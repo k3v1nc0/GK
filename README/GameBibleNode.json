@@ -1,0 +1,2327 @@
+{
+    "schema": "gamebible-node-system-v6.14",
+    "title": "🎮 Game Bible - Vaelen: Ashen Tide - Epic Node System",
+    "version": 6.14,
+    "updatedAt": "2026-06-09T15:06:59.735Z",
+    "groups": [
+        {
+            "id": "col-story",
+            "title": "📖 Epic Lore & Acts"
+        },
+        {
+            "id": "col-world",
+            "title": "🗺️ World & Exploration"
+        },
+        {
+            "id": "col-mainquests",
+            "title": "⚔️ Main Quest Chains"
+        },
+        {
+            "id": "col-sidequests",
+            "title": "🕯️ Side Quests & Secrets"
+        },
+        {
+            "id": "col-chars",
+            "title": "🧙 Characters & Progression"
+        },
+        {
+            "id": "col-factions",
+            "title": "🏰 Factions & Warfront"
+        },
+        {
+            "id": "col-bosses",
+            "title": "👹 Ashen Lieutenants & Bosses"
+        },
+        {
+            "id": "col-artifacts",
+            "title": "💎 Astral Fragments & Relics"
+        },
+        {
+            "id": "col-mechanics",
+            "title": "✨ Tactics & Spell Mechanics"
+        },
+        {
+            "id": "col-systems",
+            "title": "💻 Web Engine & Tech"
+        },
+        {
+            "id": "col-ui",
+            "title": "📜 UI, Mood & Player Feel"
+        },
+        {
+            "id": "col-endgame",
+            "title": "🌌 Endgame & Secrets"
+        }
+    ],
+    "nodes": [
+        {
+            "id": "node-story-hook",
+            "title": "The Epic Hook",
+            "body": "@{Game Name}. The realm of Vaelen is slowly suffocating under @{Main Curse}: a silent magical tide that turns forests, castles, soldiers and memories into grey stone. On the horizon, armies clash like thunder, but the real hope is a scared apprentice with a spark cantrip and a map nobody believes in.",
+            "x": -375,
+            "y": -136,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-hook",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-prophecy",
+            "title": "The Star-Eaten Prophecy",
+            "body": "The old sky-map says: 'When the fourth star falls, the smallest flame must carry the heavens.' It hints that Kaelen is not chosen because he is mighty, but because he still feels fear—and fear keeps magic human.",
+            "x": -378,
+            "y": 84,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-prophecy",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-inciting",
+            "title": "Inciting Incident: Vorn's Last Light",
+            "body": "Grand Seer @{Grand Seer} burns his final life force to cloak @{Home Base} from the Tide. His apprentice @{Protagonist} inherits the broken @{World Astrolabe} and must recover @{Dawn Fragment}, @{Tideglass Fragment}, @{Thornstar Fragment}, and @{Cinderheart Fragment}.",
+            "x": -384,
+            "y": 217,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-inciting",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-act1",
+            "title": "Act I: The Sneaky Departure",
+            "body": "Kaelen slips out while the Vanguard Army fights impossible numbers in the distance. Early gameplay is quiet, tense and intimate: hiding from Ashen Scouts, solving star-locks, tricking patrols, and learning that a cantrip can save a kingdom if used cleverly.",
+            "x": -384,
+            "y": 383,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-act1",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-act2",
+            "title": "Act II: Drums Beneath the Mist",
+            "body": "The journey opens into the Sunken Valley, Moonmarket, and Cindergate trenches. Kaelen meets refugees, smugglers and broken soldiers. Every quest shows the player that the 'epic war' is too huge to fight directly—but small brave choices bend its outcome.",
+            "x": -384,
+            "y": 549,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-act2",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-act3",
+            "title": "Act III: The Lieutenants Turn Their Eyes",
+            "body": "The Ashen Lieutenants realize the apprentice is real. Elite commanders leave the main war to hunt him. Each boss battle is a duel of personality, terrain and puzzle-like magic, not a browser-breaking army brawl.",
+            "x": -384,
+            "y": 715,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-act3",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-betrayal",
+            "title": "The Beautiful Betrayal",
+            "body": "Lyssandra Vale, last Star Priestess, seems to guide Kaelen—until she reveals that the World-Astrolabe can also freeze the Tide forever by sacrificing every living dream in Vaelen. She is not evil; she is exhausted by hope.",
+            "x": -373,
+            "y": 884,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-betrayal",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-act4",
+            "title": "Act IV: The Skyrail of Broken Gods",
+            "body": "Kaelen climbs the ancient Skyrail ruins above the storm front. Gravity bends. The map becomes vertical. The music swells. The war below looks tiny, and the player realizes the real enemy has been the sky itself going dark.",
+            "x": -373,
+            "y": 1065,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-act4",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-finale",
+            "title": "Finale: The Night the Stars Answer",
+            "body": "At the Ashen Throne, Kaelen confronts the Tideheart and chooses what kind of Archmage he becomes: savior, tyrant, martyr, or impossible dreamer. The final spell is built from every rescued NPC, solved secret, and fragment attuned by the player.",
+            "x": -376,
+            "y": 1248,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-finale",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-story-epilogue",
+            "title": "Epilogue: Songs After Stone",
+            "body": "Vaelen remembers what the Tide tried to erase. Towns regain color in different ways depending on quest choices. NPCs send letters to the Starspire. The last scene: Kaelen lighting one candle with no effort—and smiling at how hard it once was.",
+            "x": -368,
+            "y": 1444,
+            "width": 400,
+            "categoryId": "col-story",
+            "sourceTaskId": "story-epilogue",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-starspire",
+            "title": "Zone 1: The Starspire of Lorn",
+            "body": "A vertical tutorial observatory-library with dusty scroll elevators, brass telescopes, owl nests, secret shelves and simple star-lock puzzles. Safe, lonely, magical. The player learns movement, Spark, interactables and saving.",
+            "x": 170,
+            "y": -123,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-starspire",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-woods",
+            "title": "Zone 2: Whispering Woods",
+            "body": "A shadowy forest where trees repeat secrets they overheard from dying soldiers. Grid stealth begins here: avoid patrol sightlines, use Gust to rustle decoy leaves, and light blue lanterns to mark safe routes.",
+            "x": 172,
+            "y": 44,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-woods",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-valley",
+            "title": "Zone 3: The Sunken Valley",
+            "body": "A misty maze of drowned roads, broken bridges and half-buried banners. Distant drums sell the epic war, while gameplay focuses on tactical 1-on-1 fights with Ashen Scouts hunting Kaelen.",
+            "x": 160,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-valley",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-moonmarket",
+            "title": "Zone 4: Moonmarket Refuge",
+            "body": "A hidden refugee bazaar under silver awnings. NPC hub: vendors, quest boards, gossip, spell upgrades, moral choices. Every stall has a name, rumor and tiny tragedy.",
+            "x": 160,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-moonmarket",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-cindergate",
+            "title": "Zone 5: Cindergate Trenches",
+            "body": "The closest the player gets to the massive war. Background silhouettes, fire-lit skies and scripted cannon flashes. Kaelen moves through supply tunnels while giants clash far away.",
+            "x": 160,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-cindergate",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-glassmere",
+            "title": "Zone 6: Glassmere Lake",
+            "body": "A mirror-lake frozen in time. Reflections move before the player does. Puzzle zone about memory, illusions and choosing which past events to reveal.",
+            "x": 160,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-glassmere",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-ironbell",
+            "title": "Zone 7: Ironbell Mines",
+            "body": "A dwarven bell-mine where sound is a weapon. Ringing rails, echo puzzles, minecart grid routes and the Bell-King boss.",
+            "x": 160,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-ironbell",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-skyrail",
+            "title": "Zone 8: Skyrail of Broken Gods",
+            "body": "Ancient floating platforms connected by star-rails. The map scrolls vertically. Wind, gravity and constellation switches create big adventure energy without heavy rendering.",
+            "x": 160,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-skyrail",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-nullcathedral",
+            "title": "Zone 9: Cathedral of the Grey Choir",
+            "body": "A silent cathedral where prayers were turned to stone mid-sentence. Enemies react to magic use, forcing stealth, timing and non-damaging spells.",
+            "x": 160,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-nullcathedral",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-world-ashenthrone",
+            "title": "Final Zone: The Ashen Throne",
+            "body": "A crater-palace at the center of the curse. The landscape pulses like a dead star. All quest flags converge here: allies, relics, endings, optional boss phases and the final sky-spell.",
+            "x": 160,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-world",
+            "sourceTaskId": "world-ashenthrone",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-prologue",
+            "title": "Main Quest 00: Vorn's Last Light",
+            "body": "Tutorial quest. Find Vorn in the star chamber, learn Spark, open the first star-lock, receive @{World Astrolabe}, and escape before the cloak around the Starspire collapses.",
+            "x": 740,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-prologue",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-firstpath",
+            "title": "Main Quest 01: Footsteps in the Ash",
+            "body": "Sneak through Whispering Woods. Learn sound, cover, patrol cones and environmental tricks. Ends with Kaelen choosing to save or ignore a trapped Vanguard scout.",
+            "x": 741,
+            "y": 53,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-firstpath",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-valleykey",
+            "title": "Main Quest 02: The Sunken Key",
+            "body": "Recover a key swallowed by the valley fog. Introduces grid maze routing and the first real duel against an Ashen Scout Captain.",
+            "x": 740,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-valleykey",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-dawnfragment",
+            "title": "Main Quest 03: Dawn Fragment",
+            "body": "Find @{Dawn Fragment} in a ruined sunrise shrine. Unlocks Radiant Spark upgrades and gives the player their first 'I am becoming stronger' moment.",
+            "x": 740,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-dawnfragment",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-moonmarket",
+            "title": "Main Quest 04: Moonmarket Oath",
+            "body": "Gain entry to Moonmarket by helping three stalls: the mapmaker, the soup witch, and the courier moth keeper. Introduces branching NPC reputation.",
+            "x": 740,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-moonmarket",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-cindergate",
+            "title": "Main Quest 05: Under the War",
+            "body": "Move beneath Cindergate while the battle rages above. Disable Ashen signal pylons so the Vanguard can survive one more night.",
+            "x": 740,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-cindergate",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-firstlieutenant",
+            "title": "Main Quest 06: Grave-Captain's Challenge",
+            "body": "Boss quest against Grave-Captain Morth. The player wins by collapsing trench supports with Gust + Spark combo, not raw damage.",
+            "x": 740,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-firstlieutenant",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-tideglass",
+            "title": "Main Quest 07: Tideglass Fragment",
+            "body": "Travel to Glassmere and face memory puzzles. The fragment reveals that Vorn once failed to stop the first wave of the curse.",
+            "x": 740,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-tideglass",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-ironbell",
+            "title": "Main Quest 08: The Bell That Woke the Dead",
+            "body": "Enter Ironbell Mines. Learn sound-based mechanics and choose whether to ring the Dawn Bell, saving miners but alerting an Ashen Lieutenant.",
+            "x": 740,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-ironbell",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-thornstar",
+            "title": "Main Quest 09: Thornstar Fragment",
+            "body": "In the Whispering Woods' ancient heart, recover a fragment grown inside a living thorn-star tree. Unlocks Bind, Root and trap-based combat.",
+            "x": 740,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-thornstar",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-greychoir",
+            "title": "Main Quest 10: The Choir Without Breath",
+            "body": "Infiltrate the Null Cathedral. Magic attracts enemies, so the player must solve quiet puzzles and rely on familiar scouting.",
+            "x": 740,
+            "y": 1540,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-greychoir",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-cinderheart",
+            "title": "Main Quest 11: Cinderheart Fragment",
+            "body": "Steal the final fragment from Lady Cindraveil's furnace-palace. Unlocks explosive late-game spells and a major boss hunt.",
+            "x": 740,
+            "y": 1706,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-cinderheart",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-astrolabe",
+            "title": "Main Quest 12: Rebuild the World-Astrolabe",
+            "body": "Return to the Starspire for a huge emotional midpoint. Every collected fragment becomes a visible rotating ring in the UI.",
+            "x": 740,
+            "y": 1872,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-astrolabe",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-skyrail",
+            "title": "Main Quest 13: Climb the Broken Sky",
+            "body": "Ride the Skyrail while Lieutenants attack in waves of duels. The map becomes a gauntlet of puzzles, mini-bosses and constellation locks.",
+            "x": 740,
+            "y": 2038,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-skyrail",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-quest-final",
+            "title": "Main Quest 14: The Night the Stars Answer",
+            "body": "Enter the Ashen Throne. All major decisions resolve into allies, boss phases, spell options and endings. The final cast is a player-built ritual, not a cutscene button.",
+            "x": 740,
+            "y": 2204,
+            "width": 400,
+            "categoryId": "col-mainquests",
+            "sourceTaskId": "quest-final",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-lostapprentice",
+            "title": "Side Quest: The Lost Apprentice",
+            "body": "Find Renn, a frightened apprentice hiding in a collapsed study. If saved, Renn upgrades the Starspire with hint-scrolls and a cozy candle room.",
+            "x": 1320,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-lostapprentice",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-lastlantern",
+            "title": "Side Quest: The Last Lantern",
+            "body": "A refugee child asks Kaelen to relight five lanterns along a dangerous road. Each lantern creates a future fast-travel node and changes the night music.",
+            "x": 1320,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-lastlantern",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-bellmaker",
+            "title": "Side Quest: Bellmaker's Debt",
+            "body": "Old Bellmaker Tovan forged a bell that can break Ashen armor, but he sold its clapper to smugglers. Retrieve it through negotiation, theft or puzzle duel.",
+            "x": 1320,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-bellmaker",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-owlcourier",
+            "title": "Side Quest: Wings Over Grey Roads",
+            "body": "Train Nyx to carry moon-sealed letters. Unlocks remote quest turn-ins, scouting, and funny NPC mail. Completion adds hopeful messages to loading screens.",
+            "x": 1320,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-owlcourier",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-ghostchess",
+            "title": "Side Quest: The Ghost Who Cheats at Chess",
+            "body": "A ghost general challenges Kaelen to tactical grid puzzles. Rewards a passive ability: preview enemy intent one turn earlier.",
+            "x": 1320,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-ghostchess",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-ashling",
+            "title": "Side Quest: The Ashling Child",
+            "body": "A tiny Ashen creature shows fear instead of rage. Spare or destroy it. This decision influences the secret ending and the Tideheart's final dialogue.",
+            "x": 1320,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-ashling",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-soupwitch",
+            "title": "Side Quest: Soup for the End of the World",
+            "body": "Mara Kettlebrew needs impossible ingredients from dangerous corners. Rewards healing recipes and makes Moonmarket feel warm despite apocalypse.",
+            "x": 1320,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-soupwitch",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-cartographer",
+            "title": "Side Quest: Orren's Impossible Map",
+            "body": "Orren Quill wants the player to chart fog tiles, secret doors and star wells. Rewards minimap layers and optional lore about lost kingdoms.",
+            "x": 1320,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-cartographer",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-greychoir",
+            "title": "Side Quest: Hymn of the Grey Choir",
+            "body": "Collect broken prayer-stones in the Null Cathedral. Reveals the Choir were once healers who chose silence to stop the curse spreading through song.",
+            "x": 1320,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-greychoir",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-vanguardletters",
+            "title": "Side Quest: Letters Never Sent",
+            "body": "Deliver battlefield letters to families in Moonmarket. Quiet, emotional, optional. Completion increases Vanguard support during Cindergate and the finale.",
+            "x": 1320,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-vanguardletters",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-starbeasts",
+            "title": "Side Quest: Hunt of the Star-Beasts",
+            "body": "Optional elite puzzle hunts. Each star-beast teaches a mechanic twist and drops cosmetic constellation glyphs for the spellbook.",
+            "x": 1320,
+            "y": 1540,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-starbeasts",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-side-secretvorn",
+            "title": "Secret Quest: Vorn's Echo",
+            "body": "Find seven hidden star echoes left by Vorn. Unlocks the impossible ending where Vorn returns as a constellation mentor, not a living human.",
+            "x": 1320,
+            "y": 1706,
+            "width": 400,
+            "categoryId": "col-sidequests",
+            "sourceTaskId": "side-secretvorn",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-kaelen",
+            "title": "Protagonist: Kaelen Ardent",
+            "body": "Untested apprentice, gentle, clever, sometimes terrified. Starts with Spark and a walking stick. Becomes an Archmage through patience, friendships and dangerous knowledge—not chosen-one arrogance.",
+            "x": 1900,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-kaelen",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-vorn",
+            "title": "Grand Seer: Vorn Alabaster",
+            "body": "Old mentor with a voice like paper and thunder. He sacrifices himself early, but star echoes of his mistakes guide the player later.",
+            "x": 1900,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-vorn",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-elira",
+            "title": "NPC Ally: Elira Voss",
+            "body": "A Vanguard scout with a cracked spear and impossible courage. Teaches stealth routes and helps Kaelen understand the war without making him a soldier.",
+            "x": 1900,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-elira",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-mira",
+            "title": "NPC Ally: Mira Larkspur",
+            "body": "Moonmarket tinkerer, lockbreaker, joke machine. Builds astrolabe adapters, trap tools and UI upgrades. Calls Kaelen 'Little Lightning'.",
+            "x": 1900,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-mira",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-nyx",
+            "title": "Familiar: Nyx, the Moon-Moth",
+            "body": "Tiny glowing moth familiar. Scouts fog, marks enemies, delivers letters, and occasionally sits on Kaelen's nose during serious cutscenes.",
+            "x": 1900,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-nyx",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-orren",
+            "title": "NPC Ally: Orren Quill",
+            "body": "Cartographer obsessed with mapping places that refuse to stay still. Gives map layers, secret-room rumors and poetic zone descriptions.",
+            "x": 1900,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-orren",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-mara",
+            "title": "NPC Ally: Mara Kettlebrew",
+            "body": "Soup witch of Moonmarket. Warm, terrifying, practical. Her cauldron recipes become consumables, buffs and cozy worldbuilding.",
+            "x": 1900,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-mara",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-thane",
+            "title": "Rival Ally: Thane Rook",
+            "body": "A disgraced sellsword who thinks magic is cheating until Kaelen saves him with a candle spell. Optional companion for arena puzzles.",
+            "x": 1900,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-thane",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-lyssandra",
+            "title": "Ambiguous Guide: Lyssandra Vale",
+            "body": "Last Star Priestess. Beautiful, calm, dangerous. She wants to end suffering even if it means freezing all dreams. Betrayal NPC and possible redemption route.",
+            "x": 1900,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-lyssandra",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-arvak",
+            "title": "War Leader: Commander Arvak Dain",
+            "body": "Vanguard commander seen mostly from afar, through letters and war-table updates. His survival depends on Cindergate choices.",
+            "x": 1900,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-arvak",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-renn",
+            "title": "Young Apprentice: Renn of Lorn",
+            "body": "Lost student from the Starspire. Rescuing Renn makes home base feel alive and unlocks tutorial recollections for new players.",
+            "x": 1900,
+            "y": 1540,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-renn",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-char-ashling",
+            "title": "Secret NPC: Pip of the Ash",
+            "body": "A small Ashen child-creature with cracked stone antlers. It asks why color hurts. The player's answer echoes in the final boss.",
+            "x": 1900,
+            "y": 1706,
+            "width": 400,
+            "categoryId": "col-chars",
+            "sourceTaskId": "char-ashling",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-vanguard",
+            "title": "Faction: The Vanguard Army",
+            "body": "The visible epic war: banners, drums, silhouettes, desperate last stands. Mostly background, but player choices affect whether they hold key lines.",
+            "x": 2480,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-vanguard",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-ashenhost",
+            "title": "Faction: The Ashen Host",
+            "body": "Curse-born armies of stone beasts, hollow soldiers and Lieutenants. They do not simply kill; they erase color, names and memory.",
+            "x": 2480,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-ashenhost",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-lornians",
+            "title": "Faction: Scholars of Lorn",
+            "body": "Starspire astronomers, archivists and spellbinders. Brilliant but fragile. Their old arrogance may have helped awaken the Tide.",
+            "x": 2480,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-lornians",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-emberwardens",
+            "title": "Faction: Emberwardens",
+            "body": "Fire-keepers protecting the last warm towns. Unlock fire upgrades, forge quests and moral debates about burning infected lands.",
+            "x": 2480,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-emberwardens",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-saltroad",
+            "title": "Faction: Saltroad Smugglers",
+            "body": "Moonmarket criminals with soft hearts. Offer stealth gear, shortcut tunnels and morally messy quest solutions.",
+            "x": 2480,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-saltroad",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-greychoir",
+            "title": "Faction: The Grey Choir",
+            "body": "Silent healer-monks turned into anti-magic guardians. Their tragedy deepens the curse beyond 'evil monster army'.",
+            "x": 2480,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-greychoir",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-nocturne",
+            "title": "Faction: Nocturne Court",
+            "body": "Dream nobles living inside Glassmere reflections. They trade memories as currency and know Lyssandra's secret.",
+            "x": 2480,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-nocturne",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-faction-starbound",
+            "title": "Faction: Starbound Civilians",
+            "body": "Refugees, cooks, children, inventors and tired survivors. Their small stories make the endgame choices matter.",
+            "x": 2480,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-factions",
+            "sourceTaskId": "faction-starbound",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-morth",
+            "title": "Boss: Grave-Captain Morth",
+            "body": "First Lieutenant. A trench commander fused with broken shields. Teaches terrain-collapse combat. Personality: honorable, dead, furious.",
+            "x": 3060,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-morth",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-cindraveil",
+            "title": "Boss: Lady Cindraveil",
+            "body": "Furnace sorceress with a dress of burning ash. She turns arenas into ticking heat puzzles and offers Kaelen power if he abandons mercy.",
+            "x": 3060,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-cindraveil",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-sabletwins",
+            "title": "Boss: The Sable Twins",
+            "body": "Two mirror assassins from Glassmere: one copies movement, one copies spells. Defeated by making them copy each other's mistakes.",
+            "x": 3060,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-sabletwins",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-ulmar",
+            "title": "Boss: Bell-King Ulmar",
+            "body": "Dwarven king petrified into living bronze. Sound waves mark safe and lethal tiles. His bell can awaken miners or summon disaster.",
+            "x": 3060,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-ulmar",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-seraph",
+            "title": "Boss: Seraph of Ash",
+            "body": "A winged anti-magic hunter in the Null Cathedral. Forces the player to win with positioning, traps and silence instead of spell spam.",
+            "x": 3060,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-seraph",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-vaul",
+            "title": "Boss: General Vaul the Uncolored",
+            "body": "Late-game tactical duel. Vaul removes colors from UI elements and disables upgraded spells until the player restores emotional memories.",
+            "x": 3060,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-vaul",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-morcant",
+            "title": "Boss: Morcant, the Null Seer",
+            "body": "Vorn's old rival. Claims the Tide is the universe correcting mortal arrogance. Puzzle boss around breaking false prophecies.",
+            "x": 3060,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-morcant",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-boss-tideheart",
+            "title": "Final Boss: The Tideheart",
+            "body": "Not a creature but a dead star dreaming of stillness. Final phases depend on fragments, rescued NPCs, spared enemies and chosen ending route.",
+            "x": 3060,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-bosses",
+            "sourceTaskId": "boss-tideheart",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-astrolabe",
+            "title": "Relic: The World-Astrolabe",
+            "body": "Broken celestial machine. Main quest hub, upgrade interface and ending calculator. Every Astral Fragment adds a ring, constellation and spell school.",
+            "x": 3640,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-astrolabe",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-dawn",
+            "title": "Astral Fragment: Dawn Fragment",
+            "body": "Warm gold fragment. Unlocks Radiant Spark, light bridges and anti-fear buffs. Theme: courage begins small.",
+            "x": 3640,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-dawn",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-tideglass",
+            "title": "Astral Fragment: Tideglass Fragment",
+            "body": "Silver-blue memory fragment. Unlocks rewind puzzles, reflection doors and enemy intent echoes. Theme: truth hurts, but lies rot.",
+            "x": 3640,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-tideglass",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-thornstar",
+            "title": "Astral Fragment: Thornstar Fragment",
+            "body": "Green-black living fragment. Unlocks Bind, roots, trap growth and battlefield control. Theme: life fights back in strange shapes.",
+            "x": 3640,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-thornstar",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-cinderheart",
+            "title": "Astral Fragment: Cinderheart Fragment",
+            "body": "Red ember fragment. Unlocks Meteor Seeds, blast runes and late-game power. Theme: power must be aimed by mercy.",
+            "x": 3640,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-cinderheart",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-vorncloak",
+            "title": "Relic: Vorn's Star-Cloak",
+            "body": "Home-base protection and stealth narrative device. Its glow fades as the main quest progresses, adding urgency without a hard timer.",
+            "x": 3640,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-vorncloak",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-staff",
+            "title": "Upgradeable Staff: The Walking Star",
+            "body": "Begins as a wooden stick. Upgrades visually: copper tip, starwood core, crystal spine, floating astrolabe halo.",
+            "x": 3640,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-staff",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-ink",
+            "title": "Crafting Relic: Starfire Ink",
+            "body": "Used to write spells into the visual spellbook. Found through exploration, boss rewards and side-quest gratitude.",
+            "x": 3640,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-ink",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-lanterns",
+            "title": "World Relic: Road Lantern Network",
+            "body": "Side-quest fast travel system. Every lit lantern pushes the Tide back a little and adds color to the world map.",
+            "x": 3640,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-lanterns",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-artifact-bellclapper",
+            "title": "Relic: Dawn Bell Clapper",
+            "body": "Key to Ironbell's emotional choice: wake the miners and alert enemies, or stay safe and leave them dreaming in stone.",
+            "x": 3640,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-artifacts",
+            "sourceTaskId": "artifact-bellclapper",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-grid",
+            "title": "2D Grid \/ Isometric Movement",
+            "body": "Performance-friendly HTML5 Canvas movement with tactical positioning. Every tile can carry state: fog, ash, heat, sound, light, roots, reflection.",
+            "x": 4220,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-grid",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-envcombat",
+            "title": "Browser-Friendly Combat: Spell + Environment",
+            "body": "Kaelen is not a hack-and-slash hero. He wins by using Gust to push enemies into traps, Spark to light oil, Bind to hold chargers, and Mirror to redirect beams.",
+            "x": 4220,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-envcombat",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-stealth",
+            "title": "Stealth & Noise System",
+            "body": "Patrol cones, sound tiles, fog cover and decoy actions. Player feels hunted, not overpowered, especially in Act I.",
+            "x": 4220,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-stealth",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-spellbook",
+            "title": "Archmage Progression Tree",
+            "body": "Visual Spellbook UI. Start by lighting candles; end by calling Meteor Swarms. Upgrades branch into Light, Memory, Root and Cinder schools.",
+            "x": 4220,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-spellbook",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-combos",
+            "title": "Spell Combo Grammar",
+            "body": "Simple readable combos create depth: Gust + Spark = Ember Drift, Bind + Cinder = Thornfire Trap, Tideglass + Spark = Echo Flare.",
+            "x": 4220,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-combos",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-bossarena",
+            "title": "Puzzle Boss Arenas",
+            "body": "Bosses are built around 2-4 rules, not huge health bars. Each Lieutenant has terrain gimmicks, narrative taunts and a mechanical lesson.",
+            "x": 4220,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-bossarena",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-familiar",
+            "title": "Familiar Scouting",
+            "body": "Nyx reveals fog, tags enemies and carries letters. Low-cost mechanic that adds charm, utility and UI clarity.",
+            "x": 4220,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-familiar",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-reputation",
+            "title": "Reputation & Ally Flags",
+            "body": "Moonmarket, Vanguard, Grey Choir and Saltroad reputations change prices, shortcuts, final allies and ending text.",
+            "x": 4220,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-reputation",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-choice",
+            "title": "Mercy \/ Power \/ Truth Choice Layer",
+            "body": "Choices are not good\/evil meters. They track how Kaelen solves impossible problems: save, sacrifice, reveal, hide, spare, destroy.",
+            "x": 4220,
+            "y": 1208,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-choice",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mech-warfront",
+            "title": "Epic War, Browser Scale",
+            "body": "No need to render 1000 units. Use parallax silhouettes, screen shake, audio drums, messenger reports and distant spell flashes to make the world feel gigantic.",
+            "x": 4220,
+            "y": 1374,
+            "width": 400,
+            "categoryId": "col-mechanics",
+            "sourceTaskId": "mech-warfront",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-canvas",
+            "title": "HTML5 Canvas Chunk Renderer",
+            "body": "Tile chunks stream by zone. Background war layers are parallax sprites and particle curtains. Keeps browser performance smooth.",
+            "x": 4800,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-canvas",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-save",
+            "title": "Asynchronous Saving",
+            "body": "LocalStorage-first save model with optional backend sync. Saves quest flags, player tile, inventory, spell tree, NPC states and ending variables.",
+            "x": 4800,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-save",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-questgraph",
+            "title": "Quest Graph State Machine",
+            "body": "Every quest is a node with prerequisites, outcomes and callbacks. Main graph feeds UI, NPC dialogue and final ritual logic.",
+            "x": 4800,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-questgraph",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-dialogue",
+            "title": "Branching Dialogue Tables",
+            "body": "NPC dialogue reads faction reputation, quest state and fragment count. Keeps writing scalable without expensive cinematic systems.",
+            "x": 4800,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-dialogue",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-ai",
+            "title": "Lightweight Enemy AI",
+            "body": "Enemies use patrol paths, alert states, tile priorities and boss scripts. Browser-friendly but tactically readable.",
+            "x": 4800,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-ai",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-audio",
+            "title": "Adaptive Audio Layers",
+            "body": "War drums, whispering woods, Moonmarket warmth and boss pulses fade based on zone, threat and quest state.",
+            "x": 4800,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-audio",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-tools",
+            "title": "Developer Node Editor Workflow",
+            "body": "Kanban-to-node conversion remains the core authoring tool. Designers can tag lore, quests, NPCs and mechanics without touching code.",
+            "x": 4800,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-tools",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-sys-accessibility",
+            "title": "Accessibility & Comfort",
+            "body": "Clear tile outlines, reduced screen shake, readable fonts, colorblind-safe symbols, adjustable combat speed and quest hint toggles.",
+            "x": 4800,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-systems",
+            "sourceTaskId": "sys-accessibility",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-title",
+            "title": "Title Screen Mood",
+            "body": "A tiny candle under an impossible grey sky. The logo slowly gains color as the player progresses. Menu music begins with one lonely note.",
+            "x": 5380,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-title",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-questjournal",
+            "title": "Node-Based Quest Journal",
+            "body": "Quest UI mirrors this bible: connected nodes, NPC portraits, fragment icons and branching outcomes. Players see how small quests feed the epic finale.",
+            "x": 5380,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-questjournal",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-spellbook",
+            "title": "Spellbook Tabs",
+            "body": "Tabs: Spark, Gust, Tideglass, Thornstar, Cinderheart, Rituals. Each page is hand-drawn, with ink animations and Kaelen's margin notes.",
+            "x": 5380,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-spellbook",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-map",
+            "title": "Living World Map",
+            "body": "The Ashen Tide visibly crawls along map borders. Lit lanterns, saved towns and defeated Lieutenants push color back.",
+            "x": 5380,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-map",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-npcletters",
+            "title": "NPC Letter Inbox",
+            "body": "After key quests, NPCs send letters to the Starspire. This makes consequences feel personal and gives players emotional rewards.",
+            "x": 5380,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-npcletters",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-bossintro",
+            "title": "Boss Intro Cards",
+            "body": "Each Lieutenant gets a dramatic browser-friendly intro card: name, title, symbol, one chilling line, then immediate tactical arena setup.",
+            "x": 5380,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-bossintro",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-loading",
+            "title": "Loading Screen Lore",
+            "body": "Short lore scraps, rumors and funny Nyx notes. Updates based on current act and completed side quests.",
+            "x": 5380,
+            "y": 876,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-loading",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-ui-endritual",
+            "title": "Final Ritual Interface",
+            "body": "Final spell screen shows all fragments, allies and choices orbiting the Astrolabe. The player literally builds the ending from their journey.",
+            "x": 5380,
+            "y": 1042,
+            "width": 400,
+            "categoryId": "col-ui",
+            "sourceTaskId": "ui-endritual",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-starfall",
+            "title": "Ending: Starfall Mercy",
+            "body": "Kaelen breaks the Tideheart and releases stored memories. Some lost people return as voices in starlight. Bittersweet, hopeful, classic hero ending.",
+            "x": 5960,
+            "y": -120,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-starfall",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-greymercy",
+            "title": "Ending: Grey Mercy",
+            "body": "Kaelen accepts Lyssandra's logic and freezes the Tide forever, saving bodies but quieting dreams. Beautiful, chilling, morally heavy.",
+            "x": 5960,
+            "y": 46,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-greymercy",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-archmage",
+            "title": "Ending: Archmage Ascendant",
+            "body": "Kaelen controls the Tide, becoming a terrifying guardian. Vaelen survives, but every kingdom now fears its savior.",
+            "x": 5960,
+            "y": 212,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-archmage",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-secret",
+            "title": "Secret Ending: The Color That Forgave",
+            "body": "Requires sparing Pip, finishing Vorn's Echo, saving letters, and redeeming Lyssandra. The Tideheart learns change instead of stillness. Maximum emotional payoff.",
+            "x": 5960,
+            "y": 378,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-secret",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-ngplus",
+            "title": "New Game+ Hook",
+            "body": "A new constellation appears above the Starspire: a map of lands beyond Vaelen. Kaelen hears drums from another sky.",
+            "x": 5960,
+            "y": 544,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-ngplus",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-end-postgame",
+            "title": "Postgame: Restoring Vaelen",
+            "body": "Optional cleanup after finale: recolor towns, finish NPC letters, hunt star-beasts, rebuild Moonmarket, unlock lore rooms and challenge bosses.",
+            "x": 5960,
+            "y": 710,
+            "width": 400,
+            "categoryId": "col-endgame",
+            "sourceTaskId": "end-postgame",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mq6ruvd2-53896",
+            "title": "Nieuwe node",
+            "body": "@{Cinderheart Fragment}",
+            "x": 2645,
+            "y": -1307,
+            "width": 400,
+            "categoryId": "",
+            "mentionMode": "value"
+        },
+        {
+            "id": "node-mq6rwc8k-3i7yv",
+            "title": "Nieuwe node",
+            "body": "",
+            "x": 3521,
+            "y": -1304,
+            "width": 400,
+            "categoryId": "",
+            "mentionMode": "value"
+        }
+    ],
+    "edges": [
+        {
+            "id": "edge-001-story--story-",
+            "from": "node-story-hook",
+            "to": "node-story-prophecy",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-002-story--story-",
+            "from": "node-story-prophecy",
+            "to": "node-story-inciting",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-003-story--story-",
+            "from": "node-story-inciting",
+            "to": "node-story-act1",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-004-story--story-",
+            "from": "node-story-act1",
+            "to": "node-story-act2",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-005-story--story-",
+            "from": "node-story-act2",
+            "to": "node-story-act3",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-006-story--story-",
+            "from": "node-story-act3",
+            "to": "node-story-betrayal",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-007-story--story-",
+            "from": "node-story-betrayal",
+            "to": "node-story-act4",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-008-story--story-",
+            "from": "node-story-act4",
+            "to": "node-story-finale",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-009-story--story-",
+            "from": "node-story-finale",
+            "to": "node-story-epilogue",
+            "label": "story flow"
+        },
+        {
+            "id": "edge-010-world--world-",
+            "from": "node-world-starspire",
+            "to": "node-world-woods",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-011-world--world-",
+            "from": "node-world-woods",
+            "to": "node-world-valley",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-012-world--world-",
+            "from": "node-world-valley",
+            "to": "node-world-moonmarket",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-013-world--world-",
+            "from": "node-world-moonmarket",
+            "to": "node-world-cindergate",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-014-world--world-",
+            "from": "node-world-cindergate",
+            "to": "node-world-glassmere",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-015-world--world-",
+            "from": "node-world-glassmere",
+            "to": "node-world-ironbell",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-016-world--world-",
+            "from": "node-world-ironbell",
+            "to": "node-world-skyrail",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-017-world--world-",
+            "from": "node-world-skyrail",
+            "to": "node-world-nullcathedral",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-018-world--world-",
+            "from": "node-world-nullcathedral",
+            "to": "node-world-ashenthrone",
+            "label": "route unlock"
+        },
+        {
+            "id": "edge-019-quest--quest-",
+            "from": "node-quest-prologue",
+            "to": "node-quest-firstpath",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-021-quest--quest-",
+            "from": "node-quest-valleykey",
+            "to": "node-quest-dawnfragment",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-022-quest--quest-",
+            "from": "node-quest-dawnfragment",
+            "to": "node-quest-moonmarket",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-023-quest--quest-",
+            "from": "node-quest-moonmarket",
+            "to": "node-quest-cindergate",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-024-quest--quest-",
+            "from": "node-quest-cindergate",
+            "to": "node-quest-firstlieutenant",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-025-quest--quest-",
+            "from": "node-quest-firstlieutenant",
+            "to": "node-quest-tideglass",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-026-quest--quest-",
+            "from": "node-quest-tideglass",
+            "to": "node-quest-ironbell",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-027-quest--quest-",
+            "from": "node-quest-ironbell",
+            "to": "node-quest-thornstar",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-028-quest--quest-",
+            "from": "node-quest-thornstar",
+            "to": "node-quest-greychoir",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-029-quest--quest-",
+            "from": "node-quest-greychoir",
+            "to": "node-quest-cinderheart",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-030-quest--quest-",
+            "from": "node-quest-cinderheart",
+            "to": "node-quest-astrolabe",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-031-quest--quest-",
+            "from": "node-quest-astrolabe",
+            "to": "node-quest-skyrail",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-032-quest--quest-",
+            "from": "node-quest-skyrail",
+            "to": "node-quest-final",
+            "label": "main quest"
+        },
+        {
+            "id": "edge-033-story--quest-",
+            "from": "node-story-inciting",
+            "to": "node-quest-prologue",
+            "label": "starts"
+        },
+        {
+            "id": "edge-034-story--quest-",
+            "from": "node-story-act1",
+            "to": "node-quest-firstpath",
+            "label": "act focus"
+        },
+        {
+            "id": "edge-035-story--quest-",
+            "from": "node-story-act2",
+            "to": "node-quest-moonmarket",
+            "label": "opens hub"
+        },
+        {
+            "id": "edge-036-story--quest-",
+            "from": "node-story-act3",
+            "to": "node-quest-firstlieutenant",
+            "label": "lieutenant hunt"
+        },
+        {
+            "id": "edge-037-story--quest-",
+            "from": "node-story-betrayal",
+            "to": "node-quest-greychoir",
+            "label": "truth route"
+        },
+        {
+            "id": "edge-038-story--quest-",
+            "from": "node-story-act4",
+            "to": "node-quest-skyrail",
+            "label": "climax climb"
+        },
+        {
+            "id": "edge-039-story--quest-",
+            "from": "node-story-finale",
+            "to": "node-quest-final",
+            "label": "finale"
+        },
+        {
+            "id": "edge-040-quest--world-",
+            "from": "node-quest-prologue",
+            "to": "node-world-starspire",
+            "label": "tutorial zone"
+        },
+        {
+            "id": "edge-041-quest--char-v",
+            "from": "node-quest-prologue",
+            "to": "node-char-vorn",
+            "label": "mentor"
+        },
+        {
+            "id": "edge-042-quest--artifa",
+            "from": "node-quest-prologue",
+            "to": "node-artifact-astrolabe",
+            "label": "receives"
+        },
+        {
+            "id": "edge-044-quest--char-e",
+            "from": "node-quest-firstpath",
+            "to": "node-char-elira",
+            "label": "save\/meet"
+        },
+        {
+            "id": "edge-045-quest--world-",
+            "from": "node-quest-valleykey",
+            "to": "node-world-valley",
+            "label": "zone"
+        },
+        {
+            "id": "edge-046-quest--artifa",
+            "from": "node-quest-dawnfragment",
+            "to": "node-artifact-dawn",
+            "label": "reward"
+        },
+        {
+            "id": "edge-047-quest--world-",
+            "from": "node-quest-dawnfragment",
+            "to": "node-world-valley",
+            "label": "shrine"
+        },
+        {
+            "id": "edge-048-quest--world-",
+            "from": "node-quest-moonmarket",
+            "to": "node-world-moonmarket",
+            "label": "hub"
+        },
+        {
+            "id": "edge-049-quest--char-m",
+            "from": "node-quest-moonmarket",
+            "to": "node-char-mira",
+            "label": "ally"
+        },
+        {
+            "id": "edge-050-quest--char-m",
+            "from": "node-quest-moonmarket",
+            "to": "node-char-mara",
+            "label": "ally"
+        },
+        {
+            "id": "edge-051-quest--world-",
+            "from": "node-quest-cindergate",
+            "to": "node-world-cindergate",
+            "label": "war route"
+        },
+        {
+            "id": "edge-052-quest--factio",
+            "from": "node-quest-cindergate",
+            "to": "node-faction-vanguard",
+            "label": "support"
+        },
+        {
+            "id": "edge-053-quest--boss-m",
+            "from": "node-quest-firstlieutenant",
+            "to": "node-boss-morth",
+            "label": "boss"
+        },
+        {
+            "id": "edge-054-quest--world-",
+            "from": "node-quest-firstlieutenant",
+            "to": "node-world-cindergate",
+            "label": "arena"
+        },
+        {
+            "id": "edge-055-quest--world-",
+            "from": "node-quest-tideglass",
+            "to": "node-world-glassmere",
+            "label": "zone"
+        },
+        {
+            "id": "edge-056-quest--artifa",
+            "from": "node-quest-tideglass",
+            "to": "node-artifact-tideglass",
+            "label": "reward"
+        },
+        {
+            "id": "edge-057-quest--boss-s",
+            "from": "node-quest-tideglass",
+            "to": "node-boss-sabletwins",
+            "label": "boss"
+        },
+        {
+            "id": "edge-058-quest--world-",
+            "from": "node-quest-ironbell",
+            "to": "node-world-ironbell",
+            "label": "zone"
+        },
+        {
+            "id": "edge-059-quest--boss-u",
+            "from": "node-quest-ironbell",
+            "to": "node-boss-ulmar",
+            "label": "boss"
+        },
+        {
+            "id": "edge-060-quest--artifa",
+            "from": "node-quest-ironbell",
+            "to": "node-artifact-bellclapper",
+            "label": "choice relic"
+        },
+        {
+            "id": "edge-061-quest--world-",
+            "from": "node-quest-thornstar",
+            "to": "node-world-woods",
+            "label": "return"
+        },
+        {
+            "id": "edge-062-quest--artifa",
+            "from": "node-quest-thornstar",
+            "to": "node-artifact-thornstar",
+            "label": "reward"
+        },
+        {
+            "id": "edge-063-quest--world-",
+            "from": "node-quest-greychoir",
+            "to": "node-world-nullcathedral",
+            "label": "zone"
+        },
+        {
+            "id": "edge-064-quest--boss-s",
+            "from": "node-quest-greychoir",
+            "to": "node-boss-seraph",
+            "label": "boss"
+        },
+        {
+            "id": "edge-065-quest--artifa",
+            "from": "node-quest-cinderheart",
+            "to": "node-artifact-cinderheart",
+            "label": "reward"
+        },
+        {
+            "id": "edge-066-quest--boss-c",
+            "from": "node-quest-cinderheart",
+            "to": "node-boss-cindraveil",
+            "label": "boss"
+        },
+        {
+            "id": "edge-067-quest--artifa",
+            "from": "node-quest-astrolabe",
+            "to": "node-artifact-astrolabe",
+            "label": "rebuild"
+        },
+        {
+            "id": "edge-068-quest--world-",
+            "from": "node-quest-skyrail",
+            "to": "node-world-skyrail",
+            "label": "zone"
+        },
+        {
+            "id": "edge-069-quest--boss-v",
+            "from": "node-quest-skyrail",
+            "to": "node-boss-vaul",
+            "label": "boss"
+        },
+        {
+            "id": "edge-070-quest--boss-m",
+            "from": "node-quest-skyrail",
+            "to": "node-boss-morcant",
+            "label": "boss"
+        },
+        {
+            "id": "edge-071-quest--world-",
+            "from": "node-quest-final",
+            "to": "node-world-ashenthrone",
+            "label": "final zone"
+        },
+        {
+            "id": "edge-072-quest--boss-t",
+            "from": "node-quest-final",
+            "to": "node-boss-tideheart",
+            "label": "final boss"
+        },
+        {
+            "id": "edge-073-side-l-char-r",
+            "from": "node-side-lostapprentice",
+            "to": "node-char-renn",
+            "label": "rescues"
+        },
+        {
+            "id": "edge-074-side-l-world-",
+            "from": "node-side-lostapprentice",
+            "to": "node-world-starspire",
+            "label": "starts"
+        },
+        {
+            "id": "edge-075-side-l-artifa",
+            "from": "node-side-lastlantern",
+            "to": "node-artifact-lanterns",
+            "label": "unlocks"
+        },
+        {
+            "id": "edge-077-side-b-artifa",
+            "from": "node-side-bellmaker",
+            "to": "node-artifact-bellclapper",
+            "label": "retrieve"
+        },
+        {
+            "id": "edge-078-side-b-world-",
+            "from": "node-side-bellmaker",
+            "to": "node-world-ironbell",
+            "label": "related"
+        },
+        {
+            "id": "edge-079-side-o-char-n",
+            "from": "node-side-owlcourier",
+            "to": "node-char-nyx",
+            "label": "upgrade"
+        },
+        {
+            "id": "edge-080-side-o-ui-npc",
+            "from": "node-side-owlcourier",
+            "to": "node-ui-npcletters",
+            "label": "feeds"
+        },
+        {
+            "id": "edge-081-side-g-mech-g",
+            "from": "node-side-ghostchess",
+            "to": "node-mech-grid",
+            "label": "training"
+        },
+        {
+            "id": "edge-082-side-a-char-a",
+            "from": "node-side-ashling",
+            "to": "node-char-ashling",
+            "label": "choice"
+        },
+        {
+            "id": "edge-083-side-a-end-se",
+            "from": "node-side-ashling",
+            "to": "node-end-secret",
+            "label": "required"
+        },
+        {
+            "id": "edge-084-side-s-char-m",
+            "from": "node-side-soupwitch",
+            "to": "node-char-mara",
+            "label": "quest giver"
+        },
+        {
+            "id": "edge-085-side-c-char-o",
+            "from": "node-side-cartographer",
+            "to": "node-char-orren",
+            "label": "quest giver"
+        },
+        {
+            "id": "edge-086-side-c-ui-map",
+            "from": "node-side-cartographer",
+            "to": "node-ui-map",
+            "label": "upgrades"
+        },
+        {
+            "id": "edge-087-side-g-factio",
+            "from": "node-side-greychoir",
+            "to": "node-faction-greychoir",
+            "label": "lore"
+        },
+        {
+            "id": "edge-088-side-g-world-",
+            "from": "node-side-greychoir",
+            "to": "node-world-nullcathedral",
+            "label": "zone"
+        },
+        {
+            "id": "edge-089-side-v-factio",
+            "from": "node-side-vanguardletters",
+            "to": "node-faction-starbound",
+            "label": "emotional payoff"
+        },
+        {
+            "id": "edge-090-side-v-factio",
+            "from": "node-side-vanguardletters",
+            "to": "node-faction-vanguard",
+            "label": "war morale"
+        },
+        {
+            "id": "edge-091-side-s-end-po",
+            "from": "node-side-starbeasts",
+            "to": "node-end-postgame",
+            "label": "postgame loop"
+        },
+        {
+            "id": "edge-092-side-s-char-v",
+            "from": "node-side-secretvorn",
+            "to": "node-char-vorn",
+            "label": "echoes"
+        },
+        {
+            "id": "edge-093-side-s-end-se",
+            "from": "node-side-secretvorn",
+            "to": "node-end-secret",
+            "label": "required"
+        },
+        {
+            "id": "edge-094-mech-g-sys-ca",
+            "from": "node-mech-grid",
+            "to": "node-sys-canvas",
+            "label": "technical base"
+        },
+        {
+            "id": "edge-095-mech-e-mech-c",
+            "from": "node-mech-envcombat",
+            "to": "node-mech-combos",
+            "label": "depth"
+        },
+        {
+            "id": "edge-096-mech-s-sys-ai",
+            "from": "node-mech-stealth",
+            "to": "node-sys-ai",
+            "label": "enemy states"
+        },
+        {
+            "id": "edge-097-mech-s-ui-spe",
+            "from": "node-mech-spellbook",
+            "to": "node-ui-spellbook",
+            "label": "interface"
+        },
+        {
+            "id": "edge-098-mech-r-sys-qu",
+            "from": "node-mech-reputation",
+            "to": "node-sys-questgraph",
+            "label": "flags"
+        },
+        {
+            "id": "edge-099-mech-c-ui-end",
+            "from": "node-mech-choice",
+            "to": "node-ui-endritual",
+            "label": "ending input"
+        },
+        {
+            "id": "edge-100-mech-w-sys-au",
+            "from": "node-mech-warfront",
+            "to": "node-sys-audio",
+            "label": "epic scale"
+        },
+        {
+            "id": "edge-101-sys-sa-sys-qu",
+            "from": "node-sys-save",
+            "to": "node-sys-questgraph",
+            "label": "stores flags"
+        },
+        {
+            "id": "edge-102-sys-di-char-m",
+            "from": "node-sys-dialogue",
+            "to": "node-char-mira",
+            "label": "dynamic banter"
+        },
+        {
+            "id": "edge-103-sys-di-char-l",
+            "from": "node-sys-dialogue",
+            "to": "node-char-lyssandra",
+            "label": "branching betrayal"
+        },
+        {
+            "id": "edge-104-sys-ac-mech-g",
+            "from": "node-sys-accessibility",
+            "to": "node-mech-grid",
+            "label": "readability"
+        },
+        {
+            "id": "edge-105-ui-que-sys-qu",
+            "from": "node-ui-questjournal",
+            "to": "node-sys-questgraph",
+            "label": "visualizes"
+        },
+        {
+            "id": "edge-106-ui-map-artifa",
+            "from": "node-ui-map",
+            "to": "node-artifact-lanterns",
+            "label": "color return"
+        },
+        {
+            "id": "edge-107-ui-end-quest-",
+            "from": "node-ui-endritual",
+            "to": "node-quest-final",
+            "label": "final choice"
+        },
+        {
+            "id": "edge-108-factio-boss-m",
+            "from": "node-faction-ashenhost",
+            "to": "node-boss-morth",
+            "label": "commands"
+        },
+        {
+            "id": "edge-109-factio-boss-c",
+            "from": "node-faction-ashenhost",
+            "to": "node-boss-cindraveil",
+            "label": "commands"
+        },
+        {
+            "id": "edge-110-factio-boss-s",
+            "from": "node-faction-ashenhost",
+            "to": "node-boss-seraph",
+            "label": "hunts"
+        },
+        {
+            "id": "edge-111-factio-boss-s",
+            "from": "node-faction-greychoir",
+            "to": "node-boss-seraph",
+            "label": "fallen guardian"
+        },
+        {
+            "id": "edge-112-factio-boss-s",
+            "from": "node-faction-nocturne",
+            "to": "node-boss-sabletwins",
+            "label": "agents"
+        },
+        {
+            "id": "edge-113-factio-char-a",
+            "from": "node-faction-vanguard",
+            "to": "node-char-arvak",
+            "label": "leader"
+        },
+        {
+            "id": "edge-114-factio-char-v",
+            "from": "node-faction-lornians",
+            "to": "node-char-vorn",
+            "label": "seer"
+        },
+        {
+            "id": "edge-115-factio-char-m",
+            "from": "node-faction-saltroad",
+            "to": "node-char-mira",
+            "label": "contacts"
+        },
+        {
+            "id": "edge-116-factio-char-m",
+            "from": "node-faction-starbound",
+            "to": "node-char-mara",
+            "label": "protects"
+        },
+        {
+            "id": "edge-117-factio-artifa",
+            "from": "node-faction-emberwardens",
+            "to": "node-artifact-cinderheart",
+            "label": "legacy"
+        },
+        {
+            "id": "edge-118-artifa-ui-end",
+            "from": "node-artifact-dawn",
+            "to": "node-ui-endritual",
+            "label": "ritual ring"
+        },
+        {
+            "id": "edge-119-artifa-ui-end",
+            "from": "node-artifact-tideglass",
+            "to": "node-ui-endritual",
+            "label": "ritual ring"
+        },
+        {
+            "id": "edge-120-artifa-ui-end",
+            "from": "node-artifact-thornstar",
+            "to": "node-ui-endritual",
+            "label": "ritual ring"
+        },
+        {
+            "id": "edge-121-artifa-ui-end",
+            "from": "node-artifact-cinderheart",
+            "to": "node-ui-endritual",
+            "label": "ritual ring"
+        },
+        {
+            "id": "edge-122-quest--end-st",
+            "from": "node-quest-final",
+            "to": "node-end-starfall",
+            "label": "possible"
+        },
+        {
+            "id": "edge-123-quest--end-gr",
+            "from": "node-quest-final",
+            "to": "node-end-greymercy",
+            "label": "possible"
+        },
+        {
+            "id": "edge-124-quest--end-ar",
+            "from": "node-quest-final",
+            "to": "node-end-archmage",
+            "label": "possible"
+        },
+        {
+            "id": "edge-125-quest--end-se",
+            "from": "node-quest-final",
+            "to": "node-end-secret",
+            "label": "possible"
+        },
+        {
+            "id": "edge-126-end-st-end-po",
+            "from": "node-end-starfall",
+            "to": "node-end-postgame",
+            "label": "after"
+        },
+        {
+            "id": "edge-127-end-se-end-ng",
+            "from": "node-end-secret",
+            "to": "node-end-ngplus",
+            "label": "tease"
+        },
+        {
+            "id": "edge-128-char-l-end-gr",
+            "from": "node-char-lyssandra",
+            "to": "node-end-greymercy",
+            "label": "tempts"
+        },
+        {
+            "id": "edge-129-char-l-end-se",
+            "from": "node-char-lyssandra",
+            "to": "node-end-secret",
+            "label": "redeem"
+        },
+        {
+            "id": "edge-130-char-a-boss-t",
+            "from": "node-char-ashling",
+            "to": "node-boss-tideheart",
+            "label": "dialogue echo"
+        },
+        {
+            "id": "edge-mq6ovqx8-okykb",
+            "from": "node-world-woods",
+            "to": "node-side-lastlantern",
+            "label": ""
+        },
+        {
+            "id": "edge-mq6ovsn1-t3in9",
+            "from": "node-world-woods",
+            "to": "node-quest-firstpath",
+            "label": ""
+        },
+        {
+            "id": "edge-mq6ow65k-uep46",
+            "from": "node-quest-firstpath",
+            "to": "node-quest-valleykey",
+            "label": ""
+        },
+        {
+            "id": "edge-mq6qm7uc-6f0bm",
+            "from": "node-char-lyssandra",
+            "to": "node-sys-dialogue",
+            "label": ""
+        },
+        {
+            "id": "edge-mq6rwgoe-yxqja",
+            "from": "node-mq6ruvd2-53896",
+            "to": "node-mq6rwc8k-3i7yv",
+            "label": ""
+        }
+    ],
+    "notes": "Gigantisch uitgebreide epic node setup op basis van de aangeleverde Game Bible. De losse testnotitie is vervangen door echte quest-, lore-, NPC-, boss-, artifact-, UI- en systems-nodes. Originele kolommen zijn uitgebreid naar speelbare tabs\/categorieën; alle hoofdquests lopen naar zones, NPC's, artifacts, bosses en eindes.",
+    "categories": [
+        {
+            "id": "col-story",
+            "title": "📖 Epic Lore & Acts",
+            "body": "",
+            "x": -400,
+            "y": -205,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-world",
+            "title": "🗺️ World & Exploration",
+            "body": "",
+            "x": 144,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-mainquests",
+            "title": "⚔️ Main Quest Chains",
+            "body": "",
+            "x": 724,
+            "y": -210,
+            "width": 470,
+            "height": 2100
+        },
+        {
+            "id": "col-sidequests",
+            "title": "🕯️ Side Quests & Secrets",
+            "body": "",
+            "x": 1304,
+            "y": -210,
+            "width": 470,
+            "height": 2100
+        },
+        {
+            "id": "col-chars",
+            "title": "🧙 Characters & Progression",
+            "body": "",
+            "x": 1884,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-factions",
+            "title": "🏰 Factions & Warfront",
+            "body": "",
+            "x": 2464,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-bosses",
+            "title": "👹 Ashen Lieutenants & Bosses",
+            "body": "",
+            "x": 3044,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-artifacts",
+            "title": "💎 Astral Fragments & Relics",
+            "body": "",
+            "x": 3624,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-mechanics",
+            "title": "✨ Tactics & Spell Mechanics",
+            "body": "",
+            "x": 4204,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-systems",
+            "title": "💻 Web Engine & Tech",
+            "body": "",
+            "x": 4784,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-ui",
+            "title": "📜 UI, Mood & Player Feel",
+            "body": "",
+            "x": 5364,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        },
+        {
+            "id": "col-endgame",
+            "title": "🌌 Endgame & Secrets",
+            "body": "",
+            "x": 5944,
+            "y": -210,
+            "width": 470,
+            "height": 1840
+        }
+    ],
+    "tags": [
+        {
+            "id": "tag-game-name",
+            "name": "Game Name",
+            "value": "Vaelen: Ashen Tide asdf"
+        },
+        {
+            "id": "tag-protagonist",
+            "name": "Protagonist",
+            "value": "Kaelen Ardent"
+        },
+        {
+            "id": "tag-main-curse",
+            "name": "Main Curse",
+            "value": "The Ashen Tide"
+        },
+        {
+            "id": "tag-home-base",
+            "name": "Home Base",
+            "value": "The Starspire of Lorn"
+        },
+        {
+            "id": "tag-grand-seer",
+            "name": "Grand Seer",
+            "value": "Vorn Alabaster"
+        },
+        {
+            "id": "tag-world-astrolabe",
+            "name": "World Astrolabe",
+            "value": "The World-Astrolabe"
+        },
+        {
+            "id": "tag-dawn-fragment",
+            "name": "Dawn Fragment",
+            "value": "Dawn Fragment"
+        },
+        {
+            "id": "tag-tideglass-fragment",
+            "name": "Tideglass Fragment",
+            "value": "Tideglass Fragment"
+        },
+        {
+            "id": "tag-thornstar-fragment",
+            "name": "Thornstar Fragment",
+            "value": "Thornstar Fragment"
+        },
+        {
+            "id": "tag-cinderheart-fragment",
+            "name": "Cinderheart Fragment",
+            "value": "Cinderheart Fragment"
+        }
+    ],
+    "settings": {
+        "theme": "dark",
+        "tags": "sidebar-only",
+        "categories": "fields-only"
+    }
+}

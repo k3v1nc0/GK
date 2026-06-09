@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Bible - Beheersbaar Bord</title>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script>
+        MobileDragDrop.polyfill({
+            dragImageTranslateOverride: MobileDragDrop.scrollBehaviourDragImageTranslateOverride
+        });
+        window.addEventListener('touchmove', function() {}, {passive: false});
+    </script>
+
+    <style>
+        :root {
+            --bg-color: #fbfbfa;
+            --column-bg: #f4f5f6;
+            --card-bg: #ffffff;
+            --text-main: #37352f;
+            --text-muted: #7a7a78;
+            --border-color: #e9e9e6;
+            --accent-color: #2383e2;
+            --accent-hover: #1a62ab;
+            --danger-color: #eb5757;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none; 
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            background-color: var(--card-bg);
+            flex-wrap: wrap; 
+            gap: 10px;
+        }
+
+        .logo-section h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
+
+        .actions-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #save-status {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            transition: color 0.2s ease;
+            min-width: 80px;
+            text-align: right;
+        }
+        #save-status.saving { color: var(--accent-color); }
+        #save-status.error { color: var(--danger-color); }
+        #save-status.success { color: #2ea043; }
+
+        button {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-main);
+            transition: background-color 0.15s ease, opacity 0.2s ease;
+        }
+
+        button:hover:not(:disabled) { background-color: var(--column-bg); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        button.primary { background-color: var(--accent-color); color: white; border-color: var(--accent-color); }
+        button.primary:hover:not(:disabled) { background-color: var(--accent-hover); }
+
+        .icon-btn { padding: 6px 10px; font-size: 16px; }
+
+        .board-container {
+            display: flex; 
+            gap: 16px; 
+            padding: 24px; 
+            overflow-x: auto; 
+            flex-grow: 1; 
+            align-items: flex-start;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .column {
+            background-color: var(--column-bg); 
+            border-radius: 6px; 
+            width: 85vw; 
+            max-width: 320px;
+            min-width: 280px;
+            flex-shrink: 0; 
+            display: flex; 
+            flex-direction: column; 
+            max-height: 100%; 
+            padding: 10px;
+            position: relative; 
+            transition: opacity 0.2s ease;
+        }
+        
+        /* Visuele indicatie voor een kolom die gesleept wordt */
+        .column.dragging { opacity: 0.5; }
+
+        /* Magische fix voor de Kaarten (deken) */
+        .column::after {
+            content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 10; pointer-events: none; border-radius: 6px;
+        }
+        body.is-dragging-card .column::after { pointer-events: all; }
+        
+        /* Voorkom dat kaarten interfereren als je een KOLOM sleept */
+        body.is-dragging-column .card { pointer-events: none; }
+        
+        .column.drag-over { background-color: #e2e4e6; outline: 2px dashed var(--accent-color); }
+        
+        /* Kolom Header fungeert nu als de "Drag Handle" */
+        .column-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px 12px 8px; cursor: grab; }
+        .column-header:active { cursor: grabbing; }
+        .column-title { font-size: 15px; font-weight: 600; outline: none; width: 100%; cursor: text; }
+
+        .cards-container { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1; min-height: 50px; padding-bottom: 10px; }
+
+        .card {
+            background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04); cursor: grab; position: relative;
+        }
+        .card:active { cursor: grabbing; }
+        .card.dragging { opacity: 0.4; transform: scale(0.98); }
+        
+        .card-text { font-size: 14px; line-height: 1.5; outline: none; word-break: break-word; padding-right: 20px; min-height: 21px; cursor: text; }
+        .card-text:empty::before { content: "Typ hier..."; color: #adb5bd; pointer-events: none; }
+
+        .card-actions { position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity 0.15s ease; }
+        .card:hover .card-actions { opacity: 1; }
+
+        .delete-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 3px; }
+        .delete-btn:hover { background-color: rgba(235, 87, 87, 0.1); color: var(--danger-color); }
+
+        .add-card-btn { background: none; border: none; text-align: left; padding: 8px; color: var(--text-muted); font-size: 14px; cursor: pointer; border-radius: 4px; margin-top: 4px; width: 100%; }
+        .add-card-btn:hover { background-color: rgba(55, 53, 47, 0.08); color: var(--text-main); }
+
+        .add-column-btn { background-color: transparent; border: 1px dashed var(--border-color); border-radius: 6px; width: 100%; max-width: 320px; flex-shrink: 0; padding: 12px; text-align: center; color: var(--text-muted); font-weight: 500; cursor: pointer; }
+        .add-column-btn:hover { background-color: var(--column-bg); color: var(--text-main); border-style: solid; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-section">
+            <h1>🎮 Game Bible</h1>
+        </div>
+        <div class="actions-section">
+            <button id="btn-undo" class="icon-btn" onclick="undo()" title="Ongedaan maken (Ctrl+Z)" disabled>↩️</button>
+            <button id="btn-redo" class="icon-btn" onclick="redo()" title="Opnieuw (Ctrl+Shift+Z)" disabled>↪️</button>
+            <div id="save-status">Laden...</div>
+        </div>
+    </header>
+
+    <div class="board-container" id="board">
+    </div>
+
+    <script>
+        let appData = { columns: [], tasks: [] };
+        let saveTimeout;
+        
+        // --- HISTORY STACK ---
+        let historyStack = [];
+        let historyIndex = -1;
+        const MAX_HISTORY = 50;
+
+        function pushToHistory() {
+            if (historyIndex < historyStack.length - 1) {
+                historyStack = historyStack.slice(0, historyIndex + 1);
+            }
+            historyStack.push(JSON.parse(JSON.stringify(appData)));
+            if (historyStack.length > MAX_HISTORY) { historyStack.shift(); } else { historyIndex++; }
+            updateHistoryButtons();
+        }
+
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                appData = JSON.parse(JSON.stringify(historyStack[historyIndex]));
+                renderBoard(); triggerSave(); updateHistoryButtons();
+            }
+        }
+
+        function redo() {
+            if (historyIndex < historyStack.length - 1) {
+                historyIndex++;
+                appData = JSON.parse(JSON.stringify(historyStack[historyIndex]));
+                renderBoard(); triggerSave(); updateHistoryButtons();
+            }
+        }
+
+        function updateHistoryButtons() {
+            document.getElementById('btn-undo').disabled = (historyIndex <= 0);
+            document.getElementById('btn-redo').disabled = (historyIndex >= historyStack.length - 1);
+        }
+
+        document.addEventListener('keydown', function(e) {
+            const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+            if (cmdOrCtrl && e.key.toLowerCase() === 'z') {
+                if (document.activeElement && document.activeElement.getAttribute('contenteditable') === 'true') return; 
+                e.preventDefault();
+                if (e.shiftKey) { redo(); } else { undo(); }
+            }
+            if (cmdOrCtrl && e.key.toLowerCase() === 'y') {
+                if (document.activeElement && document.activeElement.getAttribute('contenteditable') === 'true') return;
+                e.preventDefault(); redo();
+            }
+        });
+
+        // --- SERVER ---
+        function setStatus(message, state) {
+            const statusEl = document.getElementById('save-status');
+            statusEl.innerText = message; statusEl.className = state;
+        }
+
+        async function loadDataFromServer() {
+            setStatus('⏳ Inladen...', 'saving');
+            try {
+                const response = await fetch('GameBible.json?t=' + Date.now()); 
+                if (response.ok) {
+                    appData = await response.json();
+                    renderBoard();
+                    setStatus('✔️ Up-to-date', 'success');
+                    historyStack = [JSON.parse(JSON.stringify(appData))];
+                    historyIndex = 0; updateHistoryButtons();
+                } else { setStatus('❌ Kon JSON niet laden', 'error'); }
+            } catch (error) { setStatus('❌ Server error.', 'error'); }
+        }
+
+        async function saveDataToServer() {
+            setStatus('⏳ Opslaan...', 'saving');
+            try {
+                const response = await fetch('GameBible.php', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(appData, null, 2)
+                });
+                if (response.ok) { setStatus('✔️ Up-to-date', 'success'); } 
+                else { setStatus('❌ Fout bij opslaan', 'error'); }
+            } catch (error) { setStatus('❌ Geen verbinding', 'error'); }
+        }
+
+        function triggerSave() {
+            clearTimeout(saveTimeout);
+            setStatus('⏳ Aanpassen...', 'saving');
+            saveTimeout = setTimeout(saveDataToServer, 800);
+        }
+
+        // --- RENDER & CRUD ---
+        function renderBoard() {
+            const board = document.getElementById('board');
+            board.innerHTML = '';
+
+            appData.columns.forEach(column => {
+                const columnEl = document.createElement('div');
+                columnEl.className = 'column';
+                columnEl.setAttribute('data-id', column.id);
+                // NIEUW: De hele kolom is nu sleepbaar!
+                columnEl.setAttribute('draggable', 'true'); 
+                
+                columnEl.addEventListener('dragstart', dragStart);
+                columnEl.addEventListener('dragend', dragEnd);
+                columnEl.addEventListener('dragover', dragOver);
+                columnEl.addEventListener('dragenter', dragEnter);
+                columnEl.addEventListener('dragleave', dragLeave);
+                columnEl.addEventListener('drop', drop);
+
+                const columnTasks = appData.tasks.filter(t => t.columnId === column.id);
+                let cardsHtml = '';
+                columnTasks.forEach(task => {
+                    cardsHtml += `
+                        <div class="card" draggable="true" data-id="${task.id}" ondragstart="dragStart(event)" ondragend="dragEnd(event)">
+                            <div class="card-text" contenteditable="true" onblur="updateTaskContent('${task.id}', this.innerText)" onkeyup="setStatus('📝 Typen...', 'saving')">${task.content}</div>
+                            <div class="card-actions">
+                                <button class="delete-btn" onclick="deleteTask('${task.id}')">✕</button>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                columnEl.innerHTML = `
+                    <div class="column-header">
+                        <div class="column-title" contenteditable="true" onblur="updateColumnTitle('${column.id}', this.innerText)">${column.title}</div>
+                        <button class="delete-btn" onclick="deleteColumn('${column.id}')">Wissen</button>
+                    </div>
+                    <div class="cards-container">${cardsHtml}</div>
+                    <button class="add-card-btn" onclick="addTask('${column.id}')">+ Item toevoegen</button>
+                `;
+                board.appendChild(columnEl);
+            });
+
+            const addColBtn = document.createElement('button');
+            addColBtn.className = 'add-column-btn';
+            addColBtn.innerText = '+ Kolom toevoegen';
+            addColBtn.onclick = addColumn;
+            board.appendChild(addColBtn);
+        }
+
+        function addTask(columnId) {
+            const newId = 'task-' + Date.now();
+            appData.tasks.push({ id: newId, columnId: columnId, content: '' }); 
+            pushToHistory(); renderBoard(); triggerSave();
+            setTimeout(() => {
+                const newCard = document.querySelector(`.card[data-id="${newId}"] .card-text`);
+                if (newCard) { newCard.focus(); }
+            }, 10);
+        }
+
+        function updateTaskContent(taskId, newContent) {
+            const task = appData.tasks.find(t => t.id === taskId);
+            if (task && task.content !== newContent) { 
+                task.content = newContent; pushToHistory(); triggerSave(); 
+            }
+        }
+        function deleteTask(taskId) {
+            appData.tasks = appData.tasks.filter(t => t.id !== taskId);
+            pushToHistory(); renderBoard(); triggerSave();
+        }
+        function addColumn() {
+            appData.columns.push({ id: 'col-' + Date.now(), title: 'Nieuwe Kolom' });
+            pushToHistory(); renderBoard(); triggerSave();
+        }
+        function updateColumnTitle(columnId, newTitle) {
+            const column = appData.columns.find(c => c.id === columnId);
+            if (column && column.title !== newTitle) { 
+                column.title = newTitle; pushToHistory(); triggerSave(); 
+            }
+        }
+        function deleteColumn(columnId) {
+            if (confirm('Zeker weten dat je deze kolom wil weggooien?')) {
+                appData.columns = appData.columns.filter(c => c.id !== columnId);
+                appData.tasks = appData.tasks.filter(t => t.columnId !== columnId);
+                pushToHistory(); renderBoard(); triggerSave();
+            }
+        }
+
+        // --- DRAG & DROP LOGICA ---
+        
+        // Verticaal (Kaarten)
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.card:not(.dragging)')];
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else { return closest; }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        // Horizontaal (Kolommen)
+        function getDragAfterColumn(container, x) {
+            const draggableColumns = [...container.querySelectorAll('.column:not(.dragging)')];
+            return draggableColumns.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = x - box.left - box.width / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else { return closest; }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        function dragStart(e) { 
+            e.stopPropagation(); // Voorkomt dat kaart en kolom tegelijk triggeren
+            e.currentTarget.classList.add('dragging'); 
+            e.dataTransfer.setData('text/plain', e.currentTarget.getAttribute('data-id')); 
+            
+            setTimeout(() => { 
+                if (e.currentTarget.classList.contains('column')) {
+                    document.body.classList.add('is-dragging-column');
+                } else {
+                    document.body.classList.add('is-dragging-card'); 
+                }
+            }, 10);
+        }
+        
+        function dragOver(e) { 
+            e.preventDefault(); 
+            const draggingCard = document.querySelector('.card.dragging');
+            // Zorgt dat we alleen kaarten sorteren binnen een kolom (en niet de kolommen zelf in de war brengen)
+            if (draggingCard && this.classList.contains('column')) {
+                const cardsContainer = this.querySelector('.cards-container');
+                const afterElement = getDragAfterElement(cardsContainer, e.clientY);
+                if (afterElement == null) { cardsContainer.appendChild(draggingCard); } 
+                else { cardsContainer.insertBefore(draggingCard, afterElement); }
+            }
+        }
+
+        // Event listener speciaal voor het hoofd-bord (verwerkt kolom-sortering)
+        document.getElementById('board').addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const draggingColumn = document.querySelector('.column.dragging');
+            if (draggingColumn) {
+                const board = document.getElementById('board');
+                const addBtn = document.querySelector('.add-column-btn');
+                const afterElement = getDragAfterColumn(board, e.clientX);
+                
+                // Voeg de kolom in, maar zorg dat de "+ Kolom toevoegen" knop ALTIJD achteraan blijft
+                if (afterElement == null || afterElement === addBtn) { 
+                    board.insertBefore(draggingColumn, addBtn); 
+                } else { 
+                    board.insertBefore(draggingColumn, afterElement); 
+                }
+            }
+        });
+
+        function dragEnter(e) { 
+            e.preventDefault(); 
+            if (document.querySelector('.card.dragging')) { this.classList.add('drag-over'); }
+        }
+        function dragLeave() { this.classList.remove('drag-over'); }
+        function drop(e) { this.classList.remove('drag-over'); }
+
+        function dragEnd(e) { 
+            e.stopPropagation();
+            e.currentTarget.classList.remove('dragging'); 
+            document.body.classList.remove('is-dragging-card', 'is-dragging-column');
+            document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+
+            const newColumns = [];
+            const newTasks = [];
+            
+            // Loop door het bord om de visuele volgorde EXACT uit te lezen
+            document.querySelectorAll('.column').forEach(column => {
+                const colId = column.getAttribute('data-id');
+                const colData = appData.columns.find(c => c.id === colId);
+                
+                if (colData) { newColumns.push(colData); } // Sla de nieuwe kolomvolgorde op
+
+                column.querySelectorAll('.card').forEach(card => {
+                    const taskId = card.getAttribute('data-id');
+                    const task = appData.tasks.find(t => t.id === taskId);
+                    if (task) {
+                        task.columnId = colId;
+                        newTasks.push(task); // Sla de nieuwe taakvolgorde op
+                    }
+                });
+            });
+
+            // Is er daadwerkelijk iets veranderd? Dan slaan we het op in de history en server!
+            const orderChanged = JSON.stringify(appData.tasks) !== JSON.stringify(newTasks) || 
+                                 JSON.stringify(appData.columns) !== JSON.stringify(newColumns);
+            
+            if (orderChanged) {
+                appData.columns = newColumns;
+                appData.tasks = newTasks;
+                pushToHistory(); 
+                triggerSave();
+            }
+        }
+
+        // --- AUTO SCROLL ---
+        document.addEventListener('dragover', (e) => {
+            const board = document.getElementById('board');
+            const edgeThreshold = 100; const scrollSpeed = 15;
+            if (e.clientX > window.innerWidth - edgeThreshold) { board.scrollLeft += scrollSpeed; } 
+            else if (e.clientX < edgeThreshold) { board.scrollLeft -= scrollSpeed; }
+        });
+
+        loadDataFromServer();
+    </script>
+</body>
+</html>
