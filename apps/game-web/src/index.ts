@@ -2,6 +2,8 @@ import type { PublishedNodeEnvelope } from "@gk/schemas";
 import { createAudioRuntime } from "@gk/audio-runtime";
 import { createRendererRuntime } from "@gk/renderer-runtime";
 
+export * from "./auth-client.js";
+
 export interface GameWebRuntimeBoundary {
   readonly rendererReady: boolean;
   readonly audioReady: boolean;
@@ -24,4 +26,3 @@ export function createGameWebBoundary(nodes: readonly PublishedNodeEnvelope[]): 
     contentSource: "published-node-data"
   };
 }
-

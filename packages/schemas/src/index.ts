@@ -30,3 +30,4 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "validation-issue"
 ] as const;
 
+export * from "./auth.js";

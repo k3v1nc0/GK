@@ -1,15 +1,16 @@
 # Current Phase
 
-Actieve fase: `fase3.md`
+Actieve fase: `fase4.md`
 
-Status: Fase 3 Git-basis voorbereid; install/build/typecheck gate open voor Codex.
+Status: Fase 4 Git-basis voorbereid; Codex database migration/seed gate open.
 
-## Primaire Fase 3-status
+## Primaire Fase 4-status
 
 Open voor de actuele fasecontractstatus:
 
 - `docs/design/phase-plan/current-phase.md`
-- `README/fase3.md`
+- `README/fase4.md`
+- `docs/architecture/auth-boundaries.md`
 - `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
 - `docs/ops/server-layout.md`
@@ -29,11 +30,11 @@ Dit README-fasebestand blijft de korte fase-index. De inhoudelijke fasebeoordeli
 
 Fase 1 is klaar.
 
-Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Dat is akkoord voor Fase 3, omdat `/var/www/gk/current`, echte services, build, migraties en runtimechecks pas kunnen afronden nadat de workspace/runtime-basis bestaat.
+Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Fase 3 Git-basis is voorbereid, maar `pnpm install/build/typecheck/test/lint` blijven open voor Codex.
 
-## Fase 3 Git-basis
+## Fase 4 Git-basis
 
-Aangemaakt of bijgewerkt voor Fase 3:
+Al aanwezig uit Fase 3:
 
 - root `package.json`
 - `pnpm-workspace.yaml`
@@ -57,6 +58,19 @@ Aangemaakt of bijgewerkt voor Fase 3:
 - `tests/workspace-boundaries.test.mjs`
 - `docs/architecture/workspace-boundaries.md`
 
+Aangemaakt of bijgewerkt voor Fase 4:
+
+- `db/migrations/0001_auth_foundation.sql`
+- `db/seeds/0001_initial_editor_admin.sql.template`
+- `packages/schemas/src/auth.ts`
+- `apps/api-server/src/auth-policy.ts`
+- `apps/api-server/src/auth-routes.ts`
+- `apps/editor-web/src/auth-client.ts`
+- `apps/game-web/src/auth-client.ts`
+- `tests/auth-boundaries.test.mjs`
+- `docs/architecture/auth-boundaries.md`
+- `ops/env/gk.example.env`
+
 ## Bevestigde grenzen
 
 - Apache blijft voorlopig de actieve hoofdwebserver.
@@ -69,10 +83,15 @@ Aangemaakt of bijgewerkt voor Fase 3:
 - Schemas, node-engine en node-types zijn aparte packages.
 - Net-protocol is apart.
 - Asset-worker leest generiek `GK_ASSET_SOURCE_DIR` en wijst geen runtime-rollen toe.
+- Editor-auth en game-auth zijn strikt gescheiden.
+- Game registratie is open en start met `pending_verification`.
+- Editorregistratie is niet publiek.
+- Eerste editor admin e-mail: `k3v1nc0@hotmail.com`.
+- Admin seed password/hash/secret blijven buiten Git.
 
 ## Open Kevin-input
 
-Geen blokkerende Fase 3-structuurinput open. Kevin heeft akkoord gegeven op de apps/packages-structuur uit `README/fase3.md`.
+Geen blokkerende Fase 4-input open.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
 
@@ -85,6 +104,11 @@ Codex moet nog uitvoeren in een omgeving met registry-toegang:
 - `pnpm typecheck`
 - `pnpm test`
 - `pnpm lint`
+- MySQL migraties draaien.
+- Admin seed secret buiten Git zetten.
+- Eerste editor admin seed uitvoeren met e-mail `k3v1nc0@hotmail.com`.
+- Runtime env controleren.
+- Database/auth smoke tests draaien op server.
 
 Fase 2-open serverpunten blijven ook open totdat runtime/build bestaat:
 
@@ -97,7 +121,6 @@ Fase 2-open serverpunten blijven ook open totdat runtime/build bestaat:
 
 ## Fasebeoordeling
 
-Fase 3 is niet volledig klaar zolang de workspace niet echt met pnpm is geinstalleerd en build/typecheck/test/lint niet via pnpm zijn geslaagd.
+Fase 4 is niet volledig klaar zolang de database migraties, admin seed en server-side smoke tests niet door Codex zijn uitgevoerd.
 
-Huidige status: Git-basis voorbereid; install/build/typecheck gate open.
-
+Huidige status: Fase 4 Git-basis voorbereid; Codex database migration/seed gate open.

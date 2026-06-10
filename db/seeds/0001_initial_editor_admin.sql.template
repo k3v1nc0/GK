@@ -1,0 +1,56 @@
+-- Fase 4 initial editor admin seed template.
+-- Render and run server-side only after Codex sets env/secrets outside Git.
+-- This template must never contain real passwords, hashes, tokens, or private values.
+
+START TRANSACTION;
+
+INSERT INTO editor_roles (slug, description)
+VALUES ('editor_admin', 'Editor administrator')
+ON DUPLICATE KEY UPDATE slug = VALUES(slug);
+
+INSERT INTO editor_users (
+  email,
+  normalized_email,
+  password_hash,
+  password_hash_algorithm,
+  is_email_verified,
+  is_active,
+  password_changed_at
+)
+VALUES (
+  '${GK_INITIAL_EDITOR_ADMIN_EMAIL}',
+  LOWER(TRIM('${GK_INITIAL_EDITOR_ADMIN_EMAIL}')),
+  '${GK_INITIAL_EDITOR_ADMIN_PASSWORD_HASH}',
+  '${GK_INITIAL_EDITOR_ADMIN_PASSWORD_HASH_ALGORITHM}',
+  1,
+  1,
+  CURRENT_TIMESTAMP(6)
+)
+ON DUPLICATE KEY UPDATE
+  is_email_verified = VALUES(is_email_verified),
+  is_active = VALUES(is_active),
+  updated_at = CURRENT_TIMESTAMP(6);
+
+INSERT IGNORE INTO editor_user_roles (editor_user_id, editor_role_id, assigned_by_editor_user_id)
+SELECT editor_users.id, editor_roles.id, NULL
+FROM editor_users
+JOIN editor_roles ON editor_roles.slug = 'editor_admin'
+WHERE editor_users.normalized_email = LOWER(TRIM('${GK_INITIAL_EDITOR_ADMIN_EMAIL}'));
+
+INSERT INTO audit_log (
+  actor_scope,
+  action,
+  target_scope,
+  target_id,
+  metadata_json
+)
+SELECT
+  'system',
+  'admin.seed',
+  'editor',
+  CAST(editor_users.id AS CHAR),
+  JSON_OBJECT('source', 'outside-git-seed')
+FROM editor_users
+WHERE editor_users.normalized_email = LOWER(TRIM('${GK_INITIAL_EDITOR_ADMIN_EMAIL}'));
+
+COMMIT;

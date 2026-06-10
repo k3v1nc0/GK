@@ -1,6 +1,8 @@
 import type { PublishedNodeEnvelope } from "@gk/schemas";
 import type { UiSurfaceDescriptor } from "@gk/shared-ui";
 
+export * from "./auth-client.js";
+
 export interface EditorWorkspaceBoot {
   readonly loadedNodeCount: number;
   readonly acceptsConcreteContent: false;
@@ -18,4 +20,3 @@ export function describeEditorBoot(nodes: readonly PublishedNodeEnvelope[]): Edi
     acceptsConcreteContent: false
   };
 }
-
