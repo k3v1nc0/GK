@@ -2,140 +2,110 @@
 
 ## Status
 
-Dit document is het levende projectcontract voor Fase 1 van het nieuwe gameproject. Het is geen definitieve lorebijbel en geen content seed. Het bepaalt welke keuzes Kevin moet aanleveren of goedkeuren voordat latere fases gamecontent mogen bouwen.
+Dit document is het levende Fase 1-contract voor de nieuwe game. Kevin heeft bevestigd dat `README/GameBibleNode.json` de actuele leidende Game Bible is voor deze nieuwe game.
 
-Fase 1 staat op: documentbasis opgezet, content-input gates open. De fase is niet volledig klaar zolang verplichte Kevin-input en de server-assetcontrole nog openstaan.
+Fase 1-status: klaar voor Fase 2, met asset- en content-gates voor latere fases.
 
-## Bronnen en conflictregel
+## Leidende bron
 
-Actuele repo-documentatie blijft een bron die opnieuw geopend moet worden wanneer een fase daarom vraagt. Voor Fase 1 zijn minimaal geraadpleegd:
+Leidend:
+
+- `README/GameBibleNode.json`
+  - schema: `gamebible-node-system-v6.23`
+  - versie: `6.23`
+  - updatedAt: `2026-06-10T07:35:24.409Z`
+
+Regel: concrete gamecontent mag alleen worden overgenomen uit `README/GameBibleNode.json` of uit latere expliciete Kevin-input. De AI mag geen extra definitieve content verzinnen buiten deze bron.
+
+Ondersteunende repo-documenten die toekomstige agents opnieuw moeten openen wanneer relevant:
 
 - `README/00-index.md`
 - `README/fase1.md`
 - `README/kevin-maaklijst.md`
 - `README/node-system-super-dynamic-contract.md`
 - `README/hard-facts-to-node-panels.md`
-- `README/fase7.md`, `README/fase9.md`, `README/fase13.md`, `README/fase14.md`, `README/fase15.md`, `README/fase16.md`, `README/fase17.md`
-- `README/GameBibleNode.json`
-- `README/story - The Staff of Eldoria.md`
+- relevante fasebestanden, vooral Fase 7, 9, 13, 14, 15, 16 en 17
 
-Belangrijk conflict: `README/GameBibleNode.json` en `README/story - The Staff of Eldoria.md` bevatten al concrete verhaal-, naam-, zone-, boss- en progression-content. Kevin heeft nu expliciet vastgelegd dat dit een 100% nieuw project is en dat oude gamecontext, definitieve namen en definitieve verhaalcontent niet mogen worden overgenomen zonder bevestiging. Daarom geldt voor Fase 1:
-
-- deze bestaande concrete content is niet automatisch bindend voor de nieuwe game;
-- toekomstige agents moeten deze content behandelen als te verifieren of te vervangen;
-- geen enkele naam, zone, quest, boss, currency of lore uit die bestanden mag stilzwijgend als definitieve nieuwe-game waarheid worden gebruikt.
+`README/story - The Staff of Eldoria.md` mag alleen als ondersteunende narratieve bron worden gebruikt wanneer dat consistent is met `README/GameBibleNode.json`. Bij conflict is `README/GameBibleNode.json` leidend.
 
 ## AI-regels
 
 De AI mag niet:
 
-- definitieve gamecontent verzinnen;
+- definitieve gamecontent verzinnen buiten `README/GameBibleNode.json` of expliciete Kevin-input;
 - dummy assets, nepmodellen of tijdelijke vervangers toevoegen;
-- definitieve namen, lore, quests, side quests, bosses, currencies, NPC-routes, dialogen, merchants, prices, levels, audio-keuzes, camerawaarden, lightingwaarden, minimap-lagen of HUD-instellingen invullen;
+- ontbrekende UI/audio/currency/economy/camera/light/minimap/merchant/boss/quest-waarden invullen als gok;
 - concrete content in runtimecode plaatsen;
 - ontbrekende Kevin-input verbergen achter helperlogica.
 
-Als verplichte input ontbreekt, stopt de fase of vervolgstap met een duidelijke lijst ontbrekende items.
+Als benodigde content niet in `README/GameBibleNode.json` staat en Kevin die niet aanvullend bevestigt, dan blijft het een content gate voor de betreffende latere fase.
 
-## Bekende Kevin-input
+## Bekende Fase 1-feiten
 
-Reeds bevestigd:
+Bevestigd:
 
 - Het project is 100% nieuw.
+- `README/GameBibleNode.json` is de leidende Game Bible.
 - Alles draait eerst op een eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- Er worden geen branches of pull requests gemaakt.
-- Codex doet serverwerk buiten Git.
+- `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` is door Codex gezet of bevestigd.
+- Codex heeft `/var/www/gk/assets` gecontroleerd.
+- Serverassets en repo-assets komen overeen voor de vier aanwezige GLB-bestanden.
 - Concrete gamecontent hoort niet in runtimecode.
 - De hoofdketen is `Database > Editor/Node-system > Publish > Runtime Game`.
 - Runtimecode bevat alleen engine-capabilities.
-- Concrete waardes moeten uit node-data, database, editorinput, Game Bible, asset register of registers komen.
-- 3D wereldobjecten gebruiken bestaande of later bewust gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden via nodes gekozen en ingesteld.
 
-## Open Kevin-input
+## Assetfeiten
 
-Deze input moet nog door Kevin worden bevestigd of later samen worden uitgewerkt:
+Codex heeft bevestigd:
 
-| Onderwerp | Status | Blokkeert definitieve content? |
-|---|---|---|
-| Assetpad | Kevin-input vereist | Ja, voor definitieve assetbron |
-| Game naam | Kevin-input vereist | Ja |
-| Startgebied | Kevin-input vereist | Ja |
-| Sfeer | Later samen uitwerken | Ja voor sfeercontent |
-| MMO-stijl | Later samen uitwerken | Ja voor camera, UI, combat en social feel |
-| Bestaande GLB-assets op server | Codex-controle vereist | Ja voor definitieve assetmapping |
-| Bestaande UI-assets op server | Codex-controle vereist | Ja voor UI-content |
-| Bestaande audio-assets op server | Codex-controle vereist | Ja voor audio-content |
-| Namen | Later samen uitwerken | Ja |
-| Quests | Later samen uitwerken | Ja |
-| Side quests | Later samen uitwerken | Ja |
-| Boss | Later samen uitwerken | Ja |
-| Currency | Later samen uitwerken | Ja |
+| Type | Aantal |
+|---|---:|
+| GLB | 4 |
+| UI images | 0 |
+| Audio | 0 |
 
-## Game identity
+Aanwezige GLB-bestanden:
 
-### Game naam
+- `Blacksmit forge.glb`
+- `Blacksmit.glb`
+- `Taverne.glb`
+- `Wizard.glb`
 
-Status: Kevin-input vereist.
+Er zijn geen submappen en geen dubbele bestandsnamen. `Blacksmit forge.glb` bevat een spatie; toekomstige asset tooling moet dit correct ondersteunen of expliciet valideren.
 
-Geen bestaande repo-naam of oude GameBible-naam mag als definitieve game naam worden gebruikt zonder nieuwe bevestiging.
-
-### Startgebied
-
-Status: Kevin-input vereist.
-
-Het startgebied mag pas worden vastgelegd wanneer Kevin het kiest of samen met de AI uitwerkt. Tot die tijd mogen systemen alleen generieke `world.zone`, `world.spawnPoint` en asset-koppelingen ondersteunen.
-
-### Sfeer
-
-Status: later samen uitwerken.
-
-Sfeer mag worden beschreven als ontwerpinput, maar mag nog geen definitieve lore, audio, lighting, weather, UI-stijl of kleurwaarden vastleggen.
-
-### MMO-stijl
-
-Status: later samen uitwerken.
-
-MMO-stijl moet later vertaald worden naar editor- en node-keuzes voor camera, controls, HUD, party, presence, combat, chat of social systems. Runtimecode mag hier geen concrete stijlkeuzes hard-coden.
+Deze assets zijn feitelijk geregistreerd. Ze zijn nog geen definitieve runtime-keuze voor player, NPC, merchant, boss, prop, environment of quest object.
 
 ## Contentsecties
 
-### Verhaal en lore
+### Game naam, lore, namen en progression
 
-Status: Kevin-input vereist.
+Bron: `README/GameBibleNode.json`.
 
-Er is nog geen definitieve nieuwe-game lore. Bestaande Staff of Eldoria-content in de repo is conflictcontent totdat Kevin die opnieuw bevestigt.
+Geen extra namen, lore of progression buiten deze bron verzinnen. Als een latere fase een waarde nodig heeft die niet duidelijk uit de GameBible JSON komt, moet die fase stoppen en Kevin-input vragen.
 
-### Namen
+### Quests en side quests
 
-Status: later samen uitwerken.
+Bron: `README/GameBibleNode.json`.
 
-Namen voor game, zones, NPCs, enemies, bosses, items, abilities, currencies en quests mogen alleen worden toegevoegd na Kevin-keuze of expliciete samen-uitwerking.
+Fase 14 en Fase 17 mogen questcontent alleen uit de GameBible JSON, editor/node-data of expliciete Kevin-input halen. Quest runtimecode blijft generiek.
 
-### Quests
+### Bosses en combat content
 
-Status: later samen uitwerken.
+Bron: `README/GameBibleNode.json` plus latere asset/role mappings.
 
-Questteksten, queststappen, objectives, beloningen en questnamen mogen niet in code of docs worden ingevuld zonder Kevin-input. Fase 14 en 17 moeten deze sectie opnieuw openen voordat ze questcontent bouwen.
+Fase 16 en Fase 17 moeten boss GLB, UI/audio en combatwaarden via nodes/registers koppelen. Geen damage, cooldown, boss phase, loot of audio hard-coden.
 
-### Side quests
+### Currency en economy
 
-Status: later samen uitwerken.
+Bron: GameBible JSON wanneer aanwezig, anders latere Kevin-input.
 
-Side quests volgen dezelfde regels als main quests. Geen side quest idee is definitief totdat Kevin het bevestigt.
+Economywaarden, prices, rewards, merchants, itemwaarden, XP en lootkansen blijven node/editor/database-data.
 
-### Boss
+### UI en audio
 
-Status: later samen uitwerken.
+Huidige assetstatus: 0 UI images en 0 audio aanwezig.
 
-Bossnaam, boss GLB, boss mechanics, boss audio, boss UI en loot mogen niet worden verzonnen. Fase 16 en 17 moeten blokkeren als deze input ontbreekt.
-
-### Currency
-
-Status: later samen uitwerken.
-
-Currency naam, icoon, startgeld, prices, merchant stock, rewards, XP en lootkansen zijn contentdata en geen runtimecode.
+UI/audio mogen later worden toegevoegd of gekozen via asset library en nodes. Totdat ze bestaan, blokkeren ze alleen fases die concrete UI/audio nodig hebben.
 
 ## Scheiding van verantwoordelijkheden
 
@@ -155,28 +125,26 @@ Runtime- en enginecode mag vaste capabilities bevatten:
 
 ### Contentdata
 
-Contentdata bevat concrete gamekeuzes zoals namen, verhaal, assets, camera-instellingen, lighting, minimap layers, quests, prices, merchant stock, levels, enemy data, boss mechanics en HUD-instellingen. Deze data hoort in database, registers, Game Bible, editorinput of node-data.
+Contentdata bevat concrete gamekeuzes uit GameBible JSON, database, registers, editorinput of node-data. Runtimecode beslist niet zelf welke concrete content bestaat.
 
 ### Editor/node-data
 
-De editor is de authoring-laag. Alle inhoudelijk instelbare gamekeuzes moeten als node-data of node-panel data beheerd kunnen worden. De bestaande node-contracten in `README/node-system-super-dynamic-contract.md` en `README/hard-facts-to-node-panels.md` zijn hierbij ondersteunende repo-bronnen die toekomstige agents opnieuw moeten openen.
+Alle inhoudelijk instelbare gamekeuzes moeten via editor/node-data beheerd kunnen worden. De node-contracten in `README/node-system-super-dynamic-contract.md` en `README/hard-facts-to-node-panels.md` blijven hiervoor verplichte ondersteunende bronnen.
 
 ### Publish/runtime gedrag
 
-Publish vertaalt database- en node-data naar runtime-consumeerbare projections. Runtime mag alleen gepubliceerde data consumeren en generieke engine-capabilities uitvoeren. Runtime mag niet zelf beslissen welke concrete gamecontent bestaat.
+Publish vertaalt database- en node-data naar runtime-consumeerbare projections. Runtime mag alleen gepubliceerde data consumeren en generieke engine-capabilities uitvoeren.
 
 ## Regels voor toekomstige contenttoevoeging
 
 Nieuwe content mag pas worden toegevoegd wanneer:
 
-1. De relevante Fase 1-gate is geopend en gecontroleerd.
-2. Kevin de concrete content heeft aangeleverd of goedgekeurd.
+1. De relevante gate is gecontroleerd.
+2. De content in `README/GameBibleNode.json` staat of Kevin die expliciet aanlevert/goedkeurt.
 3. De asset of data in het juiste register is opgenomen.
 4. De content via node-data of database-data kan worden beheerd.
-5. Publish-validatie kan bepalen of ontbrekende input blokkerend of waarschuwend is.
+5. Publish-validatie ontbrekende verplichte input kan blokkeren.
 6. Runtimecode alleen generieke capability gebruikt.
-
-Als een toekomstige fase content nodig heeft maar de input ontbreekt, is stoppen het correcte gedrag.
 
 ## Waarschuwing voor runtimecode
 
@@ -194,11 +162,9 @@ Als code zulke waarden nodig lijkt te hebben, moet eerst een node type, schema, 
 
 ## Latere fasehulp
 
-Dit document helpt latere fases zo:
-
-- Fase 7: asset/audio library mag alleen bestaande of bewust toegevoegde assets registreren; geen dummy assets.
-- Fase 9: world, camera, lighting, levels/zones en minimap moeten node-data zijn.
-- Fase 13: NPC assets, taken, routes, audio en schedules vereisen Kevin-input.
+- Fase 7: asset/audio library kan starten met bevestigd assetpad en 4 GLB-assets; UI/audio staan op 0 en vereisen latere toevoeging voor UI/audio-testflows.
+- Fase 9: world, camera, lighting, levels/zones en minimap blijven node-data.
+- Fase 13: NPC assets, taken, routes, audio en schedules vereisen GameBible JSON plus asset/role mappings.
 - Fase 15: economy, levels, money, merchants, inventory en scrolls vereisen node/database-data.
-- Fase 16: combat, attacks, boss mechanics en loot vereisen assets en Kevin-keuzes.
-- Fase 17: complete beginquest mag pas starten als Game Bible, registers en gates genoeg definitieve input bevatten.
+- Fase 16: combat, attacks, boss mechanics en loot vereisen GameBible JSON plus asset/UI/audio gates.
+- Fase 17: complete beginquest mag pas seeden wanneer GameBible JSON, registers en node-data genoeg concrete input bevatten.

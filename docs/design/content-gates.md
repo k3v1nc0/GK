@@ -2,16 +2,32 @@
 
 ## Definitie
 
-Een content gate is een expliciete poort die bepaalt of een fase, feature, fix, refactor of content-uitwerking mag doorgaan. De gate voorkomt dat ontbrekende Kevin-input wordt vervangen door aannames, dummy content of runtime-hardcoding.
+Een content gate is een expliciete poort die bepaalt of een fase, feature, fix, refactor of content-uitwerking mag doorgaan. De gate voorkomt dat ontbrekende input wordt vervangen door aannames, dummy content of runtime-hardcoding.
+
+Fase 1-status: gates opgezet, GameBible-bron bevestigd, serverassetscan afgerond.
+
+## Leidende contentbron
+
+Kevin heeft bevestigd:
+
+- `README/GameBibleNode.json` is de leidende Game Bible voor deze nieuwe game.
+
+Regel: concrete gamecontent mag alleen uit `README/GameBibleNode.json`, editor/node-data, registers, database of expliciete Kevin-input komen.
+
+Niet toegestaan:
+
+- extra definitieve content verzinnen buiten GameBible JSON;
+- oude twijfelmarkeringen gebruiken om GameBible JSON te negeren;
+- runtimecode vullen met concrete contentwaarden.
 
 ## Fail-fast regels
 
 Stop direct wanneer:
 
-- verplichte Kevin-input ontbreekt;
-- een asset verplicht is maar niet bestaat of niet gecontroleerd is;
+- een vereiste waarde niet in `README/GameBibleNode.json` staat en Kevin die ook niet aanvullend bevestigt;
+- een asset verplicht is maar niet bestaat of niet via asset library/node-data gekozen kan worden;
+- UI/audio verplicht is maar de huidige telling 0 is en Kevin nog niets heeft toegevoegd;
 - server/database/build/runtime context nodig is maar niet gecontroleerd kan worden;
-- bestaande repo-documentatie botst met de nieuwe-game instructies en niet veilig als verouderd of te verifieren kan worden gemarkeerd;
 - een oplossing concrete gamecontent in runtimecode zou plaatsen;
 - een helper ontbrekende core-architectuur zou maskeren;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
@@ -25,142 +41,92 @@ De AI mag niet:
 - improviseren bij ontbrekende contentinput;
 - placeholders of dummy content toevoegen;
 - dummy assets, nepmodellen of tijdelijke vervangers gebruiken;
-- definitieve contentnamen verzinnen;
-- runtime hard-coding gebruiken om content of waardes te laten werken;
-- oude of onbevestigde GameBible-content als nieuwe-game contract overnemen.
+- definitieve contentnamen verzinnen buiten `README/GameBibleNode.json` of Kevin-input;
+- runtime hard-coding gebruiken om content of waardes te laten werken.
 
-## Blokkerende input
+## Afgeronde Fase 1-gates
 
-Deze input blokkeert wanneer de fase of feature haar concreet nodig heeft:
+| Gate | Status |
+|---|---|
+| Leidende Game Bible | Afgerond: `README/GameBibleNode.json` |
+| Assetpad | Afgerond: `/var/www/gk/assets` |
+| Env var | Afgerond: `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` |
+| GLB telling | Afgerond: 4 |
+| UI telling | Afgerond: 0 |
+| Audio telling | Afgerond: 0 |
+| Repo/server asset match | Afgerond: exact gelijk |
+| Duplicate filenames | Afgerond: geen dubbele namen |
+| Runtimecode scope | Afgerond: geen runtimecode gewijzigd |
+
+## Open gates voor latere fases
 
 | Input | Wanneer blokkerend |
 |---|---|
-| Game naam | Zodra branding, title, UI, docs of content seed een definitieve naam nodig heeft |
-| Startgebied | Zodra world, camera, lighting, minimap, ambience of beginquest een concrete locatie nodig heeft |
-| Assetpad | Zodra asset-worker, asset library of publish assets moet scannen |
-| GLB assets | Zodra player/NPC/enemy/boss/object visuals verplicht zijn |
+| GLB role mapping | Zodra een fase player/NPC/enemy/boss/object rol nodig heeft |
 | UI assets | Zodra HUD, inventory, merchant, quest tracker, scrolls of boss UI verplicht zijn |
 | Audio assets | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio verplicht zijn |
-| Namen | Zodra NPCs, bosses, quests, zones, items, abilities of currency definitief worden |
-| Story/lore | Zodra quest/dialogue/story seed wordt gemaakt |
-| Quests | Zodra quest system concrete content nodig heeft |
-| Side quests | Zodra side quest content nodig is |
-| Boss | Zodra combat/boss phase/loot/content seed nodig is |
-| Currency/economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
+| Asset filename met spatie | Zodra scanner/URL/database/node IDs spaties niet veilig ondersteunen |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
+| Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist |
-
-## Open ontwerpbeslissingen
-
-Deze input mag als open worden geregistreerd zonder Fase 1-documentopzet te blokkeren:
-
-- game naam;
-- startgebied;
-- sfeer;
-- MMO-stijl;
-- namen;
-- quests;
-- side quests;
-- boss;
-- currency;
-- camera stijl;
-- lighting richting;
-- minimap vorm;
-- economy/balancing richting;
-- audio-richting.
-
-Voorwaarde: het document mag geen definitieve waarde invullen en de fase mag niet als volledig klaar worden gemarkeerd.
 
 ## Gate-checks per domein
 
 ### Assets
 
-- Zijn repo-assets en server-assets apart benoemd?
-- Is `/var/www/gk/assets` door Codex gecontroleerd?
-- Is `GK_ASSET_SOURCE_DIR` ingesteld?
-- Zijn GLB/UI/audio aantallen bekend?
-- Zijn assetrollen door Kevin gekozen?
+- `/var/www/gk/assets` is gecontroleerd.
+- `GK_ASSET_SOURCE_DIR` is bevestigd.
+- GLB/UI/audio aantallen zijn bekend.
+- Assetrollen zijn nog niet definitief gekozen; dat hoort via editor/node-data.
+- `Blacksmit forge.glb` bevat een spatie en moet in Fase 7 als filename/ID/URL-validatiepunt worden getest.
 
 ### UI
 
-- Bestaan de benodigde UI assets?
-- Zijn ze via asset library gekozen?
-- Zijn HUD/panel/dock instellingen node-data?
+- Huidige telling: 0 UI images.
+- UI-assets moeten later worden toegevoegd of gekozen via asset library.
+- HUD/panel/dock instellingen blijven node-data.
 
 ### Audio
 
-- Bestaan de benodigde audio assets?
-- Zijn music, ambience, SFX, UI audio en eventuele voice/dialogue via nodes gekoppeld?
-- Zijn loopgedrag en mixcategorie editor-data?
+- Huidige telling: 0 audio assets.
+- Music, ambience, SFX, UI audio en voice/dialogue moeten later via audio nodes en asset library worden gekoppeld.
 
-### Story/lore
+### Story/lore/names
 
-- Is lore door Kevin aangeleverd of goedgekeurd?
-- Is oude/onbevestigde repo-story niet stilzwijgend overgenomen?
+- Leidende bron: `README/GameBibleNode.json`.
+- Geen extra namen of lore verzinnen buiten GameBible JSON of Kevin-input.
 
-### Names
+### Quests en side quests
 
-- Zijn namen definitief gekozen?
-- Zijn namen data, niet code?
+- Leidende bron: `README/GameBibleNode.json`.
+- Quest runtimecode blijft generiek.
+- Ontbrekende concrete questvelden blijven content gates.
 
-### Quests
+### Boss en combat
 
-- Zijn questnaam, stappen, objectives, dialogue, rewards en sharing-regels gekozen?
-- Zijn quest nodes en publish-validatie aanwezig?
+- Leidende bron: `README/GameBibleNode.json`.
+- Boss GLB, UI/audio en combatwaarden moeten via assets/registers/nodes worden gekoppeld.
 
-### Side quests
+### Currency en economy
 
-- Is side quest idee en scope gekozen?
-- Zijn side quest rewards en UI/audio assets beschikbaar indien verplicht?
-
-### Boss
-
-- Is boss GLB gekozen?
-- Zijn bossnaam, phases, UI, music/audio, loot en mechanics gekozen?
-
-### Currency
-
-- Zijn currency naam, icoon en basisregels gekozen?
-
-### Camera
-
-- Zijn camera mode, afstand, hoogte, zoom, smoothing en bounds data?
-
-### Lighting
-
-- Zijn sun, ambient, fog, sky en day/night data?
-
-### Minimap
-
-- Zijn editor/game views, layers, markers, zoom en visibility rules data?
-
-### Economy
-
-- Zijn money, prices, merchants, rewards, item values, XP en loot data?
-
-### Levels
-
-- Zijn levels/zones en unlocks via node/database-data beheerd?
-
-### Merchants
-
-- Zijn merchant NPC, stock, prices, buy/sell regels, UI en audio assets gekozen?
+- Leidende bron: GameBible JSON wanneer aanwezig, anders Kevin-input.
+- Geen economywaarden hard-coden.
 
 ### Node-data
 
-- Is alle concrete content beheerbaar via editor/node-system?
-- Bestaan validators voor verplichte velden?
-- Zijn defaults alleen generiek en niet concrete gamecontent?
+- Alle concrete content moet beheerbaar zijn via editor/node-system.
+- Validators moeten verplichte velden kunnen blokkeren.
+- Defaults mogen alleen generiek zijn, niet concrete gamecontent.
 
 ### Publish/runtime
 
-- Consumeert runtime alleen gepubliceerde data?
-- Blokkeert publish ontbrekende verplichte data?
-- Geeft publish waarschuwingen voor optionele of kwaliteitsproblemen?
+- Runtime consumeert alleen gepubliceerde data.
+- Publish blokkeert ontbrekende verplichte data.
+- Publish mag waarschuwingen geven voor optionele of kwaliteitsproblemen.
 
 ## Te verifieren fase-input voor latere fases
 
-Nieuwe agents moeten altijd eerst `README/current-phase.md`, `docs/design/phase-plan/current-phase.md`, het relevante fasebestand, deze gates, de registers en het node-contract openen.
+Nieuwe agents moeten altijd eerst `README/current-phase.md`, `docs/design/phase-plan/current-phase.md`, het relevante fasebestand, deze gates, de registers, `README/GameBibleNode.json` en het node-contract openen.
 
 ### Fase 7
 
@@ -171,13 +137,14 @@ Bronnen eerst openen:
 - `docs/design/audio-register.md`
 - `README/node-system-super-dynamic-contract.md`
 
-Input vooraf:
+Input/status vooraf:
 
 - assetpad bevestigd;
-- `/var/www/gk/assets` door Codex gecontroleerd;
+- `/var/www/gk/assets` gecontroleerd;
 - `GK_ASSET_SOURCE_DIR` gezet;
 - GLB/UI/audio telling beschikbaar;
-- minimaal benodigde assets door Kevin gekozen voor de fase;
+- GLB=4, UI=0, audio=0;
+- spatie in `Blacksmit forge.glb` testen in scanner/URL/database/node IDs;
 - geen assets in Git toevoegen als server-assetflow leidend is.
 
 ### Fase 9
@@ -187,14 +154,12 @@ Bronnen eerst openen:
 - `README/fase9.md`
 - `docs/design/world-settings-plan.md`
 - `docs/design/asset-register.md`
+- `README/GameBibleNode.json`
 
 Input vooraf:
 
-- startgebied gekozen;
-- camera stijl en waarden gekozen;
-- startlicht, ambient, fog en sky gekozen;
-- minimap vorm/zoom en editor/game verschil gekozen;
-- eerste level/zone naam gekozen;
+- world/camera/light/minimap waarden uit GameBible JSON, editor-data of Kevin-input;
+- startgebied en zones uit GameBible JSON of Kevin-input;
 - alle waarden als node-data, niet runtimecode.
 
 ### Fase 13
@@ -205,14 +170,14 @@ Bronnen eerst openen:
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
 - `docs/design/game-bible.md`
+- `README/GameBibleNode.json`
 
 Input vooraf:
 
-- questgiver, friendly NPC en merchant GLB gekozen;
-- NPC namen of testzinnen door Kevin goedgekeurd;
-- NPC taakgeluiden en ambience beschikbaar;
-- routes, werkplekken, spawngebieden en respawn timings gekozen;
-- NPC state server-owned en node-driven.
+- NPC content uit GameBible JSON;
+- GLB role mappings via editor;
+- audio staat nu op 0 en blokkeert verplichte NPC-audio totdat Kevin audio toevoegt;
+- routes, werkplekken, spawngebieden en respawn timings blijven node-data.
 
 ### Fase 15
 
@@ -222,16 +187,12 @@ Bronnen eerst openen:
 - `docs/design/economy-plan.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
+- `README/GameBibleNode.json`
 
 Input vooraf:
 
-- currency naam en icoon gekozen;
-- startgeld gekozen;
-- item icons en prijzen gekozen;
-- merchant stock gekozen;
-- inventory UI gekozen;
-- scroll background en scroll tekst gekozen;
-- level curve of basisregels gekozen;
+- currency/economy uit GameBible JSON of Kevin-input;
+- UI assets staan nu op 0 en blokkeren verplichte inventory/merchant/scroll UI totdat Kevin UI toevoegt;
 - geen economywaarden hard-coded.
 
 ### Fase 16
@@ -243,15 +204,13 @@ Bronnen eerst openen:
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
 - `docs/design/game-bible.md`
+- `README/GameBibleNode.json`
 
 Input vooraf:
 
-- enemy minion GLB gekozen;
-- boss GLB gekozen;
-- loot drop GLB gekozen;
-- attack icons/audio gekozen;
-- boss health UI/music/audio gekozen;
-- attack namen, boss naam, loot item en mechanics gekozen;
+- boss/enemy/combat content uit GameBible JSON;
+- GLB role mappings via editor;
+- audio/UI staan nu op 0 en blokkeren verplichte boss/combat audio/UI totdat Kevin assets toevoegt;
 - damage, cooldowns, loot en phases als node-data.
 
 ### Fase 17
@@ -259,6 +218,7 @@ Input vooraf:
 Bronnen eerst openen:
 
 - `README/fase17.md`
+- `README/GameBibleNode.json`
 - `docs/design/game-bible.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
@@ -268,23 +228,11 @@ Bronnen eerst openen:
 
 Input vooraf:
 
-- Game Bible compleet genoeg voor eerste speelbare content;
-- alle namen definitief;
-- dialogen definitief;
-- beginquest en side quest definitief;
-- currency, merchant en levels ingevuld;
+- GameBible JSON is leidend voor beginquest-content;
 - alle required GLB/UI/audio roles gemapt;
-- Codex asset scan en serverchecks uitgevoerd;
+- UI/audio staan nu op 0 en blokkeren complete content als die assets verplicht zijn;
 - content seed alleen via node-data en publish.
 
 ## Fase 14 tussenpoort
 
-Fase 14 is niet in de gevraagde kernlijst genoemd, maar ligt functioneel tussen Fase 13 en 15 en beheert quests, story, side quests en party sharing. Nieuwe agents moeten `README/fase14.md` openen voordat questcontent wordt gebouwd.
-
-Input vooraf:
-
-- eerste questnaam;
-- minimaal 1 side quest idee;
-- queststappen;
-- party sharing gedrag;
-- quest tracker UI/audio.
+Fase 14 beheert quests, story, side quests en party sharing. Nieuwe agents moeten `README/fase14.md` en `README/GameBibleNode.json` openen voordat questcontent wordt gebouwd.

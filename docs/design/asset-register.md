@@ -2,16 +2,16 @@
 
 ## Status
 
-Dit register is de Fase 1-poort voor GLB-, UI- en assetgebruik. Het registreert alleen geverifieerde bronnen en open input. Het wijst nog geen definitieve gameplayrollen toe.
+Dit register is de Fase 1-poort voor GLB-, UI- en assetgebruik. Codex heeft de serverassets gecontroleerd.
 
-Fase-status: documentbasis opgezet, asset-input gates open.
+Fase 1-status: assetbron bevestigd, assets feitelijk geregistreerd, role/content gates open voor latere fases.
 
 ## Asset source policy
 
 Assets mogen alleen worden gebruikt wanneer hun bron is bevestigd:
 
-- repo-assets: bestanden die in de repository staan en door de repo-controle zijn gezien;
-- server-assets: bestanden onder `/var/www/gk/assets` nadat Codex ze buiten Git heeft gecontroleerd;
+- repo-assets: bestanden die in de repository staan;
+- server-assets: bestanden onder `/var/www/gk/assets`;
 - later bewust gemaakte assets: assets die Kevin later toevoegt, kiest of goedkeurt.
 
 Niet toegestaan:
@@ -19,60 +19,74 @@ Niet toegestaan:
 - dummy assets;
 - nepmodellen;
 - tijdelijke vervangers;
-- definitieve assetnamen die niet uit repo- of servercontrole komen;
+- definitieve runtime-roltoewijzing zonder node/editor-data;
 - runtime-hardcoding van concrete assetkeuzes.
 
 ## Assetpaden
 
 | Pad | Status | Eigenaar controle | Opmerking |
 |---|---|---|---|
-| `assets/` in repo | Beperkt gecontroleerd | GK Code Copiloot via GitHub | Vier `.glb`-bestanden zichtbaar in repo-assets. |
-| `/var/www/gk/assets` | Te controleren | Codex buiten Git | Serverpad mag niet als geinventariseerd worden geclaimd totdat Codex telt. |
-| `GK_ASSET_SOURCE_DIR` | Te zetten | Codex buiten Git | Moet naar de gekozen assetbron wijzen. |
+| `assets/` in repo | Bevestigd | GK Code Copiloot via GitHub | Vier `.glb`-bestanden aanwezig. |
+| `/var/www/gk/assets` | Bevestigd | Codex buiten Git | Exact dezelfde vier GLB-bestanden aanwezig. |
+| `GK_ASSET_SOURCE_DIR` | Bevestigd | Codex buiten Git | `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` |
 
-## Repo assettelling
+## Server assettelling
 
-Deze telling is alleen gebaseerd op zichtbare repo-assets, niet op `/var/www/gk/assets`.
+Codex heeft bevestigd:
 
-| Type | Repo-telling | Server-telling | Status |
-|---|---:|---:|---|
-| GLB | 4 | Onbekend | Repo bevestigd, server open |
-| UI image | 0 zichtbaar | Onbekend | Kevin/Codex-input vereist |
-| Audio | 0 zichtbaar | Onbekend | Kevin/Codex-input vereist |
+| Type | Aantal | Status |
+|---|---:|---|
+| GLB | 4 | Aanwezig |
+| UI image | 0 | Niet aanwezig; latere asset gate |
+| Audio | 0 | Niet aanwezig; latere audio gate |
+
+Aanvullend:
+
+- Geen submappen onder `/var/www/gk/assets`.
+- Geen dubbele bestandsnamen.
+- Repo-assets zijn exact aanwezig op server.
+- Git bleef schoon bij de Codex-servercontrole.
+- `Blacksmit forge.glb` bevat een spatie in de bestandsnaam.
 
 ## GLB assets
 
-Deze bestanden bestaan in de repo. Hun rol is nog niet definitief.
+Deze bestanden bestaan in repo en server. Hun gameplayrol is nog niet definitief.
 
-| Assetpad | Status | Herkomst | Toegestaan gebruik | Gekoppelde nodes | Ontbrekende input |
+| Assetpad | Serverbestand | Status | Toegestaan gebruik | Gekoppelde nodes | Open gate |
 |---|---|---|---|---|---|
-| `assets/Blacksmit forge.glb` | Repo aanwezig | Repo asset | Kandidaat GLB asset na asset scan; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Serverbevestiging, metadata, role/capability-keuze |
-| `assets/Blacksmit.glb` | Repo aanwezig | Repo asset | Kandidaat GLB asset na asset scan; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Serverbevestiging, metadata, role/capability-keuze |
-| `assets/Taverne.glb` | Repo aanwezig | Repo asset | Kandidaat GLB asset na asset scan; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Serverbevestiging, metadata, role/capability-keuze |
-| `assets/Wizard.glb` | Repo aanwezig | Repo asset | Kandidaat GLB asset na asset scan; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Serverbevestiging, metadata, role/capability-keuze |
+| `assets/Blacksmit forge.glb` | `/var/www/gk/assets/Blacksmit forge.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Blacksmit.glb` | `/var/www/gk/assets/Blacksmit.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Taverne.glb` | `/var/www/gk/assets/Taverne.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Wizard.glb` | `/var/www/gk/assets/Wizard.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
 
-Let op: bestandsnamen zijn repo-feiten, geen definitieve gamecontent. Een assetnaam bepaalt nog niet of iets player, NPC, merchant, enemy, boss, prop of environment is.
+Let op: bestandsnamen zijn feiten, geen definitieve gamecontentbeslissing. Een assetnaam bepaalt nog niet of iets player, NPC, merchant, enemy, boss, prop, environment of quest object is.
+
+## Filename gate
+
+`Blacksmit forge.glb` bevat een spatie. Fase 7 moet controleren dat scanner, asset IDs, URLs, database records en node pickers dit correct ondersteunen. Als de pipeline geen spaties veilig ondersteunt, moet Fase 7 een structurele normalisatie- of validatieregel ontwerpen voordat assets worden gepubliceerd.
 
 ## UI assets
 
-Status: geen UI-assets zichtbaar in de repo-assets tijdens Fase 1-controle.
+Status: 0 UI images aanwezig.
 
-UI-assets moeten later via asset library en nodes gekozen worden. Vereiste velden voor registratie:
+UI-assets moeten later via asset library en nodes gekozen of toegevoegd worden. Dit blokkeert Fase 1 niet, maar blokkeert latere flows die concrete UI assets vereisen.
+
+Vereiste registratievelden:
 
 | Veld | Betekenis |
 |---|---|
-| Assetpad | Repo- of serverpad na controle |
+| Assetpad | Serverpad na scan |
 | Status | `available`, `missing`, `needs-kevin-choice`, `blocked` |
-| Herkomst | Repo, server, Kevin-made, later import |
+| Herkomst | Server, Kevin-made, later import |
 | Toegestaan gebruik | HUD, inventory, dialogue, scroll, minimap, merchant, quest, boss UI |
 | Gekoppelde nodes | Bijvoorbeeld `ui.imageAsset`, `ui.iconAsset`, `hud.panel`, `hud.minimap` |
 | Ontbrekende input | Welke keuze of asset nog nodig is |
 
 ## Audio assets
 
-Audio-assets worden beheerd in `docs/design/audio-register.md`. Dit asset-register verwijst daarnaar voor muziek, ambience, SFX, UI-audio en voice/dialogue.
+Status: 0 audio assets aanwezig.
 
-Status: geen audio-assets zichtbaar in de repo-assets tijdens Fase 1-controle.
+Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag later worden toegevoegd of gekozen via asset library en audio nodes.
 
 ## Assetstatussen
 
@@ -80,10 +94,10 @@ Gebruik deze statussen in latere fases:
 
 | Status | Betekenis |
 |---|---|
-| `repo-present` | Bestand staat in de repo en is gezien. |
 | `server-present` | Bestand staat onder `/var/www/gk/assets` en Codex heeft het geteld. |
-| `needs-kevin-choice` | Asset bestaat mogelijk, maar Kevin moet rol of gebruik kiezen. |
-| `needs-codex-scan` | Server- of metadata-scan is nog niet uitgevoerd. |
+| `repo-present` | Bestand staat ook in de repo-assets. |
+| `needs-kevin-choice` | Asset bestaat, maar Kevin/editor moet rol of gebruik kiezen. |
+| `missing` | Asset is niet aanwezig. |
 | `blocked` | Asset is verplicht voor de fase en ontbreekt. |
 | `warning-only` | Asset is optioneel of mist niet-blokkerende metadata. |
 
@@ -101,13 +115,11 @@ Latere fases moeten deze assetkoppelingen via nodes beheren:
 
 ## Codex-taken buiten Git
 
-Codex moet buiten Git uitvoeren:
+Afgerond voor Fase 1:
 
-1. Controleer `/var/www/gk/assets`.
-2. Tel GLB-, UI- en audiobestanden.
-3. Rapporteer ontbrekende of dubbele assets.
-4. Stel `GK_ASSET_SOURCE_DIR` in.
-5. Controleer leesrechten voor runtime/editor asset-worker.
-6. Bevestig of repo-assets ook op de server aanwezig zijn of bewust apart blijven.
+1. `/var/www/gk/assets` gecontroleerd.
+2. GLB-, UI- en audiobestanden geteld.
+3. `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` bevestigd.
+4. Repo-assets en server-assets vergeleken.
 
-Tot deze taken klaar zijn, is server-assetstatus onbekend.
+Latere fases kunnen nieuwe serverchecks nodig hebben wanneer assets worden toegevoegd of wanneer asset-worker, watcher, rechten, metadata-extractie of runtime serving worden gebouwd.
