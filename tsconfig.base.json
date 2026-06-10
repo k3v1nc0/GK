@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@gk/schemas": ["packages/schemas/src/index.ts"],
+      "@gk/node-engine": ["packages/node-engine/src/index.ts"],
+      "@gk/node-types": ["packages/node-types/src/index.ts"],
+      "@gk/net-protocol": ["packages/net-protocol/src/index.ts"],
+      "@gk/shared-ui": ["packages/shared-ui/src/index.ts"],
+      "@gk/shared-utils": ["packages/shared-utils/src/index.ts"],
+      "@gk/renderer-runtime": ["packages/renderer-runtime/src/index.ts"],
+      "@gk/audio-runtime": ["packages/audio-runtime/src/index.ts"]
+    }
+  }
+}
+

@@ -1,0 +1,17 @@
+{
+  "name": "@gk/editor-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@gk/schemas": "workspace:*",
+    "@gk/shared-ui": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  }
+}
+

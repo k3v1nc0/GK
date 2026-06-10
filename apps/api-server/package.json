@@ -1,0 +1,17 @@
+{
+  "name": "@gk/api-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@gk/net-protocol": "workspace:*",
+    "@gk/schemas": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  }
+}
+

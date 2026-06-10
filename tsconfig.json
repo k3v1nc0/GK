@@ -1,0 +1,21 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/schemas" },
+    { "path": "packages/node-types" },
+    { "path": "packages/node-engine" },
+    { "path": "packages/net-protocol" },
+    { "path": "packages/shared-ui" },
+    { "path": "packages/shared-utils" },
+    { "path": "packages/renderer-runtime" },
+    { "path": "packages/audio-runtime" },
+    { "path": "apps/editor-web" },
+    { "path": "apps/game-web" },
+    { "path": "apps/api-server" },
+    { "path": "apps/realtime-gateway" },
+    { "path": "apps/world-service" },
+    { "path": "apps/publish-service" },
+    { "path": "apps/asset-worker" }
+  ]
+}
+
