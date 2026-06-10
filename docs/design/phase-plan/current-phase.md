@@ -6,9 +6,9 @@ Actieve fase: Fase 2 - Serverfundering onder `/var/www/gk`.
 
 ## Status
 
-Fase-status: Fase 2 Git-basis voorbereid; Codex serveractivatie open.
+Fase-status: Fase 2 serverfundering grotendeels uitgevoerd; runtime, endpoint-env-update en definitieve webserver/service-activatie open.
 
-Fase 2 is niet volledig server-klaar zolang domein/subpad niet is bevestigd en Codex de server-side activatie en checks nog niet heeft uitgevoerd.
+Fase 2 is niet volledig server-klaar zolang `/etc/gk/gk.env` nog endpoint-placeholders kan bevatten, Apache/Nginx keuze openstaat, `/var/www/gk/current` leeg is en er geen echte runtime/build/systemd service actief is.
 
 ## Doel
 
@@ -56,6 +56,26 @@ Geopend of gecontroleerd voor deze fase:
 - GLB-assets hebben nog geen definitieve runtime-role mapping.
 - UI/audio blijven latere asset/content gates.
 
+## Bevestigde endpoints
+
+Kevin heeft bevestigd:
+
+| Endpoint | Waarde |
+|---|---|
+| Game | `https://gk-k3v1nc0.duckdns.org/` |
+| Editor | `https://gk-k3v1nc0.duckdns.org/editor` |
+
+Voor env en templates is dit genormaliseerd naar:
+
+| Env | Waarde |
+|---|---|
+| `GAME_DOMAIN` | `gk-k3v1nc0.duckdns.org` |
+| `GAME_PUBLIC_PATH` | `/` |
+| `EDITOR_DOMAIN` | `gk-k3v1nc0.duckdns.org` |
+| `EDITOR_PUBLIC_PATH` | `/editor` |
+
+Open Codex-taak: `/etc/gk/gk.env` buiten Git bijwerken met deze waarden, omdat de eerdere serverrun nog placeholderwaarden meldde.
+
 ## Wat is aangemaakt of bijgewerkt
 
 - `docs/ops/server-layout.md`
@@ -82,31 +102,42 @@ Geopend of gecontroleerd voor deze fase:
 | `ops/systemd/*.service.template` | Service-templates met buiten-Git `EnvironmentFile=/etc/gk/gk.env`. |
 | `docs/ops/server-layout.md` | Blijvend serverlayout- en activatiecontract. |
 
+## Codex serverresultaat
+
+Codex heeft buiten Git gemeld:
+
+- `/var/www/gk`, `/var/www/gk/assets` en runtime directories bestaan.
+- `/etc/gk/gk.env` bestaat buiten Git als `root:gk` `0640`.
+- `/etc/gk/nginx/*`, `/etc/gk/systemd-verify/*` en `/etc/apache2/conf-available/gk-hardening.conf` zijn buiten Git aangemaakt.
+- `ops/scripts/create-runtime-dirs`: OK.
+- `ops/scripts/check-host`: OK met 0 warnings, maar domein/env stonden toen technisch nog als placeholders.
+- `ops/scripts/check-assets`: OK met 1 warning voor `Blacksmit forge.glb` met spatie.
+- MySQL actief/enabled; database `gk` en user `gk_app@127.0.0.1` aangemaakt/gecontroleerd.
+- Redis geinstalleerd, actief/enabled; `redis-cli ping` gaf `PONG`.
+- Nginx geinstalleerd; candidate config gevalideerd met `nginx -t`, maar bewust inactive/disabled omdat Apache poort 80 gebruikt.
+- Apache-hardening is geactiveerd en configtest/reload zijn uitgevoerd.
+- systemd templates zijn gevalideerd met `systemd-analyze verify`, maar geen `gk-*.service` units geinstalleerd of gestart.
+- Server Git-status bleef schoon.
+
 ## Open Kevin-input
 
-Nog te bevestigen voor volledige serveractivatie:
+Geen blokkerende Fase 2 endpoint-input meer open.
 
-- `GAME_PUBLIC_PATH`
-- `EDITOR_PUBLIC_PATH`
-- `GAME_DOMAIN`
-- `EDITOR_DOMAIN`
+Nog beleidsmatig te kiezen voordat volledige webserveractivatie kan afronden:
 
-Deze input blokkeert de Git-basis niet, omdat templates veilige placeholders gebruiken. Ze blokkeert wel volledige serveractivatie.
+- Apache actief laten en Nginx later migreren;
+- of Apache/Nginx rolverdeling wijzigen zodat Nginx definitief kan activeren.
 
 ## Open Codex-taken buiten Git
 
-Codex moet buiten Git uitvoeren:
+Codex moet buiten Git nog uitvoeren:
 
-1. `/var/www/gk` en runtime directories aanmaken of bevestigen met `ops/scripts/create-runtime-dirs`.
-2. Users, groups, ownership en rechten instellen.
-3. `/etc/gk/gk.env` of afgesproken buiten-Git secretlocatie aanmaken.
-4. Echte MySQL database/user/secrets maken.
-5. Redis installeren of bevestigen.
-6. Nginx-template renderen met Kevin-bevestigde domeinen/subpaden en `nginx -t` draaien.
-7. systemd templates renderen/installeren, `daemon-reload` draaien en services pas starten wanneer runtime/build beschikbaar is.
-8. `ops/scripts/check-host` op de server draaien.
-9. `ops/scripts/check-assets` op de server draaien.
-10. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
+1. `/etc/gk/gk.env` endpointvelden vervangen door de nu bevestigde waarden.
+2. `ops/scripts/check-host` opnieuw draaien; het script detecteert nu placeholderwaarden.
+3. Apache/Nginx migratiekeuze uitvoeren.
+4. `/var/www/gk/current` vullen zodra runtime/build bestaat.
+5. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
+6. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
 
 ## Checks
 
@@ -131,13 +162,23 @@ Niet volledig uitvoerbaar in deze omgeving:
 
 Fase 2 is Git-basis voorbereid.
 
+Serverfundering is ook grotendeels uitgevoerd door Codex:
+
+- directories/users/rechten;
+- buiten-Git env/secrets;
+- MySQL;
+- Redis;
+- Nginx candidate-validatie;
+- Apache-hardening;
+- systemd template-validatie;
+- host/assets checks.
+
 Niet markeren als volledig server-klaar totdat:
 
-- Codex serveractivatie heeft uitgevoerd;
-- domein/subpad door Kevin is bevestigd of expliciet niet-blokkerend is gemaakt;
-- `create-runtime-dirs`, `check-host` en `check-assets` op de server zijn gedraaid;
-- Nginx en systemd server-side zijn gevalideerd;
-- echte secrets buiten Git zijn geplaatst;
+- endpointwaarden in `/etc/gk/gk.env` zijn bijgewerkt en opnieuw gecheckt;
+- Apache/Nginx keuze is afgerond;
+- `/var/www/gk/current` een echte runtime/build bevat;
+- systemd services definitief zijn geinstalleerd/gestart wanneer `ExecStart` bestaat;
 - beschikbare build/migratie/runtime checks zijn uitgevoerd zodra tooling bestaat.
 
-Fase 3 mag pas starten als Kevin accepteert dat Fase 2 nog serveractivatie-gates open heeft, of nadat Codex deze gates sluit.
+Fase 3 mag pas starten als Kevin accepteert dat Fase 2 nog runtime/webserver/service-gates open heeft, of nadat Codex deze gates sluit.

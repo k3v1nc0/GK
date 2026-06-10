@@ -6,6 +6,7 @@ GK_ASSET_SOURCE_DIR="${GK_ASSET_SOURCE_DIR:-$APP_BASE_DIR/assets}"
 ENV_FILE="${GK_ENV_FILE:-/etc/gk/gk.env}"
 REQUIRE_SERVER_TOOLS="${REQUIRE_SERVER_TOOLS:-0}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-0}"
+REQUIRE_PUBLIC_ENDPOINTS="${REQUIRE_PUBLIC_ENDPOINTS:-0}"
 
 failures=0
 warnings=0
@@ -59,6 +60,33 @@ check_command() {
   fi
 }
 
+is_placeholder_value() {
+  local value="$1"
+
+  [[ "$value" == "__CONFIRM_WITH_KEVIN__" || "$value" == __*__ ]]
+}
+
+check_public_endpoint() {
+  local name="$1"
+  local value="${!name:-}"
+
+  if [[ -z "$value" ]]; then
+    if [[ "$REQUIRE_PUBLIC_ENDPOINTS" == "1" ]]; then
+      fail "$name is not set"
+    else
+      warn "$name is not set yet; Kevin must confirm domain/subpath before full server activation"
+    fi
+  elif is_placeholder_value "$value"; then
+    if [[ "$REQUIRE_PUBLIC_ENDPOINTS" == "1" ]]; then
+      fail "$name still contains placeholder value: $value"
+    else
+      warn "$name still contains placeholder value: $value"
+    fi
+  else
+    info "$name is set to $value"
+  fi
+}
+
 info "using APP_BASE_DIR=$APP_BASE_DIR"
 info "using GK_ASSET_SOURCE_DIR=$GK_ASSET_SOURCE_DIR"
 info "using GK_ENV_FILE=$ENV_FILE"
@@ -94,11 +122,7 @@ check_command redis-cli
 check_command node
 
 for name in GAME_DOMAIN EDITOR_DOMAIN GAME_PUBLIC_PATH EDITOR_PUBLIC_PATH; do
-  if [[ -z "${!name:-}" ]]; then
-    warn "$name is not set yet; Kevin must confirm domain/subpath before server activation is complete"
-  else
-    info "$name is set"
-  fi
+  check_public_endpoint "$name"
 done
 
 if [[ "$failures" -gt 0 ]]; then
