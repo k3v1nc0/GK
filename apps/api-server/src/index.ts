@@ -3,6 +3,7 @@ import type { PublishedNodeEnvelope } from "@gk/schemas";
 
 export * from "./auth-policy.js";
 export * from "./auth-routes.js";
+export * from "./editor-game-user-management.js";
 
 export interface ApiServerBoundary {
   readonly accepts: "editor-node-data";

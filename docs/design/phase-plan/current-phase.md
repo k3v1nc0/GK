@@ -2,27 +2,29 @@
 
 ## Fase
 
-Actieve fase: Fase 4 - Database, migraties, editor-login en game-login.
+Actieve fase: Fase 5 - Editor-shell, node-canvas, panels en game-user beheer.
 
 ## Status
 
-Fase-status: Fase 4 klaar voor Fase 5; database/auth server-side validatie afgerond.
+Fase-status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.
 
-Codex heeft de Fase 4 database/auth-validatie server-side afgerond. Er is geen harde Fase 4 database/auth blocker meer.
+Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. `pnpm` build/typecheck en server/browser runtime-smoke zijn nog Codex-taken buiten Git.
 
 ## Doel
 
-Fase 4 maakt database- en authfundering met gescheiden editor-login, game-login, game users, player profiles en characters.
+Fase 5 maakt de eerste generieke editorwerkplek met aparte editor login/session entry, node-raster, node menu, inspector, dockable panels, lege world preview en game-user beheer.
 
-De fase legt generieke account/auth-capabilities vast voor:
+De fase legt generieke editor-capabilities vast voor:
 
-- editor users en editor roles;
-- game users en game-user status;
-- sessions met scope;
-- player profiles en characters;
-- email verificatie en password reset tokens;
-- audit logging;
-- scoped API-routecontracten.
+- editor shell layout;
+- Node Library;
+- Node Canvas;
+- Viewport / World Preview;
+- Inspector en Validation;
+- History/logs;
+- Asset Panel en Audio Panel;
+- HUD Editor en Minimap Panel;
+- Game Users met editor_admin gate.
 
 ## Bronnen gecontroleerd
 
@@ -30,12 +32,14 @@ Geopend of gecontroleerd voor deze fase:
 
 - `README/current-phase.md`
 - `docs/design/phase-plan/current-phase.md`
+- `README/fase5.md`
 - `README/fase4.md`
 - `README/fase3.md`
 - `README/fase2.md`
 - `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
 - `docs/architecture/workspace-boundaries.md`
+- `docs/architecture/auth-boundaries.md`
 - `docs/ops/server-layout.md`
 - `README/GameBibleNode.json`
 - `package.json`
@@ -44,6 +48,7 @@ Geopend of gecontroleerd voor deze fase:
 - `apps/editor-web`
 - `apps/game-web`
 - `packages/schemas`
+- `packages/shared-ui`
 - `packages/shared-utils`
 
 ## Fase 1- en Fase 2-contracten die blijven gelden
@@ -85,6 +90,18 @@ De Fase 3 workspace-checks zijn tijdens Fase 4 server-side gevalideerd:
 
 Aandachtspunt: systeem-Node is `v18.19.1`; toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
 
+## Fase 4-validatie
+
+Fase 4 database/auth is server-side gevalideerd:
+
+- MySQL database `gk` en user `gk_app@127.0.0.1` bestaan;
+- runtime DB-connectie is OK;
+- `db/migrations/0001_auth_foundation.sql` is toegepast;
+- eerste editor admin `k3v1nc0@hotmail.com` bestaat, is actief en e-mail-geverifieerd;
+- rol `editor_admin` is gekoppeld;
+- `admin.seed` auditregel is aanwezig;
+- database/auth smoke tests zijn geslaagd.
+
 ## Auth- en databasekeuzes
 
 - Eerste editor admin e-mail: `k3v1nc0@hotmail.com`.
@@ -98,6 +115,23 @@ Aandachtspunt: systeem-Node is `v18.19.1`; toekomstige `pnpm test` runs vereisen
 - Editor admin moet geverifieerd en actief zijn voordat editor-toegang werkt.
 - Editor-auth en game-auth blijven strikt gescheiden.
 - Kruistoegang moet falen.
+
+## Fase 5 editorlayout
+
+Kevin heeft deze layout bevestigd:
+
+- links: `Node Library`;
+- midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
+- rechts: `Inspector` en `Validation`;
+- onder: `History`;
+- dock tabs: `Asset Panel`, `Audio Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
+
+Regels:
+
+- `Viewport / World Preview` blijft leeg tot latere nodes/world/runtime data iets plaatsen;
+- geen dummy wereld, dummy assets of nepcontent;
+- geen hard-coded camera, lighting, minimap, audio, HUD, NPC, quest, price, item, boss of route;
+- `Game Users` vereist editor scope met `editor_admin`.
 
 ## Wat is aangemaakt of bijgewerkt
 
@@ -141,8 +175,20 @@ Overig:
 - `tests/auth-boundaries.test.mjs`
 - `docs/architecture/workspace-boundaries.md`
 - `docs/architecture/auth-boundaries.md`
+- `docs/architecture/editor-shell.md`
 - `docs/design/phase-plan/current-phase.md`
 - `README/current-phase.md`
+
+Fase 5 aanvullingen:
+
+- `packages/shared-ui/src/editor-layout.ts`
+- `apps/editor-web/src/editor-shell.ts`
+- `apps/editor-web/src/node-canvas.ts`
+- `apps/editor-web/src/world-preview.ts`
+- `apps/editor-web/src/panels.ts`
+- `apps/editor-web/src/game-user-management.ts`
+- `apps/api-server/src/editor-game-user-management.ts`
+- `tests/editor-shell.test.mjs`
 
 ## Database/migraties
 
@@ -164,7 +210,7 @@ Geen productie-data of echte credentials in migraties. De admin seed-template ge
 
 ## API routes en scopes
 
-Routecontracten toegevoegd voor:
+Fase 4 routecontracten blijven leidend voor:
 
 - editor login/logout/me;
 - game register/login/logout/me;
@@ -182,7 +228,39 @@ Scope-regels:
 - editor session mag niet automatisch player endpoints gebruiken;
 - publieke auth routes gebruiken generieke responses zonder account-enumeratie.
 
-## Content- en assetgrenz
+Fase 5 voegt een API-helper toe voor editor game-user beheer. Deze helper gebruikt de Fase 4 routecontracten en geeft alleen toegang wanneer de sessie editor scope en `editor_admin` heeft.
+
+## Editor shell, canvas, viewport en panels
+
+Editor shell:
+
+- editor login/session entry gebruikt editor-auth routes;
+- hoofd-layout is modulair en niet monolithisch;
+- dock layout is een model dat later door UI-rendering gebruikt kan worden.
+
+Node Canvas:
+
+- start met lege canvas state;
+- heeft editor-grid/raster;
+- bevat alleen generieke capability-definities voor schema, asset reference, validation en publish;
+- bevat geen concrete gameplay nodes.
+
+Viewport / World Preview:
+
+- staat als aparte main tab naast Node Canvas;
+- status is `empty`;
+- wacht op gepubliceerde world-node data;
+- bevat geen world objects, assets, audio, camera of lighting.
+
+Panels:
+
+- `Node Library`, `Inspector`, `Validation`, `History`, `Asset Panel`, `Audio Panel`, `HUD Editor`, `Minimap Panel`, `Game Users` bestaan als generieke capabilities;
+- `Asset Panel` leest later asset inventory en wijst geen runtime-rollen toe;
+- `Audio Panel` houdt de audio-gate open wanneer audio count 0 is;
+- `HUD Editor` en `Minimap Panel` leggen geen definitieve waarden of layout vast;
+- `Game Users` vereist editor scope met `editor_admin`.
+
+## Content- en assetgrens
 
 Niet toegevoegd:
 
@@ -193,7 +271,7 @@ Niet toegevoegd:
 - concrete gamecontent;
 - runtime-hardcoded NPCs, quests, prijzen, camera, lighting, minimap, boss, item, route, HUD of audio-keuzes.
 
-De startcode bevat alleen generieke boundaries, registries, protocoltypes, validators, renderer/audio primitives, env-readers en auth/database capabilities.
+De startcode bevat alleen generieke boundaries, registries, primitives, env-readers en auth/database capabilities.
 
 ## Checks
 
@@ -213,7 +291,7 @@ Eerder Git-side uitgevoerd:
 - Migratie- en seed-template scans: OK.
 - Migratiestructuur-scan op tabeldefinities en statements: OK.
 
-Server-side door Codex afgerond:
+Eerder server-side door Codex afgerond voor Fase 3/Fase 4:
 
 - `pnpm install`: OK.
 - `pnpm build`: OK.
@@ -233,9 +311,27 @@ Server-side door Codex afgerond:
 - Database/auth smoke tests: OK.
 - Server-side Git status bleef schoon.
 
+Fase 5 Git-side uitgevoerd:
+
+- `npm test`: OK.
+- `npm run lint`: OK.
+- `node --experimental-strip-types --check` op `apps/**/*.ts` en `packages/**/*.ts`: OK.
+- Secret/content scan op Fase 5 editor shell, docs en tests: OK.
+- Asset/dummy-content scan op Fase 5 bestanden: OK.
+- Diff-scope controle: alleen Fase 5 editor/API/shared-ui/test/docs/current-phase bestanden.
+
+Niet lokaal uitvoerbaar in deze omgeving:
+
+- `pnpm install`: `pnpm` ontbreekt lokaal en Corepack kan `pnpm-10.12.4.tgz` niet downloaden door registry/proxyblokkade.
+- `pnpm build`: niet uitvoerbaar zonder `pnpm install`.
+- `pnpm typecheck`: niet uitvoerbaar zonder `pnpm install` en `tsc`.
+- `pnpm test`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm test` is wel geslaagd.
+- `pnpm lint`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm run lint` is wel geslaagd.
+- `npm run build` en `npm run typecheck`: niet uitvoerbaar omdat `tsc` lokaal ontbreekt.
+
 ## Open Kevin-input
 
-Geen blokkerende Fase 4-input open.
+Geen blokkerende Fase 5-input open.
 
 Latere fases houden hun eigen gates voor GLB-role mapping, UI-assets, audio-assets, concrete content, economy, world settings en runtime services.
 
@@ -245,20 +341,34 @@ Fase 4 database/auth-taken zijn afgerond. Open blijven:
 
 1. Fase 2 servergates verder sluiten zodra echte runtime/build bestaat.
 2. Node 22 activeren voor toekomstige `pnpm test` runs of de systeem-Node structureel upgraden vanaf `v18.19.1`.
+3. `pnpm install` draaien.
+4. `pnpm build` draaien.
+5. `pnpm typecheck` draaien.
+6. `pnpm test` draaien met Node 22-activatie.
+7. `pnpm lint` draaien.
+8. API/editor-web starten.
+9. Browserconsole controleren.
+10. Apache route `/editor` controleren.
+11. Editor login smoke test uitvoeren.
+12. Game-user beheer smoke test uitvoeren.
+13. Viewport/Node Canvas laden controleren.
+14. Bestaande sites niet breken.
 
 ## Fasebeoordeling
 
-Fase 4 is klaar voor Fase 5.
+Fase 5 Git-basis is voorbereid met lokale fallbackchecks.
 
 Afgerond voor deze fase:
 
-- workspace install/build/typecheck/test/lint zijn server-side geslaagd;
-- Fase 4 MySQL migratie is server-side succesvol toegepast;
-- eerste editor admin seed is via buiten-Git secret/env uitgevoerd;
-- database/auth smoke tests zijn geslaagd;
+- editor shell layoutmodel bestaat;
+- Node Canvas en Viewport / World Preview zijn aparte main tabs;
+- Viewport / World Preview blijft leeg zonder dummy content;
+- Fase 5 panels bestaan als generieke capabilities;
+- game-user beheer vereist editor scope met `editor_admin`;
+- lokale Fase 5 tests, lint en TS syntaxchecks slagen;
 - geen generated `dist`, `node_modules`, secrets, assets of data zijn in Git beland;
-- er is geen harde Fase 4 database/auth blocker meer.
+- er is geen harde Fase 5 Git-basis blocker meer.
 
 Niet verwarren met Fase 2 servervoltooiing: runtime/service/webserverpunten blijven open tot echte runtime/build bestaat.
 
-Open technische gate voor toekomstige runs: systeem-Node is `v18.19.1`; `pnpm test` vereist Node 22-activatie of structurele Node-upgrade.
+Niet markeren als volledig browser/server-klaar totdat Codex de `pnpm` build/typecheck/test/lint gate en editor/API runtime smoke gate buiten Git sluit.

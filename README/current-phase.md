@@ -1,15 +1,16 @@
 # Current Phase
 
-Actieve fase: `fase4.md` klaar voor `fase5.md`
+Actieve fase: `fase5.md`
 
-Status: Fase 4 klaar voor Fase 5; database/auth server-side validatie afgerond.
+Status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.
 
-## Primaire Fase 4-status
+## Primaire Fase 5-status
 
 Open voor de actuele fasecontractstatus:
 
 - `docs/design/phase-plan/current-phase.md`
-- `README/fase4.md`
+- `README/fase5.md`
+- `docs/architecture/editor-shell.md`
 - `docs/architecture/auth-boundaries.md`
 - `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
@@ -30,9 +31,9 @@ Dit README-fasebestand blijft de korte fase-index. De inhoudelijke fasebeoordeli
 
 Fase 1 is klaar.
 
-Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Fase 3 Git-basis is voorbereid en de workspace-checks zijn server-side gevalideerd tijdens Fase 4.
+Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Fase 3 workspace en Fase 4 database/auth zijn server-side gevalideerd.
 
-## Fase 4 Git-basis
+## Fase 5 Git-basis
 
 Al aanwezig uit Fase 3:
 
@@ -71,6 +72,18 @@ Aangemaakt of bijgewerkt voor Fase 4:
 - `docs/architecture/auth-boundaries.md`
 - `ops/env/gk.example.env`
 
+Aangemaakt of bijgewerkt voor Fase 5:
+
+- `packages/shared-ui/src/editor-layout.ts`
+- `apps/editor-web/src/editor-shell.ts`
+- `apps/editor-web/src/node-canvas.ts`
+- `apps/editor-web/src/world-preview.ts`
+- `apps/editor-web/src/panels.ts`
+- `apps/editor-web/src/game-user-management.ts`
+- `apps/api-server/src/editor-game-user-management.ts`
+- `tests/editor-shell.test.mjs`
+- `docs/architecture/editor-shell.md`
+
 ## Bevestigde grenzen
 
 - Apache blijft voorlopig de actieve hoofdwebserver.
@@ -88,16 +101,20 @@ Aangemaakt of bijgewerkt voor Fase 4:
 - Editorregistratie is niet publiek.
 - Eerste editor admin e-mail: `k3v1nc0@hotmail.com`.
 - Admin seed password/hash/secret blijven buiten Git.
+- Node Canvas en Viewport / World Preview zijn aparte main tabs.
+- Viewport / World Preview blijft leeg tot gepubliceerde world/node-data beschikbaar is.
+- Asset Panel en Audio Panel verzinnen geen assets, audio of runtime-rollen.
+- Game Users vereist editor scope met `editor_admin`.
 
 ## Open Kevin-input
 
-Geen blokkerende Fase 4-input open.
+Geen blokkerende Fase 5-input open.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
 
-## Afgeronde Codex-validatie buiten Git
+## Afgeronde eerdere Codex-validatie buiten Git
 
-Codex heeft Fase 4 server-side gevalideerd:
+Codex heeft Fase 3/Fase 4 server-side gevalideerd:
 
 - `pnpm install`: geslaagd.
 - `pnpm build`: geslaagd.
@@ -133,8 +150,23 @@ Fase 2-open serverpunten blijven ook open totdat runtime/build bestaat:
 - `/var/www/gk/current` vullen zodra runtime/build bestaat.
 - Definitieve `gk-*.service` units starten wanneer echte `ExecStart` bestaat.
 
+Fase 5 runtime-smoke blijft open voor Codex buiten Git:
+
+- `pnpm install` draaien in server/toolingomgeving.
+- `pnpm build` draaien.
+- `pnpm typecheck` draaien.
+- `pnpm test` draaien met Node 22-activatie.
+- `pnpm lint` draaien.
+- API/editor-web starten.
+- Browserconsole controleren.
+- Apache route `/editor` controleren.
+- Editor login smoke test uitvoeren.
+- Game-user beheer smoke test uitvoeren.
+- Viewport/Node Canvas laden controleren.
+- Bestaande sites niet breken.
+
 ## Fasebeoordeling
 
-Fase 4 database/auth is server-side gevalideerd en klaar voor Fase 5.
+Fase 5 Git-basis is voorbereid met lokale fallbackchecks.
 
-Huidige status: Fase 4 klaar voor Fase 5; Node 18/Node 22 blijft een technische runtime/tooling gate voor toekomstige test-runs.
+Huidige status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.

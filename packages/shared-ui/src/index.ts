@@ -8,3 +8,4 @@ export interface UiSurfaceDescriptor {
 
 export const SHARED_UI_CONTENT_POLICY: UiContentPolicy = "node-data-only";
 
+export * from "./editor-layout.js";
