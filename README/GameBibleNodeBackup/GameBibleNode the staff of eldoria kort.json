@@ -1,0 +1,3836 @@
+{
+  "schema": "gamebible-node-system-v6.11",
+  "title": "🎮 Game Bible - Arlen Tharys: Heart of Eldoria - Epic Tag Node System",
+  "version": 7.0,
+  "updatedAt": "2026-06-09T20:25:00.000Z",
+  "groups": [
+    {
+      "id": "col-story",
+      "title": "📖 Epic Lore & Acts"
+    },
+    {
+      "id": "col-world",
+      "title": "🗺️ World & Exploration"
+    },
+    {
+      "id": "col-mainquests",
+      "title": "⚔️ Main Quest Chains"
+    },
+    {
+      "id": "col-sidequests",
+      "title": "🕯️ Side Quests & Secrets"
+    },
+    {
+      "id": "col-chars",
+      "title": "🧙 Characters & Progression"
+    },
+    {
+      "id": "col-factions",
+      "title": "🏰 Factions & Warfront"
+    },
+    {
+      "id": "col-bosses",
+      "title": "👹 Eclipse Lieutenants & Bosses"
+    },
+    {
+      "id": "col-artifacts",
+      "title": "💎 Staff Relics & Items"
+    },
+    {
+      "id": "col-unlocks",
+      "title": "🔓 Unlocks, Gates & Rewards"
+    },
+    {
+      "id": "col-mechanics",
+      "title": "✨ Tactics & Spell Mechanics"
+    },
+    {
+      "id": "col-systems",
+      "title": "💻 Web Engine & Tech"
+    },
+    {
+      "id": "col-ui",
+      "title": "📜 UI, Mood & Player Feel"
+    },
+    {
+      "id": "col-endgame",
+      "title": "🌌 Endgame & Secrets"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-story-full",
+      "title": "Core Story: @{Arlen Tharys} and @{Heart of Eldoria}",
+      "body": "@{Game Name} follows @{Arlen Tharys}, a frightened apprentice in @{Willowmere Workshop}, whose plain @{Humble Staff} becomes the only conduit gentle enough to touch the @{Heart of Eldoria}. When @{Archmage Valerius} spreads @{Valerius Curse} across @{Eldoria}, forests bleach into bone, rivers remember poison, and even names begin to fade from doorways and graves. @{Master Thorne} reveals @{Humble Wood Prophecy}: not a warrior, not a royal mage, but a shaking hand carrying humble wood must wake the realm. The story begins intimate: cold rain, a cracked workshop wall, one dying candle. It then expands through @{Whispering Peaks}, @{Shadowfen}, @{Emberglass Desert}, @{Ironroot Bastion}, @{Stormcourt Spire}, and the impossible @{Eclipse Citadel}. Every relic changes the staff and the player: @{Sunstone Shard} gives courage, @{Moonpetal Bloom} gives compassion, @{Ironroot Sigil} gives endurance, @{Dragon Ember Core} gives dangerous power, and @{Starlit Tear} gives the truth Valerius tried to erase. The final spectacle is not one spell button; @{Arlen Tharys} builds @{Heartstorm Ritual} from rescued NPCs, spared enemies, solved sidequests, unlocked items, and choices of @{Mercy Choice}, @{Power Choice}, @{Truth Choice}, and @{Name Choice}.",
+      "x": -420,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-full",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-hook",
+      "title": "The Epic Hook",
+      "body": "In @{Game Name}, @{Eldoria} is not invaded by an army first; it is slowly forgotten. @{Archmage Valerius} uses @{Valerius Curse} to drain color, memory and warmth, while @{Arlen Tharys} begins with only @{Humble Staff}, one candle spell, and the fear that she is far too small for a prophecy.",
+      "x": -420,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-hook",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-prophecy",
+      "title": "@{Humble Wood Prophecy}",
+      "body": "@{Master Thorne} translates the oldest line of @{Humble Wood Prophecy}: 'When crowns crack and towers kneel, humble wood shall hold the heart.' It means @{Heartwood Staff} cannot be forged from royal gold; it must grow from @{Arlen Tharys}'s courage, mistake by mistake.",
+      "x": -420,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-prophecy",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-inciting",
+      "title": "Inciting Incident: Ash at @{Willowmere Workshop}",
+      "body": "@{Archmage Valerius} sends an eclipse flare through @{Willowmere Workshop}. @{Master Thorne} survives by binding the blast into @{Thorne Red Thread}, but the workshop cloak fails. @{Arlen Tharys} must flee, carrying @{Humble Staff}, the first map to @{Whispering Peaks}, and the terrible knowledge that @{Sunstone Shard} is real.",
+      "x": -420,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-inciting",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-act1",
+      "title": "Act I: Humble Wood, Shaking Hands",
+      "body": "Early gameplay keeps the scale personal: rain, locked doors, cold lanterns and hunters on @{Gloaming Road}. @{Arlen Tharys} wins by listening, hiding and using tiny spells cleverly. The player feels weak, but never useless.",
+      "x": -420,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-act1",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-act2",
+      "title": "Act II: Shards, Blooms and First Courage",
+      "body": "@{Arlen Tharys} earns @{Sunstone Shard} from @{Queen Aeravelle} in @{Whispering Peaks}, then risks @{Shadowfen} for @{Moonpetal Bloom}. The staff begins to glow with both sun and moon, and small villagers start whispering her name like a prayer.",
+      "x": -420,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-act2",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-act3",
+      "title": "Act III: Allies Beneath a Dying Sky",
+      "body": "The world opens into refugee routes, caravan wars and broken fortresses. @{Liora Fenwick}, @{Captain Soren Vale}, @{Rurik Ironbranch}, @{Kett Morrow} and @{Brindle} can become living connections in the quest graph. The story grows epic through people, not just explosions.",
+      "x": -420,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-act3",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-act4",
+      "title": "Act IV: The Lieutenants Start Hunting",
+      "body": "After @{Dragon Ember Core} wakes the staff's battle-form, @{Eclipse Court} no longer treats @{Arlen Tharys} as a rumor. @{Commander Veyra Ashlance}, @{Stormglass Sentinel}, @{Eclipse Herald Orvane} and other lieutenants leave the warfront to hunt one apprentice.",
+      "x": -420,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-act4",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-betrayal",
+      "title": "The Beautiful Betrayal: @{Selene Noctis}",
+      "body": "@{Selene Noctis} guides @{Arlen Tharys} through @{Dreamvault of Aurel}, but reveals she serves a mercy twisted by despair: end all pain by letting @{Valerius Curse} freeze every heart. She can become @{Moon Eaten Selene}, or be redeemed through @{Truth Choice} and sidequest evidence.",
+      "x": -420,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-betrayal",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-act5",
+      "title": "Act V: Reforging the Staff of the Realm",
+      "body": "At @{Stormcourt Spire}, the sky breaks open. @{Arlen Tharys} binds @{Sunstone Shard}, @{Moonpetal Bloom}, @{Stormglass Lens}, @{Ironroot Sigil}, @{Dragon Ember Core} and @{Starlit Tear} into @{Heartwood Staff}. The humble branch becomes a living constellation.",
+      "x": -420,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-act5",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-finale",
+      "title": "Finale: @{Heartstorm Ritual}",
+      "body": "Inside @{Eclipse Citadel}, @{Archmage Valerius} tears open @{Heartstorm Nexus}. The final battle escalates from duel, to collapsing citadel, to sky-sized ritual where NPCs, items, sidequests and choices orbit @{Arlen Tharys}'s @{Heartwood Staff}. The spectacle is earned by every earlier node.",
+      "x": -420,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-finale",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-story-epilogue",
+      "title": "Epilogue: Songs After the Eclipse",
+      "body": "@{Eldoria} does not simply become fixed. Towns recover differently depending on the player: lantern roads glow, ash children speak, forests grow strange flowers, and @{Arlen Tharys} finally lights a candle without trembling—then laughs because trembling saved the world.",
+      "x": -420,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-story",
+      "sourceTaskId": "story-epilogue",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-workshop",
+      "title": "Zone 1: @{Willowmere Workshop}",
+      "body": "Tutorial home base. @{Master Thorne}'s shelves, rain leaks, cracked glyph boards and beginner staff puzzles. This zone introduces @{Arlen Tharys}, @{Humble Staff}, saving, dialogue tags and the first omen of @{Valerius Curse}.",
+      "x": 160,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-workshop",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-road",
+      "title": "Zone 2: @{Gloaming Road}",
+      "body": "A haunted road of drowned lanterns between @{Willowmere Workshop} and @{Whispering Peaks}. Unlocks stealth, patrol cones, road shrines and early sidequest links to @{Road Lantern Network}.",
+      "x": 160,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-road",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-peaks",
+      "title": "Zone 3: @{Whispering Peaks}",
+      "body": "Crystalline mountain caverns, wind bridges and mischievous tests by @{Sylph Court}. Contains @{Sunstone Shard}, @{Pyria}, @{Queen Aeravelle}, @{Boss Aeravelle}, and the first vertical traversal spectacle.",
+      "x": 160,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-peaks",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-shadowfen",
+      "title": "Zone 4: @{Shadowfen}",
+      "body": "A breathing swamp where fog tells lies. @{Liora Fenwick} teaches survival routes. Contains @{Moonpetal Bloom}, @{Fen Lantern}, @{Bog King Mourn}, illusion puzzles and moral bargains.",
+      "x": 160,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-shadowfen",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-moonwell",
+      "title": "Zone 5: @{Moonwell of Nymera}",
+      "body": "Hidden refugee sanctuary built around a silver well. @{Nymira} reads reflected memories here. Hub for NPC bonds, sidequests, healing, lore, and the first big emotional rest after the swamp.",
+      "x": 160,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-moonwell",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-emberglass",
+      "title": "Zone 6: @{Emberglass Desert}",
+      "body": "A desert of red mirrors and fossil dragons. @{Ember Caravans}, @{Kett Morrow} and @{Thalor Emberwyrm} connect trade, fire magic and dangerous temptation. Contains @{Dragon Ember Core}.",
+      "x": 160,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-emberglass",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-ironroot",
+      "title": "Zone 7: @{Ironroot Bastion}",
+      "body": "A fortress grown from black roots and iron bark. @{Rurik Ironbranch}, @{Ironroot Wardens}, siege routing, root gates and endurance trials. Contains @{Ironroot Sigil} and @{Ironroot Revenant}.",
+      "x": 160,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-ironroot",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-stormcourt",
+      "title": "Zone 8: @{Stormcourt Spire}",
+      "body": "A broken sky tower that harvests lightning. Wind, gravity and lens puzzles build toward @{Stormglass Lens}. The player sees @{Eclipse Citadel} above the clouds for the first time.",
+      "x": 160,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-stormcourt",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-dreamvault",
+      "title": "Zone 9: @{Dreamvault of Aurel}",
+      "body": "A palace inside sleeping memory. @{Selene Noctis} reveals truths about @{Archmage Valerius}, @{Master Thorne} and the origin of @{Valerius Curse}. Dialogue choices rewrite rooms in real time.",
+      "x": 160,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-dreamvault",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-citadel",
+      "title": "Final Zone: @{Eclipse Citadel}",
+      "body": "A cathedral-palace suspended in a black eclipse. Requires @{Black Gate Key}. All major flags converge: NPCs, items, bosses, ending routes and the final spell logic for @{Heartstorm Ritual}.",
+      "x": 160,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-citadel",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-world-heartstorm",
+      "title": "Ritual Space: @{Heartstorm Nexus}",
+      "body": "The impossible space inside the world-heart. Battle tiles become stars, allies become constellations, and every unlocked relic transforms @{Heartwood Staff}'s final cast.",
+      "x": 160,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-world",
+      "sourceTaskId": "world-heartstorm",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-prologue",
+      "title": "Main Quest 00: @{Quest Ash at the Workshop}",
+      "body": "Tutorial quest. Wake in @{Willowmere Workshop}, learn Spark, bind @{Thorne Red Thread}, receive @{Humble Staff}, and escape before @{Archmage Valerius}'s eclipse flare turns the workshop archive to ash.",
+      "x": 740,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-prologue",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-road",
+      "title": "Main Quest 01: @{Quest Road of Cold Lanterns}",
+      "body": "Sneak along @{Gloaming Road}. Learn stealth, sound tiles, early combat avoidance and how lighting broken lanterns weakens @{Valerius Curse}. Optional rescue introduces @{Captain Soren Vale}.",
+      "x": 740,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-road",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-peaks",
+      "title": "Main Quest 02: @{Quest Climb to Whispering Peaks}",
+      "body": "Reach @{Whispering Peaks} by crossing collapsing goat paths and wind bridges. Meet @{Pyria}, unlock basic wind tricks, and gain entry to @{Sylph Court}'s crystalline trial cave.",
+      "x": 740,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-peaks",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-sunstone",
+      "title": "Main Quest 03: @{Quest Sunstone Trial}",
+      "body": "Earn @{Sunstone Shard} from @{Queen Aeravelle}. The trial tests honesty, not damage. Reward unlocks @{Dawnflare}, sun bridges, fear-breaking light, and the first visible golden growth on @{Heartwood Staff}.",
+      "x": 740,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-sunstone",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-shadowfen",
+      "title": "Main Quest 04: @{Quest Into Shadowfen}",
+      "body": "Enter @{Shadowfen} with @{Liora Fenwick}. Introduces poison fog, illusion tiles and swamp beasts. Requires @{Dawnflare} to reveal true paths through false reeds.",
+      "x": 740,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-shadowfen",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-moonpetal",
+      "title": "Main Quest 05: @{Quest Moonpetal Bloom}",
+      "body": "Defeat or spare @{Bog King Mourn}, recover @{Moonpetal Bloom}, and unlock @{Moonveil}. The staff gains a silver bloom that reveals hidden NPC intentions and false walls.",
+      "x": 740,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-moonpetal",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-refuge",
+      "title": "Main Quest 06: @{Quest Refuge of Broken Crowns}",
+      "body": "Reach @{Moonwell of Nymera}. Meet @{Nymira}, register ally flags, open the NPC hub, and choose which refugee problem to solve first. This quest turns the journey from survival into leadership.",
+      "x": 740,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-refuge",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-emberglass",
+      "title": "Main Quest 07: @{Quest Emberglass Caravan}",
+      "body": "Travel with @{Kett Morrow} across @{Emberglass Desert}. Use @{Moonveil} to see mirage ambushes, negotiate with @{Ember Caravans}, and unlock @{Ember Compass} navigation.",
+      "x": 740,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-emberglass",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-dragon",
+      "title": "Main Quest 08: @{Quest Dragon Ember Core}",
+      "body": "Find @{Thalor Emberwyrm}, the dragon who forgot fire. Restore his memory or steal his flame. Reward: @{Dragon Ember Core}, unlocking @{Ember Crown} and late-game destructive spell routes.",
+      "x": 740,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-dragon",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-ironroot",
+      "title": "Main Quest 09: @{Quest Ironroot Oath}",
+      "body": "Help @{Rurik Ironbranch} open @{Ironroot Bastion}. Requires @{Dragon Ember Core} to burn cursed brambles without killing the living roots. Reward path leads to @{Ironroot Sigil}.",
+      "x": 740,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-ironroot",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-siege",
+      "title": "Main Quest 10: @{Quest Siege of Ironroot}",
+      "body": "Hold @{Ironroot Bastion} during a tactical siege by @{Commander Veyra Ashlance}. Outcome depends on @{Vanguard of Dawn}, @{Ironroot Wardens}, rescued NPCs and sidequest supplies.",
+      "x": 740,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-siege",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-stormcourt",
+      "title": "Main Quest 11: @{Quest Stormcourt Lens}",
+      "body": "Climb @{Stormcourt Spire}, defeat @{Stormglass Sentinel}, recover @{Stormglass Lens}, and unlock @{Stormbridge} for sky routes, lightning puzzles and new staff forms.",
+      "x": 740,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-stormcourt",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-dreamvault",
+      "title": "Main Quest 12: @{Quest Dreamvault Truth}",
+      "body": "Enter @{Dreamvault of Aurel} with @{Selene Noctis}. Discover @{Master Thorne}'s hidden role in binding @{Archmage Valerius}. Can trigger @{Moon Eaten Selene} boss route or redemption evidence route.",
+      "x": 740,
+      "y": 1872,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-dreamvault",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-reforge",
+      "title": "Main Quest 13: @{Quest Reforge the Heartwood Staff}",
+      "body": "At @{Stormcourt Spire}, bind @{Sunstone Shard}, @{Moonpetal Bloom}, @{Ironroot Sigil}, @{Dragon Ember Core}, @{Stormglass Lens} and @{Starlit Tear} into @{Heartwood Staff}. Unlocks @{Starwake} and final quest tier.",
+      "x": 740,
+      "y": 2038,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-reforge",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-citadel",
+      "title": "Main Quest 14: @{Quest March to Eclipse Citadel}",
+      "body": "Open the eclipse route with @{Black Gate Key}. Allies gathered through sidequests create shortcuts, shield phases and banter while @{Eclipse Herald Orvane} turns the sky itself into a battlefield.",
+      "x": 740,
+      "y": 2204,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-citadel",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-quest-final",
+      "title": "Main Quest 15: @{Quest Heartstorm Ritual}",
+      "body": "Final quest. Confront @{Archmage Valerius} in @{Eclipse Citadel}, descend into @{Heartstorm Nexus}, and cast @{Heartstorm Ritual}. Ending logic reads relics, NPCs, sidequests, and choices of @{Mercy Choice}, @{Power Choice}, @{Truth Choice} and @{Name Choice}.",
+      "x": 740,
+      "y": 2370,
+      "width": 400,
+      "categoryId": "col-mainquests",
+      "sourceTaskId": "quest-final",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-sylphname",
+      "title": "Side Quest: @{Sidequest Stolen Sylph Name}",
+      "body": "@{Pyria} lost her true name to a wind-thief in @{Whispering Peaks}. Recover it through echo puzzles. Reward: @{Pyria}'s @{Sylph Bell}, which unlocks @{Gale Step} shortcuts and gives @{Pyria} finale support.",
+      "x": 1320,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-sylphname",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-lanterns",
+      "title": "Side Quest: @{Sidequest Lanterns Beneath Rain}",
+      "body": "Relight seven cursed lanterns on @{Gloaming Road}. Each lantern pushes back @{Valerius Curse}, opens a fast-travel node in @{Road Lantern Network}, and adds civilian hope flags to @{Heartstorm Ritual}.",
+      "x": 1320,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-lanterns",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-bogmother",
+      "title": "Side Quest: @{Sidequest Bog Mothers Bargain}",
+      "body": "@{Liora Fenwick} asks @{Arlen Tharys} to negotiate with the oldest voice in @{Shadowfen}. Choose to cure, bind or bargain with the bog-mother. Reward changes poison tiles and @{Bog King Mourn}'s final memory.",
+      "x": 1320,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-bogmother",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-ashchild",
+      "title": "Side Quest: @{Sidequest Child Made of Ash}",
+      "body": "Find @{Iri}, a small Ashen child who remembers sunlight but fears color. Spare, heal or abandon @{Iri}. This directly changes @{Archmage Valerius}'s final dialogue and unlocks the secret ending route.",
+      "x": 1320,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-ashchild",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-letters",
+      "title": "Side Quest: @{Sidequest Letters for the Last Dawn}",
+      "body": "Deliver battlefield letters for @{Captain Soren Vale} and @{Vanguard of Dawn}. Emotional quest with low combat, but huge payoff: more troops survive @{Quest Siege of Ironroot} and appear in the finale constellation ring.",
+      "x": 1320,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-letters",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-glassknight",
+      "title": "Side Quest: @{Sidequest Glass Knights Promise}",
+      "body": "A knight trapped in @{Emberglass Desert}'s mirror sand asks for one true reflection. Solve mirror duels, obtain a shield charm, and unlock a defensive option against @{Commander Veyra Ashlance}.",
+      "x": 1320,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-glassknight",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-dragonfire",
+      "title": "Side Quest: @{Sidequest Dragon Forgot Fire}",
+      "body": "Optional deep route for @{Thalor Emberwyrm}. Instead of stealing @{Dragon Ember Core}, restore the dragon's lost song. Makes @{Ember Crown} safer, unlocks dragon aid, and weakens the @{Power Choice} corruption path.",
+      "x": 1320,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-dragonfire",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-rootoath",
+      "title": "Side Quest: @{Sidequest Ruriks Root Oath}",
+      "body": "@{Rurik Ironbranch} cannot open the oldest gate of @{Ironroot Bastion} until his family oath is remembered. Explore root memories, defeat corrupted ancestors, and empower @{Ironroot Sigil}.",
+      "x": 1320,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-rootoath",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-mirrorbride",
+      "title": "Side Quest: @{Sidequest Mirror Bride}",
+      "body": "In @{Dreamvault of Aurel}, a bride repeats the same wedding to a missing groom. Breaking or honoring the loop gives evidence needed to redeem @{Selene Noctis} before she becomes @{Moon Eaten Selene}.",
+      "x": 1320,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-mirrorbride",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-thornedrawer",
+      "title": "Side Quest: @{Sidequest Thornes Locked Drawer}",
+      "body": "Open @{Master Thorne}'s sealed drawer in @{Willowmere Workshop}. Reveals @{Thorne Red Thread}, old letters to @{Archmage Valerius}, and the truth that guilt—not destiny—sent @{Arlen Tharys} on the road.",
+      "x": 1320,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-thornedrawer",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-sevensongs",
+      "title": "Secret Quest: @{Sidequest Seven Songs}",
+      "body": "Collect seven living songs across @{Eldoria}: wind, mire, moon, ember, root, storm and heart. Required for @{Ending Heart of Eldoria}, where @{Valerius Curse} learns change instead of stillness.",
+      "x": 1320,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-sevensongs",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-side-soldstar",
+      "title": "Side Quest: @{Sidequest Merchant Sold Star}",
+      "body": "@{Kett Morrow} once sold a fallen star to @{Eclipse Court}. Recover it through heist, confession or trade. Reward: upgraded @{Ember Compass}, plus a shortcut to @{Eclipse Citadel}.",
+      "x": 1320,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-sidequests",
+      "sourceTaskId": "side-soldstar",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-arlen",
+      "title": "Protagonist: @{Arlen Tharys}",
+      "body": "@{Arlen Tharys} is gentle, anxious and stubborn. Begins with @{Humble Staff} and almost no confidence. Grows into an Archmage only if the player connects items, NPCs and choices instead of chasing raw power.",
+      "x": 1900,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-arlen",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-thorne",
+      "title": "Mentor: @{Master Thorne}",
+      "body": "@{Master Thorne} is a brilliant old conduit-maker haunted by his past with @{Archmage Valerius}. He teaches @{Arlen Tharys} that a staff remembers the hand that carries it.",
+      "x": 1900,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-thorne",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-valerius",
+      "title": "Main Antagonist: @{Archmage Valerius}",
+      "body": "@{Archmage Valerius} believes grief is a flaw in reality. Through @{Valerius Curse}, he tries to still @{Eldoria} forever. Final form becomes @{Valerius Final Form} when he merges with the eclipse.",
+      "x": 1900,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-valerius",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-pyria",
+      "title": "Sylph Ally: @{Pyria}",
+      "body": "@{Pyria} is tiny, rude, hilarious and brave. If @{Arlen Tharys} completes @{Sidequest Stolen Sylph Name}, @{Pyria} becomes a scout ally and her @{Sylph Bell} unlocks @{Gale Step} routes.",
+      "x": 1900,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-pyria",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-aeravelle",
+      "title": "Sylph Queen: @{Queen Aeravelle}",
+      "body": "@{Queen Aeravelle} guards @{Sunstone Shard} in @{Whispering Peaks}. She tests truth, not strength, and returns during @{Heartstorm Ritual} if treated with respect.",
+      "x": 1900,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-aeravelle",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-liora",
+      "title": "Fen Guide: @{Liora Fenwick}",
+      "body": "@{Liora Fenwick} knows every lie @{Shadowfen} tells. NPC guide for poison rules, swamp bargains and routes that let scared players survive without brute force.",
+      "x": 1900,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-liora",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-soren",
+      "title": "War Ally: @{Captain Soren Vale}",
+      "body": "@{Captain Soren Vale} leads a shattered unit of @{Vanguard of Dawn}. His survival depends on letters, lanterns and siege choices, making the war feel personal.",
+      "x": 1900,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-soren",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-nymira",
+      "title": "Moon Oracle: @{Nymira}",
+      "body": "@{Nymira} tends @{Moonwell of Nymera}. She reads NPC bonds and warns that @{Heartstorm Ritual} will magnify whatever kind of mage @{Arlen Tharys} becomes.",
+      "x": 1900,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-nymira",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-rurik",
+      "title": "Root Warden: @{Rurik Ironbranch}",
+      "body": "@{Rurik Ironbranch} is a living-bark defender of @{Ironroot Bastion}. He links endurance, ancient oaths, @{Ironroot Sigil}, and siege unlocks.",
+      "x": 1900,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-rurik",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-selene",
+      "title": "Ambiguous Guide: @{Selene Noctis}",
+      "body": "@{Selene Noctis} is elegant, kind and terrifyingly tired. She guides @{Arlen Tharys} toward @{Dreamvault of Aurel}, then tempts her toward @{Ending Grey Silence} unless redeemed.",
+      "x": 1900,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-selene",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-kett",
+      "title": "Merchant Ally: @{Kett Morrow}",
+      "body": "@{Kett Morrow} jokes through fear and sells impossible tools. His debt to @{Eclipse Court} creates @{Sidequest Merchant Sold Star} and several shortcut unlocks.",
+      "x": 1900,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-kett",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-brindle",
+      "title": "Familiar: @{Brindle}",
+      "body": "@{Brindle} is a folded paper-golem familiar made from @{Master Thorne}'s old notes. Scouts fog, carries tiny items, highlights tagged quest links, and panics adorably during boss intros.",
+      "x": 1900,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-brindle",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-iri",
+      "title": "Secret NPC: @{Iri}",
+      "body": "@{Iri} is an Ashen child who asks why color hurts. This NPC turns the curse from abstract evil into a question of mercy, identity and whether enemies can be remembered back into life.",
+      "x": 1900,
+      "y": 1872,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-iri",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-char-thalor",
+      "title": "Dragon NPC: @{Thalor Emberwyrm}",
+      "body": "@{Thalor Emberwyrm} was once a sky-fire guardian. His forgotten flame becomes @{Dragon Ember Core}, but the player decides whether that item is stolen power or restored friendship.",
+      "x": 1900,
+      "y": 2038,
+      "width": 400,
+      "categoryId": "col-chars",
+      "sourceTaskId": "char-thalor",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-vanguard",
+      "title": "Faction: @{Vanguard of Dawn}",
+      "body": "The visible war effort: banners, wounded scouts, distant siege lines. @{Captain Soren Vale} represents them. Their survival modifies @{Quest Siege of Ironroot} and @{Heartstorm Ritual}.",
+      "x": 2480,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-vanguard",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-eclipse",
+      "title": "Faction: @{Eclipse Court}",
+      "body": "@{Archmage Valerius}'s inner order: elegant mages, hollow judges and oath-broken nobles who prefer a still world to a painful one.",
+      "x": 2480,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-eclipse",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-sylph",
+      "title": "Faction: @{Sylph Court}",
+      "body": "Wind spirits of @{Whispering Peaks}. Mischievous, proud and ancient. They reward sincerity with @{Sunstone Shard}, @{Sylph Bell} and air route unlocks.",
+      "x": 2480,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-sylph",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-fenwardens",
+      "title": "Faction: @{Fenwardens}",
+      "body": "Swamp guardians from @{Shadowfen}. Some serve @{Liora Fenwick}; others listen to @{Bog King Mourn}. Their support changes poison, fog and healing recipes.",
+      "x": 2480,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-fenwardens",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-ember",
+      "title": "Faction: @{Ember Caravans}",
+      "body": "Nomad traders crossing @{Emberglass Desert}. They sell heat tools, carry rumors, and judge whether @{Arlen Tharys} uses @{Dragon Ember Core} carefully.",
+      "x": 2480,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-ember",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-ironroot",
+      "title": "Faction: @{Ironroot Wardens}",
+      "body": "Ancient defenders of @{Ironroot Bastion}. Their root gates open when @{Rurik Ironbranch}'s oath is restored and @{Ironroot Sigil} is empowered.",
+      "x": 2480,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-ironroot",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-refugees",
+      "title": "Faction: @{Starfall Refugees}",
+      "body": "Civilians from across @{Eldoria}. They are the emotional proof that sidequests matter: soup, letters, names, lanterns and ending reactions.",
+      "x": 2480,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-refugees",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-faction-choir",
+      "title": "Faction: @{Silent Choir}",
+      "body": "A secret order that erased their own voices to resist @{Valerius Curse}. Their lore feeds @{Sidequest Seven Songs} and the secret ending.",
+      "x": 2480,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-factions",
+      "sourceTaskId": "faction-choir",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-aeravelle",
+      "title": "Trial Boss: @{Boss Aeravelle}",
+      "body": "A non-lethal duel in @{Whispering Peaks}. @{Queen Aeravelle} copies lies as decoys; the player wins by standing in truthful light and refusing cheap shots. Rewards @{Sunstone Shard}.",
+      "x": 3060,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-aeravelle",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-mourn",
+      "title": "Boss: @{Bog King Mourn}",
+      "body": "A sorrowful swamp giant in @{Shadowfen}. Arena breathes fog and fake exits. Can be defeated, healed or bound, affecting @{Moonpetal Bloom} and @{Fenwardens}.",
+      "x": 3060,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-mourn",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-nullhound",
+      "title": "Boss Pack: @{Null Hound Pack}",
+      "body": "Early hunter encounter on @{Gloaming Road}. Teaches sound, baiting and lantern safety. Returns stronger if the player ignores @{Road Lantern Network}.",
+      "x": 3060,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-nullhound",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-solakar",
+      "title": "Boss: @{Solakar}",
+      "body": "A mirror-scaled wyrm beneath @{Emberglass Desert}. Reflects spell combos back at @{Arlen Tharys}; defeated by making reflections burn each other.",
+      "x": 3060,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-solakar",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-veyra",
+      "title": "Boss: @{Commander Veyra Ashlance}",
+      "body": "An @{Eclipse Court} war commander who treats hope as a tactical disease. Her siege boss fight in @{Ironroot Bastion} changes based on allies, letters, traps and @{Ironroot Sigil}.",
+      "x": 3060,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-veyra",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-revenant",
+      "title": "Boss: @{Ironroot Revenant}",
+      "body": "A corrupted ancestor of @{Rurik Ironbranch}. Uses root chains, memory tiles and oath-locks. Defeating it unlocks full @{Rootbind} and strengthens @{Ironroot Wardens}.",
+      "x": 3060,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-revenant",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-sentinel",
+      "title": "Boss: @{Stormglass Sentinel}",
+      "body": "A lightning automaton at @{Stormcourt Spire}. Players rotate lenses, ride wind tiles and redirect storms. Reward: @{Stormglass Lens} and @{Stormbridge}.",
+      "x": 3060,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-sentinel",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-selene",
+      "title": "Boss: @{Moon Eaten Selene}",
+      "body": "Triggered if @{Selene Noctis} loses hope. A beautiful duel in @{Dreamvault of Aurel} where words, evidence and memory choices can replace damage.",
+      "x": 3060,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-selene",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-orvane",
+      "title": "Boss: @{Eclipse Herald Orvane}",
+      "body": "Gatekeeper of @{Eclipse Citadel}. Orvane turns tag names and memories against the player, temporarily blanking UI names unless @{Name Choice} flags are strong.",
+      "x": 3060,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-orvane",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-boss-valerius",
+      "title": "Final Boss: @{Valerius Final Form}",
+      "body": "@{Archmage Valerius} merged with the black eclipse. Final phases read @{Sunstone Shard}, @{Moonpetal Bloom}, @{Dragon Ember Core}, @{Starlit Tear}, NPC support and sidequest mercy.",
+      "x": 3060,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-bosses",
+      "sourceTaskId": "boss-valerius",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-humblestaff",
+      "title": "Starting Item: @{Humble Staff}",
+      "body": "A carved branch from @{Willowmere Workshop}. Weak at first, but uniquely able to hold the @{Heart of Eldoria} because it was shaped by care rather than conquest.",
+      "x": 3640,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-humblestaff",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-heartwood",
+      "title": "Upgradeable Staff: @{Heartwood Staff}",
+      "body": "The evolving form of @{Humble Staff}. Visually gains gold grain from @{Sunstone Shard}, silver petals from @{Moonpetal Bloom}, root bands from @{Ironroot Sigil}, ember veins from @{Dragon Ember Core}, and a storm halo from @{Stormglass Lens}.",
+      "x": 3640,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-heartwood",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-sunstone",
+      "title": "Relic: @{Sunstone Shard}",
+      "body": "Found in @{Whispering Peaks}, guarded by @{Queen Aeravelle}. Unlocks @{Dawnflare}, light bridges and courage buffs. Theme: fear can glow.",
+      "x": 3640,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-sunstone",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-moonpetal",
+      "title": "Relic: @{Moonpetal Bloom}",
+      "body": "Found in @{Shadowfen}. Unlocks @{Moonveil}, hidden paths and empathy readings. Theme: compassion is not weakness.",
+      "x": 3640,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-moonpetal",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-stormglass",
+      "title": "Relic: @{Stormglass Lens}",
+      "body": "Found at @{Stormcourt Spire}. Unlocks @{Stormbridge}, lightning redirects and sky-route gates. Theme: clarity during chaos.",
+      "x": 3640,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-stormglass",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-ironroot",
+      "title": "Relic: @{Rurik Ironbranch}'s @{Ironroot Sigil}",
+      "body": "A living seal from @{Ironroot Bastion}. Unlocks @{Rootbind}, endurance walls and siege traps. Item title intentionally uses NPC + relic tags for easy renaming.",
+      "x": 3640,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-ironroot",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-dragonember",
+      "title": "Relic: @{Thalor Emberwyrm}'s @{Dragon Ember Core}",
+      "body": "The restored or stolen flame of @{Thalor Emberwyrm} in @{Emberglass Desert}. Unlocks @{Ember Crown}. How the player obtains it affects @{Ending Eclipse Crown}.",
+      "x": 3640,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-dragonember",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-starlittear",
+      "title": "Relic: @{Nymira}'s @{Starlit Tear}",
+      "body": "A moonlit truth given at @{Moonwell of Nymera} after key memories are faced. Unlocks @{Starwake} and lets @{Arlen Tharys} resist @{Archmage Valerius}'s name-erasing magic.",
+      "x": 3640,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-starlittear",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-sylphbell",
+      "title": "Relic: @{Pyria}'s @{Sylph Bell}",
+      "body": "Reward from @{Sidequest Stolen Sylph Name}. Unlocks @{Gale Step}, wind shortcuts and small-but-powerful finale support from @{Sylph Court}.",
+      "x": 3640,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-sylphbell",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-fenlantern",
+      "title": "Tool: @{Liora Fenwick}'s @{Fen Lantern}",
+      "body": "A swamp lantern tied to @{Shadowfen}. Reveals fake ground, poison currents and secret spirit doors. Item name mixes NPC and zone function tags.",
+      "x": 3640,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-fenlantern",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-embercompass",
+      "title": "Tool: @{Kett Morrow}'s @{Ember Compass}",
+      "body": "Navigation item for @{Emberglass Desert}. Upgraded through @{Sidequest Merchant Sold Star} to reveal hidden caravan caches and the shortcut toward @{Eclipse Citadel}.",
+      "x": 3640,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-embercompass",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-thread",
+      "title": "Lore Relic: @{Thorne Red Thread}",
+      "body": "A red binding thread hidden by @{Master Thorne}. It proves @{Master Thorne} once helped seal @{Archmage Valerius}, making the mentor's guilt playable instead of exposition-only.",
+      "x": 3640,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-thread",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-grimoire",
+      "title": "Key Item: @{Valerius Grimoire}",
+      "body": "Stolen from @{Eclipse Court}. Contains the pattern for @{Black Gate Key}, but reading it increases @{Power Choice} temptation unless balanced by @{Truth Choice} evidence.",
+      "x": 3640,
+      "y": 1872,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-grimoire",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-artifact-lanterns",
+      "title": "World Relic: @{Road Lantern Network}",
+      "body": "Fast-travel and hope system. Every lantern lit on @{Gloaming Road} creates safe nodes, weakens @{Null Hound Pack}, and adds small lights to the final sky.",
+      "x": 3640,
+      "y": 2038,
+      "width": 400,
+      "categoryId": "col-artifacts",
+      "sourceTaskId": "artifact-lanterns",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-dawnflare",
+      "title": "Unlock: @{Dawnflare}",
+      "body": "Requires @{Sunstone Shard}. Opens sun bridges, fear barriers, truth-light puzzles and special dialogue where @{Arlen Tharys} admits fear without being ruled by it.",
+      "x": 4220,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-dawnflare",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-moonveil",
+      "title": "Unlock: @{Moonveil}",
+      "body": "Requires @{Moonpetal Bloom}. Reveals false walls, hidden motives, spirit NPCs and peaceful routes through illusion-heavy zones like @{Shadowfen} and @{Dreamvault of Aurel}.",
+      "x": 4220,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-moonveil",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-galestep",
+      "title": "Unlock: @{Gale Step}",
+      "body": "Requires @{Pyria}'s @{Sylph Bell}. Adds dash routes, wind vents, cliff shortcuts and optional no-combat paths through @{Whispering Peaks} and @{Stormcourt Spire}.",
+      "x": 4220,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-galestep",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-rootbind",
+      "title": "Unlock: @{Rootbind}",
+      "body": "Requires @{Ironroot Sigil}. Lets @{Arlen Tharys} trap enemies, hold gates, stabilize collapsing bridges and create non-lethal boss solutions.",
+      "x": 4220,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-rootbind",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-embercrown",
+      "title": "Unlock: @{Ember Crown}",
+      "body": "Requires @{Dragon Ember Core}. High power, high risk. Enables explosive spell combos and heat gates, but reckless use pushes the game toward @{Ending Eclipse Crown}.",
+      "x": 4220,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-embercrown",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-stormbridge",
+      "title": "Unlock: @{Stormbridge}",
+      "body": "Requires @{Stormglass Lens}. Creates temporary lightning paths, rotates sky mirrors and unlocks upper-map routes toward @{Eclipse Citadel}.",
+      "x": 4220,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-stormbridge",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-starwake",
+      "title": "Unlock: @{Starwake}",
+      "body": "Requires @{Starlit Tear} and the reforged @{Heartwood Staff}. Restores erased names, resists UI blanking, and opens final mercy/truth options against @{Archmage Valerius}.",
+      "x": 4220,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-starwake",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-blackgate",
+      "title": "Gate Unlock: @{Black Gate Key}",
+      "body": "Requires @{Valerius Grimoire}, @{Stormbridge}, and at least one strong alliance. Opens @{Eclipse Citadel} and begins the irreversible final act warning.",
+      "x": 4220,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-blackgate",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-lanterntravel",
+      "title": "Unlock: Lantern Fast Travel",
+      "body": "Powered by @{Road Lantern Network}. Lets players return to earlier zones for NPC quests, item upgrades and secret ending requirements without killing epic pacing.",
+      "x": 4220,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-lanterntravel",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-brindle",
+      "title": "Unlock: @{Brindle} Scouting",
+      "body": "Unlocked when @{Master Thorne}'s notes are folded into @{Brindle}. Marks hidden doors, enemy cones, tag-linked objectives and sidequest opportunities.",
+      "x": 4220,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-brindle",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-finalritual",
+      "title": "Unlock: @{Heartstorm Ritual} Choices",
+      "body": "Final ritual interface reads every major tag: @{Arlen Tharys}, relics, NPCs, factions, sidequests and choices. Makes the GameBible node web directly map to gameplay variables.",
+      "x": 4220,
+      "y": 1540,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-finalritual",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-unlock-secretending",
+      "title": "Unlock: @{Ending Heart of Eldoria} Route",
+      "body": "Requires @{Iri} saved, @{Sidequest Seven Songs} complete, @{Selene Noctis} redeemed, @{Starlit Tear} obtained and @{Name Choice} strong enough to restore erased enemies.",
+      "x": 4220,
+      "y": 1706,
+      "width": 400,
+      "categoryId": "col-unlocks",
+      "sourceTaskId": "unlock-secretending",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-staffprogress",
+      "title": "Mechanic: Staff Growth Grammar",
+      "body": "@{Heartwood Staff} changes visually and mechanically after each relic. Every item unlock should point to the staff, so renaming @{Sunstone Shard} or @{Dragon Ember Core} updates the design language cleanly.",
+      "x": 4800,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-staffprogress",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-envcombat",
+      "title": "Mechanic: Spell + Environment Combat",
+      "body": "@{Arlen Tharys} rarely wins by raw damage. Use @{Dawnflare} to reveal, @{Rootbind} to hold, @{Moonveil} to misdirect, @{Gale Step} to reposition and @{Ember Crown} only when the cost is worth it.",
+      "x": 4800,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-envcombat",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-combos",
+      "title": "Mechanic: Spell Combo Grammar",
+      "body": "Readable combos: @{Dawnflare}+@{Moonveil}=Truth Halo, @{Rootbind}+@{Ember Crown}=Thornfire Cage, @{Gale Step}+@{Stormbridge}=Skycut Dash, @{Starwake}+any relic=final ritual variant.",
+      "x": 4800,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-combos",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-bossarenas",
+      "title": "Mechanic: Puzzle Boss Arenas",
+      "body": "Each boss has 2-4 clear rules, emotional stakes and a quest-linked weakness. @{Bog King Mourn} can be healed, @{Commander Veyra Ashlance} can be out-supplied, and @{Moon Eaten Selene} can be reached with words.",
+      "x": 4800,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-bossarenas",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-choice",
+      "title": "Mechanic: @{Mercy Choice} / @{Power Choice} / @{Truth Choice} / @{Name Choice}",
+      "body": "No simple good-evil meter. The game tracks how @{Arlen Tharys} solves problems: spare, burn, reveal, hide, restore names, or seize power. These flags feed endings and dialogue.",
+      "x": 4800,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-choice",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-reputation",
+      "title": "Mechanic: Faction Reputation",
+      "body": "@{Sylph Court}, @{Fenwardens}, @{Ember Caravans}, @{Ironroot Wardens}, @{Vanguard of Dawn} and @{Starfall Refugees} change prices, routes, siege support and final ritual rings.",
+      "x": 4800,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-reputation",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-familiar",
+      "title": "Mechanic: @{Brindle} and Companion Utility",
+      "body": "@{Brindle} scouts fog, carries small quest items, tags interactables and gives comic relief. Low-cost browser mechanic with strong emotional flavor.",
+      "x": 4800,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-familiar",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-warfront",
+      "title": "Mechanic: Epic Scale, Browser Friendly",
+      "body": "Use silhouettes, sky flares, messenger reports, parallax armies and audio layers. The player feels @{Eldoria}'s war without rendering thousands of units.",
+      "x": 4800,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-warfront",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-tags",
+      "title": "Mechanic: Tag-First Naming",
+      "body": "All important names are written as @{Arlen Tharys}, @{Archmage Valerius}, @{Whispering Peaks}, @{Sunstone Shard}, @{Quest Heartstorm Ritual}, etc. Rename once in tags; bodies, items and quest text stay consistent.",
+      "x": 4800,
+      "y": 1208,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-tags",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-mech-unlocks",
+      "title": "Mechanic: Item-to-Quest Unlock Rules",
+      "body": "Every major quest has a reward item, every item has an unlock, and every unlock points to zones, bosses or UI. This keeps progression visible inside the node graph.",
+      "x": 4800,
+      "y": 1374,
+      "width": 400,
+      "categoryId": "col-mechanics",
+      "sourceTaskId": "mech-unlocks",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-nodeeditor",
+      "title": "System: GameBible Tag Node Workflow",
+      "body": "Designer rule: never hardcode names like @{Archmage Valerius}, @{Shadowfen} or @{Dragon Ember Core} in new bodies without tags. This makes renaming zones, NPCs, quests and items safe.",
+      "x": 5380,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-nodeeditor",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-save",
+      "title": "System: Save Flags",
+      "body": "Stores quest state, relics, NPC survival, faction reputation, unlocks, and ending variables for @{Mercy Choice}, @{Power Choice}, @{Truth Choice} and @{Name Choice}.",
+      "x": 5380,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-save",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-questgraph",
+      "title": "System: Quest Graph State Machine",
+      "body": "Each quest node has prerequisites, rewards and callbacks. Example: @{Quest Moonpetal Bloom} requires @{Quest Into Shadowfen}, rewards @{Moonpetal Bloom}, unlocks @{Moonveil}, and updates @{Liora Fenwick}.",
+      "x": 5380,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-questgraph",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-inventory",
+      "title": "System: Inventory Unlock Registry",
+      "body": "Inventory items call unlock handlers: @{Sunstone Shard} -> @{Dawnflare}, @{Moonpetal Bloom} -> @{Moonveil}, @{Ironroot Sigil} -> @{Rootbind}, @{Dragon Ember Core} -> @{Ember Crown}.",
+      "x": 5380,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-inventory",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-dialogue",
+      "title": "System: Branching Dialogue Tables",
+      "body": "NPC dialogue checks tags and flags: @{Pyria} reacts to @{Sylph Bell}; @{Selene Noctis} reacts to @{Truth Choice}; @{Archmage Valerius} reacts to whether @{Iri} was saved.",
+      "x": 5380,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-dialogue",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-canvas",
+      "title": "System: HTML5 Canvas Zone Renderer",
+      "body": "2D/isometric tile chunks for @{Gloaming Road}, @{Shadowfen}, @{Emberglass Desert} and @{Eclipse Citadel}. Background spectacle stays parallax and particle-based.",
+      "x": 5380,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-canvas",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-audio",
+      "title": "System: Adaptive Audio Layers",
+      "body": "Wind chimes in @{Whispering Peaks}, wet drums in @{Shadowfen}, glass hum in @{Emberglass Desert}, root bass in @{Ironroot Bastion}, and choir storm during @{Heartstorm Ritual}.",
+      "x": 5380,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-audio",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-sys-accessibility",
+      "title": "System: Accessibility & Comfort",
+      "body": "Readable tile outlines, reduced flashing for @{Stormbridge}, lower screen shake for @{Ember Crown}, colorblind symbols for relics, and optional quest hinting through @{Brindle}.",
+      "x": 5380,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-systems",
+      "sourceTaskId": "sys-accessibility",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-title",
+      "title": "UI: Title Screen Mood",
+      "body": "One wet candle in @{Willowmere Workshop}. As the player collects @{Sunstone Shard}, @{Moonpetal Bloom}, @{Ironroot Sigil} and @{Dragon Ember Core}, the logo @{Game Name} gains color.",
+      "x": 5960,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-title",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-questjournal",
+      "title": "UI: Node-Based Quest Journal",
+      "body": "Quest UI mirrors this GameBible. Main quests, sidequests, NPCs, items and unlocks appear as connected nodes so players see how @{Sidequest Child Made of Ash} can affect @{Quest Heartstorm Ritual}.",
+      "x": 5960,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-questjournal",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-spellbook",
+      "title": "UI: Living Spellbook",
+      "body": "Tabs: @{Dawnflare}, @{Moonveil}, @{Gale Step}, @{Rootbind}, @{Ember Crown}, @{Stormbridge}, @{Starwake}. Margins include anxious notes from @{Arlen Tharys} and sarcastic folds from @{Brindle}.",
+      "x": 5960,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-spellbook",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-map",
+      "title": "UI: Living Map of @{Eldoria}",
+      "body": "The map shows @{Valerius Curse} crawling over borders. Lit @{Road Lantern Network} nodes, saved towns and allied factions push color back.",
+      "x": 5960,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-map",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-npccodex",
+      "title": "UI: NPC Codex",
+      "body": "Profiles for @{Master Thorne}, @{Pyria}, @{Liora Fenwick}, @{Captain Soren Vale}, @{Selene Noctis}, @{Iri} and others update after choices, gifts and quest outcomes.",
+      "x": 5960,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-npccodex",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-itemcodex",
+      "title": "UI: Relic Codex",
+      "body": "Shows each item, zone source, NPC connection and unlock: e.g. @{Pyria}'s @{Sylph Bell} from @{Whispering Peaks} unlocks @{Gale Step}.",
+      "x": 5960,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-itemcodex",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-bossintro",
+      "title": "UI: Boss Intro Cards",
+      "body": "Browser-friendly dramatic cards: title, symbol, one line and arena rule. Example: @{Commander Veyra Ashlance} — 'Hope is a supply line. I cut supply lines.'",
+      "x": 5960,
+      "y": 876,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-bossintro",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-ui-finalritual",
+      "title": "UI: @{Heartstorm Ritual} Interface",
+      "body": "Final screen shows every relic, ally and choice orbiting @{Heartwood Staff}. The player builds the ending by dragging unlocked rings into the @{Heart of Eldoria}.",
+      "x": 5960,
+      "y": 1042,
+      "width": 400,
+      "categoryId": "col-ui",
+      "sourceTaskId": "ui-finalritual",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-dawn",
+      "title": "Ending: @{Ending Dawn Mender}",
+      "body": "@{Arlen Tharys} breaks @{Valerius Curse} and releases stored memories. Some losses remain, but @{Eldoria} wakes with songs, lanterns and rebuilt homes.",
+      "x": 6540,
+      "y": -120,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-dawn",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-eclipse",
+      "title": "Ending: @{Ending Eclipse Crown}",
+      "body": "@{Arlen Tharys} controls the eclipse using @{Dragon Ember Core} and @{Valerius Grimoire}. @{Eldoria} survives, but every kingdom now fears its savior.",
+      "x": 6540,
+      "y": 46,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-eclipse",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-grey",
+      "title": "Ending: @{Ending Grey Silence}",
+      "body": "@{Arlen Tharys} accepts @{Selene Noctis}'s despairing logic. Pain ends because dreams end. Beautiful, silent, morally chilling.",
+      "x": 6540,
+      "y": 212,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-grey",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-secret",
+      "title": "Secret Ending: @{Ending Heart of Eldoria}",
+      "body": "Requires @{Iri}, @{Sidequest Seven Songs}, redeemed @{Selene Noctis}, full @{Starwake} and strong @{Name Choice}. @{Heart of Eldoria} teaches even @{Archmage Valerius} how to change.",
+      "x": 6540,
+      "y": 378,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-secret",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-ngplus",
+      "title": "New Game+ Hook: Beyond @{Eldoria}",
+      "body": "A new constellation appears over @{Willowmere Workshop}: a map beyond @{Eldoria}. @{Brindle} unfolds into a paper ship, and @{Arlen Tharys} hears another world's staff calling.",
+      "x": 6540,
+      "y": 544,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-ngplus",
+      "mentionMode": "value"
+    },
+    {
+      "id": "node-end-postgame",
+      "title": "Postgame: Recoloring @{Eldoria}",
+      "body": "Optional cleanup after the finale: restore roads, finish NPC letters, heal @{Shadowfen}, rebuild @{Ironroot Bastion}, map @{Emberglass Desert}, and unlock challenge echoes of bosses.",
+      "x": 6540,
+      "y": 710,
+      "width": 400,
+      "categoryId": "col-endgame",
+      "sourceTaskId": "end-postgame",
+      "mentionMode": "value"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-001",
+      "from": "node-story-full",
+      "to": "node-story-hook",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-002",
+      "from": "node-story-hook",
+      "to": "node-story-prophecy",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-003",
+      "from": "node-story-prophecy",
+      "to": "node-story-inciting",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-004",
+      "from": "node-story-inciting",
+      "to": "node-story-act1",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-005",
+      "from": "node-story-act1",
+      "to": "node-story-act2",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-006",
+      "from": "node-story-act2",
+      "to": "node-story-act3",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-007",
+      "from": "node-story-act3",
+      "to": "node-story-act4",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-008",
+      "from": "node-story-act4",
+      "to": "node-story-betrayal",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-009",
+      "from": "node-story-betrayal",
+      "to": "node-story-act5",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-010",
+      "from": "node-story-act5",
+      "to": "node-story-finale",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-011",
+      "from": "node-story-finale",
+      "to": "node-story-epilogue",
+      "label": "story flow"
+    },
+    {
+      "id": "edge-012",
+      "from": "node-story-inciting",
+      "to": "node-quest-prologue",
+      "label": "starts"
+    },
+    {
+      "id": "edge-013",
+      "from": "node-story-act1",
+      "to": "node-quest-road",
+      "label": "act focus"
+    },
+    {
+      "id": "edge-014",
+      "from": "node-story-act2",
+      "to": "node-quest-sunstone",
+      "label": "first relic"
+    },
+    {
+      "id": "edge-015",
+      "from": "node-story-act2",
+      "to": "node-quest-moonpetal",
+      "label": "second relic"
+    },
+    {
+      "id": "edge-016",
+      "from": "node-story-act3",
+      "to": "node-quest-refuge",
+      "label": "opens hub"
+    },
+    {
+      "id": "edge-017",
+      "from": "node-story-act4",
+      "to": "node-quest-siege",
+      "label": "lieutenant hunt"
+    },
+    {
+      "id": "edge-018",
+      "from": "node-story-betrayal",
+      "to": "node-quest-dreamvault",
+      "label": "truth route"
+    },
+    {
+      "id": "edge-019",
+      "from": "node-story-act5",
+      "to": "node-quest-reforge",
+      "label": "rebuild staff"
+    },
+    {
+      "id": "edge-020",
+      "from": "node-story-finale",
+      "to": "node-quest-final",
+      "label": "finale"
+    },
+    {
+      "id": "edge-021",
+      "from": "node-world-workshop",
+      "to": "node-world-road",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-022",
+      "from": "node-world-road",
+      "to": "node-world-peaks",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-023",
+      "from": "node-world-peaks",
+      "to": "node-world-shadowfen",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-024",
+      "from": "node-world-shadowfen",
+      "to": "node-world-moonwell",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-025",
+      "from": "node-world-moonwell",
+      "to": "node-world-emberglass",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-026",
+      "from": "node-world-emberglass",
+      "to": "node-world-ironroot",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-027",
+      "from": "node-world-ironroot",
+      "to": "node-world-stormcourt",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-028",
+      "from": "node-world-stormcourt",
+      "to": "node-world-dreamvault",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-029",
+      "from": "node-world-dreamvault",
+      "to": "node-world-citadel",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-030",
+      "from": "node-world-citadel",
+      "to": "node-world-heartstorm",
+      "label": "route unlock"
+    },
+    {
+      "id": "edge-031",
+      "from": "node-quest-prologue",
+      "to": "node-quest-road",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-032",
+      "from": "node-quest-road",
+      "to": "node-quest-peaks",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-033",
+      "from": "node-quest-peaks",
+      "to": "node-quest-sunstone",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-034",
+      "from": "node-quest-sunstone",
+      "to": "node-quest-shadowfen",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-035",
+      "from": "node-quest-shadowfen",
+      "to": "node-quest-moonpetal",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-036",
+      "from": "node-quest-moonpetal",
+      "to": "node-quest-refuge",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-037",
+      "from": "node-quest-refuge",
+      "to": "node-quest-emberglass",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-038",
+      "from": "node-quest-emberglass",
+      "to": "node-quest-dragon",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-039",
+      "from": "node-quest-dragon",
+      "to": "node-quest-ironroot",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-040",
+      "from": "node-quest-ironroot",
+      "to": "node-quest-siege",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-041",
+      "from": "node-quest-siege",
+      "to": "node-quest-stormcourt",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-042",
+      "from": "node-quest-stormcourt",
+      "to": "node-quest-dreamvault",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-043",
+      "from": "node-quest-dreamvault",
+      "to": "node-quest-reforge",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-044",
+      "from": "node-quest-reforge",
+      "to": "node-quest-citadel",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-045",
+      "from": "node-quest-citadel",
+      "to": "node-quest-final",
+      "label": "main quest"
+    },
+    {
+      "id": "edge-046",
+      "from": "node-quest-prologue",
+      "to": "node-world-workshop",
+      "label": "zone"
+    },
+    {
+      "id": "edge-047",
+      "from": "node-quest-prologue",
+      "to": "node-char-thorne",
+      "label": "mentor"
+    },
+    {
+      "id": "edge-048",
+      "from": "node-quest-prologue",
+      "to": "node-artifact-humblestaff",
+      "label": "receives"
+    },
+    {
+      "id": "edge-049",
+      "from": "node-quest-prologue",
+      "to": "node-artifact-thread",
+      "label": "lore hook"
+    },
+    {
+      "id": "edge-050",
+      "from": "node-quest-prologue",
+      "to": "node-unlock-brindle",
+      "label": "later unlock seed"
+    },
+    {
+      "id": "edge-051",
+      "from": "node-quest-road",
+      "to": "node-world-road",
+      "label": "zone"
+    },
+    {
+      "id": "edge-052",
+      "from": "node-quest-road",
+      "to": "node-char-soren",
+      "label": "optional rescue"
+    },
+    {
+      "id": "edge-053",
+      "from": "node-quest-road",
+      "to": "node-boss-nullhound",
+      "label": "hunter"
+    },
+    {
+      "id": "edge-054",
+      "from": "node-quest-road",
+      "to": "node-artifact-lanterns",
+      "label": "introduces"
+    },
+    {
+      "id": "edge-055",
+      "from": "node-quest-road",
+      "to": "node-unlock-lanterntravel",
+      "label": "foreshadow"
+    },
+    {
+      "id": "edge-056",
+      "from": "node-quest-peaks",
+      "to": "node-world-peaks",
+      "label": "zone"
+    },
+    {
+      "id": "edge-057",
+      "from": "node-quest-peaks",
+      "to": "node-char-pyria",
+      "label": "meet"
+    },
+    {
+      "id": "edge-058",
+      "from": "node-quest-peaks",
+      "to": "node-faction-sylph",
+      "label": "faction"
+    },
+    {
+      "id": "edge-059",
+      "from": "node-quest-peaks",
+      "to": "node-unlock-galestep",
+      "label": "foreshadow"
+    },
+    {
+      "id": "edge-060",
+      "from": "node-quest-sunstone",
+      "to": "node-world-peaks",
+      "label": "trial cave"
+    },
+    {
+      "id": "edge-061",
+      "from": "node-quest-sunstone",
+      "to": "node-char-aeravelle",
+      "label": "judge"
+    },
+    {
+      "id": "edge-062",
+      "from": "node-quest-sunstone",
+      "to": "node-boss-aeravelle",
+      "label": "trial"
+    },
+    {
+      "id": "edge-063",
+      "from": "node-quest-sunstone",
+      "to": "node-artifact-sunstone",
+      "label": "reward"
+    },
+    {
+      "id": "edge-064",
+      "from": "node-quest-sunstone",
+      "to": "node-unlock-dawnflare",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-065",
+      "from": "node-quest-shadowfen",
+      "to": "node-world-shadowfen",
+      "label": "zone"
+    },
+    {
+      "id": "edge-066",
+      "from": "node-quest-shadowfen",
+      "to": "node-char-liora",
+      "label": "guide"
+    },
+    {
+      "id": "edge-067",
+      "from": "node-quest-shadowfen",
+      "to": "node-artifact-fenlantern",
+      "label": "tool"
+    },
+    {
+      "id": "edge-068",
+      "from": "node-quest-shadowfen",
+      "to": "node-unlock-dawnflare",
+      "label": "requires"
+    },
+    {
+      "id": "edge-069",
+      "from": "node-quest-moonpetal",
+      "to": "node-world-shadowfen",
+      "label": "arena"
+    },
+    {
+      "id": "edge-070",
+      "from": "node-quest-moonpetal",
+      "to": "node-boss-mourn",
+      "label": "boss"
+    },
+    {
+      "id": "edge-071",
+      "from": "node-quest-moonpetal",
+      "to": "node-artifact-moonpetal",
+      "label": "reward"
+    },
+    {
+      "id": "edge-072",
+      "from": "node-quest-moonpetal",
+      "to": "node-unlock-moonveil",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-073",
+      "from": "node-quest-moonpetal",
+      "to": "node-faction-fenwardens",
+      "label": "reputation"
+    },
+    {
+      "id": "edge-074",
+      "from": "node-quest-refuge",
+      "to": "node-world-moonwell",
+      "label": "hub"
+    },
+    {
+      "id": "edge-075",
+      "from": "node-quest-refuge",
+      "to": "node-char-nymira",
+      "label": "oracle"
+    },
+    {
+      "id": "edge-076",
+      "from": "node-quest-refuge",
+      "to": "node-char-brindle",
+      "label": "familiar"
+    },
+    {
+      "id": "edge-077",
+      "from": "node-quest-refuge",
+      "to": "node-unlock-brindle",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-078",
+      "from": "node-quest-refuge",
+      "to": "node-faction-refugees",
+      "label": "opens"
+    },
+    {
+      "id": "edge-079",
+      "from": "node-quest-emberglass",
+      "to": "node-world-emberglass",
+      "label": "zone"
+    },
+    {
+      "id": "edge-080",
+      "from": "node-quest-emberglass",
+      "to": "node-char-kett",
+      "label": "caravan"
+    },
+    {
+      "id": "edge-081",
+      "from": "node-quest-emberglass",
+      "to": "node-artifact-embercompass",
+      "label": "tool"
+    },
+    {
+      "id": "edge-082",
+      "from": "node-quest-emberglass",
+      "to": "node-faction-ember",
+      "label": "reputation"
+    },
+    {
+      "id": "edge-083",
+      "from": "node-quest-dragon",
+      "to": "node-world-emberglass",
+      "label": "dragon lair"
+    },
+    {
+      "id": "edge-084",
+      "from": "node-quest-dragon",
+      "to": "node-char-thalor",
+      "label": "dragon"
+    },
+    {
+      "id": "edge-085",
+      "from": "node-quest-dragon",
+      "to": "node-boss-solakar",
+      "label": "mirror boss"
+    },
+    {
+      "id": "edge-086",
+      "from": "node-quest-dragon",
+      "to": "node-artifact-dragonember",
+      "label": "reward"
+    },
+    {
+      "id": "edge-087",
+      "from": "node-quest-dragon",
+      "to": "node-unlock-embercrown",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-088",
+      "from": "node-quest-ironroot",
+      "to": "node-world-ironroot",
+      "label": "zone"
+    },
+    {
+      "id": "edge-089",
+      "from": "node-quest-ironroot",
+      "to": "node-char-rurik",
+      "label": "ally"
+    },
+    {
+      "id": "edge-090",
+      "from": "node-quest-ironroot",
+      "to": "node-artifact-ironroot",
+      "label": "reward path"
+    },
+    {
+      "id": "edge-091",
+      "from": "node-quest-ironroot",
+      "to": "node-unlock-rootbind",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-092",
+      "from": "node-quest-ironroot",
+      "to": "node-faction-ironroot",
+      "label": "reputation"
+    },
+    {
+      "id": "edge-093",
+      "from": "node-quest-siege",
+      "to": "node-world-ironroot",
+      "label": "siege"
+    },
+    {
+      "id": "edge-094",
+      "from": "node-quest-siege",
+      "to": "node-boss-veyra",
+      "label": "boss"
+    },
+    {
+      "id": "edge-095",
+      "from": "node-quest-siege",
+      "to": "node-faction-vanguard",
+      "label": "support"
+    },
+    {
+      "id": "edge-096",
+      "from": "node-quest-siege",
+      "to": "node-faction-ironroot",
+      "label": "support"
+    },
+    {
+      "id": "edge-097",
+      "from": "node-quest-siege",
+      "to": "node-mech-warfront",
+      "label": "scale"
+    },
+    {
+      "id": "edge-098",
+      "from": "node-quest-stormcourt",
+      "to": "node-world-stormcourt",
+      "label": "zone"
+    },
+    {
+      "id": "edge-099",
+      "from": "node-quest-stormcourt",
+      "to": "node-boss-sentinel",
+      "label": "boss"
+    },
+    {
+      "id": "edge-100",
+      "from": "node-quest-stormcourt",
+      "to": "node-artifact-stormglass",
+      "label": "reward"
+    },
+    {
+      "id": "edge-101",
+      "from": "node-quest-stormcourt",
+      "to": "node-unlock-stormbridge",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-102",
+      "from": "node-quest-dreamvault",
+      "to": "node-world-dreamvault",
+      "label": "zone"
+    },
+    {
+      "id": "edge-103",
+      "from": "node-quest-dreamvault",
+      "to": "node-char-selene",
+      "label": "guide/betrayal"
+    },
+    {
+      "id": "edge-104",
+      "from": "node-quest-dreamvault",
+      "to": "node-boss-selene",
+      "label": "conditional boss"
+    },
+    {
+      "id": "edge-105",
+      "from": "node-quest-dreamvault",
+      "to": "node-artifact-starlittear",
+      "label": "truth reward"
+    },
+    {
+      "id": "edge-106",
+      "from": "node-quest-dreamvault",
+      "to": "node-unlock-starwake",
+      "label": "foreshadow"
+    },
+    {
+      "id": "edge-107",
+      "from": "node-quest-reforge",
+      "to": "node-world-stormcourt",
+      "label": "ritual forge"
+    },
+    {
+      "id": "edge-108",
+      "from": "node-quest-reforge",
+      "to": "node-artifact-heartwood",
+      "label": "upgrades"
+    },
+    {
+      "id": "edge-109",
+      "from": "node-quest-reforge",
+      "to": "node-unlock-starwake",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-110",
+      "from": "node-quest-reforge",
+      "to": "node-mech-staffprogress",
+      "label": "system"
+    },
+    {
+      "id": "edge-111",
+      "from": "node-quest-citadel",
+      "to": "node-world-citadel",
+      "label": "final zone"
+    },
+    {
+      "id": "edge-112",
+      "from": "node-quest-citadel",
+      "to": "node-boss-orvane",
+      "label": "gate boss"
+    },
+    {
+      "id": "edge-113",
+      "from": "node-quest-citadel",
+      "to": "node-artifact-grimoire",
+      "label": "key source"
+    },
+    {
+      "id": "edge-114",
+      "from": "node-quest-citadel",
+      "to": "node-unlock-blackgate",
+      "label": "requires"
+    },
+    {
+      "id": "edge-115",
+      "from": "node-quest-final",
+      "to": "node-world-heartstorm",
+      "label": "ritual space"
+    },
+    {
+      "id": "edge-116",
+      "from": "node-quest-final",
+      "to": "node-boss-valerius",
+      "label": "final boss"
+    },
+    {
+      "id": "edge-117",
+      "from": "node-quest-final",
+      "to": "node-unlock-finalritual",
+      "label": "uses"
+    },
+    {
+      "id": "edge-118",
+      "from": "node-quest-final",
+      "to": "node-ui-finalritual",
+      "label": "interface"
+    },
+    {
+      "id": "edge-119",
+      "from": "node-quest-final",
+      "to": "node-end-dawn",
+      "label": "possible"
+    },
+    {
+      "id": "edge-120",
+      "from": "node-quest-final",
+      "to": "node-end-eclipse",
+      "label": "possible"
+    },
+    {
+      "id": "edge-121",
+      "from": "node-quest-final",
+      "to": "node-end-grey",
+      "label": "possible"
+    },
+    {
+      "id": "edge-122",
+      "from": "node-quest-final",
+      "to": "node-end-secret",
+      "label": "possible"
+    },
+    {
+      "id": "edge-123",
+      "from": "node-side-sylphname",
+      "to": "node-char-pyria",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-124",
+      "from": "node-side-sylphname",
+      "to": "node-world-peaks",
+      "label": "zone"
+    },
+    {
+      "id": "edge-125",
+      "from": "node-side-sylphname",
+      "to": "node-artifact-sylphbell",
+      "label": "reward"
+    },
+    {
+      "id": "edge-126",
+      "from": "node-side-sylphname",
+      "to": "node-unlock-galestep",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-127",
+      "from": "node-side-sylphname",
+      "to": "node-end-secret",
+      "label": "helps"
+    },
+    {
+      "id": "edge-128",
+      "from": "node-side-lanterns",
+      "to": "node-world-road",
+      "label": "route"
+    },
+    {
+      "id": "edge-129",
+      "from": "node-side-lanterns",
+      "to": "node-artifact-lanterns",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-130",
+      "from": "node-side-lanterns",
+      "to": "node-unlock-lanterntravel",
+      "label": "fast travel"
+    },
+    {
+      "id": "edge-131",
+      "from": "node-side-lanterns",
+      "to": "node-boss-nullhound",
+      "label": "weakens"
+    },
+    {
+      "id": "edge-132",
+      "from": "node-side-lanterns",
+      "to": "node-end-dawn",
+      "label": "strengthens"
+    },
+    {
+      "id": "edge-133",
+      "from": "node-side-bogmother",
+      "to": "node-char-liora",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-134",
+      "from": "node-side-bogmother",
+      "to": "node-world-shadowfen",
+      "label": "zone"
+    },
+    {
+      "id": "edge-135",
+      "from": "node-side-bogmother",
+      "to": "node-boss-mourn",
+      "label": "changes"
+    },
+    {
+      "id": "edge-136",
+      "from": "node-side-bogmother",
+      "to": "node-faction-fenwardens",
+      "label": "reputation"
+    },
+    {
+      "id": "edge-137",
+      "from": "node-side-ashchild",
+      "to": "node-char-iri",
+      "label": "choice"
+    },
+    {
+      "id": "edge-138",
+      "from": "node-side-ashchild",
+      "to": "node-faction-refugees",
+      "label": "emotional link"
+    },
+    {
+      "id": "edge-139",
+      "from": "node-side-ashchild",
+      "to": "node-end-secret",
+      "label": "required"
+    },
+    {
+      "id": "edge-140",
+      "from": "node-side-ashchild",
+      "to": "node-boss-valerius",
+      "label": "dialogue echo"
+    },
+    {
+      "id": "edge-141",
+      "from": "node-side-letters",
+      "to": "node-char-soren",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-142",
+      "from": "node-side-letters",
+      "to": "node-faction-vanguard",
+      "label": "morale"
+    },
+    {
+      "id": "edge-143",
+      "from": "node-side-letters",
+      "to": "node-quest-siege",
+      "label": "improves"
+    },
+    {
+      "id": "edge-144",
+      "from": "node-side-letters",
+      "to": "node-end-dawn",
+      "label": "epilogue letters"
+    },
+    {
+      "id": "edge-145",
+      "from": "node-side-glassknight",
+      "to": "node-world-emberglass",
+      "label": "zone"
+    },
+    {
+      "id": "edge-146",
+      "from": "node-side-glassknight",
+      "to": "node-boss-veyra",
+      "label": "weakness"
+    },
+    {
+      "id": "edge-147",
+      "from": "node-side-glassknight",
+      "to": "node-unlock-embercrown",
+      "label": "safer defense"
+    },
+    {
+      "id": "edge-148",
+      "from": "node-side-dragonfire",
+      "to": "node-char-thalor",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-149",
+      "from": "node-side-dragonfire",
+      "to": "node-artifact-dragonember",
+      "label": "alters"
+    },
+    {
+      "id": "edge-150",
+      "from": "node-side-dragonfire",
+      "to": "node-unlock-embercrown",
+      "label": "purifies"
+    },
+    {
+      "id": "edge-151",
+      "from": "node-side-dragonfire",
+      "to": "node-end-eclipse",
+      "label": "softens"
+    },
+    {
+      "id": "edge-152",
+      "from": "node-side-rootoath",
+      "to": "node-char-rurik",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-153",
+      "from": "node-side-rootoath",
+      "to": "node-artifact-ironroot",
+      "label": "empowers"
+    },
+    {
+      "id": "edge-154",
+      "from": "node-side-rootoath",
+      "to": "node-boss-revenant",
+      "label": "boss"
+    },
+    {
+      "id": "edge-155",
+      "from": "node-side-rootoath",
+      "to": "node-quest-siege",
+      "label": "defense"
+    },
+    {
+      "id": "edge-156",
+      "from": "node-side-mirrorbride",
+      "to": "node-world-dreamvault",
+      "label": "zone"
+    },
+    {
+      "id": "edge-157",
+      "from": "node-side-mirrorbride",
+      "to": "node-char-selene",
+      "label": "redeem evidence"
+    },
+    {
+      "id": "edge-158",
+      "from": "node-side-mirrorbride",
+      "to": "node-boss-selene",
+      "label": "peace option"
+    },
+    {
+      "id": "edge-159",
+      "from": "node-side-mirrorbride",
+      "to": "node-end-secret",
+      "label": "required"
+    },
+    {
+      "id": "edge-160",
+      "from": "node-side-thornedrawer",
+      "to": "node-char-thorne",
+      "label": "lore"
+    },
+    {
+      "id": "edge-161",
+      "from": "node-side-thornedrawer",
+      "to": "node-artifact-thread",
+      "label": "reward"
+    },
+    {
+      "id": "edge-162",
+      "from": "node-side-thornedrawer",
+      "to": "node-char-valerius",
+      "label": "backstory"
+    },
+    {
+      "id": "edge-163",
+      "from": "node-side-thornedrawer",
+      "to": "node-unlock-starwake",
+      "label": "truth support"
+    },
+    {
+      "id": "edge-164",
+      "from": "node-side-sevensongs",
+      "to": "node-faction-choir",
+      "label": "lore"
+    },
+    {
+      "id": "edge-165",
+      "from": "node-side-sevensongs",
+      "to": "node-world-heartstorm",
+      "label": "final song"
+    },
+    {
+      "id": "edge-166",
+      "from": "node-side-sevensongs",
+      "to": "node-unlock-secretending",
+      "label": "required"
+    },
+    {
+      "id": "edge-167",
+      "from": "node-side-sevensongs",
+      "to": "node-end-secret",
+      "label": "required"
+    },
+    {
+      "id": "edge-168",
+      "from": "node-side-soldstar",
+      "to": "node-char-kett",
+      "label": "quest giver"
+    },
+    {
+      "id": "edge-169",
+      "from": "node-side-soldstar",
+      "to": "node-artifact-embercompass",
+      "label": "upgrades"
+    },
+    {
+      "id": "edge-170",
+      "from": "node-side-soldstar",
+      "to": "node-faction-eclipse",
+      "label": "debt"
+    },
+    {
+      "id": "edge-171",
+      "from": "node-side-soldstar",
+      "to": "node-unlock-blackgate",
+      "label": "shortcut"
+    },
+    {
+      "id": "edge-172",
+      "from": "node-char-thorne",
+      "to": "node-char-valerius",
+      "label": "old bond"
+    },
+    {
+      "id": "edge-173",
+      "from": "node-char-thorne",
+      "to": "node-artifact-thread",
+      "label": "hidden guilt"
+    },
+    {
+      "id": "edge-174",
+      "from": "node-char-thorne",
+      "to": "node-world-workshop",
+      "label": "home"
+    },
+    {
+      "id": "edge-175",
+      "from": "node-char-arlen",
+      "to": "node-artifact-heartwood",
+      "label": "wields"
+    },
+    {
+      "id": "edge-176",
+      "from": "node-char-arlen",
+      "to": "node-unlock-finalritual",
+      "label": "casts"
+    },
+    {
+      "id": "edge-177",
+      "from": "node-char-pyria",
+      "to": "node-faction-sylph",
+      "label": "member"
+    },
+    {
+      "id": "edge-178",
+      "from": "node-char-aeravelle",
+      "to": "node-faction-sylph",
+      "label": "queen"
+    },
+    {
+      "id": "edge-179",
+      "from": "node-char-aeravelle",
+      "to": "node-artifact-sunstone",
+      "label": "guards"
+    },
+    {
+      "id": "edge-180",
+      "from": "node-char-liora",
+      "to": "node-faction-fenwardens",
+      "label": "guide"
+    },
+    {
+      "id": "edge-181",
+      "from": "node-char-liora",
+      "to": "node-artifact-fenlantern",
+      "label": "owns"
+    },
+    {
+      "id": "edge-182",
+      "from": "node-char-soren",
+      "to": "node-faction-vanguard",
+      "label": "captain"
+    },
+    {
+      "id": "edge-183",
+      "from": "node-char-rurik",
+      "to": "node-faction-ironroot",
+      "label": "warden"
+    },
+    {
+      "id": "edge-184",
+      "from": "node-char-rurik",
+      "to": "node-artifact-ironroot",
+      "label": "binds"
+    },
+    {
+      "id": "edge-185",
+      "from": "node-char-kett",
+      "to": "node-faction-ember",
+      "label": "trader"
+    },
+    {
+      "id": "edge-186",
+      "from": "node-char-kett",
+      "to": "node-artifact-embercompass",
+      "label": "owns"
+    },
+    {
+      "id": "edge-187",
+      "from": "node-char-selene",
+      "to": "node-end-grey",
+      "label": "tempts"
+    },
+    {
+      "id": "edge-188",
+      "from": "node-char-selene",
+      "to": "node-end-secret",
+      "label": "redeem"
+    },
+    {
+      "id": "edge-189",
+      "from": "node-char-iri",
+      "to": "node-end-secret",
+      "label": "required"
+    },
+    {
+      "id": "edge-190",
+      "from": "node-char-thalor",
+      "to": "node-artifact-dragonember",
+      "label": "source"
+    },
+    {
+      "id": "edge-191",
+      "from": "node-faction-eclipse",
+      "to": "node-boss-veyra",
+      "label": "commands"
+    },
+    {
+      "id": "edge-192",
+      "from": "node-faction-eclipse",
+      "to": "node-boss-orvane",
+      "label": "commands"
+    },
+    {
+      "id": "edge-193",
+      "from": "node-faction-eclipse",
+      "to": "node-boss-valerius",
+      "label": "ruled by"
+    },
+    {
+      "id": "edge-194",
+      "from": "node-faction-fenwardens",
+      "to": "node-boss-mourn",
+      "label": "divided by"
+    },
+    {
+      "id": "edge-195",
+      "from": "node-faction-ironroot",
+      "to": "node-boss-revenant",
+      "label": "ancestral"
+    },
+    {
+      "id": "edge-196",
+      "from": "node-faction-choir",
+      "to": "node-side-sevensongs",
+      "label": "secret lore"
+    },
+    {
+      "id": "edge-197",
+      "from": "node-artifact-humblestaff",
+      "to": "node-artifact-heartwood",
+      "label": "evolves into"
+    },
+    {
+      "id": "edge-198",
+      "from": "node-artifact-sunstone",
+      "to": "node-unlock-dawnflare",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-199",
+      "from": "node-artifact-sunstone",
+      "to": "node-ui-spellbook",
+      "label": "spell tab"
+    },
+    {
+      "id": "edge-200",
+      "from": "node-artifact-moonpetal",
+      "to": "node-unlock-moonveil",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-201",
+      "from": "node-artifact-moonpetal",
+      "to": "node-ui-spellbook",
+      "label": "spell tab"
+    },
+    {
+      "id": "edge-202",
+      "from": "node-artifact-sylphbell",
+      "to": "node-unlock-galestep",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-203",
+      "from": "node-artifact-sylphbell",
+      "to": "node-ui-itemcodex",
+      "label": "codex"
+    },
+    {
+      "id": "edge-204",
+      "from": "node-artifact-ironroot",
+      "to": "node-unlock-rootbind",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-205",
+      "from": "node-artifact-ironroot",
+      "to": "node-ui-spellbook",
+      "label": "spell tab"
+    },
+    {
+      "id": "edge-206",
+      "from": "node-artifact-dragonember",
+      "to": "node-unlock-embercrown",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-207",
+      "from": "node-artifact-dragonember",
+      "to": "node-ui-spellbook",
+      "label": "spell tab"
+    },
+    {
+      "id": "edge-208",
+      "from": "node-artifact-stormglass",
+      "to": "node-unlock-stormbridge",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-209",
+      "from": "node-artifact-stormglass",
+      "to": "node-ui-spellbook",
+      "label": "spell tab"
+    },
+    {
+      "id": "edge-210",
+      "from": "node-artifact-starlittear",
+      "to": "node-unlock-starwake",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-211",
+      "from": "node-artifact-starlittear",
+      "to": "node-ui-finalritual",
+      "label": "ritual ring"
+    },
+    {
+      "id": "edge-212",
+      "from": "node-artifact-grimoire",
+      "to": "node-unlock-blackgate",
+      "label": "creates"
+    },
+    {
+      "id": "edge-213",
+      "from": "node-artifact-lanterns",
+      "to": "node-unlock-lanterntravel",
+      "label": "unlocks"
+    },
+    {
+      "id": "edge-214",
+      "from": "node-artifact-heartwood",
+      "to": "node-mech-staffprogress",
+      "label": "drives"
+    },
+    {
+      "id": "edge-215",
+      "from": "node-artifact-heartwood",
+      "to": "node-ui-finalritual",
+      "label": "centerpiece"
+    },
+    {
+      "id": "edge-216",
+      "from": "node-unlock-dawnflare",
+      "to": "node-mech-envcombat",
+      "label": "combat rule"
+    },
+    {
+      "id": "edge-217",
+      "from": "node-unlock-dawnflare",
+      "to": "node-world-shadowfen",
+      "label": "required path"
+    },
+    {
+      "id": "edge-218",
+      "from": "node-unlock-moonveil",
+      "to": "node-mech-envcombat",
+      "label": "combat rule"
+    },
+    {
+      "id": "edge-219",
+      "from": "node-unlock-moonveil",
+      "to": "node-world-dreamvault",
+      "label": "required path"
+    },
+    {
+      "id": "edge-220",
+      "from": "node-unlock-galestep",
+      "to": "node-world-stormcourt",
+      "label": "shortcut"
+    },
+    {
+      "id": "edge-221",
+      "from": "node-unlock-rootbind",
+      "to": "node-mech-bossarenas",
+      "label": "nonlethal tools"
+    },
+    {
+      "id": "edge-222",
+      "from": "node-unlock-embercrown",
+      "to": "node-mech-choice",
+      "label": "power risk"
+    },
+    {
+      "id": "edge-223",
+      "from": "node-unlock-stormbridge",
+      "to": "node-world-citadel",
+      "label": "route"
+    },
+    {
+      "id": "edge-224",
+      "from": "node-unlock-starwake",
+      "to": "node-boss-orvane",
+      "label": "counter"
+    },
+    {
+      "id": "edge-225",
+      "from": "node-unlock-blackgate",
+      "to": "node-world-citadel",
+      "label": "opens"
+    },
+    {
+      "id": "edge-226",
+      "from": "node-unlock-lanterntravel",
+      "to": "node-ui-map",
+      "label": "map nodes"
+    },
+    {
+      "id": "edge-227",
+      "from": "node-unlock-brindle",
+      "to": "node-mech-familiar",
+      "label": "enables"
+    },
+    {
+      "id": "edge-228",
+      "from": "node-unlock-finalritual",
+      "to": "node-ui-finalritual",
+      "label": "enables"
+    },
+    {
+      "id": "edge-229",
+      "from": "node-unlock-secretending",
+      "to": "node-end-secret",
+      "label": "opens"
+    },
+    {
+      "id": "edge-230",
+      "from": "node-unlock-dawnflare",
+      "to": "node-sys-inventory",
+      "label": "registered"
+    },
+    {
+      "id": "edge-231",
+      "from": "node-unlock-moonveil",
+      "to": "node-sys-inventory",
+      "label": "registered"
+    },
+    {
+      "id": "edge-232",
+      "from": "node-unlock-rootbind",
+      "to": "node-sys-inventory",
+      "label": "registered"
+    },
+    {
+      "id": "edge-233",
+      "from": "node-unlock-embercrown",
+      "to": "node-sys-inventory",
+      "label": "registered"
+    },
+    {
+      "id": "edge-234",
+      "from": "node-mech-tags",
+      "to": "node-sys-nodeeditor",
+      "label": "authoring rule"
+    },
+    {
+      "id": "edge-235",
+      "from": "node-mech-unlocks",
+      "to": "node-sys-questgraph",
+      "label": "quest callbacks"
+    },
+    {
+      "id": "edge-236",
+      "from": "node-mech-unlocks",
+      "to": "node-sys-inventory",
+      "label": "item registry"
+    },
+    {
+      "id": "edge-237",
+      "from": "node-mech-choice",
+      "to": "node-sys-save",
+      "label": "stored flags"
+    },
+    {
+      "id": "edge-238",
+      "from": "node-mech-choice",
+      "to": "node-ui-finalritual",
+      "label": "ending input"
+    },
+    {
+      "id": "edge-239",
+      "from": "node-mech-reputation",
+      "to": "node-sys-dialogue",
+      "label": "dialogue conditions"
+    },
+    {
+      "id": "edge-240",
+      "from": "node-mech-familiar",
+      "to": "node-ui-questjournal",
+      "label": "hint overlay"
+    },
+    {
+      "id": "edge-241",
+      "from": "node-mech-warfront",
+      "to": "node-sys-audio",
+      "label": "epic audio"
+    },
+    {
+      "id": "edge-242",
+      "from": "node-mech-envcombat",
+      "to": "node-mech-combos",
+      "label": "depth"
+    },
+    {
+      "id": "edge-243",
+      "from": "node-mech-bossarenas",
+      "to": "node-ui-bossintro",
+      "label": "presentation"
+    },
+    {
+      "id": "edge-244",
+      "from": "node-sys-questgraph",
+      "to": "node-ui-questjournal",
+      "label": "visualizes"
+    },
+    {
+      "id": "edge-245",
+      "from": "node-sys-inventory",
+      "to": "node-ui-itemcodex",
+      "label": "feeds"
+    },
+    {
+      "id": "edge-246",
+      "from": "node-sys-dialogue",
+      "to": "node-ui-npccodex",
+      "label": "updates"
+    },
+    {
+      "id": "edge-247",
+      "from": "node-sys-canvas",
+      "to": "node-mech-warfront",
+      "label": "renders"
+    },
+    {
+      "id": "edge-248",
+      "from": "node-sys-accessibility",
+      "to": "node-ui-spellbook",
+      "label": "readability"
+    },
+    {
+      "id": "edge-249",
+      "from": "node-ui-map",
+      "to": "node-artifact-lanterns",
+      "label": "shows"
+    },
+    {
+      "id": "edge-250",
+      "from": "node-end-dawn",
+      "to": "node-end-postgame",
+      "label": "after"
+    },
+    {
+      "id": "edge-251",
+      "from": "node-end-secret",
+      "to": "node-end-ngplus",
+      "label": "tease"
+    },
+    {
+      "id": "edge-252",
+      "from": "node-end-eclipse",
+      "to": "node-end-postgame",
+      "label": "haunted rule"
+    },
+    {
+      "id": "edge-253",
+      "from": "node-end-grey",
+      "to": "node-end-postgame",
+      "label": "quiet world"
+    },
+    {
+      "id": "edge-254",
+      "from": "node-unlock-secretending",
+      "to": "node-side-ashchild",
+      "label": "requires"
+    },
+    {
+      "id": "edge-255",
+      "from": "node-unlock-secretending",
+      "to": "node-side-sevensongs",
+      "label": "requires"
+    },
+    {
+      "id": "edge-256",
+      "from": "node-unlock-secretending",
+      "to": "node-side-mirrorbride",
+      "label": "requires"
+    },
+    {
+      "id": "edge-257",
+      "from": "node-end-secret",
+      "to": "node-char-valerius",
+      "label": "redeems or releases"
+    },
+    {
+      "id": "edge-258",
+      "from": "node-end-eclipse",
+      "to": "node-artifact-grimoire",
+      "label": "uses"
+    },
+    {
+      "id": "edge-259",
+      "from": "node-end-grey",
+      "to": "node-char-selene",
+      "label": "accepts logic"
+    }
+  ],
+  "notes": "Nieuwe Arlen Tharys GameBible. De oude Kaelen/Vaelen-lijn is vervangen door een episch Eldoria-verhaal met sterke tag-mentions, veel quest/NPC/item/unlock-koppelingen, spannende sidequests en een finale waarin alle flags samenkomen. Belangrijke namen staan zoveel mogelijk als @{Tag Name}, zodat NPCs, zones, items en quests later centraal hernoemd kunnen worden.",
+  "categories": [
+    {
+      "id": "col-story",
+      "title": "📖 Epic Lore & Acts",
+      "body": "",
+      "x": -436,
+      "y": -210,
+      "width": 470,
+      "height": 2242
+    },
+    {
+      "id": "col-world",
+      "title": "🗺️ World & Exploration",
+      "body": "",
+      "x": 144,
+      "y": -210,
+      "width": 470,
+      "height": 2076
+    },
+    {
+      "id": "col-mainquests",
+      "title": "⚔️ Main Quest Chains",
+      "body": "",
+      "x": 724,
+      "y": -210,
+      "width": 470,
+      "height": 2906
+    },
+    {
+      "id": "col-sidequests",
+      "title": "🕯️ Side Quests & Secrets",
+      "body": "",
+      "x": 1304,
+      "y": -210,
+      "width": 470,
+      "height": 2242
+    },
+    {
+      "id": "col-chars",
+      "title": "🧙 Characters & Progression",
+      "body": "",
+      "x": 1884,
+      "y": -210,
+      "width": 470,
+      "height": 2574
+    },
+    {
+      "id": "col-factions",
+      "title": "🏰 Factions & Warfront",
+      "body": "",
+      "x": 2464,
+      "y": -210,
+      "width": 470,
+      "height": 1840
+    },
+    {
+      "id": "col-bosses",
+      "title": "👹 Eclipse Lieutenants & Bosses",
+      "body": "",
+      "x": 3044,
+      "y": -210,
+      "width": 470,
+      "height": 1910
+    },
+    {
+      "id": "col-artifacts",
+      "title": "💎 Staff Relics & Items",
+      "body": "",
+      "x": 3624,
+      "y": -210,
+      "width": 470,
+      "height": 2574
+    },
+    {
+      "id": "col-unlocks",
+      "title": "🔓 Unlocks, Gates & Rewards",
+      "body": "",
+      "x": 4204,
+      "y": -210,
+      "width": 470,
+      "height": 2242
+    },
+    {
+      "id": "col-mechanics",
+      "title": "✨ Tactics & Spell Mechanics",
+      "body": "",
+      "x": 4784,
+      "y": -210,
+      "width": 470,
+      "height": 1910
+    },
+    {
+      "id": "col-systems",
+      "title": "💻 Web Engine & Tech",
+      "body": "",
+      "x": 5364,
+      "y": -210,
+      "width": 470,
+      "height": 1840
+    },
+    {
+      "id": "col-ui",
+      "title": "📜 UI, Mood & Player Feel",
+      "body": "",
+      "x": 5944,
+      "y": -210,
+      "width": 470,
+      "height": 1840
+    },
+    {
+      "id": "col-endgame",
+      "title": "🌌 Endgame & Secrets",
+      "body": "",
+      "x": 6524,
+      "y": -210,
+      "width": 470,
+      "height": 1840
+    }
+  ],
+  "tags": [
+    {
+      "id": "tag-game-name",
+      "name": "Game Name",
+      "value": "Arlen Tharys: Heart of Eldoria"
+    },
+    {
+      "id": "tag-realm",
+      "name": "Eldoria",
+      "value": "Eldoria"
+    },
+    {
+      "id": "tag-protagonist",
+      "name": "Arlen Tharys",
+      "value": "Arlen Tharys"
+    },
+    {
+      "id": "tag-master-thorne",
+      "name": "Master Thorne",
+      "value": "Master Thorne"
+    },
+    {
+      "id": "tag-archmage-valerius",
+      "name": "Archmage Valerius",
+      "value": "Archmage Valerius"
+    },
+    {
+      "id": "tag-main-curse",
+      "name": "Valerius Curse",
+      "value": "the Withering Eclipse"
+    },
+    {
+      "id": "tag-heartwood-staff",
+      "name": "Heartwood Staff",
+      "value": "Heartwood Staff"
+    },
+    {
+      "id": "tag-humble-staff",
+      "name": "Humble Staff",
+      "value": "Humble Staff"
+    },
+    {
+      "id": "tag-eldoria-heartstone",
+      "name": "Eldoria Heartstone",
+      "value": "Eldoria Heartstone"
+    },
+    {
+      "id": "tag-world-heart",
+      "name": "Heart of Eldoria",
+      "value": "Heart of Eldoria"
+    },
+    {
+      "id": "tag-prophecy",
+      "name": "Humble Wood Prophecy",
+      "value": "the Humble Wood Prophecy"
+    },
+    {
+      "id": "tag-thorne-workshop",
+      "name": "Willowmere Workshop",
+      "value": "Willowmere Workshop"
+    },
+    {
+      "id": "tag-gloaming-road",
+      "name": "Gloaming Road",
+      "value": "Gloaming Road"
+    },
+    {
+      "id": "tag-whispering-peaks",
+      "name": "Whispering Peaks",
+      "value": "Whispering Peaks"
+    },
+    {
+      "id": "tag-shadowfen",
+      "name": "Shadowfen",
+      "value": "Shadowfen"
+    },
+    {
+      "id": "tag-moonwell",
+      "name": "Moonwell of Nymera",
+      "value": "Moonwell of Nymera"
+    },
+    {
+      "id": "tag-emberglass",
+      "name": "Emberglass Desert",
+      "value": "Emberglass Desert"
+    },
+    {
+      "id": "tag-ironroot",
+      "name": "Ironroot Bastion",
+      "value": "Ironroot Bastion"
+    },
+    {
+      "id": "tag-stormcourt",
+      "name": "Stormcourt Spire",
+      "value": "Stormcourt Spire"
+    },
+    {
+      "id": "tag-dreamvault",
+      "name": "Dreamvault of Aurel",
+      "value": "Dreamvault of Aurel"
+    },
+    {
+      "id": "tag-eclipse-citadel",
+      "name": "Eclipse Citadel",
+      "value": "Eclipse Citadel"
+    },
+    {
+      "id": "tag-final-zone",
+      "name": "Heartstorm Nexus",
+      "value": "Heartstorm Nexus"
+    },
+    {
+      "id": "tag-pyria",
+      "name": "Pyria",
+      "value": "Pyria"
+    },
+    {
+      "id": "tag-queen-aeravelle",
+      "name": "Queen Aeravelle",
+      "value": "Queen Aeravelle"
+    },
+    {
+      "id": "tag-liora",
+      "name": "Liora Fenwick",
+      "value": "Liora Fenwick"
+    },
+    {
+      "id": "tag-soren",
+      "name": "Captain Soren Vale",
+      "value": "Captain Soren Vale"
+    },
+    {
+      "id": "tag-nymira",
+      "name": "Nymira",
+      "value": "Nymira"
+    },
+    {
+      "id": "tag-rurik",
+      "name": "Rurik Ironbranch",
+      "value": "Rurik Ironbranch"
+    },
+    {
+      "id": "tag-selene",
+      "name": "Selene Noctis",
+      "value": "Selene Noctis"
+    },
+    {
+      "id": "tag-kett",
+      "name": "Kett Morrow",
+      "value": "Kett Morrow"
+    },
+    {
+      "id": "tag-brindle",
+      "name": "Brindle",
+      "value": "Brindle"
+    },
+    {
+      "id": "tag-iri",
+      "name": "Iri",
+      "value": "Iri"
+    },
+    {
+      "id": "tag-thalor",
+      "name": "Thalor Emberwyrm",
+      "value": "Thalor Emberwyrm"
+    },
+    {
+      "id": "tag-vanguard",
+      "name": "Vanguard of Dawn",
+      "value": "Vanguard of Dawn"
+    },
+    {
+      "id": "tag-eclipse-court",
+      "name": "Eclipse Court",
+      "value": "Eclipse Court"
+    },
+    {
+      "id": "tag-sylph-court",
+      "name": "Sylph Court",
+      "value": "Sylph Court"
+    },
+    {
+      "id": "tag-fenwardens",
+      "name": "Fenwardens",
+      "value": "Fenwardens"
+    },
+    {
+      "id": "tag-ember-caravans",
+      "name": "Ember Caravans",
+      "value": "Ember Caravans"
+    },
+    {
+      "id": "tag-ironroot-wardens",
+      "name": "Ironroot Wardens",
+      "value": "Ironroot Wardens"
+    },
+    {
+      "id": "tag-starfall-refugees",
+      "name": "Starfall Refugees",
+      "value": "Starfall Refugees"
+    },
+    {
+      "id": "tag-silent-choir",
+      "name": "Silent Choir",
+      "value": "Silent Choir"
+    },
+    {
+      "id": "tag-boss-aeravelle",
+      "name": "Boss Aeravelle",
+      "value": "Queen Aeravelle's Trial"
+    },
+    {
+      "id": "tag-boss-mourn",
+      "name": "Bog King Mourn",
+      "value": "Bog King Mourn"
+    },
+    {
+      "id": "tag-boss-nullhound",
+      "name": "Null Hound Pack",
+      "value": "Null Hound Pack"
+    },
+    {
+      "id": "tag-boss-solakar",
+      "name": "Solakar",
+      "value": "Solakar the Glass Wyrm"
+    },
+    {
+      "id": "tag-boss-veyra",
+      "name": "Commander Veyra Ashlance",
+      "value": "Commander Veyra Ashlance"
+    },
+    {
+      "id": "tag-boss-revenant",
+      "name": "Ironroot Revenant",
+      "value": "Ironroot Revenant"
+    },
+    {
+      "id": "tag-boss-sentinel",
+      "name": "Stormglass Sentinel",
+      "value": "Stormglass Sentinel"
+    },
+    {
+      "id": "tag-boss-selene",
+      "name": "Moon Eaten Selene",
+      "value": "Selene, Moon-Eaten"
+    },
+    {
+      "id": "tag-boss-orvane",
+      "name": "Eclipse Herald Orvane",
+      "value": "Eclipse Herald Orvane"
+    },
+    {
+      "id": "tag-boss-valerius",
+      "name": "Valerius Final Form",
+      "value": "Valerius, Eclipse Ascendant"
+    },
+    {
+      "id": "tag-sunstone",
+      "name": "Sunstone Shard",
+      "value": "Sunstone Shard"
+    },
+    {
+      "id": "tag-moonpetal",
+      "name": "Moonpetal Bloom",
+      "value": "Moonpetal Bloom"
+    },
+    {
+      "id": "tag-stormglass",
+      "name": "Stormglass Lens",
+      "value": "Stormglass Lens"
+    },
+    {
+      "id": "tag-ironroot-sigil",
+      "name": "Ironroot Sigil",
+      "value": "Ironroot Sigil"
+    },
+    {
+      "id": "tag-dragon-ember",
+      "name": "Dragon Ember Core",
+      "value": "Dragon Ember Core"
+    },
+    {
+      "id": "tag-starlit-tear",
+      "name": "Starlit Tear",
+      "value": "Starlit Tear"
+    },
+    {
+      "id": "tag-sylph-bell",
+      "name": "Sylph Bell",
+      "value": "Sylph Bell"
+    },
+    {
+      "id": "tag-fen-lantern",
+      "name": "Fen Lantern",
+      "value": "Fen Lantern"
+    },
+    {
+      "id": "tag-ember-compass",
+      "name": "Ember Compass",
+      "value": "Ember Compass"
+    },
+    {
+      "id": "tag-thorne-thread",
+      "name": "Thorne Red Thread",
+      "value": "Thorne's Red Thread"
+    },
+    {
+      "id": "tag-valerius-grimoire",
+      "name": "Valerius Grimoire",
+      "value": "Valerius' Black Grimoire"
+    },
+    {
+      "id": "tag-road-lanterns",
+      "name": "Road Lantern Network",
+      "value": "Road Lantern Network"
+    },
+    {
+      "id": "tag-dawnflare",
+      "name": "Dawnflare",
+      "value": "Dawnflare"
+    },
+    {
+      "id": "tag-moonveil",
+      "name": "Moonveil",
+      "value": "Moonveil"
+    },
+    {
+      "id": "tag-gale-step",
+      "name": "Gale Step",
+      "value": "Gale Step"
+    },
+    {
+      "id": "tag-rootbind",
+      "name": "Rootbind",
+      "value": "Rootbind"
+    },
+    {
+      "id": "tag-ember-crown",
+      "name": "Ember Crown",
+      "value": "Ember Crown"
+    },
+    {
+      "id": "tag-stormbridge",
+      "name": "Stormbridge",
+      "value": "Stormbridge"
+    },
+    {
+      "id": "tag-starwake",
+      "name": "Starwake",
+      "value": "Starwake"
+    },
+    {
+      "id": "tag-black-gate-key",
+      "name": "Black Gate Key",
+      "value": "Black Gate Key"
+    },
+    {
+      "id": "tag-final-ritual",
+      "name": "Heartstorm Ritual",
+      "value": "Heartstorm Ritual"
+    },
+    {
+      "id": "tag-choice-mercy",
+      "name": "Mercy Choice",
+      "value": "Mercy"
+    },
+    {
+      "id": "tag-choice-power",
+      "name": "Power Choice",
+      "value": "Power"
+    },
+    {
+      "id": "tag-choice-truth",
+      "name": "Truth Choice",
+      "value": "Truth"
+    },
+    {
+      "id": "tag-choice-name",
+      "name": "Name Choice",
+      "value": "Name"
+    },
+    {
+      "id": "tag-quest-prologue",
+      "name": "Quest Ash at the Workshop",
+      "value": "Ash at the Workshop"
+    },
+    {
+      "id": "tag-quest-road",
+      "name": "Quest Road of Cold Lanterns",
+      "value": "Road of Cold Lanterns"
+    },
+    {
+      "id": "tag-quest-peaks",
+      "name": "Quest Climb to Whispering Peaks",
+      "value": "Climb to the Whispering Peaks"
+    },
+    {
+      "id": "tag-quest-sunstone",
+      "name": "Quest Sunstone Trial",
+      "value": "The Sunstone Trial"
+    },
+    {
+      "id": "tag-quest-shadowfen",
+      "name": "Quest Into Shadowfen",
+      "value": "Into Shadowfen"
+    },
+    {
+      "id": "tag-quest-moonpetal",
+      "name": "Quest Moonpetal Bloom",
+      "value": "Moonpetal Bloom"
+    },
+    {
+      "id": "tag-quest-refuge",
+      "name": "Quest Refuge of Broken Crowns",
+      "value": "Refuge of Broken Crowns"
+    },
+    {
+      "id": "tag-quest-emberglass",
+      "name": "Quest Emberglass Caravan",
+      "value": "Emberglass Caravan"
+    },
+    {
+      "id": "tag-quest-dragon",
+      "name": "Quest Dragon Ember Core",
+      "value": "Dragon Ember Core"
+    },
+    {
+      "id": "tag-quest-ironroot",
+      "name": "Quest Ironroot Oath",
+      "value": "The Ironroot Oath"
+    },
+    {
+      "id": "tag-quest-siege",
+      "name": "Quest Siege of Ironroot",
+      "value": "Siege of Ironroot"
+    },
+    {
+      "id": "tag-quest-stormcourt",
+      "name": "Quest Stormcourt Lens",
+      "value": "Stormcourt Lens"
+    },
+    {
+      "id": "tag-quest-dreamvault",
+      "name": "Quest Dreamvault Truth",
+      "value": "Dreamvault Truth"
+    },
+    {
+      "id": "tag-quest-reforge",
+      "name": "Quest Reforge the Heartwood Staff",
+      "value": "Reforge the Heartwood Staff"
+    },
+    {
+      "id": "tag-quest-citadel",
+      "name": "Quest March to Eclipse Citadel",
+      "value": "March to the Eclipse Citadel"
+    },
+    {
+      "id": "tag-quest-final",
+      "name": "Quest Heartstorm Ritual",
+      "value": "The Heartstorm Ritual"
+    },
+    {
+      "id": "tag-side-sylph-name",
+      "name": "Sidequest Stolen Sylph Name",
+      "value": "A Sylph's Stolen Name"
+    },
+    {
+      "id": "tag-side-lanterns",
+      "name": "Sidequest Lanterns Beneath Rain",
+      "value": "Lanterns Beneath Rain"
+    },
+    {
+      "id": "tag-side-bogmother",
+      "name": "Sidequest Bog Mothers Bargain",
+      "value": "The Bog Mother's Bargain"
+    },
+    {
+      "id": "tag-side-ashchild",
+      "name": "Sidequest Child Made of Ash",
+      "value": "The Child Made of Ash"
+    },
+    {
+      "id": "tag-side-letters",
+      "name": "Sidequest Letters for the Last Dawn",
+      "value": "Letters for the Last Dawn"
+    },
+    {
+      "id": "tag-side-glassknight",
+      "name": "Sidequest Glass Knights Promise",
+      "value": "The Glass Knight's Promise"
+    },
+    {
+      "id": "tag-side-dragon-fire",
+      "name": "Sidequest Dragon Forgot Fire",
+      "value": "The Dragon Who Forgot Fire"
+    },
+    {
+      "id": "tag-side-root-oath",
+      "name": "Sidequest Ruriks Root Oath",
+      "value": "Rurik's Root-Oath"
+    },
+    {
+      "id": "tag-side-mirror-bride",
+      "name": "Sidequest Mirror Bride",
+      "value": "The Mirror Bride"
+    },
+    {
+      "id": "tag-side-thorne-drawer",
+      "name": "Sidequest Thornes Locked Drawer",
+      "value": "Thorne's Locked Drawer"
+    },
+    {
+      "id": "tag-side-seven-songs",
+      "name": "Sidequest Seven Songs",
+      "value": "Seven Songs of Eldoria"
+    },
+    {
+      "id": "tag-side-sold-star",
+      "name": "Sidequest Merchant Sold Star",
+      "value": "The Merchant Who Sold a Star"
+    },
+    {
+      "id": "tag-ending-dawn",
+      "name": "Ending Dawn Mender",
+      "value": "Dawn Mender"
+    },
+    {
+      "id": "tag-ending-eclipse",
+      "name": "Ending Eclipse Crown",
+      "value": "Eclipse Crown"
+    },
+    {
+      "id": "tag-ending-grey",
+      "name": "Ending Grey Silence",
+      "value": "Grey Silence"
+    },
+    {
+      "id": "tag-ending-secret",
+      "name": "Ending Heart of Eldoria",
+      "value": "The Heart of Eldoria"
+    }
+  ],
+  "settings": {
+    "theme": "dark",
+    "tags": "sidebar-only",
+    "categories": "fields-only"
+  }
+}
