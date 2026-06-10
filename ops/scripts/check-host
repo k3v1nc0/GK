@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_BASE_DIR="${APP_BASE_DIR:-/var/www/gk}"
+GK_ASSET_SOURCE_DIR="${GK_ASSET_SOURCE_DIR:-$APP_BASE_DIR/assets}"
+ENV_FILE="${GK_ENV_FILE:-/etc/gk/gk.env}"
+REQUIRE_SERVER_TOOLS="${REQUIRE_SERVER_TOOLS:-0}"
+REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-0}"
+
+failures=0
+warnings=0
+
+info() {
+  printf '[check-host] %s\n' "$1"
+}
+
+warn() {
+  warnings=$((warnings + 1))
+  printf '[check-host] WARN: %s\n' "$1" >&2
+}
+
+fail() {
+  failures=$((failures + 1))
+  printf '[check-host] ERROR: %s\n' "$1" >&2
+}
+
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+
+  if [[ -z "$value" ]]; then
+    fail "$name is empty"
+  elif [[ "$value" != /* ]]; then
+    fail "$name must be an absolute path: $value"
+  fi
+}
+
+check_dir() {
+  local dir="$1"
+  local label="$2"
+
+  if [[ -d "$dir" ]]; then
+    info "found $label: $dir"
+  else
+    fail "missing $label: $dir"
+  fi
+}
+
+check_command() {
+  local command_name="$1"
+  local required="${2:-0}"
+
+  if command -v "$command_name" >/dev/null 2>&1; then
+    info "found command: $command_name"
+  elif [[ "$required" == "1" || "$REQUIRE_SERVER_TOOLS" == "1" ]]; then
+    fail "missing required command: $command_name"
+  else
+    warn "missing command, to be installed or verified by Codex server-side: $command_name"
+  fi
+}
+
+info "using APP_BASE_DIR=$APP_BASE_DIR"
+info "using GK_ASSET_SOURCE_DIR=$GK_ASSET_SOURCE_DIR"
+info "using GK_ENV_FILE=$ENV_FILE"
+
+require_absolute_path "APP_BASE_DIR" "$APP_BASE_DIR"
+require_absolute_path "GK_ASSET_SOURCE_DIR" "$GK_ASSET_SOURCE_DIR"
+require_absolute_path "GK_ENV_FILE" "$ENV_FILE"
+
+check_dir "$APP_BASE_DIR" "app base"
+check_dir "$APP_BASE_DIR/assets" "default assets directory"
+check_dir "$APP_BASE_DIR/releases" "releases directory"
+check_dir "$APP_BASE_DIR/current" "current release directory"
+check_dir "$APP_BASE_DIR/data" "data directory"
+check_dir "$APP_BASE_DIR/logs" "logs directory"
+check_dir "$APP_BASE_DIR/tmp" "tmp directory"
+check_dir "$GK_ASSET_SOURCE_DIR" "configured asset source"
+
+if [[ -f "$ENV_FILE" ]]; then
+  info "found outside-Git env file: $ENV_FILE"
+elif [[ "$REQUIRE_ENV_FILE" == "1" ]]; then
+  fail "missing required outside-Git env file: $ENV_FILE"
+else
+  warn "outside-Git env file not present yet: $ENV_FILE"
+fi
+
+check_command bash 1
+check_command find 1
+check_command wc 1
+check_command nginx
+check_command systemctl
+check_command mysql
+check_command redis-cli
+check_command node
+
+for name in GAME_DOMAIN EDITOR_DOMAIN GAME_PUBLIC_PATH EDITOR_PUBLIC_PATH; do
+  if [[ -z "${!name:-}" ]]; then
+    warn "$name is not set yet; Kevin must confirm domain/subpath before server activation is complete"
+  else
+    info "$name is set"
+  fi
+done
+
+if [[ "$failures" -gt 0 ]]; then
+  printf '[check-host] FAILED with %d error(s) and %d warning(s)\n' "$failures" "$warnings" >&2
+  exit 1
+fi
+
+printf '[check-host] OK with %d warning(s)\n' "$warnings"

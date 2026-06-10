@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_BASE_DIR="${APP_BASE_DIR:-/var/www/gk}"
+GK_ASSET_SOURCE_DIR="${GK_ASSET_SOURCE_DIR:-$APP_BASE_DIR/assets}"
+
+log() {
+  printf '[create-runtime-dirs] %s\n' "$1"
+}
+
+fail() {
+  printf '[create-runtime-dirs] ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+
+  [[ -n "$value" ]] || fail "$name is empty"
+  [[ "$value" == /* ]] || fail "$name must be an absolute path: $value"
+}
+
+ensure_dir() {
+  local dir="$1"
+
+  if [[ -e "$dir" && ! -d "$dir" ]]; then
+    fail "$dir exists but is not a directory"
+  fi
+
+  mkdir -p "$dir"
+  log "ready: $dir"
+}
+
+require_absolute_path "APP_BASE_DIR" "$APP_BASE_DIR"
+require_absolute_path "GK_ASSET_SOURCE_DIR" "$GK_ASSET_SOURCE_DIR"
+
+log "using APP_BASE_DIR=$APP_BASE_DIR"
+log "using GK_ASSET_SOURCE_DIR=$GK_ASSET_SOURCE_DIR"
+
+ensure_dir "$APP_BASE_DIR"
+ensure_dir "$APP_BASE_DIR/assets"
+ensure_dir "$APP_BASE_DIR/releases"
+ensure_dir "$APP_BASE_DIR/current"
+ensure_dir "$APP_BASE_DIR/shared"
+ensure_dir "$APP_BASE_DIR/shared/config"
+ensure_dir "$APP_BASE_DIR/data"
+ensure_dir "$APP_BASE_DIR/logs"
+ensure_dir "$APP_BASE_DIR/tmp"
+ensure_dir "$APP_BASE_DIR/tmp/cache"
+ensure_dir "$APP_BASE_DIR/tmp/run"
+
+if [[ "$GK_ASSET_SOURCE_DIR" != "$APP_BASE_DIR/assets" ]]; then
+  ensure_dir "$GK_ASSET_SOURCE_DIR"
+fi
+
+log "runtime directory foundation is ready"
+log "secrets are not created by this script; Codex must manage them outside Git"

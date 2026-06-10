@@ -1,0 +1,68 @@
+# GK Fase 2 Nginx template.
+# Codex must render this server-side after Kevin confirms domains/subpaths,
+# then run nginx -t before enabling or reloading Nginx.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __GAME_DOMAIN__ __EDITOR_DOMAIN__;
+
+    # Deny hidden files and likely secret/config/data paths everywhere.
+    location ~ /\.(?!well-known) {
+        deny all;
+    }
+
+    location ~* ^/(data|logs|tmp|cache|shared|releases)(/|$) {
+        deny all;
+    }
+
+    location ~* \.(env|ini|log|sql|sqlite|sqlite3|bak|backup|key|pem|crt)$ {
+        deny all;
+    }
+
+    # Controlled asset serving. Keep this path aligned with GK_ASSET_SOURCE_DIR.
+    # Assets are factual files only; role/content mapping stays in asset library and nodes.
+    location __ASSET_PUBLIC_PATH__/ {
+        alias /var/www/gk/assets/;
+        autoindex off;
+        add_header X-Content-Type-Options nosniff always;
+    }
+
+    # Game frontend placeholder. Replace __GAME_PUBLIC_PATH__ only after Kevin confirms it.
+    location __GAME_PUBLIC_PATH__/ {
+        proxy_pass http://127.0.0.1:__GAME_PORT__/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Editor frontend/API placeholder. Replace __EDITOR_PUBLIC_PATH__ only after Kevin confirms it.
+    location __EDITOR_PUBLIC_PATH__/ {
+        proxy_pass http://127.0.0.1:__EDITOR_PORT__/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Generic websocket/realtime placeholder. This is only a proxy primitive, not a runtime claim.
+    location __REALTIME_PUBLIC_PATH__/ {
+        proxy_pass http://127.0.0.1:__REALTIME_PORT__/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+}

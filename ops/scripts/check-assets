@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_BASE_DIR="${APP_BASE_DIR:-/var/www/gk}"
+GK_ASSET_SOURCE_DIR="${GK_ASSET_SOURCE_DIR:-$APP_BASE_DIR/assets}"
+EXPECTED_GLB_COUNT="${EXPECTED_GLB_COUNT:-4}"
+EXPECTED_UI_COUNT="${EXPECTED_UI_COUNT:-0}"
+EXPECTED_AUDIO_COUNT="${EXPECTED_AUDIO_COUNT:-0}"
+EXPECT_NO_ASSET_SUBDIRS="${EXPECT_NO_ASSET_SUBDIRS:-1}"
+FAIL_ON_ASSET_SPACES="${FAIL_ON_ASSET_SPACES:-0}"
+
+failures=0
+warnings=0
+
+info() {
+  printf '[check-assets] %s\n' "$1"
+}
+
+warn() {
+  warnings=$((warnings + 1))
+  printf '[check-assets] WARN: %s\n' "$1" >&2
+}
+
+fail() {
+  failures=$((failures + 1))
+  printf '[check-assets] ERROR: %s\n' "$1" >&2
+}
+
+require_absolute_path() {
+  local name="$1"
+  local value="$2"
+
+  if [[ -z "$value" ]]; then
+    fail "$name is empty"
+  elif [[ "$value" != /* ]]; then
+    fail "$name must be an absolute path: $value"
+  fi
+}
+
+count_matching_files() {
+  local kind="$1"
+
+  case "$kind" in
+    glb)
+      find "$GK_ASSET_SOURCE_DIR" -maxdepth 1 -type f -iname '*.glb' -print | wc -l | tr -d ' '
+      ;;
+    ui)
+      find "$GK_ASSET_SOURCE_DIR" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.svg' \) -print | wc -l | tr -d ' '
+      ;;
+    audio)
+      find "$GK_ASSET_SOURCE_DIR" -maxdepth 1 -type f \( -iname '*.ogg' -o -iname '*.mp3' -o -iname '*.wav' -o -iname '*.flac' -o -iname '*.aac' \) -print | wc -l | tr -d ' '
+      ;;
+    *)
+      fail "unknown count kind: $kind"
+      printf '0'
+      ;;
+  esac
+}
+
+assert_count() {
+  local label="$1"
+  local actual="$2"
+  local expected="$3"
+
+  if [[ "$actual" == "$expected" ]]; then
+    info "$label count OK: $actual"
+  else
+    fail "$label count mismatch: expected $expected, got $actual"
+  fi
+}
+
+info "using APP_BASE_DIR=$APP_BASE_DIR"
+info "using GK_ASSET_SOURCE_DIR=$GK_ASSET_SOURCE_DIR"
+
+require_absolute_path "APP_BASE_DIR" "$APP_BASE_DIR"
+require_absolute_path "GK_ASSET_SOURCE_DIR" "$GK_ASSET_SOURCE_DIR"
+
+if [[ ! -d "$GK_ASSET_SOURCE_DIR" ]]; then
+  fail "asset source directory does not exist: $GK_ASSET_SOURCE_DIR"
+else
+  glb_count="$(count_matching_files glb)"
+  ui_count="$(count_matching_files ui)"
+  audio_count="$(count_matching_files audio)"
+
+  assert_count "GLB" "$glb_count" "$EXPECTED_GLB_COUNT"
+  assert_count "UI image" "$ui_count" "$EXPECTED_UI_COUNT"
+  assert_count "audio" "$audio_count" "$EXPECTED_AUDIO_COUNT"
+
+  if [[ "$EXPECT_NO_ASSET_SUBDIRS" == "1" ]]; then
+    subdir_count="$(find "$GK_ASSET_SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d ' ')"
+    assert_count "asset subdirectory" "$subdir_count" "0"
+  fi
+
+  if find "$GK_ASSET_SOURCE_DIR" -maxdepth 1 -type f -name '* *' -print -quit | grep -q .; then
+    if [[ "$FAIL_ON_ASSET_SPACES" == "1" ]]; then
+      fail "one or more asset filenames contain spaces"
+    else
+      warn "one or more asset filenames contain spaces; Fase 7 must test scanner, URLs, database records and node IDs"
+    fi
+  else
+    info "no spaces found in asset filenames"
+  fi
+
+  info "asset files at max depth 1:"
+  find "$GK_ASSET_SOURCE_DIR" -maxdepth 1 -type f -printf '  %f\n' | sort
+fi
+
+if [[ "$failures" -gt 0 ]]; then
+  printf '[check-assets] FAILED with %d error(s) and %d warning(s)\n' "$failures" "$warnings" >&2
+  exit 1
+fi
+
+printf '[check-assets] OK with %d warning(s)\n' "$warnings"

@@ -2,131 +2,142 @@
 
 ## Fase
 
-Actieve fase: Fase 1 - Game Bible, content gates en maaklijst.
+Actieve fase: Fase 2 - Serverfundering onder `/var/www/gk`.
 
 ## Status
 
-Fase-status: klaar voor Fase 2, met asset- en content-gates voor latere fases.
+Fase-status: Fase 2 Git-basis voorbereid; Codex serveractivatie open.
 
-Fase 1 is niet hetzelfde als alle content afhebben. Fase 1 is klaar wanneer de leidende Game Bible, registers, gates, assetbron en maaklijststatus betrouwbaar genoeg zijn om Fase 2 veilig te starten.
+Fase 2 is niet volledig server-klaar zolang domein/subpad niet is bevestigd en Codex de server-side activatie en checks nog niet heeft uitgevoerd.
 
 ## Doel
 
-Fase 1 legt het levende contract vast voor:
+Fase 2 bereidt de single-server omgeving voor met blijvende repo-onderdelen voor:
 
-- Game Bible;
+- `/var/www/gk`;
 - assets;
-- UI;
-- audio;
-- camera;
-- lighting;
-- minimap;
-- economy;
-- levels;
-- boss/quest keuzes;
-- content gates;
-- maaklijst en phase-plan.
+- data;
+- releases;
+- buiten-Git secrets;
+- logs;
+- MySQL;
+- Redis;
+- Nginx;
+- systemd;
+- serverchecks.
 
-## Wat is aangemaakt of bijgewerkt
+GK Code Copiloot levert alleen scripts, templates, docs en checks in Git. Codex voert OS-, database-, service-, secret- en runtimewerk buiten Git uit.
 
+## Bronnen gecontroleerd
+
+Geopend of gecontroleerd voor deze fase:
+
+- `README/current-phase.md`
+- `docs/design/phase-plan/current-phase.md`
+- `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
-- `docs/design/world-settings-plan.md`
-- `docs/design/economy-plan.md`
-- `docs/design/content-gates.md`
+- `README/fase2.md`
+- `README/GameBibleNode.json`
+- root `package.json` pad
+- beoogde ops-paden onder `docs/ops/` en `ops/`
+
+## Fase 1-contracten die blijven gelden
+
+- `README/GameBibleNode.json` is de leidende Game Bible.
+- Concrete gamecontent mag alleen uit GameBible JSON, editor/node-data, registers, database of expliciete Kevin-input komen.
+- Geen concrete gamecontent in runtimecode.
+- Hoofdketen: `Database > Editor/Node-system > Publish > Runtime Game`.
+- Runtimecode bevat alleen engine-capabilities.
+- Assetpad is bevestigd: `/var/www/gk/assets`.
+- `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` is bevestigd.
+- GLB=4, UI images=0, audio=0.
+- GLB-assets hebben nog geen definitieve runtime-role mapping.
+- UI/audio blijven latere asset/content gates.
+
+## Wat is aangemaakt of bijgewerkt
+
+- `docs/ops/server-layout.md`
+- `ops/scripts/create-runtime-dirs`
+- `ops/scripts/check-host`
+- `ops/scripts/check-assets`
+- `ops/env/gk.example.env`
+- `ops/nginx/gk.conf.template`
+- `ops/systemd/gk-api.service.template`
+- `ops/systemd/gk-realtime.service.template`
+- `ops/systemd/gk-worker.service.template`
 - `docs/design/phase-plan/current-phase.md`
 - `README/current-phase.md`
 
-## Leidende Game Bible
+## Ops-bestanden en bedoeling
 
-Kevin heeft bevestigd:
-
-- `README/GameBibleNode.json` is de actuele leidende Game Bible voor deze nieuwe game.
-
-Concrete gamecontent mag alleen uit deze GameBible JSON, editor/node-data, registers, database of expliciete Kevin-input komen.
-
-## Assetstatus
-
-Codex heeft bevestigd:
-
-| Veld | Waarde |
+| Bestand | Doel |
 |---|---|
-| Assetpad | `/var/www/gk/assets` |
-| Env var | `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` |
-| GLB | 4 |
-| UI images | 0 |
-| Audio | 0 |
-| Submappen | Geen |
-| Dubbele bestandsnamen | Geen |
-| Repo/server match | Exact gelijk |
-| Git-status bij Codex | Schoon |
+| `ops/scripts/create-runtime-dirs` | Maakt idempotent de `/var/www/gk` runtime directories aan zonder assets of secrets te genereren. |
+| `ops/scripts/check-host` | Controleert servervoorbereiding, vereiste directories, tooling en open domein/subpad-env. |
+| `ops/scripts/check-assets` | Controleert `GK_ASSET_SOURCE_DIR`, verwacht GLB=4, UI=0, audio=0 en waarschuwt over assetnamen met spaties. |
+| `ops/env/gk.example.env` | Veilige env-template met placeholders; echte waarden blijven buiten Git. |
+| `ops/nginx/gk.conf.template` | Nginx-template met placeholders en deny-regels voor secrets/data/logs/tmp/cache. |
+| `ops/systemd/*.service.template` | Service-templates met buiten-Git `EnvironmentFile=/etc/gk/gk.env`. |
+| `docs/ops/server-layout.md` | Blijvend serverlayout- en activatiecontract. |
 
-Aanwezige GLB-bestanden:
+## Open Kevin-input
 
-- `Blacksmit forge.glb`
-- `Blacksmit.glb`
-- `Taverne.glb`
-- `Wizard.glb`
+Nog te bevestigen voor volledige serveractivatie:
 
-Let op: `Blacksmit forge.glb` bevat een spatie. Fase 7 moet dit testen in asset scanner, URLs, database records en node IDs.
+- `GAME_PUBLIC_PATH`
+- `EDITOR_PUBLIC_PATH`
+- `GAME_DOMAIN`
+- `EDITOR_DOMAIN`
+
+Deze input blokkeert de Git-basis niet, omdat templates veilige placeholders gebruiken. Ze blokkeert wel volledige serveractivatie.
+
+## Open Codex-taken buiten Git
+
+Codex moet buiten Git uitvoeren:
+
+1. `/var/www/gk` en runtime directories aanmaken of bevestigen met `ops/scripts/create-runtime-dirs`.
+2. Users, groups, ownership en rechten instellen.
+3. `/etc/gk/gk.env` of afgesproken buiten-Git secretlocatie aanmaken.
+4. Echte MySQL database/user/secrets maken.
+5. Redis installeren of bevestigen.
+6. Nginx-template renderen met Kevin-bevestigde domeinen/subpaden en `nginx -t` draaien.
+7. systemd templates renderen/installeren, `daemon-reload` draaien en services pas starten wanneer runtime/build beschikbaar is.
+8. `ops/scripts/check-host` op de server draaien.
+9. `ops/scripts/check-assets` op de server draaien.
+10. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
 
 ## Checks
 
-Uitgevoerd:
+Uit te voeren voor commit:
 
-- Repo-structuur gecontroleerd via GitHub connector.
-- Bestaande Fase 1-documenten opnieuw opgehaald.
-- `README/GameBibleNode.json` gericht gecontroleerd.
-- Codex-serverassetscan als Kevin/Codex-bevestiging verwerkt.
-- Bevestigd dat `package.json` niet bestaat op rootpad via connectorcontrole.
-- Wijzigingsscope beperkt tot documentatie en phase-plan.
+- Repo-structuur gecontroleerd via GitHub connector en lokale werkset.
+- Bevestigen dat `package.json` op rootpad ontbreekt.
+- `bash -n` op alle shell scripts.
+- `shellcheck` indien beschikbaar.
+- Secret/content scan op nieuwe ops/docs-bestanden.
+- Git diff of equivalente lokale diff controleren.
 
-Niet uitvoerbaar hier:
+Niet volledig uitvoerbaar in deze omgeving:
 
-- `build`: geen package/config-tooling zichtbaar in de repo-root.
-- `typecheck`: geen TypeScript/package tooling zichtbaar in de repo-root.
-- `tests`: geen testconfig of package script zichtbaar in de repo-root.
-- `lint`: geen lintconfig of package script zichtbaar in de repo-root.
-- Nieuwe server/runtime checks: niet nodig voor deze documentupdate; Codex heeft de assetscan al uitgevoerd.
-
-Beperkte verificatie:
-
-- Geen runtimecode gewijzigd.
-- Geen assets toegevoegd.
-- Geen dummy assets of tijdelijke vervangers toegevoegd.
-- Geen extra gamecontent verzonnen buiten `README/GameBibleNode.json`.
-
-## Afgeronde Codex-taken buiten Git
-
-- `/var/www/gk/assets` gecontroleerd.
-- GLB/UI/audio bestanden geteld.
-- `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` bevestigd.
-- Repo-assets exact aanwezig op server.
-- Geen submappen en geen dubbele bestandsnamen gevonden.
-- Git bleef schoon bij Codex.
-
-## Open gates voor latere fases
-
-Niet Fase 1-blokkerend, wel belangrijk voor latere fases:
-
-- UI images staan nu op 0.
-- Audio staat nu op 0.
-- GLB-assets hebben nog geen definitieve role/capability mapping.
-- `Blacksmit forge.glb` met spatie moet in Fase 7 pipeline-validatie krijgen.
-- Camera, lighting, minimap, economy, levels, merchants, combat en bosswaarden moeten uit GameBible JSON, editor/node-data of Kevin-input komen.
+- `build`: geen root `package.json` of buildtooling zichtbaar.
+- `typecheck`: geen TypeScript/package tooling zichtbaar.
+- `tests`: geen testconfig of package script zichtbaar.
+- `lint`: geen lintconfig of package script zichtbaar.
+- Serverchecks: moeten door Codex op de server worden uitgevoerd.
 
 ## Fasebeoordeling
 
-Fase 1 is klaar voor Fase 2.
+Fase 2 is Git-basis voorbereid.
 
-Reden:
+Niet markeren als volledig server-klaar totdat:
 
-- De leidende Game Bible is bevestigd.
-- Assetpad en `GK_ASSET_SOURCE_DIR` zijn bevestigd.
-- GLB/UI/audio telling is bekend.
-- Registers en gates bestaan.
-- Ontbrekende UI/audio en asset role mappings zijn expliciet latere gates.
-- Runtimecode is niet gewijzigd en bevat geen nieuwe concrete content.
+- Codex serveractivatie heeft uitgevoerd;
+- domein/subpad door Kevin is bevestigd of expliciet niet-blokkerend is gemaakt;
+- `create-runtime-dirs`, `check-host` en `check-assets` op de server zijn gedraaid;
+- Nginx en systemd server-side zijn gevalideerd;
+- echte secrets buiten Git zijn geplaatst;
+- beschikbare build/migratie/runtime checks zijn uitgevoerd zodra tooling bestaat.
 
-Fase 2 mag starten zolang toekomstige agents deze gates blijven respecteren.
+Fase 3 mag pas starten als Kevin accepteert dat Fase 2 nog serveractivatie-gates open heeft, of nadat Codex deze gates sluit.

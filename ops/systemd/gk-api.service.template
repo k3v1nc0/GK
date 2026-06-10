@@ -1,0 +1,19 @@
+[Unit]
+Description=GK API service
+After=network-online.target mysql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__GK_SERVICE_USER__
+Group=__GK_SERVICE_GROUP__
+WorkingDirectory=/var/www/gk/current
+EnvironmentFile=/etc/gk/gk.env
+ExecStart=__API_EXEC_START__
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
