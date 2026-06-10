@@ -1,5 +1,7 @@
-# GK Fase 2 Nginx template.
-# Codex must render this server-side, then run nginx -t before enabling or reloading Nginx.
+# GK Fase 2 Nginx candidate template.
+# Apache is the active main webserver for Fase 2 on this multi-site server.
+# Do not activate this Nginx candidate on ports 80/443 without a separate migration phase.
+# Codex may render/test this server-side as a candidate, but must not make it live in Fase 2.
 # Kevin-confirmed endpoints:
 # - game: https://gk-k3v1nc0.duckdns.org/
 # - editor: https://gk-k3v1nc0.duckdns.org/editor

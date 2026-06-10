@@ -1,0 +1,48 @@
+# GK Fase 2 Apache vhost template.
+# Apache remains the active main webserver on this multi-site server.
+# Codex must render this server-side, validate with apache2ctl configtest,
+# and only reload Apache after checking that existing sites remain safe.
+
+<VirtualHost *:80>
+    ServerName gk-k3v1nc0.duckdns.org
+
+    ProxyRequests Off
+    ProxyPreserveHost On
+
+    ErrorLog /var/www/gk/logs/apache-gk-error.log
+    CustomLog /var/www/gk/logs/apache-gk-access.log combined
+
+    # Deny secret/config/data paths before any reverse proxy catch-all.
+    <LocationMatch "^/(?:\\.git|data|logs|tmp|cache|shared|releases)(?:/|$)">
+        Require all denied
+    </LocationMatch>
+
+    <LocationMatch "\\.(?:env|ini|log|sql|sqlite|sqlite3|bak|backup|key|pem|crt)$">
+        Require all denied
+    </LocationMatch>
+
+    # Assets are factual files only; role/content mapping stays in asset library and nodes.
+    ProxyPass "/assets/" "!"
+    Alias "/assets/" "/var/www/gk/assets/"
+    <Directory "/var/www/gk/assets/">
+        Options -Indexes
+        AllowOverride None
+        Require all granted
+    </Directory>
+    <Location "/assets/">
+        Header always set X-Content-Type-Options "nosniff"
+    </Location>
+
+    # Editor reverse proxy. Service port remains a render-time choice.
+    RedirectMatch 301 "^/editor$" "/editor/"
+    ProxyPass "/editor/" "http://127.0.0.1:__EDITOR_PORT__/"
+    ProxyPassReverse "/editor/" "http://127.0.0.1:__EDITOR_PORT__/"
+
+    # Optional realtime route. Keep disabled or render intentionally when runtime exists.
+    # ProxyPass "__REALTIME_PUBLIC_PATH__/" "ws://127.0.0.1:__REALTIME_PORT__/"
+    # ProxyPassReverse "__REALTIME_PUBLIC_PATH__/" "ws://127.0.0.1:__REALTIME_PORT__/"
+
+    # Game reverse proxy at the confirmed root path. Service port remains a render-time choice.
+    ProxyPass "/" "http://127.0.0.1:__GAME_PORT__/"
+    ProxyPassReverse "/" "http://127.0.0.1:__GAME_PORT__/"
+</VirtualHost>

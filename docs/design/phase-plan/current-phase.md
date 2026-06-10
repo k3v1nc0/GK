@@ -6,9 +6,9 @@ Actieve fase: Fase 2 - Serverfundering onder `/var/www/gk`.
 
 ## Status
 
-Fase-status: Fase 2 serverfundering grotendeels uitgevoerd; runtime, endpoint-env-update en definitieve webserver/service-activatie open.
+Fase-status: Fase 2 serverfundering grotendeels uitgevoerd; Apache blijft voorlopig hoofdwebserver; runtime, endpoint-env-update en service-activatie open.
 
-Fase 2 is niet volledig server-klaar zolang `/etc/gk/gk.env` nog endpoint-placeholders kan bevatten, Apache/Nginx keuze openstaat, `/var/www/gk/current` leeg is en er geen echte runtime/build/systemd service actief is.
+Fase 2 is niet volledig server-klaar zolang `/etc/gk/gk.env` nog endpoint-placeholders kan bevatten, Apache vhost/reverse proxy nog niet server-side veilig is getest, `/var/www/gk/current` leeg is en er geen echte runtime/build/systemd service actief is.
 
 ## Doel
 
@@ -83,6 +83,7 @@ Open Codex-taak: `/etc/gk/gk.env` buiten Git bijwerken met deze waarden, omdat d
 - `ops/scripts/check-host`
 - `ops/scripts/check-assets`
 - `ops/env/gk.example.env`
+- `ops/apache/gk-vhost.conf.template`
 - `ops/nginx/gk.conf.template`
 - `ops/systemd/gk-api.service.template`
 - `ops/systemd/gk-realtime.service.template`
@@ -98,9 +99,21 @@ Open Codex-taak: `/etc/gk/gk.env` buiten Git bijwerken met deze waarden, omdat d
 | `ops/scripts/check-host` | Controleert servervoorbereiding, vereiste directories, tooling en open domein/subpad-env. |
 | `ops/scripts/check-assets` | Controleert `GK_ASSET_SOURCE_DIR`, verwacht GLB=4, UI=0, audio=0 en waarschuwt over assetnamen met spaties. |
 | `ops/env/gk.example.env` | Veilige env-template met placeholders; echte waarden blijven buiten Git. |
-| `ops/nginx/gk.conf.template` | Nginx-template met placeholders en deny-regels voor secrets/data/logs/tmp/cache. |
+| `ops/apache/gk-vhost.conf.template` | Apache vhost/reverse proxy template voor de voorlopige actieve webserver. |
+| `ops/nginx/gk.conf.template` | Nginx candidate-template voor een aparte latere migratiefase; niet live activeren in Fase 2. |
 | `ops/systemd/*.service.template` | Service-templates met buiten-Git `EnvironmentFile=/etc/gk/gk.env`. |
 | `docs/ops/server-layout.md` | Blijvend serverlayout- en activatiecontract. |
+
+## Webserver policy
+
+Kevin heeft bevestigd:
+
+- De server draait meerdere bestaande sites.
+- Apache blijft voorlopig de actieve hoofdwebserver.
+- GK moet voorlopig via Apache vhost/reverse proxy worden voorbereid.
+- Nginx blijft alleen candidate/template.
+- Nginx mag niet live worden geactiveerd op poort 80/443.
+- Een volledige migratie naar Nginx vereist een aparte migratiefase.
 
 ## Codex serverresultaat
 
@@ -123,10 +136,7 @@ Codex heeft buiten Git gemeld:
 
 Geen blokkerende Fase 2 endpoint-input meer open.
 
-Nog beleidsmatig te kiezen voordat volledige webserveractivatie kan afronden:
-
-- Apache actief laten en Nginx later migreren;
-- of Apache/Nginx rolverdeling wijzigen zodat Nginx definitief kan activeren.
+Geen blokkerende Fase 2 webserverkeuze meer open: Apache blijft voorlopig leidend. Nginx-migratie is expliciet uitgesteld naar een aparte migratiefase.
 
 ## Open Codex-taken buiten Git
 
@@ -134,10 +144,11 @@ Codex moet buiten Git nog uitvoeren:
 
 1. `/etc/gk/gk.env` endpointvelden vervangen door de nu bevestigde waarden.
 2. `ops/scripts/check-host` opnieuw draaien; het script detecteert nu placeholderwaarden.
-3. Apache/Nginx migratiekeuze uitvoeren.
-4. `/var/www/gk/current` vullen zodra runtime/build bestaat.
-5. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
-6. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
+3. Apache vhost/reverse proxy renderen uit `ops/apache/gk-vhost.conf.template`.
+4. Apache-config veilig testen en bevestigen dat bestaande sites niet breken.
+5. `/var/www/gk/current` vullen zodra runtime/build bestaat.
+6. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
+7. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
 
 ## Checks
 
@@ -176,9 +187,10 @@ Serverfundering is ook grotendeels uitgevoerd door Codex:
 Niet markeren als volledig server-klaar totdat:
 
 - endpointwaarden in `/etc/gk/gk.env` zijn bijgewerkt en opnieuw gecheckt;
-- Apache/Nginx keuze is afgerond;
+- Apache vhost/reverse proxy veilig is getest en server-side bevestigd;
+- Nginx niet live is geactiveerd op poort 80/443 in Fase 2;
 - `/var/www/gk/current` een echte runtime/build bevat;
 - systemd services definitief zijn geinstalleerd/gestart wanneer `ExecStart` bestaat;
 - beschikbare build/migratie/runtime checks zijn uitgevoerd zodra tooling bestaat.
 
-Fase 3 mag pas starten als Kevin accepteert dat Fase 2 nog runtime/webserver/service-gates open heeft, of nadat Codex deze gates sluit.
+Fase 3 mag pas starten als Kevin accepteert dat Fase 2 nog runtime/Apache/service-gates open heeft, of nadat Codex deze gates sluit.

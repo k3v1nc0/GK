@@ -2,7 +2,7 @@
 
 Actieve fase: `fase2.md`
 
-Status: Fase 2 serverfundering grotendeels uitgevoerd; runtime, endpoint-env-update en definitieve webserver/service-activatie open.
+Status: Fase 2 serverfundering grotendeels uitgevoerd; Apache blijft voorlopig hoofdwebserver; runtime, endpoint-env-update en service-activatie open.
 
 ## Primaire Fase 2-status
 
@@ -38,6 +38,7 @@ Aangemaakt of bijgewerkt voor Fase 2:
 - `ops/scripts/check-host`
 - `ops/scripts/check-assets`
 - `ops/env/gk.example.env`
+- `ops/apache/gk-vhost.conf.template`
 - `ops/nginx/gk.conf.template`
 - `ops/systemd/gk-api.service.template`
 - `ops/systemd/gk-realtime.service.template`
@@ -63,10 +64,12 @@ Aangemaakt of bijgewerkt voor Fase 2:
 
 Geen blokkerende Fase 2 endpoint-input meer open.
 
-Nog te kiezen voordat volledige webserveractivatie kan afronden:
+Geen blokkerende Fase 2 webserverkeuze meer open:
 
-- Apache actief laten en Nginx later migreren;
-- of Apache/Nginx rolverdeling wijzigen zodat Nginx definitief kan activeren.
+- Apache blijft voorlopig de actieve hoofdwebserver.
+- GK wordt voorlopig via Apache vhost/reverse proxy voorbereid.
+- Nginx blijft candidate/template voor een aparte latere migratiefase.
+- Nginx mag niet live worden geactiveerd op poort 80/443 in Fase 2.
 
 ## Open Codex-taken buiten Git
 
@@ -86,7 +89,8 @@ Codex moet nog server-side uitvoeren:
 
 - `/etc/gk/gk.env` endpointvelden vervangen door de nu bevestigde waarden.
 - `ops/scripts/check-host` opnieuw draaien met placeholderdetectie.
-- Apache/Nginx migratiekeuze uitvoeren.
+- Apache vhost/reverse proxy renderen uit `ops/apache/gk-vhost.conf.template`.
+- Apache-config veilig testen en bevestigen dat bestaande sites niet breken.
 - `/var/www/gk/current` vullen zodra runtime/build bestaat.
 - Definitieve `gk-*.service` units installeren/starten wanneer echte `ExecStart` beschikbaar is.
 - Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
@@ -95,4 +99,4 @@ Codex moet nog server-side uitvoeren:
 
 Fase 2 is niet volledig server-klaar.
 
-Huidige status: serverfundering grotendeels uitgevoerd. Volledige serveractivatie blijft open totdat endpoint-env is bijgewerkt, de Apache/Nginx keuze is afgerond, `/var/www/gk/current` een echte runtime/build bevat en de definitieve services/runtimechecks bestaan.
+Huidige status: serverfundering grotendeels uitgevoerd. Volledige serveractivatie blijft open totdat endpoint-env is bijgewerkt, Apache vhost/reverse proxy veilig server-side is getest, `/var/www/gk/current` een echte runtime/build bevat en de definitieve services/runtimechecks bestaan.
