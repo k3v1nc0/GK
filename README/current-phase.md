@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve fase: `fase4.md`
+Actieve fase: `fase4.md` klaar voor `fase5.md`
 
-Status: Fase 4 Git-basis voorbereid; Codex database migration/seed gate open.
+Status: Fase 4 klaar voor Fase 5; database/auth server-side validatie afgerond.
 
 ## Primaire Fase 4-status
 
@@ -30,7 +30,7 @@ Dit README-fasebestand blijft de korte fase-index. De inhoudelijke fasebeoordeli
 
 Fase 1 is klaar.
 
-Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Fase 3 Git-basis is voorbereid, maar `pnpm install/build/typecheck/test/lint` blijven open voor Codex.
+Fase 2 serverfundering is grotendeels uitgevoerd, maar niet volledig server-klaar. Fase 3 Git-basis is voorbereid en de workspace-checks zijn server-side gevalideerd tijdens Fase 4.
 
 ## Fase 4 Git-basis
 
@@ -95,20 +95,34 @@ Geen blokkerende Fase 4-input open.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
 
-## Open Codex-taken buiten Git
+## Afgeronde Codex-validatie buiten Git
 
-Codex moet nog uitvoeren in een omgeving met registry-toegang:
+Codex heeft Fase 4 server-side gevalideerd:
 
-- `pnpm install`
-- `pnpm build`
-- `pnpm typecheck`
-- `pnpm test`
-- `pnpm lint`
-- MySQL migraties draaien.
-- Admin seed secret buiten Git zetten.
-- Eerste editor admin seed uitvoeren met e-mail `k3v1nc0@hotmail.com`.
-- Runtime env controleren.
-- Database/auth smoke tests draaien op server.
+- `pnpm install`: geslaagd.
+- `pnpm build`: geslaagd.
+- `pnpm typecheck`: geslaagd.
+- `pnpm test`: geslaagd met Node 22 via `npx -p node@22`.
+- `pnpm lint`: geslaagd.
+- MySQL is actief.
+- Database `gk` bestaat.
+- User `gk_app@127.0.0.1` bestaat.
+- Runtime DB-connectie is OK.
+- `db/migrations/0001_auth_foundation.sql` is succesvol toegepast.
+- Alle Fase 4-auth tabellen zijn aanwezig.
+- Admin seed secret/temp password/hash staan buiten Git in `/etc/gk/secrets/initial-editor-admin.env`.
+- Admin `k3v1nc0@hotmail.com` bestaat, is actief en heeft geverifieerde e-mail.
+- Rol `editor_admin` is gekoppeld.
+- `admin.seed` auditregel is aanwezig.
+- Database/auth smoke tests zijn geslaagd.
+- Git status bleef schoon.
+- Geen harde Fase 4 database/auth blocker meer.
+
+## Open aandachtspunten
+
+Technische runtime/tooling gate:
+
+- Systeem-Node is `v18.19.1`; toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
 
 Fase 2-open serverpunten blijven ook open totdat runtime/build bestaat:
 
@@ -121,6 +135,6 @@ Fase 2-open serverpunten blijven ook open totdat runtime/build bestaat:
 
 ## Fasebeoordeling
 
-Fase 4 is niet volledig klaar zolang de database migraties, admin seed en server-side smoke tests niet door Codex zijn uitgevoerd.
+Fase 4 database/auth is server-side gevalideerd en klaar voor Fase 5.
 
-Huidige status: Fase 4 Git-basis voorbereid; Codex database migration/seed gate open.
+Huidige status: Fase 4 klaar voor Fase 5; Node 18/Node 22 blijft een technische runtime/tooling gate voor toekomstige test-runs.

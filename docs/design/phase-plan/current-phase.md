@@ -6,9 +6,9 @@ Actieve fase: Fase 4 - Database, migraties, editor-login en game-login.
 
 ## Status
 
-Fase-status: Fase 4 Git-basis voorbereid; Codex database migration/seed gate open.
+Fase-status: Fase 4 klaar voor Fase 5; database/auth server-side validatie afgerond.
 
-Fase 4 is nog niet volledig klaar zolang Codex de MySQL migraties, admin seed en database/auth smoke tests nog niet server-side heeft uitgevoerd.
+Codex heeft de Fase 4 database/auth-validatie server-side afgerond. Er is geen harde Fase 4 database/auth blocker meer.
 
 ## Doel
 
@@ -71,19 +71,19 @@ Deze punten blokkeren Fase 4 Git-werk niet, maar blijven Codex-taken buiten Git:
 4. Apache-config veilig testen en bevestigen dat bestaande sites niet breken.
 5. `/var/www/gk/current` vullen zodra runtime/build bestaat.
 6. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
-7. Build, migraties en runtime checks uitvoeren zodra tooling bestaat.
+7. Fase 2 runtime build/service checks uitvoeren zodra echte runtime/build bestaat.
 
-## Fase 3-open punten die open blijven
+## Fase 3-validatie
 
-Deze punten blokkeren Fase 4 Git-werk niet, maar blijven Codex-taken:
+De Fase 3 workspace-checks zijn tijdens Fase 4 server-side gevalideerd:
 
-1. `pnpm install`.
-2. `pnpm build`.
-3. `pnpm typecheck`.
-4. `pnpm test`.
-5. `pnpm lint`.
+1. `pnpm install`: geslaagd.
+2. `pnpm build`: geslaagd.
+3. `pnpm typecheck`: geslaagd.
+4. `pnpm test`: geslaagd met Node 22 via `npx -p node@22`.
+5. `pnpm lint`: geslaagd.
 
-Niet claimen dat de workspace volledig bewezen is totdat deze checks server-side of in een omgeving met registry-toegang zijn geslaagd.
+Aandachtspunt: systeem-Node is `v18.19.1`; toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
 
 ## Auth- en databasekeuzes
 
@@ -182,7 +182,7 @@ Scope-regels:
 - editor session mag niet automatisch player endpoints gebruiken;
 - publieke auth routes gebruiken generieke responses zonder account-enumeratie.
 
-## Content- en assetgrens
+## Content- en assetgrenz
 
 Niet toegevoegd:
 
@@ -197,7 +197,7 @@ De startcode bevat alleen generieke boundaries, registries, protocoltypes, valid
 
 ## Checks
 
-Uitgevoerd:
+Eerder Git-side uitgevoerd:
 
 - Repo-bronnen geopend via GitHub connector.
 - Fase 4-relevante workspacebestanden lokaal gecontroleerd.
@@ -213,15 +213,25 @@ Uitgevoerd:
 - Migratie- en seed-template scans: OK.
 - Migratiestructuur-scan op tabeldefinities en statements: OK.
 
-Niet volledig uitvoerbaar in deze omgeving:
+Server-side door Codex afgerond:
 
-- `pnpm install`: niet uitvoerbaar, omdat Corepack de pnpm tarball niet kon downloaden via registry-toegang.
-- `pnpm build`: niet uitvoerbaar zonder pnpm install en TypeScript dependency.
-- `pnpm typecheck`: niet uitvoerbaar zonder pnpm install en TypeScript dependency.
-- `pnpm test`: rootscript niet via pnpm uitvoerbaar zonder pnpm install; de onderliggende Node-test is wel direct uitgevoerd en geslaagd met TypeScript strip-check.
-- `npm run build`: niet uitvoerbaar, omdat `tsc` niet lokaal beschikbaar is.
-- `npm run typecheck`: niet uitvoerbaar, omdat `tsc` niet lokaal beschikbaar is.
-- MySQL migratie-parse/run: niet uitvoerbaar, omdat `mysql` niet lokaal beschikbaar is en databasewerk door Codex buiten Git moet gebeuren.
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK met Node 22 via `npx -p node@22`.
+- `pnpm lint`: OK.
+- MySQL actief.
+- Database `gk` aanwezig.
+- User `gk_app@127.0.0.1` aanwezig.
+- Runtime DB-connectie OK.
+- `db/migrations/0001_auth_foundation.sql` succesvol toegepast.
+- Vereiste tabellen aanwezig: `editor_users`, `editor_roles`, `editor_user_roles`, `game_users`, `game_user_status`, `sessions`, `player_profiles`, `characters`, `email_verification_tokens`, `password_reset_tokens`, `audit_log`.
+- Admin seed secret/temp password/hash staan buiten Git in `/etc/gk/secrets/initial-editor-admin.env`.
+- Admin `k3v1nc0@hotmail.com` bestaat, is actief en heeft geverifieerde e-mail.
+- Rol `editor_admin` is gekoppeld.
+- `admin.seed` auditregel is aanwezig.
+- Database/auth smoke tests: OK.
+- Server-side Git status bleef schoon.
 
 ## Open Kevin-input
 
@@ -231,31 +241,24 @@ Latere fases houden hun eigen gates voor GLB-role mapping, UI-assets, audio-asse
 
 ## Open Codex-taken buiten Git
 
-Codex moet na deze commit buiten Git of in een omgeving met registry-toegang uitvoeren:
+Fase 4 database/auth-taken zijn afgerond. Open blijven:
 
-1. `pnpm install`.
-2. `pnpm build`.
-3. `pnpm typecheck`.
-4. `pnpm test`.
-5. `pnpm lint`.
-6. MySQL migraties draaien.
-7. Admin seed secret buiten Git zetten.
-8. Eerste editor admin seed uitvoeren met e-mail `k3v1nc0@hotmail.com`.
-9. Runtime env controleren.
-10. Database/auth smoke tests draaien op server.
-11. Fase 2 servergates verder sluiten zodra runtime/build bestaat.
+1. Fase 2 servergates verder sluiten zodra echte runtime/build bestaat.
+2. Node 22 activeren voor toekomstige `pnpm test` runs of de systeem-Node structureel upgraden vanaf `v18.19.1`.
 
 ## Fasebeoordeling
 
-Fase 4 is Git-basis voorbereid, maar nog niet volledig klaar.
+Fase 4 is klaar voor Fase 5.
 
-Niet markeren als volledig klaar totdat:
+Afgerond voor deze fase:
 
-- workspace install succesvol is;
-- build/typecheck/test/lint via pnpm succesvol draaien;
-- MySQL migraties server-side succesvol zijn;
-- eerste editor admin seed via buiten-Git env/secret succesvol is;
-- database/auth smoke tests op server slagen;
-- geen generated `dist`, `node_modules`, secrets, assets of data in Git belanden.
+- workspace install/build/typecheck/test/lint zijn server-side geslaagd;
+- Fase 4 MySQL migratie is server-side succesvol toegepast;
+- eerste editor admin seed is via buiten-Git secret/env uitgevoerd;
+- database/auth smoke tests zijn geslaagd;
+- geen generated `dist`, `node_modules`, secrets, assets of data zijn in Git beland;
+- er is geen harde Fase 4 database/auth blocker meer.
 
-Fase 5 mag pas starten als Kevin accepteert dat Fase 4 nog migration/seed/runtime-gates open heeft, of nadat Codex deze gates sluit.
+Niet verwarren met Fase 2 servervoltooiing: runtime/service/webserverpunten blijven open tot echte runtime/build bestaat.
+
+Open technische gate voor toekomstige runs: systeem-Node is `v18.19.1`; `pnpm test` vereist Node 22-activatie of structurele Node-upgrade.

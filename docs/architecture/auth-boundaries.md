@@ -86,13 +86,23 @@ Audit logt minimaal:
 
 Audit bevat actor, action, target, scope, timestamp en metadata.
 
-## Buiten Git
+## Server-side validatie
 
-Codex moet buiten Git uitvoeren:
+Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
 
-- `pnpm install/build/typecheck/test/lint`;
-- MySQL migraties draaien;
-- admin seed secret instellen;
-- eerste editor admin seeden met e-mail `k3v1nc0@hotmail.com`;
-- runtime env controleren;
-- database/auth smoke tests uitvoeren op server.
+- `pnpm install/build/typecheck/test/lint` zijn geslaagd;
+- `pnpm test` is geslaagd met Node 22 via `npx -p node@22`;
+- MySQL is actief;
+- database `gk` en user `gk_app@127.0.0.1` bestaan;
+- runtime DB-connectie is OK;
+- `db/migrations/0001_auth_foundation.sql` is succesvol toegepast;
+- alle vereiste auth-tabellen zijn aanwezig;
+- admin seed secret/temp password/hash staan buiten Git in `/etc/gk/secrets/initial-editor-admin.env`;
+- editor admin `k3v1nc0@hotmail.com` bestaat, is actief en heeft geverifieerde e-mail;
+- rol `editor_admin` is gekoppeld;
+- `admin.seed` auditregel is aanwezig;
+- database/auth smoke tests zijn geslaagd.
+
+## Open aandachtspunt
+
+Systeem-Node is `v18.19.1`. Toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
