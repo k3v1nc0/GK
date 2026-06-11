@@ -81,7 +81,7 @@ Codex heeft de Fase 5.2 server/browser smoke afgerond:
 - Viewport / World Preview blijft leeg;
 - bestaande sites bleven OK.
 
-Fase 5.3 corrigeert de resterende blocker: de editor shell was bereikbaar, maar nog niet gekoppeld aan een echte editor-admin login. De architectuur is pas klaar voor Fase 6 nadat Codex de nieuwe normale browser-login en GameBible browser-save flow server-side heeft getest.
+Fase 5.3 corrigeerde de resterende blocker: de editor shell was bereikbaar, maar nog niet gekoppeld aan een echte editor-admin login. Claude heeft de nieuwe normale browser-login en GameBible browser-save flow server-side getest. De editor-shell architectuur is klaar voor Fase 6.
 
 ## Fase 5.3 runtime contract
 
@@ -105,3 +105,15 @@ Editor runtime:
 - `GET /shell.json`.
 
 Deze routes voegen geen concrete gamecontent toe. Smoke-auth headers mogen alleen worden gebruikt wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet voor gecontroleerde Codex-tests, en de Apache-template stript die headers voor publieke requests.
+
+## Fase 5.3 server-smoke
+
+Afgerond:
+
+- `/editor` toont login zonder sessie;
+- editor admin login werkt;
+- `/auth/editor/me` geeft authenticated true met `editor_admin`;
+- GameBible save werkt met dezelfde editor session;
+- logout werkt en save na logout faalt;
+- publieke save en legacy PHP write blijven dicht;
+- Node Canvas en Viewport / World Preview blijven leeg zonder dummy content.

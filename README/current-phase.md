@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve fase: Fase 5.3 - echte editor-login en GameBible browser-save flow.
+Actieve fase: Fase 5/Fase 5.3 afgerond; klaar voor Fase 6.
 
-Status: Fase 5.3 Git-basis voorbereid; Codex editor-login en GameBible browser-save smoke gate open. Fase 6-input is bevestigd geregistreerd, maar Fase 6 is nog niet geimplementeerd.
+Status: Fase 5.3 editor-login en GameBible browser-save zijn server-side gevalideerd. Fase 6-input is bevestigd geregistreerd, maar Fase 6 is nog niet geimplementeerd.
 
 ## Primaire Fase 5-status
 
@@ -36,6 +36,8 @@ Fase 1 is klaar.
 Fase 2 serverfundering is grotendeels uitgevoerd. Apache blijft hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn server-side actief en gevalideerd. Fase 3 workspace en Fase 4 database/auth zijn server-side gevalideerd.
 
 Fase 5.3 corrigeert de Fase 5.2-status: `/editor` was bereikbaar, maar nog niet bruikbaar als normale editor-admin browserflow. De editor-web HTML toonde direct de shell, de API had nog geen echte `POST /auth/editor/login` databaseflow met session cookie, en Kevin kon daardoor `GameBibleNode.json` niet vanuit de normale browser opslaan met een echte `editor_admin` session.
+
+Claude heeft de Fase 5.3 server-smoke afgerond. De normale editor-login, authenticated `/auth/editor/me`, GameBible browser-save, logout en fail-closed public save checks zijn groen.
 
 ## Fase 5 Git-basis
 
@@ -145,7 +147,7 @@ Aangemaakt of bijgewerkt voor Fase 5.3:
 
 ## Open Kevin-input
 
-Geen blokkerende Kevin-input open voor de Fase 5.3 Git-implementatie.
+Geen blokkerende Kevin-input open voor Fase 5.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
 
@@ -246,6 +248,8 @@ Fase 5.3 Git-wijziging:
 - `/auth/editor/me` leest de echte editor session en rollen uit de database;
 - smoke-auth headers blijven alleen bruikbaar wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git expliciet is gezet en worden via Apache gestript;
 - GameBibleNode save blijft beschermd door editor-auth, `editor_admin`, Origin/CSRF, JSON-contract, lock, backup, atomische write en audit.
+- latere build-fix: `set-cookie` headers in `apps/api-server/src/http-server.ts` zijn TypeScript-correct gemaakt;
+- latere password-verifier fix: `scrypt$N$r$p$salt$hash` en `scrypt:N=<n>,r=<r>,p=<p>:saltBase64url:hashBase64url` worden ondersteund.
 
 Lokaal gecontroleerd:
 
@@ -254,19 +258,27 @@ Lokaal gecontroleerd:
 - tijdelijke API source-smoke: OK voor editor login, session cookie, `/auth/editor/me`, public save fail, protected GameBibleNode save en logout;
 - `node scripts/check-workspace-boundaries.mjs`: OK.
 
-Fase 5.3 is pas klaar voor Fase 6 nadat Codex server-side heeft bevestigd:
+Fase 5.3 server-smoke afgerond door Claude:
 
-- `pnpm install/build/typecheck/test/lint` met Node 22 zijn OK;
-- `gk-api` en `gk-editor-web` zijn herstart met de nieuwe build;
-- browser-login met `k3v1nc0@hotmail.com` werkt;
-- `/auth/editor/me` geeft daarna authenticated true met `editor_admin`;
-- GameBibleNode browser-save werkt met dezelfde editor session;
-- publieke save en legacy PHP public POST blijven falen;
-- game session krijgt geen editor toegang.
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 35/35;
+- `pnpm lint`: OK;
+- services actief via `/opt/gk/node-v22/bin/node`;
+- `/editor` toont login zonder sessie;
+- editor admin login werkt;
+- `/auth/editor/me` geeft authenticated true met `editor_admin`;
+- GameBible save via `/editor/game-bible-node/save` werkt;
+- backup en audit werken;
+- logout werkt;
+- save na logout faalt;
+- publieke save en legacy PHP write blijven dicht;
+- bestaande game-site blijft bereikbaar.
 
 ## Fasebeoordeling
 
-Fase 5.3 Git-basis voorbereid; Codex editor-login en GameBible browser-save smoke gate open.
+Fase 5/Fase 5.3 is klaar voor Fase 6.
 
 Fase 6-input blijft bevestigd maar nog niet geimplementeerd:
 

@@ -66,7 +66,7 @@ Fase 5.2 gebruikt daarom deze veilige bridge:
 5. De save-client stuurt `X-GK-CSRF-Token` mee vanuit de runtime CSRF-cookie of meta-tag.
 6. De API-route blijft de enige normale schrijfroute en controleert editor-auth, `editor_admin`, Origin, CSRF, JSON-contract, lock, backup, atomische write en audit.
 
-Fase 5.2 bevestigde server-side dat browser-save naar de beschermde API-route post en niet meer naar `GameBibleNode.php`. Fase 5.3 moet aanvullend door Codex worden getest met de normale editor-admin login, zodat Kevin vanuit de gewone browser kan opslaan zonder smoke-auth of legacy PHP-write.
+Fase 5.2 bevestigde server-side dat browser-save naar de beschermde API-route post en niet meer naar `GameBibleNode.php`. Fase 5.3 is daarna server-side getest met de normale editor-admin login, zodat Kevin vanuit de gewone browser kan opslaan zonder smoke-auth of legacy PHP-write.
 
 ## Legacy PHP
 
@@ -100,4 +100,4 @@ Codex heeft buiten Git bevestigd:
 13. backup en audit werken;
 14. `GameBibleNode.json` is na test exact hersteld.
 
-Er is geen Fase 5.2 GameBibleNode save-policy blocker meer. Fase 5.3 houdt nog een browser-login/save-smoke gate open totdat Codex heeft bevestigd dat Kevin met de echte `editor_admin` session vanuit `GameBibleNode.html` kan opslaan. De write-route blijft beschermd; een open publieke PHP-write blijft altijd een faseblokkade.
+Er is geen Fase 5.3 GameBibleNode browser-save blocker meer. De write-route blijft beschermd; een open publieke PHP-write blijft altijd een faseblokkade.

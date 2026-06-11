@@ -2,7 +2,7 @@
 
 ## Status
 
-Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn actief en gevalideerd. Fase 5.3 wijzigt de API/editor runtime voor echte editor-login; Codex moet de services na build herstarten en opnieuw browser-smoken.
+Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
 
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt geen actieve serverstatus.
 
@@ -224,13 +224,22 @@ Codex-resultaat:
 
 Realtime gateway, workers, publish-services en latere game runtime krijgen eigen fasegates voordat ze als permanent actief mogen worden gemarkeerd.
 
-Fase 5.3 Codex-gate:
+Fase 5.3 server-smoke:
 
-- `pnpm install/build/typecheck/test/lint` draaien met Node 22;
-- `gk-api` en `gk-editor-web` herstarten met de nieuwe build;
-- normale editor-login smoke uitvoeren met `k3v1nc0@hotmail.com` en het buiten-Git wachtwoord;
-- GameBibleNode browser-save smoke uitvoeren met dezelfde editor session;
-- publieke save, legacy PHP public POST en game-session editor toegang blijven controleren op falen.
+- set-cookie TypeScript build-fix aanwezig in `apps/api-server/src/http-server.ts`;
+- password-verifier ondersteunt beide scrypt formats;
+- `pnpm install/build/typecheck/test/lint`: OK;
+- `pnpm test`: OK, 35/35;
+- services actief via `/opt/gk/node-v22/bin/node`;
+- `/editor` toont login zonder sessie;
+- editor admin login werkt;
+- `/auth/editor/me` geeft authenticated true met `editor_admin`;
+- GameBible save via `/editor/game-bible-node/save` werkt;
+- backup en audit werken;
+- logout werkt;
+- save na logout faalt;
+- publieke save en legacy PHP write blijven dicht;
+- bestaande game-site blijft bereikbaar.
 
 ## MySQL en Redis
 

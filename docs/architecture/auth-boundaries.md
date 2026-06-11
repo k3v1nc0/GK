@@ -119,4 +119,4 @@ Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
 
 GK gebruikt structureel Node 22 onder `/opt/gk/node-v22`. `/usr/bin/node` is serverbreed bewust op `v18.19.1` blijven staan en is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
 
-Fase 5.3 blijft pas volledig gevalideerd nadat Codex de normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save met de echte serverdatabase heeft getest.
+Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save werken met de echte serverdatabase. Publieke save, legacy PHP write en save na logout blijven dicht.
