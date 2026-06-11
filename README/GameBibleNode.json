@@ -2,7 +2,7 @@
     "schema": "gamebible-node-system-v6.23",
     "title": "🎮 Game Bible - Arlen Tharys: Staff of Eldoria - Game Node System Lvl 1-100",
     "version": 6.23,
-    "updatedAt": "2026-06-10T07:35:24.409Z",
+    "updatedAt": "2026-06-11T06:34:34.074Z",
     "groups": [
         {
             "id": "col-level",
@@ -296,7 +296,7 @@
         {
             "id": "node-story-premise",
             "title": "Core Premise: @{Protagonist} and @{Item Core Relic}",
-            "body": "@{Game Name} is about @{Protagonist}, a terrified apprentice whose fear becomes the exact frequency the @{Item Core Relic} needs. @{Main Villain} uses @{Main Curse} to force @{World} into perfect, lifeless order; the player restores messy, living harmony through quests, choices and relics.",
+            "body": "@{Eldoria} is about @{Protagonist}, a terrified apprentice whose fear becomes the exact frequency the @{Item Core Relic} needs. @{Main Villain} uses @{Main Curse} to force @{World} into perfect, lifeless order; the player restores messy, living harmony through quests, choices and relics.",
             "x": -408,
             "y": 120,
             "width": 420,
@@ -2292,6 +2292,7 @@
             "y": -756,
             "width": 400,
             "categoryId": "",
+            "sourceTaskId": "",
             "mentionMode": "value"
         }
     ],
@@ -5349,7 +5350,7 @@
     "tags": [
         {
             "id": "tag-game-name",
-            "name": "Game Name",
+            "name": "Eldoria",
             "value": "Arlen Tharys: Staff of Eldoria"
         },
         {
