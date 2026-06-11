@@ -1,19 +1,17 @@
 # Fase 7 - Auto asset/audio library uit jouw assets-map
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
 - Alles draait eerst op 1 eigen server onder `/var/www/gk`.
 - GK Code Copiloot werkt alleen op `main`.
 - GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
 - Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
 - Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
+- Alles wat Kevin maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
 - De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
 - Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
+- 3D wereldobjecten gebruiken bestaande of later door Kevin gemaakte `.glb` assets.
 - UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
 - De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
 - Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
@@ -21,17 +19,52 @@
 
 ## Doel van de fase
 
-Bouw asset-worker en editor bibliotheek die jouw GLB, UI en audio assets automatisch scant, toont en bijwerkt.
+Bouw asset-worker en editor bibliotheek die GLB, UI en audio assets automatisch kan scannen, registreren, tonen en bijwerken.
+
+## Belangrijke grens
+
+GLB-bestanden krijgen geen definitieve runtime-role door de scanner.
+
+Toegestaan:
+
+- generieke metadata registreren;
+- kandidaat-capabilities tonen;
+- role mapping status als `candidate` markeren;
+- role mapping later via editor-data laten kiezen.
+
+Niet toegestaan:
+
+- een GLB automatisch object, NPC, prop, player, boss of environment maken;
+- concrete gamecontent uit bestandsnamen afleiden;
+- runtime publish starten vanuit asset scan;
+- assets naar Git kopieren;
+- dummy UI/audio tonen wanneer de telling 0 is.
 
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
-- Zorg dat bestaande GLB assets in assets-map staan.
-- Zorg voor minimaal 1 GLB voor player/character, 1 environment, 1 prop.
-- Voeg eventueel eerste UI en audio testassets toe.
+Voor de Git-basis van deze fase is geen extra Kevin-input nodig.
 
-## Actie voor Codex
+Voor latere content/publish-fases blijft nodig:
 
-Run asset scan en rapporteer aantallen GLB, UI en audio. Controleer watcher/polling.
+- definitieve GLB-role mapping via editor/Kevin-keuze;
+- UI-assets wanneer HUD/UI-flow concrete assets verplicht maakt;
+- audio-assets wanneer muziek, ambience, SFX, UI audio of voice verplicht worden.
+
+## Actie voor Codex/Claude buiten Git
+
+Run server-side na de Git-wijzigingen:
+
+- `pnpm install`;
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- MySQL migratie `db/migrations/0003_asset_library_register.sql`;
+- echte scan op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`;
+- watcher/polling smoke;
+- editor-only API smoke voor read/scan;
+- anonymous/game-denial smoke;
+- bevestig dat scan niets publiceert naar runtime en geen assets naar Git kopieert.
 
 ## Prompt voor GK Code Copiloot
 
@@ -40,7 +73,7 @@ Git-regels:
 - Werk alleen op main.
 - Maak geen branches.
 - Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
+- Gebruik zo min mogelijk commits via de beschikbare GitHub-write route.
 - Commit pas na de beschikbare checks.
 
 Inhoudsregels:
@@ -50,30 +83,50 @@ Inhoudsregels:
 - Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
 - Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
 
-
 Je werkt aan fase 7: Auto asset/audio library uit jouw assets-map.
 
 Doel:
-Bouw asset-worker en editor bibliotheek die jouw GLB, UI en audio assets automatisch scant, toont en bijwerkt.
+Bouw asset-worker en editor bibliotheek die GLB, UI en audio assets automatisch scant, toont en bijwerkt.
 
 Werk uit:
-Implementeer recursive scanner en watcher/polling. Registreer GLB, UI en audio metadata. Editor krijgt realtime asset updates. Elke GLB krijgt standaard object/NPC capabilities. Bouw capability editor en role mapping.
+Implementeer recursive scanner en watcher/polling contract. Registreer GLB, UI en audio metadata. Editor krijgt asset library state met counts, missing/invalid/unassigned/candidate/assigned status. GLB krijgt alleen kandidaat-capabilities; definitieve role mapping is editor-data en wordt niet door de scanner gekozen. Bouw role mapping als editor capability, niet als hard-coded runtime-role.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
 - Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
+- Update current-phase.md alleen naar klaar als de fase echt server-side klaar is.
+- Commit met duidelijke message in zo weinig mogelijk commits.
 ```
 
 ## Acceptatiechecklist
 
-- [ ] Nieuwe GLB verschijnt automatisch.
-- [ ] Nieuwe UI asset verschijnt automatisch.
-- [ ] Nieuwe audio asset verschijnt automatisch.
-- [ ] Elke GLB kan object/NPC kandidaat.
-- [ ] Geen assets in Git.
+- [x] Asset schema/contract bestaat voor GLB, UI image en audio.
+- [x] Recursive scanner core ondersteunt filenames met spaties.
+- [x] Scanner registreert metadata en hash waar haalbaar.
+- [x] Verdwenen assets worden als `missing` gemarkeerd.
+- [x] UI/audio count 0 blijft geldig.
+- [x] Audio picker toont geen dummy audio.
+- [x] GLB role mapping blijft `candidate` totdat editor-data anders kiest.
+- [x] Editor asset/audio panel state toont library counts en role mapping status.
+- [x] Editor-only asset library read/scan routes zijn voorbereid.
+- [x] Database-migratie bevat alleen schema, geen echte assetdata.
+- [x] Scanner publiceert niets naar runtime.
+- [x] Geen assets in Git toegevoegd.
+- [ ] Server-side build/typecheck/test/lint groen.
+- [ ] MySQL migratie toegepast.
+- [ ] Echte server scan op `/var/www/gk/assets` bevestigd.
+- [ ] Watcher/polling smoke bevestigd.
 
 ## Testplan
 
-Plaats een GLB, UI image en audio file in assets; controleer dat editor ze zonder codewijziging ziet.
+Server-side:
+
+1. Zet `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`.
+2. Draai de asset scan.
+3. Verwacht GLB=4, UI=0, audio=0.
+4. Controleer dat de bestandsnaam met spatie veilig als original filename blijft bestaan en een normalized key krijgt.
+5. Controleer dat GLB-records geen definitieve runtime-role krijgen.
+6. Controleer dat `/editor/assets/library` alleen met editor session werkt.
+7. Controleer dat `/editor/assets/scan` alleen met editor session en CSRF/Origin werkt.
+8. Controleer dat anonymous/game session geen editor asset beheer krijgt.
+9. Controleer dat geen runtime publish of asset copy naar Git plaatsvindt.

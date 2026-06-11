@@ -2,6 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { authorizeEditorGameUserManagement } from "./editor-game-user-management.js";
 import {
+  handleEditorAssetLibraryHttpRequest
+} from "./editor-asset-library-routes.js";
+import {
   handleEditorGraphHttpRequest
 } from "./editor-graph-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
@@ -33,6 +36,7 @@ export interface ApiRuntimeDependencies {
   readonly editorAuthStore?: EditorAuthStore | null;
   readonly passwordVerifier?: EditorPasswordVerifier;
   readonly now?: () => Date;
+  readonly assetSourceDir?: string;
 }
 
 export function createApiHttpServer(dependencies: ApiRuntimeDependencies = {}): Server {
@@ -129,6 +133,13 @@ export async function handleApiRequest(
       const status = code === "missing_editor_admin" ? 403 : code === "csrf_required" || code === "origin_not_allowed" ? 403 : 400;
       sendJson(response, status, { ok: false, error: code });
     }
+    return;
+  }
+
+  if (await handleEditorAssetLibraryHttpRequest(request, response, session, {
+    sourceDir: dependencies.assetSourceDir,
+    now
+  })) {
     return;
   }
 

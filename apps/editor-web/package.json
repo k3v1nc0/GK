@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
+    "@gk/asset-library": "workspace:*",
     "@gk/schemas": "workspace:*",
     "@gk/shared-ui": "workspace:*"
   },

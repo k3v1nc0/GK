@@ -67,6 +67,8 @@ Minimaal ondersteunen:
 - color
 - curve
 - schedule
+- asset.reference
+- audio.reference
 - asset.glb
 - asset.ui
 - asset.audio
@@ -84,43 +86,45 @@ Minimaal ondersteunen:
 - level
 - list
 
+Fase 6 heeft de eerste typed sockets vastgelegd als engine-capabilities: `var.string`, `number`, `color`, `asset.reference` en `audio.reference`.
+
 ## Asset import
 
 Als een bestand in `/var/www/gk/assets` komt:
 
 1. asset-worker ziet het via watcher of periodieke scan.
-2. hash, pad, bestandstype en metadata worden opgeslagen.
-3. GLB metadata wordt gelezen waar mogelijk: scenes, meshes, materials, animation clips, bounding box en triangle estimate.
-4. UI images krijgen width, height, format en alpha info.
-5. Audio krijgt duration, channels, sample rate en loop candidate info waar mogelijk.
-6. Editor krijgt realtime update.
+2. hash, pad, bestandstype en metadata worden opgeslagen waar veilig/haalbaar.
+3. GLB metadata wordt gelezen waar mogelijk: basisheader in Fase 7, later scenes, meshes, materials, animation clips, bounding box en triangle estimate.
+4. UI images krijgen later width, height, format en alpha info waar mogelijk.
+5. Audio krijgt later duration, channels, sample rate en loop candidate info waar mogelijk.
+6. Editor krijgt asset library state.
 7. Asset verschijnt in asset library.
 
-## Elke GLB is object en NPC kandidaat
+De scanner kopieert geen assets naar Git, verwijdert geen serverbestanden en publiceert niets naar runtime.
 
-Elke GLB krijgt standaard capabilities:
+## GLB role mapping blijft editor-data
 
-- renderable
-- spawnable_object
-- spawnable_npc_candidate
-- transformable
-- selectable
-- group_selectable
+GLB-bestanden mogen niet automatisch een definitieve runtime-role krijgen.
 
-Kevin kan extra capabilities aanvinken:
+De scanner mag alleen generieke kandidaat-capability metadata registreren, bijvoorbeeld:
 
-- collidable
-- interactable
-- npc_brain
-- enemy_combatant
-- boss_combatant
-- loot_container
-- quest_target
-- merchant
-- dialogue_speaker
-- player_appearance
-- vfx
-- audio_emitter_anchor
+- `asset.glb`
+- `renderable_candidate`
+- `spawnable_candidate`
+- `entity_visual_candidate`
+- `npc_visual_candidate`
+- `prop_visual_candidate`
+- `environment_visual_candidate`
+
+Deze metadata betekent niet dat een GLB al object, NPC, player, prop, environment, enemy of boss is. Kevin/editor kiest de definitieve role mapping later als editor-data.
+
+Role mapping status:
+
+- `unassigned`: geen role mapping gekozen;
+- `candidate`: scanner of editor toont mogelijke capabilities zonder definitieve runtime-role;
+- `assigned`: editor-data heeft expliciet een role mapping gekozen.
+
+Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd als concrete role mapping.
 
 ## Node families
 
@@ -274,12 +278,13 @@ Kevin kan extra capabilities aanvinken:
 
 ## Publish regels
 
-- Elk GLB mag als object of NPC kandidaat gebruikt worden.
+- Een GLB mag pas als concrete object/NPC/player/prop/environment/enemy/boss role worden gebruikt wanneer editor-data die role mapping expliciet heeft toegewezen.
 - Ontbrekende animaties geven waarschuwing.
 - Vreemde schaal geeft waarschuwing.
 - Hoog triangle budget geeft waarschuwing.
 - Ontbrekende audio geeft waarschuwing als audio optioneel is.
 - Ontbrekende audio blokkeert als een node die audio verplicht maakt.
 - Blokkeren gebeurt alleen als een gekozen node capability verplichte data mist.
+- Asset scan en draft preview zijn geen publishstap.
 
-Voorbeeld: een boss zonder boss health setup blokkeert. Een NPC zonder walk animatie mag als static/talk NPC met waarschuwing.
+Voorbeeld: een boss zonder boss health setup blokkeert pas wanneer editor-data/publish die boss-capability daadwerkelijk vereist. Een GLB met alleen `candidate` status mag niet automatisch boss, NPC of object worden.

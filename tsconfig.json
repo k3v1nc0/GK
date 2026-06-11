@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/asset-library" },
     { "path": "packages/schemas" },
     { "path": "packages/node-types" },
     { "path": "packages/node-engine" },
@@ -18,4 +19,3 @@
     { "path": "apps/asset-worker" }
   ]
 }
-

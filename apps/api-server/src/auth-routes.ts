@@ -200,6 +200,29 @@ export const AUTH_ROUTES = [
     auditAction: "game_bible_node.save"
   },
   {
+    id: "editor.asset_library.read",
+    method: "GET",
+    path: "/editor/assets/library",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.asset_library.scan",
+    method: "POST",
+    path: "/editor/assets/scan",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.asset_library.scan"
+  },
+  {
     id: "editor.graph.draft",
     method: "GET",
     path: "/editor/graph/draft",

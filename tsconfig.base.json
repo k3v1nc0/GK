@@ -16,6 +16,7 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
+      "@gk/asset-library": ["packages/asset-library/src/index.ts"],
       "@gk/schemas": ["packages/schemas/src/index.ts"],
       "@gk/node-engine": ["packages/node-engine/src/index.ts"],
       "@gk/node-types": ["packages/node-types/src/index.ts"],
@@ -27,4 +28,3 @@
     }
   }
 }
-

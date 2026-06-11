@@ -33,6 +33,22 @@ Fase 6 voegt de graph-core toe:
 
 Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
 
+## Asset en audio panels
+
+Panels zijn generieke capabilities:
+
+- `Asset Panel` leest Fase 7 asset-library state en toont GLB/UI/audio counts.
+- `Asset Panel` toont missing, invalid, unassigned, candidate en assigned role mapping status.
+- `Asset Panel` laat role mapping als editor-data/capability zien en wijst geen definitieve runtime-rollen toe.
+- `Audio Panel` leest dezelfde asset library en filtert op audio records.
+- `Audio Panel` blijft leeg/gated wanneer audio count 0 is.
+- `Audio Panel` toont geen dummy audio.
+- `HUD Editor` configureert later HUD nodes, zonder definitieve HUD-layout.
+- `Minimap Panel` configureert later minimap nodes, zonder definitieve minimapvorm of waarden.
+- `Game Users` vereist editor scope en `editor_admin`.
+
+GLB-bestanden mogen alleen kandidaat-capability metadata tonen totdat Kevin/editor een role mapping als data kiest.
+
 ## Viewport / World Preview
 
 De viewport is een aparte tab naast `Node Canvas`.
@@ -46,16 +62,6 @@ Fase 5 houdt deze preview expliciet leeg:
 - geen audio of HUD-keuzes.
 
 De preview wacht op latere gepubliceerde world/node-data.
-
-## Panels
-
-Panels zijn generieke capabilities:
-
-- `Asset Panel` leest later asset-inventory en wijst geen runtime-rollen toe.
-- `Audio Panel` houdt de audio-gate open wanneer audio count 0 is.
-- `HUD Editor` configureert later HUD nodes, zonder definitieve HUD-layout.
-- `Minimap Panel` configureert later minimap nodes, zonder definitieve minimapvorm of waarden.
-- `Game Users` vereist editor scope en `editor_admin`.
 
 ## Auth boundary
 
@@ -77,26 +83,7 @@ Game-user beheer gebruikt de Fase 4 routecontracten:
 
 Beide vereisen editor scope met `editor_admin`.
 
-## Server/runtime gate
-
-Fase 5 Git-basis bewees nog niet dat `/editor` live draaide. Fase 5.1 voegde minimale startbare HTTP entrypoints toe voor API en editor-web. Fase 5.2 voegde permanente API/editor service-templates en GameBibleNode browser-save bridge toe.
-
-Codex heeft de Fase 5.2 server/browser smoke afgerond:
-
-- `gk-api` en `gk-editor-web` zijn active/enabled en draaien via `/opt/gk/node-v22/bin/node`;
-- `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` zijn OK;
-- `/editor` werkt via Apache;
-- `/auth/editor/me` geeft `401` zonder sessie;
-- `/editor/game-users` geeft `403` zonder `editor_admin`;
-- Playwright browser-smoke geeft geen console/page errors;
-- Editor shell laadt;
-- Node Canvas blijft leeg;
-- Viewport / World Preview blijft leeg;
-- bestaande sites bleven OK.
-
-Fase 5.3 corrigeerde de resterende blocker: de editor shell was bereikbaar, maar nog niet gekoppeld aan een echte editor-admin login. Claude heeft de nieuwe normale browser-login en GameBible browser-save flow server-side getest. De editor-shell architectuur is klaar voor Fase 6.
-
-## Fase 5.3 runtime contract
+## API runtime contract
 
 API runtime:
 
@@ -110,7 +97,9 @@ API runtime:
 - `POST /editor/game-bible-node/save`;
 - `GET /editor/graph/draft`;
 - `POST /editor/graph/operation`;
-- `POST /editor/graph/preview`.
+- `POST /editor/graph/preview`;
+- `GET /editor/assets/library`;
+- `POST /editor/assets/scan`.
 
 Editor runtime:
 
@@ -131,6 +120,32 @@ Graph routes zijn editor-only:
 - `POST /editor/graph/preview` valideert draft graph data en retourneert `publishesRuntimeOutput: false`.
 
 Game sessions zijn niet geldig voor deze routes. Draft preview mag geen publish uitvoeren en mag de Runtime Game niet wijzigen.
+
+## Fase 7 asset routes
+
+Asset routes zijn editor-only:
+
+- `GET /editor/assets/library` levert asset-library state, counts en validation issues.
+- `POST /editor/assets/scan` triggert een scan van `GK_ASSET_SOURCE_DIR`.
+
+De scanroute:
+
+- vereist editor scope;
+- blijft CSRF/Origin beschermd;
+- uploadt geen assets;
+- maakt geen assets aan;
+- kopieert geen assets naar Git;
+- verwijdert geen serverbestanden;
+- publiceert niets naar Runtime Game;
+- wijst geen definitieve runtime-role mapping toe.
+
+Game sessions en anonymous requests krijgen geen editor asset beheer.
+
+## Server/runtime gate
+
+Fase 5 Git-basis bewees nog niet dat `/editor` live draaide. Fase 5.1 voegde minimale startbare HTTP entrypoints toe voor API en editor-web. Fase 5.2 voegde permanente API/editor service-templates en GameBibleNode browser-save bridge toe. Fase 5.3 koppelde de editor shell aan echte editor-admin login. Fase 6 voegde graph routes toe.
+
+Fase 7 Git-basis voegt asset-library routes en panel state toe, maar de server-side scan, database-migratie, watcher/polling smoke en route smoke moeten nog door Codex/Claude worden uitgevoerd.
 
 ## Fase 5.3 server-smoke
 
