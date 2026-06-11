@@ -6,6 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
+    "@gk/node-engine": "workspace:*",
+    "@gk/node-types": "workspace:*",
     "@gk/net-protocol": "workspace:*",
     "@gk/schemas": "workspace:*",
     "@node-rs/argon2": "^2.0.2",

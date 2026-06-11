@@ -117,12 +117,17 @@ De AI mag niet:
 - Alle concrete content moet beheerbaar zijn via editor/node-system.
 - Validators moeten verplichte velden kunnen blokkeren.
 - Defaults mogen alleen generiek zijn, niet concrete gamecontent.
+- Fase 6 graph operations blijven editor draft-data totdat een latere publishfase ze expliciet publiceert.
+- Typed sockets en field schemas zijn engine-capabilities; concrete waardes moeten uit node-data, GameBible, registers, database of expliciete Kevin-input komen.
+- Audio picker blijft gated zolang audio count 0 is.
+- Draft preview mag valideren en tonen, maar niets publiceren naar Runtime Game.
 
 ### Publish/runtime
 
 - Runtime consumeert alleen gepubliceerde data.
 - Publish blokkeert ontbrekende verplichte data.
 - Publish mag waarschuwingen geven voor optionele of kwaliteitsproblemen.
+- Draft preview is geen publishstap.
 
 ## Te verifieren fase-input voor latere fases
 

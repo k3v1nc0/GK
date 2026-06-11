@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve fase: Fase 5/Fase 5.3 afgerond; klaar voor Fase 6.
+Actieve fase: Fase 6 - node graph core met typed sockets, dropdowns en undo/redo.
 
-Status: Fase 5.3 editor-login en GameBible browser-save zijn server-side gevalideerd. Fase 6-input is bevestigd geregistreerd, maar Fase 6 is nog niet geimplementeerd.
+Status: Fase 6 Git-basis voorbereid; Codex database migration en editor/API runtime smoke gate open.
 
 ## Primaire Fase 5-status
 
@@ -10,7 +10,7 @@ Open voor de actuele fasecontractstatus:
 
 - `docs/design/phase-plan/current-phase.md`
 - `README/fase5.md`
-- `README/fase6.md` voor bevestigde input, nog niet implementeren
+- `README/fase6.md`
 - `docs/architecture/editor-shell.md`
 - `docs/architecture/gamebible-node-access.md`
 - `docs/architecture/auth-boundaries.md`
@@ -35,9 +35,9 @@ Fase 1 is klaar.
 
 Fase 2 serverfundering is grotendeels uitgevoerd. Apache blijft hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn server-side actief en gevalideerd. Fase 3 workspace en Fase 4 database/auth zijn server-side gevalideerd.
 
-Fase 5.3 corrigeert de Fase 5.2-status: `/editor` was bereikbaar, maar nog niet bruikbaar als normale editor-admin browserflow. De editor-web HTML toonde direct de shell, de API had nog geen echte `POST /auth/editor/login` databaseflow met session cookie, en Kevin kon daardoor `GameBibleNode.json` niet vanuit de normale browser opslaan met een echte `editor_admin` session.
+Fase 5.3 is server-side afgerond: normale editor-login, authenticated `/auth/editor/me`, GameBible browser-save, logout en fail-closed public save checks zijn groen.
 
-Claude heeft de Fase 5.3 server-smoke afgerond. De normale editor-login, authenticated `/auth/editor/me`, GameBible browser-save, logout en fail-closed public save checks zijn groen.
+Fase 6 voegt de eerste echte node graph core toe: typed sockets, meerdere poorten, dropdown/input field schemas, edge validation, editor graph operations, undo/redo history met 100 acties per editor session, operation log en draft preview zonder publish.
 
 ## Fase 5 Git-basis
 
@@ -117,6 +117,17 @@ Aangemaakt of bijgewerkt voor Fase 5.3:
 - `apps/api-server/src/session-cookies.ts`
 - `tests/editor-login-flow.test.mjs`
 
+Aangemaakt of bijgewerkt voor Fase 6:
+
+- `db/migrations/0002_node_graph_core.sql`
+- `packages/schemas/src/node-graph.ts`
+- `packages/node-types/src/index.ts`
+- `packages/node-engine/src/graph-validation.ts`
+- `packages/node-engine/src/graph-history.ts`
+- `packages/node-engine/src/draft-preview.ts`
+- `apps/api-server/src/editor-graph-routes.ts`
+- `tests/node-graph-core.test.mjs`
+
 ## Bevestigde grenzen
 
 - Apache blijft voorlopig de actieve hoofdwebserver.
@@ -151,11 +162,13 @@ Geen blokkerende Kevin-input open voor Fase 5.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
 
-Bevestigde Fase 6-input, alleen geregistreerd en nog niet geimplementeerd:
+Bevestigde Fase 6-input:
 
 - `game.name = Eldoria`
 - `start zone = Willowmere Workshop`
 - `history depth = 100 undo/redo acties per editor session`
+
+`history depth` is als editor graph-history contract vastgelegd. `game.name` en `start zone` blijven contentdata uit Kevin-input/GameBible/editor-data en zijn niet als runtimecode of hard-coded worldcontent toegevoegd.
 
 ## Afgeronde eerdere Codex-validatie buiten Git
 
@@ -207,7 +220,7 @@ Fase 2-serverstatus na Codex Fase 5.2:
 Nog open als latere fases daarom vragen:
 
 - definitieve release/current-deploy-afspraken verder aanscherpen voor toekomstige game runtime, realtime gateway, workers en publish-services;
-- Fase 6 zelf nog niet implementeren.
+- toekomstige fases na Fase 6 pas starten wanneer Kevin die expliciet opent.
 
 ## Fase 5.2 server/browser validatie
 
@@ -278,10 +291,25 @@ Fase 5.3 server-smoke afgerond door Claude:
 
 ## Fasebeoordeling
 
-Fase 5/Fase 5.3 is klaar voor Fase 6.
+Fase 6 Git-basis voorbereid; Codex database migration en editor/API runtime smoke gate open.
 
-Fase 6-input blijft bevestigd maar nog niet geimplementeerd:
+Afgerond in Git:
 
-- `game.name = Eldoria`
-- `start zone = Willowmere Workshop`
-- `history depth = 100 undo/redo acties per editor session`
+- graph schema/migratie voor graphs, nodes, edges, revisions, operation log en draft state;
+- typed socket en field schemas voor flow, `var.string`, `number`, `color`, `asset.reference` en `audio.reference`;
+- graph edge validation, field validation, undo/redo en draft preview;
+- editor-only graph routecontracten;
+- Node Canvas graph contract en undo/redo UI-contract;
+- tests voor typed sockets, verkeerde koppelingen, fields, history depth 100, draft preview en editor-only access.
+
+Open voor Codex buiten Git:
+
+- `pnpm install`;
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- `db/migrations/0002_node_graph_core.sql` toepassen op MySQL;
+- API/editor services herstarten;
+- `/editor/graph/draft`, `/editor/graph/operation` en `/editor/graph/preview` smoke testen met editor session;
+- bevestigen dat game session geen editor graph toegang krijgt en draft preview niets publiceert.

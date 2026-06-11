@@ -34,11 +34,40 @@ Maak nodes echt zoals een geometry-node systeem: typed sockets, meerdere poorten
 - `start zone`: `Willowmere Workshop`
 - `history depth`: 100 undo/redo acties per editor session
 
-Deze input is alleen geregistreerd voor Fase 6. Fase 5.1 implementeert deze waarden nog niet in runtimecode, editorcode, node-data of database.
+Deze input is bevestigd voor Fase 6. `history depth` is in Fase 6 als editor graph-history contract vastgelegd. `game.name` en `start zone` blijven contentdata uit Kevin-input/GameBible/editor-data en zijn niet als runtimecode of hard-coded worldcontent toegevoegd.
+
+## Git-uitwerking Fase 6
+
+Aangemaakt of bijgewerkt:
+
+- graph database schema voor graphs, nodes, edges, revisions, operation log en editor draft state;
+- typed socket schemas voor flow en value sockets;
+- value socket types: `var.string`, `number`, `color`, `asset.reference`, `audio.reference`;
+- field schemas voor dropdown, text, number, color, asset picker en audio picker;
+- generieke graph node types zonder concrete gamecontent;
+- edge validation voor richting, socket type matching, value compatibility en max-connection gates;
+- graph operations voor add/remove/move/update/connect/disconnect/select;
+- undo/redo met `history depth = 100`;
+- operation log;
+- draft preview met `publishesRuntimeOutput = false`;
+- editor-only API routecontracten voor graph draft, operation en preview;
+- Node Canvas contract gekoppeld aan graph state;
+- tests voor graph core, validation, history, draft preview en auth boundary.
+
+Fase 6 is in Git voorbereid. Server-side migratie en runtime-smoke moeten nog door Codex worden uitgevoerd voordat de fase server-gevalideerd is.
 
 ## Actie voor Codex
 
-Draai graph migraties en start API/editor.
+- Draai `pnpm install`.
+- Draai `pnpm build`.
+- Draai `pnpm typecheck`.
+- Draai `pnpm test`.
+- Draai `pnpm lint`.
+- Pas `db/migrations/0002_node_graph_core.sql` toe op MySQL.
+- Herstart API/editor.
+- Smoke test `/editor/graph/draft`, `/editor/graph/operation` en `/editor/graph/preview` met editor session.
+- Bevestig dat game session geen editor graph toegang krijgt.
+- Bevestig dat draft preview niets publiceert.
 
 ## Prompt voor GK Code Copiloot
 
@@ -75,12 +104,15 @@ Verplichte controle:
 
 ## Acceptatiechecklist
 
-- [ ] Nodes/edges opgeslagen.
-- [ ] Typed sockets.
-- [ ] Dropdowns en inputvelden.
-- [ ] Meerdere poorten.
-- [ ] Ctrl+Z/redo.
-- [ ] Draft preview publiceert niets.
+- [x] Nodes/edges schema in migratie.
+- [x] Typed sockets.
+- [x] Dropdowns en inputvelden.
+- [x] Meerdere poorten.
+- [x] Ctrl+Z/redo contract en history engine.
+- [x] Draft preview publiceert niets.
+- [ ] Codex heeft migratie server-side toegepast.
+- [ ] Codex heeft `pnpm install/build/typecheck/test/lint` server-side gedraaid.
+- [ ] Codex heeft editor/API graph smoke server-side afgerond.
 
 ## Testplan
 

@@ -1,7 +1,9 @@
 import type {
+  EditorGraphInteractionContract,
   EditorDockLayoutDescriptor,
   EditorWorkspaceTabDescriptor
 } from "@gk/shared-ui";
+import { EDITOR_GRAPH_INTERACTION_CONTRACT } from "@gk/shared-ui";
 
 import { editorAuthClientContract } from "./auth-client.js";
 import { createEmptyNodeCanvasState, type NodeCanvasState } from "./node-canvas.js";
@@ -22,6 +24,7 @@ export interface EditorShellModel {
   readonly panels: typeof EDITOR_PANEL_DEFINITIONS;
   readonly nodeCanvas: NodeCanvasState;
   readonly worldPreview: EmptyWorldPreviewState;
+  readonly graphInteraction: EditorGraphInteractionContract;
   readonly acceptsConcreteGameContent: false;
 }
 
@@ -67,6 +70,7 @@ export function createEditorShellModel(): EditorShellModel {
     panels: EDITOR_PANEL_DEFINITIONS,
     nodeCanvas: createEmptyNodeCanvasState(),
     worldPreview: createEmptyWorldPreviewState(),
+    graphInteraction: EDITOR_GRAPH_INTERACTION_CONTRACT,
     acceptsConcreteGameContent: false
   };
 }

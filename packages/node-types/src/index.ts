@@ -1,4 +1,8 @@
-import type { Validator } from "@gk/schemas";
+import type {
+  NodeFieldDefinition,
+  NodeSocketDefinition,
+  Validator
+} from "@gk/schemas";
 
 export type NodeCapabilityScope =
   | "engine-capability"
@@ -13,9 +17,152 @@ export interface NodeTypeDefinition<TConfig extends Record<string, unknown> = Re
   readonly validate: Validator<TConfig>;
 }
 
+export interface GraphNodeTypeDefinition<TConfig extends Record<string, unknown> = Record<string, unknown>>
+  extends NodeTypeDefinition<TConfig> {
+  readonly title: string;
+  readonly sockets: readonly NodeSocketDefinition[];
+  readonly fields: readonly NodeFieldDefinition[];
+  readonly createsConcreteGameContent: false;
+}
+
 export interface NodeTypeRegistrySnapshot {
   readonly nodeTypes: readonly string[];
 }
 
 export const RESERVED_NODE_TYPE_PREFIX = "gk.";
 
+const permissiveValidator: Validator<Record<string, unknown>> = {
+  validate: () => []
+};
+
+export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
+  {
+    type: "gk.flow.entry",
+    title: "Flow Entry",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "flow", label: "Flow", direction: "output", kind: "flow" }
+    ],
+    fields: [],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.flow.sequence",
+    title: "Flow Sequence",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "in", label: "In", direction: "input", kind: "flow", maxConnections: 1 },
+      { id: "first", label: "First", direction: "output", kind: "flow" },
+      { id: "second", label: "Second", direction: "output", kind: "flow" }
+    ],
+    fields: [],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.value.string",
+    title: "String Value",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "value", label: "Value", direction: "output", kind: "value", valueType: "var.string" }
+    ],
+    fields: [
+      { id: "value", label: "Value", kind: "text", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.value.number",
+    title: "Number Value",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "value", label: "Value", direction: "output", kind: "value", valueType: "number" }
+    ],
+    fields: [
+      { id: "value", label: "Value", kind: "number", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.value.color",
+    title: "Color Value",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "value", label: "Value", direction: "output", kind: "value", valueType: "color" }
+    ],
+    fields: [
+      { id: "value", label: "Value", kind: "color", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.asset.reference",
+    title: "Asset Reference",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "asset", label: "Asset", direction: "output", kind: "value", valueType: "asset.reference" }
+    ],
+    fields: [
+      { id: "asset", label: "Asset", kind: "asset-picker", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.audio.reference",
+    title: "Audio Reference",
+    version: 1,
+    scope: "engine-capability",
+    sockets: [
+      { id: "audio", label: "Audio", direction: "output", kind: "value", valueType: "audio.reference" }
+    ],
+    fields: [
+      { id: "audio", label: "Audio", kind: "audio-picker", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  },
+  {
+    type: "gk.editor.collect",
+    title: "Editor Collector",
+    version: 1,
+    scope: "editor-data",
+    sockets: [
+      { id: "flowIn", label: "Flow In", direction: "input", kind: "flow", maxConnections: 1 },
+      { id: "label", label: "Label", direction: "input", kind: "value", valueType: "var.string", maxConnections: 1 },
+      { id: "amount", label: "Amount", direction: "input", kind: "value", valueType: "number", maxConnections: 1 },
+      { id: "tint", label: "Tint", direction: "input", kind: "value", valueType: "color", maxConnections: 1 },
+      { id: "asset", label: "Asset", direction: "input", kind: "value", valueType: "asset.reference", maxConnections: 1 },
+      { id: "flowOut", label: "Flow Out", direction: "output", kind: "flow" }
+    ],
+    fields: [
+      {
+        id: "mode",
+        label: "Mode",
+        kind: "dropdown",
+        required: true,
+        options: [
+          { value: "draft", label: "Draft" },
+          { value: "preview", label: "Preview" }
+        ]
+      },
+      { id: "note", label: "Note", kind: "text", required: false }
+    ],
+    validate: permissiveValidator,
+    createsConcreteGameContent: false
+  }
+] as const;
+
+export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
+  return CORE_GRAPH_NODE_TYPES;
+}

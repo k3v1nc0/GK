@@ -31,8 +31,13 @@ Fase 4 definieert route-contracten voor:
 - `password_reset.confirm`
 - `editor.game_users.list`
 - `editor.game_users.status_update`
+- `editor.graph.draft`
+- `editor.graph.operation`
+- `editor.graph.preview`
 
 Editor game-user beheer vereist een editor session met `editor_admin`.
+
+Editor graph draft, operation en preview vereisen een editor session. Ze vereisen geen game session en accepteren geen game session als editorbewijs. State-changing graph operations en draft-preview POSTs blijven CSRF/Origin beschermd via de editor session flow.
 
 ## Registration and verification
 
@@ -120,3 +125,5 @@ Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
 GK gebruikt structureel Node 22 onder `/opt/gk/node-v22`. `/usr/bin/node` is serverbreed bewust op `v18.19.1` blijven staan en is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
 
 Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save werken met de echte serverdatabase. Publieke save, legacy PHP write en save na logout blijven dicht.
+
+Fase 6 voegt editor-only graph routes toe. Codex moet server-side nog bevestigen dat een game session geen toegang krijgt tot `/editor/graph/draft`, `/editor/graph/operation` of `/editor/graph/preview`.

@@ -20,6 +20,12 @@ importers:
       '@gk/net-protocol':
         specifier: workspace:*
         version: link:../../packages/net-protocol
+      '@gk/node-engine':
+        specifier: workspace:*
+        version: link:../../packages/node-engine
+      '@gk/node-types':
+        specifier: workspace:*
+        version: link:../../packages/node-types
       '@gk/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas

@@ -1,3 +1,9 @@
+import {
+  EDITOR_GRAPH_HISTORY_DEPTH,
+  NODE_VALUE_SOCKET_TYPES,
+  type EditorGraphDocument
+} from "@gk/schemas";
+
 export type NodeCanvasTool = "select" | "pan" | "connect";
 
 export interface NodeCanvasGrid {
@@ -24,8 +30,11 @@ export interface NodeCanvasState {
   readonly grid: NodeCanvasGrid;
   readonly viewport: NodeCanvasViewportState;
   readonly activeTool: NodeCanvasTool;
-  readonly nodes: readonly never[];
+  readonly graph: EditorGraphDocument;
   readonly selectedNodeId: null;
+  readonly supportedValueSocketTypes: typeof NODE_VALUE_SOCKET_TYPES;
+  readonly historyDepth: typeof EDITOR_GRAPH_HISTORY_DEPTH;
+  readonly draftPreviewPublishesRuntimeOutput: false;
   readonly acceptsConcreteGameContent: false;
   readonly capabilityDefinitions: readonly NodeCapabilityDefinition[];
 }
@@ -71,8 +80,16 @@ export function createEmptyNodeCanvasState(): NodeCanvasState {
       zoom: 1
     },
     activeTool: "select",
-    nodes: [],
+    graph: {
+      id: "editor-draft",
+      nodes: [],
+      edges: [],
+      revision: 0
+    },
     selectedNodeId: null,
+    supportedValueSocketTypes: NODE_VALUE_SOCKET_TYPES,
+    historyDepth: EDITOR_GRAPH_HISTORY_DEPTH,
+    draftPreviewPublishesRuntimeOutput: false,
     acceptsConcreteGameContent: false,
     capabilityDefinitions: NODE_CANVAS_CAPABILITIES
   };

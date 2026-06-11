@@ -16,9 +16,22 @@ Tabs volgen het WAI-ARIA tab/panel model als contract voor latere UI-rendering. 
 
 ## Node Canvas
 
-Het node canvas start leeg en bevat alleen generieke capability-definities voor schema, asset reference, validation en publish gates.
+Het node canvas start leeg en bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates en typed node graph editing.
 
 Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes of assetrollen bevatten. Zulke waarden horen later uit database, editor/node-data, registers, Game Bible of publish-data te komen.
+
+Fase 6 voegt de graph-core toe:
+
+- graph state met nodes en edges;
+- typed flow sockets en typed value sockets;
+- value socket types `var.string`, `number`, `color`, `asset.reference` en `audio.reference`;
+- dropdown, text, number, color, asset-picker en audio-picker field schemas;
+- edge validation voor richting, flow/value matching, value compatibility en max-connections;
+- undo/redo met `historyDepth = 100`;
+- operation log;
+- draft preview die valideert maar niets publiceert.
+
+Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
 
 ## Viewport / World Preview
 
@@ -94,7 +107,10 @@ API runtime:
 - `GET /auth/editor/me`;
 - `GET /editor/game-users`;
 - `PATCH /editor/game-users/:gameUserId/status`;
-- `POST /editor/game-bible-node/save`.
+- `POST /editor/game-bible-node/save`;
+- `GET /editor/graph/draft`;
+- `POST /editor/graph/operation`;
+- `POST /editor/graph/preview`.
 
 Editor runtime:
 
@@ -105,6 +121,16 @@ Editor runtime:
 - `GET /shell.json`.
 
 Deze routes voegen geen concrete gamecontent toe. Smoke-auth headers mogen alleen worden gebruikt wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet voor gecontroleerde Codex-tests, en de Apache-template stript die headers voor publieke requests.
+
+## Fase 6 graph routes
+
+Graph routes zijn editor-only:
+
+- `GET /editor/graph/draft` levert draft graph state.
+- `POST /editor/graph/operation` accepteert editor graph operations en blijft CSRF/Origin beschermd.
+- `POST /editor/graph/preview` valideert draft graph data en retourneert `publishesRuntimeOutput: false`.
+
+Game sessions zijn niet geldig voor deze routes. Draft preview mag geen publish uitvoeren en mag de Runtime Game niet wijzigen.
 
 ## Fase 5.3 server-smoke
 

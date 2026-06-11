@@ -9,6 +9,7 @@ export * from "./auth-policy.js";
 export * from "./auth-routes.js";
 export * from "./editor-game-user-management.js";
 export * from "./editor-auth-store.js";
+export * from "./editor-graph-routes.js";
 export * from "./gamebible-node-routes.js";
 export * from "./gamebible-node-save-client.js";
 export * from "./gamebible-node-store.js";

@@ -54,8 +54,10 @@ describe("Fase 5 editor shell layout", () => {
     const canvas = createEmptyNodeCanvasState();
 
     assert.equal(canvas.id, "node-canvas");
-    assert.deepEqual(canvas.nodes, []);
+    assert.deepEqual(canvas.graph.nodes, []);
+    assert.deepEqual(canvas.graph.edges, []);
     assert.equal(canvas.grid.enabled, true);
+    assert.equal(canvas.historyDepth, 100);
     assert.equal(canvas.capabilityDefinitions.every((definition) => definition.createsConcreteGameContent === false), true);
   });
 

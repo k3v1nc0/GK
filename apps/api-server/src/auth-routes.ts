@@ -198,6 +198,41 @@ export const AUTH_ROUTES = [
     requiresRateLimit: true,
     avoidsAccountEnumeration: true,
     auditAction: "game_bible_node.save"
+  },
+  {
+    id: "editor.graph.draft",
+    method: "GET",
+    path: "/editor/graph/draft",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.graph.operation",
+    method: "POST",
+    path: "/editor/graph/operation",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.graph.operation"
+  },
+  {
+    id: "editor.graph.preview",
+    method: "POST",
+    path: "/editor/graph/preview",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.graph.preview"
   }
 ] as const satisfies readonly AuthRouteDefinition[];
 

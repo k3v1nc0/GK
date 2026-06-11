@@ -27,7 +27,9 @@ export interface AssetReference {
 export const SCHEMA_PACKAGE_SCOPE = [
   "published-node-envelope",
   "asset-reference",
-  "validation-issue"
+  "validation-issue",
+  "node-graph"
 ] as const;
 
 export * from "./auth.js";
+export * from "./node-graph.js";

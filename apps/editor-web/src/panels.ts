@@ -65,7 +65,7 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     id: "history",
     title: "History",
     region: "bottom",
-    capability: "editor-event-log",
+    capability: "graph-operation-log-undo-redo",
     requiresEditorSession: true,
     requiresEditorAdmin: false,
     acceptsConcreteGameContent: false

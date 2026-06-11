@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { authorizeEditorGameUserManagement } from "./editor-game-user-management.js";
+import {
+  handleEditorGraphHttpRequest
+} from "./editor-graph-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
 import type { EditorAuthStore } from "./editor-auth-store.js";
 import { saveGameBibleNodeFromRequest } from "./gamebible-node-routes.js";
@@ -126,6 +129,10 @@ export async function handleApiRequest(
       const status = code === "missing_editor_admin" ? 403 : code === "csrf_required" || code === "origin_not_allowed" ? 403 : 400;
       sendJson(response, status, { ok: false, error: code });
     }
+    return;
+  }
+
+  if (await handleEditorGraphHttpRequest(request, response, session)) {
     return;
   }
 
