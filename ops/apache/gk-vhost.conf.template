@@ -34,9 +34,45 @@
     </Location>
 
     # Editor reverse proxy. Service port remains a render-time choice.
+    ProxyPass "/auth/" "http://127.0.0.1:__API_PORT__/auth/"
+    ProxyPassReverse "/auth/" "http://127.0.0.1:__API_PORT__/auth/"
+    ProxyPass "/editor/game-users" "http://127.0.0.1:__API_PORT__/editor/game-users"
+    ProxyPassReverse "/editor/game-users" "http://127.0.0.1:__API_PORT__/editor/game-users"
+    ProxyPass "/editor/game-bible-node/save" "http://127.0.0.1:__API_PORT__/editor/game-bible-node/save"
+    ProxyPassReverse "/editor/game-bible-node/save" "http://127.0.0.1:__API_PORT__/editor/game-bible-node/save"
+
     RedirectMatch 301 "^/editor$" "/editor/"
     ProxyPass "/editor/" "http://127.0.0.1:__EDITOR_PORT__/"
     ProxyPassReverse "/editor/" "http://127.0.0.1:__EDITOR_PORT__/"
+
+    # Keep GameBibleNode access narrow. Do not expose the full README directory.
+    Alias "/README/GameBibleNode.html" "/var/www/gk/README/GameBibleNode.html"
+    Alias "/README/GameBibleNode.json" "/var/www/gk/README/GameBibleNode.json"
+    Alias "/README/GameBibleNode.php" "/var/www/gk/README/GameBibleNode.php"
+    <LocationMatch "^/README/(?!GameBibleNode\.(?:html|json|php)$)">
+        Require all denied
+    </LocationMatch>
+    <Location "/README/GameBibleNode.html">
+        Require all granted
+    </Location>
+    <Location "/README/GameBibleNode.json">
+        Require all granted
+        Header always set X-Content-Type-Options "nosniff"
+    </Location>
+    <Location "/README/GameBibleNode.php">
+        <LimitExcept POST>
+            Require all granted
+        </LimitExcept>
+        <Limit POST>
+            # Temporary legacy-save protection until editor-auth API save is fully wired.
+            # Codex must configure an outside-Git auth provider here, such as Basic Auth
+            # with AuthUserFile under /etc/gk, or an IP allowlist for a private admin network.
+            AuthType Basic
+            AuthName "GK GameBible Save"
+            AuthUserFile /etc/gk/gamebible-save.htpasswd
+            Require valid-user
+        </Limit>
+    </Location>
 
     # Optional realtime route. Keep disabled or render intentionally when runtime exists.
     # ProxyPass "__REALTIME_PUBLIC_PATH__/" "ws://127.0.0.1:__REALTIME_PORT__/"

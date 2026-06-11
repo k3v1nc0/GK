@@ -137,6 +137,23 @@ Apache mag niet rechtstreeks serveren:
 
 Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. De template `ops/apache/gk-vhost.conf.template` bereidt de bevestigde host en `/editor` route voor, maar moet server-side door Codex worden gerenderd, veilig getest en pas daarna geactiveerd.
 
+Fase 5.1 voegt toe:
+
+- `/auth/` proxyt naar de API runtime;
+- `/editor/game-users` proxyt naar de API runtime;
+- `/editor/game-bible-node/save` proxyt naar de API runtime;
+- `/editor/` proxyt naar de editor-web runtime;
+- exact `/README/GameBibleNode.html`, `/README/GameBibleNode.json` en `/README/GameBibleNode.php` mogen bereikbaar blijven;
+- andere `README`-paden blijven dicht.
+
+GameBibleNode save-policy:
+
+- publieke GET op HTML/JSON blijft toegestaan;
+- schrijven naar `GameBibleNode.json` mag niet publiek of onbeschermd;
+- voorkeursroute is `POST /editor/game-bible-node/save` met editor-auth en `editor_admin`;
+- legacy `GameBibleNode.php` mag alleen tijdelijk schrijven met buiten-Git serverbescherming, zoals Basic Auth, IP allowlist of een buiten-Git token;
+- Codex moet bevestigen dat POST zonder server-side auth faalt.
+
 Codex-resultaat:
 
 - Nginx is geinstalleerd als candidate-tooling.
@@ -180,7 +197,7 @@ Codex moet buiten Git:
 - migraties draaien wanneer repo-tooling bestaat;
 - Redis lokaal of volgens Fase 2-serverkeuze installeren of bevestigen;
 - `DATABASE_URL` en `REDIS_URL` in de buiten-Git env file zetten;
-- runtime/build checks uitvoeren zodra services en tooling bestaan.
+- runtime/build checks uitvoeren zodra services en tooling bestaat.
 
 Codex-resultaat:
 

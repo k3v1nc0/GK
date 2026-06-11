@@ -183,6 +183,19 @@ export const AUTH_ROUTES = [
     requiresRateLimit: true,
     avoidsAccountEnumeration: true,
     auditAction: "user.status.change"
+  },
+  {
+    id: "editor.game_bible_node.save",
+    method: "POST",
+    path: "/editor/game-bible-node/save",
+    public: false,
+    requiredScope: "editor",
+    requiredEditorRole: "editor_admin",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "game_bible_node.save"
   }
 ] as const satisfies readonly AuthRouteDefinition[];
 

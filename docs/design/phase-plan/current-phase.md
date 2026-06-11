@@ -2,17 +2,17 @@
 
 ## Fase
 
-Actieve fase: Fase 5 - Editor-shell, node-canvas, panels en game-user beheer.
+Actieve fase: Fase 5.1 - editor/API runtime smoke blockers en GameBibleNode veilige toegang.
 
 ## Status
 
-Fase-status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.
+Fase-status: Fase 5 runtime blockers patched; Codex editor/API and GameBibleNode save smoke gate open.
 
-Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. `pnpm` build/typecheck en server/browser runtime-smoke zijn nog Codex-taken buiten Git.
+Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. Fase 5.1 patcht de bekende runtime-smoke blockers: lint directory traversal, startbare API/editor HTTP entrypoints, Apache `/editor`/API proxyplan en veilige GameBibleNode save-contracten. Server/browser smoke blijft nog Codex-taak buiten Git.
 
 ## Doel
 
-Fase 5 maakt de eerste generieke editorwerkplek met aparte editor login/session entry, node-raster, node menu, inspector, dockable panels, lege world preview en game-user beheer.
+Fase 5 maakt de eerste generieke editorwerkplek met aparte editor login/session entry, node-raster, node menu, inspector, dockable panels, lege world preview en game-user beheer. Fase 5.1 maakt deze Git-basis startbaar genoeg voor runtime smoke zonder naar Fase 6 te gaan.
 
 De fase legt generieke editor-capabilities vast voor:
 
@@ -33,6 +33,7 @@ Geopend of gecontroleerd voor deze fase:
 - `README/current-phase.md`
 - `docs/design/phase-plan/current-phase.md`
 - `README/fase5.md`
+- `README/fase6.md`
 - `README/fase4.md`
 - `README/fase3.md`
 - `README/fase2.md`
@@ -40,6 +41,8 @@ Geopend of gecontroleerd voor deze fase:
 - `docs/design/game-bible.md`
 - `docs/architecture/workspace-boundaries.md`
 - `docs/architecture/auth-boundaries.md`
+- `docs/architecture/editor-shell.md`
+- `docs/architecture/gamebible-node-access.md`
 - `docs/ops/server-layout.md`
 - `README/GameBibleNode.json`
 - `package.json`
@@ -50,6 +53,9 @@ Geopend of gecontroleerd voor deze fase:
 - `packages/schemas`
 - `packages/shared-ui`
 - `packages/shared-utils`
+- `README/GameBibleNode.html`
+- `README/GameBibleNode.json`
+- `README/GameBibleNode.php`
 
 ## Fase 1- en Fase 2-contracten die blijven gelden
 
@@ -133,6 +139,26 @@ Regels:
 - geen hard-coded camera, lighting, minimap, audio, HUD, NPC, quest, price, item, boss of route;
 - `Game Users` vereist editor scope met `editor_admin`.
 
+## Fase 5.1 runtime blockers
+
+Codex smoke meldde:
+
+- `pnpm lint` crashte met `EISDIR` doordat generated directories/symlinks als bestanden werden gelezen;
+- `apps/api-server/dist/index.js` en `apps/editor-web/dist/index.js` startten niet als langlopende HTTP-processen;
+- er waren geen actieve `gk-*.service` units;
+- `/var/www/gk/current` was leeg;
+- Apache `/editor`, `/editor/` en `/auth/editor/me` gaven `404`;
+- echte browser-login smoke was daardoor niet uitvoerbaar;
+- contract-smoke voor editor_admin/game-user boundaries, lege Node Canvas en lege World Preview was groen.
+
+Fase 5.1 Git-fix:
+
+- lintscript slaat generated dirs en symlinks over;
+- API server heeft minimale HTTP routes voor editor health, editor me, Game Users en GameBibleNode save;
+- editor-web heeft minimale HTTP routes voor editor health, shell HTML en shell JSON;
+- Apache-template proxyt `/auth/`, `/editor/game-users`, `/editor/game-bible-node/save` en `/editor/` naar de juiste runtimes;
+- GameBibleNode access is vastgelegd met publieke readroutes en beschermde save.
+
 ## Wat is aangemaakt of bijgewerkt
 
 Root:
@@ -190,6 +216,20 @@ Fase 5 aanvullingen:
 - `apps/api-server/src/editor-game-user-management.ts`
 - `tests/editor-shell.test.mjs`
 
+Fase 5.1 aanvullingen:
+
+- `scripts/check-workspace-boundaries.mjs`
+- `apps/api-server/src/http-server.ts`
+- `apps/api-server/src/http-utils.ts`
+- `apps/api-server/src/runtime-session.ts`
+- `apps/api-server/src/gamebible-node-routes.ts`
+- `apps/api-server/src/gamebible-node-store.ts`
+- `apps/editor-web/src/http-server.ts`
+- `README/GameBibleNode.php`
+- `README/fase6.md`
+- `docs/architecture/gamebible-node-access.md`
+- `tests/phase5-runtime.test.mjs`
+
 ## Database/migraties
 
 Fase 4 voegt schema-only migraties toe voor:
@@ -230,6 +270,8 @@ Scope-regels:
 
 Fase 5 voegt een API-helper toe voor editor game-user beheer. Deze helper gebruikt de Fase 4 routecontracten en geeft alleen toegang wanneer de sessie editor scope en `editor_admin` heeft.
 
+Fase 5.1 voegt het routecontract `editor.game_bible_node.save` toe. Deze route vereist editor scope met `editor_admin`, rate limiting, CSRF/Origin-check en auditactie `game_bible_node.save`.
+
 ## Editor shell, canvas, viewport en panels
 
 Editor shell:
@@ -260,6 +302,20 @@ Panels:
 - `HUD Editor` en `Minimap Panel` leggen geen definitieve waarden of layout vast;
 - `Game Users` vereist editor scope met `editor_admin`.
 
+HTTP runtime:
+
+- API: `GET /health/editor`, `GET /auth/editor/me`, `GET /editor/game-users`, `PATCH /editor/game-users/:gameUserId/status`, `POST /editor/game-bible-node/save`;
+- editor-web: `GET /health/editor`, `GET /`, `GET /editor`, `GET /editor/`, `GET /shell.json`;
+- smoke-auth headers zijn alleen toegestaan wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet.
+
+GameBibleNode:
+
+- exact `README/GameBibleNode.html`, `README/GameBibleNode.json` en `README/GameBibleNode.php` blijven beschikbaar;
+- andere README-bestanden blijven dicht;
+- API-save is de voorkeursroute;
+- legacy PHP-save mag alleen tijdelijk met buiten-Git serverbescherming en faalt zonder auth/token;
+- save schrijft atomisch met lock, backup en auditregel.
+
 ## Content- en assetgrens
 
 Niet toegevoegd:
@@ -271,7 +327,13 @@ Niet toegevoegd:
 - concrete gamecontent;
 - runtime-hardcoded NPCs, quests, prijzen, camera, lighting, minimap, boss, item, route, HUD of audio-keuzes.
 
-De startcode bevat alleen generieke boundaries, registries, primitives, env-readers en auth/database capabilities.
+De startcode bevat alleen generieke boundaries, registries, protocoltypes, validators, renderer/audio primitives, env-readers en auth/database capabilities.
+
+Bevestigde Fase 6-input, nog niet geimplementeerd:
+
+- `game.name = Eldoria`
+- `start zone = Willowmere Workshop`
+- `history depth = 100 undo/redo acties per editor session`
 
 ## Checks
 
@@ -282,7 +344,7 @@ Eerder Git-side uitgevoerd:
 - Root workspace-structuur gecontroleerd.
 - Starter file size scan: sourcebestanden blijven klein.
 - ASCII-scan op nieuwe workspacebestanden: OK.
-- Secret/content scan op `apps/`, `packages/`, `db/`, `docs/architecture/`, `tests/`, `scripts/` en workspace-configs: geen echte secrets/assets/data/concrete runtimecontent gevonden.
+- Secret/content scan op `apps/`, `packages/`, `db/`, `docs/architecture/`, `tests/`, `scripts` en workspace-configs: geen echte secrets/assets/data/concrete runtimecontent gevonden.
 - `node --experimental-strip-types --test tests/*.test.mjs`: OK.
 - `node scripts/check-workspace-boundaries.mjs`: OK.
 - `node --experimental-strip-types --check` op alle `apps/**/*.ts` en `packages/**/*.ts`: OK.
@@ -320,6 +382,21 @@ Fase 5 Git-side uitgevoerd:
 - Asset/dummy-content scan op Fase 5 bestanden: OK.
 - Diff-scope controle: alleen Fase 5 editor/API/shared-ui/test/docs/current-phase bestanden.
 
+Fase 5.1 Git-side uitgevoerd:
+
+- lint EISDIR-fix voorbereid voor generated dirs/symlinks;
+- API/editor HTTP runtime entrypoints toegevoegd;
+- GameBibleNode save contract toegevoegd;
+- Apache-template bijgewerkt voor `/editor`, `/auth/`, Game Users en GameBibleNode;
+- GameBibleNode access doc toegevoegd.
+- `npm test`: OK met source-tests; 4 gebouwde-runtime subtests blijven skipped totdat `dist` door build bestaat.
+- `npm run lint`: OK.
+- `node --experimental-strip-types --check` op gewijzigde TS/MJS-bestanden: OK.
+- Source runtime smoke met tijdelijke resolutiebruggen: OK voor API health, editor session, Game Users gate en lege editor viewport.
+- Source GameBibleNode save smoke met tijdelijke resolutiebruggen: OK voor editor_admin policy, game-session blokkade, backup, lock en atomische write.
+- Secret/content scan: OK; alleen bestaande assetnamen in het lintscript zelf als verboden scanpatronen.
+- Generated output scan: OK, geen `dist`, `node_modules`, `build` of `coverage` in de werkset.
+
 Niet lokaal uitvoerbaar in deze omgeving:
 
 - `pnpm install`: `pnpm` ontbreekt lokaal en Corepack kan `pnpm-10.12.4.tgz` niet downloaden door registry/proxyblokkade.
@@ -328,12 +405,20 @@ Niet lokaal uitvoerbaar in deze omgeving:
 - `pnpm test`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm test` is wel geslaagd.
 - `pnpm lint`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm run lint` is wel geslaagd.
 - `npm run build` en `npm run typecheck`: niet uitvoerbaar omdat `tsc` lokaal ontbreekt.
+- `npx -p node@22`: niet uitvoerbaar door registry/proxyblokkade.
+- `php -l README/GameBibleNode.php`: niet uitvoerbaar omdat PHP lokaal ontbreekt.
 
 ## Open Kevin-input
 
 Geen blokkerende Fase 5-input open.
 
 Latere fases houden hun eigen gates voor GLB-role mapping, UI-assets, audio-assets, concrete content, economy, world settings en runtime services.
+
+Fase 6-input is bevestigd maar hoort nog niet in implementatie tijdens Fase 5.1:
+
+- game name: `Eldoria`
+- start zone: `Willowmere Workshop`
+- history depth: `100` undo/redo acties per editor session
 
 ## Open Codex-taken buiten Git
 
@@ -353,10 +438,15 @@ Fase 4 database/auth-taken zijn afgerond. Open blijven:
 12. Game-user beheer smoke test uitvoeren.
 13. Viewport/Node Canvas laden controleren.
 14. Bestaande sites niet breken.
+15. `/auth/editor/me` via Apache controleren.
+16. `/editor/game-users` via Apache/API controleren.
+17. `/editor/game-bible-node/save` via Apache/API controleren.
+18. GameBibleNode publieke leesroutes controleren.
+19. GameBibleNode save controleren met auth, JSON-validatie, backup, lock, audit en atomische rename.
 
 ## Fasebeoordeling
 
-Fase 5 Git-basis is voorbereid met lokale fallbackchecks.
+Fase 5.1 patcht de bekende runtime blockers in Git.
 
 Afgerond voor deze fase:
 
@@ -365,10 +455,10 @@ Afgerond voor deze fase:
 - Viewport / World Preview blijft leeg zonder dummy content;
 - Fase 5 panels bestaan als generieke capabilities;
 - game-user beheer vereist editor scope met `editor_admin`;
-- lokale Fase 5 tests, lint en TS syntaxchecks slagen;
+- lokale Fase 5/Fase 5.1 tests, lint, TS syntaxchecks en source-smoke zijn geslaagd binnen de lokale toolingbeperkingen;
 - geen generated `dist`, `node_modules`, secrets, assets of data zijn in Git beland;
-- er is geen harde Fase 5 Git-basis blocker meer.
+- er is geen harde Fase 5.1 Git-basis blocker meer wanneer de checks slagen.
 
 Niet verwarren met Fase 2 servervoltooiing: runtime/service/webserverpunten blijven open tot echte runtime/build bestaat.
 
-Niet markeren als volledig browser/server-klaar totdat Codex de `pnpm` build/typecheck/test/lint gate en editor/API runtime smoke gate buiten Git sluit.
+Niet markeren als volledig browser/server-klaar totdat Codex de `pnpm` build/typecheck/test/lint gate, editor/API runtime smoke gate, Apache `/editor` gate en GameBibleNode save gate buiten Git sluit.

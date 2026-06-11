@@ -28,6 +28,14 @@ Maak nodes echt zoals een geometry-node systeem: typed sockets, meerdere poorten
 - Kies basis variabelen zoals game.name en start zone.
 - Bepaal globale editor voorkeuren voor history depth.
 
+## Bevestigde input voor Fase 6
+
+- `game.name`: `Eldoria`
+- `start zone`: `Willowmere Workshop`
+- `history depth`: 100 undo/redo acties per editor session
+
+Deze input is alleen geregistreerd voor Fase 6. Fase 5.1 implementeert deze waarden nog niet in runtimecode, editorcode, node-data of database.
+
 ## Actie voor Codex
 
 Draai graph migraties en start API/editor.

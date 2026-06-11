@@ -1,9 +1,14 @@
+import { pathToFileURL } from "node:url";
+
 import type { PublishedNodeEnvelope } from "@gk/schemas";
 import type { UiSurfaceDescriptor } from "@gk/shared-ui";
+
+import { startEditorServer } from "./http-server.js";
 
 export * from "./auth-client.js";
 export * from "./editor-shell.js";
 export * from "./game-user-management.js";
+export * from "./http-server.js";
 export * from "./node-canvas.js";
 export * from "./panels.js";
 export * from "./world-preview.js";
@@ -24,4 +29,8 @@ export function describeEditorBoot(nodes: readonly PublishedNodeEnvelope[]): Edi
     loadedNodeCount: nodes.length,
     acceptsConcreteContent: false
   };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startEditorServer();
 }

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const requiredDirs = [
@@ -32,6 +32,16 @@ const forbiddenPatterns = [
 ];
 
 const sourceRoots = ["apps", "packages"];
+const ignoredDirectoryNames = new Set([
+  ".cache",
+  ".next",
+  ".turbo",
+  ".vite",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules"
+]);
 const failures = [];
 
 for (const dir of requiredDirs) {
@@ -43,12 +53,27 @@ for (const dir of requiredDirs) {
 const walk = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
+
+    if (ignoredDirectoryNames.has(entry.name)) {
+      continue;
+    }
+
+    const linkStats = lstatSync(path);
+    if (linkStats.isSymbolicLink()) {
+      continue;
+    }
+
+    const stats = statSync(path);
+    if (stats.isDirectory()) {
       walk(path);
       continue;
     }
 
-    const size = statSync(path).size;
+    if (!stats.isFile()) {
+      continue;
+    }
+
+    const size = stats.size;
     if (size > 12_000) {
       failures.push(`Starter file is too large for Fase 3 skeleton: ${path}`);
     }
@@ -74,4 +99,3 @@ if (failures.length > 0) {
 }
 
 console.log("workspace boundaries ok");
-

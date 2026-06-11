@@ -10,8 +10,8 @@
     "@gk/shared-ui": "workspace:*"
   },
   "scripts": {
+    "start": "node ./dist/index.js",
     "build": "tsc -b",
     "typecheck": "tsc -b"
   }
 }
-

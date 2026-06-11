@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve fase: `fase5.md`
+Actieve fase: `fase5.1` binnen `fase5.md`
 
-Status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.
+Status: Fase 5 runtime blockers patched; Codex editor/API and GameBibleNode save smoke gate open.
 
 ## Primaire Fase 5-status
 
@@ -10,7 +10,9 @@ Open voor de actuele fasecontractstatus:
 
 - `docs/design/phase-plan/current-phase.md`
 - `README/fase5.md`
+- `README/fase6.md` voor bevestigde input, nog niet implementeren
 - `docs/architecture/editor-shell.md`
+- `docs/architecture/gamebible-node-access.md`
 - `docs/architecture/auth-boundaries.md`
 - `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
@@ -84,6 +86,21 @@ Aangemaakt of bijgewerkt voor Fase 5:
 - `tests/editor-shell.test.mjs`
 - `docs/architecture/editor-shell.md`
 
+Aangemaakt of bijgewerkt voor Fase 5.1:
+
+- `scripts/check-workspace-boundaries.mjs`
+- `apps/api-server/src/http-server.ts`
+- `apps/api-server/src/http-utils.ts`
+- `apps/api-server/src/runtime-session.ts`
+- `apps/api-server/src/gamebible-node-routes.ts`
+- `apps/api-server/src/gamebible-node-store.ts`
+- `apps/editor-web/src/http-server.ts`
+- `README/GameBibleNode.php`
+- `docs/architecture/gamebible-node-access.md`
+- `ops/apache/gk-vhost.conf.template`
+- `tests/phase5-runtime.test.mjs`
+- `README/fase6.md`
+
 ## Bevestigde grenzen
 
 - Apache blijft voorlopig de actieve hoofdwebserver.
@@ -105,12 +122,20 @@ Aangemaakt of bijgewerkt voor Fase 5:
 - Viewport / World Preview blijft leeg tot gepubliceerde world/node-data beschikbaar is.
 - Asset Panel en Audio Panel verzinnen geen assets, audio of runtime-rollen.
 - Game Users vereist editor scope met `editor_admin`.
+- Fase 5.1 voegt startbare API/editor HTTP entrypoints toe; lokale source-smoke is groen, maar gebouwde/server/browser smoke blijft open tot Codex dit buiten Git bevestigt.
+- GameBibleNode HTML/JSON blijven smal publiek leesbaar; save moet beschermd zijn.
 
 ## Open Kevin-input
 
 Geen blokkerende Fase 5-input open.
 
 Latere fases houden hun eigen gates voor assetrollen, UI/audio, concrete content, economy, world settings en runtime services.
+
+Bevestigde Fase 6-input, alleen geregistreerd en nog niet geimplementeerd:
+
+- `game.name = Eldoria`
+- `start zone = Willowmere Workshop`
+- `history depth = 100 undo/redo acties per editor session`
 
 ## Afgeronde eerdere Codex-validatie buiten Git
 
@@ -157,6 +182,7 @@ Fase 5 runtime-smoke blijft open voor Codex buiten Git:
 - `pnpm typecheck` draaien.
 - `pnpm test` draaien met Node 22-activatie.
 - `pnpm lint` draaien.
+- gebouwde runtime-tests draaien nadat `pnpm build` `dist` heeft gemaakt.
 - API/editor-web starten.
 - Browserconsole controleren.
 - Apache route `/editor` controleren.
@@ -164,9 +190,14 @@ Fase 5 runtime-smoke blijft open voor Codex buiten Git:
 - Game-user beheer smoke test uitvoeren.
 - Viewport/Node Canvas laden controleren.
 - Bestaande sites niet breken.
+- Apache `/auth/editor/me` controleren.
+- Apache `/editor/game-users` controleren.
+- Apache `/editor/game-bible-node/save` controleren.
+- GameBibleNode HTML/JSON publieke leesroutes controleren.
+- GameBibleNode PHP/API save controleren met server-side auth, backup, lock, audit en atomische write.
 
 ## Fasebeoordeling
 
-Fase 5 Git-basis is voorbereid met lokale fallbackchecks.
+Fase 5.1 patcht de bekende runtime blockers in Git, maar bewijst nog niet dat de server/browser smoke groen is.
 
-Huidige status: Fase 5 Git-basis voorbereid; Codex build/typecheck en editor/API runtime smoke gate open.
+Huidige status: Fase 5 runtime blockers patched; Codex editor/API and GameBibleNode save smoke gate open.

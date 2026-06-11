@@ -57,12 +57,33 @@ Beide vereisen editor scope met `editor_admin`.
 
 ## Server/runtime gate
 
-Fase 5 Git-basis bewijst niet dat `/editor` live draait. Codex moet buiten Git nog:
+Fase 5 Git-basis bewees nog niet dat `/editor` live draait. Fase 5.1 voegt minimale startbare HTTP entrypoints toe voor API en editor-web, maar Codex moet buiten Git nog server/browser smoke bevestigen:
 
 - API/editor-web starten;
 - browserconsole controleren;
 - Apache route `/editor` controleren;
+- Apache routes `/auth/`, `/editor/game-users` en `/editor/game-bible-node/save` controleren;
 - editor login smoke test uitvoeren;
 - game-user beheer smoke test uitvoeren;
 - Node Canvas en Viewport laden controleren;
 - bestaande sites controleren.
+
+## Fase 5.1 runtime contract
+
+API runtime:
+
+- `GET /health/editor`;
+- `GET /auth/editor/me`;
+- `GET /editor/game-users`;
+- `PATCH /editor/game-users/:gameUserId/status`;
+- `POST /editor/game-bible-node/save`.
+
+Editor runtime:
+
+- `GET /health/editor`;
+- `GET /`;
+- `GET /editor`;
+- `GET /editor/`;
+- `GET /shell.json`.
+
+Deze routes zijn smoke- en contractentrypoints. Ze voegen geen concrete gamecontent toe. Smoke-auth headers mogen alleen worden gebruikt wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet voor gecontroleerde Codex-tests.
