@@ -1,6 +1,6 @@
 [Unit]
-Description=GK realtime service
-After=network-online.target redis-server.service
+Description=GK editor-web service
+After=network-online.target gk-api.service
 Wants=network-online.target
 
 [Service]
@@ -10,7 +10,7 @@ Group=gk
 WorkingDirectory=/var/www/gk
 EnvironmentFile=/etc/gk/gk.env
 Environment=PATH=/opt/gk/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/realtime-gateway/dist/index.js
+ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/editor-web/dist/index.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

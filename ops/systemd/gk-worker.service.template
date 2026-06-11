@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=__GK_SERVICE_USER__
-Group=__GK_SERVICE_GROUP__
-WorkingDirectory=/var/www/gk/current
+User=gk
+Group=gk
+WorkingDirectory=/var/www/gk
 EnvironmentFile=/etc/gk/gk.env
-ExecStart=__WORKER_EXEC_START__
+Environment=PATH=/opt/gk/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/asset-worker/dist/index.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

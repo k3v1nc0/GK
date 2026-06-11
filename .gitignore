@@ -8,4 +8,9 @@ dist/
 coverage/
 .turbo/
 .pnpm-store/
-
+current/
+data/
+logs/
+releases/
+shared/
+tmp/

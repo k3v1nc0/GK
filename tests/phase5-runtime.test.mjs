@@ -94,7 +94,7 @@ function createRequest(headers = {}) {
 
 describe("Fase 5.1 lint boundary", () => {
   it("skips generated directories instead of reading them as source files", async () => {
-    const distPath = "apps/editor-web/dist/nested";
+    const distPath = "apps/editor-web/dist/.boundary-smoke/nested";
     const modulesPath = "apps/editor-web/node_modules/generated-package";
 
     await mkdir(distPath, { recursive: true });
@@ -111,7 +111,7 @@ describe("Fase 5.1 lint boundary", () => {
       assert.equal(run.status, 0, run.stderr || run.stdout);
       assert.match(run.stdout, /workspace boundaries ok/);
     } finally {
-      await rm("apps/editor-web/dist", { recursive: true, force: true });
+      await rm("apps/editor-web/dist/.boundary-smoke", { recursive: true, force: true });
       await rm("apps/editor-web/node_modules", { recursive: true, force: true });
     }
   });
@@ -171,7 +171,10 @@ describe("Fase 5.1 HTTP runtime", () => {
 
       const model = await fetch(`http://127.0.0.1:${port}/editor/shell.json`);
       assert.equal(model.status, 200);
-      assert.deepEqual((await model.json()).mainTabs, ["node-canvas", "viewport-world-preview"]);
+      assert.deepEqual(
+        (await model.json()).mainTabs.map((tab) => tab.id),
+        ["node-canvas", "viewport-world-preview"]
+      );
 
     } finally {
       await close(server);
@@ -180,6 +183,15 @@ describe("Fase 5.1 HTTP runtime", () => {
 });
 
 describe("Fase 5.1 GameBibleNode save protection", () => {
+  it("posts browser saves to the protected API route instead of legacy PHP", () => {
+    const source = readFileSync("README/GameBibleNode.html", "utf8");
+
+    assert.match(source, /GAMEBIBLE_SAVE_ROUTE=['"]\/editor\/game-bible-node\/save['"]/);
+    assert.match(source, /credentials:['"]same-origin['"]/);
+    assert.match(source, /X-GK-CSRF-Token/);
+    assert.doesNotMatch(source, /fetch\(['"]GameBibleNode\.php/);
+  });
+
   it("requires editor_admin, allowed origin and CSRF proof", { skip: !runtimeDistReady }, async () => {
     const { validateGameBibleNodeSavePolicy } = await loadGameBibleNodeRoutes();
 
@@ -258,6 +270,41 @@ describe("Fase 5.1 GameBibleNode save protection", () => {
     assert.equal(existsSync(result.backupPath), true);
     assert.match(await readFile(target, "utf8"), /contract-node/);
     assert.equal(existsSync(`${target}.lock`), false);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("validates JSON contract, lock state and audit writes before replacing the file", { skip: !runtimeDistReady }, async () => {
+    const { writeGameBibleNodeJsonAtomically } = await loadGameBibleNodeStore();
+    const dir = await mkdtemp(join(tmpdir(), "gk-gamebible-"));
+    const target = join(dir, "GameBibleNode.json");
+    const auditPath = join(dir, "audit.log");
+
+    await writeFile(target, `${JSON.stringify({ schema: "gamebible-node-system", nodes: [] })}\n`);
+
+    await assert.rejects(
+      () => writeGameBibleNodeJsonAtomically({ schema: "gamebible-node-system" }, target),
+      /game_bible_json_contract_invalid/
+    );
+    assert.match(await readFile(target, "utf8"), /"nodes":\[\]/);
+
+    await writeFile(`${target}.lock`, "locked");
+    await assert.rejects(
+      () => writeGameBibleNodeJsonAtomically({ schema: "gamebible-node-system", nodes: [] }, target),
+      /game_bible_save_locked/
+    );
+    await rm(`${target}.lock`, { force: true });
+
+    await withEnv({ GK_GAMEBIBLE_NODE_AUDIT_LOG: auditPath }, async () => {
+      const result = await writeGameBibleNodeJsonAtomically(
+        { schema: "gamebible-node-system", nodes: [{ id: "audited-node" }] },
+        target
+      );
+
+      assert.equal(result.auditAction, "game_bible_node.save");
+      assert.match(await readFile(auditPath, "utf8"), /game_bible_node\.save/);
+      assert.match(await readFile(target, "utf8"), /audited-node/);
+    });
 
     await rm(dir, { recursive: true, force: true });
   });
