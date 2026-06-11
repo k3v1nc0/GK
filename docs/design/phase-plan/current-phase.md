@@ -2,17 +2,17 @@
 
 ## Fase
 
-Actieve fase: Fase 5.1 - editor/API runtime smoke blockers en GameBibleNode veilige toegang.
+Actieve fase: Fase 5/Fase 5.2 afgerond; klaar voor Fase 6.
 
 ## Status
 
-Fase-status: Fase 5 runtime blockers patched; Codex editor/API and GameBibleNode save smoke gate open.
+Fase-status: Fase 5/Fase 5.2 server/browser gevalideerd. Fase 6-input is bevestigd geregistreerd, maar Fase 6 is nog niet geimplementeerd.
 
-Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. Fase 5.1 patcht de bekende runtime-smoke blockers: lint directory traversal, startbare API/editor HTTP entrypoints, Apache `/editor`/API proxyplan en veilige GameBibleNode save-contracten. Server/browser smoke blijft nog Codex-taak buiten Git.
+Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. Fase 5.1 patchte de eerste runtime-smoke blockers: lint directory traversal, startbare API/editor HTTP entrypoints, Apache `/editor`/API proxyplan en veilige GameBibleNode save-contracten. Fase 5.2 loste de echte vervolgblockers op: test-isolatie, GameBibleNode browser-save naar de beschermde API-route en permanente API/editor service-templates. Codex heeft de server/browser smoke daarna afgerond.
 
 ## Doel
 
-Fase 5 maakt de eerste generieke editorwerkplek met aparte editor login/session entry, node-raster, node menu, inspector, dockable panels, lege world preview en game-user beheer. Fase 5.1 maakt deze Git-basis startbaar genoeg voor runtime smoke zonder naar Fase 6 te gaan.
+Fase 5 maakt de eerste generieke editorwerkplek met aparte editor login/session entry, node-raster, node menu, inspector, dockable panels, lege world preview en game-user beheer. Fase 5.2 maakt deze basis startbaar en server-side gevalideerd zonder Fase 6 te implementeren.
 
 De fase legt generieke editor-capabilities vast voor:
 
@@ -72,17 +72,23 @@ Geopend of gecontroleerd voor deze fase:
 - Apache blijft voorlopig hoofdwebserver.
 - Nginx blijft alleen candidate/template voor een aparte latere migratiefase.
 
-## Fase 2-open punten die open blijven
+## Fase 2-serverstatus
 
-Deze punten blokkeren Fase 4 Git-werk niet, maar blijven Codex-taken buiten Git:
+Na Codex Fase 5.2 geldt:
 
-1. `/etc/gk/gk.env` endpointvelden vervangen door de bevestigde waarden.
-2. `ops/scripts/check-host` opnieuw draaien.
-3. Apache vhost/reverse proxy renderen uit `ops/apache/gk-vhost.conf.template`.
-4. Apache-config veilig testen en bevestigen dat bestaande sites niet breken.
-5. `/var/www/gk/current` vullen zodra runtime/build bestaat.
-6. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
-7. Fase 2 runtime build/service checks uitvoeren zodra echte runtime/build bestaat.
+- Apache blijft voorlopig hoofdwebserver.
+- Nginx blijft inactive/candidate.
+- `apache2ctl configtest`: `Syntax OK`.
+- bestaande sites bleven OK.
+- `gk-api` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
+- `gk-editor-web` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
+- API health: OK.
+- editor-web health: OK.
+- `/editor`: OK.
+- `/auth/editor/me`: `401` zonder sessie.
+- `/editor/game-users`: `403` zonder `editor_admin`.
+
+Nog open als latere fases daarom vragen: definitieve release/current-deploy-afspraken verder aanscherpen voor toekomstige game runtime, realtime gateway, workers en publish-services.
 
 ## Fase 3-validatie
 
@@ -94,7 +100,7 @@ De Fase 3 workspace-checks zijn tijdens Fase 4 server-side gevalideerd:
 4. `pnpm test`: geslaagd met Node 22 via `npx -p node@22`.
 5. `pnpm lint`: geslaagd.
 
-Aandachtspunt: systeem-Node is `v18.19.1`; toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
+Node 22 is inmiddels structureel beschikbaar voor GK onder `/opt/gk/node-v22`. `/usr/bin/node` bleef bewust serverbreed ongemoeid op `v18.19.1`; dat is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
 
 ## Fase 4-validatie
 
@@ -139,7 +145,7 @@ Regels:
 - geen hard-coded camera, lighting, minimap, audio, HUD, NPC, quest, price, item, boss of route;
 - `Game Users` vereist editor scope met `editor_admin`.
 
-## Fase 5.1 runtime blockers
+## Fase 5.1 en Fase 5.2 runtime blockers
 
 Codex smoke meldde:
 
@@ -158,6 +164,16 @@ Fase 5.1 Git-fix:
 - editor-web heeft minimale HTTP routes voor editor health, shell HTML en shell JSON;
 - Apache-template proxyt `/auth/`, `/editor/game-users`, `/editor/game-bible-node/save` en `/editor/` naar de juiste runtimes;
 - GameBibleNode access is vastgelegd met publieke readroutes en beschermde save.
+
+Fase 5.2 Git-fix:
+
+- de lint-test gebruikt een tijdelijke fixture in plaats van echte `apps/editor-web/dist` of `node_modules`, zodat build-output voor latere runtime-tests intact blijft;
+- API server levert `GET /editor/game-bible-node/save-client.js`;
+- Apache-template injecteert deze save-client in `README/GameBibleNode.html` via `substitute_module` of een gelijkwaardige server-side patch;
+- browser-save post naar `POST /editor/game-bible-node/save` met same-origin credentials en CSRF-header;
+- legacy `README/GameBibleNode.php` is gedepricieerd voor normale browser-save en blijft alleen beschermde fallback;
+- permanente service-templates voor `gk-api` en `gk-editor-web` zijn voorbereid;
+- `ops/scripts/render-runtime-services` rendert de service-units voor server-side verify/install.
 
 ## Wat is aangemaakt of bijgewerkt
 
@@ -216,18 +232,21 @@ Fase 5 aanvullingen:
 - `apps/api-server/src/editor-game-user-management.ts`
 - `tests/editor-shell.test.mjs`
 
-Fase 5.1 aanvullingen:
+Fase 5.1/Fase 5.2 aanvullingen:
 
 - `scripts/check-workspace-boundaries.mjs`
 - `apps/api-server/src/http-server.ts`
 - `apps/api-server/src/http-utils.ts`
 - `apps/api-server/src/runtime-session.ts`
 - `apps/api-server/src/gamebible-node-routes.ts`
+- `apps/api-server/src/gamebible-node-save-client.ts`
 - `apps/api-server/src/gamebible-node-store.ts`
 - `apps/editor-web/src/http-server.ts`
 - `README/GameBibleNode.php`
 - `README/fase6.md`
 - `docs/architecture/gamebible-node-access.md`
+- `ops/scripts/render-runtime-services`
+- `ops/systemd/gk-editor-web.service.template`
 - `tests/phase5-runtime.test.mjs`
 
 ## Database/migraties
@@ -304,7 +323,7 @@ Panels:
 
 HTTP runtime:
 
-- API: `GET /health/editor`, `GET /auth/editor/me`, `GET /editor/game-users`, `PATCH /editor/game-users/:gameUserId/status`, `POST /editor/game-bible-node/save`;
+- API: `GET /health/editor`, `GET /editor/game-bible-node/save-client.js`, `GET /auth/editor/me`, `GET /editor/game-users`, `PATCH /editor/game-users/:gameUserId/status`, `POST /editor/game-bible-node/save`;
 - editor-web: `GET /health/editor`, `GET /`, `GET /editor`, `GET /editor/`, `GET /shell.json`;
 - smoke-auth headers zijn alleen toegestaan wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet.
 
@@ -344,7 +363,7 @@ Eerder Git-side uitgevoerd:
 - Root workspace-structuur gecontroleerd.
 - Starter file size scan: sourcebestanden blijven klein.
 - ASCII-scan op nieuwe workspacebestanden: OK.
-- Secret/content scan op `apps/`, `packages/`, `db/`, `docs/architecture/`, `tests/`, `scripts` en workspace-configs: geen echte secrets/assets/data/concrete runtimecontent gevonden.
+- Secret/content scan op `apps/`, `packages/`, `db/`, `docs/architecture/`, `tests/`, `scripts/` en workspace-configs: geen echte secrets/assets/data/concrete runtimecontent gevonden.
 - `node --experimental-strip-types --test tests/*.test.mjs`: OK.
 - `node scripts/check-workspace-boundaries.mjs`: OK.
 - `node --experimental-strip-types --check` op alle `apps/**/*.ts` en `packages/**/*.ts`: OK.
@@ -397,16 +416,69 @@ Fase 5.1 Git-side uitgevoerd:
 - Secret/content scan: OK; alleen bestaande assetnamen in het lintscript zelf als verboden scanpatronen.
 - Generated output scan: OK, geen `dist`, `node_modules`, `build` of `coverage` in de werkset.
 
-Niet lokaal uitvoerbaar in deze omgeving:
+Fase 5.2 Git-side uitgevoerd:
 
-- `pnpm install`: `pnpm` ontbreekt lokaal en Corepack kan `pnpm-10.12.4.tgz` niet downloaden door registry/proxyblokkade.
-- `pnpm build`: niet uitvoerbaar zonder `pnpm install`.
-- `pnpm typecheck`: niet uitvoerbaar zonder `pnpm install` en `tsc`.
-- `pnpm test`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm test` is wel geslaagd.
-- `pnpm lint`: niet via `pnpm` uitvoerbaar zonder `pnpm install`; fallback `npm run lint` is wel geslaagd.
-- `npm run build` en `npm run typecheck`: niet uitvoerbaar omdat `tsc` lokaal ontbreekt.
-- `npx -p node@22`: niet uitvoerbaar door registry/proxyblokkade.
-- `php -l README/GameBibleNode.php`: niet uitvoerbaar omdat PHP lokaal ontbreekt.
+- test-isolatie aangepast zodat de lint-test geen echte build-output verwijdert;
+- GameBibleNode browser-save client toegevoegd voor de beschermde API-route;
+- Apache-template voorbereid voor save-client injectie in `GameBibleNode.html`;
+- permanente `gk-api` en `gk-editor-web` service-templates voorbereid;
+- `ops/scripts/render-runtime-services` toegevoegd voor server-side unit rendering;
+- `npm test`: OK; 30 tests, 26 passed, 4 runtime-dist tests skipped omdat lokale `dist` ontbreekt;
+- `npm run lint`: OK;
+- `node --experimental-strip-types --check` op `apps`, `packages`, `scripts` en `tests`: OK;
+- `bash -n` op ops-scripts: OK;
+- `ops/scripts/render-runtime-services` naar tijdelijke map: OK;
+- `systemd-analyze verify` op gerenderde `gk-api.service` en `gk-editor-web.service`: OK;
+- GameBibleNode save-client JavaScript syntaxcheck: OK;
+- secret/content scan: OK;
+- generated output scan: OK.
+
+Fase 5.2 server-side door Codex afgerond:
+
+- Commit op main: `c3b5543c1a6c68aa29b6c81aeb3c0f2e957674a1`.
+- Commit message: `fix: complete phase 5 runtime smoke blockers`.
+- Node 22 structureel geinstalleerd op `/opt/gk/node-v22`.
+- `/opt/gk/node-v22/bin/node -v`: `v22.22.3`.
+- `/opt/gk/node-v22/bin/corepack --version`: `0.34.6`.
+- `pnpm` via Node 22: `10.12.4`.
+- `/usr/bin/node` bleef ongemoeid op `v18.19.1`.
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK, 31/31 tests groen.
+- `pnpm lint`: OK.
+- `gk-api`: active/enabled via `/opt/gk/node-v22/bin/node`.
+- `gk-editor-web`: active/enabled via `/opt/gk/node-v22/bin/node`.
+- API health: OK.
+- editor-web health: OK.
+- Apache blijft hoofdwebserver.
+- Nginx blijft inactive.
+- `apache2ctl configtest`: `Syntax OK`.
+- bestaande sites bleven OK.
+- `/editor`: OK.
+- `/auth/editor/me`: `401` zonder sessie.
+- `/editor/game-users`: `403` zonder `editor_admin`.
+- `/README/GameBibleNode.html`: `200`.
+- `/README/GameBibleNode.json`: `200`.
+- `/README/GameBibleNode.php` is bereikbaar maar geen open write.
+- andere README-bestanden blijven `403`.
+- publieke POST naar legacy PHP faalt.
+- publieke POST naar save API faalt.
+- public smoke headers via Apache worden gestript.
+- browser-save post naar `/editor/game-bible-node/save`, niet meer naar `GameBibleNode.php`.
+- Playwright browser-smoke: geen console/page errors.
+- Editor shell: OK.
+- Node Canvas: leeg.
+- Viewport / World Preview: leeg.
+- geen dummy media/assets/world/camera/light/audio.
+- beveiligde `editor_admin` save: OK.
+- invalid JSON: `400`.
+- invalid contract JSON: `400`.
+- lock-test faalt veilig.
+- backup en audit werken.
+- `GameBibleNode.json` is na test exact hersteld.
+- Git status bleef schoon.
+- Geen Fase 5.2 runtime-smoke blocker meer.
 
 ## Open Kevin-input
 
@@ -414,7 +486,7 @@ Geen blokkerende Fase 5-input open.
 
 Latere fases houden hun eigen gates voor GLB-role mapping, UI-assets, audio-assets, concrete content, economy, world settings en runtime services.
 
-Fase 6-input is bevestigd maar hoort nog niet in implementatie tijdens Fase 5.1:
+Fase 6-input is bevestigd maar hoort nog niet in implementatie tijdens Fase 5.2:
 
 - game name: `Eldoria`
 - start zone: `Willowmere Workshop`
@@ -422,31 +494,18 @@ Fase 6-input is bevestigd maar hoort nog niet in implementatie tijdens Fase 5.1:
 
 ## Open Codex-taken buiten Git
 
-Fase 4 database/auth-taken zijn afgerond. Open blijven:
+Geen harde Fase 5.2 runtime-smoke blocker meer.
 
-1. Fase 2 servergates verder sluiten zodra echte runtime/build bestaat.
-2. Node 22 activeren voor toekomstige `pnpm test` runs of de systeem-Node structureel upgraden vanaf `v18.19.1`.
-3. `pnpm install` draaien.
-4. `pnpm build` draaien.
-5. `pnpm typecheck` draaien.
-6. `pnpm test` draaien met Node 22-activatie.
-7. `pnpm lint` draaien.
-8. API/editor-web starten.
-9. Browserconsole controleren.
-10. Apache route `/editor` controleren.
-11. Editor login smoke test uitvoeren.
-12. Game-user beheer smoke test uitvoeren.
-13. Viewport/Node Canvas laden controleren.
-14. Bestaande sites niet breken.
-15. `/auth/editor/me` via Apache controleren.
-16. `/editor/game-users` via Apache/API controleren.
-17. `/editor/game-bible-node/save` via Apache/API controleren.
-18. GameBibleNode publieke leesroutes controleren.
-19. GameBibleNode save controleren met auth, JSON-validatie, backup, lock, audit en atomische rename.
+Open blijft alleen toekomstwerk voor latere fases:
+
+1. Fase 6 nog niet implementeren totdat Kevin die fase expliciet start.
+2. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
+3. Nginx blijft candidate; geen Nginx-migratie zonder aparte migratiefase.
+4. `/usr/bin/node` blijft serverbreed `v18.19.1`; dit is bewust ongemoeid en geen GK-blocker zolang GK via `/opt/gk/node-v22` draait.
 
 ## Fasebeoordeling
 
-Fase 5.1 patcht de bekende runtime blockers in Git.
+Fase 5.2 patcht de bekende runtime smoke blockers in Git en is daarna server/browser gevalideerd door Codex.
 
 Afgerond voor deze fase:
 
@@ -455,10 +514,14 @@ Afgerond voor deze fase:
 - Viewport / World Preview blijft leeg zonder dummy content;
 - Fase 5 panels bestaan als generieke capabilities;
 - game-user beheer vereist editor scope met `editor_admin`;
-- lokale Fase 5/Fase 5.1 tests, lint, TS syntaxchecks en source-smoke zijn geslaagd binnen de lokale toolingbeperkingen;
+- lokale Fase 5/Fase 5.1/Fase 5.2 tests, lint, TS syntaxchecks en source-smoke zijn geslaagd binnen de lokale toolingbeperkingen;
+- server-side `pnpm install/build/typecheck/test/lint` zijn geslaagd met Node 22 onder `/opt/gk/node-v22`;
+- `gk-api` en `gk-editor-web` zijn active/enabled;
+- Apache `/editor`, auth/API gates, GameBibleNode readroutes en browser-save zijn gevalideerd;
+- Node Canvas en Viewport / World Preview blijven leeg zonder dummy content;
 - geen generated `dist`, `node_modules`, secrets, assets of data zijn in Git beland;
-- er is geen harde Fase 5.1 Git-basis blocker meer wanneer de checks slagen.
+- er is geen harde Fase 5.2 runtime-smoke blocker meer.
 
-Niet verwarren met Fase 2 servervoltooiing: runtime/service/webserverpunten blijven open tot echte runtime/build bestaat.
+Niet verwarren met volledige toekomstige game-runtime voltooiing: realtime gateway, workers, publish-services en latere game runtime krijgen hun eigen fasegates.
 
-Niet markeren als volledig browser/server-klaar totdat Codex de `pnpm` build/typecheck/test/lint gate, editor/API runtime smoke gate, Apache `/editor` gate en GameBibleNode save gate buiten Git sluit.
+Huidige status: Fase 5/Fase 5.2 is klaar voor Fase 6. Fase 6-input is bevestigd geregistreerd, maar Fase 6 is nog niet geimplementeerd.

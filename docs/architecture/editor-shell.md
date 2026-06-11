@@ -57,22 +57,29 @@ Beide vereisen editor scope met `editor_admin`.
 
 ## Server/runtime gate
 
-Fase 5 Git-basis bewees nog niet dat `/editor` live draait. Fase 5.1 voegt minimale startbare HTTP entrypoints toe voor API en editor-web, maar Codex moet buiten Git nog server/browser smoke bevestigen:
+Fase 5 Git-basis bewees nog niet dat `/editor` live draaide. Fase 5.1 voegde minimale startbare HTTP entrypoints toe voor API en editor-web. Fase 5.2 voegde permanente API/editor service-templates en GameBibleNode browser-save bridge toe.
 
-- API/editor-web starten;
-- browserconsole controleren;
-- Apache route `/editor` controleren;
-- Apache routes `/auth/`, `/editor/game-users` en `/editor/game-bible-node/save` controleren;
-- editor login smoke test uitvoeren;
-- game-user beheer smoke test uitvoeren;
-- Node Canvas en Viewport laden controleren;
-- bestaande sites controleren.
+Codex heeft de Fase 5.2 server/browser smoke afgerond:
 
-## Fase 5.1 runtime contract
+- `gk-api` en `gk-editor-web` zijn active/enabled en draaien via `/opt/gk/node-v22/bin/node`;
+- `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` zijn OK;
+- `/editor` werkt via Apache;
+- `/auth/editor/me` geeft `401` zonder sessie;
+- `/editor/game-users` geeft `403` zonder `editor_admin`;
+- Playwright browser-smoke geeft geen console/page errors;
+- Editor shell laadt;
+- Node Canvas blijft leeg;
+- Viewport / World Preview blijft leeg;
+- bestaande sites bleven OK.
+
+De editor-shell architectuur is daarmee klaar voor Fase 6, zonder Fase 6-content te implementeren.
+
+## Fase 5.2 runtime contract
 
 API runtime:
 
 - `GET /health/editor`;
+- `GET /editor/game-bible-node/save-client.js`;
 - `GET /auth/editor/me`;
 - `GET /editor/game-users`;
 - `PATCH /editor/game-users/:gameUserId/status`;

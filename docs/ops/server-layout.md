@@ -2,7 +2,7 @@
 
 ## Status
 
-Fase 2 serverfundering grotendeels uitgevoerd; Apache blijft voorlopig hoofdwebserver; runtime, endpoint-env-update en service-activatie open.
+Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn actief en gevalideerd.
 
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt geen actieve serverstatus.
 
@@ -33,7 +33,7 @@ Door Kevin bevestigd op 2026-06-10:
 | `EDITOR_DOMAIN` | `gk-k3v1nc0.duckdns.org` |
 | `EDITOR_PUBLIC_PATH` | `/editor` |
 
-Let op: Codex meldde dat `/etc/gk/gk.env` tijdens de serverrun nog placeholderwaarden bevatte voor deze endpointvelden. Codex moet die buiten Git vervangen door bovenstaande bevestigde waarden en daarna `ops/scripts/check-host` opnieuw draaien.
+Fase 5.2 rooktests gebruiken deze bevestigde endpointlijn via Apache en de API/editor services.
 
 ## Webserver policy
 
@@ -121,7 +121,7 @@ Codex-resultaat:
 - Secretwaarden zijn niet geprint en niet in de repo gezet.
 - MySQL secret staat alleen in `/etc/gk/gk.env`.
 
-Open: endpointvelden in `/etc/gk/gk.env` moeten nog worden vervangen door de nu bevestigde waarden.
+Fase 5.2-status: GK-services en checks gebruiken structureel Node 22 onder `/opt/gk/node-v22`. `/usr/bin/node` bleef bewust serverbreed ongemoeid op `v18.19.1`; dit is geen GK-blocker.
 
 ## Apache serving policy
 
@@ -137,11 +137,12 @@ Apache mag niet rechtstreeks serveren:
 
 Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. De template `ops/apache/gk-vhost.conf.template` bereidt de bevestigde host en `/editor` route voor, maar moet server-side door Codex worden gerenderd, veilig getest en pas daarna geactiveerd.
 
-Fase 5.1 voegt toe:
+Fase 5.2 voegt toe:
 
 - `/auth/` proxyt naar de API runtime;
 - `/editor/game-users` proxyt naar de API runtime;
 - `/editor/game-bible-node/save` proxyt naar de API runtime;
+- `/editor/game-bible-node/save-client.js` proxyt naar de API runtime en levert de browser-save bridge;
 - `/editor/` proxyt naar de editor-web runtime;
 - exact `/README/GameBibleNode.html`, `/README/GameBibleNode.json` en `/README/GameBibleNode.php` mogen bereikbaar blijven;
 - andere `README`-paden blijven dicht.
@@ -151,7 +152,9 @@ GameBibleNode save-policy:
 - publieke GET op HTML/JSON blijft toegestaan;
 - schrijven naar `GameBibleNode.json` mag niet publiek of onbeschermd;
 - voorkeursroute is `POST /editor/game-bible-node/save` met editor-auth en `editor_admin`;
-- legacy `GameBibleNode.php` mag alleen tijdelijk schrijven met buiten-Git serverbescherming, zoals Basic Auth, IP allowlist of een buiten-Git token;
+- `GameBibleNode.html` krijgt de API-save client via Apache `substitute_module` of een gelijkwaardige server-side HTML patch;
+- browser-save moet naar de API-route posten met Origin/CSRF, niet naar een publieke PHP-write;
+- legacy `GameBibleNode.php` is gedepricieerd voor normale browser-saves en mag alleen tijdelijk schrijven met buiten-Git serverbescherming, zoals Basic Auth, IP allowlist of een buiten-Git token;
 - Codex moet bevestigen dat POST zonder server-side auth faalt.
 
 Codex-resultaat:
@@ -164,7 +167,25 @@ Codex-resultaat:
 - `a2enconf gk-hardening`, `apache2ctl configtest` en `systemctl reload apache2` zijn uitgevoerd.
 - Apache serveert momenteel de GK-vhost en hardent `.git`, data, logs, tmp, shared en vergelijkbare paden naar 403.
 
-Open: Codex moet de Apache vhost/reverse proxy server-side renderen, met `apache2ctl configtest` testen, bestaande sites controleren en pas daarna veilig herladen. Nginx blijft candidate-only tot een aparte migratiefase.
+Fase 5.2 Codex-resultaat:
+
+- Apache blijft hoofdwebserver.
+- Nginx blijft inactive/candidate.
+- `apache2ctl configtest`: `Syntax OK`.
+- bestaande sites bleven OK.
+- `/editor`: OK.
+- `/auth/editor/me`: `401` zonder sessie.
+- `/editor/game-users`: `403` zonder `editor_admin`.
+- `/README/GameBibleNode.html`: `200`.
+- `/README/GameBibleNode.json`: `200`.
+- `/README/GameBibleNode.php` is bereikbaar maar geen open write.
+- andere README-bestanden blijven `403`.
+- publieke POST naar legacy PHP faalt.
+- publieke POST naar save API faalt.
+- public smoke headers via Apache worden gestript.
+- browser-save post naar `/editor/game-bible-node/save`, niet meer naar `GameBibleNode.php`.
+
+Nginx blijft candidate-only tot een aparte migratiefase.
 
 ## systemd policy
 
@@ -172,18 +193,29 @@ De templates onder `ops/systemd/` gebruiken:
 
 - `EnvironmentFile=/etc/gk/gk.env`;
 - `WorkingDirectory=/var/www/gk/current`;
-- generieke serviceprocessen voor API, realtime en worker;
+- concrete Fase 5.2 serviceprocessen voor API en editor-web;
+- generieke serviceprocessen voor realtime en worker;
 - een veilige restart-policy.
 
-Deze templates claimen niet dat services al bestaan of draaien. Codex moet de definitieve `ExecStart` server-side koppelen aan de echte runtime/build zodra tooling bestaat.
+`gk-api.service.template` start `apps/api-server/dist/index.js` en `gk-editor-web.service.template` start `apps/editor-web/dist/index.js`.
 
 Codex-resultaat:
 
-- Templates zijn server-side gevalideerd via tijdelijke units onder `/etc/gk/systemd-verify`.
-- `systemd-analyze verify` gaf exit 0 voor GK-units.
-- Er zijn geen `gk-*.service` units geinstalleerd of gestart.
+- Node 22 is structureel geinstalleerd op `/opt/gk/node-v22`.
+- `/opt/gk/node-v22/bin/node -v`: `v22.22.3`.
+- `/opt/gk/node-v22/bin/corepack --version`: `0.34.6`.
+- `pnpm` via Node 22: `10.12.4`.
+- `gk-api` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
+- `gk-editor-web` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
+- API health: OK.
+- editor-web health: OK.
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK, 31/31 tests groen.
+- `pnpm lint`: OK.
 
-Open: `/var/www/gk/current` is nog leeg en er bestaat nog geen echte runtime/build/`ExecStart`.
+Realtime gateway, workers, publish-services en latere game runtime krijgen eigen fasegates voordat ze als permanent actief mogen worden gemarkeerd.
 
 ## MySQL en Redis
 
@@ -197,7 +229,7 @@ Codex moet buiten Git:
 - migraties draaien wanneer repo-tooling bestaat;
 - Redis lokaal of volgens Fase 2-serverkeuze installeren of bevestigen;
 - `DATABASE_URL` en `REDIS_URL` in de buiten-Git env file zetten;
-- runtime/build checks uitvoeren zodra services en tooling bestaat.
+- runtime/build checks uitvoeren zodra services en tooling bestaan.
 
 Codex-resultaat:
 
@@ -224,13 +256,9 @@ Afgerond door Codex:
 
 Nog open voor Codex:
 
-1. `/etc/gk/gk.env` endpointvelden bijwerken met de bevestigde Kevin-waarden.
-2. `ops/scripts/check-host` opnieuw draaien met placeholderdetectie.
-3. Apache vhost/reverse proxy renderen uit `ops/apache/gk-vhost.conf.template`.
-4. Apache-config veilig testen en bevestigen dat bestaande sites niet breken.
-5. `/var/www/gk/current` vullen zodra runtime/build bestaat.
-6. Definitieve `gk-*.service` units renderen/installeren/starten wanneer echte `ExecStart` beschikbaar is.
-7. Build, migraties en runtime checks draaien wanneer tooling bestaat.
+1. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
+2. Nginx niet live activeren zonder aparte migratiefase.
+3. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.
 
 ## Fase 2-klaar criterium
 
@@ -246,4 +274,4 @@ Fase 2 is pas volledig server-klaar wanneer:
 - systemd server-side is gevalideerd en waar relevant actief;
 - secrets buiten Git staan.
 
-Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache frontend voorbereiding, runtime, endpoint-env-update en service-activatie open.
+Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache hoofdwebserver bevestigd; Nginx inactive/candidate; Fase 5.2 API/editor services actief en gevalideerd. Toekomstige services blijven fasegebonden gates.
