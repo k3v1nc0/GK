@@ -6,15 +6,11 @@ Actieve fase: Fase 6 - node graph core met typed sockets, dropdowns en undo/redo
 
 ## Status
 
-Fase-status: Fase 6 Git-basis voorbereid; Codex database migration en editor/API runtime smoke gate open.
-
-Fase 5 heeft de editor shell, node canvas, lege viewport, panels en game-user beheercontracten in Git voorbereid. Fase 5.1 patchte de eerste runtime-smoke blockers: lint directory traversal, startbare API/editor HTTP entrypoints, Apache `/editor`/API proxyplan en veilige GameBibleNode save-contracten. Fase 5.2 loste de vervolgblockers op: test-isolatie, GameBibleNode browser-save naar de beschermde API-route en permanente API/editor service-templates. Codex heeft de Fase 5.2 server/browser smoke afgerond.
-
-Fase 5.3 corrigeert de resterende echte blocker: `/editor` had nog geen normale editor-admin browser-login. De API-routecontracten bestonden, maar de HTTP-runtime implementeerde nog geen echte `POST /auth/editor/login` flow met databasecontrole, editor session cookie en `GET /auth/editor/me` op basis van de Fase 4 `sessions` tabel.
-
-Claude heeft de Fase 5.3 server-smoke afgerond. Daarmee is de normale editor-admin browserflow bewezen.
+Fase-status: Fase 6 server-side afgerond; klaar voor de volgende fase wanneer Kevin die opent.
 
 Fase 6 bouwt de eerste echte node graph core voor de editor: typed sockets, meerdere input/output poorten, dropdowns, inputvelden, asset/audio picker capabilities, validators, undo/redo, operation history en draft preview. Draft preview publiceert niets naar runtime.
+
+Claude heeft de Fase 6 server-side database/API/editor smoke afgerond. Er zijn geen Fase 6-blockers open.
 
 ## Doel
 
@@ -35,38 +31,22 @@ De fase legt generieke graph-capabilities vast voor:
 
 ## Bronnen gecontroleerd
 
-Geopend of gecontroleerd voor deze fase:
+Voor deze statusupdate zijn de actuele GitHub-bronnen gebruikt:
 
 - `README/current-phase.md`
 - `docs/design/phase-plan/current-phase.md`
-- `README/fase5.md`
 - `README/fase6.md`
-- `README/fase4.md`
-- `README/fase3.md`
-- `README/fase2.md`
+
+Relevante contractbronnen voor latere fases blijven:
+
+- `README/GameBibleNode.json`
 - `docs/design/content-gates.md`
 - `docs/design/game-bible.md`
-- `docs/architecture/workspace-boundaries.md`
-- `docs/architecture/auth-boundaries.md`
 - `docs/architecture/editor-shell.md`
-- `docs/architecture/gamebible-node-access.md`
+- `docs/architecture/auth-boundaries.md`
 - `docs/ops/server-layout.md`
-- `README/GameBibleNode.json`
-- `package.json`
-- `pnpm-workspace.yaml`
-- `apps/api-server`
-- `apps/editor-web`
-- `apps/game-web`
-- `packages/schemas`
-- `packages/node-engine`
-- `packages/node-types`
-- `packages/shared-ui`
-- `packages/shared-utils`
-- `README/GameBibleNode.html`
-- `README/GameBibleNode.json`
-- `README/GameBibleNode.php`
 
-## Fase 1- en Fase 2-contracten die blijven gelden
+## Blijvende fasecontracten
 
 - `README/GameBibleNode.json` is de leidende Game Bible.
 - Concrete gamecontent mag alleen uit GameBible JSON, editor/node-data, registers, database of expliciete Kevin-input komen.
@@ -81,436 +61,28 @@ Geopend of gecontroleerd voor deze fase:
 - Apache blijft voorlopig hoofdwebserver.
 - Nginx blijft alleen candidate/template voor een aparte latere migratiefase.
 
-## Fase 2-serverstatus
-
-Na Codex Fase 5.2 geldt:
-
-- Apache blijft voorlopig hoofdwebserver.
-- Nginx blijft inactive/candidate.
-- `apache2ctl configtest`: `Syntax OK`.
-- bestaande sites bleven OK.
-- `gk-api` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
-- `gk-editor-web` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
-- API health: OK.
-- editor-web health: OK.
-- `/editor`: OK.
-- `/auth/editor/me`: `401` zonder sessie.
-- `/editor/game-users`: `403` zonder `editor_admin`.
-
-Nog open als latere fases daarom vragen: definitieve release/current-deploy-afspraken verder aanscherpen voor toekomstige game runtime, realtime gateway, workers en publish-services.
-
-## Fase 3-validatie
-
-De Fase 3 workspace-checks zijn tijdens Fase 4 server-side gevalideerd:
-
-1. `pnpm install`: geslaagd.
-2. `pnpm build`: geslaagd.
-3. `pnpm typecheck`: geslaagd.
-4. `pnpm test`: geslaagd met Node 22 via `npx -p node@22`.
-5. `pnpm lint`: geslaagd.
-
-Node 22 is inmiddels structureel beschikbaar voor GK onder `/opt/gk/node-v22`. `/usr/bin/node` bleef bewust serverbreed ongemoeid op `v18.19.1`; dat is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
-
-## Fase 4-validatie
-
-Fase 4 database/auth is server-side gevalideerd:
-
-- MySQL database `gk` en user `gk_app@127.0.0.1` bestaan;
-- runtime DB-connectie is OK;
-- `db/migrations/0001_auth_foundation.sql` is toegepast;
-- eerste editor admin `k3v1nc0@hotmail.com` bestaat, is actief en e-mail-geverifieerd;
-- rol `editor_admin` is gekoppeld;
-- `admin.seed` auditregel is aanwezig;
-- database/auth smoke tests zijn geslaagd.
-
-## Auth- en databasekeuzes
-
-- Eerste editor admin e-mail: `k3v1nc0@hotmail.com`.
-- Eerste admin password/hash/secret blijven buiten Git.
-- Spelerregistratie is open.
-- Editorregistratie is niet publiek.
-- Editor users worden later alleen door editor admin aangemaakt.
-- E-mail is verplicht, uniek en case-insensitive genormaliseerd.
-- Game users starten bij registratie met `pending_verification`.
-- Volledige gamefuncties vereisen e-mailverificatie.
-- Editor admin moet geverifieerd en actief zijn voordat editor-toegang werkt.
-- Editor-auth en game-auth blijven strikt gescheiden.
-- Kruistoegang moet falen.
-
-## Fase 5 editorlayout
-
-Kevin heeft deze layout bevestigd:
-
-- links: `Node Library`;
-- midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
-- rechts: `Inspector` en `Validation`;
-- onder: `History`;
-- dock tabs: `Asset Panel`, `Audio Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
-
-Regels:
-
-- `Viewport / World Preview` blijft leeg tot latere nodes/world/runtime data iets plaatsen;
-- geen dummy wereld, dummy assets of nepcontent;
-- geen hard-coded camera, lighting, minimap, audio, HUD, NPC, quest, price, item, boss of route;
-- `Game Users` vereist editor scope met `editor_admin`.
-
-## Fase 5.1 en Fase 5.2 runtime blockers
-
-Codex smoke meldde:
-
-- `pnpm lint` crashte met `EISDIR` doordat generated directories/symlinks als bestanden werden gelezen;
-- `apps/api-server/dist/index.js` en `apps/editor-web/dist/index.js` startten niet als langlopende HTTP-processen;
-- er waren geen actieve `gk-*.service` units;
-- `/var/www/gk/current` was leeg;
-- Apache `/editor`, `/editor/` en `/auth/editor/me` gaven `404`;
-- echte browser-login smoke was daardoor niet uitvoerbaar;
-- contract-smoke voor editor_admin/game-user boundaries, lege Node Canvas en lege World Preview was groen.
-
-Fase 5.1 Git-fix:
-
-- lintscript slaat generated dirs en symlinks over;
-- API server heeft minimale HTTP routes voor editor health, editor me, Game Users en GameBibleNode save;
-- editor-web heeft minimale HTTP routes voor editor health, shell HTML en shell JSON;
-- Apache-template proxyt `/auth/`, `/editor/game-users`, `/editor/game-bible-node/save` en `/editor/` naar de juiste runtimes;
-- GameBibleNode access is vastgelegd met publieke readroutes en beschermde save.
-
-Fase 5.2 Git-fix:
-
-- de lint-test gebruikt een tijdelijke fixture in plaats van echte `apps/editor-web/dist` of `node_modules`, zodat build-output voor latere runtime-tests intact blijft;
-- API server levert `GET /editor/game-bible-node/save-client.js`;
-- Apache-template injecteert deze save-client in `README/GameBibleNode.html` via `substitute_module` of een gelijkwaardige server-side patch;
-- browser-save post naar `POST /editor/game-bible-node/save` met same-origin credentials en CSRF-header;
-- legacy `README/GameBibleNode.php` is gedepricieerd voor normale browser-save en blijft alleen beschermde fallback;
-- permanente service-templates voor `gk-api` en `gk-editor-web` zijn voorbereid;
-- `ops/scripts/render-runtime-services` rendert de service-units voor server-side verify/install.
-
-## Fase 5.3 editor-login en GameBible browser-save
-
-Probleem uit de echte browserflow:
-
-- `/editor` was bereikbaar, maar toonde direct de shell;
-- er was geen loginformulier;
-- de API had routecontracten voor `editor.login`, maar nog geen echte `POST /auth/editor/login`;
-- `/auth/editor/me` werkte niet met een database-session cookie;
-- Kevin kon daardoor niet via de normale browser een `editor_admin` session krijgen;
-- GameBibleNode browser-save kon de beschermde API-route technisch gebruiken, maar niet vanuit Kevins normale browser zonder editor session.
-
-Fase 5.3 Git-fix:
-
-- `POST /auth/editor/login` leest de Fase 4 `editor_users`, `editor_roles`, `editor_user_roles` en schrijft naar `sessions`;
-- login gebruikt genormaliseerde e-mail, generieke foutmelding en geen account-enumeratie;
-- wachtwoordverificatie is een server/runtime capability en bewaart geen wachtwoorden, hashes of tokens in Git;
-- de session token wordt alleen gehashed in de database opgeslagen;
-- de browser krijgt een `HttpOnly`, `SameSite=Strict` editor session cookie en een CSRF-cookie;
-- `GET /auth/editor/me` leest de echte editor session en rollen uit de database;
-- `POST /auth/editor/logout` trekt de editor session in;
-- `/editor` toont login zonder editor session en toont de shell pas na authenticated `editor_admin`;
-- GameBibleNode save gebruikt dezelfde editor session plus Origin/CSRF;
-- smoke-auth headers blijven alleen beschikbaar wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git expliciet aan staat en worden via Apache gestript.
-- de latere TypeScript build-fix zet `set-cookie` headers als `string[]` in `apps/api-server/src/http-server.ts`;
-- de latere password-verifier fix ondersteunt beide scrypt formats: `scrypt$N$r$p$salt$hash` en `scrypt:N=<n>,r=<r>,p=<p>:saltBase64url:hashBase64url`.
-
-## Wat is aangemaakt of bijgewerkt
-
-Root:
-
-- `.gitignore`
-- `package.json`
-- `pnpm-workspace.yaml`
-- `tsconfig.base.json`
-- `tsconfig.json`
-- `scripts/check-workspace-boundaries.mjs`
-- `ops/env/gk.example.env`
-
-Apps:
-
-- `apps/editor-web`
-- `apps/game-web`
-- `apps/api-server`
-- `apps/realtime-gateway`
-- `apps/world-service`
-- `apps/publish-service`
-- `apps/asset-worker`
-
-Packages:
-
-- `packages/schemas`
-- `packages/node-engine`
-- `packages/node-types`
-- `packages/net-protocol`
-- `packages/shared-ui`
-- `packages/shared-utils`
-- `packages/renderer-runtime`
-- `packages/audio-runtime`
-
-Overig:
-
-- `db/schema-boundary.md`
-- `db/migrations/0001_auth_foundation.sql`
-- `db/seeds/0001_initial_editor_admin.sql.template`
-- `tests/workspace-boundaries.test.mjs`
-- `tests/auth-boundaries.test.mjs`
-- `docs/architecture/workspace-boundaries.md`
-- `docs/architecture/auth-boundaries.md`
-- `docs/architecture/editor-shell.md`
-- `docs/design/phase-plan/current-phase.md`
-- `README/current-phase.md`
-
-Fase 5 aanvullingen:
-
-- `packages/shared-ui/src/editor-layout.ts`
-- `apps/editor-web/src/editor-shell.ts`
-- `apps/editor-web/src/node-canvas.ts`
-- `apps/editor-web/src/world-preview.ts`
-- `apps/editor-web/src/panels.ts`
-- `apps/editor-web/src/game-user-management.ts`
-- `apps/api-server/src/editor-game-user-management.ts`
-- `tests/editor-shell.test.mjs`
-
-Fase 5.1/Fase 5.2 aanvullingen:
-
-- `scripts/check-workspace-boundaries.mjs`
-- `apps/api-server/src/http-server.ts`
-- `apps/api-server/src/http-utils.ts`
-- `apps/api-server/src/runtime-session.ts`
-- `apps/api-server/src/gamebible-node-routes.ts`
-- `apps/api-server/src/gamebible-node-save-client.ts`
-- `apps/api-server/src/gamebible-node-store.ts`
-- `apps/editor-web/src/http-server.ts`
-- `README/GameBibleNode.php`
-- `README/fase6.md`
-- `docs/architecture/gamebible-node-access.md`
-- `ops/scripts/render-runtime-services`
-- `ops/systemd/gk-editor-web.service.template`
-- `tests/phase5-runtime.test.mjs`
-
-## Database/migraties
-
-Fase 4 voegt schema-only migraties toe voor:
-
-- `editor_users`
-- `editor_roles`
-- `editor_user_roles`
-- `game_users`
-- `game_user_status`
-- `sessions`
-- `player_profiles`
-- `characters`
-- `email_verification_tokens`
-- `password_reset_tokens`
-- `audit_log`
-
-Geen productie-data of echte credentials in migraties. De admin seed-template gebruikt alleen buiten-Git env placeholders.
-
-## API routes en scopes
-
-Fase 4 routecontracten blijven leidend voor:
-
-- editor login/logout/me;
-- game register/login/logout/me;
-- email verification request/confirm;
-- password reset request/confirm;
-- editor game-user list;
-- editor game-user status update.
-
-Scope-regels:
-
-- editor routes vereisen editor session;
-- game routes vereisen game session;
-- editor game-user beheer vereist `editor_admin`;
-- game session mag niet in editor;
-- editor session mag niet automatisch player endpoints gebruiken;
-- publieke auth routes gebruiken generieke responses zonder account-enumeratie.
-
-Fase 5 voegt een API-helper toe voor editor game-user beheer. Deze helper gebruikt de Fase 4 routecontracten en geeft alleen toegang wanneer de sessie editor scope en `editor_admin` heeft.
-
-Fase 5.1 voegt het routecontract `editor.game_bible_node.save` toe. Deze route vereist editor scope met `editor_admin`, rate limiting, CSRF/Origin-check en auditactie `game_bible_node.save`.
-
-## Editor shell, canvas, viewport en panels
-
-Editor shell:
-
-- editor login/session entry gebruikt editor-auth routes;
-- hoofd-layout is modulair en niet monolithisch;
-- dock layout is een model dat later door UI-rendering gebruikt kan worden.
-
-Node Canvas:
-
-- start met lege canvas state;
-- heeft editor-grid/raster;
-- bevat alleen generieke capability-definities voor schema, asset reference, validation en publish;
-- bevat geen concrete gameplay nodes.
-
-Viewport / World Preview:
-
-- staat als aparte main tab naast Node Canvas;
-- status is `empty`;
-- wacht op gepubliceerde world-node data;
-- bevat geen world objects, assets, audio, camera of lighting.
-
-Panels:
-
-- `Node Library`, `Inspector`, `Validation`, `History`, `Asset Panel`, `Audio Panel`, `HUD Editor`, `Minimap Panel`, `Game Users` bestaan als generieke capabilities;
-- `Asset Panel` leest later asset inventory en wijst geen runtime-rollen toe;
-- `Audio Panel` houdt de audio-gate open wanneer audio count 0 is;
-- `HUD Editor` en `Minimap Panel` leggen geen definitieve waarden of layout vast;
-- `Game Users` vereist editor scope met `editor_admin`.
-
-HTTP runtime:
-
-- API: `GET /health/editor`, `POST /auth/editor/login`, `POST /auth/editor/logout`, `GET /auth/editor/me`, `GET /editor/game-bible-node/save-client.js`, `GET /editor/game-users`, `PATCH /editor/game-users/:gameUserId/status`, `POST /editor/game-bible-node/save`;
-- editor-web: `GET /health/editor`, `GET /`, `GET /editor`, `GET /editor/`, `GET /shell.json`;
-- smoke-auth headers zijn alleen toegestaan wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet en mogen publiek via Apache niet doorkomen.
-
-GameBibleNode:
-
-- exact `README/GameBibleNode.html`, `README/GameBibleNode.json` en `README/GameBibleNode.php` blijven beschikbaar;
-- andere README-bestanden blijven dicht;
-- API-save is de voorkeursroute;
-- legacy PHP-save mag alleen tijdelijk met buiten-Git serverbescherming en faalt zonder auth/token;
-- save schrijft atomisch met lock, backup en auditregel.
-
-## Content- en assetgrens
-
-Niet toegevoegd:
-
-- assets;
-- data;
-- secrets;
-- dummy content;
-- concrete gamecontent;
-- runtime-hardcoded NPCs, quests, prijzen, camera, lighting, minimap, boss, item, route, HUD of audio-keuzes.
-
-De startcode bevat alleen generieke boundaries, registries, protocoltypes, validators, renderer/audio primitives, env-readers en auth/database capabilities.
-
-Bevestigde Fase 6-input:
-
-- `game.name = Eldoria`: blijft GameBible/contentdata en is niet in runtimecode hard-coded.
-- `start zone = Willowmere Workshop`: blijft GameBible/contentdata en is niet in runtimecode hard-coded.
-- `history depth = 100 undo/redo acties per editor session`: vastgelegd in het node graph history-contract.
-
-## Checks
-
-Eerder Git-side uitgevoerd:
-
-- Repo-bronnen geopend via GitHub connector.
-- Fase 4-relevante workspacebestanden lokaal gecontroleerd.
-- Root workspace-structuur gecontroleerd.
-- Starter file size scan: sourcebestanden blijven klein.
-- ASCII-scan op nieuwe workspacebestanden: OK.
-- Secret/content scan op `apps/`, `packages/`, `db/`, `docs/architecture/`, `tests/`, `scripts/` en workspace-configs: geen echte secrets/assets/data/concrete runtimecontent gevonden.
-- `node --experimental-strip-types --test tests/*.test.mjs`: OK.
-- `node scripts/check-workspace-boundaries.mjs`: OK.
-- `node --experimental-strip-types --check` op alle `apps/**/*.ts` en `packages/**/*.ts`: OK.
-- `npm test`: OK.
-- `npm run lint`: OK.
-- Migratie- en seed-template scans: OK.
-- Migratiestructuur-scan op tabeldefinities en statements: OK.
-
-Eerder server-side door Codex afgerond voor Fase 3/Fase 4:
-
-- `pnpm install`: OK.
-- `pnpm build`: OK.
-- `pnpm typecheck`: OK.
-- `pnpm test`: OK met Node 22 via `npx -p node@22`.
-- `pnpm lint`: OK.
-- MySQL actief.
-- Database `gk` aanwezig.
-- User `gk_app@127.0.0.1` aanwezig.
-- Runtime DB-connectie OK.
-- `db/migrations/0001_auth_foundation.sql` succesvol toegepast.
-- Vereiste tabellen aanwezig: `editor_users`, `editor_roles`, `editor_user_roles`, `game_users`, `game_user_status`, `sessions`, `player_profiles`, `characters`, `email_verification_tokens`, `password_reset_tokens`, `audit_log`.
-- Admin seed secret/temp password/hash staan buiten Git in `/etc/gk/secrets/initial-editor-admin.env`.
-- Admin `k3v1nc0@hotmail.com` bestaat, is actief en heeft geverifieerde e-mail.
-- Rol `editor_admin` is gekoppeld.
-- `admin.seed` auditregel is aanwezig.
-- Database/auth smoke tests: OK.
-- Server-side Git status bleef schoon.
-
-Fase 5 Git-side uitgevoerd:
-
-- `npm test`: OK.
-- `npm run lint`: OK.
-- `node --experimental-strip-types --check` op `apps/**/*.ts` en `packages/**/*.ts`: OK.
-- Secret/content scan op Fase 5 editor shell, docs en tests: OK.
-- Asset/dummy-content scan op Fase 5 bestanden: OK.
-- Diff-scope controle: alleen Fase 5 editor/API/shared-ui/test/docs/current-phase bestanden.
-
-Fase 5.1 Git-side uitgevoerd:
-
-- lint EISDIR-fix voorbereid voor generated dirs/symlinks;
-- API/editor HTTP runtime entrypoints toegevoegd;
-- GameBibleNode save contract toegevoegd;
-- Apache-template bijgewerkt voor `/editor`, `/auth/`, Game Users en GameBibleNode;
-- GameBibleNode access doc toegevoegd.
-- `npm test`: OK met source-tests; 4 gebouwde-runtime subtests blijven skipped totdat `dist` door build bestaat.
-- `npm run lint`: OK.
-- `node --experimental-strip-types --check` op gewijzigde TS/MJS-bestanden: OK.
-- Source runtime smoke met tijdelijke resolutiebruggen: OK voor API health, editor session, Game Users gate en lege editor viewport.
-- Source GameBibleNode save smoke met tijdelijke resolutiebruggen: OK voor editor_admin policy, game-session blokkade, backup, lock en atomische write.
-- Secret/content scan: OK; alleen bestaande assetnamen in het lintscript zelf als verboden scanpatronen.
-- Generated output scan: OK, geen `dist`, `node_modules`, `build` of `coverage` in de werkset.
-
-Fase 5.2 Git-side uitgevoerd:
-
-- test-isolatie aangepast zodat de lint-test geen echte build-output verwijdert;
-- GameBibleNode browser-save client toegevoegd voor de beschermde API-route;
-- Apache-template voorbereid voor save-client injectie in `GameBibleNode.html`;
-- permanente `gk-api` en `gk-editor-web` service-templates voorbereid;
-- `ops/scripts/render-runtime-services` toegevoegd voor server-side unit rendering;
-- `npm test`: OK; 30 tests, 26 passed, 4 runtime-dist tests skipped omdat lokale `dist` ontbreekt;
-- `npm run lint`: OK;
-- `node --experimental-strip-types --check` op `apps`, `packages`, `scripts` en `tests`: OK;
-- `bash -n` op ops-scripts: OK;
-- `ops/scripts/render-runtime-services` naar tijdelijke map: OK;
-- `systemd-analyze verify` op gerenderde `gk-api.service` en `gk-editor-web.service`: OK;
-- GameBibleNode save-client JavaScript syntaxcheck: OK;
-- secret/content scan: OK;
-- generated output scan: OK.
-
-Fase 5.3 Git-side uitgevoerd:
-
-- echte editor-login/session-cookie flow toegevoegd in API-runtime;
-- editor-web loginformulier en login/shell switching toegevoegd;
-- GameBibleNode save-client behoudt protected API-save met duidelijke browserfouten;
-- Apache-template stript smoke-auth headers;
-- `node --experimental-strip-types --test tests/editor-login-flow.test.mjs`: OK; bronchecks groen, runtime-dist subtests blijven skipped totdat `pnpm build` dist maakt;
-- `node --experimental-strip-types --test tests/*.test.mjs`: OK; 34 tests, 28 passed, 6 runtime-dist tests skipped omdat lokale `dist` ontbreekt;
-- tijdelijke API source-smoke met resolutiesymlinks: OK voor editor login, session cookie, `/auth/editor/me`, public save fail, protected GameBibleNode save en logout;
-- `node scripts/check-workspace-boundaries.mjs`: OK.
-
-Fase 5.3 server-side door Claude afgerond:
-
-- set-cookie TypeScript build-fix aanwezig in `apps/api-server/src/http-server.ts`;
-- password-verifier ondersteunt beide scrypt formats;
-- `pnpm install`: OK;
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK, 35/35;
-- `pnpm lint`: OK;
-- services actief via `/opt/gk/node-v22/bin/node`;
-- `/editor` toont login zonder sessie;
-- editor admin login werkt;
-- `/auth/editor/me` geeft authenticated true met `editor_admin`;
-- GameBible save via `/editor/game-bible-node/save` werkt;
-- backup en audit werken;
-- logout werkt;
-- save na logout faalt;
-- publieke save en legacy PHP write blijven dicht;
-- bestaande game-site blijft bereikbaar.
-
-## Fase 6 node graph core
-
-Fase 6 Git-side uitgevoerd:
-
-- `db/migrations/0002_node_graph_core.sql` toegevoegd voor editor node graphs, nodes, edges, revisions, operation log en editor-session draft state.
-- `packages/schemas/src/node-graph.ts` toegevoegd voor graphdocumenten, operations, typed sockets, field schemas, asset/audio references, history en draft preview.
-- `packages/node-types/src/index.ts` uitgebreid met generieke graph node capabilities zoals `gk.flow.entry`, `gk.flow.sequence`, `gk.value.string`, `gk.value.number`, `gk.value.color`, `gk.asset.reference`, `gk.audio.reference` en `gk.editor.collect`.
-- `packages/node-engine` uitgebreid met graph validation, graph operation/history engine en draft preview.
-- `apps/api-server/src/editor-graph-routes.ts` toegevoegd voor editor-only graph draft, operation en preview routecontracten.
-- `apps/editor-web/src/node-canvas.ts` gekoppeld aan een leeg graphdocument, supported socket types, history depth 100 en draft-preview publish blokkade.
-- `packages/shared-ui/src/index.ts` uitgebreid met Ctrl+Z/redo/history contract.
-- `tests/node-graph-core.test.mjs` toegevoegd voor typed sockets, verkeerde koppeling, multi-port flow, dropdown/input validation, audio gate, undo/redo, draft preview en editor-only graph access.
+## Fase 6 Git-output
+
+Fase 6 commit op main:
+
+- `274bda6b90433656b6f04892dbd61cad4cf648c8`
+- `feat: add phase 6 node graph core`
+
+Aangemaakt of bijgewerkt in Fase 6:
+
+- `db/migrations/0002_node_graph_core.sql`
+- `packages/schemas/src/node-graph.ts`
+- `packages/node-types/src/index.ts`
+- `packages/node-engine/src/graph-validation.ts`
+- `packages/node-engine/src/graph-history.ts`
+- `packages/node-engine/src/draft-preview.ts`
+- `apps/api-server/src/editor-graph-routes.ts`
+- editor shell/canvas/panels updates
+- shared UI contract updates
+- `tests/node-graph-core.test.mjs`
+- fase-documentatie
+
+## Database/schema contract
 
 Fase 6 database/schema contract:
 
@@ -523,117 +95,94 @@ Fase 6 database/schema contract:
 
 Draft-state is per editor session en heeft `history_depth = 100`. Revisions in deze fase zijn draft/editor revisions en hebben `publishes_runtime_output = 0`; draft preview mag niets naar runtime publishen.
 
-Fase 6 contentgrenzen:
+## Node graph contract
 
-- `game.name = Eldoria` en `start zone = Willowmere Workshop` blijven bevestigde Kevin-input en zijn niet als runtimecode of hard-coded worldcontent toegevoegd.
-- `history depth = 100` is wel als editor graph-history contract vastgelegd.
-- Asset/audio pickers zijn capabilities. Er is geen asset-role mapping, geen dummy asset en geen audio verzonnen.
-- Audio picker blijft gated zolang audio count 0 is.
-- Viewport / World Preview blijft leeg tenzij latere draft-data generiek previewbaar is zonder concrete worldcontent.
+Fase 6 bevat:
 
-Fase 6 lokale checks binnen deze workspace:
+- typed flow sockets;
+- typed value sockets;
+- value socket types `var.string`, `number`, `color`, `asset.reference` en `audio.reference`;
+- dropdown, text, number, color, asset-picker en audio-picker field schemas;
+- generieke graph node types zonder concrete gamecontent;
+- edge validation voor richting, flow/value matching, value compatibility en max-connections;
+- graph operations voor add/remove/move/update/connect/disconnect/select;
+- undo/redo met `history depth = 100`;
+- operation log;
+- draft preview met `publishesRuntimeOutput = false`;
+- editor-only graph routecontracten voor graph draft, operation en preview.
 
-- Corepack kon `pnpm@10.12.4` niet downloaden door de beperkte netwerkroute naar `registry.npmjs.org`.
-- Daardoor zijn `pnpm install`, `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` lokaal niet volledig uitvoerbaar in deze niet-git werkset.
-- Beschikbare fallback-checks: directe Node source-tests met tijdelijke workspace-resolutie, SQL syntax-light checks, source-size/boundary scan, secret/content scan en generated-output scan.
+## Fase 6 server-side validatie
 
-Fase 5.2 server-side door Codex afgerond:
+Claude heeft Fase 6 server-side gevalideerd:
 
-- Commit op main: `c3b5543c1a6c68aa29b6c81aeb3c0f2e957674a1`.
-- Commit message: `fix: complete phase 5 runtime smoke blockers`.
-- Node 22 structureel geinstalleerd op `/opt/gk/node-v22`.
-- `/opt/gk/node-v22/bin/node -v`: `v22.22.3`.
-- `/opt/gk/node-v22/bin/corepack --version`: `0.34.6`.
-- `pnpm` via Node 22: `10.12.4`.
-- `/usr/bin/node` bleef ongemoeid op `v18.19.1`.
 - `pnpm install`: OK.
 - `pnpm build`: OK.
 - `pnpm typecheck`: OK.
-- `pnpm test`: OK, 31/31 tests groen.
+- `pnpm test`: OK, 44/44.
 - `pnpm lint`: OK.
-- `gk-api`: active/enabled via `/opt/gk/node-v22/bin/node`.
-- `gk-editor-web`: active/enabled via `/opt/gk/node-v22/bin/node`.
-- API health: OK.
-- editor-web health: OK.
-- Apache blijft hoofdwebserver.
-- Nginx blijft inactive.
-- `apache2ctl configtest`: `Syntax OK`.
-- bestaande sites bleven OK.
-- `/editor`: OK.
-- `/auth/editor/me`: `401` zonder sessie.
-- `/editor/game-users`: `403` zonder `editor_admin`.
-- `/README/GameBibleNode.html`: `200`.
-- `/README/GameBibleNode.json`: `200`.
-- `/README/GameBibleNode.php` is bereikbaar maar geen open write.
-- andere README-bestanden blijven `403`.
-- publieke POST naar legacy PHP faalt.
-- publieke POST naar save API faalt.
-- public smoke headers via Apache worden gestript.
-- browser-save post naar `/editor/game-bible-node/save`, niet meer naar `GameBibleNode.php`.
-- Playwright browser-smoke: geen console/page errors.
-- Editor shell: OK.
-- Node Canvas: leeg.
-- Viewport / World Preview: leeg.
-- geen dummy media/assets/world/camera/light/audio.
-- beveiligde `editor_admin` save: OK.
-- invalid JSON: `400`.
-- invalid contract JSON: `400`.
-- lock-test faalt veilig.
-- backup en audit werken.
-- `GameBibleNode.json` is na test exact hersteld.
-- Git status bleef schoon.
-- Geen Fase 5.2 runtime-smoke blocker meer.
+- `db/migrations/0002_node_graph_core.sql` toegepast op MySQL.
+- Alle 6 graph-tabellen bestaan.
+- `gk-api` is active/enabled via `/opt/gk/node-v22/bin/node`.
+- `gk-editor-web` is active/enabled via `/opt/gk/node-v22/bin/node`.
+- Editor admin login werkt.
+- `/auth/editor/me` geeft `editor_admin`.
+- `/editor/graph/draft` werkt met editor session.
+- `/editor/graph/operation` werkt met editor session.
+- `/editor/graph/preview` werkt met editor session.
+- Anonymous/game session krijgt geen editor graph toegang.
+- Draft preview publiceert niets naar runtime.
+- GameBible save blijft werken.
+- Bestaande game-site blijft bereikbaar.
+- Blockers: geen.
+
+## Content- en assetgrens
+
+Niet toegevoegd:
+
+- assets;
+- data;
+- secrets;
+- dummy content;
+- concrete gamecontent;
+- runtime-hardcoded NPCs, quests, prijzen, camera, lighting, minimap, boss, item, route, HUD of audio-keuzes.
+
+Bevestigde Fase 6-input:
+
+- `game.name = Eldoria`: blijft GameBible/contentdata en is niet in runtimecode hard-coded.
+- `start zone = Willowmere Workshop`: blijft GameBible/contentdata en is niet in runtimecode hard-coded.
+- `history depth = 100 undo/redo acties per editor session`: vastgelegd in het node graph history-contract.
 
 ## Open Kevin-input
 
-Geen blokkerende Fase 6-input open voor de Git-basis.
+Geen blokkerende Fase 6-input open.
 
 Latere fases houden hun eigen gates voor GLB-role mapping, UI-assets, audio-assets, concrete content, economy, world settings en runtime services.
 
-Fase 6-input:
-
-- game name: `Eldoria`
-- start zone: `Willowmere Workshop`
-- history depth: `100` undo/redo acties per editor session
-
-Alleen `history depth` is in engine/editor-contracten verwerkt. `game.name` en `start zone` blijven contentdata en mogen pas via GameBible/editor/node-data/database doorstromen, niet via runtime-hardcoding.
-
 ## Open Codex-taken buiten Git
 
-Fase 6 Codex server/database gate staat open:
+Geen Fase 6 Codex-taken open.
 
-1. `pnpm install` draaien met Node 22 onder `/opt/gk/node-v22`.
-2. `pnpm build` draaien.
-3. `pnpm typecheck` draaien.
-4. `pnpm test` draaien.
-5. `pnpm lint` draaien.
-6. `db/migrations/0002_node_graph_core.sql` toepassen op MySQL.
-7. `gk-api` en `gk-editor-web` herstarten met de nieuwe build.
-8. Smoke testen dat `/editor/graph/draft`, `/editor/graph/operation` en `/editor/graph/preview` alleen met editor session werken.
-9. Smoke testen dat game sessions geen editor graph toegang krijgen.
-10. Smoke testen dat draft preview valideert maar niets publiceert.
+Open blijft toekomstwerk voor latere fases:
 
-Open blijft ook toekomstwerk voor latere fases:
-
-- Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
-- Nginx blijft candidate; geen Nginx-migratie zonder aparte migratiefase.
+- toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan;
+- Nginx blijft candidate; geen Nginx-migratie zonder aparte migratiefase;
 - `/usr/bin/node` blijft serverbreed `v18.19.1`; dit is bewust ongemoeid en geen GK-blocker zolang GK via `/opt/gk/node-v22` draait.
 
 ## Fasebeoordeling
 
-Fase 6 Git-basis is voorbereid; Codex database migration en editor/API runtime smoke gate staan open.
+Fase 6 is klaar.
 
 Afgerond voor deze fase:
 
-- graph schema/migratie bestaat;
+- graph schema/migratie bestaat en is toegepast;
 - typed sockets en field schemas bestaan;
 - graph validation, history en draft preview bestaan;
 - editor-only graph routecontracten bestaan;
 - Node Canvas is gekoppeld aan graph state en history depth 100;
-- tests voor Fase 6 graph core zijn toegevoegd;
+- tests voor Fase 6 graph core zijn toegevoegd en server-side groen;
 - geen generated `dist`, `node_modules`, secrets, assets of data zijn in Git beland;
 - geen runtimecode bevat nieuwe concrete gamecontent.
 
 Niet verwarren met volledige toekomstige game-runtime voltooiing: realtime gateway, workers, publish-services en latere game runtime krijgen hun eigen fasegates.
 
-Huidige status: Fase 6 Git-basis voorbereid; Codex database migration en editor/API runtime smoke gate open.
+Huidige status: Fase 6 server-side afgerond; klaar voor de volgende fase wanneer Kevin die opent. Fase 7 is nog niet geimplementeerd.

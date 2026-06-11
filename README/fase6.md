@@ -1,6 +1,5 @@
 # Fase 6 - Node graph core met typed sockets, dropdowns en undo/redo
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,11 +22,6 @@
 
 Maak nodes echt zoals een geometry-node systeem: typed sockets, meerdere poorten, dropdowns, inputs, asset/audio pickers, validators, undo/redo en draft preview.
 
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
-
-- Kies basis variabelen zoals game.name en start zone.
-- Bepaal globale editor voorkeuren voor history depth.
-
 ## Bevestigde input voor Fase 6
 
 - `game.name`: `Eldoria`
@@ -37,6 +31,11 @@ Maak nodes echt zoals een geometry-node systeem: typed sockets, meerdere poorten
 Deze input is bevestigd voor Fase 6. `history depth` is in Fase 6 als editor graph-history contract vastgelegd. `game.name` en `start zone` blijven contentdata uit Kevin-input/GameBible/editor-data en zijn niet als runtimecode of hard-coded worldcontent toegevoegd.
 
 ## Git-uitwerking Fase 6
+
+Fase 6 commit op main:
+
+- `274bda6b90433656b6f04892dbd61cad4cf648c8`
+- `feat: add phase 6 node graph core`
 
 Aangemaakt of bijgewerkt:
 
@@ -54,53 +53,28 @@ Aangemaakt of bijgewerkt:
 - Node Canvas contract gekoppeld aan graph state;
 - tests voor graph core, validation, history, draft preview en auth boundary.
 
-Fase 6 is in Git voorbereid. Server-side migratie en runtime-smoke moeten nog door Codex worden uitgevoerd voordat de fase server-gevalideerd is.
+Fase 6 is in Git voorbereid en server-side gevalideerd. Claude heeft de database migration, pnpm checks en editor/API graph smoke afgerond.
 
-## Actie voor Codex
+## Server-side validatie
 
-- Draai `pnpm install`.
-- Draai `pnpm build`.
-- Draai `pnpm typecheck`.
-- Draai `pnpm test`.
-- Draai `pnpm lint`.
-- Pas `db/migrations/0002_node_graph_core.sql` toe op MySQL.
-- Herstart API/editor.
-- Smoke test `/editor/graph/draft`, `/editor/graph/operation` en `/editor/graph/preview` met editor session.
-- Bevestig dat game session geen editor graph toegang krijgt.
-- Bevestig dat draft preview niets publiceert.
-
-## Prompt voor GK Code Copiloot
-
-```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
-
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
-
-Je werkt aan fase 6: Node graph core met typed sockets, dropdowns en undo/redo.
-
-Doel:
-Maak nodes echt zoals een geometry-node systeem: typed sockets, meerdere poorten, dropdowns, inputs, asset/audio pickers, validators, undo/redo en draft preview.
-
-Werk uit:
-Implementeer graph tables, nodes, edges, revisions, operation log, node schemas, typed sockets, node field renderer, dropdowns, inputvelden, multi-output/multi-input, variable resolver, history engine en draft preview. Save blijft editor-only.
-
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
-```
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK, 44/44.
+- `pnpm lint`: OK.
+- `db/migrations/0002_node_graph_core.sql` toegepast op MySQL.
+- Alle 6 graph-tabellen bestaan.
+- `gk-api` en `gk-editor-web` zijn active/enabled via `/opt/gk/node-v22/bin/node`.
+- Editor admin login werkt.
+- `/auth/editor/me` geeft `editor_admin`.
+- `/editor/graph/draft` werkt met editor session.
+- `/editor/graph/operation` werkt met editor session.
+- `/editor/graph/preview` werkt met editor session.
+- Anonymous/game session krijgt geen editor graph toegang.
+- Draft preview publiceert niets.
+- GameBible save blijft werken.
+- Bestaande game-site blijft bereikbaar.
+- Blockers: geen.
 
 ## Acceptatiechecklist
 
@@ -110,10 +84,14 @@ Verplichte controle:
 - [x] Meerdere poorten.
 - [x] Ctrl+Z/redo contract en history engine.
 - [x] Draft preview publiceert niets.
-- [ ] Codex heeft migratie server-side toegepast.
-- [ ] Codex heeft `pnpm install/build/typecheck/test/lint` server-side gedraaid.
-- [ ] Codex heeft editor/API graph smoke server-side afgerond.
+- [x] Codex heeft migratie server-side toegepast.
+- [x] Codex heeft `pnpm install/build/typecheck/test/lint` server-side gedraaid.
+- [x] Codex heeft editor/API graph smoke server-side afgerond.
 
-## Testplan
+## Status
 
-Maak graph met var.string, color, number, asset picker en flow ports. Test verkeerde koppeling en undo/redo.
+Fase 6 is klaar. Fase 7 is nog niet geimplementeerd en mag pas starten wanneer Kevin die fase expliciet opent of een bestaand faseplan die volgende stap aanwijst.
+
+## Testplan voor regressies
+
+Maak graph met var.string, color, number, asset picker en flow ports. Test verkeerde koppeling, undo/redo, editor-only graph routes en dat draft preview niets publiceert.
