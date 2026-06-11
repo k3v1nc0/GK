@@ -72,6 +72,18 @@ Sessies:
 - gebruiken HttpOnly/Secure/SameSite cookies als cookies worden gebruikt;
 - vereisen TLS voor login en authenticated pages.
 
+Fase 5.3 implementeert de eerste echte editor-session browserflow:
+
+- `POST /auth/editor/login` controleert `editor_users` en gekoppelde `editor_roles`;
+- alleen actieve en e-mail-geverifieerde editor admins kunnen de editor shell openen;
+- login geeft een generieke `invalid_credentials` response bij mislukking, zonder account-enumeratie;
+- session tokens worden random gegenereerd en alleen als SHA-256 hash in `sessions.session_token_hash` opgeslagen;
+- de browser krijgt een `gk_editor_session` cookie met `HttpOnly` en `SameSite=Strict`;
+- `Secure` wordt gebruikt wanneer HTTPS/forwarded HTTPS of runtime-env dit afdwingt;
+- `gk_csrf` wordt als aparte CSRF-cookie gezet voor state-changing editor requests;
+- `POST /auth/editor/logout` trekt de editor session in;
+- game-session cookies tellen niet als editor session.
+
 ## Audit
 
 Audit logt minimaal:
@@ -105,4 +117,6 @@ Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
 
 ## Open aandachtspunt
 
-Systeem-Node is `v18.19.1`. Toekomstige `pnpm test` runs vereisen Node 22-activatie of een structurele Node-upgrade.
+GK gebruikt structureel Node 22 onder `/opt/gk/node-v22`. `/usr/bin/node` is serverbreed bewust op `v18.19.1` blijven staan en is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
+
+Fase 5.3 blijft pas volledig gevalideerd nadat Codex de normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save met de echte serverdatabase heeft getest.

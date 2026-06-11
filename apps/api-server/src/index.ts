@@ -8,9 +8,14 @@ import { startApiServer } from "./http-server.js";
 export * from "./auth-policy.js";
 export * from "./auth-routes.js";
 export * from "./editor-game-user-management.js";
+export * from "./editor-auth-store.js";
 export * from "./gamebible-node-routes.js";
+export * from "./gamebible-node-save-client.js";
 export * from "./gamebible-node-store.js";
 export * from "./http-server.js";
+export * from "./password-verifier.js";
+export * from "./request-security.js";
+export * from "./session-cookies.js";
 
 export interface ApiServerBoundary {
   readonly accepts: "editor-node-data";

@@ -48,6 +48,15 @@ Panels zijn generieke capabilities:
 
 Editor shell toegang gebruikt editor-auth. Game sessions mogen geen editor panel toegang krijgen.
 
+Fase 5.3 maakt dit een echte browserflow:
+
+- `/editor` toont het loginformulier wanneer `GET /auth/editor/me` geen geldige editor session ziet;
+- `POST /auth/editor/login` controleert de Fase 4 editor database en maakt een `scope=editor` session;
+- de editor session cookie is `HttpOnly` en `SameSite=Strict`, en `Secure` wanneer HTTPS/forwarded HTTPS of env dit afdwingt;
+- een aparte CSRF-cookie wordt gezet voor state-changing editor acties;
+- de shell wordt pas zichtbaar wanneer `/auth/editor/me` authenticated true met `editor_admin` teruggeeft;
+- `POST /auth/editor/logout` trekt de editor session in.
+
 Game-user beheer gebruikt de Fase 4 routecontracten:
 
 - `editor.game_users.list`;
@@ -72,14 +81,16 @@ Codex heeft de Fase 5.2 server/browser smoke afgerond:
 - Viewport / World Preview blijft leeg;
 - bestaande sites bleven OK.
 
-De editor-shell architectuur is daarmee klaar voor Fase 6, zonder Fase 6-content te implementeren.
+Fase 5.3 corrigeert de resterende blocker: de editor shell was bereikbaar, maar nog niet gekoppeld aan een echte editor-admin login. De architectuur is pas klaar voor Fase 6 nadat Codex de nieuwe normale browser-login en GameBible browser-save flow server-side heeft getest.
 
-## Fase 5.2 runtime contract
+## Fase 5.3 runtime contract
 
 API runtime:
 
 - `GET /health/editor`;
 - `GET /editor/game-bible-node/save-client.js`;
+- `POST /auth/editor/login`;
+- `POST /auth/editor/logout`;
 - `GET /auth/editor/me`;
 - `GET /editor/game-users`;
 - `PATCH /editor/game-users/:gameUserId/status`;
@@ -93,4 +104,4 @@ Editor runtime:
 - `GET /editor/`;
 - `GET /shell.json`.
 
-Deze routes zijn smoke- en contractentrypoints. Ze voegen geen concrete gamecontent toe. Smoke-auth headers mogen alleen worden gebruikt wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet voor gecontroleerde Codex-tests.
+Deze routes voegen geen concrete gamecontent toe. Smoke-auth headers mogen alleen worden gebruikt wanneer `GK_ENABLE_SMOKE_AUTH_HEADERS=1` buiten Git tijdelijk is gezet voor gecontroleerde Codex-tests, en de Apache-template stript die headers voor publieke requests.

@@ -5,6 +5,8 @@ export type HttpMethod = "GET" | "POST" | "PATCH";
 
 export interface SessionContext {
   readonly scope: AuthScope;
+  readonly editorUserId?: string;
+  readonly editorSessionId?: string;
   readonly editorRoles?: readonly EditorRoleSlug[];
   readonly gameUserStatus?: GameUserStatus;
   readonly emailVerified?: boolean;

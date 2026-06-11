@@ -1,16 +1,22 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 
 export interface JsonResponseBody {
   readonly [key: string]: unknown;
 }
 
-export function sendJson(response: ServerResponse, statusCode: number, body: JsonResponseBody): void {
+export function sendJson(
+  response: ServerResponse,
+  statusCode: number,
+  body: JsonResponseBody,
+  headers: OutgoingHttpHeaders = {}
+): void {
   const payload = JSON.stringify(body);
 
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
-    "x-content-type-options": "nosniff"
+    "x-content-type-options": "nosniff",
+    ...headers
   });
   response.end(payload);
 }

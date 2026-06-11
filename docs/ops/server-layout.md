@@ -2,7 +2,7 @@
 
 ## Status
 
-Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn actief en gevalideerd.
+Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.2 API/editor runtimes zijn actief en gevalideerd. Fase 5.3 wijzigt de API/editor runtime voor echte editor-login; Codex moet de services na build herstarten en opnieuw browser-smoken.
 
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt geen actieve serverstatus.
 
@@ -157,6 +157,13 @@ GameBibleNode save-policy:
 - legacy `GameBibleNode.php` is gedepricieerd voor normale browser-saves en mag alleen tijdelijk schrijven met buiten-Git serverbescherming, zoals Basic Auth, IP allowlist of een buiten-Git token;
 - Codex moet bevestigen dat POST zonder server-side auth faalt.
 
+Fase 5.3 voegt toe:
+
+- `/auth/editor/login`, `/auth/editor/logout` en `/auth/editor/me` zijn echte API-routes op dezelfde `/auth/` proxy;
+- de browser krijgt een editor session cookie en CSRF-cookie na succesvolle login;
+- GameBibleNode browser-save gebruikt dezelfde editor session;
+- Apache moet publieke `X-GK-Smoke-Scope` en `X-GK-Smoke-Editor-Roles` headers strippen voordat requests de API bereiken.
+
 Codex-resultaat:
 
 - Nginx is geinstalleerd als candidate-tooling.
@@ -216,6 +223,14 @@ Codex-resultaat:
 - `pnpm lint`: OK.
 
 Realtime gateway, workers, publish-services en latere game runtime krijgen eigen fasegates voordat ze als permanent actief mogen worden gemarkeerd.
+
+Fase 5.3 Codex-gate:
+
+- `pnpm install/build/typecheck/test/lint` draaien met Node 22;
+- `gk-api` en `gk-editor-web` herstarten met de nieuwe build;
+- normale editor-login smoke uitvoeren met `k3v1nc0@hotmail.com` en het buiten-Git wachtwoord;
+- GameBibleNode browser-save smoke uitvoeren met dezelfde editor session;
+- publieke save, legacy PHP public POST en game-session editor toegang blijven controleren op falen.
 
 ## MySQL en Redis
 
