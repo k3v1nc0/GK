@@ -214,7 +214,7 @@ async function handleEditorLogin(
       roles: user.roles
     },
     {
-      "set-cookie": createEditorSessionCookies(request, sessionToken, csrfToken, maxAgeSeconds)
+      "set-cookie": createEditorSessionCookies(request, sessionToken, csrfToken, maxAgeSeconds) as string[]
     }
   );
 }
@@ -239,7 +239,7 @@ async function handleEditorLogout(
   }
 
   sendJson(response, 200, { ok: true, authenticated: false }, {
-    "set-cookie": createEditorLogoutCookies(request)
+    "set-cookie": createEditorLogoutCookies(request) as string[]
   });
 }
 

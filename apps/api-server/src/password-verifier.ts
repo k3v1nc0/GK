@@ -1,7 +1,10 @@
 import { pbkdf2 as pbkdf2Callback, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
-const scrypt = promisify(scryptCallback);
+const scrypt = (password: string | Buffer, salt: string | Buffer, keylen: number, options: { N: number; r: number; p: number }): Promise<Buffer> =>
+  new Promise((resolve, reject) =>
+    scryptCallback(password, salt, keylen, options, (err, key) => err ? reject(err) : resolve(key))
+  );
 const pbkdf2 = promisify(pbkdf2Callback);
 
 export type EditorPasswordVerifier = (
@@ -37,30 +40,35 @@ export const verifyEditorPassword: EditorPasswordVerifier = async (
 };
 
 async function verifyScrypt(candidatePassword: string, storedHash: string): Promise<boolean> {
-  const parts = storedHash.split("$");
-
-  if (parts.length !== 6 || parts[0] !== "scrypt") {
-    return false;
+  // Format A: scrypt$N$r$p$saltBase64$hashBase64
+  if (storedHash.startsWith("scrypt$")) {
+    const parts = storedHash.split("$");
+    if (parts.length !== 6) return false;
+    const [, cost, blockSize, parallelization, saltBase64, expectedBase64] = parts;
+    if (!cost || !blockSize || !parallelization || !saltBase64 || !expectedBase64) return false;
+    const expected = Buffer.from(expectedBase64, "base64");
+    const actual = await scrypt(candidatePassword, Buffer.from(saltBase64, "base64"), expected.length, {
+      N: Number(cost), r: Number(blockSize), p: Number(parallelization)
+    });
+    return buffersEqual(actual, expected);
   }
 
-  const cost = parts[1];
-  const blockSize = parts[2];
-  const parallelization = parts[3];
-  const saltBase64 = parts[4];
-  const expectedBase64 = parts[5];
-
-  if (!cost || !blockSize || !parallelization || !saltBase64 || !expectedBase64) {
-    return false;
+  // Format B: scrypt:N=<n>,r=<r>,p=<p>:saltBase64url:hashBase64url
+  if (storedHash.startsWith("scrypt:")) {
+    const parts = storedHash.split(":");
+    if (parts.length !== 4) return false;
+    const [, params, saltB64url, expectedB64url] = parts;
+    const N = Number(params?.match(/N=(\d+)/)?.[1]);
+    const r = Number(params?.match(/r=(\d+)/)?.[1]);
+    const p = Number(params?.match(/p=(\d+)/)?.[1]);
+    if (!N || !r || !p || !saltB64url || !expectedB64url) return false;
+    const toBase64 = (s: string) => s.replace(/-/g, "+").replace(/_/g, "/");
+    const expected = Buffer.from(toBase64(expectedB64url), "base64");
+    const actual = await scrypt(candidatePassword, Buffer.from(toBase64(saltB64url), "base64"), expected.length, { N, r, p });
+    return buffersEqual(actual, expected);
   }
 
-  const expected = Buffer.from(expectedBase64, "base64");
-  const actual = (await scrypt(candidatePassword, Buffer.from(saltBase64, "base64"), expected.length, {
-    N: Number(cost),
-    r: Number(blockSize),
-    p: Number(parallelization)
-  })) as Buffer;
-
-  return buffersEqual(actual, expected);
+  return false;
 }
 
 async function verifyPbkdf2Sha256(candidatePassword: string, storedHash: string): Promise<boolean> {
