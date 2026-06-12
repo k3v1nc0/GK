@@ -14,6 +14,8 @@ Fase-status: Fase 8 is server-side afgerond en klaar. Fase 8.1 is server-side af
 
 Fase 8.1 publiceert niets naar Runtime Game. Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 
+Commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) staat op `main`. De asset refresh is server-side uitgevoerd en de asset scan is OK met GLB=4, UI images=37, audio files=21, invalid=0 en missing=0.
+
 ## Fase 8 server-side resultaat
 
 Fase 8 is server-side afgerond op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
@@ -62,6 +64,43 @@ Bevestigd:
 - game-site reachable: OK;
 - `gk-api` en `gk-editor-web` draaien via Node 22 en zijn actief/herstart.
 
+## Asset refresh na Assets - new
+
+De asset refresh na commit `44defc0f79f032cabc07eba43573a40c5f629b97` is server-side afgerond.
+
+Bevestigd:
+
+- commit `Assets - new` staat op `main`;
+- `git pull`: up to date;
+- `git status`: clean;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- asset scan: OK;
+- `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`;
+- GLB=4;
+- UI images=37;
+- audio files=21;
+- invalid=0;
+- missing=0;
+- `assetsCopiedToGit=false`;
+- `publishesRuntimeOutput=false`;
+- `assignsDefinitiveRuntimeRoles=false`;
+- blockers: geen.
+
+Interpretatie:
+
+- HUD-bestanden zijn UI/image assets.
+- Icon-bestanden zijn UI/image assets.
+- Minimap marker-bestanden zijn UI/image assets.
+- Ambience, music, SFX en UI-audio zijn audio assets.
+- UI/audio assets zijn beschikbaar als asset-library candidates, niet als hardcoded HUD/audio runtimecontent.
+- Bestaande GLB's blijven actief als geregistreerde candidate assets.
+- `Taverne.glb` blijft candidate.
+- `Wizard.glb` blijft candidate.
+- Definitieve runtime roles zijn niet toegekend.
+
 ## Fase 8.1 Git-basis
 
 Fase 8.1 legt de procedural generation foundation vast in het node-system voordat wereld-, zone-, camera-, lighting- en minimapnodes worden gebouwd.
@@ -96,10 +135,10 @@ Fase 8.1 sluit aan op:
 - Runtimecode bevat alleen engine-capabilities.
 - Assetpad is bevestigd: `/var/www/gk/assets`.
 - `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` is bevestigd.
-- GLB=4, UI images=0, audio=0.
+- Actuele asset scan: GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
 - GLB-assets hebben nog geen definitieve runtime-role mapping.
 - GLB role mapping blijft editor-data/Kevin-keuze.
-- UI/audio count 0 is geldig en mag geen dummy assets veroorzaken.
+- UI/audio assets zijn asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
 - Entity draft, validation, asset mapping, group state, procedural preview en procedural bake publiceren niets naar runtime.
 - Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 - Server/runtime blijft later authoritative; client mag geen eigen MMO-state verzinnen.
@@ -143,6 +182,8 @@ Belangrijkste grenzen:
 
 Fase 9 blijft `World, camera, lighting, levels/zones en minimap nodes`, maar wordt afhankelijk van Fase 8.1.
 
+Fase 9 mag worden geopend wanneer Kevin dat doet. De vereiste Fase 8.1 server-side validatie en asset refresh zijn afgerond, maar Fase 9 is nog niet geimplementeerd.
+
 Fase 9 mag:
 
 - generated zones gebruiken;
@@ -150,20 +191,22 @@ Fase 9 mag:
 - generated path networks gebruiken;
 - generated resource distributions gebruiken;
 - generated entity placements gebruiken;
-- camera, lighting, fog, sky en minimap als editor/node-data modelleren.
+- camera, lighting, fog, sky en minimap als editor/node-data modelleren;
+- UI images en audio files als asset-library candidates aanbieden aan world/HUD/minimap/audio nodes.
 
 Fase 9 mag niet:
 
 - world/zone/minimap als losse hardcoded world settings bouwen;
 - camera/light/minimap waarden hard-coden;
+- HUD-, icon-, minimap- of audio-assets als definitieve runtimecontent hard-coden;
 - procedural generation core opnieuw definieren;
 - procedural output direct naar runtime publiceren.
 
 ## Open Kevin-input
 
-Geen blokkerende Kevin-input voor de Fase 8.1 Git-basis.
+Geen blokkerende Kevin-input voor de Fase 8.1 Git-basis of de nieuwe asset scan.
 
-Voor server-side validatie is geen nieuwe Kevin-input nodig. Voor latere concrete generatorgedrag, editorervaring of testgraphs kan Kevin-input later blokkerend worden wanneer zulke keuzes niet uit GameBible/editor-data/registries komen.
+Voor Fase 9 kan Kevin-input later blokkerend worden zodra concrete camera, lighting, minimap, HUD of audio-keuzes nodig zijn die niet uit GameBible/editor-data/registries/procedural draft-output komen.
 
 ## Fasebeoordeling
 
@@ -171,4 +214,6 @@ Fase 8 is klaar.
 
 Fase 8.1 server-side is afgerond en klaar.
 
-Huidige status: Fase 8.1 is server-side gevalideerd.
+Huidige status: Fase 8.1 is server-side gevalideerd en de asset scan na `Assets - new` is OK.
+
+Volgende fase: Fase 9 mag worden geopend wanneer Kevin dat doet, maar is nog niet geimplementeerd.

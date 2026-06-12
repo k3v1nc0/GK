@@ -31,19 +31,23 @@ Fase 6 voegt de graph-core toe:
 - operation log;
 - draft preview die valideert maar niets publiceert.
 
-Fase 8 breidt typed value sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
+Fase 8 breidt typed value sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Asset picker en audio picker lezen registered assets, maar wijzen geen runtime-role mapping of definitieve audio/UI inzet toe.
 
 Fase 8.1 breidt typed sockets uit met procedural references voor seeds, generator graphs, generation outputs en generated draft/candidate data. Deze blijven editor draft/candidate data en publiceren niets naar Runtime Game.
+
+Na `Assets - new` is de asset scan OK met GLB=4, UI images=37 en audio files=21. Deze assets zijn beschikbaar voor picker/panel-capabilities als candidates; concrete HUD, minimap, music, ambience, SFX of UI-audio keuzes blijven node/editor-data.
 
 ## Asset, audio, entity en procedural panels
 
 Panels zijn generieke capabilities:
 
 - `Asset Panel` leest Fase 7 asset-library state en toont GLB/UI/audio counts.
+- `Asset Panel` toont de actuele scanstatus GLB=4, UI images=37, audio files=21, invalid=0 en missing=0.
 - `Asset Panel` toont missing, invalid, unassigned, candidate en assigned role mapping status.
 - `Asset Panel` laat role mapping als editor-data/capability zien en wijst geen definitieve runtime-rollen toe.
 - `Audio Panel` leest dezelfde asset library en filtert op audio records.
-- `Audio Panel` blijft leeg/gated wanneer audio count 0 is.
+- `Audio Panel` toont de 21 audio assets als ambience, music, SFX en UI-audio candidates.
+- `Audio Panel` wijst geen definitieve music state, ambience zone, SFX event of UI feedback toe.
 - `Audio Panel` toont geen dummy audio.
 - `Entity / Component Panel` toont Fase 8 component stack state.
 - `Entity / Component Panel` toont candidate/assigned/invalid component counts.
@@ -51,15 +55,15 @@ Panels zijn generieke capabilities:
 - `Entity / Component Panel` houdt runtime-active behavior gated totdat editor-data en animation mapping bestaan.
 - `Procedural Generation Panel` is vanaf Fase 8.1 het contract voor seed controls, generator graph state, preview result state, validation issues, bake draft actions en generated candidate lists.
 - `Procedural Generation Panel` mag generated output tonen als draft/candidate, maar niet als definitieve runtimecontent.
-- `HUD Editor` configureert later HUD nodes, zonder definitieve HUD-layout.
-- `Minimap Panel` configureert later minimap nodes, zonder definitieve minimapvorm of waarden.
+- `HUD Editor` configureert later HUD nodes. HUD image assets zijn beschikbaar als candidates, maar bepalen geen definitieve HUD-layout.
+- `Minimap Panel` configureert later minimap nodes. Minimap marker assets zijn beschikbaar als candidates, maar bepalen geen definitieve minimapvorm of waarden.
 - `Game Users` vereist editor scope en `editor_admin`.
 
-GLB-bestanden mogen alleen kandidaat-capability metadata tonen totdat Kevin/editor een role mapping als data kiest.
+GLB-bestanden mogen alleen kandidaat-capability metadata tonen totdat Kevin/editor een role mapping als data kiest. UI/audio assets mogen alleen kandidaat-metadata tonen totdat Kevin/editor concrete node-koppelingen kiest.
 
 ## Fase 8.1 procedural panel status
 
-Git-basis voorbereid:
+Git-basis voorbereid en server-side gevalideerd:
 
 - Procedural Generation Panel state bestaat;
 - seed controls zijn expliciet seed-driven;
@@ -83,6 +87,8 @@ Fase 5 houdt deze preview expliciet leeg:
 - geen audio of HUD-keuzes.
 
 De preview wacht op latere editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish.
+
+Na de nieuwe asset scan blijven HUD-, minimap- en audio-assets library candidates. De preview mag ze pas tonen of gebruiken wanneer editor draft/procedural/publish-data daar expliciet naar verwijst.
 
 ## Auth boundary
 
@@ -174,6 +180,8 @@ Fase 7 voegt asset-library routes en panel state toe en is server-side afgerond 
 Fase 8 voegt entity/component contracts, node types, routes en panel state toe en is server-side afgerond op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
 
 Fase 8.1 voegt procedural generation contracts, deterministic random core, node types, routes, panel state, migratie en tests toe. Fase 8.1 is server-side gevalideerd.
+
+De asset refresh na `Assets - new` is server-side uitgevoerd. Asset scan OK: GLB=4, UI images=37, audio files=21, invalid=0, missing=0, `assetsCopiedToGit=false`, `publishesRuntimeOutput=false`, `assignsDefinitiveRuntimeRoles=false`.
 
 ## Fase 8.1 server-smoke
 

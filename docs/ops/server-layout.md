@@ -10,6 +10,8 @@ Fase 8 entity/component core is server-side gevalideerd door Codex op HEAD `5b48
 
 Fase 8.1 procedural generation core is server-side gevalideerd en klaar.
 
+Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asset refresh server-side uitgevoerd en is de asset scan OK met GLB=4, UI images=37, audio files=21, invalid=0 en missing=0.
+
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt alleen serverstatus wanneer die expliciet server-side is gevalideerd.
 
 ## Hoofdregels
@@ -20,6 +22,7 @@ Dit document beschrijft de single-server fundering voor de nieuwe game onder `/v
 - Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
 - Procedural generation output blijft draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
+- UI/audio assets blijven asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
 
 ## Bevestigde paden
 
@@ -44,30 +47,53 @@ Fase 5.2 rooktests gebruiken deze bevestigde endpointlijn via Apache en de API/e
 
 ## Assetstatus
 
-Fase 7 server-smoke heeft `/var/www/gk/assets` via `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` gevalideerd:
+De asset refresh na `Assets - new` heeft `/var/www/gk/assets` via `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` gevalideerd:
 
 | Type | Aantal | Gate |
 |---|---:|---|
 | GLB | 4 | Feitelijk aanwezig, alleen kandidaat role mapping |
-| UI images | 0 | Geldige lege library; geen dummy UI |
-| Audio | 0 | Geldige lege library; Audio Panel gated/leeg |
+| UI images | 37 | Aanwezig als asset-library candidates; geen hardcoded HUD/minimap/UI |
+| Audio | 21 | Aanwezig als asset-library candidates; geen hardcoded music/ambience/SFX/UI audio |
+| Invalid | 0 | OK |
+| Missing | 0 | OK |
 
 Aanwezige GLB-bestanden:
 
-- `Blacksmit forge.glb`
-- `Blacksmit.glb`
-- `Taverne.glb`
-- `Wizard.glb`
+- `assets/glb/buildings/Blacksmit forge.glb`
+- `assets/glb/buildings/Taverne.glb`
+- `assets/glb/characters/Blacksmit.glb`
+- `assets/glb/characters/Wizard.glb`
 
-Fase 7 bevestigd:
+UI image groepen:
+
+- HUD frames/fills;
+- action icons;
+- item icons;
+- status icons;
+- minimap markers.
+
+Audio groepen:
+
+- ambience;
+- music;
+- SFX;
+- UI audio.
+
+Bevestigd:
 
 - `Blacksmit forge.glb` bevat een spatie en werkt in scanner/library.
-- Alle 4 GLB records hebben `roleMapping.status=candidate`.
+- Alle 4 GLB records blijven candidate totdat editor-data/Kevin anders kiest.
+- `Taverne.glb` blijft candidate.
+- `Wizard.glb` blijft candidate.
 - GLB-bestanden krijgen geen definitieve runtime-role door de scanner.
+- HUD-bestanden worden als UI/image assets gezien.
+- Icon-bestanden worden als UI/image assets gezien.
+- Minimap marker-bestanden worden als UI/image assets gezien.
+- Ambience, music, SFX en UI audio worden als audio assets gezien.
 - `assetsCopiedToGit=false`.
 - `assignsDefinitiveRuntimeRoles=false`.
 - `publishesRuntimeOutput=false`.
-- UI/audio count 0 is geldig en veroorzaakt geen dummy assets.
+- De scan heeft geen blockers.
 
 Fase 8 bevestigd:
 
@@ -213,6 +239,23 @@ Realtime gateway, workers, publish-services en latere game runtime krijgen eigen
 - no asset copy to Git: OK.
 - anonymous/game denied: OK.
 
+### Assets - new
+
+- Commit `44defc0f79f032cabc07eba43573a40c5f629b97` staat op `main`.
+- `git pull`: up to date.
+- `git status`: clean.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK.
+- `pnpm lint`: OK.
+- Asset scan: OK.
+- GLB=4, UI images=37, audio files=21.
+- Invalid=0, missing=0.
+- `assetsCopiedToGit=false`.
+- `publishesRuntimeOutput=false`.
+- `assignsDefinitiveRuntimeRoles=false`.
+- Blockers: geen.
+
 ## MySQL en Redis
 
 Geen credentials in Git.
@@ -237,6 +280,7 @@ Afgerond door Codex/Claude:
 2. Fase 7 install/build/typecheck/test/lint, migratie, asset scan en route smoke afgerond.
 3. Fase 8 install/build/typecheck/test/lint, migratie, entity routes en runtime gates afgerond.
 4. Fase 8.1 install/build/typecheck/test/lint, migratie, procedural smoke en no-runtime-publish/no-asset-copy checks afgerond.
+5. Asset refresh na `Assets - new` uitgevoerd en scan OK met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
 
 Nog open voor Codex/Claude:
 
