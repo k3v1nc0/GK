@@ -14,10 +14,21 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "generation.output.reference",
   "generated.entity.draft.reference",
   "generated.group.draft.reference",
+  "generated.zone.candidate.reference",
   "generated.placement.candidate.reference",
   "generated.spawn-area.candidate.reference",
   "generated.path-network.candidate.reference",
-  "generated.resource-distribution.candidate.reference"
+  "generated.resource-distribution.candidate.reference",
+  "world.settings.reference",
+  "world.level.reference",
+  "world.zone.reference",
+  "world.spawnpoint.reference",
+  "camera.reference",
+  "lighting.reference",
+  "minimap.view.reference",
+  "minimap.layer.reference",
+  "minimap.marker.reference",
+  "ui.asset-display.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

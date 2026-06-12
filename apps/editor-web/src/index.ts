@@ -11,6 +11,7 @@ export * from "./game-user-management.js";
 export * from "./http-server.js";
 export * from "./node-canvas.js";
 export * from "./panels.js";
+export * from "./world-camera-minimap-panels.js";
 export * from "./world-preview.js";
 
 export interface EditorWorkspaceBoot {

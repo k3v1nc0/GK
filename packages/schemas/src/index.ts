@@ -1,41 +1,46 @@
-export type SchemaId = string;
-
-export type ValidationSeverity = "warning" | "error";
-
-export interface ValidationIssue {
-  readonly path: string;
-  readonly message: string;
-  readonly severity: ValidationSeverity;
-}
-
-export interface Validator<TInput> {
-  validate(input: TInput): readonly ValidationIssue[];
-}
-
-export interface PublishedNodeEnvelope {
-  readonly schemaId: SchemaId;
-  readonly nodeType: string;
-  readonly version: number;
-  readonly data: Readonly<Record<string, unknown>>;
-}
-
-export interface AssetReference {
-  readonly source: "asset-library";
-  readonly assetId: string;
-}
+export * from "./asset-library.js";
+export * from "./auth.js";
+export * from "./database.js";
+export * from "./entity-components.js";
+export * from "./editor-shell.js";
+export * from "./gamebible-node.js";
+export * from "./node-graph.js";
+export * from "./node-publish.js";
+export * from "./procedural-generation.js";
+export * from "./procedural-random.js";
+export * from "./procedural-validation.js";
+export * from "./world-camera-minimap.js";
+export * from "./world-camera-minimap-validation.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
-  "published-node-envelope",
-  "asset-reference",
-  "validation-issue",
-  "node-graph",
+  "asset-library",
+  "auth",
+  "database",
   "entity-components",
-  "procedural-generation"
+  "editor-shell",
+  "gamebible-node",
+  "node-graph",
+  "node-publish",
+  "procedural-generation",
+  "world-camera-minimap"
 ] as const;
 
-export * from "./auth.js";
-export * from "./entity-components.js";
-export * from "./entity-validation.js";
-export * from "./node-graph.js";
-export * from "./procedural-generation.js";
-export * from "./procedural-validation.js";
+export type SchemaPackageScope = (typeof SCHEMA_PACKAGE_SCOPE)[number];
+
+export interface PackageBoundaryContract {
+  readonly name: "@gk/schemas";
+  readonly allowedImports: readonly [
+    "typescript-runtime",
+    "standard-library"
+  ];
+  readonly exportsOnlyContracts: true;
+}
+
+export const schemaPackageBoundary: PackageBoundaryContract = {
+  name: "@gk/schemas",
+  allowedImports: [
+    "typescript-runtime",
+    "standard-library"
+  ],
+  exportsOnlyContracts: true
+};

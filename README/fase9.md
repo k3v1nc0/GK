@@ -1,188 +1,275 @@
 # Fase 9 - World, camera, lighting, levels/zones en minimap nodes
 
-## Vaste regels voor deze fase
-
-- Dit is een 100% nieuw project.
-- Alles draait eerst op 1 eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
-- Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
-- Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
-- De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
-- Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
-- De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
-- Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
-- Maak geen losse backupbestanden, geen tijdelijke markdown-dumps en geen extra README-bestanden die niet blijvend onderhouden worden.
-
 ## Status
 
-Fase 9 blijft Fase 9. Deze fase is nog niet geimplementeerd.
+Fase 9 Git-basis is voorbereid op `main`.
 
-Verplichte basis: Fase 8.1 - Procedural Generation Core. Fase 8.1 is server-side gevalideerd en klaar. Fase 9 mag als implementatiefase worden geopend wanneer Kevin dat doet.
+Fase 9 is nog niet server-side afgerond. Codex/Claude moet de huidige Git-basis nog valideren met build/typecheck/test/lint en editor/API smoke.
 
-Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asset refresh server-side uitgevoerd en is de asset scan OK met GLB=4, UI images=37, audio files=21, invalid=0 en missing=0.
-
-Belangrijke statusgrens: de nieuwe UI/audio assets zijn asset-library candidates. Ze zijn geen hardcoded HUD, minimap, music, ambience, SFX of UI-audio runtimecontent.
-
-## Doel van de fase
-
-Maak world settings volledig node-driven: levels/zones, spawnpoints, camera, belichting, fog, sky, day/night en minimap lagen voor editor en game.
-
-Fase 9 bouwt geen losse hardcoded world settings. World/zone/minimap nodes moeten kunnen werken met procedural outputs uit Fase 8.1:
-
-- generated zones;
-- generated spawn areas;
-- generated path networks;
-- generated resource distributions;
-- generated entity placements.
-
-Camera, lighting, fog, sky en minimap blijven node-data/editor-data. Fase 9 mag procedural generation gebruiken, maar mag de procedural core niet opnieuw definieren.
-
-## Verplichte afhankelijkheden
-
-Fase 9 moet aansluiten op:
+Fase 9 bouwt op:
 
 - Fase 6 typed node graph core;
 - Fase 7 asset library;
 - Fase 8 entity/component core;
 - Fase 8.1 procedural generation core.
 
-Fase 8.1 levert draft/preview/bake contracts voor generated world candidates. Fase 9 gebruikt die outputs als input voor world/zone/minimap capabilities, zonder ze automatisch naar runtime te publiceren.
+Na `Assets - new` is de asset scan OK:
 
-Voor Fase 9 start is server-side bevestigd:
+- GLB=4;
+- UI images=37;
+- audio files=21;
+- invalid=0;
+- missing=0.
 
-- Fase 8.1 migratie toegepast;
-- Fase 8.1 build/typecheck/test/lint groen;
-- procedural API/editor smoke groen;
-- determinism smoke groen;
-- no-runtime-publish/no-asset-copy bevestigd;
-- asset refresh na `Assets - new` uitgevoerd;
-- asset scan groen met GLB=4, UI images=37, audio files=21, invalid=0, missing=0;
-- `assetsCopiedToGit=false`, `publishesRuntimeOutput=false` en `assignsDefinitiveRuntimeRoles=false`.
+UI/HUD/minimap/audio assets zijn asset-library candidates, geen hardcoded runtimecontent.
 
-## Beschikbare asset-library candidates voor Fase 9
+## Vaste regels voor deze fase
 
-Fase 9 mag deze assets alleen als candidates via editor/node-data aanbieden:
+- Werk alleen op `main`.
+- Geen branch en geen pull request.
+- Geen assets toevoegen, wijzigen of kopieren.
+- Geen dummy assets of placeholder-content.
+- Geen concrete gamecontent hardcoden.
+- Geen vaste camera waardes hardcoden.
+- Geen vaste light/fog/sky waardes hardcoden.
+- Geen vaste minimap layout hardcoden.
+- Geen vaste world map hardcoden.
+- Geen runtime publish vanuit deze Git-basis.
+- Alles loopt via `Database > Editor/Node-system > Publish > Runtime Game`.
+- Runtimecode mag alleen engine-capabilities bevatten.
 
-- bestaande GLB's blijven actief als candidates;
-- `Taverne.glb` blijft candidate;
-- `Wizard.glb` blijft candidate;
-- HUD-bestanden tellen als UI/image assets;
-- icon-bestanden tellen als UI/image assets;
-- minimap marker-bestanden tellen als UI/image assets;
-- ambience, music, SFX en UI audio tellen als audio assets.
+## Doel
 
-Niet toegestaan:
+Maak world settings volledig node-driven:
 
-- GLB roles definitief toekennen zonder editor-data/Kevin-keuze;
-- HUD assets direct als runtime HUD-layout hard-coden;
-- minimap marker assets direct als runtime minimapregels hard-coden;
-- audio files direct als music/ambience/SFX/UI runtimegedrag hard-coden.
+- levels/zones;
+- spawnpoints;
+- camera;
+- lighting;
+- fog;
+- sky;
+- day/night;
+- minimap layers;
+- HUD/minimap asset display rules.
 
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
+Fase 9 mag Fase 8.1 generated output gebruiken als draft/candidate input, maar mag de procedural core niet opnieuw definieren.
 
-Kevin-input is pas nodig voor concrete keuzes die niet uit GameBible JSON, editor-data of procedural draft-output komen.
+## Git-basis toegevoegd
 
-Mogelijke keuzes:
+### World/zone schemas
 
-- camera stijl en waardes;
-- startlicht, ambient, fog en sky;
-- minimap vorm/zoom;
-- verschil tussen editor minimap en game minimap;
-- eerste level/zone naam, alleen wanneer die niet via GameBible/editor-data/procedural draft bepaald is;
-- welke generated zones, spawn areas, path networks, resource distributions of entity placements Kevin/editor accepteert of aanpast;
-- welke HUD, minimap marker, music, ambience, SFX of UI-audio candidates Kevin/editor later koppelt.
+Engine-contracten zijn toegevoegd voor:
 
-Als deze input ontbreekt, mag Fase 9 alleen generieke node capabilities bouwen en moet concrete content gated blijven.
+- world settings;
+- level;
+- zone;
+- spawnpoint;
+- zone bounds;
+- zone transition;
+- generated zone reference;
+- generated placement reference;
+- generated path network reference;
+- generated resource distribution reference.
 
-## Belangrijke grens
+Er is geen echte map data of vaste zone hardcoded. Willowmere Workshop mag alleen als bestaande Kevin/GameBible input worden behandeld, niet als runtimecode.
 
-Niet toegestaan in Fase 9:
+### Camera schemas/nodes
 
-- hardcoded camera distance, zoom, mode, smoothing of bounds;
-- hardcoded sun color, light intensity, fog, sky of day/night waardes;
-- hardcoded minimap shape, layers, zoom, markers of discovery rules;
-- hardcoded world maps, zones, routes, spawnpoints of resource distributions;
-- hardcoded HUD layout, HUD icons, minimap markers, music, ambience, SFX of UI audio;
-- procedural core opnieuw definieren;
-- procedural preview/bake direct naar runtime publiceren;
-- generated output als definitieve runtimecontent behandelen zonder normale publish-flow.
+Node contracts zijn toegevoegd voor:
 
-## Actie voor Codex
+- `camera.mode`;
+- `camera.followTarget`;
+- `camera.orbit`;
+- `camera.zoom`;
+- `camera.bounds`;
+- `camera.collision`;
+- `camera.transition`.
 
-Geen extra OS werk behalve migraties draaien en services starten als de Fase 9 Git-basis dat later nodig maakt.
+Camera values moeten uit node-data komen. Runtime mag geen vaste gamecamera afdwingen zonder node-data.
 
-Codex/Claude moet server-side na de Git-basis bevestigen:
+### Lighting/fog/sky schemas/nodes
 
-- build/typecheck/test/lint;
-- eventuele migraties;
-- world/camera/light/minimap editor/API smoke;
-- dat Fase 9 Fase 8.1 outputs kan lezen als draft/candidate input;
-- dat Fase 9 de asset-library candidates kan aanbieden zonder runtime roles toe te kennen;
-- dat Fase 9 geen procedural core opnieuw definieert;
-- dat preview/draft niets naar Runtime Game publiceert.
+Node contracts zijn toegevoegd voor:
 
-## Prompt voor GK Code Copiloot
+- `lighting.directional`;
+- `lighting.ambient`;
+- `lighting.fog`;
+- `lighting.sky`;
+- `lighting.dayNightCycle`.
 
-```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
+Er zijn geen concrete lighting presets toegevoegd.
 
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, zone, resource distribution, HUD, audio of minimap-instelling hard-coded bevatten.
-- Fase 9 mag de Fase 8.1 procedural generation core gebruiken, maar niet opnieuw definieren.
+### Minimap schemas/nodes
 
-Je werkt aan fase 9: World, camera, lighting, levels/zones en minimap nodes.
+Node contracts zijn toegevoegd voor:
 
-Doel:
-Maak world settings volledig node-driven: levels/zones, spawnpoints, camera, belichting, fog, sky, day/night en minimap lagen voor editor en game.
+- `minimap.view`;
+- `minimap.layer`;
+- `minimap.marker`;
+- `minimap.icon`;
+- `minimap.zoneBounds`;
+- `minimap.generatedPathLayer`;
+- `minimap.generatedResourceLayer`;
+- `minimap.generatedSpawnLayer`.
 
-Werk uit:
-Maak node families world, camera, lighting, minimap en level. Editor toont panels voor camera/light/minimap. Game en editor lezen verschillende minimap view nodes uit dezelfde data. World/zone/minimap nodes kunnen generated zones, generated spawn areas, generated path networks, generated resource distributions en generated entity placements uit Fase 8.1 gebruiken als draft/candidate input. UI/audio assets mogen alleen via asset-library references en nodes worden gekozen. Waardes mogen niet hard-coded in runtimecode.
+Editor minimap en game minimap mogen verschillen via node-data.
 
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
-```
+### HUD/UI asset display schemas
+
+Generieke UI asset display contracts zijn toegevoegd voor:
+
+- `asset.reference`;
+- natural width/height metadata;
+- `displayWidth`;
+- `displayHeight`;
+- optional min/max width/height;
+- `scaleMode`;
+- `anchor`;
+- `pivot`;
+- `opacity`;
+- `zIndex`;
+- responsive rules;
+- `nineSlice` margins.
+
+Belangrijke schaalregel:
+
+- source image natural size mag groot zijn;
+- natural size is metadata;
+- runtime/editor mag natural size nooit blind als display size gebruiken;
+- display size moet via node-data/editor-data komen;
+- default values zijn schema/editor hints, geen concrete HUD layout.
+
+Schema hints:
+
+- icon display default: 32x32;
+- minimap marker display default: 24x24;
+- small status icon default: 24x24;
+- HUD bar/frame display size blijft node-data required;
+- `nineSlice` is alleen geldig met slice margins uit node-data.
+
+## Node types
+
+Toegevoegd aan de core node registry:
+
+- `gk.world.settings`;
+- `gk.world.level`;
+- `gk.world.zone`;
+- `gk.world.spawnpoint`;
+- `gk.world.generatedZoneReference`;
+- `gk.world.generatedPlacementReference`;
+- `gk.camera.mode`;
+- `gk.camera.followTarget`;
+- `gk.camera.orbit`;
+- `gk.camera.zoom`;
+- `gk.camera.bounds`;
+- `gk.camera.collision`;
+- `gk.camera.transition`;
+- `gk.lighting.directional`;
+- `gk.lighting.ambient`;
+- `gk.lighting.fog`;
+- `gk.lighting.sky`;
+- `gk.lighting.dayNightCycle`;
+- `gk.minimap.view`;
+- `gk.minimap.layer`;
+- `gk.minimap.marker`;
+- `gk.minimap.icon`;
+- `gk.minimap.zoneBounds`;
+- `gk.minimap.generatedPathLayer`;
+- `gk.minimap.generatedResourceLayer`;
+- `gk.minimap.generatedSpawnLayer`;
+- `gk.ui.assetDisplay`;
+- `gk.ui.iconDisplay`;
+- `gk.ui.hudFrame`;
+- `gk.ui.hudBar`;
+- `gk.ui.nineSlice`.
+
+## Editor/API contracts
+
+Editor panel state is voorbereid voor:
+
+- World Panel;
+- Zone Panel;
+- Camera Panel;
+- Lighting Panel;
+- Minimap Panel;
+- UI Display Inspector.
+
+Editor-only route contracts zijn voorbereid voor:
+
+- `GET /editor/world/settings`;
+- `POST /editor/world/validate`;
+- `GET /editor/minimap/settings`;
+- `POST /editor/minimap/validate`;
+- `GET /editor/ui-display/assets`;
+- `POST /editor/ui-display/validate`.
+
+State-changing routes vereisen CSRF/Origin protection. Anonymous/game sessions worden geweigerd. De route contracts publiceren niets naar runtime en wijzigen geen assets.
+
+## Validators
+
+Toegevoegd voor:
+
+- data-driven world/zone ids;
+- camera, lighting en minimap node-data;
+- generated world data die draft/candidate blijft;
+- minimap marker source via UI asset.reference of procedural marker source;
+- UI display node met displayWidth/displayHeight of responsive rule;
+- warning/error wanneer grote source natural size bestaat maar display size ontbreekt;
+- `nineSlice` met verplichte slice margins;
+- no-runtime-publish gates.
+
+## Tests
+
+Toegevoegd: `tests/phase9-world-camera-minimap.test.mjs`.
+
+Testdekking:
+
+- world/camera/light/minimap/UI node types bestaan;
+- values zijn node-data, niet hardcoded runtimecontent;
+- Fase 8.1 generated zone/path/resource/placement references blijven candidate input;
+- UI display node schaalt grote source images via displayWidth/displayHeight;
+- minimap marker display hint is klein en overrideable via node-data;
+- missing display size geeft validation issue;
+- `nineSlice` zonder margins geeft validation issue;
+- editor/game minimap views kunnen verschillen via node-data;
+- anonymous/game denied voor editor world/minimap beheer;
+- geen runtime publish.
+
+## Open Codex/Claude-taken
+
+Nog server-side valideren:
+
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- editor/API smoke voor world/minimap/UI display contracts;
+- bevestigen dat er geen runtime publish of assetmutatie is;
+- bevestigen dat anonymous/game sessions geen editor world/minimap beheer krijgen.
 
 ## Acceptatiechecklist
 
-- [ ] Fase 9 gebruikt Fase 8.1 procedural outputs als draft/candidate input waar relevant.
-- [ ] Camera settings via nodes.
-- [ ] Wereldbelichting via nodes.
-- [ ] Fog/sky via nodes.
-- [ ] Level/zone beheer via nodes.
-- [ ] Generated zones kunnen als editor-data worden bekeken of gekozen.
-- [ ] Generated spawn areas kunnen als editor-data worden bekeken of gekozen.
-- [ ] Generated path networks kunnen als editor-data worden bekeken of gekozen.
-- [ ] Generated resource distributions kunnen als editor-data worden bekeken of gekozen.
-- [ ] Generated entity placements kunnen als editor-data worden bekeken of gekozen.
-- [ ] Editor minimap en game minimap kunnen verschillen.
-- [ ] HUD/UI image candidates blijven node/editor-data.
-- [ ] Audio candidates blijven node/editor-data.
-- [ ] Geen hardcoded camera/light/minimap/world/HUD/audio values.
-- [ ] Geen procedural core opnieuw gedefinieerd.
-- [ ] Geen runtime publish vanuit draft/preview.
+- [x] Fase 9 Git-basis gebruikt Fase 8.1 procedural outputs als draft/candidate input waar relevant.
+- [x] Camera settings via node contracts.
+- [x] Wereldbelichting via node contracts.
+- [x] Fog/sky via node contracts.
+- [x] Level/zone beheer via node contracts.
+- [x] Generated zones kunnen als candidate reference worden gemodelleerd.
+- [x] Generated spawn areas kunnen als candidate input worden gemodelleerd.
+- [x] Generated path networks kunnen als candidate input worden gemodelleerd.
+- [x] Generated resource distributions kunnen als candidate input worden gemodelleerd.
+- [x] Generated entity placements kunnen als candidate input worden gemodelleerd.
+- [x] Editor minimap en game minimap kunnen verschillen via node-data.
+- [x] HUD/UI image candidates blijven node/editor-data.
+- [x] Audio candidates blijven node/editor-data.
+- [x] Geen hardcoded camera/light/minimap/world/HUD/audio values in Fase 9 Git-basis.
+- [x] Geen procedural core opnieuw gedefinieerd.
+- [x] Geen runtime publish vanuit draft/preview contracts.
+- [ ] Server-side build/typecheck/test/lint bevestigd.
+- [ ] Server-side editor/API smoke bevestigd.
 
-## Testplan
+## Fasebeoordeling
 
-1. Gebruik een Fase 8.1 procedural draft met generated zone, spawn area, path network, resource distribution en entity placement candidates.
-2. Koppel deze candidates aan Fase 9 world/zone/minimap node-data zonder runtime publish.
-3. Maak twee minimap view nodes: editor toont debug/selection, game toont player/party/quest/discovery-data uit published data.
-4. Controleer dat camera, light, fog, sky en minimap values niet hard-coded zijn.
-5. Controleer dat HUD/UI image candidates en audio candidates alleen via node/editor-data gekoppeld worden.
-6. Controleer dat Fase 9 procedural generation niet opnieuw definieert en alleen de Fase 8.1 outputs consumeert.
+Fase 9 Git-basis is voorbereid.
+
+Fase 9 is nog niet server-side klaar totdat Codex/Claude de open checks bevestigt.
