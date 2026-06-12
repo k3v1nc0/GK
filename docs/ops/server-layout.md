@@ -2,9 +2,9 @@
 
 ## Status
 
-Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
+Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd. Fase 7 asset library, scanner, editor API, editor panels, database migration en runtime smoke zijn server-side gevalideerd door Claude op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`).
 
-Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt geen actieve serverstatus.
+Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt alleen serverstatus wanneer die expliciet server-side is gevalideerd.
 
 ## Hoofdregels
 
@@ -80,13 +80,13 @@ Codex-resultaat:
 
 ## Assetstatus
 
-Codex heeft `/var/www/gk/assets` gecontroleerd:
+Fase 7 server-smoke heeft `/var/www/gk/assets` via `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` gevalideerd:
 
 | Type | Aantal | Gate |
 |---|---:|---|
-| GLB | 4 | Feitelijk aanwezig, nog geen definitieve runtime-role mapping |
-| UI images | 0 | Latere asset-library/node gate |
-| Audio | 0 | Latere asset-library/audio-node gate |
+| GLB | 4 | Feitelijk aanwezig, alleen kandidaat role mapping |
+| UI images | 0 | Geldige lege library; geen dummy UI |
+| Audio | 0 | Geldige lege library; Audio Panel gated/leeg |
 
 Aanwezige GLB-bestanden:
 
@@ -95,7 +95,15 @@ Aanwezige GLB-bestanden:
 - `Taverne.glb`
 - `Wizard.glb`
 
-Er zijn geen submappen en geen dubbele bestandsnamen. `Blacksmit forge.glb` bevat een spatie; Fase 7 moet scanner, URLs, database records en node IDs daarop testen.
+Fase 7 bevestigd:
+
+- `Blacksmit forge.glb` bevat een spatie en werkt in scanner/library.
+- Alle 4 GLB records hebben `roleMapping.status=candidate`.
+- GLB-bestanden krijgen geen definitieve runtime-role door de scanner.
+- `assetsCopiedToGit=false`.
+- `assignsDefinitiveRuntimeRoles=false`.
+- `publishesRuntimeOutput=false`.
+- UI/audio count 0 is geldig en veroorzaakt geen dummy assets.
 
 ## Secrets en env
 
@@ -146,6 +154,13 @@ Fase 5.2 voegt toe:
 - `/editor/` proxyt naar de editor-web runtime;
 - exact `/README/GameBibleNode.html`, `/README/GameBibleNode.json` en `/README/GameBibleNode.php` mogen bereikbaar blijven;
 - andere `README`-paden blijven dicht.
+
+Fase 7 voegt toe:
+
+- `/editor/assets/library` proxyt naar de API runtime en blijft editor-only;
+- `/editor/assets/scan` proxyt naar de API runtime en blijft editor-only plus CSRF/Origin beschermd;
+- anonymous en game sessions krijgen geen editor asset beheer;
+- asset scan uploadt niets, maakt geen assets aan, kopieert niets naar Git en publiceert niets naar Runtime Game.
 
 GameBibleNode save-policy:
 
@@ -241,6 +256,41 @@ Fase 5.3 server-smoke:
 - publieke save en legacy PHP write blijven dicht;
 - bestaande game-site blijft bereikbaar.
 
+Fase 7 server-smoke:
+
+- HEAD server-check: `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`).
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK, 53/53 pass.
+- `pnpm lint`: OK.
+- `db/migrations/0003_asset_library_register.sql` toegepast.
+- `asset_library_records` bestaat.
+- `asset_library_scan_runs` bestaat.
+- GLB count = 4.
+- UI count = 0.
+- Audio count = 0.
+- `Blacksmit forge.glb` met spatie werkt.
+- `publishesRuntimeOutput=false`.
+- `assetsCopiedToGit=false`.
+- `assignsDefinitiveRuntimeRoles=false`.
+- Alle 4 GLB records hebben `roleMapping.status=candidate`.
+- `gk-api` active/enabled via `/opt/gk/node-v22/bin/node`.
+- `gk-editor-web` active/enabled via `/opt/gk/node-v22/bin/node`.
+- `/editor` werkt.
+- Editor admin login werkt.
+- `/auth/editor/me` geeft `editor_admin`.
+- `GET /editor/assets/library` werkt.
+- `POST /editor/assets/scan` werkt met editor session en CSRF.
+- Anonymous krijgt geen asset beheer.
+- Game session krijgt geen asset beheer.
+- Asset Panel aanwezig.
+- Audio Panel aanwezig en gated/leeg bij audio=0.
+- GameBible save blijft werken.
+- Game site blijft bereikbaar.
+- DB CHECK constraint blokkeert `publishes_runtime_output=1`.
+- Blockers: geen.
+
 ## MySQL en Redis
 
 Geen credentials in Git.
@@ -262,10 +312,13 @@ Codex-resultaat:
 - Database `gk` en user `gk_app@127.0.0.1` zijn aangemaakt/gecontroleerd.
 - Redis is geinstalleerd, actief/enabled.
 - `redis-cli ping` gaf `PONG`.
+- Fase 7 migratie `db/migrations/0003_asset_library_register.sql` is toegepast.
+- Fase 7 tabellen `asset_library_records` en `asset_library_scan_runs` bestaan.
+- Fase 7 DB CHECK constraint blokkeert `publishes_runtime_output=1`.
 
 ## Codex-taken buiten Git
 
-Afgerond door Codex:
+Afgerond door Codex/Claude:
 
 1. `/var/www/gk` runtime directories aangemaakt of bevestigd.
 2. `gk` group/user aangemaakt.
@@ -277,12 +330,20 @@ Afgerond door Codex:
 8. Apache-hardening buiten Git toegevoegd en Apache configuratie gevalideerd/herladen.
 9. systemd templates buiten Git gevalideerd.
 10. `ops/scripts/create-runtime-dirs`, `ops/scripts/check-host` en `ops/scripts/check-assets` server-side gedraaid.
+11. Fase 7 install/build/typecheck/test/lint server-side groen bevestigd.
+12. Fase 7 MySQL migratie toegepast en tabellen bevestigd.
+13. Fase 7 echte scan op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` bevestigd.
+14. Fase 7 editor-only asset read/scan routes getest.
+15. Fase 7 anonymous/game-denial getest.
+16. Fase 7 watcher/polling smoke bevestigd zonder permanente daemon vanuit Git.
+17. Fase 7 runtime-publish en Git-copy gates bevestigd.
 
 Nog open voor Codex:
 
 1. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
 2. Nginx niet live activeren zonder aparte migratiefase.
 3. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.
+4. Fase 8 pas voorbereiden of implementeren wanneer Kevin die fase opent.
 
 ## Fase 2-klaar criterium
 
@@ -298,4 +359,4 @@ Fase 2 is pas volledig server-klaar wanneer:
 - systemd server-side is gevalideerd en waar relevant actief;
 - secrets buiten Git staan.
 
-Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache hoofdwebserver bevestigd; Nginx inactive/candidate; Fase 5.2 API/editor services actief en gevalideerd. Toekomstige services blijven fasegebonden gates.
+Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache hoofdwebserver bevestigd; Nginx inactive/candidate; Fase 5.2/Fase 5.3 API/editor services actief en gevalideerd; Fase 7 asset library server-side gevalideerd en klaar. Toekomstige services blijven fasegebonden gates.

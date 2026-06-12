@@ -2,6 +2,12 @@ import type {
   AssetLibrarySnapshot,
   AssetRecord
 } from "@gk/asset-library";
+import {
+  ENTITY_COMPONENT_TYPES,
+  ENTITY_RUNTIME_ACTIVE_ANIMATION_COMPONENTS,
+  type EntityComponentDraft,
+  type EntityComponentType
+} from "@gk/schemas";
 import type { EditorPanelDescriptor } from "@gk/shared-ui";
 
 export type EditorPanelId =
@@ -11,6 +17,7 @@ export type EditorPanelId =
   | "history"
   | "asset-panel"
   | "audio-panel"
+  | "entity-component-panel"
   | "hud-editor"
   | "minimap-panel"
   | "game-users";
@@ -54,6 +61,30 @@ export interface AudioPanelState {
   readonly audioPickerEnabled: boolean;
   readonly gateOpenWhenAudioCountIsZero: true;
   readonly inventedAudio: readonly never[];
+}
+
+export interface EntityComponentPanelState {
+  readonly panelId: "entity-component-panel";
+  readonly componentTypes: readonly EntityComponentType[];
+  readonly componentStatusCounts: {
+    readonly candidate: number;
+    readonly assigned: number;
+    readonly invalid: number;
+  };
+  readonly renderableUsesAssetReference: true;
+  readonly npcAnimationWarning: {
+    readonly severity: "warning";
+    readonly blocksCandidate: false;
+    readonly blocksRuntimeActive: true;
+  };
+  readonly audioEmitterGate: {
+    readonly audioAssetCount: number;
+    readonly audioPickerEnabled: boolean;
+    readonly gatedWhenAudioCountIsZero: true;
+  };
+  readonly groupTransformPrepared: true;
+  readonly publishesRuntimeOutput: false;
+  readonly inventedContent: readonly never[];
 }
 
 export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
@@ -107,6 +138,15 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     title: "Audio Panel",
     region: "dock",
     capability: "audio-library-inventory",
+    requiresEditorSession: true,
+    requiresEditorAdmin: false,
+    acceptsConcreteGameContent: false
+  },
+  {
+    id: "entity-component-panel",
+    title: "Entity / Component Panel",
+    region: "dock",
+    capability: "entity-component-draft-authoring",
     requiresEditorSession: true,
     requiresEditorAdmin: false,
     acceptsConcreteGameContent: false
@@ -177,6 +217,37 @@ export function createAudioPanelState(library: AssetLibrarySnapshot | null = nul
   };
 }
 
+export function createEntityComponentPanelState(
+  library: AssetLibrarySnapshot | null = null,
+  components: readonly EntityComponentDraft[] = []
+): EntityComponentPanelState {
+  const audioAssetCount = library?.counts.audio ?? 0;
+
+  return {
+    panelId: "entity-component-panel",
+    componentTypes: ENTITY_COMPONENT_TYPES,
+    componentStatusCounts: {
+      candidate: components.filter((component) => component.status === "candidate").length,
+      assigned: components.filter((component) => component.status === "assigned").length,
+      invalid: components.filter((component) => component.status === "invalid").length
+    },
+    renderableUsesAssetReference: true,
+    npcAnimationWarning: {
+      severity: "warning",
+      blocksCandidate: false,
+      blocksRuntimeActive: true
+    },
+    audioEmitterGate: {
+      audioAssetCount,
+      audioPickerEnabled: audioAssetCount > 0,
+      gatedWhenAudioCountIsZero: true
+    },
+    groupTransformPrepared: true,
+    publishesRuntimeOutput: false,
+    inventedContent: []
+  };
+}
+
 export function summarizeAssetLibrary(library: AssetLibrarySnapshot | null): AssetInventorySummary | null {
   if (!library) {
     return null;
@@ -205,3 +276,5 @@ export function getEditorPanelDefinition(panelId: EditorPanelId): EditorPanelDes
 
   return panel;
 }
+
+export const ENTITY_COMPONENT_PANEL_ANIMATION_GATED_TYPES = ENTITY_RUNTIME_ACTIVE_ANIMATION_COMPONENTS;

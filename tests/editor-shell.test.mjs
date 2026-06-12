@@ -11,8 +11,14 @@ import { createEmptyNodeCanvasState } from "../apps/editor-web/src/node-canvas.t
 import {
   createAssetPanelState,
   createAudioPanelState,
+  createEntityComponentPanelState,
   EDITOR_PANEL_DEFINITIONS
 } from "../apps/editor-web/src/panels.ts";
+import {
+  createEmptyAssetLibrarySnapshot,
+  countAssetRecords,
+  createRoleMappingForAssetType
+} from "../packages/asset-library/src/index.ts";
 import { createEmptyWorldPreviewState } from "../apps/editor-web/src/world-preview.ts";
 
 const editorAdminSession = {
@@ -47,7 +53,7 @@ describe("Fase 5 editor shell layout", () => {
     assert.match(shellSource, /left: \["node-library"\]/);
     assert.match(shellSource, /right: \["inspector", "validation"\]/);
     assert.match(shellSource, /bottom: \["history"\]/);
-    assert.match(shellSource, /dockTabs: \["asset-panel", "audio-panel", "hud-editor", "minimap-panel", "game-users"\]/);
+    assert.match(shellSource, /dockTabs: \["asset-panel", "audio-panel", "entity-component-panel", "hud-editor", "minimap-panel", "game-users"\]/);
   });
 
   it("starts the node canvas empty with generic capability definitions", () => {
@@ -61,12 +67,13 @@ describe("Fase 5 editor shell layout", () => {
     assert.equal(canvas.capabilityDefinitions.every((definition) => definition.createsConcreteGameContent === false), true);
   });
 
-  it("exposes all Fase 5 panels as generic capabilities", () => {
+  it("exposes all editor panels as generic capabilities", () => {
     const panelIds = EDITOR_PANEL_DEFINITIONS.map((panel) => panel.id).sort();
 
     assert.deepEqual(panelIds, [
       "asset-panel",
       "audio-panel",
+      "entity-component-panel",
       "game-users",
       "history",
       "hud-editor",
@@ -94,20 +101,35 @@ describe("Fase 5 empty viewport and asset/audio gates", () => {
   });
 
   it("keeps asset and audio panels from inventing assets or roles", () => {
-    const inventory = {
-      glbCount: 4,
-      uiImageCount: 0,
-      audioCount: 0,
-      source: "server-scan"
-    };
-    const assetPanel = createAssetPanelState(inventory);
-    const audioPanel = createAudioPanelState(inventory);
+    const glbRecord = (n) => ({
+      assetId: `glb-${n}`,
+      assetType: "glb",
+      originalFilename: `model${n}.glb`,
+      normalizedKey: `glb/model${n}`,
+      relativePath: `glb/model${n}.glb`,
+      extension: ".glb",
+      sizeBytes: 1024,
+      modifiedAt: new Date().toISOString(),
+      contentHash: null,
+      metadata: {},
+      status: "active",
+      roleMapping: createRoleMappingForAssetType("glb")
+    });
+    const records = [glbRecord(1), glbRecord(2), glbRecord(3), glbRecord(4)];
+    const base = createEmptyAssetLibrarySnapshot("/var/www/gk/assets");
+    const snapshot = { ...base, records, counts: countAssetRecords(records) };
+    const assetPanel = createAssetPanelState(snapshot);
+    const audioPanel = createAudioPanelState(snapshot);
+    const entityPanel = createEntityComponentPanelState(snapshot);
 
     assert.equal(assetPanel.assignsRuntimeRoles, false);
     assert.deepEqual(assetPanel.inventedAssets, []);
     assert.equal(audioPanel.gateOpenWhenAudioCountIsZero, true);
     assert.deepEqual(audioPanel.inventedAudio, []);
     assert.equal(audioPanel.inventory?.audioCount, 0);
+    assert.equal(entityPanel.publishesRuntimeOutput, false);
+    assert.equal(entityPanel.audioEmitterGate.audioPickerEnabled, false);
+    assert.deepEqual(entityPanel.inventedContent, []);
   });
 });
 

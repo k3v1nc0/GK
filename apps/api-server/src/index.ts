@@ -8,6 +8,7 @@ import { startApiServer } from "./http-server.js";
 export * from "./auth-policy.js";
 export * from "./auth-routes.js";
 export * from "./editor-asset-library-routes.js";
+export * from "./editor-entity-routes.js";
 export * from "./editor-game-user-management.js";
 export * from "./editor-auth-store.js";
 export * from "./editor-graph-routes.js";

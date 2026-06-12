@@ -1,15 +1,15 @@
 # Current Phase
 
-Actieve fase: Fase 7 - auto asset/audio library uit assets-map.
+Actieve fase: Fase 8 - universal entity/component systeem voor GLB objecten en NPCs.
 
-Status: Fase 7 Git-basis voorbereid. De asset-library scanner core, editor-only API-contracten, editor panel state, asset-worker scan/polling contract, database-migratie en tests staan klaar in Git. Server-side migratie, echte `/var/www/gk/assets` scan, watcher/polling smoke en runtime/API smoke moeten nog door Codex/Claude op de server worden uitgevoerd.
+Status: Fase 8 Git-basis voorbereid. Entity/component schemas, validators, node types, editor-only API-contracten, Entity/Component panel state, database-migratie en tests staan klaar in Git. Server-side migratie, install/build/typecheck/test/lint, API/editor smoke en asset/entity checks moeten nog door Codex/Claude op de server worden uitgevoerd.
 
 ## Primaire bronnen
 
 Open voor de actuele fasecontractstatus:
 
 - `docs/design/phase-plan/current-phase.md`
-- `README/fase7.md`
+- `README/fase8.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/architecture/editor-shell.md`
 - `docs/architecture/auth-boundaries.md`
@@ -40,37 +40,21 @@ Fase 3 workspace, Fase 4 database/auth en Fase 5/Fase 5.3 editor-login plus Game
 
 Fase 6 is server-side afgerond. De node graph core bestaat uit typed sockets, meerdere poorten, dropdown/input field schemas, edge validation, editor graph operations, undo/redo history met 100 acties per editor session, operation log en draft preview zonder publish.
 
-Fase 7 Git-basis is voorbereid:
+Fase 7 is server-side afgerond en klaar. Asset library scan, editor-only asset routes, Asset Panel, Audio Panel, migratie en runtime/gate checks zijn server-side bevestigd. GLB=4, UI=0 en audio=0. GLB role mapping staat alleen op `candidate` totdat editor-data/Kevin anders kiest.
 
-- `@gk/asset-library` definieert asset records voor `glb`, `ui_image` en `audio`;
-- scanner ondersteunt recursive scan, filenames met spaties, hash/metadata waar haalbaar, missing-status en validatie-issues;
-- GLB krijgt alleen kandidaat-capability metadata en geen definitieve runtime-role;
-- editor asset/audio panel state toont counts, missing/invalid/unassigned/candidate/assigned en houdt audio picker leeg/gated bij audio count 0;
-- editor-only API-contracten bestaan voor asset library read en scan trigger;
-- database-migratie `0003_asset_library_register.sql` bevat alleen schema, geen echte assetdata;
-- asset scan publiceert niets naar Runtime Game en kopieert geen assets naar Git.
+Fase 8 Git-basis is voorbereid:
 
-## Fase 6 server-side validatie
-
-Fase 6 commit op main:
-
-- `274bda6b90433656b6f04892dbd61cad4cf648c8`
-- `feat: add phase 6 node graph core`
-
-Claude heeft server-side bevestigd:
-
-- `pnpm install`: OK.
-- `pnpm build`: OK.
-- `pnpm typecheck`: OK.
-- `pnpm test`: OK, 44/44.
-- `pnpm lint`: OK.
-- `db/migrations/0002_node_graph_core.sql` is toegepast op MySQL.
-- Alle 6 graph-tabellen bestaan.
-- `gk-api` en `gk-editor-web` zijn active/enabled via `/opt/gk/node-v22/bin/node`.
-- Editor admin login, graph draft/operation/preview en GameBible save werken.
-- Anonymous/game session krijgt geen editor graph toegang.
-- Draft preview publiceert niets naar runtime.
-- Blockers: geen.
+- entity/component contracts bestaan voor transform, renderable, collider, interactable, npc_brain, audio_emitter, combatant, boss, loot, quest_target, merchant, player_appearance en group_transform;
+- entity drafts kunnen naar `asset.reference` uit de Fase 7 asset library verwijzen;
+- dezelfde GLB kan via editor-data/componenten object-candidate en NPC-candidate zijn;
+- `Taverne.glb` en `Wizard.glb` zijn alleen Kevin-testkeuzes, geen hardcoded runtimecontent;
+- missing animation mapping is warning voor candidate entities;
+- runtime-active NPC/combat/player behavior vereist expliciete animation mapping via editor-data;
+- audio emitter blijft gated bij audio count 0;
+- Fase 8 node types zijn toegevoegd als engine-capabilities;
+- editor-only entity API-contracten en Entity/Component panel state zijn voorbereid;
+- database-migratie `0004_entity_component_core.sql` bevat alleen schema, geen echte assetdata;
+- Fase 8 publiceert niets naar Runtime Game.
 
 ## Bevestigde grenzen
 
@@ -80,35 +64,37 @@ Claude heeft server-side bevestigd:
 - `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`.
 - GLB=4, UI=0, audio=0.
 - GLB assets hebben nog geen definitieve runtime-role mapping.
+- GLB role mapping blijft editor-data/Kevin-keuze.
+- UI/audio count 0 is geldig en veroorzaakt geen dummy assets.
 - Geen assets, data, secrets, dummy content of concrete gamecontent toegevoegd.
 - Editor-auth en game-auth zijn strikt gescheiden.
-- GameBibleNode browser-save blijft beschermd via editor session en admin-gate.
-- Draft preview en asset scan publiceren niets naar runtime.
+- Draft preview, asset scan en entity validation publiceren niets naar runtime.
 
-## Bevestigde Fase 6-input
+## Bevestigde Fase 8-input
 
-- `game.name = Eldoria`
-- `start zone = Willowmere Workshop`
-- `history depth = 100 undo/redo acties per editor session`
-
-`game.name` en `start zone` blijven contentdata uit Kevin-input/GameBible/editor-data en zijn niet als runtimecode of hard-coded worldcontent toegevoegd.
+- Object test GLB: `Taverne.glb`.
+- NPC test GLB: `Wizard.glb`.
+- Ontbrekende animaties zijn geen blocker voor kandidaat-entity.
+- Ontbrekende animaties geven wel validation warning.
+- NPC/combat/player behavior mag pas runtime-actief worden zodra animation mapping expliciet via editor-data is ingesteld.
 
 ## Open aandachtspunten
 
-Open Fase 7 Codex/Claude-taken:
+Open Fase 8 Codex/Claude-taken:
 
-- `pnpm install` server-side draaien en workspace lockfile valideren/bijwerken indien nodig.
+- `pnpm install` server-side draaien.
 - `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` server-side draaien.
-- `db/migrations/0003_asset_library_register.sql` toepassen op MySQL.
-- `/editor/assets/library` en `/editor/assets/scan` met editor session testen.
-- Anonymous/game session toegang tot asset beheer testen.
-- Echte scan op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` draaien.
-- Bevestigen dat GLB=4, UI=0, audio=0 netjes rapporteert.
-- Watcher/polling smoke buiten Git doen zonder permanente daemon vanuit Git te starten.
+- `db/migrations/0004_entity_component_core.sql` toepassen op MySQL.
+- Nieuwe Fase 8 tabellen controleren.
+- Entity API routes met editor session en CSRF testen.
+- Anonymous/game session denial voor entity beheer testen.
+- Asset/entity checks met `Taverne.glb` en `Wizard.glb` uitvoeren.
+- Bevestigen dat missing animation mapping warning is voor candidate en blocker voor runtime-active behavior.
+- Bevestigen dat Fase 8 niets publiceert naar runtime en geen assets naar Git kopieert.
 
 Open blijft toekomstwerk voor latere fases:
 
 - definitieve GLB-role mapping via editor-data/Kevin-keuze;
-- UI-assets, audio-assets, concrete content, economy en world settings;
-- toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan;
+- concrete UI-assets, audio-assets, content, economy en world settings;
+- runtime publish en game runtime pas activeren wanneer hun fase dit expliciet opent;
 - Nginx blijft candidate; geen Nginx-migratie zonder aparte migratiefase.

@@ -28,8 +28,11 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "published-node-envelope",
   "asset-reference",
   "validation-issue",
-  "node-graph"
+  "node-graph",
+  "entity-components"
 ] as const;
 
 export * from "./auth.js";
+export * from "./entity-components.js";
+export * from "./entity-validation.js";
 export * from "./node-graph.js";

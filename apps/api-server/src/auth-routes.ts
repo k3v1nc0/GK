@@ -223,6 +223,63 @@ export const AUTH_ROUTES = [
     auditAction: "editor.asset_library.scan"
   },
   {
+    id: "editor.entity.draft",
+    method: "GET",
+    path: "/editor/entities/draft",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.entity.validate",
+    method: "POST",
+    path: "/editor/entities/validate",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.entity.validate"
+  },
+  {
+    id: "editor.entity.groups",
+    method: "GET",
+    path: "/editor/entities/groups",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.entity.asset_mappings.read",
+    method: "GET",
+    path: "/editor/entities/asset-mappings",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.entity.asset_mappings.update",
+    method: "PATCH",
+    path: "/editor/entities/asset-mappings/:assetId",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.entity.asset_mappings.update"
+  },
+  {
     id: "editor.graph.draft",
     method: "GET",
     path: "/editor/graph/draft",

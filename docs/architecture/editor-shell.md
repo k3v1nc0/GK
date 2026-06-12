@@ -10,7 +10,7 @@ De standaardindeling is:
 - midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
 - rechts: `Inspector` en `Validation`;
 - onder: `History`;
-- dock tabs: `Asset Panel`, `Audio Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
+- dock tabs: `Asset Panel`, `Audio Panel`, `Entity / Component Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
 
 Tabs volgen het WAI-ARIA tab/panel model als contract voor latere UI-rendering. De huidige implementatie legt het layoutmodel vast, maar introduceert nog geen framework of browserbundler.
 
@@ -31,9 +31,9 @@ Fase 6 voegt de graph-core toe:
 - operation log;
 - draft preview die valideert maar niets publiceert.
 
-Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
+Fase 8 breidt typed value sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
 
-## Asset en audio panels
+## Asset, audio en entity panels
 
 Panels zijn generieke capabilities:
 
@@ -43,11 +43,31 @@ Panels zijn generieke capabilities:
 - `Audio Panel` leest dezelfde asset library en filtert op audio records.
 - `Audio Panel` blijft leeg/gated wanneer audio count 0 is.
 - `Audio Panel` toont geen dummy audio.
+- `Entity / Component Panel` toont Fase 8 component stack state.
+- `Entity / Component Panel` toont candidate/assigned/invalid component counts.
+- `Entity / Component Panel` toont animation warnings voor candidate NPC/combat/player behavior zonder mapping.
+- `Entity / Component Panel` houdt runtime-active behavior gated totdat editor-data en animation mapping bestaan.
 - `HUD Editor` configureert later HUD nodes, zonder definitieve HUD-layout.
 - `Minimap Panel` configureert later minimap nodes, zonder definitieve minimapvorm of waarden.
 - `Game Users` vereist editor scope en `editor_admin`.
 
 GLB-bestanden mogen alleen kandidaat-capability metadata tonen totdat Kevin/editor een role mapping als data kiest.
+
+Fase 7 server-side bevestigd:
+
+- Asset Panel is aanwezig.
+- Audio Panel is aanwezig.
+- Audio Panel blijft gated/leeg bij audio=0.
+- Alle 4 GLB records hebben `roleMapping.status=candidate`.
+- Geen asset panel-flow publiceert naar Runtime Game.
+
+Fase 8 Git-basis voorbereid:
+
+- Entity/Component panel state bestaat.
+- Renderable component gebruikt `asset.reference`.
+- Audio emitter blijft gated/leeg bij audio=0.
+- Group transform state is voorbereid.
+- Entity validation publiceert niets naar Runtime Game.
 
 ## Viewport / World Preview
 
@@ -99,7 +119,12 @@ API runtime:
 - `POST /editor/graph/operation`;
 - `POST /editor/graph/preview`;
 - `GET /editor/assets/library`;
-- `POST /editor/assets/scan`.
+- `POST /editor/assets/scan`;
+- `GET /editor/entities/draft`;
+- `POST /editor/entities/validate`;
+- `GET /editor/entities/groups`;
+- `GET /editor/entities/asset-mappings`;
+- `PATCH /editor/entities/asset-mappings/:assetId`.
 
 Editor runtime:
 
@@ -141,11 +166,47 @@ De scanroute:
 
 Game sessions en anonymous requests krijgen geen editor asset beheer.
 
+Fase 7 server-side bevestigd:
+
+- `/editor` werkt.
+- Editor admin login werkt.
+- `/auth/editor/me` geeft `editor_admin`.
+- `GET /editor/assets/library` werkt.
+- `POST /editor/assets/scan` werkt met editor session en CSRF.
+- Anonymous krijgt geen asset beheer.
+- Game session krijgt geen asset beheer.
+- GameBible save blijft werken.
+- Game site blijft bereikbaar.
+
+## Fase 8 entity routes
+
+Entity routes zijn editor-only:
+
+- `GET /editor/entities/draft` levert entity draft state.
+- `POST /editor/entities/validate` valideert component stacks.
+- `GET /editor/entities/groups` levert group/transform draft state.
+- `GET /editor/entities/asset-mappings` levert asset-to-entity candidate mapping state.
+- `PATCH /editor/entities/asset-mappings/:assetId` accepteert role mapping draft data als editor-data.
+
+De routes:
+
+- vereisen editor scope;
+- blijven CSRF/Origin beschermd voor state-changing requests;
+- uploaden geen assets;
+- maken geen concrete runtimecontent aan;
+- kopieren geen assets naar Git;
+- publiceren niets naar Runtime Game;
+- wijzen geen definitieve runtime-role mapping toe zonder editor-data.
+
+Game sessions en anonymous requests krijgen geen editor entity beheer.
+
 ## Server/runtime gate
 
 Fase 5 Git-basis bewees nog niet dat `/editor` live draaide. Fase 5.1 voegde minimale startbare HTTP entrypoints toe voor API en editor-web. Fase 5.2 voegde permanente API/editor service-templates en GameBibleNode browser-save bridge toe. Fase 5.3 koppelde de editor shell aan echte editor-admin login. Fase 6 voegde graph routes toe.
 
-Fase 7 Git-basis voegt asset-library routes en panel state toe, maar de server-side scan, database-migratie, watcher/polling smoke en route smoke moeten nog door Codex/Claude worden uitgevoerd.
+Fase 7 voegt asset-library routes en panel state toe. Deze Fase 7 server-side scan, database-migratie, watcher/polling smoke en route smoke zijn afgerond door Claude op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d`.
+
+Fase 8 voegt entity/component contracts, node types, routes en panel state toe. Fase 8 is Git-basis voorbereid, maar server-side migratie, build/typecheck/test/lint, API/editor smoke en asset/entity checks moeten nog door Codex/Claude worden uitgevoerd.
 
 ## Fase 5.3 server-smoke
 
@@ -158,3 +219,32 @@ Afgerond:
 - logout werkt en save na logout faalt;
 - publieke save en legacy PHP write blijven dicht;
 - Node Canvas en Viewport / World Preview blijven leeg zonder dummy content.
+
+## Fase 7 server-smoke
+
+Afgerond:
+
+- `pnpm install/build/typecheck/test/lint`: OK;
+- `pnpm test`: 53/53 pass;
+- `db/migrations/0003_asset_library_register.sql` toegepast;
+- `asset_library_records` en `asset_library_scan_runs` bestaan;
+- GLB=4, UI=0, audio=0;
+- `Blacksmit forge.glb` met spatie werkt;
+- `publishesRuntimeOutput=false`;
+- `assetsCopiedToGit=false`;
+- `assignsDefinitiveRuntimeRoles=false`;
+- alle 4 GLB records hebben `roleMapping.status=candidate`;
+- DB CHECK constraint blokkeert `publishes_runtime_output=1`;
+- blockers: geen.
+
+## Fase 8 server-smoke
+
+Nog open voor Codex/Claude:
+
+- server-side `pnpm install/build/typecheck/test/lint`;
+- `db/migrations/0004_entity_component_core.sql` toepassen;
+- entity route smoke met editor session en CSRF;
+- anonymous/game-denial smoke;
+- asset/entity validation met `Taverne.glb` en `Wizard.glb`;
+- missing animation mapping warning/blocker gedrag bevestigen;
+- bevestigen dat entity validation niets naar Runtime Game publiceert.

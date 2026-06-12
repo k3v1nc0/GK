@@ -21,6 +21,12 @@
 
 Bouw asset-worker en editor bibliotheek die GLB, UI en audio assets automatisch kan scannen, registreren, tonen en bijwerken.
 
+## Status
+
+Fase 7 is server-side afgerond en klaar.
+
+Claude heeft de Fase 7 asset library, scanner, editor API, editor panels, database migration en runtime smoke server-side gevalideerd op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`). Er zijn geen Fase 7-blockers open.
+
 ## Belangrijke grens
 
 GLB-bestanden krijgen geen definitieve runtime-role door de scanner.
@@ -42,7 +48,7 @@ Niet toegestaan:
 
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
-Voor de Git-basis van deze fase is geen extra Kevin-input nodig.
+Voor Fase 7 is geen extra Kevin-input nodig.
 
 Voor latere content/publish-fases blijft nodig:
 
@@ -50,21 +56,26 @@ Voor latere content/publish-fases blijft nodig:
 - UI-assets wanneer HUD/UI-flow concrete assets verplicht maakt;
 - audio-assets wanneer muziek, ambience, SFX, UI audio of voice verplicht worden.
 
-## Actie voor Codex/Claude buiten Git
+## Server-side verificatie
 
-Run server-side na de Git-wijzigingen:
+Uitgevoerd door Claude buiten Git:
 
-- `pnpm install`;
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- MySQL migratie `db/migrations/0003_asset_library_register.sql`;
-- echte scan op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`;
-- watcher/polling smoke;
-- editor-only API smoke voor read/scan;
-- anonymous/game-denial smoke;
-- bevestig dat scan niets publiceert naar runtime en geen assets naar Git kopieert.
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK, 53/53 pass.
+- `pnpm lint`: OK.
+- MySQL migratie `db/migrations/0003_asset_library_register.sql` toegepast.
+- `asset_library_records` bestaat.
+- `asset_library_scan_runs` bestaat.
+- Echte scan op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` bevestigd.
+- GLB=4, UI=0 en audio=0 bevestigd.
+- `Blacksmit forge.glb` met spatie werkt.
+- Watcher/polling smoke bevestigd zonder permanente daemon vanuit Git.
+- Editor-only API smoke voor read/scan bevestigd.
+- Anonymous/game-denial smoke bevestigd.
+- Scan publiceert niets naar runtime en kopieert geen assets naar Git.
+- DB CHECK constraint blokkeert `publishes_runtime_output=1`.
 
 ## Prompt voor GK Code Copiloot
 
@@ -112,14 +123,14 @@ Verplichte controle:
 - [x] Database-migratie bevat alleen schema, geen echte assetdata.
 - [x] Scanner publiceert niets naar runtime.
 - [x] Geen assets in Git toegevoegd.
-- [ ] Server-side build/typecheck/test/lint groen.
-- [ ] MySQL migratie toegepast.
-- [ ] Echte server scan op `/var/www/gk/assets` bevestigd.
-- [ ] Watcher/polling smoke bevestigd.
+- [x] Server-side build/typecheck/test/lint groen.
+- [x] MySQL migratie toegepast.
+- [x] Echte server scan op `/var/www/gk/assets` bevestigd.
+- [x] Watcher/polling smoke bevestigd.
 
 ## Testplan
 
-Server-side:
+Server-side uitgevoerd:
 
 1. Zet `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`.
 2. Draai de asset scan.
@@ -130,3 +141,5 @@ Server-side:
 7. Controleer dat `/editor/assets/scan` alleen met editor session en CSRF/Origin werkt.
 8. Controleer dat anonymous/game session geen editor asset beheer krijgt.
 9. Controleer dat geen runtime publish of asset copy naar Git plaatsvindt.
+
+Resultaat: uitgevoerd en groen volgens Claude server-side verificatie; blockers: geen.

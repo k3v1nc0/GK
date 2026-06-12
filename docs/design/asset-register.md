@@ -2,9 +2,9 @@
 
 ## Status
 
-Dit register is de Fase 1-poort voor GLB-, UI- en assetgebruik. Codex heeft de serverassets gecontroleerd.
+Dit register is de poort voor GLB-, UI- en assetgebruik. Codex heeft de serverassets gecontroleerd en Fase 7 heeft de asset library server-side gevalideerd.
 
-Fase 1-status: assetbron bevestigd, assets feitelijk geregistreerd, role/content gates open voor latere fases.
+Fase 8-status: `Taverne.glb` is Kevin-testkeuze voor object-candidate validation en `Wizard.glb` is Kevin-testkeuze voor NPC-candidate validation. Dit zijn geen definitieve runtime-role mappings.
 
 ## Asset source policy
 
@@ -32,21 +32,22 @@ Niet toegestaan:
 
 ## Server assettelling
 
-Codex heeft bevestigd:
+Codex/Claude heeft bevestigd:
 
 | Type | Aantal | Status |
 |---|---:|---|
-| GLB | 4 | Aanwezig |
-| UI image | 0 | Niet aanwezig; latere asset gate |
-| Audio | 0 | Niet aanwezig; latere audio gate |
+| GLB | 4 | Aanwezig; Fase 7 roleMapping.status=`candidate` |
+| UI image | 0 | Niet aanwezig; geldige lege library |
+| Audio | 0 | Niet aanwezig; geldige lege library |
 
 Aanvullend:
 
 - Geen submappen onder `/var/www/gk/assets`.
 - Geen dubbele bestandsnamen.
-- Repo-assets zijn exact aanwezig op server.
-- Git bleef schoon bij de Codex-servercontrole.
-- `Blacksmit forge.glb` bevat een spatie in de bestandsnaam.
+- `Blacksmit forge.glb` bevat een spatie en werkt in Fase 7 scanner/library.
+- Asset scan publiceert niets naar runtime.
+- Asset scan kopieert geen assets naar Git.
+- GLB role mapping blijft editor-data.
 
 ## GLB assets
 
@@ -54,22 +55,36 @@ Deze bestanden bestaan in repo en server. Hun gameplayrol is nog niet definitief
 
 | Assetpad | Serverbestand | Status | Toegestaan gebruik | Gekoppelde nodes | Open gate |
 |---|---|---|---|---|---|
-| `assets/Blacksmit forge.glb` | `/var/www/gk/assets/Blacksmit forge.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
-| `assets/Blacksmit.glb` | `/var/www/gk/assets/Blacksmit.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
-| `assets/Taverne.glb` | `/var/www/gk/assets/Taverne.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
-| `assets/Wizard.glb` | `/var/www/gk/assets/Wizard.glb` | Bevestigd | Kandidaat GLB asset; geen definitieve rol | Fase 7: `asset.reference`, `asset.requireCapability`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Blacksmit forge.glb` | `/var/www/gk/assets/Blacksmit forge.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Blacksmit.glb` | `/var/www/gk/assets/Blacksmit.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset` | Role/capability-keuze via editor |
+| `assets/Taverne.glb` | `/var/www/gk/assets/Taverne.glb` | Candidate GLB; Fase 8 object-test | Kevin-testkeuze voor object-candidate validation; geen definitieve rol | `asset.reference`, `gk.entity.spawnFromAsset`, `gk.component.renderable` | Definitieve role mapping via editor |
+| `assets/Wizard.glb` | `/var/www/gk/assets/Wizard.glb` | Candidate GLB; Fase 8 NPC-test | Kevin-testkeuze voor NPC-candidate validation; geen definitieve rol | `asset.reference`, `gk.npc.makeFromAsset`, `gk.component.npcBrain` | Definitieve role mapping en animation mapping via editor |
 
 Let op: bestandsnamen zijn feiten, geen definitieve gamecontentbeslissing. Een assetnaam bepaalt nog niet of iets player, NPC, merchant, enemy, boss, prop, environment of quest object is.
 
+## Fase 8 entity/component gate
+
+Fase 8 mag een GLB alleen als candidate entity/component data gebruiken.
+
+Regels:
+
+- `Taverne.glb` mag als object-test in tests/docs worden gebruikt.
+- `Wizard.glb` mag als NPC-test in tests/docs worden gebruikt.
+- Geen van beide mag als definitieve runtime object/NPC role in broncode of migratie worden vastgelegd.
+- `renderable` gebruikt `asset.reference`.
+- `npc_brain`, `combatant`, `boss` en `player_appearance` blijven candidate zonder animation mapping.
+- Ontbrekende animation mapping is warning voor candidate.
+- Runtime-active NPC/combat/player behavior blokkeert zonder expliciete animation mapping via editor-data.
+
 ## Filename gate
 
-`Blacksmit forge.glb` bevat een spatie. Fase 7 moet controleren dat scanner, asset IDs, URLs, database records en node pickers dit correct ondersteunen. Als de pipeline geen spaties veilig ondersteunt, moet Fase 7 een structurele normalisatie- of validatieregel ontwerpen voordat assets worden gepubliceerd.
+`Blacksmit forge.glb` bevat een spatie. Fase 7 heeft bevestigd dat scanner, asset IDs, database records en node pickers dit correct ondersteunen. Latere runtime serving/URL-fases moeten deze gate opnieuw controleren wanneer assets publiek geserveerd worden.
 
 ## UI assets
 
 Status: 0 UI images aanwezig.
 
-UI-assets moeten later via asset library en nodes gekozen of toegevoegd worden. Dit blokkeert Fase 1 niet, maar blokkeert latere flows die concrete UI assets vereisen.
+UI-assets moeten later via asset library en nodes gekozen of toegevoegd worden. Dit blokkeert Fase 8 niet, maar blokkeert latere flows die concrete UI assets vereisen.
 
 Vereiste registratievelden:
 
@@ -88,6 +103,8 @@ Status: 0 audio assets aanwezig.
 
 Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag later worden toegevoegd of gekozen via asset library en audio nodes.
 
+Fase 8 `audio_emitter` blijft gated/leeg bij audio=0 en mag geen dummy audio tonen.
+
 ## Assetstatussen
 
 Gebruik deze statussen in latere fases:
@@ -97,6 +114,8 @@ Gebruik deze statussen in latere fases:
 | `server-present` | Bestand staat onder `/var/www/gk/assets` en Codex heeft het geteld. |
 | `repo-present` | Bestand staat ook in de repo-assets. |
 | `needs-kevin-choice` | Asset bestaat, maar Kevin/editor moet rol of gebruik kiezen. |
+| `candidate` | Asset of component is kandidaat, zonder definitieve runtime-role. |
+| `assigned` | Editor-data heeft expliciet een role/component mapping gekozen. |
 | `missing` | Asset is niet aanwezig. |
 | `blocked` | Asset is verplicht voor de fase en ontbreekt. |
 | `warning-only` | Asset is optioneel of mist niet-blokkerende metadata. |
@@ -106,7 +125,7 @@ Gebruik deze statussen in latere fases:
 Latere fases moeten deze assetkoppelingen via nodes beheren:
 
 - Fase 7: asset scan, asset library, role/capability mapping.
-- Fase 8: entity/component gebruik van GLB assets.
+- Fase 8: entity/component gebruik van GLB assets als candidates.
 - Fase 9: world/zone/spawn assetkoppelingen.
 - Fase 13: NPC GLB, taakgeluiden en NPC audio.
 - Fase 15: UI assets voor inventory, merchant, currency, scrolls.
@@ -115,11 +134,19 @@ Latere fases moeten deze assetkoppelingen via nodes beheren:
 
 ## Codex-taken buiten Git
 
-Afgerond voor Fase 1:
+Afgerond voor Fase 1/Fase 7:
 
 1. `/var/www/gk/assets` gecontroleerd.
 2. GLB-, UI- en audiobestanden geteld.
 3. `GK_ASSET_SOURCE_DIR="/var/www/gk/assets"` bevestigd.
 4. Repo-assets en server-assets vergeleken.
+5. Fase 7 asset library scan server-side gevalideerd.
+
+Open voor Fase 8 server-side:
+
+1. Entity/component migratie toepassen.
+2. Asset/entity validation check met `Taverne.glb` en `Wizard.glb` uitvoeren.
+3. Bevestigen dat candidate role mapping niet runtime-active wordt zonder editor-data.
+4. Bevestigen dat missing animation mapping warning is voor candidate en blocker voor runtime-active behavior.
 
 Latere fases kunnen nieuwe serverchecks nodig hebben wanneer assets worden toegevoegd of wanneer asset-worker, watcher, rechten, metadata-extractie of runtime serving worden gebouwd.

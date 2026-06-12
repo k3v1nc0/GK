@@ -2,41 +2,32 @@
 
 ## Fase
 
-Actieve fase: Fase 7 - auto asset/audio library uit assets-map.
+Actieve fase: Fase 8 - universal entity/component systeem voor GLB objecten en NPCs.
 
 ## Status
 
-Fase-status: Fase 7 Git-basis voorbereid; server-side validatie staat nog open.
+Fase-status: Fase 8 Git-basis voorbereid; server-side validatie staat nog open.
 
-Fase 7 bouwt de basis voor een automatische asset/audio library uit `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`. De fase voegt schema-contracten, scanner core, editor-only API-contracten, editor panel state, asset-worker scan/polling contract, database-migratie en tests toe. De fase publiceert niets naar Runtime Game.
+Fase 8 bouwt de basis voor component-gedreven entities bovenop Fase 6 typed graph sockets en Fase 7 asset library. De fase voegt schema-contracten, validators, generieke node types, editor-only API-contracten, Entity/Component panel state, database-migratie en tests toe. De fase publiceert niets naar Runtime Game.
 
 ## Doel
 
-Fase 7 maakt server-assets zichtbaar en beheerbaar als editor/library-data zonder assets in Git te zetten en zonder definitieve runtime-roles te hard-coden.
+Maak component-gedreven entities zodat dezelfde GLB via nodes object-kandidaat, NPC-kandidaat, enemy-kandidaat, boss-kandidaat, loot-kandidaat, VFX-kandidaat of player-appearance-kandidaat kan worden.
 
-De fase legt generieke capabilities vast voor:
+Dit blijft data-gedreven:
 
-- asset records voor `glb`, `ui_image` en `audio`;
-- original filename, normalized key/id, relative path, extension, size, modified timestamp, content hash waar haalbaar, metadata JSON en status;
-- statuswaarden `active`, `missing` en `invalid`;
-- role mapping status `unassigned`, `candidate` en `assigned`;
-- recursive scanner voor `GK_ASSET_SOURCE_DIR`;
-- filenames met spaties;
-- GLB, UI image en audio extensieherkenning;
-- missing asset reconciliation zonder serverbestanden te verwijderen;
-- watcher/polling contract zonder permanente daemon vanuit Git;
-- editor asset/audio panel counts en role mapping status;
-- editor-only read/scan routes;
-- scan responses met counts en validation issues;
-- database-schema voor asset register en scan runs zonder echte assetdata.
+- GLB role mapping blijft editor-data;
+- component stacks blijven editor/node-data;
+- runtime-active gedrag blijft gated;
+- publish/runtime consumeert pas later expliciet gepubliceerde data.
 
 ## Bronnen gecontroleerd
 
-Voor deze statusupdate zijn de actuele GitHub-bronnen gebruikt:
+Voor deze fase zijn de actuele GitHub-bronnen gebruikt:
 
 - `README/current-phase.md`
 - `docs/design/phase-plan/current-phase.md`
-- `README/fase7.md`
+- `README/fase8.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/design/content-gates.md`
 - `docs/design/asset-register.md`
@@ -44,6 +35,8 @@ Voor deze statusupdate zijn de actuele GitHub-bronnen gebruikt:
 - `docs/architecture/editor-shell.md`
 - `docs/ops/server-layout.md`
 - `README/GameBibleNode.json`
+- Fase 6 graph/schema code
+- Fase 7 asset-library/API/editor code
 
 ## Blijvende fasecontracten
 
@@ -56,123 +49,178 @@ Voor deze statusupdate zijn de actuele GitHub-bronnen gebruikt:
 - `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` is bevestigd.
 - GLB=4, UI images=0, audio=0.
 - GLB-assets hebben nog geen definitieve runtime-role mapping.
-- GLB-bestanden mogen alleen generieke kandidaat-capability metadata krijgen.
-- Role mapping is editor-data; Kevin/editor kiest later definitieve rollen.
+- GLB role mapping blijft editor-data/Kevin-keuze.
 - UI/audio count 0 is geldig en mag geen dummy assets veroorzaken.
-- Asset scan kopieert geen assets naar Git en publiceert niets naar runtime.
+- Entity draft, validation, asset mapping en group state publiceren niets naar runtime.
 
-## Fase 7 Git-output
+## Bevestigde Kevin-input
 
-Aangemaakt of bijgewerkt in Fase 7:
+- Object test GLB: `Taverne.glb`.
+- NPC test GLB: `Wizard.glb`.
+- Ontbrekende animaties zijn geen blocker voor kandidaat-entity.
+- Ontbrekende animaties geven wel validation warning.
+- NPC/combat/player behavior mag pas runtime-actief worden zodra animation mapping expliciet via editor-data is ingesteld.
 
-- `packages/asset-library/*`
-- `apps/asset-worker/src/index.ts`
-- `apps/api-server/src/editor-asset-library-routes.ts`
+Deze inputs mogen alleen worden gebruikt als test/fixture-input en documenteerde Kevin-keuze. Ze zijn geen hardcoded runtimecontent.
+
+## Fase 8 Git-output
+
+Aangemaakt of bijgewerkt in Fase 8:
+
+- `packages/schemas/src/entity-components.ts`
+- `packages/schemas/src/entity-validation.ts`
+- `packages/schemas/src/index.ts`
+- `packages/schemas/src/node-graph.ts`
+- `packages/node-types/src/entity-component-nodes.ts`
+- `packages/node-types/src/index.ts`
+- `apps/api-server/src/editor-entity-routes.ts`
 - `apps/api-server/src/auth-routes.ts`
 - `apps/api-server/src/http-server.ts`
 - `apps/api-server/src/index.ts`
 - `apps/editor-web/src/panels.ts`
-- package/tsconfig workspace-koppelingen voor API, editor-web, asset-worker en asset-library
-- `db/migrations/0003_asset_library_register.sql`
-- `tests/phase7-asset-library.test.mjs`
+- `apps/editor-web/src/editor-shell.ts`
+- `db/migrations/0004_entity_component_core.sql`
+- `tests/phase8-entity-components.test.mjs`
+- `tests/editor-shell.test.mjs`
 - fase-documentatie
 
-## Asset schema/contract
+## Entity/component schema
 
-Een asset record bevat:
+Fase 8 definieert generieke component-contracten voor:
 
-- `assetId`;
-- `assetType`: `glb`, `ui_image` of `audio`;
-- `originalFilename`;
-- `normalizedKey`;
-- `relativePath`;
-- `extension`;
-- `sizeBytes`;
-- `modifiedAt`;
-- `contentHash` met `sha256` wanneer veilig/haalbaar;
-- `metadata`;
-- `status`: `active`, `missing` of `invalid`;
-- `roleMapping.status`: `unassigned`, `candidate` of `assigned`.
+- `transform`
+- `renderable`
+- `collider`
+- `interactable`
+- `npc_brain`
+- `audio_emitter`
+- `combatant`
+- `boss`
+- `loot`
+- `quest_target`
+- `merchant`
+- `player_appearance`
+- `group_transform`
 
-GLB krijgt standaard alleen kandidaat-capability metadata. `assignedRole` blijft `null` totdat editor-data die keuze vastlegt.
+Een entity draft kan een `asset.reference` naar de Fase 7 asset library bevatten. Componenten hebben `candidate`, `assigned` of `invalid` status. Runtime-active gedrag gebruikt een aparte gate met editor-data confirmation en animation mapping.
+
+## Node types
+
+Fase 8 voegt generieke graph node types toe:
+
+- `gk.entity.spawnFromAsset`
+- `gk.entity.addComponent`
+- `gk.entity.group`
+- `gk.entity.groupTransform`
+- `gk.component.renderable`
+- `gk.component.transform`
+- `gk.component.collider`
+- `gk.component.interactable`
+- `gk.component.audioEmitter`
+- `gk.component.npcBrain`
+- `gk.component.combatant`
+- `gk.component.boss`
+- `gk.component.loot`
+- `gk.component.questTarget`
+- `gk.component.merchant`
+- `gk.component.playerAppearance`
+- `gk.npc.makeFromAsset`
+
+Fase 8 breidt `NODE_VALUE_SOCKET_TYPES` uit met:
+
+- `entity.reference`
+- `component.reference`
+- `entity.group.reference`
+
+`asset.reference` en `audio.reference` uit Fase 6/7 blijven leidend voor asset/audio pickers.
+
+## Validatie
+
+Fase 8-validatie:
+
+- `renderable` vereist een `asset.reference` naar een GLB asset met candidate/assigned editor-data status;
+- `transform` en `group_transform` vereisen data-gedreven position/rotation/scale velden;
+- `collider` is optional en data-gedreven;
+- `npc_brain`, `combatant`, `boss`, `merchant`, `quest_target` en `player_appearance` blijven candidate totdat expliciete editor-data bestaat;
+- `audio_emitter` vereist `audio.reference` wanneer audio assets bestaan;
+- audio count 0 blijft geldig en gated;
+- ontbrekende animation mapping geeft warning voor candidate entities;
+- runtime-active NPC/combat/player behavior vereist expliciete animation mapping via editor-data;
+- entity validation publiceert niets naar Runtime Game.
 
 ## API contract
 
 Editor-only routes:
 
-- `GET /editor/assets/library`
-- `POST /editor/assets/scan`
+- `GET /editor/entities/draft`
+- `POST /editor/entities/validate`
+- `GET /editor/entities/groups`
+- `GET /editor/entities/asset-mappings`
+- `PATCH /editor/entities/asset-mappings/:assetId`
 
-Beide routes vereisen editor scope. De scanroute is CSRF/Origin beschermd, uploadt niets, maakt geen assets aan, kopieert niets naar Git en publiceert niets naar runtime.
-
-Game sessions en anonieme requests mogen geen editor asset beheer krijgen.
+Game sessions en anonymous requests mogen geen editor entity beheer krijgen. State-changing routes blijven CSRF/Origin beschermd. Geen route uploadt assets, maakt runtimecontent aan of publiceert naar runtime.
 
 ## Database/schema contract
 
-Fase 7 database/schema contract:
+Fase 8 database/schema contract:
 
-- `asset_library_records`
-- `asset_library_scan_runs`
+- `editor_entity_template_drafts`
+- `editor_entity_component_definition_drafts`
+- `editor_entity_group_drafts`
+- `editor_entity_component_validation_issues`
+- `editor_asset_entity_role_mapping_drafts`
 
-De migratie is idempotent met `CREATE TABLE IF NOT EXISTS` en bevat geen echte assetdata.
+De migratie is idempotent met `CREATE TABLE IF NOT EXISTS` en bevat geen echte assetdata, geen Taverne/Wizard records en geen concrete gamecontent.
 
-## Content- en assetgrens
+## Editor UI contract
 
-Niet toegevoegd:
-
-- assets;
-- dummy assets;
-- fake GLB/UI/audio;
-- concrete gamecontent;
-- runtime-hardcoded NPCs, quests, prijzen, camera, lighting, minimap, boss, item, route, HUD of audio-keuzes.
-
-De bekende serverassetstatus blijft:
-
-- GLB=4;
-- UI=0;
-- audio=0;
-- GLB role mapping nog niet definitief gekozen.
+- Entity/Component panel state is voorbereid.
+- Component list toont candidate/assigned/invalid counts.
+- Renderable component toont `asset.reference`.
+- NPC/combat/player component toont animation warning als mapping ontbreekt.
+- Audio emitter blijft gated/leeg bij audio=0.
+- Group transform state is voorbereid.
+- Geen concrete NPC/object content wordt buiten Kevin-testkeuzes getoond.
 
 ## Open Kevin-input
 
-Geen blokkerende Kevin-input voor de Git-basis van Fase 7.
+Geen blokkerende Kevin-input voor de Git-basis van Fase 8.
 
-Definitieve GLB-role mapping, UI-assets en audio-assets blijven latere editor/content gates. Zonder Kevin/editor-keuze mag de code geen roles invullen.
+Definitieve GLB-role mapping, animation mappings voor runtime-active behavior, UI-assets en audio-assets blijven latere editor/content gates. Zonder Kevin/editor-keuze mag de code geen roles of behavior activeren.
 
-## Open Codex-taken buiten Git
+## Open Codex/Claude-taken buiten Git
 
-- `pnpm install` draaien en lockfile/workspace symlinks valideren.
+- `pnpm install` draaien.
 - `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` draaien.
-- `db/migrations/0003_asset_library_register.sql` toepassen.
-- Echte scan uitvoeren op `GK_ASSET_SOURCE_DIR=/var/www/gk/assets`.
-- Bevestigen dat de scan GLB=4, UI=0 en audio=0 meldt.
-- Filename met spatie server-side controleren.
-- Watcher/polling smoke doen zonder permanente daemon vanuit Git.
-- Editor-only route smoke doen voor read/scan.
+- `db/migrations/0004_entity_component_core.sql` toepassen.
+- Nieuwe Fase 8 tabellen controleren.
+- Editor-only route smoke doen voor entity draft/validate/groups/asset-mappings.
 - Anonymous/game session denial testen.
-- Bevestigen dat scan niets publiceert naar runtime en geen assets naar Git kopieert.
+- Asset/entity validation check met `Taverne.glb` als object-test en `Wizard.glb` als NPC-test.
+- Bevestigen dat missing animation mapping warning is voor candidate en blocker voor runtime-active behavior.
+- Bevestigen dat Fase 8 niets publiceert naar runtime en geen assets naar Git kopieert.
 
 ## Fasebeoordeling
 
-Fase 7 is nog niet volledig server-side klaar.
+Fase 8 is nog niet volledig server-side klaar.
 
 Afgerond in Git:
 
-- schema/contract;
-- scanner core;
-- watcher/polling contract;
-- editor asset/audio panel state;
+- entity/component schema;
+- component validators;
+- entity/component node types;
+- typed entity/component/group sockets;
 - editor-only API-contracten;
+- Entity/Component panel state;
 - database-migratie;
 - tests;
-- documentatiecorrectie rond GLB kandidaat-capabilities en role mapping.
+- documentatie rond Kevin-testkeuzes, animation gates en role mapping.
 
 Nog open:
 
 - server-side install/build/typecheck/test/lint;
 - MySQL migratie;
-- echte assets-map scan;
-- watcher/polling smoke;
-- API/editor smoke.
+- API/editor smoke;
+- asset/entity checks met echte server asset library.
 
-Huidige status: Fase 7 Git-basis voorbereid; server-side validatie moet nog volgen.
+Huidige status: Fase 8 Git-basis voorbereid; server-side validatie moet nog volgen.

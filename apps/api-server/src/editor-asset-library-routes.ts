@@ -29,6 +29,7 @@ export interface EditorAssetLibraryRouteOptions {
 }
 
 export interface EditorAssetLibraryResponse {
+  readonly [key: string]: unknown;
   readonly ok: true;
   readonly library: AssetLibrarySnapshot;
   readonly counts: AssetLibrarySnapshot["counts"];

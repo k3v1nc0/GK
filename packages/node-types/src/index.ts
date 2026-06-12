@@ -4,6 +4,8 @@ import type {
   Validator
 } from "@gk/schemas";
 
+import { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
+
 export type NodeCapabilityScope =
   | "engine-capability"
   | "editor-data"
@@ -160,9 +162,12 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
     ],
     validate: permissiveValidator,
     createsConcreteGameContent: false
-  }
+  },
+  ...ENTITY_COMPONENT_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
   return CORE_GRAPH_NODE_TYPES;
 }
+
+export { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";

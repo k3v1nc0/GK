@@ -5,7 +5,10 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "number",
   "color",
   "asset.reference",
-  "audio.reference"
+  "audio.reference",
+  "entity.reference",
+  "component.reference",
+  "entity.group.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

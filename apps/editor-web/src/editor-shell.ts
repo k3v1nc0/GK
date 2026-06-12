@@ -50,7 +50,7 @@ export const EDITOR_SHELL_LAYOUT: EditorDockLayoutDescriptor = {
   mainTabs: ["node-canvas", "viewport-world-preview"],
   right: ["inspector", "validation"],
   bottom: ["history"],
-  dockTabs: ["asset-panel", "audio-panel", "hud-editor", "minimap-panel", "game-users"]
+  dockTabs: ["asset-panel", "audio-panel", "entity-component-panel", "hud-editor", "minimap-panel", "game-users"]
 } as const;
 
 export function createEditorLoginEntryContract(): EditorLoginEntryContract {

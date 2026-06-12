@@ -5,6 +5,9 @@ import {
   handleEditorAssetLibraryHttpRequest
 } from "./editor-asset-library-routes.js";
 import {
+  handleEditorEntityHttpRequest
+} from "./editor-entity-routes.js";
+import {
   handleEditorGraphHttpRequest
 } from "./editor-graph-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
@@ -140,6 +143,10 @@ export async function handleApiRequest(
     sourceDir: dependencies.assetSourceDir,
     now
   })) {
+    return;
+  }
+
+  if (await handleEditorEntityHttpRequest(request, response, session)) {
     return;
   }
 

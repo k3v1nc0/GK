@@ -2,7 +2,7 @@
   "schema": "gamebible-node-system-v6.23",
   "title": "🎮 Game Bible - Arlen Tharys: Staff of Eldoria - Game Node System Lvl 1-100",
   "version": 6.23,
-  "updatedAt": "2026-06-11T06:36:25.071Z",
+  "updatedAt": "2026-06-12T05:19:23.755Z",
   "groups": [
     {
       "id": "col-level",
@@ -5348,6 +5348,11 @@
     }
   ],
   "tags": [
+    {
+      "id": "tag-game-name",
+      "name": "GameName",
+      "value": "Eldoria"
+    },
     {
       "id": "tag-game-name",
       "name": "Eldoria",

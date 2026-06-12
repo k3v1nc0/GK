@@ -17,6 +17,9 @@ importers:
 
   apps/api-server:
     dependencies:
+      '@gk/asset-library':
+        specifier: workspace:*
+        version: link:../../packages/asset-library
       '@gk/net-protocol':
         specifier: workspace:*
         version: link:../../packages/net-protocol
@@ -41,12 +44,18 @@ importers:
 
   apps/asset-worker:
     dependencies:
+      '@gk/asset-library':
+        specifier: workspace:*
+        version: link:../../packages/asset-library
       '@gk/shared-utils':
         specifier: workspace:*
         version: link:../../packages/shared-utils
 
   apps/editor-web:
     dependencies:
+      '@gk/asset-library':
+        specifier: workspace:*
+        version: link:../../packages/asset-library
       '@gk/schemas':
         specifier: workspace:*
         version: link:../../packages/schemas
@@ -86,6 +95,8 @@ importers:
       '@gk/node-engine':
         specifier: workspace:*
         version: link:../../packages/node-engine
+
+  packages/asset-library: {}
 
   packages/audio-runtime:
     dependencies:

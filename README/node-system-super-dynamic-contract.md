@@ -73,6 +73,9 @@ Minimaal ondersteunen:
 - asset.ui
 - asset.audio
 - entity
+- entity.reference
+- component.reference
+- entity.group.reference
 - npc
 - player
 - quest
@@ -87,6 +90,8 @@ Minimaal ondersteunen:
 - list
 
 Fase 6 heeft de eerste typed sockets vastgelegd als engine-capabilities: `var.string`, `number`, `color`, `asset.reference` en `audio.reference`.
+
+Fase 8 breidt de engine-capability sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Deze sockets zijn data-contracten voor editor drafts; ze publiceren niets naar Runtime Game.
 
 ## Asset import
 
@@ -125,6 +130,37 @@ Role mapping status:
 - `assigned`: editor-data heeft expliciet een role mapping gekozen.
 
 Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd als concrete role mapping.
+
+## Fase 8 entity/component laag
+
+Fase 8 voegt een universal entity/component systeem toe als editor- en node-contract. Een GLB kan kandidaat zijn voor meerdere component-combinaties zonder definitieve runtime-role.
+
+Component capabilities:
+
+- `transform`
+- `renderable`
+- `collider`
+- `interactable`
+- `npc_brain`
+- `audio_emitter`
+- `combatant`
+- `boss`
+- `loot`
+- `quest_target`
+- `merchant`
+- `player_appearance`
+- `group_transform`
+
+Belangrijke regels:
+
+- `renderable` gebruikt `asset.reference` naar de Fase 7 asset library.
+- `audio_emitter` gebruikt `audio.reference` en blijft gated wanneer audio count 0 is.
+- `npc_brain`, `combatant`, `boss`, `merchant`, `quest_target` en `player_appearance` blijven candidate totdat editor-data bestaat.
+- Ontbrekende animation mapping is warning voor candidate entities.
+- Runtime-active NPC/combat/player behavior vereist expliciete animation mapping via editor-data.
+- Entity validation en graph draft preview zijn geen publishstap.
+
+`Taverne.glb` en `Wizard.glb` zijn Fase 8 Kevin-testkeuzes. Ze zijn geen runtime-hardcoded object of NPC.
 
 ## Node families
 
@@ -183,7 +219,7 @@ Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd
 - minimap.questMarker
 - minimap.partyMarker
 
-### Entity nodes
+### Entity/component nodes
 
 - entity.spawn
 - entity.spawnFromAsset
@@ -194,6 +230,20 @@ Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd
 - entity.despawn
 - entity.setTag
 - entity.setVariable
+- component.renderable
+- component.transform
+- component.collider
+- component.interactable
+- component.audioEmitter
+- component.npcBrain
+- component.combatant
+- component.boss
+- component.loot
+- component.questTarget
+- component.merchant
+- component.playerAppearance
+
+Fase 8 implementeert de generieke `gk.entity.*`, `gk.component.*` en `gk.npc.makeFromAsset` contracten als engine-capabilities. Deze nodes maken candidate data, geen definitieve runtime-rollen.
 
 ### NPC task nodes
 
@@ -279,12 +329,13 @@ Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd
 ## Publish regels
 
 - Een GLB mag pas als concrete object/NPC/player/prop/environment/enemy/boss role worden gebruikt wanneer editor-data die role mapping expliciet heeft toegewezen.
-- Ontbrekende animaties geven waarschuwing.
+- Ontbrekende animaties geven waarschuwing voor candidate entities.
+- Runtime-active NPC/combat/player behavior blokkeert zonder expliciete animation mapping via editor-data.
 - Vreemde schaal geeft waarschuwing.
 - Hoog triangle budget geeft waarschuwing.
 - Ontbrekende audio geeft waarschuwing als audio optioneel is.
 - Ontbrekende audio blokkeert als een node die audio verplicht maakt.
 - Blokkeren gebeurt alleen als een gekozen node capability verplichte data mist.
-- Asset scan en draft preview zijn geen publishstap.
+- Asset scan, entity validation en draft preview zijn geen publishstap.
 
 Voorbeeld: een boss zonder boss health setup blokkeert pas wanneer editor-data/publish die boss-capability daadwerkelijk vereist. Een GLB met alleen `candidate` status mag niet automatisch boss, NPC of object worden.

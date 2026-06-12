@@ -62,10 +62,11 @@ De AI mag niet:
 
 | Input | Wanneer blokkerend |
 |---|---|
-| GLB role mapping | Zodra een fase player/NPC/enemy/boss/object rol nodig heeft |
+| GLB role mapping | Zodra publish/runtime een concrete player/NPC/enemy/boss/object rol wil gebruiken |
+| Animation mapping | Zodra NPC/combat/player behavior runtime-active wordt |
 | UI assets | Zodra HUD, inventory, merchant, quest tracker, scrolls of boss UI verplicht zijn |
 | Audio assets | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio verplicht zijn |
-| Asset filename met spatie | Zodra scanner/URL/database/node IDs spaties niet veilig ondersteunen |
+| Asset filename met spatie | Afgerond voor Fase 7 scan; opnieuw controleren wanneer URLs/runtime serving worden gebouwd |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist |
@@ -78,7 +79,9 @@ De AI mag niet:
 - `GK_ASSET_SOURCE_DIR` is bevestigd.
 - GLB/UI/audio aantallen zijn bekend.
 - Assetrollen zijn nog niet definitief gekozen; dat hoort via editor/node-data.
-- `Blacksmit forge.glb` bevat een spatie en moet in Fase 7 als filename/ID/URL-validatiepunt worden getest.
+- `Blacksmit forge.glb` bevat een spatie en is in Fase 7 scanner/library gevalideerd.
+- Fase 8 gebruikt `Taverne.glb` en `Wizard.glb` alleen als Kevin-testkeuzes voor candidate entity/component validation.
+- Fase 8 mag Taverne/Wizard niet als definitieve object/NPC runtime-role in code of migratie vastleggen.
 
 ### UI
 
@@ -90,6 +93,7 @@ De AI mag niet:
 
 - Huidige telling: 0 audio assets.
 - Music, ambience, SFX, UI audio en voice/dialogue moeten later via audio nodes en asset library worden gekoppeld.
+- Fase 8 audio emitter blijft gated/leeg bij audio count 0.
 
 ### Story/lore/names
 
@@ -106,6 +110,7 @@ De AI mag niet:
 
 - Leidende bron: `README/GameBibleNode.json`.
 - Boss GLB, UI/audio en combatwaarden moeten via assets/registers/nodes worden gekoppeld.
+- Fase 8 `combatant` en `boss` components zijn candidate schemas; runtime-active combat/boss behavior vereist editor-data en animation mapping.
 
 ### Currency en economy
 
@@ -121,6 +126,7 @@ De AI mag niet:
 - Typed sockets en field schemas zijn engine-capabilities; concrete waardes moeten uit node-data, GameBible, registers, database of expliciete Kevin-input komen.
 - Audio picker blijft gated zolang audio count 0 is.
 - Draft preview mag valideren en tonen, maar niets publiceren naar Runtime Game.
+- Fase 8 entity/component validation mag candidate data valideren, maar niets publiceren naar Runtime Game.
 
 ### Publish/runtime
 
@@ -128,6 +134,7 @@ De AI mag niet:
 - Publish blokkeert ontbrekende verplichte data.
 - Publish mag waarschuwingen geven voor optionele of kwaliteitsproblemen.
 - Draft preview is geen publishstap.
+- Asset scan en entity validation zijn geen publishstap.
 
 ## Te verifieren fase-input voor latere fases
 
@@ -151,6 +158,27 @@ Input/status vooraf:
 - GLB=4, UI=0, audio=0;
 - spatie in `Blacksmit forge.glb` testen in scanner/URL/database/node IDs;
 - geen assets in Git toevoegen als server-assetflow leidend is.
+
+### Fase 8
+
+Bronnen eerst openen:
+
+- `README/fase8.md`
+- `README/node-system-super-dynamic-contract.md`
+- `docs/design/asset-register.md`
+- `docs/design/audio-register.md`
+- `docs/architecture/editor-shell.md`
+
+Input/status vooraf:
+
+- Fase 7 asset library server-side klaar;
+- GLB=4, UI=0, audio=0;
+- object test GLB: `Taverne.glb`;
+- NPC test GLB: `Wizard.glb`;
+- Taverne/Wizard blijven Kevin-testkeuzes en geen runtime hardcode;
+- ontbrekende animation mapping is warning voor candidate;
+- runtime-active NPC/combat/player behavior vereist explicit animation mapping via editor-data;
+- definitieve GLB role mapping blijft editor-data/Kevin-keuze.
 
 ### Fase 9
 
