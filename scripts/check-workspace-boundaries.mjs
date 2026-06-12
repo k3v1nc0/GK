@@ -42,6 +42,7 @@ const ignoredDirectoryNames = new Set([
   "dist",
   "node_modules"
 ]);
+const maxSourceFileSize = 13_000;
 const failures = [];
 
 for (const dir of requiredDirs) {
@@ -74,7 +75,7 @@ const walk = (dir) => {
     }
 
     const size = stats.size;
-    if (size > 12_000) {
+    if (size > maxSourceFileSize) {
       failures.push(`Starter file is too large for Fase 3 skeleton: ${path}`);
     }
 

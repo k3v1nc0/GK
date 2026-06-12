@@ -78,7 +78,10 @@ export function createDeterministicSequence(options: {
   readonly count: number;
   readonly streamKey?: string;
 }): readonly number[] {
-  const stream = createDeterministicRandomStream({ seed: options.seed, streamKey: options.streamKey });
+  const stream = createDeterministicRandomStream({
+    seed: options.seed,
+    ...(options.streamKey !== undefined ? { streamKey: options.streamKey } : {})
+  });
   return Array.from({ length: options.count }, () => stream.next());
 }
 
