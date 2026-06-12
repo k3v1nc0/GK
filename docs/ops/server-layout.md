@@ -8,7 +8,7 @@ Fase 7 asset library, scanner, editor API, editor panels, database migration en 
 
 Fase 8 entity/component core is server-side gevalideerd door Codex op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
 
-Fase 8.1 procedural generation core heeft nu een Git-basis met code/docs/tests/migratie. Er is nog geen Fase 8.1 server-side verificatie uitgevoerd.
+Fase 8.1 procedural generation core is server-side gevalideerd en klaar.
 
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt alleen serverstatus wanneer die expliciet server-side is gevalideerd.
 
@@ -79,7 +79,7 @@ Fase 8 bevestigd:
 
 ## Procedural generation status
 
-Fase 8.1 Git-basis is voorbereid:
+Fase 8.1 server-side verificatie is afgerond:
 
 - procedural contracts en validators;
 - deterministic random utility;
@@ -89,10 +89,10 @@ Fase 8.1 Git-basis is voorbereid:
 - migratie `0005_procedural_generation_core.sql`;
 - tests voor determinism, draft-only output, generated entity/asset/audio gates en editor-only access.
 
-Nog open voor Codex/Claude server-side:
+Bevestigd:
 
 - `pnpm install/build/typecheck/test/lint`;
-- migratie `0005_procedural_generation_core.sql` toepassen;
+- migratie `0005_procedural_generation_core.sql` toegepast;
 - procedural API/editor smoke;
 - determinism smoke: zelfde seed + graph + inputs geeft dezelfde output;
 - different-seed smoke: andere seed mag andere output geven;
@@ -135,7 +135,7 @@ Fase 8.1 voegt toe als API-contract:
 - `/editor/procedural/generated`;
 - `/editor/procedural/issues`.
 
-Deze routes blijven editor-only, CSRF/Origin beschermd waar state-changing, en no-runtime-publish. Server-side Apache/API smoke moet nog volgen.
+Deze routes blijven editor-only, CSRF/Origin beschermd waar state-changing, en no-runtime-publish. Server-side Apache/API smoke is bevestigd.
 
 ## Runtime directory layout
 
@@ -205,15 +205,13 @@ Realtime gateway, workers, publish-services en latere game runtime krijgen eigen
 
 ### Fase 8.1
 
-Nog open:
-
-- `pnpm install/build/typecheck/test/lint`;
-- migratie `0005_procedural_generation_core.sql`;
-- procedural routes en panel smoke;
-- determinism/different-seed smoke;
-- no runtime publish;
-- no asset copy to Git;
-- anonymous/game denied.
+- `pnpm install/build/typecheck/test/lint`: OK.
+- migratie `0005_procedural_generation_core.sql`: OK.
+- procedural routes en panel smoke: OK.
+- determinism/different-seed smoke: OK.
+- no runtime publish: OK.
+- no asset copy to Git: OK.
+- anonymous/game denied: OK.
 
 ## MySQL en Redis
 
@@ -229,7 +227,7 @@ Codex moet buiten Git:
 - `DATABASE_URL` en `REDIS_URL` in de buiten-Git env file zetten;
 - runtime/build checks uitvoeren zodra services en tooling bestaan.
 
-Fase 7 en Fase 8 migraties zijn server-side toegepast. Fase 8.1 migratie is nog open.
+Fase 7 en Fase 8 migraties zijn server-side toegepast. Fase 8.1 migratie is toegepast en bevestigd.
 
 ## Codex-taken buiten Git
 
@@ -238,10 +236,10 @@ Afgerond door Codex/Claude:
 1. Runtime directories, user/group, env, MySQL, Redis, Apache-hardening en systemd templates server-side gevalideerd.
 2. Fase 7 install/build/typecheck/test/lint, migratie, asset scan en route smoke afgerond.
 3. Fase 8 install/build/typecheck/test/lint, migratie, entity routes en runtime gates afgerond.
+4. Fase 8.1 install/build/typecheck/test/lint, migratie, procedural smoke en no-runtime-publish/no-asset-copy checks afgerond.
 
 Nog open voor Codex/Claude:
 
-1. Fase 8.1 server-side verificatie uitvoeren.
-2. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
-3. Nginx niet live activeren zonder aparte migratiefase.
-4. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.
+1. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
+2. Nginx niet live activeren zonder aparte migratiefase.
+3. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.

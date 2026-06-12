@@ -69,11 +69,11 @@ De AI mag niet:
 | UI assets | Zodra HUD, inventory, merchant, quest tracker, scrolls of boss UI verplicht zijn |
 | Audio assets | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio verplicht zijn |
 | Asset filename met spatie | Afgerond voor Fase 7 scan; opnieuw controleren wanneer URLs/runtime serving worden gebouwd |
-| Procedural generation core | Git-basis voorbereid in Fase 8.1; server-side validatie nog open en blokkerend voor Fase 9 implementatie |
-| Procedural determinism | Git-test toegevoegd in Fase 8.1; server-side smoke nog open voordat generator output wordt gebruikt |
+| Procedural generation core | Afgerond: Fase 8.1 server-side bevestigd; Fase 9 bouwt hier later op |
+| Procedural determinism | Afgerond: server-side smoke bevestigd |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
-| Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist |
+| Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist zijn |
 
 ## Gate-checks per domein
 
@@ -104,7 +104,7 @@ De AI mag niet:
 
 ### Procedural generation
 
-Fase 8.1 is de verplichte core-basis voor procedural generation. De Git-basis is voorbereid, maar server-side validatie staat nog open.
+Fase 8.1 is de verplichte core-basis voor procedural generation. De core is server-side gevalideerd.
 
 Regels:
 
@@ -190,7 +190,7 @@ Bronnen eerst openen:
 Input/status vooraf:
 
 - Fase 8 server-side klaar;
-- Fase 8.1 Git-basis voorbereid;
+- Fase 8.1 server-side klaar;
 - procedural generation blijft engine-capability;
 - generator output blijft draft-only;
 - preview/bake publiceert niets naar runtime;
@@ -198,7 +198,7 @@ Input/status vooraf:
 - generated entities gebruiken Fase 8 contracts;
 - generated assets gebruiken Fase 7 `asset.reference`;
 - anonymous/game sessions krijgen geen procedural editor beheer;
-- server-side build/typecheck/test/lint/migratie/smoke nog open.
+- server-side build/typecheck/test/lint/migratie/smoke bevestigd.
 
 ### Fase 9
 

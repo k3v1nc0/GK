@@ -2,11 +2,11 @@
 
 ## Status
 
-Fase 8.1 Git-basis is voorbereid.
+Fase 8.1 server-side is afgerond en klaar.
 
-Deze fase is nog niet server-side klaar totdat Codex/Claude de serverchecks uitvoert: install/build/typecheck/test/lint, migratie `0005_procedural_generation_core.sql`, procedural API/editor smoke, determinism smoke en no-runtime-publish/no-asset-copy checks.
+Codex heeft install/build/typecheck/test/lint, migratie `0005_procedural_generation_core.sql`, procedural API/editor smoke, determinism smoke en no-runtime-publish/no-asset-copy checks uitgevoerd en bevestigd.
 
-Fase 8 is server-side afgerond en klaar. Fase 9 blijft Fase 9, maar mag pas als implementatiefase starten nadat Fase 8.1 server-side is gevalideerd of Kevin expliciet anders beslist.
+Fase 8 is server-side afgerond en klaar. Fase 9 blijft Fase 9, maar mag pas als implementatiefase starten wanneer Kevin die later opent.
 
 ## Waarom
 
@@ -159,15 +159,15 @@ De editor mag generated output tonen als draft/candidate, maar niet als definiti
 - [x] Geen concrete gamecontent hard-coded in Fase 8.1 source/tests.
 - [x] Geen assets naar Git in Fase 8.1 source/tests.
 - [x] Anonymous/game session krijgt geen procedural editor beheer in route contracts/tests.
-- [ ] Server-side `pnpm install/build/typecheck/test/lint` uitgevoerd.
-- [ ] Migratie `0005_procedural_generation_core.sql` toegepast.
-- [ ] Procedural API/editor smoke uitgevoerd.
-- [ ] Server-side determinism smoke uitgevoerd.
-- [ ] Server-side no-runtime-publish/no-asset-copy checks bevestigd.
+- [x] Server-side `pnpm install/build/typecheck/test/lint` uitgevoerd.
+- [x] Migratie `0005_procedural_generation_core.sql` toegepast.
+- [x] Procedural API/editor smoke uitgevoerd.
+- [x] Server-side determinism smoke uitgevoerd.
+- [x] Server-side no-runtime-publish/no-asset-copy checks bevestigd.
 
 ## Fase 8.1 Codex/Claude actie
 
-Na deze Git-basis:
+Afgerond door Codex/Claude:
 
 1. `pnpm install`.
 2. `pnpm build`.
@@ -184,7 +184,6 @@ Na deze Git-basis:
 
 ## Open aandachtspunten
 
-- Fase 8.1 is Git-technisch voorbereid, maar nog niet server-side afgerond.
 - Fase 9 mag niet starten als losse world/camera/minimap hardcodingfase.
 - Fase 9 mag procedural generation gebruiken, maar mag de procedural core niet opnieuw definieren.
 - Runtime publish blijft een aparte latere publish-flow.

@@ -178,7 +178,7 @@ Belangrijke regels:
 
 ## Fase 8.1 procedural generation laag
 
-Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system. De Git-basis is voorbereid; server-side validatie staat nog open.
+Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system. Server-side verificatie is afgerond en de basis is klaar.
 
 Belangrijke regels:
 

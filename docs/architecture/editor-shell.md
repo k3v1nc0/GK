@@ -68,7 +68,7 @@ Git-basis voorbereid:
 - generated entity/group/placement/spawn/path/resource lists zijn draft/candidate lists;
 - panel state accepteert geen concrete gamecontent en verzint niets.
 
-Server-side panel/API smoke moet nog door Codex/Claude worden uitgevoerd.
+Server-side panel/API smoke is bevestigd door Codex/Claude.
 
 ## Viewport / World Preview
 
@@ -173,14 +173,14 @@ Fase 7 voegt asset-library routes en panel state toe en is server-side afgerond 
 
 Fase 8 voegt entity/component contracts, node types, routes en panel state toe en is server-side afgerond op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
 
-Fase 8.1 voegt procedural generation contracts, deterministic random core, node types, routes, panel state, migratie en tests toe. Fase 8.1 is nog niet server-side gevalideerd.
+Fase 8.1 voegt procedural generation contracts, deterministic random core, node types, routes, panel state, migratie en tests toe. Fase 8.1 is server-side gevalideerd.
 
 ## Fase 8.1 server-smoke
 
-Nog open voor Codex/Claude:
+Bevestigd door Codex/Claude:
 
 - `pnpm install/build/typecheck/test/lint`;
-- migratie `0005_procedural_generation_core.sql` toepassen;
+- migratie `0005_procedural_generation_core.sql` toegepast;
 - procedural API/editor smoke;
 - determinism smoke: zelfde seed geeft dezelfde output;
 - different-seed smoke: andere seed mag andere output geven;

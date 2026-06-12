@@ -1,10 +1,10 @@
 # Current Phase
 
-Actieve status: Fase 8.1 Git-basis voorbereid; server-side validatie nog open.
+Actieve status: Fase 8.1 server-side afgerond en klaar.
 
-Volgende fase: Fase 8.1 server-side verificatie door Codex/Claude. Fase 9 blijft de volgende implementatiefase pas wanneer Kevin die later opent.
+Volgende fase: Fase 9 blijft de volgende implementatiefase pas wanneer Kevin die later opent.
 
-Status: Fase 8 is server-side afgerond en klaar. Fase 8.1 heeft nu Git/code/docs/tests voorbereid voor Procedural Generation Core, maar is nog niet server-side klaar totdat install/build/typecheck/test/lint, migratie en procedural smoke zijn uitgevoerd.
+Status: Fase 8 is server-side afgerond en klaar. Fase 8.1 heeft de procedural generation core, routes, panel, migratie en tests server-side bevestigd. Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 
 ## Primaire bronnen
 
@@ -33,7 +33,7 @@ Dit README-fasebestand blijft de korte fase-index. De inhoudelijke fasebeoordeli
 - Voor content geldt `README/GameBibleNode.json` als leidende Game Bible.
 - Concrete gamecontent loopt via `Database > Editor/Node-system > Publish > Runtime Game`, niet via runtime-hardcoding.
 - Pas een fase pas naar klaar aan als alle blokkerende input, Codex-taken en checks voor die fase zijn afgerond.
-- Fase 8.1 mag pas als klaar worden gemarkeerd nadat de server-side verificatie groen is.
+- Fase 8.1 is nu als klaar bevestigd na server-side verificatie.
 
 ## Laatste status
 
@@ -68,17 +68,24 @@ Fase 8 is server-side afgerond en klaar op HEAD `5b4872cfc1dbf737d31e78fb965e78a
 - blockers: geen;
 - `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
 
-Fase 8.1 Git-basis is voorbereid:
+Fase 8.1 is server-side afgerond en klaar. De verificatie bevestigde:
 
-- procedural schemas/contracts toegevoegd;
-- deterministic random utility toegevoegd;
-- procedural node types toegevoegd op Fase 6 typed sockets;
-- editor-only procedural API contracts toegevoegd;
-- Procedural Generation Panel state toegevoegd;
-- migratie `0005_procedural_generation_core.sql` toegevoegd;
-- tests toegevoegd voor seed, determinism, draft-only output, generated entity/asset/audio gates, editor-only access en no-runtime-publish.
-
-Fase 8.1 is nog niet server-side klaar.
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- migratie `0005_procedural_generation_core.sql`: OK;
+- nieuwe Fase 8.1 tabellen: OK;
+- procedural routes: OK;
+- anonymous/game denied: OK;
+- same-seed determinism: OK;
+- different-seed smoke: OK;
+- no runtime publish: OK;
+- no asset copy to Git: OK;
+- GameBible save: OK;
+- game-site reachable: OK;
+- `gk-api` en `gk-editor-web` draaien via Node 22 en zijn actief/herstart.
 
 ## Bevestigde grenzen
 
@@ -98,21 +105,6 @@ Fase 8.1 is nog niet server-side klaar.
 ## Open aandachtspunten
 
 Geen Fase 8 blockers open.
-
-Open voor Fase 8.1 server-side verificatie:
-
-- `pnpm install`;
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- migratie `db/migrations/0005_procedural_generation_core.sql` toepassen;
-- procedural API/editor smoke;
-- determinism smoke: zelfde seed + graph + inputs geeft dezelfde output;
-- different-seed smoke: andere seed mag andere output geven;
-- bevestigen dat procedural preview/bake niets naar Runtime Game publiceert;
-- bevestigen dat procedural generation geen assets naar Git kopieert;
-- bevestigen dat anonymous/game sessions geen procedural editor beheer krijgen.
 
 Open blijft toekomstwerk voor latere fases:
 

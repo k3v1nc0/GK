@@ -2,15 +2,15 @@
 
 ## Fase
 
-Actieve status: Fase 8.1 Git-basis voorbereid; server-side validatie nog open.
+Actieve status: Fase 8.1 server-side afgerond en klaar.
 
-Volgende stap: Fase 8.1 server-side verificatie door Codex/Claude.
+Volgende stap: Fase 9 blijft de volgende implementatiefase wanneer Kevin die later opent.
 
-Fase 9 blijft Fase 9 en mag pas als implementatiefase starten wanneer Kevin die later opent. Fase 9 moet dan bouwen op de Fase 8.1 procedural generation core en mag die core niet opnieuw definieren.
+Fase 9 blijft Fase 9 en moet blijven bouwen op de Fase 8.1 procedural generation core zonder die core opnieuw te definieren.
 
 ## Status
 
-Fase-status: Fase 8 is server-side afgerond en klaar. Fase 8.1 heeft Git/code/docs/tests voorbereid voor Procedural Generation Core, maar is nog niet server-side afgerond.
+Fase-status: Fase 8 is server-side afgerond en klaar. Fase 8.1 is server-side afgerond en klaar.
 
 Fase 8.1 publiceert niets naar Runtime Game. Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 
@@ -38,6 +38,29 @@ Bevestigd:
 - assets niet naar Git: bevestigd;
 - blockers: geen;
 - `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
+
+## Fase 8.1 server-side resultaat
+
+Fase 8.1 is server-side afgerond op HEAD `173076db0348ed7043fde682c978b8b45afb3fcf` met latere codex-fix op `b3cd38fb7a5a4a3da50d4a773c99aa56a348e4e5`.
+
+Bevestigd:
+
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- migratie `0005_procedural_generation_core.sql`: OK;
+- nieuwe Fase 8.1 tabellen: OK;
+- procedural API/editor smoke: OK;
+- same-seed determinism: OK;
+- different-seed smoke: OK;
+- no runtime publish: OK;
+- no asset copy to Git: OK;
+- anonymous/game denied: OK;
+- GameBible save: OK;
+- game-site reachable: OK;
+- `gk-api` en `gk-editor-web` draaien via Node 22 en zijn actief/herstart.
 
 ## Fase 8.1 Git-basis
 
@@ -142,23 +165,10 @@ Geen blokkerende Kevin-input voor de Fase 8.1 Git-basis.
 
 Voor server-side validatie is geen nieuwe Kevin-input nodig. Voor latere concrete generatorgedrag, editorervaring of testgraphs kan Kevin-input later blokkerend worden wanneer zulke keuzes niet uit GameBible/editor-data/registries komen.
 
-## Open Codex/Claude-taken buiten Git
-
-Open voor Fase 8.1:
-
-- `pnpm install/build/typecheck/test/lint` draaien;
-- migratie `db/migrations/0005_procedural_generation_core.sql` toepassen;
-- Procedural API/editor smoke uitvoeren;
-- determinism smoke: zelfde seed geeft dezelfde output;
-- different-seed smoke: andere seed mag andere output geven;
-- bevestigen dat procedural preview/bake niets naar runtime publiceert;
-- bevestigen dat procedural generation geen assets naar Git kopieert;
-- bevestigen dat anonymous/game sessions geen procedural editor beheer krijgen.
-
 ## Fasebeoordeling
 
 Fase 8 is klaar.
 
-Fase 8.1 Git-basis is voorbereid, maar Fase 8.1 is nog niet server-side klaar.
+Fase 8.1 server-side is afgerond en klaar.
 
-Huidige status: Fase 8.1 wacht op server-side validatie.
+Huidige status: Fase 8.1 is server-side gevalideerd.
