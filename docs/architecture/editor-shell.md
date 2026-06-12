@@ -10,7 +10,7 @@ De standaardindeling is:
 - midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
 - rechts: `Inspector` en `Validation`;
 - onder: `History`;
-- dock tabs: `Asset Panel`, `Audio Panel`, `Entity / Component Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
+- dock tabs: `Asset Panel`, `Audio Panel`, `Entity / Component Panel`, `Procedural Generation Panel`, `HUD Editor`, `Minimap Panel`, `Game Users`.
 
 Tabs volgen het WAI-ARIA tab/panel model als contract voor latere UI-rendering. De huidige implementatie legt het layoutmodel vast, maar introduceert nog geen framework of browserbundler.
 
@@ -18,7 +18,7 @@ Tabs volgen het WAI-ARIA tab/panel model als contract voor latere UI-rendering. 
 
 Het node canvas start leeg en bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates en typed node graph editing.
 
-Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes of assetrollen bevatten. Zulke waarden horen later uit database, editor/node-data, registers, Game Bible of publish-data te komen.
+Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes, generated worldcontent of assetrollen bevatten. Zulke waarden horen later uit database, editor/node-data, registers, Game Bible, procedural draft/bake data of publish-data te komen.
 
 Fase 6 voegt de graph-core toe:
 
@@ -33,7 +33,9 @@ Fase 6 voegt de graph-core toe:
 
 Fase 8 breidt typed value sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Audio picker blijft een capability-gate zolang audio count 0 is. Asset picker wijst geen runtime-role mapping toe.
 
-## Asset, audio en entity panels
+Fase 8.1 mag procedural sockets en nodefamilies toevoegen voor seeds, generator graphs, preview, validation, bake drafts, generated entity/group/placement candidates en generation outputs. Deze blijven editor draft/candidate data en publiceren niets naar Runtime Game.
+
+## Asset, audio, entity en procedural panels
 
 Panels zijn generieke capabilities:
 
@@ -47,6 +49,8 @@ Panels zijn generieke capabilities:
 - `Entity / Component Panel` toont candidate/assigned/invalid component counts.
 - `Entity / Component Panel` toont animation warnings voor candidate NPC/combat/player behavior zonder mapping.
 - `Entity / Component Panel` houdt runtime-active behavior gated totdat editor-data en animation mapping bestaan.
+- `Procedural Generation Panel` is vanaf Fase 8.1 het contract voor seed controls, generator graph state, preview result state, validation issues, bake draft actions en generated candidate lists.
+- `Procedural Generation Panel` mag generated output tonen als draft/candidate, maar niet als definitieve runtimecontent.
 - `HUD Editor` configureert later HUD nodes, zonder definitieve HUD-layout.
 - `Minimap Panel` configureert later minimap nodes, zonder definitieve minimapvorm of waarden.
 - `Game Users` vereist editor scope en `editor_admin`.
@@ -61,13 +65,22 @@ Fase 7 server-side bevestigd:
 - Alle 4 GLB records hebben `roleMapping.status=candidate`.
 - Geen asset panel-flow publiceert naar Runtime Game.
 
-Fase 8 Git-basis voorbereid:
+Fase 8 server-side bevestigd:
 
 - Entity/Component panel state bestaat.
 - Renderable component gebruikt `asset.reference`.
 - Audio emitter blijft gated/leeg bij audio=0.
 - Group transform state is voorbereid.
 - Entity validation publiceert niets naar Runtime Game.
+- Entity routes werken editor-only.
+- Anonymous/game sessions krijgen geen entity beheer.
+- `Taverne.glb` object-test en `Wizard.glb` NPC-test zijn bevestigd als testinput, geen runtimecontent.
+
+Fase 8.1 nog niet geimplementeerd:
+
+- Procedural Generation Panel state moet later worden gebouwd wanneer Kevin Fase 8.1 opent.
+- Preview en bake blijven no-runtime-publish gates.
+- Generated output blijft editor draft/candidate data.
 
 ## Viewport / World Preview
 
@@ -81,7 +94,7 @@ Fase 5 houdt deze preview expliciet leeg:
 - geen GLB-role mapping;
 - geen audio of HUD-keuzes.
 
-De preview wacht op latere gepubliceerde world/node-data.
+De preview wacht op latere editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish.
 
 ## Auth boundary
 
@@ -125,6 +138,8 @@ API runtime:
 - `GET /editor/entities/groups`;
 - `GET /editor/entities/asset-mappings`;
 - `PATCH /editor/entities/asset-mappings/:assetId`.
+
+Fase 8.1 mag later editor-only procedural routes toevoegen voor graph read, preview, validation, bake draft en generated candidate state. Die routes mogen geen runtime publish uitvoeren en mogen anonymous/game sessions geen procedural editor beheer geven.
 
 Editor runtime:
 
@@ -200,13 +215,46 @@ De routes:
 
 Game sessions en anonymous requests krijgen geen editor entity beheer.
 
+Fase 8 server-side bevestigd:
+
+- entity routes werken;
+- anonymous/game denied werkt;
+- animation warning/blocker werkt;
+- GameBible save blijft werken;
+- game-site blijft bereikbaar;
+- runtime publish nee bevestigd;
+- assets niet naar Git bevestigd;
+- blockers: geen.
+
+## Fase 8.1 procedural routes
+
+Fase 8.1 is nog niet geimplementeerd. Wanneer Kevin die fase opent, mogen alleen editor-only procedural routes worden toegevoegd, bijvoorbeeld:
+
+- procedural graph draft read;
+- procedural preview trigger;
+- procedural validation;
+- bake generation draft action;
+- generated candidate read state.
+
+De routes moeten:
+
+- editor scope vereisen;
+- CSRF/Origin beschermd zijn voor state-changing requests;
+- deterministic preview/bake output ondersteunen;
+- geen assets uploaden of kopieren;
+- geen concrete gamecontent verzinnen;
+- geen Runtime Game publish uitvoeren;
+- anonymous/game sessions geen procedural beheer geven.
+
 ## Server/runtime gate
 
 Fase 5 Git-basis bewees nog niet dat `/editor` live draaide. Fase 5.1 voegde minimale startbare HTTP entrypoints toe voor API en editor-web. Fase 5.2 voegde permanente API/editor service-templates en GameBibleNode browser-save bridge toe. Fase 5.3 koppelde de editor shell aan echte editor-admin login. Fase 6 voegde graph routes toe.
 
 Fase 7 voegt asset-library routes en panel state toe. Deze Fase 7 server-side scan, database-migratie, watcher/polling smoke en route smoke zijn afgerond door Claude op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d`.
 
-Fase 8 voegt entity/component contracts, node types, routes en panel state toe. Fase 8 is Git-basis voorbereid, maar server-side migratie, build/typecheck/test/lint, API/editor smoke en asset/entity checks moeten nog door Codex/Claude worden uitgevoerd.
+Fase 8 voegt entity/component contracts, node types, routes en panel state toe. Fase 8 is server-side afgerond op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
+
+Fase 8.1 is de volgende fase wanneer Kevin die expliciet opent. Die fase mag procedural generation core voorbereiden, maar blijft draft/preview/bake-only totdat een latere publishfase publiceert.
 
 ## Fase 5.3 server-smoke
 
@@ -239,12 +287,36 @@ Afgerond:
 
 ## Fase 8 server-smoke
 
-Nog open voor Codex/Claude:
+Afgerond:
 
-- server-side `pnpm install/build/typecheck/test/lint`;
-- `db/migrations/0004_entity_component_core.sql` toepassen;
-- entity route smoke met editor session en CSRF;
-- anonymous/game-denial smoke;
-- asset/entity validation met `Taverne.glb` en `Wizard.glb`;
-- missing animation mapping warning/blocker gedrag bevestigen;
-- bevestigen dat entity validation niets naar Runtime Game publiceert.
+- HEAD server-check: `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`);
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- migratie `0004_entity_component_core.sql`: OK;
+- nieuwe Fase 8 tabellen: OK;
+- entity routes: OK;
+- anonymous/game denied: OK;
+- `Taverne.glb` object-test: OK;
+- `Wizard.glb` NPC-test: OK;
+- animation warning/blocker: OK;
+- GameBible save: OK;
+- game-site reachable: OK;
+- runtime publish nee bevestigd;
+- assets niet naar Git;
+- blockers: geen;
+- `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
+
+## Fase 8.1 server-smoke
+
+Nog niet van toepassing. Wanneer Kevin Fase 8.1 opent en de Git-basis is gemaakt, moet Codex/Claude server-side bevestigen:
+
+- `pnpm install/build/typecheck/test/lint`;
+- migratie toepassen als Fase 8.1 schema toevoegt;
+- procedural API/editor smoke;
+- determinism smoke: zelfde seed geeft zelfde output;
+- different-seed smoke: andere seed mag andere output geven;
+- no runtime publish;
+- no asset copy to Git.

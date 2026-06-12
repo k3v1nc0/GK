@@ -1,6 +1,5 @@
 # Fase 16 - Combat, attacks, eindbaas mechanics en loot
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,6 +22,16 @@
 
 Combat is server-owned. Aanvallen, damage, cooldowns, VFX, audio, boss phases, loot tables en quest combat objectives zijn node-data.
 
+Generated spawn areas, path networks, resource distributions en entity placements uit Fase 8.1/Fase 9 mogen combat authoring ondersteunen als draft/candidate input. Ze mogen geen enemy, boss, combat stats, loot tables, damage, cooldowns of boss phases verzinnen.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core.
+- Fase 9 world/zone/spawn/path/resource nodes.
+- Fase 11 publish projections.
+- Fase 12 server-owned realtime state.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Kies enemy minion GLB.
@@ -31,6 +40,7 @@ Combat is server-owned. Aanvallen, damage, cooldowns, VFX, audio, boss phases, l
 - Kies attack icons/audio.
 - Kies boss health UI/music/audio.
 - Kies attack namen, boss naam, loot item en mechanics.
+- Kies of accepteer generated spawn/resource/path candidates die combat mag gebruiken.
 
 ## Actie voor Codex
 
@@ -50,9 +60,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated spawn/resource data of minimap-instelling hard-coded bevatten.
+- Procedural generation mag geen combat stats, boss phases, loot tables, damage, cooldowns of enemy/boss identity verzinnen.
 
 Je werkt aan fase 16: Combat, attacks, eindbaas mechanics en loot.
 
@@ -60,7 +70,7 @@ Doel:
 Combat is server-owned. Aanvallen, damage, cooldowns, VFX, audio, boss phases, loot tables en quest combat objectives zijn node-data.
 
 Werk uit:
-Maak combat ability nodes, hitbox/damage/cooldown/targeting/status/audio/VFX, boss phase nodes, loot tables en quest defeat coupling. Server valideert alles.
+Maak combat ability nodes, hitbox/damage/cooldown/targeting/status/audio/VFX, boss phase nodes, loot tables en quest defeat coupling. Server valideert alles. Generated spawn/resource/path candidates mogen alleen als gekozen editor-data input dienen.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -78,7 +88,8 @@ Verplichte controle:
 - [ ] Loot.
 - [ ] Quest defeat objective.
 - [ ] Geen damage/cooldown hard-coded.
+- [ ] Generated spawn/resource candidates blijven input en verzinnen geen combatcontent.
 
 ## Testplan
 
-Maak ability in editor, koppel icon/audio, spawn boss, vecht solo en met twee spelers, claim loot.
+Maak ability in editor, koppel icon/audio, spawn boss, vecht solo en met twee spelers, claim loot. Controleer dat generated spawn/resource/path candidates alleen gekozen editor-data zijn en dat combatwaarden uit nodes/GameBible/Kevin-input komen.

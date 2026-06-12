@@ -30,6 +30,7 @@ Stop direct wanneer:
 - server/database/build/runtime context nodig is maar niet gecontroleerd kan worden;
 - een oplossing concrete gamecontent in runtimecode zou plaatsen;
 - een helper ontbrekende core-architectuur zou maskeren;
+- procedural generation als vervanging voor ontbrekende Kevin/GameBible/editor-input wordt gebruikt;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
 
 Stoppen is correct gedrag. Niet improviseren.
@@ -42,7 +43,8 @@ De AI mag niet:
 - placeholders of dummy content toevoegen;
 - dummy assets, nepmodellen of tijdelijke vervangers gebruiken;
 - definitieve contentnamen verzinnen buiten `README/GameBibleNode.json` of Kevin-input;
-- runtime hard-coding gebruiken om content of waardes te laten werken.
+- runtime hard-coding gebruiken om content of waardes te laten werken;
+- procedural generators concrete dorpen, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes, lighting presets of world maps laten hard-coden.
 
 ## Afgeronde Fase 1-gates
 
@@ -67,6 +69,8 @@ De AI mag niet:
 | UI assets | Zodra HUD, inventory, merchant, quest tracker, scrolls of boss UI verplicht zijn |
 | Audio assets | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio verplicht zijn |
 | Asset filename met spatie | Afgerond voor Fase 7 scan; opnieuw controleren wanneer URLs/runtime serving worden gebouwd |
+| Procedural generation core | Blokkerend voor Fase 9 world/zone/minimap implementatie |
+| Procedural determinism | Blokkerend zodra generator preview/bake output wordt gebruikt |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist |
@@ -82,6 +86,7 @@ De AI mag niet:
 - `Blacksmit forge.glb` bevat een spatie en is in Fase 7 scanner/library gevalideerd.
 - Fase 8 gebruikt `Taverne.glb` en `Wizard.glb` alleen als Kevin-testkeuzes voor candidate entity/component validation.
 - Fase 8 mag Taverne/Wizard niet als definitieve object/NPC runtime-role in code of migratie vastleggen.
+- Fase 8 server-side is afgerond; geen Fase 8 blockers open.
 
 ### UI
 
@@ -94,6 +99,31 @@ De AI mag niet:
 - Huidige telling: 0 audio assets.
 - Music, ambience, SFX, UI audio en voice/dialogue moeten later via audio nodes en asset library worden gekoppeld.
 - Fase 8 audio emitter blijft gated/leeg bij audio count 0.
+- Fase 8.1 generated audio mag alleen via `audio.reference` en blijft gated bij audio count 0.
+
+### Procedural generation
+
+Fase 8.1 is de verplichte core-basis voor procedural generation.
+
+Regels:
+
+- Procedural generation is een engine-capability, geen contentlaag.
+- Generatoren moeten data-driven en deterministic zijn.
+- Zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output.
+- Andere seed mag andere output geven.
+- Procedural preview publiceert niets naar Runtime Game.
+- Procedural bake maakt alleen editor draft data.
+- Procedural output blijft draft/candidate totdat de normale publish-flow later expliciet publiceert.
+- Generated entities gebruiken Fase 8 entity/component contracts.
+- Generated assets gebruiken Fase 7 `asset.reference`.
+- Anonymous/game sessions krijgen geen procedural editor beheer.
+
+Niet toegestaan:
+
+- procedural output gebruiken als shortcut voor ontbrekende Kevin-input;
+- vaste world maps, dorpen, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes of lighting presets hard-coden;
+- Fase 9 of latere fases de procedural core opnieuw laten bouwen;
+- client-side MMO-state verzinnen op basis van procedural output.
 
 ### Story/lore/names
 
@@ -105,17 +135,20 @@ De AI mag niet:
 - Leidende bron: `README/GameBibleNode.json`.
 - Quest runtimecode blijft generiek.
 - Ontbrekende concrete questvelden blijven content gates.
+- Procedural placement/path candidates mogen quest authoring ondersteunen, maar mogen geen questcontent verzinnen.
 
 ### Boss en combat
 
 - Leidende bron: `README/GameBibleNode.json`.
 - Boss GLB, UI/audio en combatwaarden moeten via assets/registers/nodes worden gekoppeld.
 - Fase 8 `combatant` en `boss` components zijn candidate schemas; runtime-active combat/boss behavior vereist editor-data en animation mapping.
+- Procedural spawn/resource candidates mogen combat authoring ondersteunen, maar mogen geen boss, loot table, damage, cooldown of phase content hard-coden.
 
 ### Currency en economy
 
 - Leidende bron: GameBible JSON wanneer aanwezig, anders Kevin-input.
 - Geen economywaarden hard-coden.
+- Procedural resource distributions blijven candidates en mogen geen prices, rewards of lootkansen invullen.
 
 ### Node-data
 
@@ -127,6 +160,7 @@ De AI mag niet:
 - Audio picker blijft gated zolang audio count 0 is.
 - Draft preview mag valideren en tonen, maar niets publiceren naar Runtime Game.
 - Fase 8 entity/component validation mag candidate data valideren, maar niets publiceren naar Runtime Game.
+- Fase 8.1 procedural preview/bake mag candidate data tonen of als editor draft opslaan, maar niets publiceren naar Runtime Game.
 
 ### Publish/runtime
 
@@ -134,7 +168,7 @@ De AI mag niet:
 - Publish blokkeert ontbrekende verplichte data.
 - Publish mag waarschuwingen geven voor optionele of kwaliteitsproblemen.
 - Draft preview is geen publishstap.
-- Asset scan en entity validation zijn geen publishstap.
+- Asset scan, entity validation, procedural preview en procedural bake zijn geen publishstap.
 
 ## Te verifieren fase-input voor latere fases
 
@@ -178,21 +212,47 @@ Input/status vooraf:
 - Taverne/Wizard blijven Kevin-testkeuzes en geen runtime hardcode;
 - ontbrekende animation mapping is warning voor candidate;
 - runtime-active NPC/combat/player behavior vereist explicit animation mapping via editor-data;
-- definitieve GLB role mapping blijft editor-data/Kevin-keuze.
+- definitieve GLB role mapping blijft editor-data/Kevin-keuze;
+- Fase 8 server-side klaar op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0`.
+
+### Fase 8.1
+
+Bronnen eerst openen:
+
+- `README/fase8.1.md`
+- `README/node-system-super-dynamic-contract.md`
+- `docs/design/content-gates.md`
+- `docs/design/asset-register.md`
+- `docs/design/game-bible.md`
+- `docs/architecture/editor-shell.md`
+
+Input/status vooraf:
+
+- Fase 8 server-side klaar;
+- procedural generation blijft engine-capability;
+- generator output blijft draft-only;
+- preview/bake publiceert niets naar runtime;
+- zelfde seed + graph + inputs moet dezelfde output geven;
+- generated entities gebruiken Fase 8 contracts;
+- generated assets gebruiken Fase 7 `asset.reference`;
+- anonymous/game sessions krijgen geen procedural editor beheer.
 
 ### Fase 9
 
 Bronnen eerst openen:
 
 - `README/fase9.md`
+- `README/fase8.1.md`
 - `docs/design/world-settings-plan.md`
 - `docs/design/asset-register.md`
 - `README/GameBibleNode.json`
 
 Input vooraf:
 
+- Fase 8.1 procedural generation core moet als basis bestaan;
 - world/camera/light/minimap waarden uit GameBible JSON, editor-data of Kevin-input;
-- startgebied en zones uit GameBible JSON of Kevin-input;
+- generated zones, spawn areas, path networks, resource distributions en entity placements uit Fase 8.1 mogen alleen als draft/candidate input worden gebruikt;
+- startgebied en zones uit GameBible JSON, editor-data, procedural draft output of Kevin-input;
 - alle waarden als node-data, niet runtimecode.
 
 ### Fase 13
@@ -200,6 +260,8 @@ Input vooraf:
 Bronnen eerst openen:
 
 - `README/fase13.md`
+- `README/fase8.1.md`
+- `README/fase9.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
 - `docs/design/game-bible.md`
@@ -210,13 +272,15 @@ Input vooraf:
 - NPC content uit GameBible JSON;
 - GLB role mappings via editor;
 - audio staat nu op 0 en blokkeert verplichte NPC-audio totdat Kevin audio toevoegt;
-- routes, werkplekken, spawngebieden en respawn timings blijven node-data.
+- routes, werkplekken, spawngebieden en respawn timings blijven node-data;
+- generated path networks en spawn areas uit Fase 8.1/Fase 9 mogen alleen draft/candidate input zijn.
 
 ### Fase 15
 
 Bronnen eerst openen:
 
 - `README/fase15.md`
+- `README/fase8.1.md`
 - `docs/design/economy-plan.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
@@ -226,6 +290,7 @@ Input vooraf:
 
 - currency/economy uit GameBible JSON of Kevin-input;
 - UI assets staan nu op 0 en blokkeren verplichte inventory/merchant/scroll UI totdat Kevin UI toevoegt;
+- generated resource distributions blijven candidate data;
 - geen economywaarden hard-coded.
 
 ### Fase 16
@@ -233,6 +298,8 @@ Input vooraf:
 Bronnen eerst openen:
 
 - `README/fase16.md`
+- `README/fase8.1.md`
+- `README/fase9.md`
 - `docs/design/economy-plan.md`
 - `docs/design/asset-register.md`
 - `docs/design/audio-register.md`
@@ -244,6 +311,7 @@ Input vooraf:
 - boss/enemy/combat content uit GameBible JSON;
 - GLB role mappings via editor;
 - audio/UI staan nu op 0 en blokkeren verplichte boss/combat audio/UI totdat Kevin assets toevoegt;
+- generated spawn/resource/path candidates mogen combat authoring ondersteunen, maar geen combatcontent verzinnen;
 - damage, cooldowns, loot en phases als node-data.
 
 ### Fase 17
@@ -251,6 +319,8 @@ Input vooraf:
 Bronnen eerst openen:
 
 - `README/fase17.md`
+- `README/fase8.1.md`
+- `README/fase9.md`
 - `README/GameBibleNode.json`
 - `docs/design/game-bible.md`
 - `docs/design/asset-register.md`
@@ -262,10 +332,11 @@ Bronnen eerst openen:
 Input vooraf:
 
 - GameBible JSON is leidend voor beginquest-content;
+- Fase 8.1/Fase 9 generated world candidates mogen alleen als editor/node-data basis dienen;
 - alle required GLB/UI/audio roles gemapt;
 - UI/audio staan nu op 0 en blokkeren complete content als die assets verplicht zijn;
 - content seed alleen via node-data en publish.
 
 ## Fase 14 tussenpoort
 
-Fase 14 beheert quests, story, side quests en party sharing. Nieuwe agents moeten `README/fase14.md` en `README/GameBibleNode.json` openen voordat questcontent wordt gebouwd.
+Fase 14 beheert quests, story, side quests en party sharing. Nieuwe agents moeten `README/fase14.md`, `README/fase8.1.md` en `README/GameBibleNode.json` openen voordat questcontent wordt gebouwd.

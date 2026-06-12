@@ -19,6 +19,8 @@ De code mag vaste engine-feiten hebben, omdat zonder deze feiten het spel niet k
 - welke packet types bestaan
 - welke component types bestaan
 - welke node-field types bestaan
+- hoe deterministic random streams en procedural generator graphs als engine-capability werken
+- hoe procedural preview en bake draft contracts werken
 
 ## Wat code niet vast mag invullen
 
@@ -32,6 +34,11 @@ Deze waardes mogen niet vast in runtimecode staan:
 - minimap zoom
 - minimap markers
 - startgebied inhoud
+- world maps
+- zone layout als concrete content
+- spawnpoints als concrete content
+- path networks als concrete content
+- resource distributions als concrete content
 - NPC namen
 - NPC routes
 - NPC taken
@@ -64,7 +71,26 @@ Elke engine primitive krijgt een schema. De editor maakt hier automatisch panele
 - schedule wordt planning editor
 - curve wordt curve editor
 - list wordt herhaalbaar veld
+- seed wordt seed input
+- procedural graph wordt generator graph editor
+- generated output wordt preview/bake draft state
+
+## Procedural generation grens
+
+Procedural generation mag als engine-capability bestaan, maar niet als verborgen contentmaker.
+
+Regels:
+
+- zelfde seed + graph + inputs geeft dezelfde output;
+- preview publiceert niets naar runtime;
+- bake maakt alleen editor draft data;
+- generated entities gebruiken entity/component contracts;
+- generated assets gebruiken `asset.reference`;
+- generated output blijft candidate totdat editor/publish die expliciet accepteert;
+- geen vaste dorpen, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes, lighting presets of world maps hard-coden.
 
 ## Acceptatieregel
 
 Als Kevin vraagt: "kan ik dit later instellen zonder AI?" dan moet het antwoord ja zijn voor alle contentwaardes. Als het antwoord nee is, moet er een node type of node field bij komen.
+
+Als Kevin vraagt: "kan ik dezelfde generator opnieuw draaien en dezelfde output krijgen?" dan moet Fase 8.1 dat met seed + graph + inputs aantoonbaar kunnen valideren.

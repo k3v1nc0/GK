@@ -2,41 +2,56 @@
 
 ## Fase
 
-Actieve fase: Fase 8 - universal entity/component systeem voor GLB objecten en NPCs.
+Actieve status: Fase 8 afgerond; klaar om Fase 8.1 te openen wanneer Kevin dat expliciet doet.
+
+Volgende fase: Fase 8.1 - Procedural Generation Core.
 
 ## Status
 
-Fase-status: Fase 8 Git-basis voorbereid; server-side validatie staat nog open.
+Fase-status: Fase 8 is server-side afgerond en klaar. Fase 8.1 is als nieuwe tussenfase toegevoegd aan de faseplanning, maar is nog niet geimplementeerd.
 
-Fase 8 bouwt de basis voor component-gedreven entities bovenop Fase 6 typed graph sockets en Fase 7 asset library. De fase voegt schema-contracten, validators, generieke node types, editor-only API-contracten, Entity/Component panel state, database-migratie en tests toe. De fase publiceert niets naar Runtime Game.
+Fase 9 blijft Fase 9. Fase 9 mag world/camera/lighting/levels/zones/minimap nodes bouwen, maar moet daarbij uitgaan van de Fase 8.1 procedural generation core als verplichte basis. Procedural generation verdringt Fase 9 niet en wordt ook niet opnieuw in Fase 9 gedefinieerd.
 
-## Doel
+## Doel van de nieuwe tussenfase
 
-Maak component-gedreven entities zodat dezelfde GLB via nodes object-kandidaat, NPC-kandidaat, enemy-kandidaat, boss-kandidaat, loot-kandidaat, VFX-kandidaat of player-appearance-kandidaat kan worden.
+Fase 8.1 legt de procedural generation foundation vast in het node-system voordat wereld-, zone-, camera-, lighting- en minimapnodes worden gebouwd.
 
-Dit blijft data-gedreven:
+Fase 8.1 richt zich op:
 
-- GLB role mapping blijft editor-data;
-- component stacks blijven editor/node-data;
-- runtime-active gedrag blijft gated;
-- publish/runtime consumeert pas later expliciet gepubliceerde data.
+- seeds;
+- deterministic random streams;
+- generator graphs;
+- procedural preview;
+- procedural validation;
+- draft/bake contract;
+- generated entity/component drafts;
+- generated groups;
+- generated placements;
+- generated spawn/resource/path candidates;
+- no-runtime-publish gates.
+
+Fase 8.1 moet aansluiten op:
+
+- Fase 6 typed node graph core;
+- Fase 7 asset library;
+- Fase 8 entity/component core.
 
 ## Bronnen gecontroleerd
 
-Voor deze fase zijn de actuele GitHub-bronnen gebruikt:
+Voor deze statusupdate zijn de actuele GitHub-bronnen gebruikt:
 
 - `README/current-phase.md`
 - `docs/design/phase-plan/current-phase.md`
+- `README/00-index.md`
 - `README/fase8.md`
+- `README/fase9.md`
+- `README/fase10.md` t/m `README/fase18.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/design/content-gates.md`
 - `docs/design/asset-register.md`
-- `docs/design/audio-register.md`
+- `docs/design/game-bible.md`
 - `docs/architecture/editor-shell.md`
 - `docs/ops/server-layout.md`
-- `README/GameBibleNode.json`
-- Fase 6 graph/schema code
-- Fase 7 asset-library/API/editor code
 
 ## Blijvende fasecontracten
 
@@ -51,9 +66,47 @@ Voor deze fase zijn de actuele GitHub-bronnen gebruikt:
 - GLB-assets hebben nog geen definitieve runtime-role mapping.
 - GLB role mapping blijft editor-data/Kevin-keuze.
 - UI/audio count 0 is geldig en mag geen dummy assets veroorzaken.
-- Entity draft, validation, asset mapping en group state publiceren niets naar runtime.
+- Entity draft, validation, asset mapping, group state, procedural preview en procedural bake publiceren niets naar runtime.
+- Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
+- Server/runtime blijft later authoritative; client mag geen eigen MMO-state verzinnen.
 
-## Bevestigde Kevin-input
+## Fase 8 server-side resultaat
+
+Fase 8 is server-side afgerond op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
+
+Bevestigd:
+
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- migratie `0004_entity_component_core.sql`: OK;
+- nieuwe Fase 8 tabellen: OK;
+- entity routes: OK;
+- anonymous/game denied: OK;
+- `Taverne.glb` object-test: OK;
+- `Wizard.glb` NPC-test: OK;
+- animation warning/blocker: OK;
+- GameBible save: OK;
+- game-site reachable: OK;
+- runtime publish: nee bevestigd;
+- assets niet naar Git: bevestigd;
+- blockers: geen;
+- `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
+
+## Fase 8 blijvende output
+
+Fase 8 heeft de basis gelegd voor component-gedreven entities zodat dezelfde GLB via data object-kandidaat, NPC-kandidaat, enemy-kandidaat, boss-kandidaat, loot-kandidaat, VFX-kandidaat of player-appearance-kandidaat kan worden.
+
+Dit blijft data-gedreven:
+
+- GLB role mapping blijft editor-data;
+- component stacks blijven editor/node-data;
+- runtime-active gedrag blijft gated;
+- publish/runtime consumeert pas later expliciet gepubliceerde data.
+
+## Bevestigde Kevin-input voor Fase 8
 
 - Object test GLB: `Taverne.glb`.
 - NPC test GLB: `Wizard.glb`.
@@ -61,166 +114,69 @@ Voor deze fase zijn de actuele GitHub-bronnen gebruikt:
 - Ontbrekende animaties geven wel validation warning.
 - NPC/combat/player behavior mag pas runtime-actief worden zodra animation mapping expliciet via editor-data is ingesteld.
 
-Deze inputs mogen alleen worden gebruikt als test/fixture-input en documenteerde Kevin-keuze. Ze zijn geen hardcoded runtimecontent.
+Deze inputs zijn test/fixture-input en documenteerde Kevin-keuze. Ze zijn geen hardcoded runtimecontent.
 
-## Fase 8 Git-output
+## Fase 8.1 contract
 
-Aangemaakt of bijgewerkt in Fase 8:
+Fase 8.1 is toegevoegd in `README/fase8.1.md`.
 
-- `packages/schemas/src/entity-components.ts`
-- `packages/schemas/src/entity-validation.ts`
-- `packages/schemas/src/index.ts`
-- `packages/schemas/src/node-graph.ts`
-- `packages/node-types/src/entity-component-nodes.ts`
-- `packages/node-types/src/index.ts`
-- `apps/api-server/src/editor-entity-routes.ts`
-- `apps/api-server/src/auth-routes.ts`
-- `apps/api-server/src/http-server.ts`
-- `apps/api-server/src/index.ts`
-- `apps/editor-web/src/panels.ts`
-- `apps/editor-web/src/editor-shell.ts`
-- `db/migrations/0004_entity_component_core.sql`
-- `tests/phase8-entity-components.test.mjs`
-- `tests/editor-shell.test.mjs`
-- fase-documentatie
+Belangrijkste grenzen:
 
-## Entity/component schema
+- Procedural generation mag als engine-capability in de core.
+- Procedural output mag geen hardcoded gamecontent zijn.
+- Generatoren moeten data-driven en deterministic zijn.
+- Zelfde seed + zelfde graph + zelfde inputs = zelfde output.
+- Fase 8.1 publiceert niets naar Runtime Game.
+- Bake maakt alleen editor draft data, geen runtime publish.
+- Generated entities gebruiken Fase 8 entity/component contracts.
+- Generated assets gebruiken Fase 7 `asset.reference`.
+- Anonymous/game session krijgt geen procedural editor beheer.
 
-Fase 8 definieert generieke component-contracten voor:
+## Fase 9 afhankelijkheid
 
-- `transform`
-- `renderable`
-- `collider`
-- `interactable`
-- `npc_brain`
-- `audio_emitter`
-- `combatant`
-- `boss`
-- `loot`
-- `quest_target`
-- `merchant`
-- `player_appearance`
-- `group_transform`
+Fase 9 blijft `World, camera, lighting, levels/zones en minimap nodes`, maar wordt afhankelijk van Fase 8.1.
 
-Een entity draft kan een `asset.reference` naar de Fase 7 asset library bevatten. Componenten hebben `candidate`, `assigned` of `invalid` status. Runtime-active gedrag gebruikt een aparte gate met editor-data confirmation en animation mapping.
+Fase 9 mag:
 
-## Node types
+- generated zones gebruiken;
+- generated spawn areas gebruiken;
+- generated path networks gebruiken;
+- generated resource distributions gebruiken;
+- generated entity placements gebruiken;
+- camera, lighting, fog, sky en minimap als editor/node-data modelleren.
 
-Fase 8 voegt generieke graph node types toe:
+Fase 9 mag niet:
 
-- `gk.entity.spawnFromAsset`
-- `gk.entity.addComponent`
-- `gk.entity.group`
-- `gk.entity.groupTransform`
-- `gk.component.renderable`
-- `gk.component.transform`
-- `gk.component.collider`
-- `gk.component.interactable`
-- `gk.component.audioEmitter`
-- `gk.component.npcBrain`
-- `gk.component.combatant`
-- `gk.component.boss`
-- `gk.component.loot`
-- `gk.component.questTarget`
-- `gk.component.merchant`
-- `gk.component.playerAppearance`
-- `gk.npc.makeFromAsset`
-
-Fase 8 breidt `NODE_VALUE_SOCKET_TYPES` uit met:
-
-- `entity.reference`
-- `component.reference`
-- `entity.group.reference`
-
-`asset.reference` en `audio.reference` uit Fase 6/7 blijven leidend voor asset/audio pickers.
-
-## Validatie
-
-Fase 8-validatie:
-
-- `renderable` vereist een `asset.reference` naar een GLB asset met candidate/assigned editor-data status;
-- `transform` en `group_transform` vereisen data-gedreven position/rotation/scale velden;
-- `collider` is optional en data-gedreven;
-- `npc_brain`, `combatant`, `boss`, `merchant`, `quest_target` en `player_appearance` blijven candidate totdat expliciete editor-data bestaat;
-- `audio_emitter` vereist `audio.reference` wanneer audio assets bestaan;
-- audio count 0 blijft geldig en gated;
-- ontbrekende animation mapping geeft warning voor candidate entities;
-- runtime-active NPC/combat/player behavior vereist expliciete animation mapping via editor-data;
-- entity validation publiceert niets naar Runtime Game.
-
-## API contract
-
-Editor-only routes:
-
-- `GET /editor/entities/draft`
-- `POST /editor/entities/validate`
-- `GET /editor/entities/groups`
-- `GET /editor/entities/asset-mappings`
-- `PATCH /editor/entities/asset-mappings/:assetId`
-
-Game sessions en anonymous requests mogen geen editor entity beheer krijgen. State-changing routes blijven CSRF/Origin beschermd. Geen route uploadt assets, maakt runtimecontent aan of publiceert naar runtime.
-
-## Database/schema contract
-
-Fase 8 database/schema contract:
-
-- `editor_entity_template_drafts`
-- `editor_entity_component_definition_drafts`
-- `editor_entity_group_drafts`
-- `editor_entity_component_validation_issues`
-- `editor_asset_entity_role_mapping_drafts`
-
-De migratie is idempotent met `CREATE TABLE IF NOT EXISTS` en bevat geen echte assetdata, geen Taverne/Wizard records en geen concrete gamecontent.
-
-## Editor UI contract
-
-- Entity/Component panel state is voorbereid.
-- Component list toont candidate/assigned/invalid counts.
-- Renderable component toont `asset.reference`.
-- NPC/combat/player component toont animation warning als mapping ontbreekt.
-- Audio emitter blijft gated/leeg bij audio=0.
-- Group transform state is voorbereid.
-- Geen concrete NPC/object content wordt buiten Kevin-testkeuzes getoond.
+- world/zone/minimap als losse hardcoded world settings bouwen;
+- camera/light/minimap waarden hard-coden;
+- procedural generation core opnieuw definieren;
+- procedural output direct naar runtime publiceren.
 
 ## Open Kevin-input
 
-Geen blokkerende Kevin-input voor de Git-basis van Fase 8.
+Geen blokkerende Kevin-input voor het afronden van Fase 8.
 
-Definitieve GLB-role mapping, animation mappings voor runtime-active behavior, UI-assets en audio-assets blijven latere editor/content gates. Zonder Kevin/editor-keuze mag de code geen roles of behavior activeren.
+Voor Fase 8.1 is Kevin-input pas blokkerend wanneer de implementatiefase concrete generatorgedrag, editorervaring of testgraphs wil vastleggen. Tot die tijd is alleen het fasecontract voorbereid.
 
 ## Open Codex/Claude-taken buiten Git
 
-- `pnpm install` draaien.
-- `pnpm build`, `pnpm typecheck`, `pnpm test` en `pnpm lint` draaien.
-- `db/migrations/0004_entity_component_core.sql` toepassen.
-- Nieuwe Fase 8 tabellen controleren.
-- Editor-only route smoke doen voor entity draft/validate/groups/asset-mappings.
-- Anonymous/game session denial testen.
-- Asset/entity validation check met `Taverne.glb` als object-test en `Wizard.glb` als NPC-test.
-- Bevestigen dat missing animation mapping warning is voor candidate en blocker voor runtime-active behavior.
-- Bevestigen dat Fase 8 niets publiceert naar runtime en geen assets naar Git kopieert.
+Geen Fase 8 Codex/Claude-taken open.
+
+Open voor later, wanneer Kevin Fase 8.1 expliciet opent:
+
+- Git-basis voor procedural generation core bouwen;
+- `pnpm install/build/typecheck/test/lint` draaien;
+- migratie toepassen als Fase 8.1 schema toevoegt;
+- Procedural API/editor smoke uitvoeren;
+- determinism smoke: zelfde seed geeft dezelfde output;
+- different-seed smoke: andere seed mag andere output geven;
+- bevestigen dat procedural preview/bake niets naar runtime publiceert;
+- bevestigen dat procedural generation geen assets naar Git kopieert.
 
 ## Fasebeoordeling
 
-Fase 8 is nog niet volledig server-side klaar.
+Fase 8 is klaar.
 
-Afgerond in Git:
+Fase 8.1 is aangemaakt als volgende fase, maar nog niet geimplementeerd.
 
-- entity/component schema;
-- component validators;
-- entity/component node types;
-- typed entity/component/group sockets;
-- editor-only API-contracten;
-- Entity/Component panel state;
-- database-migratie;
-- tests;
-- documentatie rond Kevin-testkeuzes, animation gates en role mapping.
-
-Nog open:
-
-- server-side install/build/typecheck/test/lint;
-- MySQL migratie;
-- API/editor smoke;
-- asset/entity checks met echte server asset library.
-
-Huidige status: Fase 8 Git-basis voorbereid; server-side validatie moet nog volgen.
+Huidige status: Fase 8 afgerond; klaar om Fase 8.1 te openen wanneer Kevin dat expliciet doet.

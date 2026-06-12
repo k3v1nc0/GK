@@ -13,6 +13,8 @@ Alles wat de speler of editor straks inhoudelijk ziet of voelt, moet via nodes k
 - GLB assets
 - UI plaatjes
 - audio en sfeer
+- procedural generation seeds, previews en bake drafts
+- generated zones, placements, spawn areas, path networks en resource distributions
 - NPC taken
 - NPC routes
 - NPC groepen
@@ -30,6 +32,8 @@ Alles wat de speler of editor straks inhoudelijk ziet of voelt, moet via nodes k
 - HUD panels en docks
 
 De code mag vaste engine-feiten bevatten, maar die moeten als node types, dropdowns, inputvelden, sockets, panelen en validators zichtbaar worden in de editor. De editor moet werken als een node-systeem met typed sockets, dropdowns, eigen velden en meerdere bolletjes/poorten per node.
+
+Procedural generation is vanaf Fase 8.1 een core engine-capability. Procedural output blijft draft/preview/bake data totdat de normale publish-flow later expliciet publiceert.
 
 ## Belangrijke levende documenten
 
@@ -50,7 +54,8 @@ De code mag vaste engine-feiten bevatten, maar die moeten als node types, dropdo
 | 6 | `fase6.md` | Node graph core met typed sockets, dropdowns en undo/redo |
 | 7 | `fase7.md` | Auto asset/audio library uit jouw assets-map |
 | 8 | `fase8.md` | Universal entity/component systeem voor GLB objecten en NPCs |
-| 9 | `fase9.md` | World, camera, lighting, levels/zones en minimap nodes |
+| 8.1 | `fase8.1.md` | Procedural Generation Core |
+| 9 | `fase9.md` | World, camera, lighting, levels/zones en minimap nodes op Fase 8.1 basis |
 | 10 | `fase10.md` | Runtime 3D client met camera, audio, minimap en HUD host |
 | 11 | `fase11.md` | Publish pipeline en runtime projections |
 | 12 | `fase12.md` | Realtime MMO rooms, presence en player sync |
@@ -70,3 +75,5 @@ Werk 1 fase tegelijk. Open eerst:
 3. het fasebestand
 4. `node-system-super-dynamic-contract.md`
 5. `hard-facts-to-node-panels.md`
+
+Vanaf Fase 9 moet ook `fase8.1.md` worden geopend, omdat world/zone/minimap en latere runtime/contentfases op de procedural generation core moeten voortbouwen zonder die opnieuw te definieren.

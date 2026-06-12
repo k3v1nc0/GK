@@ -19,7 +19,30 @@
 
 ## Status
 
-Fase 8 Git-basis voorbereid. Server-side migratie, install/build/typecheck/test/lint, API/editor smoke en asset/entity checks moeten nog door Codex/Claude op de server worden uitgevoerd.
+Fase 8 is server-side afgerond en klaar.
+
+Server-side bevestigd op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`):
+
+- `pnpm install`: OK;
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- migratie `0004_entity_component_core.sql`: OK;
+- nieuwe Fase 8 tabellen: OK;
+- entity routes: OK;
+- anonymous/game denied: OK;
+- `Taverne.glb` object-test: OK;
+- `Wizard.glb` NPC-test: OK;
+- animation warning/blocker: OK;
+- GameBible save: OK;
+- game-site reachable: OK;
+- runtime publish: nee bevestigd;
+- assets niet naar Git: bevestigd;
+- blockers: geen;
+- `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
+
+Volgende fase: Fase 8.1 - Procedural Generation Core. Fase 8.1 is toegevoegd als planning, maar nog niet geimplementeerd.
 
 ## Doel van de fase
 
@@ -155,43 +178,48 @@ De migratie bevat geen echte assetdata, geen Taverne/Wizard records en geen conc
 - [x] Entity/Component panel state is voorbereid.
 - [x] Database-migratie bevat alleen schema.
 - [x] Tests toegevoegd.
-- [ ] Server-side `pnpm install/build/typecheck/test/lint` groen.
-- [ ] MySQL migratie `0004_entity_component_core.sql` toegepast.
-- [ ] API/editor smoke voor entity routes bevestigd.
-- [ ] Asset/entity checks met Taverne/Wizard bevestigd.
+- [x] Server-side `pnpm install/build/typecheck/test/lint` groen.
+- [x] MySQL migratie `0004_entity_component_core.sql` toegepast.
+- [x] API/editor smoke voor entity routes bevestigd.
+- [x] Asset/entity checks met Taverne/Wizard bevestigd.
+- [x] Geen runtime publish en geen assets naar Git bevestigd.
 
 ## Codex/Claude-taken buiten Git
 
-Na deze Git-basis moet Codex/Claude server-side uitvoeren:
+Afgerond voor Fase 8:
 
 1. `pnpm install`.
 2. `pnpm build`.
 3. `pnpm typecheck`.
 4. `pnpm test`.
 5. `pnpm lint`.
-6. MySQL migratie `db/migrations/0004_entity_component_core.sql` toepassen.
-7. Controleren dat de nieuwe Fase 8 tabellen bestaan.
+6. MySQL migratie `db/migrations/0004_entity_component_core.sql` toegepast.
+7. Nieuwe Fase 8 tabellen gecontroleerd.
 8. Editor admin login smoke.
-9. `GET /editor/entities/draft` smoke.
-10. `POST /editor/entities/validate` smoke met editor session en CSRF.
-11. `GET /editor/entities/groups` smoke.
-12. `GET /editor/entities/asset-mappings` smoke.
-13. `PATCH /editor/entities/asset-mappings/:assetId` smoke met editor session en CSRF.
-14. Anonymous/game session denial voor entity beheer testen.
-15. Asset/entity validation check met `Taverne.glb` als object-test en `Wizard.glb` als NPC-test.
-16. Bevestigen dat missing animation mapping warning is voor candidate en blocker voor runtime-active behavior.
-17. Bevestigen dat Fase 8 niets publiceert naar runtime en geen assets naar Git kopieert.
+9. Entity route smoke.
+10. Anonymous/game session denial voor entity beheer getest.
+11. Asset/entity validation check met `Taverne.glb` als object-test en `Wizard.glb` als NPC-test.
+12. Missing animation mapping warning/blocker gedrag bevestigd.
+13. Bevestigd dat Fase 8 niets publiceert naar runtime en geen assets naar Git kopieert.
+
+Geen Fase 8 blockers open.
 
 ## Testplan
 
-Gebruik de server asset library als bron:
+Server-side afgerond:
 
-1. Kies `Taverne.glb` als object-test via editor-data.
-2. Kies `Wizard.glb` als NPC-test via editor-data.
-3. Maak beide alleen candidate entity/component drafts.
-4. Controleer dat renderable via `asset.reference` loopt.
-5. Controleer dat `npc_brain` zonder animation mapping warning geeft.
-6. Controleer dat runtime-active NPC/combat/player behavior zonder animation mapping blokkeert.
-7. Controleer dat audio emitter gated blijft bij audio=0.
-8. Controleer dat anonymous/game session geen editor entity beheer krijgt.
-9. Controleer dat draft/validation geen runtime publish uitvoert.
+1. `Taverne.glb` als object-test via editor-data.
+2. `Wizard.glb` als NPC-test via editor-data.
+3. Beide alleen als candidate entity/component drafts.
+4. Renderable via `asset.reference`.
+5. `npc_brain` zonder animation mapping geeft warning.
+6. Runtime-active NPC/combat/player behavior zonder animation mapping blokkeert.
+7. Audio emitter gated bij audio=0.
+8. Anonymous/game session krijgt geen editor entity beheer.
+9. Draft/validation voert geen runtime publish uit.
+
+## Volgende fase
+
+Fase 8.1 - Procedural Generation Core.
+
+Fase 8.1 moet vóór Fase 9 worden geopend, omdat world/zone/minimap nodes niet op losse handmatige world-data gebouwd mogen worden. Procedural generation wordt een data-driven, deterministic engine-capability met draft/preview/bake gates en zonder runtime publish.

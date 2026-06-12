@@ -1,6 +1,5 @@
 # Fase 11 - Publish pipeline en runtime projections
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,9 +22,22 @@
 
 Save en publish worden echt gescheiden. Publish compileert node-data naar runtime projections voor game, editor-preview en rollback.
 
+Fase 11 is de eerste plaats waar Fase 8.1 procedural bake draft data runtime-betekenis mag krijgen, en alleen wanneer publish-validatie die data expliciet accepteert en compileert naar immutable runtime projections.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core.
+- Fase 9 world/camera/lighting/minimap nodes.
+- Fase 10 runtime client consumeert alleen published projections.
+
+Publish mag procedural preview niet consumeren. Alleen editor bake draft data die door validators komt, mag naar runtime projections.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Kies simpele testgraph: player spawn, ground, camera, licht, minimap en 1 prop.
+- Kies of accepteer de generated zones/placements/path/resource candidates die in de testpublish gebruikt worden.
+- Bevestig dat testcontent uit GameBible/editor-data/asset register/procedural bake draft komt.
 
 ## Actie voor Codex
 
@@ -45,9 +57,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural bake draft die door editor/publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated placement of minimap-instelling hard-coded bevatten.
+- Publish mag procedural preview niet behandelen als runtimebron.
 
 Je werkt aan fase 11: Publish pipeline en runtime projections.
 
@@ -55,7 +67,7 @@ Doel:
 Save en publish worden echt gescheiden. Publish compileert node-data naar runtime projections voor game, editor-preview en rollback.
 
 Werk uit:
-Bouw publish-service, validation, compiler, immutable release manifest, runtime bootstrap/chunks/story/HUD/assets/audio/camera/minimap projections en rollback.
+Bouw publish-service, validation, compiler, immutable release manifest, runtime bootstrap/chunks/story/HUD/assets/audio/camera/minimap projections en rollback. Neem Fase 8.1 procedural bake draft data alleen mee wanneer die door editor-data en publish-validatie expliciet is geaccepteerd. Preview en bake zelf blijven geen publishstap.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -70,8 +82,10 @@ Verplichte controle:
 - [ ] Publish valideert.
 - [ ] Runtime projections bestaan.
 - [ ] Audio/camera/light/minimap in projections.
+- [ ] Procedural bake draft kan alleen via publish-validatie naar projections.
+- [ ] Procedural preview wordt niet als runtimebron gebruikt.
 - [ ] Rollback werkt.
 
 ## Testplan
 
-Save draft, game blijft gelijk; publish, game verandert; rollback naar vorige release.
+Save draft, game blijft gelijk; run procedural preview/bake draft, game blijft gelijk; publish geaccepteerde node/procedural draft data, game verandert; rollback naar vorige release.

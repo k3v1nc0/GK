@@ -1,6 +1,5 @@
 # Fase 15 - Economy, levels, money, merchants, inventory en scrolls
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,6 +22,15 @@
 
 Maak player levels, XP, currency, merchant stock/prijzen, buy/sell, inventory, items, readable scrolls en UI/audio assets via nodes.
 
+Generated resource distributions uit Fase 8.1/Fase 9 mogen later als draft/candidate input dienen, maar economywaarden, prices, rewards, XP, merchant stock en lootkansen blijven GameBible/editor/Kevin-data.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core voor eventuele resource candidates.
+- Fase 9 world/zone/resource context.
+- Fase 11 publish projections voor runtime.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Kies currency naam/icoon.
@@ -32,6 +40,7 @@ Maak player levels, XP, currency, merchant stock/prijzen, buy/sell, inventory, i
 - Kies inventory UI.
 - Kies scroll background en scroll tekst.
 - Kies level curve 1 t/m 5 of basisregels.
+- Kies of accepteer eventuele generated resource distributions als draftbasis, zonder dat die prijzen/rewards invullen.
 
 ## Actie voor Codex
 
@@ -51,9 +60,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated resource distribution of minimap-instelling hard-coded bevatten.
+- Procedural generation mag geen economywaarden, prices, rewards, merchant stock, XP of lootkansen verzinnen.
 
 Je werkt aan fase 15: Economy, levels, money, merchants, inventory en scrolls.
 
@@ -61,7 +70,7 @@ Doel:
 Maak player levels, XP, currency, merchant stock/prijzen, buy/sell, inventory, items, readable scrolls en UI/audio assets via nodes.
 
 Werk uit:
-Maak progression, currency, merchant, inventory, item en readable.scroll nodes. Merchant stock en prijzen zijn node-data. Wallet en inventory server-side. Scrolls gebruiken UI assets en tekst uit data.
+Maak progression, currency, merchant, inventory, item en readable.scroll nodes. Merchant stock en prijzen zijn node-data. Wallet en inventory server-side. Scrolls gebruiken UI assets en tekst uit data. Generated resource distributions mogen alleen candidate input zijn voor editorkeuzes.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -78,7 +87,8 @@ Verplichte controle:
 - [ ] Inventory werkt.
 - [ ] Scrolls leesbaar.
 - [ ] Geen prijzen hard-coded.
+- [ ] Generated resources blijven candidate input en vullen geen economywaarden in.
 
 ## Testplan
 
-Geef speler geld, koop item bij merchant, lees scroll, level/XP reward testen.
+Geef speler geld, koop item bij merchant, lees scroll, level/XP reward testen. Controleer dat generated resources geen prices/rewards/merchant stock hebben verzonnen en alleen gekozen editor-data zijn.

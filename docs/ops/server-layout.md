@@ -2,7 +2,13 @@
 
 ## Status
 
-Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd. Fase 7 asset library, scanner, editor API, editor panels, database migration en runtime smoke zijn server-side gevalideerd door Claude op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`).
+Fase 2 serverfundering grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
+
+Fase 7 asset library, scanner, editor API, editor panels, database migration en runtime smoke zijn server-side gevalideerd door Claude op HEAD `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`).
+
+Fase 8 entity/component core is server-side gevalideerd door Codex op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
+
+Fase 8.1 is alleen toegevoegd als volgende faseplanning. Er is nog geen Fase 8.1 serverwerk uitgevoerd en er is geen procedural code/schema/test in deze docs-update toegevoegd.
 
 Dit document beschrijft de single-server fundering voor de nieuwe game onder `/var/www/gk`. Het is een blijvend ops-contract voor scripts, templates en serverchecks. Het claimt alleen serverstatus wanneer die expliciet server-side is gevalideerd.
 
@@ -13,6 +19,7 @@ Dit document beschrijft de single-server fundering voor de nieuwe game onder `/v
 - Echte secrets, credentials, tokens, private keys en serverwaarden mogen niet in Git.
 - Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
+- Procedural generation output blijft draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 
 ## Bevestigde paden
 
@@ -105,6 +112,29 @@ Fase 7 bevestigd:
 - `publishesRuntimeOutput=false`.
 - UI/audio count 0 is geldig en veroorzaakt geen dummy assets.
 
+Fase 8 bevestigd:
+
+- `Taverne.glb` object-test OK als Kevin-testkeuze, geen runtime hardcode.
+- `Wizard.glb` NPC-test OK als Kevin-testkeuze, geen runtime hardcode.
+- Missing animation mapping warning/blocker OK.
+- Assets niet naar Git.
+- Runtime publish nee bevestigd.
+
+## Procedural generation status
+
+Fase 8.1 is nog niet geimplementeerd. Wanneer Kevin Fase 8.1 opent, moet Codex/Claude server-side bevestigen:
+
+- procedural migratie toepassen als schema wordt toegevoegd;
+- procedural API/editor smoke;
+- determinism smoke: zelfde seed + graph + inputs geeft dezelfde output;
+- different-seed smoke: andere seed mag andere output geven;
+- preview publiceert niets naar Runtime Game;
+- bake maakt alleen editor draft data;
+- geen assets naar Git;
+- anonymous/game session krijgt geen procedural editor beheer.
+
+Geen permanente daemon, watcher of runtime publish mag door Git-docs alleen worden verondersteld.
+
 ## Secrets en env
 
 Echte serverwaarden horen buiten Git, bijvoorbeeld in:
@@ -143,7 +173,7 @@ Apache mag niet rechtstreeks serveren:
 - database dumps;
 - release-interne bronbestanden tenzij een build expliciet als public directory is aangewezen.
 
-Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. De template `ops/apache/gk-vhost.conf.template` bereidt de bevestigde host en `/editor` route voor, maar moet server-side door Codex worden gerenderd, veilig getest en pas daarna geactiveerd.
+Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data mag niet publiek worden geserveerd alsof het runtimecontent is; alleen een latere publishfase mag expliciet runtime projections publiceren.
 
 Fase 5.2 voegt toe:
 
@@ -162,6 +192,17 @@ Fase 7 voegt toe:
 - anonymous en game sessions krijgen geen editor asset beheer;
 - asset scan uploadt niets, maakt geen assets aan, kopieert niets naar Git en publiceert niets naar Runtime Game.
 
+Fase 8 voegt toe:
+
+- entity routes blijven editor-only;
+- anonymous en game sessions krijgen geen editor entity beheer;
+- entity validation maakt geen runtimecontent aan en publiceert niets naar Runtime Game.
+
+Fase 8.1 mag later toevoegen:
+
+- procedural editor routes voor graph, preview, validation, bake en generated candidates;
+- deze routes blijven editor-only, CSRF/Origin beschermd waar state-changing, en no-runtime-publish.
+
 GameBibleNode save-policy:
 
 - publieke GET op HTML/JSON blijft toegestaan;
@@ -171,43 +212,6 @@ GameBibleNode save-policy:
 - browser-save moet naar de API-route posten met Origin/CSRF, niet naar een publieke PHP-write;
 - legacy `GameBibleNode.php` is gedepricieerd voor normale browser-saves en mag alleen tijdelijk schrijven met buiten-Git serverbescherming, zoals Basic Auth, IP allowlist of een buiten-Git token;
 - Codex moet bevestigen dat POST zonder server-side auth faalt.
-
-Fase 5.3 voegt toe:
-
-- `/auth/editor/login`, `/auth/editor/logout` en `/auth/editor/me` zijn echte API-routes op dezelfde `/auth/` proxy;
-- de browser krijgt een editor session cookie en CSRF-cookie na succesvolle login;
-- GameBibleNode browser-save gebruikt dezelfde editor session;
-- Apache moet publieke `X-GK-Smoke-Scope` en `X-GK-Smoke-Editor-Roles` headers strippen voordat requests de API bereiken.
-
-Codex-resultaat:
-
-- Nginx is geinstalleerd als candidate-tooling.
-- Candidate config uit template staat buiten Git op `/etc/gk/nginx/gk.conf.candidate`.
-- `nginx -t -c /etc/gk/nginx/nginx-test.conf` was succesvol voor de candidate.
-- Nginx is bewust inactive/disabled omdat Apache al op poort 80 actief is.
-- Apache-hardening is buiten Git toegevoegd via `/etc/apache2/conf-available/gk-hardening.conf`.
-- `a2enconf gk-hardening`, `apache2ctl configtest` en `systemctl reload apache2` zijn uitgevoerd.
-- Apache serveert momenteel de GK-vhost en hardent `.git`, data, logs, tmp, shared en vergelijkbare paden naar 403.
-
-Fase 5.2 Codex-resultaat:
-
-- Apache blijft hoofdwebserver.
-- Nginx blijft inactive/candidate.
-- `apache2ctl configtest`: `Syntax OK`.
-- bestaande sites bleven OK.
-- `/editor`: OK.
-- `/auth/editor/me`: `401` zonder sessie.
-- `/editor/game-users`: `403` zonder `editor_admin`.
-- `/README/GameBibleNode.html`: `200`.
-- `/README/GameBibleNode.json`: `200`.
-- `/README/GameBibleNode.php` is bereikbaar maar geen open write.
-- andere README-bestanden blijven `403`.
-- publieke POST naar legacy PHP faalt.
-- publieke POST naar save API faalt.
-- public smoke headers via Apache worden gestript.
-- browser-save post naar `/editor/game-bible-node/save`, niet meer naar `GameBibleNode.php`.
-
-Nginx blijft candidate-only tot een aparte migratiefase.
 
 ## systemd policy
 
@@ -231,18 +235,13 @@ Codex-resultaat:
 - `gk-editor-web` is active/enabled en draait via `/opt/gk/node-v22/bin/node`.
 - API health: OK.
 - editor-web health: OK.
-- `pnpm install`: OK.
-- `pnpm build`: OK.
-- `pnpm typecheck`: OK.
-- `pnpm test`: OK, 31/31 tests groen.
-- `pnpm lint`: OK.
 
 Realtime gateway, workers, publish-services en latere game runtime krijgen eigen fasegates voordat ze als permanent actief mogen worden gemarkeerd.
 
-Fase 5.3 server-smoke:
+## Server-smokes
 
-- set-cookie TypeScript build-fix aanwezig in `apps/api-server/src/http-server.ts`;
-- password-verifier ondersteunt beide scrypt formats;
+### Fase 5.3
+
 - `pnpm install/build/typecheck/test/lint`: OK;
 - `pnpm test`: OK, 35/35;
 - services actief via `/opt/gk/node-v22/bin/node`;
@@ -250,13 +249,12 @@ Fase 5.3 server-smoke:
 - editor admin login werkt;
 - `/auth/editor/me` geeft authenticated true met `editor_admin`;
 - GameBible save via `/editor/game-bible-node/save` werkt;
-- backup en audit werken;
 - logout werkt;
 - save na logout faalt;
 - publieke save en legacy PHP write blijven dicht;
 - bestaande game-site blijft bereikbaar.
 
-Fase 7 server-smoke:
+### Fase 7
 
 - HEAD server-check: `0b4a0472870e4aa0fa09877a183aa1efa975340d` (`fase 7 - Claude`).
 - `pnpm install`: OK.
@@ -291,6 +289,28 @@ Fase 7 server-smoke:
 - DB CHECK constraint blokkeert `publishes_runtime_output=1`.
 - Blockers: geen.
 
+### Fase 8
+
+- HEAD server-check: `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 8 fix codex`).
+- `pnpm install`: OK.
+- `pnpm build`: OK.
+- `pnpm typecheck`: OK.
+- `pnpm test`: OK.
+- `pnpm lint`: OK.
+- Migratie `0004_entity_component_core.sql`: OK.
+- Nieuwe Fase 8 tabellen: OK.
+- Entity routes: OK.
+- Anonymous/game denied: OK.
+- `Taverne.glb` object-test: OK.
+- `Wizard.glb` NPC-test: OK.
+- Animation warning/blocker: OK.
+- GameBible save: OK.
+- Game-site reachable: OK.
+- Runtime publish nee bevestigd.
+- Assets niet naar Git.
+- Blockers: geen.
+- `gk-api` en `gk-editor-web` zijn herstart om huidige build live te laden.
+
 ## MySQL en Redis
 
 Geen credentials in Git.
@@ -315,6 +335,8 @@ Codex-resultaat:
 - Fase 7 migratie `db/migrations/0003_asset_library_register.sql` is toegepast.
 - Fase 7 tabellen `asset_library_records` en `asset_library_scan_runs` bestaan.
 - Fase 7 DB CHECK constraint blokkeert `publishes_runtime_output=1`.
+- Fase 8 migratie `db/migrations/0004_entity_component_core.sql` is toegepast.
+- Nieuwe Fase 8 tabellen bestaan.
 
 ## Codex-taken buiten Git
 
@@ -337,13 +359,17 @@ Afgerond door Codex/Claude:
 15. Fase 7 anonymous/game-denial getest.
 16. Fase 7 watcher/polling smoke bevestigd zonder permanente daemon vanuit Git.
 17. Fase 7 runtime-publish en Git-copy gates bevestigd.
+18. Fase 8 install/build/typecheck/test/lint server-side groen bevestigd.
+19. Fase 8 MySQL migratie toegepast en tabellen bevestigd.
+20. Fase 8 entity routes, anonymous/game-denial, Taverne/Wizard checks en runtime-publish/asset-copy gates bevestigd.
+21. `gk-api` en `gk-editor-web` herstart voor de huidige Fase 8 build.
 
-Nog open voor Codex:
+Nog open voor Codex/Claude:
 
-1. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
-2. Nginx niet live activeren zonder aparte migratiefase.
-3. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.
-4. Fase 8 pas voorbereiden of implementeren wanneer Kevin die fase opent.
+1. Fase 8.1 pas uitvoeren wanneer Kevin die fase expliciet opent.
+2. Toekomstige game runtime, realtime gateway, workers en publish-services pas installeren/starten wanneer hun fase en echte build-output bestaan.
+3. Nginx niet live activeren zonder aparte migratiefase.
+4. `/usr/bin/node` blijft serverbreed `v18.19.1`; geen actie nodig voor GK zolang GK via `/opt/gk/node-v22` draait.
 
 ## Fase 2-klaar criterium
 
@@ -359,4 +385,4 @@ Fase 2 is pas volledig server-klaar wanneer:
 - systemd server-side is gevalideerd en waar relevant actief;
 - secrets buiten Git staan.
 
-Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache hoofdwebserver bevestigd; Nginx inactive/candidate; Fase 5.2/Fase 5.3 API/editor services actief en gevalideerd; Fase 7 asset library server-side gevalideerd en klaar. Toekomstige services blijven fasegebonden gates.
+Huidige status: Fase 2 serverfundering grotendeels uitgevoerd; Apache hoofdwebserver bevestigd; Nginx inactive/candidate; Fase 5.2/Fase 5.3 API/editor services actief en gevalideerd; Fase 7 asset library server-side gevalideerd en klaar; Fase 8 entity/component core server-side gevalideerd en klaar. Toekomstige services blijven fasegebonden gates.

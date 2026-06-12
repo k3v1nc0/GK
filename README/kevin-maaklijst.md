@@ -14,6 +14,7 @@ Dat betekent:
 - Als er een scroll leesbaar moet zijn, maak of kies jij de scroll achtergrond en tekst.
 - Als er audio nodig is, maak of kies jij sfeer, NPC, UI, combat of muziek audio.
 - Als er camera, licht, minimap, geld, level, merchant of NPC-routes nodig zijn, beslis jij de gewenste waardes of we verzinnen ze samen voordat de fase start.
+- Als procedural generation output wordt gebaked, keur jij/editor later expliciet goed welke generated candidates echte editor/node-data mogen worden.
 - Als iets ontbreekt, moet de AI stoppen en melden wat mist.
 
 ## Asset mappen op de server
@@ -62,6 +63,22 @@ Als jij iets in assets zet, moet de editor het automatisch kunnen tonen na scan/
 
 Elke GLB moet als object en als NPC-kandidaat gebruikt kunnen worden. De editor mag waarschuwen bij schaal, animaties of performance, maar de asset mag niet verdwijnen.
 
+## Procedural generation regel
+
+Fase 8.1 bouwt procedural generation als engine-capability, niet als contentbeslisser.
+
+Kevin hoeft voor Fase 8.1 geen concrete dorpen, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes, lighting presets of world maps aan te leveren. Die mogen ook niet door AI worden verzonnen.
+
+Wat later wel door Kevin/editor gekozen of goedgekeurd moet worden:
+
+- welke generated zones of layouts als editor-data worden gebruikt;
+- welke generated spawn areas blijven, worden aangepast of worden afgewezen;
+- welke generated path networks mogen dienen als basis voor NPC/player/world nodes;
+- welke generated resource distributions alleen candidate blijven of later content worden;
+- welke generated entity placements echt worden gebruikt in publish-data.
+
+Zelfde seed + graph + inputs moet dezelfde generated draft output geven. Preview en bake publiceren niets naar Runtime Game.
+
 ## Minimale GLB rollen voor eerste speelbare versie
 
 | Rol | Nodig vanaf fase | Jij moet maken of kiezen |
@@ -72,7 +89,7 @@ Elke GLB moet als object en als NPC-kandidaat gebruikt kunnen worden. De editor 
 | merchant_npc | 15 | NPC die spullen verkoopt |
 | enemy_minion | 16 | Kleine vijand |
 | boss_model | 16 | Eindbaas GLB |
-| ground_or_terrain | 9 | Vloer, terrain of startgebied basis |
+| ground_or_terrain | 9 | Vloer, terrain of startgebied basis, eventueel gekozen uit Fase 8.1/Fase 9 draft candidates |
 | gate_or_portal | 17 | Poort, deur of ingang naar boss |
 | quest_object | 17 | Object voor quest objective |
 | loot_chest_or_drop | 16 | Loot chest/drop GLB |
@@ -139,8 +156,9 @@ Voor fase 17 moet dit definitief zijn:
 
 ## World, camera, lighting en minimap keuzes
 
-Voor fase 9 en 10 moet jij kiezen of samen uitwerken:
+Voor fase 9 en 10 moet jij kiezen, goedkeuren of samen uitwerken:
 
+- welke Fase 8.1 generated zones/spawn areas/path networks/resource distributions/entity placements als draftbasis mogen dienen
 - camera stijl: third-person, MMO camera, top-down, isometric of hybrid
 - camera afstand, hoogte, zoom limits en smoothing
 - startgebied licht: zonkleur, intensiteit, ambient, fog, sky kleur
@@ -151,6 +169,8 @@ Voor fase 9 en 10 moet jij kiezen of samen uitwerken:
   - editor toont node/debug/selection layers
   - game toont alleen speler, party, quest markers en ontdekte gebieden
 - welke layers zichtbaar zijn per mode
+
+Alle concrete waarden blijven editor/node-data en mogen niet in runtimecode worden ingevuld.
 
 ## Levels, geld en merchants
 
@@ -167,6 +187,8 @@ Voor fase 15 moet jij kiezen of samen uitwerken:
 - XP reward waardes
 - loot drop kansen
 
+Generated resource distributions uit Fase 8.1 kunnen later helpen als draft/candidate input, maar mogen geen economywaarden of lootkansen verzinnen.
+
 ## NPC taken en routes
 
 Voor fase 13 moet jij kiezen of samen uitwerken:
@@ -180,3 +202,5 @@ Voor fase 13 moet jij kiezen of samen uitwerken:
 - dag/nacht schema, als gebruikt
 - spawn gebied voor wilde NPC/enemy groepen
 - respawn timing
+
+Generated path networks en spawn areas uit Fase 8.1/Fase 9 kunnen als draft/candidate input dienen, maar Kevin/editor kiest later wat echt wordt gebruikt.

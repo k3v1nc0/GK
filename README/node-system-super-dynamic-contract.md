@@ -8,6 +8,9 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 
 - assets
 - audio
+- procedural generation seeds
+- procedural preview en bake drafts
+- generated zones, spawn areas, path networks, resource distributions en entity placements
 - camera
 - licht
 - fog
@@ -87,11 +90,19 @@ Minimaal ondersteunen:
 - minimap.layer
 - zone
 - level
+- procedural.graph.reference
+- procedural.seed.reference
+- generation.output.reference
+- generated.entity.draft.reference
+- generated.group.draft.reference
+- generated.placement.candidate.reference
 - list
 
 Fase 6 heeft de eerste typed sockets vastgelegd als engine-capabilities: `var.string`, `number`, `color`, `asset.reference` en `audio.reference`.
 
 Fase 8 breidt de engine-capability sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Deze sockets zijn data-contracten voor editor drafts; ze publiceren niets naar Runtime Game.
+
+Fase 8.1 mag procedural socket capabilities toevoegen voor generator graphs, seeds, generated draft entities, generated groups, generated placement candidates en generation outputs. Ook die sockets zijn editor/draft-contracten en publiceren niets naar Runtime Game.
 
 ## Asset import
 
@@ -162,6 +173,29 @@ Belangrijke regels:
 
 `Taverne.glb` en `Wizard.glb` zijn Fase 8 Kevin-testkeuzes. Ze zijn geen runtime-hardcoded object of NPC.
 
+## Fase 8.1 procedural generation laag
+
+Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system.
+
+Belangrijke regels:
+
+- Generatoren zijn data-driven en deterministic.
+- Zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output.
+- Andere seed mag andere output geven.
+- Procedural preview publiceert niets naar Runtime Game.
+- Procedural bake maakt alleen editor draft data.
+- Procedural output blijft draft/candidate totdat een latere publish-flow expliciet publiceert.
+- Generated entities gebruiken Fase 8 entity/component contracts.
+- Generated assets gebruiken Fase 7 `asset.reference`.
+- Generated audio gebruikt `audio.reference` en blijft gated bij audio count 0.
+- Client mag geen eigen MMO-state verzinnen; server/runtime blijft later authoritative.
+
+Niet toegestaan:
+
+- vaste dorpen, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes, lighting presets of world maps hard-coden;
+- procedural output direct als runtimecontent behandelen;
+- procedural core opnieuw bouwen in Fase 9 of latere fases.
+
 ## Node families
 
 ### Asset nodes
@@ -188,6 +222,25 @@ Belangrijke regels:
 - audio.ducking
 - audio.volumeByDistance
 
+### Procedural generation nodes
+
+- proc.seed
+- proc.random
+- proc.pickWeighted
+- proc.noise2D
+- proc.noise3D
+- proc.scatterAssets
+- proc.scatterEntities
+- proc.zoneLayout
+- proc.pathNetwork
+- proc.spawnArea
+- proc.resourceDistribution
+- proc.validateGeneratedGraph
+- proc.previewGeneration
+- proc.bakeGenerationDraft
+
+Fase 8.1 definieert deze nodes als procedural engine-capabilities. De nodes maken generated draft/candidate data, geen concrete runtimecontent.
+
 ### World/camera/light nodes
 
 - world.zone
@@ -205,6 +258,8 @@ Belangrijke regels:
 - camera.bounds
 - camera.shake
 - camera.cinematic
+
+Fase 9 gebruikt de Fase 8.1 procedural outputs als draft/candidate input waar relevant. Fase 9 mag de procedural core niet opnieuw definieren.
 
 ### Minimap nodes
 
@@ -331,11 +386,13 @@ Fase 8 implementeert de generieke `gk.entity.*`, `gk.component.*` en `gk.npc.mak
 - Een GLB mag pas als concrete object/NPC/player/prop/environment/enemy/boss role worden gebruikt wanneer editor-data die role mapping expliciet heeft toegewezen.
 - Ontbrekende animaties geven waarschuwing voor candidate entities.
 - Runtime-active NPC/combat/player behavior blokkeert zonder expliciete animation mapping via editor-data.
+- Procedural preview en bake zijn geen publishstap.
+- Generated procedural output mag pas runtimecontent worden wanneer een latere publishfase expliciet gekozen editor/node-data compileert naar runtime projections.
 - Vreemde schaal geeft waarschuwing.
 - Hoog triangle budget geeft waarschuwing.
 - Ontbrekende audio geeft waarschuwing als audio optioneel is.
 - Ontbrekende audio blokkeert als een node die audio verplicht maakt.
 - Blokkeren gebeurt alleen als een gekozen node capability verplichte data mist.
-- Asset scan, entity validation en draft preview zijn geen publishstap.
+- Asset scan, entity validation, procedural preview, procedural bake en draft preview zijn geen publishstap.
 
-Voorbeeld: een boss zonder boss health setup blokkeert pas wanneer editor-data/publish die boss-capability daadwerkelijk vereist. Een GLB met alleen `candidate` status mag niet automatisch boss, NPC of object worden.
+Voorbeeld: een boss zonder boss health setup blokkeert pas wanneer editor-data/publish die boss-capability daadwerkelijk vereist. Een GLB met alleen `candidate` status mag niet automatisch boss, NPC of object worden. Een generated spawn area of path network mag niet automatisch runtime-state worden zonder publish.

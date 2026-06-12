@@ -1,6 +1,5 @@
 # Fase 10 - Runtime 3D client met camera, audio, minimap en HUD host
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,11 +22,23 @@
 
 Een speler kan inloggen, 3D runtime openen, bewegen, camera gebruiken, audio horen, minimap zien en HUD panels krijgen uit published node-data.
 
+Fase 10 leest alleen published runtime projections. Procedural output uit Fase 8.1 mag alleen zichtbaar worden als Fase 11 of een latere publish-flow die output expliciet heeft gevalideerd en gepubliceerd.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core.
+- Fase 9 world/camera/lighting/minimap nodes.
+- Published runtime projections uit de publish-flow.
+
+Runtime mag geen procedural preview/bake draft direct lezen alsof het live game-state is.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Player GLB role gemapt.
-- Ground/environment GLB gemapt.
+- Ground/environment GLB gemapt of via geaccepteerde generated placements beschikbaar.
 - Camera/minimap/audio basiskeuzes uit fase 9 ingevuld.
+- Generated zones/placements uit Fase 8.1/Fase 9 alleen wanneer ze via editor/node-data en publish zijn geaccepteerd.
 
 ## Actie voor Codex
 
@@ -47,9 +58,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die via publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, world zone, generated placement of minimap-instelling hard-coded bevatten.
+- Runtime mag geen procedural preview/bake draft direct consumeren.
 
 Je werkt aan fase 10: Runtime 3D client met camera, audio, minimap en HUD host.
 
@@ -57,7 +68,7 @@ Doel:
 Een speler kan inloggen, 3D runtime openen, bewegen, camera gebruiken, audio horen, minimap zien en HUD panels krijgen uit published node-data.
 
 Werk uit:
-Bouw game login, runtime bootstrap, GLB renderer, player movement, camera controller uit node-data, audio runtime, minimap runtime en dockable HUD host. Runtime leest alleen published data.
+Bouw game login, runtime bootstrap, GLB renderer, player movement, camera controller uit node-data, audio runtime, minimap runtime en dockable HUD host. Runtime leest alleen published data. World, generated placements en minimap data komen alleen uit runtime projections die door de publish-flow zijn gemaakt.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -75,7 +86,9 @@ Verplichte controle:
 - [ ] Audio uit nodes.
 - [ ] Minimap uit nodes.
 - [ ] HUD host.
+- [ ] Runtime leest geen procedural preview/bake draft direct.
+- [ ] Runtime world data komt uit published projections.
 
 ## Testplan
 
-Login, beweeg, camera zoom, audio volume, minimap markers en mobile viewport testen.
+Login, beweeg, camera zoom, audio volume, minimap markers en mobile viewport testen. Controleer dat generated world data alleen zichtbaar is na expliciete publish en niet vanuit Fase 8.1 preview/bake draft.

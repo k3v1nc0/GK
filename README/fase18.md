@@ -1,6 +1,5 @@
 # Fase 18 - Polijst, performance, deploy en eindacceptatie
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,12 +22,25 @@
 
 Stabiliseer de complete game, test performance, load, backup/restore en deploy. Aan het eind is de eerste versie echt speelbaar.
 
+Fase 18 controleert ook dat de Fase 8.1 procedural generation contracten veilig in de complete flow zitten: deterministic generation, no-runtime-publish preview/bake, accepted generated data only through publish, en geen client-invented MMO-state.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core.
+- Fase 9 world/camera/lighting/minimap nodes.
+- Fase 10 runtime client.
+- Fase 11 publish pipeline.
+- Fase 12 realtime MMO rooms.
+- Fase 13 t/m 17 gameplay/content systemen.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Speel alles uit.
 - Noteer bugs.
 - Lever betere GLB/UI/audio assets aan als nodig.
 - Kies performance target voor mobiel/desktop en spelers per room.
+- Controleer of generated world candidates die in de build zitten expliciet geaccepteerd zijn.
 
 ## Actie voor Codex
 
@@ -48,9 +60,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated placement of minimap-instelling hard-coded bevatten.
+- Eindacceptatie moet bevestigen dat procedural preview/bake niet rechtstreeks runtime wijzigt.
 
 Je werkt aan fase 18: Polijst, performance, deploy en eindacceptatie.
 
@@ -58,7 +70,7 @@ Doel:
 Stabiliseer de complete game, test performance, load, backup/restore en deploy. Aan het eind is de eerste versie echt speelbaar.
 
 Werk uit:
-Maak full game flow tests, editor publish tests, two-player tests, boss/loot tests, merchant/economy tests, audio/minimap tests, load smoke tests, mobile performance checks, deploy scripts, backup/restore scripts en operations runbook.
+Maak full game flow tests, editor publish tests, procedural determinism/regression tests, two-player tests, boss/loot tests, merchant/economy tests, audio/minimap tests, load smoke tests, mobile performance checks, deploy scripts, backup/restore scripts en operations runbook.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -72,6 +84,8 @@ Verplichte controle:
 - [ ] Editor werkt.
 - [ ] Node system werkt.
 - [ ] Asset/audio auto import werkt.
+- [ ] Procedural generation determinism werkt.
+- [ ] Procedural preview/bake publiceert niets direct naar runtime.
 - [ ] Publish werkt.
 - [ ] Runtime werkt.
 - [ ] Realtime MMO.
@@ -82,4 +96,4 @@ Verplichte controle:
 
 ## Testplan
 
-Volledige eindtest: editor publish, twee spelers, minimap, audio, beginquest, side quest, merchant, boss, loot, refresh, backup/restore check.
+Volledige eindtest: editor publish, procedural determinism en no-runtime-publish checks, twee spelers, minimap, audio, beginquest, side quest, merchant, boss, loot, refresh, backup/restore check.

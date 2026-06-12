@@ -1,6 +1,5 @@
 # Fase 14 - Quest systeem, story, side quests en party sharing
 
-
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
@@ -23,6 +22,15 @@
 
 NPCs kunnen quests geven, party sharing werkt, progressie blijft bewaard en side quests worden via nodes gemaakt.
 
+Questdoelen mogen later verwijzen naar world/zone/entity candidates die via Fase 8.1/Fase 9 zijn ontstaan, maar questnamen, teksten, objectives en rewards blijven GameBible/editor/Kevin-data. Procedural generation mag geen questcontent verzinnen.
+
+## Verplichte afhankelijkheden
+
+- Fase 8 entity/component core.
+- Fase 8.1 procedural generation core voor eventuele generated placement/path/zone candidates.
+- Fase 9 world/zone/minimap nodes.
+- Fase 13 NPC/task/dialog basis wanneer quest-NPCs nodig zijn.
+
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 
 - Kies naam eerste quest.
@@ -30,6 +38,7 @@ NPCs kunnen quests geven, party sharing werkt, progressie blijft bewaard en side
 - Kies quest stappen.
 - Kies party sharing gedrag.
 - Kies quest tracker UI/audio.
+- Kies of accepteer eventuele generated zone/entity/path candidates die questdoelen mogen gebruiken.
 
 ## Actie voor Codex
 
@@ -49,9 +58,9 @@ Inhoudsregels:
 - Voeg geen dummy assets toe.
 - Verzin geen definitieve gamecontent.
 - Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route of minimap-instelling hard-coded bevatten.
-
+- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
+- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated placement of minimap-instelling hard-coded bevatten.
+- Procedural generation mag geen questtekst, questnamen, rewards of objectives verzinnen.
 
 Je werkt aan fase 14: Quest systeem, story, side quests en party sharing.
 
@@ -59,7 +68,7 @@ Doel:
 NPCs kunnen quests geven, party sharing werkt, progressie blijft bewaard en side quests worden via nodes gemaakt.
 
 Werk uit:
-Maak quest nodes, dialog quest effects, quest state, party state, quest tracker HUD, quest audio events en server validation. Geen quest tekst verzinnen buiten Game Bible.
+Maak quest nodes, dialog quest effects, quest state, party state, quest tracker HUD, quest audio events en server validation. Geen quest tekst verzinnen buiten Game Bible. Questdoelen mogen verwijzen naar geaccepteerde world/entity candidates, maar de questinhoud blijft expliciete data.
 
 Verplichte controle:
 - Run build/typecheck/tests die beschikbaar zijn.
@@ -75,7 +84,8 @@ Verplichte controle:
 - [ ] Party share.
 - [ ] Side quest mogelijk.
 - [ ] Quest audio/HUD via nodes.
+- [ ] Procedural candidates kunnen alleen als gekozen target/input dienen, niet als questcontentbron.
 
 ## Testplan
 
-Speler A accepteert quest, deelt met B, objective progress sync, side quest test.
+Speler A accepteert quest, deelt met B, objective progress sync, side quest test. Controleer dat alle questtekst en rewards uit GameBible/editor-data komen en dat generated zone/entity references alleen geaccepteerde node-data zijn.
