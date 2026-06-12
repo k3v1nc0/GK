@@ -1,13 +1,9 @@
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 
-export interface JsonResponseBody {
-  readonly [key: string]: unknown;
-}
-
 export function sendJson(
   response: ServerResponse,
   statusCode: number,
-  body: JsonResponseBody,
+  body: object,
   headers: OutgoingHttpHeaders = {}
 ): void {
   const payload = JSON.stringify(body);
