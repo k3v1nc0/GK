@@ -14,6 +14,8 @@ Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asse
 
 Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar. Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
+Fase 10 Publish Flow Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
+
 ## Hoofdregels
 
 - GK Code Copiloot beheert in Git alleen blijvende scripts, templates, docs en checks.
@@ -21,9 +23,10 @@ Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar
 - Echte secrets, credentials, tokens, private keys en serverwaarden mogen niet in Git.
 - Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
-- Procedural generation output blijft draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
+- Procedural generation output blijft draft/preview/bake data totdat publish-flow expliciet publiceert in een daarvoor geopende fase.
 - UI/audio assets blijven asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
 - Fase 9 publiceert niets naar runtime.
+- Fase 10 publiceert niets naar runtime en maakt alleen publish validation/snapshot metadata contracts.
 
 ## Bevestigde paden
 
@@ -112,25 +115,35 @@ Bevestigd:
 - Fase 9 route smokes: OK;
 - anonymous denied: OK, 401 en niet 404;
 - game smoke-scope denied: OK, 403 en niet 404;
-- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
+- editor panels: OK;
 - UI scaling validation: OK;
 - no-runtime-publish: OK;
 - no-asset-mutation: OK;
-- GameBible save: OK via testdekking;
-- game-site reachable: OK;
-- worktree schoon;
 - blockers: geen.
 
-Fase 9 route contracts:
+## Fase 10 Git-basis status
 
-- `GET /editor/world/settings`;
-- `POST /editor/world/validate`;
-- `GET /editor/minimap/settings`;
-- `POST /editor/minimap/validate`;
-- `GET /editor/ui-display/assets`;
-- `POST /editor/ui-display/validate`.
+Fase 10 voegt Publish Flow Core contracts toe in Git:
 
-State-changing route contracts blijven CSRF/Origin beschermd. Anonymous/game sessions moeten denied blijven.
+- publish schemas en validators;
+- publish socket/node contracts;
+- editor-only publish route contracts;
+- Publish Flow panel state;
+- tests;
+- docs.
+
+Route contracts:
+
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
+
+Server-side verificatie staat open. Geen server runtime, database migratie, service restart of live smoke is door deze GitHub-only update geclaimd.
+
+Fase 10 voert geen runtime publish uit en wijzigt geen assets.
 
 ## Webserver policy
 
@@ -143,7 +156,7 @@ Kevin heeft bevestigd:
 - Nginx mag niet live worden geactiveerd op poort 80/443.
 - Er komt geen volledige migratie naar Nginx zonder aparte migratiefase.
 
-Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data en Fase 9 world/minimap/UI display drafts mogen niet publiek worden geserveerd alsof het runtimecontent is.
+Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts en Fase 10 publish validation/snapshot metadata mogen niet publiek worden geserveerd alsof het runtimecontent is.
 
 ## Runtime directory layout
 
@@ -165,7 +178,7 @@ Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 - `/etc/gk/gk.env`;
 - een door Codex beheerde secret store of serverconfig.
 
-Git mag alleen veilige examples bevatten. Geen Fase 9 wijziging mag secrets toevoegen.
+Git mag alleen veilige examples bevatten. Geen Fase 10 wijziging mag secrets toevoegen.
 
 ## Codex/Claude serverchecks
 
@@ -179,11 +192,22 @@ Afgerond:
 6. Fase 9 build/typecheck/test/lint afgerond.
 7. Fase 9 editor/API smoke, panel smoke, auth-deny smoke, UI scaling validation, no-runtime-publish en no-asset-mutation afgerond.
 
+Open voor Fase 10:
+
+1. `pnpm build`.
+2. `pnpm typecheck`.
+3. `pnpm test`.
+4. `pnpm lint`.
+5. Publish route smokes.
+6. Anonymous/game/non-admin denied smokes.
+7. CSRF/Origin smokes voor state-changing publish routes.
+8. Publish Flow panel smoke.
+9. Bevestigen dat geen runtime publish of assetmutatie plaatsvindt.
+
 Nog open voor latere fases:
 
 - game runtime;
 - realtime gateway;
 - workers;
-- publish-services;
-- Nginx live-migratie alleen in aparte migratiefase;
-- Fase 10 pas openen wanneer Kevin die fase start.
+- runtime publish-services;
+- Nginx live-migratie alleen in aparte migratiefase.

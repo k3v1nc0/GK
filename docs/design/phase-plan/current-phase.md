@@ -2,46 +2,24 @@
 
 ## Fase
 
-Actieve status: Fase 9 server-side afgerond en klaar op `main`.
+Actieve status: Fase 10 Git-basis voorbereid op `main`.
 
-Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is nog niet geopend of geimplementeerd.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd, maar Fase 10 is nog niet server-side klaar.
 
 ## Statussamenvatting
 
-Fase 9 is `World, camera, lighting, levels/zones en minimap nodes`.
+Fase 10 bouwt een gecontroleerde Publish Flow Core waarmee editor/node/procedural/world/camera/minimap/UI data vanuit draft/candidate state gevalideerd kan worden naar publish-ready snapshots.
 
-De Git-basis is voorbereid en server-side gevalideerd als engine-capability en editor/node-data contractlaag. Er is geen runtime publish toegevoegd, er zijn geen assets toegevoegd of gewijzigd, en er is geen concrete gamecontent hardcoded.
+Deze fase voegt geen runtime game, geen renderer, geen automatische publish en geen concrete gamecontent toe. Snapshot creation blijft metadata-only totdat een latere expliciete publish/runtime fase wordt geopend.
 
-Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
+## Afgeronde basis
 
-Server-side verificatie door Codex:
+Fase 9 is server-side afgerond en klaar. Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK, 86/86 tests pass;
-- `pnpm lint`: OK;
-- `gk-api` herstart: OK;
-- `gk-editor-web` herstart: OK;
-- services active/enabled: OK;
-- beide services draaien via `/opt/gk/node-v22/bin/node`;
-- `/editor`: OK;
-- editor login: OK;
-- `/auth/editor/me`: OK, `editor_admin`;
-- Fase 9 route smokes: OK;
-- anonymous denied: OK, 401 en niet 404;
-- game smoke-scope denied: OK, 403 en niet 404;
-- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
-- UI scaling validation: OK;
-- no-runtime-publish: OK;
-- no-asset-mutation: OK;
-- GameBible save: OK via testdekking;
-- game-site reachable: OK;
-- worktree schoon;
-- blockers: geen.
+Server-side Fase 9 verificatie was OK voor build/typecheck/test/lint, services, editor login, route smokes, auth-deny smoke, panels, UI scaling validation, no-runtime-publish en no-asset-mutation.
 
 Asset refresh na `Assets - new` blijft bevestigd:
 
-- commit `44defc0f79f032cabc07eba43573a40c5f629b97` staat op `main`;
 - GLB=4;
 - UI images=37;
 - audio files=21;
@@ -51,95 +29,92 @@ Asset refresh na `Assets - new` blijft bevestigd:
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-## Fase 9 Git-basis
+## Fase 10 Git-basis
 
-Toegevoegd en gevalideerd:
+Toegevoegd:
 
-- `packages/schemas/src/world-camera-minimap.ts` voor world, level, zone, spawnpoint, generated world references, camera, lighting, minimap en UI display contracts;
-- `packages/schemas/src/world-camera-minimap-validation.ts` voor Fase 9 validators;
-- typed socket additions voor world, camera, lighting, minimap, UI display en generated zone/placement/path/resource candidate references;
-- `packages/node-types/src/world-camera-minimap-nodes.ts` met Fase 9 graph node types;
-- editor-only world/minimap/UI display route contracts;
-- Fase 9 editor panel state voor World, Zone, Camera, Lighting, Minimap en UI Display Inspector;
-- `tests/phase9-world-camera-minimap.test.mjs` voor contract coverage.
+- `packages/schemas/src/publish-flow.ts` voor status/state, candidate references, validation result, snapshot metadata, audit/event en rollback reference contracts;
+- `packages/schemas/src/publish-flow-validation.ts` voor publish validation gates;
+- publish socket types in `packages/schemas/src/node-graph.ts`;
+- `packages/node-types/src/publish-flow-nodes.ts` met publish-boundary node types;
+- editor-only publish route contracts in `apps/api-server/src/editor-publish-routes.ts`;
+- API router wiring voor `/editor/publish/*`;
+- `apps/editor-web/src/publish-flow-panel.ts` en editor-shell panel wiring;
+- `tests/phase10-publish-flow.test.mjs` voor contractdekking.
 
-## Contractgrenzen
+## Publish validation gates
 
-Fase 9 gebruikt Fase 8.1 procedural output alleen als draft/candidate input:
+Fase 10 bewaakt minimaal:
 
-- generated zones;
-- generated placements;
-- generated spawn areas;
-- generated path networks;
-- generated resource distributions.
-
-Fase 9 mag niet:
-
-- procedural generation core opnieuw definieren;
-- generated data als definitieve runtimecontent behandelen;
-- world maps, zones, spawnpoints, camera values, lighting presets, fog, sky, minimap layout, HUD layout of audio hardcoden;
-- assets toevoegen, wijzigen of kopieren;
-- runtime publish uitvoeren buiten de publish-flow.
-
-Willowmere Workshop mag alleen als bestaande Kevin/GameBible input worden genoemd of gebruikt als data/input. Het mag niet als runtimecode of vaste world map hardcoded worden.
-
-## UI/HUD/minimap display rule
-
-UI/HUD/minimap source images mogen groot zijn. Runtime/editor mag de bronpixelmaat nooit blind als display size gebruiken.
-
-Display moet via node-data/editor-data komen:
-
-- `displayWidth`;
-- `displayHeight`;
-- optional min/max width/height;
-- `scaleMode`: `contain`, `cover`, `stretch`, `nineSlice`, `none`;
-- `anchor`;
-- `pivot`;
-- `opacity`;
-- `zIndex`;
-- responsive rules.
-
-Schema defaults zijn hints, geen concrete HUD-layout:
-
-- icon display hint: 32x32;
-- minimap marker display hint: 24x24;
-- small status icon hint: 24x24;
-- HUD bar/frame display size blijft node-data required;
-- `nineSlice` is alleen geldig met slice margins uit node-data.
+- node graph completeness;
+- asset candidates zonder definitieve hardcoded role mapping;
+- entity/component validity;
+- procedural generated refs als draft/candidate input;
+- world/zone/camera/lighting/minimap/UI display validity;
+- UI display sizing uit node/editor data, niet uit source natural size;
+- no-runtime-publish;
+- no-asset-mutation/copy;
+- no-hardcoded-content.
 
 ## Editor/API status
 
-Fase 9 introduceert editor-only route contracts:
+Nieuwe route contracts:
 
-- `GET /editor/world/settings`;
-- `POST /editor/world/validate`;
-- `GET /editor/minimap/settings`;
-- `POST /editor/minimap/validate`;
-- `GET /editor/ui-display/assets`;
-- `POST /editor/ui-display/validate`.
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
 
-State-changing route contracts vereisen CSRF/Origin bescherming. Anonymous/game sessions krijgen geen editor world/minimap/UI display beheer. De route responses starten zonder verzonnen world/minimap content en publiceren niets naar Runtime Game.
+Regels:
 
-Server-side smoke is OK voor deze routes, inclusief anonymous denied 401 en game smoke-scope denied 403 zonder 404 fallback.
+- editor admin only;
+- state-changing routes CSRF/Origin protected;
+- anonymous/game/non-admin denied;
+- geen runtime publish;
+- geen assets wijzigen;
+- geen concrete gamecontent in responses.
+
+## Contractgrenzen
+
+Fase 10 mag niet:
+
+- runtime game of renderer bouwen;
+- concrete world, zone, NPC, quest, economy, camera, lighting, HUD, minimap of audio content hardcoden;
+- GLB roles definitief maken;
+- assets toevoegen, wijzigen, verwijderen of kopieren;
+- procedural output automatisch publiceren;
+- runtime publish uitvoeren.
+
+UI/HUD/minimap source image natural size blijft metadata. Display size, scale mode, anchor en pivot blijven node-data/editor-data.
 
 ## Tests/checks
 
-Server-side bevestigd:
+Git-basis bevat tests voor:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK, 86/86 tests pass;
-- `pnpm lint`: OK;
-- editor/API smoke: OK;
-- no-runtime-publish: OK;
-- no-asset-mutation: OK.
+- publish schema exports;
+- publish node/socket registration;
+- invalid draft/candidate validation issues;
+- generated procedural refs als candidate input;
+- UI display sizing en nineSlice margins;
+- no-runtime-publish/no-asset-mutation/no-hardcoded-content;
+- snapshot metadata en rollback references zonder runtime payload;
+- publish route contracts, anonymous/game/non-admin denied en CSRF/Origin gate;
+- Publish Flow panel registratie.
+
+Niet geclaimd als server-side uitgevoerd in deze GitHub-only update:
+
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- live service smokes.
 
 ## Fasebeoordeling
 
-Fase 8 is klaar.
+Fase 10 Git-basis is voorbereid.
 
-Fase 8.1 is server-side afgerond en klaar.
+Fase 10 is server-side nog niet klaar. Codex/Claude moet de open checks en live smokes opnieuw draaien voordat Fase 10 als afgerond gemarkeerd mag worden.
 
-Fase 9 is server-side afgerond en klaar.
-
-Volgende stap: Fase 10 is toekomstwerk en mag later worden geopend wanneer Kevin dat doet. Fase 10 is nog niet geimplementeerd.
+Volgende stap: server-side validatie van Fase 10. Geen Fase 11 openen.

@@ -6,6 +6,7 @@ import type {
 
 import { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
 import { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
+import { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
 import { WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES } from "./world-camera-minimap-nodes.js";
 
 export type NodeCapabilityScope =
@@ -167,7 +168,8 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   },
   ...ENTITY_COMPONENT_GRAPH_NODE_TYPES,
   ...PROCEDURAL_GENERATION_GRAPH_NODE_TYPES,
-  ...WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES
+  ...WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES,
+  ...PUBLISH_FLOW_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
@@ -177,3 +179,4 @@ export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
 export { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
 export { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
 export { WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES } from "./world-camera-minimap-nodes.js";
+export { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";

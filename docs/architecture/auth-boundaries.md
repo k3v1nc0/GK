@@ -39,6 +39,41 @@ Editor game-user beheer vereist een editor session met `editor_admin`.
 
 Editor graph draft, operation en preview vereisen een editor session. Ze vereisen geen game session en accepteren geen game session als editorbewijs. State-changing graph operations en draft-preview POSTs blijven CSRF/Origin beschermd via de editor session flow.
 
+## Fase 9 editor-only routes
+
+Fase 9 world/minimap/UI display routes vereisen editor scope:
+
+- `GET /editor/world/settings`;
+- `POST /editor/world/validate`;
+- `GET /editor/minimap/settings`;
+- `POST /editor/minimap/validate`;
+- `GET /editor/ui-display/assets`;
+- `POST /editor/ui-display/validate`.
+
+State-changing routes zijn CSRF/Origin beschermd. Anonymous/game sessions krijgen geen editor world/minimap/UI display beheer.
+
+## Fase 10 publish-flow routes
+
+Fase 10 publish-flow routes vereisen editor scope en `editor_admin`:
+
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
+
+Regels:
+
+- anonymous sessions krijgen 401/403 deny, niet 404 fallback;
+- game sessions krijgen deny;
+- editor sessions zonder `editor_admin` krijgen deny;
+- state-changing publish routes vereisen CSRF/Origin bescherming;
+- publish route responses zijn metadata/validation-only;
+- routes voeren geen runtime publish uit;
+- routes wijzigen geen assets;
+- routes bevatten geen concrete gamecontent.
+
 ## Registration and verification
 
 Game registratie is publiek open. Nieuwe game users starten als `pending_verification`. Volledige gamefuncties mogen pas beschikbaar komen nadat e-mailverificatie de user naar een toegestane actieve status brengt.
@@ -99,9 +134,12 @@ Audit logt minimaal:
 - role changes;
 - password reset request/complete;
 - failed login throttling events;
-- game-user beheeracties door editor admin.
+- game-user beheeracties door editor admin;
+- publish validation;
+- publish snapshot metadata creation;
+- publish rollback validation.
 
-Audit bevat actor, action, target, scope, timestamp en metadata.
+Audit bevat actor, action, target, scope, timestamp en metadata. Fase 10 audit/event contracts bevatten geen concrete runtimecontent en publiceren niets naar Runtime Game.
 
 ## Server-side validatie
 
@@ -120,10 +158,12 @@ Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
 - `admin.seed` auditregel is aanwezig;
 - database/auth smoke tests zijn geslaagd.
 
+Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save werken met de echte serverdatabase. Publieke save, legacy PHP write en save na logout blijven dicht.
+
+Fase 9 is server-side gevalideerd voor editor world/minimap/UI display auth-deny en route smokes.
+
+Fase 10 Git-basis is voorbereid, maar server-side validatie staat open voor publish route smokes, auth-deny smokes en CSRF/Origin smokes.
+
 ## Open aandachtspunt
 
 GK gebruikt structureel Node 22 onder `/opt/gk/node-v22`. `/usr/bin/node` is serverbreed bewust op `v18.19.1` blijven staan en is geen GK-blocker zolang GK-services en checks via `/opt/gk/node-v22` lopen.
-
-Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save werken met de echte serverdatabase. Publieke save, legacy PHP write en save na logout blijven dicht.
-
-Fase 6 voegt editor-only graph routes toe. Codex moet server-side nog bevestigen dat een game session geen toegang krijgt tot `/editor/graph/draft`, `/editor/graph/operation` of `/editor/graph/preview`.

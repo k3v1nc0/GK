@@ -5,6 +5,8 @@ export * from "./procedural-generation.js";
 export * from "./procedural-validation.js";
 export * from "./world-camera-minimap.js";
 export * from "./world-camera-minimap-validation.js";
+export * from "./publish-flow.js";
+export * from "./publish-flow-validation.js";
 export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
@@ -15,6 +17,8 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "procedural-validation",
   "world-camera-minimap",
   "world-camera-minimap-validation",
+  "publish-flow",
+  "publish-flow-validation",
   "node-publish"
 ] as const;
 

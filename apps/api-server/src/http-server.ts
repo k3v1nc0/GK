@@ -14,6 +14,9 @@ import {
   handleEditorProceduralHttpRequest
 } from "./editor-procedural-routes.js";
 import {
+  handleEditorPublishHttpRequest
+} from "./editor-publish-routes.js";
+import {
   handleEditorWorldHttpRequest
 } from "./editor-world-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
@@ -161,6 +164,10 @@ export async function handleApiRequest(
   }
 
   if (await handleEditorWorldHttpRequest(request, response, session)) {
+    return;
+  }
+
+  if (await handleEditorPublishHttpRequest(request, response, session)) {
     return;
   }
 

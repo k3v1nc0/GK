@@ -1,94 +1,196 @@
-# Fase 10 - Runtime 3D client met camera, audio, minimap en HUD host
+# Fase 10 - Publish Flow Core
+
+## Status
+
+Fase 10 is door Kevin geopend.
+
+Git-basis: voorbereid op `main`.
+
+Server-side status: nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live smokes en docs final nog bevestigen voordat Fase 10 als afgerond mag worden gemarkeerd.
 
 ## Vaste regels voor deze fase
 
 - Dit is een 100% nieuw project.
-- Alles draait eerst op 1 eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
-- Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
-- Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
-- De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
-- Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
-- De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
-- Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
-- Maak geen losse backupbestanden, geen tijdelijke markdown-dumps en geen extra README-bestanden die niet blijvend onderhouden worden.
+- GK Code Copiloot werkt GitHub-only en rechtstreeks op `main`.
+- Geen branches en geen pull requests.
+- Geen runtime game implementeren.
+- Geen runtime renderer bouwen.
+- Geen concrete gamecontent toevoegen.
+- Geen dummy assets.
+- Geen assets toevoegen, wijzigen, verwijderen of kopieren.
+- Geen automatische publish.
+- Geen runtime publish uitvoeren.
+- Geen GLB role mapping definitief maken.
+- Geen hardcoded world, camera, lighting, fog, sky, minimap, HUD, audio, NPC, quest, economy of contentwaarden.
+- Snapshot creation in Fase 10 is metadata/contractbasis, geen runtime payload.
+- Runtime game publish/renderer is nog niet geopend.
 
 ## Doel van de fase
 
-Een speler kan inloggen, 3D runtime openen, bewegen, camera gebruiken, audio horen, minimap zien en HUD panels krijgen uit published node-data.
+Fase 10 bouwt de Git-basis voor een gecontroleerde Publish Flow Core.
 
-Fase 10 leest alleen published runtime projections. Procedural output uit Fase 8.1 mag alleen zichtbaar worden als Fase 11 of een latere publish-flow die output expliciet heeft gevalideerd en gepubliceerd.
+De publish flow valideert editor/node/procedural/entity/world/camera/lighting/minimap/UI data vanuit `draft` en `candidate` state naar `publish-ready` snapshotmetadata.
+
+Duidelijk onderscheid:
+
+- `draft`: editor/node/procedural data is nog in bewerking;
+- `candidate`: data is kandidaat-input voor publish validation;
+- `publish-ready`: validatie heeft geen blocking errors;
+- `published-snapshot`: metadata over een snapshot, zonder runtime payload.
 
 ## Verplichte afhankelijkheden
 
-- Fase 8 entity/component core.
-- Fase 8.1 procedural generation core.
-- Fase 9 world/camera/lighting/minimap nodes.
-- Published runtime projections uit de publish-flow.
+Fase 10 bouwt op:
 
-Runtime mag geen procedural preview/bake draft direct lezen alsof het live game-state is.
+- Fase 6 typed node graph core;
+- Fase 7 asset/audio library;
+- Fase 8 entity/component core;
+- Fase 8.1 procedural generation core;
+- Fase 9 world/camera/lighting/minimap/UI display core.
 
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
+## Toegevoegde contracts
 
-- Player GLB role gemapt.
-- Ground/environment GLB gemapt of via geaccepteerde generated placements beschikbaar.
-- Camera/minimap/audio basiskeuzes uit fase 9 ingevuld.
-- Generated zones/placements uit Fase 8.1/Fase 9 alleen wanneer ze via editor/node-data en publish zijn geaccepteerd.
+Schema/contracts:
 
-## Actie voor Codex
+- publish status/state model;
+- publish candidate/input references;
+- publish validation result model;
+- publish gate result model;
+- publish snapshot metadata;
+- publish audit/event model;
+- rollback/snapshot reference basis;
+- candidate summary counts;
+- no-runtime-publish/no-asset-mutation/no-hardcoded-content flags.
 
-Start API/game-web en controleer asset/audio endpoints.
+Node/socket contracts:
 
-## Prompt voor GK Code Copiloot
+- `publish.candidate.reference`;
+- `publish.validation.reference`;
+- `publish.snapshot.reference`;
+- `gk.publish.status`;
+- `gk.publish.candidateReference`;
+- `gk.publish.validate`;
+- `gk.publish.snapshotMetadata`;
+- `gk.publish.rollbackReference`.
 
-```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
+## Validation gates
 
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die via publish is geaccepteerd, of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, world zone, generated placement of minimap-instelling hard-coded bevatten.
-- Runtime mag geen procedural preview/bake draft direct consumeren.
+Fase 10 validation bewaakt:
 
-Je werkt aan fase 10: Runtime 3D client met camera, audio, minimap en HUD host.
+- node graph completeness;
+- asset candidates zonder definitieve hardcoded role mapping;
+- entity/component validity;
+- procedural generated refs als draft/candidate input;
+- world/zone/camera/lighting/minimap/UI display validity;
+- UI display sizing uit node/editor data;
+- source natural size alleen als metadata;
+- `nineSlice` vereist margins uit node-data;
+- no-runtime-publish;
+- no-asset-mutation/copy;
+- no-hardcoded-content.
 
-Doel:
-Een speler kan inloggen, 3D runtime openen, bewegen, camera gebruiken, audio horen, minimap zien en HUD panels krijgen uit published node-data.
+Generated Fase 8.1 data blijft draft/candidate totdat publish validation en latere publish-flow die expliciet accepteren.
 
-Werk uit:
-Bouw game login, runtime bootstrap, GLB renderer, player movement, camera controller uit node-data, audio runtime, minimap runtime en dockable HUD host. Runtime leest alleen published data. World, generated placements en minimap data komen alleen uit runtime projections die door de publish-flow zijn gemaakt.
+## Editor/API contracts
 
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
-```
+Editor-only route contracts:
+
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
+
+Regels:
+
+- alleen editor admin;
+- state-changing routes vereisen CSRF/Origin bescherming;
+- anonymous, game en non-admin editor sessions worden geweigerd;
+- responses bevatten geen concrete gamecontent;
+- snapshot creation is metadata-only;
+- routes publiceren niets naar Runtime Game;
+- routes wijzigen geen assets.
+
+## Editor panel/state
+
+Fase 10 voegt een Publish Flow panel/state contract toe.
+
+Het paneel mag tonen:
+
+- status;
+- validation issues;
+- candidate summary;
+- candidate references;
+- snapshot metadata;
+- geselecteerde snapshot metadata.
+
+Het paneel mag niet tonen of maken:
+
+- verzonnen world/NPC/quest/economy data;
+- concrete HUD/minimap/audio runtimecontent;
+- runtime publish acties;
+- assetmutaties.
+
+## Tests
+
+Toegevoegd testcontract:
+
+- publish schema exports bestaan;
+- publish sockets/node types zijn geregistreerd;
+- invalid draft/candidate data geeft validation issues;
+- generated procedural refs blijven candidate input;
+- UI display natural size is metadata en display size komt uit node/editor data;
+- `nineSlice` zonder margins geeft validation issue;
+- no-runtime-publish/no-asset-mutation/no-hardcoded-content;
+- snapshot metadata bevat geen runtime payload;
+- rollback reference valideert alleen en herstelt runtime niet automatisch;
+- publish routes zijn editor-admin only;
+- anonymous/game/non-admin denied;
+- CSRF/Origin gate voor state-changing publish routes;
+- Publish Flow panel is aanwezig in editor shell.
 
 ## Acceptatiechecklist
 
-- [ ] Game login.
-- [ ] Player GLB laadt.
-- [ ] Movement.
-- [ ] Camera uit nodes.
-- [ ] Audio uit nodes.
-- [ ] Minimap uit nodes.
-- [ ] HUD host.
-- [ ] Runtime leest geen procedural preview/bake draft direct.
-- [ ] Runtime world data komt uit published projections.
+- [x] Publish schemas/contracts toegevoegd.
+- [x] Publish validation gates toegevoegd.
+- [x] Publish socket/node contracts toegevoegd.
+- [x] Editor-only publish route contracts toegevoegd.
+- [x] Publish Flow panel/state basis toegevoegd.
+- [x] Tests toegevoegd.
+- [x] Docs bijgewerkt.
+- [x] Geen assets gewijzigd.
+- [x] Geen runtime publish toegevoegd.
+- [x] Geen concrete gamecontent toegevoegd.
+- [ ] Server-side build/typecheck/test/lint bevestigd.
+- [ ] Live route smokes bevestigd.
+- [ ] Auth/CSRF smokes bevestigd.
+- [ ] Panel smoke bevestigd.
+- [ ] Docs final bevestigd.
 
-## Testplan
+## Open Codex/Claude-taken
 
-Login, beweeg, camera zoom, audio volume, minimap markers en mobile viewport testen. Controleer dat generated world data alleen zichtbaar is na expliciete publish en niet vanuit Fase 8.1 preview/bake draft.
+Nog server-side valideren:
+
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- smoke `GET /editor/publish/status`;
+- smoke `POST /editor/publish/validate`;
+- smoke `POST /editor/publish/snapshots` als metadata-only;
+- smoke `GET /editor/publish/snapshots`;
+- smoke `GET /editor/publish/snapshots/:id`;
+- smoke `POST /editor/publish/rollback/validate`;
+- anonymous/game/non-admin denied;
+- CSRF/Origin denied voor state-changing routes zonder proof;
+- editor shell toont Publish Flow panel;
+- bevestigen dat geen runtime publish of assetmutatie plaatsvindt.
+
+## Fasebeoordeling
+
+Fase 10 Git-basis is voorbereid.
+
+Fase 10 is nog niet server-side klaar. Markeer Fase 10 pas als afgerond nadat Codex/Claude de open checks en live smokes bevestigt.
+
+Geen Fase 11 voorbereiden of openen vanuit deze fase.

@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve status: Fase 9 server-side afgerond en klaar op `main`.
+Actieve status: Fase 10 Git-basis voorbereid op `main`.
 
-Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is nog niet geopend of geimplementeerd; die mag later alleen als volgende fase worden gestart wanneer Kevin dat doet.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd, maar Fase 10 is nog niet server-side afgerond totdat Codex/Claude build/typecheck/test/lint, live smokes en docs final bevestigt.
 
 ## Primaire bronnen
 
@@ -12,6 +12,7 @@ Open voor de actuele fasecontractstatus:
 - `README/fase8.md`
 - `README/fase8.1.md`
 - `README/fase9.md`
+- `README/fase10.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/architecture/editor-shell.md`
 - `docs/architecture/auth-boundaries.md`
@@ -22,60 +23,72 @@ Open voor de actuele fasecontractstatus:
 - `docs/ops/server-layout.md`
 - `README/GameBibleNode.json`
 
-## Actuele status
-
-Fase 9 bouwt op:
-
-- Fase 6 typed node graph core;
-- Fase 7 asset library;
-- Fase 8 entity/component core;
-- Fase 8.1 procedural generation core.
-
-Toegevoegd en server-side gevalideerd in Fase 9:
-
-- world settings, level, zone, spawnpoint, zone bounds en transition schema-contracten;
-- generated zone, placement, path network en resource distribution references uit Fase 8.1 als draft/candidate input;
-- camera node contracts voor mode, follow target, orbit, zoom, bounds, collision en transition;
-- lighting node contracts voor directional, ambient, fog, sky en day/night cycle;
-- minimap view, layer, marker, icon en generated path/resource/spawn layer contracts;
-- generieke UI asset display contracts met display size, scale mode, anchor, pivot, opacity, zIndex, responsive rules en nineSlice margins;
-- Fase 9 node types in de core node registry;
-- editor-only route contracts voor world, minimap en UI display validation;
-- editor panel state voor World, Zone, Camera, Lighting, Minimap en UI Display Inspector;
-- tests voor node types, candidate refs, UI display scaling, nineSlice validation, minimap view split, editor-only access en no-runtime-publish.
-
-## Server-side verificatie
+## Fase 9 status
 
 Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
-Codex server-side verificatie:
+Codex server-side verificatie voor Fase 9 is klaar:
 
 - `pnpm build`: OK;
 - `pnpm typecheck`: OK;
 - `pnpm test`: OK, 86/86 tests pass;
 - `pnpm lint`: OK;
-- `gk-api` herstart: OK;
-- `gk-editor-web` herstart: OK;
-- services active/enabled: OK;
-- beide services draaien via `/opt/gk/node-v22/bin/node`;
-- `/editor`: OK;
-- editor login: OK;
-- `/auth/editor/me`: OK, `editor_admin`;
+- `gk-api` en `gk-editor-web` herstart: OK;
+- editor login en `/auth/editor/me`: OK;
 - Fase 9 route smokes: OK;
-- anonymous denied: OK, 401 en niet 404;
-- game smoke-scope denied: OK, 403 en niet 404;
-- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
+- anonymous denied 401 en game denied 403: OK;
+- editor panels: OK;
 - UI scaling validation: OK;
 - no-runtime-publish: OK;
 - no-asset-mutation: OK;
-- GameBible save: OK via testdekking;
-- game-site reachable: OK;
-- worktree schoon;
 - blockers: geen.
+
+## Fase 10 Git-basis
+
+Fase 10 bouwt op:
+
+- Fase 6 typed node graph core;
+- Fase 7 asset/audio library;
+- Fase 8 entity/component core;
+- Fase 8.1 procedural generation core;
+- Fase 9 world/camera/lighting/minimap/UI display core.
+
+Toegevoegd in de Fase 10 Git-basis:
+
+- publish status/state model voor `draft`, `candidate`, `publish-ready` en `published-snapshot` metadata;
+- publish candidate/input references;
+- publish validation result en gate model;
+- snapshot metadata, audit/event en rollback reference basis;
+- validation gates voor node graph completeness, asset candidates, entity/component validity, procedural generated refs, Fase 9 world/UI validity, UI display sizing, no-runtime-publish, no-asset-mutation en no-hardcoded-content;
+- typed sockets en node types voor publish candidate, validation en snapshot references;
+- editor-only publish route contracts;
+- Publish Flow panel/state contract;
+- tests voor schemas, routes, auth/CSRF, panel state, validation gates, snapshot metadata en publish safety flags.
+
+## Fase 10 API/editor contract
+
+Editor-only route contracts:
+
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
+
+Regels:
+
+- alleen editor admin;
+- state-changing routes vereisen CSRF/Origin bescherming;
+- anonymous/game sessions denied;
+- snapshot creation is metadata-only;
+- geen runtime publish;
+- geen assets wijzigen of kopieren;
+- geen concrete gamecontent in responses.
 
 ## Assetstatus
 
-Commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) staat op `main`. De server-side asset refresh en scan zijn uitgevoerd en OK:
+Asset refresh na `Assets - new` blijft bevestigd:
 
 - GLB=4;
 - UI images=37;
@@ -86,30 +99,33 @@ Commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) staat op `mai
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-HUD-bestanden, icon-bestanden en minimap marker-bestanden zijn UI/image assets. Ambience, music, SFX en UI-audio zijn audio assets. Alle UI/audio assets blijven asset-library candidates en zijn geen hardcoded HUD/audio/minimap runtimecontent.
+GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library candidates. Source image natural size blijft metadata; display size, scale mode, anchor en pivot blijven node-data/editor-data.
 
-## Fase 9 grenzen
+## Fase 10 grenzen
 
-- Geen concrete gamecontent in runtimecode.
-- Geen vaste camera, lighting, fog, sky, minimap, world, HUD of audio values hardcoded.
-- World/camera/light/minimap/HUD display waarden komen uit node-data/editor-data/procedural draft/publish data.
-- Source image natural size is metadata en mag niet blind als display size worden gebruikt.
-- UI/minimap display size, scale mode, anchor en pivot moeten via node-data/editor-data komen.
-- Default display sizes zijn schema/editor hints, geen concrete HUD-layout.
-- GLB roles blijven candidate/editor-data.
-- Generated Fase 8.1 world data blijft draft/candidate totdat een latere publish-flow accepteert.
-- Geen runtime publish buiten de publish-flow.
+- Geen runtime game implementatie.
+- Geen renderer, movement, HUD runtime of minimap runtime.
+- Geen automatische publish.
+- Geen concrete world map, zones, camera values, lighting presets, HUD layout, minimap layout, audio mapping, NPCs, quests of economy hardcoded.
+- Geen GLB role mapping definitief maken.
+- Generated Fase 8.1 data blijft draft/candidate totdat publish validation en latere publish-flow dit expliciet accepteren.
+- Runtime publish/renderer blijft niet geopend in Fase 10 Git-basis.
 
 ## Open aandachtspunten
 
-Geen Fase 8, Fase 8.1 of Fase 9 blockers open.
+Fase 10 Git-basis is voorbereid, maar server-side status staat open.
 
-Blijvende gates voor latere fases:
+Codex/Claude moet nog draaien/bevestigen:
 
-- GLB role mapping pas definitief via editor/node-data of Kevin-input;
-- UI/audio assets blijven asset-library candidates totdat editor/node-data ze kiest;
-- generated Fase 8.1 data blijft draft/candidate tot een latere publish-flow;
-- runtime publish blijft buiten Fase 9;
-- Fase 10 nog niet implementeren totdat Kevin die fase opent.
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- live smoke voor `/editor/publish/*` route contracts;
+- anonymous/game/non-admin denied smoke;
+- CSRF/Origin smoke voor state-changing publish routes;
+- Publish Flow panel smoke;
+- no-runtime-publish en no-asset-mutation bevestiging;
+- docs final.
 
-Volgende fase: Fase 10 is toekomstwerk en mag later worden geopend wanneer Kevin dat doet.
+Volgende fase: geen Fase 11 openen. Fase 10 is pas klaar na server-side validatie en Kevin/Codex/Claude bevestiging.

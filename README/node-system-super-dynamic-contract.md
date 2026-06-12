@@ -21,6 +21,8 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - day/night;
 - minimap;
 - HUD/UI display;
+- publish candidates en validation gates;
+- snapshot metadata;
 - player levels en XP;
 - money/currency;
 - merchants;
@@ -81,7 +83,13 @@ Fase 9 breidt uit met:
 - `minimap.marker.reference`;
 - `ui.asset-display.reference`.
 
-Deze sockets zijn editor/draft/node-data contracts en publiceren niets naar Runtime Game.
+Fase 10 breidt uit met:
+
+- `publish.candidate.reference`;
+- `publish.validation.reference`;
+- `publish.snapshot.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary contracts en publiceren niets naar Runtime Game.
 
 ## Asset import
 
@@ -137,7 +145,7 @@ Belangrijke regels:
 - zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output;
 - procedural preview publiceert niets naar Runtime Game;
 - procedural bake maakt alleen editor draft data of bake draft result;
-- procedural output blijft draft/candidate totdat een latere publish-flow expliciet publiceert;
+- procedural output blijft draft/candidate totdat een publish-flow expliciet publiceert;
 - generated entities gebruiken Fase 8 entity/component contracts;
 - generated assets gebruiken Fase 7 `asset.reference`;
 - generated audio gebruikt `audio.reference` en blijft candidate/editor-data.
@@ -145,8 +153,6 @@ Belangrijke regels:
 ## Fase 9 world/camera/minimap laag
 
 Fase 9 is server-side afgerond en klaar. Deze laag voegt world, camera, lighting, minimap en UI display toe als engine-capabilities.
-
-Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`). Server-side bevestigd: build/typecheck/test/lint OK, Fase 9 route smokes OK, editor panels OK, UI scaling validation OK, no-runtime-publish OK en no-asset-mutation OK.
 
 Belangrijke regels:
 
@@ -159,13 +165,35 @@ Belangrijke regels:
 - anonymous/game sessions krijgen geen editor world/minimap beheer;
 - Fase 9 publiceert niets naar Runtime Game.
 
-Niet toegestaan:
+## Fase 10 publish-flow laag
 
-- vaste world maps, zones, NPCs, quests, routes, loot tables, bosses, minimap lagen, camera waardes, lighting presets of HUD-layout hard-coden;
-- procedural output direct als runtimecontent behandelen;
-- procedural core opnieuw bouwen;
-- assets toevoegen, wijzigen of kopieren;
-- runtime publish uitvoeren buiten de publish-flow.
+Fase 10 Git-basis is voorbereid als publish-boundary laag. Server-side validatie is nog open.
+
+Publish flow states:
+
+- `draft`;
+- `candidate`;
+- `publish-ready`;
+- `published-snapshot` metadata.
+
+Belangrijke regels:
+
+- publish validation bundelt node graph, asset/audio candidates, entity/component drafts, procedural generated refs en Fase 9 world/UI data;
+- generated Fase 8.1 refs blijven draft/candidate input totdat publish validation ze accepteert;
+- asset candidates mogen geen definitieve runtime role mapping krijgen;
+- UI display natural size blijft metadata en mag display size niet vervangen;
+- snapshot creation is metadata-only;
+- rollback reference valideert alleen en herstelt runtime niet automatisch;
+- anonymous, game en non-admin editor sessions krijgen geen publish-flow beheer;
+- Fase 10 publiceert niets naar Runtime Game en wijzigt geen assets.
+
+### Publish nodes
+
+- `gk.publish.status`
+- `gk.publish.candidateReference`
+- `gk.publish.validate`
+- `gk.publish.snapshotMetadata`
+- `gk.publish.rollbackReference`
 
 ## UI/HUD/minimap display contract
 
@@ -235,13 +263,21 @@ Schema defaults zijn editor/schema hints, geen concrete HUD layout:
 - `gk.ui.hudBar`
 - `gk.ui.nineSlice`
 
+### Publish nodes
+
+- `gk.publish.status`
+- `gk.publish.candidateReference`
+- `gk.publish.validate`
+- `gk.publish.snapshotMetadata`
+- `gk.publish.rollbackReference`
+
 ## Publish regels
 
-- GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen.
+- GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
 - Runtime-active behavior blokkeert zonder verplichte editor-data.
 - Procedural preview en bake zijn geen publishstap.
-- Generated procedural output mag pas runtimecontent worden wanneer een latere publishfase expliciet gekozen editor/node-data compileert naar runtime projections.
+- Generated procedural output mag pas runtimecontent worden wanneer publish-flow expliciet gekozen editor/node-data compileert naar runtime projections in een daarvoor geopende fase.
 - UI display natural size is nooit automatisch display size.
 - Missing display size of missing responsive rule geeft validation issue.
 - Missing `nineSlice` margins geeft validation issue.
-- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation en draft preview zijn geen publishstap.
+- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation en draft preview zijn geen runtime publish.

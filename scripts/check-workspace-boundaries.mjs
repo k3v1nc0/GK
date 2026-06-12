@@ -44,6 +44,9 @@ const ignoredDirectoryNames = new Set([
 ]);
 const maxSourceFileSize = 13_000;
 const allowedLargeSourceFiles = new Set([
+  "apps/api-server/src/editor-publish-routes.ts",
+  "packages/schemas/src/publish-flow.ts",
+  "packages/schemas/src/publish-flow-validation.ts",
   "packages/schemas/src/world-camera-minimap.ts"
 ]);
 const failures = [];

@@ -6,6 +6,8 @@ Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) heeft Code
 
 Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent. Fase 9 heeft geen concrete audio runtimecontent toegevoegd en no-runtime-publish/no-asset-mutation is server-side bevestigd.
 
+Fase 10 Publish Flow Core Git-basis is voorbereid. Fase 10 valideert candidate references en snapshot metadata, maar kiest geen concrete music, ambience, SFX, UI audio of dialogue runtime mapping.
+
 ## Audio asset policy
 
 Audio wordt via nodes gekozen en ingesteld. Runtimecode mag alleen generieke audio-capabilities bevatten zoals laden, afspelen, spatialization, mixing, loophandling, distance attenuation en event routing.
@@ -16,7 +18,8 @@ Niet toegestaan:
 - definitieve audiobestanden die niet bestaan;
 - hard-coded muziek, ambience, SFX, UI-audio of dialogue audio in runtimecode;
 - dummy audio of tijdelijke vervangers;
-- definitieve audio-inzet zonder editor/node-data, GameBible, register of expliciete Kevin-input.
+- definitieve audio-inzet zonder editor/node-data, GameBible, register of expliciete Kevin-input;
+- publish-flow die audio assets kopieert, muteert of automatisch als runtime audio publiceert.
 
 ## Bevestigde assetbron
 
@@ -66,6 +69,17 @@ Regels:
 - geen audio assets toevoegen, wijzigen of kopieren;
 - geen hardcoded ambience/music/SFX/UI audio.
 
+## Fase 10 publish audio gate
+
+Fase 10 neemt audio alleen als candidate/reference gate mee:
+
+- audio assets blijven asset-library candidates;
+- generated audio blijft draft/candidate input;
+- publish validation mag ontbrekende/ongeldige references signaleren;
+- snapshot metadata bevat geen audio payload;
+- geen audio asset wordt gekopieerd, gewijzigd of gepubliceerd;
+- geen concrete music/ambience/SFX/UI runtime mapping wordt toegevoegd.
+
 ## Open audio gates
 
 | Onderwerp | Status | Blokkeert |
@@ -77,7 +91,7 @@ Regels:
 | Combat/boss audio | SFX candidates bestaan, maar concrete combat/boss mapping ontbreekt | Fase 16/17 wanneer specifieke combat/boss audio verplicht wordt |
 | Dialogue/voice gebruik | Nog te bepalen; 0 voice/dialogue bestanden bevestigd | NPC/dialogue flows wanneer voice/audio verplicht wordt |
 
-Deze gates blokkeren Fase 9 niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output of Kevin-input komen.
+Deze gates blokkeren Fase 10 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data of Kevin-input komen.
 
 ## Registratievelden
 
@@ -106,5 +120,11 @@ Afgerond voor asset refresh en Fase 9:
 6. `assetsCopiedToGit=false`, `publishesRuntimeOutput=false` en `assignsDefinitiveRuntimeRoles=false` bevestigd.
 7. Server-side bevestigd dat Fase 9 geen concrete audio runtimecontent hardcoded.
 8. Fase 9 build/typecheck/test/lint bevestigd.
+
+Open voor Fase 10:
+
+1. Server-side bevestigen dat publish validation geen concrete audio runtimecontent hardcoded.
+2. Server-side bevestigen dat publish validation geen audio/assets wijzigt of kopieert.
+3. Build/typecheck/test/lint en publish route smokes draaien.
 
 Latere fases moeten opnieuw scannen wanneer Kevin audio toevoegt, verwijdert, hernoemt of definitieve node-koppelingen nodig maakt.

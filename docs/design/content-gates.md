@@ -10,14 +10,15 @@ Kevin heeft bevestigd:
 
 - `README/GameBibleNode.json` is de leidende Game Bible voor deze nieuwe game.
 
-Regel: concrete gamecontent mag alleen uit `README/GameBibleNode.json`, editor/node-data, registers, database, procedural draft/candidate output of expliciete Kevin-input komen.
+Regel: concrete gamecontent mag alleen uit `README/GameBibleNode.json`, editor/node-data, registers, database, procedural draft/candidate output, publish-ready metadata of expliciete Kevin-input komen.
 
 Niet toegestaan:
 
 - extra definitieve content verzinnen buiten GameBible JSON;
 - runtimecode vullen met concrete contentwaarden;
 - procedural generation als vervanging voor ontbrekende Kevin/GameBible/editor-input gebruiken;
-- asset-aanwezigheid behandelen als definitieve runtimekeuze.
+- asset-aanwezigheid behandelen als definitieve runtimekeuze;
+- publish-flow behandelen als runtime renderer of automatische publish.
 
 ## Actuele gates
 
@@ -33,16 +34,18 @@ Niet toegestaan:
 | Missing assets | Afgerond: 0 |
 | Fase 8.1 procedural core | Server-side afgerond en klaar |
 | Fase 9 world/camera/minimap/UI display | Server-side afgerond en klaar |
+| Fase 10 Publish Flow Core | Git-basis voorbereid; server-side validatie open |
 
 ## Fail-fast regels
 
 Stop direct wanneer:
 
-- een vereiste waarde niet in GameBible JSON, editor/node-data, registers, procedural draft-output of Kevin-input staat;
+- een vereiste waarde niet in GameBible JSON, editor/node-data, registers, procedural draft-output, publish data of Kevin-input staat;
 - een asset verplicht is maar niet bestaat of niet via asset library/node-data gekozen kan worden;
 - een oplossing concrete gamecontent in runtimecode zou plaatsen;
 - een helper ontbrekende core-architectuur zou maskeren;
 - procedural generation als shortcut voor ontbrekende contentinput wordt gebruikt;
+- publish-flow runtime publish, renderer of concrete gamecontent zou uitvoeren;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
 
 Stoppen is correct gedrag. Niet improviseren.
@@ -64,11 +67,12 @@ Regels:
 - audio files zijn asset-library candidates;
 - HUD, icon en minimap marker bestanden zijn UI/image assets, geen definitieve HUD/minimap runtimecontent;
 - ambience, music, SFX en UI audio zijn audio assets, geen definitieve music/ambience/SFX/UI runtimecontent;
-- asset scan, entity validation, procedural preview/bake en Fase 9 validation publiceren niets naar Runtime Game.
+- asset scan, entity validation, procedural preview/bake, Fase 9 validation en Fase 10 publish validation publiceren niets naar Runtime Game;
+- Fase 10 mag geen assets toevoegen, wijzigen, verwijderen of kopieren.
 
 ## UI/HUD/minimap display gate
 
-Fase 9 introduceert een harde UI display gate. Deze gate is server-side gevalideerd.
+Fase 9 introduceert een harde UI display gate. Deze gate is server-side gevalideerd en wordt in Fase 10 meegenomen als publish validation gate.
 
 - source image natural size is metadata;
 - runtime/editor mag source pixel size nooit blind als display size gebruiken;
@@ -96,9 +100,9 @@ Regels:
 - generatoren moeten data-driven en deterministic zijn;
 - procedural preview publiceert niets naar Runtime Game;
 - procedural bake maakt alleen editor draft data of bake draft result;
-- procedural output blijft draft/candidate totdat de normale publish-flow later expliciet publiceert;
+- procedural output blijft draft/candidate totdat publish-flow expliciet publiceert;
 - Fase 9 gebruikt generated zones, placements, spawn areas, path networks en resource distributions alleen als draft/candidate input;
-- Fase 9 mag de procedural core niet opnieuw bouwen.
+- Fase 10 valideert generated refs als candidate input, maar publiceert ze niet automatisch.
 
 ## World/camera/lighting/minimap gate
 
@@ -114,19 +118,27 @@ Niet toegestaan:
 - hardcoded minimap layout, marker sizes of layers;
 - hardcoded HUD layout;
 - hardcoded audio behavior;
-- runtime publish buiten de publish-flow.
+- runtime publish buiten publish-flow.
 
 Willowmere Workshop mag alleen als bestaande Kevin/GameBible input of editor/procedural data worden gebruikt, niet als runtimecode.
 
-Server-side bevestigd voor Fase 9:
+## Publish Flow Core gate
 
-- build/typecheck/test/lint OK;
-- Fase 9 route smokes OK;
-- anonymous denied 401 en game smoke-scope denied 403, niet 404;
-- editor panels OK;
-- UI scaling validation OK;
-- no-runtime-publish OK;
-- no-asset-mutation OK.
+Fase 10 is een publish-boundary contractlaag.
+
+Publish validation moet bewaken:
+
+- node graph completeness;
+- asset candidates zonder definitive runtime role mapping;
+- entity/component validity;
+- procedural generated refs als draft/candidate input;
+- world/zone/camera/lighting/minimap/UI display validity;
+- UI display sizing uit node/editor data;
+- no-runtime-publish;
+- no-asset-mutation/copy;
+- no-hardcoded-content.
+
+Fase 10 mag alleen metadata en validation responses voorbereiden. Snapshot metadata bevat geen runtime payload en geen concrete gamecontent.
 
 ## Open gates voor latere fases
 
@@ -146,7 +158,7 @@ Nieuwe agents moeten openen:
 
 - `README/current-phase.md`;
 - `docs/design/phase-plan/current-phase.md`;
-- de actuele fase-README, bijvoorbeeld `README/fase10.md` wanneer Kevin Fase 10 opent;
+- de actuele fase-README, nu `README/fase10.md`;
 - `README/fase8.1.md`;
 - `README/fase9.md`;
 - `README/node-system-super-dynamic-contract.md`;
@@ -155,4 +167,4 @@ Nieuwe agents moeten openen:
 - `docs/architecture/editor-shell.md`;
 - `README/GameBibleNode.json`.
 
-Fase 9 heeft geen open server-side blockers meer. Fase 10 is nog niet geopend of geimplementeerd.
+Fase 10 server-side validatie staat nog open. Geen Fase 11 openen voordat Fase 10 is bevestigd.

@@ -15,6 +15,10 @@ import {
 import type { EditorPanelDescriptor } from "@gk/shared-ui";
 
 import {
+  PUBLISH_FLOW_PANEL_DEFINITION,
+  type PublishFlowPanelId
+} from "./publish-flow-panel.js";
+import {
   WORLD_CAMERA_MINIMAP_PANEL_DEFINITIONS,
   type WorldCameraMinimapPanelId
 } from "./world-camera-minimap-panels.js";
@@ -31,6 +35,7 @@ export type EditorPanelId =
   | "hud-editor"
   | "minimap-panel"
   | "game-users"
+  | PublishFlowPanelId
   | WorldCameraMinimapPanelId;
 
 export interface AssetInventorySummary {
@@ -204,6 +209,7 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     requiresEditorAdmin: false,
     acceptsConcreteGameContent: false
   },
+  PUBLISH_FLOW_PANEL_DEFINITION,
   ...PHASE9_PANEL_DEFINITIONS,
   {
     id: "hud-editor",

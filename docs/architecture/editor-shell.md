@@ -10,7 +10,7 @@ De standaardindeling bevat:
 - midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
 - rechts: `Inspector`, `Validation` en `UI Display Inspector`;
 - onder: `History`;
-- dock tabs voor asset, audio, entity/component, procedural generation, world, zone, camera, lighting, HUD, minimap en game-user beheer.
+- dock tabs voor asset, audio, entity/component, procedural generation, publish flow, world, zone, camera, lighting, HUD, minimap en game-user beheer.
 
 Fase 9 voegt panel state toe voor:
 
@@ -21,9 +21,11 @@ Fase 9 voegt panel state toe voor:
 - `Minimap Panel`;
 - `UI Display Inspector`.
 
-Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap of HUD content.
+Fase 10 voegt panel state toe voor:
 
-Server-side panel smoke is bevestigd voor alle Fase 9 panels.
+- `Publish Flow`.
+
+Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap, HUD, publish payload of runtimecontent.
 
 ## Node Canvas
 
@@ -40,6 +42,14 @@ Fase 9 breidt de node canvas capabilities uit met:
 - minimap view/layer/marker/icon/generated layer nodes;
 - UI asset display nodes.
 
+Fase 10 breidt de node canvas capabilities uit met publish-boundary nodes:
+
+- publish status;
+- publish candidate reference;
+- publish validate;
+- publish snapshot metadata;
+- publish rollback reference.
+
 ## UI Display Inspector
 
 De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
@@ -54,9 +64,29 @@ De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
 
 Belangrijke regel: natural size is metadata, geen display size. Display size, scale mode, anchor en pivot moeten uit node-data/editor-data komen.
 
-UI scaling validation is server-side bevestigd.
+UI scaling validation is server-side bevestigd voor Fase 9 en blijft onderdeel van Fase 10 publish validation.
 
-## Asset, audio, entity, procedural en Fase 9 panels
+## Publish Flow Panel
+
+Het Publish Flow panel toont alleen contract/statusinformatie:
+
+- phase/status;
+- validation issues;
+- candidate summary;
+- candidate references;
+- snapshot metadata;
+- selected snapshot metadata.
+
+Het panel:
+
+- vereist editor session en `editor_admin`;
+- is metadata-only;
+- publiceert niets naar Runtime Game;
+- wijzigt geen assets;
+- accepteert geen concrete gamecontent;
+- verzint geen world, NPC, quest, economy, HUD, minimap of audio data.
+
+## Asset, audio, entity, procedural, publish en Fase 9 panels
 
 Panels zijn generieke capabilities:
 
@@ -64,6 +94,7 @@ Panels zijn generieke capabilities:
 - `Audio Panel` leest dezelfde asset library en filtert op audio records.
 - `Entity / Component Panel` toont Fase 8 component stack state.
 - `Procedural Generation Panel` toont Fase 8.1 seed controls, generator graph state, preview result state, validation issues, bake draft actions en generated candidate lists.
+- `Publish Flow` toont Fase 10 validation status, candidate summary en snapshot metadata zonder runtime publish.
 - `World Panel` toont world settings draft state en generated candidate input, zonder runtime publish.
 - `Zone Panel` toont zone draft state en generated candidate input, zonder runtime publish.
 - `Camera Panel` toont camera node-data en validation issues, zonder runtime defaults af te dwingen.
@@ -88,7 +119,7 @@ De preview blijft gated:
 - geen minimap layout zonder node-data;
 - geen runtime publish.
 
-De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish.
+De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish. Fase 10 voegt geen runtime renderer toe.
 
 ## Auth boundary
 
@@ -102,16 +133,19 @@ Fase 9 editor world/minimap/UI display beheer blijft editor-only:
 - route contracts publiceren niets naar Runtime Game;
 - route contracts wijzigen geen assets.
 
-Server-side bevestigd:
+Fase 10 publish-flow beheer is strenger:
 
-- editor login OK;
-- `/auth/editor/me` OK met `editor_admin`;
-- anonymous denied OK, 401 en niet 404;
-- game smoke-scope denied OK, 403 en niet 404.
+- editor admin only;
+- anonymous denied;
+- game session denied;
+- non-admin editor denied;
+- state-changing route contracts vereisen CSRF/Origin protection;
+- route contracts publiceren niets naar Runtime Game;
+- route contracts wijzigen geen assets.
 
 ## API runtime contract
 
-Bestaande API runtime contracts blijven geldig. Fase 9 voegt editor-only route contracts toe:
+Fase 9 route contracts:
 
 - `GET /editor/world/settings`;
 - `POST /editor/world/validate`;
@@ -120,9 +154,17 @@ Bestaande API runtime contracts blijven geldig. Fase 9 voegt editor-only route c
 - `GET /editor/ui-display/assets`;
 - `POST /editor/ui-display/validate`.
 
+Fase 10 route contracts:
+
+- `GET /editor/publish/status`;
+- `POST /editor/publish/validate`;
+- `POST /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots`;
+- `GET /editor/publish/snapshots/:id`;
+- `POST /editor/publish/rollback/validate`.
+
 Deze route contracts:
 
-- vereisen editor scope;
 - blijven CSRF/Origin beschermd voor state-changing requests;
 - geven anonymous/game sessions geen beheer;
 - uploaden geen assets;
@@ -130,8 +172,6 @@ Deze route contracts:
 - kopieren geen assets naar Git;
 - verzinnen geen concrete gamecontent;
 - publiceren niets naar Runtime Game.
-
-Fase 9 route smokes zijn server-side OK.
 
 ## Assetstatus
 
@@ -151,18 +191,14 @@ Fase 8.1 is server-side gevalideerd.
 
 Fase 9 is server-side afgerond en klaar.
 
-Server-side bevestigd voor Fase 9:
+Fase 10 Git-basis is voorbereid, maar server-side validatie staat open:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK, 86/86 tests pass;
-- `pnpm lint`: OK;
-- `gk-api` herstart: OK;
-- `gk-editor-web` herstart: OK;
-- services active/enabled: OK;
-- beide services draaien via `/opt/gk/node-v22/bin/node`;
-- `/editor`: OK;
-- editor/API smoke voor world/minimap/UI display contracts: OK;
-- no runtime publish: OK;
-- no asset mutation: OK;
-- anonymous/game denied: OK.
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- publish route smokes;
+- auth/CSRF smokes;
+- panel smoke;
+- no-runtime-publish;
+- no-asset-mutation.

@@ -28,7 +28,10 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "minimap.view.reference",
   "minimap.layer.reference",
   "minimap.marker.reference",
-  "ui.asset-display.reference"
+  "ui.asset-display.reference",
+  "publish.candidate.reference",
+  "publish.validation.reference",
+  "publish.snapshot.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

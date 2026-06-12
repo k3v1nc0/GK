@@ -20,6 +20,8 @@ Fase 8.1 is server-side afgerond en klaar. Procedural generated assets mogen uit
 
 Fase 9 is server-side afgerond en klaar. Fase 9 gebruikt assets alleen als asset-library references in node/editor-data. Er is geen runtime publish en er zijn geen assets toegevoegd of gewijzigd. No-asset-mutation is server-side bevestigd.
 
+Fase 10 Publish Flow Core Git-basis is voorbereid. Fase 10 valideert asset candidates en snapshot metadata, maar wijzigt, kopieert, verwijdert of publiceert geen assets.
+
 ## Asset source policy
 
 Assets mogen alleen worden gebruikt wanneer hun bron is bevestigd:
@@ -36,6 +38,7 @@ Niet toegestaan:
 - definitieve runtime-roltoewijzing zonder node/editor-data;
 - runtime-hardcoding van concrete assetkeuzes;
 - procedural generators die assets verzinnen of naar Git kopieren;
+- publish-flow die assets kopieert, muteert of definitieve GLB roles hardcoded toewijst;
 - UI source pixel size gebruiken als runtime display size zonder node-data.
 
 ## Assetpaden
@@ -95,13 +98,25 @@ Schema hints:
 - small status icon: 24x24;
 - HUD bar/frame display size blijft node-data required.
 
+## Fase 10 publish asset gate
+
+Fase 10 publish validation neemt asset/UI gates mee:
+
+- asset candidates blijven references, geen hardcoded runtime roles;
+- GLB roles blijven candidate/editor-data;
+- UI/audio assets blijven asset-library candidates;
+- generated procedural assets blijven draft/candidate input;
+- snapshot metadata bevat geen asset payload;
+- `assetsCopiedToGit=false` en `copiesAssetsToGit=false` blijven harde gates;
+- no-asset-mutation blijft verplicht.
+
 ## Audio assets
 
 Status: 21 audio files aanwezig als asset-library candidates.
 
 Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag alleen via asset library en audio nodes worden gekozen of ingesteld.
 
-Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe.
+Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst nog steeds geen concrete audio runtimecontent toe.
 
 ## Fase 8.1 procedural asset gate
 
@@ -115,11 +130,12 @@ Regels:
 - procedural bake maakt alleen editor draft data of bake draft result;
 - geen procedural generator mag assets uploaden, kopieren naar Git, verwijderen of verzinnen.
 
-## Fase 9 gekoppelde nodefamilies
+## Fase 9 en Fase 10 gekoppelde nodefamilies
 
 - world/zone/spawn assetkoppelingen op Fase 8.1 draft/candidate output;
 - minimap marker assets via `gk.minimap.marker`, `gk.minimap.icon` en UI display nodes;
 - HUD image candidates via `gk.ui.assetDisplay`, `gk.ui.iconDisplay`, `gk.ui.hudFrame`, `gk.ui.hudBar` en `gk.ui.nineSlice`;
+- publish candidate references via Fase 10 publish-flow nodes;
 - audio blijft candidate/editor-data voor latere audio nodefamilies.
 
 ## Codex-taken buiten Git
@@ -135,6 +151,12 @@ Afgerond:
 7. Asset refresh na `Assets - new` uitgevoerd met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
 8. Fase 9 build/typecheck/test/lint en route/panel smoke bevestigd.
 9. Fase 9 no-asset-mutation en UI display validation bevestigd.
+
+Open voor Fase 10:
+
+1. Server-side bevestigen dat publish validation geen assets wijzigt of kopieert.
+2. Server-side build/typecheck/test/lint draaien.
+3. Publish route smokes draaien.
 
 Open voor latere fases:
 
