@@ -34,7 +34,7 @@ Niet toegestaan:
 | Missing assets | Afgerond: 0 |
 | Fase 8.1 procedural core | Server-side afgerond en klaar |
 | Fase 9 world/camera/minimap/UI display | Server-side afgerond en klaar |
-| Fase 10 Publish Flow Core | Git-basis voorbereid; server-side validatie open |
+| Fase 10 Publish Flow Core | Server-side afgerond en klaar |
 
 ## Fail-fast regels
 
@@ -167,4 +167,4 @@ Nieuwe agents moeten openen:
 - `docs/architecture/editor-shell.md`;
 - `README/GameBibleNode.json`.
 
-Fase 10 server-side validatie staat nog open. Geen Fase 11 openen voordat Fase 10 is bevestigd.
+Fase 10 server-side validatie is afgerond. Geen Fase 11 openen.

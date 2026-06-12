@@ -191,7 +191,7 @@ Fase 8.1 is server-side gevalideerd.
 
 Fase 9 is server-side afgerond en klaar.
 
-Fase 10 Git-basis is voorbereid, maar server-side validatie staat open:
+Fase 10 Git-basis is voorbereid en server-side validatie is afgerond:
 
 - `pnpm build`;
 - `pnpm typecheck`;

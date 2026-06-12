@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "typecheck": "tsc -b --pretty false",
-    "test": "node --experimental-strip-types --loader ./scripts/ts-test-loader.mjs --test tests/*.test.mjs",
+    "test": "node --loader ./scripts/ts-test-loader.mjs --test tests/*.test.mjs",
     "lint": "node scripts/check-workspace-boundaries.mjs"
   },
   "devDependencies": {

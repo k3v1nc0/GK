@@ -14,7 +14,7 @@ Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asse
 
 Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar. Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
-Fase 10 Publish Flow Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
+Fase 10 Publish Flow Core Git-basis is voorbereid op `main`. Server-side validatie is afgerond.
 
 ## Hoofdregels
 

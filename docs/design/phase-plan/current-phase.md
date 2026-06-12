@@ -4,7 +4,7 @@
 
 Actieve status: Fase 10 Git-basis voorbereid op `main`.
 
-Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd, maar Fase 10 is nog niet server-side klaar.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd en de server-side verificatie van Fase 10 is afgerond.
 
 ## Statussamenvatting
 
@@ -103,18 +103,21 @@ Git-basis bevat tests voor:
 - publish route contracts, anonymous/game/non-admin denied en CSRF/Origin gate;
 - Publish Flow panel registratie.
 
-Niet geclaimd als server-side uitgevoerd in deze GitHub-only update:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- live service smokes.
-
 ## Fasebeoordeling
 
-Fase 10 Git-basis is voorbereid.
+Server-side verificatie van Fase 10 is afgerond:
 
-Fase 10 is server-side nog niet klaar. Codex/Claude moet de open checks en live smokes opnieuw draaien voordat Fase 10 als afgerond gemarkeerd mag worden.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api` en `gk-editor-web`: actief en enabled;
+- editor login en `/auth/editor/me`: OK met `editor_admin`;
+- `/editor` bereikbaar en Publish Flow panel zichtbaar in de editor shell: OK;
+- publish route smokes: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin smokes voor state-changing publish routes: OK;
+- no-runtime-publish en no-asset-mutation: OK;
+- blockers: geen.
 
-Volgende stap: server-side validatie van Fase 10. Geen Fase 11 openen.
+Volgende stap: geen Fase 11 openen.

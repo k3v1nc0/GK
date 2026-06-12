@@ -167,7 +167,7 @@ Belangrijke regels:
 
 ## Fase 10 publish-flow laag
 
-Fase 10 Git-basis is voorbereid als publish-boundary laag. Server-side validatie is nog open.
+Fase 10 Git-basis is voorbereid als publish-boundary laag en server-side validatie is afgerond.
 
 Publish flow states:
 

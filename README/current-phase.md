@@ -2,7 +2,7 @@
 
 Actieve status: Fase 10 Git-basis voorbereid op `main`.
 
-Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd, maar Fase 10 is nog niet server-side afgerond totdat Codex/Claude build/typecheck/test/lint, live smokes en docs final bevestigt.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd en de server-side verificatie van Fase 10 is afgerond.
 
 ## Primaire bronnen
 
@@ -111,21 +111,27 @@ GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library c
 - Generated Fase 8.1 data blijft draft/candidate totdat publish validation en latere publish-flow dit expliciet accepteren.
 - Runtime publish/renderer blijft niet geopend in Fase 10 Git-basis.
 
-## Open aandachtspunten
+## Fase 10 status
 
-Fase 10 Git-basis is voorbereid, maar server-side status staat open.
+Server-side verificatie is afgerond en groen:
 
-Codex/Claude moet nog draaien/bevestigen:
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api` en `gk-editor-web`: actief en enabled;
+- editor login en `/auth/editor/me`: OK met `editor_admin`;
+- `/editor` bereikbaar: OK;
+- Publish Flow panel in editor shell: OK;
+- `GET /editor/publish/status`: OK;
+- `POST /editor/publish/validate`: OK;
+- `POST /editor/publish/snapshots`: OK;
+- `GET /editor/publish/snapshots`: OK;
+- `GET /editor/publish/snapshots/:id`: OK;
+- `POST /editor/publish/rollback/validate`: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin protection op state-changing publish routes: OK;
+- no-runtime-publish/no-asset-mutation: OK;
+- blockers: geen.
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- live smoke voor `/editor/publish/*` route contracts;
-- anonymous/game/non-admin denied smoke;
-- CSRF/Origin smoke voor state-changing publish routes;
-- Publish Flow panel smoke;
-- no-runtime-publish en no-asset-mutation bevestiging;
-- docs final.
-
-Volgende fase: geen Fase 11 openen. Fase 10 is pas klaar na server-side validatie en Kevin/Codex/Claude bevestiging.
+Volgende fase: geen Fase 11 openen.

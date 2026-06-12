@@ -6,7 +6,7 @@ Fase 10 is door Kevin geopend.
 
 Git-basis: voorbereid op `main`.
 
-Server-side status: nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live smokes en docs final nog bevestigen voordat Fase 10 als afgerond mag worden gemarkeerd.
+Server-side status: afgerond en klaar.
 
 ## Vaste regels voor deze fase
 
@@ -162,35 +162,36 @@ Toegevoegd testcontract:
 - [x] Geen assets gewijzigd.
 - [x] Geen runtime publish toegevoegd.
 - [x] Geen concrete gamecontent toegevoegd.
-- [ ] Server-side build/typecheck/test/lint bevestigd.
-- [ ] Live route smokes bevestigd.
-- [ ] Auth/CSRF smokes bevestigd.
-- [ ] Panel smoke bevestigd.
-- [ ] Docs final bevestigd.
+- [x] Server-side build/typecheck/test/lint bevestigd.
+- [x] Live route smokes bevestigd.
+- [x] Auth/CSRF smokes bevestigd.
+- [x] Panel smoke bevestigd.
+- [x] Docs final bevestigd.
 
-## Open Codex/Claude-taken
+## Server-side verificatie
 
-Nog server-side valideren:
+Bevestigd:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- smoke `GET /editor/publish/status`;
-- smoke `POST /editor/publish/validate`;
-- smoke `POST /editor/publish/snapshots` als metadata-only;
-- smoke `GET /editor/publish/snapshots`;
-- smoke `GET /editor/publish/snapshots/:id`;
-- smoke `POST /editor/publish/rollback/validate`;
-- anonymous/game/non-admin denied;
-- CSRF/Origin denied voor state-changing routes zonder proof;
-- editor shell toont Publish Flow panel;
-- bevestigen dat geen runtime publish of assetmutatie plaatsvindt.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api` en `gk-editor-web`: actief en enabled;
+- editor login en `/auth/editor/me`: OK met `editor_admin`;
+- `/editor` bereikbaar en Publish Flow panel zichtbaar in de editor shell: OK;
+- `GET /editor/publish/status`: OK;
+- `POST /editor/publish/validate`: OK;
+- `POST /editor/publish/snapshots`: OK;
+- `GET /editor/publish/snapshots`: OK;
+- `GET /editor/publish/snapshots/:id`: OK;
+- `POST /editor/publish/rollback/validate`: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin bescherming op state-changing publish routes: OK;
+- no-runtime-publish/no-asset-mutation: OK;
+- blockers: geen.
 
 ## Fasebeoordeling
 
-Fase 10 Git-basis is voorbereid.
-
-Fase 10 is nog niet server-side klaar. Markeer Fase 10 pas als afgerond nadat Codex/Claude de open checks en live smokes bevestigt.
+Fase 10 is server-side afgerond en klaar.
 
 Geen Fase 11 voorbereiden of openen vanuit deze fase.
