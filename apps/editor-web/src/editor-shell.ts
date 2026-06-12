@@ -48,9 +48,21 @@ export const EDITOR_MAIN_TABS: readonly EditorWorkspaceTabDescriptor[] = [
 export const EDITOR_SHELL_LAYOUT: EditorDockLayoutDescriptor = {
   left: ["node-library"],
   mainTabs: ["node-canvas", "viewport-world-preview"],
-  right: ["inspector", "validation"],
+  right: ["inspector", "validation", "ui-display-inspector"],
   bottom: ["history"],
-  dockTabs: ["asset-panel", "audio-panel", "entity-component-panel", "procedural-generation-panel", "hud-editor", "minimap-panel", "game-users"]
+  dockTabs: [
+    "asset-panel",
+    "audio-panel",
+    "entity-component-panel",
+    "procedural-generation-panel",
+    "world-panel",
+    "zone-panel",
+    "camera-panel",
+    "lighting-panel",
+    "hud-editor",
+    "minimap-panel",
+    "game-users"
+  ]
 } as const;
 
 export function createEditorLoginEntryContract(): EditorLoginEntryContract {

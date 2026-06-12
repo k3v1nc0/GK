@@ -12,7 +12,7 @@ Fase 8.1 procedural generation core is server-side gevalideerd en klaar.
 
 Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asset refresh server-side uitgevoerd en is de asset scan OK met GLB=4, UI images=37, audio files=21, invalid=0 en missing=0.
 
-Fase 9 Git-basis is voorbereid op `main`, maar is nog niet server-side gevalideerd. Dit document claimt Fase 9 dus nog niet als live/server-side klaar.
+Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar. Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
 ## Hoofdregels
 
@@ -23,7 +23,7 @@ Fase 9 Git-basis is voorbereid op `main`, maar is nog niet server-side gevalidee
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
 - Procedural generation output blijft draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 - UI/audio assets blijven asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
-- Fase 9 Git-basis publiceert niets naar runtime.
+- Fase 9 publiceert niets naar runtime.
 
 ## Bevestigde paden
 
@@ -32,6 +32,7 @@ Fase 9 Git-basis is voorbereid op `main`, maar is nog niet server-side gevalidee
 | `/var/www/gk` | Bevestigd | Basis voor de eerste single-server omgeving. |
 | `/var/www/gk/assets` | Bevestigd | Server assetbron. |
 | `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` | Bevestigd | Door Codex buiten Git gezet of bevestigd. |
+| `/opt/gk/node-v22/bin/node` | Bevestigd | Actieve Node runtime voor `gk-api` en `gk-editor-web`. |
 
 ## Assetstatus
 
@@ -80,7 +81,7 @@ Bevestigd:
 - no asset copy to Git;
 - anonymous/game session krijgt geen procedural editor beheer.
 
-## Fase 9 Git-basis status
+## Fase 9 server-side status
 
 Fase 9 voegt world/camera/lighting/minimap/UI display contracts toe in Git:
 
@@ -93,7 +94,32 @@ Fase 9 voegt world/camera/lighting/minimap/UI display contracts toe in Git:
 - tests;
 - docs.
 
-Geen server-side runtime status is hiermee automatisch bevestigd. Geen migratie of service restart is door deze docs als uitgevoerd geclaimd.
+Server-side verificatie is afgerond en klaar.
+
+Bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- `gk-api` herstart: OK;
+- `gk-editor-web` herstart: OK;
+- services active/enabled: OK;
+- beide services draaien via `/opt/gk/node-v22/bin/node`;
+- `/editor`: OK;
+- editor login: OK;
+- `/auth/editor/me`: OK, `editor_admin`;
+- Fase 9 route smokes: OK;
+- anonymous denied: OK, 401 en niet 404;
+- game smoke-scope denied: OK, 403 en niet 404;
+- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
+- UI scaling validation: OK;
+- no-runtime-publish: OK;
+- no-asset-mutation: OK;
+- GameBible save: OK via testdekking;
+- game-site reachable: OK;
+- worktree schoon;
+- blockers: geen.
 
 Fase 9 route contracts:
 
@@ -150,18 +176,8 @@ Afgerond:
 3. Fase 8 install/build/typecheck/test/lint, migratie, entity routes en runtime gates afgerond.
 4. Fase 8.1 install/build/typecheck/test/lint, migratie, procedural smoke en no-runtime-publish/no-asset-copy checks afgerond.
 5. Asset refresh na `Assets - new` uitgevoerd en scan OK met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
-
-Open voor Fase 9:
-
-1. `pnpm build`.
-2. `pnpm typecheck`.
-3. `pnpm test`.
-4. `pnpm lint`.
-5. Editor/API smoke voor world/minimap/UI display contracts.
-6. Bevestigen dat anonymous/game sessions denied blijven.
-7. Bevestigen dat Fase 9 geen runtime publish uitvoert.
-8. Bevestigen dat Fase 9 geen assets toevoegt, wijzigt of kopieert.
-9. Services pas herstarten wanneer de server-side build/checks dit nodig maken.
+6. Fase 9 build/typecheck/test/lint afgerond.
+7. Fase 9 editor/API smoke, panel smoke, auth-deny smoke, UI scaling validation, no-runtime-publish en no-asset-mutation afgerond.
 
 Nog open voor latere fases:
 
@@ -169,4 +185,5 @@ Nog open voor latere fases:
 - realtime gateway;
 - workers;
 - publish-services;
-- Nginx live-migratie alleen in aparte migratiefase.
+- Nginx live-migratie alleen in aparte migratiefase;
+- Fase 10 pas openen wanneer Kevin die fase start.

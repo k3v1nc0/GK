@@ -7,6 +7,7 @@ import {
   canOpenGameUserManagementPanel,
   gameUserManagementPanelContract
 } from "../apps/editor-web/src/game-user-management.ts";
+import { createEditorShellModel } from "../apps/editor-web/src/editor-shell.ts";
 import { createEmptyNodeCanvasState } from "../apps/editor-web/src/node-canvas.ts";
 import {
   createAssetPanelState,
@@ -49,12 +50,24 @@ describe("Fase 5 editor shell layout", () => {
   });
 
   it("places the required panels in stable editor regions", () => {
-    const shellSource = readFileSync("apps/editor-web/src/editor-shell.ts", "utf8");
+    const shell = createEditorShellModel();
 
-    assert.match(shellSource, /left: \["node-library"\]/);
-    assert.match(shellSource, /right: \["inspector", "validation"\]/);
-    assert.match(shellSource, /bottom: \["history"\]/);
-    assert.match(shellSource, /dockTabs: \["asset-panel", "audio-panel", "entity-component-panel", "procedural-generation-panel", "hud-editor", "minimap-panel", "game-users"\]/);
+    assert.deepEqual(shell.layout.left, ["node-library"]);
+    assert.deepEqual(shell.layout.right, ["inspector", "validation", "ui-display-inspector"]);
+    assert.deepEqual(shell.layout.bottom, ["history"]);
+    assert.deepEqual(shell.layout.dockTabs, [
+      "asset-panel",
+      "audio-panel",
+      "entity-component-panel",
+      "procedural-generation-panel",
+      "world-panel",
+      "zone-panel",
+      "camera-panel",
+      "lighting-panel",
+      "hud-editor",
+      "minimap-panel",
+      "game-users"
+    ]);
   });
 
   it("starts the node canvas empty with generic capability definitions", () => {
@@ -74,16 +87,22 @@ describe("Fase 5 editor shell layout", () => {
     assert.deepEqual(panelIds, [
       "asset-panel",
       "audio-panel",
+      "camera-panel",
       "entity-component-panel",
       "game-users",
       "history",
       "hud-editor",
       "inspector",
+      "lighting-panel",
       "minimap-panel",
       "node-library",
       "procedural-generation-panel",
-      "validation"
+      "ui-display-inspector",
+      "validation",
+      "world-panel",
+      "zone-panel"
     ]);
+    assert.equal(new Set(panelIds).size, panelIds.length);
     assert.equal(EDITOR_PANEL_DEFINITIONS.every((panel) => panel.acceptsConcreteGameContent === false), true);
   });
 });

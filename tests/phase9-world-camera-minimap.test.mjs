@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   NODE_VALUE_SOCKET_TYPES,
+  SCHEMA_PACKAGE_SCOPE,
   UI_DISPLAY_SCHEMA_HINTS,
   createGeneratedCandidateReference,
   createMinimapMarkerDraft,
@@ -19,6 +20,7 @@ import {
 } from "../packages/schemas/src/index.ts";
 import { getCoreGraphNodeTypes } from "../packages/node-types/src/index.ts";
 import {
+  EDITOR_WORLD_ROUTE_DEFINITIONS,
   EDITOR_WORLD_ROUTE_IDS,
   authorizeEditorWorldAccess,
   createEditorMinimapSettingsResponse,
@@ -26,8 +28,89 @@ import {
   createEditorWorldSettingsResponse,
   createEditorWorldValidationResponse
 } from "../apps/api-server/src/editor-world-routes.ts";
+import { handleApiRequest } from "../apps/api-server/src/http-server.ts";
+import { createEditorShellModel } from "../apps/editor-web/src/editor-shell.ts";
+import { EDITOR_PANEL_DEFINITIONS } from "../apps/editor-web/src/panels.ts";
 
 const phase9NodeTypes = new Set(getCoreGraphNodeTypes().map((node) => node.type));
+const phase9HttpRoutes = [
+  ["GET", "/editor/world/settings"],
+  ["POST", "/editor/world/validate"],
+  ["GET", "/editor/minimap/settings"],
+  ["POST", "/editor/minimap/validate"],
+  ["GET", "/editor/ui-display/assets"],
+  ["POST", "/editor/ui-display/validate"]
+];
+const phase9PanelIds = [
+  "world-panel",
+  "zone-panel",
+  "camera-panel",
+  "lighting-panel",
+  "minimap-panel",
+  "ui-display-inspector"
+];
+
+test("Fase 9 schema package exports only existing world, minimap, UI and publish contracts", () => {
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("entity-components"), true);
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("entity-validation"), true);
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("procedural-validation"), true);
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("world-camera-minimap"), true);
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("world-camera-minimap-validation"), true);
+  assert.equal(SCHEMA_PACKAGE_SCOPE.includes("node-publish"), true);
+
+  for (const removedScope of [
+    "asset-library-validation",
+    "entity-component-system",
+    "entity-component-system-validation",
+    "procedural-generation-validation",
+    "editor-shell"
+  ]) {
+    assert.equal(SCHEMA_PACKAGE_SCOPE.includes(removedScope), false);
+  }
+});
+
+test("Fase 9 route contracts are editor-only, CSRF-aware and non-publishing", () => {
+  const routeKeys = new Set(EDITOR_WORLD_ROUTE_DEFINITIONS.map((route) => `${route.method} ${route.path}`));
+
+  for (const [method, path] of phase9HttpRoutes) {
+    assert.equal(routeKeys.has(`${method} ${path}`), true, `${method} ${path} should have a route contract`);
+  }
+
+  for (const route of EDITOR_WORLD_ROUTE_DEFINITIONS) {
+    assert.equal(route.public, false);
+    assert.equal(route.requiredScope, "editor");
+    assert.equal(route.publishesRuntimeOutput, false);
+    assert.equal(route.modifiesAssets, false);
+    assert.equal(route.requiresCsrf, route.stateChanging);
+  }
+});
+
+test("Fase 9 routes are wired into the API server and deny anonymous sessions", async () => {
+  for (const [method, path] of phase9HttpRoutes) {
+    const response = await requestApi(method, path);
+
+    assert.notEqual(response.statusCode, 404, `${method} ${path} should be handled before the 404 fallback`);
+    assert.equal([401, 403].includes(response.statusCode), true, `${method} ${path} should deny anonymous access`);
+  }
+});
+
+test("Fase 9 panels are registered in the editor shell model", () => {
+  const shell = createEditorShellModel();
+  const registeredPanelIds = shell.panels.map((panel) => panel.id);
+
+  assert.equal(shell.panels, EDITOR_PANEL_DEFINITIONS);
+  assert.equal(new Set(registeredPanelIds).size, registeredPanelIds.length, "editor panel ids should remain unique");
+
+  for (const panelId of phase9PanelIds) {
+    assert.equal(registeredPanelIds.includes(panelId), true, `${panelId} should be in the live editor panel model`);
+  }
+
+  for (const panelId of ["world-panel", "zone-panel", "camera-panel", "lighting-panel", "minimap-panel"]) {
+    assert.equal(shell.layout.dockTabs.includes(panelId), true, `${panelId} should be visible in dock tabs`);
+  }
+
+  assert.equal(shell.layout.right.includes("ui-display-inspector"), true);
+});
 
 test("Fase 9 world, camera, lighting, minimap and UI node types are registered", () => {
   for (const nodeType of [
@@ -241,3 +324,49 @@ test("editor-only route contracts do not publish runtime output or mutate assets
   assert.equal(uiAssets.displaySizeMustComeFromNodeData, true);
   assert.equal(validation.publishesRuntimeOutput, false);
 });
+
+async function requestApi(method, path) {
+  const response = new MockServerResponse();
+  const request = {
+    method,
+    url: path,
+    headers: {},
+    socket: { remoteAddress: "127.0.0.1" }
+  };
+
+  await handleApiRequest(request, response, {
+    editorAuthStore: null,
+    now: () => new Date("2026-06-12T00:00:00.000Z")
+  });
+
+  return response;
+}
+
+class MockServerResponse {
+  statusCode = 0;
+  headers = {};
+  chunks = [];
+  body = "";
+
+  writeHead(statusCode, headers = {}) {
+    this.statusCode = statusCode;
+    this.headers = { ...this.headers, ...headers };
+    return this;
+  }
+
+  setHeader(name, value) {
+    this.headers[String(name).toLowerCase()] = value;
+  }
+
+  getHeader(name) {
+    return this.headers[String(name).toLowerCase()];
+  }
+
+  end(chunk = "") {
+    if (chunk) {
+      this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    }
+
+    this.body = Buffer.concat(this.chunks).toString("utf8");
+  }
+}

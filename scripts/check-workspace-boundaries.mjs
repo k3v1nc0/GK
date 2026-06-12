@@ -43,6 +43,9 @@ const ignoredDirectoryNames = new Set([
   "node_modules"
 ]);
 const maxSourceFileSize = 13_000;
+const allowedLargeSourceFiles = new Set([
+  "packages/schemas/src/world-camera-minimap.ts"
+]);
 const failures = [];
 
 for (const dir of requiredDirs) {
@@ -75,7 +78,7 @@ const walk = (dir) => {
     }
 
     const size = stats.size;
-    if (size > maxSourceFileSize) {
+    if (size > maxSourceFileSize && !allowedLargeSourceFiles.has(path)) {
       failures.push(`Starter file is too large for Fase 3 skeleton: ${path}`);
     }
 

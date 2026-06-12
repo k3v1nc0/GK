@@ -8,9 +8,9 @@ De standaardindeling bevat:
 
 - links: `Node Library`;
 - midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
-- rechts: `Inspector` en `Validation`;
+- rechts: `Inspector`, `Validation` en `UI Display Inspector`;
 - onder: `History`;
-- dock tabs voor asset, audio, entity/component, procedural generation, HUD, minimap en game-user beheer.
+- dock tabs voor asset, audio, entity/component, procedural generation, world, zone, camera, lighting, HUD, minimap en game-user beheer.
 
 Fase 9 voegt panel state toe voor:
 
@@ -22,6 +22,8 @@ Fase 9 voegt panel state toe voor:
 - `UI Display Inspector`.
 
 Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap of HUD content.
+
+Server-side panel smoke is bevestigd voor alle Fase 9 panels.
 
 ## Node Canvas
 
@@ -51,6 +53,8 @@ De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
 - validation issues.
 
 Belangrijke regel: natural size is metadata, geen display size. Display size, scale mode, anchor en pivot moeten uit node-data/editor-data komen.
+
+UI scaling validation is server-side bevestigd.
 
 ## Asset, audio, entity, procedural en Fase 9 panels
 
@@ -98,6 +102,13 @@ Fase 9 editor world/minimap/UI display beheer blijft editor-only:
 - route contracts publiceren niets naar Runtime Game;
 - route contracts wijzigen geen assets.
 
+Server-side bevestigd:
+
+- editor login OK;
+- `/auth/editor/me` OK met `editor_admin`;
+- anonymous denied OK, 401 en niet 404;
+- game smoke-scope denied OK, 403 en niet 404.
+
 ## API runtime contract
 
 Bestaande API runtime contracts blijven geldig. Fase 9 voegt editor-only route contracts toe:
@@ -120,6 +131,8 @@ Deze route contracts:
 - verzinnen geen concrete gamecontent;
 - publiceren niets naar Runtime Game.
 
+Fase 9 route smokes zijn server-side OK.
+
 ## Assetstatus
 
 Asset scan na `Assets - new`:
@@ -136,15 +149,20 @@ HUD-, icon- en minimap marker-bestanden zijn UI/image assets en blijven candidat
 
 Fase 8.1 is server-side gevalideerd.
 
-Fase 9 Git-basis is voorbereid, maar nog niet server-side klaar.
+Fase 9 is server-side afgerond en klaar.
 
-Open server-side checks:
+Server-side bevestigd voor Fase 9:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- editor/API smoke voor world/minimap/UI display contracts;
-- no runtime publish;
-- no asset mutation;
-- anonymous/game denied.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- `gk-api` herstart: OK;
+- `gk-editor-web` herstart: OK;
+- services active/enabled: OK;
+- beide services draaien via `/opt/gk/node-v22/bin/node`;
+- `/editor`: OK;
+- editor/API smoke voor world/minimap/UI display contracts: OK;
+- no runtime publish: OK;
+- no asset mutation: OK;
+- anonymous/game denied: OK.

@@ -144,7 +144,9 @@ Belangrijke regels:
 
 ## Fase 9 world/camera/minimap laag
 
-Fase 9 Git-basis is voorbereid. Deze laag voegt world, camera, lighting, minimap en UI display toe als engine-capabilities.
+Fase 9 is server-side afgerond en klaar. Deze laag voegt world, camera, lighting, minimap en UI display toe als engine-capabilities.
+
+Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`). Server-side bevestigd: build/typecheck/test/lint OK, Fase 9 route smokes OK, editor panels OK, UI scaling validation OK, no-runtime-publish OK en no-asset-mutation OK.
 
 Belangrijke regels:
 
@@ -155,7 +157,7 @@ Belangrijke regels:
 - minimap view, layers, markers, icons en generated layers zijn node-data;
 - editor minimap en game minimap mogen verschillen via node-data;
 - anonymous/game sessions krijgen geen editor world/minimap beheer;
-- Fase 9 Git-basis publiceert niets naar Runtime Game.
+- Fase 9 publiceert niets naar Runtime Game.
 
 Niet toegestaan:
 
@@ -163,7 +165,7 @@ Niet toegestaan:
 - procedural output direct als runtimecontent behandelen;
 - procedural core opnieuw bouwen;
 - assets toevoegen, wijzigen of kopieren;
-- runtime publish uitvoeren.
+- runtime publish uitvoeren buiten de publish-flow.
 
 ## UI/HUD/minimap display contract
 

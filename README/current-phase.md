@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve status: Fase 9 Git-basis voorbereid op `main`.
+Actieve status: Fase 9 server-side afgerond en klaar op `main`.
 
-Fase 8 en Fase 8.1 blijven server-side afgerond en klaar. Fase 9 is nog niet server-side afgerond totdat Codex/Claude de huidige Git-basis op de server valideert.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is nog niet geopend of geimplementeerd; die mag later alleen als volgende fase worden gestart wanneer Kevin dat doet.
 
 ## Primaire bronnen
 
@@ -31,7 +31,7 @@ Fase 9 bouwt op:
 - Fase 8 entity/component core;
 - Fase 8.1 procedural generation core.
 
-Toegevoegd in de Fase 9 Git-basis:
+Toegevoegd en server-side gevalideerd in Fase 9:
 
 - world settings, level, zone, spawnpoint, zone bounds en transition schema-contracten;
 - generated zone, placement, path network en resource distribution references uit Fase 8.1 als draft/candidate input;
@@ -43,6 +43,35 @@ Toegevoegd in de Fase 9 Git-basis:
 - editor-only route contracts voor world, minimap en UI display validation;
 - editor panel state voor World, Zone, Camera, Lighting, Minimap en UI Display Inspector;
 - tests voor node types, candidate refs, UI display scaling, nineSlice validation, minimap view split, editor-only access en no-runtime-publish.
+
+## Server-side verificatie
+
+Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
+
+Codex server-side verificatie:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- `gk-api` herstart: OK;
+- `gk-editor-web` herstart: OK;
+- services active/enabled: OK;
+- beide services draaien via `/opt/gk/node-v22/bin/node`;
+- `/editor`: OK;
+- editor login: OK;
+- `/auth/editor/me`: OK, `editor_admin`;
+- Fase 9 route smokes: OK;
+- anonymous denied: OK, 401 en niet 404;
+- game smoke-scope denied: OK, 403 en niet 404;
+- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
+- UI scaling validation: OK;
+- no-runtime-publish: OK;
+- no-asset-mutation: OK;
+- GameBible save: OK via testdekking;
+- game-site reachable: OK;
+- worktree schoon;
+- blockers: geen.
 
 ## Assetstatus
 
@@ -69,20 +98,18 @@ HUD-bestanden, icon-bestanden en minimap marker-bestanden zijn UI/image assets. 
 - Default display sizes zijn schema/editor hints, geen concrete HUD-layout.
 - GLB roles blijven candidate/editor-data.
 - Generated Fase 8.1 world data blijft draft/candidate totdat een latere publish-flow accepteert.
-- Geen runtime publish vanuit deze Git-basis.
+- Geen runtime publish buiten de publish-flow.
 
 ## Open aandachtspunten
 
-Geen Fase 8 of Fase 8.1 blockers open.
+Geen Fase 8, Fase 8.1 of Fase 9 blockers open.
 
-Open voor Fase 9 server-side validatie:
+Blijvende gates voor latere fases:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- editor/API smoke voor world, minimap en UI display route contracts;
-- bevestigen dat anonymous/game sessions geen editor world/minimap beheer krijgen;
-- bevestigen dat geen runtime publish of asset mutatie plaatsvindt.
+- GLB role mapping pas definitief via editor/node-data of Kevin-input;
+- UI/audio assets blijven asset-library candidates totdat editor/node-data ze kiest;
+- generated Fase 8.1 data blijft draft/candidate tot een latere publish-flow;
+- runtime publish blijft buiten Fase 9;
+- Fase 10 nog niet implementeren totdat Kevin die fase opent.
 
-Volgende fase: Codex/Claude moet de Fase 9 Git-basis server-side valideren. Pas daarna mag Fase 9 als server-side klaar worden gemarkeerd.
+Volgende fase: Fase 10 is toekomstwerk en mag later worden geopend wanneer Kevin dat doet.

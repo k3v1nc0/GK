@@ -2,9 +2,11 @@
 
 ## Status
 
-Fase 9 Git-basis is voorbereid op `main`.
+Fase 9 is server-side afgerond en klaar op `main`.
 
-Fase 9 is nog niet server-side afgerond. Codex/Claude moet de huidige Git-basis nog valideren met build/typecheck/test/lint en editor/API smoke.
+Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
+
+Codex heeft build/typecheck/test/lint, service herstart, editor/API smoke, panel smoke, auth-deny smoke, UI scaling validation, no-runtime-publish en no-asset-mutation server-side uitgevoerd en bevestigd.
 
 Fase 9 bouwt op:
 
@@ -185,7 +187,7 @@ Toegevoegd aan de core node registry:
 
 ## Editor/API contracts
 
-Editor panel state is voorbereid voor:
+Editor panel state is voorbereid en server-side smoke bevestigd voor:
 
 - World Panel;
 - Zone Panel;
@@ -194,7 +196,7 @@ Editor panel state is voorbereid voor:
 - Minimap Panel;
 - UI Display Inspector.
 
-Editor-only route contracts zijn voorbereid voor:
+Editor-only route contracts zijn voorbereid en server-side smoke bevestigd voor:
 
 - `GET /editor/world/settings`;
 - `POST /editor/world/validate`;
@@ -235,17 +237,34 @@ Testdekking:
 - anonymous/game denied voor editor world/minimap beheer;
 - geen runtime publish.
 
-## Open Codex/Claude-taken
+Server-side teststatus: `pnpm test` OK, 86/86 tests pass.
 
-Nog server-side valideren:
+## Server-side verificatie
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- editor/API smoke voor world/minimap/UI display contracts;
-- bevestigen dat er geen runtime publish of assetmutatie is;
-- bevestigen dat anonymous/game sessions geen editor world/minimap beheer krijgen.
+Afgerond door Codex:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- `gk-api` herstart: OK;
+- `gk-editor-web` herstart: OK;
+- services active/enabled: OK;
+- beide services draaien via `/opt/gk/node-v22/bin/node`;
+- `/editor`: OK;
+- editor login: OK;
+- `/auth/editor/me`: OK, `editor_admin`;
+- Fase 9 route smokes: OK;
+- anonymous denied: OK, 401 en niet 404;
+- game smoke-scope denied: OK, 403 en niet 404;
+- editor panels: OK;
+- UI scaling validation: OK;
+- no-runtime-publish: OK;
+- no-asset-mutation: OK;
+- GameBible save: OK via testdekking;
+- game-site reachable: OK;
+- worktree schoon;
+- blockers: geen.
 
 ## Acceptatiechecklist
 
@@ -265,11 +284,11 @@ Nog server-side valideren:
 - [x] Geen hardcoded camera/light/minimap/world/HUD/audio values in Fase 9 Git-basis.
 - [x] Geen procedural core opnieuw gedefinieerd.
 - [x] Geen runtime publish vanuit draft/preview contracts.
-- [ ] Server-side build/typecheck/test/lint bevestigd.
-- [ ] Server-side editor/API smoke bevestigd.
+- [x] Server-side build/typecheck/test/lint bevestigd.
+- [x] Server-side editor/API smoke bevestigd.
 
 ## Fasebeoordeling
 
-Fase 9 Git-basis is voorbereid.
+Fase 9 is server-side afgerond en klaar.
 
-Fase 9 is nog niet server-side klaar totdat Codex/Claude de open checks bevestigt.
+Fase 10 is de volgende fase/toekomstwerk, maar is nog niet geopend of geimplementeerd.

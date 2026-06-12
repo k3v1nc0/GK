@@ -2,15 +2,42 @@
 
 ## Fase
 
-Actieve status: Fase 9 Git-basis voorbereid op `main`.
+Actieve status: Fase 9 server-side afgerond en klaar op `main`.
 
-Fase 8 en Fase 8.1 blijven server-side afgerond en klaar. Fase 9 is nog niet server-side afgerond totdat Codex/Claude de huidige Git-basis server-side valideert.
+Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is nog niet geopend of geimplementeerd.
 
 ## Statussamenvatting
 
 Fase 9 is `World, camera, lighting, levels/zones en minimap nodes`.
 
-De Git-basis is voorbereid als engine-capability en editor/node-data contractlaag. Er is geen runtime publish toegevoegd, er zijn geen assets toegevoegd of gewijzigd, en er is geen concrete gamecontent hardcoded.
+De Git-basis is voorbereid en server-side gevalideerd als engine-capability en editor/node-data contractlaag. Er is geen runtime publish toegevoegd, er zijn geen assets toegevoegd of gewijzigd, en er is geen concrete gamecontent hardcoded.
+
+Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
+
+Server-side verificatie door Codex:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- `gk-api` herstart: OK;
+- `gk-editor-web` herstart: OK;
+- services active/enabled: OK;
+- beide services draaien via `/opt/gk/node-v22/bin/node`;
+- `/editor`: OK;
+- editor login: OK;
+- `/auth/editor/me`: OK, `editor_admin`;
+- Fase 9 route smokes: OK;
+- anonymous denied: OK, 401 en niet 404;
+- game smoke-scope denied: OK, 403 en niet 404;
+- editor panels: OK, inclusief World Panel, Zone Panel, Camera Panel, Lighting Panel, Minimap Panel en UI Display Inspector;
+- UI scaling validation: OK;
+- no-runtime-publish: OK;
+- no-asset-mutation: OK;
+- GameBible save: OK via testdekking;
+- game-site reachable: OK;
+- worktree schoon;
+- blockers: geen.
 
 Asset refresh na `Assets - new` blijft bevestigd:
 
@@ -26,7 +53,7 @@ Asset refresh na `Assets - new` blijft bevestigd:
 
 ## Fase 9 Git-basis
 
-Toegevoegd:
+Toegevoegd en gevalideerd:
 
 - `packages/schemas/src/world-camera-minimap.ts` voor world, level, zone, spawnpoint, generated world references, camera, lighting, minimap en UI display contracts;
 - `packages/schemas/src/world-camera-minimap-validation.ts` voor Fase 9 validators;
@@ -52,7 +79,7 @@ Fase 9 mag niet:
 - generated data als definitieve runtimecontent behandelen;
 - world maps, zones, spawnpoints, camera values, lighting presets, fog, sky, minimap layout, HUD layout of audio hardcoden;
 - assets toevoegen, wijzigen of kopieren;
-- runtime publish uitvoeren.
+- runtime publish uitvoeren buiten de publish-flow.
 
 Willowmere Workshop mag alleen als bestaande Kevin/GameBible input worden genoemd of gebruikt als data/input. Het mag niet als runtimecode of vaste world map hardcoded worden.
 
@@ -93,21 +120,19 @@ Fase 9 introduceert editor-only route contracts:
 
 State-changing route contracts vereisen CSRF/Origin bescherming. Anonymous/game sessions krijgen geen editor world/minimap/UI display beheer. De route responses starten zonder verzonnen world/minimap content en publiceren niets naar Runtime Game.
 
+Server-side smoke is OK voor deze routes, inclusief anonymous denied 401 en game smoke-scope denied 403 zonder 404 fallback.
+
 ## Tests/checks
 
-Lokaal in deze GitHub-only omgeving is uitgevoerd:
+Server-side bevestigd:
 
-- syntaxischeck met `node --experimental-strip-types --check` op de tijdelijke Fase 9 werkset: OK.
-
-Niet uitgevoerd in deze omgeving, omdat er geen lokale repo checkout/buildcontext gebruikt mocht worden:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- server/API smoke.
-
-Deze checks blijven Codex/Claude-taken op de server.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm lint`: OK;
+- editor/API smoke: OK;
+- no-runtime-publish: OK;
+- no-asset-mutation: OK.
 
 ## Fasebeoordeling
 
@@ -115,6 +140,6 @@ Fase 8 is klaar.
 
 Fase 8.1 is server-side afgerond en klaar.
 
-Fase 9 Git-basis is voorbereid, maar Fase 9 is nog niet server-side klaar.
+Fase 9 is server-side afgerond en klaar.
 
-Volgende stap: Codex/Claude valideert de Fase 9 Git-basis server-side met build/typecheck/test/lint en editor/API smoke. Pas daarna mag Fase 9 als server-side afgerond worden gemarkeerd.
+Volgende stap: Fase 10 is toekomstwerk en mag later worden geopend wanneer Kevin dat doet. Fase 10 is nog niet geimplementeerd.

@@ -1,46 +1,35 @@
-export * from "./asset-library.js";
-export * from "./auth.js";
-export * from "./database.js";
-export * from "./entity-components.js";
-export * from "./editor-shell.js";
-export * from "./gamebible-node.js";
 export * from "./node-graph.js";
-export * from "./node-publish.js";
+export * from "./entity-components.js";
+export * from "./entity-validation.js";
 export * from "./procedural-generation.js";
-export * from "./procedural-random.js";
 export * from "./procedural-validation.js";
 export * from "./world-camera-minimap.js";
 export * from "./world-camera-minimap-validation.js";
+export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
-  "asset-library",
-  "auth",
-  "database",
-  "entity-components",
-  "editor-shell",
-  "gamebible-node",
   "node-graph",
-  "node-publish",
+  "entity-components",
+  "entity-validation",
   "procedural-generation",
-  "world-camera-minimap"
+  "procedural-validation",
+  "world-camera-minimap",
+  "world-camera-minimap-validation",
+  "node-publish"
 ] as const;
 
 export type SchemaPackageScope = (typeof SCHEMA_PACKAGE_SCOPE)[number];
 
-export interface PackageBoundaryContract {
-  readonly name: "@gk/schemas";
-  readonly allowedImports: readonly [
-    "typescript-runtime",
-    "standard-library"
-  ];
-  readonly exportsOnlyContracts: true;
+export interface SchemaPackageBoundary {
+  readonly scope: SchemaPackageScope;
+  readonly publishesRuntimeOutput: false;
+  readonly acceptsConcreteRuntimeContent: false;
 }
 
-export const schemaPackageBoundary: PackageBoundaryContract = {
-  name: "@gk/schemas",
-  allowedImports: [
-    "typescript-runtime",
-    "standard-library"
-  ],
-  exportsOnlyContracts: true
-};
+export function schemaPackageBoundary(scope: SchemaPackageScope): SchemaPackageBoundary {
+  return {
+    scope,
+    publishesRuntimeOutput: false,
+    acceptsConcreteRuntimeContent: false
+  };
+}

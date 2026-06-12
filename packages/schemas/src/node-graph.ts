@@ -153,6 +153,12 @@ export interface GraphValidationIssue {
   readonly severity: "warning" | "error";
 }
 
+export type ValidationIssue = GraphValidationIssue;
+
+export interface Validator<TConfig extends Record<string, unknown> = Record<string, unknown>> {
+  validate(config: TConfig): readonly ValidationIssue[];
+}
+
 export interface DraftPreviewResult {
   readonly mode: "draft-preview";
   readonly publishesRuntimeOutput: false;

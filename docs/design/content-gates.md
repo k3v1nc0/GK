@@ -32,7 +32,7 @@ Niet toegestaan:
 | Invalid assets | Afgerond: 0 |
 | Missing assets | Afgerond: 0 |
 | Fase 8.1 procedural core | Server-side afgerond en klaar |
-| Fase 9 Git-basis | Voorbereid; server-side validatie open |
+| Fase 9 world/camera/minimap/UI display | Server-side afgerond en klaar |
 
 ## Fail-fast regels
 
@@ -68,7 +68,7 @@ Regels:
 
 ## UI/HUD/minimap display gate
 
-Fase 9 introduceert een harde UI display gate:
+Fase 9 introduceert een harde UI display gate. Deze gate is server-side gevalideerd.
 
 - source image natural size is metadata;
 - runtime/editor mag source pixel size nooit blind als display size gebruiken;
@@ -102,7 +102,7 @@ Regels:
 
 ## World/camera/lighting/minimap gate
 
-Fase 9 Git-basis is voorbereid als node-data contractlaag.
+Fase 9 is server-side afgerond en klaar als node-data contractlaag.
 
 Niet toegestaan:
 
@@ -114,9 +114,19 @@ Niet toegestaan:
 - hardcoded minimap layout, marker sizes of layers;
 - hardcoded HUD layout;
 - hardcoded audio behavior;
-- runtime publish vanuit Fase 9 Git-basis.
+- runtime publish buiten de publish-flow.
 
 Willowmere Workshop mag alleen als bestaande Kevin/GameBible input of editor/procedural data worden gebruikt, niet als runtimecode.
+
+Server-side bevestigd voor Fase 9:
+
+- build/typecheck/test/lint OK;
+- Fase 9 route smokes OK;
+- anonymous denied 401 en game smoke-scope denied 403, niet 404;
+- editor panels OK;
+- UI scaling validation OK;
+- no-runtime-publish OK;
+- no-asset-mutation OK.
 
 ## Open gates voor latere fases
 
@@ -130,26 +140,19 @@ Willowmere Workshop mag alleen als bestaande Kevin/GameBible input of editor/pro
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist zijn |
 
-## Te verifieren fase-input voor Fase 9
+## Te verifieren fase-input voor volgende fases
 
 Nieuwe agents moeten openen:
 
 - `README/current-phase.md`;
 - `docs/design/phase-plan/current-phase.md`;
-- `README/fase9.md`;
+- de actuele fase-README, bijvoorbeeld `README/fase10.md` wanneer Kevin Fase 10 opent;
 - `README/fase8.1.md`;
+- `README/fase9.md`;
 - `README/node-system-super-dynamic-contract.md`;
 - `docs/design/asset-register.md`;
 - `docs/design/audio-register.md`;
 - `docs/architecture/editor-shell.md`;
 - `README/GameBibleNode.json`.
 
-Server-side nog open voor Fase 9:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- editor/API smoke voor world/minimap/UI display contracts;
-- no-runtime-publish/no-asset-mutation bevestiging;
-- anonymous/game denied bevestiging.
+Fase 9 heeft geen open server-side blockers meer. Fase 10 is nog niet geopend of geimplementeerd.

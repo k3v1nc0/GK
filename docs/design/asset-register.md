@@ -18,7 +18,7 @@ Fase 8 is server-side afgerond en klaar. `Taverne.glb` is Kevin-testkeuze voor o
 
 Fase 8.1 is server-side afgerond en klaar. Procedural generated assets mogen uitsluitend via Fase 7 `asset.reference` verwijzen naar geregistreerde assets.
 
-Fase 9 Git-basis is voorbereid. Fase 9 gebruikt assets alleen als asset-library references in node/editor-data. Er is geen runtime publish en er zijn geen assets toegevoegd of gewijzigd.
+Fase 9 is server-side afgerond en klaar. Fase 9 gebruikt assets alleen als asset-library references in node/editor-data. Er is geen runtime publish en er zijn geen assets toegevoegd of gewijzigd. No-asset-mutation is server-side bevestigd.
 
 ## Asset source policy
 
@@ -75,7 +75,7 @@ HUD-bestanden, icon-bestanden en minimap marker-bestanden worden door de asset s
 
 ## Fase 9 UI display gate
 
-Fase 9 introduceert generieke UI asset display contracts.
+Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd.
 
 Regels:
 
@@ -133,9 +133,11 @@ Afgerond:
 5. Fase 8 entity/component migratie toegepast.
 6. Fase 8.1 build/typecheck/test/lint en migratie bevestigd.
 7. Asset refresh na `Assets - new` uitgevoerd met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
+8. Fase 9 build/typecheck/test/lint en route/panel smoke bevestigd.
+9. Fase 9 no-asset-mutation en UI display validation bevestigd.
 
-Open voor Fase 9:
+Open voor latere fases:
 
-1. `pnpm build/typecheck/test/lint` server-side draaien.
-2. Bevestigen dat Fase 9 route contracts geen assets wijzigen.
-3. Bevestigen dat UI display validation grote source images zonder display size blokkeert/waarschuwt volgens contract.
+1. Definitieve GLB role mapping via editor/node-data of Kevin-input wanneer publish/runtime dat nodig maakt.
+2. Definitieve UI/HUD/minimap display mappings via editor/node-data wanneer concrete runtime UI nodig wordt.
+3. Nieuwe asset scan wanneer Kevin assets toevoegt, verwijdert of hernoemt.

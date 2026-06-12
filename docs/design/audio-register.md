@@ -4,7 +4,7 @@
 
 Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) heeft Codex `/var/www/gk/assets` opnieuw laten scannen. Er zijn 21 audio-assets aanwezig.
 
-Fase 8.1 blijft server-side afgerond en klaar. Fase 9 Git-basis is voorbereid. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
+Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent. Fase 9 heeft geen concrete audio runtimecontent toegevoegd en no-runtime-publish/no-asset-mutation is server-side bevestigd.
 
 ## Audio asset policy
 
@@ -49,6 +49,13 @@ Ambience, music, SFX en UI audio worden door de asset scan als audio assets gezi
 
 Fase 9 bouwt world/camera/lighting/minimap en UI display contracts. Audio assets kunnen in Fase 9 documentatie en editor/picker contexts als candidates bestaan, maar Fase 9 koppelt ze niet als definitieve runtime audio.
 
+Server-side bevestigd voor Fase 9:
+
+- geen concrete audio runtimecontent hardcoded;
+- no-runtime-publish OK;
+- no-asset-mutation OK;
+- build/typecheck/test/lint OK.
+
 Regels:
 
 - world/zone ambience blijft editor/node-data;
@@ -70,7 +77,7 @@ Regels:
 | Combat/boss audio | SFX candidates bestaan, maar concrete combat/boss mapping ontbreekt | Fase 16/17 wanneer specifieke combat/boss audio verplicht wordt |
 | Dialogue/voice gebruik | Nog te bepalen; 0 voice/dialogue bestanden bevestigd | NPC/dialogue flows wanneer voice/audio verplicht wordt |
 
-Deze gates blokkeren Fase 9 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output of Kevin-input komen.
+Deze gates blokkeren Fase 9 niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output of Kevin-input komen.
 
 ## Registratievelden
 
@@ -89,7 +96,7 @@ Elke audio asset moet later minimaal deze velden krijgen:
 
 ## Codex-taken buiten Git
 
-Afgerond voor asset refresh:
+Afgerond voor asset refresh en Fase 9:
 
 1. `/var/www/gk/assets` gecontroleerd.
 2. Audio count vastgesteld op 21.
@@ -97,10 +104,7 @@ Afgerond voor asset refresh:
 4. `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` bevestigd.
 5. Asset scan OK met invalid=0 en missing=0.
 6. `assetsCopiedToGit=false`, `publishesRuntimeOutput=false` en `assignsDefinitiveRuntimeRoles=false` bevestigd.
-
-Open voor Fase 9:
-
-1. Server-side bevestigen dat Fase 9 geen concrete audio runtimecontent hardcoded.
-2. Server-side build/typecheck/test/lint draaien.
+7. Server-side bevestigd dat Fase 9 geen concrete audio runtimecontent hardcoded.
+8. Fase 9 build/typecheck/test/lint bevestigd.
 
 Latere fases moeten opnieuw scannen wanneer Kevin audio toevoegt, verwijdert, hernoemt of definitieve node-koppelingen nodig maakt.

@@ -14,6 +14,11 @@ import {
 } from "@gk/schemas";
 import type { EditorPanelDescriptor } from "@gk/shared-ui";
 
+import {
+  WORLD_CAMERA_MINIMAP_PANEL_DEFINITIONS,
+  type WorldCameraMinimapPanelId
+} from "./world-camera-minimap-panels.js";
+
 export type EditorPanelId =
   | "node-library"
   | "inspector"
@@ -25,7 +30,8 @@ export type EditorPanelId =
   | "procedural-generation-panel"
   | "hud-editor"
   | "minimap-panel"
-  | "game-users";
+  | "game-users"
+  | WorldCameraMinimapPanelId;
 
 export interface AssetInventorySummary {
   readonly totalCount: number;
@@ -121,6 +127,10 @@ export interface ProceduralGenerationPanelState {
   readonly inventedContent: readonly never[];
 }
 
+const PHASE9_PANEL_DEFINITIONS = WORLD_CAMERA_MINIMAP_PANEL_DEFINITIONS.filter(
+  (definition) => definition.id !== "minimap-panel"
+);
+
 export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
   {
     id: "node-library",
@@ -194,6 +204,7 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     requiresEditorAdmin: false,
     acceptsConcreteGameContent: false
   },
+  ...PHASE9_PANEL_DEFINITIONS,
   {
     id: "hud-editor",
     title: "HUD Editor",
