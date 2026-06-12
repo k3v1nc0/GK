@@ -29,10 +29,13 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "asset-reference",
   "validation-issue",
   "node-graph",
-  "entity-components"
+  "entity-components",
+  "procedural-generation"
 ] as const;
 
 export * from "./auth.js";
 export * from "./entity-components.js";
 export * from "./entity-validation.js";
 export * from "./node-graph.js";
+export * from "./procedural-generation.js";
+export * from "./procedural-validation.js";

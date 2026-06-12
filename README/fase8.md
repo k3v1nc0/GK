@@ -42,7 +42,7 @@ Server-side bevestigd op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0` (`fase 
 - blockers: geen;
 - `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
 
-Volgende fase: Fase 8.1 - Procedural Generation Core. Fase 8.1 is toegevoegd als planning, maar nog niet geimplementeerd.
+Volgende fase: Fase 8.1 - Procedural Generation Core. Fase 8.1 Git-basis is voorbereid, maar server-side validatie staat nog open.
 
 ## Doel van de fase
 
@@ -222,4 +222,4 @@ Server-side afgerond:
 
 Fase 8.1 - Procedural Generation Core.
 
-Fase 8.1 moet vóór Fase 9 worden geopend, omdat world/zone/minimap nodes niet op losse handmatige world-data gebouwd mogen worden. Procedural generation wordt een data-driven, deterministic engine-capability met draft/preview/bake gates en zonder runtime publish.
+Fase 8.1 moet vóór Fase 9 server-side gevalideerd worden, omdat world/zone/minimap nodes niet op losse handmatige world-data gebouwd mogen worden. Procedural generation is een data-driven, deterministic engine-capability met draft/preview/bake gates en zonder runtime publish.

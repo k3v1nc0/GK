@@ -6,7 +6,7 @@ Dit register is de poort voor GLB-, UI- en assetgebruik. Codex heeft de serveras
 
 Fase 8-status: server-side afgerond en klaar. `Taverne.glb` is Kevin-testkeuze voor object-candidate validation en `Wizard.glb` is Kevin-testkeuze voor NPC-candidate validation. Dit zijn geen definitieve runtime-role mappings.
 
-Fase 8.1-status: alleen faseplanning toegevoegd. Procedural generated assets mogen later uitsluitend via Fase 7 `asset.reference` verwijzen naar geregistreerde assets; Fase 8.1 mag geen assets naar Git kopieren en geen definitieve assetrollen toewijzen.
+Fase 8.1-status: Git-basis voorbereid. Procedural generated assets mogen uitsluitend via Fase 7 `asset.reference` verwijzen naar geregistreerde assets; Fase 8.1 mag geen assets naar Git kopieren en geen definitieve assetrollen toewijzen. Server-side verificatie van Fase 8.1 staat nog open.
 
 ## Asset source policy
 
@@ -58,10 +58,10 @@ Deze bestanden bestaan in repo en server. Hun gameplayrol is nog niet definitief
 
 | Assetpad | Serverbestand | Status | Toegestaan gebruik | Gekoppelde nodes | Open gate |
 |---|---|---|---|---|---|
-| `assets/Blacksmit forge.glb` | `/var/www/gk/assets/Blacksmit forge.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset`, later procedural placement candidate | Role/capability-keuze via editor |
-| `assets/Blacksmit.glb` | `/var/www/gk/assets/Blacksmit.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset`, later procedural placement candidate | Role/capability-keuze via editor |
-| `assets/Taverne.glb` | `/var/www/gk/assets/Taverne.glb` | Candidate GLB; Fase 8 object-test | Kevin-testkeuze voor object-candidate validation; geen definitieve rol | `asset.reference`, `gk.entity.spawnFromAsset`, `gk.component.renderable` | Definitieve role mapping via editor |
-| `assets/Wizard.glb` | `/var/www/gk/assets/Wizard.glb` | Candidate GLB; Fase 8 NPC-test | Kevin-testkeuze voor NPC-candidate validation; geen definitieve rol | `asset.reference`, `gk.npc.makeFromAsset`, `gk.component.npcBrain` | Definitieve role mapping en animation mapping via editor |
+| `assets/Blacksmit forge.glb` | `/var/www/gk/assets/Blacksmit forge.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset`, procedural placement candidate | Role/capability-keuze via editor |
+| `assets/Blacksmit.glb` | `/var/www/gk/assets/Blacksmit.glb` | Candidate GLB | Kandidaat GLB asset; geen definitieve rol | `asset.reference`, later `entity.spawnFromAsset`, procedural placement candidate | Role/capability-keuze via editor |
+| `assets/Taverne.glb` | `/var/www/gk/assets/Taverne.glb` | Candidate GLB; Fase 8 object-test | Kevin-testkeuze voor object-candidate validation; geen definitieve rol | `asset.reference`, `gk.entity.spawnFromAsset`, `gk.component.renderable`, procedural placement candidate | Definitieve role mapping via editor |
+| `assets/Wizard.glb` | `/var/www/gk/assets/Wizard.glb` | Candidate GLB; Fase 8 NPC-test | Kevin-testkeuze voor NPC-candidate validation; geen definitieve rol | `asset.reference`, `gk.npc.makeFromAsset`, `gk.component.npcBrain`, procedural placement candidate | Definitieve role mapping en animation mapping via editor |
 
 Let op: bestandsnamen zijn feiten, geen definitieve gamecontentbeslissing. Een assetnaam bepaalt nog niet of iets player, NPC, merchant, enemy, boss, prop, environment of quest object is.
 
@@ -93,17 +93,30 @@ Fase 8 server-side bevestigd:
 
 ## Fase 8.1 procedural asset gate
 
-Fase 8.1 mag later procedural placement candidates maken, maar alleen met geregistreerde asset references.
+Fase 8.1 procedural placement candidates bestaan als Git-contract, maar zijn nog niet server-side gevalideerd.
 
 Regels:
 
 - generated assets gebruiken Fase 7 `asset.reference`;
 - generated entities gebruiken Fase 8 entity/component contracts;
 - generated placements blijven candidates totdat editor-data of publish-flow ze later expliciet accepteert;
+- generated audio gebruikt `audio.reference` en blijft gated bij audio count 0;
 - procedural preview publiceert niets naar Runtime Game;
-- procedural bake maakt alleen editor draft data;
+- procedural bake maakt alleen editor draft data of bake draft result;
 - geen procedural generator mag assets uploaden, kopieren naar Git, verwijderen of verzinnen;
 - GLB role mapping blijft editor-data/Kevin-keuze.
+
+Git-basis toegevoegd:
+
+- `ProceduralAssetRecordGate` en generated candidate contracts;
+- validator voor missing asset references;
+- tests voor `asset.reference`, audio count 0 gate, no asset copy en no runtime publish.
+
+Server-side nog open:
+
+- procedural generated asset references via Fase 7 asset library testen;
+- bevestigen dat preview/bake geen assets naar Git kopieert;
+- bevestigen dat generated placement candidates geen runtime publish uitvoeren.
 
 ## Filename gate
 
@@ -113,18 +126,7 @@ Regels:
 
 Status: 0 UI images aanwezig.
 
-UI-assets moeten later via asset library en nodes gekozen of toegevoegd worden. Dit blokkeert Fase 8 niet, maar blokkeert latere flows die concrete UI assets vereisen.
-
-Vereiste registratievelden:
-
-| Veld | Betekenis |
-|---|---|
-| Assetpad | Serverpad na scan |
-| Status | `available`, `missing`, `needs-kevin-choice`, `blocked` |
-| Herkomst | Server, Kevin-made, later import |
-| Toegestaan gebruik | HUD, inventory, dialogue, scroll, minimap, merchant, quest, boss UI |
-| Gekoppelde nodes | Bijvoorbeeld `ui.imageAsset`, `ui.iconAsset`, `hud.panel`, `hud.minimap` |
-| Ontbrekende input | Welke keuze of asset nog nodig is |
+UI-assets moeten later via asset library en nodes gekozen of toegevoegd worden. Dit blokkeert Fase 8.1 niet, maar blokkeert latere flows die concrete UI assets vereisen.
 
 ## Audio assets
 
@@ -176,10 +178,12 @@ Afgerond voor Fase 1/Fase 7/Fase 8:
 8. Candidate role mapping blijft niet runtime-active zonder editor-data.
 9. Missing animation mapping is warning voor candidate en blocker voor runtime-active behavior.
 
-Open voor Fase 8.1 wanneer Kevin die expliciet opent:
+Open voor Fase 8.1:
 
-1. Procedural generated asset references via Fase 7 asset library testen.
-2. Bevestigen dat preview/bake geen assets naar Git kopieert.
-3. Bevestigen dat generated placements candidates blijven en geen runtime publish uitvoeren.
+1. `pnpm install/build/typecheck/test/lint`.
+2. Migratie `0005_procedural_generation_core.sql` toepassen.
+3. Procedural generated asset references via Fase 7 asset library testen.
+4. Bevestigen dat preview/bake geen assets naar Git kopieert.
+5. Bevestigen dat generated placement candidates geen runtime publish uitvoeren.
 
 Latere fases kunnen nieuwe serverchecks nodig hebben wanneer assets worden toegevoegd of wanneer asset-worker, watcher, rechten, metadata-extractie of runtime serving worden gebouwd.

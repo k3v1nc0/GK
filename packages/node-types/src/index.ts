@@ -5,6 +5,7 @@ import type {
 } from "@gk/schemas";
 
 import { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
+import { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
 
 export type NodeCapabilityScope =
   | "engine-capability"
@@ -163,7 +164,8 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
     validate: permissiveValidator,
     createsConcreteGameContent: false
   },
-  ...ENTITY_COMPONENT_GRAPH_NODE_TYPES
+  ...ENTITY_COMPONENT_GRAPH_NODE_TYPES,
+  ...PROCEDURAL_GENERATION_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
@@ -171,3 +173,4 @@ export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
 }
 
 export { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
+export { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";

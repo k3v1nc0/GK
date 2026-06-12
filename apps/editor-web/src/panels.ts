@@ -6,7 +6,11 @@ import {
   ENTITY_COMPONENT_TYPES,
   ENTITY_RUNTIME_ACTIVE_ANIMATION_COMPONENTS,
   type EntityComponentDraft,
-  type EntityComponentType
+  type EntityComponentType,
+  type GenerationBakeDraftResult,
+  type GenerationPreviewResult,
+  type GenerationValidationIssue,
+  type ProceduralGraphDraft
 } from "@gk/schemas";
 import type { EditorPanelDescriptor } from "@gk/shared-ui";
 
@@ -18,6 +22,7 @@ export type EditorPanelId =
   | "asset-panel"
   | "audio-panel"
   | "entity-component-panel"
+  | "procedural-generation-panel"
   | "hud-editor"
   | "minimap-panel"
   | "game-users";
@@ -87,6 +92,35 @@ export interface EntityComponentPanelState {
   readonly inventedContent: readonly never[];
 }
 
+export interface ProceduralGenerationPanelState {
+  readonly panelId: "procedural-generation-panel";
+  readonly seedControls: {
+    readonly requiresExplicitSeed: true;
+    readonly supportsWorldSeed: true;
+    readonly supportsZoneSeed: true;
+    readonly supportsLocalSeed: true;
+  };
+  readonly generatorGraph: ProceduralGraphDraft | null;
+  readonly previewResult: GenerationPreviewResult | null;
+  readonly validationIssues: readonly GenerationValidationIssue[];
+  readonly bakeDraftAction: {
+    readonly writesEditorDraftData: true;
+    readonly publishesRuntimeOutput: false;
+  };
+  readonly generatedCandidateLists: {
+    readonly entities: readonly never[];
+    readonly groups: readonly never[];
+    readonly placements: readonly never[];
+    readonly spawnAreas: readonly never[];
+    readonly pathNetworks: readonly never[];
+    readonly resourceDistributions: readonly never[];
+  };
+  readonly bakeDraftResult: GenerationBakeDraftResult | null;
+  readonly noRuntimePublishBadge: true;
+  readonly acceptsConcreteGameContent: false;
+  readonly inventedContent: readonly never[];
+}
+
 export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
   {
     id: "node-library",
@@ -147,6 +181,15 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     title: "Entity / Component Panel",
     region: "dock",
     capability: "entity-component-draft-authoring",
+    requiresEditorSession: true,
+    requiresEditorAdmin: false,
+    acceptsConcreteGameContent: false
+  },
+  {
+    id: "procedural-generation-panel",
+    title: "Procedural Generation",
+    region: "dock",
+    capability: "procedural-generation-draft-preview-bake",
     requiresEditorSession: true,
     requiresEditorAdmin: false,
     acceptsConcreteGameContent: false
@@ -244,6 +287,42 @@ export function createEntityComponentPanelState(
     },
     groupTransformPrepared: true,
     publishesRuntimeOutput: false,
+    inventedContent: []
+  };
+}
+
+export function createProceduralGenerationPanelState(options: {
+  readonly graph?: ProceduralGraphDraft | null;
+  readonly previewResult?: GenerationPreviewResult | null;
+  readonly bakeDraftResult?: GenerationBakeDraftResult | null;
+  readonly validationIssues?: readonly GenerationValidationIssue[];
+} = {}): ProceduralGenerationPanelState {
+  return {
+    panelId: "procedural-generation-panel",
+    seedControls: {
+      requiresExplicitSeed: true,
+      supportsWorldSeed: true,
+      supportsZoneSeed: true,
+      supportsLocalSeed: true
+    },
+    generatorGraph: options.graph ?? null,
+    previewResult: options.previewResult ?? null,
+    validationIssues: options.validationIssues ?? options.previewResult?.issues ?? options.bakeDraftResult?.issues ?? [],
+    bakeDraftAction: {
+      writesEditorDraftData: true,
+      publishesRuntimeOutput: false
+    },
+    generatedCandidateLists: {
+      entities: [],
+      groups: [],
+      placements: [],
+      spawnAreas: [],
+      pathNetworks: [],
+      resourceDistributions: []
+    },
+    bakeDraftResult: options.bakeDraftResult ?? null,
+    noRuntimePublishBadge: true,
+    acceptsConcreteGameContent: false,
     inventedContent: []
   };
 }

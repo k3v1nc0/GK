@@ -69,8 +69,8 @@ De AI mag niet:
 | UI assets | Zodra HUD, inventory, merchant, quest tracker, scrolls of boss UI verplicht zijn |
 | Audio assets | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio verplicht zijn |
 | Asset filename met spatie | Afgerond voor Fase 7 scan; opnieuw controleren wanneer URLs/runtime serving worden gebouwd |
-| Procedural generation core | Blokkerend voor Fase 9 world/zone/minimap implementatie |
-| Procedural determinism | Blokkerend zodra generator preview/bake output wordt gebruikt |
+| Procedural generation core | Git-basis voorbereid in Fase 8.1; server-side validatie nog open en blokkerend voor Fase 9 implementatie |
+| Procedural determinism | Git-test toegevoegd in Fase 8.1; server-side smoke nog open voordat generator output wordt gebruikt |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist |
@@ -87,6 +87,7 @@ De AI mag niet:
 - Fase 8 gebruikt `Taverne.glb` en `Wizard.glb` alleen als Kevin-testkeuzes voor candidate entity/component validation.
 - Fase 8 mag Taverne/Wizard niet als definitieve object/NPC runtime-role in code of migratie vastleggen.
 - Fase 8 server-side is afgerond; geen Fase 8 blockers open.
+- Fase 8.1 generated assets gebruiken alleen `asset.reference` naar Fase 7 asset library records.
 
 ### UI
 
@@ -103,7 +104,7 @@ De AI mag niet:
 
 ### Procedural generation
 
-Fase 8.1 is de verplichte core-basis voor procedural generation.
+Fase 8.1 is de verplichte core-basis voor procedural generation. De Git-basis is voorbereid, maar server-side validatie staat nog open.
 
 Regels:
 
@@ -112,10 +113,11 @@ Regels:
 - Zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output.
 - Andere seed mag andere output geven.
 - Procedural preview publiceert niets naar Runtime Game.
-- Procedural bake maakt alleen editor draft data.
+- Procedural bake maakt alleen editor draft data of bake draft result.
 - Procedural output blijft draft/candidate totdat de normale publish-flow later expliciet publiceert.
 - Generated entities gebruiken Fase 8 entity/component contracts.
 - Generated assets gebruiken Fase 7 `asset.reference`.
+- Generated audio gebruikt `audio.reference` en blijft gated bij audio count 0.
 - Anonymous/game sessions krijgen geen procedural editor beheer.
 
 Niet toegestaan:
@@ -174,47 +176,6 @@ Niet toegestaan:
 
 Nieuwe agents moeten altijd eerst `README/current-phase.md`, `docs/design/phase-plan/current-phase.md`, het relevante fasebestand, deze gates, de registers, `README/GameBibleNode.json` en het node-contract openen.
 
-### Fase 7
-
-Bronnen eerst openen:
-
-- `README/fase7.md`
-- `docs/design/asset-register.md`
-- `docs/design/audio-register.md`
-- `README/node-system-super-dynamic-contract.md`
-
-Input/status vooraf:
-
-- assetpad bevestigd;
-- `/var/www/gk/assets` gecontroleerd;
-- `GK_ASSET_SOURCE_DIR` gezet;
-- GLB/UI/audio telling beschikbaar;
-- GLB=4, UI=0, audio=0;
-- spatie in `Blacksmit forge.glb` testen in scanner/URL/database/node IDs;
-- geen assets in Git toevoegen als server-assetflow leidend is.
-
-### Fase 8
-
-Bronnen eerst openen:
-
-- `README/fase8.md`
-- `README/node-system-super-dynamic-contract.md`
-- `docs/design/asset-register.md`
-- `docs/design/audio-register.md`
-- `docs/architecture/editor-shell.md`
-
-Input/status vooraf:
-
-- Fase 7 asset library server-side klaar;
-- GLB=4, UI=0, audio=0;
-- object test GLB: `Taverne.glb`;
-- NPC test GLB: `Wizard.glb`;
-- Taverne/Wizard blijven Kevin-testkeuzes en geen runtime hardcode;
-- ontbrekende animation mapping is warning voor candidate;
-- runtime-active NPC/combat/player behavior vereist explicit animation mapping via editor-data;
-- definitieve GLB role mapping blijft editor-data/Kevin-keuze;
-- Fase 8 server-side klaar op HEAD `5b4872cfc1dbf737d31e78fb965e78af7aaf74d0`.
-
 ### Fase 8.1
 
 Bronnen eerst openen:
@@ -229,13 +190,15 @@ Bronnen eerst openen:
 Input/status vooraf:
 
 - Fase 8 server-side klaar;
+- Fase 8.1 Git-basis voorbereid;
 - procedural generation blijft engine-capability;
 - generator output blijft draft-only;
 - preview/bake publiceert niets naar runtime;
 - zelfde seed + graph + inputs moet dezelfde output geven;
 - generated entities gebruiken Fase 8 contracts;
 - generated assets gebruiken Fase 7 `asset.reference`;
-- anonymous/game sessions krijgen geen procedural editor beheer.
+- anonymous/game sessions krijgen geen procedural editor beheer;
+- server-side build/typecheck/test/lint/migratie/smoke nog open.
 
 ### Fase 9
 
@@ -249,7 +212,7 @@ Bronnen eerst openen:
 
 Input vooraf:
 
-- Fase 8.1 procedural generation core moet als basis bestaan;
+- Fase 8.1 procedural generation core moet server-side gevalideerd zijn of Kevin moet expliciet beslissen dat Fase 9 toch start;
 - world/camera/light/minimap waarden uit GameBible JSON, editor-data of Kevin-input;
 - generated zones, spawn areas, path networks, resource distributions en entity placements uit Fase 8.1 mogen alleen als draft/candidate input worden gebruikt;
 - startgebied en zones uit GameBible JSON, editor-data, procedural draft output of Kevin-input;

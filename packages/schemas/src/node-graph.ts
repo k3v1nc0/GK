@@ -8,7 +8,16 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "audio.reference",
   "entity.reference",
   "component.reference",
-  "entity.group.reference"
+  "entity.group.reference",
+  "procedural.seed.reference",
+  "procedural.graph.reference",
+  "generation.output.reference",
+  "generated.entity.draft.reference",
+  "generated.group.draft.reference",
+  "generated.placement.candidate.reference",
+  "generated.spawn-area.candidate.reference",
+  "generated.path-network.candidate.reference",
+  "generated.resource-distribution.candidate.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

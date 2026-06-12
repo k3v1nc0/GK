@@ -12,6 +12,7 @@ import {
   createAssetPanelState,
   createAudioPanelState,
   createEntityComponentPanelState,
+  createProceduralGenerationPanelState,
   EDITOR_PANEL_DEFINITIONS
 } from "../apps/editor-web/src/panels.ts";
 import {
@@ -53,7 +54,7 @@ describe("Fase 5 editor shell layout", () => {
     assert.match(shellSource, /left: \["node-library"\]/);
     assert.match(shellSource, /right: \["inspector", "validation"\]/);
     assert.match(shellSource, /bottom: \["history"\]/);
-    assert.match(shellSource, /dockTabs: \["asset-panel", "audio-panel", "entity-component-panel", "hud-editor", "minimap-panel", "game-users"\]/);
+    assert.match(shellSource, /dockTabs: \["asset-panel", "audio-panel", "entity-component-panel", "procedural-generation-panel", "hud-editor", "minimap-panel", "game-users"\]/);
   });
 
   it("starts the node canvas empty with generic capability definitions", () => {
@@ -80,6 +81,7 @@ describe("Fase 5 editor shell layout", () => {
       "inspector",
       "minimap-panel",
       "node-library",
+      "procedural-generation-panel",
       "validation"
     ]);
     assert.equal(EDITOR_PANEL_DEFINITIONS.every((panel) => panel.acceptsConcreteGameContent === false), true);
@@ -121,6 +123,7 @@ describe("Fase 5 empty viewport and asset/audio gates", () => {
     const assetPanel = createAssetPanelState(snapshot);
     const audioPanel = createAudioPanelState(snapshot);
     const entityPanel = createEntityComponentPanelState(snapshot);
+    const proceduralPanel = createProceduralGenerationPanelState();
 
     assert.equal(assetPanel.assignsRuntimeRoles, false);
     assert.deepEqual(assetPanel.inventedAssets, []);
@@ -130,6 +133,9 @@ describe("Fase 5 empty viewport and asset/audio gates", () => {
     assert.equal(entityPanel.publishesRuntimeOutput, false);
     assert.equal(entityPanel.audioEmitterGate.audioPickerEnabled, false);
     assert.deepEqual(entityPanel.inventedContent, []);
+    assert.equal(proceduralPanel.noRuntimePublishBadge, true);
+    assert.deepEqual(proceduralPanel.generatedCandidateLists.entities, []);
+    assert.deepEqual(proceduralPanel.inventedContent, []);
   });
 });
 

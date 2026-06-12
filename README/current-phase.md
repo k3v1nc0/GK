@@ -1,10 +1,10 @@
 # Current Phase
 
-Actieve status: Fase 8 afgerond; klaar om Fase 8.1 te openen wanneer Kevin dat expliciet doet.
+Actieve status: Fase 8.1 Git-basis voorbereid; server-side validatie nog open.
 
-Volgende fase: Fase 8.1 - Procedural Generation Core.
+Volgende fase: Fase 8.1 server-side verificatie door Codex/Claude. Fase 9 blijft de volgende implementatiefase pas wanneer Kevin die later opent.
 
-Status: Fase 8 is server-side afgerond en klaar. Fase 8.1 is als nieuwe tussenfase toegevoegd aan de planning, maar is nog niet geimplementeerd. Fase 9 blijft Fase 9 en mag pas worden gebouwd op de Fase 8.1 procedural generation core zodra Kevin die fase opent en laat uitvoeren.
+Status: Fase 8 is server-side afgerond en klaar. Fase 8.1 heeft nu Git/code/docs/tests voorbereid voor Procedural Generation Core, maar is nog niet server-side klaar totdat install/build/typecheck/test/lint, migratie en procedural smoke zijn uitgevoerd.
 
 ## Primaire bronnen
 
@@ -33,7 +33,7 @@ Dit README-fasebestand blijft de korte fase-index. De inhoudelijke fasebeoordeli
 - Voor content geldt `README/GameBibleNode.json` als leidende Game Bible.
 - Concrete gamecontent loopt via `Database > Editor/Node-system > Publish > Runtime Game`, niet via runtime-hardcoding.
 - Pas een fase pas naar klaar aan als alle blokkerende input, Codex-taken en checks voor die fase zijn afgerond.
-- Fase 8.1 mag pas als implementatiefase starten wanneer Kevin die expliciet opent.
+- Fase 8.1 mag pas als klaar worden gemarkeerd nadat de server-side verificatie groen is.
 
 ## Laatste status
 
@@ -68,12 +68,17 @@ Fase 8 is server-side afgerond en klaar op HEAD `5b4872cfc1dbf737d31e78fb965e78a
 - blockers: geen;
 - `gk-api` en `gk-editor-web` zijn herstart om de huidige build live te laden.
 
-Fase 8.1 is toegevoegd als volgende fase:
+Fase 8.1 Git-basis is voorbereid:
 
-- Procedural generation core wordt een engine-capability in het node-system.
-- Procedural output blijft draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
-- Zelfde seed + zelfde graph + zelfde inputs moet dezelfde output geven.
-- Fase 8.1 mag geen concrete gamecontent, assets, runtime publish of MMO-state hard-coden.
+- procedural schemas/contracts toegevoegd;
+- deterministic random utility toegevoegd;
+- procedural node types toegevoegd op Fase 6 typed sockets;
+- editor-only procedural API contracts toegevoegd;
+- Procedural Generation Panel state toegevoegd;
+- migratie `0005_procedural_generation_core.sql` toegevoegd;
+- tests toegevoegd voor seed, determinism, draft-only output, generated entity/asset/audio gates, editor-only access en no-runtime-publish.
+
+Fase 8.1 is nog niet server-side klaar.
 
 ## Bevestigde grenzen
 
@@ -88,17 +93,29 @@ Fase 8.1 is toegevoegd als volgende fase:
 - Geen assets, data, secrets, dummy content of concrete gamecontent toegevoegd.
 - Editor-auth en game-auth zijn strikt gescheiden.
 - Draft preview, asset scan, entity validation en procedural preview/bake publiceren niets naar runtime.
+- Procedural output blijft editor draft/preview/bake data totdat een latere publish-flow expliciet publiceert.
 
 ## Open aandachtspunten
 
 Geen Fase 8 blockers open.
 
-Open blijft toekomstwerk voor latere fases:
+Open voor Fase 8.1 server-side verificatie:
 
-- Fase 8.1 implementeren wanneer Kevin die expliciet opent;
-- server-side Fase 8.1 build/typecheck/test/lint, migratie en procedural API/editor smoke nadat de Git-basis is gemaakt;
+- `pnpm install`;
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- migratie `db/migrations/0005_procedural_generation_core.sql` toepassen;
+- procedural API/editor smoke;
 - determinism smoke: zelfde seed + graph + inputs geeft dezelfde output;
 - different-seed smoke: andere seed mag andere output geven;
+- bevestigen dat procedural preview/bake niets naar Runtime Game publiceert;
+- bevestigen dat procedural generation geen assets naar Git kopieert;
+- bevestigen dat anonymous/game sessions geen procedural editor beheer krijgen.
+
+Open blijft toekomstwerk voor latere fases:
+
 - definitieve GLB-role mapping via editor-data/Kevin-keuze;
 - concrete UI-assets, audio-assets, content, economy en world settings;
 - Fase 9 world/camera/lighting/minimap pas bouwen op Fase 8.1 procedural core;

@@ -10,6 +10,9 @@ import {
 import {
   handleEditorGraphHttpRequest
 } from "./editor-graph-routes.js";
+import {
+  handleEditorProceduralHttpRequest
+} from "./editor-procedural-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
 import type { EditorAuthStore } from "./editor-auth-store.js";
 import { saveGameBibleNodeFromRequest } from "./gamebible-node-routes.js";
@@ -147,6 +150,10 @@ export async function handleApiRequest(
   }
 
   if (await handleEditorEntityHttpRequest(request, response, session)) {
+    return;
+  }
+
+  if (await handleEditorProceduralHttpRequest(request, response, session)) {
     return;
   }
 

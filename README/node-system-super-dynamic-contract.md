@@ -96,13 +96,16 @@ Minimaal ondersteunen:
 - generated.entity.draft.reference
 - generated.group.draft.reference
 - generated.placement.candidate.reference
+- generated.spawn-area.candidate.reference
+- generated.path-network.candidate.reference
+- generated.resource-distribution.candidate.reference
 - list
 
 Fase 6 heeft de eerste typed sockets vastgelegd als engine-capabilities: `var.string`, `number`, `color`, `asset.reference` en `audio.reference`.
 
 Fase 8 breidt de engine-capability sockets uit met `entity.reference`, `component.reference` en `entity.group.reference`. Deze sockets zijn data-contracten voor editor drafts; ze publiceren niets naar Runtime Game.
 
-Fase 8.1 mag procedural socket capabilities toevoegen voor generator graphs, seeds, generated draft entities, generated groups, generated placement candidates en generation outputs. Ook die sockets zijn editor/draft-contracten en publiceren niets naar Runtime Game.
+Fase 8.1 breidt de engine-capability sockets uit met procedural graph, seed, generation output en generated draft/candidate references. Ook die sockets zijn editor/draft-contracten en publiceren niets naar Runtime Game.
 
 ## Asset import
 
@@ -175,7 +178,7 @@ Belangrijke regels:
 
 ## Fase 8.1 procedural generation laag
 
-Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system.
+Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system. De Git-basis is voorbereid; server-side validatie staat nog open.
 
 Belangrijke regels:
 
@@ -183,7 +186,7 @@ Belangrijke regels:
 - Zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output.
 - Andere seed mag andere output geven.
 - Procedural preview publiceert niets naar Runtime Game.
-- Procedural bake maakt alleen editor draft data.
+- Procedural bake maakt alleen editor draft data of bake draft result.
 - Procedural output blijft draft/candidate totdat een latere publish-flow expliciet publiceert.
 - Generated entities gebruiken Fase 8 entity/component contracts.
 - Generated assets gebruiken Fase 7 `asset.reference`.

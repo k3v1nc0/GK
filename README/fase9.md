@@ -22,7 +22,7 @@
 
 Fase 9 blijft Fase 9. Deze fase is nog niet geimplementeerd.
 
-Nieuwe verplichte basis: Fase 8.1 - Procedural Generation Core. Fase 9 mag pas als implementatiefase starten nadat Fase 8.1 is geopend en de procedural generation core als Git-basis bestaat.
+Verplichte basis: Fase 8.1 - Procedural Generation Core. De Fase 8.1 Git-basis is voorbereid, maar Fase 9 mag pas als implementatiefase starten nadat Fase 8.1 server-side is gevalideerd of Kevin expliciet anders beslist.
 
 ## Doel van de fase
 
@@ -48,6 +48,14 @@ Fase 9 moet aansluiten op:
 - Fase 8.1 procedural generation core.
 
 Fase 8.1 levert draft/preview/bake contracts voor generated world candidates. Fase 9 gebruikt die outputs als input voor world/zone/minimap capabilities, zonder ze automatisch naar runtime te publiceren.
+
+Voor Fase 9 start moet server-side bevestigd zijn:
+
+- Fase 8.1 migratie toegepast;
+- Fase 8.1 build/typecheck/test/lint groen;
+- procedural API/editor smoke groen;
+- determinism smoke groen;
+- no-runtime-publish/no-asset-copy bevestigd.
 
 ## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
 

@@ -29,6 +29,7 @@ export class NodeRegistry {
   }
 }
 
+export * from "./deterministic-random.js";
 export * from "./draft-preview.js";
 export * from "./graph-history.js";
 export * from "./graph-validation.js";

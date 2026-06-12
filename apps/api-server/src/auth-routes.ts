@@ -280,6 +280,75 @@ export const AUTH_ROUTES = [
     auditAction: "editor.entity.asset_mappings.update"
   },
   {
+    id: "editor.procedural.graph",
+    method: "GET",
+    path: "/editor/procedural/graph",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.procedural.validate",
+    method: "POST",
+    path: "/editor/procedural/validate",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.procedural.validate"
+  },
+  {
+    id: "editor.procedural.preview",
+    method: "POST",
+    path: "/editor/procedural/preview",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.procedural.preview"
+  },
+  {
+    id: "editor.procedural.bake_draft",
+    method: "POST",
+    path: "/editor/procedural/bake-draft",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: true,
+    avoidsAccountEnumeration: true,
+    auditAction: "editor.procedural.bake_draft"
+  },
+  {
+    id: "editor.procedural.generated",
+    method: "GET",
+    path: "/editor/procedural/generated",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
+    id: "editor.procedural.issues",
+    method: "GET",
+    path: "/editor/procedural/issues",
+    public: false,
+    requiredScope: "editor",
+    rotatesSession: false,
+    revokesSession: false,
+    requiresRateLimit: false,
+    avoidsAccountEnumeration: true
+  },
+  {
     id: "editor.graph.draft",
     method: "GET",
     path: "/editor/graph/draft",
