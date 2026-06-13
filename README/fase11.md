@@ -1,10 +1,12 @@
 # Fase 11 - Runtime Projection Core
 
-Fase 11 is door Kevin geopend.
+Fase 11 is door Kevin geopend en is nu afgerond.
 
 Git-basis: voorbereid op `main`.
 
-Server-side status: nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live route smokes, auth/CSRF smokes, runtime read-only smokes en docs final nog bevestigen voordat Fase 11 als afgerond mag worden gemarkeerd.
+Server-side status: groen bevestigd door Codex/Claude. Fase 11 Runtime Projection Core is klaar.
+
+Fase 12 is nog niet geimplementeerd en wordt pas geopend wanneer Kevin dat doet.
 
 ## Doel
 
@@ -18,7 +20,7 @@ Fase 11 opent alleen de projection contractlaag. De Runtime Game renderer/client
 
 ## Vaste grenzen
 
-Niet toegestaan in Fase 11:
+Niet toegestaan en niet toegevoegd in Fase 11:
 
 - 3D runtime game bouwen;
 - renderer bouwen;
@@ -101,6 +103,8 @@ Nieuwe editor/admin route contracts:
 - `GET /editor/runtime-projection/manifests`;
 - `GET /editor/runtime-projection/manifests/:id`.
 
+Server-side groen bevestigd.
+
 Regels:
 
 - editor admin only;
@@ -118,6 +122,8 @@ Nieuwe runtime read-only route contracts:
 - `GET /runtime/projection/status`;
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
+
+Server-side groen bevestigd.
 
 Regels:
 
@@ -151,7 +157,7 @@ Deze nodes bouwen geen gameplay-node, renderer-node of hardcoded world values.
 
 ### Editor panel/state basis
 
-Toegevoegd:
+Toegevoegd en server-side bevestigd:
 
 - `Runtime Projection` panel;
 - status;
@@ -182,6 +188,40 @@ Toegevoegd testcontract voor:
 - runtime read-only routes geven veilige empty state zonder draft leakage;
 - Runtime Projection panel registratie.
 
+Server-side bevestigd: `pnpm test` OK met 111 tests / 55 suites / 0 fail.
+
+## Server-side verificatie
+
+Codex/Claude heeft bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 111 tests / 55 suites / 0 fail;
+- `pnpm lint`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- beide services via `/opt/gk/node-v22/bin/node`: OK;
+- editor login: OK;
+- `/auth/editor/me` geeft `editor_admin`: OK;
+- `/editor` bereikbaar: OK;
+- Runtime Projection panel aanwezig: OK;
+- `/editor/runtime-projection/status`: OK;
+- `/editor/runtime-projection/validate`: OK;
+- `/editor/runtime-projection/project`: OK;
+- `/editor/runtime-projection/manifests`: OK;
+- `/editor/runtime-projection/manifests/:id`: OK;
+- `/runtime/projection/status`: OK;
+- `/runtime/projection/manifest`: OK;
+- `/runtime/projection/records`: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin protection: OK;
+- GameBible save beschermd en content ongewijzigd: OK;
+- game-site reachable: OK;
+- worktree schoon: OK;
+- blockers: geen.
+
+Browser smoke en ops/docs-hardening zijn ook afgerond op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36` (`Codex/Claude - browser en ops/docs-hardining`). De editor browser-smoke is groen. Game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
+
 ## Checklist
 
 - [x] Runtime projection schemas/contracts toegevoegd.
@@ -196,38 +236,15 @@ Toegevoegd testcontract voor:
 - [x] Geen concrete gamecontent toegevoegd.
 - [x] Geen runtime renderer/game client gebouwd.
 - [x] Geen hardcoded world/camera/light/minimap/HUD/audio values toegevoegd.
-- [ ] Server-side build/typecheck/test/lint bevestigd.
-- [ ] Live editor/admin route smokes bevestigd.
-- [ ] Runtime read-only route smokes bevestigd.
-- [ ] Auth/CSRF smokes bevestigd.
-- [ ] Panel smoke bevestigd.
-- [ ] Docs final bevestigd.
-
-## Open Codex/Claude-taken
-
-Nog server-side valideren:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- smoke `GET /editor/runtime-projection/status`;
-- smoke `POST /editor/runtime-projection/validate`;
-- smoke `POST /editor/runtime-projection/project` als contract-only manifest/read-model metadata;
-- smoke `GET /editor/runtime-projection/manifests`;
-- smoke `GET /editor/runtime-projection/manifests/:id`;
-- smoke `GET /runtime/projection/status`;
-- smoke `GET /runtime/projection/manifest`;
-- smoke `GET /runtime/projection/records`;
-- anonymous/game/non-admin denied;
-- CSRF/Origin denied voor state-changing routes zonder proof;
-- editor shell toont Runtime Projection panel;
-- bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
+- [x] Server-side build/typecheck/test/lint bevestigd.
+- [x] Live editor/admin route smokes bevestigd.
+- [x] Runtime read-only route smokes bevestigd.
+- [x] Auth/CSRF smokes bevestigd.
+- [x] Panel smoke bevestigd.
+- [x] Docs final bevestigd.
 
 ## Fasebeoordeling
 
-Fase 11 Git-basis is voorbereid.
+Fase 11 Runtime Projection Core is afgerond en server-side klaar.
 
-Fase 11 is server-side nog niet klaar. Markeer Fase 11 pas als afgerond nadat Codex/Claude de open checks en live smokes bevestigt.
-
-Geen Fase 12 voorbereiden of openen vanuit deze fase.
+Fase 12 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 12 openen.

@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve status: Fase 11 Git-basis voorbereid op `main`.
+Actieve status: Fase 11 Runtime Projection Core is afgerond en server-side groen bevestigd op `main`.
 
-Fase 1 t/m Fase 10 zijn afgerond. Fase 10 Publish Flow Core is server-side groen bevestigd. Fase 11 is door Kevin geopend als `Runtime Projection Core`. De Git-basis is toegevoegd, maar Fase 11 is nog niet server-side afgerond totdat Codex/Claude build/typecheck/test/lint, live smokes en docs final bevestigt.
+Fase 1 t/m Fase 11 zijn afgerond. Fase 11 Runtime Projection Core is door Codex/Claude server-side gevalideerd. Fase 12 is nog niet geimplementeerd; Kevin mag Fase 12 als volgende fase openen wanneer hij dat wil.
 
 ## Primaire bronnen
 
@@ -25,26 +25,7 @@ Open voor de actuele fasecontractstatus:
 - `docs/ops/server-verification-runbook.md`
 - `README/GameBibleNode.json`
 
-## Fase 10 status
-
-Laatste Fase 10 Git-basis commit: `5fc53fa9e290122abc0bfeeb39b3cf6f52c75a2c` (`fase 10`).
-
-Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
-
-Server-side verificatie voor Fase 10 is afgerond en groen:
-
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK;
-- `pnpm lint`: OK;
-- publish route smokes: OK;
-- anonymous/game/non-admin denied: OK;
-- CSRF/Origin protection op state-changing publish routes: OK;
-- Publish Flow panel smoke: OK;
-- no-runtime-publish/no-asset-mutation: OK;
-- blockers: geen.
-
-## Fase 11 Git-basis
+## Fase 11 status
 
 Fase 11 bouwt op:
 
@@ -55,7 +36,7 @@ Fase 11 bouwt op:
 - Fase 9 world/camera/lighting/minimap/UI display core;
 - Fase 10 Publish Flow Core.
 
-Toegevoegd in de Fase 11 Git-basis:
+Toegevoegd en gevalideerd in Fase 11:
 
 - runtime projection status/source/manifest/record/read-model/audit/safety contracts;
 - validation gates voor publish-ready snapshot source, no raw draft, no procedural preview source, no asset mutation, no concrete gamecontent, UI display sizing, GLB role candidate status, read-model-only en safety flags;
@@ -65,33 +46,42 @@ Toegevoegd in de Fase 11 Git-basis:
 - Runtime Projection panel/state contract;
 - tests voor schemas, validators, routes, auth/CSRF, runtime read-only empty state, node registration en panel registration.
 
-## Fase 11 API/editor contract
+## Server-side verificatie
 
-Editor/admin route contracts:
+Codex/Claude heeft Fase 11 server-side groen bevestigd:
 
-- `GET /editor/runtime-projection/status`;
-- `POST /editor/runtime-projection/validate`;
-- `POST /editor/runtime-projection/project`;
-- `GET /editor/runtime-projection/manifests`;
-- `GET /editor/runtime-projection/manifests/:id`.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 111 tests / 55 suites / 0 fail;
+- `pnpm lint`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- beide services via `/opt/gk/node-v22/bin/node`: OK;
+- editor login: OK;
+- `/auth/editor/me` geeft `editor_admin`: OK;
+- `/editor` bereikbaar: OK;
+- Runtime Projection panel smoke: OK;
+- editor/runtime projection route smokes: OK;
+- runtime read-only projection route smokes: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin protection: OK;
+- no-runtime-renderer: OK;
+- no-game-client: OK;
+- no-runtime-gameplay: OK;
+- no-asset-mutation: OK;
+- no hardcoded content: OK;
+- GameBible save/protection: OK, content ongewijzigd;
+- game-site reachable: OK;
+- worktree schoon: OK;
+- blockers: geen.
 
-Runtime read-only route contracts:
+## Browser-smoke runbook
 
-- `GET /runtime/projection/status`;
-- `GET /runtime/projection/manifest`;
-- `GET /runtime/projection/records`.
+Browser smoke en ops/docs-hardening staan op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36` (`Codex/Claude - browser en ops/docs-hardining`).
 
-Regels:
+`docs/ops/server-verification-runbook.md` is de vaste bron voor server-side verificatie, smoke-routes, editor login flow, frontend panel checks, Playwright/headless Chromium browser-smokes, secret-handling regels en eindrapportage.
 
-- editor/admin projection beheer is editor admin only;
-- state-changing editor/admin projection routes vereisen CSRF/Origin bescherming;
-- anonymous/game/non-admin sessions denied voor editor/admin beheer;
-- runtime routes zijn read-only en lekken geen editor draft data;
-- project action maakt alleen contract-safe manifest/read-model metadata;
-- geen runtime renderer;
-- geen automatic projection;
-- geen assetmutatie;
-- geen concrete gamecontent in responses.
+De editor browser-smoke is groen bevestigd. Game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
 
 ## Assetstatus
 
@@ -117,28 +107,7 @@ GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library c
 - Geen GLB role mapping definitief maken.
 - Generated Fase 8.1 data blijft draft/candidate totdat publish validation het expliciet accepteert.
 - Runtime projection is een read-model/contractlaag, geen Runtime Game renderer/client.
-- Geen Fase 12 openen.
 
-## Server-side verificatie runbook
+## Volgende stap
 
-Gebruik `docs/ops/server-verification-runbook.md` voor vaste Codex/Claude server-side verificatie, smoke-routes, editor login flow, frontend panel checks, secret-handling regels en eindrapportage. De runbook documenteert alleen secret-bestandspaden en variabelenamen, geen secret values.
-
-## Open aandachtspunten
-
-Fase 11 Git-basis is voorbereid, maar server-side status staat open.
-
-Codex/Claude moet nog draaien/bevestigen volgens `docs/ops/server-verification-runbook.md`:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- live smoke voor `/editor/runtime-projection/*` route contracts;
-- live smoke voor `/runtime/projection/*` read-only route contracts;
-- anonymous/game/non-admin denied smoke;
-- CSRF/Origin smoke voor state-changing projection routes;
-- Runtime Projection panel smoke;
-- no-runtime-renderer, no-game-client, no-concrete-gamecontent en no-asset-mutation bevestiging;
-- docs final.
-
-Volgende fase: geen Fase 12 openen. Fase 11 is pas klaar na server-side validatie en Kevin/Codex/Claude bevestiging.
+Fase 12 is nog niet geimplementeerd. Kevin mag Fase 12 openen als volgende fase.

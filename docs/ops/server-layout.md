@@ -16,7 +16,9 @@ Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar
 
 Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
 
-Fase 11 Runtime Projection Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
+Fase 11 Runtime Projection Core is server-side afgerond en klaar. Browser smoke en ops/docs-hardening staan ook op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36` (`Codex/Claude - browser en ops/docs-hardining`).
+
+Fase 12 is nog niet geimplementeerd. Kevin mag Fase 12 openen als volgende fase.
 
 ## Vast server-verificatie runbook
 
@@ -124,17 +126,9 @@ Bevestigd:
 
 Fase 10 voert geen runtime publish uit en wijzigt geen assets.
 
-## Fase 11 Git-basis status
+## Fase 11 server-side status
 
-Fase 11 voegt Runtime Projection Core contracts toe in Git:
-
-- runtime projection schemas en validators;
-- runtime projection socket/node contracts;
-- editor/admin runtime projection route contracts;
-- runtime read-only route contracts;
-- Runtime Projection panel state;
-- tests;
-- docs.
+Fase 11 voegt Runtime Projection Core contracts toe in Git en is server-side afgerond en klaar.
 
 Editor/admin route contracts:
 
@@ -150,9 +144,36 @@ Runtime read-only route contracts:
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
 
-Server-side verificatie staat open. Geen server runtime, database migratie, service restart of live smoke is door deze GitHub-only update geclaimd.
+Bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK, 111 tests / 55 suites / 0 fail;
+- `pnpm lint`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- beide services via `/opt/gk/node-v22/bin/node`: OK;
+- editor login: OK;
+- `/auth/editor/me` geeft `editor_admin`: OK;
+- `/editor` bereikbaar: OK;
+- Runtime Projection panel smoke: OK;
+- editor/runtime projection route smokes: OK;
+- runtime read-only projection route smokes: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin protection: OK;
+- no-runtime-renderer: OK;
+- no-game-client: OK;
+- no-runtime-gameplay: OK;
+- no-asset-mutation: OK;
+- no hardcoded content: OK;
+- GameBible save/protection: OK, content ongewijzigd;
+- game-site reachable: OK;
+- worktree schoon: OK;
+- blockers: geen.
 
 Fase 11 bouwt geen Runtime Game renderer/client, voert geen automatic projection uit en wijzigt geen assets.
+
+Browser smoke en ops/docs-hardening zijn beschikbaar via `docs/ops/server-verification-runbook.md`. Editor browser-smoke is groen. Game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
 
 ## Webserver policy
 
@@ -209,7 +230,7 @@ Git mag alleen veilige examples bevatten. Geen Fase 11 wijziging mag secrets toe
 - `pnpm smoke:browser:editor`;
 - `pnpm smoke:browser:game`.
 
-Deze scripts draaien pas na build/typecheck/test/lint en service restart. Ze vereisen server-side Playwright/Chromium installatie indien die nog niet aanwezig is. Ze mogen artifacts alleen in een tijdelijke server-local map zetten, standaard onder `/tmp/gk-browser-smoke/`, en nooit in Git.
+Deze scripts draaien pas na build/typecheck/test/lint en service restart. Ze mogen artifacts alleen in een tijdelijke server-local map zetten, standaard onder `/tmp/gk-browser-smoke/`, en nooit in Git.
 
 ## Codex/Claude serverchecks
 
@@ -222,25 +243,13 @@ Afgerond:
 5. Asset refresh na `Assets - new` uitgevoerd en scan OK met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
 6. Fase 9 build/typecheck/test/lint, editor/API smokes en no-runtime-publish/no-asset-mutation afgerond.
 7. Fase 10 build/typecheck/test/lint, publish route smokes, auth/CSRF smokes, panel smoke en no-runtime-publish/no-asset-mutation afgerond.
+8. Fase 11 build/typecheck/test/lint, runtime projection route smokes, runtime read-only route smokes, auth/CSRF smokes, panel smoke, browser smoke ops-hardening, no-runtime-renderer/no-game-client/no-runtime-gameplay/no-asset-mutation/no-hardcoded-content afgerond.
 
 Gebruik voor nieuwe server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
-Open voor Fase 11:
-
-1. `pnpm build`.
-2. `pnpm typecheck`.
-3. `pnpm test`.
-4. `pnpm lint`.
-5. Runtime projection editor/admin route smokes.
-6. Runtime projection read-only route smokes.
-7. Anonymous/game/non-admin denied smokes.
-8. CSRF/Origin smokes voor state-changing projection routes.
-9. Runtime Projection panel smoke.
-10. `pnpm smoke:browser` zodra Playwright/Chromium server-side beschikbaar is.
-11. Bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
-
 Nog open voor latere fases:
 
+- Fase 12 wanneer Kevin die opent;
 - game runtime;
 - realtime gateway;
 - workers;

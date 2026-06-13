@@ -84,6 +84,8 @@ Fase 11 editor/admin runtime projection routes vereisen editor scope en `editor_
 - `GET /editor/runtime-projection/manifests`;
 - `GET /editor/runtime-projection/manifests/:id`.
 
+Server-side groen bevestigd door Codex/Claude.
+
 Regels:
 
 - anonymous sessions krijgen 401/403 deny, niet 404 fallback;
@@ -100,6 +102,8 @@ Fase 11 runtime read-only routes:
 - `GET /runtime/projection/status`;
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
+
+Server-side groen bevestigd door Codex/Claude.
 
 Regels:
 
@@ -207,9 +211,11 @@ Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, l
 
 Fase 9 is server-side gevalideerd voor editor world/minimap/UI display auth-deny en route smokes.
 
-Fase 10 Git-basis is voorbereid en server-side validatie is afgerond voor publish route smokes, auth-deny smokes en CSRF/Origin smokes.
+Fase 10 is server-side gevalideerd voor publish route smokes, auth-deny smokes en CSRF/Origin smokes.
 
-Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes, CSRF/Origin smokes en `pnpm smoke:browser`. Gebruik `docs/ops/server-verification-runbook.md` als vaste checklijst en rapportvorm.
+Fase 11 is server-side gevalideerd voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes, CSRF/Origin smokes, Runtime Projection panel smoke, GameBible protection, no-runtime-renderer, no-game-client, no-runtime-gameplay, no-asset-mutation en no hardcoded content. Browser smoke en ops/docs-hardening staan op `main`; editor browser-smoke is groen en game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
+
+Fase 12 is nog niet geimplementeerd.
 
 ## Open aandachtspunt
 
