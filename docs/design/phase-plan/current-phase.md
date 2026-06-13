@@ -2,19 +2,19 @@
 
 ## Fase
 
-Actieve status: Fase 12 Runtime Client Shell Core is afgerond en server-side groen bevestigd.
+Actieve status: Fase 12.1 Game Web Service Deployment Core is afgerond en server-side groen bevestigd.
 
-Fase 1 t/m Fase 12 zijn afgerond. Fase 11 Runtime Projection Core is server-side groen bevestigd. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`).
+Fase 1 t/m Fase 12.1 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd op Git HEAD `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`).
 
 Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
 
 ## Statussamenvatting
 
-Fase 12 heeft een veilige browser-runtime client shell toegevoegd die uitsluitend Fase 11 runtime projection read-only data ophaalt en toont als engine/runtime-status en metadata. De shell is een contract- en empty-state laag, geen renderer, geen gameplayclient en geen runtime HUD/minimap/audio implementatie.
+Fase 12.1 heeft de vaste deployment/service-basis voor `apps/game-web` server-side afgerond. De Fase 12 runtime client shell draait nu als vaste `gk-game-web` systemd service via Node 22, achter Apache front-door routing.
 
-De server-side verificatie is afgerond. Build, typecheck, test, lint, live route-smokes, game/runtime shell smokes en browser smoke zijn groen bevestigd.
+De tijdelijke handmatige Node 22 game-shell is niet meer nodig. Game browser-smoke is groen en niet meer skipped.
 
-Deze fase heeft geen concrete gamecontent, geen dummy world, geen assets, geen renderer, geen movement/combat/player gameplay en geen audio playback toegevoegd.
+Deze fase heeft geen concrete gamecontent, geen dummy world, geen assets, geen renderer, geen movement/combat/player gameplay, geen HUD/minimap runtime layout en geen audio playback toegevoegd.
 
 ## Afgeronde basis
 
@@ -22,7 +22,9 @@ Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 serv
 
 Fase 11 Runtime Projection Core is server-side afgerond en klaar. Laatste Fase 11 docs-final commit: `2a2b779afe3a3a2f28466fa7a49f0be45d12ee17` (`fase 11 fix`). Browser smoke en ops/docs-hardening staan op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36`.
 
-Fase 12 Runtime Client Shell Core is server-side afgerond en klaar. Server-side fix commit: `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`).
+Fase 12 Runtime Client Shell Core is server-side afgerond en klaar. Server-side fix commit: `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Docs-final/fix commit: `199df8642cfa6f20ce518742a0ea0e35ec5fb2fe` (`fase 12 fix`).
+
+Fase 12.1 Game Web Service Deployment Core is server-side afgerond en klaar. Server-side bevestigde Git HEAD: `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`).
 
 Asset refresh na `Assets - new` blijft bevestigd:
 
@@ -35,41 +37,33 @@ Asset refresh na `Assets - new` blijft bevestigd:
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-## Fase 12 Git-basis
+## Fase 12.1 Git-basis
 
-Toegevoegd:
+Toegevoegd of bijgewerkt in de Git-basis:
 
-- `packages/schemas/src/runtime-client-shell.ts` voor runtime client shell status, boot, projection, error, capabilities en safety contracts;
-- `packages/schemas/src/runtime-client-shell-validation.ts` voor runtime client validation gates;
-- runtime client socket types in `packages/schemas/src/node-graph.ts`;
-- `packages/node-types/src/runtime-client-shell-nodes.ts` met `runtime-consumer` node types;
-- `apps/game-web/src/runtime-projection-client.ts` voor read-only projection fetch contracten;
-- `apps/game-web/src/runtime-client-shell.ts` voor de runtime shell HTML/empty-state UI;
-- `apps/game-web/src/http-server.ts` voor `/`, `/game`, `/game/`, `/game/shell.json`, `/health/game` en same-origin proxy van runtime projection read-only routes naar de API;
-- game-web entrypoint wiring;
-- browser-smoke uitbreiding voor runtime shell marker checks;
-- `tests/phase12-runtime-client-shell.test.mjs` voor contractdekking, async handler en proxy-route test;
-- `README/fase12.md` en statusdocs.
+- `ops/systemd/gk-game-web.service` als Git-template voor de vaste game-web service;
+- `README/fase12.1.md` als fasecontract;
+- `docs/ops/server-layout.md` voor de `gk-game-web` deploymentstatus;
+- `docs/ops/server-verification-runbook.md` voor vaste Fase 12.1 servicechecks;
+- current-phase docs.
 
-## Runtime client validation gates
+Systemd template contract:
 
-Fase 12 bewaakt minimaal:
+- `Description=GK Game Web`;
+- `WorkingDirectory=/var/www/gk`;
+- `EnvironmentFile=/etc/gk/gk.env`;
+- `Environment=GK_GAME_PORT=3003`;
+- `Environment=GK_GAME_HOST=127.0.0.1`;
+- `ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/game-web/dist/index.js`;
+- `Restart=on-failure`;
+- geen secrets;
+- geen inline concrete gamecontent.
 
-- runtime client gebruikt alleen `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records`;
-- runtime client gebruikt geen editor/admin routes;
-- runtime client lekt geen editor draft/candidate data;
-- safe empty state is geldig wanneer er nog geen projection bestaat;
-- no 3D renderer;
-- no gameplay;
-- no movement/combat;
-- no audio playback;
-- no HUD/minimap hardcoded layout;
-- no asset mutation/copy;
-- no hardcoded content.
+Server-side is bevestigd dat de live unit in `/etc/systemd/system/gk-game-web.service` is geinstalleerd en als `gk:gk` draait.
 
 ## Runtime shell/API status
 
-Runtime client shell routes:
+Bestaande Fase 12 runtime client shell routes:
 
 - `GET /`;
 - `GET /game`;
@@ -83,20 +77,40 @@ Runtime projection read-only routes die de shell mag consumeren:
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
 
-Regels en verificatie:
+Fase 12.1 heeft deze routes niet veranderd. Fase 12.1 heeft de vaste service-installatie en Apache/front-door route server-side bevestigd.
 
-- geen editor/admin endpoints in runtime client: OK;
-- geen credentials/secrets in frontend: OK;
-- geen CSRF nodig voor read-only runtime GETs: OK;
-- geen data mutatie: OK;
-- geen asset upload/copy/delete: OK;
-- geen concrete gamecontent in responses: OK;
-- safe empty state is verwachte output wanneer projection ontbreekt: OK;
-- game-web proxyt runtime projection read-only routes naar de API zodat de shell same-origin kan booten zonder console errors: OK.
+## Env en smoke contract
+
+Server-only env is buiten Git aangevuld met niet-secret waarden:
+
+- `GK_GAME_PORT=3003`;
+- `GK_GAME_HOST=127.0.0.1`;
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`;
+- `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/`.
+
+Regels blijven:
+
+- env-bestandinhoud niet naar Git committen;
+- credentials of secret values niet printen;
+- `/etc/gk/gk.env` inhoud niet in Git opnemen.
+
+## Apache/front-door status
+
+Apache blijft actieve hoofdwebserver. Nginx blijft candidate/inactive.
+
+Server-side bevestigd:
+
+- Apache front-door `gk-k3v1nc0.duckdns.org` proxyt `/game/` naar `127.0.0.1:3003`;
+- Apache front-door proxyt `/health/game` naar `127.0.0.1:3003`;
+- Apache front-door proxyt `/runtime/projection/` naar `127.0.0.1:3003`;
+- Apache configtest: OK;
+- Apache reload: OK.
+
+Geen Nginx live activatie en geen poort 80/443 migratie uitgevoerd.
 
 ## Contractgrenzen
 
-Fase 12 bouwt niet:
+Fase 12.1 bouwt niet:
 
 - 3D renderer;
 - runtime gameplay;
@@ -112,41 +126,46 @@ Fase 12 bouwt niet:
 
 Fase 13 is nog niet geimplementeerd.
 
-## Tests/checks
+## Server-side checks
 
-Server-side bevestigd:
+Codex/Claude heeft bevestigd:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK;
-- `pnpm lint`: OK;
-- live editor login: OK;
-- `/auth/editor/me`: OK;
-- runtime projection read-only route smokes: OK;
-- game/runtime shell route smokes: OK;
-- `/game/shell.json`: OK;
-- browser smoke: OK;
-- runtime shell marker: OK;
-- no editor/admin route usage: OK;
-- no draft leakage: OK;
-- no concrete content: OK;
-- no renderer/gameplay/movement/combat/audio playback: OK;
-- no hardcoded HUD/minimap/world/camera/light/audio values: OK;
-- no asset mutation: OK;
-- GameBible save/protection: OK;
+- `gk-game-web` live unit geinstalleerd in `/etc/systemd/system/gk-game-web.service`: OK;
+- `gk-game-web` draait als `gk:gk`: OK;
+- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- `gk-game-web` active/enabled: OK;
+- Apache front-door route voor `/game/`: OK;
+- Apache front-door route voor `/health/game`: OK;
+- Apache front-door route voor `/runtime/projection/`: OK;
+- Apache configtest: OK;
+- Apache reload: OK;
+- local route smoke `/health/game`: OK;
+- local route smoke `/game/shell.json`: OK;
+- local route smoke `/runtime/projection/status`: OK;
+- local route smoke `/runtime/projection/manifest`: OK;
+- local route smoke `/runtime/projection/records`: OK;
+- front-door GET `/game/`: OK;
+- front-door GET `/game/shell.json`: OK;
+- front-door GET `/runtime/projection/status`: OK;
+- `pnpm smoke:browser:game` met `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- game-smoke niet skipped: OK;
+- geen secrets geprint: OK;
+- geen artifacts naar Git: OK;
+- geen repo-bestanden gewijzigd achtergelaten: OK;
 - worktree schoon: OK;
+- geen runtime renderer/gameplay/movement/combat/audio playback: OK;
+- geen concrete gamecontent: OK;
+- geen hardcoded HUD/minimap/world/camera/light/audio values: OK;
+- geen assetmutatie: OK;
+- geen Fase 13 implementatie: OK;
 - blockers: geen.
-
-Server/runtime status:
-
-- apache2 actief;
-- `gk-api` actief/enabled;
-- `gk-editor-web` actief/enabled;
-- er is nog geen aparte `gk-game-web` systemd-unit zichtbaar;
-- Fase 12 is geverifieerd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`.
 
 ## Fasebeoordeling
 
-Fase 12 Runtime Client Shell Core is afgerond en server-side klaar.
+Fase 12.1 Game Web Service Deployment Core is afgerond en server-side klaar.
 
 Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.

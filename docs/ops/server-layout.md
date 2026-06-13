@@ -18,7 +18,9 @@ Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 serv
 
 Fase 11 Runtime Projection Core is server-side afgerond en klaar. Browser smoke en ops/docs-hardening staan ook op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36` (`Codex/Claude - browser en ops/docs-hardining`).
 
-Fase 1 t/m Fase 12 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side afgerond en klaar. Server-side fix commit: `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 13 is nog niet geimplementeerd; volgende stap: Kevin mag Fase 13 openen.
+Fase 12 Runtime Client Shell Core is server-side afgerond en klaar. Server-side fix commit: `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Docs-final/fix commit: `199df8642cfa6f20ce518742a0ea0e35ec5fb2fe` (`fase 12 fix`).
+
+Fase 1 t/m Fase 12.1 zijn afgerond. Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd. `gk-game-web` is nu een vaste `active`/`enabled` systemd service via Node 22, Apache routeert `/game/` naar de game-web service, en de game browser-smoke is groen en niet meer skipped. Fase 13 is nog niet geopend en niet geimplementeerd.
 
 ## Vast server-verificatie runbook
 
@@ -39,6 +41,7 @@ De runbook is leidend voor terugkerende serverchecks. Deze layoutdoc blijft de s
 - Fase 10 publiceert niets naar runtime en maakt alleen publish validation/snapshot metadata contracts.
 - Fase 11 maakt alleen runtime projection contracts/read-model metadata en bouwt geen Runtime Game renderer/client.
 - Fase 12 maakt alleen een runtime client shell voor read-only projection metadata en bouwt geen renderer, gameplay, HUD/minimap runtime of audio playback.
+- Fase 12.1 maakt alleen de vaste game-web deployment/service-basis en bouwt geen nieuwe runtime/game feature.
 - Browser-smokes mogen geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Bevestigde paden
@@ -48,24 +51,33 @@ De runbook is leidend voor terugkerende serverchecks. Deze layoutdoc blijft de s
 | `/var/www/gk` | Bevestigd | Basis voor de eerste single-server omgeving. |
 | `/var/www/gk/assets` | Bevestigd | Server assetbron. |
 | `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` | Bevestigd | Door Codex buiten Git gezet of bevestigd. |
-| `/opt/gk/node-v22/bin/node` | Bevestigd | Actieve Node runtime voor `gk-api` en `gk-editor-web`. |
+| `/opt/gk/node-v22/bin/node` | Bevestigd | Actieve Node runtime voor `gk-api`, `gk-editor-web` en `gk-game-web`. |
 | `/tmp/gk-browser-smoke/` | Candidate/default | Server-local browser-smoke artifacts, nooit Git. |
+| `ops/systemd/gk-game-web.service` | Git-template | Template voor de vaste game-web service. |
+| `/etc/systemd/system/gk-game-web.service` | Bevestigd | Live `gk-game-web` systemd unit, server-side buiten Git geplaatst. |
 
 ## Poorten en services
 
 | Service | Standaard local origin | Opmerking |
 |---|---|---|
-| API | `127.0.0.1:3001` | Bestaande `gk-api`. |
-| Editor web | `127.0.0.1:3002` | Bestaande `gk-editor-web`. |
-| Game/runtime shell | `127.0.0.1:3003` | Fase 12 game-web default via `GK_GAME_PORT`; geverifieerd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`; geen aparte `gk-game-web` systemd-unit zichtbaar. |
+| API | `127.0.0.1:3001` | Bestaande `gk-api`, `active`/`enabled`. |
+| Editor web | `127.0.0.1:3002` | Bestaande `gk-editor-web`, `active`/`enabled`. |
+| Game/runtime shell | `127.0.0.1:3003` | Vaste `gk-game-web` systemd service, `active`/`enabled`, via `/opt/gk/node-v22/bin/node`. Tijdelijke handmatige Node 22 game-shell is niet meer nodig. |
 
-Game/runtime shell routes in Git-basis:
+Game/runtime shell routes:
 
 - `GET /`;
 - `GET /game`;
 - `GET /game/`;
 - `GET /game/shell.json`;
 - `GET /health/game`.
+
+Game-web service env:
+
+- `GK_GAME_PORT=3003` voor de local service;
+- `GK_GAME_HOST=127.0.0.1` zodat game-web lokaal achter Apache draait;
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` voor local browser-smoke;
+- `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/` voor de bevestigde Apache/front-door route.
 
 ## Assetstatus
 
@@ -190,7 +202,7 @@ Bevestigd:
 
 Fase 11 bouwt geen Runtime Game renderer/client, voert geen automatic projection uit en wijzigt geen assets.
 
-Browser smoke en ops/docs-hardening zijn beschikbaar via `docs/ops/server-verification-runbook.md`. Editor browser-smoke is groen. Game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
+Browser smoke en ops/docs-hardening zijn beschikbaar via `docs/ops/server-verification-runbook.md`. Editor browser-smoke is groen. De game browser-smoke is vanaf Fase 12.1 groen en niet meer skipped.
 
 ## Fase 12 server-side status
 
@@ -229,15 +241,93 @@ Bevestigd:
 - worktree schoon: OK;
 - blockers: geen.
 
-Server/runtime status:
+Server/runtime status bij Fase 12-afsluiting:
 
 - apache2 actief;
 - `gk-api` actief/enabled;
 - `gk-editor-web` actief/enabled;
-- er is nog geen aparte `gk-game-web` systemd-unit zichtbaar;
-- Fase 12 is geverifieerd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`.
+- Fase 12 was geverifieerd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`.
+
+Die tijdelijke situatie is in Fase 12.1 opgeheven: `gk-game-web` is nu een vaste `active`/`enabled` systemd service.
 
 Fase 12 bouwt geen Runtime Game renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback en wijzigt geen assets. Fase 13 is nog niet geimplementeerd.
+
+## Fase 12.1 server-side status
+
+Fase 12.1 Game Web Service Deployment Core is server-side afgerond en klaar.
+
+Git-basis commit:
+
+- `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`).
+
+Git-basis en docs:
+
+- `ops/systemd/gk-game-web.service` als systemd unit template;
+- `README/fase12.1.md` als fasecontract;
+- current-phase docs;
+- dit server-layout document;
+- `docs/ops/server-verification-runbook.md` met vaste Fase 12.1 servicechecks.
+
+Server-side bevestigd:
+
+- live unit geinstalleerd in `/etc/systemd/system/gk-game-web.service`;
+- `gk-game-web` draait als `gk:gk`;
+- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- `gk-game-web` active/enabled: OK;
+- Apache configtest: OK;
+- Apache reload: OK;
+- worktree schoon: OK;
+- Git HEAD bleef `70808b7ac2aa50671fbf4369ef1158a5e5f13736` tijdens server-side verificatie.
+
+Server-only env is buiten Git aangevuld in `/etc/gk/gk.env` met niet-secret waarden:
+
+- `GK_GAME_PORT=3003`;
+- `GK_GAME_HOST=127.0.0.1`;
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`;
+- `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/`.
+
+Apache front-door `gk-k3v1nc0.duckdns.org` proxyt naar `127.0.0.1:3003` voor:
+
+- `/game/`;
+- `/health/game`;
+- `/runtime/projection/`.
+
+Local route smokes groen bevestigd:
+
+- `GET http://127.0.0.1:3003/health/game`;
+- `GET http://127.0.0.1:3003/game/shell.json`;
+- `GET http://127.0.0.1:3003/runtime/projection/status`;
+- `GET http://127.0.0.1:3003/runtime/projection/manifest`;
+- `GET http://127.0.0.1:3003/runtime/projection/records`.
+
+Front-door GET-checks groen bevestigd:
+
+- `GET https://gk-k3v1nc0.duckdns.org/game/`;
+- `GET https://gk-k3v1nc0.duckdns.org/game/shell.json`;
+- `GET https://gk-k3v1nc0.duckdns.org/runtime/projection/status`.
+
+Browser-smokes groen bevestigd:
+
+- `pnpm smoke:browser:game` met `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`;
+- `pnpm smoke:browser:editor`;
+- `pnpm smoke:browser`.
+
+Game-smoke is groen en niet meer skipped.
+
+Bevestigde grenzen:
+
+- geen secrets geprint;
+- geen artifacts naar Git;
+- geen repo-bestanden gewijzigd door server-side verificatie;
+- geen runtime renderer/gameplay/movement/combat/audio playback toegevoegd;
+- geen concrete gamecontent toegevoegd;
+- geen hardcoded world/camera/light/minimap/HUD/audio values toegevoegd;
+- geen assetmutatie;
+- geen Fase 13 geimplementeerd.
+
+Fase 12.1 bouwt geen Runtime Game renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback en wijzigt geen assets. Fase 13 is nog niet geopend.
 
 ## Webserver policy
 
@@ -249,6 +339,14 @@ Kevin heeft bevestigd:
 - Nginx mag alleen voorbereid blijven als candidate/template.
 - Nginx mag niet live worden geactiveerd op poort 80/443.
 - Er komt geen volledige migratie naar Nginx zonder aparte migratiefase.
+
+Fase 12.1 bevestigt deze policy voor game-web:
+
+- `gk-game-web` draait lokaal achter Apache reverse proxy op `127.0.0.1:3003`.
+- Apache routeert `/game/`, `/health/game` en `/runtime/projection/` naar `127.0.0.1:3003`.
+- Apache configtest en reload zijn groen bevestigd.
+- Nginx is niet live geactiveerd.
+- Poort 80/443 is niet gemigreerd.
 
 Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts, Fase 10 publish validation/snapshot metadata en Fase 11 runtime projection source/manifest/read-model metadata mogen niet publiek worden geserveerd alsof het concrete runtimecontent of editor draft data is. Fase 12 runtime client shell mag alleen de read-only runtime projection routes tonen.
 
@@ -275,6 +373,13 @@ Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 - `/etc/gk/secrets/smoke-users.env`;
 - een door Codex beheerde secret store of serverconfig.
 
+`/etc/gk/gk.env` bevat server-side niet-secret waarden voor Fase 12.1:
+
+- `GK_GAME_PORT=3003`;
+- `GK_GAME_HOST=127.0.0.1`;
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`;
+- `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/`.
+
 `/etc/gk/secrets/smoke-users.env` is server-only en mag optioneel deze variabelen bevatten:
 
 - `GK_SMOKE_EDITOR_EMAIL`;
@@ -284,7 +389,7 @@ Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 
 De vaste secret-bestandspaden en variabelenamen staan in `docs/ops/server-verification-runbook.md`. Print nooit secret values, plak geen `cat` output met secrets in rapporten en commit nooit secret values naar Git.
 
-Git mag alleen veilige examples bevatten. Geen Fase 12 wijziging mag secrets toevoegen.
+Git mag alleen veilige examples bevatten. Geen Fase 12.1 wijziging mag secrets toevoegen.
 
 ## Browser-smoke tooling
 
@@ -296,10 +401,13 @@ Git mag alleen veilige examples bevatten. Geen Fase 12 wijziging mag secrets toe
 
 Deze scripts draaien pas na build/typecheck/test/lint en service restart. Ze mogen artifacts alleen in een tijdelijke server-local map zetten, standaard onder `/tmp/gk-browser-smoke/`, en nooit in Git.
 
-Fase 12 runtime shell smoke gebruikt:
+Fase 12.1 game smoke gebruikt:
 
-- `GK_GAME_FRONT_DOOR_URL` als volledige URL, indien gezet;
-- anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`.
+- `GK_GAME_FRONT_DOOR_URL` als volledige URL wanneer Apache/front-door naar game-web routeert;
+- anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`;
+- voor local smoke mag `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` worden gezet.
+
+Fase 12.1 game browser-smoke is groen bevestigd en niet meer skipped.
 
 ## Codex/Claude serverchecks
 
@@ -314,13 +422,13 @@ Afgerond:
 7. Fase 10 build/typecheck/test/lint, publish route smokes, auth/CSRF smokes, panel smoke en no-runtime-publish/no-asset-mutation afgerond.
 8. Fase 11 build/typecheck/test/lint, runtime projection route smokes, runtime read-only route smokes, auth/CSRF smokes, panel smoke, browser smoke ops-hardening, no-runtime-renderer/no-game-client/no-runtime-gameplay/no-asset-mutation/no-hardcoded-content afgerond.
 9. Fase 12 build/typecheck/test/lint, live editor login, `/auth/editor/me`, runtime projection read-only route smokes, game/runtime shell route smokes, `/game/shell.json`, browser smoke, runtime shell marker, no editor/admin route usage, no draft leakage, no concrete content, no renderer/gameplay/movement/combat/audio playback, no hardcoded HUD/minimap/world/camera/light/audio values, no asset mutation, GameBible save/protection en tijdelijke Node 22 game-shell verificatie op `127.0.0.1:3003` afgerond.
+10. Fase 12.1 vaste `gk-game-web` systemd service-installatie, `active`/`enabled` checks, Node 22 process check, local route smokes, Apache/front-door route checks, game/editor/full browser-smokes, no renderer/gameplay/content/asset/secrets regressiechecks en schone worktree bevestigd.
 
 Gebruik voor nieuwe server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
-Fase 12 heeft geen open blockers. Er is nog geen aparte `gk-game-web` systemd-unit zichtbaar, maar Fase 12 is server-side groen bevestigd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`. Fase 13 is nog niet geimplementeerd; volgende stap: Kevin mag Fase 13 openen.
-
 Nog open voor latere fases:
 
+- Fase 13 openen wanneer Kevin dat expliciet doet;
 - game runtime renderer/gameplay wanneer Kevin die expliciet opent;
 - realtime gateway;
 - workers;

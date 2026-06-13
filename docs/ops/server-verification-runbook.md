@@ -26,8 +26,10 @@ Doel: niet opnieuw zoeken naar serverpaden, secretlocaties, service layout, auth
 | API | `127.0.0.1:3001` |
 | Editor web | `127.0.0.1:3002` |
 | Game/runtime shell | `127.0.0.1:3003` default via `GK_GAME_PORT` |
+| Game-web systemd template | `ops/systemd/gk-game-web.service` |
+| Game-web live unit | `/etc/systemd/system/gk-game-web.service` |
 | Actieve frontend/front door | Apache vhost/reverse proxy volgens serverconfig |
-| Game/front door | Publieke game-site via bestaande Apache front door of Fase 12 game shell origin wanneer server-side geactiveerd |
+| Game/front door | Publieke game-site via bestaande Apache front door of Fase 12.1 game shell origin wanneer server-side geactiveerd |
 
 GK-services moeten via `/opt/gk/node-v22/bin/node` draaien. `/usr/bin/node` kan serverbreed een andere versie zijn en is geen GK-blocker zolang GK-services en checks via Node 22 lopen.
 
@@ -50,6 +52,8 @@ Bekende variabelenamen:
 - `GK_SMOKE_GAME_EMAIL`
 - `GK_SMOKE_GAME_PASSWORD`
 - `GK_EDITOR_WEB_ORIGIN`
+- `GK_GAME_PORT`
+- `GK_GAME_HOST`
 - `GK_GAME_FRONT_DOOR_URL`
 - `GK_GAME_WEB_ORIGIN`
 - `GK_GAME_SHELL_PATH`
@@ -57,7 +61,14 @@ Bekende variabelenamen:
 - `GK_BROWSER_SMOKE_SCREENSHOT`
 - `GK_BROWSER_SMOKE_TRACE`
 
-Nooit secret values printen. Nooit secretbestanden met `cat` tonen. Nooit secretwaarden naar Git kopieren.
+Fase 12.1 server-only env:
+
+- `GK_GAME_PORT=3003` voor de local `gk-game-web` service;
+- `GK_GAME_HOST=127.0.0.1` waar server-side bevestigd of aangehouden;
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` voor local browser-smoke wanneer Apache/front-door nog niet bevestigd is;
+- `GK_GAME_FRONT_DOOR_URL` alleen instellen wanneer Apache werkelijk naar game-web routeert.
+
+Nooit secret values printen. Nooit secretbestanden met `cat` tonen. Nooit secretwaarden naar Git kopieren. Commit nooit de inhoud van `/etc/gk/gk.env`.
 
 Veilig patroon voor login en browser-smokes:
 
@@ -66,11 +77,12 @@ set -euo pipefail
 export PATH=/opt/gk/node-v22/bin:$PATH
 
 set -a
+source /etc/gk/gk.env
 source /etc/gk/secrets/initial-editor-admin.env
 [ -f /etc/gk/secrets/smoke-users.env ] && source /etc/gk/secrets/smoke-users.env
 set +a
 
-# Gebruik de variabelen alleen voor login requests.
+# Gebruik de variabelen alleen voor service start, login requests en smokes.
 # Echo de waarden nooit.
 ```
 
@@ -103,13 +115,30 @@ Browser-smokes draaien pas na bovenstaande checks en na service restart.
 
 Services pas herstarten na succesvolle build/typecheck/test/lint.
 
+Bestaande services:
+
 ```bash
 systemctl restart gk-api gk-editor-web
 systemctl is-active gk-api gk-editor-web
 systemctl is-enabled gk-api gk-editor-web
 ```
 
-Wanneer Fase 12 game-web runtime shell server-side als service is ingericht, controleer ook de bijbehorende game-web service volgens de actuele systemd naam. Als die service nog niet bestaat, rapporteer dat als open server-side taak en gebruik alleen route-smokes die bereikbaar zijn.
+Fase 12.1 game-web service-installatie:
+
+```bash
+# Plaats of update server-side de live unit op basis van de Git-template.
+# Bevestig eerst de bestaande GK service user/group; voeg User=/Group= toe
+# aan de live unit als de serverpolicy dat vereist.
+install -m 0644 ops/systemd/gk-game-web.service /etc/systemd/system/gk-game-web.service
+
+systemctl daemon-reload
+systemctl enable gk-game-web
+systemctl restart gk-game-web
+systemctl is-active gk-game-web
+systemctl is-enabled gk-game-web
+```
+
+Als de bestaande `gk-api`/`gk-editor-web` services een specifieke service user/group gebruiken, moet de live `gk-game-web` unit daarop aansluiten. De Git-template laat `User=` en `Group=` bewust open omdat de repo-docs die serverwaarde niet tonen.
 
 Bevestig daarna dat de processen via Node 22 draaien:
 
@@ -144,6 +173,8 @@ Echte editor login is de voorkeursroute voor live smokes.
 Smoke headers of bypass-env mogen alleen gebruikt worden waar ze expliciet zijn geactiveerd en alleen voor deny/contract-smokes. Maak live fasevalidatie niet afhankelijk van test-hacks.
 
 Fase 12 runtime client shell gebruikt geen editor login, geen editor/admin routes, geen editor CSRF en geen editor draft data. De shell mag alleen Fase 11 runtime projection read-only routes fetchen.
+
+Fase 12.1 verandert de auth-contracten niet en voegt geen game login requirement toe.
 
 ## Bekende fase-smoke routes
 
@@ -216,6 +247,45 @@ Fase 12 route-smokes moeten bevestigen:
 - no-concrete-gamecontent;
 - no-asset-mutation.
 
+### Fase 12.1 Game Web Service Deployment
+
+Service checks:
+
+- `systemctl daemon-reload`;
+- `systemctl enable gk-game-web`;
+- `systemctl restart gk-game-web`;
+- `systemctl is-active gk-game-web`;
+- `systemctl is-enabled gk-game-web`;
+- Node 22 process check via `/opt/gk/node-v22/bin/node`.
+
+Local route smokes:
+
+- `curl http://127.0.0.1:3003/health/game`;
+- `curl http://127.0.0.1:3003/game/shell.json`;
+- `curl http://127.0.0.1:3003/runtime/projection/status`.
+
+Browser smokes:
+
+- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003 pnpm smoke:browser:game` for local service smoke;
+- `GK_GAME_FRONT_DOOR_URL=<server-confirmed-game-url> pnpm smoke:browser:game` only after Apache/front-door route is confirmed;
+- `pnpm smoke:browser` after editor and game smoke env are ready.
+
+Apache/front-door checks:
+
+- Apache remains the active main webserver;
+- Nginx remains inactive/candidate;
+- confirm whether `/game/` routes to `127.0.0.1:3003`;
+- if missing, apply only the minimal Apache vhost/proxy update required by `docs/ops/server-layout.md`, without breaking other sites;
+- do not migrate ports 80/443 and do not enable Nginx live.
+
+Fase 12.1 checks must also confirm:
+
+- no renderer/gameplay/movement/combat/audio playback was added;
+- no concrete gamecontent was added;
+- no hardcoded HUD/minimap/world/camera/light/audio values were added;
+- no asset mutation happened;
+- no secrets or server-only env values were committed.
+
 ### GameBible
 
 GameBible editor save route moet beschermd blijven.
@@ -244,7 +314,7 @@ Bekende panel IDs:
 - `publish-flow-panel`
 - `runtime-projection-panel`
 
-Voor nieuwe fases: voeg het nieuwe panel-id aan dit runbook toe wanneer het een vaste server smoke wordt.
+Voor nieuwe fases: voeg het nieuwe panel-id aan dit runbook toe wanneer het een vaste server smoke wordt. Fase 12.1 voegt geen editorpanel toe.
 
 ## Headless Chromium / Playwright browser smoke
 
@@ -272,6 +342,7 @@ set -euo pipefail
 export PATH=/opt/gk/node-v22/bin:$PATH
 
 set -a
+source /etc/gk/gk.env
 source /etc/gk/secrets/initial-editor-admin.env
 [ -f /etc/gk/secrets/smoke-users.env ] && source /etc/gk/secrets/smoke-users.env
 set +a
@@ -279,7 +350,7 @@ set +a
 pnpm smoke:browser
 ```
 
-`/etc/gk/secrets/smoke-users.env` blijft server-only en komt nooit in Git.
+`/etc/gk/gk.env` en `/etc/gk/secrets/smoke-users.env` blijven server-only en komen nooit in Git.
 
 ### Scripts
 
@@ -307,6 +378,8 @@ De game smoke:
 
 - gebruikt `GK_GAME_FRONT_DOOR_URL` als volledige URL wanneer die is gezet;
 - gebruikt anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`;
+- gebruikt voor Fase 12.1 local service smoke `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` zolang Apache/front-door nog niet bevestigd is;
+- gebruikt `GK_GAME_FRONT_DOOR_URL` pas wanneer Apache werkelijk naar game-web routeert;
 - slaat netjes over als er geen game front door URL of game web origin is gezet;
 - doet reachability/read-only smoke;
 - checkt de Fase 12 runtime shell marker wanneer die route beschikbaar is;
@@ -357,7 +430,8 @@ Gebruik Node fetch of vergelijkbare HTTP-smoke om te controleren:
 - vereiste panel IDs;
 - login-required markers;
 - fase-route statusresponses;
-- Fase 12 game/runtime shell HTML en shell JSON wanneer die fase open is.
+- Fase 12 game/runtime shell HTML en shell JSON wanneer die fase open is;
+- Fase 12.1 `gk-game-web` local service routes op `127.0.0.1:3003`.
 
 ### Niveau 2: Headless browser smoke via Playwright
 
@@ -383,21 +457,31 @@ test:
 lint:
 
 services active/enabled:
+gk-api active/enabled:
+gk-editor-web active/enabled:
+gk-game-web active/enabled:
 Node 22 process OK:
 
 editor login OK:
 /auth/editor/me OK:
 
 relevante fase-routes OK:
+game-web local /health/game OK:
+game-web local /game/shell.json OK:
+game-web local /runtime/projection/status OK:
+Apache/front-door /game/ OK/minimal config applied/not configured:
 anonymous/game/non-admin denied OK:
 CSRF/Origin OK:
 frontend panel smoke OK:
 browser smoke OK/fail/skipped:
 runtime shell smoke OK/fail/skipped:
+game browser smoke OK/fail/skipped:
 
 no-runtime-publish/no-runtime-renderer waar relevant:
 no-runtime-gameplay/no-movement/no-combat/no-audio-playback waar relevant:
+no-hardcoded HUD/minimap/world/camera/light/audio values:
 no-asset-mutation:
+no-secrets-committed:
 
 GameBible save/protection:
 game-site reachable:

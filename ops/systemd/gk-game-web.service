@@ -1,0 +1,25 @@
+[Unit]
+Description=GK Game Web
+Wants=network-online.target
+After=network-online.target gk-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/gk
+EnvironmentFile=/etc/gk/gk.env
+Environment=GK_GAME_PORT=3003
+Environment=GK_GAME_HOST=127.0.0.1
+ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/game-web/dist/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+# User/Group are intentionally not set in this Git template because the
+# current repo docs do not expose the existing GK service user/group.
+# Codex/Claude must confirm the server-side GK service account and add the
+# matching User=/Group= directives in /etc/systemd/system/gk-game-web.service
+# if the server policy requires explicit service ownership.
+
+[Install]
+WantedBy=multi-user.target
