@@ -10,6 +10,7 @@ export * from "./auth-client.js";
 export * from "./http-server.js";
 export * from "./runtime-client-shell.js";
 export * from "./runtime-projection-client.js";
+export * from "./runtime-render-surface.js";
 
 export interface GameWebRuntimeBoundary {
   readonly rendererReady: boolean;

@@ -9,6 +9,7 @@ const EDITOR_PANEL_TITLES = new Map([
   ["runtime-projection-panel", "Runtime Projection"]
 ]);
 const RUNTIME_CLIENT_SHELL_SELECTOR = "[data-runtime-client-shell='phase-12']";
+const RUNTIME_RENDER_SURFACE_SELECTOR = "[data-runtime-render-surface='phase-13']";
 
 const args = new Set(process.argv.slice(2));
 const runEditor = !args.has("--game");
@@ -223,6 +224,11 @@ async function runGameSmoke(browserInstance) {
 
     const gameLoginResult = await tryGameLogin(page);
     const runtimeShellResult = await tryRuntimeShellSmoke(page);
+    const runtimeRenderSurfaceResult = await tryRuntimeRenderSurfaceSmoke(page, pageState);
+
+    if (pageState.forbiddenAssetRequests.length > 0) {
+      throw new Error(`Game browser smoke saw forbidden render-surface asset requests: ${pageState.forbiddenAssetRequests.join(", ")}.`);
+    }
 
     if (pageState.consoleErrors > 0 || pageState.pageErrors > 0) {
       throw new Error("Game browser smoke saw console or page errors.");
@@ -245,7 +251,9 @@ async function runGameSmoke(browserInstance) {
       url: gameUrl,
       reachability: "ok",
       runtimeShell: runtimeShellResult,
+      runtimeRenderSurface: runtimeRenderSurfaceResult,
       gameLogin: gameLoginResult,
+      assetRequests: pageState.forbiddenAssetRequests.length,
       consoleErrors: pageState.consoleErrors,
       pageErrors: pageState.pageErrors,
       screenshotPath,
@@ -254,6 +262,7 @@ async function runGameSmoke(browserInstance) {
   } catch (error) {
     return failed(redact(error instanceof Error ? error.message : String(error)), {
       url: gameUrl,
+      assetRequests: pageState.forbiddenAssetRequests.length,
       consoleErrors: pageState.consoleErrors,
       pageErrors: pageState.pageErrors
     });
@@ -285,6 +294,61 @@ async function tryRuntimeShellSmoke(page) {
 
   if (!shellState.marker || shellState.editorRouteMentioned || shellState.modelText.includes("/editor/")) {
     throw new Error("Runtime client shell marker failed or editor route leaked into game shell.");
+  }
+
+  return "ok";
+}
+
+async function tryRuntimeRenderSurfaceSmoke(page, pageState) {
+  const renderSurface = page.locator(RUNTIME_RENDER_SURFACE_SELECTOR).first();
+
+  if (await renderSurface.count() === 0) {
+    throw new Error("Runtime render surface marker unavailable.");
+  }
+
+  await renderSurface.waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-render-canvas]").first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-render-safe-empty-state]").first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForFunction(() => {
+    const surface = document.querySelector("[data-runtime-render-surface='phase-13']");
+    return surface?.getAttribute("data-runtime-render-loads-assets") === "false"
+      && surface?.getAttribute("data-runtime-render-renders-content") === "false";
+  }, undefined, { timeout: 5_000 });
+
+  const renderState = await page.evaluate(() => {
+    const surface = document.querySelector("[data-runtime-render-surface='phase-13']");
+    const model = document.querySelector("#runtime-render-surface-model");
+    const safeEmpty = document.querySelector("[data-runtime-render-safe-empty-state]");
+    const text = document.body.textContent ?? "";
+    const html = document.body.innerHTML;
+
+    return {
+      marker: Boolean(surface),
+      lifecycle: surface?.getAttribute("data-runtime-render-lifecycle") ?? "",
+      loadsAssets: surface?.getAttribute("data-runtime-render-loads-assets") ?? "",
+      rendersContent: surface?.getAttribute("data-runtime-render-renders-content") ?? "",
+      safeEmptyVisible: Boolean(safeEmpty),
+      modelText: model?.textContent ?? "",
+      editorRouteMentioned: text.includes("/editor/") || html.includes("/auth/editor"),
+      assetRouteMentioned: /\/assets\//i.test(html) || /\.(glb|gltf|mp3|wav|ogg)(\?|&|\"|'|<|$)/i.test(html)
+    };
+  });
+
+  if (
+    !renderState.marker
+    || renderState.loadsAssets !== "false"
+    || renderState.rendersContent !== "false"
+    || !renderState.safeEmptyVisible
+    || renderState.editorRouteMentioned
+    || renderState.assetRouteMentioned
+    || renderState.modelText.includes("/editor/")
+    || renderState.modelText.includes("/assets/")
+  ) {
+    throw new Error("Runtime render surface failed safe empty/no-route/no-asset checks.");
+  }
+
+  if (pageState.forbiddenAssetRequests.length > 0) {
+    throw new Error("Runtime render surface triggered a forbidden asset request.");
   }
 
   return "ok";
@@ -355,12 +419,29 @@ function observePage(page, state) {
   page.on("pageerror", () => {
     state.pageErrors += 1;
   });
+
+  page.on("request", (request) => {
+    const url = request.url();
+    state.requestUrls.push(url);
+    if (isForbiddenRenderAssetRequest(url)) {
+      state.forbiddenAssetRequests.push(url);
+    }
+  });
+
+  page.on("requestfailed", (request) => {
+    const url = request.url();
+    if (isForbiddenRenderAssetRequest(url) && !state.forbiddenAssetRequests.includes(url)) {
+      state.forbiddenAssetRequests.push(url);
+    }
+  });
 }
 
 function createPageState() {
   return {
     consoleErrors: 0,
-    pageErrors: 0
+    pageErrors: 0,
+    requestUrls: [],
+    forbiddenAssetRequests: []
   };
 }
 
@@ -387,6 +468,8 @@ function printReport(result, harnessError) {
     `url checks: ${statusSummary([result.editor, result.game], "url")}`,
     `panels: ${result.editor.details?.panels ?? (result.editor.status === "skipped" ? "skipped" : "fail")}`,
     `runtime shell: ${result.game.details?.runtimeShell ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
+    `render surface: ${result.game.details?.runtimeRenderSurface ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
+    `asset load requests: ${sumCounts([result.editor, result.game], "assetRequests")}`,
     `console errors count: ${sumCounts([result.editor, result.game], "consoleErrors")}`,
     `page errors count: ${sumCounts([result.editor, result.game], "pageErrors")}`
   ];
@@ -461,6 +544,10 @@ function stripTrailingSlash(value) {
 
 function timestampSlug() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function isForbiddenRenderAssetRequest(value) {
+  return /\/assets\//i.test(value) || /\.(glb|gltf|png|jpe?g|webp|gif|mp3|wav|ogg)(\?|#|$)/i.test(value);
 }
 
 function redact(value) {

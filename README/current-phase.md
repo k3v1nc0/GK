@@ -1,10 +1,14 @@
 # Current Phase
 
-Actieve status: Fase 12.1 Game Web Service Deployment Core is afgerond en server-side groen bevestigd.
+Actieve status: Fase 13 Runtime Render Surface Core is geopend en de Git-basis is toegevoegd op `main`.
 
 Fase 1 t/m Fase 12.1 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd op Git HEAD `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`).
 
-Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
+Fase 13 voegt alleen de generieke runtime render-surface basis toe: contracts, lifecycle/status, capability flags, canvas/render host, WebGL/canvas capability probe, safe empty render state, node/socket contracts, browser-smoke marker en tests.
+
+Server-side verificatie door Codex/Claude is nog nodig. Fase 13 is pas klaar na build/typecheck/test/lint, live route-smokes, browser-smoke, no-content/no-asset/no-gameplay checks en docs-final.
+
+Fase 14 is nog niet geopend.
 
 ## Primaire bronnen
 
@@ -18,6 +22,7 @@ Open voor de actuele fasecontractstatus:
 - `README/fase11.md`
 - `README/fase12.md`
 - `README/fase12.1.md`
+- `README/fase13.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/architecture/editor-shell.md`
 - `docs/architecture/auth-boundaries.md`
@@ -30,46 +35,39 @@ Open voor de actuele fasecontractstatus:
 - `ops/systemd/gk-game-web.service`
 - `README/GameBibleNode.json`
 
-## Fase 12.1 resultaat
+## Fase 13 Git-basis
 
-Fase 12.1 heeft de vaste deployment/service-basis voor `apps/game-web` server-side bevestigd. De Fase 12 runtime client shell draait nu als vaste `gk-game-web` systemd service en hoeft niet meer tijdelijk via een handmatige Node 22 game-shell op `127.0.0.1:3003` te worden gestart.
+Toegevoegd:
 
-Bevestigd server-side:
+- runtime render surface schemas en validation gates;
+- runtime render lifecycle/status/capability/safety models;
+- typed sockets en node types voor runtime render surface, status, capability, lifecycle en safety flags;
+- game-web render-surface helper met canvas host en client-side canvas/WebGL capability probe;
+- runtime shell UI marker `data-runtime-render-surface="phase-13"`;
+- safe empty render state wanneer er geen renderbare projection payload is;
+- browser-smoke uitbreiding voor render surface marker, safe empty state, console/page errors en asset-request stilte;
+- Fase 13 tests voor schemas, validators, nodes, shell UI, route contracts en no-content/no-asset/no-gameplay boundaries;
+- Fase 13 docs/statusupdates.
 
-- `gk-game-web` live unit staat in `/etc/systemd/system/gk-game-web.service`;
-- `gk-game-web` draait als `gk:gk`;
-- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`;
-- `gk-api` active/enabled: OK;
-- `gk-editor-web` active/enabled: OK;
-- `gk-game-web` active/enabled: OK;
-- Apache front-door `gk-k3v1nc0.duckdns.org` proxyt `/game/`, `/health/game` en `/runtime/projection/` naar `127.0.0.1:3003`;
-- Apache configtest: OK;
-- Apache reload: OK;
-- `/etc/gk/gk.env` is server-side buiten Git aangevuld met niet-secret game-web waarden;
-- local route smokes voor `/health/game`, `/game/shell.json`, `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records`: OK;
-- front-door GET-checks voor `/game/`, `/game/shell.json` en `/runtime/projection/status`: OK;
-- `pnpm smoke:browser:game` met `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`: OK;
-- `pnpm smoke:browser:editor`: OK;
-- `pnpm smoke:browser`: OK;
-- game-smoke is groen en niet meer skipped;
-- worktree schoon: OK;
-- blockers: geen.
-
-## Fase 12.1 grenzen
+## Fase 13 grenzen
 
 Niet toegevoegd of gewijzigd:
 
-- geen runtime renderer;
+- geen volledige 3D renderer;
+- geen projection-driven scene assembly;
+- geen concrete gamewereld;
+- geen GLB loading;
+- geen definitive GLB role mapping;
+- geen dummy world, NPC, quest of economy;
 - geen gameplay, movement, combat of player runtime;
 - geen audio playback;
 - geen HUD/minimap runtime layout;
-- geen concrete gamecontent;
-- geen dummy world, NPC, quest of economy;
 - geen hardcoded world/camera/light/minimap/HUD/audio values;
 - geen assetmutatie;
-- geen secrets in Git;
-- geen artifacts naar Git;
-- geen Fase 13 implementatie.
+- geen editor draft/candidate data direct in runtime;
+- geen automatic publish/projection;
+- geen secrets;
+- geen Fase 14 implementatie.
 
 De keten blijft:
 
@@ -79,11 +77,14 @@ Database / Editor / Node-system
   -> Runtime Projection Core
   -> Runtime Client Shell Core
   -> Game Web Service Deployment Core
-  -> latere Renderer / Gameplay / HUD / Audio fases
+  -> Runtime Render Surface Core
+  -> latere Projection-driven Scene Assembly / Gameplay / HUD / Audio fases
 ```
 
 ## Fasebeoordeling
 
-Fase 12.1 Game Web Service Deployment Core is afgerond en server-side klaar.
+Fase 13 Git-basis is toegevoegd.
 
-Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
+Fase 13 is server-side nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live `gk-game-web` route-smokes, browser-smoke en Fase 13 safety checks nog draaien en rapporteren.
+
+Fase 14 is nog niet geopend.

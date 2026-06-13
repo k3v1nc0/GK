@@ -2,19 +2,27 @@
 
 ## Fase
 
-Actieve status: Fase 12.1 Game Web Service Deployment Core is afgerond en server-side groen bevestigd.
+Actieve status: Fase 13 Runtime Render Surface Core is geopend en de Git-basis is toegevoegd op `main`.
 
 Fase 1 t/m Fase 12.1 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd op Git HEAD `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`).
 
-Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
+Fase 13 is nu de actieve open fase. Server-side verificatie door Codex/Claude is nog nodig. Fase 14 is nog niet geopend.
 
 ## Statussamenvatting
 
-Fase 12.1 heeft de vaste deployment/service-basis voor `apps/game-web` server-side afgerond. De Fase 12 runtime client shell draait nu als vaste `gk-game-web` systemd service via Node 22, achter Apache front-door routing.
+Fase 13 voegt een veilige runtime render-surface laag toe aan de bestaande game-web runtime client shell. De laag biedt:
 
-De tijdelijke handmatige Node 22 game-shell is niet meer nodig. Game browser-smoke is groen en niet meer skipped.
+- render surface contracts;
+- renderer lifecycle/status model;
+- render capability flags;
+- canvas/render host in de game shell;
+- WebGL/canvas capability probe zonder scene/content te renderen;
+- safe empty render state;
+- render-surface browser-smoke marker;
+- node/socket contracts voor runtime render surface, status, capability, lifecycle en safety flags;
+- tests en docs voor no-content/no-asset/no-gameplay boundaries.
 
-Deze fase heeft geen concrete gamecontent, geen dummy world, geen assets, geen renderer, geen movement/combat/player gameplay, geen HUD/minimap runtime layout en geen audio playback toegevoegd.
+De render surface is geen volledige renderer en geen projection-driven scene assembly. Deze fase laadt geen GLB, textures, audio of UI assets en toont geen concrete gamecontent.
 
 ## Afgeronde basis
 
@@ -37,82 +45,75 @@ Asset refresh na `Assets - new` blijft bevestigd:
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-## Fase 12.1 Git-basis
+## Fase 13 Git-basis
 
-Toegevoegd of bijgewerkt in de Git-basis:
+Toegevoegd of bijgewerkt:
 
-- `ops/systemd/gk-game-web.service` als Git-template voor de vaste game-web service;
-- `README/fase12.1.md` als fasecontract;
-- `docs/ops/server-layout.md` voor de `gk-game-web` deploymentstatus;
-- `docs/ops/server-verification-runbook.md` voor vaste Fase 12.1 servicechecks;
-- current-phase docs.
+- `packages/schemas/src/runtime-render-surface.ts`;
+- `packages/schemas/src/runtime-render-surface-validation.ts`;
+- runtime render socket types in `packages/schemas/src/node-graph.ts`;
+- `packages/node-types/src/runtime-render-surface-nodes.ts`;
+- `apps/game-web/src/runtime-render-surface.ts`;
+- Fase 13 render surface UI/marker in `apps/game-web/src/runtime-client-shell.ts`;
+- Fase 13 health/shell JSON contract in `apps/game-web/src/http-server.ts`;
+- browser-smoke render surface checks in `tests/smoke/browser-smoke.mjs`;
+- `tests/phase13-runtime-render-surface.test.mjs`;
+- `README/fase13.md` en statusdocs.
 
-Systemd template contract:
+## Runtime render surface contract
 
-- `Description=GK Game Web`;
-- `WorkingDirectory=/var/www/gk`;
-- `EnvironmentFile=/etc/gk/gk.env`;
-- `Environment=GK_GAME_PORT=3003`;
-- `Environment=GK_GAME_HOST=127.0.0.1`;
-- `ExecStart=/opt/gk/node-v22/bin/node /var/www/gk/apps/game-web/dist/index.js`;
-- `Restart=on-failure`;
-- geen secrets;
-- geen inline concrete gamecontent.
+Safety flags bewaken minimaal:
 
-Server-side is bevestigd dat de live unit in `/etc/systemd/system/gk-game-web.service` is geinstalleerd en als `gk:gk` draait.
+- `createsRenderSurface=true`;
+- `consumesRuntimeProjectionMetadata=true`;
+- `loadsAssets=false`;
+- `rendersConcreteWorld=false`;
+- `implementsGameplay=false`;
+- `implementsMovement=false`;
+- `implementsCombat=false`;
+- `implementsAudioPlayback=false`;
+- `hardcodesCamera=false`;
+- `hardcodesLighting=false`;
+- `hardcodesHud=false`;
+- `hardcodesMinimap=false`;
+- `hardcodesContent=false`;
+- `mutatesAssets=false`;
+- `usesEditorDraftData=false`;
+- `usesEditorAdminRoutes=false`.
 
-## Runtime shell/API status
+Validatie bewaakt:
 
-Bestaande Fase 12 runtime client shell routes:
+- alleen runtime projection metadata/read-only routes;
+- geen editor/admin routes;
+- geen editor draft/candidate leakage;
+- geen asset load requests;
+- geen concrete world/entity/NPC/quest/economy payload;
+- geen hardcoded camera/light/HUD/minimap/audio values;
+- geen gameplay/movement/combat/audio playback;
+- geldige safe empty render state;
+- lifecycle states `booting`, `ready`, `empty` en `error`.
 
-- `GET /`;
-- `GET /game`;
-- `GET /game/`;
-- `GET /game/shell.json`;
-- `GET /health/game`.
+## Browser-smoke contract
 
-Runtime projection read-only routes die de shell mag consumeren:
+Game browser-smoke controleert vanaf Fase 13:
 
-- `GET /runtime/projection/status`;
-- `GET /runtime/projection/manifest`;
-- `GET /runtime/projection/records`.
-
-Fase 12.1 heeft deze routes niet veranderd. Fase 12.1 heeft de vaste service-installatie en Apache/front-door route server-side bevestigd.
-
-## Env en smoke contract
-
-Server-only env is buiten Git aangevuld met niet-secret waarden:
-
-- `GK_GAME_PORT=3003`;
-- `GK_GAME_HOST=127.0.0.1`;
-- `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`;
-- `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/`.
-
-Regels blijven:
-
-- env-bestandinhoud niet naar Git committen;
-- credentials of secret values niet printen;
-- `/etc/gk/gk.env` inhoud niet in Git opnemen.
-
-## Apache/front-door status
-
-Apache blijft actieve hoofdwebserver. Nginx blijft candidate/inactive.
-
-Server-side bevestigd:
-
-- Apache front-door `gk-k3v1nc0.duckdns.org` proxyt `/game/` naar `127.0.0.1:3003`;
-- Apache front-door proxyt `/health/game` naar `127.0.0.1:3003`;
-- Apache front-door proxyt `/runtime/projection/` naar `127.0.0.1:3003`;
-- Apache configtest: OK;
-- Apache reload: OK.
-
-Geen Nginx live activatie en geen poort 80/443 migratie uitgevoerd.
+- game shell bereikbaar via local origin of front-door;
+- runtime shell marker `data-runtime-client-shell="phase-12"`;
+- render surface marker `data-runtime-render-surface="phase-13"`;
+- render surface safe empty state;
+- console/page errors count;
+- geen editor/admin route usage;
+- geen Fase 13 asset load requests;
+- geen screenshots/traces tenzij expliciet via env aangezet.
 
 ## Contractgrenzen
 
-Fase 12.1 bouwt niet:
+Fase 13 bouwt niet:
 
-- 3D renderer;
+- volledige 3D renderer;
+- projection-driven scene assembly;
+- concrete gamewereld;
+- GLB loader of definitive GLB role mapping;
 - runtime gameplay;
 - movement;
 - combat;
@@ -121,51 +122,44 @@ Fase 12.1 bouwt niet:
 - minimap runtime layout;
 - audio playback;
 - concrete world, zone, NPC, quest, economy, camera, lighting, minimap, HUD of audio content;
-- definitieve GLB role mapping;
 - automatic publish of automatic projection.
 
-Fase 13 is nog niet geimplementeerd.
+## Server-side checks open
 
-## Server-side checks
+Codex/Claude moet server-side nog bevestigen:
 
-Codex/Claude heeft bevestigd:
-
-- `gk-game-web` live unit geinstalleerd in `/etc/systemd/system/gk-game-web.service`: OK;
-- `gk-game-web` draait als `gk:gk`: OK;
-- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
-- `gk-api` active/enabled: OK;
-- `gk-editor-web` active/enabled: OK;
-- `gk-game-web` active/enabled: OK;
-- Apache front-door route voor `/game/`: OK;
-- Apache front-door route voor `/health/game`: OK;
-- Apache front-door route voor `/runtime/projection/`: OK;
-- Apache configtest: OK;
-- Apache reload: OK;
-- local route smoke `/health/game`: OK;
-- local route smoke `/game/shell.json`: OK;
-- local route smoke `/runtime/projection/status`: OK;
-- local route smoke `/runtime/projection/manifest`: OK;
-- local route smoke `/runtime/projection/records`: OK;
-- front-door GET `/game/`: OK;
-- front-door GET `/game/shell.json`: OK;
-- front-door GET `/runtime/projection/status`: OK;
-- `pnpm smoke:browser:game` met `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003`: OK;
-- `pnpm smoke:browser:editor`: OK;
-- `pnpm smoke:browser`: OK;
-- game-smoke niet skipped: OK;
-- geen secrets geprint: OK;
-- geen artifacts naar Git: OK;
-- geen repo-bestanden gewijzigd achtergelaten: OK;
-- worktree schoon: OK;
-- geen runtime renderer/gameplay/movement/combat/audio playback: OK;
-- geen concrete gamecontent: OK;
-- geen hardcoded HUD/minimap/world/camera/light/audio values: OK;
-- geen assetmutatie: OK;
-- geen Fase 13 implementatie: OK;
-- blockers: geen.
+- start HEAD/eind HEAD;
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- `gk-api` active/enabled;
+- `gk-editor-web` active/enabled;
+- `gk-game-web` active/enabled;
+- Node 22 process OK;
+- local game-web route smokes voor `/health/game`, `/game/shell.json`, `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records`;
+- Apache/front-door `/game/` smoke;
+- `pnpm smoke:browser:game`;
+- `pnpm smoke:browser`;
+- runtime shell marker OK;
+- render surface marker OK;
+- safe empty render state OK;
+- no editor/admin route usage OK;
+- no draft leakage OK;
+- no GLB loading/asset requests OK;
+- no concrete gamecontent OK;
+- no renderer scene assembly OK;
+- no gameplay/movement/combat/audio playback OK;
+- no hardcoded HUD/minimap/world/camera/light/audio values OK;
+- no asset mutation OK;
+- GameBible save/protection OK;
+- worktree schoon;
+- blockers.
 
 ## Fasebeoordeling
 
-Fase 12.1 Game Web Service Deployment Core is afgerond en server-side klaar.
+Fase 13 Runtime Render Surface Core Git-basis is toegevoegd.
 
-Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
+Fase 13 is server-side nog niet klaar. Markeer Fase 13 pas als afgerond nadat Codex/Claude build/typecheck/test/lint, live smokes, browser smoke en docs-final groen bevestigt.
+
+Fase 14 is nog niet geopend.

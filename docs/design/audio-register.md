@@ -4,13 +4,9 @@
 
 Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) heeft Codex `/var/www/gk/assets` opnieuw laten scannen. Er zijn 21 audio-assets aanwezig.
 
-Fase 8.1, Fase 9, Fase 10 en Fase 11 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
+Fase 8.1, Fase 9, Fase 10, Fase 11, Fase 12 en Fase 12.1 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
 
-Fase 10 Publish Flow Core valideert candidate references en snapshot metadata, maar kiest geen concrete music, ambience, SFX, UI audio of dialogue runtime mapping.
-
-Fase 11 Runtime Projection Core projecteert audio alleen als publish-accepted reference/read-model metadata. Fase 11 speelt geen audio af, bouwt geen audio runtime playback en wijst geen concrete audio mapping toe.
-
-Fase 12 Runtime Client Shell Core Git-basis is voorbereid. Fase 12 mag audio hooguit als runtime projection read-only metadata tonen. Fase 12 speelt geen audio af, bouwt geen audio playback runtime en wijst geen concrete audio mapping toe.
+Fase 13 Runtime Render Surface Core Git-basis is toegevoegd. Fase 13 speelt geen audio af, laadt geen audio assets, bouwt geen audio playback runtime en wijst geen concrete audio mapping toe.
 
 ## Audio asset policy
 
@@ -25,7 +21,8 @@ Niet toegestaan:
 - definitieve audio-inzet zonder editor/node-data, GameBible, register of expliciete Kevin-input;
 - publish-flow die audio assets kopieert, muteert of automatisch als runtime audio publiceert;
 - runtime projection die audio assets kopieert, muteert, afspeelt of concrete audio runtime mapping hardcoded toewijst;
-- runtime client shell die audio afspeelt, audio assets kopieert/muteert of concrete audio runtime mapping hardcoded toewijst.
+- runtime client shell die audio afspeelt, audio assets kopieert/muteert of concrete audio runtime mapping hardcoded toewijst;
+- runtime render surface die audio afspeelt, audio assets laadt/kopieert/muteert of concrete audio runtime mapping hardcoded toewijst.
 
 ## Bevestigde assetbron
 
@@ -40,7 +37,7 @@ Niet toegestaan:
 | Runtime publish | Nee, `publishesRuntimeOutput=false` |
 | Assets naar Git door scan | Nee, `assetsCopiedToGit=false` |
 
-Er zijn ook 37 UI images aanwezig. GLB- en UI-assets staan in `docs/design/asset-register.md`.
+Er zijn ook 37 UI images en 4 GLB assets aanwezig. GLB- en UI-assets staan in `docs/design/asset-register.md`.
 
 ## Audio categorieen
 
@@ -57,13 +54,6 @@ Ambience, music, SFX en UI audio worden door de asset scan als audio assets gezi
 ## Fase 9 audio gate
 
 Fase 9 bouwt world/camera/lighting/minimap en UI display contracts. Audio assets kunnen in Fase 9 documentatie en editor/picker contexts als candidates bestaan, maar Fase 9 koppelt ze niet als definitieve runtime audio.
-
-Server-side bevestigd voor Fase 9:
-
-- geen concrete audio runtimecontent hardcoded;
-- no-runtime-publish OK;
-- no-asset-mutation OK;
-- build/typecheck/test/lint OK.
 
 Regels:
 
@@ -109,6 +99,21 @@ Fase 12 neemt audio alleen als read-only projection metadata mee:
 - runtime client shell wijzigt of kopieert geen audio assets;
 - runtime client shell hardcodet geen music, ambience, SFX, UI audio of dialogue mapping.
 
+## Fase 13 runtime render surface audio gate
+
+Fase 13 neemt audio niet als runtime playback of assetload mee.
+
+Regels:
+
+- render surface speelt geen audio af;
+- render surface bouwt geen audio playback runtime;
+- render surface laadt geen audio asset;
+- render surface gebruikt geen audio/editor/admin routes;
+- render surface lekt geen editor draft audio data;
+- render surface wijzigt of kopieert geen audio assets;
+- render surface hardcodet geen music, ambience, SFX, UI audio of dialogue mapping;
+- render surface capability probe mag alleen canvas/WebGL status bepalen.
+
 ## Open audio gates
 
 | Onderwerp | Status | Blokkeert |
@@ -119,8 +124,9 @@ Fase 12 neemt audio alleen als read-only projection metadata mee:
 | UI audio | Aanwezig als candidates | Geen bestandsgate; wel HUD/UI event/mapping gate |
 | Combat/boss audio | SFX candidates bestaan, maar concrete combat/boss mapping ontbreekt | Latere combat/boss fase wanneer specifieke audio verplicht wordt |
 | Dialogue/voice gebruik | Nog te bepalen; 0 voice/dialogue bestanden bevestigd | NPC/dialogue flows wanneer voice/audio verplicht wordt |
+| Runtime audio playback | Niet geopend | Pas wanneer Kevin een expliciete audio/runtime fase opent |
 
-Deze gates blokkeren Fase 12 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
+Deze gates blokkeren Fase 13 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
 
 ## Registratievelden
 
@@ -139,7 +145,7 @@ Elke audio asset moet later minimaal deze velden krijgen:
 
 ## Codex-taken buiten Git
 
-Afgerond voor asset refresh en Fase 9 t/m Fase 11:
+Afgerond:
 
 1. `/var/www/gk/assets` gecontroleerd.
 2. Audio count vastgesteld op 21.
@@ -147,15 +153,17 @@ Afgerond voor asset refresh en Fase 9 t/m Fase 11:
 4. `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` bevestigd.
 5. Asset scan OK met invalid=0 en missing=0.
 6. `assetsCopiedToGit=false`, `publishesRuntimeOutput=false` en `assignsDefinitiveRuntimeRoles=false` bevestigd.
-7. Server-side bevestigd dat Fase 9 geen concrete audio runtimecontent hardcoded.
-8. Fase 9 build/typecheck/test/lint bevestigd.
-9. Fase 10 build/typecheck/test/lint en publish gates bevestigd.
-10. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-audio-playback/no-asset-mutation bevestigd.
+7. Fase 9 build/typecheck/test/lint bevestigd.
+8. Fase 10 build/typecheck/test/lint en publish gates bevestigd.
+9. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-audio-playback/no-asset-mutation bevestigd.
+10. Fase 12 build/typecheck/test/lint, runtime shell smokes en no-audio-playback/no-asset-mutation bevestigd.
+11. Fase 12.1 `gk-game-web` service, browser smokes en no-audio-playback/no-asset-mutation bevestigd.
 
-Open voor Fase 12:
+Open voor Fase 13:
 
-1. Server-side bevestigen dat runtime client shell geen concrete audio runtimecontent hardcoded.
-2. Server-side bevestigen dat runtime client shell geen audio/assets wijzigt of kopieert.
-3. Build/typecheck/test/lint en runtime client shell route/browser smokes draaien.
+1. Server-side bevestigen dat runtime render surface geen audio afspeelt.
+2. Server-side bevestigen dat runtime render surface geen audio assets laadt, wijzigt of kopieert.
+3. Server-side bevestigen dat runtime render surface geen concrete audio runtimecontent hardcoded.
+4. Build/typecheck/test/lint en runtime render surface route/browser smokes draaien.
 
 Latere fases moeten opnieuw scannen wanneer Kevin audio toevoegt, verwijdert, hernoemt of definitieve node-koppelingen nodig maakt.

@@ -5,6 +5,10 @@ import {
   renderRuntimeClientShellHtml,
   runtimeClientShellHttpContract
 } from "./runtime-client-shell.js";
+import {
+  createRuntimeRenderSurfaceShellState,
+  runtimeRenderSurfaceClientContract
+} from "./runtime-render-surface.js";
 
 export interface GameRuntimeOptions {
   readonly port?: number;
@@ -27,9 +31,20 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       ok: true,
       service: "game-web",
       runtimeClientShell: "phase-12",
+      runtimeRenderSurface: "phase-13",
+      createsRenderSurface: true,
       implements3DRenderer: false,
+      loadsAssets: false,
+      rendersConcreteWorld: false,
       implementsGameplay: false,
+      implementsMovement: false,
+      implementsCombat: false,
       implementsAudioPlayback: false,
+      hardcodesCamera: false,
+      hardcodesLighting: false,
+      hardcodesHud: false,
+      hardcodesMinimap: false,
+      hardcodesContent: false,
       mutatesAssets: false
     });
     return;
@@ -49,7 +64,9 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
     sendJson(response, 200, {
       ok: true,
       shell: createRuntimeClientShellResponseModel("/game/shell.json"),
-      contract: runtimeClientShellHttpContract
+      contract: runtimeClientShellHttpContract,
+      renderSurface: createRuntimeRenderSurfaceShellState(),
+      renderSurfaceContract: runtimeRenderSurfaceClientContract
     });
     return;
   }

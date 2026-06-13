@@ -5,6 +5,11 @@ import {
   type RuntimeClientShellModel
 } from "@gk/schemas";
 
+import {
+  renderRuntimeRenderSurfaceBootScript,
+  renderRuntimeRenderSurfaceSection,
+  runtimeRenderSurfaceClientContract
+} from "./runtime-render-surface.js";
 import { runtimeProjectionFetchClientContract } from "./runtime-projection-client.js";
 
 export const RUNTIME_CLIENT_SHELL_MARKER = "phase-12" as const;
@@ -23,6 +28,7 @@ export interface RuntimeClientShellHttpContract {
   readonly implementsAudioPlayback: false;
   readonly hardcodesContent: false;
   readonly mutatesAssets: false;
+  readonly renderSurface: typeof runtimeRenderSurfaceClientContract;
 }
 
 export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
@@ -36,7 +42,8 @@ export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
   implementsCombat: false,
   implementsAudioPlayback: false,
   hardcodesContent: false,
-  mutatesAssets: false
+  mutatesAssets: false,
+  renderSurface: runtimeRenderSurfaceClientContract
 };
 
 export function createRuntimeClientShellResponseModel(route: RuntimeClientShellModel["route"] = "/game/"): RuntimeClientShellModel {
@@ -49,6 +56,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
   const routeList = runtimeProjectionFetchClientContract.routes
     .map((route) => `<li><code>${escapeHtml(route)}</code></li>`)
     .join("");
+  const renderSurface = renderRuntimeRenderSurfaceSection();
 
   return `<!doctype html>
 <html lang="nl">
@@ -114,7 +122,8 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
       gap: 12px;
       margin-top: 18px;
     }
-    .panel {
+    .panel,
+    .render-surface {
       min-width: 0;
       border: 1px solid #d9dde3;
       border-radius: 8px;
@@ -124,6 +133,57 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     .panel ul {
       margin: 0;
       padding-left: 18px;
+    }
+    .render-surface {
+      margin-top: 12px;
+    }
+    .render-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .render-host {
+      position: relative;
+      min-height: 180px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border: 1px solid #c6ccd4;
+      border-radius: 6px;
+      background: #15171a;
+      color: #fff;
+    }
+    .render-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0.04;
+      pointer-events: none;
+    }
+    .render-host p {
+      position: relative;
+      margin: 0;
+      padding: 16px;
+      text-align: center;
+    }
+    .render-capability-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .render-capability-grid span {
+      min-width: 0;
+      border: 1px solid #d9dde3;
+      border-radius: 6px;
+      padding: 8px;
+      background: #f6f7f8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
     }
     .muted {
       color: #5c6672;
@@ -141,10 +201,13 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     }
     @media (max-width: 760px) {
       header,
-      .runtime-grid {
+      .runtime-grid,
+      .render-header,
+      .render-capability-grid {
         display: block;
       }
-      .panel {
+      .panel,
+      .render-capability-grid span {
         margin-top: 12px;
       }
       .status-pill {
@@ -179,6 +242,8 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
       </article>
     </section>
 
+    ${renderSurface}
+
     <section class="panel" aria-label="Runtime projection read-only routes" style="margin-top:12px">
       <h2>Read-only projection routes</h2>
       <ul>${routeList}</ul>
@@ -187,6 +252,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     <section class="error" data-runtime-error hidden></section>
     <script id="runtime-client-shell-model" type="application/json">${shellJson}</script>
   </main>
+  ${renderRuntimeRenderSurfaceBootScript()}
   <script>
     (() => {
       const routes = ${JSON.stringify(runtimeProjectionFetchClientContract.routes)};

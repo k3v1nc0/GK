@@ -6,58 +6,61 @@ Dit is een harde bouwregel. Het doel is dat Kevin later nieuwe content kan toevo
 
 Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes kunnen:
 
-- assets;
-- audio;
-- procedural generation seeds;
-- procedural preview en bake drafts;
+- assets en audio;
+- procedural generation seeds, previews en bake drafts;
 - generated zones, spawn areas, path networks, resource distributions en entity placements;
-- world settings;
-- levels/zones;
-- spawnpoints;
-- camera;
-- licht;
-- fog;
-- sky;
-- day/night;
-- minimap;
-- HUD/UI display;
-- publish candidates en validation gates;
-- snapshot metadata;
+- world settings, levels, zones en spawnpoints;
+- camera, lighting, fog, sky en day/night;
+- minimap, HUD en UI display;
+- publish candidates, validation en snapshotmetadata;
 - runtime projection source, manifest, read model, safety flags en audit events;
 - runtime client shell status, boot state, projection state en safety flags;
-- player levels en XP;
-- money/currency;
-- merchants;
-- NPC taken;
-- NPC routes;
-- NPC audio;
-- groepen en spawn timings;
-- quests;
-- side quests;
-- inventory;
-- items;
-- readable scrolls;
-- attacks;
-- boss mechanics;
-- HUD panels.
+- runtime render surface status, capability, lifecycle en safety flags;
+- latere player, economy, merchant, NPC, quest, item, combat, HUD en audio inhoud.
 
-Concrete gamecontent hoort niet in runtimecode. De keten blijft `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Game`.
+Concrete gamecontent hoort niet in runtimecode. De keten blijft:
+
+```text
+Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Game
+```
+
+Fase 13 opent alleen een generieke render-surface capability. Concrete renderer scene assembly, gameplay, HUD/minimap runtime en audio playback blijven latere expliciete fases.
 
 ## Node UI zoals geometry nodes
 
 Een node heeft typed sockets, eigen velden, dropdowns, pickers, kleur/numeric fields en warning/error status. Een output mag naar meerdere inputs. De editor moet typed sockets gebruiken zodat verkeerde koppelingen direct zichtbaar zijn.
 
-## Socket types
+## Socket types per fase
 
-Fase 6 heeft de eerste typed sockets vastgelegd als engine-capabilities: `var.string`, `number`, `color`, `asset.reference` en `audio.reference`.
+Fase 6:
 
-Fase 8 breidt uit met `entity.reference`, `component.reference` en `entity.group.reference`.
+- `var.string`;
+- `number`;
+- `color`;
+- `asset.reference`;
+- `audio.reference`.
 
-Fase 8.1 breidt uit met procedural graph, seed, generation output en generated draft/candidate references.
+Fase 8:
 
-Fase 9 breidt uit met:
+- `entity.reference`;
+- `component.reference`;
+- `entity.group.reference`.
 
+Fase 8.1:
+
+- `procedural.seed.reference`;
+- `procedural.graph.reference`;
+- `generation.output.reference`;
+- `generated.entity.draft.reference`;
+- `generated.group.draft.reference`;
 - `generated.zone.candidate.reference`;
+- `generated.placement.candidate.reference`;
+- `generated.spawn-area.candidate.reference`;
+- `generated.path-network.candidate.reference`;
+- `generated.resource-distribution.candidate.reference`.
+
+Fase 9:
+
 - `world.settings.reference`;
 - `world.level.reference`;
 - `world.zone.reference`;
@@ -69,13 +72,13 @@ Fase 9 breidt uit met:
 - `minimap.marker.reference`;
 - `ui.asset-display.reference`.
 
-Fase 10 breidt uit met:
+Fase 10:
 
 - `publish.candidate.reference`;
 - `publish.validation.reference`;
 - `publish.snapshot.reference`.
 
-Fase 11 breidt uit met:
+Fase 11:
 
 - `runtime.projection.source.reference`;
 - `runtime.projection.validation.reference`;
@@ -83,16 +86,24 @@ Fase 11 breidt uit met:
 - `runtime.projection.read-model.reference`;
 - `runtime.projection.audit.reference`.
 
-Fase 12 breidt uit met:
+Fase 12:
 
 - `runtime.client.shell.reference`;
 - `runtime.client.boot-state.reference`;
 - `runtime.client.projection-state.reference`;
 - `runtime.client.safety.reference`.
 
-Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell contracts. Ze bouwen geen Runtime Game renderer en voegen geen concrete gamecontent toe.
+Fase 13:
 
-## Asset import
+- `runtime.render.surface.reference`;
+- `runtime.render.status.reference`;
+- `runtime.render.capability.reference`;
+- `runtime.render.lifecycle.reference`;
+- `runtime.render.safety.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface contracts. Ze voegen geen concrete gamecontent toe.
+
+## Asset import en role mapping
 
 Als een bestand in `/var/www/gk/assets` komt:
 
@@ -114,15 +125,7 @@ Actuele asset scan na `Assets - new`:
 - invalid=0;
 - missing=0.
 
-GLB, UI en audio blijven candidates totdat editor/node-data, GameBible/registers of expliciete Kevin-input ze kiest.
-
-## GLB role mapping blijft editor-data
-
-GLB-bestanden mogen niet automatisch een definitieve runtime-role krijgen.
-
-De scanner mag alleen generieke kandidaat-capability metadata registreren. Alleen `assigned` editor-data mag later door publish/runtime worden geconsumeerd als concrete role mapping.
-
-`Taverne.glb` en `Wizard.glb` zijn Fase 8 Kevin-testkeuzes. Ze zijn geen runtime-hardcoded object of NPC.
+GLB, UI en audio blijven candidates totdat editor/node-data, GameBible/registers of expliciete Kevin-input ze kiest. Fase 13 laadt geen GLB, textures, UI images of audio assets.
 
 ## Fase 8 entity/component laag
 
@@ -132,219 +135,142 @@ Belangrijke regels:
 
 - `renderable` gebruikt `asset.reference` naar de Fase 7 asset library;
 - `audio_emitter` gebruikt `audio.reference` en blijft data-driven;
-- `npc_brain`, `combatant`, `boss`, `merchant`, `quest_target` en `player_appearance` blijven candidate totdat editor-data bestaat;
-- runtime-active NPC/combat/player behavior vereist expliciete animation mapping via editor-data;
+- runtime-active NPC/combat/player behavior vereist expliciete mapping via editor-data;
 - entity validation en graph draft preview zijn geen publishstap.
 
 ## Fase 8.1 procedural generation laag
 
-Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system. Server-side verificatie is afgerond en de basis is klaar.
+Fase 8.1 voegt procedural generation toe als core engine-capability in het node-system.
 
 Belangrijke regels:
 
 - generatoren zijn data-driven en deterministic;
-- zelfde seed + zelfde graph + zelfde inputs geeft dezelfde output;
-- procedural preview publiceert niets naar Runtime Game;
-- procedural bake maakt alleen editor draft data of bake draft result;
-- procedural output blijft draft/candidate totdat een publish-flow expliciet publiceert;
+- preview en bake publiceren niets naar Runtime Game;
+- procedural output blijft draft/candidate totdat publish-flow expliciet publiceert;
 - generated entities gebruiken Fase 8 entity/component contracts;
-- generated assets gebruiken Fase 7 `asset.reference`;
-- generated audio gebruikt `audio.reference` en blijft candidate/editor-data.
+- generated assets/audio blijven references en candidates.
 
 ## Fase 9 world/camera/minimap laag
 
-Fase 9 is server-side afgerond en klaar. Deze laag voegt world, camera, lighting, minimap en UI display toe als engine-capabilities.
+Fase 9 voegt world, camera, lighting, minimap en UI display toe als engine-capabilities.
 
 Belangrijke regels:
 
-- world settings, levels, zones, spawnpoints, bounds en transitions zijn node/editor-data contracts;
-- generated zones, placements, spawn areas, path networks en resource distributions uit Fase 8.1 blijven draft/candidate input;
-- camera mode, follow target, orbit, zoom, bounds, collision en transition zijn node-data;
-- directional light, ambient, fog, sky en day/night cycle zijn node-data;
-- minimap view, layers, markers, icons en generated layers zijn node-data;
-- editor minimap en game minimap mogen verschillen via node-data;
-- anonymous/game sessions krijgen geen editor world/minimap beheer;
+- world, camera, lighting, minimap en UI display zijn node/editor-data contracts;
+- generated zones, placements en paths blijven draft/candidate input;
+- UI source natural size is metadata en nooit automatisch display size;
 - Fase 9 publiceert niets naar Runtime Game.
 
 ## Fase 10 publish-flow laag
 
-Fase 10 is server-side afgerond en klaar als publish-boundary laag.
-
-Publish flow states:
-
-- `draft`;
-- `candidate`;
-- `publish-ready`;
-- `published-snapshot` metadata.
+Fase 10 is een publish-boundary contractlaag.
 
 Belangrijke regels:
 
-- publish validation bundelt node graph, asset/audio candidates, entity/component drafts, procedural generated refs en Fase 9 world/UI data;
-- generated Fase 8.1 refs blijven draft/candidate input totdat publish validation ze accepteert;
-- asset candidates mogen geen definitieve runtime role mapping krijgen;
-- UI display natural size blijft metadata en mag display size niet vervangen;
+- publish validation bundelt node graph, assets, audio, entities, procedural refs en Fase 9 world/UI data;
 - snapshot creation is metadata-only;
 - rollback reference valideert alleen en herstelt runtime niet automatisch;
-- anonymous, game en non-admin editor sessions krijgen geen publish-flow beheer;
 - Fase 10 publiceert niets naar Runtime Game en wijzigt geen assets.
 
 ### Publish nodes
 
-- `gk.publish.status`
-- `gk.publish.candidateReference`
-- `gk.publish.validate`
-- `gk.publish.snapshotMetadata`
-- `gk.publish.rollbackReference`
+- `gk.publish.status`;
+- `gk.publish.candidateReference`;
+- `gk.publish.validate`;
+- `gk.publish.snapshotMetadata`;
+- `gk.publish.rollbackReference`.
 
 ## Fase 11 runtime projection laag
 
-Fase 11 is server-side afgerond en klaar als runtime projection contractlaag.
+Fase 11 is een runtime projection contractlaag.
 
 Belangrijke regels:
 
 - runtime projection source moet uit Fase 10 publish snapshotmetadata en publish-ready validation komen;
-- raw editor drafts mogen niet direct worden geprojecteerd;
-- procedural preview/bake mag niet direct worden geprojecteerd zonder publish acceptatie;
-- generated refs blijven draft/candidate totdat publish validation ze accepteert;
-- runtime projection manifest en read model zijn contract/read-model metadata;
+- raw editor drafts en procedural preview/bake mogen niet direct worden geprojecteerd;
+- manifest en read model zijn contract/read-model metadata;
 - runtime projection bouwt geen renderer, game client, gameplay, HUD runtime, minimap runtime of audio playback;
-- UI display natural size blijft metadata en mag display size niet vervangen;
-- GLB roles blijven candidate/editor-data tenzij publish data ze later expliciet toewijst;
-- runtime projection wijzigt of kopieert geen assets;
-- runtime projection bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values.
+- GLB roles blijven candidate/editor-data tenzij latere publish data ze expliciet accepteert;
+- runtime projection wijzigt of kopieert geen assets.
 
 ### Runtime projection nodes
 
-- `gk.runtimeProjection.source`
-- `gk.runtimeProjection.validate`
-- `gk.runtimeProjection.manifest`
-- `gk.runtimeProjection.readModel`
-- `gk.runtimeProjection.auditEvent`
+- `gk.runtimeProjection.source`;
+- `gk.runtimeProjection.validate`;
+- `gk.runtimeProjection.manifest`;
+- `gk.runtimeProjection.readModel`;
+- `gk.runtimeProjection.auditEvent`.
 
 ## Fase 12 runtime client shell laag
 
-Fase 12 Git-basis is voorbereid als runtime client shell contractlaag. Server-side validatie staat nog open.
+Fase 12 is server-side afgerond en klaar als runtime client shell contractlaag.
 
 Belangrijke regels:
 
 - runtime client shell mag alleen runtime projection read-only routes consumeren;
-- runtime client shell mag geen editor/admin routes gebruiken;
-- runtime client shell mag geen editor draft/candidate data direct tonen;
-- runtime client shell toont veilige loading/empty/error/status states;
-- runtime client shell mag projection manifest/records alleen als metadata/read model tonen;
-- runtime client shell bouwt geen 3D renderer, gameplay, movement, combat, HUD runtime, minimap runtime of audio playback;
-- runtime client shell wijzigt of kopieert geen assets;
-- runtime client shell bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values;
-- Fase 12 opent Fase 13 niet.
+- geen editor/admin routes;
+- geen editor draft/candidate data;
+- veilige loading/empty/error/status states;
+- projection manifest/records alleen als metadata/read model;
+- geen 3D renderer, gameplay, movement, combat, HUD runtime, minimap runtime of audio playback;
+- geen assetmutatie;
+- geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values.
 
 ### Runtime client shell nodes
 
-- `gk.runtimeClient.shell`
-- `gk.runtimeClient.bootState`
-- `gk.runtimeClient.projectionState`
-- `gk.runtimeClient.safetyFlags`
+- `gk.runtimeClient.shell`;
+- `gk.runtimeClient.bootState`;
+- `gk.runtimeClient.projectionState`;
+- `gk.runtimeClient.safetyFlags`.
 
-## UI/HUD/minimap display contract
+## Fase 12.1 game-web service laag
 
-Source images mogen groot zijn. Natural width/height is metadata en mag niet automatisch display size worden.
+Fase 12.1 is server-side afgerond en klaar als vaste deployment/service-basis voor `apps/game-web`.
 
-UI display nodes moeten dragen:
+Belangrijke regels:
 
-- `asset.reference`;
-- natural width/height metadata indien bekend;
-- `displayWidth`;
-- `displayHeight`;
-- optional min/max width/height;
-- `scaleMode`: `contain`, `cover`, `stretch`, `nineSlice`, `none`;
-- `anchor`: `topLeft`, `topRight`, `bottomLeft`, `bottomRight`, `center`, `topCenter`, `bottomCenter`, `leftCenter`, `rightCenter`;
-- `pivot`: `center`, `topLeft`, `topRight`, `bottomLeft`, `bottomRight`, `bottomCenter`;
-- `opacity`;
-- `zIndex`;
-- responsive rules.
+- `gk-game-web` draait als vaste active/enabled systemd service;
+- service draait via `/opt/gk/node-v22/bin/node`;
+- Apache routeert `/game/`, `/health/game` en `/runtime/projection/` naar `127.0.0.1:3003`;
+- game browser-smoke is groen en niet meer skipped;
+- geen renderer/gameplay/content/assetmutatie.
 
-Schema defaults zijn editor/schema hints, geen concrete HUD layout:
+## Fase 13 runtime render surface laag
 
-- icon display hint: 32x32;
-- minimap marker display hint: 24x24;
-- small status icon hint: 24x24;
-- HUD bar/frame display size blijft node-data required;
-- `nineSlice` is alleen geldig met slice margins uit node-data.
+Fase 13 Git-basis is toegevoegd als runtime render surface contractlaag. Server-side verificatie staat nog open.
 
-## Node families
+Belangrijke regels:
 
-### World/camera/light nodes
+- render surface mag een canvas/render host maken;
+- render surface mag canvas/WebGL/WebGL2 capability proben;
+- render surface mag alleen runtime projection metadata/read-only state consumeren;
+- safe empty render state is geldig wanneer er geen renderbare projection payload is;
+- render lifecycle states zijn `booting`, `ready`, `empty` en `error`;
+- render surface bouwt geen volledige renderer en geen scene assembly;
+- render surface laadt geen GLB, texture, UI image of audio asset;
+- render surface toont geen concrete world/entity/NPC/quest/economy payload;
+- render surface bouwt geen gameplay, movement, combat of audio playback;
+- render surface hardcodet geen camera, lighting, HUD, minimap, world of audio values;
+- render surface wijzigt of kopieert geen assets;
+- Fase 13 opent Fase 14 niet.
 
-- `gk.world.settings`
-- `gk.world.level`
-- `gk.world.zone`
-- `gk.world.spawnpoint`
-- `gk.world.generatedZoneReference`
-- `gk.world.generatedPlacementReference`
-- `gk.camera.mode`
-- `gk.camera.followTarget`
-- `gk.camera.orbit`
-- `gk.camera.zoom`
-- `gk.camera.bounds`
-- `gk.camera.collision`
-- `gk.camera.transition`
-- `gk.lighting.directional`
-- `gk.lighting.ambient`
-- `gk.lighting.fog`
-- `gk.lighting.sky`
-- `gk.lighting.dayNightCycle`
+### Runtime render surface nodes
 
-### Minimap nodes
+- `gk.runtimeRender.surface`;
+- `gk.runtimeRender.status`;
+- `gk.runtimeRender.capability`;
+- `gk.runtimeRender.lifecycle`;
+- `gk.runtimeRender.safetyFlags`.
 
-- `gk.minimap.view`
-- `gk.minimap.layer`
-- `gk.minimap.marker`
-- `gk.minimap.icon`
-- `gk.minimap.zoneBounds`
-- `gk.minimap.generatedPathLayer`
-- `gk.minimap.generatedResourceLayer`
-- `gk.minimap.generatedSpawnLayer`
-
-### HUD/UI nodes
-
-- `gk.ui.assetDisplay`
-- `gk.ui.iconDisplay`
-- `gk.ui.hudFrame`
-- `gk.ui.hudBar`
-- `gk.ui.nineSlice`
-
-### Publish nodes
-
-- `gk.publish.status`
-- `gk.publish.candidateReference`
-- `gk.publish.validate`
-- `gk.publish.snapshotMetadata`
-- `gk.publish.rollbackReference`
-
-### Runtime projection nodes
-
-- `gk.runtimeProjection.source`
-- `gk.runtimeProjection.validate`
-- `gk.runtimeProjection.manifest`
-- `gk.runtimeProjection.readModel`
-- `gk.runtimeProjection.auditEvent`
-
-### Runtime client shell nodes
-
-- `gk.runtimeClient.shell`
-- `gk.runtimeClient.bootState`
-- `gk.runtimeClient.projectionState`
-- `gk.runtimeClient.safetyFlags`
-
-## Publish, projection en client shell regels
+## Publish, projection, client shell en render surface regels
 
 - GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
 - Runtime-active behavior blokkeert zonder verplichte editor-data.
 - Procedural preview en bake zijn geen publishstap.
-- Generated procedural output mag pas runtime betekenis krijgen wanneer publish-flow de output expliciet accepteert en runtime projection die accepted snapshotmetadata leest.
 - Runtime projection is nog geen renderer of gameplayclient.
 - Runtime client shell is nog geen renderer, gameplay, HUD, minimap of audio runtime.
-- Runtime client shell mag geen editor/admin routes of editor draft data consumeren.
+- Runtime render surface is nog geen scene assembly, gameplay, HUD, minimap of audio runtime.
+- Runtime client shell en render surface mogen geen editor/admin routes of editor draft data consumeren.
 - UI display natural size is nooit automatisch display size.
 - Missing display size of missing responsive rule geeft validation issue.
-- Missing `nineSlice` margins geeft validation issue.
-- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation en Fase 12 runtime client shell validation zijn geen Runtime Game renderer.
+- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation en Fase 13 runtime render surface validation zijn geen Runtime Game renderer.

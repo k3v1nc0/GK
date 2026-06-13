@@ -14,9 +14,9 @@ Actuele scanstatus:
 | Invalid | 0 | Geen invalid assets |
 | Missing | 0 | Geen missing assets |
 
-Fase 8, Fase 8.1, Fase 9, Fase 10 en Fase 11 zijn server-side afgerond en klaar.
+Fase 8, Fase 8.1, Fase 9, Fase 10, Fase 11, Fase 12 en Fase 12.1 zijn server-side afgerond en klaar.
 
-Fase 12 Runtime Client Shell Core Git-basis is voorbereid. Fase 12 mag asset/audio/UI references alleen als runtime projection read-only metadata tonen. Fase 12 mag geen assets toevoegen, wijzigen, verwijderen, kopieren, uploaden of definitieve GLB role mapping hardcoden.
+Fase 13 Runtime Render Surface Core Git-basis is toegevoegd. Fase 13 mag asset/audio/UI references alleen als runtime projection metadata kennen en mag geen assets laden, toevoegen, wijzigen, verwijderen, kopieren of definitieve GLB role mapping hardcoden.
 
 ## Asset source policy
 
@@ -37,7 +37,10 @@ Niet toegestaan:
 - publish-flow die assets kopieert, muteert of definitieve GLB roles hardcoded toewijst;
 - runtime projection die assets kopieert, muteert, verwijdert of definitive GLB roles hardcoded toewijst;
 - runtime client shell die assets kopieert, muteert, uploadt, verwijdert, role mapping definitief maakt of asset previews als gameplaycontent presenteert;
-- UI source pixel size gebruiken als runtime/projection/client display size zonder node/editor/publish data.
+- runtime render surface die GLB, textures, UI images of audio assets laadt;
+- runtime render surface die asset URLs aanvraagt;
+- runtime render surface die asset previews of concrete gameplayrollen toont;
+- UI source pixel size gebruiken als runtime/projection/client/render display size zonder node/editor/publish data.
 
 ## Assetpaden
 
@@ -60,6 +63,8 @@ Deze GLB's bestaan als geregistreerde assets. Hun gameplayrol is nog niet defini
 
 Een assetnaam bepaalt nog niet of iets player, NPC, merchant, enemy, boss, prop, environment of quest object is.
 
+Fase 13 laadt geen GLB en maakt geen GLB role mapping definitief. GLB loading hoort pas bij een latere expliciet geopende projection-driven scene assembly of renderer fase.
+
 ## UI image assets
 
 Status: 37 UI images aanwezig als asset-library candidates.
@@ -74,27 +79,22 @@ Status: 37 UI images aanwezig als asset-library candidates.
 
 HUD-bestanden, icon-bestanden en minimap marker-bestanden worden door de asset scan als UI/image assets gezien. Ze zijn beschikbaar als library candidates, maar zijn geen definitieve HUD-layout, minimapconfiguratie, itemdata, combatdata of runtime UI.
 
+Fase 13 gebruikt geen UI image assets en bouwt geen HUD/minimap runtime layout. De canvas/render host is een generieke capability surface, geen concrete HUD of minimap.
+
 ## UI display gate
 
-Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd. Fase 10 neemt deze gate mee in publish validation. Fase 11 neemt deze gate mee in runtime projection validation. Fase 12 bewaakt dat de runtime client shell natural source size niet als display/layout hardcoding gebruikt.
+Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd. Fase 10 neemt deze gate mee in publish validation. Fase 11 neemt deze gate mee in runtime projection validation. Fase 12 bewaakt dat de runtime client shell natural source size niet als display/layout hardcoding gebruikt. Fase 13 bewaakt dat de runtime render surface geen UI asset display of HUD/minimap layout hardcoded.
 
 Regels:
 
 - source image natural size is metadata;
-- runtime/editor/projection/client shell mag source pixel size nooit blind als display size gebruiken;
+- runtime/editor/projection/client shell/render surface mag source pixel size nooit blind als display size gebruiken;
 - display size moet via node-data/editor-data/publish data komen;
 - `displayWidth` en `displayHeight` zijn vereist, tenzij responsive rules expliciet dimensions leveren;
 - `scaleMode`, `anchor`, `pivot`, `opacity` en `zIndex` zijn node-data;
 - `nineSlice` vereist slice margins uit node-data;
 - grote source images zonder display size geven validation issue;
 - schema defaults zijn hints, geen concrete HUD layout.
-
-Schema hints:
-
-- icon display: 32x32;
-- minimap marker display: 24x24;
-- small status icon: 24x24;
-- HUD bar/frame display size blijft node-data required.
 
 ## Fase 10 publish asset gate
 
@@ -134,25 +134,30 @@ Regels:
 - runtime client shell bouwt geen HUD/minimap runtime layout;
 - runtime client shell gebruikt geen natural source pixel size als display/layout hardcoding.
 
+## Fase 13 runtime render surface asset gate
+
+Fase 13 runtime render surface is een capability surface, geen asset consumer.
+
+Regels:
+
+- render surface maakt alleen een canvas/render host;
+- render surface mag canvas/WebGL/WebGL2 capability proben;
+- render surface consumeert alleen runtime projection metadata/read-only state;
+- render surface laadt geen GLB;
+- render surface laadt geen texture, UI image of audio asset;
+- render surface vraagt geen asset URLs aan;
+- render surface bouwt geen asset-loader node;
+- render surface maakt geen GLB role mapping definitief;
+- render surface toont geen concrete world/entity/NPC/quest/economy payload;
+- render surface wijzigt, kopieert, uploadt of verwijdert geen assets.
+
 ## Audio assets
 
 Status: 21 audio files aanwezig als asset-library candidates.
 
 Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag alleen via asset library en audio nodes worden gekozen of ingesteld.
 
-Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst geen concrete audio runtimecontent toe. Fase 11 projecteert audio hooguit als publish-accepted metadata/reference en speelt niets af. Fase 12 toont hooguit read-only projection metadata en speelt niets af.
-
-## Fase 8.1 procedural asset gate
-
-Regels:
-
-- generated assets gebruiken Fase 7 `asset.reference`;
-- generated entities gebruiken Fase 8 entity/component contracts;
-- generated placements blijven candidates totdat editor-data of publish-flow ze later expliciet accepteert;
-- generated audio gebruikt `audio.reference` en blijft candidate/editor-data;
-- procedural preview publiceert niets naar Runtime Game;
-- procedural bake maakt alleen editor draft data of bake draft result;
-- geen procedural generator mag assets uploaden, kopieren naar Git, verwijderen of verzinnen.
+Fase 13 speelt geen audio af, laadt geen audio assets en wijst geen concrete audio runtime mapping toe.
 
 ## Gekoppelde nodefamilies
 
@@ -162,6 +167,7 @@ Regels:
 - publish candidate references via Fase 10 publish-flow nodes;
 - runtime projection references via Fase 11 runtime projection nodes;
 - runtime client shell references via Fase 12 runtime client nodes;
+- runtime render surface references via Fase 13 runtime render nodes;
 - audio blijft candidate/editor-data voor latere audio nodefamilies.
 
 ## Codex-taken buiten Git
@@ -179,16 +185,20 @@ Afgerond:
 9. Fase 9 no-asset-mutation en UI display validation bevestigd.
 10. Fase 10 build/typecheck/test/lint, publish smokes en no-asset-mutation bevestigd.
 11. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-asset-mutation bevestigd.
+12. Fase 12 build/typecheck/test/lint, runtime client shell smokes en no-asset-mutation bevestigd.
+13. Fase 12.1 `gk-game-web` service, route smokes, browser smokes en no-asset-mutation bevestigd.
 
-Open voor Fase 12:
+Open voor Fase 13:
 
-1. Server-side bevestigen dat runtime client shell geen assets wijzigt, kopieert of uploadt.
-2. Server-side bevestigen dat runtime client shell geen concrete asset/audio/UI runtimecontent hardcoded.
-3. Build/typecheck/test/lint draaien.
-4. Runtime client shell route/browser smokes draaien.
+1. Server-side bevestigen dat runtime render surface geen assets laadt, wijzigt, kopieert of uploadt.
+2. Server-side bevestigen dat runtime render surface geen GLB loading of definitive role mapping toevoegt.
+3. Server-side bevestigen dat runtime render surface geen concrete asset/audio/UI runtimecontent hardcoded.
+4. Build/typecheck/test/lint draaien.
+5. Runtime render surface route/browser smokes draaien.
 
 Open voor latere fases:
 
 1. Definitieve GLB role mapping via editor/node-data of Kevin-input wanneer publish/runtime dat nodig maakt.
 2. Definitieve UI/HUD/minimap display mappings via editor/node-data wanneer concrete runtime UI nodig wordt.
-3. Nieuwe asset scan wanneer Kevin assets toevoegt, verwijdert of hernoemt.
+3. Asset loading alleen in een expliciet geopende scene assembly/renderer fase.
+4. Nieuwe asset scan wanneer Kevin assets toevoegt, verwijdert of hernoemt.

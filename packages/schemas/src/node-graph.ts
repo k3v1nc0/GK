@@ -40,7 +40,12 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "runtime.client.shell.reference",
   "runtime.client.boot-state.reference",
   "runtime.client.projection-state.reference",
-  "runtime.client.safety.reference"
+  "runtime.client.safety.reference",
+  "runtime.render.surface.reference",
+  "runtime.render.status.reference",
+  "runtime.render.capability.reference",
+  "runtime.render.lifecycle.reference",
+  "runtime.render.safety.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];
