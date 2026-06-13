@@ -18,6 +18,12 @@ Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 serv
 
 Fase 11 Runtime Projection Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
 
+## Vast server-verificatie runbook
+
+Gebruik `docs/ops/server-verification-runbook.md` als vaste startplek voor Codex/Claude server-side verificatie. Dat runbook bundelt de bekende serverpaden, Node 22 PATH, env- en secret-bestandspaden zonder secret values, service/poort layout, editor login flow, smoke-routes, frontend/editor panel checks, Playwright/headless Chromium browser-smokes en standaard eindrapportage.
+
+De runbook is leidend voor terugkerende serverchecks. Deze layoutdoc blijft de structurele serverkaart, maar Codex/Claude hoeft voor fase-smokes niet opnieuw te zoeken naar secretlocaties, routefamilies, panel IDs of browser-smoke artifactregels.
+
 ## Hoofdregels
 
 - GK Code Copiloot beheert in Git alleen blijvende scripts, templates, docs en checks.
@@ -30,6 +36,7 @@ Fase 11 Runtime Projection Core Git-basis is voorbereid op `main`. Server-side v
 - Fase 9 publiceert niets naar runtime.
 - Fase 10 publiceert niets naar runtime en maakt alleen publish validation/snapshot metadata contracts.
 - Fase 11 maakt alleen runtime projection contracts/read-model metadata en bouwt geen Runtime Game renderer/client.
+- Browser-smokes mogen geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Bevestigde paden
 
@@ -39,6 +46,7 @@ Fase 11 Runtime Projection Core Git-basis is voorbereid op `main`. Server-side v
 | `/var/www/gk/assets` | Bevestigd | Server assetbron. |
 | `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` | Bevestigd | Door Codex buiten Git gezet of bevestigd. |
 | `/opt/gk/node-v22/bin/node` | Bevestigd | Actieve Node runtime voor `gk-api` en `gk-editor-web`. |
+| `/tmp/gk-browser-smoke/` | Candidate/default | Server-local browser-smoke artifacts, nooit Git. |
 
 ## Assetstatus
 
@@ -171,15 +179,37 @@ Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar
 | `/var/www/gk/data` | Runtime data, uploads, database dumps of generated data indien later nodig | Nee |
 | `/var/www/gk/logs` | Applicatie- en workerlogs | Nee |
 | `/var/www/gk/tmp` | Tijdelijke runtimebestanden | Nee |
+| `/tmp/gk-browser-smoke` | Tijdelijke Playwright screenshots/traces indien expliciet aangezet | Nee |
 
 ## Secrets en env
 
 Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 
 - `/etc/gk/gk.env`;
+- `/etc/gk/secrets/initial-editor-admin.env`;
+- `/etc/gk/secrets/smoke-users.env`;
 - een door Codex beheerde secret store of serverconfig.
 
+`/etc/gk/secrets/smoke-users.env` is server-only en mag optioneel deze variabelen bevatten:
+
+- `GK_SMOKE_EDITOR_EMAIL`;
+- `GK_SMOKE_EDITOR_PASSWORD`;
+- `GK_SMOKE_GAME_EMAIL`;
+- `GK_SMOKE_GAME_PASSWORD`.
+
+De vaste secret-bestandspaden en variabelenamen staan in `docs/ops/server-verification-runbook.md`. Print nooit secret values, plak geen `cat` output met secrets in rapporten en commit nooit secret values naar Git.
+
 Git mag alleen veilige examples bevatten. Geen Fase 11 wijziging mag secrets toevoegen.
+
+## Browser-smoke tooling
+
+`package.json` bevat expliciete browser-smoke scripts:
+
+- `pnpm smoke:browser`;
+- `pnpm smoke:browser:editor`;
+- `pnpm smoke:browser:game`.
+
+Deze scripts draaien pas na build/typecheck/test/lint en service restart. Ze vereisen server-side Playwright/Chromium installatie indien die nog niet aanwezig is. Ze mogen artifacts alleen in een tijdelijke server-local map zetten, standaard onder `/tmp/gk-browser-smoke/`, en nooit in Git.
 
 ## Codex/Claude serverchecks
 
@@ -193,6 +223,8 @@ Afgerond:
 6. Fase 9 build/typecheck/test/lint, editor/API smokes en no-runtime-publish/no-asset-mutation afgerond.
 7. Fase 10 build/typecheck/test/lint, publish route smokes, auth/CSRF smokes, panel smoke en no-runtime-publish/no-asset-mutation afgerond.
 
+Gebruik voor nieuwe server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
+
 Open voor Fase 11:
 
 1. `pnpm build`.
@@ -204,7 +236,8 @@ Open voor Fase 11:
 7. Anonymous/game/non-admin denied smokes.
 8. CSRF/Origin smokes voor state-changing projection routes.
 9. Runtime Projection panel smoke.
-10. Bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
+10. `pnpm smoke:browser` zodra Playwright/Chromium server-side beschikbaar is.
+11. Bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
 
 Nog open voor latere fases:
 

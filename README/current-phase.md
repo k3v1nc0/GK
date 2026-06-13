@@ -22,6 +22,7 @@ Open voor de actuele fasecontractstatus:
 - `docs/design/audio-register.md`
 - `docs/design/game-bible.md`
 - `docs/ops/server-layout.md`
+- `docs/ops/server-verification-runbook.md`
 - `README/GameBibleNode.json`
 
 ## Fase 10 status
@@ -118,11 +119,15 @@ GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library c
 - Runtime projection is een read-model/contractlaag, geen Runtime Game renderer/client.
 - Geen Fase 12 openen.
 
+## Server-side verificatie runbook
+
+Gebruik `docs/ops/server-verification-runbook.md` voor vaste Codex/Claude server-side verificatie, smoke-routes, editor login flow, frontend panel checks, secret-handling regels en eindrapportage. De runbook documenteert alleen secret-bestandspaden en variabelenamen, geen secret values.
+
 ## Open aandachtspunten
 
 Fase 11 Git-basis is voorbereid, maar server-side status staat open.
 
-Codex/Claude moet nog draaien/bevestigen:
+Codex/Claude moet nog draaien/bevestigen volgens `docs/ops/server-verification-runbook.md`:
 
 - `pnpm build`;
 - `pnpm typecheck`;

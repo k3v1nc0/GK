@@ -112,6 +112,23 @@ Regels:
 - geen dummy content;
 - geen renderer/game client.
 
+## Live auth smoke runbook
+
+Gebruik `docs/ops/server-verification-runbook.md` voor live auth- en route-smokes. Echte editor login via `POST /auth/editor/login` is de voorkeursroute voor live serververificatie, gevolgd door `GET /auth/editor/me` met de editor session cookie.
+
+Browser-smokes gebruiken server-only credentials uit `/etc/gk/secrets/initial-editor-admin.env` en optioneel `/etc/gk/secrets/smoke-users.env`. Git documenteert alleen deze paden en variabelenamen:
+
+- `GK_INITIAL_EDITOR_ADMIN_EMAIL`;
+- `GK_INITIAL_EDITOR_ADMIN_TEMP_PASSWORD`;
+- `GK_SMOKE_EDITOR_EMAIL`;
+- `GK_SMOKE_EDITOR_PASSWORD`;
+- `GK_SMOKE_GAME_EMAIL`;
+- `GK_SMOKE_GAME_PASSWORD`.
+
+Smoke headers of speciale testheaders mogen alleen worden gebruikt waar ze expliciet geactiveerd zijn en alleen voor deny/contract-smokes. Live verificatie mag niet afhankelijk worden van test-hacks. Secret values mogen nooit worden geprint, in rapporten geplakt, in screenshots/traces zichtbaar zijn of naar Git geschreven.
+
+Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
+
 ## Registration and verification
 
 Game registratie is publiek open. Nieuwe game users starten als `pending_verification`. Volledige gamefuncties mogen pas beschikbaar komen nadat e-mailverificatie de user naar een toegestane actieve status brengt.
@@ -192,7 +209,7 @@ Fase 9 is server-side gevalideerd voor editor world/minimap/UI display auth-deny
 
 Fase 10 Git-basis is voorbereid en server-side validatie is afgerond voor publish route smokes, auth-deny smokes en CSRF/Origin smokes.
 
-Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes en CSRF/Origin smokes.
+Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes, CSRF/Origin smokes en `pnpm smoke:browser`. Gebruik `docs/ops/server-verification-runbook.md` als vaste checklijst en rapportvorm.
 
 ## Open aandachtspunt
 

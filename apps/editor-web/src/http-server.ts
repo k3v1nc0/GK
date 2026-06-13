@@ -278,7 +278,11 @@ function renderEditorShellHtml(): string {
         showLogin();
       });
 
-      void refreshSession().catch(() => showLogin("Sessiestatus kon niet worden gecontroleerd."));
+      if (document.cookie.includes("gk_editor_session=")) {
+        void refreshSession().catch(() => showLogin("Sessiestatus kon niet worden gecontroleerd."));
+      } else {
+        showLogin();
+      }
     })();
   </script>
 </body>
