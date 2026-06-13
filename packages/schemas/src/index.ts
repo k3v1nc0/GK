@@ -9,6 +9,8 @@ export * from "./publish-flow.js";
 export * from "./publish-flow-validation.js";
 export * from "./runtime-projection.js";
 export * from "./runtime-projection-validation.js";
+export * from "./runtime-client-shell.js";
+export * from "./runtime-client-shell-validation.js";
 export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
@@ -23,6 +25,8 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "publish-flow-validation",
   "runtime-projection",
   "runtime-projection-validation",
+  "runtime-client-shell",
+  "runtime-client-shell-validation",
   "node-publish"
 ] as const;
 

@@ -116,6 +116,29 @@ Regels:
 - geen dummy content;
 - geen renderer/game client.
 
+## Fase 12 runtime client shell routes
+
+Fase 12 game-web/runtime shell routes zijn shell/read-only routes:
+
+- `GET /`;
+- `GET /game`;
+- `GET /game/`;
+- `GET /game/shell.json`;
+- `GET /health/game`.
+
+Server-side validatie staat nog open.
+
+Regels:
+
+- runtime client shell gebruikt geen editor/admin routes;
+- runtime client shell gebruikt geen editor credentials, CSRF token of editor session;
+- runtime client shell consumeert alleen Fase 11 runtime projection read-only routes;
+- runtime client shell toont geen raw editor draft/candidate data;
+- runtime client shell voert geen state-changing request uit;
+- runtime client shell uploadt, wijzigt of verwijdert geen assets;
+- runtime client shell bevat geen secrets en geen concrete gamecontent;
+- runtime client shell bouwt geen renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback.
+
 ## Live auth smoke runbook
 
 Gebruik `docs/ops/server-verification-runbook.md` voor live auth- en route-smokes. Echte editor login via `POST /auth/editor/login` is de voorkeursroute voor live serververificatie, gevolgd door `GET /auth/editor/me` met de editor session cookie.
@@ -131,7 +154,7 @@ Browser-smokes gebruiken server-only credentials uit `/etc/gk/secrets/initial-ed
 
 Smoke headers of speciale testheaders mogen alleen worden gebruikt waar ze expliciet geactiveerd zijn en alleen voor deny/contract-smokes. Live verificatie mag niet afhankelijk worden van test-hacks. Secret values mogen nooit worden geprint, in rapporten geplakt, in screenshots/traces zichtbaar zijn of naar Git geschreven.
 
-Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
+Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De Fase 12 runtime shell smoke mag ook zonder game login draaien wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` naar de shellroute wijst. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Registration and verification
 
@@ -199,9 +222,10 @@ Audit logt minimaal:
 - publish rollback validation;
 - runtime projection validation;
 - runtime projection manifest metadata creation;
-- runtime projection read-model access.
+- runtime projection read-model access;
+- runtime client shell status/read-model access.
 
-Audit bevat actor, action, target, scope, timestamp en metadata. Fase 10 audit/event contracts bevatten geen concrete runtimecontent en publiceren niets naar Runtime Game. Fase 11 audit/event contracts bevatten geen concrete gamecontent, muteren geen assets en bouwen geen renderer.
+Audit bevat actor, action, target, scope, timestamp en metadata. Fase 10 audit/event contracts bevatten geen concrete runtimecontent en publiceren niets naar Runtime Game. Fase 11 audit/event contracts bevatten geen concrete gamecontent, muteren geen assets en bouwen geen renderer. Fase 12 client shell status bevat geen secrets, geen editor draft data en geen concrete gamecontent.
 
 ## Server-side validatie
 
@@ -215,7 +239,7 @@ Fase 10 is server-side gevalideerd voor publish route smokes, auth-deny smokes e
 
 Fase 11 is server-side gevalideerd voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes, CSRF/Origin smokes, Runtime Projection panel smoke, GameBible protection, no-runtime-renderer, no-game-client, no-runtime-gameplay, no-asset-mutation en no hardcoded content. Browser smoke en ops/docs-hardening staan op `main`; editor browser-smoke is groen en game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
 
-Fase 12 is nog niet geimplementeerd.
+Fase 12 Runtime Client Shell Core Git-basis is voorbereid. Server-side validatie staat nog open.
 
 ## Open aandachtspunt
 

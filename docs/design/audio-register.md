@@ -4,11 +4,13 @@
 
 Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) heeft Codex `/var/www/gk/assets` opnieuw laten scannen. Er zijn 21 audio-assets aanwezig.
 
-Fase 8.1, Fase 9 en Fase 10 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
+Fase 8.1, Fase 9, Fase 10 en Fase 11 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
 
 Fase 10 Publish Flow Core valideert candidate references en snapshot metadata, maar kiest geen concrete music, ambience, SFX, UI audio of dialogue runtime mapping.
 
-Fase 11 Runtime Projection Core Git-basis is voorbereid. Fase 11 mag audio alleen als publish-accepted reference/read-model metadata projecteren. Fase 11 speelt geen audio af, bouwt geen audio runtime playback en wijst geen concrete audio mapping toe.
+Fase 11 Runtime Projection Core projecteert audio alleen als publish-accepted reference/read-model metadata. Fase 11 speelt geen audio af, bouwt geen audio runtime playback en wijst geen concrete audio mapping toe.
+
+Fase 12 Runtime Client Shell Core Git-basis is voorbereid. Fase 12 mag audio hooguit als runtime projection read-only metadata tonen. Fase 12 speelt geen audio af, bouwt geen audio playback runtime en wijst geen concrete audio mapping toe.
 
 ## Audio asset policy
 
@@ -22,7 +24,8 @@ Niet toegestaan:
 - dummy audio of tijdelijke vervangers;
 - definitieve audio-inzet zonder editor/node-data, GameBible, register of expliciete Kevin-input;
 - publish-flow die audio assets kopieert, muteert of automatisch als runtime audio publiceert;
-- runtime projection die audio assets kopieert, muteert, afspeelt of concrete audio runtime mapping hardcoded toewijst.
+- runtime projection die audio assets kopieert, muteert, afspeelt of concrete audio runtime mapping hardcoded toewijst;
+- runtime client shell die audio afspeelt, audio assets kopieert/muteert of concrete audio runtime mapping hardcoded toewijst.
 
 ## Bevestigde assetbron
 
@@ -95,6 +98,17 @@ Fase 11 neemt audio alleen als publish-accepted reference/read-model metadata me
 - runtime projection wijzigt of kopieert geen audio assets;
 - geen concrete music/ambience/SFX/UI audio mapping wordt hardcoded.
 
+## Fase 12 runtime client shell audio gate
+
+Fase 12 neemt audio alleen als read-only projection metadata mee:
+
+- runtime client shell speelt geen audio af;
+- runtime client shell bouwt geen audio playback runtime;
+- runtime client shell gebruikt geen audio/editor/admin routes;
+- runtime client shell lekt geen editor draft audio data;
+- runtime client shell wijzigt of kopieert geen audio assets;
+- runtime client shell hardcodet geen music, ambience, SFX, UI audio of dialogue mapping.
+
 ## Open audio gates
 
 | Onderwerp | Status | Blokkeert |
@@ -103,10 +117,10 @@ Fase 11 neemt audio alleen als publish-accepted reference/read-model metadata me
 | Ambience-bestanden | Aanwezig als candidates | Geen bestandsgate; wel zone/context/mapping gate |
 | SFX-bestanden | Aanwezig als candidates | Geen bestandsgate; wel event/mapping gate |
 | UI audio | Aanwezig als candidates | Geen bestandsgate; wel HUD/UI event/mapping gate |
-| Combat/boss audio | SFX candidates bestaan, maar concrete combat/boss mapping ontbreekt | Fase 16/17 wanneer specifieke combat/boss audio verplicht wordt |
+| Combat/boss audio | SFX candidates bestaan, maar concrete combat/boss mapping ontbreekt | Latere combat/boss fase wanneer specifieke audio verplicht wordt |
 | Dialogue/voice gebruik | Nog te bepalen; 0 voice/dialogue bestanden bevestigd | NPC/dialogue flows wanneer voice/audio verplicht wordt |
 
-Deze gates blokkeren Fase 11 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
+Deze gates blokkeren Fase 12 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
 
 ## Registratievelden
 
@@ -125,7 +139,7 @@ Elke audio asset moet later minimaal deze velden krijgen:
 
 ## Codex-taken buiten Git
 
-Afgerond voor asset refresh, Fase 9 en Fase 10:
+Afgerond voor asset refresh en Fase 9 t/m Fase 11:
 
 1. `/var/www/gk/assets` gecontroleerd.
 2. Audio count vastgesteld op 21.
@@ -136,11 +150,12 @@ Afgerond voor asset refresh, Fase 9 en Fase 10:
 7. Server-side bevestigd dat Fase 9 geen concrete audio runtimecontent hardcoded.
 8. Fase 9 build/typecheck/test/lint bevestigd.
 9. Fase 10 build/typecheck/test/lint en publish gates bevestigd.
+10. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-audio-playback/no-asset-mutation bevestigd.
 
-Open voor Fase 11:
+Open voor Fase 12:
 
-1. Server-side bevestigen dat runtime projection geen concrete audio runtimecontent hardcoded.
-2. Server-side bevestigen dat runtime projection geen audio/assets wijzigt of kopieert.
-3. Build/typecheck/test/lint en runtime projection route smokes draaien.
+1. Server-side bevestigen dat runtime client shell geen concrete audio runtimecontent hardcoded.
+2. Server-side bevestigen dat runtime client shell geen audio/assets wijzigt of kopieert.
+3. Build/typecheck/test/lint en runtime client shell route/browser smokes draaien.
 
 Latere fases moeten opnieuw scannen wanneer Kevin audio toevoegt, verwijdert, hernoemt of definitieve node-koppelingen nodig maakt.

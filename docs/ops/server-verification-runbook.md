@@ -25,8 +25,9 @@ Doel: niet opnieuw zoeken naar serverpaden, secretlocaties, service layout, auth
 | Standaard PATH export | `export PATH=/opt/gk/node-v22/bin:$PATH` |
 | API | `127.0.0.1:3001` |
 | Editor web | `127.0.0.1:3002` |
+| Game/runtime shell | `127.0.0.1:3003` default via `GK_GAME_PORT` |
 | Actieve frontend/front door | Apache vhost/reverse proxy volgens serverconfig |
-| Game/front door | Publieke game-site via de bestaande Apache front door waar server-layout dit bevestigt |
+| Game/front door | Publieke game-site via bestaande Apache front door of Fase 12 game shell origin wanneer server-side geactiveerd |
 
 GK-services moeten via `/opt/gk/node-v22/bin/node` draaien. `/usr/bin/node` kan serverbreed een andere versie zijn en is geen GK-blocker zolang GK-services en checks via Node 22 lopen.
 
@@ -50,6 +51,8 @@ Bekende variabelenamen:
 - `GK_SMOKE_GAME_PASSWORD`
 - `GK_EDITOR_WEB_ORIGIN`
 - `GK_GAME_FRONT_DOOR_URL`
+- `GK_GAME_WEB_ORIGIN`
+- `GK_GAME_SHELL_PATH`
 - `GK_BROWSER_SMOKE_ARTIFACT_DIR`
 - `GK_BROWSER_SMOKE_SCREENSHOT`
 - `GK_BROWSER_SMOKE_TRACE`
@@ -106,10 +109,12 @@ systemctl is-active gk-api gk-editor-web
 systemctl is-enabled gk-api gk-editor-web
 ```
 
+Wanneer Fase 12 game-web runtime shell server-side als service is ingericht, controleer ook de bijbehorende game-web service volgens de actuele systemd naam. Als die service nog niet bestaat, rapporteer dat als open server-side taak en gebruik alleen route-smokes die bereikbaar zijn.
+
 Bevestig daarna dat de processen via Node 22 draaien:
 
 ```bash
-ps -eo pid,cmd | grep -E 'gk-api|gk-editor-web|/opt/gk/node-v22/bin/node' | grep -v grep
+ps -eo pid,cmd | grep -E 'gk-api|gk-editor-web|gk-game-web|/opt/gk/node-v22/bin/node' | grep -v grep
 ```
 
 Rapporteer alleen procespad/status. Print geen env of secrets uit process output als een commando ooit env zou tonen.
@@ -137,6 +142,8 @@ Bekende session/CSRF flow:
 Echte editor login is de voorkeursroute voor live smokes.
 
 Smoke headers of bypass-env mogen alleen gebruikt worden waar ze expliciet zijn geactiveerd en alleen voor deny/contract-smokes. Maak live fasevalidatie niet afhankelijk van test-hacks.
+
+Fase 12 runtime client shell gebruikt geen editor login, geen editor/admin routes, geen editor CSRF en geen editor draft data. De shell mag alleen Fase 11 runtime projection read-only routes fetchen.
 
 ## Bekende fase-smoke routes
 
@@ -186,6 +193,29 @@ Fase 11 route-smokes moeten bevestigen:
 - no-concrete-gamecontent;
 - no-asset-mutation.
 
+### Fase 12 Runtime Client Shell
+
+Game/runtime shell routes:
+
+- `GET /`
+- `GET /game`
+- `GET /game/`
+- `GET /game/shell.json`
+- `GET /health/game`
+
+Fase 12 route-smokes moeten bevestigen:
+
+- shell HTML bevat `data-runtime-client-shell="phase-12"`;
+- shell JSON bevat Fase 12 runtime client shell contract/status;
+- shell noemt alleen runtime projection read-only routes;
+- shell response bevat geen `/editor/` of `/auth/editor` routegebruik;
+- runtime projection read-only routes blijven bereikbaar of geven veilige empty state;
+- no-runtime-renderer;
+- no-gameplay/no-movement/no-combat;
+- no-audio-playback;
+- no-concrete-gamecontent;
+- no-asset-mutation.
+
 ### GameBible
 
 GameBible editor save route moet beschermd blijven.
@@ -224,7 +254,7 @@ Deze browser-smoke is een vaste ops-hardening stap na:
 2. `pnpm typecheck`;
 3. `pnpm test`;
 4. `pnpm lint`;
-5. `systemctl restart gk-api gk-editor-web`;
+5. service restart;
 6. service active/enabled en Node 22 process checks.
 
 De browser-smoke is bewust geen onderdeel van `pnpm test`, omdat Chromium en server services nodig zijn.
@@ -271,13 +301,16 @@ De editor smoke:
 - telt console/page errors;
 - wist login-form values voordat optionele screenshots/traces worden gemaakt.
 
-### Game browser-smoke
+### Game/runtime browser-smoke
 
 De game smoke:
 
-- gebruikt `GK_GAME_FRONT_DOOR_URL` of `GK_GAME_WEB_ORIGIN`;
-- slaat netjes over als er geen game front door URL is gezet;
+- gebruikt `GK_GAME_FRONT_DOOR_URL` als volledige URL wanneer die is gezet;
+- gebruikt anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`;
+- slaat netjes over als er geen game front door URL of game web origin is gezet;
 - doet reachability/read-only smoke;
+- checkt de Fase 12 runtime shell marker wanneer die route beschikbaar is;
+- checkt projection status en empty-state markers;
 - probeert alleen game login wanneer `GK_SMOKE_GAME_EMAIL` en `GK_SMOKE_GAME_PASSWORD` bestaan en de game auth route bereikbaar is;
 - maakt geen account aan;
 - voert geen gameplay of dummy content in;
@@ -304,11 +337,12 @@ De smoke rapporteert kort:
 - `game browser smoke: ok/fail/skipped`;
 - `url checks: ok/fail/skipped`;
 - `panels: ok/fail/skipped`;
+- `runtime shell: ok/fail/skipped`;
 - `console errors count`;
 - `page errors count`;
 - screenshot/trace path indien gemaakt.
 
-`ok` betekent dat de gevraagde smoke groen is. `fail` is een blocker voor server-side klaar. `skipped` is toegestaan wanneer een optionele game front door of game-smoke user nog niet bestaat, maar moet als open taak worden gerapporteerd.
+`ok` betekent dat de gevraagde smoke groen is. `fail` is een blocker voor server-side klaar. `skipped` is toegestaan wanneer een optionele game front door, game shell origin of game-smoke user nog niet bestaat, maar moet als open taak worden gerapporteerd.
 
 ## Standaard frontend-verificatie
 
@@ -322,7 +356,8 @@ Gebruik Node fetch of vergelijkbare HTTP-smoke om te controleren:
 - editor shell JSON route;
 - vereiste panel IDs;
 - login-required markers;
-- fase-route statusresponses.
+- fase-route statusresponses;
+- Fase 12 game/runtime shell HTML en shell JSON wanneer die fase open is.
 
 ### Niveau 2: Headless browser smoke via Playwright
 
@@ -358,8 +393,10 @@ anonymous/game/non-admin denied OK:
 CSRF/Origin OK:
 frontend panel smoke OK:
 browser smoke OK/fail/skipped:
+runtime shell smoke OK/fail/skipped:
 
 no-runtime-publish/no-runtime-renderer waar relevant:
+no-runtime-gameplay/no-movement/no-combat/no-audio-playback waar relevant:
 no-asset-mutation:
 
 GameBible save/protection:

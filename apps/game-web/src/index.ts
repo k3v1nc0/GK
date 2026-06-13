@@ -1,8 +1,15 @@
+import { pathToFileURL } from "node:url";
+
 import type { PublishedNodeEnvelope } from "@gk/schemas";
 import { createAudioRuntime } from "@gk/audio-runtime";
 import { createRendererRuntime } from "@gk/renderer-runtime";
 
+import { startGameServer } from "./http-server.js";
+
 export * from "./auth-client.js";
+export * from "./http-server.js";
+export * from "./runtime-client-shell.js";
+export * from "./runtime-projection-client.js";
 
 export interface GameWebRuntimeBoundary {
   readonly rendererReady: boolean;
@@ -25,4 +32,8 @@ export function createGameWebBoundary(nodes: readonly PublishedNodeEnvelope[]): 
     audioReady: true,
     contentSource: "published-node-data"
   };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startGameServer();
 }

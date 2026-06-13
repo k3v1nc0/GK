@@ -29,13 +29,15 @@ Fase 11 voegt panel state toe voor:
 
 - `Runtime Projection`.
 
-Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap, HUD, publish payload, runtime projection payload, renderer output of runtimecontent.
+Fase 12 voegt geen editorpanel toe. Fase 12 voegt een aparte runtime client shell toe aan `apps/game-web`, zodat de browser-runtime projection read-only metadata kan tonen zonder editor/admin routes te consumeren.
+
+Deze panels en shells zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap, HUD, publish payload, runtime projection payload, renderer output of runtimecontent.
 
 ## Node Canvas
 
-Het node canvas bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates, runtime projection gates en typed node graph editing.
+Het node canvas bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates, runtime projection gates, runtime client shell gates en typed node graph editing.
 
-Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes, generated worldcontent, assetrollen, projection payloads of renderer instructions bevatten. Zulke waarden horen uit database, editor/node-data, registers, Game Bible, procedural draft/bake data, publish-data of runtime projection metadata te komen.
+Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes, generated worldcontent, assetrollen, projection payloads, runtime shell payloads of renderer instructions bevatten. Zulke waarden horen uit database, editor/node-data, registers, Game Bible, procedural draft/bake data, publish-data of runtime projection metadata te komen.
 
 Fase 9 breidt de node canvas capabilities uit met:
 
@@ -62,6 +64,13 @@ Fase 11 breidt de node canvas capabilities uit met runtime projection nodes:
 - runtime projection read model;
 - runtime projection audit event.
 
+Fase 12 breidt de node canvas capabilities uit met runtime client shell nodes:
+
+- runtime client shell;
+- runtime client boot state;
+- runtime client projection state;
+- runtime client safety flags.
+
 ## UI Display Inspector
 
 De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
@@ -76,7 +85,7 @@ De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
 
 Belangrijke regel: natural size is metadata, geen display size. Display size, scale mode, anchor en pivot moeten uit node-data/editor-data/publish data komen.
 
-UI scaling validation is server-side bevestigd voor Fase 9 en blijft onderdeel van Fase 10 publish validation en Fase 11 runtime projection validation.
+UI scaling validation is server-side bevestigd voor Fase 9 en blijft onderdeel van Fase 10 publish validation, Fase 11 runtime projection validation en Fase 12 runtime client shell safety checks.
 
 ## Publish Flow Panel
 
@@ -121,6 +130,29 @@ Het panel:
 - verzint geen world, NPC, quest, economy, HUD, minimap of audio data;
 - toont geen asset previews die GLB role mapping definitief maken.
 
+## Runtime Client Shell
+
+Fase 12 runtime client shell zit in `apps/game-web`, niet in de editor shell.
+
+De shell toont alleen:
+
+- runtime client shell marker;
+- projection status area;
+- manifest empty-state area;
+- records empty-state area;
+- safe error area;
+- read-only projection route summary.
+
+De shell:
+
+- consumeert alleen `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records`;
+- consumeert geen editor/admin routes;
+- gebruikt geen editor session, editor CSRF token of editor credentials;
+- toont geen raw editor draft/candidate data;
+- bouwt geen renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback;
+- wijzigt geen assets;
+- verzint geen concrete world, NPC, quest, economy, HUD, minimap of audio data.
+
 ## Asset, audio, entity, procedural, publish, projection en Fase 9 panels
 
 Panels zijn generieke capabilities:
@@ -154,9 +186,10 @@ De preview blijft gated:
 - geen audio of HUD-keuzes;
 - geen minimap layout zonder node-data;
 - geen runtime publish;
-- geen runtime projection als renderer-output.
+- geen runtime projection als renderer-output;
+- geen runtime client shell als renderer-output.
 
-De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish. Fase 10 voegt geen runtime renderer toe. Fase 11 voegt geen runtime renderer of game client toe.
+De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish. Fase 10 voegt geen runtime renderer toe. Fase 11 voegt geen runtime renderer of game client toe. Fase 12 voegt alleen een runtime client shell toe, geen renderer of gameplay.
 
 ## Auth boundary
 
@@ -190,6 +223,8 @@ Fase 11 runtime projection beheer is ook editor admin only:
 - route contracts wijzigen geen assets.
 
 Runtime projection read-only routes zijn read-only, geven veilige empty states wanneer er nog geen projection bestaat en mogen geen editor draft data lekken.
+
+Fase 12 runtime client shell gebruikt alleen runtime projection read-only routes. De shell mag geen editor/admin routes, editor sessions of editor draft data consumeren.
 
 ## API runtime contract
 
@@ -225,6 +260,14 @@ Fase 11 runtime read-only route contracts:
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
 
+Fase 12 runtime client shell routes:
+
+- `GET /`;
+- `GET /game`;
+- `GET /game/`;
+- `GET /game/shell.json`;
+- `GET /health/game`.
+
 Deze route contracts:
 
 - blijven CSRF/Origin beschermd voor state-changing editor requests;
@@ -233,7 +276,7 @@ Deze route contracts:
 - maken geen assets aan;
 - kopieren geen assets naar Git;
 - verzinnen geen concrete gamecontent;
-- bouwen geen Runtime Game renderer of client.
+- bouwen geen Runtime Game renderer of gameplayclient.
 
 ## Assetstatus
 
@@ -253,13 +296,15 @@ Fase 8.1 is server-side gevalideerd.
 
 Fase 9 is server-side afgerond en klaar.
 
-Fase 10 Git-basis is voorbereid en server-side validatie is afgerond.
+Fase 10 is server-side afgerond en klaar.
 
-Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor:
+Fase 11 is server-side afgerond en klaar.
+
+Fase 12 Git-basis is voorbereid, maar server-side validatie staat open voor:
 
 - build/typecheck/test/lint;
-- editor/admin projection route smokes;
-- runtime read-only route smokes;
-- auth/CSRF smokes;
-- Runtime Projection panel smoke;
-- no-runtime-renderer/no-game-client/no-concrete-gamecontent/no-asset-mutation.
+- runtime projection read-only route smokes;
+- game/runtime shell route smokes;
+- browser-smoke runtime shell marker;
+- bevestiging dat runtime client shell geen editor/admin routes gebruikt;
+- no-runtime-renderer/no-gameplay/no-movement/no-combat/no-audio-playback/no-concrete-gamecontent/no-asset-mutation.

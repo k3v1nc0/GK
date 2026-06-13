@@ -24,6 +24,7 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - publish candidates en validation gates;
 - snapshot metadata;
 - runtime projection source, manifest, read model, safety flags en audit events;
+- runtime client shell status, boot state, projection state en safety flags;
 - player levels en XP;
 - money/currency;
 - merchants;
@@ -40,7 +41,7 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - boss mechanics;
 - HUD panels.
 
-Concrete gamecontent hoort niet in runtimecode. De keten blijft `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Game`.
+Concrete gamecontent hoort niet in runtimecode. De keten blijft `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Game`.
 
 ## Node UI zoals geometry nodes
 
@@ -82,7 +83,14 @@ Fase 11 breidt uit met:
 - `runtime.projection.read-model.reference`;
 - `runtime.projection.audit.reference`.
 
-Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model contracts. Ze bouwen geen Runtime Game renderer en voegen geen concrete gamecontent toe.
+Fase 12 breidt uit met:
+
+- `runtime.client.shell.reference`;
+- `runtime.client.boot-state.reference`;
+- `runtime.client.projection-state.reference`;
+- `runtime.client.safety.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell contracts. Ze bouwen geen Runtime Game renderer en voegen geen concrete gamecontent toe.
 
 ## Asset import
 
@@ -160,7 +168,7 @@ Belangrijke regels:
 
 ## Fase 10 publish-flow laag
 
-Fase 10 Git-basis is voorbereid als publish-boundary laag en server-side validatie is afgerond.
+Fase 10 is server-side afgerond en klaar als publish-boundary laag.
 
 Publish flow states:
 
@@ -190,7 +198,7 @@ Belangrijke regels:
 
 ## Fase 11 runtime projection laag
 
-Fase 11 Git-basis is voorbereid als runtime projection contractlaag. Server-side validatie staat nog open.
+Fase 11 is server-side afgerond en klaar als runtime projection contractlaag.
 
 Belangrijke regels:
 
@@ -203,8 +211,7 @@ Belangrijke regels:
 - UI display natural size blijft metadata en mag display size niet vervangen;
 - GLB roles blijven candidate/editor-data tenzij publish data ze later expliciet toewijst;
 - runtime projection wijzigt of kopieert geen assets;
-- runtime projection bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values;
-- Fase 11 opent Fase 12 niet.
+- runtime projection bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values.
 
 ### Runtime projection nodes
 
@@ -213,6 +220,29 @@ Belangrijke regels:
 - `gk.runtimeProjection.manifest`
 - `gk.runtimeProjection.readModel`
 - `gk.runtimeProjection.auditEvent`
+
+## Fase 12 runtime client shell laag
+
+Fase 12 Git-basis is voorbereid als runtime client shell contractlaag. Server-side validatie staat nog open.
+
+Belangrijke regels:
+
+- runtime client shell mag alleen runtime projection read-only routes consumeren;
+- runtime client shell mag geen editor/admin routes gebruiken;
+- runtime client shell mag geen editor draft/candidate data direct tonen;
+- runtime client shell toont veilige loading/empty/error/status states;
+- runtime client shell mag projection manifest/records alleen als metadata/read model tonen;
+- runtime client shell bouwt geen 3D renderer, gameplay, movement, combat, HUD runtime, minimap runtime of audio playback;
+- runtime client shell wijzigt of kopieert geen assets;
+- runtime client shell bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values;
+- Fase 12 opent Fase 13 niet.
+
+### Runtime client shell nodes
+
+- `gk.runtimeClient.shell`
+- `gk.runtimeClient.bootState`
+- `gk.runtimeClient.projectionState`
+- `gk.runtimeClient.safetyFlags`
 
 ## UI/HUD/minimap display contract
 
@@ -298,14 +328,23 @@ Schema defaults zijn editor/schema hints, geen concrete HUD layout:
 - `gk.runtimeProjection.readModel`
 - `gk.runtimeProjection.auditEvent`
 
-## Publish en projection regels
+### Runtime client shell nodes
+
+- `gk.runtimeClient.shell`
+- `gk.runtimeClient.bootState`
+- `gk.runtimeClient.projectionState`
+- `gk.runtimeClient.safetyFlags`
+
+## Publish, projection en client shell regels
 
 - GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
 - Runtime-active behavior blokkeert zonder verplichte editor-data.
 - Procedural preview en bake zijn geen publishstap.
 - Generated procedural output mag pas runtime betekenis krijgen wanneer publish-flow de output expliciet accepteert en runtime projection die accepted snapshotmetadata leest.
-- Runtime projection is nog geen renderer of Runtime Game client.
+- Runtime projection is nog geen renderer of gameplayclient.
+- Runtime client shell is nog geen renderer, gameplay, HUD, minimap of audio runtime.
+- Runtime client shell mag geen editor/admin routes of editor draft data consumeren.
 - UI display natural size is nooit automatisch display size.
 - Missing display size of missing responsive rule geeft validation issue.
 - Missing `nineSlice` margins geeft validation issue.
-- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation en draft preview zijn geen Runtime Game renderer.
+- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation en Fase 12 runtime client shell validation zijn geen Runtime Game renderer.

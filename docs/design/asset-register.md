@@ -14,15 +14,9 @@ Actuele scanstatus:
 | Invalid | 0 | Geen invalid assets |
 | Missing | 0 | Geen missing assets |
 
-Fase 8 is server-side afgerond en klaar. `Taverne.glb` is Kevin-testkeuze voor object-candidate validation en `Wizard.glb` is Kevin-testkeuze voor NPC-candidate validation. Dit zijn geen definitieve runtime-role mappings.
+Fase 8, Fase 8.1, Fase 9, Fase 10 en Fase 11 zijn server-side afgerond en klaar.
 
-Fase 8.1 is server-side afgerond en klaar. Procedural generated assets mogen uitsluitend via Fase 7 `asset.reference` verwijzen naar geregistreerde assets.
-
-Fase 9 is server-side afgerond en klaar. Fase 9 gebruikt assets alleen als asset-library references in node/editor-data. Er is geen runtime publish en er zijn geen assets toegevoegd of gewijzigd. No-asset-mutation is server-side bevestigd.
-
-Fase 10 Publish Flow Core is server-side afgerond en klaar. Fase 10 valideert asset candidates en snapshot metadata, maar wijzigt, kopieert, verwijdert of publiceert geen assets.
-
-Fase 11 Runtime Projection Core Git-basis is voorbereid. Fase 11 mag asset/audio/UI references alleen als publish-accepted metadata projecteren en mag geen assets wijzigen, kopieren, verwijderen, toevoegen of definitieve role mapping hardcoden.
+Fase 12 Runtime Client Shell Core Git-basis is voorbereid. Fase 12 mag asset/audio/UI references alleen als runtime projection read-only metadata tonen. Fase 12 mag geen assets toevoegen, wijzigen, verwijderen, kopieren, uploaden of definitieve GLB role mapping hardcoden.
 
 ## Asset source policy
 
@@ -42,7 +36,8 @@ Niet toegestaan:
 - procedural generators die assets verzinnen of naar Git kopieren;
 - publish-flow die assets kopieert, muteert of definitieve GLB roles hardcoded toewijst;
 - runtime projection die assets kopieert, muteert, verwijdert of definitive GLB roles hardcoded toewijst;
-- UI source pixel size gebruiken als runtime/projection display size zonder node/editor/publish data.
+- runtime client shell die assets kopieert, muteert, uploadt, verwijdert, role mapping definitief maakt of asset previews als gameplaycontent presenteert;
+- UI source pixel size gebruiken als runtime/projection/client display size zonder node/editor/publish data.
 
 ## Assetpaden
 
@@ -81,12 +76,12 @@ HUD-bestanden, icon-bestanden en minimap marker-bestanden worden door de asset s
 
 ## UI display gate
 
-Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd. Fase 10 neemt deze gate mee in publish validation. Fase 11 neemt deze gate mee in runtime projection validation.
+Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd. Fase 10 neemt deze gate mee in publish validation. Fase 11 neemt deze gate mee in runtime projection validation. Fase 12 bewaakt dat de runtime client shell natural source size niet als display/layout hardcoding gebruikt.
 
 Regels:
 
 - source image natural size is metadata;
-- runtime/editor/projection mag source pixel size nooit blind als display size gebruiken;
+- runtime/editor/projection/client shell mag source pixel size nooit blind als display size gebruiken;
 - display size moet via node-data/editor-data/publish data komen;
 - `displayWidth` en `displayHeight` zijn vereist, tenzij responsive rules expliciet dimensions leveren;
 - `scaleMode`, `anchor`, `pivot`, `opacity` en `zIndex` zijn node-data;
@@ -125,13 +120,27 @@ Fase 11 runtime projection validation neemt asset/UI gates mee:
 - projection manifests/read models bevatten geen concrete asset payload of renderer instruction;
 - no-asset-mutation en no-asset-copy blijven verplicht.
 
+## Fase 12 runtime client shell asset gate
+
+Fase 12 runtime client shell mag asset/UI/audio references alleen als read-only projection metadata tonen.
+
+Regels:
+
+- runtime client shell consumeert geen asset library/editor endpoints;
+- runtime client shell gebruikt geen editor/admin routes;
+- runtime client shell uploadt, wijzigt, kopieert of verwijdert geen assets;
+- runtime client shell maakt geen GLB role mapping definitief;
+- runtime client shell toont geen asset previews die concrete gameplayrollen suggereren;
+- runtime client shell bouwt geen HUD/minimap runtime layout;
+- runtime client shell gebruikt geen natural source pixel size als display/layout hardcoding.
+
 ## Audio assets
 
 Status: 21 audio files aanwezig als asset-library candidates.
 
 Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag alleen via asset library en audio nodes worden gekozen of ingesteld.
 
-Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst geen concrete audio runtimecontent toe. Fase 11 projecteert audio hooguit als publish-accepted metadata/reference en speelt niets af.
+Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst geen concrete audio runtimecontent toe. Fase 11 projecteert audio hooguit als publish-accepted metadata/reference en speelt niets af. Fase 12 toont hooguit read-only projection metadata en speelt niets af.
 
 ## Fase 8.1 procedural asset gate
 
@@ -152,6 +161,7 @@ Regels:
 - HUD image candidates via `gk.ui.assetDisplay`, `gk.ui.iconDisplay`, `gk.ui.hudFrame`, `gk.ui.hudBar` en `gk.ui.nineSlice`;
 - publish candidate references via Fase 10 publish-flow nodes;
 - runtime projection references via Fase 11 runtime projection nodes;
+- runtime client shell references via Fase 12 runtime client nodes;
 - audio blijft candidate/editor-data voor latere audio nodefamilies.
 
 ## Codex-taken buiten Git
@@ -168,13 +178,14 @@ Afgerond:
 8. Fase 9 build/typecheck/test/lint en route/panel smoke bevestigd.
 9. Fase 9 no-asset-mutation en UI display validation bevestigd.
 10. Fase 10 build/typecheck/test/lint, publish smokes en no-asset-mutation bevestigd.
+11. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-asset-mutation bevestigd.
 
-Open voor Fase 11:
+Open voor Fase 12:
 
-1. Server-side bevestigen dat runtime projection validation geen assets wijzigt of kopieert.
-2. Server-side bevestigen dat runtime projection geen concrete asset/audio/UI runtimecontent hardcoded.
+1. Server-side bevestigen dat runtime client shell geen assets wijzigt, kopieert of uploadt.
+2. Server-side bevestigen dat runtime client shell geen concrete asset/audio/UI runtimecontent hardcoded.
 3. Build/typecheck/test/lint draaien.
-4. Runtime projection route smokes draaien.
+4. Runtime client shell route/browser smokes draaien.
 
 Open voor latere fases:
 

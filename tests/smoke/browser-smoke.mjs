@@ -8,6 +8,7 @@ const EDITOR_PANEL_TITLES = new Map([
   ["publish-flow-panel", "Publish Flow"],
   ["runtime-projection-panel", "Runtime Projection"]
 ]);
+const RUNTIME_CLIENT_SHELL_SELECTOR = "[data-runtime-client-shell='phase-12']";
 
 const args = new Set(process.argv.slice(2));
 const runEditor = !args.has("--game");
@@ -201,10 +202,10 @@ async function runEditorSmoke(browserInstance) {
 
 async function runGameSmoke(browserInstance) {
   const pageState = createPageState();
-  const gameUrl = process.env.GK_GAME_FRONT_DOOR_URL ?? process.env.GK_GAME_WEB_ORIGIN ?? "";
+  const gameUrl = resolveGameSmokeUrl();
 
   if (!gameUrl) {
-    return skipped("GK_GAME_FRONT_DOOR_URL is not set; game browser smoke is reachability-only and was skipped.");
+    return skipped("GK_GAME_FRONT_DOOR_URL or GK_GAME_WEB_ORIGIN is not set; game browser smoke was skipped.");
   }
 
   const context = await browserInstance.newContext();
@@ -221,6 +222,7 @@ async function runGameSmoke(browserInstance) {
     }
 
     const gameLoginResult = await tryGameLogin(page);
+    const runtimeShellResult = await tryRuntimeShellSmoke(page);
 
     if (pageState.consoleErrors > 0 || pageState.pageErrors > 0) {
       throw new Error("Game browser smoke saw console or page errors.");
@@ -242,6 +244,7 @@ async function runGameSmoke(browserInstance) {
     return ok({
       url: gameUrl,
       reachability: "ok",
+      runtimeShell: runtimeShellResult,
       gameLogin: gameLoginResult,
       consoleErrors: pageState.consoleErrors,
       pageErrors: pageState.pageErrors,
@@ -257,6 +260,34 @@ async function runGameSmoke(browserInstance) {
   } finally {
     await context.close();
   }
+}
+
+async function tryRuntimeShellSmoke(page) {
+  const shellMarker = page.locator(RUNTIME_CLIENT_SHELL_SELECTOR).first();
+
+  if (await shellMarker.count() === 0) {
+    return "skipped: runtime client shell marker unavailable";
+  }
+
+  await shellMarker.waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-projection-status]").first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-empty-state]").first().waitFor({ state: "visible", timeout: 5_000 });
+
+  const shellState = await page.evaluate(() => {
+    const marker = document.querySelector("[data-runtime-client-shell='phase-12']");
+    const model = document.querySelector("#runtime-client-shell-model");
+    return {
+      marker: Boolean(marker),
+      modelText: model?.textContent ?? "",
+      editorRouteMentioned: document.body.textContent?.includes("/editor/") === true
+    };
+  });
+
+  if (!shellState.marker || shellState.editorRouteMentioned || shellState.modelText.includes("/editor/")) {
+    throw new Error("Runtime client shell marker failed or editor route leaked into game shell.");
+  }
+
+  return "ok";
 }
 
 async function tryGameLogin(page) {
@@ -355,6 +386,7 @@ function printReport(result, harnessError) {
     `game browser smoke: ${result.game.status}`,
     `url checks: ${statusSummary([result.editor, result.game], "url")}`,
     `panels: ${result.editor.details?.panels ?? (result.editor.status === "skipped" ? "skipped" : "fail")}`,
+    `runtime shell: ${result.game.details?.runtimeShell ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `console errors count: ${sumCounts([result.editor, result.game], "consoleErrors")}`,
     `page errors count: ${sumCounts([result.editor, result.game], "pageErrors")}`
   ];
@@ -395,6 +427,20 @@ function statusSummary(smokes, key) {
 
 function sumCounts(smokes, key) {
   return smokes.reduce((total, smoke) => total + Number(smoke.details?.[key] ?? 0), 0);
+}
+
+function resolveGameSmokeUrl() {
+  if (process.env.GK_GAME_FRONT_DOOR_URL) {
+    return process.env.GK_GAME_FRONT_DOOR_URL;
+  }
+
+  if (!process.env.GK_GAME_WEB_ORIGIN) {
+    return "";
+  }
+
+  const origin = stripTrailingSlash(process.env.GK_GAME_WEB_ORIGIN);
+  const shellPath = process.env.GK_GAME_SHELL_PATH ?? "/game/";
+  return new URL(shellPath, `${origin}/`).href;
 }
 
 function ok(details) {

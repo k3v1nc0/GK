@@ -2,21 +2,21 @@
 
 ## Fase
 
-Actieve status: Fase 11 Runtime Projection Core is afgerond en server-side groen bevestigd op `main`.
+Actieve status: Fase 12 Git-basis voorbereid op `main`.
 
-Fase 1 t/m Fase 11 zijn afgerond. Fase 11 heeft de gecontroleerde Runtime Projection Core toegevoegd en is door Codex/Claude server-side gevalideerd. Fase 12 is nog niet geimplementeerd en wordt pas geopend wanneer Kevin dat doet.
+Fase 1 t/m Fase 11 zijn afgerond. Fase 11 Runtime Projection Core is server-side groen bevestigd. Fase 12 is door Kevin geopend als `Runtime Client Shell Core`.
 
 ## Statussamenvatting
 
-Fase 11 bouwt een gecontroleerde, data-driven Runtime Projection Core waarmee gevalideerde Fase 10 publish-ready snapshotmetadata kan worden omgezet naar runtime projection contracts en read-model metadata.
+Fase 12 opent een veilige browser-runtime client shell die uitsluitend Fase 11 runtime projection read-only data ophaalt en toont als engine/runtime-status en metadata. De shell is een contract- en empty-state laag, geen renderer, geen gameplayclient en geen runtime HUD/minimap/audio implementatie.
 
-Deze fase voegt geen runtime game, geen renderer, geen game client, geen gameplay, geen HUD/minimap/audio runtime en geen concrete gamecontent toe. Runtime projection blijft contract/read-model metadata totdat een latere expliciete Runtime Game fase wordt geopend.
+Deze fase voegt geen concrete gamecontent, geen dummy world, geen assets, geen renderer, geen movement/combat/player gameplay en geen audio playback toe.
 
 ## Afgeronde basis
 
-Fase 10 is server-side afgerond en klaar. Laatste Fase 10 Git-basis commit: `5fc53fa9e290122abc0bfeeb39b3cf6f52c75a2c` (`fase 10`). Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
+Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
 
-Fase 11 Runtime Projection Core is server-side afgerond en klaar.
+Fase 11 Runtime Projection Core is server-side afgerond en klaar. Laatste Fase 11 docs-final commit: `2a2b779afe3a3a2f28466fa7a49f0be45d12ee17` (`fase 11 fix`). Browser smoke en ops/docs-hardening staan op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36`.
 
 Asset refresh na `Assets - new` blijft bevestigd:
 
@@ -29,115 +29,109 @@ Asset refresh na `Assets - new` blijft bevestigd:
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-## Fase 11 Git-basis
+## Fase 12 Git-basis
 
-Toegevoegd en gevalideerd:
+Toegevoegd:
 
-- `packages/schemas/src/runtime-projection.ts` voor projection status/source/manifest/record/read-model/audit/safety contracts;
-- `packages/schemas/src/runtime-projection-validation.ts` voor runtime projection validation gates;
-- runtime projection socket types in `packages/schemas/src/node-graph.ts`;
-- `packages/node-types/src/runtime-projection-nodes.ts` met publish-boundary runtime projection node types;
-- editor/admin en runtime read-only route contracts in `apps/api-server/src/runtime-projection-routes.ts`;
-- API router wiring voor `/editor/runtime-projection/*` en `/runtime/projection/*`;
-- `apps/editor-web/src/runtime-projection-panel.ts` en editor-shell panel wiring;
-- `tests/phase11-runtime-projection.test.mjs` voor contractdekking.
+- `packages/schemas/src/runtime-client-shell.ts` voor runtime client shell status, boot, projection, error, capabilities en safety contracts;
+- `packages/schemas/src/runtime-client-shell-validation.ts` voor runtime client validation gates;
+- runtime client socket types in `packages/schemas/src/node-graph.ts`;
+- `packages/node-types/src/runtime-client-shell-nodes.ts` met `runtime-consumer` node types;
+- `apps/game-web/src/runtime-projection-client.ts` voor read-only projection fetch contracten;
+- `apps/game-web/src/runtime-client-shell.ts` voor de runtime shell HTML/empty-state UI;
+- `apps/game-web/src/http-server.ts` voor `/`, `/game`, `/game/`, `/game/shell.json` en `/health/game`;
+- game-web entrypoint wiring;
+- browser-smoke uitbreiding voor runtime shell marker checks;
+- `tests/phase12-runtime-client-shell.test.mjs` voor contractdekking;
+- `README/fase12.md` en statusdocs.
 
-## Runtime projection validation gates
+## Runtime client validation gates
 
-Fase 11 bewaakt minimaal:
+Fase 12 bewaakt minimaal:
 
-- projection source komt uit Fase 10 publish snapshotmetadata en publish-ready validation;
-- geen projection vanuit raw editor draft;
-- geen projection vanuit procedural preview/bake zonder publish acceptatie;
-- generated procedural refs blijven draft/candidate totdat publish validation ze accepteert;
-- geen asset mutation/copy;
-- geen concrete gamecontent;
-- geen hardcoded content;
-- UI display sizing uit node/editor/publish data, niet uit source natural size;
-- GLB roles blijven candidate/editor-data tenzij expliciet via publish data;
-- projection manifest/read-model is geen renderer;
-- safety flags blijven read-model-only.
+- runtime client gebruikt alleen `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records`;
+- runtime client gebruikt geen editor/admin routes;
+- runtime client lekt geen editor draft/candidate data;
+- safe empty state is geldig wanneer er nog geen projection bestaat;
+- no 3D renderer;
+- no gameplay;
+- no movement/combat;
+- no audio playback;
+- no HUD/minimap hardcoded layout;
+- no asset mutation/copy;
+- no hardcoded content.
 
-## Editor/API status
+## Runtime shell/API status
 
-Editor/admin route contracts zijn server-side groen bevestigd:
+Runtime client shell routes in Git-basis:
 
-- `GET /editor/runtime-projection/status`;
-- `POST /editor/runtime-projection/validate`;
-- `POST /editor/runtime-projection/project`;
-- `GET /editor/runtime-projection/manifests`;
-- `GET /editor/runtime-projection/manifests/:id`.
+- `GET /`;
+- `GET /game`;
+- `GET /game/`;
+- `GET /game/shell.json`;
+- `GET /health/game`.
 
-Runtime read-only route contracts zijn server-side groen bevestigd:
+Runtime projection read-only routes die de shell mag consumeren:
 
 - `GET /runtime/projection/status`;
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
 
-Regels blijven bevestigd:
+Regels:
 
-- editor admin only voor editor/admin projection beheer;
-- state-changing editor/admin routes CSRF/Origin protected;
-- anonymous/game/non-admin denied voor editor/admin beheer;
-- runtime routes zijn read-only en geven veilige empty state wanneer er nog geen projection bestaat;
-- geen runtime renderer;
-- geen game client;
-- geen runtime gameplay;
-- geen assets wijzigen;
-- geen concrete gamecontent in responses.
+- geen editor/admin endpoints in runtime client;
+- geen credentials/secrets in frontend;
+- geen CSRF nodig voor read-only runtime GETs;
+- geen data mutatie;
+- geen asset upload/copy/delete;
+- geen concrete gamecontent in responses;
+- safe empty state is verwachte output wanneer projection ontbreekt.
 
 ## Contractgrenzen
 
-Fase 11 bouwt niet:
+Fase 12 bouwt niet:
 
-- runtime game, renderer of game client;
-- movement, combat, player gameplay, HUD runtime, minimap runtime of audio playback;
-- concrete world, zone, NPC, quest, economy, camera, lighting, HUD, minimap of audio content;
+- 3D renderer;
+- runtime gameplay;
+- movement;
+- combat;
+- player controller;
+- HUD runtime layout;
+- minimap runtime layout;
+- audio playback;
+- concrete world, zone, NPC, quest, economy, camera, lighting, minimap, HUD of audio content;
 - definitieve GLB role mapping;
-- automatische publish of automatic projection.
-
-UI/HUD/minimap source image natural size blijft metadata. Display size, scale mode, anchor en pivot blijven node-data/editor-data/publish data.
+- automatic publish of automatic projection.
 
 ## Tests/checks
 
 Git-basis bevat tests voor:
 
-- runtime projection schema exports;
-- runtime projection socket/node registration;
-- invalid raw draft/candidate projection issues;
-- generated procedural refs als candidate input totdat publish validation accepteert;
-- UI display sizing en natural-size metadata;
-- no-runtime-renderer/no-game-client/no-asset-mutation/no-hardcoded-content;
-- runtime projection manifest/read-model zonder concrete payload;
-- editor/admin route contracts, anonymous/game/non-admin denied en CSRF/Origin gate;
-- runtime read-only routes met veilige empty state;
-- Runtime Projection panel registratie.
+- runtime client shell schema exports;
+- runtime client socket/node registration;
+- safety flags;
+- editor/admin route rejection;
+- no draft leakage;
+- no renderer/gameplay/movement/combat/audio playback;
+- no asset mutation;
+- no hardcoded content;
+- runtime projection fetch client read-only route discipline;
+- runtime shell HTML markers en empty state;
+- game-web shell routes;
+- browser-smoke runtime shell hook.
 
-Codex/Claude heeft server-side bevestigd:
+Niet geclaimd als server-side uitgevoerd in deze GitHub-only update:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK, 111 tests / 55 suites / 0 fail;
-- `pnpm lint`: OK;
-- `gk-api` active/enabled: OK;
-- `gk-editor-web` active/enabled: OK;
-- beide services via `/opt/gk/node-v22/bin/node`: OK;
-- editor login en `/auth/editor/me`: OK, `editor_admin`;
-- `/editor`: OK;
-- Runtime Projection panel smoke: OK;
-- editor/runtime projection route smokes: OK;
-- runtime read-only projection route smokes: OK;
-- anonymous/game/non-admin denied: OK;
-- CSRF/Origin protection: OK;
-- GameBible save beschermd en content ongewijzigd: OK;
-- game-site reachable: OK;
-- worktree schoon: OK;
-- blockers: geen.
-
-Browser smoke en ops/docs-hardening staan op `main`. Gebruik `docs/ops/server-verification-runbook.md` voor vaste Playwright/headless Chromium browser-smokes. Editor browser-smoke is groen; game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- service restart;
+- live route smokes;
+- Playwright/browser smoke.
 
 ## Fasebeoordeling
 
-Fase 11 Runtime Projection Core is afgerond en server-side klaar.
+Fase 12 Git-basis is voorbereid.
 
-Fase 12 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 12 openen.
+Fase 12 is server-side nog niet klaar. Codex/Claude moet de open checks, live smokes, browser smoke en docs final draaien voordat Fase 12 als afgerond gemarkeerd mag worden.

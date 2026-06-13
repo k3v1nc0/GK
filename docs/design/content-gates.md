@@ -19,7 +19,8 @@ Niet toegestaan:
 - procedural generation als vervanging voor ontbrekende Kevin/GameBible/editor-input gebruiken;
 - asset-aanwezigheid behandelen als definitieve runtimekeuze;
 - publish-flow behandelen als runtime renderer of automatische publish;
-- runtime projection behandelen als renderer, gameplay of contentcompiler buiten publish-ready snapshotmetadata.
+- runtime projection behandelen als renderer, gameplay of contentcompiler buiten publish-ready snapshotmetadata;
+- runtime client shell behandelen als renderer, gameplay, HUD/minimap/audio runtime of contentbron.
 
 ## Actuele gates
 
@@ -36,7 +37,8 @@ Niet toegestaan:
 | Fase 8.1 procedural core | Server-side afgerond en klaar |
 | Fase 9 world/camera/minimap/UI display | Server-side afgerond en klaar |
 | Fase 10 Publish Flow Core | Server-side afgerond en klaar |
-| Fase 11 Runtime Projection Core | Git-basis voorbereid; server-side validatie open |
+| Fase 11 Runtime Projection Core | Server-side afgerond en klaar |
+| Fase 12 Runtime Client Shell Core | Git-basis voorbereid; server-side validatie open |
 
 ## Fail-fast regels
 
@@ -49,6 +51,7 @@ Stop direct wanneer:
 - procedural generation als shortcut voor ontbrekende contentinput wordt gebruikt;
 - publish-flow runtime publish, renderer of concrete gamecontent zou uitvoeren;
 - runtime projection raw drafts, procedural preview/bake, concrete gamecontent, renderer flags of assetmutatie zou bevatten;
+- runtime client shell editor/admin routes, raw draft data, concrete gamecontent, renderer/gameplay/audio playback of assetmutatie zou bevatten;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
 
 Stoppen is correct gedrag. Niet improviseren.
@@ -70,15 +73,15 @@ Regels:
 - audio files zijn asset-library candidates;
 - HUD, icon en minimap marker bestanden zijn UI/image assets, geen definitieve HUD/minimap runtimecontent;
 - ambience, music, SFX en UI audio zijn audio assets, geen definitieve music/ambience/SFX/UI runtimecontent;
-- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation en Fase 11 runtime projection validation publiceren niets naar Runtime Game;
-- Fase 10 en Fase 11 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren.
+- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation en Fase 12 runtime client shell validation publiceren niets naar Runtime Game;
+- Fase 10, Fase 11 en Fase 12 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren.
 
 ## UI/HUD/minimap display gate
 
-Fase 9 introduceert een harde UI display gate. Deze gate is server-side gevalideerd en wordt in Fase 10 publish validation en Fase 11 runtime projection validation meegenomen.
+Fase 9 introduceert een harde UI display gate. Deze gate is server-side gevalideerd en wordt in Fase 10 publish validation, Fase 11 runtime projection validation en Fase 12 runtime client shell safety checks meegenomen.
 
 - source image natural size is metadata;
-- runtime/editor/projection mag source pixel size nooit blind als display size gebruiken;
+- runtime/editor/projection/client shell mag source pixel size nooit blind als display size gebruiken;
 - display size moet via node-data/editor-data/publish data komen;
 - `displayWidth` en `displayHeight` zijn vereist, tenzij een expliciete responsive rule display dimensions levert;
 - `scaleMode`, `anchor` en `pivot` zijn node-data;
@@ -106,7 +109,8 @@ Regels:
 - procedural output blijft draft/candidate totdat publish-flow expliciet publiceert;
 - Fase 9 gebruikt generated zones, placements, spawn areas, path networks en resource distributions alleen als draft/candidate input;
 - Fase 10 valideert generated refs als candidate input, maar publiceert ze niet automatisch;
-- Fase 11 mag generated refs alleen projecteren wanneer Fase 10 publish validation ze heeft geaccepteerd.
+- Fase 11 mag generated refs alleen projecteren wanneer Fase 10 publish validation ze heeft geaccepteerd;
+- Fase 12 mag generated refs alleen als runtime projection read-model metadata zien, nooit als raw procedural draft/preview/bake data.
 
 ## World/camera/lighting/minimap gate
 
@@ -146,7 +150,7 @@ Fase 10 mag alleen metadata en validation responses voorbereiden. Snapshot metad
 
 ## Runtime Projection Core gate
 
-Fase 11 is een runtime projection contractlaag. Server-side validatie staat nog open.
+Fase 11 is een runtime projection contractlaag en is server-side afgerond.
 
 Runtime projection validation bewaakt:
 
@@ -162,6 +166,26 @@ Runtime projection validation bewaakt:
 - no-runtime-renderer/no-game-client;
 - safety flags: `publishesRuntimeProjection=true`, `implementsRuntimeRenderer=false`, `mutatesAssets=false`, `containsConcreteGameContent=false`, `usesHardcodedContent=false`.
 
+## Runtime Client Shell Core gate
+
+Fase 12 is een runtime client shell contractlaag. Server-side validatie staat nog open.
+
+Runtime client shell validation bewaakt:
+
+- shell gebruikt alleen runtime projection read-only routes;
+- shell gebruikt geen editor/admin routes;
+- shell gebruikt of lekt geen editor draft/candidate data;
+- shell toont veilige loading/empty/error/status states;
+- shell mag projection manifest/records alleen als metadata tonen;
+- no 3D renderer;
+- no gameplay;
+- no movement/combat;
+- no audio playback;
+- no HUD/minimap hardcoded layout;
+- no-asset-mutation/copy;
+- no-hardcoded-content;
+- safety flags: `consumesRuntimeProjection=true`, `usesEditorDraftData=false`, `implements3DRenderer=false`, `implementsGameplay=false`, `implementsCombat=false`, `implementsMovement=false`, `implementsAudioPlayback=false`, `hardcodesContent=false`, `mutatesAssets=false`.
+
 ## Open gates voor latere fases
 
 | Input | Wanneer blokkerend |
@@ -172,7 +196,7 @@ Runtime projection validation bewaakt:
 | Audio mapping | Zodra ambience, music, SFX, UI audio, NPC audio of boss audio runtime verplicht wordt |
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
-| Runtime renderer/client | Zodra een expliciete latere Runtime Game fase wordt geopend |
+| Runtime renderer/gameplay client | Zodra een expliciete latere Runtime Game fase wordt geopend |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist zijn |
 
 ## Te verifieren fase-input voor volgende fases
@@ -181,10 +205,11 @@ Nieuwe agents moeten openen:
 
 - `README/current-phase.md`;
 - `docs/design/phase-plan/current-phase.md`;
-- de actuele fase-README, nu `README/fase11.md`;
+- de actuele fase-README, nu `README/fase12.md`;
 - `README/fase8.1.md`;
 - `README/fase9.md`;
 - `README/fase10.md`;
+- `README/fase11.md`;
 - `README/node-system-super-dynamic-contract.md`;
 - `docs/design/asset-register.md`;
 - `docs/design/audio-register.md`;
@@ -192,4 +217,4 @@ Nieuwe agents moeten openen:
 - `docs/architecture/auth-boundaries.md`;
 - `README/GameBibleNode.json`.
 
-Fase 11 server-side validatie staat nog open. Geen Fase 12 openen voordat Fase 11 is bevestigd en Kevin die fase opent.
+Fase 12 server-side validatie staat nog open. Geen volgende runtime renderer/gameplay/HUD/audio fase openen voordat Fase 12 is bevestigd en Kevin die fase opent.

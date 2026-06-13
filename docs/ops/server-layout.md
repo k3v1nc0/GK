@@ -18,7 +18,7 @@ Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 serv
 
 Fase 11 Runtime Projection Core is server-side afgerond en klaar. Browser smoke en ops/docs-hardening staan ook op `main` via commit `346533a98e6786e741fded8bcc5af4177e3cfd36` (`Codex/Claude - browser en ops/docs-hardining`).
 
-Fase 12 is nog niet geimplementeerd. Kevin mag Fase 12 openen als volgende fase.
+Fase 12 Runtime Client Shell Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
 
 ## Vast server-verificatie runbook
 
@@ -31,13 +31,14 @@ De runbook is leidend voor terugkerende serverchecks. Deze layoutdoc blijft de s
 - GK Code Copiloot beheert in Git alleen blijvende scripts, templates, docs en checks.
 - Codex voert serverwerk buiten Git uit: OS, users, rechten, MySQL, Redis, Nginx, systemd, secrets, builds, runtime checks en lokale scans.
 - Echte secrets, credentials, tokens, private keys en serverwaarden mogen niet in Git.
-- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Game`.
+- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
 - Procedural generation output blijft draft/preview/bake data totdat publish-flow expliciet publiceert in een daarvoor geopende fase.
 - UI/audio assets blijven asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
 - Fase 9 publiceert niets naar runtime.
 - Fase 10 publiceert niets naar runtime en maakt alleen publish validation/snapshot metadata contracts.
 - Fase 11 maakt alleen runtime projection contracts/read-model metadata en bouwt geen Runtime Game renderer/client.
+- Fase 12 maakt alleen een runtime client shell voor read-only projection metadata en bouwt geen renderer, gameplay, HUD/minimap runtime of audio playback.
 - Browser-smokes mogen geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Bevestigde paden
@@ -49,6 +50,22 @@ De runbook is leidend voor terugkerende serverchecks. Deze layoutdoc blijft de s
 | `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` | Bevestigd | Door Codex buiten Git gezet of bevestigd. |
 | `/opt/gk/node-v22/bin/node` | Bevestigd | Actieve Node runtime voor `gk-api` en `gk-editor-web`. |
 | `/tmp/gk-browser-smoke/` | Candidate/default | Server-local browser-smoke artifacts, nooit Git. |
+
+## Poorten en services
+
+| Service | Standaard local origin | Opmerking |
+|---|---|---|
+| API | `127.0.0.1:3001` | Bestaande `gk-api`. |
+| Editor web | `127.0.0.1:3002` | Bestaande `gk-editor-web`. |
+| Game/runtime shell | `127.0.0.1:3003` | Fase 12 game-web default via `GK_GAME_PORT`; server-side service/proxy validatie staat open. |
+
+Game/runtime shell routes in Git-basis:
+
+- `GET /`;
+- `GET /game`;
+- `GET /game/`;
+- `GET /game/shell.json`;
+- `GET /health/game`.
 
 ## Assetstatus
 
@@ -175,6 +192,23 @@ Fase 11 bouwt geen Runtime Game renderer/client, voert geen automatic projection
 
 Browser smoke en ops/docs-hardening zijn beschikbaar via `docs/ops/server-verification-runbook.md`. Editor browser-smoke is groen. Game browser-smoke mag `skipped` blijven totdat game front door/login expliciet wordt geopend.
 
+## Fase 12 Git-basis status
+
+Fase 12 voegt Runtime Client Shell Core contracts toe in Git:
+
+- runtime client shell schemas en validators;
+- runtime client shell socket/node contracts;
+- game-web runtime shell routes;
+- projection fetch/read-only client;
+- safe empty-state shell UI;
+- browser-smoke runtime shell hook;
+- tests;
+- docs.
+
+Server-side verificatie staat open. Geen server runtime, service restart, live smoke of browser smoke is door deze GitHub-only update geclaimd.
+
+Fase 12 bouwt geen Runtime Game renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback en wijzigt geen assets.
+
 ## Webserver policy
 
 Kevin heeft bevestigd:
@@ -186,7 +220,7 @@ Kevin heeft bevestigd:
 - Nginx mag niet live worden geactiveerd op poort 80/443.
 - Er komt geen volledige migratie naar Nginx zonder aparte migratiefase.
 
-Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts, Fase 10 publish validation/snapshot metadata en Fase 11 runtime projection source/manifest/read-model metadata mogen niet publiek worden geserveerd alsof het concrete runtimecontent of editor draft data is.
+Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts, Fase 10 publish validation/snapshot metadata en Fase 11 runtime projection source/manifest/read-model metadata mogen niet publiek worden geserveerd alsof het concrete runtimecontent of editor draft data is. Fase 12 runtime client shell mag alleen de read-only runtime projection routes tonen.
 
 ## Runtime directory layout
 
@@ -220,7 +254,7 @@ Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 
 De vaste secret-bestandspaden en variabelenamen staan in `docs/ops/server-verification-runbook.md`. Print nooit secret values, plak geen `cat` output met secrets in rapporten en commit nooit secret values naar Git.
 
-Git mag alleen veilige examples bevatten. Geen Fase 11 wijziging mag secrets toevoegen.
+Git mag alleen veilige examples bevatten. Geen Fase 12 wijziging mag secrets toevoegen.
 
 ## Browser-smoke tooling
 
@@ -231,6 +265,11 @@ Git mag alleen veilige examples bevatten. Geen Fase 11 wijziging mag secrets toe
 - `pnpm smoke:browser:game`.
 
 Deze scripts draaien pas na build/typecheck/test/lint en service restart. Ze mogen artifacts alleen in een tijdelijke server-local map zetten, standaard onder `/tmp/gk-browser-smoke/`, en nooit in Git.
+
+Fase 12 runtime shell smoke gebruikt:
+
+- `GK_GAME_FRONT_DOOR_URL` als volledige URL, indien gezet;
+- anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`.
 
 ## Codex/Claude serverchecks
 
@@ -247,10 +286,21 @@ Afgerond:
 
 Gebruik voor nieuwe server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
+Open voor Fase 12:
+
+1. `pnpm build`.
+2. `pnpm typecheck`.
+3. `pnpm test`.
+4. `pnpm lint`.
+5. Runtime projection read-only route smokes.
+6. Game/runtime shell route smokes.
+7. Browser smoke runtime shell marker wanneer game front door/origin is gezet.
+8. Bevestigen dat runtime client shell geen editor/admin routes gebruikt.
+9. Bevestigen dat geen renderer/gameplay/movement/combat/audio playback, concrete gamecontent of assetmutatie plaatsvindt.
+
 Nog open voor latere fases:
 
-- Fase 12 wanneer Kevin die opent;
-- game runtime;
+- game runtime renderer/gameplay wanneer Kevin die expliciet opent;
 - realtime gateway;
 - workers;
 - runtime publish-services;
