@@ -14,66 +14,6 @@ Editor-auth en game-auth zijn strikt gescheiden:
 
 Een game user is niet automatisch editor user. Een editor user is niet automatisch player. Een player session is niet geldig voor editor routes en een editor session is niet geldig voor game routes.
 
-## Routes
-
-Fase 4 definieert route-contracten voor:
-
-- `editor.login`;
-- `editor.logout`;
-- `editor.me`;
-- `game.register`;
-- `game.login`;
-- `game.logout`;
-- `game.me`;
-- `email_verification.request`;
-- `email_verification.confirm`;
-- `password_reset.request`;
-- `password_reset.confirm`;
-- `editor.game_users.list`;
-- `editor.game_users.status_update`;
-- `editor.graph.draft`;
-- `editor.graph.operation`;
-- `editor.graph.preview`.
-
-Editor game-user beheer vereist een editor session met `editor_admin`.
-
-Editor graph draft, operation en preview vereisen een editor session. Ze vereisen geen game session en accepteren geen game session als editorbewijs. State-changing graph operations en draft-preview POSTs blijven CSRF/Origin beschermd via de editor session flow.
-
-## Fase 9 editor-only routes
-
-Fase 9 world/minimap/UI display routes vereisen editor scope:
-
-- `GET /editor/world/settings`;
-- `POST /editor/world/validate`;
-- `GET /editor/minimap/settings`;
-- `POST /editor/minimap/validate`;
-- `GET /editor/ui-display/assets`;
-- `POST /editor/ui-display/validate`.
-
-State-changing routes zijn CSRF/Origin beschermd. Anonymous/game sessions krijgen geen editor world/minimap/UI display beheer.
-
-## Fase 10 publish-flow routes
-
-Fase 10 publish-flow routes vereisen editor scope en `editor_admin`:
-
-- `GET /editor/publish/status`;
-- `POST /editor/publish/validate`;
-- `POST /editor/publish/snapshots`;
-- `GET /editor/publish/snapshots`;
-- `GET /editor/publish/snapshots/:id`;
-- `POST /editor/publish/rollback/validate`.
-
-Regels:
-
-- anonymous sessions krijgen 401/403 deny, niet 404 fallback;
-- game sessions krijgen deny;
-- editor sessions zonder `editor_admin` krijgen deny;
-- state-changing publish routes vereisen CSRF/Origin bescherming;
-- publish route responses zijn metadata/validation-only;
-- routes voeren geen runtime publish uit;
-- routes wijzigen geen assets;
-- routes bevatten geen concrete gamecontent.
-
 ## Fase 11 runtime projection routes
 
 Fase 11 editor/admin runtime projection routes vereisen editor scope en `editor_admin`:
@@ -84,37 +24,13 @@ Fase 11 editor/admin runtime projection routes vereisen editor scope en `editor_
 - `GET /editor/runtime-projection/manifests`;
 - `GET /editor/runtime-projection/manifests/:id`.
 
-Server-side groen bevestigd door Codex/Claude.
-
-Regels:
-
-- anonymous sessions krijgen 401/403 deny, niet 404 fallback;
-- game sessions krijgen deny;
-- editor sessions zonder `editor_admin` krijgen deny;
-- state-changing projection routes vereisen CSRF/Origin bescherming;
-- projection route responses zijn contract/read-model metadata-only;
-- project action maakt geen automatic projection en geen renderer;
-- routes wijzigen geen assets;
-- routes bevatten geen concrete gamecontent.
-
 Fase 11 runtime read-only routes:
 
 - `GET /runtime/projection/status`;
 - `GET /runtime/projection/manifest`;
 - `GET /runtime/projection/records`.
 
-Server-side groen bevestigd door Codex/Claude.
-
-Regels:
-
-- read-only;
-- geen state-changing operatie;
-- geen editor/admin secrets;
-- geen raw editor draft leakage;
-- geen raw unpublished candidate data;
-- veilige empty state wanneer er nog geen projection bestaat;
-- geen dummy content;
-- geen renderer/game client.
+Read-only routes zijn geen editor/admin routes, voeren geen state change uit, lekken geen raw editor draft data en bevatten geen renderer/game client.
 
 ## Fase 12 runtime client shell routes
 
@@ -153,7 +69,7 @@ Regels:
 
 ## Fase 13 runtime render surface boundary
 
-Fase 13 Runtime Render Surface Core Git-basis is toegevoegd. Server-side validatie staat nog open.
+Fase 13 Runtime Render Surface Core is server-side groen bevestigd en formeel afgerond.
 
 Regels:
 
@@ -165,7 +81,24 @@ Regels:
 - runtime render surface uploadt, laadt, wijzigt of verwijdert geen assets;
 - runtime render surface bevat geen secrets en geen concrete gamecontent;
 - runtime render surface bouwt geen volledige renderer, scene assembly, gameplay, movement, combat, HUD/minimap runtime of audio playback;
-- browser-smoke moet render surface marker en safe empty state bevestigen zonder editor/admin route leakage.
+- browser-smoke bevestigt render surface marker en safe empty state zonder editor/admin route leakage.
+
+## Fase 14 runtime scene assembly boundary
+
+Fase 14 Projection-driven Scene Assembly Core Git-basis is toegevoegd. Server-side validatie staat nog open.
+
+Regels:
+
+- runtime scene assembly gebruikt geen editor/admin routes;
+- runtime scene assembly gebruikt geen editor credentials, CSRF token of editor session;
+- runtime scene assembly consumeert alleen runtime projection read-only records;
+- runtime scene assembly toont geen raw editor draft/candidate data;
+- runtime scene assembly voert geen state-changing request uit;
+- runtime scene assembly uploadt, laadt, wijzigt of verwijdert geen assets;
+- runtime scene assembly bevat geen secrets en geen concrete gamecontent;
+- runtime scene assembly finaliseert geen GLB of asset role mapping;
+- runtime scene assembly bouwt geen renderer draw calls, gameplay, movement, combat, HUD/minimap runtime of audio playback;
+- browser-smoke moet scene assembly marker en empty scene plan bevestigen zonder editor/admin route leakage.
 
 ## Live auth smoke runbook
 
@@ -182,47 +115,7 @@ Browser-smokes gebruiken server-only credentials uit `/etc/gk/secrets/initial-ed
 
 Smoke headers of speciale testheaders mogen alleen worden gebruikt waar ze expliciet geactiveerd zijn en alleen voor deny/contract-smokes. Live verificatie mag niet afhankelijk worden van test-hacks. Secret values mogen nooit worden geprint, in rapporten geplakt, in screenshots/traces zichtbaar zijn of naar Git geschreven.
 
-Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De Fase 12 runtime shell en Fase 13 render surface smoke mogen ook zonder game login draaien wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` naar de shellroute wijst. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
-
-## Registration and verification
-
-Game registratie is publiek open. Nieuwe game users starten als `pending_verification`. Volledige gamefuncties mogen pas beschikbaar komen nadat e-mailverificatie de user naar een toegestane actieve status brengt.
-
-Editorregistratie is niet publiek. Editor users worden later alleen door een editor admin aangemaakt.
-
-De eerste editor admin gebruikt Kevin-bevestigde e-mail `k3v1nc0@hotmail.com`, maar seed password/hash/secret mogen alleen buiten Git worden gezet.
-
-## Password and token policy
-
-De auth contracts volgen deze regels:
-
-- minimaal 15 tekens;
-- minimaal 64 tekens maximale lengte ondersteunen;
-- spaties/passphrases toestaan;
-- geen verplichte hoofdletter/cijfer/special-character-regels;
-- geen periodieke verplichte wachtwoordwissel;
-- blocklist-hook voor veelgebruikte, zwakke of gecompromitteerde wachtwoorden;
-- wachtwoorden nooit plain-text opslaan;
-- password reset via random expiring token;
-- reset- en verificatietokens alleen hashed opslaan;
-- token maar een keer bruikbaar;
-- geen security questions.
-
-Hash-algoritme en parameters worden server-side door Codex gekozen en in buiten-Git runtimeconfig vastgelegd.
-
-## Sessions
-
-Sessies:
-
-- roteren na login;
-- worden ingetrokken bij logout;
-- worden ingetrokken of ongeldig gemaakt bij password reset;
-- bewaren alleen token hashes;
-- zijn scope-gebonden;
-- gebruiken HttpOnly/Secure/SameSite cookies als cookies worden gebruikt;
-- vereisen TLS voor login en authenticated pages.
-
-Fase 5.3 implementeert de eerste echte editor-session browserflow. Game-session cookies tellen niet als editor session.
+Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De Fase 12 runtime shell, Fase 13 render surface en Fase 14 scene assembly smoke mogen ook zonder game login draaien wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` naar de shellroute wijst. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Audit
 
@@ -242,23 +135,26 @@ Audit logt minimaal:
 - runtime projection manifest metadata creation;
 - runtime projection read-model access;
 - runtime client shell status/read-model access;
-- runtime render surface status/capability access.
+- runtime render surface status/capability access;
+- runtime scene assembly status/plan access.
 
-Audit bevat actor, action, target, scope, timestamp en metadata. Fase 13 render surface status bevat geen secrets, geen editor draft data en geen concrete gamecontent.
+Audit bevat actor, action, target, scope, timestamp en metadata. Fase 14 scene assembly status bevat geen secrets, geen editor draft data en geen concrete gamecontent.
 
 ## Server-side validatie
 
-Codex heeft Fase 4 t/m Fase 12.1 server-side afgerond waar van toepassing. Fase 13 server-side validatie staat nog open.
+Codex heeft Fase 4 t/m Fase 13 server-side afgerond waar van toepassing. Fase 14 server-side validatie staat nog open.
 
-Open voor Fase 13:
+Open voor Fase 14:
 
 - build/typecheck/test/lint;
 - live route-smokes;
 - browser-smoke game/full;
-- render surface marker en safe empty state;
+- scene assembly marker en empty scene plan;
 - no editor/admin route usage;
-- no asset load requests;
+- no editor draft/candidate data;
+- no asset/GLB/audio load requests;
 - no concrete gamecontent;
+- no renderer draw calls;
 - no gameplay/audio playback;
 - worktree schoon.
 

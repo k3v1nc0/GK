@@ -45,7 +45,12 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "runtime.render.status.reference",
   "runtime.render.capability.reference",
   "runtime.render.lifecycle.reference",
-  "runtime.render.safety.reference"
+  "runtime.render.safety.reference",
+  "runtime.scene.assembly.source.reference",
+  "runtime.scene.assembly.status.reference",
+  "runtime.scene.assembly.plan.reference",
+  "runtime.scene.assembly.descriptor.reference",
+  "runtime.scene.assembly.safety.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

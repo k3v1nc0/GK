@@ -10,6 +10,7 @@ import { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
 import { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 import { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.js";
 import { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
+import { RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES } from "./runtime-scene-assembly-nodes.js";
 import { WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES } from "./world-camera-minimap-nodes.js";
 
 export type NodeCapabilityScope =
@@ -175,7 +176,8 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   ...PUBLISH_FLOW_GRAPH_NODE_TYPES,
   ...RUNTIME_PROJECTION_GRAPH_NODE_TYPES,
   ...RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES,
-  ...RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES
+  ...RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES,
+  ...RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
@@ -189,3 +191,4 @@ export { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
 export { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.js";
 export { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 export { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
+export { RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES } from "./runtime-scene-assembly-nodes.js";

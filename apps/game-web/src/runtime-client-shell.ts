@@ -5,11 +5,16 @@ import {
   type RuntimeClientShellModel
 } from "@gk/schemas";
 
+import { RUNTIME_CLIENT_SHELL_STYLES } from "./runtime-client-shell-styles.js";
 import {
   renderRuntimeRenderSurfaceBootScript,
   renderRuntimeRenderSurfaceSection,
   runtimeRenderSurfaceClientContract
 } from "./runtime-render-surface.js";
+import {
+  renderRuntimeSceneAssemblySection,
+  runtimeSceneAssemblyClientContract
+} from "./runtime-scene-assembly.js";
 import { runtimeProjectionFetchClientContract } from "./runtime-projection-client.js";
 
 export const RUNTIME_CLIENT_SHELL_MARKER = "phase-12" as const;
@@ -29,6 +34,7 @@ export interface RuntimeClientShellHttpContract {
   readonly hardcodesContent: false;
   readonly mutatesAssets: false;
   readonly renderSurface: typeof runtimeRenderSurfaceClientContract;
+  readonly sceneAssembly: typeof runtimeSceneAssemblyClientContract;
 }
 
 export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
@@ -43,7 +49,8 @@ export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
   implementsAudioPlayback: false,
   hardcodesContent: false,
   mutatesAssets: false,
-  renderSurface: runtimeRenderSurfaceClientContract
+  renderSurface: runtimeRenderSurfaceClientContract,
+  sceneAssembly: runtimeSceneAssemblyClientContract
 };
 
 export function createRuntimeClientShellResponseModel(route: RuntimeClientShellModel["route"] = "/game/"): RuntimeClientShellModel {
@@ -57,6 +64,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     .map((route) => `<li><code>${escapeHtml(route)}</code></li>`)
     .join("");
   const renderSurface = renderRuntimeRenderSurfaceSection();
+  const sceneAssembly = renderRuntimeSceneAssemblySection();
 
   return `<!doctype html>
 <html lang="nl">
@@ -64,165 +72,14 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GK Runtime Client Shell</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font-family: system-ui, sans-serif;
-      background: #f6f7f8;
-      color: #15171a;
-    }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: #f6f7f8;
-    }
-    main {
-      width: min(1040px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 32px 0;
-    }
-    header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 24px;
-      border-bottom: 1px solid #d9dde3;
-      padding-bottom: 18px;
-    }
-    h1 {
-      margin: 0;
-      font-size: 1.6rem;
-      line-height: 1.2;
-      letter-spacing: 0;
-    }
-    h2 {
-      margin: 0 0 10px;
-      font-size: 1rem;
-      line-height: 1.3;
-      letter-spacing: 0;
-    }
-    p {
-      margin: 8px 0 0;
-      line-height: 1.5;
-    }
-    code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.9em;
-    }
-    .status-pill {
-      border: 1px solid #b8c0cc;
-      border-radius: 6px;
-      padding: 6px 10px;
-      background: #fff;
-      white-space: nowrap;
-    }
-    .runtime-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 18px;
-    }
-    .panel,
-    .render-surface {
-      min-width: 0;
-      border: 1px solid #d9dde3;
-      border-radius: 8px;
-      padding: 14px;
-      background: #fff;
-    }
-    .panel ul {
-      margin: 0;
-      padding-left: 18px;
-    }
-    .render-surface {
-      margin-top: 12px;
-    }
-    .render-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 12px;
-    }
-    .render-host {
-      position: relative;
-      min-height: 180px;
-      display: grid;
-      place-items: center;
-      overflow: hidden;
-      border: 1px solid #c6ccd4;
-      border-radius: 6px;
-      background: #15171a;
-      color: #fff;
-    }
-    .render-canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      opacity: 0.04;
-      pointer-events: none;
-    }
-    .render-host p {
-      position: relative;
-      margin: 0;
-      padding: 16px;
-      text-align: center;
-    }
-    .render-capability-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 10px;
-    }
-    .render-capability-grid span {
-      min-width: 0;
-      border: 1px solid #d9dde3;
-      border-radius: 6px;
-      padding: 8px;
-      background: #f6f7f8;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.82rem;
-      overflow-wrap: anywhere;
-    }
-    .muted {
-      color: #5c6672;
-    }
-    .error {
-      margin-top: 18px;
-      border: 1px solid #b84a4a;
-      border-radius: 8px;
-      padding: 12px;
-      color: #7b1f1f;
-      background: #fff7f7;
-    }
-    [hidden] {
-      display: none !important;
-    }
-    @media (max-width: 760px) {
-      header,
-      .runtime-grid,
-      .render-header,
-      .render-capability-grid {
-        display: block;
-      }
-      .panel,
-      .render-capability-grid span {
-        margin-top: 12px;
-      }
-      .status-pill {
-        display: inline-block;
-        margin-top: 12px;
-      }
-    }
-  </style>
+  <style>${RUNTIME_CLIENT_SHELL_STYLES}</style>
 </head>
 <body>
   <main data-runtime-client-shell="${RUNTIME_CLIENT_SHELL_MARKER}" data-runtime-client-route="${escapeHtml(model.route)}">
     <header>
       <div>
         <h1>Runtime Client Shell</h1>
-        <p class="muted">Read-only projection metadata shell. Renderer and gameplay phases are not open.</p>
+        <p class="muted">Read-only projection metadata shell. Renderer, asset loading and gameplay phases are not open.</p>
       </div>
       <div class="status-pill" data-runtime-client-status>${escapeHtml(model.status)}</div>
     </header>
@@ -243,6 +100,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     </section>
 
     ${renderSurface}
+    ${sceneAssembly}
 
     <section class="panel" aria-label="Runtime projection read-only routes" style="margin-top:12px">
       <h2>Read-only projection routes</h2>

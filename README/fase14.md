@@ -1,91 +1,162 @@
-# Fase 14 - Quest systeem, story, side quests en party sharing
+# Fase 14 - Projection-driven Scene Assembly Core
 
-## Vaste regels voor deze fase
+## Status
 
-- Dit is een 100% nieuw project.
-- Alles draait eerst op 1 eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
-- Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
-- Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
-- De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
-- Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
-- De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
-- Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
-- Maak geen losse backupbestanden, geen tijdelijke markdown-dumps en geen extra README-bestanden die niet blijvend onderhouden worden.
+Fase 14 is geopend. De Git-basis voor Projection-driven Scene Assembly Core is toegevoegd op `main`.
 
-## Doel van de fase
+Server-side verificatie door Codex/Claude is nog nodig. Fase 14 is pas klaar na build, typecheck, test, lint, live route-smokes, Apache/front-door smokes, browser smoke en docs-final.
 
-NPCs kunnen quests geven, party sharing werkt, progressie blijft bewaard en side quests worden via nodes gemaakt.
+Fase 1 t/m Fase 13 zijn afgerond. Fase 15 is nog niet geopend of geimplementeerd.
 
-Questdoelen mogen later verwijzen naar world/zone/entity candidates die via Fase 8.1/Fase 9 zijn ontstaan, maar questnamen, teksten, objectives en rewards blijven GameBible/editor/Kevin-data. Procedural generation mag geen questcontent verzinnen.
+## Doel
 
-## Verplichte afhankelijkheden
+Fase 14 voegt een veilige data-driven scene assembly laag toe. De laag mag runtime projection metadata/read-model records omzetten naar neutrale scene descriptor/scene plan metadata voor latere rendererfases.
 
-- Fase 8 entity/component core.
-- Fase 8.1 procedural generation core voor eventuele generated placement/path/zone candidates.
-- Fase 9 world/zone/minimap nodes.
-- Fase 13 NPC/task/dialog basis wanneer quest-NPCs nodig zijn.
-
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
-
-- Kies naam eerste quest.
-- Kies minimaal 1 side quest idee.
-- Kies quest stappen.
-- Kies party sharing gedrag.
-- Kies quest tracker UI/audio.
-- Kies of accepteer eventuele generated zone/entity/path candidates die questdoelen mogen gebruiken.
-
-## Actie voor Codex
-
-Draai quest/party migraties en test met twee game accounts.
-
-## Prompt voor GK Code Copiloot
+De keten blijft:
 
 ```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
-
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated placement of minimap-instelling hard-coded bevatten.
-- Procedural generation mag geen questtekst, questnamen, rewards of objectives verzinnen.
-
-Je werkt aan fase 14: Quest systeem, story, side quests en party sharing.
-
-Doel:
-NPCs kunnen quests geven, party sharing werkt, progressie blijft bewaard en side quests worden via nodes gemaakt.
-
-Werk uit:
-Maak quest nodes, dialog quest effects, quest state, party state, quest tracker HUD, quest audio events en server validation. Geen quest tekst verzinnen buiten Game Bible. Questdoelen mogen verwijzen naar geaccepteerde world/entity candidates, maar de questinhoud blijft expliciete data.
-
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
+Database / Editor / Node-system
+  -> Publish Flow Core
+  -> Runtime Projection Core
+  -> Runtime Client Shell Core
+  -> Game Web Service Deployment Core
+  -> Runtime Render Surface Core
+  -> Projection-driven Scene Assembly Core
+  -> latere Asset Loading / Renderer / Gameplay / HUD / Audio fases
 ```
 
-## Acceptatiechecklist
+## Toegevoegd
 
-- [ ] Quest accept.
-- [ ] Progress blijft na refresh.
-- [ ] Party share.
-- [ ] Side quest mogelijk.
-- [ ] Quest audio/HUD via nodes.
-- [ ] Procedural candidates kunnen alleen als gekozen target/input dienen, niet als questcontentbron.
+- Runtime scene assembly contracts.
+- Scene descriptor/read-model contracts.
+- Scene assembly lifecycle/status.
+- Scene assembly safety flags.
+- Projection-to-scene-plan validation.
+- Empty scene plan wanneer runtime projection records leeg zijn.
+- Scene assembly statuszone in de game shell.
+- Marker `data-runtime-scene-assembly="phase-14"`.
+- Node/socket contracts voor scene assembly status, source, plan, descriptor en safety flags.
+- Browser-smoke check voor scene assembly marker en empty scene plan.
+- Tests voor no-content/no-asset/no-render/no-gameplay boundaries.
 
-## Testplan
+## Contracten
 
-Speler A accepteert quest, deelt met B, objective progress sync, side quest test. Controleer dat alle questtekst en rewards uit GameBible/editor-data komen en dat generated zone/entity references alleen geaccepteerde node-data zijn.
+Schema's:
+
+- `RuntimeSceneAssemblyStatus`;
+- `RuntimeSceneAssemblyState`;
+- `RuntimeSceneAssemblyPlan`;
+- `RuntimeSceneAssemblyDescriptor`;
+- `RuntimeSceneAssemblyNode`;
+- `RuntimeSceneAssemblySource`;
+- `RuntimeSceneAssemblyErrorState`;
+- `RuntimeSceneAssemblySafetyFlags`.
+
+Safety flags:
+
+- `consumesRuntimeProjectionRecords=true`;
+- `producesScenePlan=true`;
+- `loadsAssets=false`;
+- `resolvesFinalAssetRoles=false`;
+- `rendersScene=false`;
+- `implementsGameplay=false`;
+- `implementsMovement=false`;
+- `implementsCombat=false`;
+- `implementsAudioPlayback=false`;
+- `hardcodesWorld=false`;
+- `hardcodesCamera=false`;
+- `hardcodesLighting=false`;
+- `hardcodesHud=false`;
+- `hardcodesMinimap=false`;
+- `hardcodesContent=false`;
+- `mutatesAssets=false`;
+- `usesEditorDraftData=false`;
+- `usesEditorAdminRoutes=false`.
+
+## Scene plan regels
+
+- Als runtime projection records leeg zijn, is een empty scene plan geldig.
+- Als runtime projection records bestaan, mag Fase 14 alleen generieke descriptors maken op basis van toegestane metadata.
+- Scene descriptors mogen geen concrete payload, renderer instruction, asset-load URL of final asset role bevatten.
+- Scene plan nodes zijn metadata-nodes, geen renderer nodes.
+- Fase 14 maakt geen hardcoded fallback zoals default village, test NPC of dummy object.
+
+## Niet toegestaan
+
+Fase 14 bouwt niet:
+
+- volledige 3D renderer;
+- GLB asset loading;
+- texture/audio loading;
+- definitive GLB role mapping;
+- asset-loader node;
+- renderer node;
+- gameplay node;
+- concrete gamewereld;
+- dummy world, NPC, quest of economy;
+- gameplay, movement, combat of player runtime;
+- audio playback;
+- HUD/minimap runtime layout;
+- camera/light/fog/sky/world hardcoding;
+- automatic publish/projection;
+- editor draft/candidate data in runtime;
+- editor/admin routes in runtime;
+- assetmutatie;
+- secrets;
+- Fase 15.
+
+## Bestanden
+
+Toegevoegd of bijgewerkt:
+
+- `packages/schemas/src/runtime-scene-assembly.ts`;
+- `packages/schemas/src/runtime-scene-assembly-validation.ts`;
+- `packages/schemas/src/node-graph.ts`;
+- `packages/schemas/src/index.ts`;
+- `packages/node-types/src/runtime-scene-assembly-nodes.ts`;
+- `packages/node-types/src/index.ts`;
+- `apps/game-web/src/runtime-scene-assembly.ts`;
+- `apps/game-web/src/runtime-client-shell.ts`;
+- `apps/game-web/src/runtime-client-shell-styles.ts`;
+- `apps/game-web/src/http-server.ts`;
+- `apps/game-web/src/index.ts`;
+- `tests/smoke/browser-smoke.mjs`;
+- `tests/phase14-runtime-scene-assembly.test.mjs`;
+- status-, design- en ops-documentatie.
+
+## Server-side verificatie open
+
+Codex/Claude moet nog bevestigen:
+
+- `pnpm build`: open;
+- `pnpm typecheck`: open;
+- `pnpm test`: open;
+- `pnpm lint`: open;
+- `gk-api`, `gk-editor-web`, `gk-game-web` active/enabled: open;
+- Node 22 process check via `/opt/gk/node-v22/bin/node`: open;
+- local route-smokes op `127.0.0.1:3003`: open;
+- Apache/front-door smokes: open;
+- `pnpm smoke:browser:game`: open;
+- `pnpm smoke:browser:editor`: open;
+- `pnpm smoke:browser`: open;
+- runtime shell marker: open;
+- render surface marker: open;
+- scene assembly marker: open;
+- empty scene plan: open;
+- no editor/admin route usage: open;
+- no editor draft/candidate leakage: open;
+- no GLB/texture/audio loading: open;
+- no asset load requests: open;
+- no concrete gamecontent: open;
+- no renderer scene draw calls: open;
+- no gameplay/movement/combat/audio playback: open;
+- no hardcoded HUD/minimap/world/camera/light/audio values: open;
+- no asset mutation: open;
+- worktree schoon: open;
+- blockers: open.
+
+## Fasebeoordeling
+
+Git-basis klaar: ja.
+
+Server-side klaar: nee.

@@ -10,6 +10,7 @@ const EDITOR_PANEL_TITLES = new Map([
 ]);
 const RUNTIME_CLIENT_SHELL_SELECTOR = "[data-runtime-client-shell='phase-12']";
 const RUNTIME_RENDER_SURFACE_SELECTOR = "[data-runtime-render-surface='phase-13']";
+const RUNTIME_SCENE_ASSEMBLY_SELECTOR = "[data-runtime-scene-assembly='phase-14']";
 
 const args = new Set(process.argv.slice(2));
 const runEditor = !args.has("--game");
@@ -225,9 +226,10 @@ async function runGameSmoke(browserInstance) {
     const gameLoginResult = await tryGameLogin(page);
     const runtimeShellResult = await tryRuntimeShellSmoke(page);
     const runtimeRenderSurfaceResult = await tryRuntimeRenderSurfaceSmoke(page, pageState);
+    const runtimeSceneAssemblyResult = await tryRuntimeSceneAssemblySmoke(page, pageState);
 
     if (pageState.forbiddenAssetRequests.length > 0) {
-      throw new Error(`Game browser smoke saw forbidden render-surface asset requests: ${pageState.forbiddenAssetRequests.join(", ")}.`);
+      throw new Error(`Game browser smoke saw forbidden runtime asset requests: ${pageState.forbiddenAssetRequests.join(", ")}.`);
     }
 
     if (pageState.consoleErrors > 0 || pageState.pageErrors > 0) {
@@ -252,6 +254,7 @@ async function runGameSmoke(browserInstance) {
       reachability: "ok",
       runtimeShell: runtimeShellResult,
       runtimeRenderSurface: runtimeRenderSurfaceResult,
+      runtimeSceneAssembly: runtimeSceneAssemblyResult,
       gameLogin: gameLoginResult,
       assetRequests: pageState.forbiddenAssetRequests.length,
       consoleErrors: pageState.consoleErrors,
@@ -349,6 +352,65 @@ async function tryRuntimeRenderSurfaceSmoke(page, pageState) {
 
   if (pageState.forbiddenAssetRequests.length > 0) {
     throw new Error("Runtime render surface triggered a forbidden asset request.");
+  }
+
+  return "ok";
+}
+
+async function tryRuntimeSceneAssemblySmoke(page, pageState) {
+  const sceneAssembly = page.locator(RUNTIME_SCENE_ASSEMBLY_SELECTOR).first();
+
+  if (await sceneAssembly.count() === 0) {
+    throw new Error("Runtime scene assembly marker unavailable.");
+  }
+
+  await sceneAssembly.waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-empty-scene-plan]").first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForFunction(() => {
+    const assembly = document.querySelector("[data-runtime-scene-assembly='phase-14']");
+    return assembly?.getAttribute("data-runtime-scene-loads-assets") === "false"
+      && assembly?.getAttribute("data-runtime-scene-renders-scene") === "false"
+      && assembly?.getAttribute("data-runtime-scene-finalizes-roles") === "false";
+  }, undefined, { timeout: 5_000 });
+
+  const sceneState = await page.evaluate(() => {
+    const assembly = document.querySelector("[data-runtime-scene-assembly='phase-14']");
+    const model = document.querySelector("#runtime-scene-assembly-model");
+    const emptyPlan = document.querySelector("[data-runtime-empty-scene-plan]");
+    const text = document.body.textContent ?? "";
+    const html = document.body.innerHTML;
+
+    return {
+      marker: Boolean(assembly),
+      lifecycle: assembly?.getAttribute("data-runtime-scene-assembly-lifecycle") ?? "",
+      loadsAssets: assembly?.getAttribute("data-runtime-scene-loads-assets") ?? "",
+      rendersScene: assembly?.getAttribute("data-runtime-scene-renders-scene") ?? "",
+      finalizesRoles: assembly?.getAttribute("data-runtime-scene-finalizes-roles") ?? "",
+      emptyPlanVisible: Boolean(emptyPlan),
+      modelText: model?.textContent ?? "",
+      editorRouteMentioned: text.includes("/editor/") || html.includes("/auth/editor"),
+      assetRouteMentioned: /\/assets\//i.test(html) || /\.(glb|gltf|png|jpe?g|webp|gif|mp3|wav|ogg)(\?|&|\"|'|<|$)/i.test(html),
+      rendererApiMentioned: /drawImage|fillRect|stroke\(|requestAnimationFrame|THREE\.|new Scene|new Mesh/.test(html)
+    };
+  });
+
+  if (
+    !sceneState.marker
+    || sceneState.loadsAssets !== "false"
+    || sceneState.rendersScene !== "false"
+    || sceneState.finalizesRoles !== "false"
+    || !sceneState.emptyPlanVisible
+    || sceneState.editorRouteMentioned
+    || sceneState.assetRouteMentioned
+    || sceneState.rendererApiMentioned
+    || sceneState.modelText.includes("/editor/")
+    || sceneState.modelText.includes("/assets/")
+  ) {
+    throw new Error("Runtime scene assembly failed empty-plan/no-route/no-asset/no-render checks.");
+  }
+
+  if (pageState.forbiddenAssetRequests.length > 0) {
+    throw new Error("Runtime scene assembly triggered a forbidden asset request.");
   }
 
   return "ok";
@@ -469,6 +531,7 @@ function printReport(result, harnessError) {
     `panels: ${result.editor.details?.panels ?? (result.editor.status === "skipped" ? "skipped" : "fail")}`,
     `runtime shell: ${result.game.details?.runtimeShell ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `render surface: ${result.game.details?.runtimeRenderSurface ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
+    `scene assembly: ${result.game.details?.runtimeSceneAssembly ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `asset load requests: ${sumCounts([result.editor, result.game], "assetRequests")}`,
     `console errors count: ${sumCounts([result.editor, result.game], "consoleErrors")}`,
     `page errors count: ${sumCounts([result.editor, result.game], "pageErrors")}`
