@@ -94,7 +94,7 @@ test("runtime render validation rejects editor routes, draft data, asset loads a
       usesEditorAdminRoutes: true,
       usesEditorDraftData: true,
       loadsAssets: true,
-      requestsAssetUrls: true,
+      assetLoadUrls: true,
       rendersConcreteWorld: true,
       assemblesScene: true,
       implementsGameplay: true,
@@ -108,7 +108,7 @@ test("runtime render validation rejects editor routes, draft data, asset loads a
       hardcodesContent: true,
       mutatesAssets: true
     }),
-    assetLoadRequests: ["/assets/characters/forbidden.glb"],
+    assetLoadUrls: ["/assets/characters/forbidden.glb"],
     concreteContentIndicators: ["npc-payload"],
     hardcodedRuntimeValueIndicators: ["camera-position"]
   });
@@ -117,12 +117,12 @@ test("runtime render validation rejects editor routes, draft data, asset loads a
   assert.equal(validation.valid, false);
   assert.equal(validation.issues.some((issue) => issue.gate === "no-editor-admin-routes"), true);
   assert.equal(validation.issues.some((issue) => issue.gate === "no-editor-draft-data"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-asset-load-requests"), true);
+  assert.equal(validation.issues.some((issue) => issue.gate === "no-asset-loads"), true);
   assert.equal(validation.issues.some((issue) => issue.gate === "no-concrete-world-payload"), true);
   assert.equal(validation.issues.some((issue) => issue.gate === "no-hardcoded-runtime-values"), true);
   assert.equal(validation.issues.some((issue) => issue.gate === "no-gameplay-audio"), true);
   assert.equal(validateRuntimeRenderSurfaceRoutes(["/runtime/projection/status"]).length, 0);
-  assert.equal(validateRuntimeRenderSurfaceRoutes(["/assets/world.glb"]).some((issue) => issue.gate === "no-asset-load-requests"), true);
+  assert.equal(validateRuntimeRenderSurfaceRoutes(["/assets/world.glb"]).some((issue) => issue.gate === "no-asset-loads"), true);
 });
 
 test("game shell renders runtime render surface marker and safe empty host", () => {

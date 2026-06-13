@@ -16,7 +16,7 @@ export const RUNTIME_RENDER_SURFACE_VALIDATION_GATES = [
   "runtime-projection-metadata-only",
   "no-editor-admin-routes",
   "no-editor-draft-data",
-  "no-asset-load-requests",
+  "no-asset-loads",
   "no-concrete-world-payload",
   "no-hardcoded-runtime-values",
   "no-gameplay-audio",
@@ -48,7 +48,7 @@ export interface RuntimeRenderSurfaceSafetyFlags {
   readonly mutatesAssets: boolean;
   readonly usesEditorDraftData: boolean;
   readonly usesEditorAdminRoutes: boolean;
-  readonly requestsAssetUrls: boolean;
+  readonly assetLoadUrls: boolean;
   readonly assemblesScene: boolean;
 }
 
@@ -68,7 +68,7 @@ export interface RuntimeRenderSurfaceCapabilities {
   readonly implementsAudioPlayback: false;
   readonly mutatesAssets: false;
   readonly assemblesScene: false;
-  readonly requestsAssetUrls: false;
+  readonly assetLoadUrls: false;
 }
 
 export interface RuntimeRenderCapabilityProbe {
@@ -116,7 +116,7 @@ export interface RuntimeRenderSurfaceState {
   readonly capabilityProbe: RuntimeRenderCapabilityProbe;
   readonly errors: readonly RuntimeRenderSurfaceErrorState[];
   readonly hardcodedRuntimeValueIndicators: readonly string[];
-  readonly assetLoadRequests: readonly string[];
+  readonly assetLoadUrls: readonly string[];
   readonly concreteContentIndicators: readonly string[];
   readonly serverSideValidated: false;
 }
@@ -173,7 +173,7 @@ export function createRuntimeRenderSurfaceSafetyFlags(
     mutatesAssets: false,
     usesEditorDraftData: false,
     usesEditorAdminRoutes: false,
-    requestsAssetUrls: false,
+    assetLoadUrls: false,
     assemblesScene: false,
     ...overrides
   };
@@ -196,7 +196,7 @@ export function createRuntimeRenderSurfaceCapabilities(): RuntimeRenderSurfaceCa
     implementsAudioPlayback: false,
     mutatesAssets: false,
     assemblesScene: false,
-    requestsAssetUrls: false
+    assetLoadUrls: false
   };
 }
 
@@ -254,7 +254,7 @@ export function createRuntimeRenderSurfaceState(options: {
   readonly capabilityProbe?: Partial<RuntimeRenderCapabilityProbe>;
   readonly errors?: readonly RuntimeRenderSurfaceErrorState[];
   readonly hardcodedRuntimeValueIndicators?: readonly string[];
-  readonly assetLoadRequests?: readonly string[];
+  readonly assetLoadUrls?: readonly string[];
   readonly concreteContentIndicators?: readonly string[];
 } = {}): RuntimeRenderSurfaceState {
   const projectionReadModel = options.projectionReadModel ?? null;
@@ -275,7 +275,7 @@ export function createRuntimeRenderSurfaceState(options: {
     capabilityProbe: createRuntimeRenderCapabilityProbe(options.capabilityProbe),
     errors: options.errors ?? [],
     hardcodedRuntimeValueIndicators: options.hardcodedRuntimeValueIndicators ?? [],
-    assetLoadRequests: options.assetLoadRequests ?? [],
+    assetLoadUrls: options.assetLoadUrls ?? [],
     concreteContentIndicators: options.concreteContentIndicators ?? [],
     serverSideValidated: false
   };

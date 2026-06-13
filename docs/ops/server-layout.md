@@ -4,7 +4,7 @@
 
 Fase 2 serverfundering is grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
 
-Fase 1 t/m Fase 12.1 zijn afgerond.
+Fase 1 t/m Fase 13 zijn afgerond.
 
 Afgeronde server-side basis:
 
@@ -15,7 +15,8 @@ Afgeronde server-side basis:
 - Fase 10 Publish Flow Core;
 - Fase 11 Runtime Projection Core;
 - Fase 12 Runtime Client Shell Core;
-- Fase 12.1 Game Web Service Deployment Core.
+- Fase 12.1 Game Web Service Deployment Core;
+- Fase 13 Runtime Render Surface Core.
 
 Fase 12.1 bevestigde:
 
@@ -25,7 +26,7 @@ Fase 12.1 bevestigde:
 - game browser-smoke is groen en niet meer skipped;
 - worktree schoon en blockers geen.
 
-Fase 13 Runtime Render Surface Core is geopend en de Git-basis is toegevoegd. Server-side verificatie staat nog open. Fase 14 is nog niet geopend.
+Fase 13 Runtime Render Surface Core is server-side groen bevestigd en formeel afgerond. Fase 14 is nog niet geopend of geimplementeerd.
 
 ## Vast server-verificatie runbook
 
@@ -155,9 +156,9 @@ Server-side bevestigd:
 - worktree schoon: OK;
 - blockers: geen.
 
-## Fase 13 Git-basis status
+## Fase 13 server-side status
 
-Fase 13 Runtime Render Surface Core Git-basis is toegevoegd en server-side nog niet klaar.
+Fase 13 Runtime Render Surface Core is server-side afgerond en klaar.
 
 Toegevoegd of bijgewerkt:
 
@@ -171,7 +172,38 @@ Toegevoegd of bijgewerkt:
 - browser-smoke render surface checks;
 - tests en docs.
 
-Fase 13 bouwt niet:
+Server-side bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- `gk-game-web` active/enabled: OK;
+- Node 22 process check via `/opt/gk/node-v22/bin/node`: OK;
+- local route-smokes op `127.0.0.1:3003`: OK;
+- Apache/front-door smokes: OK;
+- `pnpm smoke:browser:game`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- runtime shell marker: OK;
+- render surface marker: OK;
+- safe empty render state: OK;
+- no editor/admin route usage: OK;
+- no editor draft/candidate leakage: OK;
+- no GLB loading: OK;
+- no asset load requests: OK;
+- no concrete gamecontent: OK;
+- no full 3D renderer: OK;
+- no projection-driven scene assembly: OK;
+- no gameplay/movement/combat/audio playback: OK;
+- no hardcoded HUD/minimap/world/camera/light/audio values: OK;
+- no asset mutation: OK;
+- worktree schoon: OK;
+- blockers: geen.
+
+Fase 13 bouwde niet:
 
 - volledige 3D renderer;
 - projection-driven scene assembly;
@@ -184,34 +216,6 @@ Fase 13 bouwt niet:
 - hardcoded world/camera/light/minimap/HUD/audio values;
 - assetmutatie;
 - Fase 14.
-
-Open voor Codex/Claude server-side verificatie:
-
-1. start HEAD/eind HEAD.
-2. `pnpm build`.
-3. `pnpm typecheck`.
-4. `pnpm test`.
-5. `pnpm lint`.
-6. `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled bevestigen.
-7. Node 22 process check.
-8. local route smokes op `127.0.0.1:3003`.
-9. Apache/front-door `/game/` smoke.
-10. `pnpm smoke:browser:game`.
-11. `pnpm smoke:browser`.
-12. runtime shell marker bevestigen.
-13. render surface marker bevestigen.
-14. safe empty render state bevestigen.
-15. no editor/admin route usage.
-16. no draft leakage.
-17. no GLB loading/asset requests.
-18. no concrete gamecontent.
-19. no renderer scene assembly.
-20. no gameplay/movement/combat/audio playback.
-21. no hardcoded HUD/minimap/world/camera/light/audio values.
-22. no asset mutation.
-23. GameBible save/protection.
-24. worktree schoon.
-25. blockers rapporteren.
 
 ## Webserver policy
 
@@ -258,13 +262,12 @@ Fase 13 browser-smoke moet `runtime shell: ok`, `render surface: ok`, `asset loa
 Afgerond:
 
 1. Runtime directories, user/group, env, MySQL, Redis, Apache-hardening en systemd templates server-side gevalideerd.
-2. Fase 7 t/m Fase 12.1 server-side afgerond volgens de fase-README's en dit layoutdocument.
+2. Fase 7 t/m Fase 13 server-side afgerond volgens de fase-README's en dit layoutdocument.
 
 Gebruik voor nieuwe server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
 Nog open voor latere fases:
 
-- Fase 13 server-side verificatie en docs-final;
 - Fase 14 alleen openen wanneer Kevin dat expliciet doet;
 - projection-driven scene assembly;
 - game runtime renderer/gameplay;

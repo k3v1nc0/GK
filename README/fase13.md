@@ -1,16 +1,16 @@
 # Fase 13 - Runtime Render Surface Core
 
-Fase 13 is door Kevin geopend.
+Fase 13 is server-side groen bevestigd en formeel afgerond.
 
 Git-basis: toegevoegd op `main`.
 
-Server-side status: nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live route-smokes, browser-smoke en Fase 13 safety checks server-side uitvoeren voordat Fase 13 als afgerond mag worden gemarkeerd.
+Server-side status: klaar. Codex/Claude heeft build/typecheck/test/lint, live route-smokes, browser-smokes en Fase 13 safety checks groen bevestigd via commit `192645f7c33dfc6f800f566784794f6e1111310a` (`fix: verify phase 13 runtime render surface core`).
 
-Fase 1 t/m Fase 12.1 zijn afgerond. Fase 14 is nog niet geopend.
+Fase 1 t/m Fase 13 zijn afgerond. Fase 14 is nog niet geopend of geimplementeerd.
 
 ## Doel
 
-Fase 13 voegt een veilige render-surface laag toe aan de runtime client shell, zodat de game-web client een canvas/render host, renderer lifecycle state en capability checks heeft.
+Fase 13 voegde een veilige render-surface laag toe aan de runtime client shell, zodat de game-web client een canvas/render host, renderer lifecycle state en capability checks heeft.
 
 De pipeline blijft:
 
@@ -24,28 +24,28 @@ Database / Editor / Node-system
   -> latere Projection-driven Scene Assembly / Gameplay / HUD / Audio fases
 ```
 
-Fase 13 is alleen de generieke render-oppervlakte en lifecycle-basis. Deze fase bouwt geen volledige renderer, geen scene assembly, geen gameplay, geen HUD/minimap runtime en geen audio playback.
+Fase 13 is alleen de generieke render-oppervlakte en lifecycle-basis. Deze fase bouwde geen volledige renderer, geen scene assembly, geen gameplay, geen HUD/minimap runtime en geen audio playback.
 
 ## Vaste grenzen
 
-Niet toegestaan en niet toegevoegd in Fase 13:
+Niet toegevoegd in Fase 13:
 
-- volledige 3D renderer bouwen;
-- concrete gamewereld renderen;
-- GLB assets laden;
-- definitive GLB role mapping maken;
-- dummy world, NPC, quests of economy toevoegen;
-- gameplay, movement, combat of player runtime bouwen;
-- audio playback bouwen;
-- HUD/minimap runtime layout hardcoden;
-- camera values hardcoden;
-- lighting/fog/sky presets hardcoden;
-- world map, zones of spawn routes hardcoden;
-- assets toevoegen, wijzigen, verwijderen of kopieren;
+- volledige 3D renderer;
+- concrete gamewereld rendering;
+- GLB loading;
+- definitive GLB role mapping;
+- dummy world, NPC, quests of economy;
+- gameplay, movement, combat of player runtime;
+- audio playback;
+- HUD/minimap runtime layout;
+- hardcoded camera values;
+- hardcoded lighting/fog/sky presets;
+- hardcoded world map, zones of spawn routes;
+- asset toevoeging, wijziging, verwijdering of kopie;
 - automatic publish/projection;
-- editor draft/candidate data direct in runtime tonen;
-- secrets toevoegen;
-- Fase 14 openen of implementeren.
+- editor draft/candidate data direct in runtime;
+- secrets;
+- Fase 14 implementatie.
 
 ## Toegevoegde Git-basis
 
@@ -93,6 +93,8 @@ Toegevoegd voor:
 - lifecycle states `booting`, `ready`, `empty` en `error`;
 - safety flags.
 
+De server-side fix commit heeft de interne Fase 13 asset-load veldnamen aangescherpt naar `assetLoadUrls` en `no-asset-loads`, zodat de bestaande Fase 12 safety-test geen false positives meer geeft.
+
 ### Game-web render surface UI
 
 Toegevoegd in de Fase 12 game shell:
@@ -139,7 +141,7 @@ Deze nodes hebben scope `runtime-consumer`, maken geen concrete gamecontent, lad
 
 ### Browser smoke uitbreiding
 
-`tests/smoke/browser-smoke.mjs` controleert nu voor game-smoke:
+`tests/smoke/browser-smoke.mjs` controleert voor game-smoke:
 
 - game shell bereikbaar via front-door/local origin;
 - runtime shell marker bestaat;
@@ -177,39 +179,36 @@ De tests bewaken minimaal:
 - game shell render surface marker;
 - browser-smoke render surface hook.
 
-## Open Codex/Claude server-side taken
+## Server-side bevestigd
 
-Nog server-side uitvoeren en rapporteren:
-
-1. start HEAD en eind HEAD vastleggen.
-2. `pnpm build`.
-3. `pnpm typecheck`.
-4. `pnpm test`.
-5. `pnpm lint`.
-6. `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled bevestigen.
-7. Node 22 process check via `/opt/gk/node-v22/bin/node`.
-8. `curl http://127.0.0.1:3003/health/game`.
-9. `curl http://127.0.0.1:3003/game/shell.json`.
-10. `curl http://127.0.0.1:3003/runtime/projection/status`.
-11. `curl http://127.0.0.1:3003/runtime/projection/manifest`.
-12. `curl http://127.0.0.1:3003/runtime/projection/records`.
-13. Apache/front-door `/game/` smoke bevestigen.
-14. `pnpm smoke:browser:game`.
-15. `pnpm smoke:browser`.
-16. runtime shell marker bevestigen.
-17. render surface marker bevestigen.
-18. safe empty render state bevestigen.
-19. no editor/admin route usage bevestigen.
-20. no draft leakage bevestigen.
-21. no GLB loading of asset requests bevestigen.
-22. no concrete gamecontent bevestigen.
-23. no renderer scene assembly bevestigen.
-24. no gameplay/movement/combat/audio playback bevestigen.
-25. no hardcoded HUD/minimap/world/camera/light/audio values bevestigen.
-26. no asset mutation bevestigen.
-27. GameBible save/protection bevestigen.
-28. worktree schoon bevestigen.
-29. blockers rapporteren.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api` active/enabled: OK;
+- `gk-editor-web` active/enabled: OK;
+- `gk-game-web` active/enabled: OK;
+- Node 22 process check via `/opt/gk/node-v22/bin/node`: OK;
+- local route-smokes op `127.0.0.1:3003`: OK;
+- Apache/front-door smokes: OK;
+- `pnpm smoke:browser:game`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- runtime shell marker: OK;
+- render surface marker: OK;
+- safe empty render state: OK;
+- no editor/admin route usage: OK;
+- no editor draft/candidate leakage: OK;
+- no GLB loading: OK;
+- no asset load requests: OK;
+- no concrete gamecontent: OK;
+- no full 3D renderer: OK;
+- no projection-driven scene assembly: OK;
+- no gameplay/movement/combat/audio playback: OK;
+- no hardcoded HUD/minimap/world/camera/light/audio values: OK;
+- no asset mutation: OK;
+- worktree schoon: OK;
+- blockers: geen.
 
 ## Checklist
 
@@ -228,18 +227,16 @@ Nog server-side uitvoeren en rapporteren:
 - [x] Geen volledige 3D renderer of scene assembly gebouwd.
 - [x] Geen gameplay/movement/combat/audio playback gebouwd.
 - [x] Geen hardcoded world/camera/light/minimap/HUD/audio values toegevoegd.
-- [ ] Server-side build bevestigd.
-- [ ] Server-side typecheck bevestigd.
-- [ ] Server-side test bevestigd.
-- [ ] Server-side lint bevestigd.
-- [ ] Live route smokes bevestigd.
-- [ ] Browser smoke bevestigd.
-- [ ] Docs-final bevestigd.
+- [x] Server-side build bevestigd.
+- [x] Server-side typecheck bevestigd.
+- [x] Server-side test bevestigd.
+- [x] Server-side lint bevestigd.
+- [x] Live route smokes bevestigd.
+- [x] Browser smoke bevestigd.
+- [x] Docs-final bevestigd.
 
 ## Fasebeoordeling
 
-Fase 13 Git-basis is toegevoegd.
+Fase 13 Runtime Render Surface Core is formeel klaar.
 
-Fase 13 is server-side nog niet klaar. Markeer Fase 13 pas als afgerond nadat Codex/Claude build/typecheck/test/lint, live route-smokes, browser smoke, safety checks en docs-final groen bevestigt.
-
-Fase 14 is nog niet geopend.
+Fase 14 is nog niet geopend of geimplementeerd. Volgende stap: Kevin mag de volgende fase openen.

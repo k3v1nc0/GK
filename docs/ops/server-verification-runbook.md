@@ -391,7 +391,7 @@ asset load requests: 0/nummer:
 
 no-runtime-publish/no-runtime-renderer waar relevant:
 no-renderer-scene-assembly:
-no-GLB-loading/no-asset-load-requests:
+no-GLB-loading/no-asset-loads:
 no-runtime-gameplay/no-movement/no-combat/no-audio-playback waar relevant:
 no-hardcoded HUD/minimap/world/camera/light/audio values:
 no-asset-mutation:

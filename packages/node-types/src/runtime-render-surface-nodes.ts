@@ -29,7 +29,7 @@ const validator: Validator<Record<string, unknown>> = {
       issues.push({ path: "usesEditorDraftData", message: "Fase 13 render surface nodes can only consume runtime projection metadata/read-only state.", severity: "error" as const });
     }
 
-    if (config.loadsAssets === true || config.requestsAssetUrls === true || config.assetLoader === true) {
+    if (config.loadsAssets === true || config.assetLoadUrls === true || config.assetLoader === true) {
       issues.push({ path: "loadsAssets", message: "Fase 13 render surface nodes cannot load GLB, texture, image or audio assets.", severity: "error" as const });
     }
 

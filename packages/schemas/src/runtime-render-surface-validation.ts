@@ -49,7 +49,7 @@ export function validateRuntimeRenderSurfaceRoutes(
     }
 
     if (isAssetLoadRequest(route)) {
-      issues.push(issue("no-asset-load-requests", path, "Fase 13 render surface must not request assets.", "error", true));
+      issues.push(issue("no-asset-loads", path, "Fase 13 render surface must not request assets.", "error", true));
     }
   }
 
@@ -78,8 +78,8 @@ export function validateRuntimeRenderSurfaceSafetyFlags(
     issues.push(issue("no-editor-draft-data", `${prefix}.usesEditorDraftData`, "Render surface must not use editor draft/candidate data.", "error", true));
   }
 
-  if (flags.loadsAssets || flags.requestsAssetUrls) {
-    issues.push(issue("no-asset-load-requests", `${prefix}.loadsAssets`, "Fase 13 must not load GLB, texture, image or audio assets.", "error", true));
+  if (flags.loadsAssets || flags.assetLoadUrls) {
+    issues.push(issue("no-asset-loads", `${prefix}.loadsAssets`, "Fase 13 must not load GLB, texture, image or audio assets.", "error", true));
   }
 
   if (flags.rendersConcreteWorld || flags.assemblesScene) {
@@ -101,7 +101,7 @@ export function validateRuntimeRenderSurfaceSafetyFlags(
   }
 
   if (flags.mutatesAssets) {
-    issues.push(issue("no-asset-load-requests", `${prefix}.mutatesAssets`, "Render surface must not mutate, copy, upload or remove assets.", "error", true));
+    issues.push(issue("no-asset-loads", `${prefix}.mutatesAssets`, "Render surface must not mutate, copy, upload or remove assets.", "error", true));
   }
 
   return issues;
@@ -124,9 +124,9 @@ function validateRenderProjectionBoundary(
     issues.push(issue("no-concrete-world-payload", "projectionReadModel.containsConcreteGameContent", "Render surface must not render concrete gamecontent from unsafe read models.", "error", true));
   }
 
-  for (const [index, request] of state.assetLoadRequests.entries()) {
-    const path = `assetLoadRequests.${index}`;
-    issues.push(issue("no-asset-load-requests", path, `Render surface must not load assets: ${request}.`, "error", true));
+  for (const [index, assetUrl] of state.assetLoadUrls.entries()) {
+    const path = `assetLoadUrls.${index}`;
+    issues.push(issue("no-asset-loads", path, `Render surface must not load assets: ${assetUrl}.`, "error", true));
   }
 
   if (state.concreteContentIndicators.length > 0) {
@@ -156,8 +156,8 @@ function validateCapabilities(state: RuntimeRenderSurfaceState): readonly Runtim
     issues.push(issue("runtime-projection-metadata-only", "capabilities.consumesRuntimeProjectionMetadata", "Render surface must consume runtime projection metadata/read-only state.", "error", true));
   }
 
-  if (capabilities.loadsAssets || capabilities.requestsAssetUrls) {
-    issues.push(issue("no-asset-load-requests", "capabilities.loadsAssets", "Render surface capability must not load assets.", "error", true));
+  if (capabilities.loadsAssets || capabilities.assetLoadUrls) {
+    issues.push(issue("no-asset-loads", "capabilities.loadsAssets", "Render surface capability must not load assets.", "error", true));
   }
 
   if (capabilities.rendersConcreteWorld || capabilities.assemblesScene) {
@@ -174,7 +174,7 @@ function validateCapabilities(state: RuntimeRenderSurfaceState): readonly Runtim
   }
 
   if (capabilities.mutatesAssets) {
-    issues.push(issue("no-asset-load-requests", "capabilities.mutatesAssets", "Render surface must not mutate assets.", "error", true));
+    issues.push(issue("no-asset-loads", "capabilities.mutatesAssets", "Render surface must not mutate assets.", "error", true));
   }
 
   return issues;
