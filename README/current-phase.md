@@ -1,8 +1,10 @@
 # Current Phase
 
-Actieve status: Fase 12 Git-basis voorbereid op `main`.
+Actieve status: Fase 12 Runtime Client Shell Core is afgerond en server-side groen bevestigd.
 
-Fase 1 t/m Fase 11 zijn afgerond. Fase 11 Runtime Projection Core is server-side groen bevestigd. Fase 12 is door Kevin geopend als `Runtime Client Shell Core`. De Git-basis is toegevoegd, maar Fase 12 is server-side nog niet klaar totdat Codex/Claude build/typecheck/test/lint, live smokes, browser smoke en docs final bevestigt.
+Fase 1 t/m Fase 12 zijn afgerond. Fase 11 Runtime Projection Core is server-side groen bevestigd. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`).
+
+Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.
 
 ## Primaire bronnen
 
@@ -44,15 +46,16 @@ Toegevoegd in de Fase 12 Git-basis:
 - runtime client shell status/boot/projection/error/capabilities/safety contracts;
 - validation gates voor read-only runtime projection routes, no editor/admin routes, no editor draft leakage, no renderer/gameplay, no audio playback, no asset mutation en no hardcoded content;
 - typed sockets en node types voor runtime client shell, boot state, projection state en safety flags;
-- game-web runtime client shell routes voor `/`, `/game`, `/game/` en `/game/shell.json`;
+- game-web runtime client shell routes voor `/`, `/game`, `/game/`, `/game/shell.json` en `/health/game`;
 - projection fetch client die alleen `/runtime/projection/status`, `/runtime/projection/manifest` en `/runtime/projection/records` gebruikt;
+- game-web proxy voor runtime projection read-only routes naar de API, zodat de shell same-origin kan booten zonder console errors;
 - veilige runtime empty-state UI met shell marker;
 - browser-smoke uitbreiding voor de game/runtime shell;
-- tests voor schemas, validators, routes, shell UI, node registration, browser-smoke hook en no-content/no-renderer/no-asset boundaries.
+- tests voor schemas, validators, routes, shell UI, proxy route, node registration, browser-smoke hook en no-content/no-renderer/no-asset boundaries.
 
 ## Runtime client route contract
 
-Fase 12 mag alleen deze runtime projection read-only routes consumeren:
+Fase 12 gebruikt alleen deze runtime projection read-only routes:
 
 - `GET /runtime/projection/status`;
 - `GET /runtime/projection/manifest`;
@@ -72,7 +75,7 @@ De runtime client shell consumeert geen editor/admin routes, gebruikt geen edito
 - Geen audio playback runtime gebouwd.
 - Geen HUD/minimap runtime layout hardcoded.
 - Geen automatic publish of automatic projection.
-- Geen Fase 13 geopend.
+- Geen Fase 13 geimplementeerd.
 
 UI/HUD/minimap source image natural size blijft metadata. Display size, scale mode, anchor en pivot blijven node-data/editor-data/publish data. Runtime client shell toont alleen read-only projection status/metadata en veilige empty states.
 
@@ -91,24 +94,35 @@ Asset refresh na `Assets - new` blijft bevestigd:
 
 GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library candidates.
 
-## Open Codex/Claude server-side taken
+## Fase 12 server-side verificatie
 
-Nog server-side valideren volgens `docs/ops/server-verification-runbook.md`:
+Codex/Claude heeft bevestigd:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- `gk-api` en relevante webservice restart indien server-layout dat gebruikt;
-- runtime projection read-only route smokes;
-- game/runtime shell route smokes voor `/game`, `/game/` en `/game/shell.json` waar beschikbaar;
-- browser-smoke met runtime shell marker wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` is gezet;
-- bevestigen dat runtime client geen editor/admin routes gebruikt;
-- bevestigen dat er geen renderer/gameplay/movement/combat/audio playback, hardcoded content of assetmutatie is;
-- docs final.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- live editor login: OK;
+- `/auth/editor/me`: OK;
+- runtime projection read-only route smokes: OK;
+- game/runtime shell route smokes: OK;
+- `/game/shell.json`: OK;
+- browser smoke: OK;
+- runtime shell marker: OK;
+- no editor/admin route usage: OK;
+- no draft leakage: OK;
+- no concrete content: OK;
+- no renderer/gameplay/movement/combat/audio playback: OK;
+- no hardcoded HUD/minimap/world/camera/light/audio values: OK;
+- no asset mutation: OK;
+- GameBible save/protection: OK;
+- worktree schoon: OK;
+- blockers: geen.
+
+Apache2 is actief. `gk-api` en `gk-editor-web` zijn actief/enabled. Er is nog geen aparte `gk-game-web` systemd-unit zichtbaar; Fase 12 is wel geverifieerd via tijdelijke Node 22 game-shell op `127.0.0.1:3003`.
 
 ## Fasebeoordeling
 
-Fase 12 Git-basis is voorbereid.
+Fase 12 Runtime Client Shell Core is afgerond en server-side klaar.
 
-Fase 12 is server-side nog niet klaar. Markeer Fase 12 pas als afgerond nadat Codex/Claude de open checks, live smokes en browser smoke bevestigt.
+Fase 13 is nog niet geimplementeerd. Volgende stap: Kevin mag Fase 13 openen.

@@ -13,11 +13,13 @@ export interface GameRuntimeOptions {
 
 export function createGameHttpServer(): Server {
   return createServer((request, response) => {
-    handleGameRequest(request, response);
+    void handleGameRequest(request, response).catch(() => {
+      sendJson(response, 500, { ok: false, error: "internal_error" });
+    });
   });
 }
 
-export function handleGameRequest(request: IncomingMessage, response: ServerResponse): void {
+export async function handleGameRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
   if (request.method === "GET" && url.pathname === "/health/game") {
@@ -30,6 +32,11 @@ export function handleGameRequest(request: IncomingMessage, response: ServerResp
       implementsAudioPlayback: false,
       mutatesAssets: false
     });
+    return;
+  }
+
+  if (request.method === "GET" && isRuntimeProjectionReadRoute(url.pathname)) {
+    await proxyRuntimeProjectionRoute(request, response, url.pathname);
     return;
   }
 
@@ -92,6 +99,33 @@ function sendHtml(response: ServerResponse, statusCode: number, body: string): v
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff"
+  });
+  response.end(body);
+}
+
+function isRuntimeProjectionReadRoute(pathname: string): boolean {
+  return runtimeClientShellHttpContract.consumesRuntimeProjectionRoutes.includes(pathname as never);
+}
+
+async function proxyRuntimeProjectionRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  pathname: string
+): Promise<void> {
+  const apiOrigin = process.env.GK_API_ORIGIN ?? "http://127.0.0.1:3001";
+  const upstreamUrl = new URL(pathname, apiOrigin);
+  const upstream = await fetch(upstreamUrl, {
+    method: "GET",
+    headers: {
+      Accept: request.headers.accept ?? "application/json"
+    }
+  });
+
+  const body = Buffer.from(await upstream.arrayBuffer());
+  response.writeHead(upstream.status, {
+    "content-type": upstream.headers.get("content-type") ?? "application/json; charset=utf-8",
+    "cache-control": upstream.headers.get("cache-control") ?? "no-store",
+    "x-content-type-options": upstream.headers.get("x-content-type-options") ?? "nosniff"
   });
   response.end(body);
 }

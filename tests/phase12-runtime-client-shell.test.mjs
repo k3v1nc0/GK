@@ -138,26 +138,62 @@ test("runtime client shell renders safe empty-state UI without editor/admin rout
 });
 
 test("game web shell routes expose runtime client shell and shell.json", () => {
-  for (const path of ["/", "/game", "/game/"]) {
-    const response = requestGame("GET", path);
+  return (async () => {
+    for (const path of ["/", "/game", "/game/"]) {
+      const response = await requestGame("GET", path);
 
-    assert.equal(response.statusCode, 200);
-    assert.match(response.body, /data-runtime-client-shell="phase-12"/);
-    assert.match(response.body, /No runtime projection available/);
-  }
+      assert.equal(response.statusCode, 200);
+      assert.match(response.body, /data-runtime-client-shell="phase-12"/);
+      assert.match(response.body, /No runtime projection available/);
+    }
 
-  const shellJson = requestGame("GET", "/game/shell.json");
-  assert.equal(shellJson.statusCode, 200);
-  assert.match(shellJson.body, /"phase":"phase-12"/);
-  assert.match(shellJson.body, /\/runtime\/projection\/status/);
-  assert.doesNotMatch(shellJson.body, /\/editor\//);
+    const shellJson = await requestGame("GET", "/game/shell.json");
+    assert.equal(shellJson.statusCode, 200);
+    assert.match(shellJson.body, /"phase":"phase-12"/);
+    assert.match(shellJson.body, /\/runtime\/projection\/status/);
+    assert.doesNotMatch(shellJson.body, /\/editor\//);
 
-  const health = requestGame("GET", "/health/game");
-  assert.equal(health.statusCode, 200);
-  assert.match(health.body, /"runtimeClientShell":"phase-12"/);
-  assert.match(health.body, /"implements3DRenderer":false/);
-  assert.match(health.body, /"implementsGameplay":false/);
-  assert.match(health.body, /"implementsAudioPlayback":false/);
+    const health = await requestGame("GET", "/health/game");
+    assert.equal(health.statusCode, 200);
+    assert.match(health.body, /"runtimeClientShell":"phase-12"/);
+    assert.match(health.body, /"implements3DRenderer":false/);
+    assert.match(health.body, /"implementsGameplay":false/);
+    assert.match(health.body, /"implementsAudioPlayback":false/);
+  })();
+});
+
+test("game web proxies runtime projection read-only routes to the API origin", () => {
+  return (async () => {
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            status: "empty",
+            emptyState: true,
+            implementsRuntimeRenderer: false
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+              "x-content-type-options": "nosniff"
+            }
+          }
+        );
+
+      const response = await requestGame("GET", "/runtime/projection/status");
+
+      assert.equal(response.statusCode, 200);
+      assert.match(response.body, /"status":"empty"/);
+      assert.match(response.body, /"emptyState":true/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  })();
 });
 
 test("runtime client shell source does not build renderer, gameplay or asset mutation", () => {
@@ -190,9 +226,9 @@ test("browser smoke can check runtime shell route or skip cleanly", () => {
   assert.match(smoke, /skipped: runtime client shell marker unavailable/);
 });
 
-function requestGame(method, path) {
+async function requestGame(method, path) {
   const response = new MockServerResponse();
-  handleGameRequest(mockRequest(method, path), response);
+  await handleGameRequest(mockRequest(method, path), response);
   return response;
 }
 
