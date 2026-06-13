@@ -23,6 +23,7 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - HUD/UI display;
 - publish candidates en validation gates;
 - snapshot metadata;
+- runtime projection source, manifest, read model, safety flags en audit events;
 - player levels en XP;
 - money/currency;
 - merchants;
@@ -39,27 +40,11 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - boss mechanics;
 - HUD panels.
 
+Concrete gamecontent hoort niet in runtimecode. De keten blijft `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Game`.
+
 ## Node UI zoals geometry nodes
 
-Een node heeft:
-
-- titel;
-- type;
-- categorie;
-- input sockets;
-- output sockets;
-- dropdowns;
-- eigen inputvelden;
-- asset pickers;
-- audio pickers;
-- kleurvelden;
-- sliders;
-- vectorvelden;
-- checkboxes;
-- warning/error status;
-- meerdere poorten per node.
-
-Een output mag naar meerdere inputs. Een node mag meerdere outputs hebben. De editor moet typed sockets gebruiken zodat verkeerde koppelingen direct zichtbaar zijn.
+Een node heeft typed sockets, eigen velden, dropdowns, pickers, kleur/numeric fields en warning/error status. Een output mag naar meerdere inputs. De editor moet typed sockets gebruiken zodat verkeerde koppelingen direct zichtbaar zijn.
 
 ## Socket types
 
@@ -89,7 +74,15 @@ Fase 10 breidt uit met:
 - `publish.validation.reference`;
 - `publish.snapshot.reference`.
 
-Deze sockets zijn editor/draft/node-data/publish-boundary contracts en publiceren niets naar Runtime Game.
+Fase 11 breidt uit met:
+
+- `runtime.projection.source.reference`;
+- `runtime.projection.validation.reference`;
+- `runtime.projection.manifest.reference`;
+- `runtime.projection.read-model.reference`;
+- `runtime.projection.audit.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model contracts. Ze bouwen geen Runtime Game renderer en voegen geen concrete gamecontent toe.
 
 ## Asset import
 
@@ -195,6 +188,32 @@ Belangrijke regels:
 - `gk.publish.snapshotMetadata`
 - `gk.publish.rollbackReference`
 
+## Fase 11 runtime projection laag
+
+Fase 11 Git-basis is voorbereid als runtime projection contractlaag. Server-side validatie staat nog open.
+
+Belangrijke regels:
+
+- runtime projection source moet uit Fase 10 publish snapshotmetadata en publish-ready validation komen;
+- raw editor drafts mogen niet direct worden geprojecteerd;
+- procedural preview/bake mag niet direct worden geprojecteerd zonder publish acceptatie;
+- generated refs blijven draft/candidate totdat publish validation ze accepteert;
+- runtime projection manifest en read model zijn contract/read-model metadata;
+- runtime projection bouwt geen renderer, game client, gameplay, HUD runtime, minimap runtime of audio playback;
+- UI display natural size blijft metadata en mag display size niet vervangen;
+- GLB roles blijven candidate/editor-data tenzij publish data ze later expliciet toewijst;
+- runtime projection wijzigt of kopieert geen assets;
+- runtime projection bevat geen concrete gamecontent of hardcoded world/camera/light/minimap/HUD/audio values;
+- Fase 11 opent Fase 12 niet.
+
+### Runtime projection nodes
+
+- `gk.runtimeProjection.source`
+- `gk.runtimeProjection.validate`
+- `gk.runtimeProjection.manifest`
+- `gk.runtimeProjection.readModel`
+- `gk.runtimeProjection.auditEvent`
+
 ## UI/HUD/minimap display contract
 
 Source images mogen groot zijn. Natural width/height is metadata en mag niet automatisch display size worden.
@@ -271,13 +290,22 @@ Schema defaults zijn editor/schema hints, geen concrete HUD layout:
 - `gk.publish.snapshotMetadata`
 - `gk.publish.rollbackReference`
 
-## Publish regels
+### Runtime projection nodes
+
+- `gk.runtimeProjection.source`
+- `gk.runtimeProjection.validate`
+- `gk.runtimeProjection.manifest`
+- `gk.runtimeProjection.readModel`
+- `gk.runtimeProjection.auditEvent`
+
+## Publish en projection regels
 
 - GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
 - Runtime-active behavior blokkeert zonder verplichte editor-data.
 - Procedural preview en bake zijn geen publishstap.
-- Generated procedural output mag pas runtimecontent worden wanneer publish-flow expliciet gekozen editor/node-data compileert naar runtime projections in een daarvoor geopende fase.
+- Generated procedural output mag pas runtime betekenis krijgen wanneer publish-flow de output expliciet accepteert en runtime projection die accepted snapshotmetadata leest.
+- Runtime projection is nog geen renderer of Runtime Game client.
 - UI display natural size is nooit automatisch display size.
 - Missing display size of missing responsive rule geeft validation issue.
 - Missing `nineSlice` margins geeft validation issue.
-- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation en draft preview zijn geen runtime publish.
+- Asset scan, entity validation, procedural preview, procedural bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation en draft preview zijn geen Runtime Game renderer.

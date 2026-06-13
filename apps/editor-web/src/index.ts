@@ -12,6 +12,7 @@ export * from "./http-server.js";
 export * from "./node-canvas.js";
 export * from "./panels.js";
 export * from "./publish-flow-panel.js";
+export * from "./runtime-projection-panel.js";
 export * from "./world-camera-minimap-panels.js";
 export * from "./world-preview.js";
 

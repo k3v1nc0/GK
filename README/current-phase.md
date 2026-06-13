@@ -1,8 +1,8 @@
 # Current Phase
 
-Actieve status: Fase 10 Git-basis voorbereid op `main`.
+Actieve status: Fase 11 Git-basis voorbereid op `main`.
 
-Fase 8, Fase 8.1 en Fase 9 zijn server-side afgerond en klaar. Fase 10 is door Kevin geopend als `Publish Flow Core`. De Git-basis is toegevoegd en de server-side verificatie van Fase 10 is afgerond.
+Fase 1 t/m Fase 10 zijn afgerond. Fase 10 Publish Flow Core is server-side groen bevestigd. Fase 11 is door Kevin geopend als `Runtime Projection Core`. De Git-basis is toegevoegd, maar Fase 11 is nog niet server-side afgerond totdat Codex/Claude build/typecheck/test/lint, live smokes en docs final bevestigt.
 
 ## Primaire bronnen
 
@@ -13,6 +13,7 @@ Open voor de actuele fasecontractstatus:
 - `README/fase8.1.md`
 - `README/fase9.md`
 - `README/fase10.md`
+- `README/fase11.md`
 - `README/node-system-super-dynamic-contract.md`
 - `docs/architecture/editor-shell.md`
 - `docs/architecture/auth-boundaries.md`
@@ -23,67 +24,72 @@ Open voor de actuele fasecontractstatus:
 - `docs/ops/server-layout.md`
 - `README/GameBibleNode.json`
 
-## Fase 9 status
+## Fase 10 status
 
-Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
+Laatste Fase 10 Git-basis commit: `5fc53fa9e290122abc0bfeeb39b3cf6f52c75a2c` (`fase 10`).
 
-Codex server-side verificatie voor Fase 9 is klaar:
+Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
+
+Server-side verificatie voor Fase 10 is afgerond en groen:
 
 - `pnpm build`: OK;
 - `pnpm typecheck`: OK;
-- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm test`: OK;
 - `pnpm lint`: OK;
-- `gk-api` en `gk-editor-web` herstart: OK;
-- editor login en `/auth/editor/me`: OK;
-- Fase 9 route smokes: OK;
-- anonymous denied 401 en game denied 403: OK;
-- editor panels: OK;
-- UI scaling validation: OK;
-- no-runtime-publish: OK;
-- no-asset-mutation: OK;
+- publish route smokes: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin protection op state-changing publish routes: OK;
+- Publish Flow panel smoke: OK;
+- no-runtime-publish/no-asset-mutation: OK;
 - blockers: geen.
 
-## Fase 10 Git-basis
+## Fase 11 Git-basis
 
-Fase 10 bouwt op:
+Fase 11 bouwt op:
 
 - Fase 6 typed node graph core;
 - Fase 7 asset/audio library;
 - Fase 8 entity/component core;
 - Fase 8.1 procedural generation core;
-- Fase 9 world/camera/lighting/minimap/UI display core.
+- Fase 9 world/camera/lighting/minimap/UI display core;
+- Fase 10 Publish Flow Core.
 
-Toegevoegd in de Fase 10 Git-basis:
+Toegevoegd in de Fase 11 Git-basis:
 
-- publish status/state model voor `draft`, `candidate`, `publish-ready` en `published-snapshot` metadata;
-- publish candidate/input references;
-- publish validation result en gate model;
-- snapshot metadata, audit/event en rollback reference basis;
-- validation gates voor node graph completeness, asset candidates, entity/component validity, procedural generated refs, Fase 9 world/UI validity, UI display sizing, no-runtime-publish, no-asset-mutation en no-hardcoded-content;
-- typed sockets en node types voor publish candidate, validation en snapshot references;
-- editor-only publish route contracts;
-- Publish Flow panel/state contract;
-- tests voor schemas, routes, auth/CSRF, panel state, validation gates, snapshot metadata en publish safety flags.
+- runtime projection status/source/manifest/record/read-model/audit/safety contracts;
+- validation gates voor publish-ready snapshot source, no raw draft, no procedural preview source, no asset mutation, no concrete gamecontent, UI display sizing, GLB role candidate status, read-model-only en safety flags;
+- typed sockets en node types voor runtime projection source, validation, manifest, read model en audit events;
+- editor/admin route contracts voor runtime projection status, validate, project en manifest metadata;
+- runtime read-only route contracts met veilige empty state;
+- Runtime Projection panel/state contract;
+- tests voor schemas, validators, routes, auth/CSRF, runtime read-only empty state, node registration en panel registration.
 
-## Fase 10 API/editor contract
+## Fase 11 API/editor contract
 
-Editor-only route contracts:
+Editor/admin route contracts:
 
-- `GET /editor/publish/status`;
-- `POST /editor/publish/validate`;
-- `POST /editor/publish/snapshots`;
-- `GET /editor/publish/snapshots`;
-- `GET /editor/publish/snapshots/:id`;
-- `POST /editor/publish/rollback/validate`.
+- `GET /editor/runtime-projection/status`;
+- `POST /editor/runtime-projection/validate`;
+- `POST /editor/runtime-projection/project`;
+- `GET /editor/runtime-projection/manifests`;
+- `GET /editor/runtime-projection/manifests/:id`.
+
+Runtime read-only route contracts:
+
+- `GET /runtime/projection/status`;
+- `GET /runtime/projection/manifest`;
+- `GET /runtime/projection/records`.
 
 Regels:
 
-- alleen editor admin;
-- state-changing routes vereisen CSRF/Origin bescherming;
-- anonymous/game sessions denied;
-- snapshot creation is metadata-only;
-- geen runtime publish;
-- geen assets wijzigen of kopieren;
+- editor/admin projection beheer is editor admin only;
+- state-changing editor/admin projection routes vereisen CSRF/Origin bescherming;
+- anonymous/game/non-admin sessions denied voor editor/admin beheer;
+- runtime routes zijn read-only en lekken geen editor draft data;
+- project action maakt alleen contract-safe manifest/read-model metadata;
+- geen runtime renderer;
+- geen automatic projection;
+- geen assetmutatie;
 - geen concrete gamecontent in responses.
 
 ## Assetstatus
@@ -99,39 +105,35 @@ Asset refresh na `Assets - new` blijft bevestigd:
 - `publishesRuntimeOutput=false`;
 - `assignsDefinitiveRuntimeRoles=false`.
 
-GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library candidates. Source image natural size blijft metadata; display size, scale mode, anchor en pivot blijven node-data/editor-data.
+GLB roles blijven candidate/editor-data. UI/audio assets blijven asset-library candidates. Source image natural size blijft metadata; display size, scale mode, anchor en pivot blijven node-data/editor-data/publish data.
 
-## Fase 10 grenzen
+## Fase 11 grenzen
 
 - Geen runtime game implementatie.
-- Geen renderer, movement, HUD runtime of minimap runtime.
-- Geen automatische publish.
+- Geen renderer, movement, combat, HUD runtime, minimap runtime of audio playback runtime.
+- Geen automatische publish of automatic projection.
 - Geen concrete world map, zones, camera values, lighting presets, HUD layout, minimap layout, audio mapping, NPCs, quests of economy hardcoded.
 - Geen GLB role mapping definitief maken.
-- Generated Fase 8.1 data blijft draft/candidate totdat publish validation en latere publish-flow dit expliciet accepteren.
-- Runtime publish/renderer blijft niet geopend in Fase 10 Git-basis.
+- Generated Fase 8.1 data blijft draft/candidate totdat publish validation het expliciet accepteert.
+- Runtime projection is een read-model/contractlaag, geen Runtime Game renderer/client.
+- Geen Fase 12 openen.
 
-## Fase 10 status
+## Open aandachtspunten
 
-Server-side verificatie is afgerond en groen:
+Fase 11 Git-basis is voorbereid, maar server-side status staat open.
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK;
-- `pnpm lint`: OK;
-- `gk-api` en `gk-editor-web`: actief en enabled;
-- editor login en `/auth/editor/me`: OK met `editor_admin`;
-- `/editor` bereikbaar: OK;
-- Publish Flow panel in editor shell: OK;
-- `GET /editor/publish/status`: OK;
-- `POST /editor/publish/validate`: OK;
-- `POST /editor/publish/snapshots`: OK;
-- `GET /editor/publish/snapshots`: OK;
-- `GET /editor/publish/snapshots/:id`: OK;
-- `POST /editor/publish/rollback/validate`: OK;
-- anonymous/game/non-admin denied: OK;
-- CSRF/Origin protection op state-changing publish routes: OK;
-- no-runtime-publish/no-asset-mutation: OK;
-- blockers: geen.
+Codex/Claude moet nog draaien/bevestigen:
 
-Volgende fase: geen Fase 11 openen.
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- live smoke voor `/editor/runtime-projection/*` route contracts;
+- live smoke voor `/runtime/projection/*` read-only route contracts;
+- anonymous/game/non-admin denied smoke;
+- CSRF/Origin smoke voor state-changing projection routes;
+- Runtime Projection panel smoke;
+- no-runtime-renderer, no-game-client, no-concrete-gamecontent en no-asset-mutation bevestiging;
+- docs final.
+
+Volgende fase: geen Fase 12 openen. Fase 11 is pas klaar na server-side validatie en Kevin/Codex/Claude bevestiging.

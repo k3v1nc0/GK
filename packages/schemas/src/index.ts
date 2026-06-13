@@ -7,6 +7,8 @@ export * from "./world-camera-minimap.js";
 export * from "./world-camera-minimap-validation.js";
 export * from "./publish-flow.js";
 export * from "./publish-flow-validation.js";
+export * from "./runtime-projection.js";
+export * from "./runtime-projection-validation.js";
 export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
@@ -19,6 +21,8 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "world-camera-minimap-validation",
   "publish-flow",
   "publish-flow-validation",
+  "runtime-projection",
+  "runtime-projection-validation",
   "node-publish"
 ] as const;
 

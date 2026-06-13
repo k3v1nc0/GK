@@ -56,6 +56,7 @@ export const EDITOR_SHELL_LAYOUT: EditorDockLayoutDescriptor = {
     "entity-component-panel",
     "procedural-generation-panel",
     "publish-flow-panel",
+    "runtime-projection-panel",
     "world-panel",
     "zone-panel",
     "camera-panel",

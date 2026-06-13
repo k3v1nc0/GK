@@ -19,6 +19,7 @@ import {
 import {
   handleEditorWorldHttpRequest
 } from "./editor-world-routes.js";
+import { handleRuntimeProjectionHttpRequest } from "./runtime-projection-routes.js";
 import { authorizeRequest, type SessionContext } from "./auth-routes.js";
 import type { EditorAuthStore } from "./editor-auth-store.js";
 import { saveGameBibleNodeFromRequest } from "./gamebible-node-routes.js";
@@ -168,6 +169,10 @@ export async function handleApiRequest(
   }
 
   if (await handleEditorPublishHttpRequest(request, response, session)) {
+    return;
+  }
+
+  if (await handleRuntimeProjectionHttpRequest(request, response, session)) {
     return;
   }
 

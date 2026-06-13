@@ -74,6 +74,44 @@ Regels:
 - routes wijzigen geen assets;
 - routes bevatten geen concrete gamecontent.
 
+## Fase 11 runtime projection routes
+
+Fase 11 editor/admin runtime projection routes vereisen editor scope en `editor_admin`:
+
+- `GET /editor/runtime-projection/status`;
+- `POST /editor/runtime-projection/validate`;
+- `POST /editor/runtime-projection/project`;
+- `GET /editor/runtime-projection/manifests`;
+- `GET /editor/runtime-projection/manifests/:id`.
+
+Regels:
+
+- anonymous sessions krijgen 401/403 deny, niet 404 fallback;
+- game sessions krijgen deny;
+- editor sessions zonder `editor_admin` krijgen deny;
+- state-changing projection routes vereisen CSRF/Origin bescherming;
+- projection route responses zijn contract/read-model metadata-only;
+- project action maakt geen automatic projection en geen renderer;
+- routes wijzigen geen assets;
+- routes bevatten geen concrete gamecontent.
+
+Fase 11 runtime read-only routes:
+
+- `GET /runtime/projection/status`;
+- `GET /runtime/projection/manifest`;
+- `GET /runtime/projection/records`.
+
+Regels:
+
+- read-only;
+- geen state-changing operatie;
+- geen editor/admin secrets;
+- geen raw editor draft leakage;
+- geen raw unpublished candidate data;
+- veilige empty state wanneer er nog geen projection bestaat;
+- geen dummy content;
+- geen renderer/game client.
+
 ## Registration and verification
 
 Game registratie is publiek open. Nieuwe game users starten als `pending_verification`. Volledige gamefuncties mogen pas beschikbaar komen nadat e-mailverificatie de user naar een toegestane actieve status brengt.
@@ -137,32 +175,24 @@ Audit logt minimaal:
 - game-user beheeracties door editor admin;
 - publish validation;
 - publish snapshot metadata creation;
-- publish rollback validation.
+- publish rollback validation;
+- runtime projection validation;
+- runtime projection manifest metadata creation;
+- runtime projection read-model access.
 
-Audit bevat actor, action, target, scope, timestamp en metadata. Fase 10 audit/event contracts bevatten geen concrete runtimecontent en publiceren niets naar Runtime Game.
+Audit bevat actor, action, target, scope, timestamp en metadata. Fase 10 audit/event contracts bevatten geen concrete runtimecontent en publiceren niets naar Runtime Game. Fase 11 audit/event contracts bevatten geen concrete gamecontent, muteren geen assets en bouwen geen renderer.
 
 ## Server-side validatie
 
-Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond:
-
-- `pnpm install/build/typecheck/test/lint` zijn geslaagd;
-- `pnpm test` is geslaagd met Node 22 via `npx -p node@22`;
-- MySQL is actief;
-- database `gk` en user `gk_app@127.0.0.1` bestaan;
-- runtime DB-connectie is OK;
-- `db/migrations/0001_auth_foundation.sql` is succesvol toegepast;
-- alle vereiste auth-tabellen zijn aanwezig;
-- admin seed secret/temp password/hash staan buiten Git in `/etc/gk/secrets/initial-editor-admin.env`;
-- editor admin `k3v1nc0@hotmail.com` bestaat, is actief en heeft geverifieerde e-mail;
-- rol `editor_admin` is gekoppeld;
-- `admin.seed` auditregel is aanwezig;
-- database/auth smoke tests zijn geslaagd.
+Codex heeft de Fase 4 database/auth-validatie buiten Git afgerond.
 
 Fase 5.3 is server-side gevalideerd: normale browser-login, `/auth/editor/me`, logout en GameBibleNode browser-save werken met de echte serverdatabase. Publieke save, legacy PHP write en save na logout blijven dicht.
 
 Fase 9 is server-side gevalideerd voor editor world/minimap/UI display auth-deny en route smokes.
 
 Fase 10 Git-basis is voorbereid en server-side validatie is afgerond voor publish route smokes, auth-deny smokes en CSRF/Origin smokes.
+
+Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor runtime projection route smokes, runtime read-only smokes, auth-deny smokes en CSRF/Origin smokes.
 
 ## Open aandachtspunt
 

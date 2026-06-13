@@ -31,7 +31,12 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "ui.asset-display.reference",
   "publish.candidate.reference",
   "publish.validation.reference",
-  "publish.snapshot.reference"
+  "publish.snapshot.reference",
+  "runtime.projection.source.reference",
+  "runtime.projection.validation.reference",
+  "runtime.projection.manifest.reference",
+  "runtime.projection.read-model.reference",
+  "runtime.projection.audit.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

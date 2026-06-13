@@ -20,7 +20,9 @@ Fase 8.1 is server-side afgerond en klaar. Procedural generated assets mogen uit
 
 Fase 9 is server-side afgerond en klaar. Fase 9 gebruikt assets alleen als asset-library references in node/editor-data. Er is geen runtime publish en er zijn geen assets toegevoegd of gewijzigd. No-asset-mutation is server-side bevestigd.
 
-Fase 10 Publish Flow Core Git-basis is voorbereid. Fase 10 valideert asset candidates en snapshot metadata, maar wijzigt, kopieert, verwijdert of publiceert geen assets.
+Fase 10 Publish Flow Core is server-side afgerond en klaar. Fase 10 valideert asset candidates en snapshot metadata, maar wijzigt, kopieert, verwijdert of publiceert geen assets.
+
+Fase 11 Runtime Projection Core Git-basis is voorbereid. Fase 11 mag asset/audio/UI references alleen als publish-accepted metadata projecteren en mag geen assets wijzigen, kopieren, verwijderen, toevoegen of definitieve role mapping hardcoden.
 
 ## Asset source policy
 
@@ -39,7 +41,8 @@ Niet toegestaan:
 - runtime-hardcoding van concrete assetkeuzes;
 - procedural generators die assets verzinnen of naar Git kopieren;
 - publish-flow die assets kopieert, muteert of definitieve GLB roles hardcoded toewijst;
-- UI source pixel size gebruiken als runtime display size zonder node-data.
+- runtime projection die assets kopieert, muteert, verwijdert of definitive GLB roles hardcoded toewijst;
+- UI source pixel size gebruiken als runtime/projection display size zonder node/editor/publish data.
 
 ## Assetpaden
 
@@ -76,15 +79,15 @@ Status: 37 UI images aanwezig als asset-library candidates.
 
 HUD-bestanden, icon-bestanden en minimap marker-bestanden worden door de asset scan als UI/image assets gezien. Ze zijn beschikbaar als library candidates, maar zijn geen definitieve HUD-layout, minimapconfiguratie, itemdata, combatdata of runtime UI.
 
-## Fase 9 UI display gate
+## UI display gate
 
-Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd.
+Fase 9 introduceert generieke UI asset display contracts. UI scaling validation is server-side bevestigd. Fase 10 neemt deze gate mee in publish validation. Fase 11 neemt deze gate mee in runtime projection validation.
 
 Regels:
 
 - source image natural size is metadata;
-- runtime/editor mag source pixel size nooit blind als display size gebruiken;
-- display size moet via node-data/editor-data komen;
+- runtime/editor/projection mag source pixel size nooit blind als display size gebruiken;
+- display size moet via node-data/editor-data/publish data komen;
 - `displayWidth` en `displayHeight` zijn vereist, tenzij responsive rules expliciet dimensions leveren;
 - `scaleMode`, `anchor`, `pivot`, `opacity` en `zIndex` zijn node-data;
 - `nineSlice` vereist slice margins uit node-data;
@@ -110,13 +113,25 @@ Fase 10 publish validation neemt asset/UI gates mee:
 - `assetsCopiedToGit=false` en `copiesAssetsToGit=false` blijven harde gates;
 - no-asset-mutation blijft verplicht.
 
+## Fase 11 runtime projection asset gate
+
+Fase 11 runtime projection validation neemt asset/UI gates mee:
+
+- projection records mogen alleen naar publish-accepted asset/audio/UI ids of snapshotmetadata verwijzen;
+- raw editor draft assets en raw unpublished candidate data mogen niet uitlekken via runtime read-only routes;
+- GLB roles blijven candidate/editor-data tenzij latere publish data ze expliciet accepteert;
+- UI source natural size blijft metadata;
+- display size, scale mode, anchor en pivot blijven node/editor/publish data;
+- projection manifests/read models bevatten geen concrete asset payload of renderer instruction;
+- no-asset-mutation en no-asset-copy blijven verplicht.
+
 ## Audio assets
 
 Status: 21 audio files aanwezig als asset-library candidates.
 
 Audio-assets worden inhoudelijk beheerd in `docs/design/audio-register.md`. Audio mag alleen via asset library en audio nodes worden gekozen of ingesteld.
 
-Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst nog steeds geen concrete audio runtimecontent toe.
+Fase 9 kan audio assets als candidates aanbieden aan latere world/HUD/minimap/audio nodes, maar wijst geen concrete music state, ambience zone, SFX event of UI-audio runtimegedrag toe. Fase 10 valideert hooguit candidate references en wijst geen concrete audio runtimecontent toe. Fase 11 projecteert audio hooguit als publish-accepted metadata/reference en speelt niets af.
 
 ## Fase 8.1 procedural asset gate
 
@@ -130,12 +145,13 @@ Regels:
 - procedural bake maakt alleen editor draft data of bake draft result;
 - geen procedural generator mag assets uploaden, kopieren naar Git, verwijderen of verzinnen.
 
-## Fase 9 en Fase 10 gekoppelde nodefamilies
+## Gekoppelde nodefamilies
 
 - world/zone/spawn assetkoppelingen op Fase 8.1 draft/candidate output;
 - minimap marker assets via `gk.minimap.marker`, `gk.minimap.icon` en UI display nodes;
 - HUD image candidates via `gk.ui.assetDisplay`, `gk.ui.iconDisplay`, `gk.ui.hudFrame`, `gk.ui.hudBar` en `gk.ui.nineSlice`;
 - publish candidate references via Fase 10 publish-flow nodes;
+- runtime projection references via Fase 11 runtime projection nodes;
 - audio blijft candidate/editor-data voor latere audio nodefamilies.
 
 ## Codex-taken buiten Git
@@ -151,12 +167,14 @@ Afgerond:
 7. Asset refresh na `Assets - new` uitgevoerd met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
 8. Fase 9 build/typecheck/test/lint en route/panel smoke bevestigd.
 9. Fase 9 no-asset-mutation en UI display validation bevestigd.
+10. Fase 10 build/typecheck/test/lint, publish smokes en no-asset-mutation bevestigd.
 
-Open voor Fase 10:
+Open voor Fase 11:
 
-1. Server-side bevestigen dat publish validation geen assets wijzigt of kopieert.
-2. Server-side build/typecheck/test/lint draaien.
-3. Publish route smokes draaien.
+1. Server-side bevestigen dat runtime projection validation geen assets wijzigt of kopieert.
+2. Server-side bevestigen dat runtime projection geen concrete asset/audio/UI runtimecontent hardcoded.
+3. Build/typecheck/test/lint draaien.
+4. Runtime projection route smokes draaien.
 
 Open voor latere fases:
 

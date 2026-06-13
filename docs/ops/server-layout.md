@@ -14,19 +14,22 @@ Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) is de asse
 
 Fase 9 world/camera/lighting/minimap/UI display is server-side afgerond en klaar. Laatste bevestigde Fase 9 main commit: `445ff68a803a7097d6cd6f59f05fc993cb7fbe4f` (`fase 9 fix build downstream`).
 
-Fase 10 Publish Flow Core Git-basis is voorbereid op `main`. Server-side validatie is afgerond.
+Fase 10 Publish Flow Core is server-side afgerond en klaar. Laatste Fase 10 server-side verificatie/fix commit: `cfdc25e03c922904a3628921a7e6fc6c24cf2bf6` (`fix phase 10 server-side verification`).
+
+Fase 11 Runtime Projection Core Git-basis is voorbereid op `main`. Server-side validatie staat nog open.
 
 ## Hoofdregels
 
 - GK Code Copiloot beheert in Git alleen blijvende scripts, templates, docs en checks.
 - Codex voert serverwerk buiten Git uit: OS, users, rechten, MySQL, Redis, Nginx, systemd, secrets, builds, runtime checks en lokale scans.
 - Echte secrets, credentials, tokens, private keys en serverwaarden mogen niet in Git.
-- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Game`.
+- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
 - Procedural generation output blijft draft/preview/bake data totdat publish-flow expliciet publiceert in een daarvoor geopende fase.
 - UI/audio assets blijven asset-library candidates totdat editor/node-data of Kevin-input ze expliciet kiest.
 - Fase 9 publiceert niets naar runtime.
 - Fase 10 publiceert niets naar runtime en maakt alleen publish validation/snapshot metadata contracts.
+- Fase 11 maakt alleen runtime projection contracts/read-model metadata en bouwt geen Runtime Game renderer/client.
 
 ## Bevestigde paden
 
@@ -63,74 +66,31 @@ Bevestigd:
 - `assignsDefinitiveRuntimeRoles=false`.
 - `publishesRuntimeOutput=false`.
 
-## Procedural generation status
-
-Fase 8.1 server-side verificatie is afgerond:
-
-- procedural contracts en validators;
-- deterministic random utility;
-- procedural node types;
-- editor-only procedural API contracts;
-- Procedural Generation Panel state;
-- migratie `0005_procedural_generation_core.sql`;
-- determinism, draft-only output, generated entity/asset/audio gates en editor-only access.
-
-Bevestigd:
-
-- `pnpm install/build/typecheck/test/lint`;
-- migratie `0005_procedural_generation_core.sql` toegepast;
-- procedural API/editor smoke;
-- no runtime publish;
-- no asset copy to Git;
-- anonymous/game session krijgt geen procedural editor beheer.
-
 ## Fase 9 server-side status
 
-Fase 9 voegt world/camera/lighting/minimap/UI display contracts toe in Git:
-
-- schema contracts;
-- validators;
-- typed sockets;
-- node types;
-- editor panel state;
-- editor-only route contracts;
-- tests;
-- docs.
-
-Server-side verificatie is afgerond en klaar.
+Fase 9 voegt world/camera/lighting/minimap/UI display contracts toe in Git en is server-side afgerond en klaar.
 
 Bevestigd:
 
 - `pnpm build`: OK;
 - `pnpm typecheck`: OK;
-- `pnpm test`: OK, 86/86 tests pass;
+- `pnpm test`: OK;
 - `pnpm lint`: OK;
 - `gk-api` herstart: OK;
 - `gk-editor-web` herstart: OK;
 - services active/enabled: OK;
-- beide services draaien via `/opt/gk/node-v22/bin/node`;
-- `/editor`: OK;
 - editor login: OK;
-- `/auth/editor/me`: OK, `editor_admin`;
 - Fase 9 route smokes: OK;
-- anonymous denied: OK, 401 en niet 404;
-- game smoke-scope denied: OK, 403 en niet 404;
+- anonymous/game denied: OK;
 - editor panels: OK;
 - UI scaling validation: OK;
 - no-runtime-publish: OK;
 - no-asset-mutation: OK;
 - blockers: geen.
 
-## Fase 10 Git-basis status
+## Fase 10 server-side status
 
-Fase 10 voegt Publish Flow Core contracts toe in Git:
-
-- publish schemas en validators;
-- publish socket/node contracts;
-- editor-only publish route contracts;
-- Publish Flow panel state;
-- tests;
-- docs.
+Fase 10 voegt Publish Flow Core contracts toe in Git en is server-side afgerond en klaar.
 
 Route contracts:
 
@@ -141,9 +101,50 @@ Route contracts:
 - `GET /editor/publish/snapshots/:id`;
 - `POST /editor/publish/rollback/validate`.
 
-Server-side verificatie staat open. Geen server runtime, database migratie, service restart of live smoke is door deze GitHub-only update geclaimd.
+Bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- publish route smokes: OK;
+- anonymous/game/non-admin denied: OK;
+- CSRF/Origin smokes: OK;
+- Publish Flow panel smoke: OK;
+- no-runtime-publish/no-asset-mutation: OK;
+- blockers: geen.
 
 Fase 10 voert geen runtime publish uit en wijzigt geen assets.
+
+## Fase 11 Git-basis status
+
+Fase 11 voegt Runtime Projection Core contracts toe in Git:
+
+- runtime projection schemas en validators;
+- runtime projection socket/node contracts;
+- editor/admin runtime projection route contracts;
+- runtime read-only route contracts;
+- Runtime Projection panel state;
+- tests;
+- docs.
+
+Editor/admin route contracts:
+
+- `GET /editor/runtime-projection/status`;
+- `POST /editor/runtime-projection/validate`;
+- `POST /editor/runtime-projection/project`;
+- `GET /editor/runtime-projection/manifests`;
+- `GET /editor/runtime-projection/manifests/:id`.
+
+Runtime read-only route contracts:
+
+- `GET /runtime/projection/status`;
+- `GET /runtime/projection/manifest`;
+- `GET /runtime/projection/records`.
+
+Server-side verificatie staat open. Geen server runtime, database migratie, service restart of live smoke is door deze GitHub-only update geclaimd.
+
+Fase 11 bouwt geen Runtime Game renderer/client, voert geen automatic projection uit en wijzigt geen assets.
 
 ## Webserver policy
 
@@ -156,7 +157,7 @@ Kevin heeft bevestigd:
 - Nginx mag niet live worden geactiveerd op poort 80/443.
 - Er komt geen volledige migratie naar Nginx zonder aparte migratiefase.
 
-Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts en Fase 10 publish validation/snapshot metadata mogen niet publiek worden geserveerd alsof het runtimecontent is.
+Assets mogen alleen via een gecontroleerd publiek pad worden geserveerd dat naar `/var/www/gk/assets` wijst. Procedural generated draft/bake data, Fase 9 world/minimap/UI display drafts, Fase 10 publish validation/snapshot metadata en Fase 11 runtime projection source/manifest/read-model metadata mogen niet publiek worden geserveerd alsof het concrete runtimecontent of editor draft data is.
 
 ## Runtime directory layout
 
@@ -178,7 +179,7 @@ Echte serverwaarden horen buiten Git, bijvoorbeeld in:
 - `/etc/gk/gk.env`;
 - een door Codex beheerde secret store of serverconfig.
 
-Git mag alleen veilige examples bevatten. Geen Fase 10 wijziging mag secrets toevoegen.
+Git mag alleen veilige examples bevatten. Geen Fase 11 wijziging mag secrets toevoegen.
 
 ## Codex/Claude serverchecks
 
@@ -189,20 +190,21 @@ Afgerond:
 3. Fase 8 install/build/typecheck/test/lint, migratie, entity routes en runtime gates afgerond.
 4. Fase 8.1 install/build/typecheck/test/lint, migratie, procedural smoke en no-runtime-publish/no-asset-copy checks afgerond.
 5. Asset refresh na `Assets - new` uitgevoerd en scan OK met GLB=4, UI images=37, audio files=21, invalid=0, missing=0.
-6. Fase 9 build/typecheck/test/lint afgerond.
-7. Fase 9 editor/API smoke, panel smoke, auth-deny smoke, UI scaling validation, no-runtime-publish en no-asset-mutation afgerond.
+6. Fase 9 build/typecheck/test/lint, editor/API smokes en no-runtime-publish/no-asset-mutation afgerond.
+7. Fase 10 build/typecheck/test/lint, publish route smokes, auth/CSRF smokes, panel smoke en no-runtime-publish/no-asset-mutation afgerond.
 
-Open voor Fase 10:
+Open voor Fase 11:
 
 1. `pnpm build`.
 2. `pnpm typecheck`.
 3. `pnpm test`.
 4. `pnpm lint`.
-5. Publish route smokes.
-6. Anonymous/game/non-admin denied smokes.
-7. CSRF/Origin smokes voor state-changing publish routes.
-8. Publish Flow panel smoke.
-9. Bevestigen dat geen runtime publish of assetmutatie plaatsvindt.
+5. Runtime projection editor/admin route smokes.
+6. Runtime projection read-only route smokes.
+7. Anonymous/game/non-admin denied smokes.
+8. CSRF/Origin smokes voor state-changing projection routes.
+9. Runtime Projection panel smoke.
+10. Bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
 
 Nog open voor latere fases:
 

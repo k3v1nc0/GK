@@ -10,7 +10,7 @@ De standaardindeling bevat:
 - midden: tabbed main area met `Node Canvas` en `Viewport / World Preview`;
 - rechts: `Inspector`, `Validation` en `UI Display Inspector`;
 - onder: `History`;
-- dock tabs voor asset, audio, entity/component, procedural generation, publish flow, world, zone, camera, lighting, HUD, minimap en game-user beheer.
+- dock tabs voor asset, audio, entity/component, procedural generation, publish flow, runtime projection, world, zone, camera, lighting, HUD, minimap en game-user beheer.
 
 Fase 9 voegt panel state toe voor:
 
@@ -25,13 +25,17 @@ Fase 10 voegt panel state toe voor:
 
 - `Publish Flow`.
 
-Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap, HUD, publish payload of runtimecontent.
+Fase 11 voegt panel state toe voor:
+
+- `Runtime Projection`.
+
+Deze panels zijn state/contractvoorbereiding. Ze bevatten geen concrete world, camera, lighting, minimap, HUD, publish payload, runtime projection payload, renderer output of runtimecontent.
 
 ## Node Canvas
 
-Het node canvas bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates en typed node graph editing.
+Het node canvas bevat generieke graph-capabilities voor schema, asset reference, validation, publish gates, runtime projection gates en typed node graph editing.
 
-Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes, generated worldcontent of assetrollen bevatten. Zulke waarden horen uit database, editor/node-data, registers, Game Bible, procedural draft/bake data of publish-data te komen.
+Het canvas mag geen concrete quests, NPCs, routes, prijzen, camera, licht, minimap, audio, HUD-keuzes, generated worldcontent, assetrollen, projection payloads of renderer instructions bevatten. Zulke waarden horen uit database, editor/node-data, registers, Game Bible, procedural draft/bake data, publish-data of runtime projection metadata te komen.
 
 Fase 9 breidt de node canvas capabilities uit met:
 
@@ -50,6 +54,14 @@ Fase 10 breidt de node canvas capabilities uit met publish-boundary nodes:
 - publish snapshot metadata;
 - publish rollback reference.
 
+Fase 11 breidt de node canvas capabilities uit met runtime projection nodes:
+
+- runtime projection source;
+- runtime projection validate;
+- runtime projection manifest;
+- runtime projection read model;
+- runtime projection audit event.
+
 ## UI Display Inspector
 
 De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
@@ -62,9 +74,9 @@ De UI Display Inspector moet bij UI/HUD/minimap assets tonen:
 - pivot;
 - validation issues.
 
-Belangrijke regel: natural size is metadata, geen display size. Display size, scale mode, anchor en pivot moeten uit node-data/editor-data komen.
+Belangrijke regel: natural size is metadata, geen display size. Display size, scale mode, anchor en pivot moeten uit node-data/editor-data/publish data komen.
 
-UI scaling validation is server-side bevestigd voor Fase 9 en blijft onderdeel van Fase 10 publish validation.
+UI scaling validation is server-side bevestigd voor Fase 9 en blijft onderdeel van Fase 10 publish validation en Fase 11 runtime projection validation.
 
 ## Publish Flow Panel
 
@@ -86,7 +98,30 @@ Het panel:
 - accepteert geen concrete gamecontent;
 - verzint geen world, NPC, quest, economy, HUD, minimap of audio data.
 
-## Asset, audio, entity, procedural, publish en Fase 9 panels
+## Runtime Projection Panel
+
+Het Runtime Projection panel toont alleen contract/statusinformatie:
+
+- phase/status;
+- validation issues;
+- source snapshot metadata;
+- projection manifest metadata;
+- runtime read-model metadata;
+- safety flags;
+- audit events;
+- runtime read-only route summary.
+
+Het panel:
+
+- vereist editor session en `editor_admin`;
+- maakt geen automatic projection;
+- bouwt geen Runtime Game renderer of client;
+- wijzigt geen assets;
+- accepteert geen concrete gamecontent;
+- verzint geen world, NPC, quest, economy, HUD, minimap of audio data;
+- toont geen asset previews die GLB role mapping definitief maken.
+
+## Asset, audio, entity, procedural, publish, projection en Fase 9 panels
 
 Panels zijn generieke capabilities:
 
@@ -95,6 +130,7 @@ Panels zijn generieke capabilities:
 - `Entity / Component Panel` toont Fase 8 component stack state.
 - `Procedural Generation Panel` toont Fase 8.1 seed controls, generator graph state, preview result state, validation issues, bake draft actions en generated candidate lists.
 - `Publish Flow` toont Fase 10 validation status, candidate summary en snapshot metadata zonder runtime publish.
+- `Runtime Projection` toont Fase 11 projection status, validation issues, source snapshot metadata, manifest/read-model metadata en safety flags zonder renderer.
 - `World Panel` toont world settings draft state en generated candidate input, zonder runtime publish.
 - `Zone Panel` toont zone draft state en generated candidate input, zonder runtime publish.
 - `Camera Panel` toont camera node-data en validation issues, zonder runtime defaults af te dwingen.
@@ -103,7 +139,7 @@ Panels zijn generieke capabilities:
 - `UI Display Inspector` toont display contracts en validation issues.
 - `Game Users` vereist editor scope en `editor_admin`.
 
-GLB, UI en audio assets mogen alleen kandidaat-metadata tonen totdat Kevin/editor concrete node-koppelingen kiest.
+GLB, UI en audio assets mogen alleen kandidaat-metadata tonen totdat Kevin/editor concrete node-koppelingen kiest en publish/runtime projection die data later contractueel accepteert.
 
 ## Viewport / World Preview
 
@@ -117,9 +153,10 @@ De preview blijft gated:
 - geen GLB-role mapping;
 - geen audio of HUD-keuzes;
 - geen minimap layout zonder node-data;
-- geen runtime publish.
+- geen runtime publish;
+- geen runtime projection als renderer-output.
 
-De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish. Fase 10 voegt geen runtime renderer toe.
+De preview wacht op editor draft, procedural preview/bake data of gepubliceerde world/node-data. Procedural preview mag editor-output tonen zonder runtime publish. Fase 10 voegt geen runtime renderer toe. Fase 11 voegt geen runtime renderer of game client toe.
 
 ## Auth boundary
 
@@ -143,6 +180,17 @@ Fase 10 publish-flow beheer is strenger:
 - route contracts publiceren niets naar Runtime Game;
 - route contracts wijzigen geen assets.
 
+Fase 11 runtime projection beheer is ook editor admin only:
+
+- anonymous denied;
+- game session denied;
+- non-admin editor denied;
+- state-changing projection route contracts vereisen CSRF/Origin protection;
+- route contracts bouwen geen renderer of game client;
+- route contracts wijzigen geen assets.
+
+Runtime projection read-only routes zijn read-only, geven veilige empty states wanneer er nog geen projection bestaat en mogen geen editor draft data lekken.
+
 ## API runtime contract
 
 Fase 9 route contracts:
@@ -163,15 +211,29 @@ Fase 10 route contracts:
 - `GET /editor/publish/snapshots/:id`;
 - `POST /editor/publish/rollback/validate`.
 
+Fase 11 editor/admin route contracts:
+
+- `GET /editor/runtime-projection/status`;
+- `POST /editor/runtime-projection/validate`;
+- `POST /editor/runtime-projection/project`;
+- `GET /editor/runtime-projection/manifests`;
+- `GET /editor/runtime-projection/manifests/:id`.
+
+Fase 11 runtime read-only route contracts:
+
+- `GET /runtime/projection/status`;
+- `GET /runtime/projection/manifest`;
+- `GET /runtime/projection/records`.
+
 Deze route contracts:
 
-- blijven CSRF/Origin beschermd voor state-changing requests;
-- geven anonymous/game sessions geen beheer;
+- blijven CSRF/Origin beschermd voor state-changing editor requests;
+- geven anonymous/game/non-admin sessions geen editor beheer;
 - uploaden geen assets;
 - maken geen assets aan;
 - kopieren geen assets naar Git;
 - verzinnen geen concrete gamecontent;
-- publiceren niets naar Runtime Game.
+- bouwen geen Runtime Game renderer of client.
 
 ## Assetstatus
 
@@ -191,14 +253,13 @@ Fase 8.1 is server-side gevalideerd.
 
 Fase 9 is server-side afgerond en klaar.
 
-Fase 10 Git-basis is voorbereid en server-side validatie is afgerond:
+Fase 10 Git-basis is voorbereid en server-side validatie is afgerond.
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- publish route smokes;
+Fase 11 Git-basis is voorbereid, maar server-side validatie staat open voor:
+
+- build/typecheck/test/lint;
+- editor/admin projection route smokes;
+- runtime read-only route smokes;
 - auth/CSRF smokes;
-- panel smoke;
-- no-runtime-publish;
-- no-asset-mutation.
+- Runtime Projection panel smoke;
+- no-runtime-renderer/no-game-client/no-concrete-gamecontent/no-asset-mutation.

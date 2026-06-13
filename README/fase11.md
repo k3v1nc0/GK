@@ -1,91 +1,233 @@
-# Fase 11 - Publish pipeline en runtime projections
+# Fase 11 - Runtime Projection Core
 
-## Vaste regels voor deze fase
+Fase 11 is door Kevin geopend.
 
-- Dit is een 100% nieuw project.
-- Alles draait eerst op 1 eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
-- Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
-- Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
-- De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
-- Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
-- De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
-- Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
-- Maak geen losse backupbestanden, geen tijdelijke markdown-dumps en geen extra README-bestanden die niet blijvend onderhouden worden.
+Git-basis: voorbereid op `main`.
 
-## Doel van de fase
+Server-side status: nog niet klaar. Codex/Claude moet build/typecheck/test/lint, live route smokes, auth/CSRF smokes, runtime read-only smokes en docs final nog bevestigen voordat Fase 11 als afgerond mag worden gemarkeerd.
 
-Save en publish worden echt gescheiden. Publish compileert node-data naar runtime projections voor game, editor-preview en rollback.
+## Doel
 
-Fase 11 is de eerste plaats waar Fase 8.1 procedural bake draft data runtime-betekenis mag krijgen, en alleen wanneer publish-validatie die data expliciet accepteert en compileert naar immutable runtime projections.
+Fase 11 maakt een gecontroleerde runtime projection laag op basis van Fase 10 publish-ready snapshotmetadata en validatieresultaten.
 
-## Verplichte afhankelijkheden
+De keten blijft:
 
-- Fase 8 entity/component core.
-- Fase 8.1 procedural generation core.
-- Fase 9 world/camera/lighting/minimap nodes.
-- Fase 10 runtime client consumeert alleen published projections.
+`Editor/node/procedural/world/entity/UI/audio data -> Publish validation/snapshot metadata -> Runtime projection records/contracts -> latere Runtime Game renderer/client`
 
-Publish mag procedural preview niet consumeren. Alleen editor bake draft data die door validators komt, mag naar runtime projections.
+Fase 11 opent alleen de projection contractlaag. De Runtime Game renderer/client is nog niet geopend.
 
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
+## Vaste grenzen
 
-- Kies simpele testgraph: player spawn, ground, camera, licht, minimap en 1 prop.
-- Kies of accepteer de generated zones/placements/path/resource candidates die in de testpublish gebruikt worden.
-- Bevestig dat testcontent uit GameBible/editor-data/asset register/procedural bake draft komt.
+Niet toegestaan in Fase 11:
 
-## Actie voor Codex
+- 3D runtime game bouwen;
+- renderer bouwen;
+- movement, combat of player gameplay bouwen;
+- HUD runtime renderer bouwen;
+- minimap runtime renderer bouwen;
+- audio runtime playback bouwen;
+- concrete gamecontent toevoegen;
+- dummy assets toevoegen;
+- assets toevoegen, wijzigen, verwijderen of kopieren;
+- GLB role mapping definitief maken;
+- hardcoded world, camera, light, minimap, HUD, audio, NPC, quest of economy values toevoegen;
+- automatische publish uitvoeren;
+- Fase 12 voorbereiden;
+- secrets toevoegen.
 
-Zorg dat `/var/www/gk/data/published` en releases schrijfbaar zijn voor publish service.
+## Bouwt op
 
-## Prompt voor GK Code Copiloot
+Fase 11 bouwt op:
 
-```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
+- Fase 6 typed node graph core;
+- Fase 7 asset/audio library;
+- Fase 8 entity/component core;
+- Fase 8.1 procedural generation core;
+- Fase 9 world/camera/lighting/minimap/UI display core;
+- Fase 10 Publish Flow Core.
 
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural bake draft die door editor/publish is geaccepteerd, of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated placement of minimap-instelling hard-coded bevatten.
-- Publish mag procedural preview niet behandelen als runtimebron.
+## Toegevoegd in de Git-basis
 
-Je werkt aan fase 11: Publish pipeline en runtime projections.
+### Runtime projection schemas/contracts
 
-Doel:
-Save en publish worden echt gescheiden. Publish compileert node-data naar runtime projections voor game, editor-preview en rollback.
+Nieuwe contracts:
 
-Werk uit:
-Bouw publish-service, validation, compiler, immutable release manifest, runtime bootstrap/chunks/story/HUD/assets/audio/camera/minimap projections en rollback. Neem Fase 8.1 procedural bake draft data alleen mee wanneer die door editor-data en publish-validatie expliciet is geaccepteerd. Preview en bake zelf blijven geen publishstap.
+- `RuntimeProjectionStatus`;
+- `RuntimeProjectionSource`;
+- `RuntimeProjectionManifest`;
+- `RuntimeProjectionRecord`;
+- `RuntimeProjectionValidationResult`;
+- `RuntimeProjectionAuditEvent`;
+- `RuntimeProjectionReadModel`;
+- `RuntimeProjectionSafetyFlags`.
 
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
-```
+Duidelijk gescheiden:
 
-## Acceptatiechecklist
+- Fase 10 publish snapshot metadata;
+- projection candidate/source;
+- runtime projection manifest;
+- runtime-readable projection/read model;
+- Runtime Game renderer/client, nog niet geopend.
 
-- [ ] Save verandert runtime niet.
-- [ ] Publish valideert.
-- [ ] Runtime projections bestaan.
-- [ ] Audio/camera/light/minimap in projections.
-- [ ] Procedural bake draft kan alleen via publish-validatie naar projections.
-- [ ] Procedural preview wordt niet als runtimebron gebruikt.
-- [ ] Rollback werkt.
+Runtime projection mag verwijzen naar gevalideerde publish data en accepted generated refs. Runtime projection mag geen concrete world map, NPCs, quests, economy, loot, camera values, lighting presets, HUD layout, minimap layout, definitieve GLB roles of renderer instructies bevatten.
 
-## Testplan
+### Validation gates
 
-Save draft, game blijft gelijk; run procedural preview/bake draft, game blijft gelijk; publish geaccepteerde node/procedural draft data, game verandert; rollback naar vorige release.
+Fase 11 validation bewaakt:
+
+- projection source moet uit Fase 10 publish snapshotmetadata en publish-ready validation komen;
+- geen projection vanuit raw draft;
+- geen projection vanuit procedural preview/bake zonder publish acceptatie;
+- geen asset copy/mutation;
+- geen concrete gamecontent;
+- geen hardcoded content;
+- UI display size komt uit node/editor/publish data, niet uit source natural size;
+- GLB roles blijven candidate/editor-data tenzij expliciet via publish data;
+- runtime projection is read-model/contract, geen renderer;
+- safety flags blijven:
+  - `publishesRuntimeProjection=true`;
+  - `implementsRuntimeRenderer=false`;
+  - `mutatesAssets=false`;
+  - `containsConcreteGameContent=false`;
+  - `usesHardcodedContent=false`.
+
+### Editor/admin route contracts
+
+Nieuwe editor/admin route contracts:
+
+- `GET /editor/runtime-projection/status`;
+- `POST /editor/runtime-projection/validate`;
+- `POST /editor/runtime-projection/project`;
+- `GET /editor/runtime-projection/manifests`;
+- `GET /editor/runtime-projection/manifests/:id`.
+
+Regels:
+
+- editor admin only;
+- anonymous/game/non-admin denied;
+- state-changing routes CSRF/Origin protected;
+- geen automatische projection;
+- project action maakt alleen contract-safe manifest/read-model metadata;
+- geen concrete gamecontent in responses;
+- geen asset mutatie of kopie.
+
+### Runtime read-only route contracts
+
+Nieuwe runtime read-only route contracts:
+
+- `GET /runtime/projection/status`;
+- `GET /runtime/projection/manifest`;
+- `GET /runtime/projection/records`.
+
+Regels:
+
+- read-only;
+- geen state change;
+- geen editor/admin secrets;
+- geen editor draft leakage;
+- geen raw unpublished draft/candidate data;
+- veilige empty state wanneer er nog geen projection bestaat;
+- geen dummy content.
+
+### Node/socket contracts
+
+Nieuwe socket types:
+
+- `runtime.projection.source.reference`;
+- `runtime.projection.validation.reference`;
+- `runtime.projection.manifest.reference`;
+- `runtime.projection.read-model.reference`;
+- `runtime.projection.audit.reference`.
+
+Nieuwe publish-boundary node types:
+
+- `gk.runtimeProjection.source`;
+- `gk.runtimeProjection.validate`;
+- `gk.runtimeProjection.manifest`;
+- `gk.runtimeProjection.readModel`;
+- `gk.runtimeProjection.auditEvent`.
+
+Deze nodes bouwen geen gameplay-node, renderer-node of hardcoded world values.
+
+### Editor panel/state basis
+
+Toegevoegd:
+
+- `Runtime Projection` panel;
+- status;
+- validation issues;
+- source snapshot metadata;
+- projection manifest metadata;
+- safety flags;
+- audit events;
+- runtime read-only route summary.
+
+Het panel toont geen verzonnen world content, NPC/quest/economy dummy data, asset previews die role mapping definitief maken of renderer output.
+
+## Tests
+
+Toegevoegd testcontract voor:
+
+- runtime projection schema exports;
+- runtime projection sockets en node types;
+- invalid raw draft/candidate projection;
+- generated refs blijven draft/candidate totdat publish validation accepteert;
+- manifest/read-model bevat geen concrete hardcoded gamecontent;
+- renderer flags blijven uit;
+- asset mutation/copy blijft uit;
+- UI display size komt uit data, niet uit source natural size;
+- editor/admin routes zijn editor-only;
+- anonymous/game/non-admin denied;
+- CSRF/Origin gate voor state-changing projection routes;
+- runtime read-only routes geven veilige empty state zonder draft leakage;
+- Runtime Projection panel registratie.
+
+## Checklist
+
+- [x] Runtime projection schemas/contracts toegevoegd.
+- [x] Runtime projection validation gates toegevoegd.
+- [x] Editor/admin projection route contracts toegevoegd.
+- [x] Runtime read-only route contracts toegevoegd.
+- [x] Node/socket contracts toegevoegd.
+- [x] Runtime Projection panel/state basis toegevoegd.
+- [x] Tests toegevoegd.
+- [x] Docs bijgewerkt.
+- [x] Geen assets gewijzigd.
+- [x] Geen concrete gamecontent toegevoegd.
+- [x] Geen runtime renderer/game client gebouwd.
+- [x] Geen hardcoded world/camera/light/minimap/HUD/audio values toegevoegd.
+- [ ] Server-side build/typecheck/test/lint bevestigd.
+- [ ] Live editor/admin route smokes bevestigd.
+- [ ] Runtime read-only route smokes bevestigd.
+- [ ] Auth/CSRF smokes bevestigd.
+- [ ] Panel smoke bevestigd.
+- [ ] Docs final bevestigd.
+
+## Open Codex/Claude-taken
+
+Nog server-side valideren:
+
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- smoke `GET /editor/runtime-projection/status`;
+- smoke `POST /editor/runtime-projection/validate`;
+- smoke `POST /editor/runtime-projection/project` als contract-only manifest/read-model metadata;
+- smoke `GET /editor/runtime-projection/manifests`;
+- smoke `GET /editor/runtime-projection/manifests/:id`;
+- smoke `GET /runtime/projection/status`;
+- smoke `GET /runtime/projection/manifest`;
+- smoke `GET /runtime/projection/records`;
+- anonymous/game/non-admin denied;
+- CSRF/Origin denied voor state-changing routes zonder proof;
+- editor shell toont Runtime Projection panel;
+- bevestigen dat geen runtime renderer/game client, concrete gamecontent of assetmutatie plaatsvindt.
+
+## Fasebeoordeling
+
+Fase 11 Git-basis is voorbereid.
+
+Fase 11 is server-side nog niet klaar. Markeer Fase 11 pas als afgerond nadat Codex/Claude de open checks en live smokes bevestigt.
+
+Geen Fase 12 voorbereiden of openen vanuit deze fase.

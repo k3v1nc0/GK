@@ -19,6 +19,10 @@ import {
   type PublishFlowPanelId
 } from "./publish-flow-panel.js";
 import {
+  RUNTIME_PROJECTION_PANEL_DEFINITION,
+  type RuntimeProjectionPanelId
+} from "./runtime-projection-panel.js";
+import {
   WORLD_CAMERA_MINIMAP_PANEL_DEFINITIONS,
   type WorldCameraMinimapPanelId
 } from "./world-camera-minimap-panels.js";
@@ -36,6 +40,7 @@ export type EditorPanelId =
   | "minimap-panel"
   | "game-users"
   | PublishFlowPanelId
+  | RuntimeProjectionPanelId
   | WorldCameraMinimapPanelId;
 
 export interface AssetInventorySummary {
@@ -210,6 +215,7 @@ export const EDITOR_PANEL_DEFINITIONS: readonly EditorPanelDescriptor[] = [
     acceptsConcreteGameContent: false
   },
   PUBLISH_FLOW_PANEL_DEFINITION,
+  RUNTIME_PROJECTION_PANEL_DEFINITION,
   ...PHASE9_PANEL_DEFINITIONS,
   {
     id: "hud-editor",
