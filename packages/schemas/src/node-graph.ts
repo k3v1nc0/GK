@@ -75,7 +75,16 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "runtime.quest.asset-role.reference",
   "runtime.quest.state.reference",
   "runtime.quest.diagnostics.reference",
-  "runtime.quest.safety.reference"
+  "runtime.quest.safety.reference",
+  "quest.authoring.quest.reference",
+  "quest.authoring.dialogue.reference",
+  "quest.authoring.objective.reference",
+  "quest.authoring.interactable.reference",
+  "quest.authoring.reward.reference",
+  "quest.authoring.unlock.reference",
+  "quest.authoring.checkpoint.reference",
+  "quest.authoring.asset-role.reference",
+  "quest.authoring.publish-contract.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];
