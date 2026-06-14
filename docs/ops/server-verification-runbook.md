@@ -169,6 +169,21 @@ Contract checks:
 - shell HTML laadt geen GLB, texture, UI image of audio asset;
 - shell HTML bevat geen renderer draw calls of gameplay controls.
 
+### Fase 15 Runtime Asset Reference Planning
+
+Contract checks:
+
+- `GET http://127.0.0.1:3003/health/game` bevat `runtimeAssetReferencePlanning=phase-15`, `consumesRuntimeScenePlan=true`, `producesAssetReferencePlan=true`, `usesAssetMetadataOnly=true`, `loadsAssets=false`, `fetchesAssetBytes=false`, `resolvesFinalAssetRoles=false`, `rendersScene=false` en `rendererDrawCalls=false`;
+- `GET http://127.0.0.1:3003/game/shell.json` bevat asset reference planning state/contract;
+- `GET http://127.0.0.1:3003/game/` bevat `data-runtime-asset-reference-planning="phase-15"`;
+- shell HTML bevat `data-runtime-empty-asset-reference-plan`;
+- shell HTML bevat geen `/editor/` of `/auth/editor` routegebruik;
+- shell HTML bevat geen `/assets/` routegebruik;
+- shell HTML laadt geen GLB, texture, UI image of audio asset;
+- shell HTML fetcht geen asset bytes;
+- shell HTML bevat geen definitive asset role mapping;
+- shell HTML bevat geen renderer draw calls of gameplay controls.
+
 Local route smokes:
 
 ```bash
@@ -194,17 +209,20 @@ Als Apache/front-door route bevestigd is:
 GK_GAME_FRONT_DOOR_URL=<server-confirmed-game-url> pnpm smoke:browser:game
 ```
 
-Fase 14 checks moeten bevestigen:
+Fase 15 checks moeten bevestigen:
 
 - runtime shell marker OK;
 - render surface marker OK;
 - scene assembly marker OK;
+- asset reference planning marker OK;
 - empty scene plan OK;
+- empty asset reference plan OK;
 - console/page errors count OK;
 - no editor/admin route usage;
 - no editor draft/candidate leakage;
 - no GLB loading;
 - no texture/audio loading;
+- no asset byte fetch;
 - no asset load requests;
 - no definitive asset role mapping;
 - no concrete gamecontent;
@@ -261,7 +279,9 @@ De game smoke:
 - checkt de Fase 13 safe empty render state;
 - checkt de Fase 14 runtime scene assembly marker;
 - checkt de Fase 14 empty scene plan;
-- checkt dat Fase 14 geen asset/GLB/audio-load requests doet;
+- checkt de Fase 15 runtime asset reference planning marker;
+- checkt de Fase 15 empty asset reference plan;
+- checkt dat Fase 15 geen asset/GLB/texture/audio byte/load requests doet;
 - probeert alleen game login wanneer `GK_SMOKE_GAME_EMAIL` en `GK_SMOKE_GAME_PASSWORD` bestaan en de game auth route bereikbaar is;
 - maakt geen account aan;
 - voert geen gameplay of dummy content in;
@@ -278,12 +298,13 @@ De smoke rapporteert kort:
 - `runtime shell: ok/fail/skipped`;
 - `render surface: ok/fail/skipped`;
 - `scene assembly: ok/fail/skipped`;
-- `asset load requests: 0` voor Fase 14;
+- `asset reference planning: ok/fail/skipped`;
+- `asset load requests: 0` voor Fase 15;
 - `console errors count`;
 - `page errors count`;
 - screenshot/trace path indien gemaakt.
 
-`ok` betekent dat de gevraagde smoke groen is. `fail` is een blocker voor server-side klaar. `skipped` is toegestaan wanneer een optionele game front door, game shell origin of game-smoke user nog niet bestaat, maar Fase 14 scene assembly checks mogen niet worden overgeslagen wanneer game shell bereikbaar is.
+`ok` betekent dat de gevraagde smoke groen is. `fail` is een blocker voor server-side klaar. `skipped` is toegestaan wanneer een optionele game front door, game shell origin of game-smoke user nog niet bestaat, maar Fase 15 asset reference planning checks mogen niet worden overgeslagen wanneer game shell bereikbaar is.
 
 ## Standaard eindrapport voor Codex/Claude
 
@@ -322,12 +343,14 @@ browser smoke OK/fail/skipped:
 runtime shell smoke OK/fail/skipped:
 render surface smoke OK/fail/skipped:
 scene assembly smoke OK/fail/skipped:
+asset reference planning smoke OK/fail/skipped:
 game browser smoke OK/fail/skipped:
 asset load requests: 0/nummer:
 
 no-runtime-publish/no-runtime-renderer waar relevant:
 no-renderer-scene-draw-calls:
 no-GLB-loading/no-texture-audio-loading/no-asset-loads:
+no-asset-byte-fetch:
 no-definitive-asset-role-mapping:
 no-runtime-gameplay/no-movement/no-combat/no-audio-playback waar relevant:
 no-hardcoded HUD/minimap/world/camera/light/audio values:

@@ -7,6 +7,10 @@ import {
 
 import { RUNTIME_CLIENT_SHELL_STYLES } from "./runtime-client-shell-styles.js";
 import {
+  renderRuntimeAssetReferencePlanningSection,
+  runtimeAssetReferencePlanningClientContract
+} from "./runtime-asset-reference-planning.js";
+import {
   renderRuntimeRenderSurfaceBootScript,
   renderRuntimeRenderSurfaceSection,
   runtimeRenderSurfaceClientContract
@@ -35,6 +39,7 @@ export interface RuntimeClientShellHttpContract {
   readonly mutatesAssets: false;
   readonly renderSurface: typeof runtimeRenderSurfaceClientContract;
   readonly sceneAssembly: typeof runtimeSceneAssemblyClientContract;
+  readonly assetReferencePlanning: typeof runtimeAssetReferencePlanningClientContract;
 }
 
 export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
@@ -50,7 +55,8 @@ export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
   hardcodesContent: false,
   mutatesAssets: false,
   renderSurface: runtimeRenderSurfaceClientContract,
-  sceneAssembly: runtimeSceneAssemblyClientContract
+  sceneAssembly: runtimeSceneAssemblyClientContract,
+  assetReferencePlanning: runtimeAssetReferencePlanningClientContract
 };
 
 export function createRuntimeClientShellResponseModel(route: RuntimeClientShellModel["route"] = "/game/"): RuntimeClientShellModel {
@@ -65,6 +71,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     .join("");
   const renderSurface = renderRuntimeRenderSurfaceSection();
   const sceneAssembly = renderRuntimeSceneAssemblySection();
+  const assetReferencePlanning = renderRuntimeAssetReferencePlanningSection();
 
   return `<!doctype html>
 <html lang="nl">
@@ -101,6 +108,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
 
     ${renderSurface}
     ${sceneAssembly}
+    ${assetReferencePlanning}
 
     <section class="panel" aria-label="Runtime projection read-only routes" style="margin-top:12px">
       <h2>Read-only projection routes</h2>

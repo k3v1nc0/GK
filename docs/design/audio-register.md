@@ -4,9 +4,9 @@
 
 Na commit `44defc0f79f032cabc07eba43573a40c5f629b97` (`Assets - new`) heeft Codex `/var/www/gk/assets` opnieuw laten scannen. Er zijn 21 audio-assets aanwezig.
 
-Fase 8.1 t/m Fase 13 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
+Fase 8.1 t/m Fase 14 zijn server-side afgerond en klaar. De audio-assets zijn asset-library candidates en geen hardcoded runtimecontent.
 
-Fase 14 Projection-driven Scene Assembly Core Git-basis is toegevoegd. Fase 14 speelt geen audio af, laadt geen audio assets, bouwt geen audio playback runtime en wijst geen concrete audio mapping toe.
+Fase 15 Runtime Asset Reference Planning Core Git-basis is toegevoegd. Fase 15 speelt geen audio af, laadt geen audio assets, fetcht geen audio bytes, bouwt geen audio playback runtime en wijst geen concrete audio mapping toe.
 
 ## Audio asset policy
 
@@ -23,7 +23,8 @@ Niet toegestaan:
 - runtime projection die audio assets kopieert, muteert, afspeelt of concrete audio runtime mapping hardcoded toewijst;
 - runtime client shell die audio afspeelt, audio assets kopieert/muteert of concrete audio runtime mapping hardcoded toewijst;
 - runtime render surface die audio afspeelt, audio assets laadt/kopieert/muteert of concrete audio runtime mapping hardcoded toewijst;
-- runtime scene assembly die audio afspeelt, audio assets laadt/kopieert/muteert of concrete audio runtime mapping hardcoded toewijst.
+- runtime scene assembly die audio afspeelt, audio assets laadt/kopieert/muteert of concrete audio runtime mapping hardcoded toewijst;
+- runtime asset reference planning die audio afspeelt, audio assets laadt, audio bytes fetcht, audio role mapping finaliseert of concrete audio runtime mapping hardcoded toewijst.
 
 ## Bevestigde assetbron
 
@@ -52,20 +53,22 @@ Er zijn ook 37 UI images en 4 GLB assets aanwezig. GLB- en UI-assets staan in `d
 
 Ambience, music, SFX en UI audio worden door de asset scan als audio assets gezien.
 
-## Fase 14 runtime scene assembly audio gate
+## Fase 15 runtime asset reference planning audio gate
 
-Fase 14 neemt audio niet als runtime playback of assetload mee.
+Fase 15 neemt audio niet als runtime playback, assetload of byte-fetch mee.
 
 Regels:
 
-- scene assembly speelt geen audio af;
-- scene assembly bouwt geen audio playback runtime;
-- scene assembly laadt geen audio asset;
-- scene assembly gebruikt geen audio/editor/admin routes;
-- scene assembly lekt geen editor draft audio data;
-- scene assembly wijzigt of kopieert geen audio assets;
-- scene assembly hardcodet geen music, ambience, SFX, UI audio of dialogue mapping;
-- scene assembly maakt alleen neutrale scene plan metadata uit runtime projection records.
+- asset reference planning speelt geen audio af;
+- asset reference planning bouwt geen audio playback runtime;
+- asset reference planning laadt geen audio asset;
+- asset reference planning fetcht geen audio bytes;
+- asset reference planning gebruikt geen audio/editor/admin routes;
+- asset reference planning lekt geen editor draft audio data;
+- asset reference planning wijzigt of kopieert geen audio assets;
+- asset reference planning hardcodet geen music, ambience, SFX, UI audio of dialogue mapping;
+- asset reference planning finaliseert geen audio role mapping;
+- asset reference planning maakt alleen neutrale asset-reference metadata uit runtime scene plan descriptors.
 
 ## Open audio gates
 
@@ -79,7 +82,7 @@ Regels:
 | Dialogue/voice gebruik | Nog te bepalen; 0 voice/dialogue bestanden bevestigd | NPC/dialogue flows wanneer voice/audio verplicht wordt |
 | Runtime audio playback | Niet geopend | Pas wanneer Kevin een expliciete audio/runtime fase opent |
 
-Deze gates blokkeren Fase 14 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
+Deze gates blokkeren Fase 15 Git-basis niet. Ze blokkeren alleen latere fases wanneer concrete audio-keuzes nodig zijn die niet uit GameBible JSON, editor-data, registers, procedural draft output, publish data, runtime projection metadata of Kevin-input komen.
 
 ## Registratievelden
 
@@ -106,18 +109,13 @@ Afgerond:
 4. `GK_ASSET_SOURCE_DIR=/var/www/gk/assets` bevestigd.
 5. Asset scan OK met invalid=0 en missing=0.
 6. `assetsCopiedToGit=false`, `publishesRuntimeOutput=false` en `assignsDefinitiveRuntimeRoles=false` bevestigd.
-7. Fase 9 build/typecheck/test/lint bevestigd.
-8. Fase 10 build/typecheck/test/lint en publish gates bevestigd.
-9. Fase 11 build/typecheck/test/lint, runtime projection smokes en no-audio-playback/no-asset-mutation bevestigd.
-10. Fase 12 build/typecheck/test/lint, runtime shell smokes en no-audio-playback/no-asset-mutation bevestigd.
-11. Fase 12.1 `gk-game-web` service, browser smokes en no-audio-playback/no-asset-mutation bevestigd.
-12. Fase 13 runtime render surface build/typecheck/test/lint, route/browser smokes en no-audio-playback/no-asset-mutation bevestigd.
+7. Fase 9 t/m Fase 14 server-side bevestigd.
 
-Open voor Fase 14:
+Open voor Fase 15:
 
-1. Server-side bevestigen dat runtime scene assembly geen audio afspeelt.
-2. Server-side bevestigen dat runtime scene assembly geen audio assets laadt, wijzigt of kopieert.
-3. Server-side bevestigen dat runtime scene assembly geen concrete audio runtimecontent hardcoded.
-4. Build/typecheck/test/lint en runtime scene assembly route/browser smokes draaien.
+1. Server-side bevestigen dat runtime asset reference planning geen audio afspeelt.
+2. Server-side bevestigen dat runtime asset reference planning geen audio assets laadt, audio bytes fetcht, wijzigt of kopieert.
+3. Server-side bevestigen dat runtime asset reference planning geen concrete audio runtimecontent hardcoded.
+4. Build/typecheck/test/lint en runtime asset reference planning route/browser smokes draaien.
 
 Latere fases moeten opnieuw scannen wanneer Kevin audio toevoegt, verwijdert, hernoemt of definitieve node-koppelingen nodig maakt.

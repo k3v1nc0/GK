@@ -32,73 +32,22 @@ Fase 11 runtime read-only routes:
 
 Read-only routes zijn geen editor/admin routes, voeren geen state change uit, lekken geen raw editor draft data en bevatten geen renderer/game client.
 
-## Fase 12 runtime client shell routes
+## Fase 15 runtime asset reference planning boundary
 
-Fase 12 game-web/runtime shell routes zijn shell/read-only routes:
-
-- `GET /`;
-- `GET /game`;
-- `GET /game/`;
-- `GET /game/shell.json`;
-- `GET /health/game`.
-
-Server-side groen bevestigd door Codex/Claude.
+Fase 15 Runtime Asset Reference Planning Core Git-basis is toegevoegd. Server-side validatie staat nog open.
 
 Regels:
 
-- runtime client shell gebruikt geen editor/admin routes;
-- runtime client shell gebruikt geen editor credentials, CSRF token of editor session;
-- runtime client shell consumeert alleen Fase 11 runtime projection read-only routes;
-- runtime client shell toont geen raw editor draft/candidate data;
-- runtime client shell voert geen state-changing request uit;
-- runtime client shell uploadt, wijzigt of verwijdert geen assets;
-- runtime client shell bevat geen secrets en geen concrete gamecontent;
-- runtime client shell bouwt geen renderer, gameplay, movement, combat, HUD/minimap runtime of audio playback.
-
-## Fase 12.1 game-web service boundary
-
-Fase 12.1 is server-side groen bevestigd.
-
-Regels:
-
-- `gk-game-web` is een vaste active/enabled service;
-- `gk-game-web` draait via Node 22;
-- Apache routeert `/game/`, `/health/game` en `/runtime/projection/` naar `127.0.0.1:3003`;
-- game browser-smoke is groen en niet meer skipped;
-- Fase 12.1 verandert de auth-contracten niet en voegt geen game login requirement toe.
-
-## Fase 13 runtime render surface boundary
-
-Fase 13 Runtime Render Surface Core is server-side groen bevestigd en formeel afgerond.
-
-Regels:
-
-- runtime render surface gebruikt geen editor/admin routes;
-- runtime render surface gebruikt geen editor credentials, CSRF token of editor session;
-- runtime render surface consumeert alleen runtime projection metadata/read-only state;
-- runtime render surface toont geen raw editor draft/candidate data;
-- runtime render surface voert geen state-changing request uit;
-- runtime render surface uploadt, laadt, wijzigt of verwijdert geen assets;
-- runtime render surface bevat geen secrets en geen concrete gamecontent;
-- runtime render surface bouwt geen volledige renderer, scene assembly, gameplay, movement, combat, HUD/minimap runtime of audio playback;
-- browser-smoke bevestigt render surface marker en safe empty state zonder editor/admin route leakage.
-
-## Fase 14 runtime scene assembly boundary
-
-Fase 14 Projection-driven Scene Assembly Core Git-basis is toegevoegd. Server-side validatie staat nog open.
-
-Regels:
-
-- runtime scene assembly gebruikt geen editor/admin routes;
-- runtime scene assembly gebruikt geen editor credentials, CSRF token of editor session;
-- runtime scene assembly consumeert alleen runtime projection read-only records;
-- runtime scene assembly toont geen raw editor draft/candidate data;
-- runtime scene assembly voert geen state-changing request uit;
-- runtime scene assembly uploadt, laadt, wijzigt of verwijdert geen assets;
-- runtime scene assembly bevat geen secrets en geen concrete gamecontent;
-- runtime scene assembly finaliseert geen GLB of asset role mapping;
-- runtime scene assembly bouwt geen renderer draw calls, gameplay, movement, combat, HUD/minimap runtime of audio playback;
-- browser-smoke moet scene assembly marker en empty scene plan bevestigen zonder editor/admin route leakage.
+- runtime asset reference planning gebruikt geen editor/admin routes;
+- runtime asset reference planning gebruikt geen editor credentials, CSRF token of editor session;
+- runtime asset reference planning consumeert alleen Fase 14 runtime scene-plan metadata;
+- runtime asset reference planning toont geen raw editor draft/candidate data;
+- runtime asset reference planning voert geen state-changing request uit;
+- runtime asset reference planning uploadt, laadt, fetcht, wijzigt of verwijdert geen assets;
+- runtime asset reference planning bevat geen secrets en geen concrete gamecontent;
+- runtime asset reference planning finaliseert geen GLB of asset role mapping;
+- runtime asset reference planning bouwt geen asset-loader, renderer draw calls, gameplay, movement, combat, HUD/minimap runtime of audio playback;
+- browser-smoke moet asset reference planning marker en empty asset reference plan bevestigen zonder editor/admin route leakage.
 
 ## Live auth smoke runbook
 
@@ -115,7 +64,7 @@ Browser-smokes gebruiken server-only credentials uit `/etc/gk/secrets/initial-ed
 
 Smoke headers of speciale testheaders mogen alleen worden gebruikt waar ze expliciet geactiveerd zijn en alleen voor deny/contract-smokes. Live verificatie mag niet afhankelijk worden van test-hacks. Secret values mogen nooit worden geprint, in rapporten geplakt, in screenshots/traces zichtbaar zijn of naar Git geschreven.
 
-Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De Fase 12 runtime shell, Fase 13 render surface en Fase 14 scene assembly smoke mogen ook zonder game login draaien wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` naar de shellroute wijst. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
+Game browser-smoke mag alleen met een bestaande smoke user inloggen wanneer die server-side veilig is voorbereid. De Fase 12 runtime shell, Fase 13 render surface, Fase 14 scene assembly en Fase 15 asset reference planning smoke mogen ook zonder game login draaien wanneer `GK_GAME_WEB_ORIGIN` of `GK_GAME_FRONT_DOOR_URL` naar de shellroute wijst. De smoke mag geen account aanmaken, geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
 
 ## Audit
 
@@ -136,23 +85,26 @@ Audit logt minimaal:
 - runtime projection read-model access;
 - runtime client shell status/read-model access;
 - runtime render surface status/capability access;
-- runtime scene assembly status/plan access.
+- runtime scene assembly status/plan access;
+- runtime asset reference planning status/plan access.
 
-Audit bevat actor, action, target, scope, timestamp en metadata. Fase 14 scene assembly status bevat geen secrets, geen editor draft data en geen concrete gamecontent.
+Audit bevat actor, action, target, scope, timestamp en metadata. Fase 15 asset reference planning status bevat geen secrets, geen editor draft data en geen concrete gamecontent.
 
 ## Server-side validatie
 
-Codex heeft Fase 4 t/m Fase 13 server-side afgerond waar van toepassing. Fase 14 server-side validatie staat nog open.
+Codex heeft Fase 4 t/m Fase 14 server-side afgerond waar van toepassing. Fase 15 server-side validatie staat nog open.
 
-Open voor Fase 14:
+Open voor Fase 15:
 
 - build/typecheck/test/lint;
 - live route-smokes;
 - browser-smoke game/full;
-- scene assembly marker en empty scene plan;
+- asset reference planning marker en empty asset reference plan;
 - no editor/admin route usage;
 - no editor draft/candidate data;
-- no asset/GLB/audio load requests;
+- no asset/GLB/texture/audio load requests;
+- no asset byte fetch;
+- no definitive asset role mapping;
 - no concrete gamecontent;
 - no renderer draw calls;
 - no gameplay/audio playback;

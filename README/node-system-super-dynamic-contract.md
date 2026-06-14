@@ -17,15 +17,16 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - runtime client shell status, boot state, projection state en safety flags;
 - runtime render surface status, capability, lifecycle en safety flags;
 - runtime scene assembly source, status, plan, descriptor en safety flags;
+- runtime asset reference planning source, status, plan, descriptor, candidate en safety flags;
 - latere player, economy, merchant, NPC, quest, item, combat, HUD en audio inhoud.
 
 Concrete gamecontent hoort niet in runtimecode. De keten blijft:
 
 ```text
-Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Game
+Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game
 ```
 
-Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 opent alleen projection-driven scene assembly metadata. Concrete asset loading, renderer draw calls, gameplay, HUD/minimap runtime en audio playback blijven latere expliciete fases.
+Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 is server-side afgerond als projection-driven scene assembly metadata. Fase 15 opent alleen runtime asset-reference planning metadata. Concrete asset loading, renderer draw calls, gameplay, HUD/minimap runtime en audio playback blijven latere expliciete fases.
 
 ## Socket types per fase
 
@@ -106,7 +107,16 @@ Fase 14:
 - `runtime.scene.assembly.descriptor.reference`;
 - `runtime.scene.assembly.safety.reference`.
 
-Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface/runtime-scene-assembly contracts. Ze voegen geen concrete gamecontent toe.
+Fase 15:
+
+- `runtime.asset.reference.source.reference`;
+- `runtime.asset.reference.planning.status.reference`;
+- `runtime.asset.reference.plan.reference`;
+- `runtime.asset.reference.descriptor.reference`;
+- `runtime.asset.reference.candidate.reference`;
+- `runtime.asset.reference.safety.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface/runtime-scene-assembly/runtime-asset-reference-planning contracts. Ze voegen geen concrete gamecontent toe.
 
 ## Asset import en role mapping
 
@@ -122,60 +132,38 @@ Als een bestand in `/var/www/gk/assets` komt:
 
 De scanner kopieert geen assets naar Git, verwijdert geen serverbestanden en publiceert niets naar runtime.
 
-GLB, UI en audio blijven candidates totdat editor/node-data, GameBible/registers of expliciete Kevin-input ze kiest. Fase 14 laadt geen GLB, textures, UI images of audio assets en maakt geen definitive role mapping.
+GLB, UI en audio blijven candidates totdat editor/node-data, GameBible/registers of expliciete Kevin-input ze kiest. Fase 15 laadt geen GLB, textures, UI images of audio assets, fetcht geen asset bytes en maakt geen definitive role mapping.
 
-## Fase 13 runtime render surface laag
+## Fase 15 runtime asset reference planning laag
 
-Fase 13 is server-side afgerond en klaar als runtime render surface contractlaag.
-
-Belangrijke regels:
-
-- render surface mag een canvas/render host maken;
-- render surface mag canvas/WebGL/WebGL2 capability proben;
-- render surface mag alleen runtime projection metadata/read-only state consumeren;
-- safe empty render state is geldig wanneer er geen renderbare projection payload is;
-- render surface bouwt geen volledige renderer en geen scene assembly;
-- render surface laadt geen GLB, texture, UI image of audio asset;
-- render surface bouwt geen gameplay, movement, combat of audio playback;
-- render surface hardcodet geen camera, lighting, HUD, minimap, world of audio values;
-- render surface wijzigt of kopieert geen assets.
-
-### Runtime render surface nodes
-
-- `gk.runtimeRender.surface`;
-- `gk.runtimeRender.status`;
-- `gk.runtimeRender.capability`;
-- `gk.runtimeRender.lifecycle`;
-- `gk.runtimeRender.safetyFlags`.
-
-## Fase 14 runtime scene assembly laag
-
-Fase 14 Git-basis is toegevoegd als projection-driven scene assembly contractlaag. Server-side verificatie staat nog open.
+Fase 15 Git-basis is toegevoegd als runtime asset-reference planning contractlaag. Server-side verificatie staat nog open.
 
 Belangrijke regels:
 
-- scene assembly consumeert alleen runtime projection read-only records;
-- scene assembly produceert alleen neutrale scene plan metadata;
-- empty scene plan is geldig wanneer runtime projection records leeg zijn;
-- scene descriptors mogen geen concrete payload, renderer instruction, asset-load URL of final asset role bevatten;
-- scene assembly gebruikt geen editor/admin routes en geen editor draft/candidate data;
-- scene assembly laadt geen GLB, texture, UI image of audio asset;
-- scene assembly finaliseert geen asset/GLB roles;
-- scene assembly rendert geen scene en doet geen renderer draw calls;
-- scene assembly bouwt geen gameplay, movement, combat of audio playback;
-- scene assembly hardcodet geen world, camera, lighting, HUD, minimap of audio values;
-- scene assembly wijzigt of kopieert geen assets;
-- Fase 14 opent Fase 15 niet.
+- asset reference planning consumeert alleen runtime scene-plan metadata;
+- asset reference planning produceert alleen neutrale asset-reference plan metadata;
+- empty asset reference plan is geldig wanneer scene descriptors leeg zijn;
+- asset reference descriptors en candidates mogen geen concrete payload, asset-load URL, asset byte URL, renderer instruction of final asset role bevatten;
+- asset reference planning gebruikt geen editor/admin routes en geen editor draft/candidate data;
+- asset reference planning laadt geen GLB, texture, UI image of audio asset;
+- asset reference planning fetcht geen asset bytes;
+- asset reference planning finaliseert geen asset/GLB roles;
+- asset reference planning rendert geen scene en doet geen renderer draw calls;
+- asset reference planning bouwt geen gameplay, movement, combat of audio playback;
+- asset reference planning hardcodet geen world, camera, lighting, HUD, minimap of audio values;
+- asset reference planning wijzigt of kopieert geen assets;
+- Fase 15 opent Fase 16 niet.
 
-### Runtime scene assembly nodes
+### Runtime asset reference planning nodes
 
-- `gk.runtimeSceneAssembly.source`;
-- `gk.runtimeSceneAssembly.plan`;
-- `gk.runtimeSceneAssembly.descriptor`;
-- `gk.runtimeSceneAssembly.status`;
-- `gk.runtimeSceneAssembly.safetyFlags`.
+- `gk.runtimeAssetReferencePlanning.source`;
+- `gk.runtimeAssetReferencePlanning.plan`;
+- `gk.runtimeAssetReferencePlanning.descriptor`;
+- `gk.runtimeAssetReferencePlanning.candidate`;
+- `gk.runtimeAssetReferencePlanning.status`;
+- `gk.runtimeAssetReferencePlanning.safetyFlags`.
 
-## Publish, projection, client shell, render surface en scene assembly regels
+## Publish, projection, client shell, render surface, scene assembly en asset reference planning regels
 
 - GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
 - Runtime-active behavior blokkeert zonder verplichte editor-data.
@@ -184,6 +172,7 @@ Belangrijke regels:
 - Runtime client shell is geen renderer, gameplay, HUD, minimap of audio runtime.
 - Runtime render surface is geen scene assembly, gameplay, HUD, minimap of audio runtime.
 - Runtime scene assembly is geen renderer, asset-loader, gameplay, HUD, minimap of audio runtime.
-- Runtime client shell, render surface en scene assembly mogen geen editor/admin routes of editor draft data consumeren.
+- Runtime asset reference planning is geen asset loader, renderer, gameplay, HUD, minimap of audio runtime.
+- Runtime client shell, render surface, scene assembly en asset reference planning mogen geen editor/admin routes of editor draft data consumeren.
 - UI display natural size is nooit automatisch display size.
-- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation en Fase 14 runtime scene assembly validation zijn geen Runtime Game renderer.
+- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation en Fase 15 runtime asset reference planning validation zijn geen Runtime Game renderer.

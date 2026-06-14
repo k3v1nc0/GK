@@ -11,6 +11,7 @@ const EDITOR_PANEL_TITLES = new Map([
 const RUNTIME_CLIENT_SHELL_SELECTOR = "[data-runtime-client-shell='phase-12']";
 const RUNTIME_RENDER_SURFACE_SELECTOR = "[data-runtime-render-surface='phase-13']";
 const RUNTIME_SCENE_ASSEMBLY_SELECTOR = "[data-runtime-scene-assembly='phase-14']";
+const RUNTIME_ASSET_REFERENCE_PLANNING_SELECTOR = "[data-runtime-asset-reference-planning='phase-15']";
 
 const args = new Set(process.argv.slice(2));
 const runEditor = !args.has("--game");
@@ -227,6 +228,7 @@ async function runGameSmoke(browserInstance) {
     const runtimeShellResult = await tryRuntimeShellSmoke(page);
     const runtimeRenderSurfaceResult = await tryRuntimeRenderSurfaceSmoke(page, pageState);
     const runtimeSceneAssemblyResult = await tryRuntimeSceneAssemblySmoke(page, pageState);
+    const runtimeAssetReferencePlanningResult = await tryRuntimeAssetReferencePlanningSmoke(page, pageState);
 
     if (pageState.forbiddenAssetRequests.length > 0) {
       throw new Error(`Game browser smoke saw forbidden runtime asset requests: ${pageState.forbiddenAssetRequests.join(", ")}.`);
@@ -255,6 +257,7 @@ async function runGameSmoke(browserInstance) {
       runtimeShell: runtimeShellResult,
       runtimeRenderSurface: runtimeRenderSurfaceResult,
       runtimeSceneAssembly: runtimeSceneAssemblyResult,
+      runtimeAssetReferencePlanning: runtimeAssetReferencePlanningResult,
       gameLogin: gameLoginResult,
       assetRequests: pageState.forbiddenAssetRequests.length,
       consoleErrors: pageState.consoleErrors,
@@ -416,6 +419,68 @@ async function tryRuntimeSceneAssemblySmoke(page, pageState) {
   return "ok";
 }
 
+async function tryRuntimeAssetReferencePlanningSmoke(page, pageState) {
+  const assetReferencePlanning = page.locator(RUNTIME_ASSET_REFERENCE_PLANNING_SELECTOR).first();
+
+  if (await assetReferencePlanning.count() === 0) {
+    throw new Error("Runtime asset reference planning marker unavailable.");
+  }
+
+  await assetReferencePlanning.waitFor({ state: "visible", timeout: 5_000 });
+  await page.locator("[data-runtime-empty-asset-reference-plan]").first().waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForFunction(() => {
+    const planning = document.querySelector("[data-runtime-asset-reference-planning='phase-15']");
+    return planning?.getAttribute("data-runtime-asset-loads-assets") === "false"
+      && planning?.getAttribute("data-runtime-asset-fetches-bytes") === "false"
+      && planning?.getAttribute("data-runtime-asset-finalizes-roles") === "false"
+      && planning?.getAttribute("data-runtime-asset-renders-scene") === "false";
+  }, undefined, { timeout: 5_000 });
+
+  const assetReferenceState = await page.evaluate(() => {
+    const planning = document.querySelector("[data-runtime-asset-reference-planning='phase-15']");
+    const model = document.querySelector("#runtime-asset-reference-planning-model");
+    const emptyPlan = document.querySelector("[data-runtime-empty-asset-reference-plan]");
+    const text = document.body.textContent ?? "";
+    const html = document.body.innerHTML;
+
+    return {
+      marker: Boolean(planning),
+      lifecycle: planning?.getAttribute("data-runtime-asset-reference-lifecycle") ?? "",
+      loadsAssets: planning?.getAttribute("data-runtime-asset-loads-assets") ?? "",
+      fetchesBytes: planning?.getAttribute("data-runtime-asset-fetches-bytes") ?? "",
+      finalizesRoles: planning?.getAttribute("data-runtime-asset-finalizes-roles") ?? "",
+      rendersScene: planning?.getAttribute("data-runtime-asset-renders-scene") ?? "",
+      emptyPlanVisible: Boolean(emptyPlan),
+      modelText: model?.textContent ?? "",
+      editorRouteMentioned: text.includes("/editor/") || html.includes("/auth/editor"),
+      assetRouteMentioned: /\/assets\//i.test(html) || /\.(glb|gltf|png|jpe?g|webp|gif|mp3|wav|ogg)(\?|&|\"|'|<|$)/i.test(html),
+      rendererApiMentioned: /drawImage|fillRect|stroke\(|requestAnimationFrame|THREE\.|new Scene|new Mesh/.test(html)
+    };
+  });
+
+  if (
+    !assetReferenceState.marker
+    || assetReferenceState.loadsAssets !== "false"
+    || assetReferenceState.fetchesBytes !== "false"
+    || assetReferenceState.finalizesRoles !== "false"
+    || assetReferenceState.rendersScene !== "false"
+    || !assetReferenceState.emptyPlanVisible
+    || assetReferenceState.editorRouteMentioned
+    || assetReferenceState.assetRouteMentioned
+    || assetReferenceState.rendererApiMentioned
+    || assetReferenceState.modelText.includes("/editor/")
+    || assetReferenceState.modelText.includes("/assets/")
+  ) {
+    throw new Error("Runtime asset reference planning failed empty-plan/no-route/no-asset/no-render checks.");
+  }
+
+  if (pageState.forbiddenAssetRequests.length > 0) {
+    throw new Error("Runtime asset reference planning triggered a forbidden asset request.");
+  }
+
+  return "ok";
+}
+
 async function tryGameLogin(page) {
   const email = process.env.GK_SMOKE_GAME_EMAIL;
   const password = process.env.GK_SMOKE_GAME_PASSWORD;
@@ -532,6 +597,7 @@ function printReport(result, harnessError) {
     `runtime shell: ${result.game.details?.runtimeShell ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `render surface: ${result.game.details?.runtimeRenderSurface ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `scene assembly: ${result.game.details?.runtimeSceneAssembly ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
+    `asset reference planning: ${result.game.details?.runtimeAssetReferencePlanning ?? (result.game.status === "skipped" ? "skipped" : "fail")}`,
     `asset load requests: ${sumCounts([result.editor, result.game], "assetRequests")}`,
     `console errors count: ${sumCounts([result.editor, result.game], "consoleErrors")}`,
     `page errors count: ${sumCounts([result.editor, result.game], "pageErrors")}`

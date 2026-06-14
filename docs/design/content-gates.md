@@ -22,7 +22,8 @@ Niet toegestaan:
 - runtime projection behandelen als renderer, gameplay of contentcompiler buiten publish-ready snapshotmetadata;
 - runtime client shell behandelen als renderer, gameplay, HUD/minimap/audio runtime of contentbron;
 - runtime render surface behandelen als volledige renderer, scene assembly, gameplay, asset-loader, HUD/minimap/audio runtime of contentbron;
-- runtime scene assembly behandelen als renderer, asset-loader, gameplay, HUD/minimap/audio runtime of contentbron.
+- runtime scene assembly behandelen als renderer, asset-loader, gameplay, HUD/minimap/audio runtime of contentbron;
+- runtime asset reference planning behandelen als asset loader, definitive role mapping, renderer, gameplay, HUD/minimap/audio runtime of contentbron.
 
 ## Actuele gates
 
@@ -43,7 +44,8 @@ Niet toegestaan:
 | Fase 12 Runtime Client Shell Core | Server-side afgerond en klaar |
 | Fase 12.1 Game Web Service Deployment Core | Server-side afgerond en klaar |
 | Fase 13 Runtime Render Surface Core | Server-side afgerond en klaar |
-| Fase 14 Projection-driven Scene Assembly Core | Git-basis toegevoegd; server-side verificatie open |
+| Fase 14 Projection-driven Scene Assembly Core | Server-side afgerond en klaar |
+| Fase 15 Runtime Asset Reference Planning Core | Git-basis toegevoegd; server-side verificatie open |
 
 ## Fail-fast regels
 
@@ -59,22 +61,24 @@ Stop direct wanneer:
 - runtime client shell editor/admin routes, raw draft data, concrete gamecontent, renderer/gameplay/audio playback of assetmutatie zou bevatten;
 - runtime render surface editor/admin routes, raw draft data, concrete gamecontent, asset loads, scene assembly, gameplay/audio playback, hardcoded runtime values of assetmutatie zou bevatten;
 - runtime scene assembly editor/admin routes, raw draft data, concrete gamecontent, asset loads, final role mapping, renderer draw calls, gameplay/audio playback, hardcoded runtime values of assetmutatie zou bevatten;
+- runtime asset reference planning editor/admin routes, raw draft data, concrete gamecontent, asset loads, asset byte fetch, final role mapping, renderer draw calls, gameplay/audio playback, hardcoded runtime values of assetmutatie zou bevatten;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
 
 Stoppen is correct gedrag. Niet improviseren.
 
-## Runtime Scene Assembly Core gate
+## Runtime Asset Reference Planning Core gate
 
-Fase 14 is een projection-driven scene assembly contractlaag. Git-basis is toegevoegd; server-side verificatie staat open.
+Fase 15 is een metadata-only asset-reference planning contractlaag. Git-basis is toegevoegd; server-side verificatie staat open.
 
-Runtime scene assembly validation bewaakt:
+Runtime asset reference planning validation bewaakt:
 
-- scene assembly consumeert alleen runtime projection read-only records;
-- scene assembly produceert alleen scene plan metadata;
-- empty scene plan is geldig wanneer runtime projection records leeg zijn;
+- asset reference planning consumeert alleen runtime scene-plan metadata;
+- asset reference planning produceert alleen asset-reference plan metadata;
+- empty asset reference plan is geldig wanneer scene descriptors leeg zijn;
 - geen editor/admin routes;
 - geen editor draft/candidate leakage;
 - geen asset load requests;
+- geen asset byte fetch;
 - geen GLB, texture, UI image of audio load;
 - geen definitive asset/GLB role mapping;
 - geen concrete world/entity/NPC/quest/economy payload;
@@ -86,11 +90,14 @@ Runtime scene assembly validation bewaakt:
 
 Safety flags:
 
-- `consumesRuntimeProjectionRecords=true`;
-- `producesScenePlan=true`;
+- `consumesRuntimeScenePlan=true`;
+- `producesAssetReferencePlan=true`;
+- `usesAssetMetadataOnly=true`;
 - `loadsAssets=false`;
+- `fetchesAssetBytes=false`;
 - `resolvesFinalAssetRoles=false`;
 - `rendersScene=false`;
+- `rendererDrawCalls=false`;
 - `implementsGameplay=false`;
 - `implementsMovement=false`;
 - `implementsCombat=false`;
@@ -122,9 +129,9 @@ Regels:
 - audio files zijn asset-library candidates;
 - HUD, icon en minimap marker bestanden zijn UI/image assets, geen definitieve HUD/minimap runtimecontent;
 - ambience, music, SFX en UI audio zijn audio assets, geen definitieve music/ambience/SFX/UI runtimecontent;
-- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation en Fase 14 runtime scene assembly validation publiceren niets naar Runtime Game;
-- Fase 10 t/m Fase 14 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren;
-- Fase 14 mag geen GLB, texture, UI image of audio asset laden.
+- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation en Fase 15 runtime asset reference planning validation publiceren niets naar Runtime Game;
+- Fase 10 t/m Fase 15 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren;
+- Fase 15 mag geen GLB, texture, UI image of audio asset laden en mag geen asset bytes fetchen.
 
 ## Open gates voor latere fases
 
@@ -146,9 +153,8 @@ Nieuwe agents moeten openen:
 
 - `README/current-phase.md`;
 - `docs/design/phase-plan/current-phase.md`;
-- de actuele fase-README, nu `README/fase14.md`;
-- `README/fase13.md`;
-- `README/fase12.1.md`;
+- de actuele fase-README, nu `README/fase15.md`;
+- `README/fase14.md`;
 - `README/node-system-super-dynamic-contract.md`;
 - `docs/design/asset-register.md`;
 - `docs/design/audio-register.md`;
@@ -157,4 +163,4 @@ Nieuwe agents moeten openen:
 - `docs/ops/server-verification-runbook.md`;
 - `README/GameBibleNode.json`.
 
-Fase 14 server-side validatie staat nog open. Geen Fase 15 of runtime renderer/asset-loading/gameplay openen voordat Fase 14 is bevestigd en Kevin die fase opent.
+Fase 15 server-side validatie staat nog open. Geen Fase 16 of runtime asset-loading/renderer/gameplay openen voordat Fase 15 is bevestigd en Kevin die fase opent.

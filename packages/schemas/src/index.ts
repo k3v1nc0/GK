@@ -15,6 +15,8 @@ export * from "./runtime-render-surface.js";
 export * from "./runtime-render-surface-validation.js";
 export * from "./runtime-scene-assembly.js";
 export * from "./runtime-scene-assembly-validation.js";
+export * from "./runtime-asset-reference-planning.js";
+export * from "./runtime-asset-reference-planning-validation.js";
 export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
@@ -35,6 +37,8 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "runtime-render-surface-validation",
   "runtime-scene-assembly",
   "runtime-scene-assembly-validation",
+  "runtime-asset-reference-planning",
+  "runtime-asset-reference-planning-validation",
   "node-publish"
 ] as const;
 

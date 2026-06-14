@@ -50,7 +50,13 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "runtime.scene.assembly.status.reference",
   "runtime.scene.assembly.plan.reference",
   "runtime.scene.assembly.descriptor.reference",
-  "runtime.scene.assembly.safety.reference"
+  "runtime.scene.assembly.safety.reference",
+  "runtime.asset.reference.source.reference",
+  "runtime.asset.reference.planning.status.reference",
+  "runtime.asset.reference.plan.reference",
+  "runtime.asset.reference.descriptor.reference",
+  "runtime.asset.reference.candidate.reference",
+  "runtime.asset.reference.safety.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

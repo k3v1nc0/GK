@@ -7,6 +7,7 @@ import type {
 import { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
 import { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
 import { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
+import { RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES } from "./runtime-asset-reference-planning-nodes.js";
 import { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 import { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.js";
 import { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
@@ -177,7 +178,8 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   ...RUNTIME_PROJECTION_GRAPH_NODE_TYPES,
   ...RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES,
   ...RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES,
-  ...RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES
+  ...RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES,
+  ...RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
@@ -192,3 +194,4 @@ export { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.
 export { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 export { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
 export { RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES } from "./runtime-scene-assembly-nodes.js";
+export { RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES } from "./runtime-asset-reference-planning-nodes.js";

@@ -1,94 +1,174 @@
-# Fase 15 - Economy, levels, money, merchants, inventory en scrolls
+# Fase 15 - Runtime Asset Reference Planning Core
 
-## Vaste regels voor deze fase
+## Status
 
-- Dit is een 100% nieuw project.
-- Alles draait eerst op 1 eigen server onder `/var/www/gk`.
-- GK Code Copiloot werkt alleen op `main`.
-- GK Code Copiloot maakt geen branches en geen pull requests.
-- GK Code Copiloot gebruikt zo min mogelijk commits: standaard 1 commit per fase, maximaal 2 als het echt nodig is.
-- Codex doet serverwerk buiten Git: OS, MySQL, Redis, Nginx, systemd, secrets, rechten, builds, runtime checks en lokale scans.
-- Concrete gamecontent hoort niet in runtimecode.
-- Alles wat jij maakt, speelt of instelt loopt via Database > Editor/Node-system > Publish > Runtime Game.
-- De code mag alleen engine-capabilities bevatten: schemas, node types, validators, renderer/audio/protocol primitives en vaste socket types.
-- Waardes zoals camera, licht, geld, prijzen, levels, NPC routes, NPC taken, dialogen, quests, minimap lagen, audio en HUD instellingen moeten node-data zijn.
-- 3D wereldobjecten gebruiken jouw eigen bestaande of door jou gemaakte `.glb` assets.
-- UI plaatjes en audio mogen in de assetbibliotheek, maar worden ook via nodes gekozen en ingesteld.
-- De AI mag geen dummy assets, nepmodellen, tijdelijke vervangers, definitieve namen of definitieve verhaalcontent verzinnen.
-- Als verplichte Kevin-input mist, stopt de fase met een duidelijke lijst ontbrekende items.
-- Maak geen losse backupbestanden, geen tijdelijke markdown-dumps en geen extra README-bestanden die niet blijvend onderhouden worden.
+Fase 15 Runtime Asset Reference Planning Core is geopend. De Git-basis is toegevoegd op `main`; server-side verificatie door Codex/Claude is nog nodig.
 
-## Doel van de fase
+Fase 1 t/m Fase 14 zijn afgerond. Fase 16 is nog niet geopend of geimplementeerd.
 
-Maak player levels, XP, currency, merchant stock/prijzen, buy/sell, inventory, items, readable scrolls en UI/audio assets via nodes.
+## Doel
 
-Generated resource distributions uit Fase 8.1/Fase 9 mogen later als draft/candidate input dienen, maar economywaarden, prices, rewards, XP, merchant stock en lootkansen blijven GameBible/editor/Kevin-data.
+Fase 15 voegt een veilige asset-reference planninglaag toe bovenop Fase 14 scene assembly. De laag mag scene-plan descriptors koppelen aan generieke asset-reference metadata/candidates, maar mag nog geen assets laden, downloaden, renderen, afspelen of definitief mappen.
 
-## Verplichte afhankelijkheden
-
-- Fase 8 entity/component core.
-- Fase 8.1 procedural generation core voor eventuele resource candidates.
-- Fase 9 world/zone/resource context.
-- Fase 11 publish projections voor runtime.
-
-## Wat Kevin vooraf moet maken, kiezen of samen uitwerken
-
-- Kies currency naam/icoon.
-- Kies startgeld.
-- Kies item icons en prijzen.
-- Kies merchant stock.
-- Kies inventory UI.
-- Kies scroll background en scroll tekst.
-- Kies level curve 1 t/m 5 of basisregels.
-- Kies of accepteer eventuele generated resource distributions als draftbasis, zonder dat die prijzen/rewards invullen.
-
-## Actie voor Codex
-
-Run asset scan voor UI/audio en draai economy/inventory migraties.
-
-## Prompt voor GK Code Copiloot
+De keten blijft:
 
 ```text
-Git-regels:
-- Werk alleen op main.
-- Maak geen branches.
-- Maak geen pull request.
-- Gebruik zo min mogelijk commits: standaard 1 commit voor deze fase, maximaal 2 als het echt nodig is.
-- Commit pas na de beschikbare checks.
-
-Inhoudsregels:
-- Voeg geen dummy assets toe.
-- Verzin geen definitieve gamecontent.
-- Als Kevin-input mist, stop en rapporteer exact wat mist.
-- Concrete waardes moeten uit node-data, Game Bible, asset register, procedural draft output die door editor/publish is geaccepteerd, of editor input komen.
-- Runtimecode mag geen concrete NPC, quest, prijs, camera, licht, boss, item, route, generated resource distribution of minimap-instelling hard-coded bevatten.
-- Procedural generation mag geen economywaarden, prices, rewards, merchant stock, XP of lootkansen verzinnen.
-
-Je werkt aan fase 15: Economy, levels, money, merchants, inventory en scrolls.
-
-Doel:
-Maak player levels, XP, currency, merchant stock/prijzen, buy/sell, inventory, items, readable scrolls en UI/audio assets via nodes.
-
-Werk uit:
-Maak progression, currency, merchant, inventory, item en readable.scroll nodes. Merchant stock en prijzen zijn node-data. Wallet en inventory server-side. Scrolls gebruiken UI assets en tekst uit data. Generated resource distributions mogen alleen candidate input zijn voor editorkeuzes.
-
-Verplichte controle:
-- Run build/typecheck/tests die beschikbaar zijn.
-- Als server/database nodig is, noteer exact wat Codex moet doen.
-- Update current-phase.md alleen als de fase echt klaar is.
-- Commit met een duidelijke message in zo weinig mogelijk commits.
+Database / Editor / Node-system
+  -> Publish Flow Core
+  -> Runtime Projection Core
+  -> Runtime Client Shell Core
+  -> Game Web Service Deployment Core
+  -> Runtime Render Surface Core
+  -> Projection-driven Scene Assembly Core
+  -> Runtime Asset Reference Planning Core
+  -> latere Asset Loading / Renderer / Gameplay / HUD / Audio fases
 ```
 
-## Acceptatiechecklist
+## Toegevoegd
 
-- [ ] Geldnaam/icoon via nodes.
-- [ ] Player levels/XP via nodes.
-- [ ] Merchant stock/prijzen via nodes.
-- [ ] Inventory werkt.
-- [ ] Scrolls leesbaar.
-- [ ] Geen prijzen hard-coded.
-- [ ] Generated resources blijven candidate input en vullen geen economywaarden in.
+Fase 15 voegt alleen runtime asset-reference planning metadata toe:
 
-## Testplan
+- Runtime asset reference planning contracts.
+- Asset reference plan/read-model contracts.
+- Asset reference candidate metadata contracts.
+- Asset reference planning lifecycle/status.
+- Asset reference safety flags.
+- Scene-plan-to-asset-reference validation.
+- Empty asset reference plan wanneer er geen scene descriptors zijn.
+- Asset reference planning statuszone in de game shell.
+- Marker `data-runtime-asset-reference-planning="phase-15"`.
+- Node/socket contracts voor asset reference source, status, plan, descriptor, candidate en safety flags.
+- Browser-smoke check voor asset reference planning marker en empty asset reference plan.
+- Tests voor no-asset-load/no-final-role/no-render/no-gameplay boundaries.
 
-Geef speler geld, koop item bij merchant, lees scroll, level/XP reward testen. Controleer dat generated resources geen prices/rewards/merchant stock hebben verzonnen en alleen gekozen editor-data zijn.
+## Contracten
+
+Schema's:
+
+- `RuntimeAssetReferencePlanningStatus`;
+- `RuntimeAssetReferencePlanningState`;
+- `RuntimeAssetReferencePlan`;
+- `RuntimeAssetReferenceDescriptor`;
+- `RuntimeAssetReferenceCandidate`;
+- `RuntimeAssetReferenceSource`;
+- `RuntimeAssetReferenceErrorState`;
+- `RuntimeAssetReferenceSafetyFlags`.
+
+Safety flags:
+
+- `consumesRuntimeScenePlan=true`;
+- `producesAssetReferencePlan=true`;
+- `usesAssetMetadataOnly=true`;
+- `loadsAssets=false`;
+- `fetchesAssetBytes=false`;
+- `resolvesFinalAssetRoles=false`;
+- `rendersScene=false`;
+- `rendererDrawCalls=false`;
+- `implementsGameplay=false`;
+- `implementsMovement=false`;
+- `implementsCombat=false`;
+- `implementsAudioPlayback=false`;
+- `hardcodesWorld=false`;
+- `hardcodesCamera=false`;
+- `hardcodesLighting=false`;
+- `hardcodesHud=false`;
+- `hardcodesMinimap=false`;
+- `hardcodesContent=false`;
+- `mutatesAssets=false`;
+- `usesEditorDraftData=false`;
+- `usesEditorAdminRoutes=false`.
+
+## Asset reference plan regels
+
+- Als scene plan leeg is, is een empty asset reference plan geldig.
+- Als scene descriptors bestaan, mag Fase 15 alleen generieke reference descriptors en metadata-only candidates maken.
+- Reference descriptors en candidates mogen geen asset bytes, asset-load URL, final asset role, concrete asset-library binding, renderer instruction of concrete payload bevatten.
+- Fase 15 kiest geen definitive GLB/asset role mapping.
+- Fase 15 maakt geen hardcoded fallback zoals default model, test texture of dummy object.
+
+## Server-side verificatie nog open
+
+Fase 15 is pas klaar na Codex/Claude server-side bevestiging van:
+
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled;
+- local route-smokes;
+- Apache/front-door smokes;
+- `pnpm smoke:browser:game`;
+- `pnpm smoke:browser:editor`;
+- `pnpm smoke:browser`;
+- asset reference planning marker;
+- empty asset reference plan;
+- no editor/admin route usage;
+- no draft leakage;
+- no GLB/texture/audio loading;
+- no asset byte fetch;
+- no asset load requests;
+- no definitive asset role mapping;
+- no concrete content;
+- no renderer draw calls;
+- no gameplay/movement/combat/audio playback;
+- no hardcoded runtime values;
+- no asset mutation;
+- worktree schoon;
+- blockers geen.
+
+## Niet toegestaan en niet gebouwd
+
+Fase 15 is geen asset loader en bouwt niet:
+
+- asset loading;
+- GLB loading;
+- texture/audio loading;
+- asset byte fetch;
+- definitive GLB role mapping;
+- definitive asset role mapping;
+- asset-loader node;
+- renderer node;
+- gameplay node;
+- volledige renderer;
+- renderer scene draw calls;
+- concrete gamewereld;
+- dummy world, NPC, quest of economy;
+- gameplay, movement, combat of player runtime;
+- audio playback;
+- HUD/minimap runtime layout;
+- camera/light/fog/sky/world hardcoding;
+- automatic publish/projection;
+- editor draft/candidate data in runtime;
+- editor/admin routes in runtime;
+- assetmutatie;
+- secrets;
+- Fase 16.
+
+## Bestanden
+
+Toegevoegd of bijgewerkt in de Fase 15 Git-basis:
+
+- `packages/schemas/src/runtime-asset-reference-planning.ts`;
+- `packages/schemas/src/runtime-asset-reference-planning-validation.ts`;
+- `packages/schemas/src/node-graph.ts`;
+- `packages/schemas/src/index.ts`;
+- `packages/node-types/src/runtime-asset-reference-planning-nodes.ts`;
+- `packages/node-types/src/index.ts`;
+- `apps/game-web/src/runtime-asset-reference-planning.ts`;
+- `apps/game-web/src/runtime-client-shell.ts`;
+- `apps/game-web/src/http-server.ts`;
+- `apps/game-web/src/index.ts`;
+- `tests/smoke/browser-smoke.mjs`;
+- `tests/phase15-runtime-asset-reference-planning.test.mjs`;
+- `scripts/check-workspace-boundaries.mjs`;
+- status-, design- en ops-documentatie.
+
+## Fasebeoordeling
+
+Git-basis klaar: ja.
+
+Server-side klaar: nee.
+
+Fase 15 formeel afgerond: nee.
+
+Fase 16 geimplementeerd: nee.

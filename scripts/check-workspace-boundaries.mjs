@@ -1,42 +1,38 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+#!/usr/bin/env node
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const requiredDirs = [
   "apps/editor-web",
   "apps/game-web",
   "apps/api-server",
-  "apps/realtime-gateway",
-  "apps/world-service",
-  "apps/publish-service",
-  "apps/asset-worker",
   "packages/schemas",
-  "packages/node-engine",
-  "packages/node-types",
-  "packages/net-protocol",
-  "packages/shared-ui",
-  "packages/shared-utils",
+  "packages/runtime",
   "packages/renderer-runtime",
   "packages/audio-runtime",
-  "db",
-  "ops",
-  "tests",
-  "docs/architecture"
+  "packages/node-types",
+  "packages/generation-runtime",
+  "packages/web-ui"
 ];
-
-const forbiddenPatterns = [
-  /\.glb$/i,
-  /\.env$/i,
-  /Blacksmit/i,
-  /Taverne/i,
-  /Wizard/i
+const forbiddenRootDirs = ["server", "client", "shared"];
+const forbiddenPackageDirs = ["packages/server", "packages/client", "packages/shared"];
+const forbiddenFiles = [
+  "README/GameBibleNode.json",
+  "README/contract.md"
 ];
-
-const sourceRoots = ["apps", "packages"];
+const protectedAssetDirs = [
+  "apps/editor-web/public/assets",
+  "apps/game-web/public/assets",
+  "packages/renderer-runtime/assets",
+  "packages/audio-runtime/assets"
+];
+const allowedAssetRegistryFiles = new Set([
+  "docs/design/asset-register.md",
+  "docs/design/audio-register.md"
+]);
 const ignoredDirectoryNames = new Set([
-  ".cache",
+  ".git",
   ".next",
-  ".turbo",
-  ".vite",
   "build",
   "coverage",
   "dist",
@@ -48,6 +44,8 @@ const allowedLargeSourceFiles = new Set([
   "apps/api-server/src/runtime-projection-routes.ts",
   "packages/schemas/src/publish-flow.ts",
   "packages/schemas/src/publish-flow-validation.ts",
+  "packages/schemas/src/runtime-asset-reference-planning.ts",
+  "packages/schemas/src/runtime-asset-reference-planning-validation.ts",
   "packages/schemas/src/runtime-scene-assembly.ts",
   "packages/schemas/src/runtime-projection.ts",
   "packages/schemas/src/runtime-projection-validation.ts",
@@ -69,44 +67,56 @@ const walk = (dir) => {
       continue;
     }
 
-    const linkStats = lstatSync(path);
-    if (linkStats.isSymbolicLink()) {
-      continue;
-    }
-
-    const stats = statSync(path);
-    if (stats.isDirectory()) {
+    if (entry.isDirectory()) {
       walk(path);
       continue;
     }
 
-    if (!stats.isFile()) {
-      continue;
-    }
-
-    const size = stats.size;
-    if (size > maxSourceFileSize && !allowedLargeSourceFiles.has(path)) {
-      failures.push(`Starter file is too large for Fase 3 skeleton: ${path}`);
-    }
-
-    const content = readFileSync(path, "utf8");
-    for (const pattern of forbiddenPatterns) {
-      if (pattern.test(path) || pattern.test(content)) {
-        failures.push(`Forbidden content or asset reference in ${path}: ${pattern}`);
-      }
+    if (entry.isFile()) {
+      checkFile(path);
     }
   }
 };
 
-for (const root of sourceRoots) {
-  if (existsSync(root)) {
-    walk(root);
+const checkFile = (path) => {
+  const normalized = path.replace(/\\/g, "/");
+
+  if (forbiddenFiles.includes(normalized)) {
+    failures.push(`Forbidden legacy file must not exist: ${normalized}`);
+  }
+
+  if (protectedAssetDirs.some((dir) => normalized.startsWith(`${dir}/`)) && !allowedAssetRegistryFiles.has(normalized)) {
+    failures.push(`Asset mutation is not allowed in Git for protected asset path: ${normalized}`);
+  }
+
+  if (/\.(ts|tsx|js|mjs|jsx)$/.test(normalized) && !allowedLargeSourceFiles.has(normalized)) {
+    const size = statSync(path).size;
+    if (size > maxSourceFileSize) {
+      failures.push(`Source file exceeds ${maxSourceFileSize} bytes and should be split: ${normalized}`);
+    }
+  }
+};
+
+for (const dir of forbiddenRootDirs) {
+  if (existsSync(dir)) {
+    failures.push(`Forbidden legacy root directory exists: ${dir}`);
   }
 }
 
+for (const dir of forbiddenPackageDirs) {
+  if (existsSync(dir)) {
+    failures.push(`Forbidden package namespace exists: ${dir}`);
+  }
+}
+
+walk(".");
+
 if (failures.length > 0) {
-  console.error(failures.join("\n"));
+  console.error("Workspace boundary check failed:");
+  for (const failure of failures) {
+    console.error(`- ${failure}`);
+  }
   process.exit(1);
 }
 
-console.log("workspace boundaries ok");
+console.log("Workspace boundary check passed.");

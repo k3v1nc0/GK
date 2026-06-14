@@ -4,7 +4,7 @@
 
 Fase 2 serverfundering is grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
 
-Fase 1 t/m Fase 14 zijn afgerond.
+Fase 1 t/m Fase 14 zijn afgerond. Fase 15 Runtime Asset Reference Planning Core is geopend met Git-basis op `main`; server-side verificatie door Codex/Claude is nog nodig.
 
 Afgeronde server-side basis:
 
@@ -21,7 +21,7 @@ Afgeronde server-side basis:
 
 Fase 14 Projection-driven Scene Assembly Core is server-side groen bevestigd en formeel afgerond via commit `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`).
 
-Fase 15 is nog niet geopend of geimplementeerd.
+Fase 15 is geopend maar nog niet server-side bevestigd. Fase 16 is nog niet geopend of geimplementeerd.
 
 ## Vast server-verificatie runbook
 
@@ -32,10 +32,10 @@ Gebruik `docs/ops/server-verification-runbook.md` als vaste startplek voor Codex
 - GK Code Copiloot beheert in Git alleen blijvende scripts, templates, docs en checks.
 - Codex voert serverwerk buiten Git uit: OS, users, rechten, MySQL, Redis, Nginx, systemd, secrets, builds, runtime checks en lokale scans.
 - Echte secrets, credentials, tokens, private keys en serverwaarden mogen niet in Git.
-- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Game`.
+- Concrete gamecontent blijft buiten runtimecode en loopt via `Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game`.
 - Runtimecode mag alleen generieke engine-capabilities bevatten.
 - Browser-smokes mogen geen GameBible muteren, geen assets uploaden en geen dummy content invoeren.
-- Fase 14 maakt alleen de projection-driven scene assembly metadata-basis en bouwt geen renderer, asset-loader, gameplay, HUD/minimap runtime of audio playback.
+- Fase 15 maakt alleen de runtime asset-reference planning metadata-basis en bouwt geen asset-loader, renderer, gameplay, HUD/minimap runtime of audio playback.
 
 ## Bevestigde paden
 
@@ -78,89 +78,54 @@ Game-web service env:
 - `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` voor local browser-smoke;
 - `GK_GAME_FRONT_DOOR_URL=https://gk-k3v1nc0.duckdns.org/game/` voor de bevestigde Apache/front-door route.
 
-## Fase 13 server-side status
+## Fase 15 server-side status
 
-Fase 13 Runtime Render Surface Core is server-side afgerond en klaar.
+Fase 15 Runtime Asset Reference Planning Core is geopend en heeft een Git-basis. Server-side verificatie is nog open.
 
-Server-side bevestigd:
+Fase 15 voegt alleen runtime asset-reference planning metadata/contracts toe:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK;
-- `pnpm lint`: OK;
-- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled: OK;
-- Node 22 process check via `/opt/gk/node-v22/bin/node`: OK;
-- local route-smokes op `127.0.0.1:3003`: OK;
-- Apache/front-door smokes: OK;
-- `pnpm smoke:browser:game`: OK;
-- `pnpm smoke:browser:editor`: OK;
-- `pnpm smoke:browser`: OK;
-- runtime shell marker: OK;
-- render surface marker: OK;
-- safe empty render state: OK;
-- no editor/admin route usage: OK;
-- no editor draft/candidate leakage: OK;
-- no GLB loading: OK;
-- no asset load requests: OK;
-- no concrete gamecontent: OK;
-- no full 3D renderer: OK;
-- no projection-driven scene assembly: OK;
-- no gameplay/movement/combat/audio playback: OK;
-- no hardcoded HUD/minimap/world/camera/light/audio values: OK;
-- no asset mutation: OK;
-- worktree schoon: OK;
-- blockers: geen.
-
-## Fase 14 server-side status
-
-Fase 14 Projection-driven Scene Assembly Core is server-side afgerond en klaar.
-
-Fase 14 voegde alleen projection-driven scene assembly metadata/scene-plan contracts toe:
-
-- runtime scene assembly schemas en validators;
-- runtime scene assembly socket/node contracts;
-- game-web scene assembly helper;
-- scene assembly statuszone in de runtime shell;
-- marker `data-runtime-scene-assembly="phase-14"`;
-- empty scene plan output;
-- browser-smoke scene assembly checks;
+- runtime asset reference planning schemas en validators;
+- runtime asset reference socket/node contracts;
+- game-web asset reference planning helper;
+- asset reference planning statuszone in de runtime shell;
+- marker `data-runtime-asset-reference-planning="phase-15"`;
+- empty asset reference plan output;
+- browser-smoke asset reference planning checks;
 - tests en docs.
 
-Server-side bevestigd:
+Nog open voor Codex/Claude:
 
-- `pnpm build`: OK;
-- `pnpm typecheck`: OK;
-- `pnpm test`: OK;
-- `pnpm lint`: OK;
-- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled: OK;
-- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
-- local route-smokes: OK;
-- Apache/front-door smokes: OK;
-- `pnpm smoke:browser:game`: OK;
-- `pnpm smoke:browser:editor`: OK;
-- `pnpm smoke:browser`: OK;
-- scene assembly marker: OK;
-- empty scene plan: OK;
-- no editor/admin route usage: OK;
-- no draft leakage: OK;
-- no GLB/texture/audio loading: OK;
-- no asset load requests: OK;
-- no definitive asset role mapping: OK;
-- no concrete content: OK;
-- no renderer draw calls: OK;
-- no gameplay/movement/combat/audio playback: OK;
-- no hardcoded runtime values: OK;
-- no asset mutation: OK;
-- worktree schoon: OK;
-- blockers: geen.
+- `pnpm build`;
+- `pnpm typecheck`;
+- `pnpm test`;
+- `pnpm lint`;
+- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled bevestigen;
+- local route-smokes;
+- Apache/front-door smokes;
+- `pnpm smoke:browser:game`;
+- `pnpm smoke:browser:editor`;
+- `pnpm smoke:browser`;
+- asset reference planning marker bevestigen;
+- empty asset reference plan bevestigen;
+- no editor/admin route usage;
+- no draft leakage;
+- no GLB/texture/audio loading;
+- no asset byte fetch;
+- no asset load requests;
+- no definitive asset role mapping;
+- no concrete content;
+- no renderer draw calls;
+- no gameplay/movement/combat/audio playback;
+- no hardcoded runtime values;
+- no asset mutation;
+- worktree schoon;
+- blockers geen.
 
-De server-side fix commit was `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`). Die commit paste alleen `scripts/check-workspace-boundaries.mjs` aan om `packages/schemas/src/runtime-scene-assembly.ts` toe te staan als groot bronbestand. Er was geen inhoudelijke Fase 14 runtimewijziging.
+Fase 15 bouwt niet:
 
-Fase 14 bouwde niet:
-
-- volledige 3D renderer;
 - asset-loader;
 - GLB/texture/audio loading;
+- asset byte fetch;
 - definitive asset role mapping;
 - concrete gamewereld;
 - dummy world, NPC, quest of economy;
@@ -170,7 +135,7 @@ Fase 14 bouwde niet:
 - HUD/minimap runtime layout;
 - hardcoded world/camera/light/minimap/HUD/audio values;
 - assetmutatie;
-- Fase 15.
+- Fase 16.
 
 ## Webserver policy
 
@@ -183,7 +148,7 @@ Kevin heeft bevestigd:
 - Nginx mag niet live worden geactiveerd op poort 80/443.
 - Er komt geen volledige migratie naar Nginx zonder aparte migratiefase.
 
-Fase 14 verandert deze policy niet.
+Fase 15 verandert deze policy niet.
 
 ## Browser-smoke tooling
 
@@ -193,15 +158,15 @@ Fase 14 verandert deze policy niet.
 - `pnpm smoke:browser:editor`;
 - `pnpm smoke:browser:game`.
 
-Fase 14 game smoke gebruikt:
+Fase 15 game smoke gebruikt:
 
 - `GK_GAME_FRONT_DOOR_URL` als volledige URL wanneer Apache/front-door naar game-web routeert;
 - anders `GK_GAME_WEB_ORIGIN` plus `GK_GAME_SHELL_PATH`, default `/game/`;
 - voor local smoke mag `GK_GAME_WEB_ORIGIN=http://127.0.0.1:3003` worden gezet.
 
-Fase 14 browser-smoke moet `runtime shell: ok`, `render surface: ok`, `scene assembly: ok`, `asset load requests: 0`, console errors `0` en page errors `0` bevestigen.
+Fase 15 browser-smoke moet `runtime shell: ok`, `render surface: ok`, `scene assembly: ok`, `asset reference planning: ok`, `asset load requests: 0`, console errors `0` en page errors `0` bevestigen.
 
-Voor de formele Fase 14 afronding zijn deze browser-smoke checks groen bevestigd.
+Voor de formele Fase 15 afronding zijn deze browser-smoke checks nog niet server-side bevestigd.
 
 ## Codex/Claude serverchecks
 
@@ -210,11 +175,11 @@ Afgerond:
 1. Runtime directories, user/group, env, MySQL, Redis, Apache-hardening en systemd templates server-side gevalideerd.
 2. Fase 7 t/m Fase 14 server-side afgerond volgens de fase-README's en dit layoutdocument.
 
-Gebruik voor toekomstige server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
+Gebruik voor Fase 15 server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
 Nog open voor latere fases:
 
-- Fase 15 alleen openen wanneer Kevin dat expliciet doet;
+- Fase 15 server-side verificatie en docs-final;
 - asset loading;
 - game runtime renderer/gameplay;
 - realtime gateway;

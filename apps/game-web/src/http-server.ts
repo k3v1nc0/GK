@@ -6,6 +6,10 @@ import {
   runtimeClientShellHttpContract
 } from "./runtime-client-shell.js";
 import {
+  createRuntimeAssetReferencePlanningShellState,
+  runtimeAssetReferencePlanningClientContract
+} from "./runtime-asset-reference-planning.js";
+import {
   createRuntimeRenderSurfaceShellState,
   runtimeRenderSurfaceClientContract
 } from "./runtime-render-surface.js";
@@ -37,11 +41,16 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       runtimeClientShell: "phase-12",
       runtimeRenderSurface: "phase-13",
       runtimeSceneAssembly: "phase-14",
+      runtimeAssetReferencePlanning: "phase-15",
       createsRenderSurface: true,
       consumesRuntimeProjectionRecords: true,
       producesScenePlan: true,
+      consumesRuntimeScenePlan: true,
+      producesAssetReferencePlan: true,
+      usesAssetMetadataOnly: true,
       implements3DRenderer: false,
       loadsAssets: false,
+      fetchesAssetBytes: false,
       resolvesFinalAssetRoles: false,
       rendersConcreteWorld: false,
       rendersScene: false,
@@ -79,7 +88,9 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       renderSurface: createRuntimeRenderSurfaceShellState(),
       renderSurfaceContract: runtimeRenderSurfaceClientContract,
       sceneAssembly: createRuntimeSceneAssemblyShellState(),
-      sceneAssemblyContract: runtimeSceneAssemblyClientContract
+      sceneAssemblyContract: runtimeSceneAssemblyClientContract,
+      assetReferencePlanning: createRuntimeAssetReferencePlanningShellState(),
+      assetReferencePlanningContract: runtimeAssetReferencePlanningClientContract
     });
     return;
   }
