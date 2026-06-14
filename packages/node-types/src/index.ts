@@ -91,7 +91,7 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   },
   {
     type: "gk.value.number",
-    title: "String Value",
+    title: "Number Value",
     version: 1,
     scope: "engine-capability",
     sockets: [
