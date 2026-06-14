@@ -75,7 +75,8 @@ Stopregel: als een concrete inhoudswaarde nog geen node type, node field, valida
 | Fase 15 Runtime Asset Reference Planning Core | Server-side afgerond en klaar |
 | Fase 16 Fundering en herbaseline | Afgerond |
 | Fase 17 Runtime Game Core | Server-side afgerond en klaar |
-| Fase 18 Generieke quest- en dialoogslice | Git-basis geopend; server-side verificatie open |
+| Fase 18 Generieke quest- en dialoogslice | Server-side afgerond en klaar |
+| Fase 19 Quest authoring publish bridge | Git-basis geopend; server-side verificatie open |
 
 ## Fail-fast regels
 
@@ -95,6 +96,7 @@ Stop direct wanneer:
 - runtime asset reference planning editor/admin routes, raw draft data, concrete gamecontent, asset loads, asset byte fetch, final role mapping, renderer draw calls, gameplay/audio playback, hardcoded runtime values of assetmutatie zou bevatten;
 - Runtime Game Core concrete gamecontent, dummy world/NPC/quest/fallback model, asset byte loading, renderer draw calls, movement, combat, economy, multiplayer or audio playback zou bevatten;
 - Runtime Quest Slice concrete questcontent, runtime fallback content, dummy published data, asset byte loading, final asset-role mapping, combat, economy, movement, multiplayer or audio playback zou bevatten;
+- Quest Authoring Publish Bridge runtime fallbackcontent, hardcoded runtimecontent, dummy published data, asset byte loading, asset copy/mutation, final asset-role resolving of directe runtime output zou bevatten;
 - checks niet kunnen draaien en het risico voor direct op `main` te hoog is.
 
 Stoppen is correct gedrag. Niet improviseren.
@@ -162,10 +164,34 @@ Regels:
 - audio files zijn asset-library candidates;
 - HUD, icon en minimap marker bestanden zijn UI/image assets, geen definitieve HUD/minimap runtimecontent;
 - ambience, music, SFX en UI audio zijn audio assets, geen definitieve music/ambience/SFX/UI runtimecontent;
-- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation, Fase 17 Runtime Game Core validation en Fase 18 Runtime Quest Slice validation publiceren niets naar Runtime Game;
-- Fase 10 t/m Fase 18 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren tenzij de fase expliciet asset-import of asset-migratie opent;
+- asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation, Fase 17 Runtime Game Core validation, Fase 18 Runtime Quest Slice validation en Fase 19 Quest Authoring validation publiceren niets naar Runtime Game;
+- Fase 10 t/m Fase 19 mogen geen assets toevoegen, wijzigen, verwijderen of kopieren tenzij de fase expliciet asset-import of asset-migratie opent;
 - Fase 15 mag geen GLB, texture, UI image of audio asset laden en mag geen asset bytes fetchen;
-- Fase 18 mag asset-role records zichtbaar blokkeren, maar mag geen asset roles hardcoden of oplossen.
+- Fase 18 mag asset-role records zichtbaar blokkeren, maar mag geen asset roles hardcoden of oplossen;
+- Fase 19 mag asset-role authoring records voorbereiden, maar mag geen asset roles finaliseren, asset bytes laden of dummy assets maken.
+
+## Fase 19 Quest Authoring Publish Bridge gate
+
+Fase 19 is een editor/node-data naar publish/read-model brug.
+
+Fase 19 mag:
+
+- quest/dialogue/objective/interactable/reward/unlock/checkpoint/asset-role node types en fields voorbereiden;
+- concrete contentvelden in editor/node-data mogelijk maken;
+- authoring-node records valideren;
+- normalized runtime projection record references voorbereiden;
+- read-model shape vastleggen met payload in editor/node-data en references in runtime projection.
+
+Fase 19 mag niet:
+
+- Quest 00 of andere concrete questcontent in runtimecode zetten;
+- runtime fallbackcontent maken;
+- dummy published data maken;
+- dummy assets maken;
+- asset bytes laden of assets kopieren/muteren;
+- final asset roles oplossen;
+- Runtime Game output publiceren;
+- combat, economy, movement, multiplayer of audio openen.
 
 ## Open gates voor latere fases
 
@@ -178,6 +204,7 @@ Regels:
 | Camera/lighting/minimap waarden | Zodra runtime publish concrete world presentation nodig heeft |
 | Economywaarden | Zodra money, prices, rewards, merchants, XP of loot nodig zijn |
 | Quest/dialogue/objective/reward data | Zodra een concrete quest speelbaar moet worden |
+| Quest 00 editor/node-data | Zodra Kevin Quest 00 als echte authoring data wil invoeren |
 | Asset loading | Zodra Kevin een expliciete asset-loading/renderer fase opent |
 | Runtime renderer/gameplay client | Zodra een expliciete latere Runtime Game fase wordt geopend |
 | Server/database/runtime status | Zodra een fase migraties, services of runtimechecks vereist zijn |
