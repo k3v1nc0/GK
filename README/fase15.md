@@ -2,9 +2,26 @@
 
 ## Status
 
-Fase 15 Runtime Asset Reference Planning Core is geopend. De Git-basis is toegevoegd op `main`; server-side verificatie door Codex/Claude is nog nodig.
+Fase 15 Runtime Asset Reference Planning Core is server-side groen bevestigd en formeel afgerond op 2026-06-14.
 
-Fase 1 t/m Fase 14 zijn afgerond. Fase 16 is nog niet geopend of geimplementeerd.
+Fase 1 t/m Fase 15 zijn afgerond. Fase 16 Fundering en herbaseline is daarna als documentatie- en roadmapfase verwerkt. Fase 17 Runtime Game Core is nog niet geopend of geimplementeerd.
+
+Server-side bewijs:
+
+- `pnpm build`: groen;
+- `pnpm typecheck`: groen;
+- `pnpm test`: groen;
+- `pnpm lint`: groen;
+- `pnpm smoke:browser:game`: groen;
+- `pnpm smoke:browser:editor`: groen;
+- `pnpm smoke:browser`: groen;
+- lokale route-smokes: groen;
+- Apache/front-door smokes: groen;
+- `gk-api`, `gk-editor-web` en `gk-game-web`: actief en enabled;
+- `GET /health/editor` en `GET /health/game`: groen;
+- game shell en `/game/shell.json`: Fase 15 metadata-only asset reference planning bevestigd;
+- workspace-boundary drift opgelost via commit `b8b4c39f76f1fc778f7af8dd51b3cffdc6d3497d` (`fase 15 fix`);
+- werktree schoon na server-side verificatie.
 
 ## Doel
 
@@ -86,22 +103,22 @@ Safety flags:
 - Fase 15 kiest geen definitive GLB/asset role mapping.
 - Fase 15 maakt geen hardcoded fallback zoals default model, test texture of dummy object.
 
-## Server-side verificatie nog open
+## Server-side verificatie afgerond
 
-Fase 15 is pas klaar na Codex/Claude server-side bevestiging van:
+Fase 15 is afgerond na Codex server-side bevestiging van:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
+- `pnpm build`: groen;
+- `pnpm typecheck`: groen;
+- `pnpm test`: groen;
+- `pnpm lint`: groen;
 - `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled;
-- local route-smokes;
-- Apache/front-door smokes;
-- `pnpm smoke:browser:game`;
-- `pnpm smoke:browser:editor`;
-- `pnpm smoke:browser`;
-- asset reference planning marker;
-- empty asset reference plan;
+- local route-smokes: groen;
+- Apache/front-door smokes: groen;
+- `pnpm smoke:browser:game`: groen;
+- `pnpm smoke:browser:editor`: groen;
+- `pnpm smoke:browser`: groen;
+- asset reference planning marker aanwezig;
+- empty asset reference plan aanwezig;
 - no editor/admin route usage;
 - no draft leakage;
 - no GLB/texture/audio loading;
@@ -142,7 +159,7 @@ Fase 15 is geen asset loader en bouwt niet:
 - editor/admin routes in runtime;
 - assetmutatie;
 - secrets;
-- Fase 16.
+- Fase 16 runtimecode.
 
 ## Bestanden
 
@@ -167,8 +184,10 @@ Toegevoegd of bijgewerkt in de Fase 15 Git-basis:
 
 Git-basis klaar: ja.
 
-Server-side klaar: nee.
+Server-side klaar: ja.
 
-Fase 15 formeel afgerond: nee.
+Fase 15 formeel afgerond: ja.
 
-Fase 16 geimplementeerd: nee.
+Fase 16 herbaseline verwerkt: ja.
+
+Fase 17 geimplementeerd: nee.

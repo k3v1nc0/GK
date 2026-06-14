@@ -2,7 +2,9 @@
 
 ## Status
 
-Gepland. Deze fase mag pas geopend worden nadat Fase 15 Runtime Asset Reference Planning Core server-side groen is bevestigd.
+Afgerond op 2026-06-14. Deze fase is geopend en verwerkt nadat Fase 15 Runtime Asset Reference Planning Core server-side groen is bevestigd.
+
+Fase 17 Runtime Game Core is de volgende geplande fase en is nog niet geopend of geimplementeerd.
 
 ## Bronbasis
 
@@ -23,7 +25,7 @@ De tijdelijke onderzoeksmap `docs/roadmap-research-input` is geen levende roadma
 Maak een harde herbaseline voor de komende speelbare lijn. De repo moet daarna duidelijk onderscheiden tussen:
 
 - afgeronde technische fundering tot en met Fase 15;
-- open server-side verificatie van Fase 15;
+- afgeronde server-side verificatie van Fase 15;
 - geplande speelbare fases vanaf Runtime Game Core;
 - documentatie die alleen onderzoek was en geen live statusclaim mag blijven.
 
@@ -50,25 +52,52 @@ De huidige technische keten is sterk, maar stopt volgens het repo-contract nog v
 
 ## Verplichte gates
 
-- Fase 15 server-side verificatie is groen of de fase blijft geblokkeerd.
+- Fase 15 server-side verificatie is groen bevestigd.
 - De keten blijft `Database > Editor/Node-system > Publish > Runtime Game`.
 - Engine-capabilities blijven gescheiden van concrete gamecontent.
 - Repo-documentatie, GameBible, README en fasebestanden spreken elkaar niet stilzwijgend tegen.
 
+## Uitgevoerd
+
+- Fase 15 status en blockers zijn hard bevestigd op groen server-side bewijs.
+- Fase 15 is formeel afgesloten in de statusdocumentatie.
+- De canonieke speelbare fasevolgorde staat in `docs/fases`.
+- Oude live toekomstfasebestanden `README/fase16.md`, `README/fase17.md` en `README/fase18.md` zijn niet aanwezig als live roadmapbron.
+- De tijdelijke onderzoeksmap `docs/roadmap-research-input` is geen levende roadmapbron.
+- Fase 17 Runtime Game Core blijft gepland en is nog niet geopend.
+
+## Serverbewijs
+
+Fase 15 is server-side groen bevestigd met:
+
+- `pnpm build`: groen;
+- `pnpm typecheck`: groen;
+- `pnpm test`: groen;
+- `pnpm lint`: groen;
+- browser-smokes voor game en editor: groen;
+- local route-smokes: groen;
+- Apache/front-door smokes: groen;
+- Fase 15 asset-reference planning marker en empty plan: groen;
+- geen asset load requests, renderer draw calls, draft leakage of editor/admin route usage;
+- workspace-boundary drift opgelost via commit `b8b4c39f76f1fc778f7af8dd51b3cffdc6d3497d` (`fase 15 fix`);
+- werktree schoon na server-side verificatie.
+
 ## Deliverables
 
-- `docs/fases/fase-16-fundering-en-herbaseline.md`.
-- Verwijderde oude/live roadmapbestanden die toekomstige faseopening blokkeren.
-- Heldere lijst met open blockers voor de volgende fase.
-- Geen codewijzigingen.
+- `docs/fases/fase-16-fundering-en-herbaseline.md`: aanwezig en afgerond.
+- Fase 17-21 roadmapbestanden in `docs/fases`: aanwezig als geplande lijn.
+- Oude/live roadmapbestanden die toekomstige faseopening blokkeren: niet aanwezig als `README/fase16.md`, `README/fase17.md` of `README/fase18.md`.
+- Heldere lijst met open blockers voor de volgende fase: Fase 17 moet nog expliciet geopend worden en mag geen concrete content hard-coden.
+- Geen codewijzigingen voor runtimegedrag.
 
 ## Acceptatie
 
-- Fase 15 is niet per ongeluk als afgerond gemarkeerd.
+- Fase 15 is formeel als afgerond gemarkeerd op basis van server-side groen bewijs.
 - Fase 16-18 oude roadmapbestanden staan niet meer als live toekomstfases in `README/`.
 - Nieuwe fasebestanden staan in `docs/fases`.
 - Er is geen concrete gamecontent toegevoegd of verzonnen.
 - Er is geen runtimegedrag gewijzigd.
+- Fase 17 is nog niet geopend.
 
 ## Prompt 1 - GK Code Copiloot
 
