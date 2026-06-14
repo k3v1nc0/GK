@@ -56,7 +56,15 @@ export const NODE_VALUE_SOCKET_TYPES = [
   "runtime.asset.reference.plan.reference",
   "runtime.asset.reference.descriptor.reference",
   "runtime.asset.reference.candidate.reference",
-  "runtime.asset.reference.safety.reference"
+  "runtime.asset.reference.safety.reference",
+  "runtime.game.source.reference",
+  "runtime.game.status.reference",
+  "runtime.game.boot.reference",
+  "runtime.game.session.reference",
+  "runtime.game.input.reference",
+  "runtime.game.save-state.reference",
+  "runtime.game.diagnostics.reference",
+  "runtime.game.safety.reference"
 ] as const;
 
 export type NodeValueSocketType = (typeof NODE_VALUE_SOCKET_TYPES)[number];

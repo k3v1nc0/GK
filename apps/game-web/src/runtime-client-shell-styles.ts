@@ -58,7 +58,9 @@ code {
 }
 .panel,
 .render-surface,
-.scene-assembly {
+.scene-assembly,
+.asset-reference-planning,
+.runtime-game-core {
   min-width: 0;
   border: 1px solid #d9dde3;
   border-radius: 8px;
@@ -70,11 +72,15 @@ code {
   padding-left: 18px;
 }
 .render-surface,
-.scene-assembly {
+.scene-assembly,
+.asset-reference-planning,
+.runtime-game-core {
   margin-top: 12px;
 }
 .render-header,
-.scene-assembly-header {
+.scene-assembly-header,
+.asset-reference-header,
+.runtime-game-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -106,24 +112,32 @@ code {
   padding: 16px;
   text-align: center;
 }
-.scene-plan-panel {
+.scene-plan-panel,
+.asset-reference-plan-panel,
+.runtime-game-panel {
   border: 1px solid #d9dde3;
   border-radius: 6px;
   padding: 12px;
   background: #f6f7f8;
 }
-.scene-plan-panel p {
+.scene-plan-panel p,
+.asset-reference-plan-panel p,
+.runtime-game-panel p {
   margin: 0;
 }
 .render-capability-grid,
-.scene-assembly-grid {
+.scene-assembly-grid,
+.asset-reference-grid,
+.runtime-game-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
 .render-capability-grid span,
-.scene-assembly-grid span {
+.scene-assembly-grid span,
+.asset-reference-grid span,
+.runtime-game-grid span {
   min-width: 0;
   border: 1px solid #d9dde3;
   border-radius: 6px;
@@ -152,13 +166,19 @@ code {
   .runtime-grid,
   .render-header,
   .scene-assembly-header,
+  .asset-reference-header,
+  .runtime-game-header,
   .render-capability-grid,
-  .scene-assembly-grid {
+  .scene-assembly-grid,
+  .asset-reference-grid,
+  .runtime-game-grid {
     display: block;
   }
   .panel,
   .render-capability-grid span,
-  .scene-assembly-grid span {
+  .scene-assembly-grid span,
+  .asset-reference-grid span,
+  .runtime-game-grid span {
     margin-top: 12px;
   }
   .status-pill {

@@ -47,10 +47,13 @@ const maxSourceFileSize = 13_000;
 const allowedLargeSourceFiles = new Set([
   "apps/api-server/src/editor-publish-routes.ts",
   "apps/api-server/src/runtime-projection-routes.ts",
+  "apps/game-web/src/runtime-client-shell.ts",
   "packages/schemas/src/publish-flow.ts",
   "packages/schemas/src/publish-flow-validation.ts",
   "packages/schemas/src/runtime-asset-reference-planning.ts",
   "packages/schemas/src/runtime-asset-reference-planning-validation.ts",
+  "packages/schemas/src/runtime-game-core.ts",
+  "packages/schemas/src/runtime-game-core-validation.ts",
   "packages/schemas/src/runtime-scene-assembly.ts",
   "packages/schemas/src/runtime-projection.ts",
   "packages/schemas/src/runtime-projection-validation.ts",
@@ -60,6 +63,7 @@ const allowedLargeSourceFiles = new Set([
   "tests/phase11-runtime-projection.test.mjs",
   "tests/phase14-runtime-scene-assembly.test.mjs",
   "tests/phase15-runtime-asset-reference-planning.test.mjs",
+  "tests/phase17-runtime-game-core.test.mjs",
   "tests/smoke/browser-smoke.mjs"
 ]);
 const failures = [];

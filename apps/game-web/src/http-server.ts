@@ -10,6 +10,10 @@ import {
   runtimeAssetReferencePlanningClientContract
 } from "./runtime-asset-reference-planning.js";
 import {
+  createRuntimeGameCoreShellState,
+  runtimeGameCoreClientContract
+} from "./runtime-game-core.js";
+import {
   createRuntimeRenderSurfaceShellState,
   runtimeRenderSurfaceClientContract
 } from "./runtime-render-surface.js";
@@ -42,11 +46,16 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       runtimeRenderSurface: "phase-13",
       runtimeSceneAssembly: "phase-14",
       runtimeAssetReferencePlanning: "phase-15",
+      runtimeGameCore: "phase-17",
       createsRenderSurface: true,
       consumesRuntimeProjectionRecords: true,
       producesScenePlan: true,
       consumesRuntimeScenePlan: true,
       producesAssetReferencePlan: true,
+      consumesRuntimeAssetReferencePlan: true,
+      consumesPublishedReadModel: true,
+      bootsRuntimeGame: true,
+      blockedByMissingPublishedData: true,
       usesAssetMetadataOnly: true,
       implements3DRenderer: false,
       loadsAssets: false,
@@ -90,7 +99,9 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       sceneAssembly: createRuntimeSceneAssemblyShellState(),
       sceneAssemblyContract: runtimeSceneAssemblyClientContract,
       assetReferencePlanning: createRuntimeAssetReferencePlanningShellState(),
-      assetReferencePlanningContract: runtimeAssetReferencePlanningClientContract
+      assetReferencePlanningContract: runtimeAssetReferencePlanningClientContract,
+      runtimeGameCore: createRuntimeGameCoreShellState(),
+      runtimeGameCoreContract: runtimeGameCoreClientContract
     });
     return;
   }

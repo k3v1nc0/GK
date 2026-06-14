@@ -11,6 +11,10 @@ import {
   runtimeAssetReferencePlanningClientContract
 } from "./runtime-asset-reference-planning.js";
 import {
+  renderRuntimeGameCoreSection,
+  runtimeGameCoreClientContract
+} from "./runtime-game-core.js";
+import {
   renderRuntimeRenderSurfaceBootScript,
   renderRuntimeRenderSurfaceSection,
   runtimeRenderSurfaceClientContract
@@ -40,6 +44,7 @@ export interface RuntimeClientShellHttpContract {
   readonly renderSurface: typeof runtimeRenderSurfaceClientContract;
   readonly sceneAssembly: typeof runtimeSceneAssemblyClientContract;
   readonly assetReferencePlanning: typeof runtimeAssetReferencePlanningClientContract;
+  readonly runtimeGameCore: typeof runtimeGameCoreClientContract;
 }
 
 export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
@@ -56,7 +61,8 @@ export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
   mutatesAssets: false,
   renderSurface: runtimeRenderSurfaceClientContract,
   sceneAssembly: runtimeSceneAssemblyClientContract,
-  assetReferencePlanning: runtimeAssetReferencePlanningClientContract
+  assetReferencePlanning: runtimeAssetReferencePlanningClientContract,
+  runtimeGameCore: runtimeGameCoreClientContract
 };
 
 export function createRuntimeClientShellResponseModel(route: RuntimeClientShellModel["route"] = "/game/"): RuntimeClientShellModel {
@@ -72,6 +78,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
   const renderSurface = renderRuntimeRenderSurfaceSection();
   const sceneAssembly = renderRuntimeSceneAssemblySection();
   const assetReferencePlanning = renderRuntimeAssetReferencePlanningSection();
+  const runtimeGameCore = renderRuntimeGameCoreSection();
 
   return `<!doctype html>
 <html lang="nl">
@@ -109,6 +116,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     ${renderSurface}
     ${sceneAssembly}
     ${assetReferencePlanning}
+    ${runtimeGameCore}
 
     <section class="panel" aria-label="Runtime projection read-only routes" style="margin-top:12px">
       <h2>Read-only projection routes</h2>
