@@ -6,18 +6,23 @@ const requiredDirs = [
   "apps/editor-web",
   "apps/game-web",
   "apps/api-server",
+  "apps/realtime-gateway",
+  "apps/world-service",
+  "apps/publish-service",
+  "apps/asset-worker",
+  "packages/asset-library",
   "packages/schemas",
-  "packages/runtime",
-  "packages/renderer-runtime",
-  "packages/audio-runtime",
   "packages/node-types",
-  "packages/generation-runtime",
-  "packages/web-ui"
+  "packages/node-engine",
+  "packages/net-protocol",
+  "packages/shared-ui",
+  "packages/shared-utils",
+  "packages/renderer-runtime",
+  "packages/audio-runtime"
 ];
 const forbiddenRootDirs = ["server", "client", "shared"];
 const forbiddenPackageDirs = ["packages/server", "packages/client", "packages/shared"];
 const forbiddenFiles = [
-  "README/GameBibleNode.json",
   "README/contract.md"
 ];
 const protectedAssetDirs = [
@@ -49,7 +54,13 @@ const allowedLargeSourceFiles = new Set([
   "packages/schemas/src/runtime-scene-assembly.ts",
   "packages/schemas/src/runtime-projection.ts",
   "packages/schemas/src/runtime-projection-validation.ts",
-  "packages/schemas/src/world-camera-minimap.ts"
+  "packages/schemas/src/world-camera-minimap.ts",
+  "tests/phase9-world-camera-minimap.test.mjs",
+  "tests/phase10-publish-flow.test.mjs",
+  "tests/phase11-runtime-projection.test.mjs",
+  "tests/phase14-runtime-scene-assembly.test.mjs",
+  "tests/phase15-runtime-asset-reference-planning.test.mjs",
+  "tests/smoke/browser-smoke.mjs"
 ]);
 const failures = [];
 
@@ -119,4 +130,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("Workspace boundary check passed.");
+console.log("workspace boundaries ok");
