@@ -21,6 +21,7 @@ import {
 import { renderRuntimeClientShellHtml } from "../apps/game-web/src/runtime-client-shell.ts";
 import { handleGameRequest } from "../apps/game-web/src/http-server.ts";
 
+const FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN = /Quest 00|Humble Ash Staff|Spark|Empathy Casting|Mentor failure|The Candle|Fixture Quest Title|Fixture Reward Name|Fixture Unlock Name|Fixture Dialogue Line/i;
 const nodeTypes = new Set(getCoreGraphNodeTypes().map((node) => node.type));
 
 test("Fase 15 schema package exports runtime asset reference planning contracts", () => {
@@ -180,8 +181,11 @@ test("game shell renders runtime asset reference planning marker and empty asset
     assert.doesNotMatch(output, /\/auth\/editor/);
     assert.doesNotMatch(output, /\/assets\//);
     assert.doesNotMatch(output, /\.glb|\.gltf|\.mp3|\.wav|\.ogg/i);
-    assert.doesNotMatch(output, /NPC|quest|economy|loot/i);
   }
+
+  assert.doesNotMatch(section, /NPC|quest|economy|loot/i);
+  assert.doesNotMatch(html, /NPC|economy|loot/i);
+  assert.doesNotMatch(html, FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN);
 });
 
 test("runtime asset reference planning client contract stays metadata-only and contentless", () => {

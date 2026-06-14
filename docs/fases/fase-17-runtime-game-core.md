@@ -2,7 +2,7 @@
 
 ## Status
 
-Geopend en Git-basis toegevoegd op `main`. Server-side verificatie staat nog open; deze fase is dus nog niet formeel afgerond.
+Formeel afgerond. Server-side verificatie is groen bevestigd op HEAD `8ebbcf4`.
 
 Fase 16 Fundering en herbaseline is afgerond. Fase 15 Runtime Asset Reference Planning Core blijft het directe upstream-contract voor Fase 17.
 
@@ -88,120 +88,46 @@ Dat betekent:
 - input is een intent-adapter zonder movement/combat binding;
 - camera/HUD/audio blijven adapterpunten die published data vereisen.
 
+## Server-side verificatie
+
+Groen bevestigd:
+
+- `git status --short` voor en na: schoon;
+- `git pull --ff-only`: up to date;
+- `pnpm lint`: groen;
+- `pnpm test`: groen;
+- `pnpm build`: groen;
+- `pnpm typecheck`: groen;
+- lokale `GET /health/game`: groen;
+- lokale `GET /game/`: groen;
+- lokale `GET /game/shell.json`: groen;
+- Apache/front-door game route-smokes: groen;
+- `pnpm smoke:browser:game`: groen;
+- `pnpm smoke:browser`: groen.
+
+Runtime bewijs:
+
+- `/health/game` geeft `runtimeGameCore:"phase-17"`, `bootsRuntimeGame:true`, `consumesPublishedReadModel:true`, `consumesRuntimeAssetReferencePlan:true` en `blockedByMissingPublishedData:true`;
+- `/game/` bevat `data-runtime-game-core="phase-17"`;
+- safe blocked diagnostics zijn aanwezig: `published_manifest_missing`, `published_world_read_model_missing`, `runtime_asset_reference_plan_empty`;
+- `/game/shell.json` bevat `runtimeGameCore` en `runtimeGameCoreContract`;
+- browser-smoke via front-door had `asset load requests: 0`, `console errors count: 0`, `page errors count: 0`.
+
 ## Acceptatie
 
-Nog te bevestigen server-side:
+Bevestigd:
 
-- Runtime kan starten vanuit alleen published data.
-- Geen hard-coded world/camera/light/HUD/minimap/audio/contentwaarden.
-- Save/load basis werkt of ontbreekt expliciet als blocker.
-- Fouten door ontbrekende data zijn zichtbaar en blokkeren veilig.
-- Geen quest/combat/economy/multiplayer is per ongeluk gebouwd.
-- Browser-smoke ziet de Fase 17 marker en geen editor/draft/asset-byte/render leaks.
-
-## Server-side verificatie open
-
-Nog te draaien op de servercheckout:
-
-- `pnpm lint`
-- `pnpm test`
-- `pnpm build`
-- `pnpm typecheck`
-- lokale route-smokes voor `/health/game`, `/game/` en `/game/shell.json`
-- Apache/front-door route-smokes
-- `pnpm smoke:browser:game`
-- `pnpm smoke:browser`
-
-## Prompt 1 - GK Code Copiloot
-
-```text
-Je bent GK Code Copiloot in builder mode. Werk GitHub-only op main en gebruik de actuele repository als waarheid.
-
-DOEL
-Rond Fase 17 - Runtime Game Core af. Controleer de bestaande Git-basis op main en corrigeer alleen structurele issues die de Fase 17 gates blokkeren.
-
-VERPLICHTE BRONNEN
-- docs/fases/fase-16-fundering-en-herbaseline.md
-- docs/fases/fase-17-runtime-game-core.md
-- docs/architecture/runtime-game-core.md
-- README/current-phase.md
-- docs/design/phase-plan/current-phase.md
-- README/fase15.md
-- README/node-system-super-dynamic-contract.md
-- README/hard-facts-to-node-panels.md
-- packages/schemas/src/runtime-game-core.ts
-- packages/schemas/src/runtime-game-core-validation.ts
-- packages/node-types/src/runtime-game-core-nodes.ts
-- apps/game-web/src/runtime-game-core.ts
-- apps/game-web/src/http-server.ts
-- apps/game-web/src/runtime-client-shell.ts
-- tests/phase17-runtime-game-core.test.mjs
-- tests/smoke/runtime-game-core-smoke.mjs
-
-WERKWIJZE
-1. Controleer eerst dat Fase 16 klaar is en Fase 15 server-side groen blijft.
-2. Controleer dat Fase 17 alleen published/read-model-data en Fase 15 asset-reference metadata consumeert.
-3. Houd editor/draft en runtime strikt gescheiden.
-4. Voeg geen concrete gamecontent, dummy world, dummy NPC, dummy quest of fallback model toe.
-5. Voeg geen asset byte loading, renderer draw calls, quest/combat/economy/multiplayer of hardcoded runtime values toe.
-6. Corrigeer alleen echte gate-fouten en update docs/status alleen als server-side bewijs dat rechtvaardigt.
-
-ACCEPTATIE
 - Runtime Game Core marker in game shell.
-- /game/shell.json en /health/game expose Fase 17 status.
+- `/game/shell.json` en `/health/game` expose Fase 17 status.
 - Safe blocked diagnostics wanneer required published data ontbreekt.
 - Ready-state alleen mogelijk uit published read-model + metadata asset plan.
 - Geen draft/editor route usage.
 - Geen hard-coded contentwaarden.
 - Geen quest/combat/economy/multiplayer buiten expliciete latere fases.
-```
+- Save/load basis is runtime-state only: `saveLoad.status:"contract-ready"` en `savesRuntimeStateOnly:true`.
 
-## Prompt 2 - Server-side verificatie
+## Afsluitoordeel
 
-```text
-Je voert server-side verificatie uit voor Fase 17 - Runtime Game Core op de servercheckout.
+Fase 17 mag formeel afgesloten blijven. De live runtime boot is veilig blocked door ontbrekende published data; dat is voor Fase 17 valide eindgedrag en geen blocker voor Fase 17 zelf.
 
-START
-- Pull eerst `main`.
-- Controleer `git status --short` voor en na je werk.
-- Raak Fase 18 niet aan.
-
-CONTROLEER
-- pnpm lint
-- pnpm test
-- pnpm build
-- pnpm typecheck
-- GET /health/game
-- GET /game/
-- GET /game/shell.json
-- Apache/front-door route-smokes voor de game route
-- pnpm smoke:browser:game
-- pnpm smoke:browser
-
-SPECIFIEKE ASSERTIES
-- Game shell bevat `data-runtime-game-core="phase-17"`.
-- /health/game bevat `runtimeGameCore:"phase-17"`, `bootsRuntimeGame:true`, `consumesPublishedReadModel:true`, `consumesRuntimeAssetReferencePlan:true`.
-- /game/shell.json bevat `runtimeGameCore` en `runtimeGameCoreContract`.
-- Default state blokkeert veilig op ontbrekende published data en gebruikt diagnostics.
-- Geen editor/admin route usage in game runtime output.
-- Geen draft leakage.
-- Geen /assets byte fetches, GLB/texture/audio loads of asset load requests.
-- Geen renderer draw calls.
-- Geen hardcoded world/camera/light/HUD/minimap/audio/content values.
-- Geen quest/combat/economy/multiplayer runtime gebouwd.
-- Save/load basis is runtime-state only of rapporteert expliciet blocker.
-
-NIET DOEN
-- Geen ontbrekende Kevin-content invullen.
-- Geen dummy assets toevoegen.
-- Geen dummy world/NPC/quest/fallback model toevoegen.
-- Geen Fase 18 quest/dialooginhoud openen.
-
-RAPPORTEER
-- groene checks;
-- falende checks;
-- exacte runtime boot bewijzen;
-- exacte blockers als Fase 17 niet dicht kan;
-- commit SHA als je een fix moest maken;
-- of Fase 17 formeel wel/niet mag worden afgesloten.
-```
+Fase 18 is daardoor nog niet automatisch open: Fase 18 vereist echte published quest/dialogue data en concrete slice-input uit GameBible/editor/node-data of expliciete Kevin-input.

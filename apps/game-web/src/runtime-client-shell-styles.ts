@@ -60,7 +60,8 @@ code {
 .render-surface,
 .scene-assembly,
 .asset-reference-planning,
-.runtime-game-core {
+.runtime-game-core,
+.runtime-quest-slice {
   min-width: 0;
   border: 1px solid #d9dde3;
   border-radius: 8px;
@@ -74,13 +75,15 @@ code {
 .render-surface,
 .scene-assembly,
 .asset-reference-planning,
-.runtime-game-core {
+.runtime-game-core,
+.runtime-quest-slice {
   margin-top: 12px;
 }
 .render-header,
 .scene-assembly-header,
 .asset-reference-header,
-.runtime-game-header {
+.runtime-game-header,
+.runtime-quest-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -114,7 +117,8 @@ code {
 }
 .scene-plan-panel,
 .asset-reference-plan-panel,
-.runtime-game-panel {
+.runtime-game-panel,
+.runtime-quest-panel {
   border: 1px solid #d9dde3;
   border-radius: 6px;
   padding: 12px;
@@ -122,13 +126,15 @@ code {
 }
 .scene-plan-panel p,
 .asset-reference-plan-panel p,
-.runtime-game-panel p {
+.runtime-game-panel p,
+.runtime-quest-panel p {
   margin: 0;
 }
 .render-capability-grid,
 .scene-assembly-grid,
 .asset-reference-grid,
-.runtime-game-grid {
+.runtime-game-grid,
+.runtime-quest-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -137,7 +143,8 @@ code {
 .render-capability-grid span,
 .scene-assembly-grid span,
 .asset-reference-grid span,
-.runtime-game-grid span {
+.runtime-game-grid span,
+.runtime-quest-grid span {
   min-width: 0;
   border: 1px solid #d9dde3;
   border-radius: 6px;
@@ -168,17 +175,20 @@ code {
   .scene-assembly-header,
   .asset-reference-header,
   .runtime-game-header,
+  .runtime-quest-header,
   .render-capability-grid,
   .scene-assembly-grid,
   .asset-reference-grid,
-  .runtime-game-grid {
+  .runtime-game-grid,
+  .runtime-quest-grid {
     display: block;
   }
   .panel,
   .render-capability-grid span,
   .scene-assembly-grid span,
   .asset-reference-grid span,
-  .runtime-game-grid span {
+  .runtime-game-grid span,
+  .runtime-quest-grid span {
     margin-top: 12px;
   }
   .status-pill {

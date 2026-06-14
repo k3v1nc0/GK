@@ -19,15 +19,42 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - runtime scene assembly source, status, plan, descriptor en safety flags;
 - runtime asset reference planning source, status, plan, descriptor, candidate en safety flags;
 - runtime game source, status, boot, session, input, save-state, diagnostics en safety flags;
-- latere player, economy, merchant, NPC, quest, item, combat, HUD en audio inhoud.
+- runtime quest slice, dialogue, objective, interactable, reward, unlock, checkpoint, asset-role, state, diagnostics en safety flags;
+- latere concrete player, economy, merchant, NPC, quest, item, combat, HUD en audio inhoud.
 
 Concrete gamecontent hoort niet in runtimecode. De keten blijft:
 
 ```text
-Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game Core > Runtime Game
+Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game Core > Runtime Quest Slice > Runtime Game
 ```
 
-Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 is server-side afgerond als projection-driven scene assembly metadata. Fase 15 is server-side afgerond als runtime asset-reference planning metadata. Fase 16 is afgerond als fundering/herbaseline. Fase 17 is geopend als Runtime Game Core Git-basis; server-side verificatie staat nog open. Concrete asset loading, renderer draw calls, gameplay, HUD/minimap runtime, quest/combat/economy/multiplayer en audio playback blijven latere expliciete fases.
+## Spelinhoud eerst in nodes
+
+Als een fase, prototype of voorproefje concrete spelinhoud nodig heeft, moet die inhoud eerst als node-system voorbereiding worden gebouwd. Dat mag en is zelfs de gewenste route, zolang het via de data-keten loopt.
+
+Toegestaan als voorbereiding:
+
+- nieuwe node types;
+- node fields en sockets;
+- schema's en validators;
+- editorpanelen of schema-gegenereerde panelen;
+- publish/read-model contracts;
+- expliciete node/editor-data;
+- neutrale testfixtures die alleen tests voeden.
+
+Niet toegestaan:
+
+- concrete spelinhoud direct in runtimecode zetten;
+- runtime fallback content maken wanneer node/editor-data ontbreekt;
+- testfixtures door de game runtime laten gebruiken;
+- dummy assets of dummy published data toevoegen om een fase groen te laten lijken;
+- hardcoded NPCs, quests, rewards, unlocks, flags, camera, lighting, HUD, minimap, audio of asset roles gebruiken.
+
+Beslisregel: als concrete spelinhoud nog geen node type, node field, validator, publish contract of read-model pad heeft, moet eerst die node-system voorbereiding worden gebouwd. De runtime mag daarna alleen published read-model data consumeren.
+
+Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 is server-side afgerond als projection-driven scene assembly metadata. Fase 15 is server-side afgerond als runtime asset-reference planning metadata. Fase 16 is afgerond als fundering/herbaseline. Fase 17 is server-side afgerond als Runtime Game Core. Fase 18 is geopend als generieke non-visual blocked runtime quest-slice, maar nog niet server-side geverifieerd of formeel afgerond.
+
+Concrete questcontent, concrete asset loading, renderer draw calls, full gameplay, HUD/minimap runtime, combat/economy/multiplayer en audio playback blijven latere expliciete fases totdat de bijbehorende node-data en publishcontracts aanwezig zijn.
 
 ## Socket types per fase
 
@@ -128,7 +155,36 @@ Fase 17:
 - `runtime.game.diagnostics.reference`;
 - `runtime.game.safety.reference`.
 
-Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface/runtime-scene-assembly/runtime-asset-reference-planning/runtime-game-core contracts. Ze voegen geen concrete gamecontent toe.
+Fase 18:
+
+- `runtime.quest.slice.reference`;
+- `runtime.quest.dialogue.reference`;
+- `runtime.quest.objective.reference`;
+- `runtime.quest.interactable.reference`;
+- `runtime.quest.reward.reference`;
+- `runtime.quest.unlock.reference`;
+- `runtime.quest.checkpoint.reference`;
+- `runtime.quest.asset-role.reference`;
+- `runtime.quest.state.reference`;
+- `runtime.quest.diagnostics.reference`;
+- `runtime.quest.safety.reference`.
+
+Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface/runtime-scene-assembly/runtime-asset-reference-planning/runtime-game-core/runtime-quest-slice contracts. Ze voegen geen concrete gamecontent toe.
+
+## Runtime projection record types voor Fase 18
+
+Fase 18 voegt published read-model record types toe voor:
+
+- `quest.reference`;
+- `dialogue.reference`;
+- `objective.reference`;
+- `interactable.reference`;
+- `reward.reference`;
+- `unlock.reference`;
+- `checkpoint.reference`;
+- `asset-role.reference`.
+
+Deze record types mogen alleen via published data gevuld worden. Runtimecode mag geen concrete questcontentwaarden bevatten.
 
 ## Asset import en role mapping
 
@@ -145,6 +201,15 @@ Als een bestand in `/var/www/gk/assets` komt:
 De scanner kopieert geen assets naar Git, verwijdert geen serverbestanden en publiceert niets naar runtime.
 
 GLB, UI en audio blijven candidates totdat editor/node-data, GameBible/registers of expliciete Kevin-input ze kiest. Fase 15 laadt geen GLB, textures, UI images of audio assets, fetcht geen asset bytes en maakt geen definitive role mapping. Fase 17 consumeert alleen Fase 15 asset-reference metadata en opent nog geen asset byte loading of final role mapping.
+
+Fase 18 asset-regel:
+
+- asset-role records moeten expliciet in published data bestaan;
+- unresolved asset roles moeten zichtbaar runtime completion blokkeren;
+- non-visual blocked slice is toegestaan;
+- dummy assets zijn verboden;
+- runtime hardcoding van asset roles is verboden;
+- volledig visual playable claim mag pas na editor/node-data mapping of expliciete Kevin-confirmatie.
 
 ## Fase 15 runtime asset reference planning laag
 
@@ -176,7 +241,7 @@ Belangrijke regels:
 
 ## Fase 17 Runtime Game Core laag
 
-Fase 17 Git-basis is toegevoegd als Runtime Game Core boot- en contractlaag. Server-side verificatie staat nog open.
+Fase 17 is server-side afgerond als Runtime Game Core boot- en contractlaag.
 
 Belangrijke regels:
 
@@ -191,8 +256,7 @@ Belangrijke regels:
 - Runtime Game Core laadt geen asset bytes en finaliseert geen asset roles;
 - Runtime Game Core doet geen renderer draw calls;
 - Runtime Game Core hardcodet geen world, camera, lighting, HUD, minimap, audio of content values;
-- Runtime Game Core bouwt geen quest, combat, economy, multiplayer, movement of audio playback;
-- Fase 17 opent Fase 18 niet.
+- Runtime Game Core bouwt geen quest, combat, economy, multiplayer, movement of audio playback.
 
 ### Runtime Game Core nodes
 
@@ -202,6 +266,35 @@ Belangrijke regels:
 - `gk.runtimeGameCore.inputAdapter`;
 - `gk.runtimeGameCore.saveState`;
 - `gk.runtimeGameCore.diagnostics`.
+
+## Fase 18 Runtime Quest Slice laag
+
+Fase 18 is geopend als generieke non-visual blocked runtime quest-slice.
+
+Belangrijke runtime-regels:
+
+- Runtime Quest Slice consumeert alleen published runtime projection read-model records;
+- runtime gebruikt geen editor/admin routes en geen draft/candidate data;
+- runtime hardcodet geen concrete questcontent, dialogue, objective, reward, checkpoint of asset-role data;
+- Quest 00 en andere quests zijn later node-data/editor-data, niet runtimecode;
+- testfixtures mogen alleen tests voeden en mogen nooit runtime fallback of gamecontent worden;
+- questmutaties lopen via quest/objective executors;
+- dialogue runtime advance gebeurt via dialogue state;
+- reward applicator grant alleen vanuit published data;
+- save/load bewaart runtime quest/dialogue/checkpoint state only;
+- unresolved asset roles blijven visible blockers;
+- runtime laadt geen assets, fetcht geen bytes en finaliseert geen asset roles;
+- runtime opent geen combat, economy, movement, multiplayer of audio playback.
+
+### Runtime Quest Slice nodes
+
+- `gk.runtimeQuestSlice.source`;
+- `gk.runtimeQuestSlice.questState`;
+- `gk.runtimeQuestSlice.dialogueExecutor`;
+- `gk.runtimeQuestSlice.objectiveEvaluator`;
+- `gk.runtimeQuestSlice.rewardApplicator`;
+- `gk.runtimeQuestSlice.checkpointFlow`;
+- `gk.runtimeQuestSlice.assetRoleBlockers`.
 
 ## Publish, projection, client shell, render surface, scene assembly, asset reference planning en runtime game core regels
 
@@ -213,7 +306,8 @@ Belangrijke regels:
 - Runtime render surface is geen scene assembly, gameplay, HUD, minimap of audio runtime.
 - Runtime scene assembly is geen renderer, asset-loader, gameplay, HUD, minimap of audio runtime.
 - Runtime asset reference planning is geen asset loader, renderer, gameplay, HUD, minimap of audio runtime.
-- Runtime Game Core is geen renderer, quest, combat, economy, multiplayer, movement of audio runtime.
-- Runtime client shell, render surface, scene assembly, asset reference planning en Runtime Game Core mogen geen editor/admin routes of editor draft data consumeren.
+- Runtime Game Core is geen renderer, combat, economy, multiplayer, movement of audio runtime.
+- Runtime Quest Slice is geen asset loader, renderer, combat, economy, multiplayer, movement of audio runtime.
+- Runtime client shell, render surface, scene assembly, asset reference planning, Runtime Game Core en Runtime Quest Slice mogen geen editor/admin routes of editor draft data consumeren.
 - UI display natural size is nooit automatisch display size.
-- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation en Fase 17 Runtime Game Core validation zijn geen Runtime Game renderer.
+- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation, Fase 17 Runtime Game Core validation en Fase 18 Runtime Quest Slice validation zijn geen Runtime Game renderer.

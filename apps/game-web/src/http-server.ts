@@ -14,6 +14,10 @@ import {
   runtimeGameCoreClientContract
 } from "./runtime-game-core.js";
 import {
+  createRuntimeQuestSliceShellState,
+  runtimeQuestSliceClientContract
+} from "./runtime-quest-slice.js";
+import {
   createRuntimeRenderSurfaceShellState,
   runtimeRenderSurfaceClientContract
 } from "./runtime-render-surface.js";
@@ -47,6 +51,7 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       runtimeSceneAssembly: "phase-14",
       runtimeAssetReferencePlanning: "phase-15",
       runtimeGameCore: "phase-17",
+      runtimeQuestSlice: "phase-18",
       createsRenderSurface: true,
       consumesRuntimeProjectionRecords: true,
       producesScenePlan: true,
@@ -55,7 +60,15 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       consumesRuntimeAssetReferencePlan: true,
       consumesPublishedReadModel: true,
       bootsRuntimeGame: true,
+      implementsQuestRuntime: true,
+      implementsDialogueRuntime: true,
+      implementsObjectiveRuntime: true,
+      implementsRewardRuntime: true,
+      implementsCheckpointRuntime: true,
+      supportsNonVisualBlockedSlice: true,
       blockedByMissingPublishedData: true,
+      blockedByUnresolvedAssetRoles: true,
+      exposesUnresolvedAssetRoleBlockers: true,
       usesAssetMetadataOnly: true,
       implements3DRenderer: false,
       loadsAssets: false,
@@ -67,14 +80,20 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       implementsGameplay: false,
       implementsMovement: false,
       implementsCombat: false,
+      implementsEconomyRuntime: false,
       implementsAudioPlayback: false,
+      implementsMultiplayer: false,
       hardcodesWorld: false,
       hardcodesCamera: false,
       hardcodesLighting: false,
       hardcodesHud: false,
       hardcodesMinimap: false,
       hardcodesContent: false,
-      mutatesAssets: false
+      hardcodesQuestContent: false,
+      mutatesAssets: false,
+      mutatesPublishedData: false,
+      usesEditorAdminRoutes: false,
+      usesEditorDraftData: false
     });
     return;
   }
@@ -101,7 +120,9 @@ export async function handleGameRequest(request: IncomingMessage, response: Serv
       assetReferencePlanning: createRuntimeAssetReferencePlanningShellState(),
       assetReferencePlanningContract: runtimeAssetReferencePlanningClientContract,
       runtimeGameCore: createRuntimeGameCoreShellState(),
-      runtimeGameCoreContract: runtimeGameCoreClientContract
+      runtimeGameCoreContract: runtimeGameCoreClientContract,
+      runtimeQuestSlice: createRuntimeQuestSliceShellState(),
+      runtimeQuestSliceContract: runtimeQuestSliceClientContract
     });
     return;
   }

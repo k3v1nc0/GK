@@ -11,6 +11,7 @@ import { RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES } from "./runtime-ass
 import { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 import { RUNTIME_GAME_CORE_GRAPH_NODE_TYPES } from "./runtime-game-core-nodes.js";
 import { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.js";
+import { RUNTIME_QUEST_SLICE_GRAPH_NODE_TYPES } from "./runtime-quest-slice-nodes.js";
 import { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
 import { RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES } from "./runtime-scene-assembly-nodes.js";
 import { WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES } from "./world-camera-minimap-nodes.js";
@@ -181,7 +182,8 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   ...RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES,
   ...RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES,
   ...RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES,
-  ...RUNTIME_GAME_CORE_GRAPH_NODE_TYPES
+  ...RUNTIME_GAME_CORE_GRAPH_NODE_TYPES,
+  ...RUNTIME_QUEST_SLICE_GRAPH_NODE_TYPES
 ] as const;
 
 export function getCoreGraphNodeTypes(): readonly GraphNodeTypeDefinition[] {
@@ -198,3 +200,4 @@ export { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surfac
 export { RUNTIME_SCENE_ASSEMBLY_GRAPH_NODE_TYPES } from "./runtime-scene-assembly-nodes.js";
 export { RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES } from "./runtime-asset-reference-planning-nodes.js";
 export { RUNTIME_GAME_CORE_GRAPH_NODE_TYPES } from "./runtime-game-core-nodes.js";
+export { RUNTIME_QUEST_SLICE_GRAPH_NODE_TYPES } from "./runtime-quest-slice-nodes.js";

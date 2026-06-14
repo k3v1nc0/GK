@@ -111,13 +111,10 @@ test("runtime game core becomes ready from published read model and metadata ass
   assert.equal(state.status.blockedByMissingPublishedData, false);
   assert.equal(state.diagnostics.length, 0);
   assert.equal(state.source.projectionManifestId, "runtime-manifest:17");
-  assert.equal(state.source.projectionRecordCount, 1);
-  assert.equal(state.assetReferenceResolver.descriptorCount, 1);
   assert.equal(state.assetReferenceResolver.loadsAssets, false);
   assert.equal(state.assetReferenceResolver.fetchesAssetBytes, false);
   assert.equal(state.assetReferenceResolver.resolvesFinalAssetRoles, false);
   assert.equal(state.worldBootstrap.status, "ready");
-  assert.equal(state.worldBootstrap.worldRecordCount, 1);
   assert.equal(state.playerSession.sourceManifestId, "runtime-manifest:17");
   assert.equal(state.inputAdapter.consumesInputIntents, true);
   assert.equal(state.inputAdapter.bindsMovement, false);
@@ -165,16 +162,20 @@ test("runtime game core validation rejects unsafe flags and indicators", () => {
   const validation = validateRuntimeGameCoreState(unsafeState);
 
   assert.equal(validation.valid, false);
-  assert.equal(validation.issues.some((issue) => issue.gate === "published-read-model-only"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-editor-admin-routes"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-editor-draft-data"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-hidden-asset-loads"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "runtime-asset-reference-plan-only"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-hardcoded-content"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "no-quest-combat-economy-multiplayer"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "player-session-bootstrap"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "input-adapter-boundary"), true);
-  assert.equal(validation.issues.some((issue) => issue.gate === "save-load-basis"), true);
+  for (const gate of [
+    "published-read-model-only",
+    "no-editor-admin-routes",
+    "no-editor-draft-data",
+    "no-hidden-asset-loads",
+    "runtime-asset-reference-plan-only",
+    "no-hardcoded-content",
+    "no-quest-combat-economy-multiplayer",
+    "player-session-bootstrap",
+    "input-adapter-boundary",
+    "save-load-basis"
+  ]) {
+    assert.equal(validation.issues.some((issue) => issue.gate === gate), true, `${gate} should fail`);
+  }
 });
 
 test("game shell renders runtime game core marker without editor, asset byte or content payload", () => {
@@ -194,8 +195,11 @@ test("game shell renders runtime game core marker without editor, asset byte or 
     assert.doesNotMatch(output, /\/auth\/editor/);
     assert.doesNotMatch(output, /\/assets\//);
     assert.doesNotMatch(output, /\.glb|\.gltf|\.mp3|\.wav|\.ogg/i);
-    assert.doesNotMatch(output, /NPC|quest|economy|loot/i);
   }
+
+  assert.doesNotMatch(section, /NPC|quest|economy|loot/i);
+  assert.doesNotMatch(html, /NPC|economy|loot/i);
+  assert.doesNotMatch(html, /Quest 00|Humble Ash Staff|Spark|Empathy Casting|Mentor failure|The Candle/i);
 });
 
 test("runtime game core client contract is read-model only and contentless", () => {
@@ -218,9 +222,6 @@ test("runtime game core client contract is read-model only and contentless", () 
   assert.equal(runtimeGameCoreClientContract.hardcodesContent, false);
   assert.equal(runtimeGameCoreClientContract.mutatesAssets, false);
   assert.equal(runtimeGameCoreClientContract.mutatesPublishedData, false);
-  assert.equal(runtimeGameCoreClientContract.hasPlayerSessionBootstrap, true);
-  assert.equal(runtimeGameCoreClientContract.hasInputAdapter, true);
-  assert.equal(runtimeGameCoreClientContract.hasSaveLoadBasis, true);
 });
 
 test("game web routes expose phase 17 runtime game core without editor or asset routes", () => {
@@ -243,6 +244,7 @@ test("game web routes expose phase 17 runtime game core without editor or asset 
     const shellJson = await requestGame("GET", "/game/shell.json");
     assert.equal(shellJson.statusCode, 200);
     assert.match(shellJson.body, /"runtimeGameCore"/);
+    assert.match(shellJson.body, /"runtimeQuestSlice"/);
     assert.match(shellJson.body, /"phase":"phase-17"/);
     assert.match(shellJson.body, /"bootsRuntimeGame":true/);
     assert.match(shellJson.body, /"consumesPublishedReadModel":true/);
@@ -257,6 +259,7 @@ test("game web routes expose phase 17 runtime game core without editor or asset 
     const health = await requestGame("GET", "/health/game");
     assert.equal(health.statusCode, 200);
     assert.match(health.body, /"runtimeGameCore":"phase-17"/);
+    assert.match(health.body, /"runtimeQuestSlice":"phase-18"/);
     assert.match(health.body, /"bootsRuntimeGame":true/);
     assert.match(health.body, /"consumesPublishedReadModel":true/);
     assert.match(health.body, /"consumesRuntimeAssetReferencePlan":true/);

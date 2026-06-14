@@ -56,6 +56,28 @@ Deze waardes mogen niet vast in runtimecode staan:
 - loot kansen
 - HUD layout
 
+## Voorproefjes horen in het node-system
+
+Een voorproefje van spelinhoud mag worden voorbereid, maar alleen als node-system werk:
+
+- voeg een node type toe;
+- voeg node fields of sockets toe;
+- voeg schema's en validators toe;
+- voeg een editorpaneel of schema-gegenereerd paneel toe;
+- voeg een publish/read-model contract toe;
+- voeg echte editor/node-data toe wanneer Kevin die inhoud expliciet bevestigt;
+- gebruik neutrale testfixtures alleen in tests.
+
+Niet doen:
+
+- spelinhoud in runtimecode zetten;
+- runtime fallback content maken;
+- dummy data gebruiken om gameplay te laten lijken alsof het al bestaat;
+- testfixtures door de game runtime laten lezen;
+- concrete contentwaarden hardcoden omdat het nodeveld nog ontbreekt.
+
+Acceptatieregel: als een concrete waarde nog niet via het node-system instelbaar is, is de juiste oplossing een node type, node field, validator, editorpaneel of publishcontract toevoegen. Pas daarna mag runtime die waarde consumeren via published read-model data.
+
 ## Hoe harde feiten zichtbaar worden
 
 Elke engine primitive krijgt een schema. De editor maakt hier automatisch panelen van:

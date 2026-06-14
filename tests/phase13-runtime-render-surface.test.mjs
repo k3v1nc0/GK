@@ -22,6 +22,7 @@ import {
 import { renderRuntimeClientShellHtml } from "../apps/game-web/src/runtime-client-shell.ts";
 import { handleGameRequest } from "../apps/game-web/src/http-server.ts";
 
+const FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN = /Quest 00|Humble Ash Staff|Spark|Empathy Casting|Mentor failure|The Candle|Fixture Quest Title|Fixture Reward Name|Fixture Unlock Name|Fixture Dialogue Line/i;
 const nodeTypes = new Set(getCoreGraphNodeTypes().map((node) => node.type));
 
 test("Fase 13 schema package exports runtime render surface contracts from real modules", () => {
@@ -138,8 +139,11 @@ test("game shell renders runtime render surface marker and safe empty host", () 
     assert.doesNotMatch(output, /\/auth\/editor/);
     assert.doesNotMatch(output, /\/assets\//);
     assert.doesNotMatch(output, /\.glb|\.gltf|\.mp3|\.wav|\.ogg/i);
-    assert.doesNotMatch(output, /dummy|NPC|quest|economy|loot/i);
   }
+
+  assert.doesNotMatch(section, /dummy|NPC|quest|economy|loot/i);
+  assert.doesNotMatch(html, /dummy|NPC|economy|loot/i);
+  assert.doesNotMatch(html, FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN);
 });
 
 test("runtime render surface client contract stays metadata-only and contentless", () => {

@@ -15,6 +15,10 @@ import {
   runtimeGameCoreClientContract
 } from "./runtime-game-core.js";
 import {
+  renderRuntimeQuestSliceSection,
+  runtimeQuestSliceClientContract
+} from "./runtime-quest-slice.js";
+import {
   renderRuntimeRenderSurfaceBootScript,
   renderRuntimeRenderSurfaceSection,
   runtimeRenderSurfaceClientContract
@@ -45,6 +49,7 @@ export interface RuntimeClientShellHttpContract {
   readonly sceneAssembly: typeof runtimeSceneAssemblyClientContract;
   readonly assetReferencePlanning: typeof runtimeAssetReferencePlanningClientContract;
   readonly runtimeGameCore: typeof runtimeGameCoreClientContract;
+  readonly runtimeQuestSlice: typeof runtimeQuestSliceClientContract;
 }
 
 export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
@@ -62,7 +67,8 @@ export const runtimeClientShellHttpContract: RuntimeClientShellHttpContract = {
   renderSurface: runtimeRenderSurfaceClientContract,
   sceneAssembly: runtimeSceneAssemblyClientContract,
   assetReferencePlanning: runtimeAssetReferencePlanningClientContract,
-  runtimeGameCore: runtimeGameCoreClientContract
+  runtimeGameCore: runtimeGameCoreClientContract,
+  runtimeQuestSlice: runtimeQuestSliceClientContract
 };
 
 export function createRuntimeClientShellResponseModel(route: RuntimeClientShellModel["route"] = "/game/"): RuntimeClientShellModel {
@@ -79,6 +85,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
   const sceneAssembly = renderRuntimeSceneAssemblySection();
   const assetReferencePlanning = renderRuntimeAssetReferencePlanningSection();
   const runtimeGameCore = renderRuntimeGameCoreSection();
+  const runtimeQuestSlice = renderRuntimeQuestSliceSection();
 
   return `<!doctype html>
 <html lang="nl">
@@ -117,6 +124,7 @@ export function renderRuntimeClientShellHtml(model: RuntimeClientShellModel = cr
     ${sceneAssembly}
     ${assetReferencePlanning}
     ${runtimeGameCore}
+    ${runtimeQuestSlice}
 
     <section class="panel" aria-label="Runtime projection read-only routes" style="margin-top:12px">
       <h2>Read-only projection routes</h2>

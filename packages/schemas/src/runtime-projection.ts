@@ -27,7 +27,15 @@ export const RUNTIME_PROJECTION_RECORD_TYPES = [
   "component.reference",
   "asset.reference",
   "audio.reference",
-  "generated.reference"
+  "generated.reference",
+  "quest.reference",
+  "dialogue.reference",
+  "objective.reference",
+  "interactable.reference",
+  "reward.reference",
+  "unlock.reference",
+  "checkpoint.reference",
+  "asset-role.reference"
 ] as const;
 
 export const RUNTIME_PROJECTION_VALIDATION_GATES = [

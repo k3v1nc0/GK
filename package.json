@@ -8,9 +8,9 @@
     "typecheck": "tsc -b --pretty false",
     "test": "node --loader ./scripts/ts-test-loader.mjs --test tests/*.test.mjs",
     "lint": "node scripts/check-workspace-boundaries.mjs",
-    "smoke:browser": "node tests/smoke/browser-smoke.mjs && node tests/smoke/runtime-game-core-smoke.mjs",
+    "smoke:browser": "node tests/smoke/browser-smoke.mjs && node tests/smoke/runtime-game-core-smoke.mjs && node tests/smoke/runtime-quest-slice-smoke.mjs",
     "smoke:browser:editor": "node tests/smoke/browser-smoke.mjs --editor",
-    "smoke:browser:game": "node tests/smoke/browser-smoke.mjs --game && node tests/smoke/runtime-game-core-smoke.mjs"
+    "smoke:browser:game": "node tests/smoke/browser-smoke.mjs --game && node tests/smoke/runtime-game-core-smoke.mjs && node tests/smoke/runtime-quest-slice-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

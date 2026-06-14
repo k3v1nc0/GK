@@ -25,6 +25,7 @@ import {
 } from "../apps/game-web/src/runtime-client-shell.ts";
 import { handleGameRequest } from "../apps/game-web/src/http-server.ts";
 
+const FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN = /Quest 00|Humble Ash Staff|Spark|Empathy Casting|Mentor failure|The Candle|Fixture Quest Title|Fixture Reward Name|Fixture Unlock Name|Fixture Dialogue Line/i;
 const nodeTypes = new Set(getCoreGraphNodeTypes().map((node) => node.type));
 
 test("Fase 12 schema package exports runtime client shell contracts from real modules", () => {
@@ -134,7 +135,8 @@ test("runtime client shell renders safe empty-state UI without editor/admin rout
   assert.match(html, /\/runtime\/projection\/records/);
   assert.doesNotMatch(html, /\/editor\//);
   assert.doesNotMatch(html, /\/auth\/editor/);
-  assert.doesNotMatch(html, /dummy|NPC|quest|economy|loot/i);
+  assert.doesNotMatch(html, /dummy|NPC|economy|loot/i);
+  assert.doesNotMatch(html, FORBIDDEN_CONCRETE_QUEST_CONTENT_PATTERN);
 });
 
 test("game web shell routes expose runtime client shell and shell.json", () => {
