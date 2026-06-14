@@ -21,6 +21,8 @@ export * from "./runtime-game-core.js";
 export * from "./runtime-game-core-validation.js";
 export * from "./runtime-quest-slice.js";
 export * from "./runtime-quest-slice-validation.js";
+export * from "./quest-authoring.js";
+export * from "./quest-authoring-validation.js";
 export * from "./node-publish.js";
 
 export const SCHEMA_PACKAGE_SCOPE = [
@@ -47,6 +49,8 @@ export const SCHEMA_PACKAGE_SCOPE = [
   "runtime-game-core-validation",
   "runtime-quest-slice",
   "runtime-quest-slice-validation",
+  "quest-authoring",
+  "quest-authoring-validation",
   "node-publish"
 ] as const;
 
