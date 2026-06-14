@@ -2,15 +2,17 @@
 
 ## Fase
 
-Actieve status: Fase 14 Projection-driven Scene Assembly Core is geopend. De Git-basis is toegevoegd; server-side verificatie door Codex/Claude staat nog open.
+Actieve status: Fase 14 Projection-driven Scene Assembly Core is server-side groen bevestigd en formeel afgerond.
 
-Fase 1 t/m Fase 13 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd op Git HEAD `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`). Fase 13 Runtime Render Surface Core is server-side groen bevestigd via commit `192645f7c33dfc6f800f566784794f6e1111310a` (`fix: verify phase 13 runtime render surface core`) en formeel afgerond.
+Fase 1 t/m Fase 14 zijn afgerond. Fase 12 Runtime Client Shell Core is server-side groen bevestigd via commit `61792b7e6b923add68fdebd80f673dfdd86210ff` (`fix: verify phase 12 runtime client shell core`). Fase 12.1 Game Web Service Deployment Core is server-side groen bevestigd op Git HEAD `70808b7ac2aa50671fbf4369ef1158a5e5f13736` (`fase 12.1 definitieve Node 22 game-shell`). Fase 13 Runtime Render Surface Core is server-side groen bevestigd via commit `192645f7c33dfc6f800f566784794f6e1111310a` (`fix: verify phase 13 runtime render surface core`) en formeel afgerond. Fase 14 Projection-driven Scene Assembly Core is server-side groen bevestigd via commit `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`) en formeel afgerond.
 
 Fase 15 is nog niet geopend of geimplementeerd.
 
+Volgende stap: Kevin mag Fase 15 openen.
+
 ## Statussamenvatting
 
-Fase 14 bouwt een veilige data-driven scene assembly laag tussen Runtime Render Surface Core en latere renderer/gameplay fases. De laag zet runtime projection read-model records om naar neutrale scene-plan metadata.
+Fase 14 bouwde een veilige data-driven scene assembly laag tussen Runtime Render Surface Core en latere renderer/gameplay fases. De laag zet runtime projection read-model records om naar neutrale scene-plan metadata.
 
 Toegevoegd of bijgewerkt:
 
@@ -24,6 +26,8 @@ Toegevoegd of bijgewerkt:
 - browser-smoke scene assembly checks in `tests/smoke/browser-smoke.mjs`;
 - `tests/phase14-runtime-scene-assembly.test.mjs`;
 - `README/fase14.md` en statusdocs.
+
+Fase 14 voegde alleen projection-driven scene assembly metadata/scene-plan contracts toe. Fase 14 is geen renderer.
 
 ## Runtime scene assembly contract
 
@@ -76,9 +80,43 @@ Game browser-smoke controleert vanaf Fase 14:
 - geen asset/GLB/audio requests door Fase 14;
 - geen screenshots/traces tenzij expliciet via env aangezet.
 
+Server-side is bevestigd dat de game-smoke groen is en niet wordt overgeslagen.
+
+## Server-side bevestigd
+
+Codex/Claude heeft Fase 14 server-side groen bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled: OK;
+- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
+- local route-smokes: OK;
+- Apache/front-door smokes: OK;
+- `pnpm smoke:browser:game`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- scene assembly marker: OK;
+- empty scene plan: OK;
+- no editor/admin route usage: OK;
+- no draft leakage: OK;
+- no GLB/texture/audio loading: OK;
+- no asset load requests: OK;
+- no definitive asset role mapping: OK;
+- no concrete content: OK;
+- no renderer draw calls: OK;
+- no gameplay/movement/combat/audio playback: OK;
+- no hardcoded runtime values: OK;
+- no asset mutation: OK;
+- worktree schoon: OK;
+- blockers: geen.
+
+De minimale server-side fix commit was `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`). Die paste alleen `scripts/check-workspace-boundaries.mjs` aan om `packages/schemas/src/runtime-scene-assembly.ts` toe te staan als groot bronbestand. Er was geen inhoudelijke Fase 14 runtimewijziging.
+
 ## Contractgrenzen
 
-Fase 14 bouwt niet:
+Fase 14 bouwde niet:
 
 - volledige 3D renderer;
 - GLB loader of texture/audio loader;
@@ -95,39 +133,12 @@ Fase 14 bouwt niet:
 - assetmutatie;
 - Fase 15.
 
-## Open server-side verificatie
-
-Codex/Claude moet Fase 14 nog server-side bevestigen:
-
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled;
-- Node 22 process check via `/opt/gk/node-v22/bin/node`;
-- local route-smokes op `127.0.0.1:3003`;
-- Apache/front-door smokes;
-- `pnpm smoke:browser:game`;
-- `pnpm smoke:browser:editor`;
-- `pnpm smoke:browser`;
-- runtime shell marker;
-- render surface marker;
-- scene assembly marker;
-- empty scene plan;
-- no editor/admin route usage;
-- no editor draft/candidate leakage;
-- no GLB/texture/audio loading;
-- no asset load requests;
-- no concrete gamecontent;
-- no renderer scene draw calls;
-- no gameplay/movement/combat/audio playback;
-- no hardcoded HUD/minimap/world/camera/light/audio values;
-- no asset mutation;
-- worktree schoon;
-- blockers geen.
-
 ## Fasebeoordeling
 
 Fase 14 Git-basis klaar: ja.
 
-Fase 14 server-side klaar: nee.
+Fase 14 server-side klaar: ja.
+
+Fase 14 formeel afgerond: ja.
+
+Fase 15 geimplementeerd: nee.

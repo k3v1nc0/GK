@@ -2,15 +2,21 @@
 
 ## Status
 
-Fase 14 is geopend. De Git-basis voor Projection-driven Scene Assembly Core is toegevoegd op `main`.
+Fase 14 Projection-driven Scene Assembly Core is server-side groen bevestigd en formeel afgerond.
 
-Server-side verificatie door Codex/Claude is nog nodig. Fase 14 is pas klaar na build, typecheck, test, lint, live route-smokes, Apache/front-door smokes, browser smoke en docs-final.
+Fase 1 t/m Fase 14 zijn afgerond. Fase 15 is nog niet geopend of geimplementeerd.
 
-Fase 1 t/m Fase 13 zijn afgerond. Fase 15 is nog niet geopend of geimplementeerd.
+Server-side fix commit:
+
+- `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`).
+
+De minimale server-side fix paste alleen `scripts/check-workspace-boundaries.mjs` aan om `packages/schemas/src/runtime-scene-assembly.ts` toe te staan als groot bronbestand. Er was geen inhoudelijke Fase 14 runtimewijziging en er zijn geen assets, gamecontent, package-bestanden of secrets gewijzigd.
+
+Volgende stap: Kevin mag Fase 15 openen.
 
 ## Doel
 
-Fase 14 voegt een veilige data-driven scene assembly laag toe. De laag mag runtime projection metadata/read-model records omzetten naar neutrale scene descriptor/scene plan metadata voor latere rendererfases.
+Fase 14 voegde een veilige data-driven scene assembly laag toe. De laag mag runtime projection metadata/read-model records omzetten naar neutrale scene descriptor/scene plan metadata voor latere rendererfases.
 
 De keten blijft:
 
@@ -26,6 +32,8 @@ Database / Editor / Node-system
 ```
 
 ## Toegevoegd
+
+Fase 14 voegde alleen projection-driven scene assembly metadata/scene-plan contracts toe:
 
 - Runtime scene assembly contracts.
 - Scene descriptor/read-model contracts.
@@ -81,9 +89,39 @@ Safety flags:
 - Scene plan nodes zijn metadata-nodes, geen renderer nodes.
 - Fase 14 maakt geen hardcoded fallback zoals default village, test NPC of dummy object.
 
-## Niet toegestaan
+## Server-side bevestigd
 
-Fase 14 bouwt niet:
+Codex/Claude heeft Fase 14 groen bevestigd:
+
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled: OK;
+- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
+- local route-smokes: OK;
+- Apache/front-door smokes: OK;
+- `pnpm smoke:browser:game`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- scene assembly marker: OK;
+- empty scene plan: OK;
+- no editor/admin route usage: OK;
+- no draft leakage: OK;
+- no GLB/texture/audio loading: OK;
+- no asset load requests: OK;
+- no definitive asset role mapping: OK;
+- no concrete content: OK;
+- no renderer draw calls: OK;
+- no gameplay/movement/combat/audio playback: OK;
+- no hardcoded runtime values: OK;
+- no asset mutation: OK;
+- worktree schoon: OK;
+- blockers: geen.
+
+## Niet toegestaan en niet gebouwd
+
+Fase 14 is geen renderer en bouwde niet:
 
 - volledige 3D renderer;
 - GLB asset loading;
@@ -94,6 +132,7 @@ Fase 14 bouwt niet:
 - gameplay node;
 - concrete gamewereld;
 - dummy world, NPC, quest of economy;
+- renderer scene draw calls;
 - gameplay, movement, combat of player runtime;
 - audio playback;
 - HUD/minimap runtime layout;
@@ -107,7 +146,7 @@ Fase 14 bouwt niet:
 
 ## Bestanden
 
-Toegevoegd of bijgewerkt:
+Toegevoegd of bijgewerkt in de Fase 14 Git-basis:
 
 - `packages/schemas/src/runtime-scene-assembly.ts`;
 - `packages/schemas/src/runtime-scene-assembly-validation.ts`;
@@ -124,39 +163,14 @@ Toegevoegd of bijgewerkt:
 - `tests/phase14-runtime-scene-assembly.test.mjs`;
 - status-, design- en ops-documentatie.
 
-## Server-side verificatie open
-
-Codex/Claude moet nog bevestigen:
-
-- `pnpm build`: open;
-- `pnpm typecheck`: open;
-- `pnpm test`: open;
-- `pnpm lint`: open;
-- `gk-api`, `gk-editor-web`, `gk-game-web` active/enabled: open;
-- Node 22 process check via `/opt/gk/node-v22/bin/node`: open;
-- local route-smokes op `127.0.0.1:3003`: open;
-- Apache/front-door smokes: open;
-- `pnpm smoke:browser:game`: open;
-- `pnpm smoke:browser:editor`: open;
-- `pnpm smoke:browser`: open;
-- runtime shell marker: open;
-- render surface marker: open;
-- scene assembly marker: open;
-- empty scene plan: open;
-- no editor/admin route usage: open;
-- no editor draft/candidate leakage: open;
-- no GLB/texture/audio loading: open;
-- no asset load requests: open;
-- no concrete gamecontent: open;
-- no renderer scene draw calls: open;
-- no gameplay/movement/combat/audio playback: open;
-- no hardcoded HUD/minimap/world/camera/light/audio values: open;
-- no asset mutation: open;
-- worktree schoon: open;
-- blockers: open.
+Docs-final wijzigde alleen statusdocumentatie.
 
 ## Fasebeoordeling
 
 Git-basis klaar: ja.
 
-Server-side klaar: nee.
+Server-side klaar: ja.
+
+Fase 14 formeel afgerond: ja.
+
+Fase 15 geimplementeerd: nee.

@@ -4,7 +4,7 @@
 
 Fase 2 serverfundering is grotendeels uitgevoerd. Apache blijft voorlopig hoofdwebserver, Nginx blijft inactive/candidate, en de Fase 5.3 API/editor login plus GameBible browser-save flow zijn server-side gevalideerd.
 
-Fase 1 t/m Fase 13 zijn afgerond.
+Fase 1 t/m Fase 14 zijn afgerond.
 
 Afgeronde server-side basis:
 
@@ -16,9 +16,10 @@ Afgeronde server-side basis:
 - Fase 11 Runtime Projection Core;
 - Fase 12 Runtime Client Shell Core;
 - Fase 12.1 Game Web Service Deployment Core;
-- Fase 13 Runtime Render Surface Core.
+- Fase 13 Runtime Render Surface Core;
+- Fase 14 Projection-driven Scene Assembly Core.
 
-Fase 14 Projection-driven Scene Assembly Core Git-basis is toegevoegd. Server-side verificatie staat nog open.
+Fase 14 Projection-driven Scene Assembly Core is server-side groen bevestigd en formeel afgerond via commit `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`).
 
 Fase 15 is nog niet geopend of geimplementeerd.
 
@@ -110,11 +111,11 @@ Server-side bevestigd:
 - worktree schoon: OK;
 - blockers: geen.
 
-## Fase 14 Git-basis status
+## Fase 14 server-side status
 
-Fase 14 Projection-driven Scene Assembly Core is geopend. Git-basis is toegevoegd, server-side klaar staat nog op nee.
+Fase 14 Projection-driven Scene Assembly Core is server-side afgerond en klaar.
 
-Toegevoegd of bijgewerkt:
+Fase 14 voegde alleen projection-driven scene assembly metadata/scene-plan contracts toe:
 
 - runtime scene assembly schemas en validators;
 - runtime scene assembly socket/node contracts;
@@ -125,31 +126,37 @@ Toegevoegd of bijgewerkt:
 - browser-smoke scene assembly checks;
 - tests en docs.
 
-Nog open voor Codex/Claude server-side verificatie:
+Server-side bevestigd:
 
-- `pnpm build`;
-- `pnpm typecheck`;
-- `pnpm test`;
-- `pnpm lint`;
-- `gk-api`, `gk-editor-web`, `gk-game-web` active/enabled;
-- Node 22 process check;
-- local route-smokes op `127.0.0.1:3003`;
-- Apache/front-door smokes;
-- browser-smoke game/editor/full;
-- runtime shell marker;
-- render surface marker;
-- scene assembly marker;
-- empty scene plan;
-- no editor/admin route usage;
-- no asset/GLB/audio load requests;
-- no concrete gamecontent;
-- no renderer scene draw calls;
-- no gameplay/movement/combat/audio playback;
-- no hardcoded HUD/minimap/world/camera/light/audio values;
-- no asset mutation;
-- worktree schoon.
+- `pnpm build`: OK;
+- `pnpm typecheck`: OK;
+- `pnpm test`: OK;
+- `pnpm lint`: OK;
+- `gk-api`, `gk-editor-web` en `gk-game-web` active/enabled: OK;
+- `gk-game-web` draait via `/opt/gk/node-v22/bin/node`: OK;
+- local route-smokes: OK;
+- Apache/front-door smokes: OK;
+- `pnpm smoke:browser:game`: OK;
+- `pnpm smoke:browser:editor`: OK;
+- `pnpm smoke:browser`: OK;
+- scene assembly marker: OK;
+- empty scene plan: OK;
+- no editor/admin route usage: OK;
+- no draft leakage: OK;
+- no GLB/texture/audio loading: OK;
+- no asset load requests: OK;
+- no definitive asset role mapping: OK;
+- no concrete content: OK;
+- no renderer draw calls: OK;
+- no gameplay/movement/combat/audio playback: OK;
+- no hardcoded runtime values: OK;
+- no asset mutation: OK;
+- worktree schoon: OK;
+- blockers: geen.
 
-Fase 14 bouwt niet:
+De server-side fix commit was `1b583b7f769690c3f7e7a98c41b4dd1937853519` (`fase 14 fix`). Die commit paste alleen `scripts/check-workspace-boundaries.mjs` aan om `packages/schemas/src/runtime-scene-assembly.ts` toe te staan als groot bronbestand. Er was geen inhoudelijke Fase 14 runtimewijziging.
+
+Fase 14 bouwde niet:
 
 - volledige 3D renderer;
 - asset-loader;
@@ -194,14 +201,16 @@ Fase 14 game smoke gebruikt:
 
 Fase 14 browser-smoke moet `runtime shell: ok`, `render surface: ok`, `scene assembly: ok`, `asset load requests: 0`, console errors `0` en page errors `0` bevestigen.
 
+Voor de formele Fase 14 afronding zijn deze browser-smoke checks groen bevestigd.
+
 ## Codex/Claude serverchecks
 
 Afgerond:
 
 1. Runtime directories, user/group, env, MySQL, Redis, Apache-hardening en systemd templates server-side gevalideerd.
-2. Fase 7 t/m Fase 13 server-side afgerond volgens de fase-README's en dit layoutdocument.
+2. Fase 7 t/m Fase 14 server-side afgerond volgens de fase-README's en dit layoutdocument.
 
-Gebruik voor Fase 14 server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
+Gebruik voor toekomstige server-side verificatie `docs/ops/server-verification-runbook.md`; die legt de standaard checkvolgorde, smoke routes, browser-smokes, frontend checks en rapportvelden vast.
 
 Nog open voor latere fases:
 
