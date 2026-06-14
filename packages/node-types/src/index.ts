@@ -7,6 +7,7 @@ import type {
 import { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
 import { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
 import { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
+import { QUEST_AUTHORING_GRAPH_NODE_TYPES } from "./quest-authoring-nodes.js";
 import { RUNTIME_ASSET_REFERENCE_PLANNING_GRAPH_NODE_TYPES } from "./runtime-asset-reference-planning-nodes.js";
 import { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 import { RUNTIME_GAME_CORE_GRAPH_NODE_TYPES } from "./runtime-game-core-nodes.js";
@@ -90,7 +91,7 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   },
   {
     type: "gk.value.number",
-    title: "Number Value",
+    title: "String Value",
     version: 1,
     scope: "engine-capability",
     sockets: [
@@ -177,6 +178,7 @@ export const CORE_GRAPH_NODE_TYPES: readonly GraphNodeTypeDefinition[] = [
   ...PROCEDURAL_GENERATION_GRAPH_NODE_TYPES,
   ...WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES,
   ...PUBLISH_FLOW_GRAPH_NODE_TYPES,
+  ...QUEST_AUTHORING_GRAPH_NODE_TYPES,
   ...RUNTIME_PROJECTION_GRAPH_NODE_TYPES,
   ...RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES,
   ...RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES,
@@ -194,6 +196,7 @@ export { ENTITY_COMPONENT_GRAPH_NODE_TYPES } from "./entity-component-nodes.js";
 export { PROCEDURAL_GENERATION_GRAPH_NODE_TYPES } from "./procedural-generation-nodes.js";
 export { WORLD_CAMERA_MINIMAP_GRAPH_NODE_TYPES } from "./world-camera-minimap-nodes.js";
 export { PUBLISH_FLOW_GRAPH_NODE_TYPES } from "./publish-flow-nodes.js";
+export { QUEST_AUTHORING_GRAPH_NODE_TYPES } from "./quest-authoring-nodes.js";
 export { RUNTIME_PROJECTION_GRAPH_NODE_TYPES } from "./runtime-projection-nodes.js";
 export { RUNTIME_CLIENT_SHELL_GRAPH_NODE_TYPES } from "./runtime-client-shell-nodes.js";
 export { RUNTIME_RENDER_SURFACE_GRAPH_NODE_TYPES } from "./runtime-render-surface-nodes.js";
