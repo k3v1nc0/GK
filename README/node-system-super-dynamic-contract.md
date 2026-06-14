@@ -13,6 +13,7 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 - camera, lighting, fog, sky en day/night;
 - minimap, HUD en UI display;
 - publish candidates, validation en snapshotmetadata;
+- quest authoring quest, dialogue, objective, interactable, reward, unlock, checkpoint, asset-role en publish bridge records;
 - runtime projection source, manifest, read model, safety flags en audit events;
 - runtime client shell status, boot state, projection state en safety flags;
 - runtime render surface status, capability, lifecycle en safety flags;
@@ -25,7 +26,7 @@ Alles wat inhoudelijk instelbaar is, moet via nodes of editorpanelen op nodes ku
 Concrete gamecontent hoort niet in runtimecode. De keten blijft:
 
 ```text
-Database > Editor/Node-system > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game Core > Runtime Quest Slice > Runtime Game
+Database > Editor/Node-system > Quest Authoring > Publish > Runtime Projection > Runtime Client Shell > Runtime Render Surface > Runtime Scene Assembly > Runtime Asset Reference Planning > Runtime Game Core > Runtime Quest Slice > Runtime Game
 ```
 
 ## Spelinhoud eerst in nodes
@@ -52,7 +53,7 @@ Niet toegestaan:
 
 Beslisregel: als concrete spelinhoud nog geen node type, node field, validator, publish contract of read-model pad heeft, moet eerst die node-system voorbereiding worden gebouwd. De runtime mag daarna alleen published read-model data consumeren.
 
-Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 is server-side afgerond als projection-driven scene assembly metadata. Fase 15 is server-side afgerond als runtime asset-reference planning metadata. Fase 16 is afgerond als fundering/herbaseline. Fase 17 is server-side afgerond als Runtime Game Core. Fase 18 is geopend als generieke non-visual blocked runtime quest-slice, maar nog niet server-side geverifieerd of formeel afgerond.
+Fase 13 is server-side afgerond als generieke render-surface capability. Fase 14 is server-side afgerond als projection-driven scene assembly metadata. Fase 15 is server-side afgerond als runtime asset-reference planning metadata. Fase 16 is afgerond als fundering/herbaseline. Fase 17 is server-side afgerond als Runtime Game Core. Fase 18 is server-side afgerond als generieke non-visual blocked runtime quest-slice. Fase 19 is geopend als Quest authoring publish bridge Git-basis, maar nog niet server-side geverifieerd of formeel afgerond.
 
 Concrete questcontent, concrete asset loading, renderer draw calls, full gameplay, HUD/minimap runtime, combat/economy/multiplayer en audio playback blijven latere expliciete fases totdat de bijbehorende node-data en publishcontracts aanwezig zijn.
 
@@ -169,9 +170,21 @@ Fase 18:
 - `runtime.quest.diagnostics.reference`;
 - `runtime.quest.safety.reference`.
 
+Fase 19:
+
+- `quest.authoring.quest.reference`;
+- `quest.authoring.dialogue.reference`;
+- `quest.authoring.objective.reference`;
+- `quest.authoring.interactable.reference`;
+- `quest.authoring.reward.reference`;
+- `quest.authoring.unlock.reference`;
+- `quest.authoring.checkpoint.reference`;
+- `quest.authoring.asset-role.reference`;
+- `quest.authoring.publish-contract.reference`.
+
 Deze sockets zijn editor/draft/node-data/publish-boundary/runtime-read-model/runtime-client-shell/runtime-render-surface/runtime-scene-assembly/runtime-asset-reference-planning/runtime-game-core/runtime-quest-slice contracts. Ze voegen geen concrete gamecontent toe.
 
-## Runtime projection record types voor Fase 18
+## Runtime projection record types voor Fase 18 en Fase 19
 
 Fase 18 voegt published read-model record types toe voor:
 
@@ -183,6 +196,8 @@ Fase 18 voegt published read-model record types toe voor:
 - `unlock.reference`;
 - `checkpoint.reference`;
 - `asset-role.reference`.
+
+Fase 19 maakt authoring-node records die naar deze runtime projection record types mappen. Runtime projection records bevatten references, geen runtime payload. De payload blijft editor/node-data en publish-source metadata.
 
 Deze record types mogen alleen via published data gevuld worden. Runtimecode mag geen concrete questcontentwaarden bevatten.
 
@@ -210,6 +225,14 @@ Fase 18 asset-regel:
 - dummy assets zijn verboden;
 - runtime hardcoding van asset roles is verboden;
 - volledig visual playable claim mag pas na editor/node-data mapping of expliciete Kevin-confirmatie.
+
+Fase 19 asset-regel:
+
+- asset-role authoring nodes mogen asset-role records voorbereiden;
+- final asset-role mapping blijft later;
+- geen asset byte loading;
+- geen asset copy/mutation;
+- geen dummy assets.
 
 ## Fase 15 runtime asset reference planning laag
 
@@ -269,7 +292,7 @@ Belangrijke regels:
 
 ## Fase 18 Runtime Quest Slice laag
 
-Fase 18 is geopend als generieke non-visual blocked runtime quest-slice.
+Fase 18 is server-side afgerond als generieke non-visual blocked runtime quest-slice.
 
 Belangrijke runtime-regels:
 
@@ -296,6 +319,32 @@ Belangrijke runtime-regels:
 - `gk.runtimeQuestSlice.checkpointFlow`;
 - `gk.runtimeQuestSlice.assetRoleBlockers`.
 
+## Fase 19 Quest Authoring Publish Bridge laag
+
+Fase 19 is geopend als generieke editor/node-data naar publish/read-model brug.
+
+Belangrijke regels:
+
+- Quest authoring nodes mogen concrete contentvelden voorbereiden, maar die content blijft editor/node-data;
+- publish bridge emit alleen normalized runtime projection record references;
+- runtime projection records bevatten geen runtime payload;
+- runtime fallbackcontent is verboden;
+- dummy published data en dummy assets zijn verboden;
+- asset byte loading, asset copy/mutation en final asset-role resolving zijn verboden;
+- Quest 00 wordt nog niet als echte node-data ingevoerd in deze fase.
+
+### Quest Authoring nodes
+
+- `gk.questAuthoring.quest`;
+- `gk.questAuthoring.dialogue`;
+- `gk.questAuthoring.objective`;
+- `gk.questAuthoring.interactable`;
+- `gk.questAuthoring.reward`;
+- `gk.questAuthoring.unlock`;
+- `gk.questAuthoring.checkpoint`;
+- `gk.questAuthoring.assetRole`;
+- `gk.questAuthoring.publishBridge`.
+
 ## Publish, projection, client shell, render surface, scene assembly, asset reference planning en runtime game core regels
 
 - GLB role mapping mag pas runtime worden wanneer editor-data die role expliciet heeft toegewezen en publish-flow dit later accepteert.
@@ -308,6 +357,7 @@ Belangrijke runtime-regels:
 - Runtime asset reference planning is geen asset loader, renderer, gameplay, HUD, minimap of audio runtime.
 - Runtime Game Core is geen renderer, combat, economy, multiplayer, movement of audio runtime.
 - Runtime Quest Slice is geen asset loader, renderer, combat, economy, multiplayer, movement of audio runtime.
+- Quest Authoring Publish Bridge is geen runtime renderer, runtime gameplayclient of asset-role resolver.
 - Runtime client shell, render surface, scene assembly, asset reference planning, Runtime Game Core en Runtime Quest Slice mogen geen editor/admin routes of editor draft data consumeren.
 - UI display natural size is nooit automatisch display size.
-- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation, Fase 17 Runtime Game Core validation en Fase 18 Runtime Quest Slice validation zijn geen Runtime Game renderer.
+- Asset scan, entity validation, procedural preview/bake, Fase 9 validation, Fase 10 publish validation, Fase 11 runtime projection validation, Fase 12 runtime client shell validation, Fase 13 runtime render surface validation, Fase 14 runtime scene assembly validation, Fase 15 runtime asset reference planning validation, Fase 17 Runtime Game Core validation, Fase 18 Runtime Quest Slice validation en Fase 19 Quest Authoring validation zijn geen Runtime Game renderer.
