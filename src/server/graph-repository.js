@@ -351,10 +351,15 @@ export class GraphRepository {
     }
     const count = this.db.prepare("SELECT COUNT(*) AS total FROM editor_nodes WHERE type = 'model_entity'").get().total;
     const shortId = asset.id.replace("asset_", "").slice(0, 8);
+    const defaultAnimation = asset.metadata?.defaultAnimation || null;
     const values = {
       entityId: "entity_" + shortId,
       label: asset.name,
       modelAssetId: asset.id,
+      animationClip: defaultAnimation,
+      idleAnimation: defaultAnimation,
+      walkAnimation: null,
+      runAnimation: null,
       x: Number.isFinite(Number(worldPosition.x)) ? Number(worldPosition.x) : 0,
       y: Number.isFinite(Number(worldPosition.y)) ? Number(worldPosition.y) : 0,
       z: Number.isFinite(Number(worldPosition.z)) ? Number(worldPosition.z) : 0,

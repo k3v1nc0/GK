@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { TransformControls } from "three/addons/controls/TransformControls.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -58,19 +58,33 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const textureCache = new Map();
   const entityRoots = new Map();
   const solids = [];
+  const animationMixers = new Map();
+  const modifierState = { ctrlKey: false };
 
   let world = null;
   let orbitControls = null;
-  let transformControls = null;
+  let selectionHelper = null;
+  let transformGuide = null;
   let selectedEntityId = null;
+  let selectedRoot = null;
+  let transformSession = null;
   let onSelectEntity = options.onSelectEntity || function () {};
   let onTransformCommit = options.onTransformCommit || function () {};
+  let onTransformEnd = options.onTransformEnd || function () {};
+  let onTransformChange = options.onTransformChange || function () {};
   const loadErrors = [];
   let editorViewInitialized = false;
   let disposed = false;
   let editorPointerDownHandler = null;
-  let transformDraggingHandler = null;
-  let transformMouseUpHandler = null;
+  let editorPointerDownCaptureHandler = null;
+  let editorPointerUpCaptureHandler = null;
+  let editorContextMenuHandler = null;
+  let editorKeyDownHandler = null;
+  let editorKeyUpHandler = null;
+  let editorDirectPointerMoveHandler = null;
+  let editorDirectPointerUpHandler = null;
+  let lastEditorPointer = null;
+  let viewportPanSession = null;
   let gamePointerDownHandler = null;
   let gameKeyDownHandler = null;
   let gameKeyUpHandler = null;
@@ -87,6 +101,27 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let lastResizePixelRatio = 0;
   let loopGeneration = 0;
   let pendingResizeReason = "init";
+  let transformState = {
+    active: false,
+    cancelled: false,
+    object: null,
+    rootId: null,
+    start: null,
+    mode: "move",
+    axis: null,
+    startPointer: null,
+    currentPointer: null,
+    startPosition: null,
+    startRotation: null,
+    startScale: null
+  };
+  let transformAxisConstraint = null;
+  let snapState = {
+    mode: "off",
+    gridSize: 1
+  };
+  let localViewActive = false;
+  let previewAnimations = false;
   const DEBUG_RUNTIME = window.__GK_DEBUG_RUNTIME && typeof window.__GK_DEBUG_RUNTIME === "object"
     ? window.__GK_DEBUG_RUNTIME
     : { enabled: false, activeLoopCount: 0, running: false, resizeCount: 0, renderCount: 0, lastRenderReasons: [], lastResizeSnapshot: null, activeResizeHandlers: 0 };
@@ -115,24 +150,96 @@ export function createGkWorldRuntime(canvas, options = {}) {
     orbitControls = new OrbitControls(camera, canvas);
     orbitControls.enableDamping = false;
     orbitControls.dampingFactor = 0.08;
-    orbitControls.maxPolarAngle = Math.PI * 0.49;
+    orbitControls.screenSpacePanning = true;
+    orbitControls.minPolarAngle = 0.001;
+    orbitControls.maxPolarAngle = Math.PI - 0.001;
+    updateOrbitMouseMapping();
+    orbitControls.enableKeys = false;
     orbitControls.addEventListener("change", requestRender);
-    transformControls = new TransformControls(camera, canvas);
-    transformDraggingHandler = function (event) {
-      if (orbitControls) orbitControls.enabled = !event.value;
-      requestRender();
+    selectionHelper = new THREE.BoxHelper(new THREE.Object3D(), 0x7bd4ff);
+    selectionHelper.visible = false;
+    selectionHelper.material.depthTest = false;
+    selectionHelper.material.depthWrite = false;
+    selectionHelper.material.transparent = true;
+    selectionHelper.material.opacity = 0.9;
+    selectionHelper.material.toneMapped = false;
+    selectionHelper.renderOrder = 999;
+    selectionHelper.raycast = function () {};
+    scene.add(selectionHelper);
+    transformGuide = createTransformGuide();
+    scene.add(transformGuide);
+    editorPointerDownCaptureHandler = function (event) {
+      if (!orbitControls) return;
+      rememberEditorPointer(event);
+      if (viewportPanSession && event.pointerId === viewportPanSession.pointerId) return;
+      if (transformSession) {
+        if (event.button === 2) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          cancelTransform();
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (event.button === 1 && event.shiftKey && !transformState.active) {
+        if (beginViewportPan(event)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+      if (event.button === 1) updateOrbitMouseMapping(event.ctrlKey || event.metaKey);
     };
-    transformMouseUpHandler = function () {
-      const object = transformControls.object;
-      if (!object?.userData?.entityId) return;
-      onTransformCommit(object.userData.entityId, objectToTransform(object));
+    editorContextMenuHandler = function (event) {
+      event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      if (transformSession) cancelTransform();
     };
-    transformControls.addEventListener("dragging-changed", transformDraggingHandler);
-    transformControls.addEventListener("objectChange", requestRender);
-    transformControls.addEventListener("mouseUp", transformMouseUpHandler);
-    scene.add(transformControls);
+    editorKeyDownHandler = function (event) {
+      if (event.key === "Control" || event.key === "Meta") {
+        modifierState.ctrlKey = true;
+        updateOrbitMouseMapping();
+        applyTransformSnapState();
+      }
+    };
+    editorKeyUpHandler = function (event) {
+      if (event.key === "Control" || event.key === "Meta") {
+        modifierState.ctrlKey = false;
+        updateOrbitMouseMapping();
+        applyTransformSnapState();
+      }
+    };
+    canvas.addEventListener("pointerdown", editorPointerDownCaptureHandler, true);
+    canvas.addEventListener("contextmenu", editorContextMenuHandler);
+    window.addEventListener("keydown", editorKeyDownHandler);
+    window.addEventListener("keyup", editorKeyUpHandler);
+    editorDirectPointerMoveHandler = handleTransformPointerMove;
+    editorDirectPointerUpHandler = handleTransformPointerUp;
+    canvas.addEventListener("pointermove", editorDirectPointerMoveHandler, true);
+    canvas.addEventListener("pointerup", editorDirectPointerUpHandler, true);
+    canvas.addEventListener("pointercancel", editorDirectPointerUpHandler, true);
+    window.addEventListener("pointermove", editorDirectPointerMoveHandler, true);
+    window.addEventListener("pointerup", editorDirectPointerUpHandler, true);
+    window.addEventListener("pointercancel", editorDirectPointerUpHandler, true);
+    editorPointerUpCaptureHandler = function (event) {
+      rememberEditorPointer(event);
+      if (viewportPanSession && event.pointerId === viewportPanSession.pointerId) {
+        handleViewportPanUp(event);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (event.button !== 1) return;
+      updateOrbitMouseMapping();
+    };
+    canvas.addEventListener("pointerup", editorPointerUpCaptureHandler, true);
+    canvas.addEventListener("pointercancel", editorPointerUpCaptureHandler, true);
     editorPointerDownHandler = function (event) {
+      rememberEditorPointer(event);
       if (event.button !== 0) return;
+      if (transformSession) return;
       const entityId = pickEntity(event);
       if (entityId) {
         selectEntity(entityId);
@@ -174,9 +281,37 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return action === "move_forward" || action === "move_back" || action === "move_left" || action === "move_right";
   }
 
+  function updateOrbitMouseMapping(forceCtrl) {
+    if (!orbitControls) return;
+    if (forceCtrl !== undefined) modifierState.ctrlKey = Boolean(forceCtrl);
+    orbitControls.mouseButtons.LEFT = THREE.MOUSE.NONE;
+    orbitControls.mouseButtons.RIGHT = THREE.MOUSE.NONE;
+    orbitControls.mouseButtons.MIDDLE = modifierState.ctrlKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+  }
+
+  function rememberEditorPointer(event) {
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    lastEditorPointer = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      pointerId: event.pointerId
+    };
+  }
+
+  function pointerFromClientPoint(clientX, clientY, buttonOverride) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      y: -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+      button: buttonOverride !== undefined ? buttonOverride : 0
+    };
+  }
+
   function configureCallbacks(callbacks) {
     onSelectEntity = callbacks.onSelectEntity || onSelectEntity;
     onTransformCommit = callbacks.onTransformCommit || onTransformCommit;
+    onTransformEnd = callbacks.onTransformEnd || onTransformEnd;
+    onTransformChange = callbacks.onTransformChange || onTransformChange;
   }
 
   function updateDebugLoopState() {
@@ -202,6 +337,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (disposed || rafId !== null) return;
     running = true;
     loopGeneration += 1;
+    lastTime = performance.now();
     updateDebugLoopState();
     rafId = requestAnimationFrame(renderFrame);
     if (reason) DEBUG_RUNTIME.lastStartReason = reason;
@@ -281,20 +417,49 @@ export function createGkWorldRuntime(canvas, options = {}) {
     DEBUG_RUNTIME.renderCount += 1;
     const delta = Math.min(0.05, (time - lastTime) / 1000);
     lastTime = time;
+    const shouldAnimate = mode === "game" || (mode === "editor" && previewAnimations && animationMixers.size > 0);
+    if (shouldAnimate) {
+      for (const { mixer } of animationMixers.values()) {
+        mixer.update(delta);
+      }
+    }
+    if (selectionHelper?.visible) selectionHelper.update();
+    if (transformGuide?.visible) updateTransformGuide();
     if (mode === "game") updatePlayer(delta);
     renderer.render(scene, camera);
     running = false;
     updateDebugLoopState();
     if (mode === "game") {
       startRenderLoop("game");
+    } else if (shouldAnimate) {
+      startRenderLoop("preview");
     } else if (renderRequested) {
       startRenderLoop("follow-up");
     }
   }
 
   function clearContent() {
-    if (transformControls) transformControls.detach();
+    viewportPanSession = null;
     selectedEntityId = null;
+    selectedRoot = null;
+    transformSession = null;
+    transformState.active = false;
+    transformState.cancelled = false;
+    transformState.object = null;
+    transformState.rootId = null;
+    transformState.start = null;
+    transformState.axis = null;
+    transformState.startPointer = null;
+    transformState.currentPointer = null;
+    if (selectionHelper) selectionHelper.visible = false;
+    if (selectionHelper) selectionHelper.object = null;
+    if (transformGuide) transformGuide.visible = false;
+    if (orbitControls) orbitControls.enabled = true;
+    for (const { mixer, root } of animationMixers.values()) {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(root);
+    }
+    animationMixers.clear();
     for (const child of Array.from(content.children)) {
       content.remove(child);
       disposeObject(child);
@@ -313,7 +478,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
       cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       cameraTarget: orbitControls ? { x: orbitControls.target.x, y: orbitControls.target.y, z: orbitControls.target.z } : null,
       selectedEntityId: selectedEntityId,
-      gizmoMode: transformControls?.mode || "translate"
+      gizmoMode: transformState.mode === "move" ? "translate" : (transformState.mode || "translate"),
+      localViewActive: localViewActive
     };
   }
 
@@ -324,20 +490,681 @@ export function createGkWorldRuntime(canvas, options = {}) {
       orbitControls.target.set(viewState.cameraTarget.x, viewState.cameraTarget.y, viewState.cameraTarget.z);
       orbitControls.update();
     }
-    selectedEntityId = viewState.selectedEntityId && entityRoots.has(viewState.selectedEntityId) ? viewState.selectedEntityId : null;
-    if (transformControls) {
-      if (viewState.gizmoMode && ["translate", "rotate", "scale"].includes(viewState.gizmoMode)) {
-        transformControls.setMode(viewState.gizmoMode);
-      }
-      if (selectedEntityId) {
-        const object = entityRoots.get(selectedEntityId);
-        if (object) transformControls.attach(object); else transformControls.detach();
-      } else {
-        transformControls.detach();
-      }
+    selectedEntityId = viewState.selectedEntityId || null;
+    refreshSelectedRootReference();
+    if (viewState.gizmoMode) {
+      transformState.mode = viewState.gizmoMode === "translate" ? "move" : viewState.gizmoMode;
     }
+    transformSession = null;
+    transformAxisConstraint = null;
+    localViewActive = Boolean(viewState.localViewActive);
+    applyLocalView();
+    updateSelectionHelper();
     requestRender();
     return true;
+  }
+
+  function rootForSelectableId(entityId) {
+    if (!entityId) return null;
+    if (entityRoots.has(entityId)) return entityRoots.get(entityId) || null;
+    if (player.root?.userData?.playerId === entityId) return player.root;
+    return null;
+  }
+
+  function refreshSelectedRootReference() {
+    if (!selectedEntityId) {
+      selectedRoot = null;
+      return null;
+    }
+    const freshRoot = rootForSelectableId(selectedEntityId);
+    selectedRoot = freshRoot || null;
+    if (!freshRoot) selectedEntityId = null;
+    return freshRoot;
+  }
+
+  function selectableIdForObject(object) {
+    if (!object) return null;
+    return object.userData?.entityId || object.userData?.playerId || null;
+  }
+
+  function selectedObjectRoot() {
+    return refreshSelectedRootReference();
+  }
+
+  function createTransformGuide() {
+    const guide = new THREE.Group();
+    guide.name = "GK editor transform guide";
+    guide.visible = false;
+    guide.renderOrder = 1000;
+    const axes = [
+      { name: "X", color: 0xff5a5f, points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0)] },
+      { name: "Y", color: 0x78d87b, points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1)] },
+      { name: "Z", color: 0x66aaff, points: [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0)] }
+    ];
+    for (const axis of axes) {
+      const geometry = new THREE.BufferGeometry().setFromPoints(axis.points);
+      const material = new THREE.LineBasicMaterial({
+        color: axis.color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95,
+        toneMapped: false
+      });
+      const line = new THREE.Line(geometry, material);
+      line.name = "GK editor transform guide " + axis.name;
+      line.renderOrder = 1000;
+      line.raycast = function () {};
+      guide.add(line);
+    }
+    guide.traverse(function (child) {
+      child.raycast = function () {};
+    });
+    return guide;
+  }
+
+  function updateTransformGuide() {
+    if (!transformGuide) return;
+    const object = selectedRoot;
+    transformGuide.visible = Boolean(object);
+    if (!object) return;
+    object.updateWorldMatrix(true, true);
+    const position = new THREE.Vector3();
+    object.getWorldPosition(position);
+    transformGuide.position.copy(position);
+    transformGuide.quaternion.identity();
+    const box = new THREE.Box3().setFromObject(object);
+    const size = new THREE.Vector3();
+    if (!box.isEmpty()) box.getSize(size);
+    const maxSize = Math.max(size.x, size.y, size.z, 1);
+    transformGuide.scale.setScalar(Math.min(6, Math.max(0.75, maxSize * 0.65)));
+  }
+
+  function getSelectedEntitySnapshot() {
+    const root = refreshSelectedRootReference();
+    if (!root) return null;
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    const size = new THREE.Vector3();
+    if (!box.isEmpty()) box.getSize(size);
+    return {
+      entityId: selectableIdForObject(root),
+      type: root.userData?.playerId ? "player_character" : "model_entity",
+      position: { x: round(root.position.x), y: round(root.position.y), z: round(root.position.z) },
+      rotation: {
+        x: round(root.rotation.x / DEG_TO_RAD),
+        y: round(root.rotation.y / DEG_TO_RAD),
+        z: round(root.rotation.z / DEG_TO_RAD)
+      },
+      scale: { x: round(root.scale.x), y: round(root.scale.y), z: round(root.scale.z) },
+      dimensions: { x: round(size.x), y: round(size.y), z: round(size.z) },
+      hasBounds: !box.isEmpty()
+    };
+  }
+
+  function updateSelectionHelper() {
+    if (!selectionHelper) return;
+    const object = refreshSelectedRootReference();
+    if (!object) {
+      selectionHelper.object = null;
+      selectionHelper.visible = false;
+      if (selectionHelper.geometry?.computeBoundingBox) selectionHelper.geometry.computeBoundingBox();
+      if (selectionHelper.geometry?.computeBoundingSphere) selectionHelper.geometry.computeBoundingSphere();
+      updateTransformGuide();
+      return;
+    }
+    object.updateWorldMatrix(true, true);
+    object.traverse(function (child) {
+      child.updateWorldMatrix(true, false);
+    });
+    selectionHelper.object = object;
+    selectionHelper.visible = true;
+    if (typeof selectionHelper.setFromObject === "function") selectionHelper.setFromObject(object);
+    else selectionHelper.update();
+    if (selectionHelper.geometry?.computeBoundingBox) selectionHelper.geometry.computeBoundingBox();
+    if (selectionHelper.geometry?.computeBoundingSphere) selectionHelper.geometry.computeBoundingSphere();
+    updateTransformGuide();
+  }
+
+  function clearSelectedRuntimeEntity() {
+    selectedEntityId = null;
+    selectedRoot = null;
+    transformSession = null;
+    transformState.active = false;
+    transformState.cancelled = false;
+    transformState.object = null;
+    transformState.rootId = null;
+    transformState.start = null;
+    transformState.axis = null;
+    if (selectionHelper) {
+      selectionHelper.object = null;
+      selectionHelper.visible = false;
+    }
+    if (transformGuide) transformGuide.visible = false;
+    transformAxisConstraint = null;
+    if (orbitControls) orbitControls.enabled = true;
+    applyLocalView();
+  }
+
+  function applyLocalView() {
+    const activeRoot = localViewActive ? selectedRoot : null;
+    for (const child of content.children) {
+      child.visible = !activeRoot || child === activeRoot;
+    }
+  }
+
+  function captureTransformStart(object) {
+    return {
+      position: object.position.clone(),
+      rotation: object.rotation.clone(),
+      scale: object.scale.clone(),
+      values: objectToTransform(object)
+    };
+  }
+
+  function restoreTransformStart(state) {
+    if (!state || !transformSession?.object) return;
+    transformSession.object.position.copy(state.position);
+    transformSession.object.rotation.copy(state.rotation);
+    transformSession.object.scale.copy(state.scale);
+  }
+
+  function constraintKeyToAxis(axisKey) {
+    if (axisKey === "x") return "x";
+    if (axisKey === "y") return "z";
+    if (axisKey === "z") return "y";
+    return null;
+  }
+
+  function currentTransformAxes() {
+    if (!transformAxisConstraint) {
+      return { x: true, y: true, z: true };
+    }
+    const axis = constraintKeyToAxis(transformAxisConstraint);
+    return {
+      x: axis === "x",
+      y: axis === "y",
+      z: axis === "z"
+    };
+  }
+
+  function activeSnapMode() {
+    if (snapState.mode === "off" && modifierState.ctrlKey) return "grid";
+    return snapState.mode;
+  }
+
+  function pointerFromEvent(event, buttonOverride) {
+    return {
+      x: Number(event.clientX) || 0,
+      y: Number(event.clientY) || 0,
+      button: buttonOverride !== undefined ? buttonOverride : event.button
+    };
+  }
+
+  function getObjectScreenCenter(object) {
+    if (!object) return null;
+    object.updateWorldMatrix(true, true);
+    const worldPosition = new THREE.Vector3();
+    object.getWorldPosition(worldPosition);
+    const ndc = worldPosition.clone().project(camera);
+    if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y) || !Number.isFinite(ndc.z) || ndc.z < -1 || ndc.z > 1) return null;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
+      y: rect.top + (-ndc.y + 1) * 0.5 * rect.height
+    };
+  }
+
+  function radialAngleForPointer(center, pointer) {
+    if (!center || !pointer) return null;
+    const dx = pointer.x - center.x;
+    const dy = pointer.y - center.y;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) < 8) return null;
+    return Math.atan2(dy, dx);
+  }
+
+  function normalizeAngleDelta(delta) {
+    if (!Number.isFinite(delta)) return null;
+    let next = delta;
+    while (next > Math.PI) next -= Math.PI * 2;
+    while (next < -Math.PI) next += Math.PI * 2;
+    return next;
+  }
+
+  function radialRotationDelta(transform, pointer) {
+    const center = transform?.radialCenter || getObjectScreenCenter(transform?.object);
+    const startAngle = Number.isFinite(transform?.radialStartAngle)
+      ? transform.radialStartAngle
+      : radialAngleForPointer(center, transform?.startPointer);
+    const currentAngle = radialAngleForPointer(center, pointer);
+    if (!Number.isFinite(startAngle) || !Number.isFinite(currentAngle)) {
+      const dx = pointer.x - transform.startPointer.x;
+      const dy = pointer.y - transform.startPointer.y;
+      return (dx - dy) * 0.01;
+    }
+    const delta = normalizeAngleDelta(currentAngle - startAngle);
+    return Number.isFinite(delta) ? delta : 0;
+  }
+
+  function worldUnitsPerPixel() {
+    if (!orbitControls) return 0.01;
+    const element = canvas;
+    if (camera.isPerspectiveCamera) {
+      const distance = camera.position.distanceTo(orbitControls.target);
+      if (!Number.isFinite(distance) || distance <= 0) return 0.01;
+      const targetDistance = distance * Math.tan((camera.fov * DEG_TO_RAD) / 2);
+      return 2 * targetDistance / Math.max(1, element.clientHeight || 1);
+    }
+    if (camera.isOrthographicCamera) {
+      const height = Math.max(1, element.clientHeight || 1);
+      return (camera.top - camera.bottom) / Math.max(1, camera.zoom * height);
+    }
+    return 0.01;
+  }
+
+  function transformLabelForMode(mode) {
+    if (mode === "rotate") return "Rotate Z";
+    if (mode === "scale") return "Scale";
+    return "Move";
+  }
+
+  function rootForSelectedTransform() {
+    return selectedRoot || rootForSelectableId(selectedEntityId);
+  }
+
+  function isPointerOverTransformControls() {
+    return false;
+  }
+
+  function selectableRootForObject(object) {
+    let current = object;
+    while (current) {
+      if (current.userData?.entityId || current.userData?.playerId) return current;
+      current = current.parent || null;
+    }
+    return null;
+  }
+
+  function applyTransformToObject(object, transform, pointer) {
+    if (!object || !transform) return false;
+    const mode = transform.mode || "move";
+    const axis = transform.axis || null;
+    const scale = worldUnitsPerPixel();
+    const basis = cameraGroundBasis();
+    const dx = pointer.x - transform.startPointer.x;
+    const dy = pointer.y - transform.startPointer.y;
+    let changed = false;
+    if (mode === "move") {
+      const groundDelta = new THREE.Vector3();
+      groundDelta.addScaledVector(basis.right, -dx * scale);
+      groundDelta.addScaledVector(basis.forward, -dy * scale);
+      const next = transform.startPosition.clone();
+      if (!axis) {
+        next.x += groundDelta.x;
+        next.z += groundDelta.z;
+        next.y = transform.startPosition.y;
+      } else if (axis === "x") {
+        next.x += groundDelta.x;
+      } else if (axis === "y") {
+        next.z += groundDelta.z;
+      } else if (axis === "z") {
+        next.y += -dy * scale;
+      }
+      if (snapState.mode === "grid" || (snapState.mode === "off" && modifierState.ctrlKey)) {
+        const gridSize = Math.max(0.0001, num(snapState.gridSize, 1));
+        if (!axis || axis === "x") next.x = Math.round(next.x / gridSize) * gridSize;
+        if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
+        if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
+      }
+      if (snapState.mode === "ground" && object.userData.snapToGround !== false) {
+        next.y = num(world?.ground?.y, 0);
+      }
+      if (!object.position.equals(next)) {
+        object.position.copy(next);
+        changed = true;
+      }
+    } else if (mode === "rotate") {
+      const next = transform.startRotation.clone();
+      const rotationAxis = constraintKeyToAxis(axis || "z") || "y";
+      next[rotationAxis] = transform.startRotation[rotationAxis] + radialRotationDelta(transform, pointer);
+      if (!object.rotation.equals(next)) {
+        object.rotation.copy(next);
+        changed = true;
+      }
+    } else if (mode === "scale") {
+      const delta = (dx - dy) * 0.005;
+      const next = transform.startScale.clone();
+      if (!axis) {
+        const uniform = Math.max(0.001, transform.startScale.x * (1 + delta));
+        next.set(uniform, uniform, uniform);
+      } else if (axis === "x") {
+        next.x = Math.max(0.001, transform.startScale.x * (1 + delta));
+      } else if (axis === "y") {
+        next.z = Math.max(0.001, transform.startScale.z * (1 + delta));
+      } else if (axis === "z") {
+        next.y = Math.max(0.001, transform.startScale.y * (1 + delta));
+      }
+      if (!object.scale.equals(next)) {
+        object.scale.copy(next);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function applyTransformPreview(pointer, triggerChange = true) {
+    if (!transformSession?.object) return false;
+    const object = transformSession.object;
+    const session = transformSession;
+    session.currentPointer = { x: pointer.x, y: pointer.y };
+    const changed = applyTransformToObject(object, session, pointer);
+    if (changed) {
+      updateSelectionHelper();
+      if (triggerChange) onTransformChange(session.rootId, objectToTransform(object));
+      requestRender();
+    }
+    return changed;
+  }
+
+  function beginTransform(modeName) {
+    if (transformSession?.object) return false;
+    const root = rootForSelectedTransform();
+    if (!root || root.userData.transformable === false) return false;
+    const mode = modeName === "translate" ? "move" : modeName === "rotate" || modeName === "scale" ? modeName : "move";
+    const rect = canvas.getBoundingClientRect();
+    const startPointer = lastEditorPointer
+      ? { x: lastEditorPointer.clientX, y: lastEditorPointer.clientY }
+      : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const radialCenter = mode === "rotate" ? getObjectScreenCenter(root) : null;
+    transformState = {
+      active: true,
+      cancelled: false,
+      object: root,
+      rootId: selectableIdForObject(root),
+      start: captureTransformStart(root),
+      mode: mode,
+      axis: transformAxisConstraint,
+      startPointer: startPointer,
+      currentPointer: { x: startPointer.x, y: startPointer.y },
+      startPosition: root.position.clone(),
+      startRotation: root.rotation.clone(),
+      startScale: root.scale.clone(),
+      radialCenter: radialCenter,
+      radialStartAngle: radialAngleForPointer(radialCenter, startPointer)
+    };
+    transformSession = transformState;
+    if (orbitControls) orbitControls.enabled = false;
+    canvas.style.cursor = mode === "rotate" ? "ew-resize" : mode === "scale" ? "nwse-resize" : "move";
+    applyTransformPreview(startPointer, false);
+    updateSelectionHelper();
+    onTransformChange(transformState.rootId, objectToTransform(root));
+    requestRender();
+    return true;
+  }
+
+  function beginKeyboardTransform() {
+    return beginTransform(transformState.mode || "move");
+  }
+
+  function setGizmoMode(modeName) {
+    const mode = modeName === "translate" ? "move" : modeName === "rotate" || modeName === "scale" ? modeName : "move";
+    transformState.mode = mode;
+    if (transformSession) {
+      transformSession.mode = mode;
+      if (transformSession.currentPointer) applyTransformPreview(transformSession.currentPointer);
+    }
+    requestRender();
+  }
+
+  function setTransformAxis(axis) {
+    transformAxisConstraint = axis === "x" || axis === "y" || axis === "z" ? axis : null;
+    if (transformSession) {
+      transformSession.axis = transformAxisConstraint;
+      if (transformSession.currentPointer) applyTransformPreview(transformSession.currentPointer);
+    }
+    applyTransformSnapState();
+    requestRender();
+  }
+
+  function finishTransform(commit) {
+    if (!transformSession?.object) return false;
+    const session = transformSession;
+    const object = session.object;
+    const start = session.start;
+    const rootId = session.rootId;
+    const current = objectToTransform(object);
+    const changed = Boolean(start && JSON.stringify(current) !== JSON.stringify(start.values));
+    const shouldCommit = Boolean(commit && changed && rootId);
+    if (!commit && start) {
+      restoreTransformStart(start);
+    }
+    transformSession = null;
+    transformState.active = false;
+    transformState.cancelled = !commit;
+    transformState.object = null;
+    transformState.rootId = null;
+    transformState.start = null;
+    transformState.axis = null;
+    if (orbitControls) orbitControls.enabled = true;
+    canvas.style.cursor = "";
+    transformAxisConstraint = null;
+    clearSelectedRuntimeEntity();
+    if (shouldCommit) onTransformCommit(rootId, current);
+    onTransformEnd({
+      action: commit ? "confirm" : "cancel",
+      entityId: rootId,
+      mode: session.mode,
+      axis: session.axis,
+      transform: current,
+      changed: changed
+    });
+    updateSelectionHelper();
+    requestRender();
+    return shouldCommit;
+  }
+
+  function confirmTransform() {
+    return finishTransform(true);
+  }
+
+  function cancelTransform() {
+    return finishTransform(false);
+  }
+
+  function handleTransformPointerMove(event) {
+    rememberEditorPointer(event);
+    if (viewportPanSession) {
+      handleViewportPanMove(event);
+      return;
+    }
+    if (!transformSession?.object) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const pointer = pointerFromEvent(event, -1);
+    applyTransformPreview(pointer);
+  }
+
+  function handleTransformPointerUp(event) {
+    rememberEditorPointer(event);
+    if (viewportPanSession) {
+      handleViewportPanUp(event);
+      return;
+    }
+    if (!transformSession?.object) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.button === 2 || event.button === 1) {
+      cancelTransform();
+      return;
+    }
+    if (event.button === 0) {
+      confirmTransform();
+      return;
+    }
+  }
+
+  function applyTransformSnapState() {
+    if (!transformSession?.object) return;
+    if (transformSession.currentPointer) {
+      applyTransformPreview(transformSession.currentPointer, false);
+    }
+  }
+
+  function fitDistanceForBox(box, fovDegrees) {
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxSize = Math.max(size.x, size.y, size.z);
+    if (!Number.isFinite(maxSize) || maxSize <= 0.0001) return 8;
+    const fov = (fovDegrees || camera.fov || 60) * DEG_TO_RAD;
+    return (maxSize * 1.25) / Math.tan(fov / 2);
+  }
+
+  function frameObject(object, preserveDirection) {
+    if (!orbitControls || !object) return false;
+    const box = new THREE.Box3().setFromObject(object);
+    if (box.isEmpty()) {
+      const target = new THREE.Vector3();
+      object.getWorldPosition(target);
+      orbitControls.target.copy(target);
+      orbitControls.update();
+      requestRender();
+      return true;
+    }
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const currentOffset = camera.position.clone().sub(orbitControls.target);
+    const direction = preserveDirection && currentOffset.lengthSq() > 0.0001
+      ? currentOffset.normalize()
+      : new THREE.Vector3(1, 1, 1).normalize();
+    const distance = Math.max(1, fitDistanceForBox(box, camera.fov));
+    orbitControls.target.copy(center);
+    camera.position.copy(center).add(direction.multiplyScalar(distance));
+    orbitControls.update();
+    updateSelectionHelper();
+    requestRender();
+    return true;
+  }
+
+  function frameEntity(entityId) {
+    const object = rootForSelectableId(entityId);
+    if (!object) return false;
+    return frameObject(object, true);
+  }
+
+  function frameAll() {
+    if (localViewActive && selectedObjectRoot()) {
+      return frameObject(selectedObjectRoot(), true);
+    }
+    return frameObject(content, true);
+  }
+
+  function setView(viewName) {
+    if (!orbitControls) return false;
+    const object = selectedObjectRoot() || content;
+    const box = new THREE.Box3().setFromObject(object);
+    const center = new THREE.Vector3();
+    if (box.isEmpty()) {
+      object.getWorldPosition(center);
+    } else {
+      box.getCenter(center);
+    }
+    const distance = Math.max(1, camera.position.distanceTo(orbitControls.target) || camDistance || 8);
+    let direction = null;
+    if (viewName === "front") direction = new THREE.Vector3(0, 0, 1);
+    else if (viewName === "right") direction = new THREE.Vector3(1, 0, 0);
+    else if (viewName === "top") direction = new THREE.Vector3(0, 1, 0);
+    if (!direction) return false;
+    orbitControls.target.copy(center);
+    camera.position.copy(center).add(direction.multiplyScalar(distance));
+    if (viewName === "top") camera.up.set(0, 0, -1); else camera.up.set(0, 1, 0);
+    orbitControls.update();
+    updateSelectionHelper();
+    requestRender();
+    return true;
+  }
+
+  function setTransformAxisConstraint(axis) {
+    return setTransformAxis(axis);
+  }
+
+  function beginViewportPan(event) {
+    if (!orbitControls || !event) return false;
+    viewportPanSession = {
+      pointerId: event.pointerId,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY
+    };
+    if (typeof canvas.setPointerCapture === "function" && event.pointerId !== undefined) {
+      try { canvas.setPointerCapture(event.pointerId); } catch {}
+    }
+    return true;
+  }
+
+  function panOrbitByPixels(deltaX, deltaY) {
+    if (!orbitControls) return;
+    const element = canvas;
+    const pan = new THREE.Vector3();
+    camera.updateMatrixWorld(true);
+    if (camera.isPerspectiveCamera) {
+      const distance = camera.position.distanceTo(orbitControls.target);
+      if (!Number.isFinite(distance) || distance <= 0) return;
+      const targetDistance = distance * Math.tan((camera.fov * DEG_TO_RAD) / 2);
+      const scale = 2 * targetDistance / Math.max(1, element.clientHeight || 1);
+      pan.setFromMatrixColumn(camera.matrix, 0).multiplyScalar(-deltaX * scale);
+      pan.addScaledVector(new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1), deltaY * scale);
+    } else if (camera.isOrthographicCamera) {
+      const width = Math.max(1, element.clientWidth || 1);
+      const height = Math.max(1, element.clientHeight || 1);
+      const scaleX = (camera.right - camera.left) / Math.max(1, camera.zoom * width);
+      const scaleY = (camera.top - camera.bottom) / Math.max(1, camera.zoom * height);
+      pan.setFromMatrixColumn(camera.matrix, 0).multiplyScalar(-deltaX * scaleX);
+      pan.addScaledVector(new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1), deltaY * scaleY);
+    } else {
+      return;
+    }
+    camera.position.add(pan);
+    orbitControls.target.add(pan);
+    orbitControls.update();
+    requestRender();
+  }
+
+  function handleViewportPanMove(event) {
+    if (!viewportPanSession || event.pointerId !== viewportPanSession.pointerId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const deltaX = event.clientX - viewportPanSession.lastClientX;
+    const deltaY = event.clientY - viewportPanSession.lastClientY;
+    viewportPanSession.lastClientX = event.clientX;
+    viewportPanSession.lastClientY = event.clientY;
+    if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) panOrbitByPixels(deltaX, deltaY);
+  }
+
+  function handleViewportPanUp(event) {
+    if (!viewportPanSession || event.pointerId !== viewportPanSession.pointerId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    viewportPanSession = null;
+    if (typeof canvas.releasePointerCapture === "function" && event.pointerId !== undefined) {
+      try { canvas.releasePointerCapture(event.pointerId); } catch {}
+    }
+    requestRender();
+  }
+
+  function setSnapState(modeName, gridSize) {
+    snapState.mode = ["off", "grid", "ground"].includes(modeName) ? modeName : "off";
+    snapState.gridSize = Math.max(0.001, num(gridSize, 1));
+    applyTransformSnapState();
+    requestRender();
+  }
+
+  function setAnimationPreviewEnabled(enabled) {
+    previewAnimations = Boolean(enabled);
+    requestRender("preview-toggle");
+    return previewAnimations;
+  }
+
+  function isAnimationPreviewEnabled() {
+    return previewAnimations;
   }
 
   function applyCameraConfig(worldData) {
@@ -435,6 +1262,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       loader.load(asset.sourcePath, function (gltf) {
         record.status = "ready";
         record.gltf = gltf;
+        record.gltf.animations = normalizeAnimations(gltf.animations);
         for (const waiter of record.waiters.splice(0)) waiter(gltf);
       }, undefined, function () {
         record.status = "error";
@@ -443,12 +1271,26 @@ export function createGkWorldRuntime(canvas, options = {}) {
       });
     }
     const attach = function (gltf) {
-      const clone = gltf.scene.clone(true);
+      const clone = SkeletonUtils.clone(gltf.scene);
       clone.traverse(function (child) {
         if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
       });
       root.add(clone);
+      const preferredClip = resolveAnimationClipName(gltf.animations || [], root.userData.animationClip || root.userData.idleAnimation || null, asset.metadata || {});
+      if (preferredClip) {
+        const clip = (gltf.animations || []).find(function (candidate) { return candidate.name === preferredClip; }) || null;
+        if (clip) {
+          const mixer = new THREE.AnimationMixer(clone);
+          const action = mixer.clipAction(clip);
+          action.reset();
+          action.setLoop(THREE.LoopRepeat, Infinity);
+          action.clampWhenFinished = false;
+          action.play();
+          animationMixers.set(root, { mixer, root: clone, action });
+        }
+      }
       if (onReady) onReady(clone);
+      if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
       requestRender();
     };
     if (record.status === "ready") attach(record.gltf);
@@ -469,7 +1311,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
       x: round(object.position.x),
       y: round(object.position.y),
       z: round(object.position.z),
+      rotationX: round(object.rotation.x / DEG_TO_RAD),
       rotationY: round(object.rotation.y / DEG_TO_RAD),
+      rotationZ: round(object.rotation.z / DEG_TO_RAD),
       scaleX: round(object.scale.x),
       scaleY: round(object.scale.y),
       scaleZ: round(object.scale.z)
@@ -480,9 +1324,50 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return Math.round(Number(value) * 1000) / 1000;
   }
 
+  function normalizeAnimations(animations) {
+    return (animations || []).map(function (clip, index) {
+      const next = clip.clone();
+      const name = String(next.name || "").trim();
+      next.name = name || "Animation " + (index + 1);
+      return next;
+    });
+  }
+
+  function resolveAnimationClipName(clips, preferredName, metadata) {
+    const names = (clips || []).map(function (clip) { return String(clip?.name || "").trim(); }).filter(Boolean);
+    if (!names.length) return null;
+    const preferred = String(preferredName || "").trim();
+    if (preferred) {
+      const exact = names.find(function (name) { return name === preferred; });
+      if (exact) return exact;
+      const lower = preferred.toLowerCase();
+      const caseMatch = names.find(function (name) { return name.toLowerCase() === lower; });
+      if (caseMatch) return caseMatch;
+      const contains = names.find(function (name) { return name.toLowerCase().includes(lower); });
+      if (contains) return contains;
+    }
+    const defaultName = String(metadata?.defaultAnimation || "").trim();
+    if (defaultName) {
+      const exact = names.find(function (name) { return name === defaultName; });
+      if (exact) return exact;
+      const lower = defaultName.toLowerCase();
+      const caseMatch = names.find(function (name) { return name.toLowerCase() === lower; });
+      if (caseMatch) return caseMatch;
+      const contains = names.find(function (name) { return name.toLowerCase().includes(lower); });
+      if (contains) return contains;
+    }
+    return names[0] || null;
+  }
+
   function addEntity(worldData, entity) {
     const root = new THREE.Group();
     root.userData.entityId = entity.id;
+    root.userData.transformable = true;
+    root.userData.snapToGround = true;
+    root.userData.animationClip = entity.animationClip || null;
+    root.userData.idleAnimation = entity.idleAnimation || null;
+    root.userData.walkAnimation = entity.walkAnimation || null;
+    root.userData.runAnimation = entity.runAnimation || null;
     root.name = entity.id;
     transformObject(root, entity.transform);
     entityRoots.set(entity.id, root);
@@ -500,6 +1385,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (inter.modelAssetId) {
       const root = new THREE.Group();
       root.userData.interactableId = inter.id;
+      root.userData.transformable = false;
+      root.userData.snapToGround = true;
       root.position.set(x, groundY, z);
       content.add(root);
       loadModelInto(root, inter.modelAssetId, worldData);
@@ -520,6 +1407,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
     player.pos.set(num(spawn.x, 0), groundY, num(spawn.z, 0));
     const root = new THREE.Group();
     root.name = "player";
+    root.userData.playerId = def.id;
+    root.userData.transformable = false;
+    root.userData.snapToGround = false;
+    root.userData.animationClip = def.animationClip || null;
+    root.userData.idleAnimation = def.idleAnimation || null;
+    root.userData.walkAnimation = def.walkAnimation || null;
+    root.userData.runAnimation = def.runAnimation || null;
     root.position.copy(player.pos);
     root.rotation.y = player.facing;
     const scale = num(def.scale, 1);
@@ -530,10 +1424,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function selectEntity(entityId) {
-    selectedEntityId = entityId;
-    if (!transformControls) return;
-    const object = entityRoots.get(entityId);
-    if (object) transformControls.attach(object); else transformControls.detach();
+    selectedEntityId = entityId || null;
+    refreshSelectedRootReference();
+    applyLocalView();
+    if (selectionHelper) updateSelectionHelper();
     requestRender();
   }
 
@@ -542,13 +1436,21 @@ export function createGkWorldRuntime(canvas, options = {}) {
     pointer.x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     pointer.y = -((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
-    const candidates = [];
-    for (const root of entityRoots.values()) candidates.push.apply(candidates, root.children);
-    const hits = raycaster.intersectObjects(candidates, true);
+    const hits = raycaster.intersectObjects(content.children, true);
     if (!hits.length) return null;
-    let object = hits[0].object;
-    while (object && !object.userData.entityId) object = object.parent;
-    return object?.userData.entityId || null;
+    for (const hit of hits) {
+      let object = hit.object;
+      while (object && object !== content) {
+        if (object.visible === false) break;
+        if (object === selectionHelper || object === transformGuide) break;
+        if (object.name === "GK editor transform guide" || String(object.name || "").startsWith("GK editor transform guide")) break;
+        if (object.userData?.entityId || object.userData?.playerId) {
+          return object.userData.entityId || object.userData.playerId || null;
+        }
+        object = object.parent || null;
+      }
+    }
+    return null;
   }
 
   function pickInteractable(event) {
@@ -621,7 +1523,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function cameraGroundBasis() {
-    const forward = new THREE.Vector3(camTarget.x - camera.position.x, 0, camTarget.z - camera.position.z);
+    const target = orbitControls ? orbitControls.target : camTarget;
+    const forward = new THREE.Vector3(target.x - camera.position.x, 0, target.z - camera.position.z);
     if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
     forward.normalize();
     const right = new THREE.Vector3(forward.z, 0, -forward.x);
@@ -770,18 +1673,46 @@ export function createGkWorldRuntime(canvas, options = {}) {
   function destroy() {
     disposed = true;
     stopRenderLoop("destroy");
+    viewportPanSession = null;
     if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
     resizeRafId = null;
     if (resizeObserver) resizeObserver.disconnect();
     resizeObserver = null;
     if (windowResizeHandler) window.removeEventListener("resize", windowResizeHandler);
     windowResizeHandler = null;
-    if (orbitControls) orbitControls.removeEventListener("change", requestRender);
-    if (transformControls) {
-      if (transformDraggingHandler) transformControls.removeEventListener("dragging-changed", transformDraggingHandler);
-      transformControls.removeEventListener("objectChange", requestRender);
-      if (transformMouseUpHandler) transformControls.removeEventListener("mouseUp", transformMouseUpHandler);
+    if (orbitControls) {
+      orbitControls.removeEventListener("change", requestRender);
+      if (typeof orbitControls.dispose === "function") orbitControls.dispose();
     }
+    if (selectionHelper) {
+      scene.remove(selectionHelper);
+      if (selectionHelper.geometry) selectionHelper.geometry.dispose();
+      if (selectionHelper.material) selectionHelper.material.dispose();
+      selectionHelper = null;
+    }
+    if (transformGuide) {
+      scene.remove(transformGuide);
+      disposeObject(transformGuide);
+      transformGuide = null;
+    }
+    if (editorPointerDownCaptureHandler) canvas.removeEventListener("pointerdown", editorPointerDownCaptureHandler, true);
+    if (editorPointerUpCaptureHandler) {
+      canvas.removeEventListener("pointerup", editorPointerUpCaptureHandler, true);
+      canvas.removeEventListener("pointercancel", editorPointerUpCaptureHandler, true);
+    }
+    if (editorDirectPointerMoveHandler) {
+      canvas.removeEventListener("pointermove", editorDirectPointerMoveHandler, true);
+      window.removeEventListener("pointermove", editorDirectPointerMoveHandler, true);
+    }
+    if (editorDirectPointerUpHandler) {
+      canvas.removeEventListener("pointerup", editorDirectPointerUpHandler, true);
+      canvas.removeEventListener("pointercancel", editorDirectPointerUpHandler, true);
+      window.removeEventListener("pointerup", editorDirectPointerUpHandler, true);
+      window.removeEventListener("pointercancel", editorDirectPointerUpHandler, true);
+    }
+    if (editorContextMenuHandler) canvas.removeEventListener("contextmenu", editorContextMenuHandler);
+    if (editorKeyDownHandler) window.removeEventListener("keydown", editorKeyDownHandler);
+    if (editorKeyUpHandler) window.removeEventListener("keyup", editorKeyUpHandler);
     if (editorPointerDownHandler) canvas.removeEventListener("pointerdown", editorPointerDownHandler);
     if (gamePointerDownHandler) canvas.removeEventListener("pointerdown", gamePointerDownHandler);
     if (gameKeyDownHandler) window.removeEventListener("keydown", gameKeyDownHandler);
@@ -806,27 +1737,37 @@ export function createGkWorldRuntime(canvas, options = {}) {
   scheduleResize("init");
   requestRender("init");
 
-  function setGizmoMode(modeName) {
-    if (transformControls && ["translate", "rotate", "scale"].includes(modeName)) {
-      transformControls.setMode(modeName);
-      requestRender();
-    }
-  }
-
   function focusSelected() {
-    if (!orbitControls) return;
-    const object = selectedEntityId ? entityRoots.get(selectedEntityId) : null;
-    if (object) {
-      orbitControls.target.copy(object.position);
-      orbitControls.update();
-      requestRender();
-    }
+    return frameEntity(selectedEntityId);
   }
 
   function deselect() {
-    if (transformControls) transformControls.detach();
-    selectedEntityId = null;
+    clearSelectedRuntimeEntity();
     requestRender();
+  }
+
+  function setLocalView(enabled) {
+    localViewActive = Boolean(enabled);
+    applyLocalView();
+    updateSelectionHelper();
+    requestRender();
+    return localViewActive;
+  }
+
+  function toggleLocalView() {
+    return setLocalView(!localViewActive);
+  }
+
+  function isLocalViewActive() {
+    return localViewActive;
+  }
+
+  function isTransformActive() {
+    return Boolean(transformSession?.object);
+  }
+
+  function isTransformControlsAttached() {
+    return Boolean(selectedRoot);
   }
 
   return {
@@ -836,11 +1777,33 @@ export function createGkWorldRuntime(canvas, options = {}) {
     dispose: destroy,
     screenToGround: screenToGround,
     selectEntity: selectEntity,
+    frameEntity: frameEntity,
+    frameAll: frameAll,
     captureViewState: captureViewState,
     restoreViewState: restoreViewState,
     configureCallbacks: configureCallbacks,
+    beginTransform: beginTransform,
     setGizmoMode: setGizmoMode,
+    setTransformAxis: setTransformAxis,
+    setTransformAxisConstraint: setTransformAxisConstraint,
+    setSnapState: setSnapState,
+    setAnimationPreviewEnabled: setAnimationPreviewEnabled,
+    isAnimationPreviewEnabled: isAnimationPreviewEnabled,
+    isPointerOverTransformControls: isPointerOverTransformControls,
+    beginKeyboardTransform: beginKeyboardTransform,
+    setView: setView,
+    setLocalView: setLocalView,
+    toggleLocalView: toggleLocalView,
+    isLocalViewActive: isLocalViewActive,
     focusSelected: focusSelected,
+    cancelTransform: cancelTransform,
+    confirmTransform: confirmTransform,
+    cancelTransformSession: cancelTransform,
+    confirmTransformSession: confirmTransform,
+    isTransformActive: isTransformActive,
+    isTransformControlsAttached: isTransformControlsAttached,
+    getSelectedEntitySnapshot: getSelectedEntitySnapshot,
+    getSelectedEntityId: function () { return selectedEntityId; },
     deselect: deselect,
     getLoadErrors: function () { return loadErrors.slice(); }
   };

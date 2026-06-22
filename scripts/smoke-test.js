@@ -38,7 +38,16 @@ function assert(condition, message) {
 }
 
 function buildMinimalGlb() {
-  const json = Buffer.from(JSON.stringify({ asset: { version: "2.0" }, scenes: [{ nodes: [] }], scene: 0, nodes: [] }), "utf8");
+  const json = Buffer.from(JSON.stringify({
+    asset: { version: "2.0" },
+    scenes: [{ nodes: [] }],
+    scene: 0,
+    nodes: [],
+    animations: [
+      { name: "Idle" },
+      { name: "Walk" }
+    ]
+  }), "utf8");
   const jsonPad = (4 - (json.length % 4)) % 4;
   const jsonChunk = Buffer.concat([json, Buffer.alloc(jsonPad, 0x20)]);
   const header = Buffer.alloc(12);
@@ -143,6 +152,10 @@ async function main() {
     const upload = await call("POST", "/api/assets/import", form, true);
     assert(upload.status === 201 && upload.json.asset, "GLB upload werkt");
     const modelId = upload.json.asset.id;
+    assert(upload.json.asset.metadata.animationCount === 2, "GLB metadata telt 2 animaties");
+    assert(upload.json.asset.metadata.defaultAnimation === "Idle", "GLB metadata kiest Idle als default");
+    assert(Array.isArray(upload.json.asset.metadata.animations) && upload.json.asset.metadata.animations.length === 2, "GLB metadata bevat animatielijst");
+    assert(upload.json.asset.metadata.animations[0].name === "Idle" && upload.json.asset.metadata.animations[1].name === "Walk", "GLB metadata bevat Idle en Walk");
 
     const baselineGraph = (await call("GET", "/api/editor/graph")).json;
     const tempNode = await createNode("ambient_light", { lightId: "temp_restore", color: "#ffffff", intensity: 0.1 });
@@ -163,10 +176,15 @@ async function main() {
     const ambientNode = graph.nodes.find(function (n) { return n.type === "ambient_light"; });
     graph = (await createNode("directional_light", { lightId: "sun", color: "#ffffff", intensity: 1.2, x: 10, y: 20, z: 10 })).graph;
     const dirNode = graph.nodes.find(function (n) { return n.type === "directional_light"; });
-    graph = (await createNode("player_character", { playerId: "hero", modelAssetId: modelId, moveSpeed: 6, sprintMultiplier: 1.6, turnSpeed: 600, collisionRadius: 0.5, scale: 1 })).graph;
+    graph = (await createNode("player_character", { playerId: "hero", modelAssetId: modelId, animationClip: "Idle", moveSpeed: 6, sprintMultiplier: 1.6, turnSpeed: 600, collisionRadius: 0.5, scale: 1 })).graph;
     const playerNode = graph.nodes.find(function (n) { return n.type === "player_character"; });
+    assert(playerNode.values.animationClip === "Idle", "player_character bewaart animationClip");
     graph = (await createNode("player_spawn", { spawnId: "spawn", x: 0, z: 0, facing: 0 })).graph;
     const spawnNode = graph.nodes.find(function (n) { return n.type === "player_spawn"; });
+    graph = (await createNode("model_entity", { entityId: "entity_walk", label: "Walker", modelAssetId: modelId, animationClip: "Walk", x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1, solid: false, collisionRadius: 1 })).graph;
+    const modelEntityNode = findNode(graph, function (n) { return n.type === "model_entity" && n.values.entityId === "entity_walk"; }, "model entity aangemaakt");
+    assert(modelEntityNode.values.animationClip === "Walk", "model_entity bewaart animationClip");
+    assert(modelEntityNode.values.rotationX === 10 && modelEntityNode.values.rotationY === 20 && modelEntityNode.values.rotationZ === 30, "model_entity bewaart rotationX/Y/Z");
     graph = (await createNode("keybind", { bindingId: "kb_direct", action: "move_forward", keyCode: "KeyW" })).graph;
     const keybindDirect = findNode(graph, function (n) { return n.type === "keybind" && n.values.bindingId === "kb_direct"; }, "directe keybind aangemaakt");
 
@@ -219,6 +237,7 @@ async function main() {
     graph = await connect(graph, dirNode.id, "light", gameOutputNode.id, "lights");
     graph = await connect(graph, playerNode.id, "player", gameOutputNode.id, "player");
     graph = await connect(graph, spawnNode.id, "spawn", gameOutputNode.id, "spawn");
+    graph = await connect(graph, modelEntityNode.id, "entity", gameOutputNode.id, "entities");
 
     const validate = await call("GET", "/api/editor/validate");
     assert(validate.status === 200 && validate.json.ok, "validatie is groen");
@@ -233,7 +252,13 @@ async function main() {
     assert(after.status === 200, "game wereld is 200 na publish");
     assert(after.json.camera && after.json.camera.mode === "top-down", "camera is top-down");
     assert(after.json.player && after.json.player.modelAssetId === modelId, "speler verwijst naar geuploade model");
+    assert(after.json.player && after.json.player.animationClip === "Idle", "speler publiceert gekozen animationClip");
     assert(after.json.spawn && after.json.spawn.x === 0, "spawn aanwezig");
+    assert(Array.isArray(after.json.entities) && after.json.entities.some(function (entity) { return entity.animationClip === "Walk"; }), "entities publiceren gekozen animationClip");
+    const publishedModelEntity = Array.isArray(after.json.entities)
+      ? after.json.entities.find(function (entity) { return entity.id === "entity_walk"; })
+      : null;
+    assert(publishedModelEntity && publishedModelEntity.transform && publishedModelEntity.transform.rotation.x === 10 && publishedModelEntity.transform.rotation.y === 20 && publishedModelEntity.transform.rotation.z === 30, "entities publiceren rotationX/Y/Z");
     assert(Array.isArray(after.json.keybinds) && after.json.keybinds.length === 3, "keybinds uit root en beide groups zijn mee gepubliceerd");
     const publishedKeybindIds = new Set(after.json.keybinds.map(function (entry) { return entry.id; }));
     assert(publishedKeybindIds.has("kb_direct"), "directe keybind is gepubliceerd");

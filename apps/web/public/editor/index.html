@@ -62,8 +62,50 @@
 
       <section class="viewportColumn">
         <div class="viewportWrap">
+          <div class="viewportChromeLeft">
+            <div class="viewportChromeBar">
+              <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
+              <button id="viewportInfoButton" type="button" class="viewportInfoButton" title="Viewport help" aria-controls="viewportHelpPanel" aria-expanded="false">i</button>
+            </div>
+            <div class="viewportHelpPanel" id="viewportHelpPanel" hidden>
+              <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Hotkeys</div>
+                <div class="viewportHelpGrid">
+                  <span class="viewportHelpKey">MMB</span><span>Orbit</span>
+                  <span class="viewportHelpKey">Shift+MMB</span><span>Pan</span>
+                  <span class="viewportHelpKey">Scroll</span><span>Zoom</span>
+                  <span class="viewportHelpKey">F</span><span>Frame selected</span>
+                  <span class="viewportHelpKey">Home</span><span>Frame all</span>
+                  <span class="viewportHelpKey">G</span><span>Move</span>
+                  <span class="viewportHelpKey">R</span><span>Rotate</span>
+                  <span class="viewportHelpKey">S</span><span>Scale</span>
+                  <span class="viewportHelpKey">X/Y/Z</span><span>Constrain axis</span>
+                  <span class="viewportHelpKey">Alt+G</span><span>Reset location</span>
+                  <span class="viewportHelpKey">Alt+R</span><span>Reset rotation</span>
+                  <span class="viewportHelpKey">Alt+S</span><span>Reset scale</span>
+                  <span class="viewportHelpKey">Esc</span><span>Cancel</span>
+                  <span class="viewportHelpKey">Enter</span><span>Confirm</span>
+                </div>
+              </div>
+              <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Snap</div>
+                <label class="snapControl">
+                  <span>Mode</span>
+                  <select id="snapModeSelect">
+                    <option value="off">Off</option>
+                    <option value="grid">Grid</option>
+                    <option value="ground">Ground</option>
+                  </select>
+                </label>
+                <label class="snapControl">
+                  <span>Grid</span>
+                  <input id="snapGridInput" type="number" min="0.1" step="0.1" value="1">
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
           <canvas id="viewportCanvas"></canvas>
-          <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
           <div class="viewportErrors" id="viewportErrors"></div>
         </div>
         <div class="statusLine" id="statusText">Laden...</div>

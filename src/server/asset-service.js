@@ -72,6 +72,9 @@ export class AssetService {
       contentType: file.contentType || "",
       format: ext.slice(1)
     };
+    if (assetType === "model") {
+      Object.assign(metadata, metadataFromGlb(file.data));
+    }
     this.db.prepare("INSERT INTO asset_library (id, name, category, asset_type, source_path, thumbnail_path, original_filename, mime_type, size_bytes, sha256, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, name, category, assetType, sourcePath, thumbnailPath, originalFileName, file.contentType || "", file.data.length, metadata.sha256, JSON.stringify(metadata), now(), now());
     return this.get(id);
@@ -110,6 +113,73 @@ function toAsset(row) {
 
 function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function metadataFromGlb(data) {
+  if (!data || data.length < 20) {
+    const error = new Error("GLB bestand is te klein.");
+    error.status = 400;
+    throw error;
+  }
+  if (data.slice(0, 4).toString("utf8") !== "glTF" || data.readUInt32LE(4) !== 2) {
+    const error = new Error("GLB header is ongeldig.");
+    error.status = 400;
+    throw error;
+  }
+  const declaredLength = data.readUInt32LE(8);
+  if (declaredLength > data.length) {
+    const error = new Error("GLB lengte klopt niet.");
+    error.status = 400;
+    throw error;
+  }
+  const json = parseGlbJsonChunk(data);
+  const animations = Array.isArray(json.animations) ? json.animations.map(function (animation, index) {
+    return { name: animationName(animation?.name, index), index: index };
+  }) : [];
+  return {
+    animationCount: animations.length,
+    animations: animations,
+    defaultAnimation: defaultAnimationFromAnimations(animations)
+  };
+}
+
+function parseGlbJsonChunk(data) {
+  let offset = 12;
+  while (offset + 8 <= data.length) {
+    const chunkLength = data.readUInt32LE(offset);
+    const chunkType = data.slice(offset + 4, offset + 8).toString("utf8");
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkLength;
+    if (chunkEnd > data.length) break;
+    if (chunkType === "JSON") {
+      const text = data.slice(chunkStart, chunkEnd).toString("utf8").trim();
+      if (!text) break;
+      try {
+        return JSON.parse(text);
+      } catch {
+        const error = new Error("GLB JSON chunk is ongeldig.");
+        error.status = 400;
+        throw error;
+      }
+    }
+    offset = chunkEnd;
+  }
+  const error = new Error("GLB JSON chunk ontbreekt.");
+  error.status = 400;
+  throw error;
+}
+
+function animationName(name, index) {
+  const trimmed = String(name || "").trim();
+  return trimmed || "Animation " + (index + 1);
+}
+
+function defaultAnimationFromAnimations(animations) {
+  if (!animations.length) return null;
+  const idle = animations.find(function (animation) {
+    return String(animation.name || "").toLowerCase().includes("idle");
+  });
+  return (idle || animations[0]).name || null;
 }
 
 function inferType(ext) {

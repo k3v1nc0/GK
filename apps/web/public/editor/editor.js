@@ -35,6 +35,15 @@ const state = {
   assetSort: "date",
   assetFilter: "all",
   captureField: null,
+  viewportMode: "translate",
+  viewportAxis: null,
+  snapMode: "off",
+  snapGridSize: 1,
+  previewAnimations: false,
+  viewportHelpOpen: false,
+  statusMessage: "",
+  statusKind: "",
+  viewportDebugKey: "",
   history: { undo: [], redo: [] },
   viewportDirty: false,
   dragPreviewPositions: {},
@@ -60,6 +69,9 @@ const el = {
   nodeLayer: document.querySelector("#nodeLayer"),
   viewportCanvas: document.querySelector("#viewportCanvas"),
   viewportStatus: document.querySelector("#viewportStatus"),
+  viewportInfoButton: document.querySelector("#viewportInfoButton"),
+  viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
+  viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   viewportErrors: document.querySelector("#viewportErrors"),
   statusText: document.querySelector("#statusText"),
   assetSearch: document.querySelector("#assetSearch"),
@@ -67,6 +79,8 @@ const el = {
   assetFilter: document.querySelector("#assetFilter"),
   assetGrid: document.querySelector("#assetGrid"),
   assetForm: document.querySelector("#assetForm"),
+  snapModeSelect: document.querySelector("#snapModeSelect"),
+  snapGridInput: document.querySelector("#snapGridInput"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
   logoutButton: document.querySelector("#logoutButton"),
@@ -108,8 +122,9 @@ async function api(path, options) {
 }
 
 function setStatus(message, kind) {
-  el.statusText.textContent = message;
-  el.statusText.className = "statusLine" + (kind ? " " + kind : "");
+  state.statusMessage = message || "";
+  state.statusKind = kind || "";
+  renderStatusLine();
 }
 
 function bumpUnsaved() {
@@ -132,6 +147,419 @@ function effectiveFieldValue(field, value) {
 
 function clonePlain(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function assetById(assetId) {
+  return state.assets.find(function (asset) { return asset.id === assetId; }) || null;
+}
+
+function runtimeNodeId(node) {
+  if (!node) return null;
+  if (node.type === "player_character") return node.values?.playerId || null;
+  if (node.type === "model_entity") return node.values?.entityId || null;
+  return null;
+}
+
+function runtimeSelectedEntityId() {
+  if (!runtime || typeof runtime.getSelectedEntityId !== "function") return null;
+  return runtime.getSelectedEntityId() || null;
+}
+
+function runtimeTransformActive() {
+  if (!runtime || typeof runtime.isTransformActive !== "function") return false;
+  return runtime.isTransformActive();
+}
+
+function nodeByRuntimeId(runtimeId) {
+  if (!runtimeId) return null;
+  return state.graph.nodes.find(function (node) {
+    return node.values && (node.values.entityId === runtimeId || node.values.playerId === runtimeId);
+  }) || null;
+}
+
+function viewportAxisToNodeAxis(axis) {
+  if (axis === "x") return "x";
+  if (axis === "y") return "z";
+  if (axis === "z") return "y";
+  return null;
+}
+
+function nodeAxisToViewportAxis(axis) {
+  if (axis === "x") return "x";
+  if (axis === "y") return "z";
+  if (axis === "z") return "y";
+  return null;
+}
+
+function viewportVectorFromWorld(vector) {
+  return {
+    x: Number(vector?.x) || 0,
+    y: Number(vector?.z) || 0,
+    z: Number(vector?.y) || 0
+  };
+}
+
+function animationClipsForAsset(asset) {
+  const animations = asset?.metadata?.animations;
+  if (!Array.isArray(animations)) return [];
+  return animations.map(function (entry) {
+    return {
+      name: String(entry?.name || "").trim(),
+      index: Number.isFinite(Number(entry?.index)) ? Number(entry.index) : 0
+    };
+  }).filter(function (entry) { return Boolean(entry.name); });
+}
+
+function defaultAnimationForAsset(asset) {
+  const defaultAnimation = String(asset?.metadata?.defaultAnimation || "").trim();
+  return defaultAnimation || null;
+}
+
+function animationBadgeText(asset) {
+  const count = Number(asset?.metadata?.animationCount || 0);
+  return count + " anim" + (count === 1 ? "" : "s");
+}
+
+function animationBlankLabel(key) {
+  if (key === "animationClip") return "Auto / standaard";
+  if (key === "idleAnimation") return "Idle / standaard";
+  return "(geen)";
+}
+
+function resolveAnimationChoiceForAsset(asset, currentValue, options = {}) {
+  const clips = animationClipsForAsset(asset);
+  if (!clips.length) return null;
+  const current = String(currentValue || "").trim();
+  if (current) {
+    const exact = clips.find(function (clip) { return clip.name === current; });
+    if (exact) return exact.name;
+    const lower = current.toLowerCase();
+    const caseMatch = clips.find(function (clip) { return clip.name.toLowerCase() === lower; });
+    if (caseMatch) return caseMatch.name;
+    const contains = clips.find(function (clip) { return clip.name.toLowerCase().includes(lower); });
+    if (contains) return contains.name;
+  }
+  if (options.allowEmpty) return null;
+  if (options.preferDefault !== false) {
+    const defaultAnimation = defaultAnimationForAsset(asset);
+    if (defaultAnimation && clips.some(function (clip) { return clip.name === defaultAnimation; })) return defaultAnimation;
+  }
+  if (options.fallbackToFirst === false) return null;
+  return clips[0].name || null;
+}
+
+function resolveAnimationClipForAsset(asset, currentValue) {
+  return resolveAnimationChoiceForAsset(asset, currentValue, { allowEmpty: false, preferDefault: true, fallbackToFirst: true });
+}
+
+function resolveIdleAnimationForAsset(asset, currentValue) {
+  return resolveAnimationChoiceForAsset(asset, currentValue, { allowEmpty: false, preferDefault: true, fallbackToFirst: true });
+}
+
+function resolveOptionalAnimationForAsset(asset, currentValue) {
+  return resolveAnimationChoiceForAsset(asset, currentValue, { allowEmpty: true, preferDefault: false, fallbackToFirst: false });
+}
+
+function viewportModeLabelText() {
+  const mode = state.viewportMode === "translate"
+    ? "Move"
+    : state.viewportMode === "rotate"
+      ? "Rotate"
+      : state.viewportMode === "scale"
+        ? "Scale"
+        : "Select";
+  const localView = runtime && typeof runtime.isLocalViewActive === "function" && runtime.isLocalViewActive() ? " Local" : "";
+  const axisSuffix = state.viewportAxis
+    ? " " + state.viewportAxis.toUpperCase()
+    : state.viewportMode === "rotate"
+      ? " Z"
+      : "";
+  return mode + axisSuffix + localView;
+}
+
+function formatViewportNumber(value, digits = 3) {
+  const number = Math.round(Number(value) * Math.pow(10, digits)) / Math.pow(10, digits);
+  if (!Number.isFinite(number)) return "0";
+  return String(number);
+}
+
+function selectedModelNode() {
+  const runtimeId = runtimeSelectedEntityId();
+  if (runtimeId) {
+    const runtimeNode = nodeByRuntimeId(runtimeId);
+    if (runtimeNode && runtimeNode.type === "model_entity") return runtimeNode;
+    return null;
+  }
+  const node = nodeById(state.selectedNodeId);
+  return node && node.type === "model_entity" ? node : null;
+}
+
+function selectedTransformSnapshot() {
+  if (!runtime || typeof runtime.getSelectedEntitySnapshot !== "function") return null;
+  const snapshot = runtime.getSelectedEntitySnapshot();
+  const node = selectedModelNode();
+  if (!snapshot || !node) return null;
+  const runtimeId = runtimeNodeId(node);
+  if (runtimeId && snapshot.entityId && snapshot.entityId !== runtimeId) return null;
+  return snapshot;
+}
+
+function renderStatusLine() {
+  if (!el.statusText) return;
+  const parts = [];
+  const modeLabel = viewportModeLabelText();
+  const snapshot = selectedTransformSnapshot();
+  const node = selectedModelNode();
+  const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
+  if (state.viewportDebugKey) parts.push("key received: " + state.viewportDebugKey);
+  parts.push(modeLabel);
+  if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
+  parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
+  parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
+  if (node) {
+    const source = snapshot
+      ? viewportVectorFromWorld(snapshot.position)
+      : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
+    parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
+  }
+  if (state.statusMessage) parts.push(state.statusMessage);
+  el.statusText.textContent = parts.join(" | ");
+  el.statusText.className = "statusLine" + (state.statusKind ? " " + state.statusKind : "");
+}
+
+function renderViewportControls() {
+  if (el.viewportInfoButton) {
+    el.viewportInfoButton.classList.toggle("active", state.viewportHelpOpen);
+    el.viewportInfoButton.setAttribute("aria-expanded", state.viewportHelpOpen ? "true" : "false");
+  }
+  if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = !state.viewportHelpOpen;
+  if (el.snapModeSelect && el.snapModeSelect.value !== state.snapMode) el.snapModeSelect.value = state.snapMode;
+  if (el.snapGridInput) {
+    const nextValue = String(state.snapGridSize || 1);
+    if (el.snapGridInput.value !== nextValue) el.snapGridInput.value = nextValue;
+  }
+  renderStatusLine();
+  renderTransformPanel();
+}
+
+function setViewportMode(mode) {
+  if (!["translate", "rotate", "scale"].includes(mode)) return;
+  state.viewportMode = mode;
+  if (runtime && typeof runtime.setGizmoMode === "function") runtime.setGizmoMode(mode);
+  renderViewportControls();
+}
+
+function setViewportAxis(axis) {
+  state.viewportAxis = ["x", "y", "z"].includes(axis) ? axis : null;
+  if (runtime && typeof runtime.setTransformAxis === "function") runtime.setTransformAxis(state.viewportAxis);
+  else if (runtime && typeof runtime.setTransformAxisConstraint === "function") runtime.setTransformAxisConstraint(state.viewportAxis);
+  renderViewportControls();
+}
+
+function setViewportSnap(mode, gridSize) {
+  state.snapMode = ["off", "grid", "ground"].includes(mode) ? mode : "off";
+  state.snapGridSize = Math.max(0.1, Number.isFinite(Number(gridSize)) ? Number(gridSize) : 1);
+  renderViewportControls();
+  if (runtime && typeof runtime.setSnapState === "function") runtime.setSnapState(state.snapMode, state.snapGridSize);
+}
+
+function setAnimationPreviewEnabled(enabled) {
+  state.previewAnimations = Boolean(enabled);
+  renderViewportControls();
+  if (runtime && typeof runtime.setAnimationPreviewEnabled === "function") runtime.setAnimationPreviewEnabled(state.previewAnimations);
+}
+
+function toggleViewportHelp() {
+  state.viewportHelpOpen = !state.viewportHelpOpen;
+  renderViewportControls();
+}
+
+function resetSelectedModelTransform(kind) {
+  const node = selectedModelNode();
+  if (!node) return false;
+  const patch = {};
+  if (kind === "location") {
+    patch.x = 0;
+    patch.y = 0;
+    patch.z = 0;
+  } else if (kind === "rotation") {
+    patch.rotationX = 0;
+    patch.rotationY = 0;
+    patch.rotationZ = 0;
+  } else if (kind === "scale") {
+    patch.scaleX = 1;
+    patch.scaleY = 1;
+    patch.scaleZ = 1;
+  }
+  if (!Object.keys(patch).length) return false;
+  cancelRuntimeTransform();
+  setViewportAxis(null);
+  patchValues(node.id, patch, {
+    historyLabel: kind === "location" ? "Reset location" : kind === "rotation" ? "Reset rotation" : "Reset scale",
+    refreshViewport: true,
+    refreshValidation: true,
+    refreshEdgeList: false
+  });
+  return true;
+}
+
+function renderTransformPanel() {
+  if (!el.viewportTransformPanel) return;
+  const node = selectedModelNode();
+  if (!node) {
+    el.viewportTransformPanel.hidden = true;
+    el.viewportTransformPanel.innerHTML = "";
+    return;
+  }
+  const snapshot = selectedTransformSnapshot();
+  const position = snapshot ? viewportVectorFromWorld(snapshot.position) : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
+  const rotation = snapshot
+    ? viewportVectorFromWorld(snapshot.rotation)
+    : viewportVectorFromWorld({
+      x: node.values.rotationX,
+      y: node.values.rotationY,
+      z: node.values.rotationZ
+    });
+  const scale = snapshot?.scale || { x: node.values.scaleX, y: node.values.scaleY, z: node.values.scaleZ };
+  el.viewportTransformPanel.hidden = false;
+  el.viewportTransformPanel.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "transformPanelHeader";
+  const title = document.createElement("div");
+  title.className = "transformPanelTitle";
+  title.textContent = "TRS";
+  header.appendChild(title);
+  el.viewportTransformPanel.appendChild(header);
+
+  const matrix = document.createElement("div");
+  matrix.className = "transformMatrix";
+  const labels = ["as", "G", "R", "S"];
+  for (const label of labels) {
+    const cell = document.createElement("div");
+    cell.className = "transformMatrixHead";
+    cell.textContent = label;
+    matrix.appendChild(cell);
+  }
+
+  function commitTransformInput(kind, axis, value) {
+    const patch = {};
+    if (kind === "G") {
+      const nodeAxis = viewportAxisToNodeAxis(axis);
+      if (!nodeAxis) return;
+      patch[nodeAxis] = value;
+    } else if (kind === "R") {
+      const nodeAxis = viewportAxisToNodeAxis(axis);
+      if (!nodeAxis) return;
+      patch["rotation" + nodeAxis.toUpperCase()] = value;
+    } else if (kind === "S") {
+      patch["scale" + axis.toUpperCase()] = value;
+    }
+    cancelRuntimeTransform();
+    setViewportAxis(null);
+    patchValues(node.id, patch, {
+      historyLabel: "Transform " + kind,
+      refreshViewport: true,
+      refreshValidation: true,
+      refreshEdgeList: false
+    });
+  }
+
+  function addMatrixInput(kind, axis, value, step, digits) {
+    const input = document.createElement("input");
+    input.className = "transformMatrixInput";
+    input.type = "number";
+    input.step = step;
+    input.value = formatViewportNumber(value, digits);
+    input.title = kind + " " + axis.toUpperCase();
+    input.addEventListener("change", function () {
+      const next = Number(input.value);
+      if (!Number.isFinite(next)) {
+        input.value = formatViewportNumber(value, digits);
+        return;
+      }
+      commitTransformInput(kind, axis, next);
+    });
+    input.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      input.blur();
+    });
+    matrix.appendChild(input);
+  }
+
+  for (const axis of ["x", "y", "z"]) {
+    const axisLabel = document.createElement("div");
+    axisLabel.className = "transformMatrixAxis";
+    axisLabel.textContent = axis.toUpperCase();
+    matrix.appendChild(axisLabel);
+    addMatrixInput("G", axis, position[axis] ?? 0, "0.01", 3);
+    addMatrixInput("R", axis, rotation[axis] ?? 0, "0.1", 1);
+    addMatrixInput("S", axis, scale[axis] ?? 1, "0.01", 3);
+  }
+  el.viewportTransformPanel.appendChild(matrix);
+}
+
+function cancelRuntimeTransform() {
+  if (!runtime) return false;
+  const wasActive = typeof runtime.isTransformActive === "function" && runtime.isTransformActive();
+  const cancelFn = typeof runtime.cancelTransform === "function"
+    ? runtime.cancelTransform
+    : runtime.cancelTransformSession;
+  const result = typeof cancelFn === "function" ? cancelFn.call(runtime) : false;
+  if (wasActive) {
+    setViewportAxis(null);
+    clearSelection({ clearPendingEdge: true });
+    renderGraph();
+    setStatus("Transform cancelled.", "");
+  }
+  return result;
+}
+
+function confirmRuntimeTransform() {
+  if (!runtime) return false;
+  const wasActive = typeof runtime.isTransformActive === "function" && runtime.isTransformActive();
+  const confirmFn = typeof runtime.confirmTransform === "function"
+    ? runtime.confirmTransform
+    : runtime.confirmTransformSession;
+  const result = typeof confirmFn === "function" ? confirmFn.call(runtime) : false;
+  if (wasActive) {
+    setViewportAxis(null);
+    clearSelection({ clearPendingEdge: true });
+    renderGraph();
+    setStatus("Transform confirmed.", "success");
+  }
+  return result;
+}
+
+function openGroupForNode(node) {
+  if (!node) return false;
+  const parentId = node.parentId || null;
+  if (state.currentGroupId === parentId) return false;
+  state.currentGroupId = parentId;
+  syncBreadcrumb();
+  renderGraph();
+  renderInspector();
+  applyTransform();
+  return true;
+}
+
+function focusGraphNode(nodeId) {
+  const node = nodeById(nodeId);
+  if (!node) return false;
+  openGroupForNode(node);
+  const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + nodeId + '"]');
+  if (!card) return false;
+  const viewportRect = el.graphViewport.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const cardCenterX = cardRect.left + cardRect.width / 2;
+  const cardCenterY = cardRect.top + cardRect.height / 2;
+  const viewportCenterX = viewportRect.left + viewportRect.width / 2;
+  const viewportCenterY = viewportRect.top + viewportRect.height / 2;
+  state.view.panX += viewportCenterX - cardCenterX;
+  state.view.panY += viewportCenterY - cardCenterY;
+  applyTransform();
+  return true;
 }
 
 function snapshotNode(node) {
@@ -209,6 +637,7 @@ function normalizeSelectionState() {
 }
 
 function setSelection(nodeIds, edgeIds, options = {}) {
+  const previousPrimary = state.selectedNodeId;
   const nextNodeIds = Array.from(new Set((nodeIds || []).filter(Boolean)));
   const nextEdgeIds = Array.from(new Set((edgeIds || []).filter(Boolean)));
   state.selectedNodeIds = nextNodeIds;
@@ -221,6 +650,10 @@ function setSelection(nodeIds, edgeIds, options = {}) {
   syncSelectedEdgeCard();
   renderInspector();
   syncRuntimeSelection();
+  if (previousPrimary !== state.selectedNodeId && runtime && typeof runtime.isTransformActive === "function" && !runtime.isTransformActive()) {
+    setViewportAxis(null);
+  }
+  renderViewportControls();
   scheduleEdgeRender();
 }
 
@@ -288,7 +721,8 @@ function syncSelectedEdgeCard() {
 function syncRuntimeSelection() {
   if (!runtime) return;
   const node = nodeById(state.selectedNodeId);
-  if (node && node.type === "model_entity" && node.values.entityId) runtime.selectEntity(node.values.entityId);
+  const runtimeId = runtimeNodeId(node);
+  if (runtimeId) runtime.selectEntity(runtimeId);
   else runtime.deselect();
 }
 
@@ -383,7 +817,8 @@ function applyGraphMutationResult(result, options = {}) {
   }
   if (options.refreshEdgeList !== false) renderEdgeList();
   if (options.refreshInspector !== false) renderInspector();
-  syncRuntimeSelection();
+  if (!options.refreshViewport) syncRuntimeSelection();
+  renderViewportControls();
   if (options.refreshViewport) {
     invalidateDraftWorld();
     scheduleViewportRefresh(false);
@@ -494,22 +929,45 @@ async function boot() {
   runtime = createGkWorldRuntime(el.viewportCanvas, {
     mode: "editor",
     onSelectEntity: function (entityId) {
-      const node = state.graph.nodes.find(function (n) { return n.values && n.values.entityId === entityId; });
-      if (node) selectNode(node.id, false);
+      const node = nodeByRuntimeId(entityId);
+      if (!node) return;
+      focusGraphNode(node.id);
+      selectNode(node.id, false);
+    },
+    onTransformChange: function () {
+      renderViewportControls();
+    },
+    onTransformEnd: function (info) {
+      if (!info) return;
+      setViewportAxis(null);
+      clearSelection({ clearPendingEdge: true });
+      renderGraph();
+      if (info.action === "confirm") {
+        setStatus("Transform confirmed.", "success");
+      } else if (info.action === "cancel") {
+        setStatus("Transform cancelled.", "");
+      }
     },
     onTransformCommit: function (entityId, transform) {
-      const node = state.graph.nodes.find(function (n) { return n.values && n.values.entityId === entityId; });
-      if (node) patchValues(node.id, transform, {
+      const node = nodeByRuntimeId(entityId);
+      if (!node || node.type !== "model_entity") return;
+      patchValues(node.id, transform, {
         historyLabel: "Transform",
         refreshViewport: true,
         refreshEdgeList: false,
         refreshValidation: false
       });
+      setViewportAxis(null);
     },
     onLoadErrors: renderViewportErrors
   });
+  state.viewportHelpOpen = false;
+  if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
   await reloadGraph();
   await reloadAssets();
+  renderViewportControls();
+  setViewportSnap(state.snapMode, state.snapGridSize);
+  setViewportMode(state.viewportMode);
   await refreshViewport({ force: true });
   await refreshValidation();
   applyTransform();
@@ -1310,6 +1768,14 @@ el.zoomResetButton.addEventListener("click", function () {
   applyTransform();
 });
 
+if (el.viewportInfoButton) el.viewportInfoButton.addEventListener("click", toggleViewportHelp);
+if (el.snapModeSelect) el.snapModeSelect.addEventListener("change", function () {
+  setViewportSnap(el.snapModeSelect.value, el.snapGridInput ? el.snapGridInput.value : state.snapGridSize);
+});
+if (el.snapGridInput) el.snapGridInput.addEventListener("change", function () {
+  setViewportSnap(el.snapModeSelect ? el.snapModeSelect.value : state.snapMode, el.snapGridInput.value);
+});
+
 // ---------- Groups + breadcrumb ----------
 function enterGroup(node) {
   state.currentGroupId = node.id;
@@ -1383,6 +1849,7 @@ function renderInspector() {
     del.addEventListener("click", deleteSelectedNodes);
     actions.append(copy, cut, del);
     el.inspectorForm.appendChild(actions);
+    renderViewportControls();
     return;
   }
   if (!node && selectedEdges.length) {
@@ -1412,6 +1879,7 @@ function renderInspector() {
     del.addEventListener("click", deleteSelectedNodes);
     actions.appendChild(del);
     el.inspectorForm.appendChild(actions);
+    renderViewportControls();
     return;
   }
   if (!node) {
@@ -1419,6 +1887,7 @@ function renderInspector() {
     empty.className = "inspectorEmpty";
     empty.textContent = "Selecteer een node om eigenschappen te bewerken.";
     el.inspectorForm.appendChild(empty);
+    renderViewportControls();
     return;
   }
   const def = state.nodeTypes[node.type];
@@ -1431,6 +1900,27 @@ function renderInspector() {
     hint.className = "inspectorHint";
     hint.textContent = "Stel hier de Group Interface in. De typed ports bepalen wat de Group Node buiten de group aanbiedt en wat Group Input/Output binnen de group tonen.";
     el.inspectorForm.appendChild(hint);
+  }
+
+  if (node.type === "model_entity" || node.type === "player_character") {
+    const previewWrap = document.createElement("div");
+    previewWrap.className = "field";
+    const previewLabel = document.createElement("label");
+    previewLabel.textContent = "Preview animations";
+    const previewRow = document.createElement("div");
+    previewRow.className = "colorRow";
+    const preview = document.createElement("input");
+    preview.type = "checkbox";
+    preview.checked = state.previewAnimations;
+    preview.addEventListener("change", function () {
+      setAnimationPreviewEnabled(preview.checked);
+    });
+    const previewHint = document.createElement("div");
+    previewHint.className = "inspectorHint";
+    previewHint.textContent = "Editor-only. Wanneer uit staat, blijven GLB-mixers gepauzeerd voor performance.";
+    previewRow.appendChild(preview);
+    previewWrap.append(previewLabel, previewRow, previewHint);
+    el.inspectorForm.appendChild(previewWrap);
   }
 
   for (const [key, field] of Object.entries(def.fields)) {
@@ -1453,6 +1943,7 @@ function renderInspector() {
     actions.append(dup, del);
   }
   el.inspectorForm.appendChild(actions);
+  renderViewportControls();
 }
 
 function buildField(node, key, field) {
@@ -1473,17 +1964,46 @@ function buildField(node, key, field) {
     const select = document.createElement("select");
     const blank = document.createElement("option");
     blank.value = "";
-    blank.textContent = "(kies)";
+    blank.textContent = field.dynamicOptions === "assetAnimations" ? animationBlankLabel(key) : "(kies)";
     select.appendChild(blank);
-    for (const option of field.options) {
+    const options = field.dynamicOptions === "assetAnimations"
+      ? animationClipsForAsset(assetById(node.values.modelAssetId))
+      : (field.options || []).map(function (option, index) {
+        return { name: option, index: index };
+      });
+    for (const option of options) {
       const opt = document.createElement("option");
-      opt.value = option;
-      opt.textContent = option;
-      if (option === value) opt.selected = true;
+      opt.value = option.name;
+      opt.textContent = option.name;
+      if (option.name === value) opt.selected = true;
       select.appendChild(opt);
     }
-    select.addEventListener("change", function () { patchValues(node.id, makePatch(key, select.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
+    select.value = value || "";
+    select.addEventListener("change", function () {
+      patchValues(node.id, makePatch(key, select.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
+    });
     wrap.appendChild(select);
+    if (field.dynamicOptions === "assetAnimations") {
+      const selectedAsset = assetById(node.values.modelAssetId);
+      const clipNames = options.map(function (option) { return option.name; });
+      const hasClip = value && clipNames.includes(value);
+      if (!selectedAsset) {
+        const hint = document.createElement("div");
+        hint.className = "inspectorHint";
+        hint.textContent = "Kies eerst een model asset om animaties te tonen.";
+        wrap.appendChild(hint);
+      } else if (!clipNames.length) {
+        const hint = document.createElement("div");
+        hint.className = "inspectorHint";
+        hint.textContent = "Deze asset heeft geen animaties.";
+        wrap.appendChild(hint);
+      } else if (value && !hasClip) {
+        const hint = document.createElement("div");
+        hint.className = "inspectorHint";
+        hint.textContent = "Gekozen clip ontbreekt in deze asset. De runtime valt terug op de default clip.";
+        wrap.appendChild(hint);
+      }
+    }
   } else if (field.type === "asset") {
     const select = document.createElement("select");
     const blank = document.createElement("option");
@@ -1497,7 +2017,22 @@ function buildField(node, key, field) {
       if (asset.id === value) opt.selected = true;
       select.appendChild(opt);
     }
-    select.addEventListener("change", function () { patchValues(node.id, makePatch(key, select.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
+    select.value = value || "";
+    select.addEventListener("change", function () {
+      const patch = makePatch(key, select.value);
+      if (key === "modelAssetId" && (node.type === "model_entity" || node.type === "player_character")) {
+        const selectedAsset = assetById(select.value);
+        const resolvedAnimationClip = resolveAnimationClipForAsset(selectedAsset, node.values.animationClip);
+        const resolvedIdleAnimation = resolveIdleAnimationForAsset(selectedAsset, node.values.idleAnimation);
+        const resolvedWalkAnimation = resolveOptionalAnimationForAsset(selectedAsset, node.values.walkAnimation);
+        const resolvedRunAnimation = resolveOptionalAnimationForAsset(selectedAsset, node.values.runAnimation);
+        if (resolvedAnimationClip !== node.values.animationClip) patch.animationClip = resolvedAnimationClip;
+        if (resolvedIdleAnimation !== node.values.idleAnimation) patch.idleAnimation = resolvedIdleAnimation;
+        if (resolvedWalkAnimation !== node.values.walkAnimation) patch.walkAnimation = resolvedWalkAnimation;
+        if (resolvedRunAnimation !== node.values.runAnimation) patch.runAnimation = resolvedRunAnimation;
+      }
+      patchValues(node.id, patch, { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
+    });
     wrap.appendChild(select);
   } else if (field.type === "color") {
     const row = document.createElement("div");
@@ -1589,6 +2124,7 @@ function buildField(node, key, field) {
       capture.textContent = "Druk toets...";
       const handler = function (keyEvent) {
         keyEvent.preventDefault();
+        keyEvent.stopImmediatePropagation();
         text.value = keyEvent.code;
         capture.textContent = "Capture";
         window.removeEventListener("keydown", handler, true);
@@ -2079,6 +2615,7 @@ async function reloadAssets() {
   const data = await api("/api/assets");
   state.assets = data.assets || [];
   renderAssets();
+  renderInspector();
 }
 
 function renderAssets() {
@@ -2108,6 +2645,10 @@ function buildAssetCard(asset) {
   const card = document.createElement("div");
   card.className = "assetCard";
   card.draggable = asset.assetType === "model";
+  const animationNames = animationClipsForAsset(asset).map(function (entry) { return entry.name; });
+  card.title = asset.assetType === "model" && animationNames.length
+    ? "Animations: " + animationNames.join(", ")
+    : asset.name;
   card.addEventListener("dragstart", function (event) {
     event.dataTransfer.setData("text/gk-asset", asset.id);
   });
@@ -2136,6 +2677,12 @@ function buildAssetCard(asset) {
   const size = document.createElement("span");
   size.textContent = Math.max(1, Math.round(asset.sizeBytes / 1024)) + " KB";
   sub.append(cat, size);
+  if (asset.assetType === "model") {
+    const badge = document.createElement("span");
+    badge.className = "assetAnimBadge";
+    badge.textContent = animationBadgeText(asset);
+    sub.appendChild(badge);
+  }
   meta.append(name, sub);
   card.append(thumb, meta);
   if (asset.assetType === "model") {
@@ -2210,6 +2757,8 @@ function applyViewportWorld(world) {
   el.viewportStatus.textContent = world.world && world.world.displayName ? world.world.displayName : "Draft viewport";
   state.viewportDirty = false;
   clearViewportRefreshTimer();
+  syncRuntimeSelection();
+  renderViewportControls();
 }
 
 async function refreshViewport(options = {}) {
@@ -2301,32 +2850,90 @@ async function publish() {
 
 // ---------- Keyboard shortcuts ----------
 function isEditableTarget(target) {
-  if (!target || typeof target.closest !== "function") return Boolean(target && target.isContentEditable);
-  return Boolean(target.isContentEditable || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']"));
+  if (!target || typeof target.tagName !== "string") return false;
+  const tag = target.tagName.toUpperCase();
+  return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
 }
 
-window.addEventListener("keydown", function (event) {
+function keyMatches(event, letter) {
+  const code = String(event.code || "");
+  const key = String(event.key || "").toLowerCase();
+  return code === "Key" + letter.toUpperCase() || key === letter.toLowerCase();
+}
+
+function viewportShortcutDebugLabel(event) {
+  const code = String(event.code || "");
+  let letter = "";
+  if (code.startsWith("Key") && code.length === 4) {
+    letter = code.slice(3).toUpperCase();
+  } else if (String(event.key || "").length === 1) {
+    letter = String(event.key || "").toUpperCase();
+  }
+  if (!["G", "R", "S", "X", "Y", "Z"].includes(letter)) return "";
+  return event.altKey ? "Alt+" + letter : letter;
+}
+
+function setViewportShortcutDebug(label) {
+  state.viewportDebugKey = label || "";
+  renderStatusLine();
+}
+
+function consumeShortcutEvent(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+}
+
+function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
-  if (meta && event.key.toLowerCase() === "s") { event.preventDefault(); saveDraft(); return; }
+  const shortcutLabel = viewportShortcutDebugLabel(event);
+  if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
+  if (event.key === "Enter" && runtime && typeof runtime.isTransformActive === "function" && runtime.isTransformActive()) {
+    consumeShortcutEvent(event);
+    confirmRuntimeTransform();
+    return;
+  }
+  if (meta && keyMatches(event, "s")) { event.preventDefault(); saveDraft(); return; }
   if (meta && event.key === "Enter") { event.preventDefault(); publish(); return; }
-  if (meta && event.key.toLowerCase() === "c") { event.preventDefault(); copySelectionToClipboard(); return; }
-  if (meta && event.key.toLowerCase() === "x") { event.preventDefault(); cutSelection(); return; }
-  if (meta && event.key.toLowerCase() === "v") { event.preventDefault(); pasteSelection(); return; }
-  if (meta && event.key.toLowerCase() === "d") { event.preventDefault(); duplicateSelection(); return; }
-  if (meta && event.key.toLowerCase() === "z") {
+  if (meta && keyMatches(event, "c")) { event.preventDefault(); copySelectionToClipboard(); return; }
+  if (meta && keyMatches(event, "x")) { event.preventDefault(); cutSelection(); return; }
+  if (meta && keyMatches(event, "v")) { event.preventDefault(); pasteSelection(); return; }
+  if (meta && keyMatches(event, "d")) { event.preventDefault(); duplicateSelection(); return; }
+  if (meta && keyMatches(event, "z")) {
     event.preventDefault();
     if (event.shiftKey) redoGraphMutation(); else undoGraphMutation();
     return;
   }
-  if (meta && event.key.toLowerCase() === "y") {
+  if (meta && keyMatches(event, "y")) {
     event.preventDefault();
     redoGraphMutation();
     return;
   }
+  if (event.altKey && !meta && keyMatches(event, "g")) {
+    consumeShortcutEvent(event);
+    resetSelectedModelTransform("location");
+    return;
+  }
+  if (event.altKey && !meta && keyMatches(event, "r")) {
+    consumeShortcutEvent(event);
+    resetSelectedModelTransform("rotation");
+    return;
+  }
+  if (event.altKey && !meta && keyMatches(event, "s")) {
+    consumeShortcutEvent(event);
+    resetSelectedModelTransform("scale");
+    return;
+  }
   if (event.key === "Escape") {
+    if (runtime && typeof runtime.isTransformActive === "function" && runtime.isTransformActive()) {
+      consumeShortcutEvent(event);
+      cancelRuntimeTransform();
+      return;
+    }
     clearSelection({ clearPendingEdge: true });
     renderGraph();
+    setStatus("Deselected.", "");
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
@@ -2334,10 +2941,79 @@ window.addEventListener("keydown", function (event) {
     deleteSelectedNodes();
     return;
   }
-  if (event.key.toLowerCase() === "w" && runtime) runtime.setGizmoMode("translate");
-  if (event.key.toLowerCase() === "e" && runtime) runtime.setGizmoMode("rotate");
-  if (event.key.toLowerCase() === "r" && runtime) runtime.setGizmoMode("scale");
-  if (event.key.toLowerCase() === "f" && runtime) runtime.focusSelected();
-});
+  if (!event.altKey && !meta && (keyMatches(event, "g") || keyMatches(event, "w")) && runtime) {
+    consumeShortcutEvent(event);
+    setViewportMode("translate");
+    setViewportAxis(null);
+    const started = typeof runtime.beginTransform === "function"
+      ? runtime.beginTransform("move")
+      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
+    setStatus(started ? "Move." : "No mesh selected.", started ? "" : "error");
+    return;
+  }
+  if (!event.altKey && !meta && (keyMatches(event, "r") || keyMatches(event, "e")) && runtime) {
+    consumeShortcutEvent(event);
+    setViewportMode("rotate");
+    setViewportAxis(null);
+    const started = typeof runtime.beginTransform === "function"
+      ? runtime.beginTransform("rotate")
+      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
+    setStatus(started ? "Rotate Z." : "No mesh selected.", started ? "" : "error");
+    return;
+  }
+  if (!event.altKey && !meta && (keyMatches(event, "s") || keyMatches(event, "t")) && runtime) {
+    consumeShortcutEvent(event);
+    setViewportMode("scale");
+    setViewportAxis(null);
+    const started = typeof runtime.beginTransform === "function"
+      ? runtime.beginTransform("scale")
+      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
+    setStatus(started ? "Scale." : "No mesh selected.", started ? "" : "error");
+    return;
+  }
+  if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y") || keyMatches(event, "z")) && runtime && ["translate", "rotate", "scale"].includes(state.viewportMode)) {
+    consumeShortcutEvent(event);
+    const axis = keyMatches(event, "x") ? "x" : keyMatches(event, "y") ? "y" : "z";
+    setViewportAxis(axis);
+    return;
+  }
+  if (!event.altKey && !meta && keyMatches(event, "f") && runtime) {
+    consumeShortcutEvent(event);
+    runtime.focusSelected();
+    return;
+  }
+  if (event.key === "Home" && runtime && typeof runtime.frameAll === "function") {
+    consumeShortcutEvent(event);
+    runtime.frameAll();
+    return;
+  }
+  if ((event.code === "Numpad1") && runtime && typeof runtime.setView === "function") {
+    consumeShortcutEvent(event);
+    runtime.setView("front");
+    return;
+  }
+  if ((event.code === "Numpad3") && runtime && typeof runtime.setView === "function") {
+    consumeShortcutEvent(event);
+    runtime.setView("right");
+    return;
+  }
+  if ((event.code === "Numpad7") && runtime && typeof runtime.setView === "function") {
+    consumeShortcutEvent(event);
+    runtime.setView("top");
+    return;
+  }
+  if (event.key === "/" && runtime && typeof runtime.toggleLocalView === "function") {
+    consumeShortcutEvent(event);
+    runtime.toggleLocalView();
+    renderViewportControls();
+    return;
+  }
+  if ((event.code === "NumpadDecimal" || event.key === ".") && runtime && typeof runtime.focusSelected === "function") {
+    consumeShortcutEvent(event);
+    runtime.focusSelected();
+  }
+}
+
+window.addEventListener("keydown", handleEditorKeyDown, true);
 
 boot();
