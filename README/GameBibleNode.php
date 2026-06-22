@@ -1,112 +1,85 @@
 <?php
-// GameBibleNode.php
-// Legacy save endpoint for the standalone GameBibleNode editor.
-// Preferred long-term save path: editor-auth protected API route /editor/game-bible-node/save.
+declare(strict_types=1);
+
+require_once __DIR__ . '/GameBibleNode.auth.php';
 
 header('Content-Type: text/plain; charset=utf-8');
+header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
-function fail_safe(int $status, string $message): void {
+function gkb_save_fail(int $status, string $message): void {
     http_response_code($status);
     echo $message;
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    fail_safe(400, 'Geen data ontvangen');
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    gkb_save_fail(405, 'Alleen POST toegestaan');
 }
 
-if (getenv('GK_GAMEBIBLE_LEGACY_SAVE_ENABLED') !== '1') {
-    fail_safe(403, 'Opslaan is niet geactiveerd');
+if (gkb_env('GK_GAMEBIBLE_LEGACY_SAVE_ENABLED') !== '1') {
+    gkb_save_fail(403, 'Opslaan is niet geactiveerd');
 }
 
-$allowedOrigin = getenv('GK_GAMEBIBLE_ALLOWED_ORIGIN') ?: '';
-$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-if ($allowedOrigin !== '' && $origin !== $allowedOrigin) {
-    fail_safe(403, 'Origin niet toegestaan');
+if (!gkb_same_origin()) {
+    gkb_save_fail(403, 'Origin niet toegestaan');
 }
 
-$remoteUser = $_SERVER['REMOTE_USER'] ?? '';
-$expectedToken = getenv('GK_GAMEBIBLE_LEGACY_SAVE_TOKEN') ?: '';
-$receivedToken = $_SERVER['HTTP_X_GK_GAMEBIBLE_SAVE_TOKEN'] ?? '';
+gkb_bootstrap_session();
 
-if ($remoteUser === '' && ($expectedToken === '' || !hash_equals($expectedToken, $receivedToken))) {
-    fail_safe(403, 'Editor authorisatie vereist');
+if (!gkb_is_authenticated()) {
+    gkb_save_fail(401, 'Login vereist');
 }
+
+session_write_close();
 
 $data = file_get_contents('php://input');
-if (!$data) {
-    fail_safe(400, 'Geen data ontvangen');
+if ($data === false || $data === '') {
+    gkb_save_fail(400, 'Geen data ontvangen');
 }
 
 $decoded = json_decode($data, true);
 if (!is_array($decoded) || json_last_error() !== JSON_ERROR_NONE) {
-    fail_safe(400, 'Ongeldige JSON');
+    gkb_save_fail(400, 'Ongeldige JSON');
 }
 
 if (!isset($decoded['schema']) || !is_string($decoded['schema']) || !isset($decoded['nodes']) || !is_array($decoded['nodes'])) {
-    fail_safe(400, 'GameBibleNode contract ongeldig');
+    gkb_save_fail(400, 'GameBibleNode contract ongeldig');
 }
 
-$target = __DIR__ . '/GameBibleNode.json';
-$backupDir = __DIR__ . '/.backups';
-$timestamp = gmdate('Ymd\THis\Z');
-$backup = $backupDir . '/GameBibleNode.json.' . $timestamp . '.bak';
-$tmp = __DIR__ . '/.GameBibleNode.json.' . getmypid() . '.' . $timestamp . '.tmp';
-$lockPath = __DIR__ . '/GameBibleNode.json.lock';
-$payload = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL;
-
-if (!is_dir($backupDir) && !mkdir($backupDir, 0750, true)) {
-    fail_safe(500, 'Backupmap kan niet worden gemaakt');
+$target = gkb_env('GK_GAMEBIBLE_JSON_PATH', __DIR__ . '/GameBibleNode.json');
+$payload = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+if ($payload === false) {
+    gkb_save_fail(500, 'JSON kan niet worden geschreven');
 }
 
-$lock = fopen($lockPath, 'c');
-if (!$lock || !flock($lock, LOCK_EX)) {
-    fail_safe(423, 'Opslaan is tijdelijk vergrendeld');
+$tmp = tempnam(dirname($target), '.GameBibleNode.json.');
+if ($tmp === false) {
+    gkb_save_fail(500, 'Tijdelijk bestand kan niet worden gemaakt');
 }
 
-try {
-    if (is_file($target) && !copy($target, $backup)) {
-        fail_safe(500, 'Backup maken mislukt');
-    }
-
-    $handle = fopen($tmp, 'xb');
-    if (!$handle) {
-        fail_safe(500, 'Tijdelijk bestand kan niet worden gemaakt');
-    }
-
-    $written = fwrite($handle, $payload);
-    fflush($handle);
-    if (function_exists('fsync')) {
-        fsync($handle);
-    }
-    fclose($handle);
-
-    if ($written === false || $written < strlen($payload)) {
-        @unlink($tmp);
-        fail_safe(500, 'Tijdelijk bestand is onvolledig');
-    }
-
-    if (!rename($tmp, $target)) {
-        @unlink($tmp);
-        fail_safe(500, 'Atomische vervanging mislukt');
-    }
-
-    $auditPath = getenv('GK_GAMEBIBLE_AUDIT_LOG') ?: '/var/www/gk/logs/gamebible-node-save.audit.log';
-    $auditLine = json_encode([
-        'at' => gmdate('c'),
-        'action' => 'game_bible_node.save',
-        'actor' => $remoteUser !== '' ? $remoteUser : 'legacy-token',
-        'target' => $target,
-        'backup' => $backup
-    ], JSON_UNESCAPED_SLASHES) . PHP_EOL;
-    @file_put_contents($auditPath, $auditLine, FILE_APPEND | LOCK_EX);
-
-    echo 'Success';
-} finally {
-    if (isset($lock) && is_resource($lock)) {
-        flock($lock, LOCK_UN);
-        fclose($lock);
-    }
+$tmpHandle = fopen($tmp, 'wb');
+if ($tmpHandle === false) {
+    @unlink($tmp);
+    gkb_save_fail(500, 'Tijdelijk bestand kan niet worden geopend');
 }
-?>
+
+$written = fwrite($tmpHandle, $payload . PHP_EOL);
+if ($written === false || $written < strlen($payload) + 1) {
+    fclose($tmpHandle);
+    @unlink($tmp);
+    gkb_save_fail(500, 'Tijdelijk bestand is onvolledig');
+}
+
+fflush($tmpHandle);
+if (function_exists('fsync')) {
+    fsync($tmpHandle);
+}
+fclose($tmpHandle);
+
+if (!rename($tmp, $target)) {
+    @unlink($tmp);
+    gkb_save_fail(500, 'Atomische vervanging mislukt');
+}
+
+echo 'Success';

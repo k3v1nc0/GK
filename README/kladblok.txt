@@ -1,0 +1,30 @@
+//Herstart npm server
+rm -rf node_modules package-lock.json && npm install && npm run dev
+
+//opruimenen van de editor leeg maken:
+rm -rf storage && npm run dev
+
+// git ignore leeg maken per file.
+git rm --cached <file_or_directory_name>
+
+//commits samenvoegen en sturen naar github
+git reset --soft HEAD~1
+git push origin HEAD --force
+
+
+# stop alles wat op 3001 luistert
+PORT=3001
+PIDS=$(lsof -tiTCP:$PORT -sTCP:LISTEN)
+if [ -n "$PIDS" ]; then
+  kill -TERM $PIDS
+  sleep 2
+  PIDS=$(lsof -tiTCP:$PORT -sTCP:LISTEN)
+  if [ -n "$PIDS" ]; then
+    kill -KILL $PIDS
+  fi
+fi
+# npm "refresh"
+rm -rf node_modules package-lock.json
+npm install
+# start opnieuw
+npm run dev

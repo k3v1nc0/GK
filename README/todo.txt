@@ -1,0 +1,8 @@
+2. Player Character node is aangesloten en ingevuld, maar in de game is er geen mesh.
+3. De mesh 3D's kun je niet van cordinatie veranderen in de 3D viewpoort
+6. thumbnail worden niet aan gemaakt als er een .glb word geupload.
+10. Dit geld ook voor de inspector deze inspector settings wil ik eigenlijk in de node hebben. plus dat je het kan inklappen.
+13. resize: horizontal, wil ik tussen tools, graphcolumn, viewpoortColumn, assetColumn.
+14. assetForm wil ik alijd ingeklapt zien, en als ik het nodig heb uitklappen.
+15. de Naam van de import asset moet de naam krijgen van de file naam. of anders zelf ge typte als ik het anders wil.
+16. in de assets word niet ge sorteerd op de Categorie die je kunt invullen.

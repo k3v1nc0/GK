@@ -1,0 +1,10 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font-family: "Segoe UI", Arial, Helvetica, sans-serif; color: #f3f6f8; background: radial-gradient(circle at 30% 20%, #142233, #090b0f 70%); }
+main { min-height: 100%; display: grid; place-items: center; padding: 24px; }
+form { width: min(360px, 100%); display: grid; gap: 14px; background: #0d141d; border: 1px solid #25303b; padding: 26px; border-radius: 12px; }
+h1 { margin: 0 0 8px; font-size: 28px; }
+label { display: grid; gap: 6px; color: #aeb8bf; font-size: 13px; }
+input, button { width: 100%; border: 1px solid #313942; background: #11161d; color: #fff; padding: 11px 12px; border-radius: 6px; font: inherit; }
+button { background: #78d5ff; color: #061018; border: 0; font-weight: 800; cursor: pointer; }
+p { margin: 0; color: #ff9d9d; min-height: 20px; }
