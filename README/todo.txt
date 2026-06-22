@@ -1,8 +1,9 @@
-2. Player Character node is aangesloten en ingevuld, maar in de game is er geen mesh.
-3. De mesh 3D's kun je niet van cordinatie veranderen in de 3D viewpoort
-6. thumbnail worden niet aan gemaakt als er een .glb word geupload.
-10. Dit geld ook voor de inspector deze inspector settings wil ik eigenlijk in de node hebben. plus dat je het kan inklappen.
-13. resize: horizontal, wil ik tussen tools, graphcolumn, viewpoortColumn, assetColumn.
-14. assetForm wil ik alijd ingeklapt zien, en als ik het nodig heb uitklappen.
-15. de Naam van de import asset moet de naam krijgen van de file naam. of anders zelf ge typte als ik het anders wil.
-16. in de assets word niet ge sorteerd op de Categorie die je kunt invullen.
+1. ik wil eigenlijk dat de asset dat word upgeload zijn naam behoud en perecies zoals je die upload in de map word geplaatst.
+2. er moet dan ook een thumbnail komen dit doet hij ook nog niet.
+3. duplicaten moet echt duplicaten word ook in de node-system als je een tweede kopieert o dan moet het niet nog een object worden maar een instance(levend exemplaar) worden en dan een nummer in de node die optelt bij elke instance, maar je moet de zelfde mesh 3D ook nog ergens anders kunnen gebruiken in de nodes en de wereld dus moet er ook nog een gewone kopie kunnen worden gebruikt.
+4. ook wil ik dat de Inspector gegevens in de node komen te staan. en de nodes in en uit geklapt kunnen worden. of als de node active is als enige zonder groeps selectie uit geklapt of is dit irritant?
+5. verwijderen moet meteen uit viewport verdwijnen, ja dit gebeurd niet meteen dat klopt dit duurt lang. en moet denk ik eerst als draft gesaved worden voor dat de mesh verdwijnt.
+6. namen van de nodes zelf moeten in de node zelf direct gewijzigd kunnen worden.
+7. de puntjes van de nodes out en inputs moeten op de rand en een tikje groter worden gemaakt, dat het  lijntje er goed invalt.
+8. Importeer asset moet altijd ingeklapt worden, tot dat ik een import wil doen dan klap ik deze uit.
+9. resize: horizontal, wil ik tussen tools, graphcolumn, viewpoortColumn, assetColumn.
