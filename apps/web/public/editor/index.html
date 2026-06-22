@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GK Game Editor</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three/build/three.module.js",
+          "three/addons/": "/vendor/three/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo">GK</span><span class="brandName">GAME EDITOR</span></div>
+      <nav id="breadcrumb" class="breadcrumb"></nav>
+      <div class="topbarRight">
+        <span id="unsavedBadge" class="unsaved">0 actions unsaved</span>
+        <button id="saveDraftButton" type="button" class="ghost">SAVE DRAFT</button>
+        <button id="publishButton" type="button" class="primary">SAVE TO GAME</button>
+        <button id="logoutButton" type="button" class="ghost">LOGOUT</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="tools">
+        <div class="panel">
+          <h2>Node Library</h2>
+          <div id="nodeLibrary"></div>
+        </div>
+        <div class="panel">
+          <h2>Inspector</h2>
+          <form id="inspectorForm"></form>
+        </div>
+        <div class="panel">
+          <h2>Validation</h2>
+          <div id="validationPanel"></div>
+        </div>
+        <div class="panel">
+          <h2>Connections</h2>
+          <div id="edgeList"></div>
+        </div>
+      </aside>
+
+      <section class="graphColumn">
+        <div class="graphToolbar">
+          <span id="graphHint">Klik output-poort, dan input-poort om te verbinden. Wiel = zoom, sleep leeg vlak = pan.</span>
+          <span class="spacer"></span>
+          <button id="zoomResetButton" type="button" class="mini">Reset view</button>
+        </div>
+        <div id="graphViewport" class="graphViewport">
+          <div id="graphContent" class="graphContent">
+            <svg id="edgeLayer" class="edgeLayer"></svg>
+            <div id="nodeLayer" class="nodeLayer"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="viewportColumn">
+        <div class="viewportWrap">
+          <canvas id="viewportCanvas"></canvas>
+          <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
+          <div class="viewportErrors" id="viewportErrors"></div>
+        </div>
+        <div class="statusLine" id="statusText">Laden...</div>
+      </section>
+
+      <aside class="assetColumn">
+        <div class="assetSearchRow">
+          <input id="assetSearch" placeholder="Zoek assets...">
+        </div>
+        <div class="assetControls">
+          <select id="assetSort">
+            <option value="date">Datum</option>
+            <option value="name">Naam</option>
+            <option value="type">Type</option>
+          </select>
+          <select id="assetFilter">
+            <option value="all">Alle</option>
+            <option value="model">Model</option>
+            <option value="texture">Texture</option>
+            <option value="image">Image</option>
+            <option value="audio">Audio</option>
+            <option value="data">Data</option>
+          </select>
+        </div>
+        <div id="assetGrid" class="assetGrid"></div>
+        <form id="assetForm" class="assetForm">
+          <h3>Importeer asset</h3>
+          <input name="name" placeholder="Naam" required>
+          <input name="category" placeholder="Categorie" required>
+          <select name="assetType">
+            <option value="model">GLB model</option>
+            <option value="texture">Texture</option>
+            <option value="image">Image</option>
+            <option value="audio">Audio</option>
+            <option value="data">Data</option>
+          </select>
+          <input name="file" type="file" required>
+          <button type="submit" class="primary">Upload</button>
+        </form>
+      </aside>
+    </main>
+    <script type="module" src="./editor.js"></script>
+  </body>
+</html>

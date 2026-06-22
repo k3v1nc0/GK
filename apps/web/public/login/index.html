@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GK Editor Login</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main>
+      <form id="loginForm">
+        <h1>GK Editor</h1>
+        <label>Gebruiker <input name="username" autocomplete="username" required></label>
+        <label>Wachtwoord <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Login</button>
+        <p id="statusText"></p>
+      </form>
+    </main>
+    <script type="module" src="./login.js"></script>
+  </body>
+</html>
