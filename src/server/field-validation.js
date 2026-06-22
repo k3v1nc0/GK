@@ -56,7 +56,9 @@ export function coerceAndValidateField(field, value, label) {
     if (clean && field.type === "color" && !/^#[0-9a-fA-F]{6}$/.test(clean)) errors.push(label + " moet een hex kleur zijn, bijvoorbeeld #ffffff.");
     if (clean && field.type === "asset" && !/^asset_[a-f0-9-]+$/.test(clean)) errors.push(label + " moet een asset id zijn.");
     if (clean && field.type === "keycode" && !KEYCODE_PATTERN.test(clean)) errors.push(label + " moet een toetscode zijn zoals KeyW, ArrowUp of Space.");
-    if (clean && field.type === "select" && !field.options.includes(clean)) errors.push(label + " heeft een onbekende optie.");
+    if (clean && field.type === "select" && !field.dynamicOptions && Array.isArray(field.options) && !field.options.includes(clean)) {
+      errors.push(label + " heeft een onbekende optie.");
+    }
   }
   if (field.required && isEmpty(clean)) errors.push(label + " is verplicht.");
   return { value: clean, errors };

@@ -430,6 +430,7 @@ export function buildWorldFromGraph(graph, services = {}) {
     player: playerNode ? {
       id: playerNode.values.playerId,
       modelAssetId: playerNode.values.modelAssetId,
+      animationClip: playerNode.values.animationClip || null,
       moveSpeed: numberOrNull(playerNode.values.moveSpeed),
       sprintMultiplier: numberOrNull(playerNode.values.sprintMultiplier),
       turnSpeed: numberOrNull(playerNode.values.turnSpeed),
@@ -452,11 +453,16 @@ export function buildWorldFromGraph(graph, services = {}) {
         label: node.values.label,
         type: "model",
         modelAssetId: node.values.modelAssetId,
+        animationClip: node.values.animationClip || null,
         solid: node.values.solid === true,
         collisionRadius: numberOrNull(node.values.collisionRadius),
         transform: {
           position: { x: numberOrNull(node.values.x), y: numberOrNull(node.values.y), z: numberOrNull(node.values.z) },
-          rotation: { x: 0, y: numberOrNull(node.values.rotationY), z: 0 },
+          rotation: {
+            x: numberOrNull(node.values.rotationX) ?? 0,
+            y: numberOrNull(node.values.rotationY) ?? 0,
+            z: numberOrNull(node.values.rotationZ) ?? 0
+          },
           scale: { x: numberOrNull(node.values.scaleX), y: numberOrNull(node.values.scaleY), z: numberOrNull(node.values.scaleZ) }
         }
       };
