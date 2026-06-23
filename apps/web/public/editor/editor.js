@@ -34,6 +34,16 @@ const state = {
   assetSearch: "",
   assetSort: "date",
   assetFilter: "all",
+  assetManager: {
+    assetId: null,
+    usage: [],
+    loadingUsage: false,
+    error: "",
+    replacementAssetId: "",
+    draftName: null,
+    draftCategory: null,
+    requestToken: 0
+  },
   captureField: null,
   viewportMode: "translate",
   viewportAxis: null,
@@ -74,6 +84,7 @@ const el = {
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   viewportErrors: document.querySelector("#viewportErrors"),
   statusText: document.querySelector("#statusText"),
+  assetColumn: document.querySelector(".assetColumn"),
   assetSearch: document.querySelector("#assetSearch"),
   assetSort: document.querySelector("#assetSort"),
   assetFilter: document.querySelector("#assetFilter"),
@@ -95,6 +106,15 @@ const selectionBox = document.createElement("div");
 selectionBox.className = "selectionBox";
 selectionBox.hidden = true;
 el.graphViewport.appendChild(selectionBox);
+const assetManageOverlay = document.createElement("div");
+assetManageOverlay.className = "assetManageOverlay";
+assetManageOverlay.hidden = true;
+const assetManagePanel = document.createElement("div");
+assetManagePanel.className = "assetManagePanel";
+assetManageOverlay.appendChild(assetManagePanel);
+if (el.assetColumn) el.assetColumn.appendChild(assetManageOverlay);
+el.assetManageOverlay = assetManageOverlay;
+el.assetManagePanel = assetManagePanel;
 const edgePanel = el.edgeList && typeof el.edgeList.closest === "function" ? el.edgeList.closest(".panel") : null;
 if (edgePanel) edgePanel.style.display = "none";
 const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR === "object"
@@ -218,6 +238,350 @@ function defaultAnimationForAsset(asset) {
 function animationBadgeText(asset) {
   const count = Number(asset?.metadata?.animationCount || 0);
   return count + " anim" + (count === 1 ? "" : "s");
+}
+
+function managedAsset() {
+  return assetById(state.assetManager.assetId);
+}
+
+function managedAssetDraftValue(current, draft) {
+  return draft === null || draft === undefined ? current : draft;
+}
+
+function managedAssetUsageField(entry) {
+  return state.nodeTypes?.[entry.nodeType]?.fields?.[entry.fieldKey] || null;
+}
+
+function compatibleReplacementAssets(assetId, usage) {
+  const asset = assetById(assetId);
+  if (!asset) return [];
+  const usageList = Array.isArray(usage) ? usage : [];
+  return state.assets.filter(function (candidate) {
+    if (!candidate || candidate.id === assetId) return false;
+    return usageList.every(function (entry) {
+      const field = managedAssetUsageField(entry);
+      return Boolean(field && field.type === "asset" && Array.isArray(field.assetTypes) && field.assetTypes.includes(candidate.assetType));
+    });
+  });
+}
+
+function assetUsageMetaText(entry) {
+  return [entry.nodeLabel, entry.fieldLabel, entry.nodeType].filter(Boolean).join(" · ");
+}
+
+function setManagedAssetDraft(field, value) {
+  state.assetManager.error = "";
+  if (field === "name") state.assetManager.draftName = value;
+  if (field === "category") state.assetManager.draftCategory = value;
+}
+
+function openAssetManageOverlay(assetId) {
+  const asset = assetById(assetId);
+  if (!asset) return;
+  state.assetManager.assetId = assetId;
+  state.assetManager.usage = [];
+  state.assetManager.loadingUsage = true;
+  state.assetManager.error = "";
+  state.assetManager.replacementAssetId = "";
+  state.assetManager.draftName = asset.name;
+  state.assetManager.draftCategory = asset.category;
+  state.assetManager.requestToken += 1;
+  const token = state.assetManager.requestToken;
+  renderAssetManageOverlay();
+  loadManagedAssetUsage(assetId, token);
+}
+
+function closeAssetManageOverlay() {
+  state.assetManager.assetId = null;
+  state.assetManager.usage = [];
+  state.assetManager.loadingUsage = false;
+  state.assetManager.error = "";
+  state.assetManager.replacementAssetId = "";
+  state.assetManager.draftName = null;
+  state.assetManager.draftCategory = null;
+  state.assetManager.requestToken += 1;
+  renderAssetManageOverlay();
+}
+
+async function loadManagedAssetUsage(assetId, token) {
+  try {
+    const data = await api("/api/assets/" + assetId + "/usage");
+    if (state.assetManager.assetId !== assetId || state.assetManager.requestToken !== token) return;
+    state.assetManager.usage = data.usage || [];
+    state.assetManager.loadingUsage = false;
+    state.assetManager.error = "";
+    if (state.assetManager.replacementAssetId) {
+      const compatible = compatibleReplacementAssets(assetId, state.assetManager.usage);
+      if (!compatible.some(function (asset) { return asset.id === state.assetManager.replacementAssetId; })) {
+        state.assetManager.replacementAssetId = "";
+      }
+    }
+    renderAssetManageOverlay();
+  } catch (error) {
+    if (state.assetManager.assetId !== assetId || state.assetManager.requestToken !== token) return;
+    state.assetManager.loadingUsage = false;
+    state.assetManager.error = error.message;
+    if (error.status === 404) {
+      closeAssetManageOverlay();
+      setStatus(error.message, "error");
+      return;
+    }
+    renderAssetManageOverlay();
+    setStatus(error.message, "error");
+  }
+}
+
+function renderAssetManageOverlay() {
+  const overlay = el.assetManageOverlay;
+  const panel = el.assetManagePanel;
+  if (!overlay || !panel) return;
+  const asset = managedAsset();
+  if (!state.assetManager.assetId || !asset) {
+    overlay.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  overlay.hidden = false;
+  panel.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "assetManageTitle";
+  title.textContent = asset.name;
+  const subtitle = document.createElement("div");
+  subtitle.className = "assetManageSubtitle";
+  subtitle.textContent = asset.assetType + " · " + asset.category;
+  const idLine = document.createElement("div");
+  idLine.className = "assetManageId";
+  idLine.textContent = asset.id;
+
+  const nameField = document.createElement("label");
+  nameField.className = "assetManageField";
+  const nameLabel = document.createElement("span");
+  nameLabel.textContent = "Naam";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.maxLength = 96;
+  nameInput.value = managedAssetDraftValue(asset.name, state.assetManager.draftName);
+  nameInput.addEventListener("input", function () { setManagedAssetDraft("name", nameInput.value); });
+  nameField.append(nameLabel, nameInput);
+
+  const categoryField = document.createElement("label");
+  categoryField.className = "assetManageField";
+  const categoryLabel = document.createElement("span");
+  categoryLabel.textContent = "Categorie";
+  const categoryInput = document.createElement("input");
+  categoryInput.type = "text";
+  categoryInput.maxLength = 64;
+  categoryInput.value = managedAssetDraftValue(asset.category, state.assetManager.draftCategory);
+  categoryInput.addEventListener("input", function () { setManagedAssetDraft("category", categoryInput.value); });
+  categoryField.append(categoryLabel, categoryInput);
+
+  const usageHeading = document.createElement("div");
+  usageHeading.className = "assetManageSectionTitle";
+  usageHeading.textContent = "Gebruikslijst";
+  const usageList = document.createElement("div");
+  usageList.className = "assetManageUsage";
+  if (state.assetManager.loadingUsage) {
+    const loading = document.createElement("div");
+    loading.className = "assetManageEmpty";
+    loading.textContent = "Gebruikslijst laden...";
+    usageList.appendChild(loading);
+  } else if (!state.assetManager.usage.length) {
+    const empty = document.createElement("div");
+    empty.className = "assetManageEmpty";
+    empty.textContent = "Niet in gebruik.";
+    usageList.appendChild(empty);
+  } else {
+    for (const entry of state.assetManager.usage) {
+      const item = document.createElement("div");
+      item.className = "assetManageUsageItem";
+      const itemTitle = document.createElement("div");
+      itemTitle.className = "assetManageUsageTitle";
+      itemTitle.textContent = entry.nodeTitle;
+      const itemMeta = document.createElement("div");
+      itemMeta.className = "assetManageUsageMeta";
+      itemMeta.textContent = assetUsageMetaText(entry);
+      item.append(itemTitle, itemMeta);
+      usageList.appendChild(item);
+    }
+  }
+
+  const compatibleAssets = compatibleReplacementAssets(asset.id, state.assetManager.usage);
+  if (state.assetManager.replacementAssetId && !compatibleAssets.some(function (candidate) { return candidate.id === state.assetManager.replacementAssetId; })) {
+    state.assetManager.replacementAssetId = "";
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "assetManageActions";
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "assetManageButton save";
+  saveButton.textContent = "Opslaan";
+  saveButton.addEventListener("click", saveManagedAsset);
+  actions.appendChild(saveButton);
+
+  if (state.assetManager.usage.length > 0) {
+    const replaceWrap = document.createElement("div");
+    replaceWrap.className = "assetManageReplace";
+    const replaceLabel = document.createElement("label");
+    replaceLabel.className = "assetManageField";
+    const replaceTitle = document.createElement("span");
+    replaceTitle.textContent = "Vervang door";
+    const replaceSelect = document.createElement("select");
+    replaceSelect.disabled = state.assetManager.loadingUsage || !compatibleAssets.length;
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = compatibleAssets.length ? "(kies asset)" : "Geen compatibele vervangers";
+    replaceSelect.appendChild(blank);
+    for (const candidate of compatibleAssets) {
+      const option = document.createElement("option");
+      option.value = candidate.id;
+      option.textContent = candidate.name + " (" + candidate.assetType + ")";
+      if (candidate.id === state.assetManager.replacementAssetId) option.selected = true;
+      replaceSelect.appendChild(option);
+    }
+    replaceSelect.value = state.assetManager.replacementAssetId || "";
+    replaceSelect.addEventListener("change", function () {
+      state.assetManager.error = "";
+      state.assetManager.replacementAssetId = replaceSelect.value;
+      renderAssetManageOverlay();
+    });
+    replaceLabel.append(replaceTitle, replaceSelect);
+    replaceWrap.appendChild(replaceLabel);
+    if (!compatibleAssets.length) {
+      const note = document.createElement("div");
+      note.className = "assetManageHint";
+      note.textContent = "Geen compatibele vervangers beschikbaar.";
+      replaceWrap.appendChild(note);
+    }
+    const replaceButton = document.createElement("button");
+    replaceButton.type = "button";
+    replaceButton.className = "assetManageButton replace";
+    replaceButton.textContent = "Vervang asset";
+    replaceButton.disabled = state.assetManager.loadingUsage || !state.assetManager.replacementAssetId || !compatibleAssets.some(function (candidate) { return candidate.id === state.assetManager.replacementAssetId; });
+    replaceButton.addEventListener("click", replaceManagedAsset);
+    replaceWrap.appendChild(replaceButton);
+    actions.appendChild(replaceWrap);
+  }
+
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "assetManageButton delete";
+  deleteButton.textContent = "Verwijder";
+  deleteButton.disabled = state.assetManager.loadingUsage || state.assetManager.usage.length > 0;
+  deleteButton.title = state.assetManager.usage.length > 0 ? "Vervang eerst de verwijzingen." : "Verwijder deze asset.";
+  deleteButton.addEventListener("click", deleteManagedAsset);
+  actions.appendChild(deleteButton);
+
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "assetManageButton cancel";
+  cancelButton.textContent = "Annuleren";
+  cancelButton.addEventListener("click", closeAssetManageOverlay);
+  actions.appendChild(cancelButton);
+
+  panel.append(title, subtitle, idLine, nameField, categoryField, usageHeading, usageList);
+  if (state.assetManager.error) {
+    const error = document.createElement("div");
+    error.className = "assetManageError";
+    error.textContent = state.assetManager.error;
+    panel.appendChild(error);
+  }
+  panel.appendChild(actions);
+}
+
+async function saveManagedAsset() {
+  const asset = managedAsset();
+  if (!asset) return;
+  const name = String(managedAssetDraftValue(asset.name, state.assetManager.draftName)).trim();
+  const category = String(managedAssetDraftValue(asset.category, state.assetManager.draftCategory)).trim();
+  try {
+    const data = await api("/api/assets/" + asset.id, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name, category: category })
+    });
+    state.assets = data.assets || state.assets;
+    state.assetManager.draftName = data.asset?.name || name;
+    state.assetManager.draftCategory = data.asset?.category || category;
+    state.assetManager.error = "";
+    renderAssets();
+    renderInspector();
+    renderAssetManageOverlay();
+    setStatus("Asset opgeslagen.", "success");
+  } catch (error) {
+    state.assetManager.error = error.message;
+    renderAssetManageOverlay();
+    setStatus(error.message, "error");
+  }
+}
+
+async function deleteManagedAsset() {
+  const asset = managedAsset();
+  if (!asset) return;
+  if (state.assetManager.loadingUsage) return;
+  if (state.assetManager.usage.length > 0) {
+    state.assetManager.error = "Vervang eerst de verwijzingen.";
+    renderAssetManageOverlay();
+    setStatus("Vervang eerst de verwijzingen.", "error");
+    return;
+  }
+  if (!window.confirm("Asset verwijderen?")) return;
+  try {
+    const data = await api("/api/assets/" + asset.id, { method: "DELETE" });
+    state.assets = data.assets || [];
+    renderAssets();
+    renderInspector();
+    closeAssetManageOverlay();
+    setStatus("Asset verwijderd.", "success");
+  } catch (error) {
+    state.assetManager.error = error.message;
+    renderAssetManageOverlay();
+    setStatus(error.message, "error");
+  }
+}
+
+async function replaceManagedAsset() {
+  const asset = managedAsset();
+  if (!asset) return;
+  if (state.assetManager.loadingUsage) return;
+  const replacementAssetId = String(state.assetManager.replacementAssetId || "").trim();
+  if (!replacementAssetId) {
+    state.assetManager.error = "Kies een vervangende asset.";
+    renderAssetManageOverlay();
+    setStatus("Kies een vervangende asset.", "error");
+    return;
+  }
+  const replacementAsset = assetById(replacementAssetId);
+  if (!replacementAsset) {
+    state.assetManager.error = "Vervangende asset bestaat niet.";
+    renderAssetManageOverlay();
+    setStatus("Vervangende asset bestaat niet.", "error");
+    return;
+  }
+  const result = await applyGraphMutation(function () {
+    return api("/api/assets/" + asset.id + "/replace", {
+      method: "POST",
+      body: JSON.stringify({ replacementAssetId: replacementAssetId })
+    });
+  }, {
+    historyLabel: "Asset vervangen",
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function (_, response) {
+      state.assets = response.assets || state.assets;
+      state.assetManager.usage = [];
+      state.assetManager.loadingUsage = false;
+      state.assetManager.error = "";
+      state.assetManager.replacementAssetId = "";
+      renderAssets();
+      renderInspector();
+      renderAssetManageOverlay();
+      setStatus("Asset vervangen.", "success");
+    }
+  });
+  if (!result) {
+    state.assetManager.error = state.statusMessage || "Vervangen mislukt.";
+    renderAssetManageOverlay();
+  }
 }
 
 function animationBlankLabel(key) {
@@ -2616,6 +2980,16 @@ async function reloadAssets() {
   state.assets = data.assets || [];
   renderAssets();
   renderInspector();
+  renderAssetManageOverlay();
+}
+
+function focusAssetImportForm() {
+  if (!el.assetForm) return;
+  if (typeof el.assetForm.scrollIntoView === "function") {
+    el.assetForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  const firstField = el.assetForm.querySelector("input, select, button");
+  if (firstField && typeof firstField.focus === "function") firstField.focus();
 }
 
 function renderAssets() {
@@ -2631,10 +3005,27 @@ function renderAssets() {
     if (state.assetSort === "type") return a.assetType.localeCompare(b.assetType);
     return (b.createdAt || "").localeCompare(a.createdAt || "");
   });
+  el.assetGrid.classList.toggle("empty", !list.length);
   if (!list.length) {
     const empty = document.createElement("div");
-    empty.className = "inspectorEmpty";
-    empty.textContent = "Geen assets. Importeer hieronder.";
+    empty.className = "assetEmptyState";
+    const title = document.createElement("div");
+    title.className = "assetEmptyStateTitle";
+    title.textContent = state.assets.length ? "Geen assets gevonden" : "Nog geen assets";
+    const text = document.createElement("div");
+    text.className = "assetEmptyStateText";
+    text.textContent = state.assets.length
+      ? "Pas zoekterm of filters aan."
+      : "Importeer een GLB, texture, image, audio of data asset.";
+    empty.append(title, text);
+    if (!state.assets.length) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "assetEmptyStateButton";
+      button.textContent = "Importeer asset";
+      button.addEventListener("click", focusAssetImportForm);
+      empty.appendChild(button);
+    }
     el.assetGrid.appendChild(empty);
     return;
   }
@@ -2685,6 +3076,26 @@ function buildAssetCard(asset) {
   }
   meta.append(name, sub);
   card.append(thumb, meta);
+  const menu = document.createElement("button");
+  menu.type = "button";
+  menu.className = "assetMenuButton";
+  menu.draggable = false;
+  menu.textContent = "...";
+  menu.title = "Beheer asset";
+  menu.setAttribute("aria-label", "Beheer asset");
+  menu.addEventListener("pointerdown", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  menu.addEventListener("dragstart", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  menu.addEventListener("click", function (event) {
+    event.stopPropagation();
+    openAssetManageOverlay(asset.id);
+  });
+  card.appendChild(menu);
   if (asset.assetType === "model") {
     const place = document.createElement("button");
     place.type = "button";
@@ -2728,6 +3139,7 @@ el.assetForm.addEventListener("submit", async function (event) {
     el.assetForm.reset();
     renderAssets();
     renderInspector();
+    renderAssetManageOverlay();
     setStatus("Asset geimporteerd.", "success");
   } catch (error) {
     setStatus(error.message, "error");

@@ -214,6 +214,29 @@ async function handleApi(req, res, url) {
       });
       return sendJson(res, 201, { ok: true, asset, assets: assetService.list() });
     }
+    const assetUsageMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/usage$/);
+    if (req.method === "GET" && assetUsageMatch) {
+      authService.requireEditor(req);
+      return sendJson(res, 200, { ok: true, assetId: assetUsageMatch[1], usage: assetService.usageForAsset(assetUsageMatch[1], repository) });
+    }
+    const assetReplaceMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/replace$/);
+    if (req.method === "POST" && assetReplaceMatch) {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      return sendJson(res, 200, Object.assign({ ok: true }, assetService.replaceAssetReferences(assetReplaceMatch[1], body.replacementAssetId, repository)));
+    }
+    const assetIdMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
+    if (req.method === "PATCH" && assetIdMatch) {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      const asset = assetService.updateAsset(assetIdMatch[1], body);
+      return sendJson(res, 200, { ok: true, asset, assets: assetService.list() });
+    }
+    if (req.method === "DELETE" && assetIdMatch) {
+      authService.requireEditor(req);
+      const assets = assetService.deleteAsset(assetIdMatch[1], repository);
+      return sendJson(res, 200, { ok: true, assets });
+    }
     if (req.method === "GET" && url.pathname === "/api/editor/graph") {
       authService.requireEditor(req);
       return sendJson(res, 200, repository.getGraph());
@@ -300,7 +323,10 @@ async function handleApi(req, res, url) {
     }
     return sendJson(res, 404, { ok: false, message: "API route niet gevonden." });
   } catch (error) {
-    return sendJson(res, error.status || 500, { ok: false, message: error.message, details: error.details || undefined });
+    const payload = { ok: false, message: error.message };
+    if (error.usage) payload.usage = error.usage;
+    if (error.details) payload.details = error.details;
+    return sendJson(res, error.status || 500, payload);
   }
 }
 

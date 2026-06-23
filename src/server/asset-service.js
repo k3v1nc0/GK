@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { cleanValuesForType } from "./field-validation.js";
+import { NODE_TYPES, defaultValuesForType } from "../shared/node-types.js";
 
 const now = function () {
   return new Date().toISOString();
@@ -20,6 +22,7 @@ export class AssetService {
     this.db = db;
     this.rootDir = rootDir;
     this.assetsDir = path.join(rootDir, "assets");
+    this.uploadsDir = path.join(this.assetsDir, "uploads");
   }
 
   list() {
@@ -33,6 +36,20 @@ export class AssetService {
 
   getMany(ids) {
     return ids.map((id) => this.get(id)).filter(Boolean);
+  }
+
+  updateAsset(id, patch = {}) {
+    const row = this.db.prepare("SELECT * FROM asset_library WHERE id = ?").get(id);
+    if (!row) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    const name = requiredText(patch.name, "Asset name", 96);
+    const category = requiredText(patch.category, "Asset category", 64);
+    this.db.prepare("UPDATE asset_library SET name = ?, category = ?, updated_at = ? WHERE id = ?")
+      .run(name, category, now(), id);
+    return this.get(id);
   }
 
   importUpload(input) {
@@ -59,10 +76,9 @@ export class AssetService {
       throw error;
     }
     const id = "asset_" + crypto.randomUUID();
-    const uploadDir = path.join(this.assetsDir, "uploads");
-    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.mkdirSync(this.uploadsDir, { recursive: true });
     const storedName = id + ext;
-    fs.writeFileSync(path.join(uploadDir, storedName), file.data);
+    fs.writeFileSync(path.join(this.uploadsDir, storedName), file.data);
     const sourcePath = "/assets/uploads/" + storedName;
     // Real thumbnails only: an image is its own thumbnail. No fake thumbnails are generated.
     const thumbnailPath = (assetType === "image" || assetType === "texture") ? sourcePath : null;
@@ -78,6 +94,126 @@ export class AssetService {
     this.db.prepare("INSERT INTO asset_library (id, name, category, asset_type, source_path, thumbnail_path, original_filename, mime_type, size_bytes, sha256, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, name, category, assetType, sourcePath, thumbnailPath, originalFileName, file.contentType || "", file.data.length, metadata.sha256, JSON.stringify(metadata), now(), now());
     return this.get(id);
+  }
+
+  usageForAsset(id, graphRepository) {
+    const asset = this.get(id);
+    if (!asset) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    const graph = graphRepository && typeof graphRepository.getGraph === "function" ? graphRepository.getGraph() : null;
+    if (!graph) return [];
+    return collectAssetUsage(graph, id);
+  }
+
+  deleteAsset(id, graphRepository) {
+    const row = this.db.prepare("SELECT * FROM asset_library WHERE id = ?").get(id);
+    if (!row) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    const usage = this.usageForAsset(id, graphRepository);
+    if (usage.length > 0) {
+      const error = new Error("Asset wordt nog gebruikt.");
+      error.status = 409;
+      error.usage = usage;
+      throw error;
+    }
+    const result = this.db.prepare("DELETE FROM asset_library WHERE id = ?").run(id);
+    if (result.changes === 0) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    removeAssetFiles(this.rootDir, row);
+    return this.list();
+  }
+
+  replaceAssetReferences(oldAssetId, newAssetId, graphRepository) {
+    const sourceAssetId = String(oldAssetId || "").trim();
+    const replacementAssetId = String(newAssetId || "").trim();
+    if (!sourceAssetId) {
+      const error = new Error("Bron asset is verplicht.");
+      error.status = 400;
+      throw error;
+    }
+    if (!replacementAssetId) {
+      const error = new Error("Vervangende asset is verplicht.");
+      error.status = 400;
+      throw error;
+    }
+    const oldAsset = this.get(sourceAssetId);
+    if (!oldAsset) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    const replacementAsset = this.get(replacementAssetId);
+    if (!replacementAsset) {
+      const error = new Error("Vervangende asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    if (sourceAssetId === replacementAssetId) {
+      const error = new Error("Vervangen door dezelfde asset is niet toegestaan.");
+      error.status = 400;
+      throw error;
+    }
+    const graph = graphRepository && typeof graphRepository.getGraph === "function" ? graphRepository.getGraph() : null;
+    if (!graph) {
+      const error = new Error("Graph repository ontbreekt.");
+      error.status = 500;
+      throw error;
+    }
+    const usage = collectAssetUsage(graph, sourceAssetId);
+    if (!usage.length) {
+      return { replaced: [], graph: graph, assets: this.list() };
+    }
+    const nodeTypes = graph.nodeTypes || NODE_TYPES;
+    const incompatible = usage.filter(function (entry) {
+      const field = nodeTypes?.[entry.nodeType]?.fields?.[entry.fieldKey];
+      return !field || field.type !== "asset" || !Array.isArray(field.assetTypes) || !field.assetTypes.includes(replacementAsset.assetType);
+    });
+    if (incompatible.length) {
+      const error = new Error("Vervangende asset is niet compatibel met alle verwijzingen.");
+      error.status = 400;
+      error.details = { incompatible: incompatible };
+      throw error;
+    }
+    const nodeMap = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+    const updates = new Map();
+    for (const entry of usage) {
+      const node = nodeMap.get(entry.nodeId);
+      if (!node) continue;
+      const patch = updates.get(node.id) || {};
+      patch[entry.fieldKey] = replacementAsset.id;
+      updates.set(node.id, patch);
+    }
+    if (!updates.size) {
+      return { replaced: [], graph: graph, assets: this.list() };
+    }
+    const updateNode = this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      for (const [nodeId, patch] of updates.entries()) {
+        const node = nodeMap.get(nodeId);
+        if (!node) continue;
+        const currentValues = node.values && typeof node.values === "object" ? node.values : defaultValuesForType(node.type);
+        const cleanValues = cleanValuesForType(node.type, patch, currentValues, NODE_TYPES);
+        updateNode.run(JSON.stringify(cleanValues), now(), nodeId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    if (graphRepository && typeof graphRepository.clearDraftWorld === "function") {
+      graphRepository.clearDraftWorld();
+    }
+    return { replaced: usage, graph: graphRepository.getGraph(), assets: this.list() };
   }
 
   manifestForIds(ids) {
@@ -109,6 +245,64 @@ function toAsset(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function requiredText(value, label, maxLength) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (!text) {
+    const error = new Error(label + " is verplicht.");
+    error.status = 400;
+    throw error;
+  }
+  if (text.length > maxLength) {
+    const error = new Error(label + " is maximaal " + maxLength + " tekens.");
+    error.status = 400;
+    throw error;
+  }
+  return text;
+}
+
+function collectAssetUsage(graph, assetId) {
+  const usage = [];
+  const nodeTypes = graph?.nodeTypes || NODE_TYPES;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  for (const node of nodes) {
+    const definition = nodeTypes?.[node.type];
+    if (!definition?.fields) continue;
+    for (const [fieldKey, field] of Object.entries(definition.fields)) {
+      if (field.type !== "asset") continue;
+      if (node.values?.[fieldKey] !== assetId) continue;
+      usage.push({
+        nodeId: node.id,
+        nodeTitle: node.title,
+        nodeType: node.type,
+        nodeLabel: definition.label,
+        fieldKey: fieldKey,
+        fieldLabel: field.label
+      });
+    }
+  }
+  return usage;
+}
+
+function removeAssetFiles(rootDir, row) {
+  const candidates = new Set([row?.source_path, row?.thumbnail_path]);
+  for (const assetPath of candidates) {
+    const filePath = safeUploadFilePath(rootDir, assetPath);
+    if (!filePath) continue;
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
+  }
+}
+
+function safeUploadFilePath(rootDir, assetPath) {
+  if (typeof assetPath !== "string" || !assetPath.startsWith("/assets/uploads/")) return null;
+  const uploadsDir = path.join(rootDir, "assets", "uploads");
+  const filePath = path.resolve(rootDir, assetPath.slice(1));
+  const relative = path.relative(uploadsDir, filePath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  return filePath;
 }
 
 function parseJson(value, fallback) {
