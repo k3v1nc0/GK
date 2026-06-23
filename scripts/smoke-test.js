@@ -61,6 +61,20 @@ function buildMinimalGlb() {
   return Buffer.concat([header, chunkHeader, jsonChunk]);
 }
 
+function buildJsonBlob(value) {
+  return new Blob([JSON.stringify(value)], { type: "application/json" });
+}
+
+async function uploadAsset({ name, category, assetType, blob, filename }) {
+  const form = new FormData();
+  form.append("name", name);
+  form.append("category", category);
+  form.append("assetType", assetType);
+  const file = blob instanceof Blob ? blob : new Blob([blob], { type: assetType === "model" ? "model/gltf-binary" : assetType === "data" ? "application/json" : "application/octet-stream" });
+  form.append("file", file, filename);
+  return await call("POST", "/api/assets/import", form, true);
+}
+
 async function waitForHealth(timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -142,6 +156,9 @@ async function main() {
 
     const login = await call("POST", "/api/auth/login", { username: "kevin", password: ADMIN_PASSWORD });
     assert(login.status === 200 && login.json.ok, "login werkt");
+
+    const emptyAssets = await call("GET", "/api/assets");
+    assert(emptyAssets.status === 200 && emptyAssets.json && Array.isArray(emptyAssets.json.assets) && emptyAssets.json.assets.length === 0, "lege asset database start leeg");
 
     const glb = buildMinimalGlb();
     const form = new FormData();
@@ -265,6 +282,65 @@ async function main() {
     assert(publishedKeybindIds.has("kb_group1"), "Group 1 keybind is gepubliceerd");
     assert(publishedKeybindIds.has("kb_group2"), "Group 2 keybind is gepubliceerd");
     assert(after.json.assets.some(function (a) { return a.id === modelId; }), "asset manifest bevat model");
+
+    const renamedAssetName = "Hero Prime";
+    const renamedAssetCategory = "characters";
+    const patchAsset = await call("PATCH", "/api/assets/" + modelId, { name: renamedAssetName, category: renamedAssetCategory });
+    assert(patchAsset.status === 200 && patchAsset.json.ok, "asset metadata patch werkt");
+    assert(patchAsset.json.asset.name === renamedAssetName && patchAsset.json.asset.category === renamedAssetCategory, "PATCH /api/assets/:id geeft bijgewerkte naam en categorie");
+    const assetsAfterPatch = await call("GET", "/api/assets");
+    const patchedAsset = assetsAfterPatch.json.assets.find(function (asset) { return asset.id === modelId; });
+    assert(patchedAsset && patchedAsset.name === renamedAssetName && patchedAsset.category === renamedAssetCategory, "GET /api/assets toont gewijzigde naam en categorie");
+
+    const unusedUpload = await uploadAsset({
+      name: "Unused Config",
+      category: "misc",
+      assetType: "data",
+      blob: buildJsonBlob({ hello: "world" }),
+      filename: "unused-config.json"
+    });
+    assert(unusedUpload.status === 201 && unusedUpload.json.asset, "ongebruikte data asset upload werkt");
+    const unusedAssetId = unusedUpload.json.asset.id;
+    const deleteUnused = await call("DELETE", "/api/assets/" + unusedAssetId);
+    assert(deleteUnused.status === 200 && deleteUnused.json.ok, "ongebruikte asset kan veilig verwijderd worden");
+    assert(Array.isArray(deleteUnused.json.assets) && !deleteUnused.json.assets.some(function (asset) { return asset.id === unusedAssetId; }), "verwijderde ongebruikte asset verdwijnt uit lijst");
+
+    const usageResponse = await call("GET", "/api/assets/" + modelId + "/usage");
+    assert(usageResponse.status === 200 && usageResponse.json.ok, "usage endpoint werkt voor gebruikte asset");
+    assert(Array.isArray(usageResponse.json.usage) && usageResponse.json.usage.some(function (entry) {
+      return entry.nodeId === playerNode.id && entry.fieldKey === "modelAssetId";
+    }) && usageResponse.json.usage.some(function (entry) {
+      return entry.nodeId === modelEntityNode.id && entry.fieldKey === "modelAssetId";
+    }), "usage lijst bevat player_character en model_entity");
+
+    const deleteUsed = await call("DELETE", "/api/assets/" + modelId);
+    assert(deleteUsed.status === 409 && Array.isArray(deleteUsed.json.usage) && deleteUsed.json.usage.length >= 2, "gebruikte asset wordt geblokkeerd bij delete");
+
+    const replacementUpload = await uploadAsset({
+      name: "Hero Replacement",
+      category: "characters",
+      assetType: "model",
+      blob: buildMinimalGlb(),
+      filename: "hero-replacement.glb"
+    });
+    assert(replacementUpload.status === 201 && replacementUpload.json.asset, "replacement model upload werkt");
+    const replacementAssetId = replacementUpload.json.asset.id;
+
+    const replaceUsed = await call("POST", "/api/assets/" + modelId + "/replace", { replacementAssetId: replacementAssetId });
+    assert(replaceUsed.status === 200 && replaceUsed.json.ok, "asset replace werkt");
+    assert(Array.isArray(replaceUsed.json.replaced) && replaceUsed.json.replaced.length >= 2, "replace response bevat vervangingen");
+    const replacedGraph = replaceUsed.json.graph || {};
+    const replacedPlayerNode = findNode(replacedGraph, function (n) { return n.id === playerNode.id; }, "player node na replace");
+    const replacedModelEntityNode = findNode(replacedGraph, function (n) { return n.id === modelEntityNode.id; }, "model entity na replace");
+    assert(replacedPlayerNode.values.modelAssetId === replacementAssetId, "player_character verwijst na replace naar nieuwe asset");
+    assert(replacedModelEntityNode.values.modelAssetId === replacementAssetId, "model_entity verwijst na replace naar nieuwe asset");
+
+    const usageAfterReplace = await call("GET", "/api/assets/" + modelId + "/usage");
+    assert(usageAfterReplace.status === 200 && Array.isArray(usageAfterReplace.json.usage) && usageAfterReplace.json.usage.length === 0, "oude asset heeft na replace geen usage meer");
+
+    const deleteOld = await call("DELETE", "/api/assets/" + modelId);
+    assert(deleteOld.status === 200 && deleteOld.json.ok, "oude asset kan na replace verwijderd worden");
+    assert(Array.isArray(deleteOld.json.assets) && !deleteOld.json.assets.some(function (asset) { return asset.id === modelId; }), "oude asset verdwijnt uit lijst na delete");
 
     const mismatchGroup = (await createNode("group", { groupId: "group_mismatch", title: "Mismatch Group" })).graph;
     const mismatchGroupNode = findNode(mismatchGroup, function (n) { return n.type === "group" && n.values.groupId === "group_mismatch"; }, "mismatch group aangemaakt");
