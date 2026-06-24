@@ -129,9 +129,30 @@
             <option value="audio">Audio</option>
             <option value="data">Data</option>
           </select>
+          <label class="assetSizeControl">
+            <span>Card size</span>
+            <div class="assetSizeControlRow">
+              <input id="assetCardSize" type="range" min="64" max="180" step="4" value="88">
+              <span id="assetCardSizeValue" class="assetSizeValue">88px</span>
+            </div>
+          </label>
         </div>
         <div id="assetGrid" class="assetGrid"></div>
-        <form id="assetForm" class="assetForm">
+        <div id="assetDropOverlay" class="assetDropOverlay" hidden>
+          <div>Sleep assets hierheen</div>
+          <div>GLB, PNG, JPG, WEBP, MP3, WAV, JSON</div>
+        </div>
+          <div id="assetUploadStatus" class="assetUploadStatus" hidden aria-live="polite">
+            <div id="assetUploadProgressText" class="assetUploadProgressText"></div>
+            <div class="assetUploadProgress" aria-hidden="true"><div class="assetUploadProgressBar"></div></div>
+            <div id="assetUploadMessage" class="assetUploadMessage"></div>
+            <div id="assetUploadSummary" class="assetUploadSummary" hidden></div>
+            <details id="assetUploadDetails" class="assetUploadDetails" hidden>
+              <summary>Details</summary>
+              <div id="assetUploadDetailsList" class="assetUploadDetailsList"></div>
+            </details>
+          </div>
+        <form id="assetForm" class="assetForm" hidden>
           <h3>Importeer asset</h3>
           <input name="name" placeholder="Naam" required>
           <input name="category" placeholder="Categorie" required>

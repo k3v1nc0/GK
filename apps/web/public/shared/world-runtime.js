@@ -18,6 +18,10 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function timingMs(startedAt) {
+  return (performance.now() - startedAt).toFixed(1);
+}
+
 function disposeObject(object) {
   object.traverse(function (child) {
     if (child.geometry) child.geometry.dispose();
@@ -72,6 +76,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let onTransformCommit = options.onTransformCommit || function () {};
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
+  let onModelLoadTiming = options.onModelLoadTiming || function () {};
   const loadErrors = [];
   let editorViewInitialized = false;
   let disposed = false;
@@ -312,6 +317,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     onTransformCommit = callbacks.onTransformCommit || onTransformCommit;
     onTransformEnd = callbacks.onTransformEnd || onTransformEnd;
     onTransformChange = callbacks.onTransformChange || onTransformChange;
+    onModelLoadTiming = callbacks.onModelLoadTiming || onModelLoadTiming;
   }
 
   function updateDebugLoopState() {
@@ -1259,16 +1265,55 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (!record) {
       record = { status: "loading", gltf: null, waiters: [] };
       modelCache.set(asset.id, record);
-      loader.load(asset.sourcePath, function (gltf) {
-        record.status = "ready";
-        record.gltf = gltf;
-        record.gltf.animations = normalizeAnimations(gltf.animations);
-        for (const waiter of record.waiters.splice(0)) waiter(gltf);
-      }, undefined, function () {
+      const startedAt = performance.now();
+      console.info("[timing] GLTFLoader load start asset=" + asset.id + " path=" + asset.sourcePath);
+      try {
+        loader.load(asset.sourcePath, function (gltf) {
+          record.status = "ready";
+          record.gltf = gltf;
+          record.gltf.animations = normalizeAnimations(gltf.animations);
+          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms");
+          if (typeof onModelLoadTiming === "function") {
+            onModelLoadTiming({
+              assetId: asset.id,
+              assetName: asset.name,
+              sourcePath: asset.sourcePath,
+              durationMs: Number(timingMs(startedAt)),
+              ok: true
+            });
+          }
+          for (const waiter of record.waiters.splice(0)) waiter(gltf);
+        }, undefined, function () {
+          record.status = "error";
+          loadErrors.push("Model: " + asset.name);
+          renderHud();
+          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+          if (typeof onModelLoadTiming === "function") {
+            onModelLoadTiming({
+              assetId: asset.id,
+              assetName: asset.name,
+              sourcePath: asset.sourcePath,
+              durationMs: Number(timingMs(startedAt)),
+              ok: false
+            });
+          }
+        });
+      } catch (error) {
         record.status = "error";
         loadErrors.push("Model: " + asset.name);
         renderHud();
-      });
+        console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+        if (typeof onModelLoadTiming === "function") {
+          onModelLoadTiming({
+            assetId: asset.id,
+            assetName: asset.name,
+            sourcePath: asset.sourcePath,
+            durationMs: Number(timingMs(startedAt)),
+            ok: false
+          });
+        }
+        throw error;
+      }
     }
     const attach = function (gltf) {
       const clone = SkeletonUtils.clone(gltf.scene);
@@ -1276,19 +1321,17 @@ export function createGkWorldRuntime(canvas, options = {}) {
         if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
       });
       root.add(clone);
-      const preferredClip = resolveAnimationClipName(gltf.animations || [], root.userData.animationClip || root.userData.idleAnimation || null, asset.metadata || {});
-      if (preferredClip) {
-        const clip = (gltf.animations || []).find(function (candidate) { return candidate.name === preferredClip; }) || null;
-        if (clip) {
-          const mixer = new THREE.AnimationMixer(clone);
-          const action = mixer.clipAction(clip);
-          action.reset();
-          action.setLoop(THREE.LoopRepeat, Infinity);
-          action.clampWhenFinished = false;
-          action.play();
-          animationMixers.set(root, { mixer, root: clone, action });
-        }
-      }
+      const mixer = new THREE.AnimationMixer(clone);
+      animationMixers.set(root, {
+        mixer: mixer,
+        root: clone,
+        actions: new Map(),
+        currentAction: null,
+        currentClipName: null,
+        clips: gltf.animations || [],
+        assetMetadata: asset.metadata || {}
+      });
+      playAnimationState(root, "idle", 0);
       if (onReady) onReady(clone);
       if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
       requestRender();
@@ -1333,30 +1376,87 @@ export function createGkWorldRuntime(canvas, options = {}) {
     });
   }
 
-  function resolveAnimationClipName(clips, preferredName, metadata) {
+  function findClipName(clips, preferredName) {
     const names = (clips || []).map(function (clip) { return String(clip?.name || "").trim(); }).filter(Boolean);
     if (!names.length) return null;
     const preferred = String(preferredName || "").trim();
-    if (preferred) {
-      const exact = names.find(function (name) { return name === preferred; });
-      if (exact) return exact;
-      const lower = preferred.toLowerCase();
-      const caseMatch = names.find(function (name) { return name.toLowerCase() === lower; });
-      if (caseMatch) return caseMatch;
-      const contains = names.find(function (name) { return name.toLowerCase().includes(lower); });
-      if (contains) return contains;
+    if (!preferred) return null;
+    const exact = names.find(function (name) { return name === preferred; });
+    if (exact) return exact;
+    const lower = preferred.toLowerCase();
+    const caseMatch = names.find(function (name) { return name.toLowerCase() === lower; });
+    if (caseMatch) return caseMatch;
+    const contains = names.find(function (name) { return name.toLowerCase().includes(lower); });
+    if (contains) return contains;
+    return null;
+  }
+
+  function resolveClipNameForState(root, clips, stateName, assetMetadata) {
+    const state = String(stateName || "").trim().toLowerCase();
+    const data = root?.userData || {};
+    if (!Array.isArray(clips) || !clips.length) return null;
+    if (state === "walk") {
+      return findClipName(clips, data.walkAnimation)
+        || findClipName(clips, "Walk")
+        || resolveClipNameForState(root, clips, "idle", assetMetadata);
     }
-    const defaultName = String(metadata?.defaultAnimation || "").trim();
-    if (defaultName) {
-      const exact = names.find(function (name) { return name === defaultName; });
-      if (exact) return exact;
-      const lower = defaultName.toLowerCase();
-      const caseMatch = names.find(function (name) { return name.toLowerCase() === lower; });
-      if (caseMatch) return caseMatch;
-      const contains = names.find(function (name) { return name.toLowerCase().includes(lower); });
-      if (contains) return contains;
+    if (state === "run") {
+      return findClipName(clips, data.runAnimation)
+        || findClipName(clips, "Run")
+        || resolveClipNameForState(root, clips, "walk", assetMetadata)
+        || resolveClipNameForState(root, clips, "idle", assetMetadata);
     }
-    return names[0] || null;
+    const defaultName = String(assetMetadata?.defaultAnimation || "").trim();
+    return findClipName(clips, data.idleAnimation)
+      || findClipName(clips, data.animationClip)
+      || findClipName(clips, defaultName)
+      || findClipName(clips, "Idle")
+      || String(clips[0]?.name || "").trim()
+      || null;
+  }
+
+  function getAnimationAction(record, clipName) {
+    if (!record || !clipName) return null;
+    const existing = record.actions.get(clipName);
+    if (existing) return existing;
+    const clip = (record.clips || []).find(function (candidate) {
+      return String(candidate?.name || "").trim() === clipName;
+    }) || null;
+    if (!clip) return null;
+    const action = record.mixer.clipAction(clip);
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = false;
+    record.actions.set(clipName, action);
+    return action;
+  }
+
+  function playAnimationState(root, stateName, fadeSeconds = 0.15) {
+    const record = animationMixers.get(root);
+    if (!record || !Array.isArray(record.clips) || !record.clips.length) return null;
+    const clipName = resolveClipNameForState(root, record.clips, stateName, record.assetMetadata || {});
+    if (!clipName) return null;
+    if (record.currentClipName === clipName) return clipName;
+    const nextAction = getAnimationAction(record, clipName);
+    if (!nextAction) return null;
+    const previousAction = record.currentAction;
+    nextAction.reset();
+    nextAction.enabled = true;
+    nextAction.setLoop(THREE.LoopRepeat, Infinity);
+    nextAction.clampWhenFinished = false;
+    if (previousAction && previousAction !== nextAction) {
+      if (fadeSeconds > 0) {
+        previousAction.fadeOut(fadeSeconds);
+        nextAction.fadeIn(fadeSeconds);
+      } else {
+        previousAction.stop();
+      }
+    } else {
+      nextAction.setEffectiveWeight(1);
+    }
+    nextAction.play();
+    record.currentAction = nextAction;
+    record.currentClipName = clipName;
+    return clipName;
   }
 
   function addEntity(worldData, entity) {
@@ -1536,14 +1636,14 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const move = new THREE.Vector3();
     const basis = cameraGroundBasis();
     let usingKeys = false;
+    let isMoving = false;
+    let isSprinting = false;
     if (isActionPressed("move_forward")) { move.add(basis.forward); usingKeys = true; }
     if (isActionPressed("move_back")) { move.sub(basis.forward); usingKeys = true; }
     if (isActionPressed("move_left")) { move.sub(basis.right); usingKeys = true; }
     if (isActionPressed("move_right")) { move.add(basis.right); usingKeys = true; }
     if (isActionPressed("rotate_cam_left")) camYaw -= camRotateSpeed * delta;
     if (isActionPressed("rotate_cam_right")) camYaw += camRotateSpeed * delta;
-
-    let speed = player.speed * (isActionPressed("sprint") ? player.sprint : 1);
 
     if (!usingKeys && clickTarget) {
       const toTarget = new THREE.Vector3(clickTarget.x - player.pos.x, 0, clickTarget.z - player.pos.z);
@@ -1553,15 +1653,22 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
     if (move.lengthSq() > 0.0001) {
       move.normalize();
+      const wantsSprint = usingKeys && isActionPressed("sprint");
+      const speed = player.speed * (wantsSprint ? player.sprint : 1);
       const next = new THREE.Vector3(player.pos.x + move.x * speed * delta, player.pos.y, player.pos.z + move.z * speed * delta);
       resolveCollision(next);
-      player.pos.copy(next);
+      if (next.distanceToSquared(player.pos) > 0.000001) {
+        player.pos.copy(next);
+        isMoving = true;
+        isSprinting = wantsSprint;
+      }
       const desiredFacing = Math.atan2(move.x, move.z);
       player.facing = stepAngle(player.facing, desiredFacing, player.turnSpeed * DEG_TO_RAD * delta);
     }
 
     player.root.position.copy(player.pos);
     player.root.rotation.y = player.facing;
+    playAnimationState(player.root, isMoving ? (isSprinting ? "run" : "walk") : "idle");
 
     if (camFollow) camTarget.lerp(player.pos, Math.min(1, delta * 8));
     updateCameraPosition();

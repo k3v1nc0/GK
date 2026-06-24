@@ -7,6 +7,7 @@ const HEAD = 34;
 const PAD = 8;
 const ROW = 20;
 const NODE_WIDTH = 210;
+const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "world_settings",
   "ground_surface",
@@ -34,6 +35,17 @@ const state = {
   assetSearch: "",
   assetSort: "date",
   assetFilter: "all",
+  assetCardSize: loadStoredAssetCardSize(),
+  assetImportOpen: false,
+  assetUploadBusy: false,
+  assetUploadMessage: "",
+  assetUploadProgressText: "",
+  assetUploadTimings: null,
+  assetUploadDetailsOpen: false,
+  assetUploadTone: "",
+  assetUploadAwaitingThumbnail: false,
+  assetUploadLastAssetId: null,
+  assetUploadLoadCaptureUntil: 0,
   assetManager: {
     assetId: null,
     usage: [],
@@ -85,10 +97,20 @@ const el = {
   viewportErrors: document.querySelector("#viewportErrors"),
   statusText: document.querySelector("#statusText"),
   assetColumn: document.querySelector(".assetColumn"),
+  assetDropOverlay: document.querySelector("#assetDropOverlay"),
   assetSearch: document.querySelector("#assetSearch"),
   assetSort: document.querySelector("#assetSort"),
   assetFilter: document.querySelector("#assetFilter"),
   assetGrid: document.querySelector("#assetGrid"),
+  assetCardSize: document.querySelector("#assetCardSize"),
+  assetCardSizeValue: document.querySelector("#assetCardSizeValue"),
+  assetImportToggle: document.querySelector("#assetImportToggle"),
+  assetUploadStatus: document.querySelector("#assetUploadStatus"),
+  assetUploadProgressText: document.querySelector("#assetUploadProgressText"),
+  assetUploadMessage: document.querySelector("#assetUploadMessage"),
+  assetUploadSummary: document.querySelector("#assetUploadSummary"),
+  assetUploadDetails: document.querySelector("#assetUploadDetails"),
+  assetUploadDetailsList: document.querySelector("#assetUploadDetailsList"),
   assetForm: document.querySelector("#assetForm"),
   snapModeSelect: document.querySelector("#snapModeSelect"),
   snapGridInput: document.querySelector("#snapGridInput"),
@@ -102,6 +124,9 @@ let runtime = null;
 let viewportRefreshTimer = null;
 let validationRefreshTimer = null;
 let graphMutationQueue = Promise.resolve();
+let assetUploadProgressTimer = null;
+let assetThumbnailPollTimer = null;
+let assetColumnDropDepth = 0;
 const selectionBox = document.createElement("div");
 selectionBox.className = "selectionBox";
 selectionBox.hidden = true;
@@ -117,6 +142,7 @@ el.assetManageOverlay = assetManageOverlay;
 el.assetManagePanel = assetManagePanel;
 const edgePanel = el.edgeList && typeof el.edgeList.closest === "function" ? el.edgeList.closest(".panel") : null;
 if (edgePanel) edgePanel.style.display = "none";
+applyAssetCardSize(state.assetCardSize, false);
 const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR === "object"
   ? window.__GK_DEBUG_EDITOR
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
@@ -139,6 +165,216 @@ async function api(path, options) {
     throw error;
   }
   return data;
+}
+
+function timingMs(startedAt) {
+  return (performance.now() - startedAt).toFixed(1);
+}
+
+function logTiming(label, startedAt, details) {
+  console.info("[timing] " + label + " " + timingMs(startedAt) + "ms" + (details ? " " + details : ""));
+}
+
+function formatUploadTiming(ms) {
+  if (ms === null || ms === undefined || ms === "") return "n.v.t.";
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return "n.v.t.";
+  return (value / 1000).toFixed(1) + "s";
+}
+
+function createUploadTimingRow(label, value, muted) {
+  const row = document.createElement("div");
+  row.className = "assetUploadDetailRow";
+  const name = document.createElement("div");
+  name.className = "assetUploadDetailLabel";
+  name.textContent = label;
+  const amount = document.createElement("div");
+  amount.className = "assetUploadDetailValue" + (muted ? " muted" : "");
+  amount.textContent = value;
+  row.append(name, amount);
+  return row;
+}
+
+function clampAssetCardSize(value) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return 88;
+  return Math.max(64, Math.min(180, number));
+}
+
+function loadStoredAssetCardSize() {
+  try {
+    return clampAssetCardSize(Number(window.localStorage.getItem(ASSET_CARD_SIZE_STORAGE_KEY) || 88));
+  } catch {
+    return 88;
+  }
+}
+
+function storeAssetCardSize(value) {
+  try {
+    window.localStorage.setItem(ASSET_CARD_SIZE_STORAGE_KEY, String(clampAssetCardSize(value)));
+  } catch {}
+}
+
+function applyAssetCardSize(value, persist = true) {
+  const next = clampAssetCardSize(value);
+  state.assetCardSize = next;
+  if (el.assetColumn) el.assetColumn.style.setProperty("--asset-card-size", next + "px");
+  if (el.assetCardSize) el.assetCardSize.value = String(next);
+  if (el.assetCardSizeValue) el.assetCardSizeValue.textContent = next + "px";
+  if (persist) storeAssetCardSize(next);
+}
+
+function assetThumbnailStatus(asset) {
+  const status = String(asset?.metadata?.thumbnailStatus || "").trim().toLowerCase();
+  if (status) return status;
+  if (asset?.thumbnailPath) return "ready";
+  if (asset?.assetType === "model") return "pending";
+  return "skipped";
+}
+
+function assetThumbnailNeedsPolling(asset) {
+  const status = assetThumbnailStatus(asset);
+  return asset?.assetType === "model" && (status === "pending" || status === "processing");
+}
+
+function hasPendingThumbnails(assets) {
+  return (assets || state.assets).some(function (asset) {
+    return assetThumbnailNeedsPolling(asset);
+  });
+}
+
+function syncAssetThumbnailPolling() {
+  if (hasPendingThumbnails()) scheduleAssetThumbnailPolling();
+  else stopAssetThumbnailPolling();
+}
+
+function assetThumbnailBadgeLabel(asset) {
+  const status = assetThumbnailStatus(asset);
+  if (status === "processing") return "Bezig";
+  if (status === "pending") return "Thumbnail...";
+  if (status === "failed") return "Geen thumbnail";
+  if (status === "skipped") return "Overgeslagen";
+  return "";
+}
+
+function assetThumbnailStatusTone(asset) {
+  const status = assetThumbnailStatus(asset);
+  if (status === "failed") return "failed";
+  if (status === "pending" || status === "processing") return "pending";
+  if (status === "skipped") return "skipped";
+  return "ready";
+}
+
+function assetThumbnailStatusMessage(asset) {
+  const status = assetThumbnailStatus(asset);
+  if (status === "failed") return "Geen thumbnail";
+  if (status === "pending" || status === "processing") return "Thumbnail wordt gemaakt...";
+  if (status === "ready" || status === "skipped") return "Thumbnail klaar";
+  return "";
+}
+
+function inferAssetTypeFromFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.split(".").pop() : "";
+  if (ext === "glb") return "model";
+  if (["png", "jpg", "jpeg", "webp"].includes(ext)) return "image";
+  if (["mp3", "ogg", "wav"].includes(ext)) return "audio";
+  if (ext === "json") return "data";
+  return "";
+}
+
+function assetNameFromFile(file) {
+  return String(file?.name || "").replace(/\.[^.]+$/, "");
+}
+
+function isFileDragEvent(event) {
+  const dataTransfer = event?.dataTransfer;
+  if (!dataTransfer) return false;
+  const types = Array.from(dataTransfer.types || []);
+  if (types.includes("Files")) return true;
+  const items = Array.from(dataTransfer.items || []);
+  return items.some(function (item) { return item && item.kind === "file"; });
+}
+
+function showAssetDropOverlay() {
+  assetColumnDropDepth = Math.max(0, assetColumnDropDepth) + 1;
+  if (el.assetDropOverlay) el.assetDropOverlay.hidden = false;
+}
+
+function hideAssetDropOverlay() {
+  assetColumnDropDepth = 0;
+  if (el.assetDropOverlay) el.assetDropOverlay.hidden = true;
+}
+
+function stopAssetThumbnailPolling() {
+  if (assetThumbnailPollTimer) clearTimeout(assetThumbnailPollTimer);
+  assetThumbnailPollTimer = null;
+}
+
+function scheduleAssetThumbnailPolling() {
+  if (assetThumbnailPollTimer) return;
+  assetThumbnailPollTimer = setTimeout(function () {
+    assetThumbnailPollTimer = null;
+    pollAssetThumbnails().catch(function (error) {
+      console.warn("Thumbnail polling failed", error);
+      if (hasPendingThumbnails()) scheduleAssetThumbnailPolling();
+    });
+  }, 2500);
+}
+
+async function pollAssetThumbnails() {
+  const data = await api("/api/assets");
+  state.assets = data.assets || [];
+  renderAssets();
+  const pending = hasPendingThumbnails(state.assets);
+  if (state.assetUploadAwaitingThumbnail && state.assetUploadLastAssetId) {
+    const asset = assetById(state.assetUploadLastAssetId);
+    const status = assetThumbnailStatus(asset);
+    if (status === "failed") {
+      state.assetUploadAwaitingThumbnail = false;
+      setAssetUploadState({
+        tone: "error",
+        progressText: "Upload klaar",
+        message: "Geen thumbnail"
+      });
+      setStatus("Thumbnail generatie mislukt.", "error");
+    } else if (!pending) {
+      state.assetUploadAwaitingThumbnail = false;
+      setAssetUploadState({
+        tone: "success",
+        progressText: "Upload klaar",
+        message: assetThumbnailStatusMessage(asset) || "Thumbnail klaar"
+      });
+      setStatus("Thumbnail klaar.", "success");
+    } else {
+      setAssetUploadState({
+        tone: "pending",
+        progressText: "Upload klaar",
+        message: "Thumbnail wordt gemaakt..."
+      });
+    }
+  }
+  if (pending) scheduleAssetThumbnailPolling();
+  else stopAssetThumbnailPolling();
+}
+
+function captureUploadBrowserLoadTiming(info) {
+  if (!state.assetUploadTimings) return;
+  if (!state.assetUploadLoadCaptureUntil || performance.now() > state.assetUploadLoadCaptureUntil) return;
+  if (info?.ok === false) return;
+  const durationMs = Number(info?.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  const current = Number(state.assetUploadTimings.glbBrowserLoadMs) || 0;
+  state.assetUploadTimings.glbBrowserLoadMs = Math.round((current + durationMs) * 10) / 10;
+  renderAssetImportPanel();
+}
+
+function captureUploadViewportRefreshTiming(durationMs) {
+  if (!state.assetUploadTimings) return;
+  if (!state.assetUploadLoadCaptureUntil || performance.now() > state.assetUploadLoadCaptureUntil) return;
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  state.assetUploadTimings.refreshViewportMs = Math.round(durationMs * 10) / 10;
+  renderAssetImportPanel();
 }
 
 function setStatus(message, kind) {
@@ -235,9 +471,9 @@ function defaultAnimationForAsset(asset) {
   return defaultAnimation || null;
 }
 
-function animationBadgeText(asset) {
+function animationCountText(asset) {
   const count = Number(asset?.metadata?.animationCount || 0);
-  return count + " anim" + (count === 1 ? "" : "s");
+  return String(count);
 }
 
 function managedAsset() {
@@ -250,6 +486,23 @@ function managedAssetDraftValue(current, draft) {
 
 function managedAssetUsageField(entry) {
   return state.nodeTypes?.[entry.nodeType]?.fields?.[entry.fieldKey] || null;
+}
+
+function focusAssetUsage(usage) {
+  if (!usage || !usage.nodeId) return;
+  const node = nodeById(usage.nodeId);
+  if (!node) return;
+  selectNode(usage.nodeId, true, { clearPendingEdge: true });
+  focusGraphNode(usage.nodeId);
+  if (!runtime) return;
+  const runtimeId = node.type === "player_character"
+    ? node.values?.playerId || null
+    : node.type === "model_entity"
+      ? node.values?.entityId || null
+      : null;
+  if (!runtimeId || typeof runtime.selectEntity !== "function") return;
+  runtime.selectEntity(runtimeId);
+  if (typeof runtime.focusSelected === "function") runtime.focusSelected();
 }
 
 function compatibleReplacementAssets(assetId, usage) {
@@ -266,7 +519,7 @@ function compatibleReplacementAssets(assetId, usage) {
 }
 
 function assetUsageMetaText(entry) {
-  return [entry.nodeLabel, entry.fieldLabel, entry.nodeType].filter(Boolean).join(" · ");
+  return [entry.nodeType, entry.fieldLabel].filter(Boolean).join(" · ");
 }
 
 function setManagedAssetDraft(field, value) {
@@ -392,15 +645,20 @@ function renderAssetManageOverlay() {
     usageList.appendChild(empty);
   } else {
     for (const entry of state.assetManager.usage) {
-      const item = document.createElement("div");
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = "assetManageUsageItem";
+      item.title = "Selecteer node";
       const itemTitle = document.createElement("div");
       itemTitle.className = "assetManageUsageTitle";
-      itemTitle.textContent = entry.nodeTitle;
+      itemTitle.textContent = entry.nodeTitle || entry.nodeType;
       const itemMeta = document.createElement("div");
       itemMeta.className = "assetManageUsageMeta";
       itemMeta.textContent = assetUsageMetaText(entry);
       item.append(itemTitle, itemMeta);
+      item.addEventListener("click", function () {
+        focusAssetUsage(entry);
+      });
       usageList.appendChild(item);
     }
   }
@@ -569,13 +827,21 @@ async function replaceManagedAsset() {
     afterApply: function (_, response) {
       state.assets = response.assets || state.assets;
       state.assetManager.usage = [];
-      state.assetManager.loadingUsage = false;
+      state.assetManager.loadingUsage = true;
       state.assetManager.error = "";
       state.assetManager.replacementAssetId = "";
       renderAssets();
       renderInspector();
       renderAssetManageOverlay();
-      setStatus("Asset vervangen.", "success");
+      const requestToken = state.assetManager.requestToken;
+      loadManagedAssetUsage(asset.id, requestToken).then(function () {
+        if (state.assetManager.assetId !== asset.id || state.assetManager.requestToken !== requestToken) return;
+        if (!state.assetManager.usage.length) {
+          setStatus("Vervangen gelukt. Deze asset wordt niet meer gebruikt en kan nu verwijderd worden.", "success");
+        } else {
+          setStatus("Asset vervangen.", "success");
+        }
+      });
     }
   });
   if (!result) {
@@ -1292,6 +1558,9 @@ async function boot() {
   }
   runtime = createGkWorldRuntime(el.viewportCanvas, {
     mode: "editor",
+    onModelLoadTiming: function (info) {
+      captureUploadBrowserLoadTiming(info);
+    },
     onSelectEntity: function (entityId) {
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
@@ -2979,12 +3248,16 @@ async function reloadAssets() {
   const data = await api("/api/assets");
   state.assets = data.assets || [];
   renderAssets();
+  syncAssetThumbnailPolling();
   renderInspector();
   renderAssetManageOverlay();
+  renderAssetImportPanel();
 }
 
 function focusAssetImportForm() {
-  if (!el.assetForm) return;
+  if (!el.assetForm || el.assetForm.hidden) return;
+  state.assetImportOpen = true;
+  renderAssetImportPanel();
   if (typeof el.assetForm.scrollIntoView === "function") {
     el.assetForm.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -2992,44 +3265,174 @@ function focusAssetImportForm() {
   if (firstField && typeof firstField.focus === "function") firstField.focus();
 }
 
-function renderAssets() {
-  el.assetGrid.innerHTML = "";
-  let list = state.assets.slice();
-  if (state.assetFilter !== "all") list = list.filter(function (a) { return a.assetType === state.assetFilter; });
-  if (state.assetSearch) {
-    const term = state.assetSearch.toLowerCase();
-    list = list.filter(function (a) { return (a.name + " " + a.category).toLowerCase().includes(term); });
+function setAssetImportOpen(open) {
+  state.assetImportOpen = Boolean(open) && !state.assetUploadBusy;
+  renderAssetImportPanel();
+}
+
+function setAssetUploadState(nextState) {
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "busy")) state.assetUploadBusy = Boolean(nextState.busy);
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "message")) state.assetUploadMessage = String(nextState.message || "");
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "progressText")) state.assetUploadProgressText = String(nextState.progressText || "");
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "open")) state.assetImportOpen = Boolean(nextState.open) && !state.assetUploadBusy;
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "timings")) state.assetUploadTimings = nextState.timings ? Object.assign({}, nextState.timings) : null;
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "detailsOpen")) state.assetUploadDetailsOpen = Boolean(nextState.detailsOpen);
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "loadCaptureUntil")) state.assetUploadLoadCaptureUntil = Number(nextState.loadCaptureUntil) || 0;
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "tone")) state.assetUploadTone = String(nextState.tone || "");
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "awaitingThumbnail")) state.assetUploadAwaitingThumbnail = Boolean(nextState.awaitingThumbnail);
+  if (Object.prototype.hasOwnProperty.call(nextState || {}, "lastAssetId")) state.assetUploadLastAssetId = nextState.lastAssetId ? String(nextState.lastAssetId) : null;
+  renderAssetImportPanel();
+}
+
+function renderAssetImportPanel() {
+  if (el.assetImportToggle) {
+    el.assetImportToggle.textContent = state.assetUploadBusy
+      ? "Upload bezig..."
+      : state.assetImportOpen
+        ? "Sluit import"
+        : "Importeer asset";
+    el.assetImportToggle.disabled = state.assetUploadBusy;
+    el.assetImportToggle.setAttribute("aria-expanded", state.assetImportOpen && !state.assetUploadBusy ? "true" : "false");
   }
-  list.sort(function (a, b) {
-    if (state.assetSort === "name") return a.name.localeCompare(b.name);
-    if (state.assetSort === "type") return a.assetType.localeCompare(b.assetType);
-    return (b.createdAt || "").localeCompare(a.createdAt || "");
-  });
-  el.assetGrid.classList.toggle("empty", !list.length);
-  if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "assetEmptyState";
-    const title = document.createElement("div");
-    title.className = "assetEmptyStateTitle";
-    title.textContent = state.assets.length ? "Geen assets gevonden" : "Nog geen assets";
-    const text = document.createElement("div");
-    text.className = "assetEmptyStateText";
-    text.textContent = state.assets.length
-      ? "Pas zoekterm of filters aan."
-      : "Importeer een GLB, texture, image, audio of data asset.";
-    empty.append(title, text);
-    if (!state.assets.length) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "assetEmptyStateButton";
-      button.textContent = "Importeer asset";
-      button.addEventListener("click", focusAssetImportForm);
-      empty.appendChild(button);
+  if (el.assetForm) {
+    const formHidden = !state.assetImportOpen || state.assetUploadBusy;
+    el.assetForm.hidden = formHidden;
+    for (const control of el.assetForm.querySelectorAll("input, select, button")) {
+      control.disabled = state.assetUploadBusy;
     }
-    el.assetGrid.appendChild(empty);
-    return;
   }
-  for (const asset of list) el.assetGrid.appendChild(buildAssetCard(asset));
+  if (el.assetUploadStatus) {
+    const hasMessage = Boolean(state.assetUploadMessage);
+    const isBusy = Boolean(state.assetUploadBusy);
+    el.assetUploadStatus.hidden = !isBusy && !hasMessage;
+    el.assetUploadStatus.classList.toggle("busy", isBusy);
+    el.assetUploadStatus.classList.toggle("pending", !isBusy && state.assetUploadTone === "pending");
+    el.assetUploadStatus.classList.toggle("success", !isBusy && state.assetUploadTone === "success");
+    el.assetUploadStatus.classList.toggle("error", !isBusy && state.assetUploadTone === "error");
+  }
+  if (el.assetUploadProgressText) {
+    el.assetUploadProgressText.textContent = state.assetUploadBusy ? state.assetUploadProgressText : "";
+  }
+  if (el.assetUploadMessage) {
+    el.assetUploadMessage.textContent = !state.assetUploadBusy ? state.assetUploadMessage : "";
+  }
+  const hasTimings = !state.assetUploadBusy && Boolean(state.assetUploadTimings);
+  if (el.assetUploadSummary) {
+    el.assetUploadSummary.hidden = !hasTimings || !state.assetUploadDetailsOpen;
+    el.assetUploadSummary.innerHTML = "";
+    if (hasTimings && state.assetUploadDetailsOpen) {
+      const timings = state.assetUploadTimings || {};
+      const lines = [
+        ["Server: " + formatUploadTiming(timings.totalServerMs), "assetUploadSummaryLine"],
+        ["Thumbnail: " + formatUploadTiming(timings.thumbnailMs), "assetUploadSummaryLine"],
+        ["Browser render: " + formatUploadTiming(timings.renderAssetsMs), "assetUploadSummaryLine"]
+      ];
+      for (const [text, className] of lines) {
+        const line = document.createElement("div");
+        line.className = className;
+        line.textContent = text;
+        el.assetUploadSummary.appendChild(line);
+      }
+    }
+  }
+  if (el.assetUploadDetails) {
+    el.assetUploadDetails.hidden = !hasTimings;
+    el.assetUploadDetails.open = hasTimings && state.assetUploadDetailsOpen;
+  }
+  if (el.assetUploadDetailsList) {
+    el.assetUploadDetailsList.innerHTML = "";
+    if (hasTimings) {
+      const timings = state.assetUploadTimings || {};
+      const rows = [
+        ["Upload naar server", formatUploadTiming(timings.responseReceivedMs)],
+        ["Response ontvangen", formatUploadTiming(timings.responseProcessedMs)],
+        ["Server import", formatUploadTiming(timings.importUploadMs)],
+        ["Thumbnail", formatUploadTiming(timings.thumbnailMs)],
+        ["Browser render", formatUploadTiming(timings.renderAssetsMs)],
+        ["Viewport refresh", formatUploadTiming(timings.refreshViewportMs)],
+        ["GLB browser load", formatUploadTiming(timings.glbBrowserLoadMs)],
+        ["Total", formatUploadTiming(timings.totalClientMs)]
+      ];
+      for (const [label, value] of rows) {
+        el.assetUploadDetailsList.appendChild(createUploadTimingRow(label, value, value === "n.v.t."));
+      }
+    }
+  }
+}
+
+async function postAssetImport(formData) {
+  const requestStartedAt = performance.now();
+  const response = await fetch("/api/assets/import", { method: "POST", body: formData });
+  const responseReceivedMs = Math.round((performance.now() - requestStartedAt) * 10) / 10;
+  const responseBodyStartedAt = performance.now();
+  const data = await response.json().catch(function () { return {}; });
+  const responseProcessedMs = Math.round((performance.now() - responseBodyStartedAt) * 10) / 10;
+  if (!response.ok) throw new Error(data.message || "Upload mislukt.");
+  return {
+    data: data,
+    responseReceivedMs: responseReceivedMs,
+    responseProcessedMs: responseProcessedMs
+  };
+}
+
+function applyImportedAssetData(data) {
+  const renderAssetsStartedAt = performance.now();
+  state.assets = data.assets || state.assets;
+  renderAssets();
+  const renderAssetsMs = Math.round((performance.now() - renderAssetsStartedAt) * 10) / 10;
+  const newAsset = data.asset || null;
+  const newAssetStatus = assetThumbnailStatus(newAsset);
+  const awaitingThumbnail = Boolean(newAsset && newAsset.assetType === "model" && (newAssetStatus === "pending" || newAssetStatus === "processing"));
+  state.assetUploadAwaitingThumbnail = awaitingThumbnail;
+  state.assetUploadLastAssetId = newAsset && newAsset.id ? String(newAsset.id) : null;
+  syncAssetThumbnailPolling();
+  renderInspector();
+  renderAssetManageOverlay();
+  return {
+    newAsset: newAsset,
+    awaitingThumbnail: awaitingThumbnail,
+    renderAssetsMs: renderAssetsMs
+  };
+}
+
+function renderAssets() {
+  const startedAt = performance.now();
+  try {
+    if (!el.assetGrid) return;
+    el.assetGrid.innerHTML = "";
+    let list = state.assets.slice();
+    if (state.assetFilter !== "all") list = list.filter(function (a) { return a.assetType === state.assetFilter; });
+    if (state.assetSearch) {
+      const term = state.assetSearch.toLowerCase();
+      list = list.filter(function (a) { return (a.name + " " + a.category).toLowerCase().includes(term); });
+    }
+    list.sort(function (a, b) {
+      if (state.assetSort === "name") return a.name.localeCompare(b.name);
+      if (state.assetSort === "type") return a.assetType.localeCompare(b.assetType);
+      return (b.createdAt || "").localeCompare(a.createdAt || "");
+    });
+    el.assetGrid.classList.toggle("empty", !list.length);
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "assetEmptyState";
+      const title = document.createElement("div");
+      title.className = "assetEmptyStateTitle";
+      title.textContent = state.assets.length ? "Geen assets gevonden" : "Nog geen assets";
+      const text = document.createElement("div");
+      text.className = "assetEmptyStateText";
+      text.textContent = state.assets.length
+        ? "Pas zoekterm of filters aan."
+        : "Sleep GLB, PNG, JPG, WEBP, MP3, WAV of JSON hierheen.";
+      empty.append(title, text);
+      el.assetGrid.appendChild(empty);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const asset of list) fragment.appendChild(buildAssetCard(asset));
+    el.assetGrid.appendChild(fragment);
+  } finally {
+    logTiming("renderAssets", startedAt);
+  }
 }
 
 function buildAssetCard(asset) {
@@ -3037,9 +3440,13 @@ function buildAssetCard(asset) {
   card.className = "assetCard";
   card.draggable = asset.assetType === "model";
   const animationNames = animationClipsForAsset(asset).map(function (entry) { return entry.name; });
-  card.title = asset.assetType === "model" && animationNames.length
-    ? "Animations: " + animationNames.join(", ")
-    : asset.name;
+  const titleParts = [asset.name, asset.assetType, asset.category];
+  if (asset.assetType === "model" && animationNames.length) titleParts.push(animationNames.join(", "));
+  card.title = titleParts.filter(Boolean).join(" · ");
+  card.addEventListener("click", function () {
+    if (asset.assetType !== "model") return;
+    placeModel(asset.id, { x: 0, y: 0, z: 0 });
+  });
   card.addEventListener("dragstart", function (event) {
     event.dataTransfer.setData("text/gk-asset", asset.id);
   });
@@ -3056,6 +3463,20 @@ function buildAssetCard(asset) {
     icon.textContent = asset.assetType.toUpperCase();
     thumb.appendChild(icon);
   }
+  const thumbBadgeLabel = assetThumbnailBadgeLabel(asset);
+  if (asset.assetType === "model" && thumbBadgeLabel) {
+    const badge = document.createElement("span");
+    badge.className = "assetThumbStatus " + assetThumbnailStatusTone(asset);
+    badge.textContent = thumbBadgeLabel;
+    thumb.appendChild(badge);
+  }
+  if (asset.assetType === "model" && Number(asset?.metadata?.animationCount || 0) > 0) {
+    const animCount = document.createElement("span");
+    animCount.className = "assetAnimCount";
+    animCount.textContent = animationCountText(asset);
+    animCount.title = animationNames.length ? animationNames.join(", ") : "";
+    thumb.appendChild(animCount);
+  }
   const meta = document.createElement("div");
   meta.className = "assetMeta";
   const name = document.createElement("div");
@@ -3064,16 +3485,9 @@ function buildAssetCard(asset) {
   const sub = document.createElement("div");
   sub.className = "assetSub";
   const cat = document.createElement("span");
-  cat.textContent = asset.category;
-  const size = document.createElement("span");
-  size.textContent = Math.max(1, Math.round(asset.sizeBytes / 1024)) + " KB";
-  sub.append(cat, size);
-  if (asset.assetType === "model") {
-    const badge = document.createElement("span");
-    badge.className = "assetAnimBadge";
-    badge.textContent = animationBadgeText(asset);
-    sub.appendChild(badge);
-  }
+  cat.textContent = asset.category || "uncategorized";
+  sub.title = asset.assetType + " · " + Math.max(1, Math.round(Number(asset.sizeBytes || 0) / 1024)) + " KB";
+  sub.append(cat);
   meta.append(name, sub);
   card.append(thumb, meta);
   const menu = document.createElement("button");
@@ -3096,57 +3510,261 @@ function buildAssetCard(asset) {
     openAssetManageOverlay(asset.id);
   });
   card.appendChild(menu);
-  if (asset.assetType === "model") {
-    const place = document.createElement("button");
-    place.type = "button";
-    place.className = "assetPlace";
-    place.textContent = "+ Plaats in wereld";
-    place.addEventListener("click", function () { placeModel(asset.id, { x: 0, y: 0, z: 0 }); });
-    card.appendChild(place);
-  }
   return card;
 }
 
 async function placeModel(assetId, position) {
-  await applyGraphMutation(function () {
-    return api("/api/editor/place-model-asset", {
-      method: "POST",
-      body: JSON.stringify({ assetId: assetId, position: position, parentId: state.currentGroupId })
+  const startedAt = performance.now();
+  try {
+    await applyGraphMutation(function () {
+      return api("/api/editor/place-model-asset", {
+        method: "POST",
+        body: JSON.stringify({ assetId: assetId, position: position, parentId: state.currentGroupId })
+      });
+    }, {
+      historyLabel: "Model geplaatst",
+      refreshViewport: true,
+      refreshValidation: true,
+      afterApply: function (_, result) {
+        if (result?.nodeId) selectNode(result.nodeId, true);
+        setStatus("Model geplaatst.", "success");
+      }
     });
-  }, {
-    historyLabel: "Model geplaatst",
-    refreshViewport: true,
-    refreshValidation: true,
-    afterApply: function (_, result) {
-      if (result?.nodeId) selectNode(result.nodeId, true);
-      setStatus("Model geplaatst.", "success");
-    }
-  });
+  } finally {
+    logTiming("placeModel", startedAt, "asset=" + assetId);
+  }
 }
 
 el.assetSearch.addEventListener("input", function () { state.assetSearch = el.assetSearch.value; renderAssets(); });
 el.assetSort.addEventListener("change", function () { state.assetSort = el.assetSort.value; renderAssets(); });
 el.assetFilter.addEventListener("change", function () { state.assetFilter = el.assetFilter.value; renderAssets(); });
+if (el.assetCardSize) {
+  el.assetCardSize.addEventListener("input", function () {
+    applyAssetCardSize(el.assetCardSize.value);
+  });
+}
+if (el.assetImportToggle) {
+  el.assetImportToggle.addEventListener("click", function () {
+    if (state.assetUploadBusy) return;
+    setAssetImportOpen(!state.assetImportOpen);
+    if (state.assetImportOpen) focusAssetImportForm();
+  });
+}
+if (el.assetUploadDetails) {
+  el.assetUploadDetails.addEventListener("toggle", function () {
+    state.assetUploadDetailsOpen = Boolean(el.assetUploadDetails.open);
+    renderAssetImportPanel();
+  });
+}
 
-el.assetForm.addEventListener("submit", async function (event) {
-  event.preventDefault();
-  const formData = new FormData(el.assetForm);
+if (el.assetForm) {
+  el.assetForm.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    if (state.assetUploadBusy) return;
+    const formData = new FormData(el.assetForm);
+    if (assetUploadProgressTimer) clearTimeout(assetUploadProgressTimer);
+    const startedAt = performance.now();
+    console.info("[timing] client upload submit start");
+    setAssetUploadState({
+      busy: true,
+      message: "",
+      progressText: "Uploaden...",
+      open: false,
+      timings: null,
+      detailsOpen: false,
+      loadCaptureUntil: 0,
+      tone: "busy",
+      awaitingThumbnail: false,
+      lastAssetId: null
+    });
+    assetUploadProgressTimer = setTimeout(function () {
+      if (!state.assetUploadBusy) return;
+      setAssetUploadState({ progressText: "Thumbnail maken... dit kan even duren" });
+    }, 700);
+    try {
+      const response = await postAssetImport(formData);
+      const data = response.data || {};
+      const serverTimings = data.timings || {};
+      const imported = applyImportedAssetData(data);
+      const newAsset = imported.newAsset;
+      const totalClientMs = Math.round((performance.now() - startedAt) * 10) / 10;
+      const awaitingThumbnail = imported.awaitingThumbnail;
+      el.assetForm.reset();
+      setAssetUploadState({
+        busy: false,
+        message: awaitingThumbnail ? "Thumbnail wordt gemaakt..." : assetThumbnailStatusMessage(newAsset) || "Upload klaar",
+        progressText: "Upload klaar",
+        open: false,
+        tone: awaitingThumbnail ? "pending" : "success",
+        timings: {
+          uploadSubmitMs: totalClientMs,
+          responseReceivedMs: response.responseReceivedMs,
+          responseProcessedMs: response.responseProcessedMs,
+          importUploadMs: serverTimings.importUploadMs === null || serverTimings.importUploadMs === undefined ? null : Number(serverTimings.importUploadMs),
+          thumbnailMs: serverTimings.thumbnailMs === null || serverTimings.thumbnailMs === undefined ? null : Number(serverTimings.thumbnailMs),
+          totalServerMs: serverTimings.totalServerMs === null || serverTimings.totalServerMs === undefined ? null : Number(serverTimings.totalServerMs),
+          renderAssetsMs: imported.renderAssetsMs,
+          refreshViewportMs: null,
+          glbBrowserLoadMs: null,
+          totalClientMs: totalClientMs
+        },
+        detailsOpen: false,
+        loadCaptureUntil: performance.now() + 8000
+      });
+      setStatus(awaitingThumbnail ? "Asset opgeslagen. Thumbnail wordt gemaakt..." : "Upload klaar.", "success");
+    } catch (error) {
+      setAssetUploadState({
+        busy: false,
+        message: error.message,
+        progressText: "",
+        open: false,
+        timings: null,
+        detailsOpen: false,
+        loadCaptureUntil: 0,
+        tone: "error",
+        awaitingThumbnail: false,
+        lastAssetId: null
+      });
+      if (el.assetForm) focusAssetImportForm();
+      setStatus(error.message, "error");
+    } finally {
+      logTiming("client upload submit end", startedAt);
+      if (assetUploadProgressTimer) clearTimeout(assetUploadProgressTimer);
+      assetUploadProgressTimer = null;
+    }
+  });
+}
+
+async function uploadDroppedAssets(files) {
+  if (state.assetUploadBusy) return;
+  const fileList = Array.from(files || []).filter(function (file) {
+    return file && file.name;
+  });
+  if (!fileList.length) return;
+  if (assetUploadProgressTimer) clearTimeout(assetUploadProgressTimer);
+  const startedAt = performance.now();
+  let successCount = 0;
+  let failedCount = 0;
+  let pendingThumbnailCount = 0;
+  let lastPendingAssetId = null;
+  console.info("[timing] client drop upload start");
+  setAssetUploadState({
+    busy: true,
+    message: "",
+    progressText: "Uploaden...",
+    open: false,
+    timings: null,
+    detailsOpen: false,
+    loadCaptureUntil: 0,
+    tone: "busy",
+    awaitingThumbnail: false,
+    lastAssetId: null
+  });
+  assetUploadProgressTimer = setTimeout(function () {
+    if (!state.assetUploadBusy) return;
+    setAssetUploadState({ progressText: "Thumbnail maken... dit kan even duren" });
+  }, 700);
   try {
-    const response = await fetch("/api/assets/import", { method: "POST", body: formData });
-    const data = await response.json().catch(function () { return {}; });
-    if (!response.ok) throw new Error(data.message || "Upload mislukt.");
-    state.assets = data.assets || state.assets;
-    el.assetForm.reset();
-    renderAssets();
-    renderInspector();
-    renderAssetManageOverlay();
-    setStatus("Asset geimporteerd.", "success");
-  } catch (error) {
-    setStatus(error.message, "error");
+    for (let index = 0; index < fileList.length; index += 1) {
+      const file = fileList[index];
+      const progressText = (index + 1) + " / " + fileList.length;
+      const assetType = inferAssetTypeFromFile(file);
+      if (!assetType) {
+        failedCount += 1;
+        setAssetUploadState({
+          progressText: progressText,
+          message: file.name + ": niet ondersteund bestandstype."
+        });
+        continue;
+      }
+      setAssetUploadState({
+        progressText: progressText,
+        message: file.name
+      });
+      const formData = new FormData();
+      formData.append("name", assetNameFromFile(file));
+      formData.append("category", "uncategorized");
+      formData.append("assetType", assetType);
+      formData.append("file", file);
+      try {
+        const response = await postAssetImport(formData);
+        const data = response.data || {};
+        const imported = applyImportedAssetData(data);
+        successCount += 1;
+        if (imported.awaitingThumbnail) {
+          pendingThumbnailCount += 1;
+          lastPendingAssetId = imported.newAsset && imported.newAsset.id ? String(imported.newAsset.id) : lastPendingAssetId;
+        }
+        setAssetUploadState({
+          progressText: progressText,
+          message: imported.awaitingThumbnail ? file.name + ": thumbnail wordt gemaakt..." : file.name + " geüpload"
+        });
+      } catch (error) {
+        failedCount += 1;
+        setAssetUploadState({
+          progressText: progressText,
+          message: file.name + ": " + error.message
+        });
+      }
+    }
+  } finally {
+    if (assetUploadProgressTimer) clearTimeout(assetUploadProgressTimer);
+    assetUploadProgressTimer = null;
+    if (pendingThumbnailCount > 0) {
+      state.assetUploadAwaitingThumbnail = true;
+      state.assetUploadLastAssetId = lastPendingAssetId;
+      syncAssetThumbnailPolling();
+    }
+    const totalClientMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    const summaryParts = [];
+    if (successCount) summaryParts.push(successCount + " geüpload");
+    if (failedCount) summaryParts.push(failedCount + " mislukt");
+    if (!summaryParts.length) summaryParts.push("Geen geldige bestanden");
+    const summary = summaryParts.join(", ");
+    const finalMessage = pendingThumbnailCount ? summary + ". Thumbnails worden gemaakt..." : summary;
+    const tone = failedCount ? "error" : pendingThumbnailCount ? "pending" : "success";
+    setAssetUploadState({
+      busy: false,
+      message: finalMessage,
+      progressText: "Upload klaar",
+      open: false,
+      timings: null,
+      detailsOpen: false,
+      loadCaptureUntil: 0,
+      tone: tone,
+      awaitingThumbnail: pendingThumbnailCount > 0,
+      lastAssetId: lastPendingAssetId
+    });
+    setStatus(finalMessage, failedCount ? "error" : "success");
+    logTiming("client drop upload end", startedAt, "count=" + fileList.length + " total=" + totalClientMs + "ms");
   }
-});
+}
 
 // Drag asset to viewport to place at clicked ground position.
+if (el.assetColumn) {
+  el.assetColumn.addEventListener("dragenter", function (event) {
+    if (!isFileDragEvent(event)) return;
+    event.preventDefault();
+    showAssetDropOverlay();
+  });
+  el.assetColumn.addEventListener("dragover", function (event) {
+    if (!isFileDragEvent(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (el.assetDropOverlay) el.assetDropOverlay.hidden = false;
+  });
+  el.assetColumn.addEventListener("dragleave", function (event) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && el.assetColumn.contains(nextTarget)) return;
+    assetColumnDropDepth = Math.max(0, assetColumnDropDepth - 1);
+    if (assetColumnDropDepth <= 0) hideAssetDropOverlay();
+  });
+  el.assetColumn.addEventListener("drop", function (event) {
+    event.preventDefault();
+    hideAssetDropOverlay();
+    uploadDroppedAssets(event.dataTransfer && event.dataTransfer.files);
+  });
+}
 el.viewportCanvas.addEventListener("dragover", function (event) {
   if (Array.from(event.dataTransfer.types).includes("text/gk-asset")) {
     event.preventDefault();
@@ -3176,6 +3794,7 @@ function applyViewportWorld(world) {
 async function refreshViewport(options = {}) {
   await graphMutationQueue;
   if (!options.force && !state.viewportDirty) return null;
+  const startedAt = performance.now();
   try {
     const world = await api("/api/editor/draft-world");
     applyViewportWorld(world);
@@ -3183,6 +3802,10 @@ async function refreshViewport(options = {}) {
   } catch (error) {
     setStatus(error.message, "error");
     return null;
+  } finally {
+    const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    captureUploadViewportRefreshTiming(durationMs);
+    logTiming("refreshViewport", startedAt, "force=" + Boolean(options.force));
   }
 }
 

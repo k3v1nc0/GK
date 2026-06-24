@@ -1,18 +1,22 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
+import * as THREE from "three";
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 
 const ADMIN_PASSWORD = "k1k2k3k4k5";
+const EXPECT_GLB_THUMBNAILS = String(process.env.EXPECT_GLB_THUMBNAILS || "").trim() === "1";
 
 let cookie = "";
 let BASE = "";
+const cleanupAssetPaths = new Set();
 
 function setCookieFrom(response) {
   const raw = response.headers.get("set-cookie");
@@ -37,28 +41,121 @@ function assert(condition, message) {
   console.log("  ok - " + message);
 }
 
-function buildMinimalGlb() {
-  const json = Buffer.from(JSON.stringify({
-    asset: { version: "2.0" },
-    scenes: [{ nodes: [] }],
-    scene: 0,
-    nodes: [],
-    animations: [
-      { name: "Idle" },
-      { name: "Walk" }
-    ]
-  }), "utf8");
-  const jsonPad = (4 - (json.length % 4)) % 4;
-  const jsonChunk = Buffer.concat([json, Buffer.alloc(jsonPad, 0x20)]);
-  const header = Buffer.alloc(12);
-  header.write("glTF", 0, "ascii");
-  header.writeUInt32LE(2, 4);
-  const total = 12 + 8 + jsonChunk.length;
-  header.writeUInt32LE(total, 8);
-  const chunkHeader = Buffer.alloc(8);
-  chunkHeader.writeUInt32LE(jsonChunk.length, 0);
-  chunkHeader.write("JSON", 4, "ascii");
-  return Buffer.concat([header, chunkHeader, jsonChunk]);
+function rememberAssetPaths(asset) {
+  if (!asset) return;
+  if (asset.sourcePath) cleanupAssetPaths.add(asset.sourcePath);
+  if (asset.thumbnailPath) cleanupAssetPaths.add(asset.thumbnailPath);
+}
+
+function cleanupGeneratedAssets() {
+  for (const assetPath of cleanupAssetPaths) {
+    if (!assetPath || !assetPath.startsWith("/assets/")) continue;
+    const filePath = path.join(rootDir, assetPath.slice(1));
+    try { fs.rmSync(filePath, { force: true }); } catch {}
+  }
+}
+
+function cleanupStaleGeneratedAssets() {
+  const result = spawnSync("git", ["ls-files", "--others", "--exclude-standard", "assets/uploads", "assets/thumbnails"], {
+    cwd: rootDir,
+    encoding: "utf8"
+  });
+  if (result.status !== 0 || !result.stdout) return;
+  for (const relative of result.stdout.split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean)) {
+    const filePath = path.join(rootDir, relative);
+    try { fs.rmSync(filePath, { force: true }); } catch {}
+  }
+}
+
+function removeSmokeFixtureAssets() {
+  for (const relative of ["assets/uploads/wizard.glb", "assets/thumbnails/wizard.png"]) {
+    try { fs.rmSync(path.join(rootDir, relative), { force: true }); } catch {}
+  }
+}
+
+function restoreSmokeFixtureAssets() {
+  spawnSync("git", ["restore", "--source=HEAD", "--", "assets/uploads/wizard.glb", "assets/thumbnails/wizard.png"], {
+    cwd: rootDir,
+    stdio: "ignore"
+  });
+}
+
+class SimpleFileReader {
+  constructor() {
+    this.result = null;
+    this.onload = null;
+    this.onloadend = null;
+    this.onerror = null;
+  }
+
+  readAsArrayBuffer(blob) {
+    blob.arrayBuffer().then((buffer) => {
+      this.result = buffer;
+      const event = { target: this };
+      if (typeof this.onload === "function") this.onload(event);
+      if (typeof this.onloadend === "function") this.onloadend(event);
+    }).catch((error) => {
+      if (typeof this.onerror === "function") this.onerror(error);
+    });
+  }
+
+  readAsDataURL(blob) {
+    blob.arrayBuffer().then((buffer) => {
+      this.result = "data:application/octet-stream;base64," + Buffer.from(buffer).toString("base64");
+      const event = { target: this };
+      if (typeof this.onload === "function") this.onload(event);
+      if (typeof this.onloadend === "function") this.onloadend(event);
+    }).catch((error) => {
+      if (typeof this.onerror === "function") this.onerror(error);
+    });
+  }
+}
+
+function ensureFileReader() {
+  if (typeof globalThis.FileReader !== "undefined") return;
+  globalThis.FileReader = SimpleFileReader;
+}
+
+async function buildThumbnailGlb() {
+  ensureFileReader();
+  const scene = new THREE.Scene();
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 1.1, 1.0),
+    new THREE.MeshStandardMaterial({
+      color: 0x4d7cff,
+      metalness: 0.35,
+      roughness: 0.25
+    })
+  );
+  mesh.name = "AnimatedBox";
+  mesh.rotation.set(0.35, 0.6, 0.1);
+  mesh.position.set(0, 0.05, 0);
+  scene.add(mesh);
+  scene.updateMatrixWorld(true);
+  const exporter = new GLTFExporter();
+  const idleClip = new THREE.AnimationClip("Idle", 1, [
+    new THREE.VectorKeyframeTrack("AnimatedBox.position", [0, 0.5, 1], [
+      0, 0.05, 0,
+      0, 0.09, 0,
+      0, 0.05, 0
+    ])
+  ]);
+  const walkClip = new THREE.AnimationClip("Walk", 1, [
+    new THREE.VectorKeyframeTrack("AnimatedBox.position", [0, 0.5, 1], [
+      0, 0.05, 0,
+      0.12, 0.12, 0,
+      0, 0.05, 0
+    ])
+  ]);
+  const runClip = new THREE.AnimationClip("Run", 0.75, [
+    new THREE.VectorKeyframeTrack("AnimatedBox.position", [0, 0.375, 0.75], [
+      0, 0.05, 0,
+      0.22, 0.16, 0,
+      0, 0.05, 0
+    ])
+  ]);
+  const glb = await exporter.parseAsync(scene, { binary: true, onlyVisible: true, animations: [idleClip, walkClip, runClip] });
+  return Buffer.from(glb);
 }
 
 function buildJsonBlob(value) {
@@ -73,6 +170,30 @@ async function uploadAsset({ name, category, assetType, blob, filename }) {
   const file = blob instanceof Blob ? blob : new Blob([blob], { type: assetType === "model" ? "model/gltf-binary" : assetType === "data" ? "application/json" : "application/octet-stream" });
   form.append("file", file, filename);
   return await call("POST", "/api/assets/import", form, true);
+}
+
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function waitForThumbnailReady(assetId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await call("GET", "/api/assets");
+    assert(response.status === 200 && response.json && Array.isArray(response.json.assets), "GET /api/assets werkt tijdens thumbnail polling");
+    const asset = response.json.assets.find(function (entry) { return entry.id === assetId; }) || null;
+    assert(asset, "asset " + assetId + " blijft bestaan tijdens thumbnail polling");
+    const status = String(asset.metadata?.thumbnailStatus || "").trim().toLowerCase();
+    if (status === "ready") return asset;
+    if (status === "failed") {
+      throw new Error("Thumbnail generatie faalde voor " + assetId + ": " + String(asset.metadata?.thumbnailError || "onbekende fout"));
+    }
+    if (status === "skipped") {
+      throw new Error("Thumbnail generatie werd overgeslagen voor " + assetId + ".");
+    }
+    await sleep(2000);
+  }
+  throw new Error("Thumbnail voor " + assetId + " werd niet klaar binnen de timeout.");
 }
 
 async function waitForHealth(timeoutMs) {
@@ -140,6 +261,8 @@ async function main() {
     const PORT = process.env.SMOKE_PORT || await reservePort();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-smoke-"));
     dbPath = path.join(tmpDir, "smoke.sqlite");
+    cleanupStaleGeneratedAssets();
+    removeSmokeFixtureAssets();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
       env: Object.assign({}, process.env, { PORT: PORT, DATABASE_PATH: dbPath, ADMIN_PASSWORD: ADMIN_PASSWORD, ADMIN_USERNAME: "kevin" }),
@@ -160,19 +283,88 @@ async function main() {
     const emptyAssets = await call("GET", "/api/assets");
     assert(emptyAssets.status === 200 && emptyAssets.json && Array.isArray(emptyAssets.json.assets) && emptyAssets.json.assets.length === 0, "lege asset database start leeg");
 
-    const glb = buildMinimalGlb();
-    const form = new FormData();
-    form.append("name", "Hero");
-    form.append("category", "characters");
-    form.append("assetType", "model");
-    form.append("file", new Blob([glb], { type: "model/gltf-binary" }), "hero.glb");
-    const upload = await call("POST", "/api/assets/import", form, true);
-    assert(upload.status === 201 && upload.json.asset, "GLB upload werkt");
-    const modelId = upload.json.asset.id;
-    assert(upload.json.asset.metadata.animationCount === 2, "GLB metadata telt 2 animaties");
-    assert(upload.json.asset.metadata.defaultAnimation === "Idle", "GLB metadata kiest Idle als default");
-    assert(Array.isArray(upload.json.asset.metadata.animations) && upload.json.asset.metadata.animations.length === 2, "GLB metadata bevat animatielijst");
-    assert(upload.json.asset.metadata.animations[0].name === "Idle" && upload.json.asset.metadata.animations[1].name === "Walk", "GLB metadata bevat Idle en Walk");
+    const glb = await buildThumbnailGlb();
+    const wizardUploadStartedAt = Date.now();
+    const wizardUpload = await uploadAsset({
+      name: "Wizard",
+      category: "characters",
+      assetType: "model",
+      blob: glb,
+      filename: "wizard.glb"
+    });
+    const wizardUploadDurationMs = Date.now() - wizardUploadStartedAt;
+    assert(wizardUpload.status === 201 && wizardUpload.json.asset, "GLB upload werkt");
+    assert(wizardUpload.json.timings && typeof wizardUpload.json.timings.totalServerMs === "number", "GLB upload response bevat timings");
+    assert(wizardUpload.json.timings.thumbnailMs === null, "GLB upload response wacht niet op thumbnail timing");
+    assert(wizardUploadDurationMs < 10000, "GLB upload response komt snel terug");
+    rememberAssetPaths(wizardUpload.json.asset);
+    const modelId = wizardUpload.json.asset.id;
+    assert(wizardUpload.json.asset.metadata.animationCount === 3, "GLB metadata telt 3 animaties");
+    assert(wizardUpload.json.asset.metadata.defaultAnimation === "Idle", "GLB metadata kiest Idle als default");
+    assert(Array.isArray(wizardUpload.json.asset.metadata.animations) && wizardUpload.json.asset.metadata.animations.length === 3, "GLB metadata bevat animatielijst");
+    const wizardAnimationNames = new Set((wizardUpload.json.asset.metadata.animations || []).map(function (entry) { return entry.name; }));
+    assert(wizardAnimationNames.has("Idle") && wizardAnimationNames.has("Walk") && wizardAnimationNames.has("Run"), "GLB metadata bevat Idle, Walk en Run");
+    assert(wizardUpload.json.asset.metadata.thumbnailStatus === "pending" || wizardUpload.json.asset.metadata.thumbnailStatus === "processing", "GLB thumbnail start async als pending/processing");
+    assert(wizardUpload.json.asset.thumbnailPath === null, "GLB upload response wacht niet op thumbnailPath");
+    const assetsAfterWizardUpload = await call("GET", "/api/assets");
+    assert(assetsAfterWizardUpload.status === 200 && assetsAfterWizardUpload.json && Array.isArray(assetsAfterWizardUpload.json.assets), "GET /api/assets werkt direct na upload");
+    const wizardFromList = assetsAfterWizardUpload.json.assets.find(function (asset) { return asset.id === modelId; });
+    assert(wizardFromList && (wizardFromList.metadata.thumbnailStatus === "pending" || wizardFromList.metadata.thumbnailStatus === "processing"), "GET /api/assets toont pending thumbnail status");
+    const wizardSourcePathBeforeRename = wizardUpload.json.asset.sourcePath;
+    let wizardThumbnailPathBeforeRename = wizardUpload.json.asset.thumbnailPath;
+    assert(wizardUpload.json.asset.sourcePath.includes("wizard.glb"), "GLB sourcePath gebruikt asset slug");
+    if (EXPECT_GLB_THUMBNAILS) {
+      const wizardReadyAsset = await waitForThumbnailReady(modelId, 120000);
+      rememberAssetPaths(wizardReadyAsset);
+      wizardThumbnailPathBeforeRename = wizardReadyAsset.thumbnailPath;
+      assert(wizardReadyAsset.thumbnailPath && wizardReadyAsset.thumbnailPath.includes("wizard.png"), "GLB thumbnailPath gebruikt asset slug");
+      const thumbnailResponse = await fetch(BASE + wizardReadyAsset.thumbnailPath);
+      assert(thumbnailResponse.status === 200, "GLB thumbnail wordt publiek geserveerd");
+      assert((thumbnailResponse.headers.get("content-type") || "").includes("image/png"), "GLB thumbnail is PNG");
+      const thumbnailBytes = new Uint8Array(await thumbnailResponse.arrayBuffer());
+      assert(thumbnailBytes.length > 8 && thumbnailBytes[0] === 0x89 && thumbnailBytes[1] === 0x50 && thumbnailBytes[2] === 0x4e && thumbnailBytes[3] === 0x47, "GLB thumbnail heeft PNG signature");
+    }
+
+    const duplicateWizardUpload = await uploadAsset({
+      name: "Wizard",
+      category: "characters",
+      assetType: "model",
+      blob: glb,
+      filename: "wizard-duplicate.glb"
+    });
+    assert(duplicateWizardUpload.status === 409 && duplicateWizardUpload.json.message === "Assetnaam bestaat al.", "duplicate assetnaam wordt geweigerd");
+
+    const treeUpload = await uploadAsset({
+      name: "Tree",
+      category: "environment",
+      assetType: "model",
+      blob: await buildThumbnailGlb(),
+      filename: "tree.glb"
+    });
+    assert(treeUpload.status === 201 && treeUpload.json.asset, "Tree upload werkt");
+    rememberAssetPaths(treeUpload.json.asset);
+    const treeAssetId = treeUpload.json.asset.id;
+    const treeSourcePathBeforeRename = treeUpload.json.asset.sourcePath;
+    const treeThumbnailPathBeforeRename = treeUpload.json.asset.thumbnailPath;
+    assert(treeUpload.json.asset.sourcePath.includes("tree.glb"), "Tree sourcePath gebruikt asset slug");
+    assert(treeUpload.json.asset.metadata.thumbnailStatus === "pending" || treeUpload.json.asset.metadata.thumbnailStatus === "processing", "Tree thumbnail start async");
+    assert(treeUpload.json.asset.thumbnailPath === null, "Tree upload response wacht niet op thumbnailPath");
+    const treeAssetsAfterUpload = await call("GET", "/api/assets");
+    const treeFromList = treeAssetsAfterUpload.json.assets.find(function (asset) { return asset.id === treeAssetId; });
+    assert(treeFromList && (treeFromList.metadata.thumbnailStatus === "pending" || treeFromList.metadata.thumbnailStatus === "processing"), "Tree status blijft pending/processing in /api/assets");
+    const treeRenameConflict = await call("PATCH", "/api/assets/" + treeAssetId, { name: "Wizard", category: treeUpload.json.asset.category });
+    assert(treeRenameConflict.status === 409 && treeRenameConflict.json.message === "Assetnaam bestaat al.", "rename naar bestaande naam wordt geweigerd");
+    const treeRename = await call("PATCH", "/api/assets/" + treeAssetId, { name: "Tree Large", category: treeUpload.json.asset.category });
+    assert(treeRename.status === 200 && treeRename.json.ok, "rename naar unieke naam werkt");
+    rememberAssetPaths(treeRename.json.asset);
+    assert(treeRename.json.asset.sourcePath.includes("tree-large"), "rename past sourcePath aan naar slug");
+    if (treeRename.json.asset.thumbnailPath) {
+      assert(treeRename.json.asset.thumbnailPath.includes("tree-large"), "rename past thumbnailPath aan naar slug");
+    }
+    assert(treeRename.json.asset.sourcePath !== treeSourcePathBeforeRename, "oude sourcePath is niet meer de primaire DB path");
+    if (treeThumbnailPathBeforeRename && treeRename.json.asset.thumbnailPath) {
+      assert(treeRename.json.asset.thumbnailPath !== treeThumbnailPathBeforeRename, "oude thumbnailPath is niet meer de primaire DB path");
+    }
 
     const baselineGraph = (await call("GET", "/api/editor/graph")).json;
     const tempNode = await createNode("ambient_light", { lightId: "temp_restore", color: "#ffffff", intensity: 0.1 });
@@ -193,14 +385,20 @@ async function main() {
     const ambientNode = graph.nodes.find(function (n) { return n.type === "ambient_light"; });
     graph = (await createNode("directional_light", { lightId: "sun", color: "#ffffff", intensity: 1.2, x: 10, y: 20, z: 10 })).graph;
     const dirNode = graph.nodes.find(function (n) { return n.type === "directional_light"; });
-    graph = (await createNode("player_character", { playerId: "hero", modelAssetId: modelId, animationClip: "Idle", moveSpeed: 6, sprintMultiplier: 1.6, turnSpeed: 600, collisionRadius: 0.5, scale: 1 })).graph;
+    graph = (await createNode("player_character", { playerId: "hero", modelAssetId: modelId, animationClip: "Idle", idleAnimation: "Idle", walkAnimation: "Walk", runAnimation: "Run", moveSpeed: 6, sprintMultiplier: 1.6, turnSpeed: 600, collisionRadius: 0.5, scale: 1 })).graph;
     const playerNode = graph.nodes.find(function (n) { return n.type === "player_character"; });
     assert(playerNode.values.animationClip === "Idle", "player_character bewaart animationClip");
+    assert(playerNode.values.idleAnimation === "Idle", "player_character bewaart idleAnimation");
+    assert(playerNode.values.walkAnimation === "Walk", "player_character bewaart walkAnimation");
+    assert(playerNode.values.runAnimation === "Run", "player_character bewaart runAnimation");
     graph = (await createNode("player_spawn", { spawnId: "spawn", x: 0, z: 0, facing: 0 })).graph;
     const spawnNode = graph.nodes.find(function (n) { return n.type === "player_spawn"; });
-    graph = (await createNode("model_entity", { entityId: "entity_walk", label: "Walker", modelAssetId: modelId, animationClip: "Walk", x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1, solid: false, collisionRadius: 1 })).graph;
+    graph = (await createNode("model_entity", { entityId: "entity_walk", label: "Walker", modelAssetId: modelId, animationClip: "Walk", idleAnimation: "Idle", walkAnimation: "Walk", runAnimation: "Run", x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1, solid: false, collisionRadius: 1 })).graph;
     const modelEntityNode = findNode(graph, function (n) { return n.type === "model_entity" && n.values.entityId === "entity_walk"; }, "model entity aangemaakt");
     assert(modelEntityNode.values.animationClip === "Walk", "model_entity bewaart animationClip");
+    assert(modelEntityNode.values.idleAnimation === "Idle", "model_entity bewaart idleAnimation");
+    assert(modelEntityNode.values.walkAnimation === "Walk", "model_entity bewaart walkAnimation");
+    assert(modelEntityNode.values.runAnimation === "Run", "model_entity bewaart runAnimation");
     assert(modelEntityNode.values.rotationX === 10 && modelEntityNode.values.rotationY === 20 && modelEntityNode.values.rotationZ === 30, "model_entity bewaart rotationX/Y/Z");
     graph = (await createNode("keybind", { bindingId: "kb_direct", action: "move_forward", keyCode: "KeyW" })).graph;
     const keybindDirect = findNode(graph, function (n) { return n.type === "keybind" && n.values.bindingId === "kb_direct"; }, "directe keybind aangemaakt");
@@ -270,11 +468,17 @@ async function main() {
     assert(after.json.camera && after.json.camera.mode === "top-down", "camera is top-down");
     assert(after.json.player && after.json.player.modelAssetId === modelId, "speler verwijst naar geuploade model");
     assert(after.json.player && after.json.player.animationClip === "Idle", "speler publiceert gekozen animationClip");
+    assert(after.json.player && after.json.player.idleAnimation === "Idle", "speler publiceert idleAnimation");
+    assert(after.json.player && after.json.player.walkAnimation === "Walk", "speler publiceert walkAnimation");
+    assert(after.json.player && after.json.player.runAnimation === "Run", "speler publiceert runAnimation");
     assert(after.json.spawn && after.json.spawn.x === 0, "spawn aanwezig");
     assert(Array.isArray(after.json.entities) && after.json.entities.some(function (entity) { return entity.animationClip === "Walk"; }), "entities publiceren gekozen animationClip");
     const publishedModelEntity = Array.isArray(after.json.entities)
       ? after.json.entities.find(function (entity) { return entity.id === "entity_walk"; })
       : null;
+    assert(publishedModelEntity && publishedModelEntity.idleAnimation === "Idle", "entities publiceren idleAnimation");
+    assert(publishedModelEntity && publishedModelEntity.walkAnimation === "Walk", "entities publiceren walkAnimation");
+    assert(publishedModelEntity && publishedModelEntity.runAnimation === "Run", "entities publiceren runAnimation");
     assert(publishedModelEntity && publishedModelEntity.transform && publishedModelEntity.transform.rotation.x === 10 && publishedModelEntity.transform.rotation.y === 20 && publishedModelEntity.transform.rotation.z === 30, "entities publiceren rotationX/Y/Z");
     assert(Array.isArray(after.json.keybinds) && after.json.keybinds.length === 3, "keybinds uit root en beide groups zijn mee gepubliceerd");
     const publishedKeybindIds = new Set(after.json.keybinds.map(function (entry) { return entry.id; }));
@@ -283,14 +487,26 @@ async function main() {
     assert(publishedKeybindIds.has("kb_group2"), "Group 2 keybind is gepubliceerd");
     assert(after.json.assets.some(function (a) { return a.id === modelId; }), "asset manifest bevat model");
 
-    const renamedAssetName = "Hero Prime";
+    const renamedAssetName = "Wizard Prime";
     const renamedAssetCategory = "characters";
     const patchAsset = await call("PATCH", "/api/assets/" + modelId, { name: renamedAssetName, category: renamedAssetCategory });
     assert(patchAsset.status === 200 && patchAsset.json.ok, "asset metadata patch werkt");
     assert(patchAsset.json.asset.name === renamedAssetName && patchAsset.json.asset.category === renamedAssetCategory, "PATCH /api/assets/:id geeft bijgewerkte naam en categorie");
+    assert(patchAsset.json.asset.sourcePath.includes("wizard-prime"), "renamed sourcePath gebruikt nieuwe slug");
+    if (patchAsset.json.asset.thumbnailPath) {
+      assert(patchAsset.json.asset.thumbnailPath.includes("wizard-prime"), "renamed thumbnailPath gebruikt nieuwe slug");
+    }
+    assert(patchAsset.json.asset.sourcePath !== wizardSourcePathBeforeRename, "oude Wizard sourcePath is niet meer primair");
+    if (wizardThumbnailPathBeforeRename && patchAsset.json.asset.thumbnailPath) {
+      assert(patchAsset.json.asset.thumbnailPath !== wizardThumbnailPathBeforeRename, "oude Wizard thumbnailPath is niet meer primair");
+    }
     const assetsAfterPatch = await call("GET", "/api/assets");
     const patchedAsset = assetsAfterPatch.json.assets.find(function (asset) { return asset.id === modelId; });
     assert(patchedAsset && patchedAsset.name === renamedAssetName && patchedAsset.category === renamedAssetCategory, "GET /api/assets toont gewijzigde naam en categorie");
+    assert(patchedAsset && patchedAsset.sourcePath.includes("wizard-prime"), "GET /api/assets toont nieuwe sourcePath");
+    if (patchedAsset && patchedAsset.thumbnailPath) {
+      assert(patchedAsset.thumbnailPath.includes("wizard-prime"), "GET /api/assets toont nieuwe thumbnailPath");
+    }
 
     const unusedUpload = await uploadAsset({
       name: "Unused Config",
@@ -300,6 +516,7 @@ async function main() {
       filename: "unused-config.json"
     });
     assert(unusedUpload.status === 201 && unusedUpload.json.asset, "ongebruikte data asset upload werkt");
+    rememberAssetPaths(unusedUpload.json.asset);
     const unusedAssetId = unusedUpload.json.asset.id;
     const deleteUnused = await call("DELETE", "/api/assets/" + unusedAssetId);
     assert(deleteUnused.status === 200 && deleteUnused.json.ok, "ongebruikte asset kan veilig verwijderd worden");
@@ -317,14 +534,29 @@ async function main() {
     assert(deleteUsed.status === 409 && Array.isArray(deleteUsed.json.usage) && deleteUsed.json.usage.length >= 2, "gebruikte asset wordt geblokkeerd bij delete");
 
     const replacementUpload = await uploadAsset({
-      name: "Hero Replacement",
+      name: "Wizard New",
       category: "characters",
       assetType: "model",
-      blob: buildMinimalGlb(),
-      filename: "hero-replacement.glb"
+      blob: await buildThumbnailGlb(),
+      filename: "wizard-new.glb"
     });
     assert(replacementUpload.status === 201 && replacementUpload.json.asset, "replacement model upload werkt");
+    rememberAssetPaths(replacementUpload.json.asset);
     const replacementAssetId = replacementUpload.json.asset.id;
+    assert(replacementUpload.json.asset.sourcePath.includes("wizard-new.glb"), "replacement sourcePath gebruikt asset slug");
+    assert(replacementUpload.json.asset.metadata.thumbnailStatus === "pending" || replacementUpload.json.asset.metadata.thumbnailStatus === "processing", "replacement thumbnail start async");
+    assert(replacementUpload.json.asset.thumbnailPath === null, "replacement upload response wacht niet op thumbnailPath");
+    const replacementAssetsAfterUpload = await call("GET", "/api/assets");
+    const replacementFromList = replacementAssetsAfterUpload.json.assets.find(function (asset) { return asset.id === replacementAssetId; });
+    assert(replacementFromList && (replacementFromList.metadata.thumbnailStatus === "pending" || replacementFromList.metadata.thumbnailStatus === "processing"), "replacement status blijft pending/processing in /api/assets");
+    if (replacementUpload.json.asset.thumbnailPath) {
+      assert(replacementUpload.json.asset.thumbnailPath.includes("wizard-new.png"), "replacement thumbnailPath gebruikt asset slug");
+      const thumbnailResponse = await fetch(BASE + replacementUpload.json.asset.thumbnailPath);
+      assert(thumbnailResponse.status === 200, "GLB thumbnail wordt publiek geserveerd");
+      assert((thumbnailResponse.headers.get("content-type") || "").includes("image/png"), "GLB thumbnail is PNG");
+      const thumbnailBytes = new Uint8Array(await thumbnailResponse.arrayBuffer());
+      assert(thumbnailBytes.length > 8 && thumbnailBytes[0] === 0x89 && thumbnailBytes[1] === 0x50 && thumbnailBytes[2] === 0x4e && thumbnailBytes[3] === 0x47, "GLB thumbnail heeft PNG signature");
+    }
 
     const replaceUsed = await call("POST", "/api/assets/" + modelId + "/replace", { replacementAssetId: replacementAssetId });
     assert(replaceUsed.status === 200 && replaceUsed.json.ok, "asset replace werkt");
@@ -390,6 +622,8 @@ async function main() {
       child.kill("SIGTERM");
       try { await new Promise(function (resolve) { child.once("exit", resolve); }); } catch {}
     }
+    cleanupGeneratedAssets();
+    restoreSmokeFixtureAssets();
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
   process.exit(failed ? 1 : 0);
