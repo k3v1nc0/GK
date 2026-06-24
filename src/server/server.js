@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { loadEnvFile } from "./env.js";
 import { openDatabase } from "./db.js";
@@ -24,11 +25,20 @@ const authService = new AuthService(db);
 authService.ensureAdmin();
 authService.cleanupExpiredSessions();
 const assetService = new AssetService(db, rootDir);
+assetService.resumePendingThumbnailJobs();
 const repository = new GraphRepository(db);
 repository.seedIfEmpty();
 const publishService = new PublishService(repository, { assetService });
 const host = process.env.HOST || "127.0.0.1";
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
+
+function timingMs(startedAt) {
+  return (performance.now() - startedAt).toFixed(1);
+}
+
+function logTiming(label, startedAt, details) {
+  console.info("[timing] " + label + " " + timingMs(startedAt) + "ms" + (details ? " " + details : ""));
+}
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -176,6 +186,7 @@ function serveStatic(req, res, url) {
 }
 
 async function handleApi(req, res, url) {
+  const importResponseStartedAt = req.method === "POST" && url.pathname === "/api/assets/import" ? performance.now() : null;
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
       return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: Boolean(repository.getPublishedWorld()) });
@@ -206,13 +217,13 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/assets/import") {
       authService.requireEditor(req);
       const multipart = await readMultipart(req);
-      const asset = assetService.importUpload({
+      const result = await assetService.importUpload({
         name: multipart.fields.name,
         category: multipart.fields.category,
         assetType: multipart.fields.assetType,
         file: multipart.files.file
       });
-      return sendJson(res, 201, { ok: true, asset, assets: assetService.list() });
+      return sendJson(res, 201, { ok: true, asset: result.asset, assets: assetService.list(), timings: result.timings });
     }
     const assetUsageMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/usage$/);
     if (req.method === "GET" && assetUsageMatch) {
@@ -327,6 +338,10 @@ async function handleApi(req, res, url) {
     if (error.usage) payload.usage = error.usage;
     if (error.details) payload.details = error.details;
     return sendJson(res, error.status || 500, payload);
+  } finally {
+    if (importResponseStartedAt !== null) {
+      logTiming("server response /api/assets/import", importResponseStartedAt);
+    }
   }
 }
 
