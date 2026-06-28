@@ -28,17 +28,17 @@
 
     <main class="layout">
       <aside class="tools">
-        <div class="panel">
+        <div id="validationSection" class="panel panelSticky">
+          <h2>Validation</h2>
+          <div id="validationPanel"></div>
+        </div>
+        <div id="nodeLibrarySection" class="panel">
           <h2>Node Library</h2>
           <div id="nodeLibrary"></div>
         </div>
-        <div class="panel">
+        <div id="inspectorSection" class="panel" hidden>
           <h2>Inspector</h2>
           <form id="inspectorForm"></form>
-        </div>
-        <div class="panel">
-          <h2>Validation</h2>
-          <div id="validationPanel"></div>
         </div>
         <div class="panel">
           <h2>Connections</h2>
@@ -102,6 +102,30 @@
                   <input id="snapGridInput" type="number" min="0.1" step="0.1" value="1">
                 </label>
               </div>
+            </div>
+            <div class="terrainToolPanel" id="terrainToolPanel" hidden>
+              <div class="terrainToolHeader">
+                <div class="terrainToolTitle">Terrain Tool</div>
+                <div class="terrainToolNode" id="terrainToolNodeLabel"></div>
+              </div>
+              <div class="terrainToolRow terrainToolChannels">
+                <span class="terrainToolLabel">Edit</span>
+                <button type="button" class="terrainToolChip active" data-terrain-channel="main">1 Main</button>
+                <button type="button" class="terrainToolChip" data-terrain-channel="secondary">2 Secondary</button>
+                <button type="button" class="terrainToolChip" data-terrain-channel="edge">3 Edge</button>
+              </div>
+              <div class="terrainToolRow terrainToolActions">
+                <span class="terrainToolLabel">Point</span>
+                <button type="button" class="terrainToolChip" data-terrain-action="move">G Move</button>
+                <button type="button" class="terrainToolChip" data-terrain-action="extrude">E Extrude</button>
+                <button type="button" class="terrainToolChip" data-terrain-action="delete">Del Delete</button>
+              </div>
+              <div class="terrainToolRow terrainToolActions">
+                <span class="terrainToolLabel">Material</span>
+                <button type="button" class="terrainToolChip" data-terrain-action="scale">S Scale</button>
+                <span class="terrainToolSubhint">X/Y axis</span>
+              </div>
+              <div class="terrainToolHint" id="terrainToolHint">Esc to Select</div>
             </div>
           </div>
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
@@ -168,6 +192,6 @@
         </form>
       </aside>
     </main>
-    <script type="module" src="./editor.js"></script>
+    <script type="module" src="./editor.js?v=20260627-transform10"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260627-transform10";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260627-transform10";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -19,7 +19,15 @@ const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "model_entity",
   "interactable",
   "keybind",
-  "ui_hud_text"
+  "ui_hud_text",
+  "surface_layer"
+]);
+const TERRAIN_TOOL_NODE_TYPES = new Set([
+  "path_layer",
+  "water_layer",
+  "surface_layer",
+  "blocker_area",
+  "walkable_surface"
 ]);
 
 const state = {
@@ -46,6 +54,7 @@ const state = {
   assetUploadAwaitingThumbnail: false,
   assetUploadLastAssetId: null,
   assetUploadLoadCaptureUntil: 0,
+  viewportWorld: null,
   assetManager: {
     assetId: null,
     usage: [],
@@ -63,6 +72,30 @@ const state = {
   snapGridSize: 1,
   previewAnimations: false,
   viewportHelpOpen: false,
+  terrainTool: {
+    mode: "select",
+    activeNodeId: null,
+    selectedPointIndex: null,
+    selectedPointIndices: [],
+    selectedHandleRole: null,
+    activeChannel: "main",
+    axisConstraint: null,
+    draggingPointIndex: null,
+    draggingHandleRole: null,
+    dragNodeId: null,
+    dragStartPoints: null,
+    dragStartSurface: null,
+    dragStartScale: null,
+    dragScaleChannel: null,
+    dragStartPointer: null,
+    dragCurrentPointer: null,
+    dragExtrudeIndex: null,
+    dragPreviewPoint: null,
+    dragPointerId: null,
+    dragStartGround: null,
+    dragCurrentGround: null,
+    dragMoved: false
+  },
   statusMessage: "",
   statusKind: "",
   viewportDebugKey: "",
@@ -81,6 +114,9 @@ const state = {
 const el = {
   breadcrumb: document.querySelector("#breadcrumb"),
   unsavedBadge: document.querySelector("#unsavedBadge"),
+  validationSection: document.querySelector("#validationSection"),
+  nodeLibrarySection: document.querySelector("#nodeLibrarySection"),
+  inspectorSection: document.querySelector("#inspectorSection"),
   nodeLibrary: document.querySelector("#nodeLibrary"),
   inspectorForm: document.querySelector("#inspectorForm"),
   validationPanel: document.querySelector("#validationPanel"),
@@ -89,10 +125,21 @@ const el = {
   graphContent: document.querySelector("#graphContent"),
   edgeLayer: document.querySelector("#edgeLayer"),
   nodeLayer: document.querySelector("#nodeLayer"),
+  viewportWrap: document.querySelector(".viewportWrap"),
   viewportCanvas: document.querySelector("#viewportCanvas"),
   viewportStatus: document.querySelector("#viewportStatus"),
   viewportInfoButton: document.querySelector("#viewportInfoButton"),
   viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
+  terrainToolPanel: document.querySelector("#terrainToolPanel"),
+  terrainToolNodeLabel: document.querySelector("#terrainToolNodeLabel"),
+  terrainToolHint: document.querySelector("#terrainToolHint"),
+  terrainToolChannelMainButton: document.querySelector("[data-terrain-channel='main']"),
+  terrainToolChannelSecondaryButton: document.querySelector("[data-terrain-channel='secondary']"),
+  terrainToolChannelEdgeButton: document.querySelector("[data-terrain-channel='edge']"),
+  terrainToolMoveButton: document.querySelector("[data-terrain-action='move']"),
+  terrainToolExtrudeButton: document.querySelector("[data-terrain-action='extrude']"),
+  terrainToolScaleButton: document.querySelector("[data-terrain-action='scale']"),
+  terrainToolDeleteButton: document.querySelector("[data-terrain-action='delete']"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   viewportErrors: document.querySelector("#viewportErrors"),
   statusText: document.querySelector("#statusText"),
@@ -127,6 +174,7 @@ let graphMutationQueue = Promise.resolve();
 let assetUploadProgressTimer = null;
 let assetThumbnailPollTimer = null;
 let assetColumnDropDepth = 0;
+let terrainLastPointer = null;
 const selectionBox = document.createElement("div");
 selectionBox.className = "selectionBox";
 selectionBox.hidden = true;
@@ -142,7 +190,29 @@ el.assetManageOverlay = assetManageOverlay;
 el.assetManagePanel = assetManagePanel;
 const edgePanel = el.edgeList && typeof el.edgeList.closest === "function" ? el.edgeList.closest(".panel") : null;
 if (edgePanel) edgePanel.style.display = "none";
+syncAsideContext();
 applyAssetCardSize(state.assetCardSize, false);
+for (const button of [
+  el.terrainToolChannelMainButton,
+  el.terrainToolChannelSecondaryButton,
+  el.terrainToolChannelEdgeButton
+]) {
+  if (!button) continue;
+  button.addEventListener("click", function () {
+    setTerrainActiveChannel(String(button.dataset.terrainChannel || "main"));
+  });
+}
+for (const button of [
+  el.terrainToolMoveButton,
+  el.terrainToolExtrudeButton,
+  el.terrainToolScaleButton,
+  el.terrainToolDeleteButton
+]) {
+  if (!button) continue;
+  button.addEventListener("click", function () {
+    setTerrainToolMode(String(button.dataset.terrainAction || "select"));
+  });
+}
 const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR === "object"
   ? window.__GK_DEBUG_EDITOR
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
@@ -413,6 +483,7 @@ function runtimeNodeId(node) {
   if (!node) return null;
   if (node.type === "player_character") return node.values?.playerId || null;
   if (node.type === "model_entity") return node.values?.entityId || null;
+  if (node.type === "surface_layer") return node.values?.surfaceId || null;
   return null;
 }
 
@@ -426,10 +497,36 @@ function runtimeTransformActive() {
   return runtime.isTransformActive();
 }
 
+function runtimeTransformDebugState() {
+  if (!runtime || typeof runtime.getTransformDebugState !== "function") return null;
+  return runtime.getTransformDebugState();
+}
+
+function runtimeEntityIdFromPointer(event) {
+  if (!runtime || typeof runtime.pickEntityAt !== "function" || !event) return null;
+  return runtime.pickEntityAt(event.clientX, event.clientY) || null;
+}
+
+function runtimeEntityIdAtLastPointer() {
+  if (!terrainLastPointer || !runtime || typeof runtime.pickEntityAt !== "function") return null;
+  return runtime.pickEntityAt(terrainLastPointer.clientX, terrainLastPointer.clientY) || null;
+}
+
+function runtimeModelEntityIdAtLastPointer() {
+  const runtimeId = runtimeEntityIdAtLastPointer();
+  const node = nodeByRuntimeId(runtimeId);
+  return node && node.type === "model_entity" ? runtimeId : null;
+}
+
 function nodeByRuntimeId(runtimeId) {
   if (!runtimeId) return null;
   return state.graph.nodes.find(function (node) {
-    return node.values && (node.values.entityId === runtimeId || node.values.playerId === runtimeId);
+    return node.values && (
+      node.values.entityId === runtimeId
+      || node.values.playerId === runtimeId
+      || node.values.surfaceId === runtimeId
+      || node.id === runtimeId
+    );
   }) || null;
 }
 
@@ -934,23 +1031,508 @@ function selectedTransformSnapshot() {
   return snapshot;
 }
 
+function terrainTypeLabel(type) {
+  return String(type || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, function (char) { return char.toUpperCase(); });
+}
+
+function selectedTerrainNode() {
+  const node = nodeById(state.selectedNodeId);
+  return node && TERRAIN_TOOL_NODE_TYPES.has(node.type) ? node : null;
+}
+
+function terrainNodeLabel(node) {
+  if (!node) return "";
+  return String(node.values?.label || node.title || terrainTypeLabel(node.type) || "").trim();
+}
+
+function terrainNodePoints(node) {
+  const points = Array.isArray(node?.values?.points) ? node.values.points : [];
+  const normalized = [];
+  for (const point of points) {
+    const x = Number(point?.x);
+    const z = Number(point?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    normalized.push({ x: x, z: z });
+  }
+  return normalized;
+}
+
+function terrainClonePoints(points) {
+  const next = [];
+  for (const point of points || []) {
+    const x = Number(point?.x);
+    const z = Number(point?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    next.push({ x: x, z: z });
+  }
+  return next;
+}
+
+function terrainSurfaceSnapshot(node) {
+  return {
+    x: Number(node?.values?.x) || 0,
+    y: Number(node?.values?.y) || 0,
+    z: Number(node?.values?.z) || 0,
+    width: Number(node?.values?.width) || 0,
+    depth: Number(node?.values?.depth) || 0,
+    rotationY: Number(node?.values?.rotationY) || 0,
+    priority: Number(node?.values?.priority) || 0
+  };
+}
+
+function terrainRuntimeSurfaceId(node) {
+  return String(node?.values?.surfaceId || node?.id || "");
+}
+
+function terrainGroundY() {
+  const groundY = Number(state.viewportWorld?.ground?.y);
+  return Number.isFinite(groundY) ? groundY : 0;
+}
+
+function terrainSafeScale(value) {
+  if (!Number.isFinite(value)) return 1;
+  if (Math.abs(value) < 0.001) return value < 0 ? -0.001 : 0.001;
+  return value;
+}
+
+function terrainChannelLabel(channel) {
+  if (channel === "secondary") return "Secondary";
+  if (channel === "edge") return "Edge";
+  return "Main";
+}
+
+function terrainChannelFieldKeys(channel) {
+  if (channel === "secondary") {
+    return {
+      xKey: "secondaryTextureScaleX",
+      yKey: "secondaryTextureScaleY",
+      legacyKey: "secondaryTextureScale"
+    };
+  }
+  if (channel === "edge") {
+    return {
+      xKey: "edgeFadeNoiseScaleX",
+      yKey: "edgeFadeNoiseScaleY",
+      legacyKey: "edgeFadeNoiseScale"
+    };
+  }
+  return {
+    xKey: "textureScaleX",
+    yKey: "textureScaleY",
+    legacyKey: "textureScale"
+  };
+}
+
+function terrainChannelScalePair(node, channel) {
+  const keys = terrainChannelFieldKeys(channel);
+  const legacy = Number(node?.values?.[keys.legacyKey]);
+  const fallback = Number.isFinite(legacy) ? legacy : 1;
+  const xValue = Number(node?.values?.[keys.xKey]);
+  const yValue = Number(node?.values?.[keys.yKey]);
+  return {
+    keys: keys,
+    x: terrainSafeScale(Number.isFinite(xValue) ? xValue : fallback),
+    y: terrainSafeScale(Number.isFinite(yValue) ? yValue : fallback)
+  };
+}
+
+function terrainActiveChannel() {
+  return state.terrainTool.activeChannel === "secondary"
+    ? "secondary"
+    : state.terrainTool.activeChannel === "edge"
+      ? "edge"
+      : "main";
+}
+
+function terrainHasActiveSession() {
+  return Boolean(state.terrainTool.dragNodeId && state.terrainTool.draggingHandleRole);
+}
+
+function terrainActiveSessionModeLabel() {
+  if (!terrainHasActiveSession()) return "Select";
+  if (state.terrainTool.draggingHandleRole === "extrude") return "Extrude";
+  if (state.terrainTool.draggingHandleRole === "scale") return "Scale " + terrainChannelLabel(state.terrainTool.dragScaleChannel || terrainActiveChannel());
+  return "Move";
+}
+
+function terrainShortcutSummaryText() {
+  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, E extrude, Del delete | Material: S scale, X/Y axis";
+}
+
+function terrainNodeCapabilities(node) {
+  const nodeType = String(node?.type || "");
+  const shapeType = String(node?.values?.shapeType || "").trim().toLowerCase();
+  const polygonEditable = nodeType === "path_layer"
+    || nodeType === "water_layer"
+    || nodeType === "surface_layer"
+    || (nodeType === "blocker_area" && shapeType === "polygon");
+  const walkableSurface = nodeType === "walkable_surface";
+  return {
+    visible: Boolean(node && TERRAIN_TOOL_NODE_TYPES.has(nodeType)),
+    nodeType: nodeType,
+    shapeType: shapeType,
+    polygonEditable: polygonEditable,
+    pointEditing: polygonEditable,
+    outlineOnly: nodeType === "blocker_area" && !polygonEditable,
+    centerEditable: walkableSurface,
+    allowSelect: true,
+    allowMove: polygonEditable || walkableSurface,
+    allowExtrude: polygonEditable,
+    allowScale: nodeType === "surface_layer",
+    allowDelete: polygonEditable
+  };
+}
+
+function terrainModeAllowed(mode, capabilities) {
+  if (!capabilities || !capabilities.visible) return false;
+  if (mode === "select") return Boolean(capabilities.allowSelect);
+  if (mode === "move") return Boolean(capabilities.allowMove);
+  if (mode === "extrude") return Boolean(capabilities.allowExtrude);
+  if (mode === "scale") return Boolean(capabilities.allowScale);
+  if (mode === "delete") return Boolean(capabilities.allowDelete);
+  return false;
+}
+
+function terrainSelectionText(node, capabilities) {
+  if (!node || !capabilities) return "";
+  const title = terrainTypeLabel(node.type);
+  if (capabilities.outlineOnly) {
+    return title + " - Outline only: set shapeType to polygon to edit points";
+  }
+  const channel = terrainChannelLabel(terrainActiveChannel());
+  const channelSummary = "Edit: 1 Main, 2 Secondary, 3 Edge | Active: " + channel;
+  const shortcutSummary = terrainShortcutSummaryText();
+  if (node.type === "walkable_surface") {
+    if (state.terrainTool.mode === "move") return title + " - Move center | " + shortcutSummary;
+    if (state.terrainTool.mode === "delete") return title + " - Delete unavailable | " + shortcutSummary;
+    return title + " - Select center to move | " + shortcutSummary;
+  }
+  const pointCount = Array.isArray(node.values?.points) ? node.values.points.length : 0;
+  const base = title + " - " + channelSummary + " | " + shortcutSummary;
+  if (pointCount < terrainMinPointCount(node.type)) {
+    return base + " | Click ground to place the first points";
+  }
+  if (pointCount < 2) return base + (node.type === "surface_layer" ? " | Needs at least 2 points" : "");
+  if (state.terrainTool.mode === "move") return title + " - Moving points | " + channelSummary + " | " + shortcutSummary;
+  if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + channelSummary + " | " + shortcutSummary;
+  if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
+  if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
+  return base;
+}
+
+function terrainSelectedPointText() {
+  const multi = state.terrainTool.selectedPointIndices;
+  if (multi.length > 1) return multi.length + " points selected";
+  if (!Number.isInteger(state.terrainTool.selectedPointIndex) || state.terrainTool.selectedPointIndex < 0) return "";
+  return "Selected point " + (state.terrainTool.selectedPointIndex + 1);
+}
+
+function terrainClearDragState() {
+  state.terrainTool.draggingPointIndex = null;
+  state.terrainTool.draggingHandleRole = null;
+  state.terrainTool.dragNodeId = null;
+  state.terrainTool.dragStartPoints = null;
+  state.terrainTool.dragStartSurface = null;
+  state.terrainTool.dragStartScale = null;
+  state.terrainTool.dragScaleChannel = null;
+  state.terrainTool.dragStartPointer = null;
+  state.terrainTool.dragCurrentPointer = null;
+  state.terrainTool.dragExtrudeIndex = null;
+  state.terrainTool.dragPreviewPoint = null;
+  state.terrainTool.dragPointerId = null;
+  state.terrainTool.dragStartGround = null;
+  state.terrainTool.dragCurrentGround = null;
+  state.terrainTool.dragMoved = false;
+}
+
+function terrainSetSelection(pointIndex, handleRole) {
+  state.terrainTool.selectedPointIndex = Number.isInteger(pointIndex) && pointIndex >= 0 ? pointIndex : null;
+  state.terrainTool.selectedHandleRole = handleRole === "center" ? "center" : (state.terrainTool.selectedPointIndex !== null ? "point" : null);
+  state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndex !== null ? [state.terrainTool.selectedPointIndex] : [];
+}
+
+function terrainTogglePointSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  const existing = state.terrainTool.selectedPointIndices;
+  const pos = existing.indexOf(pointIndex);
+  if (pos === -1) {
+    state.terrainTool.selectedPointIndices = existing.concat(pointIndex);
+  } else {
+    state.terrainTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
+  }
+  const last = state.terrainTool.selectedPointIndices.length
+    ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
+    : null;
+  state.terrainTool.selectedPointIndex = last;
+  state.terrainTool.selectedHandleRole = last !== null ? "point" : null;
+}
+
+function terrainCancelActiveSession() {
+  const shouldResetWorld = Boolean(
+    state.terrainTool.draggingHandleRole === "scale"
+    || state.terrainTool.draggingHandleRole === "extrude"
+    || state.terrainTool.draggingHandleRole === "point"
+    || state.terrainTool.draggingHandleRole === "center"
+  );
+  terrainClearDragState();
+  state.terrainTool.mode = "select";
+  state.terrainTool.axisConstraint = null;
+  if (shouldResetWorld && runtime && state.viewportWorld) {
+    applyViewportWorld(state.viewportWorld);
+  }
+  terrainFinishWithRender();
+}
+
+function terrainResetForNode(node, capabilities) {
+  const nextNodeId = node ? node.id : null;
+  const nodeChanged = state.terrainTool.activeNodeId !== nextNodeId;
+  const hadActiveSession = terrainHasActiveSession();
+  state.terrainTool.activeNodeId = nextNodeId;
+  if (!node) {
+    state.terrainTool.mode = "select";
+    terrainSetSelection(null, null);
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
+    return;
+  }
+  if (nodeChanged) {
+    state.terrainTool.mode = "select";
+    terrainSetSelection(null, null);
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
+  }
+  if (!terrainModeAllowed(state.terrainTool.mode, capabilities)) state.terrainTool.mode = "select";
+  if (capabilities.centerEditable) {
+    if (state.terrainTool.selectedHandleRole !== "center" && state.terrainTool.selectedPointIndex === null) {
+      state.terrainTool.selectedHandleRole = null;
+    }
+  } else if (!capabilities.pointEditing) {
+    terrainSetSelection(null, null);
+  } else if (Number.isInteger(state.terrainTool.selectedPointIndex)) {
+    const points = terrainNodePoints(node);
+    if (!points.length) {
+      terrainSetSelection(null, null);
+    } else if (state.terrainTool.selectedPointIndex >= points.length) {
+      terrainSetSelection(points.length - 1, "point");
+    } else {
+      state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndices.filter(function (i) {
+        return i >= 0 && i < points.length;
+      });
+      if (!state.terrainTool.selectedPointIndices.includes(state.terrainTool.selectedPointIndex)) {
+        state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndex !== null
+          ? [state.terrainTool.selectedPointIndex]
+          : [];
+      }
+    }
+  } else if (state.terrainTool.selectedHandleRole === "center") {
+    terrainSetSelection(null, null);
+  }
+}
+
+function terrainSelectedNodeSummary() {
+  const node = selectedTerrainNode();
+  if (!node) return null;
+  const capabilities = terrainNodeCapabilities(node);
+  return {
+    node: node,
+    capabilities: capabilities,
+    points: terrainNodePoints(node),
+    surface: terrainSurfaceSnapshot(node)
+  };
+}
+
+function terrainOverlayState() {
+  const summary = terrainSelectedNodeSummary();
+  if (!summary) return null;
+  const { node, capabilities, points, surface } = summary;
+  const groundY = terrainGroundY();
+  const dragGround = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround || null;
+  const overlay = {
+    nodeId: node.id,
+    nodeType: node.type,
+    label: terrainNodeLabel(node),
+    mode: state.terrainTool.mode,
+    activeChannel: terrainActiveChannel(),
+    selectedPointIndex: state.terrainTool.selectedPointIndex,
+    selectedPointIndices: state.terrainTool.selectedPointIndices.slice(),
+    selectedHandleRole: state.terrainTool.selectedHandleRole,
+    draggingHandleRole: state.terrainTool.draggingHandleRole,
+    points: points,
+    shapeType: capabilities.shapeType,
+    groundY: groundY,
+    color: node.type === "water_layer"
+      ? "#43b4ff"
+      : node.type === "surface_layer"
+        ? "#8fbf6a"
+        : node.type === "walkable_surface"
+          ? "#8fe0a8"
+          : "#f0b35a"
+  };
+  if (node.type === "walkable_surface") {
+    if (dragGround && state.terrainTool.draggingHandleRole === "center" && state.terrainTool.dragStartSurface) {
+      Object.assign(overlay, state.terrainTool.dragStartSurface, {
+        x: dragGround.x,
+        z: dragGround.z
+      });
+    } else {
+      Object.assign(overlay, surface);
+    }
+  } else if (state.terrainTool.draggingPointIndex !== null && state.terrainTool.dragStartPoints) {
+    const nextPoints = terrainClonePoints(state.terrainTool.dragStartPoints);
+    if (dragGround && state.terrainTool.dragStartGround) {
+      const dx = state.terrainTool.axisConstraint === "y" ? 0 : dragGround.x - state.terrainTool.dragStartGround.x;
+      const dz = state.terrainTool.axisConstraint === "x" ? 0 : dragGround.z - state.terrainTool.dragStartGround.z;
+      const draggingIndex = state.terrainTool.draggingPointIndex;
+      const draggedIndices = state.terrainTool.selectedPointIndices.length > 1
+        ? state.terrainTool.selectedPointIndices
+        : (Number.isInteger(draggingIndex) ? [draggingIndex] : []);
+      for (const idx of draggedIndices) {
+        if (nextPoints[idx]) {
+          nextPoints[idx] = { x: nextPoints[idx].x + dx, z: nextPoints[idx].z + dz };
+        }
+      }
+    }
+    overlay.points = nextPoints;
+  } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragStartPoints) {
+    const nextPoints = terrainClonePoints(state.terrainTool.dragStartPoints);
+    const anchor = state.terrainTool.dragStartGround || dragGround;
+    const previewPoint = dragGround && Number.isFinite(dragGround.x) && Number.isFinite(dragGround.z)
+      ? {
+        x: state.terrainTool.axisConstraint === "y" && anchor ? anchor.x : dragGround.x,
+        z: state.terrainTool.axisConstraint === "x" && anchor ? anchor.z : dragGround.z
+      }
+      : null;
+    overlay.previewInsertIndex = Number.isInteger(state.terrainTool.dragExtrudeIndex)
+      ? state.terrainTool.dragExtrudeIndex
+      : Math.max(0, nextPoints.length - 1);
+    overlay.previewPoint = previewPoint;
+    if (previewPoint) {
+      const insertIndex = Math.max(0, Math.min(nextPoints.length, overlay.previewInsertIndex));
+      nextPoints.splice(insertIndex, 0, previewPoint);
+    }
+    overlay.points = nextPoints;
+  } else if (state.terrainTool.draggingHandleRole === "scale" && state.terrainTool.dragStartScale) {
+    overlay.previewScale = Object.assign({}, state.terrainTool.dragStartScale);
+  }
+  return overlay;
+}
+
+function syncTerrainToolPanel() {
+  const summary = terrainSelectedNodeSummary();
+  const node = summary?.node || null;
+  const capabilities = summary?.capabilities || null;
+  const panel = el.terrainToolPanel;
+  const nodeLabel = el.terrainToolNodeLabel;
+  const hint = el.terrainToolHint;
+
+  if (!node || !capabilities) {
+    const hadActiveSession = terrainHasActiveSession();
+    state.terrainTool.activeNodeId = null;
+    terrainClearDragState();
+    terrainSetSelection(null, null);
+    state.terrainTool.mode = "select";
+    state.terrainTool.axisConstraint = null;
+    if (panel) panel.hidden = true;
+    if (nodeLabel) nodeLabel.textContent = "";
+    if (hint) hint.textContent = "";
+    if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
+    if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") runtime.clearTerrainEditorOverlay();
+    return;
+  }
+
+  terrainResetForNode(node, capabilities);
+
+  if (panel) panel.hidden = false;
+  if (nodeLabel) {
+    const labelText = terrainNodeLabel(node);
+    nodeLabel.textContent = labelText ? labelText : terrainTypeLabel(node.type);
+  }
+  if (hint) {
+    const channel = terrainChannelLabel(terrainActiveChannel());
+    const modeText = terrainHasActiveSession()
+      ? terrainActiveSessionModeLabel()
+      : state.terrainTool.mode === "select"
+        ? "Select"
+        : terrainTypeLabel(state.terrainTool.mode);
+    hint.textContent = capabilities.outlineOnly
+      ? "Outline only"
+      : modeText + " | " + terrainShortcutSummaryText() + " | Active channel: " + channel + (state.terrainTool.axisConstraint ? " | Axis " + state.terrainTool.axisConstraint.toUpperCase() : "");
+  }
+
+  const overlay = terrainOverlayState();
+  if (runtime && typeof runtime.setTerrainEditorOverlay === "function" && overlay) {
+    runtime.setTerrainEditorOverlay(overlay);
+  } else if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") {
+    runtime.clearTerrainEditorOverlay();
+  }
+
+  const sessionActive = terrainHasActiveSession();
+  for (const button of [
+    el.terrainToolChannelMainButton,
+    el.terrainToolChannelSecondaryButton,
+    el.terrainToolChannelEdgeButton
+  ]) {
+    if (!button) continue;
+    const channel = String(button.dataset.terrainChannel || "main");
+    button.disabled = sessionActive;
+    button.classList.toggle("active", channel === terrainActiveChannel());
+    button.setAttribute("aria-pressed", channel === terrainActiveChannel() ? "true" : "false");
+  }
+
+  for (const button of [
+    el.terrainToolMoveButton,
+    el.terrainToolExtrudeButton,
+    el.terrainToolScaleButton,
+    el.terrainToolDeleteButton
+  ]) {
+    if (!button) continue;
+    const action = String(button.dataset.terrainAction || "");
+    const allowed = terrainModeAllowed(action, capabilities);
+    button.disabled = !allowed || sessionActive;
+    button.classList.toggle("active", action === state.terrainTool.mode);
+    button.setAttribute("aria-pressed", action === state.terrainTool.mode ? "true" : "false");
+  }
+}
+
 function renderStatusLine() {
   if (!el.statusText) return;
   const parts = [];
-  const modeLabel = viewportModeLabelText();
-  const snapshot = selectedTransformSnapshot();
-  const node = selectedModelNode();
-  const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
   if (state.viewportDebugKey) parts.push("key received: " + state.viewportDebugKey);
-  parts.push(modeLabel);
-  if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
-  parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
-  parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
-  if (node) {
-    const source = snapshot
-      ? viewportVectorFromWorld(snapshot.position)
-      : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
-    parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
+  const terrainNode = selectedTerrainNode();
+  if (terrainNode) {
+    const summary = terrainSelectedNodeSummary();
+    const capabilities = summary?.capabilities || terrainNodeCapabilities(terrainNode);
+    parts.push(terrainSelectionText(terrainNode, capabilities));
+    if (summary?.points && summary.points.length) parts.push(summary.points.length + " points");
+    const selectedPointText = terrainSelectedPointText();
+    if (selectedPointText) parts.push(selectedPointText);
+  } else {
+    const modeLabel = viewportModeLabelText();
+    const snapshot = selectedTransformSnapshot();
+    const node = selectedModelNode();
+    const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
+    parts.push(modeLabel);
+    if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
+    parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
+    parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
+    if (runtimeTransformActive()) {
+      const transformDebug = runtimeTransformDebugState();
+      if (transformDebug) {
+        parts.push("delta " + formatViewportNumber(transformDebug.dx, 0) + "," + formatViewportNumber(transformDebug.dy, 0));
+        parts.push("previews " + (transformDebug.previews || 0));
+        parts.push("changed " + (transformDebug.changed ? "yes" : "no"));
+      }
+    }
+    if (node) {
+      const source = snapshot
+        ? viewportVectorFromWorld(snapshot.position)
+        : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
+      parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
+    }
   }
   if (state.statusMessage) parts.push(state.statusMessage);
   el.statusText.textContent = parts.join(" | ");
@@ -968,6 +1550,7 @@ function renderViewportControls() {
     const nextValue = String(state.snapGridSize || 1);
     if (el.snapGridInput.value !== nextValue) el.snapGridInput.value = nextValue;
   }
+  syncTerrainToolPanel();
   renderStatusLine();
   renderTransformPanel();
 }
@@ -991,6 +1574,34 @@ function setViewportSnap(mode, gridSize) {
   state.snapGridSize = Math.max(0.1, Number.isFinite(Number(gridSize)) ? Number(gridSize) : 1);
   renderViewportControls();
   if (runtime && typeof runtime.setSnapState === "function") runtime.setSnapState(state.snapMode, state.snapGridSize);
+}
+
+function syncRuntimeModelSelectionForTransform() {
+  if (!runtime || runtimeTransformActive()) return selectedModelNode();
+  let node = selectedModelNode();
+  let runtimeId = runtimeNodeId(node);
+  if (!runtimeId) {
+    runtimeId = runtimeModelEntityIdAtLastPointer();
+    const pointerNode = nodeByRuntimeId(runtimeId);
+    if (pointerNode && pointerNode.type === "model_entity") node = pointerNode;
+  }
+  if (runtimeId && typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeId);
+  return node;
+}
+
+function beginRuntimeTransformFromShortcut(mode, statusText) {
+  if (!runtime) return false;
+  if (runtimeTransformActive()) {
+    setStatus(statusText, "");
+    return true;
+  }
+  syncRuntimeModelSelectionForTransform();
+  const started = typeof runtime.beginTransform === "function"
+    ? runtime.beginTransform(mode)
+    : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
+  const selectedId = runtimeSelectedEntityId() || runtimeModelEntityIdAtLastPointer();
+  setStatus(started ? statusText : "No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", started ? "" : "error");
+  return Boolean(started);
 }
 
 function setAnimationPreviewEnabled(enabled) {
@@ -1157,9 +1768,39 @@ function confirmRuntimeTransform() {
     setViewportAxis(null);
     clearSelection({ clearPendingEdge: true });
     renderGraph();
-    setStatus("Transform confirmed.", "success");
+    if (result) setStatus("Transform confirmed.", "success");
   }
   return result;
+}
+
+function consumeRuntimeTransformPointerEvent(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+}
+
+function previewRuntimeTransformFromEvent(event) {
+  if (!runtimeTransformActive()) return false;
+  if (runtime && typeof runtime.previewTransformAt === "function") {
+    runtime.previewTransformAt(event.clientX, event.clientY);
+  }
+  renderViewportControls();
+  return true;
+}
+
+function handleRuntimeTransformMoveEvent(event) {
+  if (!previewRuntimeTransformFromEvent(event)) return;
+  consumeRuntimeTransformPointerEvent(event);
+}
+
+function handleRuntimeTransformEndEvent(event) {
+  if (!previewRuntimeTransformFromEvent(event)) return;
+  consumeRuntimeTransformPointerEvent(event);
+  if (event.type === "pointercancel" || event.button === 2 || event.button === 1) {
+    cancelRuntimeTransform();
+    return;
+  }
+  confirmRuntimeTransform();
 }
 
 function openGroupForNode(node) {
@@ -1576,7 +2217,7 @@ async function boot() {
       clearSelection({ clearPendingEdge: true });
       renderGraph();
       if (info.action === "confirm") {
-        setStatus("Transform confirmed.", "success");
+        setStatus(info.changed ? "Transform confirmed." : "Transform unchanged: no mouse movement was received.", info.changed ? "success" : "error");
       } else if (info.action === "cancel") {
         setStatus("Transform cancelled.", "");
       }
@@ -2448,6 +3089,7 @@ function navigateToCrumb(index) {
 
 // ---------- Selection + inspector ----------
 function renderInspector() {
+  syncAsideContext();
   el.inspectorForm.innerHTML = "";
   const selectedNodes = state.selectedNodeIds.map(function (id) { return nodeById(id); }).filter(Boolean);
   const selectedEdges = state.selectedEdgeIds.map(function (id) {
@@ -2577,6 +3219,13 @@ function renderInspector() {
   }
   el.inspectorForm.appendChild(actions);
   renderViewportControls();
+}
+
+function syncAsideContext() {
+  const showInspector = state.selectedNodeIds.length > 0 || state.selectedEdgeIds.length > 0;
+  if (el.nodeLibrarySection) el.nodeLibrarySection.hidden = showInspector;
+  if (el.inspectorSection) el.inspectorSection.hidden = !showInspector;
+  if (el.validationSection) el.validationSection.hidden = false;
 }
 
 function buildField(node, key, field) {
@@ -3783,8 +4432,9 @@ el.viewportCanvas.addEventListener("drop", function (event) {
 
 // ---------- Viewport + validation ----------
 function applyViewportWorld(world) {
+  state.viewportWorld = world || null;
   if (runtime) runtime.setWorld(world);
-  el.viewportStatus.textContent = world.world && world.world.displayName ? world.world.displayName : "Draft viewport";
+  el.viewportStatus.textContent = world && world.world && world.world.displayName ? world.world.displayName : "Draft viewport";
   state.viewportDirty = false;
   clearViewportRefreshTimer();
   syncRuntimeSelection();
@@ -3883,6 +4533,715 @@ async function publish() {
   }
 }
 
+// ---------- Terrain tool ----------
+function terrainCanvasTarget(event) {
+  return Boolean(el.viewportCanvas) && event && event.target === el.viewportCanvas;
+}
+
+function terrainRememberPointer(event) {
+  if (!event) return;
+  terrainLastPointer = {
+    clientX: Number(event.clientX) || 0,
+    clientY: Number(event.clientY) || 0,
+    pointerId: Number.isFinite(Number(event.pointerId)) ? Number(event.pointerId) : null
+  };
+}
+
+function terrainGroundPointFromClient(clientX, clientY) {
+  if (!runtime || typeof runtime.screenToGround !== "function") return null;
+  const ground = runtime.screenToGround(clientX, clientY);
+  if (!ground || !Number.isFinite(ground.x) || !Number.isFinite(ground.z)) return null;
+  return { x: ground.x, z: ground.z };
+}
+
+function terrainGroundPointFromEvent(event) {
+  return terrainGroundPointFromClient(event.clientX, event.clientY);
+}
+
+function terrainHandleFromEvent(event) {
+  if (!runtime || typeof runtime.pickTerrainEditorHandle !== "function") return null;
+  return runtime.pickTerrainEditorHandle(event.clientX, event.clientY);
+}
+
+function terrainRenderOverlayPreview() {
+  if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
+  const overlay = terrainOverlayState();
+  if (overlay) runtime.setTerrainEditorOverlay(overlay);
+}
+
+function terrainFinishWithRender() {
+  renderViewportControls();
+}
+
+function focusTerrainOrSelected() {
+  if (!runtime) return;
+  const node = selectedTerrainNode();
+  if (!node) {
+    if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+    return;
+  }
+  const capabilities = terrainNodeCapabilities(node);
+  const groundY = terrainGroundY();
+  if (capabilities.walkableSurface || node.type === "walkable_surface") {
+    const surface = terrainSurfaceSnapshot(node);
+    const hw = Math.max(0, surface.width) / 2;
+    const hd = Math.max(0, surface.depth) / 2;
+    const cx = surface.x;
+    const cy = surface.y || groundY;
+    const cz = surface.z;
+    const positions = [
+      { x: cx - hw, y: cy, z: cz - hd },
+      { x: cx + hw, y: cy, z: cz + hd }
+    ];
+    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
+    return;
+  }
+  if (capabilities.polygonEditable || capabilities.pointEditing) {
+    const points = terrainNodePoints(node);
+    if (!points.length) {
+      if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+      return;
+    }
+    const selectedIdx = state.terrainTool.selectedPointIndex;
+    if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
+      const p = points[selectedIdx];
+      if (typeof runtime.frameWorldPoints === "function") {
+        runtime.frameWorldPoints([{ x: p.x, y: groundY, z: p.z }]);
+      }
+      return;
+    }
+    const positions = points.map(function (p) { return { x: p.x, y: groundY, z: p.z }; });
+    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
+    return;
+  }
+  if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+}
+
+function setTerrainToolMode(mode) {
+  const node = selectedTerrainNode();
+  if (!node) return;
+  const capabilities = terrainNodeCapabilities(node);
+  const nextMode = terrainModeAllowed(mode, capabilities) ? mode : "select";
+  state.terrainTool.mode = nextMode;
+  if (nextMode === "select") {
+    state.terrainTool.axisConstraint = null;
+    if (terrainHasActiveSession()) terrainClearDragState();
+  } else if (terrainHasActiveSession() && state.terrainTool.dragNodeId !== node.id) {
+    terrainClearDragState();
+  }
+  terrainFinishWithRender();
+}
+
+function setTerrainActiveChannel(channel) {
+  state.terrainTool.activeChannel = channel === "secondary" || channel === "edge" ? channel : "main";
+  terrainFinishWithRender();
+}
+
+function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
+  const points = terrainNodePoints(node);
+  const pointIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
+    ? state.terrainTool.selectedPointIndex
+    : (state.terrainTool.selectedPointIndices.length
+      ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
+      : null);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) {
+    setStatus("Select a point first.", "error");
+    return false;
+  }
+  const capabilities = terrainNodeCapabilities(node);
+  if (!capabilities.allowExtrude) {
+    setStatus("Extrude is not available here.", "error");
+    return false;
+  }
+  const insertIndex = pointIndex <= 0
+    ? 0
+    : pointIndex >= points.length - 1
+      ? points.length
+      : pointIndex + 1;
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  terrainClearDragState();
+  state.terrainTool.mode = "extrude";
+  state.terrainTool.selectedPointIndex = pointIndex;
+  state.terrainTool.selectedHandleRole = "point";
+  state.terrainTool.selectedPointIndices = [pointIndex];
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = pointIndex;
+  state.terrainTool.draggingHandleRole = "extrude";
+  state.terrainTool.dragStartPoints = terrainClonePoints(points);
+  state.terrainTool.dragExtrudeIndex = insertIndex;
+  state.terrainTool.dragPreviewPoint = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragPointerId = pointerId;
+  state.terrainTool.dragMoved = false;
+  state.terrainTool.axisConstraint = null;
+  terrainRenderOverlayPreview();
+  terrainFinishWithRender();
+  return true;
+}
+
+function terrainBeginScaleSession(node, pointerEvent, pointerId) {
+  const capabilities = terrainNodeCapabilities(node);
+  if (!capabilities.allowScale) {
+    setStatus("Surface Layer only.", "error");
+    return false;
+  }
+  const channel = terrainActiveChannel();
+  const scaleSnapshot = terrainChannelScalePair(node, channel);
+  terrainClearDragState();
+  state.terrainTool.mode = "scale";
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = null;
+  state.terrainTool.draggingHandleRole = "scale";
+  state.terrainTool.dragStartScale = scaleSnapshot;
+  state.terrainTool.dragScaleChannel = channel;
+  state.terrainTool.dragStartPointer = pointerEvent
+    ? { x: Number(pointerEvent.clientX) || 0, y: Number(pointerEvent.clientY) || 0 }
+    : (terrainLastPointer ? { x: terrainLastPointer.clientX, y: terrainLastPointer.clientY } : null);
+  state.terrainTool.dragCurrentPointer = state.terrainTool.dragStartPointer
+    ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
+    : null;
+  state.terrainTool.dragPointerId = pointerId;
+  state.terrainTool.dragMoved = false;
+  terrainUpdateScalePreview(node, state.terrainTool.dragStartPointer);
+  terrainFinishWithRender();
+  return true;
+}
+
+function terrainUpdateScalePreview(node, pointerPoint) {
+  if (!node || state.terrainTool.draggingHandleRole !== "scale") return null;
+  const channel = state.terrainTool.dragScaleChannel || terrainActiveChannel();
+  const keys = terrainChannelFieldKeys(channel);
+  const start = state.terrainTool.dragStartScale || terrainChannelScalePair(node, channel);
+  const startPointer = state.terrainTool.dragStartPointer;
+  const hasPointer = Boolean(startPointer && pointerPoint && Number.isFinite(pointerPoint.x) && Number.isFinite(pointerPoint.y));
+  const deltaX = hasPointer ? pointerPoint.x - startPointer.x : 0;
+  const factor = terrainSafeScale(1 + deltaX * 0.01);
+  const nextX = state.terrainTool.axisConstraint === "y" ? start.x : terrainSafeScale(start.x * factor);
+  const nextY = state.terrainTool.axisConstraint === "x" ? start.y : terrainSafeScale(start.y * factor);
+  const patch = {};
+  patch[keys.xKey] = nextX;
+  patch[keys.yKey] = nextY;
+  state.terrainTool.dragCurrentPointer = pointerPoint ? { x: pointerPoint.x, y: pointerPoint.y } : state.terrainTool.dragCurrentPointer;
+  if (runtime && typeof runtime.setTerrainSurfacePreview === "function") {
+    runtime.setTerrainSurfacePreview(terrainRuntimeSurfaceId(node), patch);
+  }
+  if (hasPointer) state.terrainTool.dragMoved = true;
+  terrainRenderOverlayPreview();
+  return patch;
+}
+
+function terrainBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
+  const points = terrainNodePoints(node);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) return false;
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  terrainClearDragState();
+  state.terrainTool.mode = "move";
+  state.terrainTool.selectedPointIndex = pointIndex;
+  state.terrainTool.selectedHandleRole = "point";
+  state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndices.length > 1
+    ? state.terrainTool.selectedPointIndices.slice()
+    : [pointIndex];
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = pointIndex;
+  state.terrainTool.draggingHandleRole = "point";
+  state.terrainTool.dragStartPoints = terrainClonePoints(points);
+  state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragPointerId = pointerId;
+  state.terrainTool.dragMoved = false;
+  state.terrainTool.axisConstraint = null;
+  terrainRenderOverlayPreview();
+  terrainFinishWithRender();
+  return true;
+}
+
+function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  terrainClearDragState();
+  state.terrainTool.mode = "move";
+  state.terrainTool.selectedPointIndex = null;
+  state.terrainTool.selectedHandleRole = "center";
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = null;
+  state.terrainTool.draggingHandleRole = "center";
+  state.terrainTool.dragStartSurface = terrainSurfaceSnapshot(node);
+  state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragPointerId = pointerId;
+  state.terrainTool.dragMoved = false;
+  state.terrainTool.axisConstraint = null;
+  terrainRenderOverlayPreview();
+  terrainFinishWithRender();
+  return true;
+}
+
+async function terrainPatchPoints(node, nextPoints, historyLabel) {
+  const result = await patchValues(node.id, { points: nextPoints }, {
+    historyLabel: historyLabel,
+    refreshViewport: true,
+    refreshValidation: true,
+    refreshEdgeList: false
+  });
+  if (!result) {
+    terrainFinishWithRender();
+    return false;
+  }
+  return true;
+}
+
+async function terrainPatchSurface(node, patch, historyLabel) {
+  const result = await patchValues(node.id, patch, {
+    historyLabel: historyLabel,
+    refreshViewport: true,
+    refreshValidation: true,
+    refreshEdgeList: false
+  });
+  if (!result) {
+    terrainFinishWithRender();
+    return false;
+  }
+  return true;
+}
+
+async function terrainAddPoint(node, groundPoint) {
+  if (!groundPoint) {
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const capabilities = terrainNodeCapabilities(node);
+  if (capabilities.centerEditable || node.type === "walkable_surface") {
+    const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+    if (ok) {
+      terrainSetSelection(null, "center");
+      setStatus("Surface centered.", "success");
+      terrainFinishWithRender();
+    }
+    return ok;
+  }
+  if (!capabilities.allowExtrude) return false;
+  const currentPoints = terrainNodePoints(node);
+  const newPoint = { x: groundPoint.x, z: groundPoint.z };
+  const hasSelection = Number.isInteger(state.terrainTool.selectedPointIndex) || state.terrainTool.selectedPointIndices.length > 0;
+  const selectedIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
+    ? state.terrainTool.selectedPointIndex
+    : (state.terrainTool.selectedPointIndices.length
+      ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
+      : null);
+  const insertIndex = !hasSelection
+    ? currentPoints.length
+    : selectedIndex <= 0
+      ? 0
+      : selectedIndex >= currentPoints.length - 1
+        ? currentPoints.length
+        : selectedIndex + 1;
+  const nextPoints = currentPoints.slice();
+  nextPoints.splice(insertIndex, 0, newPoint);
+  const ok = await terrainPatchPoints(node, nextPoints, "Terrain point added");
+  if (ok) {
+    terrainSetSelection(insertIndex, "point");
+    setStatus("Point extruded.", "success");
+    terrainFinishWithRender();
+  }
+  return ok;
+}
+
+async function terrainDeletePoint(node, pointIndex) {
+  const capabilities = terrainNodeCapabilities(node);
+  if (!capabilities.allowDelete) {
+    if (node.type === "walkable_surface") setStatus("Walkable Surface has no points.", "error");
+    return false;
+  }
+  const currentPoints = terrainNodePoints(node);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= currentPoints.length) return false;
+  const nextPoints = currentPoints.filter(function (_, index) { return index !== pointIndex; });
+  const ok = await terrainPatchPoints(node, nextPoints, "Terrain point deleted");
+  if (ok) {
+    const nextIndex = nextPoints.length ? Math.min(pointIndex, nextPoints.length - 1) : null;
+    terrainSetSelection(nextIndex, nextIndex === null ? null : "point");
+    setStatus("Point deleted.", "success");
+    terrainFinishWithRender();
+  }
+  return ok;
+}
+
+function terrainMinPointCount(nodeType) {
+  if (nodeType === "path_layer") return 2;
+  if (nodeType === "water_layer") return 3;
+  if (nodeType === "surface_layer") return 2;
+  if (nodeType === "blocker_area") return 3;
+  return 1;
+}
+
+async function terrainDeleteMultiPoint(node) {
+  const capabilities = terrainNodeCapabilities(node);
+  if (!capabilities.allowDelete) {
+    if (node.type === "walkable_surface") setStatus("Walkable Surface has no points.", "error");
+    return false;
+  }
+  const indices = state.terrainTool.selectedPointIndices;
+  if (!indices.length) return false;
+  const currentPoints = terrainNodePoints(node);
+  const minCount = terrainMinPointCount(node.type);
+  const toDelete = new Set(indices.filter(function (i) { return i >= 0 && i < currentPoints.length; }));
+  const remaining = currentPoints.filter(function (_, i) { return !toDelete.has(i); });
+  if (remaining.length < minCount) {
+    setStatus("Cannot delete: minimum " + minCount + " points required.", "error");
+    terrainFinishWithRender();
+    return false;
+  }
+  const ok = await terrainPatchPoints(node, remaining, "Terrain points deleted");
+  if (ok) {
+    const nextIndex = remaining.length ? 0 : null;
+    terrainSetSelection(nextIndex, nextIndex === null ? null : "point");
+    setStatus(toDelete.size + " point" + (toDelete.size > 1 ? "s" : "") + " deleted.", "success");
+    terrainFinishWithRender();
+  }
+  return ok;
+}
+
+async function terrainCommitPointDrag(node) {
+  if (state.terrainTool.draggingHandleRole === "extrude") {
+    const pointIndex = state.terrainTool.draggingPointIndex;
+    const startPoints = terrainClonePoints(state.terrainTool.dragStartPoints || terrainNodePoints(node));
+    const sourcePoint = startPoints[pointIndex] || null;
+    const previewPoint = state.terrainTool.dragPreviewPoint
+      || state.terrainTool.dragCurrentGround
+      || state.terrainTool.dragStartGround
+      || (sourcePoint ? { x: sourcePoint.x, z: sourcePoint.z } : null);
+    if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length || !previewPoint) {
+      terrainClearDragState();
+      state.terrainTool.axisConstraint = null;
+      state.terrainTool.mode = "select";
+      terrainFinishWithRender();
+      if (!previewPoint) setStatus("No ground hit.", "error");
+      return false;
+    }
+    const insertIndex = Number.isInteger(state.terrainTool.dragExtrudeIndex)
+      ? Math.max(0, Math.min(startPoints.length, state.terrainTool.dragExtrudeIndex))
+      : Math.min(startPoints.length, pointIndex + 1);
+    const nextPoints = startPoints.slice();
+    const anchor = state.terrainTool.dragStartGround || previewPoint;
+    nextPoints.splice(insertIndex, 0, {
+      x: state.terrainTool.axisConstraint === "y" && anchor ? anchor.x : previewPoint.x,
+      z: state.terrainTool.axisConstraint === "x" && anchor ? anchor.z : previewPoint.z
+    });
+    const ok = await terrainPatchPoints(node, nextPoints, "Terrain point extruded");
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    if (ok) {
+      const selectedIndex = insertIndex;
+      terrainSetSelection(selectedIndex, "point");
+      setStatus("Point extruded.", "success");
+    }
+    terrainFinishWithRender();
+    return ok;
+  }
+  const pointIndex = state.terrainTool.draggingPointIndex;
+  const startPoints = terrainClonePoints(state.terrainTool.dragStartPoints || terrainNodePoints(node));
+  const startGround = state.terrainTool.dragStartGround;
+  const groundPoint = state.terrainTool.dragCurrentGround
+    || startGround
+    || (startPoints[pointIndex] ? { x: startPoints[pointIndex].x, z: startPoints[pointIndex].z } : null);
+  if (!groundPoint || !Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length) {
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    terrainFinishWithRender();
+    if (!groundPoint) setStatus("No ground hit.", "error");
+    return false;
+  }
+  const draggedIndices = state.terrainTool.selectedPointIndices.length > 1
+    ? state.terrainTool.selectedPointIndices
+    : [pointIndex];
+  if (draggedIndices.length > 1 && startGround) {
+    const dx = state.terrainTool.axisConstraint === "y" ? 0 : groundPoint.x - startGround.x;
+    const dz = state.terrainTool.axisConstraint === "x" ? 0 : groundPoint.z - startGround.z;
+    for (const idx of draggedIndices) {
+      if (startPoints[idx]) {
+        startPoints[idx] = { x: startPoints[idx].x + dx, z: startPoints[idx].z + dz };
+      }
+    }
+  } else {
+    startPoints[pointIndex] = {
+      x: state.terrainTool.axisConstraint === "y" && startGround ? startPoints[pointIndex].x : groundPoint.x,
+      z: state.terrainTool.axisConstraint === "x" && startGround ? startPoints[pointIndex].z : groundPoint.z
+    };
+  }
+  const selectedBefore = state.terrainTool.selectedPointIndices.slice();
+  const ok = await terrainPatchPoints(node, startPoints, "Terrain point moved");
+  terrainClearDragState();
+  state.terrainTool.axisConstraint = null;
+  state.terrainTool.mode = "select";
+  if (ok) {
+    state.terrainTool.selectedPointIndices = selectedBefore;
+    state.terrainTool.selectedPointIndex = pointIndex;
+    state.terrainTool.selectedHandleRole = "point";
+    setStatus(draggedIndices.length > 1 ? draggedIndices.length + " points moved." : "Point moved.", "success");
+  }
+  terrainFinishWithRender();
+  return ok;
+}
+
+async function terrainCommitSurfaceDrag(node) {
+  const groundPoint = state.terrainTool.dragCurrentGround
+    || state.terrainTool.dragStartGround
+    || (state.terrainTool.dragStartSurface ? { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z } : null);
+  if (!groundPoint || !state.terrainTool.dragStartSurface) {
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    terrainFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+  terrainClearDragState();
+  state.terrainTool.axisConstraint = null;
+  state.terrainTool.mode = "select";
+  if (ok) {
+    terrainSetSelection(null, "center");
+    setStatus("Surface moved.", "success");
+  }
+  terrainFinishWithRender();
+  return ok;
+}
+
+async function terrainCommitScale(node) {
+  const channel = state.terrainTool.dragScaleChannel || terrainActiveChannel();
+  const keys = terrainChannelFieldKeys(channel);
+  const start = state.terrainTool.dragStartScale || terrainChannelScalePair(node, channel);
+  const pointerPoint = state.terrainTool.dragCurrentPointer || state.terrainTool.dragStartPointer;
+  const hasPointer = Boolean(pointerPoint && state.terrainTool.dragStartPointer);
+  const deltaX = hasPointer ? pointerPoint.x - state.terrainTool.dragStartPointer.x : 0;
+  const factor = terrainSafeScale(1 + deltaX * 0.01);
+  const patch = {};
+  patch[keys.xKey] = state.terrainTool.axisConstraint === "y" ? start.x : terrainSafeScale(start.x * factor);
+  patch[keys.yKey] = state.terrainTool.axisConstraint === "x" ? start.y : terrainSafeScale(start.y * factor);
+  if (runtime && typeof runtime.setTerrainSurfacePreview === "function") {
+    runtime.setTerrainSurfacePreview(terrainRuntimeSurfaceId(node), patch);
+  }
+  const ok = await terrainPatchSurface(node, patch, terrainChannelLabel(channel) + " texture scale");
+  terrainClearDragState();
+  state.terrainTool.axisConstraint = null;
+  state.terrainTool.mode = "select";
+  if (ok) {
+    setStatus(terrainChannelLabel(channel) + " texture scale updated.", "success");
+  } else if (runtime && state.viewportWorld) {
+    applyViewportWorld(state.viewportWorld);
+  }
+  terrainFinishWithRender();
+  return ok;
+}
+
+function handleTerrainPointerDown(event) {
+  if (runtimeTransformActive()) return;
+  terrainRememberPointer(event);
+  if (terrainHasActiveSession() && event.button === 0 && terrainCanvasTarget(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+    if (!node) {
+      terrainCancelActiveSession();
+      return;
+    }
+    if (state.terrainTool.draggingHandleRole === "scale") {
+      void terrainCommitScale(node);
+      return;
+    }
+    if (state.terrainTool.draggingHandleRole === "center") {
+      void terrainCommitSurfaceDrag(node);
+      return;
+    }
+    void terrainCommitPointDrag(node);
+    return;
+  }
+  if (!terrainCanvasTarget(event) || event.button !== 0) return;
+  const node = selectedTerrainNode();
+  if (!node) return;
+  const capabilities = terrainNodeCapabilities(node);
+  const hit = terrainHandleFromEvent(event);
+  const ground = terrainGroundPointFromEvent(event);
+  const mode = state.terrainTool.mode;
+  const meshEntityId = runtimeEntityIdFromPointer(event);
+  const shouldPlaceFirstPoints = mode === "select"
+    && capabilities.pointEditing
+    && ground
+    && terrainNodePoints(node).length < terrainMinPointCount(node.type);
+  const shouldConsumeTerrainClick = Boolean(hit && hit.nodeId === node.id)
+    || shouldPlaceFirstPoints
+    || mode === "extrude"
+    || mode === "scale";
+  if (meshEntityId && !(hit && hit.nodeId === node.id)) return;
+  if (!shouldConsumeTerrainClick) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+
+  if (hit && hit.nodeId === node.id) {
+    if (node.type === "walkable_surface" && hit.handleRole === "center") {
+      if (state.terrainTool.mode === "delete") {
+        setStatus("Walkable Surface has no points.", "error");
+        terrainFinishWithRender();
+        return;
+      }
+      terrainSetSelection(null, "center");
+      if (state.terrainTool.mode === "move") {
+        if (!ground) {
+          setStatus("No ground hit.", "error");
+        } else {
+          terrainBeginSurfaceDrag(node, ground, event.pointerId);
+        }
+      } else {
+        terrainFinishWithRender();
+      }
+      return;
+    }
+    if (capabilities.pointEditing && Number.isInteger(hit.pointIndex)) {
+      if (event.shiftKey && (state.terrainTool.mode === "select" || state.terrainTool.mode === "move")) {
+        terrainTogglePointSelection(hit.pointIndex);
+        terrainFinishWithRender();
+        return;
+      }
+      const alreadyInMultiSelect = state.terrainTool.selectedPointIndices.length > 1
+        && state.terrainTool.selectedPointIndices.includes(hit.pointIndex);
+      if (!alreadyInMultiSelect) {
+        terrainSetSelection(hit.pointIndex, "point");
+      } else {
+        state.terrainTool.selectedPointIndex = hit.pointIndex;
+        state.terrainTool.selectedHandleRole = "point";
+      }
+      if (state.terrainTool.mode === "move") {
+        if (!ground) {
+          setStatus("No ground hit.", "error");
+        } else {
+          terrainBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+        }
+      } else if (state.terrainTool.mode === "extrude") {
+        if (!ground) {
+          setStatus("No ground hit.", "error");
+        } else {
+          terrainBeginExtrudeSession(node, ground, event.pointerId);
+        }
+      } else if (state.terrainTool.mode === "scale") {
+        if (!ground) {
+          terrainBeginScaleSession(node, event, event.pointerId);
+        } else {
+          terrainBeginScaleSession(node, event, event.pointerId);
+        }
+      } else if (state.terrainTool.mode === "delete") {
+        void terrainDeleteMultiPoint(node);
+      } else {
+        terrainFinishWithRender();
+      }
+      return;
+    }
+  }
+
+  if (state.terrainTool.mode === "extrude" && capabilities.allowExtrude) {
+    if (!ground) {
+      setStatus("No ground hit.", "error");
+      return;
+    }
+    terrainBeginExtrudeSession(node, ground, event.pointerId);
+    return;
+  }
+
+  if (state.terrainTool.mode === "scale" && capabilities.allowScale) {
+    terrainBeginScaleSession(node, event, event.pointerId);
+    return;
+  }
+
+  if (state.terrainTool.mode === "select") {
+    const currentPoints = terrainNodePoints(node);
+    if (capabilities.pointEditing && ground && currentPoints.length < terrainMinPointCount(node.type)) {
+      void terrainAddPoint(node, ground);
+      return;
+    }
+    terrainFinishWithRender();
+    return;
+  }
+
+  if (state.terrainTool.mode === "delete" && node.type === "walkable_surface") {
+    setStatus("Walkable Surface has no points.", "error");
+    terrainFinishWithRender();
+  }
+}
+
+function handleTerrainPointerMove(event) {
+  terrainRememberPointer(event);
+  if (runtimeTransformActive()) {
+    if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
+    return;
+  }
+  const isKeyboardSession = terrainHasActiveSession() && state.terrainTool.dragPointerId === null;
+  const isPointerSession = state.terrainTool.dragPointerId !== null && event.pointerId === state.terrainTool.dragPointerId;
+  if (!isKeyboardSession && !isPointerSession) return;
+  if (!isKeyboardSession && state.terrainTool.draggingPointIndex === null && state.terrainTool.draggingHandleRole !== "center" && state.terrainTool.draggingHandleRole !== "scale") return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  if (state.terrainTool.draggingHandleRole === "scale") {
+    const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+    if (!node) return;
+    const pointer = { x: Number(event.clientX) || 0, y: Number(event.clientY) || 0 };
+    if (!state.terrainTool.dragStartPointer) state.terrainTool.dragStartPointer = pointer;
+    terrainUpdateScalePreview(node, pointer);
+    return;
+  }
+  const ground = terrainGroundPointFromEvent(event);
+  if (!ground) return;
+  if (!state.terrainTool.dragStartGround) state.terrainTool.dragStartGround = { x: ground.x, z: ground.z };
+  state.terrainTool.dragCurrentGround = { x: ground.x, z: ground.z };
+  state.terrainTool.dragMoved = true;
+  if (state.terrainTool.draggingHandleRole === "extrude") {
+    state.terrainTool.dragPreviewPoint = { x: ground.x, z: ground.z };
+  }
+  terrainRenderOverlayPreview();
+}
+
+function handleTerrainPointerUp(event) {
+  terrainRememberPointer(event);
+  if (runtimeTransformActive()) {
+    if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
+    return;
+  }
+  if (state.terrainTool.dragPointerId === null || event.pointerId !== state.terrainTool.dragPointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  if (event.type === "pointercancel") {
+    terrainCancelActiveSession();
+    return;
+  }
+  const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+  if (!node) {
+    terrainCancelActiveSession();
+    return;
+  }
+  if (state.terrainTool.draggingHandleRole === "center") {
+    void terrainCommitSurfaceDrag(node);
+    return;
+  }
+  if (state.terrainTool.draggingHandleRole === "scale") {
+    void terrainCommitScale(node);
+    return;
+  }
+  if (Number.isInteger(state.terrainTool.draggingPointIndex)) {
+    void terrainCommitPointDrag(node);
+    return;
+  }
+  terrainCancelActiveSession();
+}
+
 // ---------- Keyboard shortcuts ----------
 function isEditableTarget(target) {
   if (!target || typeof target.tagName !== "string") return false;
@@ -3919,11 +5278,149 @@ function consumeShortcutEvent(event) {
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
 }
 
+function terrainKeyboardOwnsShortcuts(terrainNode, event) {
+  if (!terrainNode) return false;
+  if (terrainHasActiveSession()) return true;
+  if (runtimeTransformActive()) return false;
+  if (!event?.altKey && !(event?.ctrlKey || event?.metaKey)
+    && (keyMatches(event, "g") || keyMatches(event, "r") || keyMatches(event, "s") || keyMatches(event, "w") || keyMatches(event, "e") || keyMatches(event, "t"))
+    && runtimeModelEntityIdAtLastPointer()) {
+    return false;
+  }
+  return !selectedModelNode();
+}
+
 function handleEditorKeyDown(event) {
   const meta = event.ctrlKey || event.metaKey;
   if (isEditableTarget(event.target)) return;
   const shortcutLabel = viewportShortcutDebugLabel(event);
   if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
+  const terrainNode = selectedTerrainNode();
+  if (terrainKeyboardOwnsShortcuts(terrainNode, event)) {
+    const selectedIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
+      ? state.terrainTool.selectedPointIndex
+      : (state.terrainTool.selectedPointIndices.length
+        ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
+        : null);
+    if (!event.altKey && !meta && (event.key === "1" || event.key === "2" || event.key === "3")) {
+      consumeShortcutEvent(event);
+      if (terrainHasActiveSession()) {
+        setStatus("Finish or cancel the current action first.", "");
+        return;
+      }
+      setTerrainActiveChannel(event.key === "2" ? "secondary" : event.key === "3" ? "edge" : "main");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "g")) {
+      consumeShortcutEvent(event);
+      if (terrainNode.type === "walkable_surface") {
+        if (!terrainBeginSurfaceDrag(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+          setStatus("Select a point first.", "error");
+        } else {
+          setStatus("Move ready. Click or Enter to confirm.", "");
+        }
+        return;
+      }
+      if (!Number.isInteger(selectedIndex)) {
+        setStatus("Select a point first.", "error");
+        return;
+      }
+      if (!terrainBeginPointDrag(terrainNode, selectedIndex, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+        setStatus("Select a point first.", "error");
+        return;
+      }
+      setStatus("Move ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "e")) {
+      consumeShortcutEvent(event);
+      if (!Number.isInteger(selectedIndex)) {
+        setStatus("Select a point first.", "error");
+        return;
+      }
+      if (!terrainBeginExtrudeSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+        return;
+      }
+      setStatus("Extrude ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "s")) {
+      consumeShortcutEvent(event);
+      if (!terrainBeginScaleSession(terrainNode, terrainLastPointer, null)) return;
+      setStatus("Scale ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y"))) {
+      consumeShortcutEvent(event);
+      state.terrainTool.axisConstraint = keyMatches(event, "x") ? "x" : "y";
+      if (terrainHasActiveSession()) {
+        const activeNode = nodeById(state.terrainTool.dragNodeId) || terrainNode;
+        if (state.terrainTool.draggingHandleRole === "scale") {
+          terrainUpdateScalePreview(activeNode, state.terrainTool.dragCurrentPointer || state.terrainTool.dragStartPointer);
+        } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragCurrentGround) {
+          terrainRenderOverlayPreview();
+        } else if (state.terrainTool.draggingHandleRole === "point" || state.terrainTool.draggingHandleRole === "center") {
+          terrainRenderOverlayPreview();
+        }
+      }
+      terrainFinishWithRender();
+      return;
+    }
+    if (event.key === "Escape") {
+      consumeShortcutEvent(event);
+      if (terrainHasActiveSession()) {
+        terrainCancelActiveSession();
+        state.terrainTool.mode = "select";
+        state.terrainTool.axisConstraint = null;
+        terrainFinishWithRender();
+        return;
+      }
+      state.terrainTool.mode = "select";
+      state.terrainTool.axisConstraint = null;
+      terrainFinishWithRender();
+      return;
+    }
+    if (event.key === "Enter") {
+      consumeShortcutEvent(event);
+      if (terrainHasActiveSession()) {
+        const activeNode = nodeById(state.terrainTool.dragNodeId) || terrainNode;
+        if (state.terrainTool.draggingHandleRole === "scale") {
+          void terrainCommitScale(activeNode);
+        } else if (state.terrainTool.draggingHandleRole === "center") {
+          void terrainCommitSurfaceDrag(activeNode);
+        } else {
+          void terrainCommitPointDrag(activeNode);
+        }
+        state.terrainTool.axisConstraint = null;
+        return;
+      }
+      if (runtime && typeof runtime.isTransformActive === "function" && runtime.isTransformActive()) {
+        confirmRuntimeTransform();
+        return;
+      }
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      consumeShortcutEvent(event);
+      if (terrainNode.type === "walkable_surface") {
+        setStatus("Walkable Surface has no points.", "error");
+        return;
+      }
+      if (state.terrainTool.selectedPointIndices.length > 1) {
+        void terrainDeleteMultiPoint(terrainNode);
+        return;
+      }
+      if (Number.isInteger(state.terrainTool.selectedPointIndex)) {
+        void terrainDeletePoint(terrainNode, state.terrainTool.selectedPointIndex);
+        return;
+      }
+      return;
+    }
+    if (event.key === ".") {
+      consumeShortcutEvent(event);
+      focusTerrainOrSelected();
+      return;
+    }
+  }
   if (event.key === "Enter" && runtime && typeof runtime.isTransformActive === "function" && runtime.isTransformActive()) {
     consumeShortcutEvent(event);
     confirmRuntimeTransform();
@@ -3980,30 +5477,21 @@ function handleEditorKeyDown(event) {
     consumeShortcutEvent(event);
     setViewportMode("translate");
     setViewportAxis(null);
-    const started = typeof runtime.beginTransform === "function"
-      ? runtime.beginTransform("move")
-      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
-    setStatus(started ? "Move." : "No mesh selected.", started ? "" : "error");
+    beginRuntimeTransformFromShortcut("move", "Move.");
     return;
   }
   if (!event.altKey && !meta && (keyMatches(event, "r") || keyMatches(event, "e")) && runtime) {
     consumeShortcutEvent(event);
     setViewportMode("rotate");
     setViewportAxis(null);
-    const started = typeof runtime.beginTransform === "function"
-      ? runtime.beginTransform("rotate")
-      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
-    setStatus(started ? "Rotate Z." : "No mesh selected.", started ? "" : "error");
+    beginRuntimeTransformFromShortcut("rotate", "Rotate Z.");
     return;
   }
   if (!event.altKey && !meta && (keyMatches(event, "s") || keyMatches(event, "t")) && runtime) {
     consumeShortcutEvent(event);
     setViewportMode("scale");
     setViewportAxis(null);
-    const started = typeof runtime.beginTransform === "function"
-      ? runtime.beginTransform("scale")
-      : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
-    setStatus(started ? "Scale." : "No mesh selected.", started ? "" : "error");
+    beginRuntimeTransformFromShortcut("scale", "Scale.");
     return;
   }
   if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y") || keyMatches(event, "z")) && runtime && ["translate", "rotate", "scale"].includes(state.viewportMode)) {
@@ -4043,12 +5531,21 @@ function handleEditorKeyDown(event) {
     renderViewportControls();
     return;
   }
-  if ((event.code === "NumpadDecimal" || event.key === ".") && runtime && typeof runtime.focusSelected === "function") {
+  if (event.code === "NumpadDecimal" || event.key === ".") {
     consumeShortcutEvent(event);
-    runtime.focusSelected();
+    if (runtime) focusTerrainOrSelected();
   }
 }
 
 window.addEventListener("keydown", handleEditorKeyDown, true);
+window.addEventListener("pointermove", handleRuntimeTransformMoveEvent, true);
+window.addEventListener("pointerup", handleRuntimeTransformEndEvent, true);
+window.addEventListener("pointercancel", handleRuntimeTransformEndEvent, true);
+window.addEventListener("mousemove", handleRuntimeTransformMoveEvent, true);
+window.addEventListener("mouseup", handleRuntimeTransformEndEvent, true);
+window.addEventListener("pointerdown", handleTerrainPointerDown, true);
+window.addEventListener("pointermove", handleTerrainPointerMove, true);
+window.addEventListener("pointerup", handleTerrainPointerUp, true);
+window.addEventListener("pointercancel", handleTerrainPointerUp, true);
 
 boot();
