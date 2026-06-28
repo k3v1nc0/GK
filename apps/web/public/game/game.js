@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260627-transform10";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
@@ -37,6 +37,7 @@ async function loadWorld() {
         if (errors.length) showHudError(errors[0]);
       }
     });
+    window.__GK_GAME_RUNTIME = runtime;
   }
   runtime.setWorld(world);
   hideOverlay();

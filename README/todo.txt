@@ -1,9 +1,5 @@
-1. ik wil eigenlijk dat de asset dat word upgeload zijn naam behoud en perecies zoals je die upload in de map word geplaatst.
-2. er moet dan ook een thumbnail komen dit doet hij ook nog niet.
-3. duplicaten moet echt duplicaten word ook in de node-system als je een tweede kopieert o dan moet het niet nog een object worden maar een instance(levend exemplaar) worden en dan een nummer in de node die optelt bij elke instance, maar je moet de zelfde mesh 3D ook nog ergens anders kunnen gebruiken in de nodes en de wereld dus moet er ook nog een gewone kopie kunnen worden gebruikt.
-4. ook wil ik dat de Inspector gegevens in de node komen te staan. en de nodes in en uit geklapt kunnen worden. of als de node active is als enige zonder groeps selectie uit geklapt of is dit irritant?
-5. verwijderen moet meteen uit viewport verdwijnen, ja dit gebeurd niet meteen dat klopt dit duurt lang. en moet denk ik eerst als draft gesaved worden voor dat de mesh verdwijnt.
-6. namen van de nodes zelf moeten in de node zelf direct gewijzigd kunnen worden.
-7. de puntjes van de nodes out en inputs moeten op de rand en een tikje groter worden gemaakt, dat het  lijntje er goed invalt.
-8. Importeer asset moet altijd ingeklapt worden, tot dat ik een import wil doen dan klap ik deze uit.
-9. resize: horizontal, wil ik tussen tools, graphcolumn, viewpoortColumn, assetColumn.
+1. objecten/mesh die ik voor de twede keer in de viewpoort drop of van een andere dupliceer. en ik zet de nieuwe ergens anders neer en vergroot of draai. dan vliegt de mesh terug naar de eerst gedropte mesh. en kan ik daar na de tweede niet meer aanraken. de tweede blijft staan en kan ik niet meer aanraken.
+2. - Edge edge_4b78523e-0 overschrijdt een group-grens. Verbind via de group interface. dit krijg ik als ik een groep start en ik verbind 1 mesh, maak ik vast aan de output. daarna drop ik weer een mesh in de groep dan krijg ik deze melding. en kan ik nergens meer nodes verplaatsen ook niet in de root en niet in de groep meer. en blijft de error ook als ik de mesh vast maak aan de groep output.
+3. objecten moet je overheen kunnen lopen met een checkbox aan.
+4. Ontwikkeling van een bounded area scatter-systeem voor het procedureel verspreiden van geselecteerde meshes binnen een afgebakend vlak, inclusief parameters voor dichtheid, willekeurige objectselectie en min/max-grenzen voor zowel schaal als rotatie.
+5. twee camera nodes 1 voor de game en 1 voor de editor nu zijn ze gelijkt dit is irritant.

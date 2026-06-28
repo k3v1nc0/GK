@@ -17,6 +17,40 @@ body { font-family: "Segoe UI", Arial, Helvetica, sans-serif; background: #05080
   padding: 10px 18px; border-radius: 22px; font-size: 15px; font-weight: 600;
 }
 
+.perf-hud {
+  position: absolute;
+  width: min(260px, calc(100vw - 24px));
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(8, 12, 16, 0.8);
+  border: 1px solid rgba(120, 145, 165, 0.28);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+  color: #d7e3ed;
+  font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+  font-size: 12px;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+}
+.perf-hud--compact { padding: 8px 10px; }
+.perf-hud-title {
+  margin: 0 0 6px;
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #aab8c5;
+}
+.perf-hud-rows { display: flex; flex-direction: column; gap: 2px; }
+.perf-hud-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; white-space: nowrap; }
+.perf-hud-label { color: #aab8c5; flex: 0 0 auto; }
+.perf-hud-value { font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.perf-hud-value--neutral { color: #d7e3ed; }
+.perf-hud-value--ok { color: #86d29a; }
+.perf-hud-value--warn { color: #f0b35a; }
+.perf-hud-value--danger { color: #ef6b6b; }
+
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(4,7,11,0.82); }
 .overlay.hidden { display: none; }
 .overlayCard {

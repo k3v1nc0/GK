@@ -22,6 +22,8 @@ export const GAME_ACTIONS = [
 export const DATA_TYPE_COLORS = {
   world: "#7bd4ff",
   ground: "#7bd4ff",
+  terrain: "#7fcf68",
+  collision: "#f0b35a",
   camera: "#7bd4ff",
   light: "#7bd4ff",
   player: "#9be870",
@@ -245,7 +247,9 @@ export const NODE_TYPES = {
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       interactables: { label: "Interactables", dataType: "interactable", required: false, multiple: true },
       keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
-      ui: { label: "UI", dataType: "ui", required: false, multiple: true }
+      ui: { label: "UI", dataType: "ui", required: false, multiple: true },
+      terrain: { label: "Terrain Layers", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true }
     },
     outputs: {},
     fields: {
@@ -284,6 +288,154 @@ export const NODE_TYPES = {
       materialColor: { label: "Material color", type: "color", default: "#3f6b3f", required: false },
       textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
       textureRepeat: { label: "Texture repeat", type: "number", default: 8, min: 1, max: 512, step: 1, required: false }
+    }
+  },
+
+  terrain_layer: {
+    label: "Terrain Layer",
+    group: "Terrain",
+    accent: "#7fcf68",
+    description: "Basis materiaalgebieden zoals gras, zand, modder, steen, bloemen en dorpspleinen.",
+    inputs: {},
+    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
+    fields: {
+      layerId: { label: "Layer id", type: "text", default: "terrain_layer", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Village Grass", required: true, maxLength: 96 },
+      material: { label: "Material", type: "select", options: ["grass", "sand", "stone", "mud", "flowers", "village_square"], default: "grass", required: true },
+      priority: { label: "Priority", type: "number", default: 0, step: 1, required: true },
+      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
+      color: { label: "Color", type: "color", default: "#6faa4f", required: true },
+      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      shapeType: { label: "Shape type", type: "select", options: ["full", "polygon"], default: "full", required: true },
+      points: { label: "Points", type: "json", default: [], required: false }
+    }
+  },
+
+  path_layer: {
+    label: "Path Layer",
+    group: "Terrain",
+    accent: "#d6b36a",
+    description: "Zandpaden en stenen dorpspaden.",
+    inputs: {},
+    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
+    fields: {
+      pathId: { label: "Path id", type: "text", default: "path_main", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Main Path", required: true, maxLength: 96 },
+      pathType: { label: "Path type", type: "select", options: ["sand", "stone", "dirt"], default: "sand", required: true },
+      width: { label: "Width", type: "number", default: 3, min: 0.1, max: 10000, step: 0.1, required: true },
+      edgeBlend: { label: "Edge blend", type: "number", default: 0.8, min: 0, max: 1, step: 0.01, required: true },
+      yOffset: { label: "Y offset", type: "number", default: 0.01, min: -1000, max: 1000, step: 0.01, required: true },
+      slightlySunken: { label: "Slightly sunken", type: "boolean", default: true, required: false },
+      speedMultiplier: { label: "Speed multiplier", type: "number", default: 1, min: 0, max: 10, step: 0.1, required: true },
+      materialMode: { label: "Material mode", type: "select", options: ["preset", "texture"], default: "preset", required: true },
+      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      textureScale: { label: "Texture scale", type: "number", default: 4, min: 0.1, max: 200, step: 0.1, required: true },
+      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
+      points: { label: "Points", type: "json", default: [], required: false }
+    }
+  },
+
+  water_layer: {
+    label: "Water Layer",
+    group: "Terrain",
+    accent: "#2f9ecf",
+    description: "Rivier-, meer- en watergebieden.",
+    inputs: {},
+    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
+    fields: {
+      waterId: { label: "Water id", type: "text", default: "river_main", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Main River", required: true, maxLength: 96 },
+      waterType: { label: "Water type", type: "select", options: ["river", "lake", "pond"], default: "river", required: true },
+      width: { label: "Width", type: "number", default: 5, min: 0.1, max: 10000, step: 0.1, required: true },
+      y: { label: "Y", type: "number", default: -0.15, min: -1000, max: 1000, step: 0.01, required: true },
+      color: { label: "Color", type: "color", default: "#2f9ecf", required: true },
+      flowSpeed: { label: "Flow speed", type: "number", default: 0.2, min: -100, max: 100, step: 0.01, required: true },
+      blocksPlayer: { label: "Blocks player", type: "boolean", default: true, required: false },
+      materialMode: { label: "Material mode", type: "select", options: ["preset", "texture"], default: "preset", required: true },
+      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      textureScale: { label: "Texture scale", type: "number", default: 6, min: 0.1, max: 200, step: 0.1, required: true },
+      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
+      points: { label: "Points", type: "json", default: [], required: false }
+    }
+  },
+
+  surface_layer: {
+    label: "Surface Layer",
+    group: "Terrain",
+    accent: "#8fbf6a",
+    description: "Texture-first terrain surface voor paden, wegen, rivieren, modder, lava en sneeuw.",
+    inputs: {},
+    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
+    fields: {
+      surfaceId: { label: "Surface id", type: "text", default: "surface_main", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Surface", required: true, maxLength: 96 },
+      surfaceKind: { label: "Surface kind", type: "select", options: ["path", "road", "water", "river", "mud", "lava", "snow", "custom"], default: "path", required: true },
+      fallbackColor: { label: "Fallback color", type: "color", default: "#8a6f45", required: true },
+      width: { label: "Width", type: "number", default: 3, min: 0.1, max: 10000, step: 0.1, required: true },
+      yOffset: { label: "Y offset", type: "number", default: 0.02, min: -1000, max: 1000, step: 0.01, required: true },
+      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      textureScaleX: { label: "Texture scale X", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      textureScaleY: { label: "Texture scale Y", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      textureScale: { label: "Texture scale (legacy)", type: "number", default: 4, min: 0.1, max: 200, step: 0.1, required: true },
+      secondaryTextureAssetId: { label: "Secondary texture", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      secondaryTextureScaleX: { label: "Secondary scale X", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      secondaryTextureScaleY: { label: "Secondary scale Y", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      secondaryTextureScale: { label: "Secondary scale (legacy)", type: "number", default: 8, min: 0.1, max: 200, step: 0.1, required: true },
+      secondaryTextureStrength: { label: "Secondary strength", type: "number", default: 0.25, min: 0, max: 1, step: 0.01, required: true },
+      edgeFadeWidth: { label: "Edge fade width", type: "number", default: 0.8, min: 0, max: 20, step: 0.05, required: true },
+      edgeFadeNoiseAssetId: { label: "Edge noise asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      edgeFadeNoiseScaleX: { label: "Edge noise scale X", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      edgeFadeNoiseScaleY: { label: "Edge noise scale Y", type: "number", default: 1, min: -1000, max: 1000, step: 0.01, required: true },
+      edgeFadeNoiseScale: { label: "Edge noise scale (legacy)", type: "number", default: 5, min: 0.1, max: 200, step: 0.1, required: true },
+      edgeFadeNoiseStrength: { label: "Edge noise strength", type: "number", default: 0.35, min: 0, max: 1, step: 0.01, required: true },
+      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
+      animated: { label: "Animated", type: "boolean", default: false, required: false },
+      flowSpeed: { label: "Flow speed", type: "number", default: 0, min: -100, max: 100, step: 0.01, required: true },
+      flowDirection: { label: "Flow direction", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
+      flowTextureLayer: { label: "Flow texture layer", type: "select", options: ["main", "secondary", "both"], default: "main", required: true },
+      blocksPlayer: { label: "Blocks player", type: "boolean", default: false, required: false },
+      points: { label: "Points", type: "json", default: [], required: false }
+    }
+  },
+
+  blocker_area: {
+    label: "Blocker Area",
+    group: "Collision",
+    accent: "#f0b35a",
+    description: "Berg, gat, muurgebied, diepe rand of verboden gebied.",
+    inputs: {},
+    outputs: { collision: { label: "Collision", dataType: "collision" } },
+    fields: {
+      blockerId: { label: "Blocker id", type: "text", default: "mountain_blocker_01", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Mountain Blocker", required: true, maxLength: 96 },
+      shapeType: { label: "Shape type", type: "select", options: ["polygon", "box", "circle"], default: "polygon", required: true },
+      x: { label: "X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      width: { label: "Width", type: "number", default: 4, min: 0.01, max: 10000, step: 0.01, required: true },
+      depth: { label: "Depth", type: "number", default: 4, min: 0.01, max: 10000, step: 0.01, required: true },
+      radius: { label: "Radius", type: "number", default: 2, min: 0.01, max: 10000, step: 0.01, required: true },
+      points: { label: "Points", type: "json", default: [], required: false },
+      reason: { label: "Reason", type: "select", options: ["mountain", "gap", "wall", "cliff", "forbidden"], default: "mountain", required: true }
+    }
+  },
+
+  walkable_surface: {
+    label: "Walkable Surface",
+    group: "Collision",
+    accent: "#f0b35a",
+    description: "Bruggen, platte rotsen, houten vlonders en platforms.",
+    inputs: {},
+    outputs: { collision: { label: "Collision", dataType: "collision" } },
+    fields: {
+      surfaceId: { label: "Surface id", type: "text", default: "bridge_walk_01", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Bridge Walk Surface", required: true, maxLength: 96 },
+      x: { label: "X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0.35, min: -10000, max: 10000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      width: { label: "Width", type: "number", default: 6, min: 0.01, max: 10000, step: 0.01, required: true },
+      depth: { label: "Depth", type: "number", default: 2.5, min: 0.01, max: 10000, step: 0.01, required: true },
+      rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      priority: { label: "Priority", type: "number", default: 10, step: 1, required: true }
     }
   },
 
@@ -452,6 +604,53 @@ export const NODE_TYPES = {
       text: { label: "Text", type: "text", default: "Label", required: true, maxLength: 200 },
       fontSize: { label: "Font size", type: "number", default: 18, min: 8, max: 96, step: 1, required: true },
       color: { label: "Color", type: "color", default: "#ffffff", required: true }
+    }
+  },
+
+  debug_performance_hud: {
+    label: "Performance HUD",
+    group: "UI",
+    accent: "#e0b15a",
+    description: "A diagnostic HUD that reports runtime cost for the published game world.",
+    inputs: {},
+    outputs: { ui: { label: "UI", dataType: "ui" } },
+    fields: {
+      hudId: { label: "HUD id", type: "text", default: "perf_hud", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Performance HUD", required: true, maxLength: 96 },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      anchor: { label: "Anchor", type: "select", options: ["top-left", "top-right", "bottom-left", "bottom-right"], default: "top-right", required: true },
+      compact: { label: "Compact layout", type: "boolean", default: true, required: true },
+      updateIntervalMs: { label: "Update interval (ms)", type: "number", default: 500, min: 250, max: 5000, step: 50, required: true },
+      showFps: { label: "Show FPS", type: "boolean", default: true, required: true },
+      showFrameMs: { label: "Show frame ms", type: "boolean", default: true, required: true },
+      showRenderer: { label: "Show renderer", type: "boolean", default: true, required: true },
+      showDrawCalls: { label: "Show draw calls", type: "boolean", default: true, required: true },
+      showTriangles: { label: "Show triangles", type: "boolean", default: true, required: true },
+      showGeometries: { label: "Show geometries", type: "boolean", default: true, required: true },
+      showTextures: { label: "Show textures", type: "boolean", default: true, required: true },
+      showSceneObjects: { label: "Show scene objects", type: "boolean", default: true, required: true },
+      showEntities: { label: "Show entities", type: "boolean", default: true, required: true },
+      showTerrainVisuals: { label: "Show terrain visuals", type: "boolean", default: true, required: true },
+      showCollisionShapes: { label: "Show collision shapes", type: "boolean", default: true, required: true },
+      showWorldSize: { label: "Show world size", type: "boolean", default: false, required: true },
+      fpsTarget: { label: "FPS target", type: "number", default: 60, min: 1, max: 240, step: 1, required: true },
+      fpsWarn: { label: "FPS warning", type: "number", default: 45, min: 1, max: 240, step: 1, required: true },
+      fpsDanger: { label: "FPS danger", type: "number", default: 30, min: 1, max: 240, step: 1, required: true },
+      frameMsTarget: { label: "Frame ms target", type: "number", default: 16.7, min: 1, max: 100, step: 0.1, required: true },
+      frameMsWarn: { label: "Frame ms warning", type: "number", default: 22, min: 1, max: 100, step: 0.1, required: true },
+      frameMsDanger: { label: "Frame ms danger", type: "number", default: 33, min: 1, max: 100, step: 0.1, required: true },
+      drawCallsWarn: { label: "Draw calls warning", type: "number", default: 80, min: 1, max: 10000, step: 1, required: true },
+      drawCallsDanger: { label: "Draw calls danger", type: "number", default: 140, min: 1, max: 10000, step: 1, required: true },
+      trianglesWarn: { label: "Triangles warning", type: "number", default: 100000, min: 1, max: 100000000, step: 1000, required: true },
+      trianglesDanger: { label: "Triangles danger", type: "number", default: 250000, min: 1, max: 100000000, step: 1000, required: true },
+      meshesWarn: { label: "Meshes warning", type: "number", default: 50, min: 1, max: 10000, step: 1, required: true },
+      meshesDanger: { label: "Meshes danger", type: "number", default: 100, min: 1, max: 10000, step: 1, required: true },
+      texturesWarn: { label: "Textures warning", type: "number", default: 24, min: 1, max: 10000, step: 1, required: true },
+      texturesDanger: { label: "Textures danger", type: "number", default: 40, min: 1, max: 10000, step: 1, required: true },
+      terrainVisualsWarn: { label: "Terrain visuals warning", type: "number", default: 40, min: 1, max: 10000, step: 1, required: true },
+      terrainVisualsDanger: { label: "Terrain visuals danger", type: "number", default: 100, min: 1, max: 10000, step: 1, required: true },
+      collisionShapesWarn: { label: "Collision shapes warning", type: "number", default: 50, min: 1, max: 10000, step: 1, required: true },
+      collisionShapesDanger: { label: "Collision shapes danger", type: "number", default: 150, min: 1, max: 10000, step: 1, required: true }
     }
   },
 

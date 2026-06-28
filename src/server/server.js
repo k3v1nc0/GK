@@ -182,7 +182,9 @@ function serveStatic(req, res, url) {
     return serveFile(res, safePath(vendorRoot, pathname.slice("/vendor/three/".length)), "public, max-age=3600");
   }
   if (pathname.endsWith("/")) pathname += "index.html";
-  return serveFile(res, safePath(publicRoot, pathname.slice(1)), path.extname(pathname) === ".html" ? "no-store" : "public, max-age=300");
+  const ext = path.extname(pathname);
+  const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-store" : "public, max-age=300";
+  return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache);
 }
 
 async function handleApi(req, res, url) {

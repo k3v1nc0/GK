@@ -211,6 +211,39 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function nodeLabel(node) {
+  return String(node?.values?.label || node?.title || node?.id || node?.type || "Node");
+}
+
+function pointList(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizePoint(point) {
+  return {
+    x: numberOrNull(point?.x),
+    z: numberOrNull(point?.z)
+  };
+}
+
+function normalizePointList(value) {
+  return pointList(value).map(function (point) {
+    return normalizePoint(point);
+  });
+}
+
+function validatePointList(errors, node, minPoints, messageSuffix = "heeft een ongeldige points-array.") {
+  const points = node?.values?.points;
+  if (!Array.isArray(points)) {
+    errors.push(nodeLabel(node) + " " + messageSuffix);
+    return [];
+  }
+  if (points.length < minPoints) {
+    errors.push(nodeLabel(node) + " heeft minstens " + minPoints + " punten nodig.");
+  }
+  return points;
+}
+
 function requireAsset(assetService, id, type, label, errors) {
   if (!id) return null;
   const asset = assetService.get(id);
@@ -222,6 +255,220 @@ function requireAsset(assetService, id, type, label, errors) {
     errors.push(label + " verwacht asset type " + type + " maar kreeg " + asset.assetType + ".");
   }
   return asset;
+}
+
+function emptyTerrainReadModel() {
+  return { layers: [], paths: [], waters: [], surfaces: [] };
+}
+
+function emptyCollisionReadModel() {
+  return { blockers: [], walkableSurfaces: [] };
+}
+
+function buildTerrainLayerReadModel(node) {
+  return {
+    id: node.values.layerId,
+    label: node.values.label,
+    material: node.values.material,
+    priority: numberOrNull(node.values.priority),
+    opacity: numberOrNull(node.values.opacity),
+    color: node.values.color,
+    textureAssetId: node.values.textureAssetId || null,
+    shapeType: node.values.shapeType,
+    points: normalizePointList(node.values.points)
+  };
+}
+
+function buildPathLayerReadModel(node) {
+  return {
+    id: node.values.pathId,
+    label: node.values.label,
+    pathType: node.values.pathType,
+    materialMode: node.values.materialMode || "preset",
+    textureAssetId: node.values.textureAssetId || null,
+    textureScale: numberOrNull(node.values.textureScale) ?? 4,
+    opacity: numberOrNull(node.values.opacity) ?? 1,
+    width: numberOrNull(node.values.width),
+    edgeBlend: numberOrNull(node.values.edgeBlend),
+    yOffset: numberOrNull(node.values.yOffset),
+    slightlySunken: node.values.slightlySunken !== false,
+    speedMultiplier: numberOrNull(node.values.speedMultiplier),
+    points: normalizePointList(node.values.points)
+  };
+}
+
+function buildWaterLayerReadModel(node) {
+  return {
+    id: node.values.waterId,
+    label: node.values.label,
+    waterType: node.values.waterType,
+    materialMode: node.values.materialMode || "preset",
+    textureAssetId: node.values.textureAssetId || null,
+    textureScale: numberOrNull(node.values.textureScale) ?? 6,
+    opacity: numberOrNull(node.values.opacity) ?? 1,
+    width: numberOrNull(node.values.width),
+    y: numberOrNull(node.values.y),
+    color: node.values.color,
+    flowSpeed: numberOrNull(node.values.flowSpeed),
+    blocksPlayer: node.values.blocksPlayer !== false,
+    points: normalizePointList(node.values.points)
+  };
+}
+
+function scalePairOrLegacy(node, primaryKeyX, primaryKeyY, legacyKey, legacyDefault) {
+  const legacy = numberOrNull(node.values[legacyKey]);
+  const fallback = legacy !== null ? legacy : legacyDefault;
+  return {
+    x: numberOrNull(node.values[primaryKeyX]) ?? fallback,
+    y: numberOrNull(node.values[primaryKeyY]) ?? fallback
+  };
+}
+
+function buildSurfaceLayerReadModel(node) {
+  const mainScale = scalePairOrLegacy(node, "textureScaleX", "textureScaleY", "textureScale", 1);
+  const secondaryScale = scalePairOrLegacy(node, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale", 1);
+  const edgeNoiseScale = scalePairOrLegacy(node, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale", 1);
+  return {
+    id: node.values.surfaceId,
+    label: node.values.label,
+    surfaceKind: node.values.surfaceKind,
+    fallbackColor: node.values.fallbackColor || "#8a6f45",
+    width: numberOrNull(node.values.width),
+    yOffset: numberOrNull(node.values.yOffset),
+    textureAssetId: node.values.textureAssetId || null,
+    textureScale: numberOrNull(node.values.textureScale) ?? 4,
+    textureScaleX: mainScale.x,
+    textureScaleY: mainScale.y,
+    secondaryTextureAssetId: node.values.secondaryTextureAssetId || null,
+    secondaryTextureScale: numberOrNull(node.values.secondaryTextureScale) ?? 8,
+    secondaryTextureScaleX: secondaryScale.x,
+    secondaryTextureScaleY: secondaryScale.y,
+    secondaryTextureStrength: numberOrNull(node.values.secondaryTextureStrength) ?? 0.25,
+    edgeFadeWidth: numberOrNull(node.values.edgeFadeWidth) ?? 0.8,
+    edgeFadeNoiseAssetId: node.values.edgeFadeNoiseAssetId || null,
+    edgeFadeNoiseScale: numberOrNull(node.values.edgeFadeNoiseScale) ?? 5,
+    edgeFadeNoiseScaleX: edgeNoiseScale.x,
+    edgeFadeNoiseScaleY: edgeNoiseScale.y,
+    edgeFadeNoiseStrength: numberOrNull(node.values.edgeFadeNoiseStrength) ?? 0.35,
+    opacity: numberOrNull(node.values.opacity) ?? 1,
+    animated: node.values.animated === true,
+    flowSpeed: numberOrNull(node.values.flowSpeed) ?? 0,
+    flowDirection: numberOrNull(node.values.flowDirection) ?? 0,
+    flowTextureLayer: node.values.flowTextureLayer || "main",
+    blocksPlayer: node.values.blocksPlayer === true,
+    points: normalizePointList(node.values.points)
+  };
+}
+
+function buildBlockerAreaReadModel(node) {
+  return {
+    id: node.values.blockerId,
+    label: node.values.label,
+    shapeType: node.values.shapeType,
+    x: numberOrNull(node.values.x),
+    z: numberOrNull(node.values.z),
+    width: numberOrNull(node.values.width),
+    depth: numberOrNull(node.values.depth),
+    radius: numberOrNull(node.values.radius),
+    points: normalizePointList(node.values.points),
+    reason: node.values.reason
+  };
+}
+
+function buildWalkableSurfaceReadModel(node) {
+  return {
+    id: node.values.surfaceId,
+    label: node.values.label,
+    x: numberOrNull(node.values.x),
+    y: numberOrNull(node.values.y),
+    z: numberOrNull(node.values.z),
+    width: numberOrNull(node.values.width),
+    depth: numberOrNull(node.values.depth),
+    rotationY: numberOrNull(node.values.rotationY),
+    priority: numberOrNull(node.values.priority)
+  };
+}
+
+function buildHudTextReadModel(node) {
+  return {
+    id: node.values.moduleId,
+    type: "hud_text",
+    anchor: node.values.anchor,
+    text: node.values.text,
+    fontSize: numberOrNull(node.values.fontSize),
+    color: node.values.color
+  };
+}
+
+function buildPerformanceHudReadModel(node) {
+  return {
+    id: node.values.hudId,
+    type: "debug_performance_hud",
+    label: node.values.label,
+    enabled: node.values.enabled !== false,
+    anchor: node.values.anchor,
+    compact: node.values.compact !== false,
+    updateIntervalMs: numberOrNull(node.values.updateIntervalMs),
+    metrics: {
+      showFps: node.values.showFps !== false,
+      showFrameMs: node.values.showFrameMs !== false,
+      showRenderer: node.values.showRenderer !== false,
+      showDrawCalls: node.values.showDrawCalls !== false,
+      showTriangles: node.values.showTriangles !== false,
+      showGeometries: node.values.showGeometries !== false,
+      showTextures: node.values.showTextures !== false,
+      showSceneObjects: node.values.showSceneObjects !== false,
+      showEntities: node.values.showEntities !== false,
+      showTerrainVisuals: node.values.showTerrainVisuals !== false,
+      showCollisionShapes: node.values.showCollisionShapes !== false,
+      showWorldSize: node.values.showWorldSize === true
+    },
+    thresholds: {
+      fpsTarget: numberOrNull(node.values.fpsTarget),
+      fpsWarn: numberOrNull(node.values.fpsWarn),
+      fpsDanger: numberOrNull(node.values.fpsDanger),
+      frameMsTarget: numberOrNull(node.values.frameMsTarget),
+      frameMsWarn: numberOrNull(node.values.frameMsWarn),
+      frameMsDanger: numberOrNull(node.values.frameMsDanger),
+      drawCallsWarn: numberOrNull(node.values.drawCallsWarn),
+      drawCallsDanger: numberOrNull(node.values.drawCallsDanger),
+      trianglesWarn: numberOrNull(node.values.trianglesWarn),
+      trianglesDanger: numberOrNull(node.values.trianglesDanger),
+      meshesWarn: numberOrNull(node.values.meshesWarn),
+      meshesDanger: numberOrNull(node.values.meshesDanger),
+      texturesWarn: numberOrNull(node.values.texturesWarn),
+      texturesDanger: numberOrNull(node.values.texturesDanger),
+      terrainVisualsWarn: numberOrNull(node.values.terrainVisualsWarn),
+      terrainVisualsDanger: numberOrNull(node.values.terrainVisualsDanger),
+      collisionShapesWarn: numberOrNull(node.values.collisionShapesWarn),
+      collisionShapesDanger: numberOrNull(node.values.collisionShapesDanger)
+    }
+  };
+}
+
+function buildUiReadModel(node) {
+  if (node.type === "debug_performance_hud") return buildPerformanceHudReadModel(node);
+  return buildHudTextReadModel(node);
+}
+
+function collectTerrainReadModel(nodes) {
+  const terrain = emptyTerrainReadModel();
+  for (const node of nodes || []) {
+    if (node.type === "terrain_layer") terrain.layers.push(buildTerrainLayerReadModel(node));
+    else if (node.type === "path_layer") terrain.paths.push(buildPathLayerReadModel(node));
+    else if (node.type === "water_layer") terrain.waters.push(buildWaterLayerReadModel(node));
+    else if (node.type === "surface_layer") terrain.surfaces.push(buildSurfaceLayerReadModel(node));
+  }
+  return terrain;
+}
+
+function collectCollisionReadModel(nodes) {
+  const collision = emptyCollisionReadModel();
+  for (const node of nodes || []) {
+    if (node.type === "blocker_area") collision.blockers.push(buildBlockerAreaReadModel(node));
+    else if (node.type === "walkable_surface") collision.walkableSurfaces.push(buildWalkableSurfaceReadModel(node));
+  }
+  return collision;
 }
 
 function validateParentGraph(graph, nodeMap, errors) {
@@ -368,13 +615,65 @@ export function validateGraphForPublish(graph, services = {}) {
     if (!boundActions.has("interact")) {
       warnings.push("Geen interact-keybind. Interactie werkt alleen via klikken op het object.");
     }
+
+    const terrainNodes = collectResolutionError(errors, function () {
+      return incomingNodes(graph, output, "terrain", nodeMap);
+    }) || [];
+    for (const node of terrainNodes) {
+      if (node.type === "path_layer") {
+        validatePointList(errors, node, 2);
+        if (node.values.materialMode === "texture" && !node.values.textureAssetId) {
+          warnings.push("Path layer '" + (node.values.label || node.id) + "' staat op texture mode maar heeft geen Texture asset gekozen.");
+        }
+        if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Path layer '" + (node.values.label || node.id) + "' texture", errors);
+      } else if (node.type === "water_layer") {
+        if (node.values.waterType === "river") validatePointList(errors, node, 2);
+        if (node.values.materialMode === "texture" && !node.values.textureAssetId) {
+          warnings.push("Water layer '" + (node.values.label || node.id) + "' staat op texture mode maar heeft geen Texture asset gekozen.");
+        }
+        if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Water layer '" + (node.values.label || node.id) + "' texture", errors);
+      } else if (node.type === "surface_layer") {
+        validatePointList(errors, node, 2);
+        if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Surface layer '" + (node.values.label || node.id) + "' texture", errors);
+        if (node.values.secondaryTextureAssetId) requireAsset(services.assetService, node.values.secondaryTextureAssetId, ["texture", "image"], "Surface layer '" + (node.values.label || node.id) + "' secondary texture", errors);
+        if (node.values.edgeFadeNoiseAssetId) requireAsset(services.assetService, node.values.edgeFadeNoiseAssetId, ["texture", "image"], "Surface layer '" + (node.values.label || node.id) + "' edge noise", errors);
+        if (!node.values.textureAssetId) {
+          warnings.push("Surface layer '" + (node.values.label || node.id) + "' heeft geen Texture asset gekozen.");
+        }
+        if ((node.values.surfaceKind === "water" || node.values.surfaceKind === "river") && !node.values.animated) {
+          warnings.push("Surface layer '" + (node.values.label || node.id) + "' is water/river maar heeft animated niet aan.");
+        }
+      } else if (node.type === "terrain_layer" && node.values.shapeType === "polygon") {
+        validatePointList(errors, node, 3);
+      }
+    }
+
+    const collisionNodes = collectResolutionError(errors, function () {
+      return incomingNodes(graph, output, "collision", nodeMap);
+    }) || [];
+    for (const node of collisionNodes) {
+      if (node.type === "blocker_area" && node.values.shapeType === "polygon") {
+        validatePointList(errors, node, 3);
+      }
+    }
   }
   return { ok: errors.length === 0, errors, warnings };
 }
 
 export function buildWorldFromGraph(graph, services = {}) {
   const outputNode = graph.nodes.find(function (node) { return node.type === "game_output"; });
-  const empty = { schemaVersion: graph.schemaVersion, source: "editor-node-graph", assets: [], entities: [], lights: [], interactables: [], keybinds: [], ui: [] };
+  const empty = {
+    schemaVersion: graph.schemaVersion,
+    source: "editor-node-graph",
+    assets: [],
+    entities: [],
+    lights: [],
+    interactables: [],
+    keybinds: [],
+    ui: [],
+    terrain: emptyTerrainReadModel(),
+    collision: emptyCollisionReadModel()
+  };
   if (!outputNode) return empty;
   const nodeMap = nodeMapForGraph(graph);
   const worldNode = firstIncomingNode(graph, outputNode, "world", nodeMap);
@@ -387,9 +686,18 @@ export function buildWorldFromGraph(graph, services = {}) {
   const interactableNodes = incomingNodes(graph, outputNode, "interactables", nodeMap);
   const keybindNodes = incomingNodes(graph, outputNode, "keybinds", nodeMap);
   const uiNodes = incomingNodes(graph, outputNode, "ui", nodeMap);
+  const terrainNodes = incomingNodes(graph, outputNode, "terrain", nodeMap);
+  const collisionNodes = incomingNodes(graph, outputNode, "collision", nodeMap);
 
   const assetIds = new Set();
   if (groundNode?.values.textureAssetId) assetIds.add(groundNode.values.textureAssetId);
+  for (const node of terrainNodes) {
+    if (node.values.textureAssetId) assetIds.add(node.values.textureAssetId);
+    if (node.type === "surface_layer") {
+      if (node.values.secondaryTextureAssetId) assetIds.add(node.values.secondaryTextureAssetId);
+      if (node.values.edgeFadeNoiseAssetId) assetIds.add(node.values.edgeFadeNoiseAssetId);
+    }
+  }
   if (playerNode?.values.modelAssetId) assetIds.add(playerNode.values.modelAssetId);
   for (const node of entityNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
   for (const node of interactableNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
@@ -492,9 +800,9 @@ export function buildWorldFromGraph(graph, services = {}) {
     }).map(function (node) {
       return { id: node.values.bindingId, action: node.values.action, keyCode: node.values.keyCode };
     }),
-    ui: uiNodes.map(function (node) {
-      return { id: node.values.moduleId, type: "hud_text", anchor: node.values.anchor, text: node.values.text, fontSize: numberOrNull(node.values.fontSize), color: node.values.color };
-    }),
+    ui: uiNodes.map(buildUiReadModel),
+    terrain: collectTerrainReadModel(terrainNodes),
+    collision: collectCollisionReadModel(collisionNodes),
     assets
   };
 }
