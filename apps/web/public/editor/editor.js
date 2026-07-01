@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading1";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-chunkloading1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading71";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-chunkloading71";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -3253,6 +3253,7 @@ async function boot() {
     },
     onLoadErrors: renderViewportErrors
   });
+  window.__GK_EDITOR_RUNTIME = runtime;
   state.viewportHelpOpen = false;
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
   await reloadGraph();

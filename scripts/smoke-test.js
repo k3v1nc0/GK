@@ -7,7 +7,7 @@ import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { buildWalkabilityIndex, buildSurfaceStripGeometry, clearWalkabilityIndex, createWalkabilityIndex, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointBlockedByWater, isPointOnWalkableSurface, resolveMovement, resolveShadowPolicy } from "../apps/web/public/shared/world-runtime.js";
+import { buildChunkWindow, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, clearWalkabilityIndex, createWalkabilityIndex, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointBlockedByWater, isPointOnWalkableSurface, resolveChunkPolicy, resolveMovement, resolveShadowPolicy } from "../apps/web/public/shared/world-runtime.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -635,6 +635,88 @@ function runWalkabilityChecks() {
   assert(clearedMove.x === 0 && clearedMove.z === 4, "clearWalkabilityIndex wist de actieve collision index");
 }
 
+function runChunkLoadingProofChecks() {
+  const proofWorld = {
+    chunkLoading: {
+      editor: {
+        id: "editor_chunks_node",
+        type: "editor",
+        enabled: true,
+        chunkProfileId: "editor_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        editorViewRadiusChunks: 2,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 2,
+        maxLoadedChunks: 49,
+        keepSelectedChunkLoaded: true,
+        showChunkGrid: true,
+        showChunkLabels: true,
+        debugOverlay: true
+      },
+      game: {
+        id: "game_chunks_node",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        cameraOnly: true,
+        gameViewRadiusChunks: 1,
+        fixedCameraPaddingTiles: 10,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 9,
+        strictUnloadOutsideCamera: true,
+        loadBudgetPerFrame: 2,
+        debugOverlay: true
+      }
+    }
+  };
+
+  const editorPolicy = resolveChunkPolicy(proofWorld, "editor");
+  const gamePolicy = resolveChunkPolicy(proofWorld, "game");
+  assert(editorPolicy.source === "editor" && editorPolicy.enabled === true, "resolveChunkPolicy leest editor chunk policy");
+  assert(gamePolicy.source === "game" && gamePolicy.enabled === true, "resolveChunkPolicy leest game chunk policy");
+  assert(editorPolicy.showChunkGrid === true && editorPolicy.showChunkLabels === true && editorPolicy.debugOverlay === true, "editor overlay-flags worden gelezen");
+  assert(gamePolicy.debugOverlay === true && gamePolicy.showChunkGrid === true && gamePolicy.showChunkLabels === false, "game overlay gebruikt game policy en grid default");
+
+  const negativeCoord = chunkCoordForPosition(-1, -1, editorPolicy);
+  assert(negativeCoord.x === -1 && negativeCoord.z === -1, "chunkCoordForPosition gebruikt floor voor negatieve coordinaten");
+  const originCoord = chunkCoordForPosition(0, 0, editorPolicy);
+  assert(originCoord.x === 0 && originCoord.z === 0, "chunkCoordForPosition houdt 0,0 in center chunk");
+  assert(chunkKey(chunkCoordForPosition(150, -1, editorPolicy)) === "1,-1", "chunkKey volgt de berekende chunkcoord");
+
+  const unclippedGamePolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: Object.assign({}, proofWorld.chunkLoading.game, { maxLoadedChunks: 25 })
+    }
+  }, "game");
+  const gameWindow = buildChunkWindow({ x: 0, z: 0 }, unclippedGamePolicy, "game");
+  assert(gameWindow.activeChunks.length === 9, "active radius 1 levert 9 active chunks");
+  assert(gameWindow.preloadChunks.length === 16, "preload margin vergroot het chunk window");
+  assert(gameWindow.loadedChunks.length === 25, "loaded window bevat active plus preload chunks zonder clipping");
+
+  const clippedGameWindow = buildChunkWindow({ x: 0, z: 0 }, gamePolicy, "game");
+  assert(clippedGameWindow.loadedChunks.length === 9, "maxLoadedChunks clipt het game window");
+  assert(clippedGameWindow.clippedByMaxLoadedChunks === true, "buildChunkWindow markeert clipping door maxLoadedChunks");
+
+  const clippedWindowAgain = buildChunkWindow({ x: 0, z: 0 }, gamePolicy, "game");
+  assert(clippedGameWindow.loadedChunkKeys.join("|") === clippedWindowAgain.loadedChunkKeys.join("|"), "maxLoadedChunks clipping blijft deterministisch");
+
+  const editorWindow = buildChunkWindow({ x: 0, z: 0 }, editorPolicy, "editor");
+  assert(editorWindow.loadedChunks.length > clippedGameWindow.loadedChunks.length, "editor policy laadt meer chunks dan game policy");
+
+  const disabledGamePolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: Object.assign({}, proofWorld.chunkLoading.game, { enabled: false })
+    }
+  }, "game");
+  assert(disabledGamePolicy.enabled === false, "enabled=false schakelt runtime chunk proof uit");
+}
+
 async function main() {
   let child = null;
   let tmpDir = "";
@@ -649,6 +731,7 @@ async function main() {
     runSurfaceGeometryChecks();
     runShadowPolicyChecks();
     runWalkabilityChecks();
+    runChunkLoadingProofChecks();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
       env: Object.assign({}, process.env, { PORT: PORT, DATABASE_PATH: dbPath, ADMIN_PASSWORD: ADMIN_PASSWORD, ADMIN_USERNAME: "kevin" }),
@@ -1253,6 +1336,13 @@ async function main() {
     assert(after.json.chunkLoading.editor.type === "editor" && after.json.chunkLoading.game.type === "game", "game world scheidt editor en game chunk loading");
     assert(after.json.chunkLoading.editor.chunkProfileId === "editor_chunks", "editor chunk profile is gepubliceerd");
     assert(after.json.chunkLoading.game.chunkProfileId === "game_chunks", "game chunk profile is gepubliceerd");
+    const publishedEditorChunkPolicy = resolveChunkPolicy(after.json, "editor");
+    const publishedGameChunkPolicy = resolveChunkPolicy(after.json, "game");
+    assert(publishedEditorChunkPolicy.source === "editor", "runtime helper kiest de editor chunk policy uit published world");
+    assert(publishedGameChunkPolicy.source === "game", "runtime helper kiest de game chunk policy uit published world");
+    const publishedEditorWindow = buildChunkWindow({ x: 0, z: 0 }, publishedEditorChunkPolicy, "editor");
+    const publishedGameWindow = buildChunkWindow({ x: 0, z: 0 }, publishedGameChunkPolicy, "game");
+    assert(publishedEditorWindow.loadedChunks.length > publishedGameWindow.loadedChunks.length, "published editor policy blijft ruimer dan game policy");
     const editorShadowPolicy = resolveShadowPolicy(after.json, "editor");
     const gameShadowPolicy = resolveShadowPolicy(after.json, "game");
     assert(editorShadowPolicy.enabled === false, "editor shadow policy volgt editor toggle");
