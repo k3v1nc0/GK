@@ -977,6 +977,12 @@ async function main() {
     })).graph;
     const ghostPerfHudNode = findNode(graph, function (n) { return n.type === "debug_performance_hud" && n.values.hudId === "perf_hud_ghost"; }, "ongekoppelde performance hud aangemaakt");
 
+    graph = (await createNode("editor_chunk_loading", {})).graph;
+    const editorChunkLoadingNode = findNode(graph, function (n) { return n.type === "editor_chunk_loading"; }, "editor chunk loading aangemaakt");
+
+    graph = (await createNode("game_chunk_loading", {})).graph;
+    const gameChunkLoadingNode = findNode(graph, function (n) { return n.type === "game_chunk_loading"; }, "game chunk loading aangemaakt");
+
     graph = await connect(graph, keybindDirect.id, "keybind", gameOutputNode.id, "keybinds");
     graph = await connect(graph, keybindGroup1.id, "keybind", groupNode.id, "keybinds_in");
 
@@ -1159,6 +1165,8 @@ async function main() {
     graph = await connect(graph, hudTextNode.id, "ui", gameOutputNode.id, "ui");
     graph = await connect(graph, perfHudNode.id, "ui", gameOutputNode.id, "ui");
     graph = await connect(graph, disabledPerfHudNode.id, "ui", gameOutputNode.id, "ui");
+    graph = await connect(graph, editorChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
+    graph = await connect(graph, gameChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
 
     const validate = await call("GET", "/api/editor/validate");
     if (!validate.json.ok) console.error("VALIDATE ERRORS", validate.json.errors);
@@ -1182,6 +1190,13 @@ async function main() {
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game && draftWorld.json.world.performance.game.shadowsEnabled === true, "draft world publiceert game shadows");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.fogEnabled === false, "draft world kan fog in editor uitschakelen");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.shadowsEnabled === false, "draft world publiceert editor shadows");
+    assert(draftWorld.json.chunkLoading && draftWorld.json.chunkLoading.editor && draftWorld.json.chunkLoading.game, "draft world publiceert chunkLoading read-model");
+    assert(draftWorld.json.chunkLoading.editor.type === "editor" && draftWorld.json.chunkLoading.game.type === "game", "draft world scheidt editor en game chunk loading");
+    assert(draftWorld.json.chunkLoading.editor.chunkWidth === 100, "editor chunk width is 100");
+    assert(draftWorld.json.chunkLoading.game.chunkWidth === 100, "game chunk width is 100");
+    assert(draftWorld.json.chunkLoading.editor.editorViewRadiusChunks > draftWorld.json.chunkLoading.game.gameViewRadiusChunks, "editor radius is groter dan game radius");
+    assert(draftWorld.json.chunkLoading.game.cameraOnly === true, "game chunkLoading cameraOnly staat aan");
+    assert(draftWorld.json.chunkLoading.game.strictUnloadOutsideCamera === true, "game chunkLoading strict unload staat aan");
     assert(draftWorld.json.collision && Array.isArray(draftWorld.json.collision.walkableSurfaces) && Array.isArray(draftWorld.json.collision.walkableSurfaces[0].points) && draftWorld.json.collision.walkableSurfaces[0].points.length === walkableSurfacePoints.length, "draft world publiceert walkable polygon points");
     assertNear(draftWorld.json.collision.walkableSurfaces[0].points[0].y, 0.425, 0.0001, "draft world bewaart walkable point hoogte");
     assert(Array.isArray(draftWorld.json.scatterAreas) && draftWorld.json.scatterAreas.length === 1, "draft world publiceert één scatter area");
@@ -1234,6 +1249,10 @@ async function main() {
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game && after.json.world.performance.game.shadowsEnabled === true, "game world publiceert game shadows");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.fogEnabled === false, "game world behoudt editor fog toggle in draft data");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.shadowsEnabled === false, "game world behoudt editor shadows in draft data");
+    assert(after.json.chunkLoading && after.json.chunkLoading.editor && after.json.chunkLoading.game, "game world publiceert chunkLoading");
+    assert(after.json.chunkLoading.editor.type === "editor" && after.json.chunkLoading.game.type === "game", "game world scheidt editor en game chunk loading");
+    assert(after.json.chunkLoading.editor.chunkProfileId === "editor_chunks", "editor chunk profile is gepubliceerd");
+    assert(after.json.chunkLoading.game.chunkProfileId === "game_chunks", "game chunk profile is gepubliceerd");
     const editorShadowPolicy = resolveShadowPolicy(after.json, "editor");
     const gameShadowPolicy = resolveShadowPolicy(after.json, "game");
     assert(editorShadowPolicy.enabled === false, "editor shadow policy volgt editor toggle");
@@ -1356,6 +1375,62 @@ async function main() {
     const publishedDisabledPerformanceHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "perf_hud_disabled"; }) : null;
     assert(publishedDisabledPerformanceHud && publishedDisabledPerformanceHud.type === "debug_performance_hud" && publishedDisabledPerformanceHud.enabled === false, "disabled performance HUD publiceert disabled config");
     assert(!Array.isArray(after.json.ui) || !after.json.ui.some(function (entry) { return entry.id === "perf_hud_ghost"; }), "ongekoppelde performance HUD wordt niet gepubliceerd");
+
+    graph = (await createNode("editor_chunk_loading", {
+      chunkProfileId: "editor_chunks_ghost",
+      enabled: false,
+      chunkWidth: 250,
+      chunkDepth: 250,
+      tileSize: 2,
+      editorViewRadiusChunks: 5,
+      preloadMarginChunks: 1,
+      unloadMarginChunks: 3,
+      maxLoadedChunks: 25,
+      keepSelectedChunkLoaded: false,
+      showChunkGrid: false,
+      showChunkLabels: true,
+      debugOverlay: false
+    })).graph;
+    const ghostEditorChunkLoadingNode = findNode(graph, function (n) {
+      return n.type === "editor_chunk_loading" && n.values.chunkProfileId === "editor_chunks_ghost";
+    }, "ongekoppelde editor chunk loading aangemaakt");
+
+    const publishAfterGhostChunkLoading = await call("POST", "/api/editor/publish");
+    assert(publishAfterGhostChunkLoading.status === 200 && publishAfterGhostChunkLoading.json.ok, "publiceren werkt met losse editor chunk loading node");
+    const afterGhostChunkLoading = await call("GET", "/api/game/world");
+    assert(afterGhostChunkLoading.status === 200, "game world blijft beschikbaar met losse chunk loading node");
+    assert(afterGhostChunkLoading.json.chunkLoading && afterGhostChunkLoading.json.chunkLoading.editor && afterGhostChunkLoading.json.chunkLoading.editor.id === editorChunkLoadingNode.id, "losse editor chunk loading node wordt niet gepubliceerd");
+    assert(!afterGhostChunkLoading.json.chunkLoading || !afterGhostChunkLoading.json.chunkLoading.editor || afterGhostChunkLoading.json.chunkLoading.editor.chunkProfileId === "editor_chunks", "originele editor chunk loading blijft leidend");
+
+    graph = (await createNode("game_chunk_loading", {
+      chunkProfileId: "game_chunks_alt",
+      enabled: true,
+      chunkWidth: 100,
+      chunkDepth: 100,
+      tileSize: 1,
+      cameraOnly: true,
+      gameViewRadiusChunks: 1,
+      fixedCameraPaddingTiles: 10,
+      preloadMarginChunks: 1,
+      unloadMarginChunks: 1,
+      maxLoadedChunks: 9,
+      strictUnloadOutsideCamera: true,
+      loadBudgetPerFrame: 2,
+      debugOverlay: false
+    })).graph;
+    const secondGameChunkLoadingNode = findNode(graph, function (n) {
+      return n.type === "game_chunk_loading" && n.values.chunkProfileId === "game_chunks_alt";
+    }, "tweede game chunk loading aangemaakt");
+    graph = await connect(graph, secondGameChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
+    const publishWithTwoChunkLoadingNodes = await call("POST", "/api/editor/publish");
+    assert(publishWithTwoChunkLoadingNodes.status === 200 && publishWithTwoChunkLoadingNodes.json.ok, "publiceren werkt met meerdere game chunk loading nodes");
+    assert(Array.isArray(publishWithTwoChunkLoadingNodes.json.validation.warnings) && publishWithTwoChunkLoadingNodes.json.validation.warnings.some(function (message) {
+      return message.includes("meerdere Game Chunk Loading nodes");
+    }), "validatie waarschuwt voor meerdere game chunk loading nodes");
+    const afterTwoChunkLoadingNodes = await call("GET", "/api/game/world");
+    assert(afterTwoChunkLoadingNodes.status === 200, "game world blijft beschikbaar met meerdere chunk loading nodes");
+    assert(afterTwoChunkLoadingNodes.json.chunkLoading && afterTwoChunkLoadingNodes.json.chunkLoading.game && afterTwoChunkLoadingNodes.json.chunkLoading.game.id === gameChunkLoadingNode.id, "eerste game chunk loading node wordt gebruikt");
+    assert(afterTwoChunkLoadingNodes.json.chunkLoading.game.chunkProfileId === "game_chunks", "eerste game chunk loading waarden blijven leidend");
 
     const renamedAssetName = "Wizard Prime";
     const renamedAssetCategory = "characters";

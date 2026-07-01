@@ -7,6 +7,7 @@ export const DATA_TYPE_COLORS = {
   spawn: "#9be870",
   entity: "#d59bff",
   interactable: "#9be870",
+  chunkLoading: "#67d8c4",
   keybind: "#ff8da3",
   ui: "#c9d4dc",
   group: "#8a97a3"
@@ -16,7 +17,7 @@ export const DATA_TYPE_OPTIONS = Object.keys(DATA_TYPE_COLORS).filter(function (
   return dataType !== "group";
 });
 
-const MULTI_VALUE_TYPES = new Set(["light", "entity", "interactable", "keybind", "ui"]);
+const MULTI_VALUE_TYPES = new Set(["light", "entity", "interactable", "chunkLoading", "keybind", "ui"]);
 
 export function dataTypeColor(dataType) {
   return DATA_TYPE_COLORS[dataType] || "#6b7d8d";

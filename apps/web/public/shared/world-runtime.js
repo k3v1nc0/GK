@@ -4278,6 +4278,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     total += Array.isArray(worldData?.lights) ? worldData.lights.length : 0;
     total += Array.isArray(worldData?.entities) ? worldData.entities.length : 0;
     total += Array.isArray(worldData?.interactables) ? worldData.interactables.length : 0;
+    if (worldData?.chunkLoading?.editor) total += 1;
+    if (worldData?.chunkLoading?.game) total += 1;
     total += Array.isArray(worldData?.keybinds) ? worldData.keybinds.length : 0;
     total += Array.isArray(worldData?.ui) ? worldData.ui.length : 0;
     total += Array.isArray(worldData?.terrain?.layers) ? worldData.terrain.layers.length : 0;
@@ -4489,6 +4491,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
         collision: {
           blockers: Array.isArray(world?.collision?.blockers) ? world.collision.blockers.length : 0,
           walkableSurfaces: Array.isArray(world?.collision?.walkableSurfaces) ? world.collision.walkableSurfaces.length : 0
+        },
+        chunkLoading: {
+          editor: world?.chunkLoading?.editor?.id || null,
+          game: world?.chunkLoading?.game?.id || null
         },
         ui: Array.isArray(world?.ui) ? world.ui.length : 0
       },

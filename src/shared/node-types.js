@@ -30,6 +30,7 @@ export const DATA_TYPE_COLORS = {
   spawn: "#9be870",
   entity: "#d59bff",
   interactable: "#9be870",
+  chunkLoading: "#67d8c4",
   keybind: "#ff8da3",
   ui: "#c9d4dc",
   group: "#8a97a3"
@@ -215,6 +216,44 @@ const WORLD_SETTINGS_EDITOR_FIELDS = {
   }
 };
 
+function chunkLoadingSharedFields(defaults = {}) {
+  const {
+    chunkProfileId = "editor_chunks",
+    unloadMarginChunks = 2,
+    unloadMarginMax = 50,
+    maxLoadedChunks = 49,
+    debugOverlay = true
+  } = defaults;
+  return {
+    chunkProfileId: { label: "Chunk profile id", type: "text", default: chunkProfileId, required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+    enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+    chunkWidth: { label: "Chunk width", type: "number", default: 100, min: 1, max: 10000, step: 1, required: true },
+    chunkDepth: { label: "Chunk depth", type: "number", default: 100, min: 1, max: 10000, step: 1, required: true },
+    tileSize: { label: "Tile size", type: "number", default: 1, min: 0.01, max: 1000, step: 0.01, required: true },
+    preloadMarginChunks: { label: "Preload margin", type: "number", default: 1, min: 0, max: 20, step: 1, required: true },
+    unloadMarginChunks: { label: "Unload margin", type: "number", default: unloadMarginChunks, min: 0, max: unloadMarginMax, step: 1, required: true },
+    maxLoadedChunks: { label: "Max loaded chunks", type: "number", default: maxLoadedChunks, min: 1, max: 10000, step: 1, required: true },
+    debugOverlay: { label: "Debug overlay", type: "boolean", default: debugOverlay, required: true }
+  };
+}
+
+const EDITOR_CHUNK_LOADING_FIELDS = {
+  ...chunkLoadingSharedFields({ chunkProfileId: "editor_chunks", unloadMarginChunks: 2, unloadMarginMax: 50, maxLoadedChunks: 49, debugOverlay: true }),
+  editorViewRadiusChunks: { label: "Editor view radius", type: "number", default: 2, min: 0, max: 50, step: 1, required: true },
+  keepSelectedChunkLoaded: { label: "Keep selected chunk loaded", type: "boolean", default: true, required: true },
+  showChunkGrid: { label: "Show chunk grid", type: "boolean", default: true, required: true },
+  showChunkLabels: { label: "Show chunk labels", type: "boolean", default: false, required: true }
+};
+
+const GAME_CHUNK_LOADING_FIELDS = {
+  ...chunkLoadingSharedFields({ chunkProfileId: "game_chunks", unloadMarginChunks: 1, unloadMarginMax: 20, maxLoadedChunks: 9, debugOverlay: false }),
+  cameraOnly: { label: "Camera only", type: "boolean", default: true, required: true },
+  gameViewRadiusChunks: { label: "Game view radius", type: "number", default: 1, min: 0, max: 20, step: 1, required: true },
+  fixedCameraPaddingTiles: { label: "Camera padding tiles", type: "number", default: 10, min: 0, max: 10000, step: 1, required: true },
+  strictUnloadOutsideCamera: { label: "Strict unload outside camera", type: "boolean", default: true, required: true },
+  loadBudgetPerFrame: { label: "Load budget per frame", type: "number", default: 2, min: 1, max: 1000, step: 1, required: true }
+};
+
 function coerceGroupPort(port, fallbackName) {
   if (!port || typeof port !== "object") return null;
   const rawName = typeof port.name === "string" && port.name.trim()
@@ -371,6 +410,7 @@ export const NODE_TYPES = {
       spawn: { label: "Spawn", dataType: "spawn", required: true, multiple: false },
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       interactables: { label: "Interactables", dataType: "interactable", required: false, multiple: true },
+      chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
       keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       ui: { label: "UI", dataType: "ui", required: false, multiple: true },
       terrain: { label: "Terrain Layers", dataType: "terrain", required: false, multiple: true },
@@ -394,6 +434,26 @@ export const NODE_TYPES = {
       ...WORLD_SETTINGS_GAME_FIELDS,
       ...WORLD_SETTINGS_EDITOR_FIELDS
     }
+  },
+
+  editor_chunk_loading: {
+    label: "Editor Chunk Loading",
+    group: "World",
+    accent: "#67d8c4",
+    description: "Editor loading policy for showing more world chunks around the editor camera while authoring.",
+    inputs: {},
+    outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
+    fields: EDITOR_CHUNK_LOADING_FIELDS
+  },
+
+  game_chunk_loading: {
+    label: "Game Chunk Loading",
+    group: "World",
+    accent: "#67d8c4",
+    description: "Game loading policy for keeping runtime chunks limited to the fixed game camera view.",
+    inputs: {},
+    outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
+    fields: GAME_CHUNK_LOADING_FIELDS
   },
 
   ground_surface: {
