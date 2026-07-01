@@ -1,6 +1,7 @@
 import {
   NODE_TYPES,
   GAME_ACTIONS,
+  defaultValuesForType,
   resolveNodePort,
   resolveNodePorts,
   isContainer
@@ -211,6 +212,17 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function numberOrFallback(value, fallback) {
+  const number = numberOrNull(value);
+  return number === null ? fallback : number;
+}
+
+function normalizeShadowQuality(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "off" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
+  return "medium";
+}
+
 function nodeLabel(node) {
   return String(node?.values?.label || node?.title || node?.id || node?.type || "Node");
 }
@@ -220,15 +232,33 @@ function pointList(value) {
 }
 
 function normalizePoint(point) {
-  return {
+  const normalized = {
     x: numberOrNull(point?.x),
     z: numberOrNull(point?.z)
   };
+  const y = numberOrNull(point?.y);
+  if (y !== null) normalized.y = y;
+  return normalized;
+}
+
+function normalizeWalkablePoint(point, fallbackY = null) {
+  const normalized = normalizePoint(point);
+  if (!Object.prototype.hasOwnProperty.call(normalized, "y")) {
+    const y = numberOrNull(fallbackY);
+    if (y !== null) normalized.y = y;
+  }
+  return normalized;
 }
 
 function normalizePointList(value) {
   return pointList(value).map(function (point) {
     return normalizePoint(point);
+  });
+}
+
+function normalizeWalkablePointList(value, fallbackY = null) {
+  return pointList(value).map(function (point) {
+    return normalizeWalkablePoint(point, fallbackY);
   });
 }
 
@@ -385,7 +415,373 @@ function buildWalkableSurfaceReadModel(node) {
     width: numberOrNull(node.values.width),
     depth: numberOrNull(node.values.depth),
     rotationY: numberOrNull(node.values.rotationY),
-    priority: numberOrNull(node.values.priority)
+    priority: numberOrNull(node.values.priority),
+    points: normalizeWalkablePointList(node.values.points, node.values.y)
+  };
+}
+
+function buildGameCameraReadModel(node) {
+  const startDistance = numberOrNull(node.values.startDistance);
+  return {
+    id: node.values.cameraId,
+    cameraId: node.values.cameraId,
+    pitch: numberOrNull(node.values.pitch),
+    yaw: numberOrNull(node.values.yaw),
+    startDistance: startDistance !== null ? startDistance : numberOrNull(node.values.distance),
+    distance: numberOrNull(node.values.distance),
+    minDistance: numberOrNull(node.values.minDistance),
+    maxDistance: numberOrNull(node.values.maxDistance),
+    fov: numberOrNull(node.values.fov),
+    follow: node.values.follow !== false,
+    rotateSpeed: numberOrNull(node.values.rotateSpeed)
+  };
+}
+
+function buildEditorCameraReadModel(node) {
+  return {
+    id: node.values.cameraId,
+    cameraId: node.values.cameraId,
+    target: {
+      x: numberOrNull(node.values.targetX),
+      y: numberOrNull(node.values.targetY),
+      z: numberOrNull(node.values.targetZ)
+    },
+    pitch: numberOrNull(node.values.pitch),
+    yaw: numberOrNull(node.values.yaw),
+    distance: numberOrNull(node.values.distance),
+    minDistance: numberOrNull(node.values.minDistance),
+    maxDistance: numberOrNull(node.values.maxDistance),
+    fov: numberOrNull(node.values.fov),
+    rotateSpeed: numberOrNull(node.values.rotateSpeed)
+  };
+}
+
+function normalizeNodeIdList(value) {
+  const ids = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(value) ? value : []) {
+    const id = String(entry || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function normalizeFinitePointList(value) {
+  const points = [];
+  for (const entry of pointList(value)) {
+    const x = numberOrNull(entry?.x);
+    const z = numberOrNull(entry?.z);
+    if (x === null || z === null) continue;
+    points.push({ x, z });
+  }
+  return points;
+}
+
+function pointInPolygon2D(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  let inside = false;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const current = points[index];
+    const prior = points[previous];
+    const intersects = ((current.z > pz) !== (prior.z > pz))
+      && (px < ((prior.x - current.x) * (pz - current.z)) / ((prior.z - current.z) || 0.000001) + current.x);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function scatterPointBounds(points) {
+  const valid = normalizeFinitePointList(points);
+  if (!valid.length) return null;
+  let minX = valid[0].x;
+  let maxX = valid[0].x;
+  let minZ = valid[0].z;
+  let maxZ = valid[0].z;
+  for (const point of valid) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.z < minZ) minZ = point.z;
+    if (point.z > maxZ) maxZ = point.z;
+  }
+  return {
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    centerX: (minX + maxX) / 2,
+    centerZ: (minZ + maxZ) / 2,
+    width: Math.max(0, maxX - minX),
+    depth: Math.max(0, maxZ - minZ)
+  };
+}
+
+function scatterRectanglePoints(settings) {
+  const centerX = numberOrNull(settings?.areaCenterX) ?? 0;
+  const centerZ = numberOrNull(settings?.areaCenterZ) ?? 0;
+  const halfWidth = Math.max(0, numberOrNull(settings?.areaWidth) ?? 0) / 2;
+  const halfDepth = Math.max(0, numberOrNull(settings?.areaDepth) ?? 0) / 2;
+  const rotation = (numberOrNull(settings?.areaRotationY) ?? 0) * Math.PI / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const offsets = [
+    { x: -halfWidth, z: -halfDepth },
+    { x: halfWidth, z: -halfDepth },
+    { x: halfWidth, z: halfDepth },
+    { x: -halfWidth, z: halfDepth }
+  ];
+  return offsets.map(function (offset) {
+    return {
+      x: centerX + ((offset.x * cos) - (offset.z * sin)),
+      z: centerZ + ((offset.x * sin) + (offset.z * cos))
+    };
+  });
+}
+
+function scatterPointsForSettings(settings) {
+  const explicitPoints = normalizeFinitePointList(settings?.points);
+  if (explicitPoints.length >= 3) return explicitPoints;
+  return scatterRectanglePoints(settings);
+}
+
+function hashStringToUint32(value) {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function createDeterministicRandom(seed) {
+  let state = hashStringToUint32(seed) || 1;
+  return function () {
+    state |= 0;
+    state = (state + 0x6D2B79F5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function scatterSettingsSeed(settings, sourceAssetIds) {
+  const points = scatterPointsForSettings(settings);
+  return JSON.stringify({
+    seed: String(settings.seed || ""),
+    enabled: settings.enabled === true,
+    points: points.map(function (point) {
+      return { x: point.x, z: point.z };
+    }),
+    count: settings.count,
+    sourceAssetIds: sourceAssetIds,
+    randomObjectSelection: settings.randomObjectSelection === true,
+    boundaryBlocksPlayer: settings.boundaryBlocksPlayer === true,
+    scaleMin: settings.scaleMin,
+    scaleMax: settings.scaleMax,
+    rotationYMin: settings.rotationYMin,
+    rotationYMax: settings.rotationYMax
+  });
+}
+
+function normalizeScatterSettings(node) {
+  const scaleMin = Math.max(0.001, numberOrNull(node.values.scaleMin) ?? 1);
+  const scaleMax = Math.max(0.001, numberOrNull(node.values.scaleMax) ?? 1);
+  const rotationYMin = numberOrNull(node.values.rotationYMin) ?? 0;
+  const rotationYMax = numberOrNull(node.values.rotationYMax) ?? 0;
+  const points = normalizeFinitePointList(node.values.points);
+  return {
+    enabled: node.values.enabled !== false,
+    areaCenterX: numberOrNull(node.values.areaCenterX) ?? 0,
+    areaCenterZ: numberOrNull(node.values.areaCenterZ) ?? 0,
+    areaWidth: Math.max(0, numberOrNull(node.values.areaWidth) ?? 0),
+    areaDepth: Math.max(0, numberOrNull(node.values.areaDepth) ?? 0),
+    areaRotationY: numberOrNull(node.values.areaRotationY) ?? 0,
+    count: Math.max(0, Math.floor(numberOrNull(node.values.count) ?? 0)),
+    sourceAssetIds: normalizeNodeIdList(node.values.sourceAssetIds),
+    sourceNodeIds: normalizeNodeIdList(node.values.sourceNodeIds),
+    randomObjectSelection: node.values.randomObjectSelection === true,
+    boundaryBlocksPlayer: node.values.boundaryBlocksPlayer === true,
+    seed: String(node.values.seed || ""),
+    scaleMin: Math.min(scaleMin, scaleMax),
+    scaleMax: Math.max(scaleMin, scaleMax),
+    rotationYMin: Math.min(rotationYMin, rotationYMax),
+    rotationYMax: Math.max(rotationYMin, rotationYMax),
+    points: points
+  };
+}
+
+function resolveScatterSources(node, nodeMap, services, errors, labelPrefix) {
+  const settings = normalizeScatterSettings(node);
+  const assetService = services?.assetService || null;
+  const resolvedSourceAssets = [];
+  const resolvedSourceNodeIds = [];
+  const sourceAssetIds = [];
+  const explicitAssetIds = settings.sourceAssetIds.slice();
+  const legacySourceNodeIds = settings.sourceNodeIds.slice();
+  const selectedAssetIds = explicitAssetIds.length ? explicitAssetIds : legacySourceNodeIds.map(function (sourceId) {
+    const source = nodeMap.get(sourceId);
+    if (!source) {
+      errors.push((labelPrefix || "Scatter") + " verwijst naar onbekende bron node " + sourceId + ".");
+      return null;
+    }
+    if (source.type !== "model_entity") {
+      errors.push((labelPrefix || "Scatter") + " bron node " + sourceId + " is geen Model Entity.");
+      return null;
+    }
+    if (!source.values.modelAssetId) {
+      errors.push((labelPrefix || "Scatter") + " bron node " + sourceId + " mist een Model asset.");
+      return null;
+    }
+    resolvedSourceNodeIds.push(sourceId);
+    return source.values.modelAssetId;
+  }).filter(Boolean);
+
+  for (const assetId of selectedAssetIds) {
+    if (sourceAssetIds.includes(assetId)) continue;
+    sourceAssetIds.push(assetId);
+    const asset = assetService ? assetService.get(assetId) : null;
+    if (!asset) {
+      errors.push((labelPrefix || "Scatter") + " verwijst naar onbekende asset " + assetId + ".");
+      continue;
+    }
+    if (asset.assetType !== "model") {
+      errors.push((labelPrefix || "Scatter") + " verwacht een model asset maar kreeg " + asset.assetType + ".");
+      continue;
+    }
+    resolvedSourceAssets.push(asset);
+  }
+  if (!explicitAssetIds.length) {
+    for (const sourceId of resolvedSourceNodeIds) {
+      const source = nodeMap.get(sourceId);
+      if (!source?.values?.modelAssetId) continue;
+      if (!sourceAssetIds.includes(source.values.modelAssetId)) sourceAssetIds.push(source.values.modelAssetId);
+    }
+  } else {
+    resolvedSourceNodeIds.push.apply(resolvedSourceNodeIds, legacySourceNodeIds);
+  }
+  return {
+    sourceAssetIds: sourceAssetIds,
+    sourceAssets: resolvedSourceAssets,
+    sourceNodeIds: resolvedSourceNodeIds.length ? Array.from(new Set(resolvedSourceNodeIds)) : legacySourceNodeIds
+  };
+}
+
+function buildScatterAreaReadModel(node, resolvedSources) {
+  const settings = normalizeScatterSettings(node);
+  const sourceAssets = Array.isArray(resolvedSources?.sourceAssets) ? resolvedSources.sourceAssets : [];
+  const points = scatterPointsForSettings(settings);
+  return {
+    id: node.id,
+    scatterId: node.values.scatterId,
+    enabled: settings.enabled,
+    boundaryBlocksPlayer: settings.boundaryBlocksPlayer,
+    areaCenterX: settings.areaCenterX,
+    areaCenterZ: settings.areaCenterZ,
+    areaWidth: settings.areaWidth,
+    areaDepth: settings.areaDepth,
+    areaRotationY: settings.areaRotationY,
+    count: settings.count,
+    sourceNodeIds: Array.from(new Set((resolvedSources?.sourceNodeIds || settings.sourceNodeIds || []).filter(Boolean))).sort(),
+    sourceAssetIds: Array.from(new Set([
+      ...settings.sourceAssetIds,
+      ...sourceAssets.map(function (source) { return source.id; }).filter(Boolean),
+      ...(resolvedSources?.sourceAssetIds || [])
+    ].filter(Boolean))).sort(),
+    randomObjectSelection: settings.randomObjectSelection,
+    seed: settings.seed,
+    scaleMin: settings.scaleMin,
+    scaleMax: settings.scaleMax,
+    rotationYMin: settings.rotationYMin,
+    rotationYMax: settings.rotationYMax,
+    points: points
+  };
+}
+
+function buildScatterInstances(node, sourceAssets, groundY) {
+  const settings = normalizeScatterSettings(node);
+  const sourceList = Array.isArray(sourceAssets) ? sourceAssets.slice().sort(function (left, right) {
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  }) : [];
+  if (!settings.enabled || !settings.count || !sourceList.length) return [];
+  const points = scatterPointsForSettings(settings);
+  const bounds = scatterPointBounds(points);
+  const random = createDeterministicRandom(scatterSettingsSeed(settings, sourceList.map(function (source) { return source.id; })));
+  const instances = [];
+  const samplePointInPolygon = function () {
+    if (!bounds) return { x: settings.areaCenterX, z: settings.areaCenterZ };
+    const width = Math.max(0.000001, bounds.maxX - bounds.minX);
+    const depth = Math.max(0.000001, bounds.maxZ - bounds.minZ);
+    for (let attempt = 0; attempt < 96; attempt += 1) {
+      const x = bounds.minX + (width * random());
+      const z = bounds.minZ + (depth * random());
+      if (pointInPolygon2D(x, z, points)) return { x, z };
+    }
+    return { x: bounds.centerX, z: bounds.centerZ };
+  };
+  for (let index = 0; index < settings.count; index += 1) {
+    const sourceIndex = settings.randomObjectSelection && sourceList.length > 1
+      ? Math.floor(random() * sourceList.length) % sourceList.length
+      : index % sourceList.length;
+    const source = sourceList[sourceIndex];
+    const position = samplePointInPolygon();
+    const scale = Math.max(0.001, settings.scaleMin + ((settings.scaleMax - settings.scaleMin) * random()));
+    const rotationY = settings.rotationYMin + ((settings.rotationYMax - settings.rotationYMin) * random());
+    const defaultAnimation = source.metadata?.defaultAnimation || null;
+    instances.push({
+      id: node.id + "::" + index,
+      nodeId: node.id,
+      scatterId: node.values.scatterId || node.id,
+      type: "scatter",
+      kind: "scatter",
+      sourceNodeId: null,
+      sourceAssetId: source.id,
+      label: source.name || source.id,
+      modelAssetId: source.id,
+      animationClip: defaultAnimation,
+      idleAnimation: defaultAnimation,
+      walkAnimation: null,
+      runAnimation: null,
+      solid: false,
+      walkable: true,
+      collisionRadius: null,
+      transform: {
+        position: {
+          x: position.x,
+          y: groundY,
+          z: position.z
+        },
+        rotation: {
+          x: 0,
+          y: rotationY,
+          z: 0
+        },
+        scale: {
+          x: scale,
+          y: scale,
+          z: scale
+        }
+      }
+    });
+  }
+  return instances;
+}
+
+function buildScatterBoundaryBlockerReadModel(node, settings) {
+  const points = scatterPointsForSettings(settings);
+  const bounds = scatterPointBounds(points);
+  return {
+    id: node.id + "::boundary",
+    label: node.values.label || node.values.scatterId || node.id,
+    shapeType: "polygon",
+    x: bounds ? bounds.centerX : settings.areaCenterX,
+    z: bounds ? bounds.centerZ : settings.areaCenterZ,
+    width: bounds ? bounds.width : settings.areaWidth,
+    depth: bounds ? bounds.depth : settings.areaDepth,
+    radius: null,
+    points: points,
+    reason: node.values.scatterId || node.id
   };
 }
 
@@ -451,6 +847,33 @@ function buildUiReadModel(node) {
   return buildHudTextReadModel(node);
 }
 
+function buildWorldPerformanceReadModel(node) {
+  const values = Object.assign({}, defaultValuesForType("world_settings"), node?.values || {});
+  return {
+    shared: {
+      shadowQuality: normalizeShadowQuality(values.shadowQuality),
+      shadowBias: numberOrFallback(values.shadowBias, -0.0003),
+      shadowNormalBias: numberOrFallback(values.shadowNormalBias, 0.04),
+      shadowCameraSize: numberOrFallback(values.shadowCameraSize, 60),
+      shadowCameraFar: numberOrFallback(values.shadowCameraFar, 400),
+      smoothShading: values.smoothShading !== false
+    },
+    game: {
+      pixelRatioCap: numberOrNull(values.gamePixelRatioCap),
+      shadowsEnabled: values.gameShadowsEnabled !== false,
+      batchStaticProps: values.gameBatchStaticProps !== false,
+      batchScatterProps: values.gameBatchScatterProps !== false,
+      staticPropCastShadows: values.gameStaticPropCastShadows === true,
+      staticPropReceiveShadows: values.gameStaticPropReceiveShadows !== false
+    },
+    editor: {
+      pixelRatioCap: numberOrNull(values.editorPixelRatioCap),
+      fogEnabled: values.editorFogEnabled !== false,
+      shadowsEnabled: values.editorShadowsEnabled !== false
+    }
+  };
+}
+
 function collectTerrainReadModel(nodes) {
   const terrain = emptyTerrainReadModel();
   for (const node of nodes || []) {
@@ -509,6 +932,7 @@ export function validateGraphForPublish(graph, services = {}) {
       errors.push("Node " + node.id + " heeft onbekend type " + node.type + ".");
       continue;
     }
+    if (node.type === "editor_camera") continue;
     const result = validateNodeValues(node.type, node.values, NODE_TYPES);
     errors.push.apply(errors, result.errors);
     if (node.type === "group") {
@@ -579,7 +1003,11 @@ export function validateGraphForPublish(graph, services = {}) {
     if (camera) {
       const minD = numberOrNull(camera.values.minDistance);
       const maxD = numberOrNull(camera.values.maxDistance);
-      if (minD !== null && maxD !== null && minD > maxD) errors.push("Top-Down Camera min zoom is groter dan max zoom.");
+      if (camera.type === "editor_camera") {
+        errors.push("Game Output camera mag geen Editor Camera zijn.");
+      } else if (minD !== null && maxD !== null && minD > maxD) {
+        errors.push("Game Camera min zoom is groter dan max zoom.");
+      }
     }
 
     const player = collectResolutionError(errors, function () {
@@ -587,9 +1015,10 @@ export function validateGraphForPublish(graph, services = {}) {
     });
     if (player) requireAsset(services.assetService, player.values.modelAssetId, "model", "Player Character model", errors);
 
-    for (const entity of collectResolutionError(errors, function () {
+    const entityNodes = collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "entities", nodeMap);
-    }) || []) {
+    }) || [];
+    for (const entity of entityNodes) {
       if (entity.type === "model_entity") requireAsset(services.assetService, entity.values.modelAssetId, "model", "Model Entity " + entity.id, errors);
     }
     for (const inter of collectResolutionError(errors, function () {
@@ -648,11 +1077,29 @@ export function validateGraphForPublish(graph, services = {}) {
       }
     }
 
+    for (const node of entityNodes) {
+      if (node.type !== "bounded_area_scatter") continue;
+      const label = "Scatter '" + (node.values.scatterId || node.id) + "'";
+      const settings = normalizeScatterSettings(node);
+      const resolved = resolveScatterSources(node, nodeMap, services, errors, label);
+      if (Array.isArray(node.values.points) && node.values.points.length > 0 && node.values.points.length < 3) {
+        errors.push(label + " heeft minstens 3 boundary punten nodig.");
+      }
+      if (settings.enabled && settings.count > 0 && !resolved.sourceAssets.length) {
+        errors.push(label + " heeft minstens één bron mesh nodig.");
+      }
+      for (const source of resolved.sourceAssets) {
+        requireAsset(services.assetService, source.id, "model", label + " bron " + source.id, errors);
+      }
+    }
+
     const collisionNodes = collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "collision", nodeMap);
     }) || [];
     for (const node of collisionNodes) {
       if (node.type === "blocker_area" && node.values.shapeType === "polygon") {
+        validatePointList(errors, node, 3);
+      } else if (node.type === "walkable_surface" && Array.isArray(node.values.points) && node.values.points.length > 0) {
         validatePointList(errors, node, 3);
       }
     }
@@ -660,13 +1107,15 @@ export function validateGraphForPublish(graph, services = {}) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-export function buildWorldFromGraph(graph, services = {}) {
+export function buildWorldFromGraph(graph, services = {}, options = {}) {
+  const includeEditorCamera = options.includeEditorCamera !== false;
   const outputNode = graph.nodes.find(function (node) { return node.type === "game_output"; });
   const empty = {
     schemaVersion: graph.schemaVersion,
     source: "editor-node-graph",
     assets: [],
     entities: [],
+    scatterAreas: [],
     lights: [],
     interactables: [],
     keybinds: [],
@@ -688,6 +1137,15 @@ export function buildWorldFromGraph(graph, services = {}) {
   const uiNodes = incomingNodes(graph, outputNode, "ui", nodeMap);
   const terrainNodes = incomingNodes(graph, outputNode, "terrain", nodeMap);
   const collisionNodes = incomingNodes(graph, outputNode, "collision", nodeMap);
+  const modelEntityNodes = entityNodes.filter(function (node) {
+    return node.type === "model_entity";
+  });
+  const scatterNodes = entityNodes.filter(function (node) {
+    return node.type === "bounded_area_scatter";
+  });
+  const editorCameraNode = graph.nodes.find(function (node) {
+    return node.type === "editor_camera";
+  }) || null;
 
   const assetIds = new Set();
   if (groundNode?.values.textureAssetId) assetIds.add(groundNode.values.textureAssetId);
@@ -699,11 +1157,29 @@ export function buildWorldFromGraph(graph, services = {}) {
     }
   }
   if (playerNode?.values.modelAssetId) assetIds.add(playerNode.values.modelAssetId);
-  for (const node of entityNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
+  for (const node of modelEntityNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
   for (const node of interactableNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
+  const scatterAreas = [];
+  const scatterEntities = [];
+  const scatterCollisionBlockers = [];
+  const groundY = numberOrNull(groundNode?.values?.y) ?? 0;
+  for (const node of scatterNodes) {
+    const label = "Scatter '" + (node.values.scatterId || node.id) + "'";
+    const resolved = resolveScatterSources(node, nodeMap, services, [], label);
+    for (const assetId of resolved.sourceAssetIds) assetIds.add(assetId);
+    const settings = normalizeScatterSettings(node);
+    scatterAreas.push(buildScatterAreaReadModel(node, resolved));
+    scatterEntities.push.apply(scatterEntities, buildScatterInstances(node, resolved.sourceAssets, groundY));
+    if (settings.boundaryBlocksPlayer) {
+      scatterCollisionBlockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
+    }
+  }
   const assets = services.assetService ? services.assetService.manifestForIds(Array.from(assetIds)) : [];
+  const editorCamera = includeEditorCamera && editorCameraNode ? buildEditorCameraReadModel(editorCameraNode) : null;
+  const collision = collectCollisionReadModel(collisionNodes);
+  collision.blockers.push.apply(collision.blockers, scatterCollisionBlockers);
 
-  return {
+  const world = {
     schemaVersion: graph.schemaVersion,
     source: "editor-node-graph",
     outputNodeId: outputNode.id,
@@ -712,7 +1188,8 @@ export function buildWorldFromGraph(graph, services = {}) {
       displayName: worldNode.values.displayName,
       backgroundColor: worldNode.values.backgroundColor,
       fogColor: worldNode.values.fogColor,
-      fogDensity: numberOrNull(worldNode.values.fogDensity)
+      fogDensity: numberOrNull(worldNode.values.fogDensity),
+      performance: buildWorldPerformanceReadModel(worldNode)
     } : null,
     ground: groundNode ? {
       id: groundNode.values.groundId,
@@ -726,8 +1203,10 @@ export function buildWorldFromGraph(graph, services = {}) {
     camera: cameraNode ? {
       id: cameraNode.values.cameraId,
       mode: "top-down",
+      cameraId: cameraNode.values.cameraId,
       pitch: numberOrNull(cameraNode.values.pitch),
       yaw: numberOrNull(cameraNode.values.yaw),
+      startDistance: numberOrNull(cameraNode.values.startDistance) ?? numberOrNull(cameraNode.values.distance),
       distance: numberOrNull(cameraNode.values.distance),
       minDistance: numberOrNull(cameraNode.values.minDistance),
       maxDistance: numberOrNull(cameraNode.values.maxDistance),
@@ -758,9 +1237,11 @@ export function buildWorldFromGraph(graph, services = {}) {
       if (node.type === "ambient_light") return { id: node.values.lightId, type: "ambient", color: node.values.color, intensity: numberOrNull(node.values.intensity) };
       return { id: node.values.lightId, type: "directional", color: node.values.color, intensity: numberOrNull(node.values.intensity), position: { x: numberOrNull(node.values.x), y: numberOrNull(node.values.y), z: numberOrNull(node.values.z) } };
     }),
-    entities: entityNodes.map(function (node) {
+    entities: modelEntityNodes.map(function (node) {
       return {
-        id: node.values.entityId,
+        id: node.id,
+        nodeId: node.id,
+        entityId: node.values.entityId || node.id,
         label: node.values.label,
         type: "model",
         modelAssetId: node.values.modelAssetId,
@@ -769,6 +1250,7 @@ export function buildWorldFromGraph(graph, services = {}) {
         walkAnimation: node.values.walkAnimation || null,
         runAnimation: node.values.runAnimation || null,
         solid: node.values.solid === true,
+        walkable: node.values.walkable === true,
         collisionRadius: numberOrNull(node.values.collisionRadius),
         transform: {
           position: { x: numberOrNull(node.values.x), y: numberOrNull(node.values.y), z: numberOrNull(node.values.z) },
@@ -780,7 +1262,7 @@ export function buildWorldFromGraph(graph, services = {}) {
           scale: { x: numberOrNull(node.values.scaleX), y: numberOrNull(node.values.scaleY), z: numberOrNull(node.values.scaleZ) }
         }
       };
-    }),
+    }).concat(scatterEntities),
     interactables: interactableNodes.map(function (node) {
       return {
         id: node.values.interactableId,
@@ -802,9 +1284,12 @@ export function buildWorldFromGraph(graph, services = {}) {
     }),
     ui: uiNodes.map(buildUiReadModel),
     terrain: collectTerrainReadModel(terrainNodes),
-    collision: collectCollisionReadModel(collisionNodes),
+    collision: collision,
+    scatterAreas: scatterAreas,
     assets
   };
+  if (editorCamera) world.editorCamera = editorCamera;
+  return world;
 }
 
 export class PublishService {
@@ -814,7 +1299,7 @@ export class PublishService {
   }
 
   saveDraft() {
-    const world = buildWorldFromGraph(this.repository.getGraph(), this.services);
+    const world = buildWorldFromGraph(this.repository.getGraph(), this.services, { includeEditorCamera: true });
     this.repository.saveDraftWorld(world);
     return world;
   }
@@ -832,9 +1317,10 @@ export class PublishService {
       error.details = validation;
       throw error;
     }
-    const world = buildWorldFromGraph(graph, this.services);
-    this.repository.saveDraftWorld(world);
-    this.repository.publishWorld(world, actorUserId);
-    return { world, validation };
+    const draftWorld = buildWorldFromGraph(graph, this.services, { includeEditorCamera: true });
+    const publishedWorld = buildWorldFromGraph(graph, this.services, { includeEditorCamera: false });
+    this.repository.saveDraftWorld(draftWorld);
+    this.repository.publishWorld(publishedWorld, actorUserId);
+    return { world: publishedWorld, validation };
   }
 }

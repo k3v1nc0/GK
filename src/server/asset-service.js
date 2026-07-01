@@ -209,6 +209,36 @@ export class AssetService {
     return true;
   }
 
+  retryThumbnail(id) {
+    const row = this.db.prepare("SELECT * FROM asset_library WHERE id = ?").get(id);
+    if (!row) {
+      const error = new Error("Asset bestaat niet.");
+      error.status = 404;
+      throw error;
+    }
+    const asset = toAsset(row);
+    if (asset.assetType !== "model") {
+      const error = new Error("Alleen model-assets kunnen een thumbnail hebben.");
+      error.status = 400;
+      throw error;
+    }
+    const sourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
+    if (!sourceFilePath || !fs.existsSync(sourceFilePath)) {
+      const error = new Error("Assetbronbestand ontbreekt.");
+      error.status = 500;
+      throw error;
+    }
+    this.updateAssetThumbnailState(id, null, {
+      thumbnailStatus: "pending",
+      thumbnailError: null,
+      thumbnailStartedAt: null,
+      thumbnailFinishedAt: null,
+      thumbnailDurationMs: null
+    });
+    this.enqueueThumbnailJob({ assetId: id });
+    return this.get(id);
+  }
+
   async runThumbnailJob(job) {
     const assetId = String(job?.assetId || "").trim();
     if (!assetId) return;

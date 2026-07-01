@@ -3,3 +3,10 @@
 3. objecten moet je overheen kunnen lopen met een checkbox aan.
 4. Ontwikkeling van een bounded area scatter-systeem voor het procedureel verspreiden van geselecteerde meshes binnen een afgebakend vlak, inclusief parameters voor dichtheid, willekeurige objectselectie en min/max-grenzen voor zowel schaal als rotatie.
 5. twee camera nodes 1 voor de game en 1 voor de editor nu zijn ze gelijkt dit is irritant.
+
+
+
+- dupliceer doet goed
+- walkable bedoel ik dat de mesh zelf walkable word en dat ik niet met het poppetje er door loop maar op de mesh van de brug.
+- de camera van de game node moet ook een standaard zoom begin zoom hebben. nu heeft het alleen de max en min zoom. en begind de came met min zoom. hij moet dus een defauld zoom krijgen waar die het spel mee begind.
+- de scatter-node moet met g t r werken dat je met meerdere punten en lijntjes het kun verzetten waar ik b.v. de bomen wil hebben. om een dorp heen, dus geen vierkant. ook wil ik het verplaatsen en draaien en een selectie van bolletjes kunnen selecteren om daar na die met g te kunnen verslepen naar de andere kan van de map / dus alles met de hot-keys. ook moet deze scatter-node een bounderie vormen waar je niet door heen kan lopen met een checkbox.

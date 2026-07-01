@@ -7,7 +7,7 @@ import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { buildWalkabilityIndex, buildSurfaceStripGeometry, clearWalkabilityIndex, createWalkabilityIndex, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointBlockedByWater, isPointOnWalkableSurface, resolveMovement } from "../apps/web/public/shared/world-runtime.js";
+import { buildWalkabilityIndex, buildSurfaceStripGeometry, clearWalkabilityIndex, createWalkabilityIndex, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointBlockedByWater, isPointOnWalkableSurface, resolveMovement, resolveShadowPolicy } from "../apps/web/public/shared/world-runtime.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +30,13 @@ async function call(method, pathname, body, isForm) {
   if (cookie) headers.Cookie = cookie;
   let payload = body;
   if (body && !isForm) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
-  const response = await fetch(BASE + pathname, { method: method, headers: headers, body: payload });
+  let response;
+  try {
+    response = await fetch(BASE + pathname, { method: method, headers: headers, body: payload });
+  } catch (error) {
+    console.error("FETCH FAIL", method, pathname, body || null, error?.message || error);
+    throw error;
+  }
   setCookieFrom(response);
   const text = await response.text();
   let json = null;
@@ -40,6 +46,13 @@ async function call(method, pathname, body, isForm) {
 
 function assert(condition, message) {
   if (!condition) throw new Error("ASSERT: " + message);
+  console.log("  ok - " + message);
+}
+
+function assertNear(actual, expected, tolerance, message) {
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error("ASSERT: " + message + " (expected " + expected + ", got " + actual + ")");
+  }
   console.log("  ok - " + message);
 }
 
@@ -76,7 +89,7 @@ function removeSmokeFixtureAssets() {
 }
 
 function restoreSmokeFixtureAssets() {
-  spawnSync("git", ["restore", "--source=HEAD", "--", "assets/uploads/wizard.glb", "assets/thumbnails/wizard.png"], {
+  spawnSync("git", ["restore", "--source=HEAD", "--", "assets/uploads/wizard.glb", "assets/thumbnails/wizard.png", "assets/thumbnails/wizard.tmp.png", "assets/thumbnails/tree-large.tmp.png"], {
     cwd: rootDir,
     stdio: "ignore"
   });
@@ -308,6 +321,46 @@ function findNode(graph, predicate, label) {
   return node;
 }
 
+function roundSignature(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return String(Math.round(number * 1000) / 1000);
+}
+
+function entitySignature(entity) {
+  const transform = entity?.transform || {};
+  const position = transform.position || {};
+  const rotation = transform.rotation || {};
+  const scale = transform.scale || {};
+  return [
+    entity?.id || "",
+    entity?.nodeId || "",
+    entity?.sourceNodeId || "",
+    entity?.sourceAssetId || "",
+    roundSignature(position.x),
+    roundSignature(position.y),
+    roundSignature(position.z),
+    roundSignature(rotation.x),
+    roundSignature(rotation.y),
+    roundSignature(rotation.z),
+    roundSignature(scale.x),
+    roundSignature(scale.y),
+    roundSignature(scale.z),
+    entity?.walkable === true ? "walkable" : "solid"
+  ].join("|");
+}
+
+function scatterSignature(world, scatterNodeId) {
+  return (Array.isArray(world?.entities) ? world.entities : [])
+    .filter(function (entity) { return entity && entity.nodeId === scatterNodeId; })
+    .slice()
+    .sort(function (left, right) {
+      return String(left.id || "").localeCompare(String(right.id || ""));
+    })
+    .map(entitySignature)
+    .join(";;");
+}
+
 function runSurfaceGeometryChecks() {
   const geo2 = buildSurfaceStripGeometry(
     [{ x: 0, z: 0 }, { x: 10, z: 0 }],
@@ -352,6 +405,58 @@ function runSurfaceGeometryChecks() {
 
   const geoNoOptions = buildSurfaceStripGeometry([{ x: 0, z: 0 }, { x: 10, z: 0 }], null);
   assert(geoNoOptions === null, "null options geeft null (geen crash)");
+}
+
+function runShadowPolicyChecks() {
+  const defaultEditorPolicy = resolveShadowPolicy({ world: {} }, "editor");
+  assert(defaultEditorPolicy.enabled === true, "shadow policy defaults aan in de editor");
+  assert(defaultEditorPolicy.quality === "medium", "shadow policy default quality is medium");
+  assert(defaultEditorPolicy.mapSize === 2048, "medium shadow quality gebruikt 2048 mapSize");
+
+  const lowPolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        shared: { shadowQuality: "low" },
+        game: { shadowsEnabled: true },
+        editor: { shadowsEnabled: true }
+      }
+    }
+  }, "game");
+  assert(lowPolicy.mapSize === 1024, "low shadow quality gebruikt 1024 mapSize");
+
+  const highPolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        shared: {
+          shadowQuality: "high",
+          shadowBias: -0.0006,
+          shadowNormalBias: 0.2,
+          shadowCameraSize: 90,
+          shadowCameraFar: 700
+        },
+        game: { shadowsEnabled: true },
+        editor: { shadowsEnabled: false }
+      }
+    }
+  }, "editor");
+  assert(highPolicy.enabled === false, "editor shadows kunnen apart uit");
+  assert(highPolicy.quality === "high", "shadow quality blijft hoog in de editor policy");
+  assert(highPolicy.mapSize === 4096, "high shadow quality gebruikt 4096 mapSize");
+  assertNear(highPolicy.bias, -0.0006, 0.000001, "shadow bias wordt gelezen");
+  assertNear(highPolicy.normalBias, 0.2, 0.000001, "shadow normal bias wordt gelezen");
+  assert(highPolicy.cameraSize === 90, "shadow camera size wordt gelezen");
+  assert(highPolicy.cameraFar === 700, "shadow distance wordt gelezen");
+
+  const offPolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        shared: { shadowQuality: "off" },
+        game: { shadowsEnabled: true },
+        editor: { shadowsEnabled: true }
+      }
+    }
+  }, "game");
+  assert(offPolicy.enabled === false, "shadowQuality=off schakelt shadows uit");
 }
 
 function runWalkabilityChecks() {
@@ -431,12 +536,18 @@ function runWalkabilityChecks() {
         {
           id: "bridge_walk_01",
           x: 0,
-          y: 0.35,
+          y: 0.6,
           z: 0,
           width: 6,
           depth: 2.5,
           rotationY: 0,
-          priority: 10
+          priority: 10,
+          points: [
+            { x: -3, y: 0.425, z: -1.25 },
+            { x: 3, y: 0.725, z: -1.25 },
+            { x: 2.4, y: 0.745, z: 1.25 },
+            { x: -2.4, y: 0.505, z: 1.25 }
+          ]
         },
         {
           id: "rotated_platform",
@@ -447,6 +558,22 @@ function runWalkabilityChecks() {
           depth: 2,
           rotationY: 45,
           priority: 5
+        },
+        {
+          id: "polygon_bridge",
+          x: 18,
+          y: 1.1,
+          z: -6,
+          width: 6,
+          depth: 3,
+          rotationY: 0,
+          priority: 8,
+          points: [
+            { x: 15, y: 0.8, z: -7.5 },
+            { x: 21, y: 1.4, z: -7.5 },
+            { x: 19, y: 1.35, z: -4.5 },
+            { x: 16.5, y: 0.95, z: -4.8 }
+          ]
         }
       ]
     }
@@ -461,21 +588,35 @@ function runWalkabilityChecks() {
   assert(isPointBlockedByBlocker(sampleIndex, 30, 0), "blocker polygon blokkeert");
   assert(isPointOnWalkableSurface(sampleIndex, 0, 0), "walkable surface override werkt");
   assert(isPointOnWalkableSurface(sampleIndex, -11, -10.9), "geroteerde walkable surface wordt herkend");
+  assert(isPointOnWalkableSurface(sampleIndex, 18.5, -5.7), "polygon walkable surface wordt herkend");
+  assert(!isPointOnWalkableSurface(sampleIndex, 20.8, -4.7), "polygon walkable surface volgt eigen vorm");
+  assert(isPointOnWalkableSurface(sampleIndex, 3, 0, 0.5), "walkable surface houdt rekening met collision radius langs rand");
   assert(!isPointBlockedByTerrain(sampleIndex, 0, 0, 0.5), "walkable surface wint boven water");
+  assert(!isPointBlockedByTerrain(sampleIndex, 3, 0, 0.5), "walkable surface voorkomt jitter op polygon-rand");
 
   const bridgeMove = resolveMovement(
-    { x: -10, y: 0, z: 0.2 },
+    { x: -2.8, y: 0.5, z: 0.2 },
     { x: 0, y: 0, z: 0.2 },
     { radius: 0.5, ground: sampleWorld.ground, solids: [], index: sampleIndex }
   );
   assert(bridgeMove.x === 0 && bridgeMove.z === 0.2, "walkable surface laat brugpassage toe");
+  assertNear(bridgeMove.y, 0.604, 0.0001, "walkable surface interpoleert punt-hoogte");
+
+  const edgeBridgeMove = resolveMovement(
+    { x: 2.1, y: 0.68, z: 0 },
+    { x: 3.1, y: 0.68, z: 0.65 },
+    { radius: 0.5, ground: sampleWorld.ground, solids: [], index: sampleIndex }
+  );
+  assert(edgeBridgeMove.x > 2.7 && edgeBridgeMove.z > 0.45, "walkable surface beweegt soepel langs schuine rand");
+  assertNear(edgeBridgeMove.y, 0.7395, 0.005, "walkable surface houdt randhoogte stabiel tijdens randbeweging");
 
   const slideMove = resolveMovement(
     { x: -10, y: 0, z: 6 },
     { x: 10, y: 0, z: 1 },
     { radius: 0.5, ground: sampleWorld.ground, solids: [], index: sampleIndex }
   );
-  assert(slideMove.x === 10 && slideMove.z === 6, "bewegingsfallback schuift langs water via x-only");
+  assert(slideMove.x === 10 && slideMove.z < 6 && slideMove.z > 2.5, "bewegingsfallback schuift soepel langs water-rand");
+  assert(!isPointBlockedByTerrain(sampleIndex, slideMove.x, slideMove.z, 0.5), "bewegingsfallback eindigt buiten terrain collision");
 
   clearWalkabilityIndex();
   buildWalkabilityIndex(sampleWorld);
@@ -506,6 +647,7 @@ async function main() {
     cleanupStaleGeneratedAssets();
     removeSmokeFixtureAssets();
     runSurfaceGeometryChecks();
+    runShadowPolicyChecks();
     runWalkabilityChecks();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
@@ -652,12 +794,28 @@ async function main() {
     const draftAfterRestore = await call("GET", "/api/editor/draft-world");
     assert(draftAfterRestore.status === 200, "draft world rebuildt na restore");
 
-    let graph = (await createNode("world_settings", { worldId: "demo_world", displayName: "Demo", backgroundColor: "#0b1622" })).graph;
+    let graph = (await createNode("world_settings", {
+      worldId: "demo_world",
+      displayName: "Demo",
+      backgroundColor: "#0b1622",
+      fogColor: "#1a2b3c",
+      fogDensity: 0.18,
+      shadowQuality: "high",
+      shadowBias: -0.0006,
+      shadowNormalBias: 0.2,
+      shadowCameraSize: 90,
+      shadowCameraFar: 700,
+      gameShadowsEnabled: true,
+      editorFogEnabled: false,
+      editorShadowsEnabled: false
+    })).graph;
     const worldNode = graph.nodes.find(function (n) { return n.type === "world_settings"; });
     graph = (await createNode("ground_surface", { groundId: "demo_ground", width: 40, depth: 40, y: 0, materialColor: "#3f6b3f" })).graph;
     const groundNode = graph.nodes.find(function (n) { return n.type === "ground_surface"; });
-    graph = (await createNode("top_down_camera", { cameraId: "main_cam", pitch: 60, yaw: 0, distance: 20, minDistance: 8, maxDistance: 40, fov: 55, follow: true, rotateSpeed: 90 })).graph;
-    const cameraNode = graph.nodes.find(function (n) { return n.type === "top_down_camera"; });
+    graph = (await createNode("game_camera", { cameraId: "main_cam", pitch: 60, yaw: 0, startDistance: 26, distance: 20, minDistance: 8, maxDistance: 40, fov: 55, follow: true, rotateSpeed: 90 })).graph;
+    const cameraNode = graph.nodes.find(function (n) { return n.type === "game_camera"; });
+    graph = (await createNode("editor_camera", { cameraId: "editor_cam", targetX: 12, targetY: 3, targetZ: -5, pitch: 48, yaw: 22, distance: 18, minDistance: 4, maxDistance: 64, fov: 60, rotateSpeed: 75 })).graph;
+    const editorCameraNode = graph.nodes.find(function (n) { return n.type === "editor_camera"; });
     graph = (await createNode("ambient_light", { lightId: "amb", color: "#ffffff", intensity: 0.8 })).graph;
     const ambientNode = graph.nodes.find(function (n) { return n.type === "ambient_light"; });
     graph = (await createNode("directional_light", { lightId: "sun", color: "#ffffff", intensity: 1.2, x: 10, y: 20, z: 10 })).graph;
@@ -677,6 +835,86 @@ async function main() {
     assert(modelEntityNode.values.walkAnimation === "Walk", "model_entity bewaart walkAnimation");
     assert(modelEntityNode.values.runAnimation === "Run", "model_entity bewaart runAnimation");
     assert(modelEntityNode.values.rotationX === 10 && modelEntityNode.values.rotationY === 20 && modelEntityNode.values.rotationZ === 30, "model_entity bewaart rotationX/Y/Z");
+    graph = (await createNode("model_entity", {
+      entityId: "entity_walk",
+      label: "Walker Drop 2",
+      modelAssetId: modelId,
+      animationClip: "Idle",
+      idleAnimation: "Idle",
+      walkAnimation: "Walk",
+      runAnimation: "Run",
+      x: 12,
+      y: 0,
+      z: 3,
+      rotationX: -5,
+      rotationY: 45,
+      rotationZ: 12,
+      scaleX: 1.25,
+      scaleY: 1.25,
+      scaleZ: 1.25,
+      solid: false,
+      collisionRadius: 1
+    })).graph;
+    const secondModelEntityNode = findNode(graph, function (n) {
+      return n.type === "model_entity" && n.id !== modelEntityNode.id && n.values.label === "Walker Drop 2";
+    }, "tweede model_entity aangemaakt");
+    assert(secondModelEntityNode.values.entityId !== modelEntityNode.values.entityId, "tweede drop krijgt unieke entityId");
+
+    const duplicateModelEntityResponse = await call("POST", "/api/editor/nodes/" + modelEntityNode.id + "/duplicate");
+    assert(duplicateModelEntityResponse.status === 201 && duplicateModelEntityResponse.json && duplicateModelEntityResponse.json.nodeId, "model_entity dupliceren werkt");
+    graph = duplicateModelEntityResponse.json.graph;
+    const duplicatedModelEntityNode = findNode(graph, function (n) {
+      return n.id === duplicateModelEntityResponse.json.nodeId;
+    }, "gedupliceerde model_entity aangemaakt");
+    assert(duplicatedModelEntityNode.type === "model_entity", "duplicaat is model_entity");
+    assert(duplicatedModelEntityNode.values.entityId !== modelEntityNode.values.entityId && duplicatedModelEntityNode.values.entityId !== secondModelEntityNode.values.entityId, "duplicaat krijgt unieke entityId");
+    assert(duplicatedModelEntityNode.values.walkable === false, "walkable checkbox defaultt false");
+    assert((graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === duplicatedModelEntityNode.id && edge.fromPort === "entity" && edge.toPort === "entities";
+    }), "duplicaat blijft automatisch verbonden");
+
+    graph = await patchNodeValues(modelEntityNode.id, { x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1 });
+    graph = await patchNodeValues(secondModelEntityNode.id, { x: 12, y: 0, z: 3, rotationX: -5, rotationY: 45, rotationZ: 12, scaleX: 1.25, scaleY: 1.25, scaleZ: 1.25 });
+    graph = await patchNodeValues(duplicatedModelEntityNode.id, { x: -7, y: 0, z: 2, rotationX: 15, rotationY: 90, rotationZ: -10, scaleX: 0.75, scaleY: 0.75, scaleZ: 0.75, walkable: true });
+    const patchedOriginalModelEntityNode = findNode(graph, function (n) { return n.id === modelEntityNode.id; }, "eerste model_entity blijft bestaan");
+    const patchedSecondModelEntityNode = findNode(graph, function (n) { return n.id === secondModelEntityNode.id; }, "tweede model_entity blijft bestaan");
+    const patchedDuplicatedModelEntityNode = findNode(graph, function (n) { return n.id === duplicatedModelEntityNode.id; }, "gedupliceerde model_entity blijft bestaan");
+    assert(patchedOriginalModelEntityNode.values.x === 5 && patchedOriginalModelEntityNode.values.rotationY === 20, "eerste instance bewaart eigen transform");
+    assert(patchedSecondModelEntityNode.values.x === 12 && patchedSecondModelEntityNode.values.rotationY === 45, "tweede drop bewaart eigen transform");
+    assert(patchedDuplicatedModelEntityNode.values.x === -7 && patchedDuplicatedModelEntityNode.values.rotationY === 90, "duplicate bewaart eigen transform");
+    assert(patchedDuplicatedModelEntityNode.values.walkable === true, "walkable checkbox bewaart true");
+
+    graph = (await createNode("bounded_area_scatter", {
+      scatterId: "scatter_forest_patch",
+      enabled: true,
+      areaCenterX: 8,
+      areaCenterZ: -4,
+      areaWidth: 18,
+      areaDepth: 12,
+      areaRotationY: 25,
+      count: 6,
+      sourceAssetIds: [modelId, treeAssetId],
+      randomObjectSelection: true,
+      boundaryBlocksPlayer: true,
+      seed: "scatter_seed_01",
+      scaleMin: 0.8,
+      scaleMax: 1.2,
+      rotationYMin: -45,
+      rotationYMax: 45,
+      points: [
+        { x: -1, z: -8 },
+        { x: 6, z: -11 },
+        { x: 15, z: -8 },
+        { x: 18, z: -1 },
+        { x: 11, z: 6 },
+        { x: 0, z: 3 }
+      ]
+    })).graph;
+    const scatterNode = findNode(graph, function (n) {
+      return n.type === "bounded_area_scatter" && n.values.scatterId === "scatter_forest_patch";
+    }, "bounded area scatter aangemaakt");
+    assert(Array.isArray(scatterNode.values.sourceAssetIds) && scatterNode.values.sourceAssetIds.length === 2, "scatter bewaart source assets");
+    assert(scatterNode.values.sourceAssetIds.includes(modelId) && scatterNode.values.sourceAssetIds.includes(treeAssetId), "scatter bewaart gekozen assets");
     graph = (await createNode("keybind", { bindingId: "kb_direct", action: "move_forward", keyCode: "KeyW" })).graph;
     const keybindDirect = findNode(graph, function (n) { return n.type === "keybind" && n.values.bindingId === "kb_direct"; }, "directe keybind aangemaakt");
 
@@ -690,6 +928,15 @@ async function main() {
     const groupInputNode = findNode(graph, function (n) { return n.parentId === groupNode.id && n.type === "group_input"; }, "group input bestaat");
     const groupOutputNode = findNode(graph, function (n) { return n.parentId === groupNode.id && n.type === "group_output"; }, "group output bestaat");
     const gameOutputNode = findNode(graph, function (n) { return n.type === "game_output"; }, "game output bestaat");
+    assert((graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === modelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
+    }), "eerste model_entity blijft automatisch verbonden");
+    assert((graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === secondModelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
+    }), "tweede model_entity blijft automatisch verbonden");
+    assert((graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === duplicatedModelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
+    }), "gedupliceerde model_entity blijft automatisch verbonden");
 
     graph = (await createNode("ui_hud_text", {
       moduleId: "hud_status",
@@ -732,10 +979,6 @@ async function main() {
 
     graph = await connect(graph, keybindDirect.id, "keybind", gameOutputNode.id, "keybinds");
     graph = await connect(graph, keybindGroup1.id, "keybind", groupNode.id, "keybinds_in");
-    const validateBeforeInternal = await call("GET", "/api/editor/validate");
-    assert(validateBeforeInternal.status === 200 && !validateBeforeInternal.json.ok && validateBeforeInternal.json.errors.some(function (message) {
-      return message.includes("Group output") && message.includes("not connected inside the group");
-    }), "group output zonder interne bron faalt validatie");
 
     graph = await connect(graph, groupInputNode.id, "keybinds_in", groupOutputNode.id, "keybinds_out");
 
@@ -756,6 +999,16 @@ async function main() {
 
     graph = (await createNode("keybind", { bindingId: "kb_group2", action: "move_left", keyCode: "KeyA" }, group2Node.id)).graph;
     const keybindGroup2 = findNode(graph, function (n) { return n.type === "keybind" && n.values.bindingId === "kb_group2"; }, "nested keybind aangemaakt");
+
+    assert(group2OutputNode.parentId === group2Node.id, "nested group output hoort bij Group 2");
+    const illegalCrossBoundaryEdge = await call("POST", "/api/editor/edges", {
+      edge: { fromNodeId: group2OutputNode.id, fromPort: "keybinds_out", toNodeId: gameOutputNode.id, toPort: "keybinds" }
+    });
+    assert(illegalCrossBoundaryEdge.status === 400, "cross-boundary edge wordt geweigerd");
+    const graphAfterIllegalEdge = await call("GET", "/api/editor/graph");
+    assert(!graphAfterIllegalEdge.json.edges.some(function (edge) {
+      return edge.fromNodeId === group2OutputNode.id && edge.toNodeId === gameOutputNode.id;
+    }), "illegal edge wordt niet opgeslagen");
 
     graph = await connect(graph, keybindGroup2.id, "keybind", group2OutputNode.id, "keybinds_out");
     graph = await connect(graph, group2Node.id, "keybinds_out", groupOutputNode.id, "keybinds_out");
@@ -868,16 +1121,24 @@ async function main() {
     })).graph;
     const blockerAreaNode = findNode(graph, function (n) { return n.type === "blocker_area" && n.values.blockerId === "mountain_blocker_01"; }, "blocker area aangemaakt");
 
+    const walkableSurfacePoints = [
+      { x: -3, y: 0.425, z: -1.25 },
+      { x: 3, y: 0.725, z: -1.25 },
+      { x: 2.4, y: 0.745, z: 1.25 },
+      { x: -2.4, y: 0.505, z: 1.25 }
+    ];
+
     graph = (await createNode("walkable_surface", {
       surfaceId: "bridge_walk_01",
       label: "Bridge Walk Surface",
       x: 0,
-      y: 0.35,
+      y: 0.6,
       z: 0,
       width: 6,
       depth: 2.5,
       rotationY: 0,
-      priority: 10
+      priority: 10,
+      points: walkableSurfacePoints
     })).graph;
     const walkableSurfaceNode = findNode(graph, function (n) { return n.type === "walkable_surface" && n.values.surfaceId === "bridge_walk_01"; }, "walkable surface aangemaakt");
 
@@ -888,7 +1149,7 @@ async function main() {
     graph = await connect(graph, dirNode.id, "light", gameOutputNode.id, "lights");
     graph = await connect(graph, playerNode.id, "player", gameOutputNode.id, "player");
     graph = await connect(graph, spawnNode.id, "spawn", gameOutputNode.id, "spawn");
-    graph = await connect(graph, modelEntityNode.id, "entity", gameOutputNode.id, "entities");
+    graph = await connect(graph, scatterNode.id, "entity", gameOutputNode.id, "entities");
     graph = await connect(graph, terrainLayerNode.id, "terrain", gameOutputNode.id, "terrain");
     graph = await connect(graph, pathLayerNode.id, "terrain", gameOutputNode.id, "terrain");
     graph = await connect(graph, waterLayerNode.id, "terrain", gameOutputNode.id, "terrain");
@@ -900,17 +1161,84 @@ async function main() {
     graph = await connect(graph, disabledPerfHudNode.id, "ui", gameOutputNode.id, "ui");
 
     const validate = await call("GET", "/api/editor/validate");
+    if (!validate.json.ok) console.error("VALIDATE ERRORS", validate.json.errors);
     assert(validate.status === 200 && validate.json.ok, "validatie is groen");
 
     const draft = await call("POST", "/api/editor/save-draft");
     assert(draft.status === 200 && draft.json.ok, "draft opslaan werkt");
+    const draftWorld = await call("GET", "/api/editor/draft-world");
+    assert(draftWorld.status === 200, "draft world is beschikbaar");
+    assert(draftWorld.json.camera && draftWorld.json.camera.id === "main_cam", "draft world bewaart camera node");
+    assert(draftWorld.json.camera && draftWorld.json.camera.pitch === 60 && draftWorld.json.camera.yaw === 0 && draftWorld.json.camera.startDistance === 26 && draftWorld.json.camera.distance === 20 && draftWorld.json.camera.fov === 55, "game camera blijft node-driven na save-draft");
+    assert(draftWorld.json.editorCamera && draftWorld.json.editorCamera.id === "editor_cam", "draft world bewaart editor camera node");
+    assert(draftWorld.json.editorCamera && draftWorld.json.editorCamera.target && draftWorld.json.editorCamera.target.x === 12 && draftWorld.json.editorCamera.target.y === 3 && draftWorld.json.editorCamera.target.z === -5, "editor camera publiceert target");
+    assert(draftWorld.json.world && draftWorld.json.world.fogColor === "#1a2b3c", "draft world publiceert fogColor");
+    assert(draftWorld.json.world && draftWorld.json.world.fogDensity === 0.18, "draft world publiceert fogDensity");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowQuality === "high", "draft world publiceert shadowQuality");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowBias === -0.0006, "draft world publiceert shadowBias");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowNormalBias === 0.2, "draft world publiceert shadowNormalBias");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowCameraSize === 90, "draft world publiceert shadowCameraSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowCameraFar === 700, "draft world publiceert shadow distance");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game && draftWorld.json.world.performance.game.shadowsEnabled === true, "draft world publiceert game shadows");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.fogEnabled === false, "draft world kan fog in editor uitschakelen");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.shadowsEnabled === false, "draft world publiceert editor shadows");
+    assert(draftWorld.json.collision && Array.isArray(draftWorld.json.collision.walkableSurfaces) && Array.isArray(draftWorld.json.collision.walkableSurfaces[0].points) && draftWorld.json.collision.walkableSurfaces[0].points.length === walkableSurfacePoints.length, "draft world publiceert walkable polygon points");
+    assertNear(draftWorld.json.collision.walkableSurfaces[0].points[0].y, 0.425, 0.0001, "draft world bewaart walkable point hoogte");
+    assert(Array.isArray(draftWorld.json.scatterAreas) && draftWorld.json.scatterAreas.length === 1, "draft world publiceert één scatter area");
+    assert(Array.isArray(draftWorld.json.scatterAreas[0].points) && draftWorld.json.scatterAreas[0].points.length >= 6, "scatter area publiceert polygon points");
+    assert(draftWorld.json.scatterAreas[0].boundaryBlocksPlayer === true, "scatter area publiceert boundary flag");
+    const initialScatterSignature = scatterSignature(draftWorld.json, scatterNode.id);
+    assert(initialScatterSignature.length > 0, "scatter publiceert preview instances in draft world");
+    assert((draftWorld.json.entities || []).filter(function (entity) { return entity && entity.nodeId === scatterNode.id; }).length === 6, "draft world publiceert 6 scatter instances");
+    const draftOriginalModelEntity = (draftWorld.json.entities || []).find(function (entity) { return entity && entity.nodeId === modelEntityNode.id; }) || null;
+    const draftSecondModelEntity = (draftWorld.json.entities || []).find(function (entity) { return entity && entity.nodeId === secondModelEntityNode.id; }) || null;
+    const draftDuplicatedModelEntity = (draftWorld.json.entities || []).find(function (entity) { return entity && entity.nodeId === duplicatedModelEntityNode.id; }) || null;
+    assert(draftOriginalModelEntity && draftSecondModelEntity && draftDuplicatedModelEntity, "draft world publiceert alle model instances");
+    assert(draftDuplicatedModelEntity.walkable === true, "walkable publiceert naar draft world");
+    assert(Array.isArray(draftWorld.json.scatterAreas[0].sourceAssetIds) && draftWorld.json.scatterAreas[0].sourceAssetIds.includes(modelId) && draftWorld.json.scatterAreas[0].sourceAssetIds.includes(treeAssetId), "scatter area bewaart bron assets");
+    assert(draftWorld.json.scatterAreas[0].seed === "scatter_seed_01" && draftWorld.json.scatterAreas[0].count === 6 && draftWorld.json.scatterAreas[0].enabled === true, "scatter area bewaart instellingen");
+
+    graph = await patchNodeValues(scatterNode.id, { seed: "scatter_seed_02" });
+    const draftAfterScatterSeedChange = await call("POST", "/api/editor/save-draft");
+    assert(draftAfterScatterSeedChange.status === 200 && draftAfterScatterSeedChange.json.ok, "save-draft werkt na seed wijziging");
+    const changedDraftWorld = await call("GET", "/api/editor/draft-world");
+    assert(changedDraftWorld.status === 200, "draft world blijft beschikbaar na seed wijziging");
+    const changedScatterSignature = scatterSignature(changedDraftWorld.json, scatterNode.id);
+    assert(changedScatterSignature !== initialScatterSignature, "scatter verandert bij andere seed");
+
+    graph = await patchNodeValues(scatterNode.id, { seed: "scatter_seed_01" });
+    const draftAfterScatterSeedReset = await call("POST", "/api/editor/save-draft");
+    assert(draftAfterScatterSeedReset.status === 200 && draftAfterScatterSeedReset.json.ok, "save-draft werkt na seed herstel");
+    const restoredDraftWorld = await call("GET", "/api/editor/draft-world");
+    assert(restoredDraftWorld.status === 200, "draft world blijft beschikbaar na seed herstel");
+    const restoredScatterSignature = scatterSignature(restoredDraftWorld.json, scatterNode.id);
+    assert(restoredScatterSignature === initialScatterSignature, "scatter is deterministisch per seed");
 
     const publish = await call("POST", "/api/editor/publish");
     assert(publish.status === 200 && publish.json.ok, "publiceren werkt");
+    const draftAfterPublish = await call("GET", "/api/editor/draft-world");
+    assert(draftAfterPublish.status === 200 && draftAfterPublish.json.editorCamera && draftAfterPublish.json.editorCamera.id === "editor_cam", "draft world behoudt editor camera na publish");
 
     const after = await call("GET", "/api/game/world");
     assert(after.status === 200, "game wereld is 200 na publish");
     assert(after.json.camera && after.json.camera.mode === "top-down", "camera is top-down");
+    assert(after.json.camera && after.json.camera.id === "main_cam" && after.json.camera.pitch === 60 && after.json.camera.yaw === 0 && after.json.camera.startDistance === 26 && after.json.camera.distance === 20 && after.json.camera.fov === 55, "game camera publiceert nodewaarden");
+    assert(!after.json.editorCamera, "editor camera publiceert niet naar /game/");
+    assert(after.json.world && after.json.world.fogColor === "#1a2b3c", "game world publiceert fogColor");
+    assert(after.json.world && after.json.world.fogDensity === 0.18, "game world publiceert fogDensity");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowQuality === "high", "game world publiceert shadowQuality");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowBias === -0.0006, "game world publiceert shadowBias");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowNormalBias === 0.2, "game world publiceert shadowNormalBias");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowCameraSize === 90, "game world publiceert shadowCameraSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowCameraFar === 700, "game world publiceert shadow distance");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game && after.json.world.performance.game.shadowsEnabled === true, "game world publiceert game shadows");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.fogEnabled === false, "game world behoudt editor fog toggle in draft data");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.shadowsEnabled === false, "game world behoudt editor shadows in draft data");
+    const editorShadowPolicy = resolveShadowPolicy(after.json, "editor");
+    const gameShadowPolicy = resolveShadowPolicy(after.json, "game");
+    assert(editorShadowPolicy.enabled === false, "editor shadow policy volgt editor toggle");
+    assert(gameShadowPolicy.enabled === true, "game shadow policy volgt game toggle");
+    assert(gameShadowPolicy.mapSize === 4096, "game shadow policy gebruikt high mapSize");
     assert(after.json.player && after.json.player.modelAssetId === modelId, "speler verwijst naar geuploade model");
     assert(after.json.player && after.json.player.animationClip === "Idle", "speler publiceert gekozen animationClip");
     assert(after.json.player && after.json.player.idleAnimation === "Idle", "speler publiceert idleAnimation");
@@ -918,13 +1246,34 @@ async function main() {
     assert(after.json.player && after.json.player.runAnimation === "Run", "speler publiceert runAnimation");
     assert(after.json.spawn && after.json.spawn.x === 0, "spawn aanwezig");
     assert(Array.isArray(after.json.entities) && after.json.entities.some(function (entity) { return entity.animationClip === "Walk"; }), "entities publiceren gekozen animationClip");
-    const publishedModelEntity = Array.isArray(after.json.entities)
-      ? after.json.entities.find(function (entity) { return entity.id === "entity_walk"; })
+    const publishedOriginalModelEntity = Array.isArray(after.json.entities)
+      ? after.json.entities.find(function (entity) { return entity.nodeId === modelEntityNode.id; })
       : null;
-    assert(publishedModelEntity && publishedModelEntity.idleAnimation === "Idle", "entities publiceren idleAnimation");
-    assert(publishedModelEntity && publishedModelEntity.walkAnimation === "Walk", "entities publiceren walkAnimation");
-    assert(publishedModelEntity && publishedModelEntity.runAnimation === "Run", "entities publiceren runAnimation");
-    assert(publishedModelEntity && publishedModelEntity.transform && publishedModelEntity.transform.rotation.x === 10 && publishedModelEntity.transform.rotation.y === 20 && publishedModelEntity.transform.rotation.z === 30, "entities publiceren rotationX/Y/Z");
+    const publishedSecondModelEntity = Array.isArray(after.json.entities)
+      ? after.json.entities.find(function (entity) { return entity.nodeId === secondModelEntityNode.id; })
+      : null;
+    const publishedDuplicatedModelEntity = Array.isArray(after.json.entities)
+      ? after.json.entities.find(function (entity) { return entity.nodeId === duplicatedModelEntityNode.id; })
+      : null;
+    assert(publishedOriginalModelEntity && publishedSecondModelEntity && publishedDuplicatedModelEntity, "alle model instances zijn gepubliceerd");
+    assert(publishedOriginalModelEntity.id !== publishedSecondModelEntity.id && publishedOriginalModelEntity.id !== publishedDuplicatedModelEntity.id && publishedSecondModelEntity.id !== publishedDuplicatedModelEntity.id, "elk gepubliceerde model krijgt een unieke runtime id");
+    assert(publishedOriginalModelEntity.idleAnimation === "Idle", "eerste entity publiceert idleAnimation");
+    assert(publishedOriginalModelEntity.walkAnimation === "Walk", "eerste entity publiceert walkAnimation");
+    assert(publishedOriginalModelEntity.runAnimation === "Run", "eerste entity publiceert runAnimation");
+    assert(publishedOriginalModelEntity.transform && publishedOriginalModelEntity.transform.rotation.x === 10 && publishedOriginalModelEntity.transform.rotation.y === 20 && publishedOriginalModelEntity.transform.rotation.z === 30, "eerste entity publiceert rotationX/Y/Z");
+    assert(publishedSecondModelEntity.transform && publishedSecondModelEntity.transform.rotation.x === -5 && publishedSecondModelEntity.transform.rotation.y === 45 && publishedSecondModelEntity.transform.rotation.z === 12, "tweede drop publiceert eigen rotation");
+    assert(publishedDuplicatedModelEntity.transform && publishedDuplicatedModelEntity.transform.rotation.x === 15 && publishedDuplicatedModelEntity.transform.rotation.y === 90 && publishedDuplicatedModelEntity.transform.rotation.z === -10, "duplicate publiceert eigen rotation");
+    assert(publishedDuplicatedModelEntity.walkable === true, "walkable publiceert naar game runtime");
+    assert((after.json.entities || []).filter(function (entity) { return entity && entity.nodeId === scatterNode.id; }).length === 6, "scatter publiceert count instances");
+    assert(scatterSignature(after.json, scatterNode.id) === initialScatterSignature, "scatter blijft deterministisch in game runtime");
+    assert(Array.isArray(after.json.scatterAreas) && after.json.scatterAreas.length === 1, "scatter area publiceert metadata");
+    assert(after.json.scatterAreas[0].seed === "scatter_seed_01" && after.json.scatterAreas[0].count === 6 && after.json.scatterAreas[0].enabled === true, "scatter area publiceert instellingen");
+    assert(after.json.scatterAreas[0].boundaryBlocksPlayer === true, "scatter area publiceert boundary flag");
+    assert(Array.isArray(after.json.scatterAreas[0].sourceAssetIds) && after.json.scatterAreas[0].sourceAssetIds.includes(modelId) && after.json.scatterAreas[0].sourceAssetIds.includes(treeAssetId), "scatter area publiceert bron assets");
+    assert(Array.isArray(after.json.scatterAreas[0].points) && after.json.scatterAreas[0].points.length >= 6, "scatter area publiceert polygon punten");
+    const publishedWalkability = createWalkabilityIndex(after.json);
+    assert(isPointBlockedByTerrain(publishedWalkability, 8, -4, 0.5), "scatter boundary blokkeert speler binnen polygon");
+    assert(!isPointBlockedByTerrain(publishedWalkability, 40, 40, 0.5), "scatter boundary blokkeert speler buiten polygon niet");
     assert(Array.isArray(after.json.keybinds) && after.json.keybinds.length === 3, "keybinds uit root en beide groups zijn mee gepubliceerd");
     const publishedKeybindIds = new Set(after.json.keybinds.map(function (entry) { return entry.id; }));
     assert(publishedKeybindIds.has("kb_direct"), "directe keybind is gepubliceerd");
@@ -980,11 +1329,25 @@ async function main() {
     assert(after.json.terrain.surfaces[0].textureAssetId === surfaceMainTextureId, "surface layer publiceert textureAssetId");
     assert(Array.isArray(after.json.terrain.paths) && after.json.terrain.paths.length === 1, "oude path layer blijft bestaan na toevoeging surface layer");
     assert(Array.isArray(after.json.terrain.waters) && after.json.terrain.waters.length === 1, "oude water layer blijft bestaan na toevoeging surface layer");
-    assert(after.json.collision && Array.isArray(after.json.collision.blockers) && after.json.collision.blockers.length === 1, "collision blockers zijn gepubliceerd");
-    assert(Array.isArray(after.json.collision.blockers[0].points) && after.json.collision.blockers[0].points.length === 3, "blocker area publiceert polygon points");
-    assert(after.json.collision.blockers[0].reason === "mountain", "blocker area publiceert reason");
+    const publishedCollisionBlockers = after.json.collision && Array.isArray(after.json.collision.blockers) ? after.json.collision.blockers : [];
+    assert(publishedCollisionBlockers.length === 2, "collision blockers zijn gepubliceerd");
+    const publishedMountainBlocker = publishedCollisionBlockers.find(function (entry) { return entry && entry.reason === "mountain"; }) || null;
+    const publishedScatterBlocker = publishedCollisionBlockers.find(function (entry) { return entry && entry.reason === "scatter_forest_patch"; }) || null;
+    assert(publishedMountainBlocker && Array.isArray(publishedMountainBlocker.points) && publishedMountainBlocker.points.length === 3, "blocker area publiceert polygon points");
+    assert(publishedMountainBlocker && publishedMountainBlocker.reason === "mountain", "blocker area publiceert reason");
+    assert(publishedScatterBlocker && Array.isArray(publishedScatterBlocker.points) && publishedScatterBlocker.points.length >= 6, "scatter boundary publiceert polygon points");
+    assert(publishedScatterBlocker && publishedScatterBlocker.reason === "scatter_forest_patch", "scatter boundary publiceert reason");
     assert(Array.isArray(after.json.collision.walkableSurfaces) && after.json.collision.walkableSurfaces.length === 1, "walkable surfaces zijn gepubliceerd");
     assert(after.json.collision.walkableSurfaces[0].width === 6 && after.json.collision.walkableSurfaces[0].depth === 2.5, "walkable surface publiceert afmetingen");
+    assert(Array.isArray(after.json.collision.walkableSurfaces[0].points) && after.json.collision.walkableSurfaces[0].points.length === walkableSurfacePoints.length, "walkable surface publiceert polygon points");
+    assertNear(after.json.collision.walkableSurfaces[0].points[1].y, 0.725, 0.0001, "walkable surface publiceert point hoogte");
+    assert(!isPointOnWalkableSurface(publishedWalkability, 2.8, 1.2), "gepubliceerde walkable surface gebruikt polygon vorm");
+    const walkableSurfaceMove = resolveMovement(
+      { x: -4, y: 0, z: 0 },
+      { x: 0, y: 0, z: 0 },
+      { radius: 0.5, ground: after.json.ground, solids: [], index: publishedWalkability }
+    );
+    assertNear(walkableSurfaceMove.y, 0.6, 0.0001, "gepubliceerde walkable surface zet speler op geinterpoleerde hoogte");
     assert(Array.isArray(after.json.ui) && after.json.ui.some(function (entry) { return entry.type === "hud_text" && entry.id === "hud_status"; }), "ui_hud_text blijft gepubliceerd");
     const publishedPerformanceHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "perf_hud_main"; }) : null;
     assert(publishedPerformanceHud && publishedPerformanceHud.type === "debug_performance_hud" && publishedPerformanceHud.enabled === true && publishedPerformanceHud.anchor === "top-right" && publishedPerformanceHud.compact === true && publishedPerformanceHud.updateIntervalMs === 500, "debug_performance_hud publiceert read-model");

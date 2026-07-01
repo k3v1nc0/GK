@@ -71,6 +71,64 @@ function mixColors(primaryHex, secondaryHex, secondaryWeight = 0.25) {
   return color;
 }
 
+const SHADOW_QUALITY_MAP_SIZES = {
+  low: 1024,
+  medium: 2048,
+  high: 4096
+};
+
+const WORLD_PERFORMANCE_DEFAULTS = {
+  shared: {
+    shadowQuality: "medium",
+    shadowBias: -0.0003,
+    shadowNormalBias: 0.04,
+    shadowCameraSize: 60,
+    shadowCameraFar: 400,
+    smoothShading: true
+  },
+  game: {
+    pixelRatioCap: 1,
+    shadowsEnabled: true,
+    batchStaticProps: true,
+    batchScatterProps: true,
+    staticPropCastShadows: false,
+    staticPropReceiveShadows: true
+  },
+  editor: {
+    pixelRatioCap: 2,
+    fogEnabled: false,
+    shadowsEnabled: true
+  }
+};
+
+function normalizeShadowQuality(value, fallback = WORLD_PERFORMANCE_DEFAULTS.shared.shadowQuality) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "off" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
+  return fallback;
+}
+
+function shadowMapSizeForQuality(quality) {
+  return SHADOW_QUALITY_MAP_SIZES[normalizeShadowQuality(quality)] || SHADOW_QUALITY_MAP_SIZES.medium;
+}
+
+export function resolveShadowPolicy(worldData, mode = "editor") {
+  const source = worldData?.world?.performance || {};
+  const shared = source.shared || {};
+  const game = source.game || {};
+  const editor = source.editor || {};
+  const quality = normalizeShadowQuality(shared.shadowQuality);
+  const modeEnabled = mode === "editor" ? editor.shadowsEnabled !== false : game.shadowsEnabled !== false;
+  return {
+    enabled: quality !== "off" && modeEnabled,
+    quality: quality,
+    mapSize: shadowMapSizeForQuality(quality),
+    bias: clamp(num(shared.shadowBias, WORLD_PERFORMANCE_DEFAULTS.shared.shadowBias), -0.01, 0.01),
+    normalBias: clamp(num(shared.shadowNormalBias, WORLD_PERFORMANCE_DEFAULTS.shared.shadowNormalBias), 0, 1),
+    cameraSize: Math.max(5, num(shared.shadowCameraSize, WORLD_PERFORMANCE_DEFAULTS.shared.shadowCameraSize)),
+    cameraFar: Math.max(10, num(shared.shadowCameraFar, WORLD_PERFORMANCE_DEFAULTS.shared.shadowCameraFar))
+  };
+}
+
 const TERRAIN_MATERIAL_PRESETS = {
   grass: "#6faa4f",
   sand: "#c8a968",
@@ -200,6 +258,78 @@ function normalizeCollisionPointList(points) {
   return normalized;
 }
 
+function normalizeWalkableCollisionPointList(points, fallbackY = 0) {
+  const normalized = [];
+  const defaultY = num(fallbackY, 0);
+  for (const point of Array.isArray(points) ? points : []) {
+    const x = Number(point?.x);
+    const z = Number(point?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    const y = Number.isFinite(Number(point?.y)) ? Number(point.y) : defaultY;
+    if (normalized.length) {
+      const previous = normalized[normalized.length - 1];
+      if (Math.abs(previous.x - x) < COLLISION_EPSILON && Math.abs(previous.z - z) < COLLISION_EPSILON) continue;
+    }
+    normalized.push({ x: x, y: y, z: z });
+  }
+  if (normalized.length >= 2) {
+    const first = normalized[0];
+    const last = normalized[normalized.length - 1];
+    if (Math.abs(first.x - last.x) < COLLISION_EPSILON && Math.abs(first.z - last.z) < COLLISION_EPSILON) {
+      normalized.pop();
+    }
+  }
+  return normalized;
+}
+
+function triangulateWalkableSurface(points) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  const contour = points.map(function (point) {
+    return new THREE.Vector2(point.x, point.z);
+  });
+  let rawTriangles = [];
+  try {
+    rawTriangles = THREE.ShapeUtils.triangulateShape(contour, []);
+  } catch {
+    rawTriangles = [];
+  }
+  if (!rawTriangles.length && points.length === 3) rawTriangles = [[0, 1, 2]];
+  const triangles = [];
+  for (const triangle of rawTriangles) {
+    if (!Array.isArray(triangle) || triangle.length < 3) continue;
+    const ai = Number(triangle[0]);
+    const bi = Number(triangle[1]);
+    const ci = Number(triangle[2]);
+    if (!Number.isInteger(ai) || !Number.isInteger(bi) || !Number.isInteger(ci)) continue;
+    const a = points[ai];
+    const b = points[bi];
+    const c = points[ci];
+    if (!a || !b || !c) continue;
+    triangles.push({
+      a: a,
+      b: b,
+      c: c,
+      minX: Math.min(a.x, b.x, c.x),
+      maxX: Math.max(a.x, b.x, c.x),
+      minZ: Math.min(a.z, b.z, c.z),
+      maxZ: Math.max(a.z, b.z, c.z)
+    });
+  }
+  return triangles;
+}
+
+function barycentricHeightAtXZ(px, pz, triangle) {
+  if (!triangle?.a || !triangle?.b || !triangle?.c) return null;
+  const { a, b, c } = triangle;
+  const denominator = ((b.z - c.z) * (a.x - c.x)) + ((c.x - b.x) * (a.z - c.z));
+  if (Math.abs(denominator) <= COLLISION_EPSILON) return null;
+  const wa = (((b.z - c.z) * (px - c.x)) + ((c.x - b.x) * (pz - c.z))) / denominator;
+  const wb = (((c.z - a.z) * (px - c.x)) + ((a.x - c.x) * (pz - c.z))) / denominator;
+  const wc = 1 - wa - wb;
+  if (wa < -COLLISION_EPSILON || wb < -COLLISION_EPSILON || wc < -COLLISION_EPSILON) return null;
+  return (a.y * wa) + (b.y * wb) + (c.y * wc);
+}
+
 function pointOnSegment(px, pz, ax, az, bx, bz) {
   const abx = bx - ax;
   const abz = bz - az;
@@ -254,6 +384,61 @@ function distanceSquaredToPolyline(px, pz, points) {
     if (distanceSq < best) best = distanceSq;
   }
   return best;
+}
+
+function closestPointOnSegment2D(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const lengthSq = abx * abx + abz * abz;
+  if (lengthSq <= COLLISION_EPSILON) {
+    const dx = px - ax;
+    const dz = pz - az;
+    return {
+      x: ax,
+      z: az,
+      t: 0,
+      distanceSq: dx * dx + dz * dz
+    };
+  }
+  const t = clamp(((px - ax) * abx + (pz - az) * abz) / lengthSq, 0, 1);
+  const x = ax + abx * t;
+  const z = az + abz * t;
+  const dx = px - x;
+  const dz = pz - z;
+  return {
+    x: x,
+    z: z,
+    t: t,
+    distanceSq: dx * dx + dz * dz
+  };
+}
+
+function closestPointOnPolygonBoundary(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let best = null;
+  for (let index = 0, previousIndex = points.length - 1; index < points.length; previousIndex = index, index += 1) {
+    const start = points[previousIndex];
+    const end = points[index];
+    const candidate = closestPointOnSegment2D(px, pz, start.x, start.z, end.x, end.z);
+    if (!best || candidate.distanceSq < best.distanceSq) {
+      best = {
+        x: candidate.x,
+        z: candidate.z,
+        t: candidate.t,
+        distanceSq: candidate.distanceSq,
+        start: start,
+        end: end
+      };
+    }
+  }
+  return best;
+}
+
+function sampleWalkableBoundaryHeight(boundary, fallbackY = 0) {
+  if (!boundary?.start || !boundary?.end) return num(fallbackY, 0);
+  const startY = num(boundary.start.y, fallbackY);
+  const endY = num(boundary.end.y, fallbackY);
+  return startY + ((endY - startY) * clamp(num(boundary.t, 0), 0, 1));
 }
 
 function pointInAxisAlignedRectangle(px, pz, rect, inflate = 0) {
@@ -362,16 +547,22 @@ export function createWalkabilityIndex(worldData) {
   for (const walkable of walkables) {
     const width = Math.max(0, num(walkable?.width, 0));
     const depth = Math.max(0, num(walkable?.depth, 0));
-    if (width <= 0 || depth <= 0) continue;
+    const y = num(walkable?.y, 0);
+    const points = normalizeWalkableCollisionPointList(walkable?.points, y);
+    const mode = points.length >= 3 ? "polygon" : "rectangle";
+    if (mode === "rectangle" && (width <= 0 || depth <= 0)) continue;
     index.walkables.push({
       id: walkable?.id || null,
       x: num(walkable?.x, 0),
-      y: num(walkable?.y, 0),
+      y: y,
       z: num(walkable?.z, 0),
       width: width,
       depth: depth,
       rotationY: num(walkable?.rotationY, 0),
-      priority: num(walkable?.priority, 0)
+      priority: num(walkable?.priority, 0),
+      points: points,
+      mode: mode,
+      triangles: mode === "polygon" ? triangulateWalkableSurface(points) : []
     });
   }
 
@@ -390,6 +581,50 @@ function resolveWalkabilitySource(source) {
   if (!source) return activeWalkabilityIndex;
   if (Array.isArray(source.walkables) && Array.isArray(source.blockers) && Array.isArray(source.waters)) return source;
   return activeWalkabilityIndex;
+}
+
+function findWalkableSurfaceEntry(index, x, z, inflate = 0) {
+  const walkables = Array.isArray(index?.walkables) ? index.walkables : [];
+  const extraRadius = Math.max(0, num(inflate, 0));
+  for (const walkable of walkables) {
+    if (walkable?.mode === "polygon") {
+      if (extraRadius > COLLISION_EPSILON ? isPolygonBlockedAtRadius(walkable.points, x, z, extraRadius) : pointInPolygon2D(x, z, walkable.points)) {
+        return walkable;
+      }
+    } else if (pointInRotatedRectangle(x, z, walkable, extraRadius)) {
+      return walkable;
+    }
+  }
+  return null;
+}
+
+function walkableSurfaceHeightSample(walkable, x, z, fallbackY = 0) {
+  if (!walkable) return null;
+  if (walkable.mode === "polygon") {
+    for (const triangle of Array.isArray(walkable.triangles) ? walkable.triangles : []) {
+      if (x < triangle.minX - COLLISION_EPSILON || x > triangle.maxX + COLLISION_EPSILON) continue;
+      if (z < triangle.minZ - COLLISION_EPSILON || z > triangle.maxZ + COLLISION_EPSILON) continue;
+      const height = barycentricHeightAtXZ(x, z, triangle);
+      if (height !== null) return height;
+    }
+    return null;
+  }
+  return num(walkable.y, fallbackY);
+}
+
+function walkableSurfaceHeightAt(index, x, z, fallbackY = 0, inflate = 0) {
+  const walkable = findWalkableSurfaceEntry(index, x, z, inflate);
+  if (!walkable) return null;
+  const height = walkableSurfaceHeightSample(walkable, x, z, fallbackY);
+  if (height !== null) return height;
+  const extraRadius = Math.max(0, num(inflate, 0));
+  if (walkable.mode === "polygon" && extraRadius > COLLISION_EPSILON) {
+    const boundary = closestPointOnPolygonBoundary(x, z, walkable.points);
+    if (boundary && boundary.distanceSq <= extraRadius * extraRadius + COLLISION_EPSILON) {
+      return sampleWalkableBoundaryHeight(boundary, fallbackY);
+    }
+  }
+  return num(walkable.y, fallbackY);
 }
 
 export function buildWalkabilityIndex(worldData) {
@@ -413,24 +648,18 @@ function countObjectTree(object) {
   return { objects: objects, meshes: meshes };
 }
 
-export function isPointOnWalkableSurface(source, x, z) {
+export function isPointOnWalkableSurface(source, x, z, radius = 0) {
   const index = resolveWalkabilitySource(source);
   if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
-  for (const walkable of index.walkables) {
-    if (pointInRotatedRectangle(x, z, walkable)) return true;
-  }
-  return false;
+  return Boolean(findWalkableSurfaceEntry(index, x, z, radius));
 }
 
 function isPolygonBlockedAtRadius(points, x, z, radius) {
   if (pointInPolygon2D(x, z, points)) return true;
   const sampleRadius = Math.max(0, num(radius, 0));
   if (sampleRadius <= COLLISION_EPSILON) return false;
-  if (pointInPolygon2D(x + sampleRadius, z, points)) return true;
-  if (pointInPolygon2D(x - sampleRadius, z, points)) return true;
-  if (pointInPolygon2D(x, z + sampleRadius, points)) return true;
-  if (pointInPolygon2D(x, z - sampleRadius, points)) return true;
-  return false;
+  const boundary = closestPointOnPolygonBoundary(x, z, points);
+  return Boolean(boundary && boundary.distanceSq <= sampleRadius * sampleRadius + COLLISION_EPSILON);
 }
 
 export function isPointBlockedByBlocker(source, x, z, radius = 0) {
@@ -490,7 +719,7 @@ export function isPointBlockedBySurface(source, x, z, radius = 0) {
 export function isPointBlockedByTerrain(source, x, z, radius = 0) {
   if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
   const index = resolveWalkabilitySource(source);
-  if (isPointOnWalkableSurface(index, x, z)) return false;
+  if (isPointOnWalkableSurface(index, x, z, radius)) return false;
   return isPointBlockedByBlocker(index, x, z, radius)
     || isPointBlockedByWater(index, x, z, radius)
     || isPointBlockedBySurface(index, x, z, radius);
@@ -537,7 +766,26 @@ function resolveMovementCandidateInto(output, startX, startY, startZ, candidateX
   pushAwayFromSolids(output, radius, solids);
   clampPointToGround(output, ground, radius);
   if (isPointBlockedByTerrain(index, output.x, output.z, radius)) return false;
+  const walkableY = walkableSurfaceHeightAt(index, output.x, output.z, num(ground?.y, startY), radius);
+  if (walkableY !== null) output.y = walkableY;
   return true;
+}
+
+function resolveMovementStepInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius) {
+  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius)) return output;
+  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, startZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
+  if (resolveMovementCandidateInto(output, startX, startY, startZ, startX, desiredY, desiredZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
+  output.x = startX;
+  output.y = startY;
+  output.z = startZ;
+  return output;
+}
+
+function movementSubstepCount(startX, startZ, desiredX, desiredZ, radius) {
+  const distance = Math.hypot(desiredX - startX, desiredZ - startZ);
+  if (distance <= COLLISION_EPSILON) return 1;
+  const stepSize = Math.max(Math.max(0, num(radius, 0)) * 0.45, 0.12);
+  return clamp(Math.ceil(distance / stepSize), 1, 8);
 }
 
 function resolveMovementInto(output, start, desired, options = {}) {
@@ -551,12 +799,29 @@ function resolveMovementInto(output, start, desired, options = {}) {
   const desiredX = num(desired?.x, startX);
   const desiredY = num(desired?.y, startY);
   const desiredZ = num(desired?.z, startZ);
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius)) return output;
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, startZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, startX, desiredY, desiredZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
+  const substeps = movementSubstepCount(startX, startZ, desiredX, desiredZ, radius);
+  let currentX = startX;
+  let currentY = startY;
+  let currentZ = startZ;
   output.x = startX;
   output.y = startY;
   output.z = startZ;
+  for (let stepIndex = 1; stepIndex <= substeps; stepIndex += 1) {
+    const t = stepIndex / substeps;
+    const candidateX = startX + ((desiredX - startX) * t);
+    const candidateY = startY + ((desiredY - startY) * t);
+    const candidateZ = startZ + ((desiredZ - startZ) * t);
+    resolveMovementStepInto(output, currentX, currentY, currentZ, candidateX, candidateY, candidateZ, index, ground, solids, radius);
+    if (!hasMovedXZ(currentX, currentZ, output.x, output.z) && hasMovedXZ(currentX, currentZ, candidateX, candidateZ)) {
+      output.x = currentX;
+      output.y = currentY;
+      output.z = currentZ;
+      return output;
+    }
+    currentX = output.x;
+    currentY = output.y;
+    currentZ = output.z;
+  }
   return output;
 }
 
@@ -692,14 +957,22 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const mode = options.mode || "editor";
   const hudElement = options.hud || null;
 
+  const worldPerformanceDefaults = WORLD_PERFORMANCE_DEFAULTS;
+  let worldPerformance = {
+    shared: { ...worldPerformanceDefaults.shared },
+    game: { ...worldPerformanceDefaults.game },
+    editor: { ...worldPerformanceDefaults.editor }
+  };
+  let shadowPolicy = resolveShadowPolicy(null, mode);
+
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mode === "editor" ? worldPerformance.editor.pixelRatioCap : worldPerformance.game.pixelRatioCap));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.info.autoReset = true;
+  renderer.shadowMap.enabled = shadowPolicy.enabled;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
@@ -718,11 +991,14 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const modifierState = { ctrlKey: false };
 
   let world = null;
+  let worldBuildGeneration = 0;
   let orbitControls = null;
   let selectionHelper = null;
   let transformGuide = null;
   let terrainEditorOverlay = null;
   let terrainEditorOverlayState = null;
+  let scatterEditorOverlay = null;
+  let scatterEditorOverlayState = null;
   let terrainRuntimeGroup = null;
   let terrainRuntimeGeneration = 0;
   const terrainTextureRecords = new Map();
@@ -808,10 +1084,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let lastTime = performance.now();
 
   // Game state
-  const player = { root: null, pos: new THREE.Vector3(), facing: 0, radius: 0.5, speed: 6, sprint: 1.6, turnSpeed: 600 };
+  const player = { root: null, pos: new THREE.Vector3(), facing: 0, radius: 0.5, speed: 6, sprint: 1.6, turnSpeed: 600, animationState: "idle" };
   let camYaw = 0;
   let camPitch = 60;
-  let camDistance = 20;
+  let camDistance = 24;
   let camMinDistance = 1;
   let camMaxDistance = 500;
   let camFollow = true;
@@ -845,8 +1121,139 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let perfHudFrameMs = 0;
   let perfHudWarmup = false;
 
+  function resolveWorldPerformance(worldData) {
+    const source = worldData?.world?.performance || {};
+    const shared = source.shared || {};
+    const game = source.game || {};
+    const editor = source.editor || {};
+    return {
+      shared: {
+        shadowQuality: normalizeShadowQuality(shared.shadowQuality, worldPerformanceDefaults.shared.shadowQuality),
+        shadowBias: clamp(num(shared.shadowBias, worldPerformanceDefaults.shared.shadowBias), -0.01, 0.01),
+        shadowNormalBias: clamp(num(shared.shadowNormalBias, worldPerformanceDefaults.shared.shadowNormalBias), 0, 1),
+        shadowCameraSize: Math.max(5, num(shared.shadowCameraSize, worldPerformanceDefaults.shared.shadowCameraSize)),
+        shadowCameraFar: Math.max(10, num(shared.shadowCameraFar, worldPerformanceDefaults.shared.shadowCameraFar)),
+        smoothShading: shared.smoothShading !== false
+      },
+      game: {
+        pixelRatioCap: clamp(num(game.pixelRatioCap, worldPerformanceDefaults.game.pixelRatioCap), 0.5, 2),
+        shadowsEnabled: game.shadowsEnabled !== false,
+        batchStaticProps: game.batchStaticProps !== false,
+        batchScatterProps: game.batchScatterProps !== false,
+        staticPropCastShadows: game.staticPropCastShadows === true,
+        staticPropReceiveShadows: game.staticPropReceiveShadows !== false
+      },
+      editor: {
+        pixelRatioCap: clamp(num(editor.pixelRatioCap, worldPerformanceDefaults.editor.pixelRatioCap), 0.5, 2),
+        fogEnabled: editor.fogEnabled !== false,
+        shadowsEnabled: editor.shadowsEnabled !== false
+      }
+    };
+  }
+
+  function resolveShadowPolicyFromPerformance(performance, modeName) {
+    const shared = performance?.shared || worldPerformanceDefaults.shared;
+    const modePerformance = modeName === "editor" ? performance?.editor || worldPerformanceDefaults.editor : performance?.game || worldPerformanceDefaults.game;
+    const quality = normalizeShadowQuality(shared.shadowQuality, worldPerformanceDefaults.shared.shadowQuality);
+    return {
+      enabled: quality !== "off" && modePerformance.shadowsEnabled !== false,
+      quality: quality,
+      mapSize: shadowMapSizeForQuality(quality),
+      bias: clamp(num(shared.shadowBias, worldPerformanceDefaults.shared.shadowBias), -0.01, 0.01),
+      normalBias: clamp(num(shared.shadowNormalBias, worldPerformanceDefaults.shared.shadowNormalBias), 0, 1),
+      cameraSize: Math.max(5, num(shared.shadowCameraSize, worldPerformanceDefaults.shared.shadowCameraSize)),
+      cameraFar: Math.max(10, num(shared.shadowCameraFar, worldPerformanceDefaults.shared.shadowCameraFar))
+    };
+  }
+
+  function applyRendererShadowPolicy(policy) {
+    const enabled = Boolean(policy?.enabled);
+    renderer.shadowMap.enabled = enabled;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    return enabled;
+  }
+
+  function applyDirectionalShadowPolicy(directional, policy) {
+    if (!directional) return;
+    directional.castShadow = Boolean(policy?.enabled);
+    if (!policy?.enabled) return;
+    directional.shadow.mapSize.set(policy.mapSize, policy.mapSize);
+    directional.shadow.bias = policy.bias;
+    directional.shadow.normalBias = policy.normalBias;
+    directional.shadow.camera.left = -policy.cameraSize;
+    directional.shadow.camera.right = policy.cameraSize;
+    directional.shadow.camera.top = policy.cameraSize;
+    directional.shadow.camera.bottom = -policy.cameraSize;
+    directional.shadow.camera.far = policy.cameraFar;
+    if (directional.shadow.camera && typeof directional.shadow.camera.updateProjectionMatrix === "function") {
+      directional.shadow.camera.updateProjectionMatrix();
+    }
+  }
+
+  function applyWorldPerformance(worldData) {
+    worldPerformance = resolveWorldPerformance(worldData);
+    shadowPolicy = resolveShadowPolicyFromPerformance(worldPerformance, mode);
+    applyRendererShadowPolicy(shadowPolicy);
+    return worldPerformance;
+  }
+
+  function applySmoothShadingToMaterial(material, smoothShading) {
+    if (!material || typeof material.flatShading === "undefined") return;
+    const nextFlatShading = !Boolean(smoothShading);
+    if (material.flatShading === nextFlatShading) return;
+    material.flatShading = nextFlatShading;
+    material.needsUpdate = true;
+  }
+
+  function applySmoothShadingToObject(object, smoothShading) {
+    if (!object || typeof object.traverse !== "function") return;
+    object.traverse(function (child) {
+      if (!child?.isMesh || !child.material) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) applySmoothShadingToMaterial(material, smoothShading);
+    });
+  }
+
+  function activeModePerformance() {
+    return mode === "editor" ? worldPerformance.editor : worldPerformance.game;
+  }
+
+  function sharedWorldPerformance() {
+    return worldPerformance.shared;
+  }
+
+  function currentShadowPolicy() {
+    return shadowPolicy;
+  }
+
+  function staticPropShadowOptions() {
+    const performance = activeModePerformance();
+    return {
+      castShadow: performance.staticPropCastShadows !== false,
+      receiveShadow: performance.staticPropReceiveShadows !== false
+    };
+  }
+
+  function scatterShadowOptions() {
+    const performance = activeModePerformance();
+    const shadowsEnabled = performance.shadowsEnabled !== false;
+    return {
+      castShadow: shadowsEnabled,
+      receiveShadow: shadowsEnabled
+    };
+  }
+
+  function shouldBatchStaticProps() {
+    return mode === "game" && activeModePerformance().batchStaticProps !== false;
+  }
+
+  function shouldBatchScatterProps() {
+    return mode === "game" && activeModePerformance().batchScatterProps !== false;
+  }
+
   if (mode === "editor") {
     orbitControls = new OrbitControls(camera, canvas);
+    orbitControls.zoomSpeed = 6.0; 
     orbitControls.enableDamping = false;
     orbitControls.dampingFactor = 0.08;
     orbitControls.screenSpacePanning = true;
@@ -869,6 +1276,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     scene.add(transformGuide);
     terrainEditorOverlay = createTerrainOverlay();
     scene.add(terrainEditorOverlay);
+    scatterEditorOverlay = createScatterOverlay();
+    scene.add(scatterEditorOverlay);
     editorPointerDownCaptureHandler = function (event) {
       if (!orbitControls) return;
       rememberEditorPointer(event);
@@ -954,30 +1363,117 @@ export function createGkWorldRuntime(canvas, options = {}) {
       }
     };
     canvas.addEventListener("pointerdown", editorPointerDownHandler);
-  } else {
+} else {
     buildHud();
+
+    // --- 1. MUIS BESTURING (Klikken & Vasthouden) ---
+    let isSpelerMuisIngedrukt = false;
+    let muisSchermX = 0;
+    let muisSchermY = 0;
+    let activeGamePointerId = null;
+
+    function beginGamePointerCapture(event) {
+      if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return false;
+      activeGamePointerId = event.pointerId;
+      if (typeof canvas.setPointerCapture === "function" && event.pointerId !== undefined) {
+        try { canvas.setPointerCapture(event.pointerId); } catch {}
+      }
+      return true;
+    }
+
+    function endGamePointerCapture(event) {
+      const pointerId = event?.pointerId !== undefined ? event.pointerId : activeGamePointerId;
+      if (pointerId !== undefined && pointerId !== null && activeGamePointerId !== null && pointerId !== activeGamePointerId) return;
+      isSpelerMuisIngedrukt = false;
+      activeGamePointerId = null;
+      if (typeof canvas.releasePointerCapture === "function" && pointerId !== undefined && pointerId !== null) {
+        try { canvas.releasePointerCapture(pointerId); } catch {}
+      }
+    }
+
+    // NIEUW: Een kleine loop die het doelwit constant ververst
+    function updateMuisDoelwit() {
+      if (!isSpelerMuisIngedrukt) return; // Stop de loop als de knop los is
+
+      // Bereken opnieuw waar de muis NU naar wijst
+      const ground = screenToGround(muisSchermX, muisSchermY);
+      if (ground) {
+        clickTarget = new THREE.Vector3(ground.x, player.pos.y, ground.z);
+      }
+
+      // Vraag de browser om dit de volgende frame weer te doen
+      requestAnimationFrame(updateMuisDoelwit);
+    }
+
     gamePointerDownHandler = function (event) {
-      if (event.button !== 0) return;
+      if (event.button !== 0 && event.button !== undefined && event.pointerType !== "touch") return;
+      if (!beginGamePointerCapture(event)) return;
+
+      isSpelerMuisIngedrukt = true;
+      muisSchermX = event.clientX;
+      muisSchermY = event.clientY;
+
       const inter = pickInteractable(event);
-      if (inter) { triggerInteractable(inter); return; }
-      const ground = screenToGround(event.clientX, event.clientY);
-      if (ground) { clickTarget = new THREE.Vector3(ground.x, player.pos.y, ground.z); pressedKeys.clear(); }
+      if (inter) {
+        triggerInteractable(inter);
+        endGamePointerCapture(event);
+        return;
+      }
+
+      pressedKeys.clear();
+      updateMuisDoelwit(); // Start de loop!
     };
+
+    let gamePointerMoveHandler = function (event) {
+      if (!isSpelerMuisIngedrukt) return;
+      if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
+      // We updaten nu alleen de coördinaten. De loop hierboven doet de rest!
+      muisSchermX = event.clientX;
+      muisSchermY = event.clientY;
+    };
+
+    let gamePointerUpHandler = function (event) {
+      if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
+      endGamePointerCapture(event); // Dit stopt automatisch de loop
+    };
+
+    // Muis-acties koppelen
     canvas.addEventListener("pointerdown", gamePointerDownHandler);
+    canvas.addEventListener("pointermove", gamePointerMoveHandler);
+    window.addEventListener("pointerup", gamePointerUpHandler);
+    window.addEventListener("pointercancel", gamePointerUpHandler);
+
+
+    // --- 2. TOETSENBORD BESTURING (WASD & Muiswiel) ---
     gameKeyDownHandler = function (event) {
       pressedKeys.add(event.code);
       const action = keyToAction.get(event.code);
       if (action === "interact" && activeInteractable) { triggerInteractable(activeInteractable); event.preventDefault(); }
-      if (action === "cancel") clickTarget = null;
-      if (action === "zoom_in") setZoom(camDistance - 2);
-      if (action === "zoom_out") setZoom(camDistance + 2);
-      if (movementActionFor(event.code)) clickTarget = null;
+
+      if (action === "cancel") {
+        clickTarget = null;
+        isSpelerMuisIngedrukt = false;
+      }
+
+      if (action === "zoom_in") setZoom(camDistance - 4);
+      if (action === "zoom_out") setZoom(camDistance + 4);
+
+      if (movementActionFor(event.code)) {
+        clickTarget = null;
+        isSpelerMuisIngedrukt = false;
+      }
     };
-    gameKeyUpHandler = function (event) { pressedKeys.delete(event.code); };
+
+    gameKeyUpHandler = function (event) {
+      pressedKeys.delete(event.code);
+    };
+
     gameWheelHandler = function (event) {
       event.preventDefault();
-      setZoom(camDistance + Math.sign(event.deltaY) * 2);
+      setZoom(camDistance + Math.sign(event.deltaY) * 4);
     };
+
+    // Toetsenbord-acties koppelen
     window.addEventListener("keydown", gameKeyDownHandler);
     window.addEventListener("keyup", gameKeyUpHandler);
     canvas.addEventListener("wheel", gameWheelHandler, { passive: false });
@@ -1068,7 +1564,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const width = Math.max(0, Math.floor(rect ? rect.width : canvas.clientWidth));
     const height = Math.max(0, Math.floor(rect ? rect.height : canvas.clientHeight));
     if (width <= 0 || height <= 0) return false;
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const ratio = Math.min(window.devicePixelRatio || 1, activeModePerformance().pixelRatioCap);
     if (width === lastResizeWidth && height === lastResizeHeight && ratio === lastResizePixelRatio) return false;
     const beforePosition = DEBUG_RUNTIME.enabled ? camera.position.clone() : null;
     const beforeTarget = DEBUG_RUNTIME.enabled && orbitControls ? orbitControls.target.clone() : null;
@@ -1156,6 +1652,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function clearContent() {
     clearTerrainEditorOverlay();
+    clearScatterEditorOverlay();
     clearTerrainRuntimeVisuals();
     clearWalkabilityIndex();
     resetRuntimeStats();
@@ -1200,6 +1697,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return {
       cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       cameraTarget: orbitControls ? { x: orbitControls.target.x, y: orbitControls.target.y, z: orbitControls.target.z } : null,
+      cameraFov: camera.fov,
+      cameraUp: { x: camera.up.x, y: camera.up.y, z: camera.up.z },
+      orbitMinDistance: orbitControls ? orbitControls.minDistance : null,
+      orbitMaxDistance: orbitControls ? orbitControls.maxDistance : null,
       selectedEntityId: selectedEntityId,
       gizmoMode: transformState.mode === "move" ? "translate" : (transformState.mode || "translate"),
       localViewActive: localViewActive
@@ -1212,6 +1713,17 @@ export function createGkWorldRuntime(canvas, options = {}) {
       camera.position.set(viewState.cameraPosition.x, viewState.cameraPosition.y, viewState.cameraPosition.z);
       orbitControls.target.set(viewState.cameraTarget.x, viewState.cameraTarget.y, viewState.cameraTarget.z);
       orbitControls.update();
+    }
+    if (Number.isFinite(Number(viewState.cameraFov))) {
+      camera.fov = num(viewState.cameraFov, camera.fov);
+      camera.updateProjectionMatrix();
+    }
+    if (viewState.cameraUp && Number.isFinite(Number(viewState.cameraUp.x)) && Number.isFinite(Number(viewState.cameraUp.y)) && Number.isFinite(Number(viewState.cameraUp.z))) {
+      camera.up.set(viewState.cameraUp.x, viewState.cameraUp.y, viewState.cameraUp.z);
+    }
+    if (orbitControls && Number.isFinite(Number(viewState.orbitMinDistance)) && Number.isFinite(Number(viewState.orbitMaxDistance))) {
+      orbitControls.minDistance = num(viewState.orbitMinDistance, orbitControls.minDistance);
+      orbitControls.maxDistance = num(viewState.orbitMaxDistance, orbitControls.maxDistance);
     }
     selectedEntityId = viewState.selectedEntityId || null;
     refreshSelectedRootReference();
@@ -1302,6 +1814,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return group;
   }
 
+  function createScatterOverlay() {
+    const group = new THREE.Group();
+    group.name = "GK editor scatter overlay";
+    group.visible = false;
+    group.renderOrder = 2001;
+    group.frustumCulled = false;
+    return group;
+  }
+
   function terrainOverlayLine(points, closed, color, opacity = 0.95) {
     if (!Array.isArray(points) || points.length < 2) return null;
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
@@ -1359,6 +1880,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return offsets;
   }
 
+  function scatterOverlayRectanglePoints(state) {
+    return terrainOverlayRectanglePoints(state);
+  }
+
   function terrainOverlayCirclePoints(state, segments = 24) {
     const radius = Math.max(0, num(state?.radius, 0));
     const center = new THREE.Vector3(num(state?.x, 0), num(state?.y, 0), num(state?.z, 0));
@@ -1385,6 +1910,21 @@ export function createGkWorldRuntime(canvas, options = {}) {
     requestRender("terrain-overlay-clear");
   }
 
+  function clearScatterEditorOverlay() {
+    if (!scatterEditorOverlay) return;
+    if (!scatterEditorOverlay.visible && scatterEditorOverlay.children.length === 0) {
+      scatterEditorOverlayState = null;
+      return;
+    }
+    scatterEditorOverlayState = null;
+    scatterEditorOverlay.visible = false;
+    for (const child of Array.from(scatterEditorOverlay.children)) {
+      scatterEditorOverlay.remove(child);
+      disposeObject(child);
+    }
+    requestRender("scatter-overlay-clear");
+  }
+
   function buildTerrainEditorOverlay(nextOverlay) {
     if (!terrainEditorOverlay || mode !== "editor") return;
     clearTerrainEditorOverlay();
@@ -1403,8 +1943,21 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const selectedRole = String(nextOverlay.selectedHandleRole || "");
 
     if (nodeType === "walkable_surface") {
-      const points = terrainOverlayRectanglePoints(nextOverlay);
-      const line = terrainOverlayLine(points, true, lineColor, 0.92);
+      const hasPoints = Array.isArray(nextOverlay.points) && nextOverlay.points.length > 0;
+      const rawPoints = hasPoints
+        ? nextOverlay.points
+        : terrainOverlayRectanglePoints({
+          x: nextOverlay.x,
+          y: y,
+          z: nextOverlay.z,
+          width: nextOverlay.width,
+          depth: nextOverlay.depth,
+          rotationY: nextOverlay.rotationY
+        });
+      const points = rawPoints.map(function (point) {
+        return new THREE.Vector3(num(point?.x, 0), num(point?.y, y), num(point?.z, 0));
+      });
+      const line = terrainOverlayLine(points, hasPoints ? points.length >= 3 : true, lineColor, 0.92);
       if (line) terrainEditorOverlay.add(line);
       const center = terrainOverlayHandle(
         new THREE.Vector3(num(nextOverlay.x, 0), num(nextOverlay.y, 0), num(nextOverlay.z, 0)),
@@ -1412,9 +1965,14 @@ export function createGkWorldRuntime(canvas, options = {}) {
         "center",
         nodeId,
         null,
-        selectedRole === "center"
+        selectedRole === "center" || nextOverlay.draggingHandleRole === "center"
       );
       terrainEditorOverlay.add(center);
+      if (hasPoints) {
+        for (let index = 0; index < points.length; index += 1) {
+          terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, selectedIndices ? selectedIndices.has(index) : index === selectedIndex));
+        }
+      }
       requestRender("terrain-overlay-update");
       return;
     }
@@ -1501,6 +2059,54 @@ export function createGkWorldRuntime(canvas, options = {}) {
     requestRender("terrain-overlay-update");
   }
 
+  function buildScatterEditorOverlay(nextOverlay) {
+    if (!scatterEditorOverlay || mode !== "editor") return;
+    clearScatterEditorOverlay();
+    if (!nextOverlay || !nextOverlay.nodeType) return;
+    scatterEditorOverlayState = nextOverlay;
+    scatterEditorOverlay.visible = true;
+    const color = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(0xd59bff);
+    const lineColor = color.clone();
+    const y = num(nextOverlay.groundY, 0) + 0.05;
+    const rawPoints = Array.isArray(nextOverlay.points) && nextOverlay.points.length >= 3
+      ? nextOverlay.points
+      : scatterOverlayRectanglePoints({
+        x: nextOverlay.x,
+        y: y,
+        z: nextOverlay.z,
+        width: nextOverlay.width,
+        depth: nextOverlay.depth,
+        rotationY: nextOverlay.rotationY
+      });
+    const points = rawPoints.map(function (point) {
+      return new THREE.Vector3(num(point?.x, 0), y, num(point?.z, 0));
+    });
+    const selectedIndices = Array.isArray(nextOverlay.selectedPointIndices) ? new Set(nextOverlay.selectedPointIndices) : null;
+    const selectedIndex = Number.isInteger(nextOverlay.selectedPointIndex) ? nextOverlay.selectedPointIndex : null;
+    const selectedRole = String(nextOverlay.selectedHandleRole || "");
+    const line = terrainOverlayLine(points, true, lineColor, 0.95);
+    if (line) scatterEditorOverlay.add(line);
+    const center = terrainOverlayHandle(
+      new THREE.Vector3(num(nextOverlay.x, 0), y, num(nextOverlay.z, 0)),
+      color,
+      "center",
+      nextOverlay.nodeId || null,
+      null,
+      selectedRole === "center" || nextOverlay.draggingHandleRole === "center" || nextOverlay.draggingHandleRole === "rotate" || nextOverlay.draggingHandleRole === "scale"
+    );
+    center.userData.scatterHandle = true;
+    scatterEditorOverlay.add(center);
+    for (let index = 0; index < points.length; index += 1) {
+      const selected = selectedIndices && selectedIndices.size > 0
+        ? selectedIndices.has(index)
+        : index === selectedIndex;
+      const handle = terrainOverlayHandle(points[index], color, "point", nextOverlay.nodeId || null, index, selected);
+      handle.userData.scatterHandle = true;
+      scatterEditorOverlay.add(handle);
+    }
+    requestRender("scatter-overlay-update");
+  }
+
   function setTerrainEditorOverlay(nextOverlay) {
     if (mode !== "editor" || !terrainEditorOverlay) return;
     if (!nextOverlay) {
@@ -1508,6 +2114,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
       return;
     }
     buildTerrainEditorOverlay(nextOverlay);
+  }
+
+  function setScatterEditorOverlay(nextOverlay) {
+    if (mode !== "editor" || !scatterEditorOverlay) return;
+    if (!nextOverlay) {
+      clearScatterEditorOverlay();
+      return;
+    }
+    buildScatterEditorOverlay(nextOverlay);
   }
 
   function ensureTerrainRuntimeGroup() {
@@ -1814,6 +2429,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         color: colorFromHex(fallbackHex, "#8a6f45"),
         roughness: 1,
         metalness: 0,
+        flatShading: sharedWorldPerformance().smoothShading === false,
         transparent: opacity < 0.999 || edgeFadeWidthUV > 0,
         opacity: opacity,
         side: THREE.DoubleSide,
@@ -2026,7 +2642,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       mesh.renderOrder = 3500 + renderIndex;
       mesh.frustumCulled = false;
       mesh.castShadow = false;
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = Boolean(currentShadowPolicy().enabled);
       mesh.userData.terrainRuntime = true;
       mesh.userData.surfaceLayerId = surface?.id || null;
       mesh.userData.entityId = surface?.id || null;
@@ -2061,6 +2677,27 @@ export function createGkWorldRuntime(canvas, options = {}) {
     for (const hit of hits) {
       const object = hit.object;
       if (object?.userData?.terrainHandle) {
+        return {
+          nodeId: object.userData.nodeId || null,
+          handleRole: object.userData.handleRole || null,
+          pointIndex: Number.isInteger(object.userData.pointIndex) ? object.userData.pointIndex : null
+        };
+      }
+    }
+    return null;
+  }
+
+  function pickScatterEditorHandle(clientX, clientY) {
+    if (mode !== "editor" || !scatterEditorOverlay || !scatterEditorOverlay.visible) return null;
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(scatterEditorOverlay.children, true);
+    if (!hits.length) return null;
+    for (const hit of hits) {
+      const object = hit.object;
+      if (object?.userData?.scatterHandle) {
         return {
           nodeId: object.userData.nodeId || null,
           handleRole: object.userData.handleRole || null,
@@ -2787,23 +3424,59 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function applyCameraConfig(worldData) {
-    const cam = worldData?.camera;
-    camPitch = num(cam?.pitch, 60);
-    camYaw = num(cam?.yaw, 0);
-    camDistance = num(cam?.distance, 20);
-    camMinDistance = num(cam?.minDistance, 6);
-    camMaxDistance = num(cam?.maxDistance, 500);
-    camFollow = cam?.follow !== false;
-    camRotateSpeed = num(cam?.rotateSpeed, 90);
-    camera.fov = num(cam?.fov, 55);
-    camera.updateProjectionMatrix();
-    camTarget.set(player.pos.x, player.pos.y, player.pos.z);
-    updateCameraPosition();
-    if (orbitControls) {
-      orbitControls.target.copy(camTarget);
-      orbitControls.minDistance = camMinDistance;
-      orbitControls.maxDistance = camMaxDistance;
-      orbitControls.update();
+    const gameCameraDefaults = {
+      pitch: 55,
+      yaw: 0,
+      startDistance: 24,
+      distance: 24,
+      minDistance: 10,
+      maxDistance: 48,
+      fov: 50,
+      follow: true,
+      rotateSpeed: 90
+    };
+    const editorCameraDefaults = {
+      target: { x: 0, y: 0, z: 0 },
+      pitch: 55,
+      yaw: 0,
+      distance: 24,
+      minDistance: 10,
+      maxDistance: 48,
+      fov: 50,
+      rotateSpeed: 90
+    };
+    const cam = mode === "editor"
+      ? (worldData?.editorCamera || editorCameraDefaults)
+      : (worldData?.camera || gameCameraDefaults);
+    camPitch = num(cam?.pitch, mode === "editor" ? editorCameraDefaults.pitch : gameCameraDefaults.pitch);
+    camYaw = num(cam?.yaw, mode === "editor" ? editorCameraDefaults.yaw : gameCameraDefaults.yaw);
+    camDistance = mode === "editor"
+      ? num(cam?.distance, editorCameraDefaults.distance)
+      : num(Number.isFinite(Number(cam?.startDistance)) ? cam.startDistance : cam?.distance, gameCameraDefaults.startDistance);
+    camMinDistance = num(cam?.minDistance, mode === "editor" ? editorCameraDefaults.minDistance : gameCameraDefaults.minDistance);
+    camMaxDistance = num(cam?.maxDistance, mode === "editor" ? editorCameraDefaults.maxDistance : gameCameraDefaults.maxDistance);
+    camFollow = mode === "editor" ? false : cam?.follow !== false;
+    camRotateSpeed = num(cam?.rotateSpeed, mode === "editor" ? editorCameraDefaults.rotateSpeed : gameCameraDefaults.rotateSpeed);
+    if (mode === "editor") {
+      camTarget.set(
+        num(cam?.target?.x, editorCameraDefaults.target.x),
+        num(cam?.target?.y, editorCameraDefaults.target.y),
+        num(cam?.target?.z, editorCameraDefaults.target.z)
+      );
+    } else {
+      camTarget.set(player.pos.x, player.pos.y, player.pos.z);
+    }
+    const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
+    if (shouldApplyToViewport) {
+      camera.fov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      camera.updateProjectionMatrix();
+      updateCameraPosition();
+      if (orbitControls) {
+        orbitControls.target.copy(camTarget);
+        orbitControls.minDistance = camMinDistance;
+        orbitControls.maxDistance = camMaxDistance;
+        orbitControls.update();
+      }
     }
   }
 
@@ -2827,7 +3500,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (!ground?.width || !ground?.depth) return;
     const geometry = new THREE.PlaneGeometry(num(ground.width, 1), num(ground.depth, 1), 1, 1);
     geometry.rotateX(-Math.PI / 2);
-    const materialOptions = { color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")), roughness: 0.9, metalness: 0 };
+    const materialOptions = {
+      color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
+      roughness: 0.9,
+      metalness: 0,
+      flatShading: sharedWorldPerformance().smoothShading === false
+    };
     const textureAsset = assetById(worldData, ground.textureAssetId);
     if (textureAsset?.sourcePath) {
       let texture = textureCache.get(textureAsset.id);
@@ -2847,7 +3525,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     }
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial(materialOptions));
     mesh.name = "published-ground";
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = Boolean(currentShadowPolicy().enabled);
     mesh.position.y = num(ground.y, 0);
     content.add(mesh);
     runtimeStats.sceneObjects += 1;
@@ -2855,6 +3533,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function addLights(worldData) {
+    const policy = currentShadowPolicy();
     for (const light of worldData?.lights || []) {
       if (light.type === "ambient") {
         content.add(new THREE.AmbientLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0)));
@@ -2862,60 +3541,38 @@ export function createGkWorldRuntime(canvas, options = {}) {
       } else if (light.type === "directional") {
         const directional = new THREE.DirectionalLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0));
         directional.position.set(num(light.position?.x, 0), num(light.position?.y, 0), num(light.position?.z, 0));
-        directional.castShadow = true;
-        directional.shadow.mapSize.set(2048, 2048);
-        directional.shadow.camera.left = -60;
-        directional.shadow.camera.right = 60;
-        directional.shadow.camera.top = 60;
-        directional.shadow.camera.bottom = -60;
-        directional.shadow.camera.far = 400;
+        applyDirectionalShadowPolicy(directional, policy);
         content.add(directional);
         runtimeStats.sceneObjects += 1;
       }
     }
   }
 
-  function loadModelInto(root, assetId, worldData, onReady) {
-    const asset = assetById(worldData, assetId);
-    if (!asset?.sourcePath) return;
+  function ensureModelRecord(asset, worldData) {
+    if (!asset?.sourcePath) return null;
     let record = modelCache.get(asset.id);
-    if (!record) {
-      record = { status: "loading", gltf: null, waiters: [] };
-      modelCache.set(asset.id, record);
-      const startedAt = performance.now();
-      console.info("[timing] GLTFLoader load start asset=" + asset.id + " path=" + asset.sourcePath);
-      try {
-        loader.load(asset.sourcePath, function (gltf) {
-          record.status = "ready";
-          record.gltf = gltf;
-          record.gltf.animations = normalizeAnimations(gltf.animations);
-          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms");
-          if (typeof onModelLoadTiming === "function") {
-            onModelLoadTiming({
-              assetId: asset.id,
-              assetName: asset.name,
-              sourcePath: asset.sourcePath,
-              durationMs: Number(timingMs(startedAt)),
-              ok: true
-            });
-          }
-          for (const waiter of record.waiters.splice(0)) waiter(gltf);
-        }, undefined, function () {
-          record.status = "error";
-          loadErrors.push("Model: " + asset.name);
-          renderHud();
-          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
-          if (typeof onModelLoadTiming === "function") {
-            onModelLoadTiming({
-              assetId: asset.id,
-              assetName: asset.name,
-              sourcePath: asset.sourcePath,
-              durationMs: Number(timingMs(startedAt)),
-              ok: false
-            });
-          }
-        });
-      } catch (error) {
+    if (record) return record;
+    record = { status: "loading", gltf: null, waiters: [] };
+    modelCache.set(asset.id, record);
+    const startedAt = performance.now();
+    console.info("[timing] GLTFLoader load start asset=" + asset.id + " path=" + asset.sourcePath);
+    try {
+      loader.load(asset.sourcePath, function (gltf) {
+        record.status = "ready";
+        record.gltf = gltf;
+        record.gltf.animations = normalizeAnimations(gltf.animations);
+        console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms");
+        if (typeof onModelLoadTiming === "function") {
+          onModelLoadTiming({
+            assetId: asset.id,
+            assetName: asset.name,
+            sourcePath: asset.sourcePath,
+            durationMs: Number(timingMs(startedAt)),
+            ok: true
+          });
+        }
+        for (const waiter of record.waiters.splice(0)) waiter(gltf);
+      }, undefined, function () {
         record.status = "error";
         loadErrors.push("Model: " + asset.name);
         renderHud();
@@ -2929,30 +3586,169 @@ export function createGkWorldRuntime(canvas, options = {}) {
             ok: false
           });
         }
-        throw error;
+      });
+    } catch (error) {
+      record.status = "error";
+      loadErrors.push("Model: " + asset.name);
+      renderHud();
+      console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+      if (typeof onModelLoadTiming === "function") {
+        onModelLoadTiming({
+          assetId: asset.id,
+          assetName: asset.name,
+          sourcePath: asset.sourcePath,
+          durationMs: Number(timingMs(startedAt)),
+          ok: false
+        });
       }
+      throw error;
     }
+    return record;
+  }
+
+  function loadModelInto(root, assetId, worldData, onReady, options = {}) {
+    const asset = assetById(worldData, assetId);
+    if (!asset?.sourcePath) return;
+    const record = ensureModelRecord(asset, worldData);
+    if (!record) return;
+    const generation = worldBuildGeneration;
     const attach = function (gltf) {
+      if (generation !== worldBuildGeneration) return;
       const clone = SkeletonUtils.clone(gltf.scene);
+      applySmoothShadingToObject(clone, worldData?.world?.performance?.shared?.smoothShading !== false);
+      const castShadow = options.castShadow !== false;
+      const receiveShadow = options.receiveShadow !== false;
       clone.traverse(function (child) {
-        if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+        if (child.isMesh) {
+          child.castShadow = castShadow;
+          child.receiveShadow = receiveShadow;
+        }
       });
       root.add(clone);
       const cloneCounts = countObjectTree(clone);
       runtimeStats.sceneObjects += cloneCounts.objects;
       runtimeStats.meshes += cloneCounts.meshes;
-      const mixer = new THREE.AnimationMixer(clone);
-      animationMixers.set(root, {
-        mixer: mixer,
-        root: clone,
-        actions: new Map(),
-        currentAction: null,
-        currentClipName: null,
-        clips: gltf.animations || [],
-        assetMetadata: asset.metadata || {}
-      });
-      playAnimationState(root, "idle", 0);
+      const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
+      if (clips.length) {
+        const mixer = new THREE.AnimationMixer(clone);
+        animationMixers.set(root, {
+          mixer: mixer,
+          root: clone,
+          actions: new Map(),
+          currentAction: null,
+          currentClipName: null,
+          clips: clips,
+          assetMetadata: asset.metadata || {}
+        });
+        playAnimationState(root, "idle", 0);
+      }
       if (onReady) onReady(clone);
+      if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
+      requestRender();
+    };
+    if (record.status === "ready") attach(record.gltf);
+    if (record.status === "loading") record.waiters.push(attach);
+  }
+
+  function createInstancedScatterBatch(gltf, instances, options = {}) {
+    if (!gltf?.scene || !Array.isArray(instances) || !instances.length) return null;
+    const templates = [];
+    let supported = true;
+    const batchKind = String(options.batchKind || "scatter").trim() || "scatter";
+    const smoothShading = options.smoothShading !== false;
+    gltf.scene.updateMatrixWorld(true);
+    gltf.scene.traverse(function (child) {
+      if (!child.isMesh) return;
+      if (child.isSkinnedMesh || Array.isArray(child.material) || !child.geometry || !child.material) {
+        supported = false;
+        return;
+      }
+      const material = child.material.clone();
+      applySmoothShadingToMaterial(material, smoothShading);
+      templates.push({
+        name: String(child.name || "").trim(),
+        geometry: child.geometry.clone(),
+        material: material,
+        matrix: child.matrixWorld.clone(),
+        castShadow: child.castShadow !== false,
+        receiveShadow: child.receiveShadow !== false
+      });
+    });
+    if (!supported || !templates.length) return null;
+    const group = new THREE.Group();
+    group.name = options.groupName || batchKind + "-batch";
+    group.userData.batchKind = batchKind;
+    group.userData[batchKind + "Batch"] = true;
+    group.userData.transformable = false;
+    group.userData.snapToGround = false;
+    const instanceTransform = new THREE.Object3D();
+    const instanceMatrix = new THREE.Matrix4();
+    const instanceTransforms = instances.map(function (entity) { return entity?.transform || null; }).filter(Boolean);
+    if (!instanceTransforms.length) return null;
+    for (const template of templates) {
+      const mesh = new THREE.InstancedMesh(template.geometry, template.material, instanceTransforms.length);
+      mesh.name = template.name ? template.name + " [" + batchKind + "]" : batchKind + " [instances]";
+      mesh.castShadow = options.castShadow !== false;
+      mesh.receiveShadow = options.receiveShadow !== false;
+      for (let index = 0; index < instanceTransforms.length; index += 1) {
+        const transform = instanceTransforms[index];
+        instanceTransform.position.set(num(transform?.position?.x, 0), num(transform?.position?.y, 0), num(transform?.position?.z, 0));
+        instanceTransform.rotation.set(
+          num(transform?.rotation?.x, 0) * DEG_TO_RAD,
+          num(transform?.rotation?.y, 0) * DEG_TO_RAD,
+          num(transform?.rotation?.z, 0) * DEG_TO_RAD
+        );
+        instanceTransform.scale.set(num(transform?.scale?.x, 1), num(transform?.scale?.y, 1), num(transform?.scale?.z, 1));
+        instanceTransform.updateMatrix();
+        instanceMatrix.multiplyMatrices(instanceTransform.matrix, template.matrix);
+        mesh.setMatrixAt(index, instanceMatrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (typeof mesh.computeBoundingSphere === "function") mesh.computeBoundingSphere();
+      group.add(mesh);
+    }
+    return group;
+  }
+
+  function loadScatterInstancesInto(root, assetId, instances, worldData, options = {}) {
+    const asset = assetById(worldData, assetId);
+    if (!asset?.sourcePath || !Array.isArray(instances) || !instances.length) return;
+    const record = ensureModelRecord(asset, worldData);
+    if (!record) return;
+    const generation = worldBuildGeneration;
+    const attach = function (gltf) {
+      if (generation !== worldBuildGeneration) return;
+      const canBatch = options.allowBatch !== false;
+      const batch = canBatch ? createInstancedScatterBatch(gltf, instances, {
+        batchKind: "scatter",
+        groupName: asset.name || asset.id,
+        castShadow: options.castShadow !== false,
+        receiveShadow: options.receiveShadow !== false,
+        smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false
+      }) : null;
+      if (batch) {
+        root.add(batch);
+        const batchCounts = countObjectTree(batch);
+        runtimeStats.sceneObjects += batchCounts.objects;
+        runtimeStats.meshes += batchCounts.meshes;
+        if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
+        requestRender();
+        return;
+      }
+      for (const entity of instances) {
+        const instanceRoot = new THREE.Group();
+        instanceRoot.userData.scatterInstance = true;
+        instanceRoot.userData.transformable = false;
+        instanceRoot.userData.snapToGround = false;
+        instanceRoot.name = entity.id || (entity.nodeId + "::instance");
+        transformObject(instanceRoot, entity.transform);
+        root.add(instanceRoot);
+        runtimeStats.sceneObjects += 1;
+        loadModelInto(instanceRoot, assetId, worldData, null, {
+          castShadow: options.castShadow !== false,
+          receiveShadow: options.receiveShadow !== false
+        });
+      }
       if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
       requestRender();
     };
@@ -3079,7 +3875,36 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return clipName;
   }
 
-  function addEntity(worldData, entity) {
+  function addEntity(worldData, entity, options = {}) {
+    const isScatter = entity?.type === "scatter" || entity?.kind === "scatter";
+    if (isScatter) {
+      const shadowOptions = scatterShadowOptions();
+      let root = entityRoots.get(entity.nodeId) || null;
+      if (!root) {
+        root = new THREE.Group();
+        root.userData.entityId = entity.nodeId;
+        root.userData.transformable = false;
+        root.userData.snapToGround = false;
+        root.name = entity.nodeId;
+        entityRoots.set(entity.nodeId, root);
+        content.add(root);
+        runtimeStats.sceneObjects += 1;
+      }
+      const instanceRoot = new THREE.Group();
+      instanceRoot.userData.scatterInstance = true;
+      instanceRoot.userData.transformable = false;
+      instanceRoot.userData.snapToGround = false;
+      instanceRoot.name = entity.id || (entity.nodeId + "::instance");
+      transformObject(instanceRoot, entity.transform);
+      root.add(instanceRoot);
+      runtimeStats.sceneObjects += 1;
+      loadModelInto(instanceRoot, entity.modelAssetId, worldData, null, shadowOptions);
+      return;
+    }
+    if (entity.solid && entity.walkable !== true && options.skipCollision !== true) {
+      solids.push({ x: num(entity.transform?.position?.x, 0), z: num(entity.transform?.position?.z, 0), radius: num(entity.collisionRadius, 1) });
+    }
+    if (options.skipVisual === true) return;
     const root = new THREE.Group();
     root.userData.entityId = entity.id;
     root.userData.transformable = true;
@@ -3093,16 +3918,22 @@ export function createGkWorldRuntime(canvas, options = {}) {
     entityRoots.set(entity.id, root);
     content.add(root);
     runtimeStats.sceneObjects += 1;
-    loadModelInto(root, entity.modelAssetId, worldData);
-    if (entity.solid) {
-      solids.push({ x: num(entity.transform?.position?.x, 0), z: num(entity.transform?.position?.z, 0), radius: num(entity.collisionRadius, 1) });
-    }
+    loadModelInto(root, entity.modelAssetId, worldData, null, {
+      castShadow: options.castShadow !== undefined ? options.castShadow : true,
+      receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
+    });
   }
 
-  function addInteractable(worldData, inter) {
+  function addInteractable(worldData, inter, options = {}) {
     const x = num(inter.position?.x, 0);
     const z = num(inter.position?.z, 0);
     const groundY = num(worldData?.ground?.y, 0);
+    if (options.skipRegistration !== true) {
+      interactables.push({ id: inter.id, x: x, z: z, radius: num(inter.radius, 2), prompt: inter.prompt, action: inter.action });
+    }
+    if (options.skipVisual === true || !inter.modelAssetId) {
+      return;
+    }
     if (inter.modelAssetId) {
       const root = new THREE.Group();
       root.userData.interactableId = inter.id;
@@ -3111,9 +3942,106 @@ export function createGkWorldRuntime(canvas, options = {}) {
       root.position.set(x, groundY, z);
       content.add(root);
       runtimeStats.sceneObjects += 1;
-      loadModelInto(root, inter.modelAssetId, worldData);
+      loadModelInto(root, inter.modelAssetId, worldData, null, {
+        castShadow: options.castShadow !== undefined ? options.castShadow : false,
+        receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
+      });
     }
-    interactables.push({ id: inter.id, x: x, z: z, radius: num(inter.radius, 2), prompt: inter.prompt, action: inter.action });
+  }
+
+  function addScatterEntities(worldData, scatterEntities) {
+    const grouped = new Map();
+    for (const entity of scatterEntities || []) {
+      const rootKey = entity?.nodeId || entity?.scatterId || entity?.id || entity?.modelAssetId || "scatter";
+      let entry = grouped.get(rootKey);
+      if (!entry) {
+        const root = new THREE.Group();
+        root.userData.entityId = rootKey;
+        root.userData.transformable = false;
+        root.userData.snapToGround = false;
+        root.name = rootKey;
+        entry = { root: root, byAsset: new Map() };
+        grouped.set(rootKey, entry);
+        entityRoots.set(rootKey, root);
+        content.add(root);
+        runtimeStats.sceneObjects += 1;
+      }
+      const assetKey = entity?.sourceAssetId || entity?.modelAssetId || "";
+      if (!assetKey) continue;
+      let bucket = entry.byAsset.get(assetKey);
+      if (!bucket) {
+        bucket = [];
+        entry.byAsset.set(assetKey, bucket);
+      }
+      bucket.push(entity);
+    }
+    for (const entry of grouped.values()) {
+      const shadowOptions = scatterShadowOptions();
+      for (const [assetId, instances] of entry.byAsset.entries()) {
+        loadScatterInstancesInto(entry.root, assetId, instances, worldData, {
+          allowBatch: shouldBatchScatterProps(),
+          castShadow: shadowOptions.castShadow,
+          receiveShadow: shadowOptions.receiveShadow
+        });
+      }
+    }
+  }
+
+  function canBatchStaticProp(worldData, assetId) {
+    if (!shouldBatchStaticProps() || !assetId) return false;
+    const asset = assetById(worldData, assetId);
+    if (!asset?.sourcePath || asset.assetType !== "model") return false;
+    return Number(asset?.metadata?.animationCount || 0) === 0;
+  }
+
+  function modelShadowOptions(worldData, assetId) {
+    const asset = assetById(worldData, assetId);
+    if (asset?.sourcePath && asset.assetType === "model" && Number(asset?.metadata?.animationCount || 0) === 0) {
+      return staticPropShadowOptions();
+    }
+    return { castShadow: true, receiveShadow: true };
+  }
+
+  function addStaticPropBatch(worldData, assetId, descriptors) {
+    const asset = assetById(worldData, assetId);
+    if (!asset?.sourcePath || !Array.isArray(descriptors) || descriptors.length < 2) return false;
+    const record = ensureModelRecord(asset, worldData);
+    if (!record) return false;
+    const instances = descriptors.map(function (descriptor) {
+      return { transform: descriptor.transform };
+    }).filter(function (instance) { return Boolean(instance.transform); });
+    if (instances.length < 2) return false;
+    const generation = worldBuildGeneration;
+    const attach = function (gltf) {
+      if (generation !== worldBuildGeneration) return;
+      const batch = createInstancedScatterBatch(gltf, instances, {
+        batchKind: "staticProp",
+        groupName: asset.name || asset.id,
+        castShadow: staticPropShadowOptions().castShadow,
+        receiveShadow: staticPropShadowOptions().receiveShadow,
+        smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false
+      });
+      if (batch) {
+        content.add(batch);
+        const batchCounts = countObjectTree(batch);
+        runtimeStats.sceneObjects += batchCounts.objects;
+        runtimeStats.meshes += batchCounts.meshes;
+        if (selectedEntityId && selectableIdForObject(batch) === selectedEntityId) selectEntity(selectedEntityId);
+        requestRender();
+        return;
+      }
+      for (const descriptor of descriptors) {
+        if (descriptor.kind === "entity") {
+          addEntity(worldData, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(worldData, descriptor.entity?.modelAssetId)));
+        } else if (descriptor.kind === "interactable") {
+          addInteractable(worldData, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(worldData, descriptor.inter?.modelAssetId)));
+        }
+      }
+      requestRender();
+    };
+    if (record.status === "ready") attach(record.gltf);
+    else if (record.status === "loading") record.waiters.push(attach);
+    return true;
   }
 
   function spawnPlayer(worldData) {
@@ -3141,6 +4069,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const scale = num(def.scale, 1);
     root.scale.set(scale, scale, scale);
     player.root = root;
+    player.animationState = "idle";
     content.add(root);
     runtimeStats.sceneObjects += 1;
     loadModelInto(root, def.modelAssetId, worldData);
@@ -3252,14 +4181,14 @@ export function createGkWorldRuntime(canvas, options = {}) {
     moveVector.set(0, 0, 0);
     updateCameraGroundBasis();
     let usingKeys = false;
-    let isMoving = false;
-    let isSprinting = false;
     if (isActionPressed("move_forward")) { moveVector.add(cameraForward); usingKeys = true; }
     if (isActionPressed("move_back")) { moveVector.sub(cameraForward); usingKeys = true; }
     if (isActionPressed("move_left")) { moveVector.sub(cameraRight); usingKeys = true; }
     if (isActionPressed("move_right")) { moveVector.add(cameraRight); usingKeys = true; }
     if (isActionPressed("rotate_cam_left")) camYaw -= camRotateSpeed * delta;
     if (isActionPressed("rotate_cam_right")) camYaw += camRotateSpeed * delta;
+
+    let desiredAnimationState = "idle";
 
     if (!usingKeys && clickTarget) {
       const toTargetX = clickTarget.x - player.pos.x;
@@ -3280,16 +4209,18 @@ export function createGkWorldRuntime(canvas, options = {}) {
       resolveCollision(movementTarget);
       if (movementTarget.distanceToSquared(player.pos) > 0.000001) {
         player.pos.copy(movementTarget);
-        isMoving = true;
-        isSprinting = wantsSprint;
       }
+      desiredAnimationState = wantsSprint ? "run" : "walk";
       const desiredFacing = Math.atan2(moveVector.x, moveVector.z);
       player.facing = stepAngle(player.facing, desiredFacing, player.turnSpeed * DEG_TO_RAD * delta);
     }
 
     player.root.position.copy(player.pos);
     player.root.rotation.y = player.facing;
-    playAnimationState(player.root, isMoving ? (isSprinting ? "run" : "walk") : "idle");
+    if (desiredAnimationState !== player.animationState) {
+      playAnimationState(player.root, desiredAnimationState);
+      player.animationState = desiredAnimationState;
+    }
 
     if (camFollow) camTarget.lerp(player.pos, Math.min(1, delta * 8));
     updateCameraPosition();
@@ -3671,11 +4602,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function setWorld(nextWorld) {
+    worldBuildGeneration += 1;
     world = nextWorld || null;
+    applyWorldPerformance(world);
+    if (!handleResize("world-performance")) scheduleResize("world-performance");
     const editorViewState = mode === "editor" && editorViewInitialized ? captureViewState() : null;
     clearContent();
     scene.background = new THREE.Color(colorOrDefault(world?.world?.backgroundColor, "#0b1622"));
-    if (world?.world?.fogColor && num(world.world.fogDensity, 0) > 0) {
+    const fogEnabled = mode === "editor" ? activeModePerformance().fogEnabled !== false : true;
+    if (fogEnabled && world?.world?.fogColor && num(world.world.fogDensity, 0) > 0) {
       scene.fog = new THREE.FogExp2(colorOrDefault(world.world.fogColor, "#0b1622"), num(world.world.fogDensity, 0));
     } else {
       scene.fog = null;
@@ -3688,8 +4623,66 @@ export function createGkWorldRuntime(canvas, options = {}) {
     buildTerrainRuntimeVisuals(world);
     addLights(world);
     spawnPlayer(world);
-    for (const entity of world?.entities || []) addEntity(world, entity);
-    for (const inter of world?.interactables || []) addInteractable(world, inter);
+    const scatterEntities = [];
+    const staticPropGroups = new Map();
+    const queueStaticPropGroup = function (assetId, descriptor) {
+      if (!assetId || !descriptor) return;
+      let group = staticPropGroups.get(assetId);
+      if (!group) {
+        group = { assetId: assetId, descriptors: [] };
+        staticPropGroups.set(assetId, group);
+      }
+      group.descriptors.push(descriptor);
+    };
+    for (const entity of world?.entities || []) {
+      if (entity?.type === "scatter" || entity?.kind === "scatter") {
+        scatterEntities.push(entity);
+        continue;
+      }
+      if (canBatchStaticProp(world, entity?.modelAssetId)) {
+        addEntity(world, entity, { skipVisual: true });
+        queueStaticPropGroup(entity.modelAssetId, {
+          kind: "entity",
+          entity: entity,
+          transform: entity.transform
+        });
+        continue;
+      }
+      addEntity(world, entity, modelShadowOptions(world, entity?.modelAssetId));
+    }
+    if (scatterEntities.length) addScatterEntities(world, scatterEntities);
+    for (const inter of world?.interactables || []) {
+      if (canBatchStaticProp(world, inter?.modelAssetId)) {
+        addInteractable(world, inter, { skipVisual: true });
+        queueStaticPropGroup(inter.modelAssetId, {
+          kind: "interactable",
+          inter: inter,
+          transform: {
+            position: {
+              x: num(inter.position?.x, 0),
+              y: num(world?.ground?.y, 0),
+              z: num(inter.position?.z, 0)
+            },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 }
+          }
+        });
+        continue;
+      }
+      addInteractable(world, inter, modelShadowOptions(world, inter?.modelAssetId));
+    }
+    for (const group of staticPropGroups.values()) {
+      if (!group.descriptors.length) continue;
+      if (group.descriptors.length < 2 || !addStaticPropBatch(world, group.assetId, group.descriptors)) {
+        for (const descriptor of group.descriptors) {
+          if (descriptor.kind === "entity") {
+            addEntity(world, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(world, descriptor.entity?.modelAssetId)));
+          } else if (descriptor.kind === "interactable") {
+            addInteractable(world, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(world, descriptor.inter?.modelAssetId)));
+          }
+        }
+      }
+    }
     buildKeyMap(world);
     if (mode === "game") {
       setHudModules(world?.ui || []);
@@ -3733,6 +4726,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
       scene.remove(terrainEditorOverlay);
       clearTerrainEditorOverlay();
       terrainEditorOverlay = null;
+    }
+    if (scatterEditorOverlay) {
+      scene.remove(scatterEditorOverlay);
+      clearScatterEditorOverlay();
+      scatterEditorOverlay = null;
     }
     if (editorPointerDownCaptureHandler) canvas.removeEventListener("pointerdown", editorPointerDownCaptureHandler, true);
     if (editorPointerUpCaptureHandler) {
@@ -3834,8 +4832,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
     debugStepPlayerTo: debugStepPlayerTo,
     setTerrainEditorOverlay: setTerrainEditorOverlay,
     clearTerrainEditorOverlay: clearTerrainEditorOverlay,
+    setScatterEditorOverlay: setScatterEditorOverlay,
+    clearScatterEditorOverlay: clearScatterEditorOverlay,
     setTerrainSurfacePreview: setTerrainSurfacePreview,
     pickTerrainEditorHandle: pickTerrainEditorHandle,
+    pickScatterEditorHandle: pickScatterEditorHandle,
     pickEntityAt: pickEntityAt,
     selectEntity: selectEntity,
     frameEntity: frameEntity,
