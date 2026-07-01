@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading71";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");

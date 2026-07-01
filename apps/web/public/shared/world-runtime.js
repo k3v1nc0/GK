@@ -129,6 +129,249 @@ export function resolveShadowPolicy(worldData, mode = "editor") {
   };
 }
 
+const CHUNK_POLICY_DEFAULTS = {
+  editor: {
+    enabled: false,
+    chunkProfileId: "editor_chunks",
+    chunkWidth: 100,
+    chunkDepth: 100,
+    tileSize: 1,
+    activeRadiusChunks: 2,
+    preloadMarginChunks: 1,
+    unloadMarginChunks: 2,
+    maxLoadedChunks: 49,
+    debugOverlay: true,
+    showChunkGrid: true,
+    showChunkLabels: false,
+    keepSelectedChunkLoaded: true,
+    cameraOnly: false,
+    fixedCameraPaddingTiles: 0,
+    strictUnloadOutsideCamera: false
+  },
+  game: {
+    enabled: false,
+    chunkProfileId: "game_chunks",
+    chunkWidth: 100,
+    chunkDepth: 100,
+    tileSize: 1,
+    activeRadiusChunks: 1,
+    preloadMarginChunks: 1,
+    unloadMarginChunks: 1,
+    maxLoadedChunks: 9,
+    debugOverlay: false,
+    showChunkGrid: true,
+    showChunkLabels: false,
+    keepSelectedChunkLoaded: false,
+    cameraOnly: true,
+    fixedCameraPaddingTiles: 10,
+    strictUnloadOutsideCamera: true
+  }
+};
+
+function chunkInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function chunkCoordInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.floor(parsed);
+}
+
+function maxLoadedChunksForValue(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.floor(parsed);
+}
+
+export function resolveChunkPolicy(worldData, mode = "editor") {
+  const modeName = mode === "game" ? "game" : "editor";
+  const policy = modeName === "game"
+    ? worldData?.chunkLoading?.game || null
+    : worldData?.chunkLoading?.editor || null;
+  const defaults = CHUNK_POLICY_DEFAULTS[modeName];
+  if (!policy) {
+    const fallbackSize = chunkSizeForPolicy(defaults);
+    return {
+      mode: modeName,
+      source: "none",
+      policyId: null,
+      type: modeName,
+      enabled: false,
+      chunkProfileId: defaults.chunkProfileId,
+      chunkWidth: defaults.chunkWidth,
+      chunkDepth: defaults.chunkDepth,
+      tileSize: defaults.tileSize,
+      chunkWorldWidth: fallbackSize.width,
+      chunkWorldDepth: fallbackSize.depth,
+      activeRadiusChunks: defaults.activeRadiusChunks,
+      preloadMarginChunks: defaults.preloadMarginChunks,
+      unloadMarginChunks: defaults.unloadMarginChunks,
+      preloadRadiusChunks: defaults.activeRadiusChunks + defaults.preloadMarginChunks,
+      loadedRadiusChunks: defaults.activeRadiusChunks + Math.max(defaults.preloadMarginChunks, defaults.unloadMarginChunks),
+      maxLoadedChunks: defaults.maxLoadedChunks,
+      debugOverlay: false,
+      showChunkGrid: false,
+      showChunkLabels: false,
+      keepSelectedChunkLoaded: defaults.keepSelectedChunkLoaded,
+      cameraOnly: defaults.cameraOnly,
+      fixedCameraPaddingTiles: defaults.fixedCameraPaddingTiles,
+      strictUnloadOutsideCamera: defaults.strictUnloadOutsideCamera
+    };
+  }
+  const chunkWidth = Math.max(1, chunkInteger(policy.chunkWidth, defaults.chunkWidth));
+  const chunkDepth = Math.max(1, chunkInteger(policy.chunkDepth, defaults.chunkDepth));
+  const tileSize = Math.max(0.01, num(policy.tileSize, defaults.tileSize));
+  const activeRadiusChunks = modeName === "game"
+    ? chunkInteger(policy.gameViewRadiusChunks, defaults.activeRadiusChunks)
+    : chunkInteger(policy.editorViewRadiusChunks, defaults.activeRadiusChunks);
+  const preloadMarginChunks = chunkInteger(policy.preloadMarginChunks, defaults.preloadMarginChunks);
+  const unloadMarginChunks = chunkInteger(policy.unloadMarginChunks, defaults.unloadMarginChunks);
+  const size = chunkSizeForPolicy({ chunkWidth: chunkWidth, chunkDepth: chunkDepth, tileSize: tileSize });
+  return {
+    mode: modeName,
+    source: modeName,
+    policyId: policy.id || null,
+    type: policy.type || modeName,
+    enabled: policy.enabled !== false,
+    chunkProfileId: policy.chunkProfileId || defaults.chunkProfileId,
+    chunkWidth: chunkWidth,
+    chunkDepth: chunkDepth,
+    tileSize: tileSize,
+    chunkWorldWidth: size.width,
+    chunkWorldDepth: size.depth,
+    activeRadiusChunks: activeRadiusChunks,
+    preloadMarginChunks: preloadMarginChunks,
+    unloadMarginChunks: unloadMarginChunks,
+    preloadRadiusChunks: activeRadiusChunks + preloadMarginChunks,
+    loadedRadiusChunks: activeRadiusChunks + Math.max(preloadMarginChunks, unloadMarginChunks),
+    maxLoadedChunks: maxLoadedChunksForValue(policy.maxLoadedChunks, defaults.maxLoadedChunks),
+    debugOverlay: policy.debugOverlay === true,
+    showChunkGrid: modeName === "editor" ? policy.showChunkGrid !== false : true,
+    showChunkLabels: modeName === "editor" ? policy.showChunkLabels === true : false,
+    keepSelectedChunkLoaded: modeName === "editor" ? policy.keepSelectedChunkLoaded !== false : false,
+    cameraOnly: modeName === "game" ? policy.cameraOnly !== false : false,
+    fixedCameraPaddingTiles: modeName === "game" ? chunkInteger(policy.fixedCameraPaddingTiles, defaults.fixedCameraPaddingTiles) : 0,
+    strictUnloadOutsideCamera: modeName === "game" ? policy.strictUnloadOutsideCamera !== false : false
+  };
+}
+
+export function chunkSizeForPolicy(policy) {
+  const chunkWidth = Math.max(1, chunkInteger(policy?.chunkWidth, 100));
+  const chunkDepth = Math.max(1, chunkInteger(policy?.chunkDepth, 100));
+  const tileSize = Math.max(0.01, num(policy?.tileSize, 1));
+  return {
+    width: chunkWidth * tileSize,
+    depth: chunkDepth * tileSize,
+    tileSize: tileSize
+  };
+}
+
+export function chunkCoordForPosition(x, z, policy) {
+  const size = chunkSizeForPolicy(policy);
+  const safeX = Number.isFinite(Number(x)) ? Number(x) : 0;
+  const safeZ = Number.isFinite(Number(z)) ? Number(z) : 0;
+  return {
+    x: Math.floor(safeX / size.width),
+    z: Math.floor(safeZ / size.depth)
+  };
+}
+
+export function chunkKey(coord) {
+  return String(chunkCoordInteger(coord?.x, 0)) + "," + String(chunkCoordInteger(coord?.z, 0));
+}
+
+export function chunkDistanceFromCenter(coord, centerCoord) {
+  return Math.hypot(chunkCoordInteger(coord?.x, 0) - chunkCoordInteger(centerCoord?.x, 0), chunkCoordInteger(coord?.z, 0) - chunkCoordInteger(centerCoord?.z, 0));
+}
+
+function chebyshevChunkDistance(coord, centerCoord) {
+  return Math.max(Math.abs(chunkCoordInteger(coord?.x, 0) - chunkCoordInteger(centerCoord?.x, 0)), Math.abs(chunkCoordInteger(coord?.z, 0) - chunkCoordInteger(centerCoord?.z, 0)));
+}
+
+function chunkCoordSort(a, b) {
+  if ((a?.x || 0) !== (b?.x || 0)) return (a?.x || 0) - (b?.x || 0);
+  return (a?.z || 0) - (b?.z || 0);
+}
+
+function chunkDistanceSort(a, b) {
+  if ((a?.distance || 0) !== (b?.distance || 0)) return (a?.distance || 0) - (b?.distance || 0);
+  return chunkCoordSort(a, b);
+}
+
+export function buildChunkWindow(centerCoord, policy, mode = "editor") {
+  const normalizedPolicy = policy?.chunkWorldWidth
+    ? policy
+    : resolveChunkPolicy({ chunkLoading: { [mode === "game" ? "game" : "editor"]: policy || null } }, mode);
+  const center = {
+    x: chunkCoordInteger(centerCoord?.x, 0),
+    z: chunkCoordInteger(centerCoord?.z, 0)
+  };
+  const activeRadiusChunks = chunkInteger(normalizedPolicy.activeRadiusChunks, 0);
+  const preloadMarginChunks = chunkInteger(normalizedPolicy.preloadMarginChunks, 0);
+  const unloadMarginChunks = chunkInteger(normalizedPolicy.unloadMarginChunks, 0);
+  const preloadRadiusChunks = activeRadiusChunks + preloadMarginChunks;
+  const loadedRadiusChunks = activeRadiusChunks + Math.max(preloadMarginChunks, unloadMarginChunks);
+  const candidates = [];
+  for (let chunkX = center.x - loadedRadiusChunks; chunkX <= center.x + loadedRadiusChunks; chunkX += 1) {
+    for (let chunkZ = center.z - loadedRadiusChunks; chunkZ <= center.z + loadedRadiusChunks; chunkZ += 1) {
+      const coord = { x: chunkX, z: chunkZ };
+      const chebyshev = chebyshevChunkDistance(coord, center);
+      const key = chunkKey(coord);
+      candidates.push({
+        x: chunkX,
+        z: chunkZ,
+        key: key,
+        chebyshev: chebyshev,
+        distance: chunkDistanceFromCenter(coord, center)
+      });
+    }
+  }
+  let clippedByMaxLoadedChunks = false;
+  const maxLoadedChunks = maxLoadedChunksForValue(normalizedPolicy.maxLoadedChunks, candidates.length || 1);
+  let loadedCandidates = candidates.slice();
+  if (loadedCandidates.length > maxLoadedChunks) {
+    clippedByMaxLoadedChunks = true;
+    loadedCandidates.sort(chunkDistanceSort);
+    loadedCandidates = loadedCandidates.slice(0, maxLoadedChunks);
+  }
+  loadedCandidates.sort(chunkCoordSort);
+  const loadedChunkKeys = loadedCandidates.map(function (coord) { return coord.key; });
+  const loadedChunkKeySet = new Set(loadedChunkKeys);
+  const activeChunks = [];
+  const preloadChunks = [];
+  const loadedOnlyChunks = [];
+  for (const coord of loadedCandidates) {
+    if (coord.chebyshev <= activeRadiusChunks) {
+      activeChunks.push({ x: coord.x, z: coord.z, key: coord.key });
+    } else if (coord.chebyshev <= preloadRadiusChunks) {
+      preloadChunks.push({ x: coord.x, z: coord.z, key: coord.key });
+    } else {
+      loadedOnlyChunks.push({ x: coord.x, z: coord.z, key: coord.key });
+    }
+  }
+  return {
+    centerChunk: { x: center.x, z: center.z, key: chunkKey(center) },
+    activeRadiusChunks: activeRadiusChunks,
+    preloadRadiusChunks: preloadRadiusChunks,
+    loadedRadiusChunks: loadedRadiusChunks,
+    maxLoadedChunks: maxLoadedChunks,
+    clippedByMaxLoadedChunks: clippedByMaxLoadedChunks,
+    activeChunks: activeChunks,
+    preloadChunks: preloadChunks,
+    loadedOnlyChunks: loadedOnlyChunks,
+    loadedChunks: loadedCandidates.map(function (coord) {
+      return { x: coord.x, z: coord.z, key: coord.key };
+    }),
+    activeChunkKeys: activeChunks.map(function (coord) { return coord.key; }),
+    preloadChunkKeys: preloadChunks.map(function (coord) { return coord.key; }),
+    loadedChunkKeys: loadedChunkKeys,
+    loadedChunkKeySet: loadedChunkKeySet
+  };
+}
+
 const TERRAIN_MATERIAL_PRESETS = {
   grass: "#6faa4f",
   sand: "#c8a968",
@@ -1120,6 +1363,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let perfHudNextUpdateAt = 0;
   let perfHudFrameMs = 0;
   let perfHudWarmup = false;
+  let chunkDebugOverlay = null;
+  let chunkDebugStateCache = null;
+  let chunkDebugSignature = "";
 
   function resolveWorldPerformance(worldData) {
     const source = worldData?.world?.performance || {};
@@ -1195,6 +1441,285 @@ export function createGkWorldRuntime(canvas, options = {}) {
     shadowPolicy = resolveShadowPolicyFromPerformance(worldPerformance, mode);
     applyRendererShadowPolicy(shadowPolicy);
     return worldPerformance;
+  }
+
+  function chunkWorldCenter(coord, policy) {
+    return {
+      x: coord.x * policy.chunkWorldWidth + policy.chunkWorldWidth / 2,
+      z: coord.z * policy.chunkWorldDepth + policy.chunkWorldDepth / 2
+    };
+  }
+
+  function clearChunkDebugOverlay() {
+    if (!chunkDebugOverlay) return;
+    for (const child of Array.from(chunkDebugOverlay.children)) {
+      chunkDebugOverlay.remove(child);
+      disposeObject(child);
+    }
+    chunkDebugOverlay.visible = false;
+  }
+
+  function ensureChunkDebugOverlay() {
+    if (!chunkDebugOverlay) {
+      chunkDebugOverlay = new THREE.Group();
+      chunkDebugOverlay.name = "GK chunk debug overlay";
+      scene.add(chunkDebugOverlay);
+    }
+    return chunkDebugOverlay;
+  }
+
+  function resolveChunkDebugCenter(policy) {
+    if (mode === "editor") {
+      if (orbitControls?.target) {
+        return {
+          x: num(orbitControls.target.x, 0),
+          z: num(orbitControls.target.z, 0),
+          source: "editor_target"
+        };
+      }
+      return {
+        x: num(camTarget.x, num(player.pos.x, 0)),
+        z: num(camTarget.z, num(player.pos.z, 0)),
+        source: "editor_camera"
+      };
+    }
+    if (policy.cameraOnly !== false) {
+      return {
+        x: num(camTarget.x, num(player.pos.x, 0)),
+        z: num(camTarget.z, num(player.pos.z, 0)),
+        source: "game_camera"
+      };
+    }
+    return {
+      x: num(player.pos.x, num(camTarget.x, 0)),
+      z: num(player.pos.z, num(camTarget.z, 0)),
+      source: "player"
+    };
+  }
+
+  function createChunkDebugState() {
+    const policy = resolveChunkPolicy(world, mode);
+    const state = {
+      editor: world?.chunkLoading?.editor?.id || null,
+      game: world?.chunkLoading?.game?.id || null,
+      enabled: policy.enabled === true,
+      source: policy.source,
+      policyId: policy.policyId,
+      chunkProfileId: policy.chunkProfileId,
+      type: policy.type,
+      chunkWidth: policy.chunkWidth,
+      chunkDepth: policy.chunkDepth,
+      tileSize: policy.tileSize,
+      chunkWorldWidth: policy.chunkWorldWidth,
+      chunkWorldDepth: policy.chunkWorldDepth,
+      activeRadiusChunks: policy.activeRadiusChunks,
+      preloadMarginChunks: policy.preloadMarginChunks,
+      unloadMarginChunks: policy.unloadMarginChunks,
+      maxLoadedChunks: policy.maxLoadedChunks,
+      debugOverlay: policy.debugOverlay,
+      showChunkGrid: policy.showChunkGrid,
+      showChunkLabels: policy.showChunkLabels,
+      keepSelectedChunkLoaded: policy.keepSelectedChunkLoaded,
+      cameraOnly: policy.cameraOnly,
+      fixedCameraPaddingTiles: policy.fixedCameraPaddingTiles,
+      strictUnloadOutsideCamera: policy.strictUnloadOutsideCamera,
+      centerSource: policy.source === "none" ? "none" : null,
+      centerPosition: null,
+      centerChunk: null,
+      activeChunks: 0,
+      preloadChunks: 0,
+      loadedChunks: 0,
+      clippedByMaxLoadedChunks: false,
+      activeChunkKeys: [],
+      preloadChunkKeys: [],
+      loadedChunkKeys: [],
+      activeChunkCoords: [],
+      preloadChunkCoords: [],
+      loadedChunkCoords: [],
+      loadedOnlyChunkCoords: [],
+      overlayVisible: false
+    };
+    if (policy.source === "none") {
+      state.signature = [
+        "none",
+        state.editor || "",
+        state.game || ""
+      ].join("|");
+      return state;
+    }
+    const centerPosition = resolveChunkDebugCenter(policy);
+    const centerChunk = chunkCoordForPosition(centerPosition.x, centerPosition.z, policy);
+    state.centerSource = centerPosition.source;
+    state.centerPosition = {
+      x: round(centerPosition.x),
+      z: round(centerPosition.z)
+    };
+    state.centerChunk = {
+      x: centerChunk.x,
+      z: centerChunk.z,
+      key: chunkKey(centerChunk)
+    };
+    if (policy.enabled) {
+      const windowState = buildChunkWindow(centerChunk, policy, mode);
+      state.activeChunks = windowState.activeChunks.length;
+      state.preloadChunks = windowState.preloadChunks.length;
+      state.loadedChunks = windowState.loadedChunks.length;
+      state.clippedByMaxLoadedChunks = windowState.clippedByMaxLoadedChunks;
+      state.activeChunkKeys = windowState.activeChunkKeys.slice();
+      state.preloadChunkKeys = windowState.preloadChunkKeys.slice();
+      state.loadedChunkKeys = windowState.loadedChunkKeys.slice();
+      state.activeChunkCoords = windowState.activeChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
+      state.preloadChunkCoords = windowState.preloadChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
+      state.loadedChunkCoords = windowState.loadedChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
+      state.loadedOnlyChunkCoords = windowState.loadedOnlyChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
+    }
+    state.overlayVisible = state.enabled && state.debugOverlay && state.loadedChunkCoords.length > 0;
+    state.signature = [
+      state.editor || "",
+      state.game || "",
+      state.source,
+      state.policyId || "",
+      state.enabled ? 1 : 0,
+      state.debugOverlay ? 1 : 0,
+      state.showChunkGrid ? 1 : 0,
+      state.showChunkLabels ? 1 : 0,
+      state.centerChunk ? state.centerChunk.key : "none",
+      state.loadedChunkKeys.join(";")
+    ].join("|");
+    return state;
+  }
+
+  function createChunkFillMesh(coord, policy, color, opacity, y) {
+    const geometry = new THREE.PlaneGeometry(policy.chunkWorldWidth, policy.chunkWorldDepth);
+    geometry.rotateX(-Math.PI / 2);
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: opacity,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    const center = chunkWorldCenter(coord, policy);
+    mesh.position.set(center.x, y, center.z);
+    mesh.renderOrder = 996;
+    return mesh;
+  }
+
+  function createChunkGridLines(coords, policy, y) {
+    if (!Array.isArray(coords) || !coords.length) return null;
+    let minX = coords[0].x;
+    let maxX = coords[0].x;
+    let minZ = coords[0].z;
+    let maxZ = coords[0].z;
+    for (const coord of coords) {
+      minX = Math.min(minX, coord.x);
+      maxX = Math.max(maxX, coord.x);
+      minZ = Math.min(minZ, coord.z);
+      maxZ = Math.max(maxZ, coord.z);
+    }
+    const points = [];
+    const startWorldX = minX * policy.chunkWorldWidth;
+    const endWorldX = (maxX + 1) * policy.chunkWorldWidth;
+    const startWorldZ = minZ * policy.chunkWorldDepth;
+    const endWorldZ = (maxZ + 1) * policy.chunkWorldDepth;
+    for (let chunkX = minX; chunkX <= maxX + 1; chunkX += 1) {
+      const worldX = chunkX * policy.chunkWorldWidth;
+      points.push(new THREE.Vector3(worldX, y, startWorldZ), new THREE.Vector3(worldX, y, endWorldZ));
+    }
+    for (let chunkZ = minZ; chunkZ <= maxZ + 1; chunkZ += 1) {
+      const worldZ = chunkZ * policy.chunkWorldDepth;
+      points.push(new THREE.Vector3(startWorldX, y, worldZ), new THREE.Vector3(endWorldX, y, worldZ));
+    }
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: 0x8eeaff,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.renderOrder = 997;
+    return lines;
+  }
+
+  function createChunkLabelSprite(text, x, y, z, policy) {
+    if (typeof document === "undefined") return null;
+    const labelCanvas = document.createElement("canvas");
+    labelCanvas.width = 256;
+    labelCanvas.height = 112;
+    const context = labelCanvas.getContext("2d");
+    if (!context) return null;
+    context.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+    context.fillStyle = "rgba(7, 15, 22, 0.82)";
+    context.fillRect(10, 12, labelCanvas.width - 20, labelCanvas.height - 24);
+    context.strokeStyle = "rgba(142, 234, 255, 0.95)";
+    context.lineWidth = 4;
+    context.strokeRect(10, 12, labelCanvas.width - 20, labelCanvas.height - 24);
+    context.fillStyle = "#f3fbff";
+    context.font = "600 32px monospace";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(text, labelCanvas.width / 2, labelCanvas.height / 2);
+    const texture = new THREE.CanvasTexture(labelCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.position.set(x, y, z);
+    sprite.scale.set(Math.max(18, policy.chunkWorldWidth * 0.75), Math.max(10, policy.chunkWorldDepth * 0.3), 1);
+    sprite.renderOrder = 998;
+    return sprite;
+  }
+
+  function rebuildChunkDebugOverlay(state) {
+    clearChunkDebugOverlay();
+    if (!state?.overlayVisible || state.source === "none") return;
+    const group = ensureChunkDebugOverlay();
+    const policy = resolveChunkPolicy(world, mode);
+    const baseY = num(world?.ground?.y, 0) + 0.05;
+    for (const coord of state.loadedOnlyChunkCoords) {
+      group.add(createChunkFillMesh(coord, policy, 0x2f7891, 0.08, baseY));
+    }
+    for (const coord of state.preloadChunkCoords) {
+      group.add(createChunkFillMesh(coord, policy, 0xe3a63d, 0.12, baseY + 0.01));
+    }
+    for (const coord of state.activeChunkCoords) {
+      group.add(createChunkFillMesh(coord, policy, 0x45d483, 0.18, baseY + 0.02));
+    }
+    if (state.showChunkGrid) {
+      const grid = createChunkGridLines(state.loadedChunkCoords, policy, baseY + 0.04);
+      if (grid) group.add(grid);
+    }
+    if (state.showChunkLabels) {
+      for (const coord of state.loadedChunkCoords) {
+        const center = chunkWorldCenter(coord, policy);
+        const label = createChunkLabelSprite(coord.key, center.x, baseY + 0.12, center.z, policy);
+        if (label) group.add(label);
+      }
+    }
+    group.visible = true;
+  }
+
+  function syncChunkDebugState() {
+    const nextState = createChunkDebugState();
+    chunkDebugStateCache = nextState;
+    if (nextState.signature !== chunkDebugSignature) {
+      chunkDebugSignature = nextState.signature;
+      rebuildChunkDebugOverlay(nextState);
+    } else if (chunkDebugOverlay) {
+      chunkDebugOverlay.visible = nextState.overlayVisible;
+    }
+    return nextState;
   }
 
   function applySmoothShadingToMaterial(material, smoothShading) {
@@ -1637,6 +2162,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (mode === "game") updatePlayer(delta);
     if (waterAnimMaterials.length > 0 && mode === "game") updateWaterAnimation(time);
     if (shouldAnimateSurfaces) updateSurfaceAnimation(time);
+    syncChunkDebugState();
     renderer.render(scene, camera);
     if (mode === "game") updatePerformanceHud(time);
     running = false;
@@ -1653,6 +2179,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   function clearContent() {
     clearTerrainEditorOverlay();
     clearScatterEditorOverlay();
+    clearChunkDebugOverlay();
     clearTerrainRuntimeVisuals();
     clearWalkabilityIndex();
     resetRuntimeStats();
@@ -1690,6 +2217,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     perfHudNextUpdateAt = 0;
     perfHudFrameMs = 0;
     perfHudWarmup = false;
+    chunkDebugStateCache = null;
+    chunkDebugSignature = "";
   }
 
   function captureViewState() {
@@ -4479,6 +5008,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function debugState() {
+    const chunkLoadingState = syncChunkDebugState();
     return {
       mode: mode,
       world: {
@@ -4492,10 +5022,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
           blockers: Array.isArray(world?.collision?.blockers) ? world.collision.blockers.length : 0,
           walkableSurfaces: Array.isArray(world?.collision?.walkableSurfaces) ? world.collision.walkableSurfaces.length : 0
         },
-        chunkLoading: {
-          editor: world?.chunkLoading?.editor?.id || null,
-          game: world?.chunkLoading?.game?.id || null
-        },
+        chunkLoading: Object.assign({}, chunkLoadingState),
         ui: Array.isArray(world?.ui) ? world.ui.length : 0
       },
       player: {
@@ -4737,6 +5264,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
       scene.remove(scatterEditorOverlay);
       clearScatterEditorOverlay();
       scatterEditorOverlay = null;
+    }
+    if (chunkDebugOverlay) {
+      scene.remove(chunkDebugOverlay);
+      clearChunkDebugOverlay();
+      chunkDebugOverlay = null;
     }
     if (editorPointerDownCaptureHandler) canvas.removeEventListener("pointerdown", editorPointerDownCaptureHandler, true);
     if (editorPointerUpCaptureHandler) {
