@@ -874,6 +874,93 @@ function buildWorldPerformanceReadModel(node) {
   };
 }
 
+function pushUniqueWarning(warnings, message) {
+  if (!Array.isArray(warnings)) return;
+  if (!warnings.includes(message)) warnings.push(message);
+}
+
+function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
+  const defaults = defaultValuesForType(nodeType);
+  const values = Object.assign({}, defaults, node?.values || {});
+  return {
+    id: node.id,
+    type: readModelType,
+    chunkProfileId: values.chunkProfileId,
+    enabled: values.enabled !== false,
+    chunkWidth: numberOrFallback(values.chunkWidth, defaults.chunkWidth),
+    chunkDepth: numberOrFallback(values.chunkDepth, defaults.chunkDepth),
+    tileSize: numberOrFallback(values.tileSize, defaults.tileSize),
+    preloadMarginChunks: numberOrFallback(values.preloadMarginChunks, defaults.preloadMarginChunks),
+    unloadMarginChunks: numberOrFallback(values.unloadMarginChunks, defaults.unloadMarginChunks),
+    maxLoadedChunks: numberOrFallback(values.maxLoadedChunks, defaults.maxLoadedChunks),
+    debugOverlay: values.debugOverlay === true
+  };
+}
+
+function buildEditorChunkLoadingReadModel(node) {
+  const base = buildChunkLoadingBaseReadModel(node, "editor_chunk_loading", "editor");
+  const values = Object.assign({}, defaultValuesForType("editor_chunk_loading"), node?.values || {});
+  return Object.assign(base, {
+    editorViewRadiusChunks: numberOrFallback(values.editorViewRadiusChunks, defaultValuesForType("editor_chunk_loading").editorViewRadiusChunks),
+    keepSelectedChunkLoaded: values.keepSelectedChunkLoaded !== false,
+    showChunkGrid: values.showChunkGrid !== false,
+    showChunkLabels: values.showChunkLabels === true
+  });
+}
+
+function buildGameChunkLoadingReadModel(node) {
+  const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game");
+  const values = Object.assign({}, defaultValuesForType("game_chunk_loading"), node?.values || {});
+  return Object.assign(base, {
+    cameraOnly: values.cameraOnly !== false,
+    gameViewRadiusChunks: numberOrFallback(values.gameViewRadiusChunks, defaultValuesForType("game_chunk_loading").gameViewRadiusChunks),
+    fixedCameraPaddingTiles: numberOrFallback(values.fixedCameraPaddingTiles, defaultValuesForType("game_chunk_loading").fixedCameraPaddingTiles),
+    strictUnloadOutsideCamera: values.strictUnloadOutsideCamera !== false,
+    loadBudgetPerFrame: numberOrFallback(values.loadBudgetPerFrame, defaultValuesForType("game_chunk_loading").loadBudgetPerFrame)
+  });
+}
+
+function collectChunkLoadingReadModel(nodes, warnings = []) {
+  const editorNodes = [];
+  const gameNodes = [];
+  for (const node of nodes || []) {
+    if (node.type === "editor_chunk_loading") editorNodes.push(node);
+    else if (node.type === "game_chunk_loading") gameNodes.push(node);
+  }
+  if (editorNodes.length > 1) {
+    pushUniqueWarning(warnings, "Er zijn meerdere Editor Chunk Loading nodes verbonden. De eerste wordt gebruikt.");
+  }
+  if (gameNodes.length > 1) {
+    pushUniqueWarning(warnings, "Er zijn meerdere Game Chunk Loading nodes verbonden. De eerste wordt gebruikt.");
+  }
+  return {
+    editor: editorNodes[0] ? buildEditorChunkLoadingReadModel(editorNodes[0]) : null,
+    game: gameNodes[0] ? buildGameChunkLoadingReadModel(gameNodes[0]) : null
+  };
+}
+
+function validateChunkLoadingReadModel(chunkLoading, warnings) {
+  if (!chunkLoading) return;
+  if (chunkLoading.editor && chunkLoading.game) {
+    const editorRadius = numberOrNull(chunkLoading.editor.editorViewRadiusChunks);
+    const gameRadius = numberOrNull(chunkLoading.game.gameViewRadiusChunks);
+    if (editorRadius !== null && gameRadius !== null && editorRadius < gameRadius) {
+      pushUniqueWarning(warnings, "Editor Chunk Loading radius is kleiner dan Game Chunk Loading radius; editor toont mogelijk minder dan game.");
+    }
+  }
+  if (chunkLoading.game && chunkLoading.game.cameraOnly === false) {
+    pushUniqueWarning(warnings, "Game Chunk Loading cameraOnly staat uit; dit kan meer chunks laden dan de vaste game camera nodig heeft.");
+  }
+  for (const model of [chunkLoading.editor, chunkLoading.game]) {
+    if (!model) continue;
+    const preloadMarginChunks = numberOrNull(model.preloadMarginChunks);
+    const unloadMarginChunks = numberOrNull(model.unloadMarginChunks);
+    if (preloadMarginChunks !== null && unloadMarginChunks !== null && unloadMarginChunks < preloadMarginChunks) {
+      pushUniqueWarning(warnings, "Chunk Loading unload margin is kleiner dan preload margin; chunks kunnen snel laden/lossen.");
+    }
+  }
+}
+
 function collectTerrainReadModel(nodes) {
   const terrain = emptyTerrainReadModel();
   for (const node of nodes || []) {
@@ -1103,6 +1190,12 @@ export function validateGraphForPublish(graph, services = {}) {
         validatePointList(errors, node, 3);
       }
     }
+
+    const chunkLoadingNodes = collectResolutionError(errors, function () {
+      return incomingNodes(graph, output, "chunkLoading", nodeMap);
+    }) || [];
+    const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings);
+    validateChunkLoadingReadModel(chunkLoading, warnings);
   }
   return { ok: errors.length === 0, errors, warnings };
 }
@@ -1118,6 +1211,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     scatterAreas: [],
     lights: [],
     interactables: [],
+    chunkLoading: { editor: null, game: null },
     keybinds: [],
     ui: [],
     terrain: emptyTerrainReadModel(),
@@ -1133,6 +1227,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const lightNodes = incomingNodes(graph, outputNode, "lights", nodeMap);
   const entityNodes = incomingNodes(graph, outputNode, "entities", nodeMap);
   const interactableNodes = incomingNodes(graph, outputNode, "interactables", nodeMap);
+  const chunkLoadingNodes = incomingNodes(graph, outputNode, "chunkLoading", nodeMap);
   const keybindNodes = incomingNodes(graph, outputNode, "keybinds", nodeMap);
   const uiNodes = incomingNodes(graph, outputNode, "ui", nodeMap);
   const terrainNodes = incomingNodes(graph, outputNode, "terrain", nodeMap);
@@ -1178,6 +1273,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const editorCamera = includeEditorCamera && editorCameraNode ? buildEditorCameraReadModel(editorCameraNode) : null;
   const collision = collectCollisionReadModel(collisionNodes);
   collision.blockers.push.apply(collision.blockers, scatterCollisionBlockers);
+  const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes);
 
   const world = {
     schemaVersion: graph.schemaVersion,
@@ -1286,6 +1382,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     terrain: collectTerrainReadModel(terrainNodes),
     collision: collision,
     scatterAreas: scatterAreas,
+    chunkLoading: chunkLoading,
     assets
   };
   if (editorCamera) world.editorCamera = editorCamera;

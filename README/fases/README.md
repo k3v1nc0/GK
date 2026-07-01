@@ -8,6 +8,7 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 - [Fase 3 - Path en River Rendering](./03-fase3-Path-en-River-Rendering.md)
 - [Fase 4 - Collision, Water en Bruggen](./04-fase4-Collision-Water-en-Bruggen.md)
 - [Fase 4.1 - Performance HUD Node](./04-1-fase4-1-Performance-HUD-Node.md)
+- [Fase 7 - Dynamic Loading & Unloading van Chunks](./07-fase7-Dynamic-Loading-Unloading-Chunks.md)
 
 ## Regie-regels voor elke fase
 

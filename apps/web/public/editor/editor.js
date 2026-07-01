@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-editorfog1";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-editorfog1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading1";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-chunkloading1";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
