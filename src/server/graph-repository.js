@@ -43,6 +43,51 @@ function graphError(message) {
   return error;
 }
 
+function identityFieldKeys(definition) {
+  return Object.entries(definition?.fields || {}).filter(function ([, field]) {
+    return field && field.type === "text" && field.pattern === "^[a-z0-9_:-]+$";
+  }).map(function ([key]) {
+    return key;
+  });
+}
+
+function uniqueIdentityValue(baseValue, field, existingValues) {
+  const maxLength = Math.max(1, Number(field?.maxLength) || 64);
+  const existing = new Set((existingValues || []).filter(function (value) {
+    return typeof value === "string" && value.trim();
+  }).map(function (value) {
+    return value.trim();
+  }));
+  const raw = String(baseValue || "").trim();
+  if (!raw) return raw;
+  if (!existing.has(raw)) return raw.slice(0, maxLength);
+  let counter = 2;
+  let next = raw;
+  while (existing.has(next)) {
+    const suffix = "_" + counter;
+    const base = raw.slice(0, Math.max(1, maxLength - suffix.length));
+    next = (base + suffix).slice(0, maxLength);
+    counter += 1;
+  }
+  return next;
+}
+
+function uniquifyIdentityFields(type, values, rows) {
+  const definition = NODE_TYPES[type];
+  if (!definition) return values;
+  const nextValues = Object.assign({}, values);
+  for (const key of identityFieldKeys(definition)) {
+    const field = definition.fields[key];
+    if (!field) continue;
+    const existingValues = (rows || []).map(function (row) {
+      const parsed = parseJson(row.values_json, defaultValuesForType(type));
+      return parsed ? parsed[key] : null;
+    }).filter(Boolean);
+    nextValues[key] = uniqueIdentityValue(nextValues[key], field, existingValues);
+  }
+  return nextValues;
+}
+
 function isGroupSystemNodeType(type) {
   return type === "group_input" || type === "group_output";
 }
@@ -61,7 +106,6 @@ function humanizePortLabel(portName) {
 
 function applyGroupInterfaceBackfill(nodes, edges, nodeMap) {
   const groups = nodes.filter(function (node) { return node.type === "group"; });
-  const groupMap = new Map(groups.map(function (group) { return [group.id, group]; }));
   let changed = false;
   for (let pass = 0; pass < 4; pass += 1) {
     let passChanged = false;
@@ -74,6 +118,7 @@ function applyGroupInterfaceBackfill(nodes, edges, nodeMap) {
       };
       const inputNames = new Set(nextInterface.inputs.map(function (port) { return port.name; }));
       const outputNames = new Set(nextInterface.outputs.map(function (port) { return port.name; }));
+      let groupChanged = false;
       for (const edge of edges) {
         const fromNode = currentNodeMap.get(edge.fromNodeId);
         const toNode = currentNodeMap.get(edge.toNodeId);
@@ -90,7 +135,7 @@ function applyGroupInterfaceBackfill(nodes, edges, nodeMap) {
               multiple: resolvedTarget.multiple === undefined ? false : Boolean(resolvedTarget.multiple)
             });
             inputNames.add(edge.fromPort);
-            passChanged = true;
+            groupChanged = true;
           }
         }
         if (toNode.type === "group_output" && typeof edge.toPort === "string" && edge.toPort && !outputNames.has(edge.toPort)) {
@@ -104,24 +149,139 @@ function applyGroupInterfaceBackfill(nodes, edges, nodeMap) {
               multiple: resolvedSource.multiple === undefined ? false : Boolean(resolvedSource.multiple)
             });
             outputNames.add(edge.toPort);
-            passChanged = true;
+            groupChanged = true;
           }
         }
       }
-      if (passChanged) {
+      if (groupChanged) {
         group.values.groupInterface = nextInterface;
+        passChanged = true;
       }
     }
     if (!passChanged) break;
     changed = true;
   }
-  if (changed) {
-    const nextNodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
-    for (const group of groups) {
-      nextNodeMap.set(group.id, group);
+  return changed;
+}
+
+function uniqueGroupPortName(baseName, interfaceState) {
+  const allPorts = [
+    ...(Array.isArray(interfaceState?.inputs) ? interfaceState.inputs : []),
+    ...(Array.isArray(interfaceState?.outputs) ? interfaceState.outputs : [])
+  ];
+  const existing = new Set(allPorts.map(function (port) {
+    return String(port?.name || "").trim();
+  }).filter(Boolean));
+  if (!existing.has(baseName)) return baseName;
+  let index = 2;
+  while (existing.has(baseName + "_" + index)) index += 1;
+  return baseName + "_" + index;
+}
+
+function findGroupPortByDataType(ports, dataType) {
+  return (Array.isArray(ports) ? ports : []).find(function (port) {
+    return port && port.dataType === dataType;
+  }) || null;
+}
+
+function ensureGroupEntityOutputPortInRow(row) {
+  const values = parseJson(row?.values_json, defaultValuesForType("group"));
+  const groupInterface = normalizeGroupInterface(values.groupInterface);
+  const existing = findGroupPortByDataType(groupInterface.outputs, "entity");
+  let changed = false;
+  let portName = null;
+  if (existing) {
+    portName = existing.name;
+    if (existing.multiple === false) {
+      existing.multiple = true;
+      changed = true;
+    }
+    if (!existing.label) {
+      existing.label = "Entities";
+      changed = true;
+    }
+  } else {
+    portName = uniqueGroupPortName("entities", groupInterface);
+    groupInterface.outputs.push({
+      id: portName,
+      name: portName,
+      label: "Entities",
+      dataType: "entity",
+      multiple: true
+    });
+    changed = true;
+  }
+  if (changed) values.groupInterface = groupInterface;
+  return { values: values, portName: portName, changed: changed };
+}
+
+function removedGroupPortNames(beforePorts, afterPorts) {
+  const before = new Set((Array.isArray(beforePorts) ? beforePorts : []).map(function (port) {
+    return String(port?.name || "").trim();
+  }).filter(Boolean));
+  const after = new Set((Array.isArray(afterPorts) ? afterPorts : []).map(function (port) {
+    return String(port?.name || "").trim();
+  }).filter(Boolean));
+  return Array.from(before).filter(function (name) {
+    return !after.has(name);
+  });
+}
+
+function deleteGroupPortEdges(db, groupId, removedInputPorts, removedOutputPorts) {
+  const inputPorts = Array.from(new Set((removedInputPorts || []).filter(Boolean)));
+  const outputPorts = Array.from(new Set((removedOutputPorts || []).filter(Boolean)));
+  if (!inputPorts.length && !outputPorts.length) return false;
+  const groupInput = db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_input' LIMIT 1").get(groupId);
+  const groupOutput = db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_output' LIMIT 1").get(groupId);
+  let changed = false;
+  const deleteInputEdge = db.prepare("DELETE FROM editor_node_edges WHERE from_node_id = ? AND from_port = ?");
+  const deleteOutputEdge = db.prepare("DELETE FROM editor_node_edges WHERE to_node_id = ? AND to_port = ?");
+  db.exec("BEGIN");
+  try {
+    if (groupInput) {
+      for (const portName of inputPorts) {
+        const result = deleteInputEdge.run(groupInput.id, portName);
+        changed = changed || result.changes > 0;
+      }
+    }
+    if (groupOutput) {
+      for (const portName of outputPorts) {
+        const result = deleteOutputEdge.run(groupOutput.id, portName);
+        changed = changed || result.changes > 0;
+      }
+    }
+    db.exec("COMMIT");
+    return changed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function pruneInvalidEdges(db, edges, nodeMap) {
+  const invalidEdgeIds = [];
+  for (const edge of edges) {
+    const fromNode = nodeMap.get(edge.fromNodeId);
+    const toNode = nodeMap.get(edge.toNodeId);
+    if (!fromNode || !toNode) {
+      invalidEdgeIds.push(edge.id);
+      continue;
+    }
+    if ((fromNode.parentId || null) !== (toNode.parentId || null)) {
+      invalidEdgeIds.push(edge.id);
     }
   }
-  return changed;
+  if (!invalidEdgeIds.length) return false;
+  db.exec("BEGIN");
+  try {
+    const deleteEdge = db.prepare("DELETE FROM editor_node_edges WHERE id = ?");
+    for (const edgeId of invalidEdgeIds) deleteEdge.run(edgeId);
+    db.exec("COMMIT");
+    return true;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function normalizeSnapshotNode(node) {
@@ -222,7 +382,7 @@ export class GraphRepository {
     this.ensureGroupSystemNodes();
     const nodes = this.db.prepare("SELECT * FROM editor_nodes ORDER BY y, x").all().map(toNode);
     const nodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
-    const edges = this.db.prepare("SELECT * FROM editor_node_edges ORDER BY created_at, id").all().map(function (row) {
+    let edges = this.db.prepare("SELECT * FROM editor_node_edges ORDER BY created_at, id").all().map(function (row) {
       return {
         id: row.id,
         fromNodeId: row.from_node_id,
@@ -232,6 +392,19 @@ export class GraphRepository {
         createdAt: row.created_at
       };
     });
+    if (pruneInvalidEdges(this.db, edges, nodeMap)) {
+      this.clearDraftWorld();
+      edges = this.db.prepare("SELECT * FROM editor_node_edges ORDER BY created_at, id").all().map(function (row) {
+        return {
+          id: row.id,
+          fromNodeId: row.from_node_id,
+          fromPort: row.from_port,
+          toNodeId: row.to_node_id,
+          toPort: row.to_port,
+          createdAt: row.created_at
+        };
+      });
+    }
     const changed = applyGroupInterfaceBackfill(nodes, edges, nodeMap);
     if (changed) {
       this.db.exec("BEGIN");
@@ -261,6 +434,38 @@ export class GraphRepository {
     this.db.prepare("DELETE FROM draft_world_state WHERE id = 1").run();
   }
 
+  ensureModelEntityWiring(nodeId) {
+    const row = this.db.prepare("SELECT id, type, parent_id FROM editor_nodes WHERE id = ?").get(nodeId);
+    if (!row || row.type !== "model_entity") return false;
+    const existing = this.db.prepare("SELECT id FROM editor_node_edges WHERE from_node_id = ? AND from_port = 'entity' LIMIT 1").get(nodeId);
+    if (existing) return false;
+    const insertEdge = this.db.prepare("INSERT INTO editor_node_edges (id, from_node_id, from_port, to_node_id, to_port, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    let targetNode = null;
+    let targetPort = "entities";
+    let changed = false;
+    if (row.parent_id) {
+      const parent = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?").get(row.parent_id);
+      if (!parent || parent.type !== "group") return false;
+      const ensured = ensureGroupEntityOutputPortInRow(parent);
+      if (ensured.changed) {
+        this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
+          .run(JSON.stringify(ensured.values), now(), parent.id);
+        changed = true;
+      }
+      targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_output' LIMIT 1").get(parent.id);
+      if (!targetNode) return changed;
+      targetPort = ensured.portName;
+    } else {
+      targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE type = 'game_output' LIMIT 1").get();
+      if (!targetNode) return false;
+    }
+    const alreadyConnected = this.db.prepare("SELECT id FROM editor_node_edges WHERE from_node_id = ? AND from_port = 'entity' AND to_node_id = ? AND to_port = ? LIMIT 1")
+      .get(nodeId, targetNode.id, targetPort);
+    if (alreadyConnected) return changed;
+    insertEdge.run("edge_" + crypto.randomUUID().slice(0, 10), nodeId, "entity", targetNode.id, targetPort, now());
+    return true;
+  }
+
   createNode(type, position, values = {}, parentId = null) {
     const definition = NODE_TYPES[type];
     if (!definition) {
@@ -287,8 +492,11 @@ export class GraphRepository {
     const x = Number.isFinite(Number(position?.x)) ? Number(position.x) : 160 + count * 26;
     const y = Number.isFinite(Number(position?.y)) ? Number(position.y) : 160 + count * 26;
     const cleanValues = cleanValuesForType(type, values, {}, NODE_TYPES);
+    const identityRows = this.db.prepare("SELECT values_json FROM editor_nodes WHERE type = ?").all(type);
+    const nextValues = uniquifyIdentityFields(type, cleanValues, identityRows);
     this.db.prepare("INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, type, title, Math.round(x), Math.round(y), parentId || null, JSON.stringify(cleanValues), now(), now());
+      .run(id, type, title, Math.round(x), Math.round(y), parentId || null, JSON.stringify(nextValues), now(), now());
+    if (type === "model_entity") this.ensureModelEntityWiring(id);
     this.clearDraftWorld();
     return { graph: this.getGraph(), nodeId: id };
   }
@@ -333,13 +541,6 @@ export class GraphRepository {
       throw error;
     }
     const values = parseJson(row.values_json, defaultValuesForType(row.type));
-    // Ensure unique ids for fields that act as identifiers.
-    const suffix = "_" + crypto.randomUUID().slice(0, 4);
-    for (const [key, field] of Object.entries(NODE_TYPES[row.type].fields)) {
-      if (field.pattern === "^[a-z0-9_:-]+$" && typeof values[key] === "string" && values[key]) {
-        values[key] = (values[key] + suffix).slice(0, field.maxLength || 64);
-      }
-    }
     return this.createNode(row.type, { x: row.x + 40, y: row.y + 40 }, values, row.parent_id || null);
   }
 
@@ -349,11 +550,9 @@ export class GraphRepository {
       error.status = 400;
       throw error;
     }
-    const count = this.db.prepare("SELECT COUNT(*) AS total FROM editor_nodes WHERE type = 'model_entity'").get().total;
-    const shortId = asset.id.replace("asset_", "").slice(0, 8);
     const defaultAnimation = asset.metadata?.defaultAnimation || null;
     const values = {
-      entityId: "entity_" + shortId,
+      entityId: "entity_" + asset.id.replace("asset_", "").slice(0, 8) + "_" + crypto.randomUUID().slice(0, 8),
       label: asset.name,
       modelAssetId: asset.id,
       animationClip: defaultAnimation,
@@ -370,13 +569,10 @@ export class GraphRepository {
       solid: false,
       collisionRadius: 1
     };
-    const created = this.createNode("model_entity", { x: 560 + count * 26, y: 200 + count * 26 }, values, parentId);
-    const output = this.db.prepare("SELECT id FROM editor_nodes WHERE type = 'game_output' LIMIT 1").get();
-    if (output) {
-      this.db.prepare("INSERT OR IGNORE INTO editor_node_edges (id, from_node_id, from_port, to_node_id, to_port, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run("edge_" + crypto.randomUUID().slice(0, 10), created.nodeId, "entity", output.id, "entities", now());
-    }
-    return { graph: this.getGraph(), nodeId: created.nodeId };
+    const parent = parentId ? this.db.prepare("SELECT type FROM editor_nodes WHERE id = ?").get(parentId) : null;
+    const validParentId = parent && isContainer(parent.type) ? parentId : null;
+    const count = this.db.prepare("SELECT COUNT(*) AS total FROM editor_nodes WHERE type = 'model_entity'").get().total;
+    return this.createNode("model_entity", { x: 560 + count * 26, y: 200 + count * 26 }, values, validParentId);
   }
 
   updateNodeValues(nodeId, nextValues) {
@@ -388,6 +584,15 @@ export class GraphRepository {
     }
     const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
     const cleanValues = cleanValuesForType(row.type, nextValues || {}, currentValues, NODE_TYPES);
+    if (row.type === "group") {
+      const currentInterface = normalizeGroupInterface(currentValues.groupInterface);
+      const nextInterface = normalizeGroupInterface(cleanValues.groupInterface);
+      const removedInputs = removedGroupPortNames(currentInterface.inputs, nextInterface.inputs);
+      const removedOutputs = removedGroupPortNames(currentInterface.outputs, nextInterface.outputs);
+      if (removedInputs.length || removedOutputs.length) {
+        deleteGroupPortEdges(this.db, nodeId, removedInputs, removedOutputs);
+      }
+    }
     this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(cleanValues), now(), nodeId);
     this.clearDraftWorld();
@@ -527,6 +732,9 @@ export class GraphRepository {
       }
       for (const edge of edges) {
         insertEdge.run(edge.id, edge.fromNodeId, edge.fromPort, edge.toNodeId, edge.toPort, now());
+      }
+      for (const node of orderedNodes) {
+        if (node.type === "model_entity") this.ensureModelEntityWiring(node.id);
       }
       this.clearDraftWorld();
       this.db.exec("COMMIT");

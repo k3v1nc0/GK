@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260627-transform10";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260627-transform10";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-editorfog1";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-editorfog1";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -11,12 +11,16 @@ const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "world_settings",
   "ground_surface",
+  "group",
+  "game_camera",
+  "editor_camera",
   "top_down_camera",
   "ambient_light",
   "directional_light",
   "player_character",
   "player_spawn",
   "model_entity",
+  "bounded_area_scatter",
   "interactable",
   "keybind",
   "ui_hud_text",
@@ -63,6 +67,7 @@ const state = {
     replacementAssetId: "",
     draftName: null,
     draftCategory: null,
+    thumbnailRetryBusy: false,
     requestToken: 0
   },
   captureField: null,
@@ -94,6 +99,29 @@ const state = {
     dragPointerId: null,
     dragStartGround: null,
     dragCurrentGround: null,
+    dragMoved: false
+  },
+  scatterTool: {
+    mode: "select",
+    activeNodeId: null,
+    selectedPointIndex: null,
+    selectedPointIndices: [],
+    selectedHandleRole: null,
+    draggingPointIndex: null,
+    draggingHandleRole: null,
+    dragNodeId: null,
+    dragStartPoints: null,
+    dragStartGround: null,
+    dragCurrentGround: null,
+    dragStartPointer: null,
+    dragCurrentPointer: null,
+    dragPointerId: null,
+    dragStartPivot: null,
+    dragStartAngle: null,
+    dragStartDistance: null,
+    dragStartRotationY: null,
+    dragExtrudeIndex: null,
+    dragPreviewPoint: null,
     dragMoved: false
   },
   statusMessage: "",
@@ -249,7 +277,7 @@ function formatUploadTiming(ms) {
   if (ms === null || ms === undefined || ms === "") return "n.v.t.";
   const value = Number(ms);
   if (!Number.isFinite(value)) return "n.v.t.";
-  return (value / 1000).toFixed(1) + "s";
+  return (value / 1000).toFixed(1) + "t";
 }
 
 function createUploadTimingRow(label, value, muted) {
@@ -339,7 +367,8 @@ function assetThumbnailStatusMessage(asset) {
   const status = assetThumbnailStatus(asset);
   if (status === "failed") return "Geen thumbnail";
   if (status === "pending" || status === "processing") return "Thumbnail wordt gemaakt...";
-  if (status === "ready" || status === "skipped") return "Thumbnail klaar";
+  if (status === "ready") return "Thumbnail klaar";
+  if (status === "skipped") return "Thumbnail overgeslagen";
   return "";
 }
 
@@ -482,7 +511,8 @@ function assetById(assetId) {
 function runtimeNodeId(node) {
   if (!node) return null;
   if (node.type === "player_character") return node.values?.playerId || null;
-  if (node.type === "model_entity") return node.values?.entityId || null;
+  if (node.type === "model_entity") return node.id || node.values?.entityId || null;
+  if (node.type === "bounded_area_scatter") return node.id || null;
   if (node.type === "surface_layer") return node.values?.surfaceId || null;
   return null;
 }
@@ -522,10 +552,10 @@ function nodeByRuntimeId(runtimeId) {
   if (!runtimeId) return null;
   return state.graph.nodes.find(function (node) {
     return node.values && (
-      node.values.entityId === runtimeId
+      node.id === runtimeId
+      || node.values.entityId === runtimeId
       || node.values.playerId === runtimeId
       || node.values.surfaceId === runtimeId
-      || node.id === runtimeId
     );
   }) || null;
 }
@@ -592,11 +622,7 @@ function focusAssetUsage(usage) {
   selectNode(usage.nodeId, true, { clearPendingEdge: true });
   focusGraphNode(usage.nodeId);
   if (!runtime) return;
-  const runtimeId = node.type === "player_character"
-    ? node.values?.playerId || null
-    : node.type === "model_entity"
-      ? node.values?.entityId || null
-      : null;
+  const runtimeId = runtimeNodeId(node);
   if (!runtimeId || typeof runtime.selectEntity !== "function") return;
   runtime.selectEntity(runtimeId);
   if (typeof runtime.focusSelected === "function") runtime.focusSelected();
@@ -635,6 +661,7 @@ function openAssetManageOverlay(assetId) {
   state.assetManager.replacementAssetId = "";
   state.assetManager.draftName = asset.name;
   state.assetManager.draftCategory = asset.category;
+  state.assetManager.thumbnailRetryBusy = false;
   state.assetManager.requestToken += 1;
   const token = state.assetManager.requestToken;
   renderAssetManageOverlay();
@@ -649,8 +676,19 @@ function closeAssetManageOverlay() {
   state.assetManager.replacementAssetId = "";
   state.assetManager.draftName = null;
   state.assetManager.draftCategory = null;
+  state.assetManager.thumbnailRetryBusy = false;
   state.assetManager.requestToken += 1;
   renderAssetManageOverlay();
+}
+
+function requestManagedAssetUsage(assetId) {
+  const targetAssetId = String(assetId || "").trim();
+  if (!targetAssetId) return;
+  state.assetManager.loadingUsage = true;
+  state.assetManager.requestToken += 1;
+  const token = state.assetManager.requestToken;
+  renderAssetManageOverlay();
+  loadManagedAssetUsage(targetAssetId, token);
 }
 
 async function loadManagedAssetUsage(assetId, token) {
@@ -765,6 +803,45 @@ function renderAssetManageOverlay() {
     state.assetManager.replacementAssetId = "";
   }
 
+  const assetThumbnailStatus = asset.assetType === "model" ? String(asset?.metadata?.thumbnailStatus || "").trim().toLowerCase() : "";
+  let thumbnailSection = null;
+  if (asset.assetType === "model") {
+    thumbnailSection = document.createElement("div");
+    thumbnailSection.className = "assetManageThumbnail";
+    const thumbnailTitle = document.createElement("div");
+    thumbnailTitle.className = "assetManageSectionTitle";
+    thumbnailTitle.textContent = "Thumbnail";
+    const thumbnailMessage = document.createElement("div");
+    thumbnailMessage.className = "assetManageHint";
+    thumbnailMessage.textContent = assetThumbnailStatusMessage(asset) || "Thumbnail opnieuw genereren.";
+    thumbnailSection.append(thumbnailTitle, thumbnailMessage);
+    const thumbnailError = String(asset?.metadata?.thumbnailError || "").trim();
+    if (assetThumbnailStatus === "failed" && thumbnailError) {
+      const error = document.createElement("div");
+      error.className = "assetManageError";
+      error.textContent = thumbnailError;
+      thumbnailSection.appendChild(error);
+    }
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "assetManageButton retry";
+    retryButton.textContent = state.assetManager.thumbnailRetryBusy
+      ? "Thumbnail opnieuw maken..."
+      : assetThumbnailStatus === "pending" || assetThumbnailStatus === "processing"
+        ? "Thumbnail wordt gemaakt"
+        : "Thumbnail opnieuw maken";
+    retryButton.disabled = state.assetManager.thumbnailRetryBusy || state.assetManager.loadingUsage || assetThumbnailStatus === "pending" || assetThumbnailStatus === "processing";
+    retryButton.title = retryButton.disabled
+      ? (state.assetManager.thumbnailRetryBusy
+        ? "Thumbnail wordt opnieuw gemaakt."
+        : state.assetManager.loadingUsage
+          ? "Gebruikslijst wordt nog geladen."
+          : "Er wordt al een thumbnail gemaakt.")
+      : "Probeer de thumbnail opnieuw te maken.";
+    retryButton.addEventListener("click", retryManagedAssetThumbnail);
+    thumbnailSection.appendChild(retryButton);
+  }
+
   const actions = document.createElement("div");
   actions.className = "assetManageActions";
   const saveButton = document.createElement("button");
@@ -834,7 +911,10 @@ function renderAssetManageOverlay() {
   cancelButton.addEventListener("click", closeAssetManageOverlay);
   actions.appendChild(cancelButton);
 
-  panel.append(title, subtitle, idLine, nameField, categoryField, usageHeading, usageList);
+  const panelParts = [title, subtitle, idLine, nameField, categoryField];
+  if (thumbnailSection) panelParts.push(thumbnailSection);
+  panelParts.push(usageHeading, usageList);
+  panel.append(...panelParts);
   if (state.assetManager.error) {
     const error = document.createElement("div");
     error.className = "assetManageError";
@@ -863,6 +943,10 @@ async function saveManagedAsset() {
     renderAssetManageOverlay();
     setStatus("Asset opgeslagen.", "success");
   } catch (error) {
+    if (error.status === 409 && Array.isArray(error.details?.usage)) {
+      state.assetManager.usage = error.details.usage;
+      state.assetManager.loadingUsage = false;
+    }
     state.assetManager.error = error.message;
     renderAssetManageOverlay();
     setStatus(error.message, "error");
@@ -894,6 +978,34 @@ async function deleteManagedAsset() {
   }
 }
 
+async function retryManagedAssetThumbnail() {
+  const asset = managedAsset();
+  if (!asset) return;
+  if (asset.assetType !== "model") return;
+  const thumbnailStatus = assetThumbnailStatus(asset);
+  if (thumbnailStatus === "pending" || thumbnailStatus === "processing") return;
+  if (state.assetManager.thumbnailRetryBusy || state.assetManager.loadingUsage) return;
+  state.assetManager.thumbnailRetryBusy = true;
+  state.assetManager.error = "";
+  renderAssetManageOverlay();
+  try {
+    const data = await api("/api/assets/" + asset.id + "/thumbnail/retry", { method: "POST" });
+    state.assets = data.assets || state.assets;
+    renderAssets();
+    syncAssetThumbnailPolling();
+    renderInspector();
+    renderAssetManageOverlay();
+    setStatus("Thumbnail opnieuw gestart.", "success");
+  } catch (error) {
+    state.assetManager.error = error.message;
+    renderAssetManageOverlay();
+    setStatus(error.message, "error");
+  } finally {
+    state.assetManager.thumbnailRetryBusy = false;
+    renderAssetManageOverlay();
+  }
+}
+
 async function replaceManagedAsset() {
   const asset = managedAsset();
   if (!asset) return;
@@ -921,6 +1033,7 @@ async function replaceManagedAsset() {
     historyLabel: "Asset vervangen",
     refreshViewport: true,
     refreshValidation: true,
+    refreshAssetUsage: false,
     afterApply: function (_, response) {
       state.assets = response.assets || state.assets;
       state.assetManager.usage = [];
@@ -1042,19 +1155,64 @@ function selectedTerrainNode() {
   return node && TERRAIN_TOOL_NODE_TYPES.has(node.type) ? node : null;
 }
 
+function selectedScatterNode() {
+  const node = nodeById(state.selectedNodeId);
+  return node && node.type === "bounded_area_scatter" ? node : null;
+}
+
 function terrainNodeLabel(node) {
   if (!node) return "";
   return String(node.values?.label || node.title || terrainTypeLabel(node.type) || "").trim();
 }
 
+const TERRAIN_HEIGHT_DRAG_STEP = 0.02;
+
+function walkableSurfaceFallbackPoints(node) {
+  const surface = terrainSurfaceSnapshot(node);
+  const x = surface.x;
+  const y = surface.y;
+  const z = surface.z;
+  const width = Math.max(0, surface.width);
+  const depth = Math.max(0, surface.depth);
+  const rotation = surface.rotationY;
+  const halfWidth = width / 2;
+  const halfDepth = depth / 2;
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const offsets = [
+    { x: -halfWidth, z: -halfDepth },
+    { x: halfWidth, z: -halfDepth },
+    { x: halfWidth, z: halfDepth },
+    { x: -halfWidth, z: halfDepth }
+  ];
+  return offsets.map(function (offset) {
+    return {
+      x: x + ((offset.x * cos) - (offset.z * sin)),
+      y: y,
+      z: z + ((offset.x * sin) + (offset.z * cos))
+    };
+  });
+}
+
 function terrainNodePoints(node) {
   const points = Array.isArray(node?.values?.points) ? node.values.points : [];
   const normalized = [];
+  const surfaceY = Number(node?.values?.y);
+  const defaultY = Number.isFinite(surfaceY) ? surfaceY : 0;
   for (const point of points) {
     const x = Number(point?.x);
     const z = Number(point?.z);
     if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-    normalized.push({ x: x, z: z });
+    if (node?.type === "walkable_surface") {
+      const y = Number(point?.y);
+      normalized.push({ x: x, y: Number.isFinite(y) ? y : defaultY, z: z });
+    } else {
+      normalized.push({ x: x, z: z });
+    }
+  }
+  if (node?.type === "walkable_surface" && normalized.length === 0) {
+    return walkableSurfaceFallbackPoints(node);
   }
   return normalized;
 }
@@ -1065,9 +1223,129 @@ function terrainClonePoints(points) {
     const x = Number(point?.x);
     const z = Number(point?.z);
     if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-    next.push({ x: x, z: z });
+    const y = Number(point?.y);
+    if (Number.isFinite(y)) next.push({ x: x, y: y, z: z });
+    else next.push({ x: x, z: z });
   }
   return next;
+}
+
+function scatterNodeLabel(node) {
+  if (!node) return "";
+  return String(node.values?.label || node.values?.scatterId || node.title || terrainTypeLabel(node.type) || "").trim();
+}
+
+function scatterFallbackRectanglePoints(node) {
+  const x = Number(node?.values?.areaCenterX) || 0;
+  const z = Number(node?.values?.areaCenterZ) || 0;
+  const width = Math.max(0, Number(node?.values?.areaWidth) || 0);
+  const depth = Math.max(0, Number(node?.values?.areaDepth) || 0);
+  const rotation = Number(node?.values?.areaRotationY) || 0;
+  const halfWidth = width / 2;
+  const halfDepth = depth / 2;
+  const radians = rotation * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const offsets = [
+    { x: -halfWidth, z: -halfDepth },
+    { x: halfWidth, z: -halfDepth },
+    { x: halfWidth, z: halfDepth },
+    { x: -halfWidth, z: halfDepth }
+  ];
+  return offsets.map(function (offset) {
+    return {
+      x: x + ((offset.x * cos) - (offset.z * sin)),
+      z: z + ((offset.x * sin) + (offset.z * cos))
+    };
+  });
+}
+
+function scatterNodePoints(node) {
+  const explicitPoints = terrainClonePoints(node?.values?.points);
+  if (explicitPoints.length >= 3) return explicitPoints;
+  return scatterFallbackRectanglePoints(node);
+}
+
+function scatterClonePoints(points) {
+  return terrainClonePoints(points);
+}
+
+function scatterPointBounds(points) {
+  const normalized = terrainClonePoints(points);
+  if (!normalized.length) return null;
+  let minX = normalized[0].x;
+  let maxX = normalized[0].x;
+  let minZ = normalized[0].z;
+  let maxZ = normalized[0].z;
+  for (const point of normalized) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.z < minZ) minZ = point.z;
+    if (point.z > maxZ) maxZ = point.z;
+  }
+  return {
+    minX: minX,
+    maxX: maxX,
+    minZ: minZ,
+    maxZ: maxZ,
+    centerX: (minX + maxX) / 2,
+    centerZ: (minZ + maxZ) / 2,
+    width: Math.max(0, maxX - minX),
+    depth: Math.max(0, maxZ - minZ)
+  };
+}
+
+function scatterPointCenter(points) {
+  const normalized = terrainClonePoints(points);
+  if (!normalized.length) return { x: 0, z: 0 };
+  let totalX = 0;
+  let totalZ = 0;
+  for (const point of normalized) {
+    totalX += point.x;
+    totalZ += point.z;
+  }
+  return {
+    x: totalX / normalized.length,
+    z: totalZ / normalized.length
+  };
+}
+
+function scatterTranslatePoints(points, dx, dz) {
+  return terrainClonePoints(points).map(function (point) {
+    const nextPoint = { x: point.x + dx, z: point.z + dz };
+    if (Number.isFinite(Number(point?.y))) nextPoint.y = Number(point.y);
+    return nextPoint;
+  });
+}
+
+function scatterRotatePoints(points, pivot, degrees) {
+  const radians = degrees * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const origin = pivot || { x: 0, z: 0 };
+  return terrainClonePoints(points).map(function (point) {
+    const dx = point.x - origin.x;
+    const dz = point.z - origin.z;
+    const nextPoint = {
+      x: origin.x + ((dx * cos) - (dz * sin)),
+      z: origin.z + ((dx * sin) + (dz * cos))
+    };
+    if (Number.isFinite(Number(point?.y))) nextPoint.y = Number(point.y);
+    return nextPoint;
+  });
+}
+
+function scatterScalePoints(points, pivot, factor) {
+  const origin = pivot || { x: 0, z: 0 };
+  const safeFactor = Number.isFinite(factor) ? factor : 1;
+  return terrainClonePoints(points).map(function (point) {
+    const nextPoint = {
+      x: origin.x + ((point.x - origin.x) * safeFactor),
+      z: origin.z + ((point.z - origin.z) * safeFactor)
+    };
+    if (Number.isFinite(Number(point?.y))) nextPoint.y = Number(point.y);
+    return nextPoint;
+  });
 }
 
 function terrainSurfaceSnapshot(node) {
@@ -1080,6 +1358,127 @@ function terrainSurfaceSnapshot(node) {
     rotationY: Number(node?.values?.rotationY) || 0,
     priority: Number(node?.values?.priority) || 0
   };
+}
+
+function terrainWalkableSurfaceGeometry(node, points) {
+  const surface = terrainSurfaceSnapshot(node);
+  const bounds = scatterPointBounds(points);
+  if (!bounds) return surface;
+  let totalY = 0;
+  let countY = 0;
+  for (const point of points || []) {
+    const y = Number(point?.y);
+    if (!Number.isFinite(y)) continue;
+    totalY += y;
+    countY += 1;
+  }
+  return Object.assign({}, surface, {
+    x: bounds.centerX,
+    y: countY > 0 ? totalY / countY : surface.y,
+    z: bounds.centerZ,
+    width: bounds.width,
+    depth: bounds.depth
+  });
+}
+
+function terrainPointHeight(point, fallbackY = 0) {
+  const y = Number(point?.y);
+  return Number.isFinite(y) ? y : fallbackY;
+}
+
+function terrainDraggedPointIndices(pointIndex) {
+  return state.terrainTool.selectedPointIndices.length > 1
+    ? state.terrainTool.selectedPointIndices
+    : (Number.isInteger(pointIndex) ? [pointIndex] : []);
+}
+
+function terrainHeightDragDelta() {
+  const startPointer = state.terrainTool.dragStartPointer;
+  const currentPointer = state.terrainTool.dragCurrentPointer || startPointer;
+  if (!startPointer || !currentPointer) return 0;
+  return (startPointer.y - currentPointer.y) * TERRAIN_HEIGHT_DRAG_STEP;
+}
+
+function terrainVerticalHeightSession(node) {
+  return node?.type === "walkable_surface" && state.terrainTool.axisConstraint === "z";
+}
+
+function terrainPreviewMovedPoints(node, startPoints, pointIndex, groundPoint, startGround) {
+  const nextPoints = terrainClonePoints(startPoints);
+  const draggedIndices = terrainDraggedPointIndices(pointIndex);
+  if (terrainVerticalHeightSession(node)) {
+    const fallbackY = Number(node?.values?.y) || 0;
+    const deltaY = terrainHeightDragDelta();
+    for (const idx of draggedIndices) {
+      if (!nextPoints[idx]) continue;
+      nextPoints[idx] = Object.assign({}, nextPoints[idx], {
+        y: terrainPointHeight(nextPoints[idx], fallbackY) + deltaY
+      });
+    }
+    return nextPoints;
+  }
+  if (draggedIndices.length > 1 && startGround && groundPoint) {
+    const dx = state.terrainTool.axisConstraint === "y" ? 0 : groundPoint.x - startGround.x;
+    const dz = state.terrainTool.axisConstraint === "x" ? 0 : groundPoint.z - startGround.z;
+    for (const idx of draggedIndices) {
+      if (nextPoints[idx]) {
+        nextPoints[idx] = Object.assign({}, nextPoints[idx], {
+          x: nextPoints[idx].x + dx,
+          z: nextPoints[idx].z + dz
+        });
+      }
+    }
+    return nextPoints;
+  }
+  if (!Number.isInteger(pointIndex) || !nextPoints[pointIndex]) return nextPoints;
+  nextPoints[pointIndex] = Object.assign({}, nextPoints[pointIndex], {
+    x: state.terrainTool.axisConstraint === "y" && startGround ? nextPoints[pointIndex].x : (groundPoint?.x ?? nextPoints[pointIndex].x),
+    z: state.terrainTool.axisConstraint === "x" && startGround ? nextPoints[pointIndex].z : (groundPoint?.z ?? nextPoints[pointIndex].z)
+  });
+  return nextPoints;
+}
+
+function terrainPreviewSurfacePoints(node, startPoints, groundPoint, startGround) {
+  if (terrainVerticalHeightSession(node)) {
+    const fallbackY = Number(node?.values?.y) || 0;
+    const deltaY = terrainHeightDragDelta();
+    return terrainClonePoints(startPoints).map(function (point) {
+      return Object.assign({}, point, {
+        y: terrainPointHeight(point, fallbackY) + deltaY
+      });
+    });
+  }
+  if (groundPoint && startGround) {
+    const dx = state.terrainTool.axisConstraint === "y" ? 0 : groundPoint.x - startGround.x;
+    const dz = state.terrainTool.axisConstraint === "x" ? 0 : groundPoint.z - startGround.z;
+    return scatterTranslatePoints(startPoints, dx, dz);
+  }
+  return terrainClonePoints(startPoints);
+}
+
+function terrainPreviewExtrudedPoints(node, startPoints, pointIndex, previewPoint, insertIndex, anchor) {
+  const nextPoints = terrainClonePoints(startPoints);
+  const sourcePoint = nextPoints[pointIndex] || null;
+  const fallbackY = terrainPointHeight(sourcePoint, Number(node?.values?.y) || 0);
+  let nextPoint = null;
+  if (node?.type === "walkable_surface") {
+    const basePoint = terrainVerticalHeightSession(node)
+      ? (anchor || sourcePoint || { x: Number(node?.values?.x) || 0, z: Number(node?.values?.z) || 0 })
+      : (previewPoint || anchor || sourcePoint || { x: Number(node?.values?.x) || 0, z: Number(node?.values?.z) || 0 });
+    nextPoint = {
+      x: Number(basePoint?.x) || 0,
+      y: fallbackY + (terrainVerticalHeightSession(node) ? terrainHeightDragDelta() : 0),
+      z: Number(basePoint?.z) || 0
+    };
+  } else if (previewPoint) {
+    nextPoint = {
+      x: previewPoint.x,
+      z: previewPoint.z
+    };
+  }
+  if (!nextPoint) return null;
+  nextPoints.splice(Math.max(0, Math.min(nextPoints.length, insertIndex)), 0, nextPoint);
+  return nextPoints;
 }
 
 function terrainRuntimeSurfaceId(node) {
@@ -1158,21 +1557,23 @@ function terrainActiveSessionModeLabel() {
 }
 
 function terrainShortcutSummaryText() {
-  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, E extrude, Del delete | Material: S scale, X/Y axis";
+  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, E extrude, Z height, Del delete | Material: S scale, X/Y/Z axis";
 }
 
 function terrainNodeCapabilities(node) {
   const nodeType = String(node?.type || "");
   const shapeType = String(node?.values?.shapeType || "").trim().toLowerCase();
+  const walkableSurface = nodeType === "walkable_surface";
   const polygonEditable = nodeType === "path_layer"
     || nodeType === "water_layer"
     || nodeType === "surface_layer"
+    || walkableSurface
     || (nodeType === "blocker_area" && shapeType === "polygon");
-  const walkableSurface = nodeType === "walkable_surface";
   return {
     visible: Boolean(node && TERRAIN_TOOL_NODE_TYPES.has(nodeType)),
     nodeType: nodeType,
     shapeType: shapeType,
+    walkableSurface: walkableSurface,
     polygonEditable: polygonEditable,
     pointEditing: polygonEditable,
     outlineOnly: nodeType === "blocker_area" && !polygonEditable,
@@ -1205,11 +1606,14 @@ function terrainSelectionText(node, capabilities) {
   const channelSummary = "Edit: 1 Main, 2 Secondary, 3 Edge | Active: " + channel;
   const shortcutSummary = terrainShortcutSummaryText();
   if (node.type === "walkable_surface") {
-    if (state.terrainTool.mode === "move") return title + " - Move center | " + shortcutSummary;
-    if (state.terrainTool.mode === "delete") return title + " - Delete unavailable | " + shortcutSummary;
-    return title + " - Select center to move | " + shortcutSummary;
+    const base = title + " - Elevated polygon walk area | " + shortcutSummary;
+    if (state.terrainTool.mode === "move" && state.terrainTool.selectedHandleRole === "center") return title + " - Moving full surface | " + shortcutSummary;
+    if (state.terrainTool.mode === "move") return title + " - Moving points | " + shortcutSummary;
+    if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
+    if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
+    return base + " | Select center to move all points, use Z for height";
   }
-  const pointCount = Array.isArray(node.values?.points) ? node.values.points.length : 0;
+  const pointCount = terrainNodePoints(node).length;
   const base = title + " - " + channelSummary + " | " + shortcutSummary;
   if (pointCount < terrainMinPointCount(node.type)) {
     return base + " | Click ground to place the first points";
@@ -1306,13 +1710,15 @@ function terrainResetForNode(node, capabilities) {
     if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
   }
   if (!terrainModeAllowed(state.terrainTool.mode, capabilities)) state.terrainTool.mode = "select";
-  if (capabilities.centerEditable) {
-    if (state.terrainTool.selectedHandleRole !== "center" && state.terrainTool.selectedPointIndex === null) {
-      state.terrainTool.selectedHandleRole = null;
-    }
-  } else if (!capabilities.pointEditing) {
+  if (!capabilities.pointEditing && !capabilities.centerEditable) {
     terrainSetSelection(null, null);
-  } else if (Number.isInteger(state.terrainTool.selectedPointIndex)) {
+    return;
+  }
+  if (!capabilities.centerEditable && state.terrainTool.selectedHandleRole === "center") {
+    terrainSetSelection(null, null);
+    return;
+  }
+  if (capabilities.pointEditing && Number.isInteger(state.terrainTool.selectedPointIndex)) {
     const points = terrainNodePoints(node);
     if (!points.length) {
       terrainSetSelection(null, null);
@@ -1328,9 +1734,616 @@ function terrainResetForNode(node, capabilities) {
           : [];
       }
     }
-  } else if (state.terrainTool.selectedHandleRole === "center") {
+  } else if (capabilities.centerEditable && state.terrainTool.selectedHandleRole !== "center" && state.terrainTool.selectedPointIndex === null) {
+    state.terrainTool.selectedHandleRole = null;
+  } else if (state.terrainTool.selectedHandleRole === "center" && !capabilities.centerEditable) {
     terrainSetSelection(null, null);
   }
+}
+
+function scatterHasActiveSession() {
+  return Boolean(state.scatterTool.dragNodeId && state.scatterTool.draggingHandleRole);
+}
+
+function scatterActiveSessionModeLabel() {
+  if (!scatterHasActiveSession()) return "Select";
+  if (state.scatterTool.draggingHandleRole === "extrude") return "Extrude";
+  if (state.scatterTool.draggingHandleRole === "rotate") return "Rotate";
+  if (state.scatterTool.draggingHandleRole === "scale") return "Scale";
+  if (state.scatterTool.draggingHandleRole === "center") return "Move area";
+  return "Move";
+}
+
+function scatterShortcutSummaryText() {
+  return "G move, R rotate, T scale, E add point, Del delete, Shift-click multi-select";
+}
+
+function scatterSelectionText(node) {
+  if (!node) return "";
+  const title = scatterNodeLabel(node) || terrainTypeLabel(node.type);
+  const modeText = scatterHasActiveSession()
+    ? scatterActiveSessionModeLabel()
+    : state.scatterTool.mode === "select"
+      ? "Select points"
+      : terrainTypeLabel(state.scatterTool.mode);
+  const extras = [];
+  extras.push(title + " - " + modeText);
+  extras.push(scatterShortcutSummaryText());
+  if (node.values?.boundaryBlocksPlayer) extras.push("Boundary blocks player");
+  return extras.join(" | ");
+}
+
+function scatterSelectedPointText() {
+  const multi = state.scatterTool.selectedPointIndices;
+  if (multi.length > 1) return multi.length + " points selected";
+  if (!Number.isInteger(state.scatterTool.selectedPointIndex) || state.scatterTool.selectedPointIndex < 0) return "";
+  return "Selected point " + (state.scatterTool.selectedPointIndex + 1);
+}
+
+function scatterClearDragState() {
+  state.scatterTool.draggingPointIndex = null;
+  state.scatterTool.draggingHandleRole = null;
+  state.scatterTool.dragNodeId = null;
+  state.scatterTool.dragStartPoints = null;
+  state.scatterTool.dragStartGround = null;
+  state.scatterTool.dragCurrentGround = null;
+  state.scatterTool.dragStartPointer = null;
+  state.scatterTool.dragCurrentPointer = null;
+  state.scatterTool.dragPointerId = null;
+  state.scatterTool.dragStartPivot = null;
+  state.scatterTool.dragStartAngle = null;
+  state.scatterTool.dragStartDistance = null;
+  state.scatterTool.dragStartRotationY = null;
+  state.scatterTool.dragExtrudeIndex = null;
+  state.scatterTool.dragPreviewPoint = null;
+  state.scatterTool.dragMoved = false;
+}
+
+function scatterSetSelection(pointIndex, handleRole) {
+  state.scatterTool.selectedPointIndex = Number.isInteger(pointIndex) && pointIndex >= 0 ? pointIndex : null;
+  state.scatterTool.selectedHandleRole = handleRole === "center"
+    ? "center"
+    : (state.scatterTool.selectedPointIndex !== null ? "point" : null);
+  state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndex !== null ? [state.scatterTool.selectedPointIndex] : [];
+}
+
+function scatterTogglePointSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  const existing = state.scatterTool.selectedPointIndices;
+  const pos = existing.indexOf(pointIndex);
+  if (pos === -1) {
+    state.scatterTool.selectedPointIndices = existing.concat(pointIndex);
+  } else {
+    state.scatterTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
+  }
+  const last = state.scatterTool.selectedPointIndices.length
+    ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
+    : null;
+  state.scatterTool.selectedPointIndex = last;
+  state.scatterTool.selectedHandleRole = last !== null ? "point" : null;
+}
+
+function scatterCancelActiveSession() {
+  scatterClearDragState();
+  state.scatterTool.mode = "select";
+  scatterFinishWithRender();
+}
+
+function scatterResetForNode(node) {
+  const nextNodeId = node ? node.id : null;
+  const nodeChanged = state.scatterTool.activeNodeId !== nextNodeId;
+  state.scatterTool.activeNodeId = nextNodeId;
+  if (!node) {
+    state.scatterTool.mode = "select";
+    scatterSetSelection(null, null);
+    scatterClearDragState();
+    return;
+  }
+  if (nodeChanged) {
+    state.scatterTool.mode = "select";
+    scatterSetSelection(null, null);
+    scatterClearDragState();
+  }
+  const points = scatterNodePoints(node);
+  if (Number.isInteger(state.scatterTool.selectedPointIndex)) {
+    if (!points.length) {
+      scatterSetSelection(null, null);
+    } else if (state.scatterTool.selectedPointIndex >= points.length) {
+      scatterSetSelection(points.length - 1, "point");
+    } else {
+      state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndices.filter(function (i) {
+        return i >= 0 && i < points.length;
+      });
+      if (!state.scatterTool.selectedPointIndices.includes(state.scatterTool.selectedPointIndex)) {
+        state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndex !== null
+          ? [state.scatterTool.selectedPointIndex]
+          : [];
+      }
+    }
+  } else if (state.scatterTool.selectedHandleRole === "center") {
+    scatterSetSelection(null, "center");
+  }
+}
+
+function scatterSelectedNodeSummary() {
+  const node = selectedScatterNode();
+  if (!node) return null;
+  const points = scatterNodePoints(node);
+  const bounds = scatterPointBounds(points);
+  return {
+    node: node,
+    points: points,
+    bounds: bounds,
+    center: scatterPointCenter(points)
+  };
+}
+
+function scatterOverlayState() {
+  const summary = scatterSelectedNodeSummary();
+  if (!summary) return null;
+  const { node, points } = summary;
+  const selectedIndices = state.scatterTool.selectedPointIndices.slice();
+  const selectedIndex = Number.isInteger(state.scatterTool.selectedPointIndex) ? state.scatterTool.selectedPointIndex : null;
+  const groundY = terrainGroundY();
+  const dragGround = state.scatterTool.dragCurrentGround || state.scatterTool.dragStartGround || null;
+  let previewPoints = scatterClonePoints(points);
+  let rotationY = Number(node.values?.areaRotationY) || 0;
+
+  if (state.scatterTool.draggingHandleRole === "point" && state.scatterTool.dragStartPoints) {
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
+    const startGround = state.scatterTool.dragStartGround;
+    if (dragGround && startGround) {
+      const dx = dragGround.x - startGround.x;
+      const dz = dragGround.z - startGround.z;
+      const draggedIndices = selectedIndices.length > 1
+        ? selectedIndices
+        : (Number.isInteger(state.scatterTool.draggingPointIndex) ? [state.scatterTool.draggingPointIndex] : []);
+      if (draggedIndices.length > 1) {
+        for (const index of draggedIndices) {
+          if (startPoints[index]) {
+            startPoints[index] = { x: startPoints[index].x + dx, z: startPoints[index].z + dz };
+          }
+        }
+      } else if (Number.isInteger(state.scatterTool.draggingPointIndex) && startPoints[state.scatterTool.draggingPointIndex]) {
+        const index = state.scatterTool.draggingPointIndex;
+        startPoints[index] = { x: startPoints[index].x + dx, z: startPoints[index].z + dz };
+      }
+    }
+    previewPoints = startPoints;
+  } else if (state.scatterTool.draggingHandleRole === "center" && state.scatterTool.dragStartPoints) {
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
+    const startGround = state.scatterTool.dragStartGround;
+    if (dragGround && startGround) {
+      const dx = dragGround.x - startGround.x;
+      const dz = dragGround.z - startGround.z;
+      previewPoints = scatterTranslatePoints(startPoints, dx, dz);
+    } else {
+      previewPoints = startPoints;
+    }
+  } else if (state.scatterTool.draggingHandleRole === "rotate" && state.scatterTool.dragStartPoints) {
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
+    const pivot = state.scatterTool.dragStartPivot || scatterPointCenter(startPoints);
+    const startGround = state.scatterTool.dragStartGround;
+    if (dragGround && startGround) {
+      const startAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
+      const currentAngle = Math.atan2(dragGround.z - pivot.z, dragGround.x - pivot.x);
+      const deltaDegrees = (currentAngle - startAngle) * (180 / Math.PI);
+      previewPoints = scatterRotatePoints(startPoints, pivot, deltaDegrees);
+      rotationY = (Number(state.scatterTool.dragStartRotationY) || 0) + deltaDegrees;
+    } else {
+      previewPoints = startPoints;
+    }
+  } else if (state.scatterTool.draggingHandleRole === "scale" && state.scatterTool.dragStartPoints) {
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
+    const pivot = state.scatterTool.dragStartPivot || scatterPointCenter(startPoints);
+    const startGround = state.scatterTool.dragStartGround;
+    if (dragGround && startGround) {
+      const startDistance = Math.max(0.0001, state.scatterTool.dragStartDistance || Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
+      const currentDistance = Math.hypot(dragGround.x - pivot.x, dragGround.z - pivot.z);
+      const factor = Math.max(0.05, currentDistance / startDistance);
+      previewPoints = scatterScalePoints(startPoints, pivot, factor);
+    } else {
+      previewPoints = startPoints;
+    }
+  }
+
+  const bounds = scatterPointBounds(previewPoints);
+  const center = scatterPointCenter(previewPoints);
+  return {
+    nodeId: node.id,
+    nodeType: node.type,
+    label: scatterNodeLabel(node),
+    mode: state.scatterTool.mode,
+    x: center.x,
+    z: center.z,
+    width: bounds ? bounds.width : 0,
+    depth: bounds ? bounds.depth : 0,
+    rotationY: rotationY,
+    groundY: groundY,
+    enabled: node.values?.enabled !== false,
+    boundaryBlocksPlayer: node.values?.boundaryBlocksPlayer === true,
+    color: node.values?.enabled === false ? "#9c9c9c" : "#d59bff",
+    points: previewPoints,
+    selectedPointIndex: selectedIndex,
+    selectedPointIndices: selectedIndices,
+    selectedHandleRole: state.scatterTool.selectedHandleRole,
+    draggingHandleRole: state.scatterTool.draggingHandleRole
+  };
+}
+
+function scatterFinishWithRender() {
+  renderViewportControls();
+}
+
+function scatterPatchGeometry(node, nextPoints, nextRotationY, historyLabel) {
+  const bounds = scatterPointBounds(nextPoints);
+  const patch = {
+    points: nextPoints,
+    areaCenterX: bounds ? bounds.centerX : Number(node?.values?.areaCenterX) || 0,
+    areaCenterZ: bounds ? bounds.centerZ : Number(node?.values?.areaCenterZ) || 0,
+    areaWidth: bounds ? bounds.width : Number(node?.values?.areaWidth) || 0,
+    areaDepth: bounds ? bounds.depth : Number(node?.values?.areaDepth) || 0,
+    areaRotationY: Number.isFinite(Number(nextRotationY)) ? Number(nextRotationY) : (Number(node?.values?.areaRotationY) || 0)
+  };
+  return patchValues(node.id, patch, {
+    historyLabel: historyLabel,
+    refreshViewport: true,
+    refreshValidation: true,
+    refreshEdgeList: false
+  });
+}
+
+function scatterBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
+  const points = scatterNodePoints(node);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) return false;
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  scatterClearDragState();
+  state.scatterTool.mode = "move";
+  state.scatterTool.selectedPointIndex = pointIndex;
+  state.scatterTool.selectedHandleRole = "point";
+  state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndices.length > 1
+    ? state.scatterTool.selectedPointIndices.slice()
+    : [pointIndex];
+  state.scatterTool.dragNodeId = node.id;
+  state.scatterTool.draggingPointIndex = pointIndex;
+  state.scatterTool.draggingHandleRole = "point";
+  state.scatterTool.dragStartPoints = scatterClonePoints(points);
+  state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragPointerId = pointerId;
+  state.scatterTool.dragMoved = false;
+  state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
+  scatterRenderOverlayPreview();
+  scatterFinishWithRender();
+  return true;
+}
+
+function scatterBeginCenterDrag(node, groundPoint, pointerId) {
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  scatterClearDragState();
+  state.scatterTool.mode = "move";
+  state.scatterTool.selectedPointIndex = null;
+  state.scatterTool.selectedHandleRole = "center";
+  state.scatterTool.selectedPointIndices = [];
+  state.scatterTool.dragNodeId = node.id;
+  state.scatterTool.draggingPointIndex = null;
+  state.scatterTool.draggingHandleRole = "center";
+  state.scatterTool.dragStartPoints = scatterClonePoints(scatterNodePoints(node));
+  state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragPointerId = pointerId;
+  state.scatterTool.dragMoved = false;
+  state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
+  scatterRenderOverlayPreview();
+  scatterFinishWithRender();
+  return true;
+}
+
+function scatterBeginExtrudeSession(node, groundPoint, pointerId) {
+  const points = scatterNodePoints(node);
+  const pointIndex = Number.isInteger(state.scatterTool.selectedPointIndex)
+    ? state.scatterTool.selectedPointIndex
+    : (state.scatterTool.selectedPointIndices.length
+      ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
+      : null);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) {
+    setStatus("Select a point first.", "error");
+    return false;
+  }
+  const insertIndex = pointIndex <= 0
+    ? 0
+    : pointIndex >= points.length - 1
+      ? points.length
+      : pointIndex + 1;
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  scatterClearDragState();
+  state.scatterTool.mode = "extrude";
+  state.scatterTool.selectedPointIndex = pointIndex;
+  state.scatterTool.selectedHandleRole = "point";
+  state.scatterTool.selectedPointIndices = [pointIndex];
+  state.scatterTool.dragNodeId = node.id;
+  state.scatterTool.draggingPointIndex = pointIndex;
+  state.scatterTool.draggingHandleRole = "extrude";
+  state.scatterTool.dragStartPoints = scatterClonePoints(points);
+  state.scatterTool.dragExtrudeIndex = insertIndex;
+  state.scatterTool.dragPreviewPoint = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.scatterTool.dragPointerId = pointerId;
+  state.scatterTool.dragMoved = false;
+  state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
+  scatterRenderOverlayPreview();
+  scatterFinishWithRender();
+  return true;
+}
+
+function scatterBeginRotateSession(node, groundPoint, pointerId) {
+  const points = scatterNodePoints(node);
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  if (!startGround) {
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const pivot = scatterPointCenter(points);
+  scatterClearDragState();
+  state.scatterTool.mode = "rotate";
+  state.scatterTool.selectedHandleRole = "center";
+  state.scatterTool.selectedPointIndex = null;
+  state.scatterTool.selectedPointIndices = [];
+  state.scatterTool.dragNodeId = node.id;
+  state.scatterTool.draggingPointIndex = null;
+  state.scatterTool.draggingHandleRole = "rotate";
+  state.scatterTool.dragStartPoints = scatterClonePoints(points);
+  state.scatterTool.dragStartGround = { x: startGround.x, z: startGround.z };
+  state.scatterTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
+  state.scatterTool.dragPointerId = pointerId;
+  state.scatterTool.dragMoved = false;
+  state.scatterTool.dragStartPivot = pivot;
+  state.scatterTool.dragStartAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
+  state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
+  scatterRenderOverlayPreview();
+  scatterFinishWithRender();
+  return true;
+}
+
+function scatterBeginScaleSession(node, groundPoint, pointerId) {
+  const points = scatterNodePoints(node);
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  if (!startGround) {
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const pivot = scatterPointCenter(points);
+  scatterClearDragState();
+  state.scatterTool.mode = "scale";
+  state.scatterTool.selectedHandleRole = "center";
+  state.scatterTool.selectedPointIndex = null;
+  state.scatterTool.selectedPointIndices = [];
+  state.scatterTool.dragNodeId = node.id;
+  state.scatterTool.draggingPointIndex = null;
+  state.scatterTool.draggingHandleRole = "scale";
+  state.scatterTool.dragStartPoints = scatterClonePoints(points);
+  state.scatterTool.dragStartGround = { x: startGround.x, z: startGround.z };
+  state.scatterTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
+  state.scatterTool.dragPointerId = pointerId;
+  state.scatterTool.dragMoved = false;
+  state.scatterTool.dragStartPivot = pivot;
+  state.scatterTool.dragStartDistance = Math.max(0.0001, Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
+  state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
+  scatterRenderOverlayPreview();
+  scatterFinishWithRender();
+  return true;
+}
+
+async function scatterCommitPointDrag(node) {
+  if (state.scatterTool.draggingHandleRole === "extrude") {
+    const pointIndex = state.scatterTool.draggingPointIndex;
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints || scatterNodePoints(node));
+    const sourcePoint = startPoints[pointIndex] || null;
+    const previewPoint = state.scatterTool.dragPreviewPoint
+      || state.scatterTool.dragCurrentGround
+      || state.scatterTool.dragStartGround
+      || (sourcePoint ? { x: sourcePoint.x, z: sourcePoint.z } : null);
+    if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length || !previewPoint) {
+      scatterClearDragState();
+      state.scatterTool.mode = "select";
+      scatterFinishWithRender();
+      if (!previewPoint) setStatus("No ground hit.", "error");
+      return false;
+    }
+    const insertIndex = Number.isInteger(state.scatterTool.dragExtrudeIndex)
+      ? Math.max(0, Math.min(startPoints.length, state.scatterTool.dragExtrudeIndex))
+      : Math.min(startPoints.length, pointIndex + 1);
+    const nextPoints = startPoints.slice();
+    nextPoints.splice(insertIndex, 0, {
+      x: previewPoint.x,
+      z: previewPoint.z
+    });
+    const ok = await scatterPatchGeometry(node, nextPoints, state.scatterTool.dragStartRotationY, "Scatter point extruded");
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    if (ok) {
+      scatterSetSelection(insertIndex, "point");
+      setStatus("Point extruded.", "success");
+    }
+    scatterFinishWithRender();
+    return ok;
+  }
+  const pointIndex = state.scatterTool.draggingPointIndex;
+  const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints || scatterNodePoints(node));
+  const startGround = state.scatterTool.dragStartGround;
+  const groundPoint = state.scatterTool.dragCurrentGround
+    || startGround
+    || (startPoints[pointIndex] ? { x: startPoints[pointIndex].x, z: startPoints[pointIndex].z } : null);
+  if (!groundPoint || !Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    scatterFinishWithRender();
+    if (!groundPoint) setStatus("No ground hit.", "error");
+    return false;
+  }
+  const draggedIndices = state.scatterTool.selectedPointIndices.length > 1
+    ? state.scatterTool.selectedPointIndices
+    : [pointIndex];
+  if (draggedIndices.length > 1 && startGround) {
+    const dx = groundPoint.x - startGround.x;
+    const dz = groundPoint.z - startGround.z;
+    for (const idx of draggedIndices) {
+      if (startPoints[idx]) {
+        startPoints[idx] = { x: startPoints[idx].x + dx, z: startPoints[idx].z + dz };
+      }
+    }
+  } else {
+    startPoints[pointIndex] = {
+      x: groundPoint.x,
+      z: groundPoint.z
+    };
+  }
+  const selectedBefore = state.scatterTool.selectedPointIndices.slice();
+  const ok = await scatterPatchGeometry(node, startPoints, state.scatterTool.dragStartRotationY, "Scatter point moved");
+  scatterClearDragState();
+  state.scatterTool.mode = "select";
+  if (ok) {
+    state.scatterTool.selectedPointIndices = selectedBefore;
+    state.scatterTool.selectedPointIndex = pointIndex;
+    state.scatterTool.selectedHandleRole = "point";
+    setStatus(draggedIndices.length > 1 ? draggedIndices.length + " points moved." : "Point moved.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+async function scatterCommitCenterDrag(node) {
+  const groundPoint = state.scatterTool.dragCurrentGround
+    || state.scatterTool.dragStartGround
+    || (state.scatterTool.dragStartPoints ? scatterPointCenter(state.scatterTool.dragStartPoints) : null);
+  if (!groundPoint || !state.scatterTool.dragStartPoints) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    scatterFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const startGround = state.scatterTool.dragStartGround || groundPoint;
+  const dx = groundPoint.x - startGround.x;
+  const dz = groundPoint.z - startGround.z;
+  const nextPoints = scatterTranslatePoints(state.scatterTool.dragStartPoints, dx, dz);
+  const ok = await scatterPatchGeometry(node, nextPoints, state.scatterTool.dragStartRotationY, "Scatter area moved");
+  scatterClearDragState();
+  state.scatterTool.mode = "select";
+  if (ok) {
+    scatterSetSelection(null, "center");
+    setStatus("Area moved.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+async function scatterCommitRotate(node) {
+  const groundPoint = state.scatterTool.dragCurrentGround || state.scatterTool.dragStartGround;
+  if (!groundPoint || !state.scatterTool.dragStartPoints || !state.scatterTool.dragStartPivot || !Number.isFinite(state.scatterTool.dragStartAngle)) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    scatterFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const currentAngle = Math.atan2(groundPoint.z - state.scatterTool.dragStartPivot.z, groundPoint.x - state.scatterTool.dragStartPivot.x);
+  const deltaDegrees = (currentAngle - state.scatterTool.dragStartAngle) * (180 / Math.PI);
+  const nextPoints = scatterRotatePoints(state.scatterTool.dragStartPoints, state.scatterTool.dragStartPivot, deltaDegrees);
+  const nextRotationY = (Number(state.scatterTool.dragStartRotationY) || 0) + deltaDegrees;
+  const ok = await scatterPatchGeometry(node, nextPoints, nextRotationY, "Scatter area rotated");
+  scatterClearDragState();
+  state.scatterTool.mode = "select";
+  if (ok) {
+    scatterSetSelection(null, "center");
+    setStatus("Area rotated.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+async function scatterCommitScale(node) {
+  const groundPoint = state.scatterTool.dragCurrentGround || state.scatterTool.dragStartGround;
+  if (!groundPoint || !state.scatterTool.dragStartPoints || !state.scatterTool.dragStartPivot || !Number.isFinite(state.scatterTool.dragStartDistance)) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    scatterFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const currentDistance = Math.hypot(groundPoint.x - state.scatterTool.dragStartPivot.x, groundPoint.z - state.scatterTool.dragStartPivot.z);
+  const factor = Math.max(0.05, currentDistance / Math.max(0.0001, state.scatterTool.dragStartDistance));
+  const nextPoints = scatterScalePoints(state.scatterTool.dragStartPoints, state.scatterTool.dragStartPivot, factor);
+  const ok = await scatterPatchGeometry(node, nextPoints, state.scatterTool.dragStartRotationY, "Scatter area scaled");
+  scatterClearDragState();
+  state.scatterTool.mode = "select";
+  if (ok) {
+    scatterSetSelection(null, "center");
+    setStatus("Area scaled.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+async function scatterDeletePoint(node, pointIndex) {
+  const currentPoints = scatterNodePoints(node);
+  if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= currentPoints.length) return false;
+  const nextPoints = currentPoints.filter(function (_, index) { return index !== pointIndex; });
+  if (nextPoints.length < 3) {
+    setStatus("Cannot delete: minimum 3 points required.", "error");
+    scatterFinishWithRender();
+    return false;
+  }
+  const ok = await scatterPatchGeometry(node, nextPoints, node.values?.areaRotationY, "Scatter point deleted");
+  if (ok) {
+    const nextIndex = nextPoints.length ? Math.min(pointIndex, nextPoints.length - 1) : null;
+    scatterSetSelection(nextIndex, nextIndex === null ? null : "point");
+    setStatus("Point deleted.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+async function scatterDeleteMultiPoint(node) {
+  const indices = state.scatterTool.selectedPointIndices;
+  if (!indices.length) return false;
+  const currentPoints = scatterNodePoints(node);
+  const toDelete = new Set(indices.filter(function (i) { return i >= 0 && i < currentPoints.length; }));
+  const remaining = currentPoints.filter(function (_, index) { return !toDelete.has(index); });
+  if (remaining.length < 3) {
+    setStatus("Cannot delete: minimum 3 points required.", "error");
+    scatterFinishWithRender();
+    return false;
+  }
+  const ok = await scatterPatchGeometry(node, remaining, node.values?.areaRotationY, "Scatter points deleted");
+  if (ok) {
+    const nextIndex = remaining.length ? 0 : null;
+    scatterSetSelection(nextIndex, nextIndex === null ? null : "point");
+    setStatus(toDelete.size + " point" + (toDelete.size > 1 ? "s" : "") + " deleted.", "success");
+  }
+  scatterFinishWithRender();
+  return ok;
+}
+
+function scatterSelectionPivot(points) {
+  const selected = state.scatterTool.selectedPointIndices.filter(function (index) {
+    return Number.isInteger(index) && index >= 0 && index < points.length;
+  });
+  if (selected.length) {
+    return scatterPointCenter(selected.map(function (index) { return points[index]; }));
+  }
+  return scatterPointCenter(points);
 }
 
 function terrainSelectedNodeSummary() {
@@ -1351,6 +2364,7 @@ function terrainOverlayState() {
   const { node, capabilities, points, surface } = summary;
   const groundY = terrainGroundY();
   const dragGround = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround || null;
+  let previewPoints = terrainClonePoints(points);
   const overlay = {
     nodeId: node.id,
     nodeType: node.type,
@@ -1372,33 +2386,19 @@ function terrainOverlayState() {
           ? "#8fe0a8"
           : "#f0b35a"
   };
-  if (node.type === "walkable_surface") {
-    if (dragGround && state.terrainTool.draggingHandleRole === "center" && state.terrainTool.dragStartSurface) {
-      Object.assign(overlay, state.terrainTool.dragStartSurface, {
-        x: dragGround.x,
-        z: dragGround.z
-      });
-    } else {
-      Object.assign(overlay, surface);
-    }
-  } else if (state.terrainTool.draggingPointIndex !== null && state.terrainTool.dragStartPoints) {
-    const nextPoints = terrainClonePoints(state.terrainTool.dragStartPoints);
-    if (dragGround && state.terrainTool.dragStartGround) {
-      const dx = state.terrainTool.axisConstraint === "y" ? 0 : dragGround.x - state.terrainTool.dragStartGround.x;
-      const dz = state.terrainTool.axisConstraint === "x" ? 0 : dragGround.z - state.terrainTool.dragStartGround.z;
-      const draggingIndex = state.terrainTool.draggingPointIndex;
-      const draggedIndices = state.terrainTool.selectedPointIndices.length > 1
-        ? state.terrainTool.selectedPointIndices
-        : (Number.isInteger(draggingIndex) ? [draggingIndex] : []);
-      for (const idx of draggedIndices) {
-        if (nextPoints[idx]) {
-          nextPoints[idx] = { x: nextPoints[idx].x + dx, z: nextPoints[idx].z + dz };
-        }
-      }
-    }
-    overlay.points = nextPoints;
+  if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
+    previewPoints = terrainPreviewMovedPoints(
+      node,
+      state.terrainTool.dragStartPoints,
+      state.terrainTool.draggingPointIndex,
+      dragGround,
+      state.terrainTool.dragStartGround
+    );
+  } else if (state.terrainTool.draggingHandleRole === "center" && node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
+    const startGround = state.terrainTool.dragStartGround
+      || (state.terrainTool.dragStartSurface ? { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z } : null);
+    previewPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, dragGround, startGround);
   } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragStartPoints) {
-    const nextPoints = terrainClonePoints(state.terrainTool.dragStartPoints);
     const anchor = state.terrainTool.dragStartGround || dragGround;
     const previewPoint = dragGround && Number.isFinite(dragGround.x) && Number.isFinite(dragGround.z)
       ? {
@@ -1408,15 +2408,22 @@ function terrainOverlayState() {
       : null;
     overlay.previewInsertIndex = Number.isInteger(state.terrainTool.dragExtrudeIndex)
       ? state.terrainTool.dragExtrudeIndex
-      : Math.max(0, nextPoints.length - 1);
+      : Math.max(0, state.terrainTool.dragStartPoints.length - 1);
     overlay.previewPoint = previewPoint;
-    if (previewPoint) {
-      const insertIndex = Math.max(0, Math.min(nextPoints.length, overlay.previewInsertIndex));
-      nextPoints.splice(insertIndex, 0, previewPoint);
-    }
-    overlay.points = nextPoints;
+    previewPoints = terrainPreviewExtrudedPoints(
+      node,
+      state.terrainTool.dragStartPoints,
+      state.terrainTool.draggingPointIndex,
+      previewPoint,
+      overlay.previewInsertIndex,
+      anchor
+    ) || terrainClonePoints(state.terrainTool.dragStartPoints);
   } else if (state.terrainTool.draggingHandleRole === "scale" && state.terrainTool.dragStartScale) {
     overlay.previewScale = Object.assign({}, state.terrainTool.dragStartScale);
+  }
+  overlay.points = previewPoints;
+  if (node.type === "walkable_surface") {
+    Object.assign(overlay, terrainWalkableSurfaceGeometry(node, previewPoints));
   }
   return overlay;
 }
@@ -1502,36 +2509,45 @@ function renderStatusLine() {
   if (!el.statusText) return;
   const parts = [];
   if (state.viewportDebugKey) parts.push("key received: " + state.viewportDebugKey);
-  const terrainNode = selectedTerrainNode();
-  if (terrainNode) {
-    const summary = terrainSelectedNodeSummary();
-    const capabilities = summary?.capabilities || terrainNodeCapabilities(terrainNode);
-    parts.push(terrainSelectionText(terrainNode, capabilities));
+  const scatterNode = selectedScatterNode();
+  if (scatterNode) {
+    const summary = scatterSelectedNodeSummary();
+    parts.push(scatterSelectionText(scatterNode));
     if (summary?.points && summary.points.length) parts.push(summary.points.length + " points");
-    const selectedPointText = terrainSelectedPointText();
+    const selectedPointText = scatterSelectedPointText();
     if (selectedPointText) parts.push(selectedPointText);
   } else {
-    const modeLabel = viewportModeLabelText();
-    const snapshot = selectedTransformSnapshot();
-    const node = selectedModelNode();
-    const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
-    parts.push(modeLabel);
-    if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
-    parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
-    parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
-    if (runtimeTransformActive()) {
-      const transformDebug = runtimeTransformDebugState();
-      if (transformDebug) {
-        parts.push("delta " + formatViewportNumber(transformDebug.dx, 0) + "," + formatViewportNumber(transformDebug.dy, 0));
-        parts.push("previews " + (transformDebug.previews || 0));
-        parts.push("changed " + (transformDebug.changed ? "yes" : "no"));
+    const terrainNode = selectedTerrainNode();
+    if (terrainNode) {
+      const summary = terrainSelectedNodeSummary();
+      const capabilities = summary?.capabilities || terrainNodeCapabilities(terrainNode);
+      parts.push(terrainSelectionText(terrainNode, capabilities));
+      if (summary?.points && summary.points.length) parts.push(summary.points.length + " points");
+      const selectedPointText = terrainSelectedPointText();
+      if (selectedPointText) parts.push(selectedPointText);
+    } else {
+      const modeLabel = viewportModeLabelText();
+      const snapshot = selectedTransformSnapshot();
+      const node = selectedModelNode();
+      const selectedId = runtimeSelectedEntityId() || runtimeNodeId(node);
+      parts.push(modeLabel);
+      if (state.viewportAxis) parts.push("as vergrendeld: " + state.viewportAxis.toUpperCase());
+      parts.push(selectedId ? "selected entity id: " + selectedId : "No mesh selected");
+      parts.push("transform active: " + (runtimeTransformActive() ? "yes" : "no"));
+      if (runtimeTransformActive()) {
+        const transformDebug = runtimeTransformDebugState();
+        if (transformDebug) {
+          parts.push("delta " + formatViewportNumber(transformDebug.dx, 0) + "," + formatViewportNumber(transformDebug.dy, 0));
+          parts.push("previews " + (transformDebug.previews || 0));
+          parts.push("changed " + (transformDebug.changed ? "yes" : "no"));
+        }
       }
-    }
-    if (node) {
-      const source = snapshot
-        ? viewportVectorFromWorld(snapshot.position)
-        : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
-      parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
+      if (node) {
+        const source = snapshot
+          ? viewportVectorFromWorld(snapshot.position)
+          : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
+        parts.push("Loc X " + formatViewportNumber(source.x) + " Y " + formatViewportNumber(source.y) + " Z " + formatViewportNumber(source.z));
+      }
     }
   }
   if (state.statusMessage) parts.push(state.statusMessage);
@@ -1551,6 +2567,8 @@ function renderViewportControls() {
     if (el.snapGridInput.value !== nextValue) el.snapGridInput.value = nextValue;
   }
   syncTerrainToolPanel();
+  scatterResetForNode(selectedScatterNode());
+  scatterRenderOverlayPreview();
   renderStatusLine();
   renderTransformPanel();
 }
@@ -1675,7 +2693,7 @@ function renderTransformPanel() {
 
   const matrix = document.createElement("div");
   matrix.className = "transformMatrix";
-  const labels = ["as", "G", "R", "S"];
+  const labels = ["as", "G", "R", "T"];
   for (const label of labels) {
     const cell = document.createElement("div");
     cell.className = "transformMatrixHead";
@@ -1693,7 +2711,7 @@ function renderTransformPanel() {
       const nodeAxis = viewportAxisToNodeAxis(axis);
       if (!nodeAxis) return;
       patch["rotation" + nodeAxis.toUpperCase()] = value;
-    } else if (kind === "S") {
+    } else if (kind === "t") {
       patch["scale" + axis.toUpperCase()] = value;
     }
     cancelRuntimeTransform();
@@ -1736,7 +2754,7 @@ function renderTransformPanel() {
     matrix.appendChild(axisLabel);
     addMatrixInput("G", axis, position[axis] ?? 0, "0.01", 3);
     addMatrixInput("R", axis, rotation[axis] ?? 0, "0.1", 1);
-    addMatrixInput("S", axis, scale[axis] ?? 1, "0.01", 3);
+    addMatrixInput("T", axis, scale[axis] ?? 1, "0.01", 3);
   }
   el.viewportTransformPanel.appendChild(matrix);
 }
@@ -2047,21 +3065,8 @@ function scheduleValidationRefresh() {
 
 function shouldRefreshViewportForNode(nodeId) {
   const node = nodeById(nodeId);
-  if (!node || !VIEWPORT_AFFECTING_NODE_TYPES.has(node.type)) return false;
-  const outputNode = state.graph.nodes.find(function (candidate) { return candidate.type === "game_output"; });
-  if (!outputNode) return false;
-  const visited = new Set([node.id]);
-  const stack = [node.id];
-  while (stack.length) {
-    const currentId = stack.pop();
-    if (currentId === outputNode.id) return true;
-    for (const edge of state.graph.edges) {
-      if (edge.fromNodeId !== currentId || visited.has(edge.toNodeId)) continue;
-      visited.add(edge.toNodeId);
-      stack.push(edge.toNodeId);
-    }
-  }
-  return false;
+  if (!node) return false;
+  return VIEWPORT_AFFECTING_NODE_TYPES.has(node.type);
 }
 
 function applyGraphMutationResult(result, options = {}) {
@@ -2096,13 +3101,21 @@ function applyGraphMutationResult(result, options = {}) {
   }
   if (options.refreshValidation !== false) scheduleValidationRefresh();
   if (typeof options.afterApply === "function") options.afterApply(nextGraph, result);
+  if (options.refreshAssetUsage !== false) requestManagedAssetUsageIfOpen();
   return nextGraph;
+}
+
+function requestManagedAssetUsageIfOpen() {
+  const assetId = state.assetManager.assetId;
+  if (!assetId) return;
+  if (!state.assetManager.loadingUsage && !state.assetManager.usage.length) return;
+  requestManagedAssetUsage(assetId);
 }
 
 async function applyGraphMutation(apiCall, options = {}) {
   return await enqueueGraphMutation(async function () {
     const historySnapshot = options.historySnapshot || (options.historyLabel ? captureHistorySnapshot(options.historyLabel) : null);
-    try {
+  try {
       const result = await apiCall();
       const normalizedResult = typeof options.normalizeResult === "function" ? options.normalizeResult(result) : result;
       if (typeof options.guard === "function" && !options.guard(normalizedResult)) return null;
@@ -2110,6 +3123,11 @@ async function applyGraphMutation(apiCall, options = {}) {
       if (historySnapshot) pushHistorySnapshot(historySnapshot);
       return nextGraph;
     } catch (error) {
+      if (options.clearPendingEdge) {
+        state.pendingEdge = null;
+        renderGraph();
+        renderViewportControls();
+      }
       setStatus(error.message, "error");
       return null;
     }
@@ -2309,7 +3327,7 @@ async function addNode(type) {
     });
   }, {
     historyLabel: "Node toegevoegd",
-    refreshViewport: false,
+    refreshViewport: true,
     refreshValidation: true,
     afterApply: function (_, result) {
       if (result?.nodeId) selectNode(result.nodeId, true);
@@ -3029,7 +4047,7 @@ el.graphViewport.addEventListener("wheel", function (event) {
   const mouseX = event.clientX - rect.left;
   const mouseY = event.clientY - rect.top;
   const oldScale = state.view.scale;
-  const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+const factor = event.deltaY < 0 ? 1.21 : 1 / 1.21;
   const newScale = Math.min(2.2, Math.max(0.25, oldScale * factor));
   state.view.panX = mouseX - (mouseX - state.view.panX) * (newScale / oldScale);
   state.view.panY = mouseY - (mouseY - state.view.panY) * (newScale / oldScale);
@@ -3176,6 +4194,26 @@ function renderInspector() {
     hint.textContent = "Stel hier de Group Interface in. De typed ports bepalen wat de Group Node buiten de group aanbiedt en wat Group Input/Output binnen de group tonen.";
     el.inspectorForm.appendChild(hint);
   }
+  if (node.type === "group_input" || node.type === "group_output") {
+    const parent = node.parentId ? nodeById(node.parentId) : null;
+    const isInput = node.type === "group_input";
+    const hint = document.createElement("div");
+    hint.className = "inspectorHint";
+    hint.textContent = parent && parent.type === "group"
+      ? (isInput
+        ? "Pas hier de input-ports van de parent group aan."
+        : "Pas hier de output-ports van de parent group aan.")
+      : "Deze group-interface node mist zijn parent group.";
+    el.inspectorForm.appendChild(hint);
+    if (parent && parent.type === "group") {
+      el.inspectorForm.appendChild(buildGroupInterfaceEditor(parent, "groupInterface", parent.values.groupInterface, {
+        targetNodeId: parent.id,
+        direction: isInput ? "input" : "output"
+      }));
+    }
+    renderViewportControls();
+    return;
+  }
 
   if (node.type === "model_entity" || node.type === "player_character") {
     const previewWrap = document.createElement("div");
@@ -3198,8 +4236,20 @@ function renderInspector() {
     el.inspectorForm.appendChild(previewWrap);
   }
 
+  let currentSection = null;
   for (const [key, field] of Object.entries(def.fields)) {
-    el.inspectorForm.appendChild(buildField(node, key, field));
+    const section = String(field.section || "").trim();
+    if (section !== currentSection) {
+      currentSection = section;
+      if (currentSection) {
+        const sectionTitle = document.createElement("div");
+        sectionTitle.className = "inspectorSectionTitle";
+        sectionTitle.textContent = currentSection;
+        el.inspectorForm.appendChild(sectionTitle);
+      }
+    }
+    const fieldEl = buildField(node, key, field);
+    if (fieldEl) el.inspectorForm.appendChild(fieldEl);
   }
 
   const actions = document.createElement("div");
@@ -3228,22 +4278,50 @@ function syncAsideContext() {
   if (el.validationSection) el.validationSection.hidden = false;
 }
 
+function fieldHelpText(field) {
+  return String(field?.help || field?.description || "").trim();
+}
+
+function applyFieldHelp(elements, helpText) {
+  const help = String(helpText || "").trim();
+  if (!help) return;
+  for (const element of Array.isArray(elements) ? elements : [elements]) {
+    if (!element) continue;
+    element.title = help;
+  }
+}
+
 function buildField(node, key, field) {
+  if (field.hidden) return null;
   const wrap = document.createElement("div");
   wrap.className = "field";
   const label = document.createElement("label");
   label.textContent = field.label;
+  const help = fieldHelpText(field);
+  applyFieldHelp([wrap, label], help);
   wrap.appendChild(label);
   const value = effectiveFieldValue(field, node.values[key]);
 
+  if (node.type === "bounded_area_scatter" && key === "sourceAssetIds") {
+    wrap.appendChild(buildScatterSourcePicker(node, key, value));
+    return wrap;
+  }
   if (field.type === "boolean") {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = value === true;
+    applyFieldHelp(input, help);
     input.addEventListener("change", function () { patchValues(node.id, makePatch(key, input.checked), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
     wrap.appendChild(input);
+    if (node.type === "bounded_area_scatter" && key === "boundaryBlocksPlayer") {
+      const hint = document.createElement("div");
+      hint.className = "inspectorHint";
+      hint.textContent = "When enabled, the polygon blocks the player.";
+      wrap.appendChild(hint);
+    }
   } else if (field.type === "select") {
     const select = document.createElement("select");
+    applyFieldHelp(select, help);
     const blank = document.createElement("option");
     blank.value = "";
     blank.textContent = field.dynamicOptions === "assetAnimations" ? animationBlankLabel(key) : "(kies)";
@@ -3288,6 +4366,7 @@ function buildField(node, key, field) {
     }
   } else if (field.type === "asset") {
     const select = document.createElement("select");
+    applyFieldHelp(select, help);
     const blank = document.createElement("option");
     blank.value = "";
     blank.textContent = "(kies asset)";
@@ -3319,13 +4398,16 @@ function buildField(node, key, field) {
   } else if (field.type === "color") {
     const row = document.createElement("div");
     row.className = "colorRow";
+    applyFieldHelp(row, help);
     const color = document.createElement("input");
     color.type = "color";
     color.value = /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : "#ffffff";
+    applyFieldHelp(color, help);
     const text = document.createElement("input");
     text.type = "text";
     text.value = value || "";
     text.placeholder = "#ffffff";
+    applyFieldHelp(text, help);
     let committedColorValue = text.value;
     let pendingColorValue = null;
     function commitColor(nextValue) {
@@ -3362,6 +4444,7 @@ function buildField(node, key, field) {
     const textarea = document.createElement("textarea");
     textarea.rows = 6;
     textarea.placeholder = JSON.stringify(groupInterfaceDefault(), null, 2);
+    applyFieldHelp(textarea, help);
     try {
       textarea.value = JSON.stringify(value === undefined ? {} : value, null, 2);
     } catch {
@@ -3393,15 +4476,18 @@ function buildField(node, key, field) {
   } else if (field.type === "keycode") {
     const row = document.createElement("div");
     row.className = "colorRow";
+    applyFieldHelp(row, help);
     const text = document.createElement("input");
     text.type = "text";
     text.value = value || "";
     text.placeholder = "KeyW";
+    applyFieldHelp(text, help);
     text.addEventListener("change", function () { patchValues(node.id, makePatch(key, text.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
     const capture = document.createElement("button");
     capture.type = "button";
     capture.className = "mini";
     capture.textContent = "Capture";
+    applyFieldHelp(capture, help);
     capture.addEventListener("click", function () {
       capture.textContent = "Druk toets...";
       const handler = function (keyEvent) {
@@ -3419,6 +4505,7 @@ function buildField(node, key, field) {
   } else {
     const input = document.createElement("input");
     input.type = field.type === "number" ? "number" : "text";
+    applyFieldHelp(input, help);
     if (field.type === "number") {
       if (field.step !== undefined) input.step = String(field.step);
       if (field.min !== undefined) input.min = String(field.min);
@@ -3488,15 +4575,21 @@ function createGroupPort(direction, ports) {
   };
 }
 
-function buildGroupInterfaceEditor(node, key, value) {
+function groupInterfacePortsKey(direction) {
+  return direction === "input" ? "inputs" : "outputs";
+}
+
+function buildGroupInterfaceEditor(node, key, value, options = {}) {
   const editor = document.createElement("div");
   editor.className = "groupInterfaceEditor";
   const interfaceState = cloneGroupInterface(value);
+  const targetNodeId = options.targetNodeId || node.id;
+  const directionFilter = options.direction === "input" || options.direction === "output" ? options.direction : null;
 
   function commit() {
-    patchValues(node.id, makePatch(key, cloneGroupInterface(interfaceState)), {
+    patchValues(targetNodeId, makePatch(key, cloneGroupInterface(interfaceState)), {
       historyLabel: "Group interface",
-      refreshViewport: false,
+      refreshViewport: shouldRefreshViewportForNode(targetNodeId),
       refreshValidation: true
     });
   }
@@ -3514,14 +4607,15 @@ function buildGroupInterfaceEditor(node, key, value) {
     add.className = "mini";
     add.textContent = "Add " + direction;
     add.addEventListener("click", function () {
-      const nextPort = createGroupPort(direction, interfaceState[direction + "s"]);
-      interfaceState[direction + "s"].push(nextPort);
+      const ports = interfaceState[groupInterfacePortsKey(direction)];
+      const nextPort = createGroupPort(direction, ports);
+      ports.push(nextPort);
       commit();
     });
     header.append(title, add);
     section.appendChild(header);
 
-    const ports = interfaceState[direction + "s"];
+    const ports = interfaceState[groupInterfacePortsKey(direction)];
     if (!ports.length) {
       const empty = document.createElement("div");
       empty.className = "groupInterfaceEmpty";
@@ -3605,11 +4699,122 @@ function buildGroupInterfaceEditor(node, key, value) {
 
   const intro = document.createElement("div");
   intro.className = "groupInterfaceHint";
-  intro.textContent = "Dit is de echte groep-interface. Vul alleen het label in; de technische naam wordt automatisch gesluggifyt en blijft stabiel zodra je een port gebruikt.";
+  intro.textContent = directionFilter
+    ? "Pas hier de ports aan die aan deze Group Input/Output gekoppeld zijn."
+    : "Dit is de echte groep-interface. Vul alleen het label in; de technische naam wordt automatisch gesluggifyt en blijft stabiel zodra je een port gebruikt.";
   editor.appendChild(intro);
-  editor.appendChild(buildSection("input", "Inputs"));
-  editor.appendChild(buildSection("output", "Outputs"));
+  if (!directionFilter || directionFilter === "input") editor.appendChild(buildSection("input", "Inputs"));
+  if (!directionFilter || directionFilter === "output") editor.appendChild(buildSection("output", "Outputs"));
   return editor;
+}
+
+function normalizedNodeIdList(value) {
+  const ids = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(value) ? value : []) {
+    const id = String(entry || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function scatterSourceAssetIdsForNode(node) {
+  const explicitAssetIds = normalizedNodeIdList(node?.values?.sourceAssetIds);
+  if (explicitAssetIds.length) return explicitAssetIds;
+  const legacySourceIds = normalizedNodeIdList(node?.values?.sourceNodeIds);
+  const assetIds = [];
+  const seen = new Set();
+  for (const legacyNodeId of legacySourceIds) {
+    const sourceNode = nodeById(legacyNodeId);
+    if (!sourceNode || sourceNode.type !== "model_entity") continue;
+    const assetId = String(sourceNode.values?.modelAssetId || "").trim();
+    if (!assetId || seen.has(assetId)) continue;
+    seen.add(assetId);
+    assetIds.push(assetId);
+  }
+  return assetIds;
+}
+
+function buildScatterSourcePicker(node, key, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "scatterSourcePicker";
+  const header = document.createElement("div");
+  header.className = "scatterSourcePickerHeader";
+  const hint = document.createElement("div");
+  hint.className = "inspectorHint";
+  hint.textContent = "Kies model-assets uit de assetkolom. De scatter maakt lichte instances van deze assets en laat de bronnodes met rust.";
+  const actions = document.createElement("div");
+  actions.className = "scatterSourceActions";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "mini";
+  clear.textContent = "Wis selectie";
+  clear.disabled = scatterSourceAssetIdsForNode(node).length === 0;
+  clear.addEventListener("click", function () {
+    patchValues(node.id, {
+      sourceAssetIds: [],
+      sourceNodeIds: []
+    }, {
+      historyLabel: "Source assets",
+      refreshViewport: shouldRefreshViewportForNode(node.id),
+      refreshValidation: true
+    });
+  });
+  actions.append(clear);
+  header.append(hint, actions);
+  wrap.appendChild(header);
+
+  const sources = state.assets.filter(function (asset) {
+    return asset && asset.assetType === "model";
+  }).slice().sort(function (left, right) {
+    const titleDelta = String(left.name || "").localeCompare(String(right.name || ""));
+    if (titleDelta !== 0) return titleDelta;
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+  const selectedIds = new Set(scatterSourceAssetIdsForNode(node));
+  if (!sources.length) {
+    const empty = document.createElement("div");
+    empty.className = "groupInterfaceEmpty";
+    empty.textContent = "Nog geen model-assets aanwezig.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+
+  const list = document.createElement("div");
+  list.className = "scatterSourceList";
+  const commit = function () {
+    const nextIds = Array.from(selectedIds).sort(function (left, right) {
+      return String(left).localeCompare(String(right));
+    });
+    patchValues(node.id, {
+      sourceAssetIds: nextIds,
+      sourceNodeIds: []
+    }, {
+      historyLabel: "Source assets",
+      refreshViewport: shouldRefreshViewportForNode(node.id),
+      refreshValidation: true
+    });
+  };
+  for (const source of sources) {
+    const item = document.createElement("label");
+    item.className = "scatterSourceItem";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedIds.has(source.id);
+    checkbox.addEventListener("change", function () {
+      if (checkbox.checked) selectedIds.add(source.id);
+      else selectedIds.delete(source.id);
+      commit();
+    });
+    const text = document.createElement("span");
+    text.textContent = source.name + " · " + source.assetType;
+    item.append(checkbox, text);
+    list.appendChild(item);
+  }
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function makePatch(key, value) {
@@ -3638,7 +4843,7 @@ async function duplicateNode(nodeId) {
     return api("/api/editor/nodes/" + nodeId + "/duplicate", { method: "POST" });
   }, {
     historyLabel: "Node gedupliceerd",
-    refreshViewport: false,
+    refreshViewport: true,
     refreshValidation: true,
     afterApply: function (_, result) {
       if (result?.nodeId) selectNode(result.nodeId, true);
@@ -3818,8 +5023,8 @@ async function deleteSelectedNodes() {
     refreshGraph: true,
     refreshEdgeList: false,
     refreshInspector: true,
-    refreshValidation: false,
-    refreshViewport: false,
+    refreshValidation: true,
+    refreshViewport: true,
     afterApply: function () {
       clearSelection({ clearPendingEdge: true });
       setStatus("Selectie verwijderd.", "success");
@@ -3877,8 +5082,8 @@ async function pasteSelection() {
     refreshGraph: true,
     refreshEdgeList: false,
     refreshInspector: true,
-    refreshValidation: false,
-    refreshViewport: false,
+    refreshValidation: true,
+    refreshViewport: true,
     afterApply: function () {
       setSelection(newNodeIds, [], { primaryNodeId: newNodeIds[0] || null, clearPendingEdge: true });
       setStatus("Gepast.", "success");
@@ -4563,10 +5768,22 @@ function terrainHandleFromEvent(event) {
   return runtime.pickTerrainEditorHandle(event.clientX, event.clientY);
 }
 
+function scatterHandleFromEvent(event) {
+  if (!runtime || typeof runtime.pickScatterEditorHandle !== "function") return null;
+  return runtime.pickScatterEditorHandle(event.clientX, event.clientY);
+}
+
 function terrainRenderOverlayPreview() {
   if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
   const overlay = terrainOverlayState();
   if (overlay) runtime.setTerrainEditorOverlay(overlay);
+}
+
+function scatterRenderOverlayPreview() {
+  if (!runtime || typeof runtime.setScatterEditorOverlay !== "function") return;
+  const overlay = scatterOverlayState();
+  if (overlay) runtime.setScatterEditorOverlay(overlay);
+  else if (typeof runtime.clearScatterEditorOverlay === "function") runtime.clearScatterEditorOverlay();
 }
 
 function terrainFinishWithRender() {
@@ -4575,6 +5792,27 @@ function terrainFinishWithRender() {
 
 function focusTerrainOrSelected() {
   if (!runtime) return;
+  const scatterNode = selectedScatterNode();
+  if (scatterNode) {
+    const summary = scatterSelectedNodeSummary();
+    const points = summary?.points || [];
+    if (!points.length) {
+      if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+      return;
+    }
+    const selectedIdx = state.scatterTool.selectedPointIndex;
+    const groundY = terrainGroundY();
+    if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
+      const p = points[selectedIdx];
+      if (typeof runtime.frameWorldPoints === "function") {
+        runtime.frameWorldPoints([{ x: p.x, y: groundY, z: p.z }]);
+      }
+      return;
+    }
+    const positions = points.map(function (p) { return { x: p.x, y: groundY, z: p.z }; });
+    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
+    return;
+  }
   const node = selectedTerrainNode();
   if (!node) {
     if (typeof runtime.focusSelected === "function") runtime.focusSelected();
@@ -4582,21 +5820,7 @@ function focusTerrainOrSelected() {
   }
   const capabilities = terrainNodeCapabilities(node);
   const groundY = terrainGroundY();
-  if (capabilities.walkableSurface || node.type === "walkable_surface") {
-    const surface = terrainSurfaceSnapshot(node);
-    const hw = Math.max(0, surface.width) / 2;
-    const hd = Math.max(0, surface.depth) / 2;
-    const cx = surface.x;
-    const cy = surface.y || groundY;
-    const cz = surface.z;
-    const positions = [
-      { x: cx - hw, y: cy, z: cz - hd },
-      { x: cx + hw, y: cy, z: cz + hd }
-    ];
-    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
-    return;
-  }
-  if (capabilities.polygonEditable || capabilities.pointEditing) {
+  if (capabilities.walkableSurface || capabilities.polygonEditable || capabilities.pointEditing) {
     const points = terrainNodePoints(node);
     if (!points.length) {
       if (typeof runtime.focusSelected === "function") runtime.focusSelected();
@@ -4606,11 +5830,21 @@ function focusTerrainOrSelected() {
     if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
       const p = points[selectedIdx];
       if (typeof runtime.frameWorldPoints === "function") {
-        runtime.frameWorldPoints([{ x: p.x, y: groundY, z: p.z }]);
+        runtime.frameWorldPoints([{
+          x: p.x,
+          y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+          z: p.z
+        }]);
       }
       return;
     }
-    const positions = points.map(function (p) { return { x: p.x, y: groundY, z: p.z }; });
+    const positions = points.map(function (p) {
+      return {
+        x: p.x,
+        y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+        z: p.z
+      };
+    });
     if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
     return;
   }
@@ -4674,6 +5908,12 @@ function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
   state.terrainTool.dragPreviewPoint = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragStartPointer = terrainLastPointer
+    ? { x: Number(terrainLastPointer.clientX) || 0, y: Number(terrainLastPointer.clientY) || 0 }
+    : null;
+  state.terrainTool.dragCurrentPointer = state.terrainTool.dragStartPointer
+    ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
+    : null;
   state.terrainTool.dragPointerId = pointerId;
   state.terrainTool.dragMoved = false;
   state.terrainTool.axisConstraint = null;
@@ -4752,6 +5992,12 @@ function terrainBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
   state.terrainTool.dragStartPoints = terrainClonePoints(points);
   state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragStartPointer = terrainLastPointer
+    ? { x: Number(terrainLastPointer.clientX) || 0, y: Number(terrainLastPointer.clientY) || 0 }
+    : null;
+  state.terrainTool.dragCurrentPointer = state.terrainTool.dragStartPointer
+    ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
+    : null;
   state.terrainTool.dragPointerId = pointerId;
   state.terrainTool.dragMoved = false;
   state.terrainTool.axisConstraint = null;
@@ -4771,9 +6017,18 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
   state.terrainTool.dragNodeId = node.id;
   state.terrainTool.draggingPointIndex = null;
   state.terrainTool.draggingHandleRole = "center";
+  state.terrainTool.dragStartPoints = node.type === "walkable_surface"
+    ? terrainClonePoints(terrainNodePoints(node))
+    : null;
   state.terrainTool.dragStartSurface = terrainSurfaceSnapshot(node);
   state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
+  state.terrainTool.dragStartPointer = terrainLastPointer
+    ? { x: Number(terrainLastPointer.clientX) || 0, y: Number(terrainLastPointer.clientY) || 0 }
+    : null;
+  state.terrainTool.dragCurrentPointer = state.terrainTool.dragStartPointer
+    ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
+    : null;
   state.terrainTool.dragPointerId = pointerId;
   state.terrainTool.dragMoved = false;
   state.terrainTool.axisConstraint = null;
@@ -4783,7 +6038,16 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
 }
 
 async function terrainPatchPoints(node, nextPoints, historyLabel) {
-  const result = await patchValues(node.id, { points: nextPoints }, {
+  const normalizedPoints = terrainClonePoints(nextPoints);
+  const patch = { points: normalizedPoints };
+  if (node.type === "walkable_surface") {
+    const geometry = terrainWalkableSurfaceGeometry(node, normalizedPoints);
+    patch.x = geometry.x;
+    patch.z = geometry.z;
+    patch.width = geometry.width;
+    patch.depth = geometry.depth;
+  }
+  const result = await patchValues(node.id, patch, {
     historyLabel: historyLabel,
     refreshViewport: true,
     refreshValidation: true,
@@ -4816,7 +6080,7 @@ async function terrainAddPoint(node, groundPoint) {
     return false;
   }
   const capabilities = terrainNodeCapabilities(node);
-  if (capabilities.centerEditable || node.type === "walkable_surface") {
+  if (capabilities.centerEditable && !capabilities.pointEditing) {
     const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
     if (ok) {
       terrainSetSelection(null, "center");
@@ -4827,7 +6091,11 @@ async function terrainAddPoint(node, groundPoint) {
   }
   if (!capabilities.allowExtrude) return false;
   const currentPoints = terrainNodePoints(node);
-  const newPoint = { x: groundPoint.x, z: groundPoint.z };
+  const surface = terrainSurfaceSnapshot(node);
+  const selectedPoint = Number.isInteger(state.terrainTool.selectedPointIndex) ? currentPoints[state.terrainTool.selectedPointIndex] : null;
+  const newPoint = node.type === "walkable_surface"
+    ? { x: groundPoint.x, y: terrainPointHeight(selectedPoint, surface.y), z: groundPoint.z }
+    : { x: groundPoint.x, z: groundPoint.z };
   const hasSelection = Number.isInteger(state.terrainTool.selectedPointIndex) || state.terrainTool.selectedPointIndices.length > 0;
   const selectedIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
     ? state.terrainTool.selectedPointIndex
@@ -4854,13 +6122,16 @@ async function terrainAddPoint(node, groundPoint) {
 
 async function terrainDeletePoint(node, pointIndex) {
   const capabilities = terrainNodeCapabilities(node);
-  if (!capabilities.allowDelete) {
-    if (node.type === "walkable_surface") setStatus("Walkable Surface has no points.", "error");
-    return false;
-  }
+  if (!capabilities.allowDelete) return false;
   const currentPoints = terrainNodePoints(node);
   if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= currentPoints.length) return false;
   const nextPoints = currentPoints.filter(function (_, index) { return index !== pointIndex; });
+  const minCount = terrainMinPointCount(node.type);
+  if (nextPoints.length < minCount) {
+    setStatus("Cannot delete: minimum " + minCount + " points required.", "error");
+    terrainFinishWithRender();
+    return false;
+  }
   const ok = await terrainPatchPoints(node, nextPoints, "Terrain point deleted");
   if (ok) {
     const nextIndex = nextPoints.length ? Math.min(pointIndex, nextPoints.length - 1) : null;
@@ -4876,15 +6147,13 @@ function terrainMinPointCount(nodeType) {
   if (nodeType === "water_layer") return 3;
   if (nodeType === "surface_layer") return 2;
   if (nodeType === "blocker_area") return 3;
+  if (nodeType === "walkable_surface") return 3;
   return 1;
 }
 
 async function terrainDeleteMultiPoint(node) {
   const capabilities = terrainNodeCapabilities(node);
-  if (!capabilities.allowDelete) {
-    if (node.type === "walkable_surface") setStatus("Walkable Surface has no points.", "error");
-    return false;
-  }
+  if (!capabilities.allowDelete) return false;
   const indices = state.terrainTool.selectedPointIndices;
   if (!indices.length) return false;
   const currentPoints = terrainNodePoints(node);
@@ -4915,23 +6184,27 @@ async function terrainCommitPointDrag(node) {
       || state.terrainTool.dragCurrentGround
       || state.terrainTool.dragStartGround
       || (sourcePoint ? { x: sourcePoint.x, z: sourcePoint.z } : null);
-    if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length || !previewPoint) {
+    if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length) {
       terrainClearDragState();
       state.terrainTool.axisConstraint = null;
       state.terrainTool.mode = "select";
       terrainFinishWithRender();
-      if (!previewPoint) setStatus("No ground hit.", "error");
+      if (!previewPoint && !terrainVerticalHeightSession(node)) setStatus("No ground hit.", "error");
       return false;
     }
     const insertIndex = Number.isInteger(state.terrainTool.dragExtrudeIndex)
       ? Math.max(0, Math.min(startPoints.length, state.terrainTool.dragExtrudeIndex))
       : Math.min(startPoints.length, pointIndex + 1);
-    const nextPoints = startPoints.slice();
     const anchor = state.terrainTool.dragStartGround || previewPoint;
-    nextPoints.splice(insertIndex, 0, {
-      x: state.terrainTool.axisConstraint === "y" && anchor ? anchor.x : previewPoint.x,
-      z: state.terrainTool.axisConstraint === "x" && anchor ? anchor.z : previewPoint.z
-    });
+    const nextPoints = terrainPreviewExtrudedPoints(node, startPoints, pointIndex, previewPoint, insertIndex, anchor);
+    if (!nextPoints) {
+      terrainClearDragState();
+      state.terrainTool.axisConstraint = null;
+      state.terrainTool.mode = "select";
+      terrainFinishWithRender();
+      setStatus("No ground hit.", "error");
+      return false;
+    }
     const ok = await terrainPatchPoints(node, nextPoints, "Terrain point extruded");
     terrainClearDragState();
     state.terrainTool.axisConstraint = null;
@@ -4950,33 +6223,18 @@ async function terrainCommitPointDrag(node) {
   const groundPoint = state.terrainTool.dragCurrentGround
     || startGround
     || (startPoints[pointIndex] ? { x: startPoints[pointIndex].x, z: startPoints[pointIndex].z } : null);
-  if (!groundPoint || !Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length) {
+  if ((!groundPoint && !terrainVerticalHeightSession(node)) || !Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= startPoints.length) {
     terrainClearDragState();
     state.terrainTool.axisConstraint = null;
     state.terrainTool.mode = "select";
     terrainFinishWithRender();
-    if (!groundPoint) setStatus("No ground hit.", "error");
+    if (!groundPoint && !terrainVerticalHeightSession(node)) setStatus("No ground hit.", "error");
     return false;
   }
-  const draggedIndices = state.terrainTool.selectedPointIndices.length > 1
-    ? state.terrainTool.selectedPointIndices
-    : [pointIndex];
-  if (draggedIndices.length > 1 && startGround) {
-    const dx = state.terrainTool.axisConstraint === "y" ? 0 : groundPoint.x - startGround.x;
-    const dz = state.terrainTool.axisConstraint === "x" ? 0 : groundPoint.z - startGround.z;
-    for (const idx of draggedIndices) {
-      if (startPoints[idx]) {
-        startPoints[idx] = { x: startPoints[idx].x + dx, z: startPoints[idx].z + dz };
-      }
-    }
-  } else {
-    startPoints[pointIndex] = {
-      x: state.terrainTool.axisConstraint === "y" && startGround ? startPoints[pointIndex].x : groundPoint.x,
-      z: state.terrainTool.axisConstraint === "x" && startGround ? startPoints[pointIndex].z : groundPoint.z
-    };
-  }
+  const draggedIndices = terrainDraggedPointIndices(pointIndex);
+  const nextPoints = terrainPreviewMovedPoints(node, startPoints, pointIndex, groundPoint, startGround);
   const selectedBefore = state.terrainTool.selectedPointIndices.slice();
-  const ok = await terrainPatchPoints(node, startPoints, "Terrain point moved");
+  const ok = await terrainPatchPoints(node, nextPoints, "Terrain point moved");
   terrainClearDragState();
   state.terrainTool.axisConstraint = null;
   state.terrainTool.mode = "select";
@@ -4994,15 +6252,23 @@ async function terrainCommitSurfaceDrag(node) {
   const groundPoint = state.terrainTool.dragCurrentGround
     || state.terrainTool.dragStartGround
     || (state.terrainTool.dragStartSurface ? { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z } : null);
-  if (!groundPoint || !state.terrainTool.dragStartSurface) {
+  if ((!groundPoint && !terrainVerticalHeightSession(node)) || !state.terrainTool.dragStartSurface) {
     terrainClearDragState();
     state.terrainTool.axisConstraint = null;
     state.terrainTool.mode = "select";
     terrainFinishWithRender();
-    setStatus("No ground hit.", "error");
+    if (!terrainVerticalHeightSession(node)) setStatus("No ground hit.", "error");
     return false;
   }
-  const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+  let ok = false;
+  if (node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
+    const startGround = state.terrainTool.dragStartGround
+      || { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z };
+    const nextPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, groundPoint, startGround);
+    ok = await terrainPatchPoints(node, nextPoints, "Terrain surface moved");
+  } else {
+    ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+  }
   terrainClearDragState();
   state.terrainTool.axisConstraint = null;
   state.terrainTool.mode = "select";
@@ -5044,6 +6310,7 @@ async function terrainCommitScale(node) {
 function handleTerrainPointerDown(event) {
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
+  if (handleScatterPointerDown(event)) return;
   if (terrainHasActiveSession() && event.button === 0 && terrainCanvasTarget(event)) {
     event.preventDefault();
     event.stopPropagation();
@@ -5089,7 +6356,7 @@ function handleTerrainPointerDown(event) {
   if (hit && hit.nodeId === node.id) {
     if (node.type === "walkable_surface" && hit.handleRole === "center") {
       if (state.terrainTool.mode === "delete") {
-        setStatus("Walkable Surface has no points.", "error");
+        setStatus("Select a point to delete.", "error");
         terrainFinishWithRender();
         return;
       }
@@ -5170,10 +6437,177 @@ function handleTerrainPointerDown(event) {
     return;
   }
 
-  if (state.terrainTool.mode === "delete" && node.type === "walkable_surface") {
-    setStatus("Walkable Surface has no points.", "error");
+  if (state.terrainTool.mode === "delete") {
+    setStatus("Select a point to delete.", "error");
     terrainFinishWithRender();
   }
+}
+
+function handleScatterPointerDown(event) {
+  const node = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
+  if (!node) return false;
+  if (scatterHasActiveSession() && event.button === 0 && terrainCanvasTarget(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    if (state.scatterTool.draggingHandleRole === "center") {
+      void scatterCommitCenterDrag(node);
+    } else if (state.scatterTool.draggingHandleRole === "rotate") {
+      void scatterCommitRotate(node);
+    } else if (state.scatterTool.draggingHandleRole === "scale") {
+      void scatterCommitScale(node);
+    } else {
+      void scatterCommitPointDrag(node);
+    }
+    return true;
+  }
+  if (!terrainCanvasTarget(event) || event.button !== 0) return false;
+  const hit = scatterHandleFromEvent(event);
+  const ground = terrainGroundPointFromEvent(event);
+  const mode = state.scatterTool.mode;
+  if (!hit || hit.nodeId !== node.id) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+
+  if (Number.isInteger(hit.pointIndex)) {
+    if (event.shiftKey && (mode === "select" || mode === "move")) {
+      scatterTogglePointSelection(hit.pointIndex);
+      scatterFinishWithRender();
+      return true;
+    }
+    const alreadyInMultiSelect = state.scatterTool.selectedPointIndices.length > 1
+      && state.scatterTool.selectedPointIndices.includes(hit.pointIndex);
+    if (!alreadyInMultiSelect) {
+      scatterSetSelection(hit.pointIndex, "point");
+    } else {
+      state.scatterTool.selectedPointIndex = hit.pointIndex;
+      state.scatterTool.selectedHandleRole = "point";
+    }
+    if (mode === "move") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+      }
+    } else if (mode === "extrude") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginExtrudeSession(node, ground, event.pointerId);
+      }
+    } else if (mode === "rotate") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginRotateSession(node, ground, event.pointerId);
+      }
+    } else if (mode === "scale") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginScaleSession(node, ground, event.pointerId);
+      }
+    } else if (mode === "delete") {
+      void scatterDeleteMultiPoint(node);
+    } else {
+      scatterFinishWithRender();
+    }
+    return true;
+  }
+
+  if (hit.handleRole === "center") {
+    scatterSetSelection(null, "center");
+    if (mode === "move") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginCenterDrag(node, ground, event.pointerId);
+      }
+    } else if (mode === "rotate") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginRotateSession(node, ground, event.pointerId);
+      }
+    } else if (mode === "scale") {
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else {
+        scatterBeginScaleSession(node, ground, event.pointerId);
+      }
+    } else {
+      scatterFinishWithRender();
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function handleScatterPointerMove(event) {
+  terrainRememberPointer(event);
+  if (runtimeTransformActive()) {
+    if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
+    return false;
+  }
+  const isKeyboardSession = scatterHasActiveSession() && state.scatterTool.dragPointerId === null;
+  const isPointerSession = state.scatterTool.dragPointerId !== null && event.pointerId === state.scatterTool.dragPointerId;
+  if (!isKeyboardSession && !isPointerSession) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  const node = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
+  if (!node) return false;
+  const ground = terrainGroundPointFromEvent(event);
+  if (!ground) return false;
+  state.scatterTool.dragCurrentGround = { x: ground.x, z: ground.z };
+  if (!state.scatterTool.dragStartGround) state.scatterTool.dragStartGround = { x: ground.x, z: ground.z };
+  state.scatterTool.dragMoved = true;
+  if (state.scatterTool.draggingHandleRole === "extrude") {
+    state.scatterTool.dragPreviewPoint = { x: ground.x, z: ground.z };
+  }
+  scatterRenderOverlayPreview();
+  return true;
+}
+
+function handleScatterPointerUp(event) {
+  terrainRememberPointer(event);
+  if (runtimeTransformActive()) {
+    if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
+    return false;
+  }
+  if (state.scatterTool.dragPointerId === null || event.pointerId !== state.scatterTool.dragPointerId) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  if (event.type === "pointercancel") {
+    scatterCancelActiveSession();
+    return true;
+  }
+  const node = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
+  if (!node) {
+    scatterCancelActiveSession();
+    return true;
+  }
+  if (state.scatterTool.draggingHandleRole === "center") {
+    void scatterCommitCenterDrag(node);
+    return true;
+  }
+  if (state.scatterTool.draggingHandleRole === "rotate") {
+    void scatterCommitRotate(node);
+    return true;
+  }
+  if (state.scatterTool.draggingHandleRole === "scale") {
+    void scatterCommitScale(node);
+    return true;
+  }
+  if (Number.isInteger(state.scatterTool.draggingPointIndex)) {
+    void scatterCommitPointDrag(node);
+    return true;
+  }
+  scatterCancelActiveSession();
+  return true;
 }
 
 function handleTerrainPointerMove(event) {
@@ -5182,6 +6616,7 @@ function handleTerrainPointerMove(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (handleScatterPointerMove(event)) return;
   const isKeyboardSession = terrainHasActiveSession() && state.terrainTool.dragPointerId === null;
   const isPointerSession = state.terrainTool.dragPointerId !== null && event.pointerId === state.terrainTool.dragPointerId;
   if (!isKeyboardSession && !isPointerSession) return;
@@ -5197,12 +6632,19 @@ function handleTerrainPointerMove(event) {
     terrainUpdateScalePreview(node, pointer);
     return;
   }
+  const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+  if (!node) return;
+  const pointer = { x: Number(event.clientX) || 0, y: Number(event.clientY) || 0 };
+  if (!state.terrainTool.dragStartPointer) state.terrainTool.dragStartPointer = pointer;
+  state.terrainTool.dragCurrentPointer = pointer;
   const ground = terrainGroundPointFromEvent(event);
-  if (!ground) return;
-  if (!state.terrainTool.dragStartGround) state.terrainTool.dragStartGround = { x: ground.x, z: ground.z };
-  state.terrainTool.dragCurrentGround = { x: ground.x, z: ground.z };
+  if (ground) {
+    if (!state.terrainTool.dragStartGround) state.terrainTool.dragStartGround = { x: ground.x, z: ground.z };
+    state.terrainTool.dragCurrentGround = { x: ground.x, z: ground.z };
+  }
+  if (!ground && !terrainVerticalHeightSession(node)) return;
   state.terrainTool.dragMoved = true;
-  if (state.terrainTool.draggingHandleRole === "extrude") {
+  if (state.terrainTool.draggingHandleRole === "extrude" && ground) {
     state.terrainTool.dragPreviewPoint = { x: ground.x, z: ground.z };
   }
   terrainRenderOverlayPreview();
@@ -5214,6 +6656,7 @@ function handleTerrainPointerUp(event) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
   }
+  if (handleScatterPointerUp(event)) return;
   if (state.terrainTool.dragPointerId === null || event.pointerId !== state.terrainTool.dragPointerId) return;
   event.preventDefault();
   event.stopPropagation();
@@ -5263,7 +6706,7 @@ function viewportShortcutDebugLabel(event) {
   } else if (String(event.key || "").length === 1) {
     letter = String(event.key || "").toUpperCase();
   }
-  if (!["G", "R", "S", "X", "Y", "Z"].includes(letter)) return "";
+  if (!["G", "R", "T", "X", "Y", "Z"].includes(letter)) return "";
   return event.altKey ? "Alt+" + letter : letter;
 }
 
@@ -5283,11 +6726,26 @@ function terrainKeyboardOwnsShortcuts(terrainNode, event) {
   if (terrainHasActiveSession()) return true;
   if (runtimeTransformActive()) return false;
   if (!event?.altKey && !(event?.ctrlKey || event?.metaKey)
-    && (keyMatches(event, "g") || keyMatches(event, "r") || keyMatches(event, "s") || keyMatches(event, "w") || keyMatches(event, "e") || keyMatches(event, "t"))
+    && (keyMatches(event, "g") || keyMatches(event, "r") || keyMatches(event, "t"))
     && runtimeModelEntityIdAtLastPointer()) {
     return false;
   }
   return !selectedModelNode();
+}
+
+function scatterKeyboardOwnsShortcuts(scatterNode, event) {
+  if (!scatterNode) return false;
+  if (scatterHasActiveSession()) return true;
+  if (runtimeTransformActive()) return false;
+  if (event?.altKey || event?.ctrlKey || event?.metaKey) return false;
+  return keyMatches(event, "g")
+    || keyMatches(event, "r")
+    || keyMatches(event, "t")
+    || keyMatches(event, "e")
+    || event.key === "Escape"
+    || event.key === "Delete"
+    || event.key === "Backspace"
+    || event.key === ".";
 }
 
 function handleEditorKeyDown(event) {
@@ -5295,6 +6753,100 @@ function handleEditorKeyDown(event) {
   if (isEditableTarget(event.target)) return;
   const shortcutLabel = viewportShortcutDebugLabel(event);
   if (shortcutLabel) setViewportShortcutDebug(shortcutLabel);
+  const scatterNode = selectedScatterNode();
+  if (scatterKeyboardOwnsShortcuts(scatterNode, event)) {
+    const selectedIndex = Number.isInteger(state.scatterTool.selectedPointIndex)
+      ? state.scatterTool.selectedPointIndex
+      : (state.scatterTool.selectedPointIndices.length
+        ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
+        : null);
+    if (!event.altKey && !meta && keyMatches(event, "g")) {
+      consumeShortcutEvent(event);
+      if (!Number.isInteger(selectedIndex)) {
+        if (!scatterBeginCenterDrag(scatterNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+          setStatus("Select a point first.", "error");
+        } else {
+          setStatus("Move ready. Click or Enter to confirm.", "");
+        }
+        return;
+      }
+      if (!scatterBeginPointDrag(scatterNode, selectedIndex, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+        setStatus("Select a point first.", "error");
+        return;
+      }
+      setStatus("Move ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "r")) {
+      consumeShortcutEvent(event);
+      if (!scatterBeginRotateSession(scatterNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+        return;
+      }
+      setStatus("Rotate ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "t")) {
+      consumeShortcutEvent(event);
+      if (!scatterBeginScaleSession(scatterNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) return;
+      setStatus("Scale ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "e")) {
+      consumeShortcutEvent(event);
+      if (!Number.isInteger(selectedIndex)) {
+        setStatus("Select a point first.", "error");
+        return;
+      }
+      if (!scatterBeginExtrudeSession(scatterNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+        return;
+      }
+      setStatus("Add point ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (event.key === "Escape") {
+      consumeShortcutEvent(event);
+      if (scatterHasActiveSession()) {
+        scatterCancelActiveSession();
+        return;
+      }
+      state.scatterTool.mode = "select";
+      scatterFinishWithRender();
+      return;
+    }
+    if (event.key === "Enter") {
+      consumeShortcutEvent(event);
+      if (scatterHasActiveSession()) {
+        const activeNode = nodeById(state.scatterTool.dragNodeId) || scatterNode;
+        if (state.scatterTool.draggingHandleRole === "center") {
+          void scatterCommitCenterDrag(activeNode);
+        } else if (state.scatterTool.draggingHandleRole === "rotate") {
+          void scatterCommitRotate(activeNode);
+        } else if (state.scatterTool.draggingHandleRole === "scale") {
+          void scatterCommitScale(activeNode);
+        } else {
+          void scatterCommitPointDrag(activeNode);
+        }
+        return;
+      }
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      consumeShortcutEvent(event);
+      if (state.scatterTool.selectedPointIndices.length > 1) {
+        void scatterDeleteMultiPoint(scatterNode);
+        return;
+      }
+      if (Number.isInteger(state.scatterTool.selectedPointIndex)) {
+        void scatterDeletePoint(scatterNode, state.scatterTool.selectedPointIndex);
+        return;
+      }
+      return;
+    }
+    if (event.code === "NumpadDecimal" || event.key === ".") {
+      consumeShortcutEvent(event);
+      if (runtime) focusTerrainOrSelected();
+      return;
+    }
+  }
   const terrainNode = selectedTerrainNode();
   if (terrainKeyboardOwnsShortcuts(terrainNode, event)) {
     const selectedIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
@@ -5313,16 +6865,16 @@ function handleEditorKeyDown(event) {
     }
     if (!event.altKey && !meta && keyMatches(event, "g")) {
       consumeShortcutEvent(event);
-      if (terrainNode.type === "walkable_surface") {
-        if (!terrainBeginSurfaceDrag(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+      if (!Number.isInteger(selectedIndex)) {
+        if (!terrainNodeCapabilities(terrainNode).centerEditable) {
           setStatus("Select a point first.", "error");
+          return;
+        }
+        if (!terrainBeginSurfaceDrag(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+          setStatus("No ground hit.", "error");
         } else {
           setStatus("Move ready. Click or Enter to confirm.", "");
         }
-        return;
-      }
-      if (!Number.isInteger(selectedIndex)) {
-        setStatus("Select a point first.", "error");
         return;
       }
       if (!terrainBeginPointDrag(terrainNode, selectedIndex, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
@@ -5341,27 +6893,46 @@ function handleEditorKeyDown(event) {
       if (!terrainBeginExtrudeSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
         return;
       }
-      setStatus("Extrude ready. Click or Enter to confirm.", "");
+      setStatus("Add point ready. Click or Enter to confirm.", "");
       return;
     }
-    if (!event.altKey && !meta && keyMatches(event, "s")) {
+    if (!event.altKey && !meta && keyMatches(event, "t")) {
       consumeShortcutEvent(event);
       if (!terrainBeginScaleSession(terrainNode, terrainLastPointer, null)) return;
       setStatus("Scale ready. Click or Enter to confirm.", "");
       return;
     }
-    if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y"))) {
+    if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y") || keyMatches(event, "z"))) {
       consumeShortcutEvent(event);
-      state.terrainTool.axisConstraint = keyMatches(event, "x") ? "x" : "y";
+      if (keyMatches(event, "z")) {
+        if (terrainNode.type !== "walkable_surface") return;
+        if (!terrainHasActiveSession()) {
+          if (Number.isInteger(selectedIndex)) {
+            if (!terrainBeginPointDrag(terrainNode, selectedIndex, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+              setStatus("Select a point first.", "error");
+              return;
+            }
+          } else if (!terrainBeginSurfaceDrag(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
+            setStatus("No point or center available.", "error");
+            return;
+          }
+        }
+        state.terrainTool.axisConstraint = "z";
+      } else {
+        state.terrainTool.axisConstraint = keyMatches(event, "x") ? "x" : "y";
+      }
       if (terrainHasActiveSession()) {
         const activeNode = nodeById(state.terrainTool.dragNodeId) || terrainNode;
         if (state.terrainTool.draggingHandleRole === "scale") {
           terrainUpdateScalePreview(activeNode, state.terrainTool.dragCurrentPointer || state.terrainTool.dragStartPointer);
-        } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragCurrentGround) {
+        } else if (state.terrainTool.draggingHandleRole === "extrude" && (state.terrainTool.dragCurrentGround || state.terrainTool.axisConstraint === "z")) {
           terrainRenderOverlayPreview();
         } else if (state.terrainTool.draggingHandleRole === "point" || state.terrainTool.draggingHandleRole === "center") {
           terrainRenderOverlayPreview();
         }
+      }
+      if (state.terrainTool.axisConstraint === "z") {
+        setStatus("Height move ready. Move pointer and confirm.", "");
       }
       terrainFinishWithRender();
       return;
@@ -5401,10 +6972,6 @@ function handleEditorKeyDown(event) {
     }
     if (event.key === "Delete" || event.key === "Backspace") {
       consumeShortcutEvent(event);
-      if (terrainNode.type === "walkable_surface") {
-        setStatus("Walkable Surface has no points.", "error");
-        return;
-      }
       if (state.terrainTool.selectedPointIndices.length > 1) {
         void terrainDeleteMultiPoint(terrainNode);
         return;
@@ -5452,7 +7019,7 @@ function handleEditorKeyDown(event) {
     resetSelectedModelTransform("rotation");
     return;
   }
-  if (event.altKey && !meta && keyMatches(event, "s")) {
+  if (event.altKey && !meta && keyMatches(event, "t")) {
     consumeShortcutEvent(event);
     resetSelectedModelTransform("scale");
     return;
@@ -5473,21 +7040,21 @@ function handleEditorKeyDown(event) {
     deleteSelectedNodes();
     return;
   }
-  if (!event.altKey && !meta && (keyMatches(event, "g") || keyMatches(event, "w")) && runtime) {
+  if (!event.altKey && !meta && (keyMatches(event, "g")) && runtime) {
     consumeShortcutEvent(event);
     setViewportMode("translate");
     setViewportAxis(null);
     beginRuntimeTransformFromShortcut("move", "Move.");
     return;
   }
-  if (!event.altKey && !meta && (keyMatches(event, "r") || keyMatches(event, "e")) && runtime) {
+  if (!event.altKey && !meta && (keyMatches(event, "r")) && runtime) {
     consumeShortcutEvent(event);
     setViewportMode("rotate");
     setViewportAxis(null);
     beginRuntimeTransformFromShortcut("rotate", "Rotate Z.");
     return;
   }
-  if (!event.altKey && !meta && (keyMatches(event, "s") || keyMatches(event, "t")) && runtime) {
+  if (!event.altKey && !meta && keyMatches(event, "t") && runtime) {
     consumeShortcutEvent(event);
     setViewportMode("scale");
     setViewportAxis(null);

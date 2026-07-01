@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260627-transform10";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-editorfog1";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");

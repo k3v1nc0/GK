@@ -90,6 +90,131 @@ export function groupInterfaceDefault() {
   };
 }
 
+const GAME_CAMERA_FIELDS = {
+  cameraId: { label: "Camera id", type: "text", default: "main_camera", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+  pitch: { label: "Pitch (deg)", type: "number", default: 55, min: 20, max: 89, step: 1, required: true },
+  yaw: { label: "Yaw (deg)", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
+  startDistance: { label: "Start zoom", type: "number", default: 24, min: 2, max: 400, step: 0.5, required: true },
+  distance: { label: "Legacy distance", type: "number", default: 24, min: 2, max: 400, step: 0.5, required: true, hidden: true },
+  minDistance: { label: "Min zoom", type: "number", default: 10, min: 1, max: 400, step: 0.5, required: true },
+  maxDistance: { label: "Max zoom", type: "number", default: 48, min: 2, max: 400, step: 0.5, required: true },
+  fov: { label: "FOV", type: "number", default: 50, min: 20, max: 110, step: 1, required: true },
+  follow: { label: "Follow player", type: "boolean", default: true, required: false },
+  rotateSpeed: { label: "Rotate speed", type: "number", default: 90, min: 0, max: 360, step: 1, required: true }
+};
+
+const EDITOR_CAMERA_FIELDS = {
+  cameraId: { label: "Camera id", type: "text", default: "editor_camera", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+  targetX: { label: "Target X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+  targetY: { label: "Target Y", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+  targetZ: { label: "Target Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+  pitch: { label: "Pitch (deg)", type: "number", default: 55, min: 20, max: 89, step: 1, required: true },
+  yaw: { label: "Yaw (deg)", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
+  distance: { label: "Distance", type: "number", default: 24, min: 2, max: 400, step: 0.5, required: true },
+  minDistance: { label: "Min zoom", type: "number", default: 10, min: 1, max: 400, step: 0.5, required: true },
+  maxDistance: { label: "Max zoom", type: "number", default: 48, min: 2, max: 400, step: 0.5, required: true },
+  fov: { label: "FOV", type: "number", default: 50, min: 20, max: 110, step: 1, required: true },
+  rotateSpeed: { label: "Rotate speed", type: "number", default: 90, min: 0, max: 360, step: 1, required: true }
+};
+
+const WORLD_SETTINGS_SHARED_FIELDS = {
+  worldId: { section: "Shared scene", label: "World id", type: "text", default: "main_world", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+  displayName: { section: "Shared scene", label: "Display name", type: "text", default: "My World", required: false, maxLength: 96 },
+  backgroundColor: { section: "Shared scene", label: "Background color", type: "color", default: "#101a26", required: false },
+  fogColor: { section: "Shared scene", label: "Fog color", type: "color", default: "#101a26", required: false },
+  fogDensity: { section: "Shared scene", label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+  smoothShading: { section: "Shared scene", label: "Smooth shading", type: "boolean", default: true, required: true },
+  shadowQuality: {
+    section: "Shadow policy",
+    label: "Shadow quality",
+    type: "select",
+    options: ["off", "low", "medium", "high"],
+    default: "medium",
+    required: true,
+    help: "Kies de shadow-resolutie. Off zet shadows uit. Low is sneller maar ruwer, medium is de balans, high is het scherpst maar zwaarder."
+  },
+  shadowBias: {
+    section: "Shadow policy",
+    label: "Shadow bias",
+    type: "number",
+    default: -0.0003,
+    min: -0.01,
+    max: 0.01,
+    step: 0.0001,
+    required: true,
+    help: "Voorkomt shadow acne op vlakke meshes. Lager, dus meer negatief, helpt tegen banding en strepen. Hoger, richting 0, houdt de schaduw strakker maar kan acne terugbrengen."
+  },
+  shadowNormalBias: {
+    section: "Shadow policy",
+    label: "Shadow normal bias",
+    type: "number",
+    default: 0.04,
+    min: 0,
+    max: 1,
+    step: 0.001,
+    required: true,
+    help: "Verplaatst de schaduw langs de normale van het oppervlak. Hoger helpt op vlakke of schuine vlakken, maar kan de schaduw laten zweven. Lager houdt contact strakker, maar kan acne terugbrengen."
+  },
+  shadowCameraSize: {
+    section: "Shadow policy",
+    label: "Shadow camera size",
+    type: "number",
+    default: 60,
+    min: 5,
+    max: 500,
+    step: 1,
+    required: true,
+    help: "Grote waarde dekt meer van de wereld, maar maakt shadows minder precies en kan banding verergeren. Kleine waarde maakt de shadows scherper, maar kan ze afsnijden buiten het bereik."
+  },
+  shadowCameraFar: {
+    section: "Shadow policy",
+    label: "Shadow distance",
+    type: "number",
+    default: 400,
+    min: 10,
+    max: 5000,
+    step: 10,
+    required: true,
+    help: "Bepaalt hoe ver de directional light shadows mee mogen rekenen. Hoger reikt verder maar kost precisie. Lager geeft meer detail dichtbij, maar snijdt verre shadows af."
+  }
+};
+
+const WORLD_SETTINGS_GAME_FIELDS = {
+  gamePixelRatioCap: { section: "Game performance", label: "Pixel ratio cap", type: "number", default: 1, min: 0.5, max: 2, step: 0.05, required: true },
+  gameShadowsEnabled: {
+    section: "Game performance",
+    label: "Game shadows",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Zet shadows in /game/ aan of uit. Uit geeft iets meer performance en maakt schaduwproblemen in de game onzichtbaar."
+  },
+  gameBatchStaticProps: { section: "Game performance", label: "Batch static props", type: "boolean", default: true, required: true },
+  gameBatchScatterProps: { section: "Game performance", label: "Batch scatter props", type: "boolean", default: true, required: true },
+  gameStaticPropCastShadows: { section: "Game performance", label: "Static props cast shadows", type: "boolean", default: false, required: true },
+  gameStaticPropReceiveShadows: { section: "Game performance", label: "Static props receive shadows", type: "boolean", default: true, required: true }
+};
+
+const WORLD_SETTINGS_EDITOR_FIELDS = {
+  editorPixelRatioCap: { section: "Editor performance", label: "Pixel ratio cap", type: "number", default: 2, min: 0.5, max: 2, step: 0.05, required: true },
+  editorFogEnabled: {
+    section: "Editor performance",
+    label: "Editor fog",
+    type: "boolean",
+    default: false,
+    required: true,
+    help: "Standaard uit. Zet fog in de editor-preview aan of uit. De game blijft de shared fog gebruiken."
+  },
+  editorShadowsEnabled: {
+    section: "Editor performance",
+    label: "Editor shadows",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Zet shadows in de editor preview aan of uit. Uit is sneller tijdens bewerken; aan laat je de echte schaduwproblemen zien."
+  }
+};
+
 function coerceGroupPort(port, fallbackName) {
   if (!port || typeof port !== "object") return null;
   const rawName = typeof port.name === "string" && port.name.trim()
@@ -240,7 +365,7 @@ export const NODE_TYPES = {
     inputs: {
       world: { label: "World", dataType: "world", required: true, multiple: false },
       ground: { label: "Ground", dataType: "ground", required: true, multiple: false },
-      camera: { label: "Camera", dataType: "camera", required: true, multiple: false },
+      camera: { label: "Camera", dataType: "camera", required: true, multiple: true },
       lights: { label: "Lights", dataType: "light", required: true, multiple: true },
       player: { label: "Player", dataType: "player", required: true, multiple: false },
       spawn: { label: "Spawn", dataType: "spawn", required: true, multiple: false },
@@ -261,15 +386,13 @@ export const NODE_TYPES = {
     label: "World Settings",
     group: "World",
     accent: "#7bd4ff",
-    description: "World identity and scene background.",
+    description: "World identity, scene background, fog, and runtime performance policy.",
     inputs: {},
     outputs: { world: { label: "World", dataType: "world" } },
     fields: {
-      worldId: { label: "World id", type: "text", default: "main_world", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
-      displayName: { label: "Display name", type: "text", default: "My World", required: false, maxLength: 96 },
-      backgroundColor: { label: "Background color", type: "color", default: "#101a26", required: false },
-      fogColor: { label: "Fog color", type: "color", default: "#101a26", required: false },
-      fogDensity: { label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false }
+      ...WORLD_SETTINGS_SHARED_FIELDS,
+      ...WORLD_SETTINGS_GAME_FIELDS,
+      ...WORLD_SETTINGS_EDITOR_FIELDS
     }
   },
 
@@ -423,40 +546,52 @@ export const NODE_TYPES = {
     label: "Walkable Surface",
     group: "Collision",
     accent: "#f0b35a",
-    description: "Bruggen, platte rotsen, houten vlonders en platforms.",
+    description: "Bruggen, platforms en loopvlakken die op hoogte mogen lopen.",
     inputs: {},
     outputs: { collision: { label: "Collision", dataType: "collision" } },
     fields: {
       surfaceId: { label: "Surface id", type: "text", default: "bridge_walk_01", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
       label: { label: "Label", type: "text", default: "Bridge Walk Surface", required: true, maxLength: 96 },
       x: { label: "X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
-      y: { label: "Y", type: "number", default: 0.35, min: -10000, max: 10000, step: 0.01, required: true },
+      y: { label: "Default Height (Y)", type: "number", default: 0.35, min: -10000, max: 10000, step: 0.01, required: true },
       z: { label: "Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
       width: { label: "Width", type: "number", default: 6, min: 0.01, max: 10000, step: 0.01, required: true },
       depth: { label: "Depth", type: "number", default: 2.5, min: 0.01, max: 10000, step: 0.01, required: true },
       rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
-      priority: { label: "Priority", type: "number", default: 10, step: 1, required: true }
+      priority: { label: "Priority", type: "number", default: 10, step: 1, required: true },
+      points: { label: "Points", type: "json", default: [], required: false, hidden: true }
     }
+  },
+
+  game_camera: {
+    label: "Game Camera",
+    group: "World",
+    accent: "#7bd4ff",
+    description: "Follow camera tuned for a top-down game. Published to /game/.",
+    inputs: {},
+    outputs: { camera: { label: "Camera", dataType: "camera" } },
+    fields: GAME_CAMERA_FIELDS
+  },
+
+  editor_camera: {
+    label: "Editor Camera",
+    group: "World",
+    accent: "#7bd4ff",
+    description: "Editor-only camera state. Never published to /game/.",
+    inputs: {},
+    outputs: { camera: { label: "Camera", dataType: "camera" } },
+    fields: EDITOR_CAMERA_FIELDS
   },
 
   top_down_camera: {
     label: "Top-Down Camera",
     group: "World",
     accent: "#7bd4ff",
-    description: "Follow camera tuned for a top-down game. Controlled at runtime by zoom and rotate.",
+    description: "Legacy alias for Game Camera.",
+    hidden: true,
     inputs: {},
     outputs: { camera: { label: "Camera", dataType: "camera" } },
-    fields: {
-      cameraId: { label: "Camera id", type: "text", default: "main_camera", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
-      pitch: { label: "Pitch (deg)", type: "number", default: 55, min: 20, max: 89, step: 1, required: true },
-      yaw: { label: "Yaw (deg)", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
-      distance: { label: "Distance", type: "number", default: 24, min: 2, max: 400, step: 0.5, required: true },
-      minDistance: { label: "Min zoom", type: "number", default: 10, min: 1, max: 400, step: 0.5, required: true },
-      maxDistance: { label: "Max zoom", type: "number", default: 48, min: 2, max: 400, step: 0.5, required: true },
-      fov: { label: "FOV", type: "number", default: 50, min: 20, max: 110, step: 1, required: true },
-      follow: { label: "Follow player", type: "boolean", default: true, required: false },
-      rotateSpeed: { label: "Rotate speed", type: "number", default: 90, min: 0, max: 360, step: 1, required: true }
-    }
+    fields: GAME_CAMERA_FIELDS
   },
 
   ambient_light: {
@@ -552,7 +687,37 @@ export const NODE_TYPES = {
       scaleY: { label: "Scale Y", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
       scaleZ: { label: "Scale Z", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
       solid: { label: "Solid (blocks player)", type: "boolean", default: false, required: false },
+      walkable: { label: "Walkable", type: "boolean", default: false, required: false },
       collisionRadius: { label: "Collision radius", type: "number", default: 1, min: 0.05, max: 100, step: 0.05, required: false }
+    }
+  },
+
+  bounded_area_scatter: {
+    label: "Bounded Area Scatter",
+    group: "Entities",
+    accent: "#d59bff",
+    description: "Scatters selected model assets inside a bounded polygon or rectangle.",
+    inputs: {},
+    outputs: { entity: { label: "Entities", dataType: "entity", multiple: true } },
+    fields: {
+      scatterId: { label: "Scatter id", type: "text", default: "scatter", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      areaCenterX: { label: "Area center X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      areaCenterZ: { label: "Area center Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
+      areaWidth: { label: "Area width", type: "number", default: 12, min: 0.01, max: 10000, step: 0.01, required: true },
+      areaDepth: { label: "Area depth", type: "number", default: 12, min: 0.01, max: 10000, step: 0.01, required: true },
+      areaRotationY: { label: "Area rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      count: { label: "Count", type: "number", default: 10, min: 0, max: 100000, step: 1, required: true },
+      sourceAssetIds: { label: "Source assets", type: "json", default: [], required: true },
+      sourceNodeIds: { label: "Source meshes (legacy)", type: "json", default: [], required: true, hidden: true },
+      randomObjectSelection: { label: "Random object selection", type: "boolean", default: false, required: true },
+      boundaryBlocksPlayer: { label: "Boundary blocks player", type: "boolean", default: false, required: true },
+      seed: { label: "Seed", type: "text", default: "scatter_seed", required: true, maxLength: 128 },
+      scaleMin: { label: "Scale min", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
+      scaleMax: { label: "Scale max", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
+      rotationYMin: { label: "Rotation Y min", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      rotationYMax: { label: "Rotation Y max", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      points: { label: "Boundary points", type: "json", default: [], required: false, hidden: true }
     }
   },
 

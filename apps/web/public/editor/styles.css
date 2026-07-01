@@ -504,7 +504,40 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
 .field .colorRow { display: flex; gap: 8px; align-items: center; }
 .field .colorRow input[type="color"] { width: 40px; height: 32px; padding: 2px; }
 .inspectorHint { font-size: 11px; color: #7b8a96; line-height: 1.4; margin-bottom: 6px; }
+.inspectorSectionTitle {
+  margin: 10px 0 2px;
+  font-size: 11px;
+  color: #61707c;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
 .inspectorActions { display: flex; gap: 8px; margin-top: 4px; }
+.scatterSourcePicker {
+  display: grid;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid #223040;
+  border-radius: 8px;
+  background: #0c131b;
+}
+.scatterSourcePickerHeader { display: grid; gap: 8px; }
+.scatterSourceActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.scatterSourceList {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.scatterSourceItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: #dbe3e9;
+  line-height: 1.35;
+}
+.scatterSourceItem input { width: auto; margin-top: 2px; }
 .deleteNode { background: #2a1518; color: #ff9d9d; border: 1px solid #5a262b; padding: 8px 10px; border-radius: 7px; cursor: pointer; font: inherit; }
 .groupInterfaceEditor { display: grid; gap: 10px; }
 .groupInterfaceHint { font-size: 11px; color: #9fb0bc; line-height: 1.4; }
@@ -991,6 +1024,15 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
 .assetManageEmpty { color: #7d8b97; }
 .assetManageHint { color: #9fb0bc; }
 .assetManageError { color: #ff9d9d; }
+.assetManageThumbnail {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #223040;
+  border-radius: 8px;
+  background: #0c131b;
+}
+.assetManageThumbnail .assetManageSectionTitle { margin-top: 0; }
 .assetManageActions { display: grid; gap: 8px; margin-top: 2px; }
 .assetManageReplace { display: grid; gap: 6px; }
 .assetManageButton {
@@ -1006,6 +1048,8 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
 .assetManageButton.save:hover { background: #ffc473; }
 .assetManageButton.replace { background: #163248; color: #9fd6ff; border-color: #274055; }
 .assetManageButton.replace:hover { background: #1b3d57; }
+.assetManageButton.retry { background: #123842; color: #b4f0ff; border-color: #27505b; }
+.assetManageButton.retry:hover { background: #18454f; }
 .assetManageButton.delete { background: #35171a; color: #ffb3b3; border-color: #5d2930; }
 .assetManageButton.delete:hover { background: #421a1d; }
 .assetManageButton.cancel { background: #18212c; color: #cdd6dd; border-color: #2c3845; }

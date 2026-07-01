@@ -238,6 +238,12 @@ async function handleApi(req, res, url) {
       const body = await readJson(req);
       return sendJson(res, 200, Object.assign({ ok: true }, assetService.replaceAssetReferences(assetReplaceMatch[1], body.replacementAssetId, repository)));
     }
+    const assetThumbnailRetryMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/thumbnail\/retry$/);
+    if (req.method === "POST" && assetThumbnailRetryMatch) {
+      authService.requireEditor(req);
+      const asset = assetService.retryThumbnail(assetThumbnailRetryMatch[1]);
+      return sendJson(res, 200, { ok: true, asset: asset, assets: assetService.list() });
+    }
     const assetIdMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
     if (req.method === "PATCH" && assetIdMatch) {
       authService.requireEditor(req);
