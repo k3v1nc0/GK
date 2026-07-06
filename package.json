@@ -11,7 +11,8 @@
     "dev": "sh scripts/run-node24.sh src/server/server.js",
     "start": "sh scripts/run-node24.sh src/server/server.js",
     "check": "sh scripts/run-node24.sh scripts/check.js",
-    "smoke": "sh scripts/run-node24.sh scripts/smoke-test.js"
+    "smoke": "sh scripts/run-node24.sh scripts/smoke-test.js",
+    "perf:game": "sh scripts/run-node24.sh scripts/perf-game.js"
   },
   "dependencies": {
     "@shopify/screenshot-glb": "^4.1.0",

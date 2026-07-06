@@ -7,7 +7,9 @@ import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { buildChunkWindow, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, clearWalkabilityIndex, createWalkabilityIndex, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointBlockedByWater, isPointOnWalkableSurface, resolveChunkPolicy, resolveMovement, resolveShadowPolicy } from "../apps/web/public/shared/world-runtime.js";
+import { applyGroundChunkPlan, auditSceneObjectsForGhostPlanes, auditSceneObjectsForShadowCasters, buildChunkWindow, buildGroundChunkPlan, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, chunkKeyForPosition, chunkKeyForSegment, chunkWorldSize, clearWalkabilityIndex, collectChunkCullingStats, collectTerrainStreamingSnapshot, computeStreamingCoverage, createGroundChunkState, createWalkabilityIndex, effectiveGroundBounds, groundBlueprintSignature, groundChunkTilesForBounds, isChunkActive, isChunkLoaded, isChunkPreload, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointOnWalkableSurface, midpointForSegment, prioritizeResidentChunkBuildQueue, removeGhostChunkPlanes, resolveChunkPolicy, resolveEditorShadowFocus, resolveGroundRenderMode, resolveMovement, resolveShadowPolicy, resolveStableShadowChunkWindows, resolveStableShadowFocus, resolveWorldContentCenter, resolveWorldPerformanceForRenderer, sanitizeNonWorldShadowCasters, segmentLineByMaxLength, segmentPolylineForChunks, setShadowProxyState, shadowResidentRadiusChunksForPolicy, shadowSnapWorldUnitsForPolicy, shouldUseChunkedGround, worldSpaceGroundUv } from "../apps/web/public/shared/world-runtime.js";
+import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
+import { buildWorldFromGraph } from "../src/server/publish-service.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -410,67 +412,520 @@ function runSurfaceGeometryChecks() {
 function runShadowPolicyChecks() {
   const defaultEditorPolicy = resolveShadowPolicy({ world: {} }, "editor");
   assert(defaultEditorPolicy.enabled === true, "shadow policy defaults aan in de editor");
-  assert(defaultEditorPolicy.quality === "medium", "shadow policy default quality is medium");
-  assert(defaultEditorPolicy.mapSize === 2048, "medium shadow quality gebruikt 2048 mapSize");
+  assert(defaultEditorPolicy.preset === "middel_schaduw", "shadow policy default preset is middel_schaduw");
+  assert(defaultEditorPolicy.mapSize === 1024, "middel schaduw gebruikt 1024 mapSize");
+  assert(defaultEditorPolicy.cameraSize === 100, "middel schaduw gebruikt editor camera size 100");
+  assert(defaultEditorPolicy.cameraFar === 450, "middel schaduw gebruikt editor camera far 450");
+  assert(defaultEditorPolicy.snapWorldUnits === 10, "middel schaduw gebruikt snapWorldUnits 10");
+  assert(defaultEditorPolicy.shadowResidentMarginChunks === 1, "middel schaduw gebruikt resident margin 1");
 
-  const lowPolicy = resolveShadowPolicy({
+  const lightGamePolicy = resolveShadowPolicy({
     world: {
       performance: {
-        shared: { shadowQuality: "low" },
-        game: { shadowsEnabled: true },
-        editor: { shadowsEnabled: true }
+        game: { shadow: { preset: "lichte_schaduw" } },
+        editor: { shadow: { preset: "hoog_schaduw" } }
       }
     }
   }, "game");
-  assert(lowPolicy.mapSize === 1024, "low shadow quality gebruikt 1024 mapSize");
+  assert(lightGamePolicy.preset === "lichte_schaduw", "game preset wordt uit shadow block gelezen");
+  assert(lightGamePolicy.enabled === true, "lichte schaduw zet shadows aan");
+  assert(lightGamePolicy.mapSize === 512, "lichte schaduw gebruikt 512 mapSize");
+  assert(lightGamePolicy.cameraSize === 75, "lichte schaduw gebruikt game camera size 75");
+  assert(lightGamePolicy.cameraFar === 350, "lichte schaduw gebruikt far 350");
+  assert(lightGamePolicy.scatterCast === false, "lichte schaduw zet scatter shadows uit");
+  assert(lightGamePolicy.staticPropsCast === true, "lichte schaduw laat static props casten");
 
-  const highPolicy = resolveShadowPolicy({
+  const sameWorldEditorPolicy = resolveShadowPolicy({
     world: {
       performance: {
-        shared: {
-          shadowQuality: "high",
-          shadowBias: -0.0006,
-          shadowNormalBias: 0.2,
-          shadowCameraSize: 90,
-          shadowCameraFar: 700
-        },
-        game: { shadowsEnabled: true },
-        editor: { shadowsEnabled: false }
+        game: { shadow: { preset: "lichte_schaduw" } },
+        editor: { shadow: { preset: "hoog_schaduw" } }
       }
     }
   }, "editor");
-  assert(highPolicy.enabled === false, "editor shadows kunnen apart uit");
-  assert(highPolicy.quality === "high", "shadow quality blijft hoog in de editor policy");
-  assert(highPolicy.mapSize === 4096, "high shadow quality gebruikt 4096 mapSize");
-  assertNear(highPolicy.bias, -0.0006, 0.000001, "shadow bias wordt gelezen");
-  assertNear(highPolicy.normalBias, 0.2, 0.000001, "shadow normal bias wordt gelezen");
-  assert(highPolicy.cameraSize === 90, "shadow camera size wordt gelezen");
-  assert(highPolicy.cameraFar === 700, "shadow distance wordt gelezen");
+  assert(sameWorldEditorPolicy.preset === "hoog_schaduw", "editor preset blijft los van game preset");
+  assert(sameWorldEditorPolicy.mapSize === 2048, "hoog schaduw gebruikt 2048 mapSize");
+  assert(sameWorldEditorPolicy.cameraSize === 120, "hoog schaduw gebruikt editor camera size 120");
 
-  const offPolicy = resolveShadowPolicy({
+  const highEditorPolicy = resolveShadowPolicy({
     world: {
       performance: {
-        shared: { shadowQuality: "off" },
-        game: { shadowsEnabled: true },
-        editor: { shadowsEnabled: true }
+        editor: {
+          shadow: {
+            preset: "hoog_schaduw",
+            bias: -0.0006,
+            normalBias: 0.2,
+            cameraSize: 130,
+            cameraFar: 700
+          }
+        },
+        game: { shadow: { preset: "middel_schaduw" } }
+      }
+    }
+  }, "editor");
+  assert(highEditorPolicy.enabled === true, "editor shadows blijven aan met hoog_schaduw");
+  assert(highEditorPolicy.preset === "hoog_schaduw", "shadow preset blijft hoog in de editor policy");
+  assert(highEditorPolicy.mapSize === 2048, "hoog schaduw gebruikt 2048 mapSize");
+  assertNear(highEditorPolicy.bias, -0.0006, 0.000001, "shadow bias wordt gelezen");
+  assertNear(highEditorPolicy.normalBias, 0.2, 0.000001, "shadow normal bias wordt gelezen");
+  assert(highEditorPolicy.cameraSize === 130, "shadow camera size wordt gelezen (expliciete override wint)");
+  assert(highEditorPolicy.cameraFar === 700, "shadow distance wordt gelezen (expliciete override wint)");
+
+  const disabledEditorPolicy = resolveShadowPolicy({
+    world: { performance: { editor: { shadow: { preset: "geen_schaduw" } }, game: { shadow: { preset: "middel_schaduw" } } } }
+  }, "editor");
+  assert(disabledEditorPolicy.enabled === false, "geen_schaduw schakelt editor shadows uit");
+  assert(disabledEditorPolicy.mapSize === 0, "geen_schaduw rapporteert mapSize 0");
+
+  const extremePolicy = resolveShadowPolicy({
+    world: { performance: { editor: { shadow: { preset: "extreem_schaduw" } }, game: { shadow: { preset: "middel_schaduw" } } } }
+  }, "editor");
+  assert(extremePolicy.mapSize === 4096, "extreem schaduw gebruikt 4096 mapSize in de policy");
+  assert(extremePolicy.cameraSize === 140, "extreem schaduw gebruikt editor camera size 140");
+}
+
+function runStableShadowControllerChecks() {
+  const editorPolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        editor: { shadow: { preset: "hoog_schaduw" } },
+        game: { shadow: { preset: "middel_schaduw" } }
+      }
+    }
+  }, "editor");
+  const gamePolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        editor: { shadow: { preset: "hoog_schaduw" } },
+        game: { shadow: { preset: "middel_schaduw" } }
       }
     }
   }, "game");
-  assert(offPolicy.enabled === false, "shadowQuality=off schakelt shadows uit");
+  assert(shadowSnapWorldUnitsForPolicy(editorPolicy, "editor") === 10, "editor shadow snap gebruikt 10 world units");
+  assert(shadowSnapWorldUnitsForPolicy(gamePolicy, "game") === 10, "game shadow snap gebruikt 10 world units");
+  assert(shadowResidentRadiusChunksForPolicy(editorPolicy, "editor") >= shadowResidentRadiusChunksForPolicy(gamePolicy, "game"), "editor shadow radius is minstens game radius");
+
+  const snappedStart = resolveStableShadowFocus({
+    mode: "editor",
+    policy: editorPolicy,
+    contentCenter: { x: 11, y: 0, z: 11 },
+    groundY: 0
+  });
+  assert(snappedStart.stableSnapCell.x === 1 && snappedStart.stableSnapCell.z === 1, "shadow focus snapt op de verwachte cel");
+
+  const smallMove = resolveStableShadowFocus({
+    mode: "editor",
+    policy: editorPolicy,
+    contentCenter: { x: 12, y: 0, z: 12 },
+    previous: snappedStart,
+    groundY: 0
+  });
+  assert(smallMove.snappedFocus.x === snappedStart.snappedFocus.x && smallMove.snappedFocus.z === snappedStart.snappedFocus.z, "kleine camerabeweging verandert de shadow snap niet");
+
+  const largerMove = resolveStableShadowFocus({
+    mode: "editor",
+    policy: editorPolicy,
+    camTarget: { x: 39, y: 0, z: 39 },
+    previous: snappedStart,
+    groundY: 0
+  });
+  assert(largerMove.snappedFocus.x !== snappedStart.snappedFocus.x || largerMove.snappedFocus.z !== snappedStart.snappedFocus.z, "shadow focus verandert pas na de snap threshold");
+
+  const orbitA = resolveStableShadowFocus({
+    mode: "editor",
+    policy: editorPolicy,
+    camTarget: { x: 100, y: 0, z: 100 },
+    camera: { position: { x: 0, y: 50, z: 0 } },
+    groundY: 0
+  });
+  const orbitB = resolveStableShadowFocus({
+    mode: "editor",
+    policy: editorPolicy,
+    camTarget: { x: 100, y: 0, z: 100 },
+    camera: { position: { x: 250, y: 80, z: 50 } },
+    previous: orbitA,
+    groundY: 0
+  });
+  assert(orbitA.snappedFocus.x === orbitB.snappedFocus.x && orbitA.snappedFocus.z === orbitB.snappedFocus.z, "camera orbit rond dezelfde target verandert de shadow focus niet");
+
+  const gameSmallMove = resolveStableShadowFocus({
+    mode: "game",
+    policy: gamePolicy,
+    player: { x: 11, y: 0, z: 11 },
+    groundY: 0
+  });
+  const gameNextMove = resolveStableShadowFocus({
+    mode: "game",
+    policy: gamePolicy,
+    player: { x: 12, y: 0, z: 12 },
+    previous: gameSmallMove,
+    groundY: 0
+  });
+  assert(gameSmallMove.snappedFocus.x === gameNextMove.snappedFocus.x && gameSmallMove.snappedFocus.z === gameNextMove.snappedFocus.z, "game shadow snap blijft stabiel bij kleine spelerbeweging");
+
+  const windows = resolveStableShadowChunkWindows({
+    mode: "editor",
+    policy: editorPolicy,
+    focus: largerMove,
+    renderResidentChunkKeys: ["0,0", "1,0"],
+    visibleChunkKeys: ["0,0"],
+    preloadChunkKeys: ["1,0"],
+    forwardChunkKeys: ["2,0"]
+  });
+  assert(windows.shadowResidentChunkKeys.includes("0,0"), "shadow resident bevat visible chunks");
+  assert(windows.shadowResidentChunkKeys.includes("1,0"), "shadow resident bevat preload chunks");
+  assert(windows.shadowResidentChunkKeys.includes("2,0"), "shadow resident bevat forward chunks");
+  assert(windows.shadowResidentChunkKeys.length >= windows.renderResidentChunkKeys.length, "shadow resident is een superset van render resident");
+}
+
+function runGhostPlaneAndShadowProxyChecks() {
+  // Test 1 - een camera-child PlaneGeometry zonder markers moet als ghost plane gevonden en verwijderd worden.
+  const ghostScene = new THREE.Scene();
+  const ghostCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+  ghostCamera.name = "Ghost Camera";
+  ghostScene.add(ghostCamera);
+  const ghostPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(12, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0x8f8a4b,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide
+    })
+  );
+  ghostPlane.name = "ghost terrain plane";
+  ghostCamera.add(ghostPlane);
+  ghostScene.updateMatrixWorld(true);
+  ghostCamera.updateMatrixWorld(true);
+  const ghostAuditBefore = auditSceneObjectsForGhostPlanes({
+    scene: ghostScene,
+    camera: ghostCamera,
+    world: { ground: { width: 100, depth: 100, y: 0 } },
+    debugOverlayVisible: false
+  });
+  assert(ghostAuditBefore.cameraChildPlanes === 1, "camera-child plane wordt gedetecteerd");
+  assert(ghostAuditBefore.suspiciousPlanes.length >= 1, "ghost plane verschijnt in suspiciousPlanes");
+  const ghostCleanup = removeGhostChunkPlanes("smoke-ghost-plane", {
+    scene: ghostScene,
+    camera: ghostCamera,
+    world: { ground: { width: 100, depth: 100, y: 0 } },
+    debugOverlayVisible: false
+  });
+  ghostScene.updateMatrixWorld(true);
+  ghostCamera.updateMatrixWorld(true);
+  const ghostAuditAfter = auditSceneObjectsForGhostPlanes({
+    scene: ghostScene,
+    camera: ghostCamera,
+    world: { ground: { width: 100, depth: 100, y: 0 } },
+    debugOverlayVisible: false
+  });
+  assert(ghostCleanup.removedSuspiciousPlanes >= 1, "ghost plane wordt verwijderd");
+  assert(ghostAuditAfter.suspiciousPlanes.length === 0, "ghost plane is na cleanup niet meer suspicious");
+  assert(ghostAuditAfter.cameraChildPlanes === 0, "cameraChildPlanes is na cleanup 0");
+  assert(ghostPlane.parent === null, "ghost plane is uit de camera subtree verwijderd");
+
+  // Test 2 - overlay planes zijn toegestaan als debug aan staat, maar verdwijnen als debug uit staat.
+  const overlayScene = new THREE.Scene();
+  const overlayCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+  overlayScene.add(overlayCamera);
+  const overlayGroup = new THREE.Group();
+  overlayGroup.name = "GK chunk debug overlay";
+  overlayGroup.userData.debugOverlay = true;
+  overlayGroup.userData.debugOverlayRoot = true;
+  overlayGroup.userData.chunkOverlayGroup = true;
+  const overlayPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x8eeaff,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide
+    })
+  );
+  overlayPlane.name = "chunk overlay plane";
+  overlayPlane.castShadow = true;
+  overlayPlane.receiveShadow = true;
+  overlayGroup.add(overlayPlane);
+  overlayScene.add(overlayGroup);
+  overlayScene.updateMatrixWorld(true);
+  overlayCamera.updateMatrixWorld(true);
+  const overlayAuditBefore = auditSceneObjectsForGhostPlanes({
+    scene: overlayScene,
+    camera: overlayCamera,
+    world: { ground: { width: 100, depth: 100, y: 0 } },
+    debugOverlayVisible: false
+  });
+  assert(overlayAuditBefore.suspiciousPlanes.some(function (entry) { return entry.name === "chunk overlay plane"; }), "debug overlay plane wordt als suspicious gezien als debug uit staat");
+  const overlayCleanup = removeGhostChunkPlanes("smoke-overlay-plane", {
+    scene: overlayScene,
+    camera: overlayCamera,
+    world: { ground: { width: 100, depth: 100, y: 0 } },
+    debugOverlayVisible: false
+  });
+  assert(overlayCleanup.removedSuspiciousPlanes >= 1, "debug overlay plane wordt verwijderd als debug uit staat");
+  assert(overlayPlane.parent === null, "overlay plane is verwijderd");
+  assert(overlayPlane.castShadow === false && overlayPlane.receiveShadow === false, "overlay plane cast/receive shadow is uit");
+
+  // Test 3 - helpers die per ongeluk schaduw casten moeten gesaneerd worden.
+  const helperScene = new THREE.Scene();
+  const helperMesh = new THREE.Mesh(
+    new THREE.CircleGeometry(2, 16),
+    new THREE.MeshBasicMaterial({
+      color: 0xffcc00,
+      side: THREE.DoubleSide
+    })
+  );
+  helperMesh.name = "mystery helper";
+  helperMesh.castShadow = true;
+  helperMesh.receiveShadow = true;
+  helperScene.add(helperMesh);
+  helperScene.updateMatrixWorld(true);
+  const helperAuditBefore = auditSceneObjectsForShadowCasters({ scene: helperScene });
+  assert(helperAuditBefore.helperCasterCount === 1, "helper caster wordt vóór saneren geteld");
+  assert(helperAuditBefore.circleOrPlaneCasterCount === 1, "CircleGeometry helper caster wordt geteld");
+  const helperSanitized = sanitizeNonWorldShadowCasters(helperScene);
+  assert(helperSanitized === 1, "helper shadow caster is gesaneerd");
+  const helperAuditAfter = auditSceneObjectsForShadowCasters({ scene: helperScene });
+  assert(helperAuditAfter.helperCasterCount === 0, "helperCasterCount is na saneren 0");
+  assert(helperAuditAfter.circleOrPlaneCasterCount === 0, "circleOrPlaneCasterCount is na saneren 0");
+  assert(helperMesh.castShadow === false && helperMesh.receiveShadow === false, "helper mesh cast/receive shadow is uit");
+
+  // Test 4 - scatter shadow proxies gebruiken echte geometry en geen circle/plane fallback.
+  const scatterScene = new THREE.Scene();
+  const scatterRoot = new THREE.Group();
+  scatterRoot.name = "scatter-batch";
+  scatterRoot.userData.batchKind = "scatter";
+  scatterRoot.userData.scatterInstance = true;
+  scatterRoot.userData.runtimeAlive = true;
+  scatterScene.add(scatterRoot);
+  const scatterMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 3, 1.2),
+    new THREE.MeshStandardMaterial({ color: 0x4f8f4f, roughness: 1 })
+  );
+  scatterMesh.name = "tree-caster";
+  scatterMesh.castShadow = true;
+  scatterMesh.receiveShadow = true;
+  scatterRoot.add(scatterMesh);
+  scatterScene.updateMatrixWorld(true);
+  const scatterProxyChanges = setShadowProxyState(scatterRoot, true, { kind: "scatter" });
+  assert(scatterProxyChanges >= 1, "scatter shadow proxy wordt geactiveerd");
+  const scatterMaterial = Array.isArray(scatterMesh.material) ? scatterMesh.material[0] : scatterMesh.material;
+  assert(scatterRoot.userData.shadowProxy === true, "scatter root is shadowProxy");
+  assert(scatterMaterial.colorWrite === false, "scatter shadow proxy schrijft geen kleur");
+  assert(scatterMesh.castShadow === true, "scatter shadow proxy cast nog steeds schaduw");
+  assert(scatterMesh.receiveShadow === false, "scatter shadow proxy ontvangt geen schaduw");
+  assert(scatterMesh.geometry.type !== "CircleGeometry" && scatterMesh.geometry.type !== "PlaneGeometry", "scatter shadow proxy gebruikt geen circle/plane geometry");
+  const scatterAudit = auditSceneObjectsForShadowCasters({ scene: scatterScene, roots: [scatterScene] });
+  assert(scatterAudit.castersByKind.scatterShadowProxy >= 1, "scatter shadow proxy wordt geteld als scatterShadowProxy");
+  assert(scatterAudit.circleOrPlaneCasterCount === 0, "scatter shadow proxy veroorzaakt geen circleOrPlaneCaster");
+
+  // Test 5 - static props blijven shadow casters als ze buiten de render resident vallen.
+  const houseScene = new THREE.Scene();
+  const houseRoot = new THREE.Group();
+  houseRoot.name = "house-root";
+  houseRoot.userData.entityId = "house_1";
+  houseRoot.userData.chunkRuntimeType = "entity";
+  houseRoot.userData.runtimeAlive = true;
+  houseRoot.userData.renderResident = false;
+  houseRoot.userData.shadowResident = true;
+  houseScene.add(houseRoot);
+  const houseMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(4, 3, 4),
+    new THREE.MeshStandardMaterial({ color: 0x8b6a46, roughness: 1 })
+  );
+  houseMesh.name = "house mesh";
+  houseMesh.castShadow = true;
+  houseMesh.receiveShadow = true;
+  houseRoot.add(houseMesh);
+  houseScene.updateMatrixWorld(true);
+  const houseProxyChanges = setShadowProxyState(houseRoot, true, { kind: "staticProp" });
+  assert(houseProxyChanges >= 1, "static prop shadow proxy wordt geactiveerd");
+  const houseMaterial = Array.isArray(houseMesh.material) ? houseMesh.material[0] : houseMesh.material;
+  assert(houseMaterial.colorWrite === false, "static prop shadow proxy schrijft geen kleur");
+  const houseAudit = auditSceneObjectsForShadowCasters({ scene: houseScene, roots: [houseScene] });
+  assert(houseAudit.castersByKind.staticProp >= 1, "static prop shadow caster blijft beschikbaar");
+  assert(houseAudit.helperCasterCount === 0, "static prop audit telt geen helper caster");
+  assert(houseAudit.circleOrPlaneCasterCount === 0, "static prop audit telt geen circle/plane caster");
+
+  // Test 6 - editor shadow focus volgt content/selection en niet de camera orbit target.
+  const focusPolicy = resolveShadowPolicy({
+    world: {
+      performance: {
+        editor: { shadow: { preset: "hoog_schaduw" } }
+      }
+    }
+  }, "editor");
+  const worldCenter = resolveWorldContentCenter({
+    ground: { width: 200, depth: 200, y: 0 }
+  });
+  assert(worldCenter && worldCenter.source === "groundCenter", "resolveWorldContentCenter gebruikt de ground center");
+  const selectedObject = new THREE.Object3D();
+  selectedObject.position.set(120, 3, 80);
+  const editorFocusA = resolveEditorShadowFocus({
+    selectedObject: selectedObject,
+    worldCenter: worldCenter,
+    groundY: 0,
+    cameraTarget: { x: 500, y: 0, z: 500 },
+    orbitTarget: { x: 500, y: 0, z: 500 }
+  });
+  const editorFocusB = resolveEditorShadowFocus({
+    selectedObject: selectedObject,
+    worldCenter: worldCenter,
+    groundY: 0,
+    cameraTarget: { x: -500, y: 0, z: -500 },
+    orbitTarget: { x: -500, y: 0, z: -500 }
+  });
+  assert(editorFocusA.source === "selected", "geselecteerd object bepaalt de editor shadow focus");
+  assert(editorFocusA.x === 120 && editorFocusA.z === 80, "editor shadow focus volgt de geselecteerde world position");
+  assert(editorFocusA.x === editorFocusB.x && editorFocusA.z === editorFocusB.z, "editor shadow focus blijft stabiel als de camera orbit target verandert");
+  const stableFocusA = resolveStableShadowFocus({
+    mode: "editor",
+    policy: focusPolicy,
+    focus: editorFocusA,
+    groundY: 0
+  });
+  const stableFocusB = resolveStableShadowFocus({
+    mode: "editor",
+    policy: focusPolicy,
+    focus: editorFocusB,
+    previous: stableFocusA,
+    groundY: 0
+  });
+  assert(stableFocusB.jumpDetected === false, "editor shadow jumpDetected blijft false");
+  assert(stableFocusA.snappedFocus.x === stableFocusB.snappedFocus.x && stableFocusA.snappedFocus.z === stableFocusB.snappedFocus.z, "editor shadow snap blijft stabiel");
+
+  // Test 7 - resident streaming en bootstrap blijven het huidige zichtbare cluster tijdig laden.
+  const residentPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_regression",
+        type: "game",
+        enabled: true,
+        chunkWidth: 100,
+        chunkDepth: 100,
+        gameViewRadiusChunks: 1,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25,
+        cameraOnly: true
+      }
+    }
+  }, "game");
+  const regressionCoverage = computeStreamingCoverage({
+    mode: "game",
+    policy: residentPolicy,
+    player: { x: 85, z: 0 },
+    camTarget: { x: 85, z: 0 },
+    lastPlayerPosition: { x: 60, z: 0 }
+  });
+  assert(regressionCoverage.desiredResidentChunkKeys.includes("1,0"), "resident streaming houdt de volgende chunk tijdig desired");
+  const regressionWindow = resolveStableShadowChunkWindows({
+    mode: "editor",
+    policy: focusPolicy,
+    focus: stableFocusA,
+    renderResidentChunkKeys: ["0,0"],
+    visibleChunkKeys: ["0,0"],
+    preloadChunkKeys: ["1,0"]
+  });
+  assert(regressionWindow.shadowResidentChunkKeys.length >= regressionWindow.renderResidentChunkKeys.length, "shadow resident blijft een superset van render resident");
+  assert(regressionWindow.shadowResidentChunkKeys.includes("1,0"), "save/reload bootstrap houdt preload chunk in shadow resident");
+}
+
+// Fase 8.7: editor/game world settings are split, presets patch visible fields, and legacy
+// world_settings only acts as a fallback for old authored values.
+function runWorldSettingsSplitChecks() {
+  function worldSettingsGraph(options = {}) {
+    const worldValues = Object.assign({ worldId: "world" }, options.worldValues || {});
+    const nodes = [
+      { id: "out1", type: "game_output", values: { publishTarget: "runtime_world" } },
+      { id: "world1", type: "world_settings", values: worldValues }
+    ];
+    if (options.editorValues !== null) {
+      nodes.push({ id: "editor1", type: "editor_world_settings", values: Object.assign({}, options.editorValues || {}) });
+    }
+    if (options.gameValues !== null) {
+      nodes.push({ id: "game1", type: "game_world_settings", values: Object.assign({}, options.gameValues || {}) });
+    }
+    const edges = [
+      { fromNodeId: "world1", fromPort: "world", toNodeId: "out1", toPort: "world" }
+    ];
+    if (options.editorValues !== null) {
+      edges.push({ fromNodeId: "editor1", fromPort: "editorWorldSettings", toNodeId: "out1", toPort: "editorWorldSettings" });
+    }
+    if (options.gameValues !== null) {
+      edges.push({ fromNodeId: "game1", fromPort: "gameWorldSettings", toNodeId: "out1", toPort: "gameWorldSettings" });
+    }
+    return { schemaVersion: 1, nodes: nodes, edges: edges };
+  }
+
+  const editorPresetPatch = worldSettingsPresetNodePatch("editor", "hoog_schaduw");
+  const gamePresetPatch = worldSettingsPresetNodePatch("game", "geen_schaduw");
+  assert(editorPresetPatch.editorPreset === "hoog_schaduw", "editor preset patch zet preset zichtbaar");
+  assert(gamePresetPatch.gamePreset === "geen_schaduw", "game preset patch zet preset zichtbaar");
+
+  const freshWorld = buildWorldFromGraph(worldSettingsGraph({
+    worldValues: { worldId: "fresh", displayName: "Fresh", backgroundColor: "#101010", fogColor: "#202020", fogDensity: 0.02, smoothShading: true },
+    editorValues: {},
+    gameValues: {}
+  }), {}, { includeEditorCamera: false });
+  assert(freshWorld.world.performance.shared.worldId === "fresh", "shared worldId publiceert");
+  assert(freshWorld.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "lege world_settings gebruikt geen legacy fallback");
+  assert(freshWorld.world.performance.editor.preset === "middel_schaduw", "editor default preset blijft middel_schaduw");
+  assert(freshWorld.world.performance.editor.debugChunkOverlayVisible === false, "editor default debugChunkOverlayVisible blijft uit");
+  assert(freshWorld.world.performance.editor.shadow.preset === "middel_schaduw", "editor shadow block gebruikt middel_schaduw");
+  assert(freshWorld.world.performance.editor.shadow.mapSize === 1024, "editor default shadow mapSize blijft 1024");
+  assert(freshWorld.world.performance.editor.shadow.cameraSize === 100, "editor default shadow cameraSize blijft 100");
+  assert(freshWorld.world.performance.editor.shadow.staticPropsCast === true, "editor default staticPropsCast blijft aan");
+  assert(freshWorld.world.performance.game.preset === "middel_schaduw", "game default preset blijft middel_schaduw");
+  assert(freshWorld.world.performance.game.debugChunkOverlayVisible === false, "game default debugChunkOverlayVisible blijft uit");
+  assert(freshWorld.world.performance.game.shadow.preset === "middel_schaduw", "game shadow block gebruikt middel_schaduw");
+  assert(freshWorld.world.performance.game.shadow.mapSize === 1024, "game default shadow mapSize blijft 1024");
+  assert(freshWorld.world.performance.game.shadow.cameraSize === 85, "game default shadow cameraSize blijft 85");
+  assert(freshWorld.world.performance.game.shadow.staticPropsCast === true, "game default staticPropsCast blijft aan");
+
+  const legacyWorld = buildWorldFromGraph(worldSettingsGraph({
+    worldValues: {
+      worldId: "legacy",
+      shadowQuality: "low",
+      shadowBias: -0.0006,
+      shadowNormalBias: 0.12,
+      shadowCameraSize: 90,
+      shadowCameraFar: 700
+    },
+    editorValues: null,
+    gameValues: null
+  }), {}, { includeEditorCamera: false });
+  assert(legacyWorld.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === true, "legacy-only world meldt gebruik van de oude fallback");
+  assert(legacyWorld.world.performance.compatibility.legacyShadowFieldsMigrated === true, "legacy-only world meldt migratie van legacy shadow velden");
+  assert(legacyWorld.world.performance.editor.shadow.preset === "lichte_schaduw", "legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor editor");
+  assert(legacyWorld.world.performance.game.shadow.preset === "lichte_schaduw", "legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor game");
+  assert(legacyWorld.world.performance.editor.shadow.mapSize === 512, "legacy low quality valt terug naar 512 mapSize");
+  assert(legacyWorld.world.performance.editor.shadow.cameraSize === 90, "legacy shadowCameraSize valt terug naar editor");
+  assert(legacyWorld.world.performance.game.shadow.cameraFar === 700, "legacy shadowCameraFar valt terug naar game");
+
+  const splitWorld = buildWorldFromGraph(worldSettingsGraph({
+    worldValues: { worldId: "split" },
+    editorValues: worldSettingsPresetNodePatch("editor", "hoog_schaduw"),
+    gameValues: worldSettingsPresetNodePatch("game", "lichte_schaduw")
+  }), {}, { includeEditorCamera: false });
+  assert(splitWorld.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "nieuwe editor/game nodes winnen van legacy world_settings");
+  assert(splitWorld.world.performance.editor.preset === "hoog_schaduw", "editor preset is zichtbaar");
+  assert(splitWorld.world.performance.game.preset === "lichte_schaduw", "game preset is zichtbaar");
+  assert(splitWorld.world.performance.editor.shadow.mapSize === 2048, "editor shadow mapSize komt uit hoog preset");
+  assert(splitWorld.world.performance.game.shadow.mapSize === 512, "game shadow mapSize komt uit lichte preset");
+  assert(splitWorld.world.performance.editor.shadow.cameraSize === 120, "editor shadow cameraSize komt uit hoog preset");
+  assert(splitWorld.world.performance.game.shadow.cameraSize === 75, "game shadow cameraSize komt uit lichte preset");
 }
 
 function runWalkabilityChecks() {
   const sampleWorld = {
     ground: { width: 80, depth: 80, y: 0 },
     terrain: {
-      waters: [
+      surfaces: [
         {
           id: "river_main",
-          waterType: "river",
+          surfaceKind: "river",
           width: 8,
-          y: -0.15,
-          color: "#2f9ecf",
-          flowSpeed: 0.2,
           blocksPlayer: true,
           points: [
             { x: -20, z: 0 },
@@ -479,19 +934,14 @@ function runWalkabilityChecks() {
         },
         {
           id: "river_visual_only",
-          waterType: "river",
+          surfaceKind: "river",
           width: 8,
-          y: -0.15,
-          color: "#2f9ecf",
-          flowSpeed: 0.2,
           blocksPlayer: false,
           points: [
             { x: -20, z: 10 },
             { x: 20, z: 10 }
           ]
-        }
-      ],
-      surfaces: [
+        },
         {
           id: "blocked_surface",
           surfaceKind: "mud",
@@ -580,8 +1030,8 @@ function runWalkabilityChecks() {
   };
 
   const sampleIndex = createWalkabilityIndex(sampleWorld);
-  assert(isPointBlockedByWater(sampleIndex, 0, 0), "water met blocksPlayer=true blokkeert");
-  assert(!isPointBlockedByWater(sampleIndex, 0, 10), "water met blocksPlayer=false blokkeert niet");
+  assert(isPointBlockedBySurface(sampleIndex, 0, 0), "surface (river) met blocksPlayer=true blokkeert");
+  assert(!isPointBlockedBySurface(sampleIndex, 0, 10), "surface (river) met blocksPlayer=false blokkeert niet");
   assert(isPointBlockedBySurface(sampleIndex, 0, -10), "surface met blocksPlayer=true blokkeert");
   assert(!isPointBlockedBySurface(sampleIndex, 0, -20), "surface met blocksPlayer=false blokkeert niet");
   assert(isPointBlockedByTerrain(sampleIndex, 0, -10, 0.5), "surface blocksPlayer telt mee als terrain collision");
@@ -591,7 +1041,7 @@ function runWalkabilityChecks() {
   assert(isPointOnWalkableSurface(sampleIndex, 18.5, -5.7), "polygon walkable surface wordt herkend");
   assert(!isPointOnWalkableSurface(sampleIndex, 20.8, -4.7), "polygon walkable surface volgt eigen vorm");
   assert(isPointOnWalkableSurface(sampleIndex, 3, 0, 0.5), "walkable surface houdt rekening met collision radius langs rand");
-  assert(!isPointBlockedByTerrain(sampleIndex, 0, 0, 0.5), "walkable surface wint boven water");
+  assert(!isPointBlockedByTerrain(sampleIndex, 0, 0, 0.5), "walkable surface wint boven blokkerende surface");
   assert(!isPointBlockedByTerrain(sampleIndex, 3, 0, 0.5), "walkable surface voorkomt jitter op polygon-rand");
 
   const bridgeMove = resolveMovement(
@@ -615,17 +1065,17 @@ function runWalkabilityChecks() {
     { x: 10, y: 0, z: 1 },
     { radius: 0.5, ground: sampleWorld.ground, solids: [], index: sampleIndex }
   );
-  assert(slideMove.x === 10 && slideMove.z < 6 && slideMove.z > 2.5, "bewegingsfallback schuift soepel langs water-rand");
+  assert(slideMove.x === 10 && slideMove.z < 6 && slideMove.z > 2.5, "bewegingsfallback schuift soepel langs blokkerende surface-rand");
   assert(!isPointBlockedByTerrain(sampleIndex, slideMove.x, slideMove.z, 0.5), "bewegingsfallback eindigt buiten terrain collision");
 
   clearWalkabilityIndex();
   buildWalkabilityIndex(sampleWorld);
-  const activeWaterMove = resolveMovement(
+  const activeBlockedMove = resolveMovement(
     { x: -10, y: 0, z: 4 },
     { x: 0, y: 0, z: 4 },
     { radius: 0.5, ground: sampleWorld.ground, solids: [] }
   );
-  assert(activeWaterMove.x === -10 && activeWaterMove.z === 4, "buildWalkabilityIndex activeert runtime collision");
+  assert(activeBlockedMove.x === -10 && activeBlockedMove.z === 4, "buildWalkabilityIndex activeert runtime collision");
   clearWalkabilityIndex();
   const clearedMove = resolveMovement(
     { x: -10, y: 0, z: 4 },
@@ -717,6 +1167,518 @@ function runChunkLoadingProofChecks() {
   assert(disabledGamePolicy.enabled === false, "enabled=false schakelt runtime chunk proof uit");
 }
 
+function runChunkCullingStateChecks() {
+  const cullingWorld = {
+    chunkLoading: {
+      game: {
+        id: "game_chunks_node",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        cameraOnly: true,
+        gameViewRadiusChunks: 1,
+        fixedCameraPaddingTiles: 10,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25,
+        strictUnloadOutsideCamera: true,
+        loadBudgetPerFrame: 2,
+        debugOverlay: true
+      }
+    }
+  };
+  const policy = resolveChunkPolicy(cullingWorld, "game");
+  const windowAtOrigin = buildChunkWindow({ x: 0, z: 0 }, policy, "game");
+  assert(isChunkActive("0,0", windowAtOrigin) === true, "isChunkActive herkent center chunk");
+  assert(isChunkPreload("2,0", windowAtOrigin) === true, "isChunkPreload herkent preload ring");
+  assert(isChunkLoaded("3,0", windowAtOrigin) === false, "isChunkLoaded weigert chunk buiten loaded window");
+
+  const cullingState = collectChunkCullingStats([
+    { id: "entity_inside", type: "entity", x: 0, z: 0, hasVisual: true },
+    { id: "entity_outside", type: "entity", x: 350, z: 350, hasVisual: true },
+    { id: "interactable_outside", type: "interactable", x: 350, z: 350, hasVisual: false },
+    { id: "solid_outside", type: "solid", x: 350, z: 350, hasVisual: false },
+    { id: "entity_uncullable", type: "entity", hasVisual: true }
+  ], windowAtOrigin, {
+    policy: policy,
+    cullingEnabled: true
+  });
+  const insideEntity = cullingState.items.find(function (item) { return item.id === "entity_inside"; });
+  const outsideEntity = cullingState.items.find(function (item) { return item.id === "entity_outside"; });
+  const outsideInteractable = cullingState.items.find(function (item) { return item.id === "interactable_outside"; });
+  const outsideSolid = cullingState.items.find(function (item) { return item.id === "solid_outside"; });
+  assert(insideEntity && insideEntity.visible === true && insideEntity.active === true, "entity binnen loaded chunks blijft zichtbaar en actief");
+  assert(outsideEntity && outsideEntity.visible === false && outsideEntity.active === false, "entity buiten loaded chunks wordt geculled");
+  assert(outsideInteractable && outsideInteractable.active === false, "interactable buiten loaded chunks wordt inactief");
+  assert(outsideSolid && outsideSolid.active === false, "solid buiten loaded chunks wordt inactief");
+  assert(cullingState.hiddenObjects === 1, "hiddenObjects telt verborgen visuals");
+  assert(cullingState.culledEntities === 1, "culledEntities telt verborgen entities");
+  assert(cullingState.inactiveInteractables === 1, "inactiveInteractables telt uitgeschakelde interactables");
+  assert(cullingState.inactiveSolids === 1, "inactiveSolids telt uitgeschakelde solids");
+  assert(cullingState.uncullableObjects === 1, "uncullableObjects telt objecten zonder position");
+
+  const movedWindow = buildChunkWindow({ x: 3, z: 3 }, policy, "game");
+  assert(windowAtOrigin.loadedChunkKeys.join("|") !== movedWindow.loadedChunkKeys.join("|"), "moving center chunk verandert de loaded set");
+  const movedState = collectChunkCullingStats([
+    { id: "entity_outside", type: "entity", x: 350, z: 350, hasVisual: true }
+  ], movedWindow, {
+    policy: policy,
+    cullingEnabled: true
+  });
+  assert(movedState.items[0] && movedState.items[0].visible === true && movedState.items[0].active === true, "terug in loaded set maakt entity weer zichtbaar en actief");
+}
+
+function runTerrainChunkingChecks() {
+  const scaledPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_scaled",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 80,
+        chunkDepth: 120,
+        tileSize: 2,
+        gameViewRadiusChunks: 1,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25
+      }
+    }
+  }, "game");
+  const worldSize = chunkWorldSize(scaledPolicy);
+  assert(worldSize.width === 160 && worldSize.depth === 240 && worldSize.tileSize === 2, "chunkWorldSize berekent chunk world size incl. tileSize");
+
+  const policy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_terrain",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        gameViewRadiusChunks: 1,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25
+      }
+    }
+  }, "game");
+  const policyEnabled = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_terrain_enabled",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        gameViewRadiusChunks: 1,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25,
+        terrainVisualChunkingEnabled: true
+      }
+    }
+  }, "game");
+
+  assert(chunkKeyForPosition(-1, -1, policy) === "-1,-1", "chunkKeyForPosition floort negatieve coordinaten");
+  assert(chunkCoordForPosition(-1, -1, policy).x === -1 && chunkCoordForPosition(-1, -1, policy).z === -1, "chunkCoordForPosition blijft consistent met chunkKeyForPosition");
+  assert(policy.terrainVisualChunkingEnabled === false, "terrainVisualChunkingEnabled staat standaard uit");
+  assert(policyEnabled.terrainVisualChunkingEnabled === true, "terrainVisualChunkingEnabled kan expliciet aan");
+
+  const segment = {
+    points: [
+      { x: -150, z: 0 },
+      { x: -50, z: 0 }
+    ]
+  };
+  const midpoint = midpointForSegment(segment);
+  assert(midpoint && midpoint.x === -100 && midpoint.z === 0, "midpointForSegment pakt het midden van een segment");
+  assert(chunkKeyForSegment(segment, policy) === chunkKeyForPosition(midpoint.x, midpoint.z, policy), "chunkKeyForSegment volgt het midpoint");
+
+  const splitLine = segmentLineByMaxLength({ x: 0, z: 0 }, { x: 0, z: 100 }, 25);
+  assert(splitLine.length === 5, "segmentLineByMaxLength splitst een lijn in vaste stappen");
+  assert(splitLine[0].x === 0 && splitLine[0].z === 0, "segmentLineByMaxLength bewaart startpunt");
+  assert(splitLine[splitLine.length - 1].x === 0 && splitLine[splitLine.length - 1].z === 100, "segmentLineByMaxLength bewaart eindpunt");
+
+  const polylinePieces = segmentPolylineForChunks([
+    { x: -150, z: 0 },
+    { x: 150, z: 0 }
+  ], policy, {
+    width: 12,
+    maxSegmentLength: 75,
+    segmentBaseId: "terrain-road"
+  });
+  assert(polylinePieces.length === 4, "segmentPolylineForChunks splitst een lange lijn over meerdere stukken");
+  assert(polylinePieces[0].chunkKey === "-2,0" && polylinePieces[1].chunkKey === "-1,0" && polylinePieces[2].chunkKey === "0,0" && polylinePieces[3].chunkKey === "1,0", "segmentPolylineForChunks houdt chunkKeys per stuk bij");
+  assert(polylinePieces.some(function (piece) { return Array.isArray(piece.chunkKeys) && piece.chunkKeys.length > 1; }), "segmentPolylineForChunks bewaart chunkKeys over chunkgrenzen");
+
+  const tiles = groundChunkTilesForBounds({ width: 300, depth: 200 }, policy);
+  assert(tiles.length === 8, "groundChunkTilesForBounds splitst grote ground in chunk tiles");
+  assert(tiles[0].chunkKey === "-2,-1" && tiles[0].minX === -150 && tiles[0].maxX === -100 && tiles[0].minZ === -100 && tiles[0].maxZ === 0, "eerste ground tile wordt goed gesneden");
+  assert(tiles[tiles.length - 1].chunkKey === "1,0" && tiles[tiles.length - 1].minX === 100 && tiles[tiles.length - 1].maxX === 150 && tiles[tiles.length - 1].minZ === 0 && tiles[tiles.length - 1].maxZ === 100, "laatste ground tile wordt goed gesneden");
+
+  const terrainWindow = {
+    loadedChunkKeys: ["0,0"],
+    activeChunkKeys: ["0,0"],
+    preloadChunkKeys: ["1,0"]
+  };
+  const terrainCullingState = collectChunkCullingStats([
+    { id: "terrain_ground", type: "terrainGround", chunkKey: "0,0", hasVisual: true },
+    { id: "terrain_layer_seamless", type: "terrainLayer", hasVisual: true },
+    { id: "terrain_surface_uncullable", type: "terrainSurface", hasVisual: true }
+  ], terrainWindow, {
+    policy: policy,
+    cullingEnabled: true
+  });
+  const terrainGround = terrainCullingState.items.find(function (item) { return item.id === "terrain_ground"; });
+  const terrainLayerSeamless = terrainCullingState.items.find(function (item) { return item.id === "terrain_layer_seamless"; });
+  const terrainSurfaceUncullable = terrainCullingState.items.find(function (item) { return item.id === "terrain_surface_uncullable"; });
+  assert(terrainGround && terrainGround.visible === true, "terrain ground blijft zichtbaar in loaded chunk");
+  assert(terrainLayerSeamless && terrainLayerSeamless.visible === true && terrainLayerSeamless.uncullable === true, "terrain layer zonder chunking blijft zichtbaar");
+  assert(terrainSurfaceUncullable && terrainSurfaceUncullable.visible === true && terrainSurfaceUncullable.uncullable === true, "terrain surface zonder chunk info blijft uncullable zichtbaar");
+  assert(terrainCullingState.terrainVisuals.registered === 3, "terrain visuals worden meegeteld");
+  assert(terrainCullingState.terrainVisuals.visible === 3, "terrain visuals zichtbaar tellen mee");
+  assert(terrainCullingState.terrainVisuals.hidden === 0, "terrain visuals verborgen tellen mee");
+  assert(terrainCullingState.terrainVisuals.groundTilesVisible === 1, "ground tile visibility wordt geteld");
+  assert(terrainCullingState.terrainVisuals.terrainLayerTilesVisible === 1, "terrain layer zichtbaarheid wordt geteld");
+  assert(terrainCullingState.terrainVisuals.surfaceSegmentsVisible === 1, "terrain surface visibility wordt geteld");
+  assert(terrainCullingState.terrainVisuals.uncullableTerrainVisuals === 2, "uncullable terrain visuals worden geteld");
+
+  const terrainChunkedState = collectChunkCullingStats([
+    { id: "terrain_layer_hidden", type: "terrainLayer", chunkKey: "2,0", chunkKeys: ["2,0"], hasVisual: true },
+    { id: "terrain_layer_visible", type: "terrainLayer", chunkKey: "0,0", chunkKeys: ["0,0"], hasVisual: true }
+  ], terrainWindow, {
+    policy: policyEnabled,
+    cullingEnabled: true
+  });
+  const terrainLayerHidden = terrainChunkedState.items.find(function (item) { return item.id === "terrain_layer_hidden"; });
+  const terrainLayerVisible = terrainChunkedState.items.find(function (item) { return item.id === "terrain_layer_visible"; });
+  assert(terrainLayerHidden && terrainLayerHidden.visible === false, "terrain layer chunking kan verborgen tile cullen");
+  assert(terrainLayerVisible && terrainLayerVisible.visible === true, "terrain layer chunking houdt loaded tile zichtbaar");
+}
+
+function runGroundRootCauseChecks() {
+  const centeredBounds = effectiveGroundBounds({
+    width: 80,
+    depth: 60,
+    y: 0
+  });
+  assert(centeredBounds && centeredBounds.minX === -40 && centeredBounds.maxX === 40 && centeredBounds.minZ === -30 && centeredBounds.maxZ === 30, "effectiveGroundBounds houdt centerSize symmetrisch");
+
+  const explicitGround = {
+    boundsMode: "explicitBounds",
+    minX: -45,
+    maxX: 75,
+    minZ: -30,
+    maxZ: 50,
+    width: 999,
+    depth: 999,
+    y: 0,
+    textureWorldSizeX: 8,
+    textureWorldSizeZ: 4
+  };
+  const explicitBounds = effectiveGroundBounds(explicitGround);
+  assert(explicitBounds && explicitBounds.minX === -45 && explicitBounds.maxX === 75 && explicitBounds.minZ === -30 && explicitBounds.maxZ === 50, "effectiveGroundBounds respecteert explicitBounds");
+  assert(explicitBounds.width === 120 && explicitBounds.depth === 80, "effectiveGroundBounds berekent explicitBounds width/depth");
+
+  const worldUv = worldSpaceGroundUv(24, 16, explicitGround, { x: 8, z: 4 });
+  assertNear(worldUv.u, 3, 0.000001, "worldSpaceGroundUv blijft world-space op X");
+  assertNear(worldUv.v, 4, 0.000001, "worldSpaceGroundUv blijft world-space op Z");
+
+  const gameChunkWorld = {
+    ground: explicitGround,
+    chunkLoading: {
+      game: {
+        id: "game_chunks_ground",
+        type: "game",
+        enabled: true,
+        chunkProfileId: "game_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        gameViewRadiusChunks: 1,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 1,
+        maxLoadedChunks: 25
+      },
+      editor: {
+        id: "editor_chunks_ground",
+        type: "editor",
+        enabled: false,
+        chunkProfileId: "editor_chunks",
+        chunkWidth: 100,
+        chunkDepth: 100,
+        tileSize: 1,
+        editorViewRadiusChunks: 2,
+        preloadMarginChunks: 1,
+        unloadMarginChunks: 2,
+        maxLoadedChunks: 49,
+        keepSelectedChunkLoaded: true
+      }
+    }
+  };
+  const editorChunkWorld = {
+    ground: explicitGround,
+    chunkLoading: {
+      game: Object.assign({}, gameChunkWorld.chunkLoading.game, { enabled: false }),
+      editor: Object.assign({}, gameChunkWorld.chunkLoading.editor, { enabled: true })
+    }
+  };
+  assert(resolveGroundRenderMode(gameChunkWorld, "game") === "chunked", "game chunk loading schakelt ground naar chunked mode");
+  assert(shouldUseChunkedGround(gameChunkWorld, "game") === true, "shouldUseChunkedGround volgt game chunk loading");
+  assert(resolveGroundRenderMode(editorChunkWorld, "editor") === "chunked", "editor chunk loading kan ook chunked ground gebruiken");
+  assert(resolveGroundRenderMode({ ground: explicitGround, chunkLoading: { game: Object.assign({}, gameChunkWorld.chunkLoading.game, { enabled: false }) } }, "game") === "full", "uitgeschakelde game chunk loading houdt full mode");
+  assert(shouldUseChunkedGround({ ground: explicitGround, chunkLoading: { game: Object.assign({}, gameChunkWorld.chunkLoading.game, { enabled: false }) } }, "game") === false, "shouldUseChunkedGround geeft false als chunk loading uit staat");
+  assert(typeof groundBlueprintSignature(gameChunkWorld, "game") === "string" && groundBlueprintSignature(gameChunkWorld, "game").length > 0, "groundBlueprintSignature berekent een geldige signature");
+
+  const gamePolicy = resolveChunkPolicy(gameChunkWorld, "game");
+  const tiles = groundChunkTilesForBounds(explicitGround, gamePolicy);
+  assert(tiles.length === 4, "groundChunkTilesForBounds splitst explicitBounds in 4 tiles");
+  assert(tiles[0].chunkKey === "-1,-1" && tiles[0].minX === -45 && tiles[0].maxX === 0 && tiles[0].minZ === -30 && tiles[0].maxZ === 0, "eerste ground tile respecteert explicit bounds");
+  assert(tiles[tiles.length - 1].chunkKey === "0,0" && tiles[tiles.length - 1].minX === 0 && tiles[tiles.length - 1].maxX === 75 && tiles[tiles.length - 1].minZ === 0 && tiles[tiles.length - 1].maxZ === 50, "laatste ground tile respecteert explicit bounds");
+
+  const groundState = createGroundChunkState();
+  const chunkPlan = buildGroundChunkPlan(gameChunkWorld, "game", { loadedChunkKeys: ["-1,-1", "0,-1", "0,0"] }, groundState);
+  assert(chunkPlan.mode === "chunked", "buildGroundChunkPlan kiest chunked mode voor game chunk loading");
+  assert(chunkPlan.fullGroundPlaneActive === false, "chunked ground plan schakelt de full plane uit");
+  assert(chunkPlan.fullGroundPlaneName === null, "chunked ground plan heeft geen full-plane naam");
+  assert(chunkPlan.residentChunkKeys.join("|") === "-1,-1|0,-1|0,0", "chunked plan houdt alleen resident ground chunk keys over");
+
+  const createdChunkKeys = [];
+  const disposedChunkKeys = [];
+  const firstDelta = applyGroundChunkPlan(groundState, chunkPlan, {
+    createTile: function (blueprint, chunkKeyValue) {
+      createdChunkKeys.push(chunkKeyValue);
+      return { chunkKey: chunkKeyValue };
+    },
+    disposeTile: function (tile, chunkKeyValue) {
+      disposedChunkKeys.push(chunkKeyValue);
+    }
+  });
+  assert(firstDelta.previousResidentKeys.length === 0, "eerste ground plan start zonder vorige resident tiles");
+  assert(createdChunkKeys.join("|") === "-1,-1|0,-1|0,0", "applyGroundChunkPlan bouwt de verwachte resident ground tiles");
+  assert(groundState.residentTiles.size === 3, "groundChunkState bewaart resident tiles");
+
+  const nextPlan = buildGroundChunkPlan(gameChunkWorld, "game", { loadedChunkKeys: ["0,0"] }, groundState);
+  assert(nextPlan.leavingChunkKeys.join("|") === "-1,-1|0,-1", "verlatende ground tiles worden bepaald bij window-shift");
+  applyGroundChunkPlan(groundState, nextPlan, {
+    createTile: function (blueprint, chunkKeyValue) {
+      createdChunkKeys.push("2:" + chunkKeyValue);
+      return { chunkKey: chunkKeyValue };
+    },
+    disposeTile: function (tile, chunkKeyValue) {
+      disposedChunkKeys.push(chunkKeyValue);
+    }
+  });
+  assert(disposedChunkKeys.join("|") === "-1,-1|0,-1", "verlatende ground tiles worden gedeactiveerd");
+  assert(groundState.residentTiles.size === 1, "groundChunkState laat alleen de loaded tile resident");
+
+  const fullPlan = buildGroundChunkPlan({
+    ground: explicitGround,
+    chunkLoading: {
+      game: Object.assign({}, gameChunkWorld.chunkLoading.game, { enabled: false })
+    }
+  }, "game", { loadedChunkKeys: ["0,0"] }, groundState);
+  assert(fullPlan.mode === "full", "uitgeschakelde chunk loading levert full ground mode op");
+  assert(fullPlan.fullGroundPlaneActive === true, "full plan verwacht een actieve full ground plane");
+  assert(fullPlan.fullGroundPlaneName === "published-ground", "full plan bewaart de legacy plane naam");
+  assert(fullPlan.residentChunkKeys.length === 0, "full plan heeft geen resident chunk tiles");
+  const fullDisposedKeys = [];
+  applyGroundChunkPlan(groundState, fullPlan, {
+    createTile: function () {
+      return null;
+    },
+    disposeTile: function (tile, chunkKeyValue) {
+      fullDisposedKeys.push(chunkKeyValue);
+    }
+  });
+  assert(fullDisposedKeys.join("|") === "0,0", "full plan ruimt de laatste resident chunk tile op");
+  assert(groundState.residentTiles.size === 0, "full plan laat geen resident ground tiles achter");
+}
+
+function runTerrainStreamingSnapshotChecks() {
+  const residentEntries = new Set(["ground_a", "path_b", "surface_c"]);
+  const terrainEntries = new Map([
+    ["ground_a", { chunkKeys: ["1,0"], assetIds: ["tex_ground"] }],
+    ["path_b", { chunkKey: "0,0", chunkKeys: ["0,0", "1,0"], assetIds: ["tex_path", "tex_shared"] }],
+    ["surface_c", { chunkKeys: ["1,0"], assetIds: ["tex_shared", "tex_surface"] }]
+  ]);
+  const terrainTextureRecords = new Map([
+    ["tex_ground", { refCount: 2 }],
+    ["tex_path", { refCount: 1 }],
+    ["tex_shared", { refCount: 3 }],
+    ["tex_surface", { refCount: 0 }]
+  ]);
+  const surfaceMaterialRecords = new Map([
+    ["surface_a", new Set([{ material: {} }, { material: {} }])],
+    ["surface_b", new Set([{ material: {} }])]
+  ]);
+
+  const snapshot = collectTerrainStreamingSnapshot(residentEntries, terrainEntries, terrainTextureRecords, surfaceMaterialRecords, {
+    loadedChunks: 11,
+    activeChunks: 5,
+    preloadChunks: 6,
+    lastUpdateReason: "chunk-update"
+  });
+
+  assert(snapshot.loadedChunks === 11, "terrain streaming snapshot bewaart loadedChunks");
+  assert(snapshot.activeChunks === 5, "terrain streaming snapshot bewaart activeChunks");
+  assert(snapshot.preloadChunks === 6, "terrain streaming snapshot bewaart preloadChunks");
+  assert(snapshot.residentPieces === 3, "terrain streaming snapshot telt resident pieces");
+  assert(snapshot.residentChunks === 2, "terrain streaming snapshot telt unieke resident chunks");
+  assert(snapshot.residentChunkKeys.join("|") === "0,0|1,0", "terrain streaming snapshot sorteert resident chunk keys");
+  assert(snapshot.textureRefs === 6, "terrain streaming snapshot telt texture refcounts");
+  assert(snapshot.textureAssets === 4, "terrain streaming snapshot telt unieke resident asset ids");
+  assert(snapshot.surfaceMaterials === 3, "terrain streaming snapshot telt surface material records");
+  assert(snapshot.lastUpdateReason === "chunk-update", "terrain streaming snapshot bewaart update reason");
+}
+
+function runStreamingCorrectnessChecks() {
+  // Fase 8.5 - Streaming Correctness Recovery: reproduceert Kevin's video-bug (pop-in na het
+  // midden, lege wereld na save/reload) op het niveau van de pure coverage/queue helpers.
+  const forwardPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_forward",
+        type: "game",
+        enabled: true,
+        chunkWidth: 100,
+        chunkDepth: 100,
+        gameViewRadiusChunks: 0,
+        preloadMarginChunks: 0,
+        unloadMarginChunks: 0,
+        maxLoadedChunks: 25,
+        cameraOnly: false
+      }
+    }
+  }, "game");
+
+  // Test 1 - boom vóór zichtbare rand: met activeRadius=0 en preloadMargin=0 zou het oude
+  // center-only window (buildChunkWindow) alléén chunk 0,0 laden. Zodra de speler richting de
+  // grens beweegt (x=60 -> x=85) moet de forward-bias chunk 1,0 al in desiredResidentChunkKeys
+  // zetten, ruim vóórdat x=100 (de grens) of x=150 (het midden van chunk 1) bereikt is.
+  const approachingCoverage = computeStreamingCoverage({
+    mode: "game",
+    policy: forwardPolicy,
+    player: { x: 85, z: 0 },
+    camTarget: { x: 85, z: 0 },
+    lastPlayerPosition: { x: 60, z: 0 }
+  });
+  assert(approachingCoverage.forwardChunkKeys.includes("1,0"), "forward lookahead bevat de volgende chunk vóórdat de speler de grens oversteekt");
+  assert(approachingCoverage.desiredResidentChunkKeys.includes("1,0"), "desired resident set bevat forward chunk vóór grensoversteek (geen center-only bug)");
+  assert(!approachingCoverage.activeChunkKeys.includes("1,0"), "chunk 1,0 is nog geen active chunk (test bewijst dat forward-bias het gat dicht, niet activeRadius)");
+
+  // Test 2 - pop-in-na-midden bug: loop x=40 -> 60 -> 90 -> 110 en controleer dat de volgende
+  // chunk al vóór x=100 desired is, niet pas nadat de speler al voorbij het midden van chunk 1 is.
+  const walkSequence = [40, 60, 90, 110];
+  let previousPoint = { x: 0, z: 0 };
+  let sawForwardBeforeCrossing = false;
+  for (const x of walkSequence) {
+    const coverage = computeStreamingCoverage({
+      mode: "game",
+      policy: forwardPolicy,
+      player: { x: x, z: 0 },
+      camTarget: { x: x, z: 0 },
+      lastPlayerPosition: previousPoint
+    });
+    if (x < 100 && coverage.desiredResidentChunkKeys.includes("1,0")) sawForwardBeforeCrossing = true;
+    previousPoint = { x: x, z: 0 };
+  }
+  assert(sawForwardBeforeCrossing, "volgende chunk wordt desired vóór de grens, niet pas nadat speler al voorbij het midden is");
+
+  // Camera-lag robuustheid: game_camera (cameraOnly) met camTarget die achterblijft op de
+  // speler mag de speler-chunk niet uit beeld laten vallen (dubbele anchor voor visibleChunkKeys).
+  const lagPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_lag",
+        type: "game",
+        enabled: true,
+        chunkWidth: 100,
+        chunkDepth: 100,
+        gameViewRadiusChunks: 0,
+        preloadMarginChunks: 0,
+        unloadMarginChunks: 0,
+        maxLoadedChunks: 25,
+        cameraOnly: true
+      }
+    }
+  }, "game");
+  const laggedCoverage = computeStreamingCoverage({
+    mode: "game",
+    policy: lagPolicy,
+    player: { x: 140, z: 0 },
+    camTarget: { x: 40, z: 0 },
+    lastPlayerPosition: { x: 130, z: 0 }
+  });
+  assert(laggedCoverage.visibleChunkKeys.includes("1,0"), "speler-chunk blijft visible ook als de (gelerpte) camTarget nog in de vorige chunk hangt");
+  assert(laggedCoverage.desiredResidentChunkKeys.includes("1,0"), "resident content voor de speler-chunk blijft desired ondanks camera-lag");
+
+  // Test 4 - build queue prioriteit: active/visible moeten altijd vóór verre preload chunks
+  // gebouwd worden, en mogen nooit als "leftover" achteraan de rij belanden.
+  const orderedQueue = prioritizeResidentChunkBuildQueue({
+    centerChunk: { x: 0, z: 0 },
+    residentChunkKeys: [],
+    desiredResidentChunkKeys: ["3,3", "0,0", "-1,0", "1,0", "2,2"],
+    activeChunkKeys: ["0,0"],
+    visibleChunkKeys: ["1,0"],
+    forwardChunkKeys: ["-1,0"],
+    preloadChunkKeys: ["2,2", "3,3"]
+  });
+  assert(orderedQueue[0] === "0,0", "active chunk staat vooraan de build queue");
+  assert(orderedQueue.indexOf("1,0") < orderedQueue.indexOf("2,2"), "visible chunk bouwt vóór verre preload chunks");
+  assert(orderedQueue.indexOf("-1,0") < orderedQueue.indexOf("2,2"), "forward chunk bouwt vóór overige preload chunks");
+  assert(orderedQueue.indexOf("2,2") < orderedQueue.indexOf("3,3"), "preload chunks blijven onderling op afstand gesorteerd");
+  assert(!orderedQueue.slice(0, 3).includes("3,3"), "verste preload chunk dringt niet voor active/visible/forward chunks");
+
+  const alreadyResidentQueue = prioritizeResidentChunkBuildQueue({
+    centerChunk: { x: 0, z: 0 },
+    residentChunkKeys: ["0,0"],
+    desiredResidentChunkKeys: ["0,0", "1,0"],
+    activeChunkKeys: ["0,0"],
+    visibleChunkKeys: [],
+    forwardChunkKeys: [],
+    preloadChunkKeys: ["1,0"]
+  });
+  assert(!alreadyResidentQueue.includes("0,0"), "reeds resident chunks worden niet opnieuw in de build queue gezet");
+
+  // Test 5 - unload hysteresis basis: de unload-marge (unloadMarginChunks) moet chunks buiten de
+  // active/preload ring toch in unloadSafeChunkKeys houden, zodat een korte grensoversteek geen
+  // meteen-unload triggert.
+  const hysteresisPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_hysteresis",
+        type: "game",
+        enabled: true,
+        chunkWidth: 100,
+        chunkDepth: 100,
+        gameViewRadiusChunks: 0,
+        preloadMarginChunks: 0,
+        unloadMarginChunks: 2,
+        maxLoadedChunks: 25,
+        cameraOnly: false
+      }
+    }
+  }, "game");
+  const hysteresisCoverage = computeStreamingCoverage({
+    mode: "game",
+    policy: hysteresisPolicy,
+    player: { x: 0, z: 0 },
+    camTarget: { x: 0, z: 0 }
+  });
+  assert(hysteresisCoverage.unloadSafeChunkKeys.includes("2,0"), "unload-marge houdt chunks buiten active/preload toch resident-safe");
+  assert(hysteresisCoverage.unloadSafeChunkKeys.includes("0,0"), "center chunk blijft altijd unload-safe");
+}
+
 async function main() {
   let child = null;
   let tmpDir = "";
@@ -730,8 +1692,16 @@ async function main() {
     removeSmokeFixtureAssets();
     runSurfaceGeometryChecks();
     runShadowPolicyChecks();
+    runStableShadowControllerChecks();
+    runGhostPlaneAndShadowProxyChecks();
+    runWorldSettingsSplitChecks();
     runWalkabilityChecks();
     runChunkLoadingProofChecks();
+    runChunkCullingStateChecks();
+    runTerrainChunkingChecks();
+    runGroundRootCauseChecks();
+    runTerrainStreamingSnapshotChecks();
+    runStreamingCorrectnessChecks();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
       env: Object.assign({}, process.env, { PORT: PORT, DATABASE_PATH: dbPath, ADMIN_PASSWORD: ADMIN_PASSWORD, ADMIN_USERNAME: "kevin" }),
@@ -883,16 +1853,13 @@ async function main() {
       backgroundColor: "#0b1622",
       fogColor: "#1a2b3c",
       fogDensity: 0.18,
-      shadowQuality: "high",
-      shadowBias: -0.0006,
-      shadowNormalBias: 0.2,
-      shadowCameraSize: 90,
-      shadowCameraFar: 700,
-      gameShadowsEnabled: true,
-      editorFogEnabled: false,
-      editorShadowsEnabled: false
+      smoothShading: true
     })).graph;
     const worldNode = graph.nodes.find(function (n) { return n.type === "world_settings"; });
+    graph = (await createNode("editor_world_settings", worldSettingsPresetNodePatch("editor", "hoog_schaduw"))).graph;
+    const editorWorldSettingsNode = graph.nodes.find(function (n) { return n.type === "editor_world_settings"; });
+    graph = (await createNode("game_world_settings", worldSettingsPresetNodePatch("game", "lichte_schaduw"))).graph;
+    const gameWorldSettingsNode = graph.nodes.find(function (n) { return n.type === "game_world_settings"; });
     graph = (await createNode("ground_surface", { groundId: "demo_ground", width: 40, depth: 40, y: 0, materialColor: "#3f6b3f" })).graph;
     const groundNode = graph.nodes.find(function (n) { return n.type === "ground_surface"; });
     graph = (await createNode("game_camera", { cameraId: "main_cam", pitch: 60, yaw: 0, startDistance: 26, distance: 20, minDistance: 8, maxDistance: 40, fov: 55, follow: true, rotateSpeed: 90 })).graph;
@@ -1036,7 +2003,9 @@ async function main() {
       enabled: true,
       anchor: "top-right",
       compact: true,
-      updateIntervalMs: 500
+      updateIntervalMs: 500,
+      showScatterInstances: true,
+      showWorldSize: true
     })).graph;
     const perfHudNode = findNode(graph, function (n) { return n.type === "debug_performance_hud" && n.values.hudId === "perf_hud_main"; }, "performance hud aangemaakt");
 
@@ -1063,7 +2032,29 @@ async function main() {
     graph = (await createNode("editor_chunk_loading", {})).graph;
     const editorChunkLoadingNode = findNode(graph, function (n) { return n.type === "editor_chunk_loading"; }, "editor chunk loading aangemaakt");
 
-    graph = (await createNode("game_chunk_loading", {})).graph;
+    graph = (await createNode("game_chunk_loading", {
+      chunkProfileId: "game_chunks",
+      enabled: true,
+      chunkWidth: 15,
+      chunkDepth: 15,
+      tileSize: 1,
+      preloadMarginChunks: 1,
+      unloadMarginChunks: 1,
+      maxLoadedChunks: 9,
+      debugOverlay: false,
+      groundChunkingEnabled: true,
+      pathWaterSurfaceChunkingEnabled: false,
+      terrainVisualChunkingEnabled: false,
+      cameraOnly: true,
+      gameViewRadiusChunks: 1,
+      fixedCameraPaddingTiles: 0,
+      strictUnloadOutsideCamera: true,
+      loadBudgetPerFrame: 2,
+      residentChunkBuildBudgetPerFrame: 2,
+      residentEntityBudget: 200,
+      residentObjectBudget: 300,
+      residentScatterInstanceBudget: 500
+    })).graph;
     const gameChunkLoadingNode = findNode(graph, function (n) { return n.type === "game_chunk_loading"; }, "game chunk loading aangemaakt");
 
     graph = await connect(graph, keybindDirect.id, "keybind", gameOutputNode.id, "keybinds");
@@ -1115,46 +2106,6 @@ async function main() {
       points: []
     })).graph;
     const terrainLayerNode = findNode(graph, function (n) { return n.type === "terrain_layer" && n.values.layerId === "village_grass"; }, "terrain layer aangemaakt");
-
-    graph = (await createNode("path_layer", {
-      pathId: "path_main",
-      label: "Main Path",
-      pathType: "sand",
-      width: 3,
-      edgeBlend: 0.8,
-      yOffset: 0.01,
-      slightlySunken: true,
-      speedMultiplier: 1,
-      materialMode: "preset",
-      textureAssetId: null,
-      textureScale: 5,
-      opacity: 1,
-      points: [
-        { x: 0, z: 0 },
-        { x: 8, z: 3 }
-      ]
-    })).graph;
-    const pathLayerNode = findNode(graph, function (n) { return n.type === "path_layer" && n.values.pathId === "path_main"; }, "path layer aangemaakt");
-
-    graph = (await createNode("water_layer", {
-      waterId: "river_main",
-      label: "Main River",
-      waterType: "river",
-      width: 5,
-      y: -0.15,
-      color: "#2f9ecf",
-      flowSpeed: 0.2,
-      blocksPlayer: true,
-      materialMode: "preset",
-      textureAssetId: null,
-      textureScale: 6,
-      opacity: 1,
-      points: [
-        { x: 0, z: 10 },
-        { x: 40, z: 18 }
-      ]
-    })).graph;
-    const waterLayerNode = findNode(graph, function (n) { return n.type === "water_layer" && n.values.waterId === "river_main"; }, "water layer aangemaakt");
 
     graph = (await createNode("surface_layer", {
       surfaceId: "river_surface_test",
@@ -1232,6 +2183,8 @@ async function main() {
     const walkableSurfaceNode = findNode(graph, function (n) { return n.type === "walkable_surface" && n.values.surfaceId === "bridge_walk_01"; }, "walkable surface aangemaakt");
 
     graph = await connect(graph, worldNode.id, "world", gameOutputNode.id, "world");
+    graph = await connect(graph, editorWorldSettingsNode.id, "editorWorldSettings", gameOutputNode.id, "editorWorldSettings");
+    graph = await connect(graph, gameWorldSettingsNode.id, "gameWorldSettings", gameOutputNode.id, "gameWorldSettings");
     graph = await connect(graph, groundNode.id, "ground", gameOutputNode.id, "ground");
     graph = await connect(graph, cameraNode.id, "camera", gameOutputNode.id, "camera");
     graph = await connect(graph, ambientNode.id, "light", gameOutputNode.id, "lights");
@@ -1240,8 +2193,6 @@ async function main() {
     graph = await connect(graph, spawnNode.id, "spawn", gameOutputNode.id, "spawn");
     graph = await connect(graph, scatterNode.id, "entity", gameOutputNode.id, "entities");
     graph = await connect(graph, terrainLayerNode.id, "terrain", gameOutputNode.id, "terrain");
-    graph = await connect(graph, pathLayerNode.id, "terrain", gameOutputNode.id, "terrain");
-    graph = await connect(graph, waterLayerNode.id, "terrain", gameOutputNode.id, "terrain");
     graph = await connect(graph, surfaceLayerNode.id, "terrain", gameOutputNode.id, "terrain");
     graph = await connect(graph, blockerAreaNode.id, "collision", gameOutputNode.id, "collision");
     graph = await connect(graph, walkableSurfaceNode.id, "collision", gameOutputNode.id, "collision");
@@ -1254,6 +2205,9 @@ async function main() {
     const validate = await call("GET", "/api/editor/validate");
     if (!validate.json.ok) console.error("VALIDATE ERRORS", validate.json.errors);
     assert(validate.status === 200 && validate.json.ok, "validatie is groen");
+    assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
+      return String(message || "").includes("chunk size is very small");
+    }), "kleine chunk size geeft een waarschuwing");
 
     const draft = await call("POST", "/api/editor/save-draft");
     assert(draft.status === 200 && draft.json.ok, "draft opslaan werkt");
@@ -1265,21 +2219,44 @@ async function main() {
     assert(draftWorld.json.editorCamera && draftWorld.json.editorCamera.target && draftWorld.json.editorCamera.target.x === 12 && draftWorld.json.editorCamera.target.y === 3 && draftWorld.json.editorCamera.target.z === -5, "editor camera publiceert target");
     assert(draftWorld.json.world && draftWorld.json.world.fogColor === "#1a2b3c", "draft world publiceert fogColor");
     assert(draftWorld.json.world && draftWorld.json.world.fogDensity === 0.18, "draft world publiceert fogDensity");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowQuality === "high", "draft world publiceert shadowQuality");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowBias === -0.0006, "draft world publiceert shadowBias");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowNormalBias === 0.2, "draft world publiceert shadowNormalBias");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowCameraSize === 90, "draft world publiceert shadowCameraSize");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.shadowCameraFar === 700, "draft world publiceert shadow distance");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game && draftWorld.json.world.performance.game.shadowsEnabled === true, "draft world publiceert game shadows");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.fogEnabled === false, "draft world kan fog in editor uitschakelen");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor && draftWorld.json.world.performance.editor.shadowsEnabled === false, "draft world publiceert editor shadows");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.worldId === "demo_world", "draft world publiceert shared worldId");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.displayName === "Demo", "draft world publiceert shared displayName");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.backgroundColor === "#0b1622", "draft world publiceert shared backgroundColor");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.fogColor === "#1a2b3c", "draft world publiceert shared fogColor");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.fogDensity === 0.18, "draft world publiceert shared fogDensity");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.smoothShading === true, "draft world publiceert shared smoothShading");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "draft world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.preset === "hoog_schaduw", "draft world publiceert editor preset");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow && draftWorld.json.world.performance.editor.shadow.preset === "hoog_schaduw", "draft world publiceert editor shadow block");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.enabled === true, "draft world zet editor shadows aan");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.mapSize === 2048, "draft world publiceert editor shadow mapSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.cameraSize === 120, "draft world publiceert editor shadow cameraSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.cameraFar === 600, "draft world publiceert editor shadowCameraFar");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.staticPropsCast === true, "draft world publiceert editor static prop cast");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.scatterCast === true, "draft world publiceert editor scatter cast");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.shadowResidentMarginChunks === 1, "draft world publiceert editor shadow resident margin");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.preset === "lichte_schaduw", "draft world publiceert game preset");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.pixelRatioCap === 1, "draft world publiceert game preset pixelRatioCap");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.antialias === true, "draft world publiceert game preset antialias");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow && draftWorld.json.world.performance.game.shadow.preset === "lichte_schaduw", "draft world publiceert game shadow block");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.enabled === true, "draft world zet game shadows aan");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.mapSize === 512, "draft world publiceert game shadow mapSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraSize === 75, "draft world publiceert game shadow cameraSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraFar === 350, "draft world publiceert game shadowCameraFar");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.staticPropsCast === true, "draft world publiceert game static prop cast");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.scatterCast === false, "draft world publiceert game scatter cast uit");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.shadowResidentMarginChunks === 0, "draft world publiceert game shadow resident margin");
     assert(draftWorld.json.chunkLoading && draftWorld.json.chunkLoading.editor && draftWorld.json.chunkLoading.game, "draft world publiceert chunkLoading read-model");
     assert(draftWorld.json.chunkLoading.editor.type === "editor" && draftWorld.json.chunkLoading.game.type === "game", "draft world scheidt editor en game chunk loading");
     assert(draftWorld.json.chunkLoading.editor.chunkWidth === 100, "editor chunk width is 100");
-    assert(draftWorld.json.chunkLoading.game.chunkWidth === 100, "game chunk width is 100");
+    assert(draftWorld.json.chunkLoading.game.chunkWidth === 15, "game chunk width is 15");
     assert(draftWorld.json.chunkLoading.editor.editorViewRadiusChunks > draftWorld.json.chunkLoading.game.gameViewRadiusChunks, "editor radius is groter dan game radius");
     assert(draftWorld.json.chunkLoading.game.cameraOnly === true, "game chunkLoading cameraOnly staat aan");
     assert(draftWorld.json.chunkLoading.game.strictUnloadOutsideCamera === true, "game chunkLoading strict unload staat aan");
+    assert(draftWorld.json.chunkLoading.game.residentEntityBudget === 200, "game chunkLoading publiceert residentEntityBudget");
+    assert(draftWorld.json.chunkLoading.game.residentObjectBudget === 300, "game chunkLoading publiceert residentObjectBudget");
+    assert(draftWorld.json.chunkLoading.game.residentScatterInstanceBudget === 500, "game chunkLoading publiceert residentScatterInstanceBudget");
+    assert(draftWorld.json.chunkLoading.game.residentChunkBuildBudgetPerFrame === 2, "game chunkLoading publiceert residentChunkBuildBudgetPerFrame");
     assert(draftWorld.json.collision && Array.isArray(draftWorld.json.collision.walkableSurfaces) && Array.isArray(draftWorld.json.collision.walkableSurfaces[0].points) && draftWorld.json.collision.walkableSurfaces[0].points.length === walkableSurfacePoints.length, "draft world publiceert walkable polygon points");
     assertNear(draftWorld.json.collision.walkableSurfaces[0].points[0].y, 0.425, 0.0001, "draft world bewaart walkable point hoogte");
     assert(Array.isArray(draftWorld.json.scatterAreas) && draftWorld.json.scatterAreas.length === 1, "draft world publiceert één scatter area");
@@ -1322,20 +2299,45 @@ async function main() {
     assert(after.json.camera && after.json.camera.mode === "top-down", "camera is top-down");
     assert(after.json.camera && after.json.camera.id === "main_cam" && after.json.camera.pitch === 60 && after.json.camera.yaw === 0 && after.json.camera.startDistance === 26 && after.json.camera.distance === 20 && after.json.camera.fov === 55, "game camera publiceert nodewaarden");
     assert(!after.json.editorCamera, "editor camera publiceert niet naar /game/");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.worldId === "demo_world", "game world publiceert shared worldId");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.displayName === "Demo", "game world publiceert shared displayName");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.backgroundColor === "#0b1622", "game world publiceert shared backgroundColor");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.fogColor === "#1a2b3c", "game world publiceert shared fogColor");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.fogDensity === 0.18, "game world publiceert shared fogDensity");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.smoothShading === true, "game world publiceert shared smoothShading");
     assert(after.json.world && after.json.world.fogColor === "#1a2b3c", "game world publiceert fogColor");
     assert(after.json.world && after.json.world.fogDensity === 0.18, "game world publiceert fogDensity");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowQuality === "high", "game world publiceert shadowQuality");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowBias === -0.0006, "game world publiceert shadowBias");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowNormalBias === 0.2, "game world publiceert shadowNormalBias");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowCameraSize === 90, "game world publiceert shadowCameraSize");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.shadowCameraFar === 700, "game world publiceert shadow distance");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.game && after.json.world.performance.game.shadowsEnabled === true, "game world publiceert game shadows");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "game world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.preset === "hoog_schaduw", "game world publiceert editor preset");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.pixelRatioCap === 2, "game world publiceert editor preset pixelRatioCap");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow && after.json.world.performance.editor.shadow.preset === "hoog_schaduw", "game world publiceert editor shadow block");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.enabled === true, "game world zet editor shadows aan");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.mapSize === 2048, "game world publiceert editor shadow mapSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.cameraSize === 120, "game world publiceert editor shadowCameraSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.cameraFar === 600, "game world publiceert editor shadow distance");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.staticPropsCast === true, "game world publiceert editor static prop cast");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.scatterCast === true, "game world publiceert editor scatter cast");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.shadowResidentMarginChunks === 1, "game world publiceert editor shadow resident margin");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.preset === "lichte_schaduw", "game world publiceert game preset");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.pixelRatioCap === 1, "game world publiceert game preset pixelRatioCap");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow && after.json.world.performance.game.shadow.preset === "lichte_schaduw", "game world publiceert game shadow block");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.enabled === true, "game world zet game shadows aan");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.mapSize === 512, "game world publiceert game shadow mapSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraSize === 75, "game world publiceert game shadow cameraSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraFar === 350, "game world publiceert game shadow distance");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.staticPropsCast === true, "game world publiceert game static prop cast");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.scatterCast === false, "game world publiceert game scatter cast uit");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.shadowResidentMarginChunks === 0, "game world publiceert game shadow resident margin");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.fogEnabled === false, "game world behoudt editor fog toggle in draft data");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.shadowsEnabled === false, "game world behoudt editor shadows in draft data");
     assert(after.json.chunkLoading && after.json.chunkLoading.editor && after.json.chunkLoading.game, "game world publiceert chunkLoading");
     assert(after.json.chunkLoading.editor.type === "editor" && after.json.chunkLoading.game.type === "game", "game world scheidt editor en game chunk loading");
     assert(after.json.chunkLoading.editor.chunkProfileId === "editor_chunks", "editor chunk profile is gepubliceerd");
     assert(after.json.chunkLoading.game.chunkProfileId === "game_chunks", "game chunk profile is gepubliceerd");
+    assert(after.json.chunkLoading.game.chunkWidth === 15, "game chunk width is 15 na publish");
+    assert(after.json.chunkLoading.game.residentEntityBudget === 200, "game chunkLoading publiceert residentEntityBudget na publish");
+    assert(after.json.chunkLoading.game.residentObjectBudget === 300, "game chunkLoading publiceert residentObjectBudget na publish");
+    assert(after.json.chunkLoading.game.residentScatterInstanceBudget === 500, "game chunkLoading publiceert residentScatterInstanceBudget na publish");
+    assert(after.json.chunkLoading.game.residentChunkBuildBudgetPerFrame === 2, "game chunkLoading publiceert residentChunkBuildBudgetPerFrame na publish");
     const publishedEditorChunkPolicy = resolveChunkPolicy(after.json, "editor");
     const publishedGameChunkPolicy = resolveChunkPolicy(after.json, "game");
     assert(publishedEditorChunkPolicy.source === "editor", "runtime helper kiest de editor chunk policy uit published world");
@@ -1345,9 +2347,12 @@ async function main() {
     assert(publishedEditorWindow.loadedChunks.length > publishedGameWindow.loadedChunks.length, "published editor policy blijft ruimer dan game policy");
     const editorShadowPolicy = resolveShadowPolicy(after.json, "editor");
     const gameShadowPolicy = resolveShadowPolicy(after.json, "game");
-    assert(editorShadowPolicy.enabled === false, "editor shadow policy volgt editor toggle");
+    assert(editorShadowPolicy.enabled === true, "editor shadow policy volgt editor toggle");
+    assert(editorShadowPolicy.preset === "hoog_schaduw", "editor shadow policy gebruikt hoog_schaduw");
+    assert(editorShadowPolicy.mapSize === 2048, "editor shadow policy gebruikt hoog mapSize");
     assert(gameShadowPolicy.enabled === true, "game shadow policy volgt game toggle");
-    assert(gameShadowPolicy.mapSize === 4096, "game shadow policy gebruikt high mapSize");
+    assert(gameShadowPolicy.preset === "lichte_schaduw", "game shadow policy gebruikt lichte_schaduw");
+    assert(gameShadowPolicy.mapSize === 512, "game shadow policy gebruikt lichte mapSize");
     assert(after.json.player && after.json.player.modelAssetId === modelId, "speler verwijst naar geuploade model");
     assert(after.json.player && after.json.player.animationClip === "Idle", "speler publiceert gekozen animationClip");
     assert(after.json.player && after.json.player.idleAnimation === "Idle", "speler publiceert idleAnimation");
@@ -1396,18 +2401,6 @@ async function main() {
     assert(after.json.terrain && Array.isArray(after.json.terrain.layers) && after.json.terrain.layers.length === 1, "terrain layers zijn gepubliceerd");
     assert(after.json.terrain.layers[0].id === "village_grass" && after.json.terrain.layers[0].material === "grass", "terrain layer publiceert metadata");
     assert(Array.isArray(after.json.terrain.layers[0].points) && after.json.terrain.layers[0].points.length === 0, "terrain layer publiceert lege points array");
-    assert(Array.isArray(after.json.terrain.paths) && after.json.terrain.paths.length === 1, "path layers zijn gepubliceerd");
-    assert(Array.isArray(after.json.terrain.paths[0].points) && after.json.terrain.paths[0].points.length === 2, "path layer publiceert points");
-    assert(after.json.terrain.paths[0].materialMode === "preset", "path layer publiceert materialMode");
-    assert(after.json.terrain.paths[0].textureAssetId === null, "path layer publiceert textureAssetId (null)");
-    assert(after.json.terrain.paths[0].textureScale === 5, "path layer publiceert textureScale");
-    assert(after.json.terrain.paths[0].opacity === 1, "path layer publiceert opacity");
-    assert(Array.isArray(after.json.terrain.waters) && after.json.terrain.waters.length === 1, "water layers zijn gepubliceerd");
-    assert(Array.isArray(after.json.terrain.waters[0].points) && after.json.terrain.waters[0].points.length === 2, "water layer publiceert points");
-    assert(after.json.terrain.waters[0].materialMode === "preset", "water layer publiceert materialMode");
-    assert(after.json.terrain.waters[0].textureAssetId === null, "water layer publiceert textureAssetId (null)");
-    assert(after.json.terrain.waters[0].textureScale === 6, "water layer publiceert textureScale");
-    assert(after.json.terrain.waters[0].opacity === 1, "water layer publiceert opacity");
     assert(Array.isArray(after.json.terrain.surfaces) && after.json.terrain.surfaces.length === 1, "surface layers zijn gepubliceerd");
     assert(after.json.terrain.surfaces[0].id === "river_surface_test", "surface layer publiceert id");
     assert(after.json.terrain.surfaces[0].surfaceKind === "river", "surface layer publiceert surfaceKind");
@@ -1436,8 +2429,6 @@ async function main() {
     assert(after.json.terrain.surfaces[0].blocksPlayer === false, "surface layer publiceert blocksPlayer");
     assert(Array.isArray(after.json.terrain.surfaces[0].points) && after.json.terrain.surfaces[0].points.length === 3, "surface layer publiceert points");
     assert(after.json.terrain.surfaces[0].textureAssetId === surfaceMainTextureId, "surface layer publiceert textureAssetId");
-    assert(Array.isArray(after.json.terrain.paths) && after.json.terrain.paths.length === 1, "oude path layer blijft bestaan na toevoeging surface layer");
-    assert(Array.isArray(after.json.terrain.waters) && after.json.terrain.waters.length === 1, "oude water layer blijft bestaan na toevoeging surface layer");
     const publishedCollisionBlockers = after.json.collision && Array.isArray(after.json.collision.blockers) ? after.json.collision.blockers : [];
     assert(publishedCollisionBlockers.length === 2, "collision blockers zijn gepubliceerd");
     const publishedMountainBlocker = publishedCollisionBlockers.find(function (entry) { return entry && entry.reason === "mountain"; }) || null;
@@ -1460,7 +2451,8 @@ async function main() {
     assert(Array.isArray(after.json.ui) && after.json.ui.some(function (entry) { return entry.type === "hud_text" && entry.id === "hud_status"; }), "ui_hud_text blijft gepubliceerd");
     const publishedPerformanceHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "perf_hud_main"; }) : null;
     assert(publishedPerformanceHud && publishedPerformanceHud.type === "debug_performance_hud" && publishedPerformanceHud.enabled === true && publishedPerformanceHud.anchor === "top-right" && publishedPerformanceHud.compact === true && publishedPerformanceHud.updateIntervalMs === 500, "debug_performance_hud publiceert read-model");
-    assert(publishedPerformanceHud && publishedPerformanceHud.metrics && publishedPerformanceHud.metrics.showFps === true && publishedPerformanceHud.metrics.showCollisionShapes === true && publishedPerformanceHud.metrics.showWorldSize === false, "debug_performance_hud publiceert metrics");
+    assert(publishedPerformanceHud && publishedPerformanceHud.metrics && publishedPerformanceHud.metrics.showFps === true && publishedPerformanceHud.metrics.showCollisionShapes === true && publishedPerformanceHud.metrics.showWorldSize === true, "debug_performance_hud publiceert metrics");
+    assert(publishedPerformanceHud && publishedPerformanceHud.metrics && publishedPerformanceHud.metrics.showScatterInstances === true, "debug_performance_hud publiceert showScatterInstances");
     assert(publishedPerformanceHud && publishedPerformanceHud.thresholds && publishedPerformanceHud.thresholds.fpsWarn === 45 && publishedPerformanceHud.thresholds.drawCallsDanger === 140 && publishedPerformanceHud.thresholds.collisionShapesDanger === 150, "debug_performance_hud publiceert thresholds");
     const publishedDisabledPerformanceHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "perf_hud_disabled"; }) : null;
     assert(publishedDisabledPerformanceHud && publishedDisabledPerformanceHud.type === "debug_performance_hud" && publishedDisabledPerformanceHud.enabled === false, "disabled performance HUD publiceert disabled config");
@@ -1521,6 +2513,7 @@ async function main() {
     assert(afterTwoChunkLoadingNodes.status === 200, "game world blijft beschikbaar met meerdere chunk loading nodes");
     assert(afterTwoChunkLoadingNodes.json.chunkLoading && afterTwoChunkLoadingNodes.json.chunkLoading.game && afterTwoChunkLoadingNodes.json.chunkLoading.game.id === gameChunkLoadingNode.id, "eerste game chunk loading node wordt gebruikt");
     assert(afterTwoChunkLoadingNodes.json.chunkLoading.game.chunkProfileId === "game_chunks", "eerste game chunk loading waarden blijven leidend");
+    assert(afterTwoChunkLoadingNodes.json.chunkLoading.game.chunkWidth === 15, "eerste game chunk loading chunk width blijft 15");
 
     const renamedAssetName = "Wizard Prime";
     const renamedAssetCategory = "characters";

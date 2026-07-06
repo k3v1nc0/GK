@@ -2,6 +2,8 @@ import {
   NODE_TYPES,
   GAME_ACTIONS,
   defaultValuesForType,
+  normalizeWorldSettingsPreset,
+  worldSettingsPresetValues,
   resolveNodePort,
   resolveNodePorts,
   isContainer
@@ -217,10 +219,98 @@ function numberOrFallback(value, fallback) {
   return number === null ? fallback : number;
 }
 
+const SHADOW_LEGACY_FIELD_KEYS = [
+  "shadowsEnabled",
+  "shadowQuality",
+  "shadowMapSize",
+  "shadowCameraSize",
+  "shadowCameraFar",
+  "shadowBias",
+  "shadowNormalBias",
+  "shadowType",
+  "staticPropCastShadows",
+  "staticPropReceiveShadows",
+  "scatterCastShadows",
+  "scatterReceiveShadows",
+  "groundReceiveShadows",
+  "terrainReceiveShadows"
+];
+
+function hasOwnValue(source, key) {
+  return Object.prototype.hasOwnProperty.call(source || {}, key);
+}
+
+function shadowLegacyField(source, prefix, key) {
+  const data = source || {};
+  const prefixedKey = prefix ? prefix + key.charAt(0).toUpperCase() + key.slice(1) : key;
+  if (hasOwnValue(data, prefixedKey)) return data[prefixedKey];
+  if (prefix && hasOwnValue(data, key)) return data[key];
+  return undefined;
+}
+
+function hasLegacyShadowFields(source, prefix) {
+  return SHADOW_LEGACY_FIELD_KEYS.some(function (key) {
+    return shadowLegacyField(source, prefix, key) !== undefined;
+  });
+}
+
+function normalizeShadowMapTypeName(value, fallback = "pcf_soft") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!normalized || normalized === "auto") return fallback;
+  if (normalized === "pcfsoft" || normalized === "pcfsoftshadowmap") return "pcf_soft";
+  if (normalized === "pcf" || normalized === "pcfshadowmap") return "pcf";
+  if (normalized === "basic" || normalized === "basicshadowmap") return "basic";
+  if (normalized === "vsm" || normalized === "vsmshadowmap") return "vsm";
+  if (normalized === "pcfsoftshadowmap") return "pcf_soft";
+  return fallback;
+}
+
+function inferShadowPresetFromLegacyFields(source, prefix, fallbackPreset = "middel_schaduw") {
+  const shadowsEnabled = shadowLegacyField(source, prefix, "shadowsEnabled");
+  if (shadowsEnabled === false) return "geen_schaduw";
+  const quality = String(shadowLegacyField(source, prefix, "shadowQuality") || "").trim().toLowerCase();
+  if (quality === "off") return "geen_schaduw";
+  if (quality === "low") return "lichte_schaduw";
+  if (quality === "medium") return "middel_schaduw";
+  if (quality === "high") return "hoog_schaduw";
+  const mapSize = numberOrNull(shadowLegacyField(source, prefix, "shadowMapSize"));
+  if (mapSize !== null) {
+    if (mapSize <= 0) return "geen_schaduw";
+    if (mapSize <= 768) return "lichte_schaduw";
+    if (mapSize <= 1536) return "middel_schaduw";
+    if (mapSize <= 3072) return "hoog_schaduw";
+    return "extreem_schaduw";
+  }
+  const normalizedFallback = normalizeWorldSettingsPreset(fallbackPreset, "middel_schaduw");
+  return normalizedFallback;
+}
+
 function normalizeShadowQuality(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "off" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
   return "medium";
+}
+
+const SHADOW_QUALITY_MAP_SIZES = {
+  off: 0,
+  low: 512,
+  medium: 1024,
+  high: 2048
+};
+
+const SHADOW_QUALITY_CAMERA_SIZE_FALLBACK = {
+  off: 60,
+  low: 80,
+  medium: 60,
+  high: 45
+};
+
+function shadowMapSizeForQuality(quality) {
+  return SHADOW_QUALITY_MAP_SIZES[normalizeShadowQuality(quality)] || SHADOW_QUALITY_MAP_SIZES.medium;
+}
+
+function shadowCameraSizeForQuality(quality) {
+  return SHADOW_QUALITY_CAMERA_SIZE_FALLBACK[normalizeShadowQuality(quality)] || SHADOW_QUALITY_CAMERA_SIZE_FALLBACK.medium;
 }
 
 function nodeLabel(node) {
@@ -288,7 +378,7 @@ function requireAsset(assetService, id, type, label, errors) {
 }
 
 function emptyTerrainReadModel() {
-  return { layers: [], paths: [], waters: [], surfaces: [] };
+  return { layers: [], surfaces: [] };
 }
 
 function emptyCollisionReadModel() {
@@ -305,42 +395,6 @@ function buildTerrainLayerReadModel(node) {
     color: node.values.color,
     textureAssetId: node.values.textureAssetId || null,
     shapeType: node.values.shapeType,
-    points: normalizePointList(node.values.points)
-  };
-}
-
-function buildPathLayerReadModel(node) {
-  return {
-    id: node.values.pathId,
-    label: node.values.label,
-    pathType: node.values.pathType,
-    materialMode: node.values.materialMode || "preset",
-    textureAssetId: node.values.textureAssetId || null,
-    textureScale: numberOrNull(node.values.textureScale) ?? 4,
-    opacity: numberOrNull(node.values.opacity) ?? 1,
-    width: numberOrNull(node.values.width),
-    edgeBlend: numberOrNull(node.values.edgeBlend),
-    yOffset: numberOrNull(node.values.yOffset),
-    slightlySunken: node.values.slightlySunken !== false,
-    speedMultiplier: numberOrNull(node.values.speedMultiplier),
-    points: normalizePointList(node.values.points)
-  };
-}
-
-function buildWaterLayerReadModel(node) {
-  return {
-    id: node.values.waterId,
-    label: node.values.label,
-    waterType: node.values.waterType,
-    materialMode: node.values.materialMode || "preset",
-    textureAssetId: node.values.textureAssetId || null,
-    textureScale: numberOrNull(node.values.textureScale) ?? 6,
-    opacity: numberOrNull(node.values.opacity) ?? 1,
-    width: numberOrNull(node.values.width),
-    y: numberOrNull(node.values.y),
-    color: node.values.color,
-    flowSpeed: numberOrNull(node.values.flowSpeed),
-    blocksPlayer: node.values.blocksPlayer !== false,
     points: normalizePointList(node.values.points)
   };
 }
@@ -785,6 +839,20 @@ function buildScatterBoundaryBlockerReadModel(node, settings) {
   };
 }
 
+function modeDefaultsFromNodeType(type, mode) {
+  const prefix = mode === "editor" ? "editor" : "game";
+  const prefixLength = prefix.length;
+  const defaults = defaultValuesForType(type);
+  const modeDefaults = {};
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!key.startsWith(prefix) || key.length <= prefixLength) continue;
+    const suffix = key.slice(prefixLength);
+    const normalizedKey = suffix.charAt(0).toLowerCase() + suffix.slice(1);
+    modeDefaults[normalizedKey] = value;
+  }
+  return modeDefaults;
+}
+
 function buildHudTextReadModel(node) {
   return {
     id: node.values.moduleId,
@@ -815,9 +883,11 @@ function buildPerformanceHudReadModel(node) {
       showTextures: node.values.showTextures !== false,
       showSceneObjects: node.values.showSceneObjects !== false,
       showEntities: node.values.showEntities !== false,
+      showScatterInstances: node.values.showScatterInstances !== false,
       showTerrainVisuals: node.values.showTerrainVisuals !== false,
       showCollisionShapes: node.values.showCollisionShapes !== false,
-      showWorldSize: node.values.showWorldSize === true
+      showWorldSize: node.values.showWorldSize === true,
+      showChunkCulling: node.values.showChunkCulling === true
     },
     thresholds: {
       fpsTarget: numberOrNull(node.values.fpsTarget),
@@ -847,30 +917,160 @@ function buildUiReadModel(node) {
   return buildHudTextReadModel(node);
 }
 
-function buildWorldPerformanceReadModel(node) {
-  const values = Object.assign({}, defaultValuesForType("world_settings"), node?.values || {});
+// Fase 9.0: the published read-model splits visible settings from one canonical shadow block.
+// New editor/game nodes publish `performance.<mode>.shadow`; legacy flat shadow fields are only
+// read when migrating old worlds and are otherwise ignored.
+function buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode = null, gameWorldSettingsNode = null) {
+  const sharedDefaults = defaultValuesForType("world_settings");
+  const editorDefaults = modeDefaultsFromNodeType("editor_world_settings", "editor");
+  const gameDefaults = modeDefaultsFromNodeType("game_world_settings", "game");
+  const sharedSource = worldNode?.values || {};
+  const legacySource = !editorWorldSettingsNode && !gameWorldSettingsNode ? sharedSource : {};
+  const editorSource = editorWorldSettingsNode?.values || legacySource;
+  const gameSource = gameWorldSettingsNode?.values || legacySource;
+
+  function buildShadowReadModel(mode, sourceValues, fallbackPreset) {
+    const prefix = mode === "editor" ? "editor" : "game";
+    const source = sourceValues || {};
+    const shadowSource = source.shadow && typeof source.shadow === "object" ? source.shadow : null;
+    const hasLegacyFields = hasLegacyShadowFields(source, prefix);
+    const explicitPresetValue = shadowSource?.preset ?? shadowLegacyField(source, prefix, "preset") ?? source[prefix + "Preset"];
+    const explicitPreset = explicitPresetValue === undefined || explicitPresetValue === null || String(explicitPresetValue).trim() === ""
+      ? null
+      : normalizeWorldSettingsPreset(explicitPresetValue, fallbackPreset);
+    const resolvedPreset = explicitPreset !== null
+      ? explicitPreset
+      : (shadowSource
+        ? normalizeWorldSettingsPreset(fallbackPreset, "middel_schaduw")
+        : (hasLegacyFields ? inferShadowPresetFromLegacyFields(source, prefix, fallbackPreset) : normalizeWorldSettingsPreset(fallbackPreset, "middel_schaduw")));
+    const presetValues = worldSettingsPresetValues(mode, resolvedPreset) || worldSettingsPresetValues(mode, fallbackPreset) || {};
+    const readShadow = function (key, legacyKey, fallback) {
+      if (shadowSource && shadowSource[key] !== undefined) return shadowSource[key];
+      if (!shadowSource) {
+        const legacyValue = shadowLegacyField(source, prefix, legacyKey);
+        if (legacyValue !== undefined) return legacyValue;
+      }
+      if (presetValues[key] !== undefined) return presetValues[key];
+      return fallback;
+    };
+    const shadow = {
+      preset: resolvedPreset,
+      enabled: resolvedPreset !== "geen_schaduw",
+      mapSize: Math.max(0, Math.floor(numberOrFallback(readShadow("mapSize", "shadowMapSize", 0), 0))),
+      cameraSize: Math.max(0, numberOrFallback(readShadow("cameraSize", "shadowCameraSize", 0), 0)),
+      cameraNear: Math.max(0, numberOrFallback(readShadow("cameraNear", "shadowCameraNear", 1), 1) || 1),
+      cameraFar: Math.max(0, numberOrFallback(readShadow("cameraFar", "shadowCameraFar", 0), 0)),
+      bias: numberOrFallback(readShadow("bias", "shadowBias", -0.0003), -0.0003),
+      normalBias: numberOrFallback(readShadow("normalBias", "shadowNormalBias", 0.04), 0.04),
+      type: normalizeShadowMapTypeName(readShadow("type", "shadowType", presetValues.type || "pcf_soft"), presetValues.type || "pcf_soft"),
+      updateMode: String(readShadow("updateMode", "shadowUpdateMode", presetValues.updateMode || "stable_snapped") || "stable_snapped").trim() || "stable_snapped",
+      snapWorldUnits: Math.max(1, Math.floor(numberOrFallback(readShadow("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10), presetValues.snapWorldUnits || 10))),
+      focusMode: String(readShadow("focusMode", "shadowFocusMode", presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")) || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")).trim() || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn"),
+      staticPropsCast: readShadow("staticPropsCast", "staticPropCastShadows", presetValues.staticPropsCast === true) === true,
+      staticPropsReceive: readShadow("staticPropsReceive", "staticPropReceiveShadows", presetValues.staticPropsReceive !== false) !== false,
+      scatterCast: readShadow("scatterCast", "scatterCastShadows", presetValues.scatterCast === true) === true,
+      scatterReceive: readShadow("scatterReceive", "scatterReceiveShadows", presetValues.scatterReceive !== false) !== false,
+      groundReceives: readShadow("groundReceives", "groundReceiveShadows", presetValues.groundReceives !== false) !== false,
+      terrainReceives: readShadow("terrainReceives", "terrainReceiveShadows", presetValues.terrainReceives !== false) !== false,
+      shadowResidentMarginChunks: Math.max(0, Math.floor(numberOrFallback(readShadow("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0), presetValues.shadowResidentMarginChunks || 0)))
+    };
+    return {
+      shadow: shadow,
+      legacyFieldsIgnored: Boolean(hasLegacyFields)
+    };
+  }
+
+  function buildModeReadModel(mode, sourceValues, defaults) {
+    const prefix = mode === "editor" ? "editor" : "game";
+    const source = sourceValues || {};
+    const explicitPreset = hasOwnValue(source, prefix + "Preset")
+      ? normalizeWorldSettingsPreset(source[prefix + "Preset"], defaults.preset || "middel_schaduw")
+      : null;
+    const seedPreset = explicitPreset || defaults.preset || "middel_schaduw";
+    const shadowState = buildShadowReadModel(mode, source, seedPreset);
+    const preset = explicitPreset || shadowState.shadow.preset;
+    return {
+      preset: preset,
+      pixelRatioCap: numberOrFallback(source[prefix + "PixelRatioCap"], defaults.pixelRatioCap),
+      antialias: source[prefix + "Antialias"] !== undefined ? source[prefix + "Antialias"] === true : defaults.antialias === true,
+      fogEnabled: source[prefix + "FogEnabled"] !== undefined ? source[prefix + "FogEnabled"] === true : defaults.fogEnabled === true,
+      maxFps: numberOrFallback(source[prefix + "MaxFps"], defaults.maxFps),
+      debugHelpersVisible: source[prefix + "DebugHelpersVisible"] !== undefined ? source[prefix + "DebugHelpersVisible"] === true : defaults.debugHelpersVisible === true,
+      debugChunkOverlayVisible: source[prefix + "DebugChunkOverlayVisible"] !== undefined ? source[prefix + "DebugChunkOverlayVisible"] === true : defaults.debugChunkOverlayVisible === true,
+      chunkGridVisible: source[prefix + "ChunkGridVisible"] !== undefined ? source[prefix + "ChunkGridVisible"] === true : defaults.chunkGridVisible === true,
+      chunkLabelsVisible: source[prefix + "ChunkLabelsVisible"] !== undefined ? source[prefix + "ChunkLabelsVisible"] === true : defaults.chunkLabelsVisible === true,
+      streamingDebugVisible: source[prefix + "StreamingDebugVisible"] !== undefined ? source[prefix + "StreamingDebugVisible"] === true : defaults.streamingDebugVisible === true,
+      shadow: shadowState.shadow
+    };
+  }
+
+  const usedLegacyWorldSettingsPerformanceFields = Boolean(
+    hasLegacyShadowFields(sharedSource, "") ||
+    hasLegacyShadowFields(editorSource, "editor") ||
+    hasLegacyShadowFields(gameSource, "game")
+  );
+
   return {
     shared: {
-      shadowQuality: normalizeShadowQuality(values.shadowQuality),
-      shadowBias: numberOrFallback(values.shadowBias, -0.0003),
-      shadowNormalBias: numberOrFallback(values.shadowNormalBias, 0.04),
-      shadowCameraSize: numberOrFallback(values.shadowCameraSize, 60),
-      shadowCameraFar: numberOrFallback(values.shadowCameraFar, 400),
-      smoothShading: values.smoothShading !== false
+      worldId: sharedSource.worldId ?? sharedDefaults.worldId,
+      displayName: sharedSource.displayName ?? sharedDefaults.displayName,
+      backgroundColor: sharedSource.backgroundColor ?? sharedDefaults.backgroundColor,
+      fogColor: sharedSource.fogColor ?? sharedDefaults.fogColor,
+      fogDensity: numberOrFallback(sharedSource.fogDensity, sharedDefaults.fogDensity),
+      smoothShading: sharedSource.smoothShading !== false
     },
-    game: {
-      pixelRatioCap: numberOrNull(values.gamePixelRatioCap),
-      shadowsEnabled: values.gameShadowsEnabled !== false,
-      batchStaticProps: values.gameBatchStaticProps !== false,
-      batchScatterProps: values.gameBatchScatterProps !== false,
-      staticPropCastShadows: values.gameStaticPropCastShadows === true,
-      staticPropReceiveShadows: values.gameStaticPropReceiveShadows !== false
-    },
-    editor: {
-      pixelRatioCap: numberOrNull(values.editorPixelRatioCap),
-      fogEnabled: values.editorFogEnabled !== false,
-      shadowsEnabled: values.editorShadowsEnabled !== false
+    editor: buildModeReadModel("editor", editorSource, editorDefaults),
+    game: buildModeReadModel("game", gameSource, gameDefaults),
+    compatibility: {
+      usedLegacyWorldSettingsPerformanceFields: usedLegacyWorldSettingsPerformanceFields,
+      legacyShadowFieldsMigrated: usedLegacyWorldSettingsPerformanceFields
     }
+  };
+}
+
+function buildGroundReadModel(node) {
+  const values = Object.assign({}, defaultValuesForType("ground_surface"), node?.values || {});
+  const boundsMode = String(values.boundsMode || "centerSize").trim() === "explicitBounds" ? "explicitBounds" : "centerSize";
+  const width = numberOrFallback(values.width, defaultValuesForType("ground_surface").width);
+  const depth = numberOrFallback(values.depth, defaultValuesForType("ground_surface").depth);
+  const explicitMinX = numberOrNull(values.minX);
+  const explicitMaxX = numberOrNull(values.maxX);
+  const explicitMinZ = numberOrNull(values.minZ);
+  const explicitMaxZ = numberOrNull(values.maxZ);
+  const centeredMinX = -width / 2;
+  const centeredMaxX = width / 2;
+  const centeredMinZ = -depth / 2;
+  const centeredMaxZ = depth / 2;
+  const minX = boundsMode === "explicitBounds" && explicitMinX !== null && explicitMaxX !== null
+    ? Math.min(explicitMinX, explicitMaxX)
+    : centeredMinX;
+  const maxX = boundsMode === "explicitBounds" && explicitMinX !== null && explicitMaxX !== null
+    ? Math.max(explicitMinX, explicitMaxX)
+    : centeredMaxX;
+  const minZ = boundsMode === "explicitBounds" && explicitMinZ !== null && explicitMaxZ !== null
+    ? Math.min(explicitMinZ, explicitMaxZ)
+    : centeredMinZ;
+  const maxZ = boundsMode === "explicitBounds" && explicitMinZ !== null && explicitMaxZ !== null
+    ? Math.max(explicitMinZ, explicitMaxZ)
+    : centeredMaxZ;
+  const textureWorldSizeX = Math.max(0.01, numberOrFallback(values.textureWorldSizeX, 10));
+  const textureWorldSizeZ = Math.max(0.01, numberOrFallback(values.textureWorldSizeZ, 10));
+  return {
+    id: values.groundId,
+    width: Math.max(0.01, maxX - minX),
+    depth: Math.max(0.01, maxZ - minZ),
+    y: numberOrNull(values.y),
+    materialColor: values.materialColor,
+    textureAssetId: values.textureAssetId,
+    textureRepeat: numberOrNull(values.textureRepeat),
+    textureWorldSizeX: textureWorldSizeX,
+    textureWorldSizeZ: textureWorldSizeZ,
+    textureRepeatMode: "world",
+    boundsMode: boundsMode,
+    minX: minX,
+    maxX: maxX,
+    minZ: minZ,
+    maxZ: maxZ
   };
 }
 
@@ -893,7 +1093,12 @@ function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
     preloadMarginChunks: numberOrFallback(values.preloadMarginChunks, defaults.preloadMarginChunks),
     unloadMarginChunks: numberOrFallback(values.unloadMarginChunks, defaults.unloadMarginChunks),
     maxLoadedChunks: numberOrFallback(values.maxLoadedChunks, defaults.maxLoadedChunks),
-    debugOverlay: values.debugOverlay === true
+    debugOverlay: values.debugOverlay === true,
+    residentEntityBudget: numberOrFallback(values.residentEntityBudget, defaults.residentEntityBudget),
+    residentObjectBudget: numberOrFallback(values.residentObjectBudget, defaults.residentObjectBudget),
+    residentScatterInstanceBudget: numberOrFallback(values.residentScatterInstanceBudget, defaults.residentScatterInstanceBudget),
+    residentChunkBuildBudgetPerFrame: numberOrFallback(values.residentChunkBuildBudgetPerFrame, defaults.residentChunkBuildBudgetPerFrame),
+    terrainVisualChunkingEnabled: values.terrainVisualChunkingEnabled === true
   };
 }
 
@@ -951,6 +1156,13 @@ function validateChunkLoadingReadModel(chunkLoading, warnings) {
   if (chunkLoading.game && chunkLoading.game.cameraOnly === false) {
     pushUniqueWarning(warnings, "Game Chunk Loading cameraOnly staat uit; dit kan meer chunks laden dan de vaste game camera nodig heeft.");
   }
+  if (chunkLoading.game) {
+    const chunkWorldWidth = numberOrNull(chunkLoading.game.chunkWidth) * numberOrNull(chunkLoading.game.tileSize);
+    const chunkWorldDepth = numberOrNull(chunkLoading.game.chunkDepth) * numberOrNull(chunkLoading.game.tileSize);
+    if (Number.isFinite(chunkWorldWidth) && Number.isFinite(chunkWorldDepth) && (chunkWorldWidth < 25 || chunkWorldDepth < 25)) {
+      pushUniqueWarning(warnings, "Game Chunk Loading chunk size is very small; this can cause frequent chunk switching. Use 25-50 for laptop baseline unless intentionally testing micro chunks.");
+    }
+  }
   for (const model of [chunkLoading.editor, chunkLoading.game]) {
     if (!model) continue;
     const preloadMarginChunks = numberOrNull(model.preloadMarginChunks);
@@ -965,8 +1177,6 @@ function collectTerrainReadModel(nodes) {
   const terrain = emptyTerrainReadModel();
   for (const node of nodes || []) {
     if (node.type === "terrain_layer") terrain.layers.push(buildTerrainLayerReadModel(node));
-    else if (node.type === "path_layer") terrain.paths.push(buildPathLayerReadModel(node));
-    else if (node.type === "water_layer") terrain.waters.push(buildWaterLayerReadModel(node));
     else if (node.type === "surface_layer") terrain.surfaces.push(buildSurfaceLayerReadModel(node));
   }
   return terrain;
@@ -1136,19 +1346,7 @@ export function validateGraphForPublish(graph, services = {}) {
       return incomingNodes(graph, output, "terrain", nodeMap);
     }) || [];
     for (const node of terrainNodes) {
-      if (node.type === "path_layer") {
-        validatePointList(errors, node, 2);
-        if (node.values.materialMode === "texture" && !node.values.textureAssetId) {
-          warnings.push("Path layer '" + (node.values.label || node.id) + "' staat op texture mode maar heeft geen Texture asset gekozen.");
-        }
-        if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Path layer '" + (node.values.label || node.id) + "' texture", errors);
-      } else if (node.type === "water_layer") {
-        if (node.values.waterType === "river") validatePointList(errors, node, 2);
-        if (node.values.materialMode === "texture" && !node.values.textureAssetId) {
-          warnings.push("Water layer '" + (node.values.label || node.id) + "' staat op texture mode maar heeft geen Texture asset gekozen.");
-        }
-        if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Water layer '" + (node.values.label || node.id) + "' texture", errors);
-      } else if (node.type === "surface_layer") {
+      if (node.type === "surface_layer") {
         validatePointList(errors, node, 2);
         if (node.values.textureAssetId) requireAsset(services.assetService, node.values.textureAssetId, ["texture", "image"], "Surface layer '" + (node.values.label || node.id) + "' texture", errors);
         if (node.values.secondaryTextureAssetId) requireAsset(services.assetService, node.values.secondaryTextureAssetId, ["texture", "image"], "Surface layer '" + (node.values.label || node.id) + "' secondary texture", errors);
@@ -1220,6 +1418,8 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   if (!outputNode) return empty;
   const nodeMap = nodeMapForGraph(graph);
   const worldNode = firstIncomingNode(graph, outputNode, "world", nodeMap);
+  const editorWorldSettingsNode = firstIncomingNode(graph, outputNode, "editorWorldSettings", nodeMap);
+  const gameWorldSettingsNode = firstIncomingNode(graph, outputNode, "gameWorldSettings", nodeMap);
   const groundNode = firstIncomingNode(graph, outputNode, "ground", nodeMap);
   const cameraNode = firstIncomingNode(graph, outputNode, "camera", nodeMap);
   const playerNode = firstIncomingNode(graph, outputNode, "player", nodeMap);
@@ -1285,16 +1485,10 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
       backgroundColor: worldNode.values.backgroundColor,
       fogColor: worldNode.values.fogColor,
       fogDensity: numberOrNull(worldNode.values.fogDensity),
-      performance: buildWorldPerformanceReadModel(worldNode)
+      performance: buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode, gameWorldSettingsNode)
     } : null,
     ground: groundNode ? {
-      id: groundNode.values.groundId,
-      width: numberOrNull(groundNode.values.width),
-      depth: numberOrNull(groundNode.values.depth),
-      y: numberOrNull(groundNode.values.y),
-      materialColor: groundNode.values.materialColor,
-      textureAssetId: groundNode.values.textureAssetId,
-      textureRepeat: numberOrNull(groundNode.values.textureRepeat)
+      ...buildGroundReadModel(groundNode)
     } : null,
     camera: cameraNode ? {
       id: cameraNode.values.cameraId,
