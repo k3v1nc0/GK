@@ -1557,7 +1557,7 @@ function terrainActiveSessionModeLabel() {
 }
 
 function terrainShortcutSummaryText() {
-  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, E extrude, Z height, Del delete | Material: S scale, X/Y/Z axis";
+  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, F extrude, Z height, Del delete | Material: S scale, X/Y/Z axis";
 }
 
 function terrainNodeCapabilities(node) {
@@ -1753,7 +1753,7 @@ function scatterActiveSessionModeLabel() {
 }
 
 function scatterShortcutSummaryText() {
-  return "G move, R rotate, T scale, E add point, Del delete, Shift-click multi-select";
+  return "G move, R rotate, T scale, F extrude, Del delete, Shift-click multi-select";
 }
 
 function scatterSelectionText(node) {
@@ -3217,6 +3217,12 @@ async function boot() {
       captureUploadBrowserLoadTiming(info);
     },
     onSelectEntity: function (entityId) {
+      if (!entityId) {
+        clearSelection({ clearPendingEdge: true });
+        renderGraph();
+        setStatus("Deselected.", "");
+        return;
+      }
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
       focusGraphNode(node.id);
@@ -6448,8 +6454,7 @@ function handleTerrainPointerDown(event) {
   }
 
   if (state.terrainTool.mode === "select") {
-    const currentPoints = terrainNodePoints(node);
-    if (capabilities.pointEditing && ground && currentPoints.length < terrainMinPointCount(node.type)) {
+    if (shouldPlaceFirstPoints) {
       void terrainAddPoint(node, ground);
       return;
     }
@@ -6761,7 +6766,7 @@ function scatterKeyboardOwnsShortcuts(scatterNode, event) {
   return keyMatches(event, "g")
     || keyMatches(event, "r")
     || keyMatches(event, "t")
-    || keyMatches(event, "e")
+    || keyMatches(event, "f")
     || event.key === "Escape"
     || event.key === "Delete"
     || event.key === "Backspace"
@@ -6811,7 +6816,7 @@ function handleEditorKeyDown(event) {
       setStatus("Scale ready. Click or Enter to confirm.", "");
       return;
     }
-    if (!event.altKey && !meta && keyMatches(event, "e")) {
+    if (!event.altKey && !meta && keyMatches(event, "f")) {
       consumeShortcutEvent(event);
       if (!Number.isInteger(selectedIndex)) {
         setStatus("Select a point first.", "error");
@@ -6904,7 +6909,7 @@ function handleEditorKeyDown(event) {
       setStatus("Move ready. Click or Enter to confirm.", "");
       return;
     }
-    if (!event.altKey && !meta && keyMatches(event, "e")) {
+    if (!event.altKey && !meta && keyMatches(event, "f")) {
       consumeShortcutEvent(event);
       if (!Number.isInteger(selectedIndex)) {
         setStatus("Select a point first.", "error");

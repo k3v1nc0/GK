@@ -3182,6 +3182,17 @@ const SURFACE_KIND_FALLBACK_COLORS = {
 
 const COLLISION_EPSILON = 0.000001;
 
+const EDITOR_FLY_CAMERA_SPEED = 30;
+const EDITOR_FLY_CAMERA_SPRINT_MULTIPLIER = 2;
+const EDITOR_FLY_CAMERA_CODES = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"]);
+
+function isEditableEventTarget(target) {
+  if (!target || typeof target.tagName !== "string") return false;
+  const tag = target.tagName.toUpperCase();
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return true;
+  return Boolean(target.isContentEditable);
+}
+
 function safeScale(value) {
   if (!Number.isFinite(value)) return 1;
   if (Math.abs(value) < 0.001) return value < 0 ? -0.001 : 0.001;
@@ -4028,7 +4039,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const entityRoots = new Map();
   const solids = [];
   const animationMixers = new Map();
-  const modifierState = { ctrlKey: false };
+  const modifierState = { ctrlKey: false, shiftKey: false };
 
   let world = null;
   let worldBuildGeneration = 0;
@@ -4126,6 +4137,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let editorAuxClickHandler = null;
   let editorKeyDownHandler = null;
   let editorKeyUpHandler = null;
+  let editorWindowBlurHandler = null;
   let editorDirectPointerMoveHandler = null;
   let editorDirectPointerUpHandler = null;
   let editorDirectMouseMoveHandler = null;
@@ -4203,6 +4215,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const moveVector = new THREE.Vector3();
   const cameraForward = new THREE.Vector3();
   const cameraRight = new THREE.Vector3();
+  const flyCameraKeys = new Set();
+  const flyCameraForward = new THREE.Vector3();
+  const flyCameraRight = new THREE.Vector3();
+  const flyCameraMove = new THREE.Vector3();
   const movementTarget = new THREE.Vector3();
   const interactables = [];
   let activeInteractable = null;
@@ -6928,7 +6944,7 @@ function resolveChunkDebugCenter(policy) {
         event.stopImmediatePropagation();
         return;
       }
-      if ((event.button === 1 || event.button === 0) && event.shiftKey && !transformState.active) {
+      if (event.button === 0 && event.shiftKey && !transformState.active) {
         if (beginViewportPan(event)) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -6943,8 +6959,18 @@ function resolveChunkDebugCenter(policy) {
         event.preventDefault();
         return;
       }
-      if (event.button === 1) updateOrbitMouseMapping(event.ctrlKey || event.metaKey);
-      if (event.button === 1) event.preventDefault();
+      if (event.button === 1) {
+        updateOrbitMouseMapping(event.ctrlKey || event.metaKey);
+        event.preventDefault();
+        // MMB is mapped to ROTATE, but OrbitControls itself swaps ROTATE for PAN whenever
+        // shiftKey is held on the initiating pointerdown (see its onMouseDown). Shift is now
+        // also the fly-camera sprint modifier, so neutralize it here to keep MMB orbiting.
+        if (event.shiftKey) {
+          try {
+            Object.defineProperty(event, "shiftKey", { value: false, configurable: true });
+          } catch {}
+        }
+      }
     };
     editorContextMenuHandler = function (event) {
       event.preventDefault();
@@ -6962,6 +6988,16 @@ function resolveChunkDebugCenter(policy) {
         updateOrbitMouseMapping();
         applyTransformSnapState();
       }
+      if (event.key === "Shift") {
+        modifierState.shiftKey = true;
+      }
+      if (EDITOR_FLY_CAMERA_CODES.has(event.code) && !event.ctrlKey && !event.metaKey && !isEditableEventTarget(event.target)) {
+        event.preventDefault();
+        if (!flyCameraKeys.has(event.code)) {
+          flyCameraKeys.add(event.code);
+          requestRender("fly-camera-start");
+        }
+      }
     };
     editorKeyUpHandler = function (event) {
       if (event.key === "Control" || event.key === "Meta") {
@@ -6969,12 +7005,21 @@ function resolveChunkDebugCenter(policy) {
         updateOrbitMouseMapping();
         applyTransformSnapState();
       }
+      if (event.key === "Shift") {
+        modifierState.shiftKey = false;
+      }
+      flyCameraKeys.delete(event.code);
+    };
+    editorWindowBlurHandler = function () {
+      flyCameraKeys.clear();
+      modifierState.shiftKey = false;
     };
     canvas.addEventListener("pointerdown", editorPointerDownCaptureHandler, true);
     canvas.addEventListener("contextmenu", editorContextMenuHandler);
     canvas.addEventListener("auxclick", editorAuxClickHandler);
     window.addEventListener("keydown", editorKeyDownHandler);
     window.addEventListener("keyup", editorKeyUpHandler);
+    window.addEventListener("blur", editorWindowBlurHandler);
     editorDirectPointerMoveHandler = handleTransformPointerMove;
     editorDirectPointerUpHandler = handleTransformPointerUp;
     editorDirectMouseMoveHandler = handleTransformPointerMove;
@@ -7016,8 +7061,8 @@ function resolveChunkDebugCenter(policy) {
       const entityId = pickEntity(event);
       if (entityId) {
         selectEntity(entityId);
-        onSelectEntity(entityId);
       }
+      onSelectEntity(entityId || null);
     };
     canvas.addEventListener("pointerdown", editorPointerDownHandler);
 } else {
@@ -7297,7 +7342,8 @@ function resolveChunkDebugCenter(policy) {
     const modePerformance = activeModePerformance();
     const shouldAnimateModels = mode === "game" || (mode === "editor" && previewAnimations && animationMixers.size > 0);
     const shouldAnimateSurfaces = surfaceAnimMaterials.length > 0 && (mode !== "game" || modePerformance.surfaceAnimationEnabled !== false) && (mode === "game" || mode === "editor");
-    const shouldAnimate = shouldAnimateModels || shouldAnimateSurfaces;
+    const shouldFlyCamera = mode === "editor" && flyCameraKeys.size > 0;
+    const shouldAnimate = shouldAnimateModels || shouldAnimateSurfaces || shouldFlyCamera;
     frameTiming.shouldAnimateModels = shouldAnimateModels;
     frameTiming.shouldAnimateSurfaces = shouldAnimateSurfaces;
     let sectionStart = performance.now();
@@ -7313,6 +7359,7 @@ function resolveChunkDebugCenter(policy) {
     if (selectionHelper?.visible) selectionHelper.update();
     if (transformGuide?.visible) updateTransformGuide();
     if (mode === "game") updatePlayer(delta);
+    if (shouldFlyCamera) updateFlyCamera(delta);
     frameTiming.updatePlayerMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
     syncChunkDebugState("frame");
@@ -10936,6 +10983,25 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  function updateFlyCamera(delta) {
+    if (!orbitControls || flyCameraKeys.size === 0) return;
+    camera.getWorldDirection(flyCameraForward);
+    flyCameraRight.crossVectors(flyCameraForward, camera.up).normalize();
+    flyCameraMove.set(0, 0, 0);
+    if (flyCameraKeys.has("KeyW")) flyCameraMove.add(flyCameraForward);
+    if (flyCameraKeys.has("KeyS")) flyCameraMove.sub(flyCameraForward);
+    if (flyCameraKeys.has("KeyD")) flyCameraMove.add(flyCameraRight);
+    if (flyCameraKeys.has("KeyA")) flyCameraMove.sub(flyCameraRight);
+    if (flyCameraKeys.has("KeyE")) flyCameraMove.y += 1;
+    if (flyCameraKeys.has("KeyQ")) flyCameraMove.y -= 1;
+    if (flyCameraMove.lengthSq() < 0.0001) return;
+    const flySpeed = EDITOR_FLY_CAMERA_SPEED * (modifierState.shiftKey ? EDITOR_FLY_CAMERA_SPRINT_MULTIPLIER : 1);
+    flyCameraMove.normalize().multiplyScalar(flySpeed * delta);
+    camera.position.add(flyCameraMove);
+    orbitControls.target.add(flyCameraMove);
+    orbitControls.update();
+  }
+
   function updateCameraGroundBasis() {
     const target = orbitControls ? orbitControls.target : camTarget;
     cameraForward.set(target.x - camera.position.x, 0, target.z - camera.position.z);
@@ -12012,6 +12078,8 @@ function resolveChunkDebugCenter(policy) {
     if (editorAuxClickHandler) canvas.removeEventListener("auxclick", editorAuxClickHandler);
     if (editorKeyDownHandler) window.removeEventListener("keydown", editorKeyDownHandler);
     if (editorKeyUpHandler) window.removeEventListener("keyup", editorKeyUpHandler);
+    if (editorWindowBlurHandler) window.removeEventListener("blur", editorWindowBlurHandler);
+    flyCameraKeys.clear();
     if (editorPointerDownHandler) canvas.removeEventListener("pointerdown", editorPointerDownHandler);
     if (gamePointerDownHandler) canvas.removeEventListener("pointerdown", gamePointerDownHandler);
     if (gameKeyDownHandler) window.removeEventListener("keydown", gameKeyDownHandler);
