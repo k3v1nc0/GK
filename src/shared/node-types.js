@@ -21,6 +21,8 @@ export const GAME_ACTIONS = [
 
 export const DATA_TYPE_COLORS = {
   world: "#7bd4ff",
+  editorWorldSettings: "#8fd5ff",
+  gameWorldSettings: "#ffb454",
   ground: "#7bd4ff",
   terrain: "#7fcf68",
   collision: "#f0b35a",
@@ -119,102 +121,450 @@ const EDITOR_CAMERA_FIELDS = {
 };
 
 const WORLD_SETTINGS_SHARED_FIELDS = {
-  worldId: { section: "Shared scene", label: "World id", type: "text", default: "main_world", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
-  displayName: { section: "Shared scene", label: "Display name", type: "text", default: "My World", required: false, maxLength: 96 },
-  backgroundColor: { section: "Shared scene", label: "Background color", type: "color", default: "#101a26", required: false },
-  fogColor: { section: "Shared scene", label: "Fog color", type: "color", default: "#101a26", required: false },
-  fogDensity: { section: "Shared scene", label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
-  smoothShading: { section: "Shared scene", label: "Smooth shading", type: "boolean", default: true, required: true },
-  shadowQuality: {
-    section: "Shadow policy",
-    label: "Shadow quality",
-    type: "select",
-    options: ["off", "low", "medium", "high"],
-    default: "medium",
-    required: true,
-    help: "Kies de shadow-resolutie. Off zet shadows uit. Low is sneller maar ruwer, medium is de balans, high is het scherpst maar zwaarder."
-  },
-  shadowBias: {
-    section: "Shadow policy",
-    label: "Shadow bias",
-    type: "number",
-    default: -0.0003,
-    min: -0.01,
-    max: 0.01,
-    step: 0.0001,
-    required: true,
-    help: "Voorkomt shadow acne op vlakke meshes. Lager, dus meer negatief, helpt tegen banding en strepen. Hoger, richting 0, houdt de schaduw strakker maar kan acne terugbrengen."
-  },
-  shadowNormalBias: {
-    section: "Shadow policy",
-    label: "Shadow normal bias",
-    type: "number",
-    default: 0.04,
-    min: 0,
-    max: 1,
-    step: 0.001,
-    required: true,
-    help: "Verplaatst de schaduw langs de normale van het oppervlak. Hoger helpt op vlakke of schuine vlakken, maar kan de schaduw laten zweven. Lager houdt contact strakker, maar kan acne terugbrengen."
-  },
-  shadowCameraSize: {
-    section: "Shadow policy",
-    label: "Shadow camera size",
-    type: "number",
-    default: 60,
-    min: 5,
-    max: 500,
-    step: 1,
-    required: true,
-    help: "Grote waarde dekt meer van de wereld, maar maakt shadows minder precies en kan banding verergeren. Kleine waarde maakt de shadows scherper, maar kan ze afsnijden buiten het bereik."
-  },
-  shadowCameraFar: {
-    section: "Shadow policy",
-    label: "Shadow distance",
-    type: "number",
-    default: 400,
-    min: 10,
-    max: 5000,
-    step: 10,
-    required: true,
-    help: "Bepaalt hoe ver de directional light shadows mee mogen rekenen. Hoger reikt verder maar kost precisie. Lager geeft meer detail dichtbij, maar snijdt verre shadows af."
-  }
+  worldId: { section: "Shared World", label: "World id", type: "text", default: "main_world", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+  displayName: { section: "Shared World", label: "Display name", type: "text", default: "My World", required: false, maxLength: 96 },
+  backgroundColor: { section: "Shared World", label: "Background color", type: "color", default: "#101a26", required: false },
+  fogColor: { section: "Shared World", label: "Fog color", type: "color", default: "#101a26", required: false },
+  fogDensity: { section: "Shared World", label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+  smoothShading: { section: "Shared World", label: "Smooth shading", type: "boolean", default: true, required: true }
 };
 
-const WORLD_SETTINGS_GAME_FIELDS = {
-  gamePixelRatioCap: { section: "Game performance", label: "Pixel ratio cap", type: "number", default: 1, min: 0.5, max: 2, step: 0.05, required: true },
-  gameShadowsEnabled: {
-    section: "Game performance",
-    label: "Game shadows",
-    type: "boolean",
-    default: true,
-    required: true,
-    help: "Zet shadows in /game/ aan of uit. Uit geeft iets meer performance en maakt schaduwproblemen in de game onzichtbaar."
-  },
-  gameBatchStaticProps: { section: "Game performance", label: "Batch static props", type: "boolean", default: true, required: true },
-  gameBatchScatterProps: { section: "Game performance", label: "Batch scatter props", type: "boolean", default: true, required: true },
-  gameStaticPropCastShadows: { section: "Game performance", label: "Static props cast shadows", type: "boolean", default: false, required: true },
-  gameStaticPropReceiveShadows: { section: "Game performance", label: "Static props receive shadows", type: "boolean", default: true, required: true }
+export const WORLD_SHADOW_PRESET_NAMES = ["geen_schaduw", "lichte_schaduw", "middel_schaduw", "hoog_schaduw", "extreem_schaduw"];
+export const WORLD_SETTINGS_PRESET_NAMES = WORLD_SHADOW_PRESET_NAMES;
+export const WORLD_SHADOW_PRESET_OPTIONS = [
+  { value: "geen_schaduw", label: "Geen schaduw" },
+  { value: "lichte_schaduw", label: "Lichte schaduw" },
+  { value: "middel_schaduw", label: "Middel schaduw" },
+  { value: "hoog_schaduw", label: "Hoog schaduw" },
+  { value: "extreem_schaduw", label: "Extreem schaduw" }
+];
+
+const WORLD_SHADOW_PRESET_ALIASES = {
+  off: "geen_schaduw",
+  potato: "geen_schaduw",
+  low: "lichte_schaduw",
+  laptop: "lichte_schaduw",
+  balanced: "middel_schaduw",
+  medium: "middel_schaduw",
+  quality: "hoog_schaduw",
+  high: "hoog_schaduw",
+  extreem: "extreem_schaduw",
+  extreme: "extreem_schaduw"
 };
 
-const WORLD_SETTINGS_EDITOR_FIELDS = {
-  editorPixelRatioCap: { section: "Editor performance", label: "Pixel ratio cap", type: "number", default: 2, min: 0.5, max: 2, step: 0.05, required: true },
-  editorFogEnabled: {
-    section: "Editor performance",
-    label: "Editor fog",
-    type: "boolean",
-    default: false,
-    required: true,
-    help: "Standaard uit. Zet fog in de editor-preview aan of uit. De game blijft de shared fog gebruiken."
-  },
-  editorShadowsEnabled: {
-    section: "Editor performance",
-    label: "Editor shadows",
-    type: "boolean",
-    default: true,
-    required: true,
-    help: "Zet shadows in de editor preview aan of uit. Uit is sneller tijdens bewerken; aan laat je de echte schaduwproblemen zien."
-  }
+export function normalizeWorldSettingsPreset(value, fallback = "middel_schaduw") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (WORLD_SHADOW_PRESET_ALIASES[normalized]) return WORLD_SHADOW_PRESET_ALIASES[normalized];
+  if (WORLD_SHADOW_PRESET_NAMES.includes(normalized)) return normalized;
+  const normalizedFallback = String(fallback || "middel_schaduw").trim().toLowerCase();
+  if (WORLD_SHADOW_PRESET_ALIASES[normalizedFallback]) return WORLD_SHADOW_PRESET_ALIASES[normalizedFallback];
+  if (WORLD_SHADOW_PRESET_NAMES.includes(normalizedFallback)) return normalizedFallback;
+  return "middel_schaduw";
+}
+
+function clonePresetValues(values) {
+  return Object.fromEntries(Object.entries(values || {}).map(function ([key, value]) {
+    return [key, cloneDefaultValue(value)];
+  }));
+}
+
+function shadowLegacyQualityForMapSize(mapSize) {
+  const size = Number(mapSize) || 0;
+  if (size <= 0) return "off";
+  if (size <= 512) return "low";
+  if (size <= 1024) return "medium";
+  return "high";
+}
+
+function buildShadowPreset(mode, preset, config) {
+  const normalizedPreset = normalizeWorldSettingsPreset(preset, "middel_schaduw");
+  const focusMode = mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn";
+  const enabled = config.enabled !== false;
+  const mapSize = Math.max(0, Math.floor(Number(config.mapSize) || 0));
+  const cameraSize = Math.max(0, Number(config.cameraSize) || 0);
+  const cameraFar = Math.max(0, Number(config.cameraFar) || 0);
+  const bias = Number.isFinite(Number(config.bias)) ? Number(config.bias) : -0.0003;
+  const normalBias = Number.isFinite(Number(config.normalBias)) ? Number(config.normalBias) : 0.04;
+  const type = String(config.type || "pcf_soft").trim() || "pcf_soft";
+  const updateMode = String(config.updateMode || "stable_snapped").trim() || "stable_snapped";
+  const snapWorldUnits = Math.max(1, Math.floor(Number(config.snapWorldUnits) || 10));
+  const shadowResidentMarginChunks = Math.max(0, Math.floor(Number(config.shadowResidentMarginChunks) || 0));
+  const staticPropsCast = config.staticPropsCast !== false;
+  const staticPropsReceive = config.staticPropsReceive !== false;
+  const scatterCast = config.scatterCast === true;
+  const scatterReceive = config.scatterReceive !== false;
+  const groundReceives = config.groundReceives !== false;
+  const terrainReceives = config.terrainReceives !== false;
+  const legacyShadowQuality = shadowLegacyQualityForMapSize(mapSize);
+  const legacyType = type === "pcf_soft" ? "pcfSoft" : (type === "pcf" ? "pcf" : "basic");
+  return {
+    preset: normalizedPreset,
+    enabled: enabled,
+    mapSize: mapSize,
+    cameraSize: cameraSize,
+    cameraNear: Math.max(0, Number(config.cameraNear) || 1),
+    cameraFar: cameraFar,
+    bias: bias,
+    normalBias: normalBias,
+    type: type,
+    updateMode: updateMode,
+    snapWorldUnits: snapWorldUnits,
+    focusMode: focusMode,
+    staticPropsCast: staticPropsCast,
+    staticPropsReceive: staticPropsReceive,
+    scatterCast: scatterCast,
+    scatterReceive: scatterReceive,
+    groundReceives: groundReceives,
+    terrainReceives: terrainReceives,
+    shadowResidentMarginChunks: shadowResidentMarginChunks,
+    shadowsEnabled: enabled,
+    shadowQuality: legacyShadowQuality,
+    shadowMapSize: mapSize,
+    shadowCameraSize: cameraSize,
+    shadowCameraFar: cameraFar,
+    shadowBias: bias,
+    shadowNormalBias: normalBias,
+    shadowType: legacyType,
+    staticPropCastShadows: staticPropsCast,
+    staticPropReceiveShadows: staticPropsReceive,
+    scatterCastShadows: scatterCast,
+    scatterReceiveShadows: scatterReceive,
+    groundReceiveShadows: groundReceives,
+    terrainReceiveShadows: terrainReceives
+  };
+}
+
+export const EDITOR_WORLD_SETTINGS_PRESETS = {
+  geen_schaduw: buildShadowPreset("editor", "geen_schaduw", {
+    enabled: false,
+    mapSize: 0,
+    cameraSize: 0,
+    cameraFar: 0,
+    bias: 0,
+    normalBias: 0,
+    staticPropsCast: false,
+    staticPropsReceive: false,
+    scatterCast: false,
+    scatterReceive: false,
+    groundReceives: false,
+    terrainReceives: false,
+    shadowResidentMarginChunks: 0
+  }),
+  lichte_schaduw: buildShadowPreset("editor", "lichte_schaduw", {
+    enabled: true,
+    mapSize: 512,
+    cameraSize: 90,
+    cameraFar: 350,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: false,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 0
+  }),
+  middel_schaduw: buildShadowPreset("editor", "middel_schaduw", {
+    enabled: true,
+    mapSize: 1024,
+    cameraSize: 100,
+    cameraFar: 450,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 1
+  }),
+  hoog_schaduw: buildShadowPreset("editor", "hoog_schaduw", {
+    enabled: true,
+    mapSize: 2048,
+    cameraSize: 120,
+    cameraFar: 600,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 1
+  }),
+  extreem_schaduw: buildShadowPreset("editor", "extreem_schaduw", {
+    enabled: true,
+    mapSize: 4096,
+    cameraSize: 140,
+    cameraFar: 800,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 2
+  })
 };
+
+export const GAME_WORLD_SETTINGS_PRESETS = {
+  geen_schaduw: buildShadowPreset("game", "geen_schaduw", {
+    enabled: false,
+    mapSize: 0,
+    cameraSize: 0,
+    cameraFar: 0,
+    bias: 0,
+    normalBias: 0,
+    staticPropsCast: false,
+    staticPropsReceive: false,
+    scatterCast: false,
+    scatterReceive: false,
+    groundReceives: false,
+    terrainReceives: false,
+    shadowResidentMarginChunks: 0
+  }),
+  lichte_schaduw: buildShadowPreset("game", "lichte_schaduw", {
+    enabled: true,
+    mapSize: 512,
+    cameraSize: 75,
+    cameraFar: 350,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: false,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 0
+  }),
+  middel_schaduw: buildShadowPreset("game", "middel_schaduw", {
+    enabled: true,
+    mapSize: 1024,
+    cameraSize: 85,
+    cameraFar: 450,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 1
+  }),
+  hoog_schaduw: buildShadowPreset("game", "hoog_schaduw", {
+    enabled: true,
+    mapSize: 2048,
+    cameraSize: 100,
+    cameraFar: 600,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 1
+  }),
+  extreem_schaduw: buildShadowPreset("game", "extreem_schaduw", {
+    enabled: true,
+    mapSize: 4096,
+    cameraSize: 120,
+    cameraFar: 800,
+    bias: -0.0003,
+    normalBias: 0.04,
+    staticPropsCast: true,
+    staticPropsReceive: true,
+    scatterCast: true,
+    scatterReceive: true,
+    groundReceives: true,
+    terrainReceives: true,
+    shadowResidentMarginChunks: 2
+  })
+};
+
+function modeFieldName(mode, key) {
+  const prefix = mode === "editor" ? "editor" : "game";
+  return prefix + key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function presetTableForMode(mode) {
+  return mode === "editor" ? EDITOR_WORLD_SETTINGS_PRESETS : GAME_WORLD_SETTINGS_PRESETS;
+}
+
+export function worldSettingsPresetValues(mode, preset) {
+  const normalized = normalizeWorldSettingsPreset(preset, "");
+  if (!normalized) return null;
+  const table = presetTableForMode(mode);
+  return table[normalized] ? clonePresetValues(table[normalized]) : null;
+}
+
+export function worldSettingsPresetNodePatch(mode, preset) {
+  const normalized = normalizeWorldSettingsPreset(preset, "middel_schaduw");
+  const prefix = mode === "editor" ? "editor" : "game";
+  return { [prefix + "Preset"]: normalized };
+}
+
+function worldSettingsModeHelpText(modeLabel, key) {
+  const modeLower = modeLabel.toLowerCase();
+  switch (key) {
+    case "Preset":
+    case "Shadow preset":
+      return "Kies één shadow preset voor de " + modeLower + ". De engine vult daar de shadow-instellingen uit en toont geen losse shadow-tuners meer.";
+    case "Pixel ratio cap":
+      return "Beperkt de renderer naar deze maximale pixel ratio. Lager is sneller, hoger is scherper. Aanbevolen voor " + modeLower + ": hoger voor kwaliteit, lager voor laptop/mobiel.";
+    case "Antialias":
+      return "Schakelt antialiasing aan of uit. Aan is mooier maar iets zwaarder; uit is sneller en kan op laptop/mobiel beter zijn.";
+    case "Fog":
+      return "Schakelt fog aan of uit. Aan geeft meer diepte; uit is iets sneller en laat de wereld scherper zien.";
+    case "Max FPS":
+      return "Cap de renderloop. Lager is rustiger voor CPU/batterij; hoger voelt vloeiender. Aanbevolen voor editor en game: 60, lager voor laptop/potato.";
+    case "Debug helpers":
+      return "Toont selectie- en transform-hulplijnen. Uit is rustiger en iets lichter; aan is aanbevolen tijdens bouwen.";
+    case "Debug chunk overlay":
+      return "Toont de chunk/terrain debug-overlay. Uit is standaard; aan gebruik je alleen om culling en streaming te inspecteren.";
+    case "Chunk grid visible":
+      return "Toont de chunk grid. Uit is rustiger; aan helpt bij culling en chunk-grenzen controleren.";
+    case "Chunk labels visible":
+      return "Toont chunk-labels. Uit is rustiger; aan helpt bij streaming- en debugcontrole.";
+    case "Streaming debug visible":
+      return "Toont extra streaming/debug-signalen. Uit is normaal gebruik; aan is alleen voor debuggen van chunk load/unload gedrag.";
+    default:
+      return "";
+  }
+}
+
+function buildWorldSettingsModeFields(mode, defaults = {}, hidden = false) {
+  const modeLabel = mode === "editor" ? "Editor" : "Game";
+  const prefix = mode === "editor" ? "editor" : "game";
+  const hide = hidden === true;
+  const field = function (fieldName, fieldDef) {
+    return hide ? Object.assign({ hidden: true }, fieldDef) : fieldDef;
+  };
+  const fields = {
+    [prefix + "Preset"]: field("Preset", {
+      section: "Preset",
+      label: "Shadow preset",
+      type: "select",
+      options: WORLD_SHADOW_PRESET_OPTIONS,
+      default: defaults.preset || "middel_schaduw",
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Shadow preset")
+    }),
+    [prefix + "PixelRatioCap"]: field("Pixel ratio cap", {
+      section: "Render",
+      label: "Pixel ratio cap",
+      type: "number",
+      default: defaults.pixelRatioCap,
+      min: 0.5,
+      max: 2,
+      step: 0.05,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Pixel ratio cap")
+    }),
+    [prefix + "Antialias"]: field("Antialias", {
+      section: "Render",
+      label: "Antialias",
+      type: "boolean",
+      default: defaults.antialias,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Antialias")
+    }),
+    [prefix + "FogEnabled"]: field("Fog", {
+      section: "Render",
+      label: "Fog",
+      type: "boolean",
+      default: defaults.fogEnabled,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Fog")
+    }),
+    [prefix + "MaxFps"]: field("Max FPS", {
+      section: "Render",
+      label: "Max FPS",
+      type: "number",
+      default: defaults.maxFps,
+      min: 1,
+      max: 240,
+      step: 1,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Max FPS")
+    }),
+    [prefix + "DebugHelpersVisible"]: field("Debug helpers", {
+      section: "Render",
+      label: "Debug helpers",
+      type: "boolean",
+      default: defaults.debugHelpersVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Debug helpers")
+    }),
+    [prefix + "DebugChunkOverlayVisible"]: field("Debug chunk overlay", {
+      section: "Render",
+      label: "Debug chunk overlay",
+      type: "boolean",
+      default: defaults.debugChunkOverlayVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Debug chunk overlay")
+    }),
+    [prefix + "ChunkGridVisible"]: field("Chunk grid visible", {
+      section: "Chunk/debug",
+      label: "Chunk grid visible",
+      type: "boolean",
+      default: defaults.chunkGridVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Chunk grid visible")
+    }),
+    [prefix + "ChunkLabelsVisible"]: field("Chunk labels visible", {
+      section: "Chunk/debug",
+      label: "Chunk labels visible",
+      type: "boolean",
+      default: defaults.chunkLabelsVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Chunk labels visible")
+    }),
+    [prefix + "StreamingDebugVisible"]: field("Streaming debug visible", {
+      section: "Chunk/debug",
+      label: "Streaming debug visible",
+      type: "boolean",
+      default: defaults.streamingDebugVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Streaming debug visible")
+    })
+  };
+  return fields;
+}
+
+const WORLD_SETTINGS_EDITOR_FIELDS = buildWorldSettingsModeFields("editor", {
+  preset: "middel_schaduw",
+  pixelRatioCap: 2,
+  antialias: true,
+  fogEnabled: false,
+  maxFps: 60,
+  debugHelpersVisible: true,
+  debugChunkOverlayVisible: false,
+  chunkGridVisible: true,
+  chunkLabelsVisible: false,
+  streamingDebugVisible: false
+});
+
+const WORLD_SETTINGS_GAME_FIELDS = buildWorldSettingsModeFields("game", {
+  preset: "middel_schaduw",
+  pixelRatioCap: 1,
+  antialias: true,
+  fogEnabled: true,
+  maxFps: 60,
+  debugHelpersVisible: false,
+  debugChunkOverlayVisible: false,
+  chunkGridVisible: false,
+  chunkLabelsVisible: false,
+  streamingDebugVisible: false
+});
 
 function chunkLoadingSharedFields(defaults = {}) {
   const {
@@ -222,7 +572,14 @@ function chunkLoadingSharedFields(defaults = {}) {
     unloadMarginChunks = 2,
     unloadMarginMax = 50,
     maxLoadedChunks = 49,
-    debugOverlay = true
+    debugOverlay = true,
+    terrainVisualChunkingEnabled = false,
+    groundChunkingEnabled = true,
+    pathWaterSurfaceChunkingEnabled = false,
+    residentEntityBudget = 200,
+    residentObjectBudget = 300,
+    residentScatterInstanceBudget = 500,
+    residentChunkBuildBudgetPerFrame = 2
   } = defaults;
   return {
     chunkProfileId: { label: "Chunk profile id", type: "text", default: chunkProfileId, required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
@@ -233,12 +590,37 @@ function chunkLoadingSharedFields(defaults = {}) {
     preloadMarginChunks: { label: "Preload margin", type: "number", default: 1, min: 0, max: 20, step: 1, required: true },
     unloadMarginChunks: { label: "Unload margin", type: "number", default: unloadMarginChunks, min: 0, max: unloadMarginMax, step: 1, required: true },
     maxLoadedChunks: { label: "Max loaded chunks", type: "number", default: maxLoadedChunks, min: 1, max: 10000, step: 1, required: true },
-    debugOverlay: { label: "Debug overlay", type: "boolean", default: debugOverlay, required: true }
+    debugOverlay: { label: "Debug overlay", type: "boolean", default: debugOverlay, required: true },
+    residentEntityBudget: { label: "Resident entity budget", type: "number", default: residentEntityBudget, min: 0, max: 100000, step: 1, required: true },
+    residentObjectBudget: { label: "Resident object budget", type: "number", default: residentObjectBudget, min: 0, max: 100000, step: 1, required: true },
+    residentScatterInstanceBudget: { label: "Resident scatter budget", type: "number", default: residentScatterInstanceBudget, min: 0, max: 100000, step: 1, required: true },
+    residentChunkBuildBudgetPerFrame: { label: "Resident build budget/frame", type: "number", default: residentChunkBuildBudgetPerFrame, min: 1, max: 1000, step: 1, required: true },
+    groundChunkingEnabled: {
+      label: "Ground chunking",
+      type: "boolean",
+      default: groundChunkingEnabled,
+      required: true,
+      help: "Schakelt de grote Ground Surface over naar chunk tiles. Uit betekent de oude full-ground route."
+    },
+    pathWaterSurfaceChunkingEnabled: {
+      label: "Path/water/surface chunking",
+      type: "boolean",
+      default: pathWaterSurfaceChunkingEnabled,
+      required: true,
+      help: "Laat path, water en surface ook chunked renderen. Standaard uit om de seam-safe route intact te laten."
+    },
+    terrainVisualChunkingEnabled: {
+      label: "Terrain visual chunking",
+      type: "boolean",
+      default: terrainVisualChunkingEnabled,
+      required: true,
+      help: "Chunk-aware terrain layer visuals. Dit staat los van ground chunking."
+    }
   };
 }
 
 const EDITOR_CHUNK_LOADING_FIELDS = {
-  ...chunkLoadingSharedFields({ chunkProfileId: "editor_chunks", unloadMarginChunks: 2, unloadMarginMax: 50, maxLoadedChunks: 49, debugOverlay: true }),
+  ...chunkLoadingSharedFields({ chunkProfileId: "editor_chunks", unloadMarginChunks: 2, unloadMarginMax: 50, maxLoadedChunks: 49, debugOverlay: true, terrainVisualChunkingEnabled: false, groundChunkingEnabled: true, pathWaterSurfaceChunkingEnabled: false }),
   editorViewRadiusChunks: { label: "Editor view radius", type: "number", default: 2, min: 0, max: 50, step: 1, required: true },
   keepSelectedChunkLoaded: { label: "Keep selected chunk loaded", type: "boolean", default: true, required: true },
   showChunkGrid: { label: "Show chunk grid", type: "boolean", default: true, required: true },
@@ -246,7 +628,7 @@ const EDITOR_CHUNK_LOADING_FIELDS = {
 };
 
 const GAME_CHUNK_LOADING_FIELDS = {
-  ...chunkLoadingSharedFields({ chunkProfileId: "game_chunks", unloadMarginChunks: 1, unloadMarginMax: 20, maxLoadedChunks: 9, debugOverlay: false }),
+  ...chunkLoadingSharedFields({ chunkProfileId: "game_chunks", unloadMarginChunks: 1, unloadMarginMax: 20, maxLoadedChunks: 9, debugOverlay: false, terrainVisualChunkingEnabled: false, groundChunkingEnabled: true, pathWaterSurfaceChunkingEnabled: false }),
   cameraOnly: { label: "Camera only", type: "boolean", default: true, required: true },
   gameViewRadiusChunks: { label: "Game view radius", type: "number", default: 1, min: 0, max: 20, step: 1, required: true },
   fixedCameraPaddingTiles: { label: "Camera padding tiles", type: "number", default: 10, min: 0, max: 10000, step: 1, required: true },
@@ -403,6 +785,8 @@ export const NODE_TYPES = {
     description: "The only publish target for the runtime game.",
     inputs: {
       world: { label: "World", dataType: "world", required: true, multiple: false },
+      editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
+      gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
       ground: { label: "Ground", dataType: "ground", required: true, multiple: false },
       camera: { label: "Camera", dataType: "camera", required: true, multiple: true },
       lights: { label: "Lights", dataType: "light", required: true, multiple: true },
@@ -426,14 +810,30 @@ export const NODE_TYPES = {
     label: "World Settings",
     group: "World",
     accent: "#7bd4ff",
-    description: "World identity, scene background, fog, and runtime performance policy.",
+    description: "Shared world identity and scene defaults. Editor/game performance lives in separate nodes.",
     inputs: {},
     outputs: { world: { label: "World", dataType: "world" } },
-    fields: {
-      ...WORLD_SETTINGS_SHARED_FIELDS,
-      ...WORLD_SETTINGS_GAME_FIELDS,
-      ...WORLD_SETTINGS_EDITOR_FIELDS
-    }
+    fields: WORLD_SETTINGS_SHARED_FIELDS
+  },
+
+  editor_world_settings: {
+    label: "Editor World Settings",
+    group: "World",
+    accent: "#8fd5ff",
+    description: "Editor-only performance with one shadow preset dropdown plus debug settings.",
+    inputs: {},
+    outputs: { editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings" } },
+    fields: WORLD_SETTINGS_EDITOR_FIELDS
+  },
+
+  game_world_settings: {
+    label: "Game World Settings",
+    group: "World",
+    accent: "#ffb454",
+    description: "Game-only performance with one shadow preset dropdown plus debug settings.",
+    inputs: {},
+    outputs: { gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings" } },
+    fields: WORLD_SETTINGS_GAME_FIELDS
   },
 
   editor_chunk_loading: {
@@ -468,8 +868,22 @@ export const NODE_TYPES = {
       width: { label: "Width", type: "number", default: 60, min: 1, max: 10000, step: 1, required: true },
       depth: { label: "Depth", type: "number", default: 60, min: 1, max: 10000, step: 1, required: true },
       y: { label: "Y height", type: "number", default: 0, min: -1000, max: 1000, step: 0.01, required: true },
+      boundsMode: {
+        label: "Bounds mode",
+        type: "select",
+        options: ["centerSize", "explicitBounds"],
+        default: "centerSize",
+        required: true,
+        help: "centerSize houdt de oude symmetrische grond; explicitBounds laat min/max per zijde toe."
+      },
+      minX: { label: "Min X", type: "number", default: -30, min: -10000, max: 10000, step: 0.01, required: false },
+      maxX: { label: "Max X", type: "number", default: 30, min: -10000, max: 10000, step: 0.01, required: false },
+      minZ: { label: "Min Z", type: "number", default: -30, min: -10000, max: 10000, step: 0.01, required: false },
+      maxZ: { label: "Max Z", type: "number", default: 30, min: -10000, max: 10000, step: 0.01, required: false },
       materialColor: { label: "Material color", type: "color", default: "#3f6b3f", required: false },
       textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
+      textureWorldSizeX: { label: "Texture world size X", type: "number", default: 10, min: 0.01, max: 10000, step: 0.01, required: false },
+      textureWorldSizeZ: { label: "Texture world size Z", type: "number", default: 10, min: 0.01, max: 10000, step: 0.01, required: false },
       textureRepeat: { label: "Texture repeat", type: "number", default: 8, min: 1, max: 512, step: 1, required: false }
     }
   },
@@ -490,54 +904,6 @@ export const NODE_TYPES = {
       color: { label: "Color", type: "color", default: "#6faa4f", required: true },
       textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
       shapeType: { label: "Shape type", type: "select", options: ["full", "polygon"], default: "full", required: true },
-      points: { label: "Points", type: "json", default: [], required: false }
-    }
-  },
-
-  path_layer: {
-    label: "Path Layer",
-    group: "Terrain",
-    accent: "#d6b36a",
-    description: "Zandpaden en stenen dorpspaden.",
-    inputs: {},
-    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
-    fields: {
-      pathId: { label: "Path id", type: "text", default: "path_main", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
-      label: { label: "Label", type: "text", default: "Main Path", required: true, maxLength: 96 },
-      pathType: { label: "Path type", type: "select", options: ["sand", "stone", "dirt"], default: "sand", required: true },
-      width: { label: "Width", type: "number", default: 3, min: 0.1, max: 10000, step: 0.1, required: true },
-      edgeBlend: { label: "Edge blend", type: "number", default: 0.8, min: 0, max: 1, step: 0.01, required: true },
-      yOffset: { label: "Y offset", type: "number", default: 0.01, min: -1000, max: 1000, step: 0.01, required: true },
-      slightlySunken: { label: "Slightly sunken", type: "boolean", default: true, required: false },
-      speedMultiplier: { label: "Speed multiplier", type: "number", default: 1, min: 0, max: 10, step: 0.1, required: true },
-      materialMode: { label: "Material mode", type: "select", options: ["preset", "texture"], default: "preset", required: true },
-      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
-      textureScale: { label: "Texture scale", type: "number", default: 4, min: 0.1, max: 200, step: 0.1, required: true },
-      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
-      points: { label: "Points", type: "json", default: [], required: false }
-    }
-  },
-
-  water_layer: {
-    label: "Water Layer",
-    group: "Terrain",
-    accent: "#2f9ecf",
-    description: "Rivier-, meer- en watergebieden.",
-    inputs: {},
-    outputs: { terrain: { label: "Terrain", dataType: "terrain" } },
-    fields: {
-      waterId: { label: "Water id", type: "text", default: "river_main", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
-      label: { label: "Label", type: "text", default: "Main River", required: true, maxLength: 96 },
-      waterType: { label: "Water type", type: "select", options: ["river", "lake", "pond"], default: "river", required: true },
-      width: { label: "Width", type: "number", default: 5, min: 0.1, max: 10000, step: 0.1, required: true },
-      y: { label: "Y", type: "number", default: -0.15, min: -1000, max: 1000, step: 0.01, required: true },
-      color: { label: "Color", type: "color", default: "#2f9ecf", required: true },
-      flowSpeed: { label: "Flow speed", type: "number", default: 0.2, min: -100, max: 100, step: 0.01, required: true },
-      blocksPlayer: { label: "Blocks player", type: "boolean", default: true, required: false },
-      materialMode: { label: "Material mode", type: "select", options: ["preset", "texture"], default: "preset", required: true },
-      textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
-      textureScale: { label: "Texture scale", type: "number", default: 6, min: 0.1, max: 200, step: 0.1, required: true },
-      opacity: { label: "Opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
       points: { label: "Points", type: "json", default: [], required: false }
     }
   },
@@ -855,9 +1221,11 @@ export const NODE_TYPES = {
       showTextures: { label: "Show textures", type: "boolean", default: true, required: true },
       showSceneObjects: { label: "Show scene objects", type: "boolean", default: true, required: true },
       showEntities: { label: "Show entities", type: "boolean", default: true, required: true },
+      showScatterInstances: { label: "Show scatter instances", type: "boolean", default: true, required: true },
       showTerrainVisuals: { label: "Show terrain visuals", type: "boolean", default: true, required: true },
       showCollisionShapes: { label: "Show collision shapes", type: "boolean", default: true, required: true },
       showWorldSize: { label: "Show world size", type: "boolean", default: false, required: true },
+      showChunkCulling: { label: "Show chunk culling", type: "boolean", default: false, required: true },
       fpsTarget: { label: "FPS target", type: "number", default: 60, min: 1, max: 240, step: 1, required: true },
       fpsWarn: { label: "FPS warning", type: "number", default: 45, min: 1, max: 240, step: 1, required: true },
       fpsDanger: { label: "FPS danger", type: "number", default: 30, min: 1, max: 240, step: 1, required: true },

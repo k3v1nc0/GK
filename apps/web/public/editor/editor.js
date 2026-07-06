@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading71";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName } from "../shared/node-types.js?v=20260701-chunkloading71";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260702-resident-streaming";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260702-resident-streaming";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -10,6 +10,8 @@ const NODE_WIDTH = 210;
 const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "world_settings",
+  "editor_world_settings",
+  "game_world_settings",
   "ground_surface",
   "group",
   "game_camera",
@@ -27,8 +29,6 @@ const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "surface_layer"
 ]);
 const TERRAIN_TOOL_NODE_TYPES = new Set([
-  "path_layer",
-  "water_layer",
   "surface_layer",
   "blocker_area",
   "walkable_surface"
@@ -1564,9 +1564,7 @@ function terrainNodeCapabilities(node) {
   const nodeType = String(node?.type || "");
   const shapeType = String(node?.values?.shapeType || "").trim().toLowerCase();
   const walkableSurface = nodeType === "walkable_surface";
-  const polygonEditable = nodeType === "path_layer"
-    || nodeType === "water_layer"
-    || nodeType === "surface_layer"
+  const polygonEditable = nodeType === "surface_layer"
     || walkableSurface
     || (nodeType === "blocker_area" && shapeType === "polygon");
   return {
@@ -2378,13 +2376,11 @@ function terrainOverlayState() {
     points: points,
     shapeType: capabilities.shapeType,
     groundY: groundY,
-    color: node.type === "water_layer"
-      ? "#43b4ff"
-      : node.type === "surface_layer"
-        ? "#8fbf6a"
-        : node.type === "walkable_surface"
-          ? "#8fe0a8"
-          : "#f0b35a"
+    color: node.type === "surface_layer"
+      ? "#8fbf6a"
+      : node.type === "walkable_surface"
+        ? "#8fe0a8"
+        : "#f0b35a"
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -3571,6 +3567,8 @@ function buildNodeElement(node) {
 
 function identityValue(node) {
   const def = state.nodeTypes[node.type];
+  if (node.type === "editor_world_settings") return node.values.editorPreset || "(kies preset)";
+  if (node.type === "game_world_settings") return node.values.gamePreset || "(kies preset)";
   const idKey = Object.keys(def.fields).find(function (key) { return def.fields[key].pattern === "^[a-z0-9_:-]+$"; });
   return idKey && node.values[idKey] ? node.values[idKey] : "(geen id)";
 }
@@ -4330,17 +4328,40 @@ function buildField(node, key, field) {
     const options = field.dynamicOptions === "assetAnimations"
       ? animationClipsForAsset(assetById(node.values.modelAssetId))
       : (field.options || []).map(function (option, index) {
-        return { name: option, index: index };
+        if (option && typeof option === "object") {
+          return {
+            value: option.value === undefined || option.value === null ? "" : String(option.value),
+            label: option.label === undefined || option.label === null ? String(option.value === undefined || option.value === null ? "" : option.value) : String(option.label),
+            index: index
+          };
+        }
+        return { value: String(option), label: String(option), index: index };
       });
     for (const option of options) {
       const opt = document.createElement("option");
-      opt.value = option.name;
-      opt.textContent = option.name;
-      if (option.name === value) opt.selected = true;
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (option.value === value) opt.selected = true;
       select.appendChild(opt);
     }
     select.value = value || "";
     select.addEventListener("change", function () {
+      if (node.type === "editor_world_settings" && key === "editorPreset") {
+        patchValues(node.id, worldSettingsPresetNodePatch("editor", select.value), {
+          historyLabel: field.label,
+          refreshViewport: shouldRefreshViewportForNode(node.id),
+          refreshValidation: true
+        });
+        return;
+      }
+      if (node.type === "game_world_settings" && key === "gamePreset") {
+        patchValues(node.id, worldSettingsPresetNodePatch("game", select.value), {
+          historyLabel: field.label,
+          refreshViewport: shouldRefreshViewportForNode(node.id),
+          refreshValidation: true
+        });
+        return;
+      }
       patchValues(node.id, makePatch(key, select.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
     });
     wrap.appendChild(select);
@@ -6144,8 +6165,6 @@ async function terrainDeletePoint(node, pointIndex) {
 }
 
 function terrainMinPointCount(nodeType) {
-  if (nodeType === "path_layer") return 2;
-  if (nodeType === "water_layer") return 3;
   if (nodeType === "surface_layer") return 2;
   if (nodeType === "blocker_area") return 3;
   if (nodeType === "walkable_surface") return 3;

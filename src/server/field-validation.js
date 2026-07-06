@@ -14,6 +14,13 @@ function fieldDefault(field) {
   return field.default === undefined ? null : field.default;
 }
 
+function fieldOptionValue(option) {
+  if (option && typeof option === "object") {
+    return option.value === undefined || option.value === null ? "" : String(option.value);
+  }
+  return option === undefined || option === null ? "" : String(option);
+}
+
 function isKnownDataType(dataType) {
   return Object.values(NODE_TYPES).some(function (definition) {
     const inputs = Object.values(definition.inputs || {});
@@ -56,7 +63,7 @@ export function coerceAndValidateField(field, value, label) {
     if (clean && field.type === "color" && !/^#[0-9a-fA-F]{6}$/.test(clean)) errors.push(label + " moet een hex kleur zijn, bijvoorbeeld #ffffff.");
     if (clean && field.type === "asset" && !/^asset_[a-f0-9-]+$/.test(clean)) errors.push(label + " moet een asset id zijn.");
     if (clean && field.type === "keycode" && !KEYCODE_PATTERN.test(clean)) errors.push(label + " moet een toetscode zijn zoals KeyW, ArrowUp of Space.");
-    if (clean && field.type === "select" && !field.dynamicOptions && Array.isArray(field.options) && !field.options.includes(clean)) {
+    if (clean && field.type === "select" && !field.dynamicOptions && Array.isArray(field.options) && !field.options.map(fieldOptionValue).includes(clean)) {
       errors.push(label + " heeft een onbekende optie.");
     }
   }

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260702-resident-streaming";
 
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -18,16 +19,110 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function numberOrFallback(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function round(value) {
+  return Math.round(Number(value) * 1000) / 1000;
+}
+
+function detectRendererProfile(renderer) {
+  try {
+    const gl = renderer?.getContext?.();
+    if (!gl) {
+      return { name: "unknown", vendor: "unknown", software: false };
+    }
+    const debugInfo = typeof gl.getExtension === "function" ? gl.getExtension("WEBGL_debug_renderer_info") : null;
+    const name = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+    const normalized = String(name || "").toLowerCase();
+    const software = normalized.includes("swiftshader")
+      || normalized.includes("software")
+      || normalized.includes("llvmpipe")
+      || normalized.includes("softpipe");
+    return {
+      name: String(name || "unknown"),
+      vendor: String(vendor || "unknown"),
+      software: software === true
+    };
+  } catch {
+    return { name: "unknown", vendor: "unknown", software: false };
+  }
+}
+
 function timingMs(startedAt) {
   return (performance.now() - startedAt).toFixed(1);
 }
 
+// Fase 8.6 (DEEL G): debug/helper/chunk-overlay/selection meshes must never cast or receive
+// shadows - only real world content (ground, static props, scatter) may. Called on every
+// debug/helper group so the invariant holds regardless of what a future edit adds to them.
+export function sanitizeNonWorldShadowCasters(root) {
+  if (!root || typeof root.traverse !== "function") return 0;
+  let sanitized = 0;
+  root.traverse(function (child) {
+    if (!child) return;
+    if (child.castShadow === true || child.receiveShadow === true) {
+      child.castShadow = false;
+      child.receiveShadow = false;
+      sanitized += 1;
+    }
+  });
+  return sanitized;
+}
+
+function isDebugOverlayObject(object) {
+  if (!object) return false;
+  if (object.userData?.debugOverlay === true || object.userData?.debugOverlayRoot === true) return true;
+  const name = String(object.name || "").trim().toLowerCase();
+  return name === "gk chunk debug overlay"
+    || name === "gk editor terrain overlay"
+    || name === "gk editor scatter overlay"
+    || name === "gk editor transform guide"
+    || name === "gk editor selection helper"
+    || name.includes("debug overlay")
+    || name.includes("camera overlay")
+    || name.includes("chunk fill")
+    || name.includes("chunk plane")
+    || name.includes("shadow helper")
+    || name.includes("transform guide")
+    || name.includes("terrain overlay")
+    || name.includes("scatter overlay")
+    || name.includes("selection helper");
+}
+
+function markDebugOverlayTree(root, kind = "debug") {
+  if (!root) return root;
+  root.userData = root.userData || {};
+  root.userData.debugOverlay = true;
+  root.userData.debugOverlayRoot = true;
+  root.userData.debugOverlayKind = String(kind || "debug");
+  if (typeof root.traverse === "function") {
+    root.traverse(function (child) {
+      if (!child) return;
+      child.userData = child.userData || {};
+      child.userData.debugOverlay = true;
+      child.userData.debugOverlayKind = String(kind || "debug");
+      if (child.isMesh || child.isInstancedMesh || child.isLine || child.isLineSegments || child.isSprite) {
+        child.castShadow = false;
+        child.receiveShadow = false;
+      }
+    });
+  }
+  return root;
+}
+
 function disposeObject(object, options = {}) {
   const disposeTextures = options.disposeTextures !== false;
+  const disposeGeometry = options.disposeGeometry !== false;
+  const disposeMaterials = options.disposeMaterials !== false;
   const disposedTextures = new Set();
   object.traverse(function (child) {
-    if (child.geometry) child.geometry.dispose();
-    if (child.material) {
+    const sharedRuntimeResources = child?.userData?.runtimeResourcesShared === true;
+    if (disposeGeometry && !sharedRuntimeResources && child.geometry) child.geometry.dispose();
+    if (disposeMaterials && !sharedRuntimeResources && child.material) {
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
         if (disposeTextures) {
@@ -71,63 +166,811 @@ function mixColors(primaryHex, secondaryHex, secondaryWeight = 0.25) {
   return color;
 }
 
+function ensureChunkBucket(map, chunkKey) {
+  const key = String(chunkKey || "").trim();
+  if (!key) return null;
+  let bucket = map.get(key);
+  if (!bucket) {
+    bucket = [];
+    map.set(key, bucket);
+  }
+  return bucket;
+}
+
+function ensureResidentChunkBucket(map, chunkKey) {
+  const key = String(chunkKey || "").trim();
+  if (!key) return null;
+  let bucket = map.get(key);
+  if (!bucket) {
+    bucket = new Map();
+    map.set(key, bucket);
+  }
+  return bucket;
+}
+
+function chunkKeyFromWorldPosition(x, z, policy) {
+  const px = Number(x);
+  const pz = Number(z);
+  if (!Number.isFinite(px) || !Number.isFinite(pz) || !policy) return null;
+  return chunkKey(chunkCoordForPosition(px, pz, policy));
+}
+
+function sortChunkKeysByDistance(keys, centerChunk) {
+  const center = centerChunk && Number.isFinite(Number(centerChunk.x)) && Number.isFinite(Number(centerChunk.z))
+    ? { x: Number(centerChunk.x), z: Number(centerChunk.z) }
+    : { x: 0, z: 0 };
+  return Array.from(new Set((Array.isArray(keys) ? keys : []).map(function (value) {
+    const key = String(value || "").trim();
+    return key || null;
+  }).filter(Boolean))).map(function (key) {
+    const coord = chunkCoordFromKey(key);
+    if (!coord) return null;
+    return {
+      key: chunkKey(coord),
+      coord: coord,
+      distance: chunkDistanceFromCenter(coord, center)
+    };
+  }).filter(Boolean).sort(function (left, right) {
+    if (left.distance !== right.distance) return left.distance - right.distance;
+    return chunkCoordSort(left.coord, right.coord);
+  }).map(function (entry) {
+    return entry.key;
+  });
+}
+
+function countEntriesForChunkMap(map) {
+  let total = 0;
+  for (const entries of map.values()) total += Array.isArray(entries) ? entries.length : 0;
+  return total;
+}
+
+function countResidentEntriesForChunkMap(map) {
+  let total = 0;
+  for (const entries of map.values()) total += entries instanceof Map ? entries.size : 0;
+  return total;
+}
+
+function createEmptyContentBlueprintIndex() {
+  return {
+    entitiesByChunkKey: new Map(),
+    scatterByChunkKey: new Map(),
+    interactablesByChunkKey: new Map(),
+    solidsByChunkKey: new Map(),
+    alwaysLoaded: [],
+    blueprintEntityCount: 0,
+    blueprintScatterInstanceCount: 0,
+    blueprintInteractableCount: 0,
+    blueprintSolidCount: 0,
+    blueprintWorldItemCount: 0,
+    lastBuildReason: "init",
+    version: 0
+  };
+}
+
+function createEmptyResidentContentState() {
+  return {
+    residentChunkKeys: new Set(),
+    desiredChunkKeys: [],
+    enteringChunkKeys: [],
+    leavingChunkKeys: [],
+    pendingChunkKeys: [],
+    entityObjectsByKey: new Map(),
+    scatterBatchesByKey: new Map(),
+    interactableObjectsByKey: new Map(),
+    solidEntriesByKey: new Map(),
+    loadedEntityCount: 0,
+    loadedScatterInstanceCount: 0,
+    loadedScatterBatchCount: 0,
+    loadedInteractableCount: 0,
+    loadedSolidCount: 0,
+    residentObject3DCount: 0,
+    residentWorldItemCount: 0,
+    blueprintEntityCount: 0,
+    blueprintScatterInstanceCount: 0,
+    blueprintInteractableCount: 0,
+    blueprintSolidCount: 0,
+    residentEntityBudget: 200,
+    residentObjectBudget: 300,
+    residentScatterInstanceBudget: 500,
+    residentChunkBuildBudgetPerFrame: 2,
+    budgetClipped: false,
+    eagerBuildDisabled: false,
+    lastSyncReason: "init",
+    lastSyncMs: 0,
+    lastDesiredSignature: "",
+    policySource: "none",
+    mode: "editor",
+    pendingLoadCount: 0
+  };
+}
+
+// Fase 8.6 shadow quality presets (DEEL H). `shadowMapSize`/`shadowCameraSize` of 0 on a mode's
+// own field means "auto: use this table"; any explicit value >0 on the node always wins and is
+// never reduced again by a performance profile.
 const SHADOW_QUALITY_MAP_SIZES = {
-  low: 1024,
-  medium: 2048,
-  high: 4096
+  off: 0,
+  low: 512,
+  medium: 1024,
+  high: 2048
+};
+
+const SHADOW_QUALITY_CAMERA_SIZE_FALLBACK = {
+  off: 60,
+  low: 80,
+  medium: 60,
+  high: 45
+};
+
+const SHADOW_QUALITY_TYPE_FALLBACK = {
+  off: "basic",
+  low: "basic",
+  medium: "pcf",
+  high: "pcfSoft"
+};
+
+function shadowMapTypeFromName(name) {
+  const normalized = String(name === undefined || name === null ? "" : name).trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (name === THREE.PCFSoftShadowMap || normalized === "pcfsoft" || normalized === "pcfsoftshadowmap") return THREE.PCFSoftShadowMap;
+  if (name === THREE.PCFShadowMap || normalized === "pcf" || normalized === "pcfshadowmap") return THREE.PCFShadowMap;
+  if (name === THREE.BasicShadowMap || normalized === "basic" || normalized === "basicshadowmap") return THREE.BasicShadowMap;
+  if (name === THREE.VSMShadowMap || normalized === "vsm" || normalized === "vsmshadowmap") return THREE.VSMShadowMap;
+  return null;
+}
+
+const WORLD_PERFORMANCE_MODE_SHADOW_DEFAULTS = {
+  shadowQuality: "medium",
+  shadowMapSize: 0,
+  shadowCameraSize: 0,
+  shadowCameraFar: 0,
+  shadowBias: -0.0003,
+  shadowNormalBias: 0.04,
+  shadowType: "auto",
+  staticPropCastShadows: false,
+  staticPropReceiveShadows: true,
+  scatterCastShadows: true,
+  scatterReceiveShadows: true,
+  groundReceiveShadows: true,
+  terrainReceiveShadows: true,
+  debugChunkOverlayVisible: false
 };
 
 const WORLD_PERFORMANCE_DEFAULTS = {
   shared: {
-    shadowQuality: "medium",
-    shadowBias: -0.0003,
-    shadowNormalBias: 0.04,
-    shadowCameraSize: 60,
-    shadowCameraFar: 400,
-    smoothShading: true
+    worldId: "main_world",
+    displayName: "My World",
+    backgroundColor: "#101a26",
+    smoothShading: true,
+    fogColor: "#101a26",
+    fogDensity: 0
   },
   game: {
+    preset: "middel_schaduw",
     pixelRatioCap: 1,
+    antialias: true,
+    fogEnabled: true,
+    maxFps: 60,
+    debugHelpersVisible: false,
+    debugChunkOverlayVisible: false,
+    chunkGridVisible: false,
+    chunkLabelsVisible: false,
+    streamingDebugVisible: false,
     shadowsEnabled: true,
-    batchStaticProps: true,
-    batchScatterProps: true,
-    staticPropCastShadows: false,
-    staticPropReceiveShadows: true
+    shadowQuality: "medium",
+    shadowMapSize: 1024,
+    shadowCameraSize: 85,
+    shadowCameraFar: 450,
+    shadowBias: -0.0003,
+    shadowNormalBias: 0.04,
+    shadowType: "pcf_soft",
+    staticPropCastShadows: true,
+    staticPropReceiveShadows: true,
+    scatterCastShadows: true,
+    scatterReceiveShadows: true,
+    groundReceiveShadows: true,
+    terrainReceiveShadows: true,
+    shadow: {
+      preset: "middel_schaduw",
+      enabled: true,
+      mapSize: 1024,
+      cameraSize: 85,
+      cameraNear: 1,
+      cameraFar: 450,
+      bias: -0.0003,
+      normalBias: 0.04,
+      type: "pcf_soft",
+      updateMode: "stable_snapped",
+      snapWorldUnits: 10,
+      focusMode: "player_or_spawn",
+      staticPropsCast: true,
+      staticPropsReceive: true,
+      scatterCast: true,
+      scatterReceive: true,
+      groundReceives: true,
+      terrainReceives: true,
+      shadowResidentMarginChunks: 1
+    }
   },
   editor: {
+    preset: "middel_schaduw",
     pixelRatioCap: 2,
+    antialias: true,
     fogEnabled: false,
-    shadowsEnabled: true
+    maxFps: 60,
+    debugHelpersVisible: true,
+    debugChunkOverlayVisible: false,
+    chunkGridVisible: true,
+    chunkLabelsVisible: false,
+    streamingDebugVisible: false,
+    shadowsEnabled: true,
+    shadowQuality: "medium",
+    shadowMapSize: 1024,
+    shadowCameraSize: 100,
+    shadowCameraFar: 450,
+    shadowBias: -0.0003,
+    shadowNormalBias: 0.04,
+    shadowType: "pcf_soft",
+    staticPropCastShadows: true,
+    staticPropReceiveShadows: true,
+    scatterCastShadows: true,
+    scatterReceiveShadows: true,
+    groundReceiveShadows: true,
+    terrainReceiveShadows: true,
+    shadow: {
+      preset: "middel_schaduw",
+      enabled: true,
+      mapSize: 1024,
+      cameraSize: 100,
+      cameraNear: 1,
+      cameraFar: 450,
+      bias: -0.0003,
+      normalBias: 0.04,
+      type: "pcf_soft",
+      updateMode: "stable_snapped",
+      snapWorldUnits: 10,
+      focusMode: "editor_world_center_or_selected",
+      staticPropsCast: true,
+      staticPropsReceive: true,
+      scatterCast: true,
+      scatterReceive: true,
+      groundReceives: true,
+      terrainReceives: true,
+      shadowResidentMarginChunks: 1
+    }
+  },
+  compatibility: {
+    usedLegacyWorldSettingsPerformanceFields: false
   }
 };
 
-function normalizeShadowQuality(value, fallback = WORLD_PERFORMANCE_DEFAULTS.shared.shadowQuality) {
+function normalizeShadowQuality(value, fallback = WORLD_PERFORMANCE_MODE_SHADOW_DEFAULTS.shadowQuality) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "off" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
   return fallback;
+}
+
+function normalizeGamePerformanceProfile(value, fallback = "") {
+  return normalizeWorldSettingsPreset(value, fallback);
+}
+
+function shadowQualityRank(value) {
+  const normalized = normalizeShadowQuality(value);
+  if (normalized === "off") return 0;
+  if (normalized === "low") return 1;
+  if (normalized === "medium") return 2;
+  return 3;
+}
+
+function lowestShadowQuality(a, b) {
+  const left = normalizeShadowQuality(a);
+  const right = normalizeShadowQuality(b);
+  return shadowQualityRank(left) <= shadowQualityRank(right) ? left : right;
+}
+
+function shadowMapTypeName(type) {
+  if (type === THREE.PCFSoftShadowMap || type === "PCFSoftShadowMap") return "pcf_soft";
+  if (type === THREE.PCFShadowMap || type === "PCFShadowMap") return "pcf";
+  if (type === THREE.BasicShadowMap || type === "BasicShadowMap") return "basic";
+  if (type === THREE.VSMShadowMap || type === "VSMShadowMap") return "vsm";
+  const normalized = String(type || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (normalized === "pcfsoft") return "pcf_soft";
+  if (normalized === "pcf") return "pcf";
+  if (normalized === "basic") return "basic";
+  if (normalized === "vsm") return "vsm";
+  return "unknown";
+}
+
+function normalizeShadowMapTypeName(value, fallback = "pcf_soft") {
+  const mapped = shadowMapTypeName(value);
+  if (mapped !== "unknown") return mapped;
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!normalized || normalized === "auto") return fallback;
+  if (normalized === "pcfsoft" || normalized === "pcfsoftshadowmap") return "pcf_soft";
+  if (normalized === "pcf" || normalized === "pcfshadowmap") return "pcf";
+  if (normalized === "basic" || normalized === "basicshadowmap") return "basic";
+  if (normalized === "vsm" || normalized === "vsmshadowmap") return "vsm";
+  return fallback;
+}
+
+const SHADOW_LEGACY_FIELD_KEYS = [
+  "shadowsEnabled",
+  "shadowQuality",
+  "shadowMapSize",
+  "shadowCameraSize",
+  "shadowCameraFar",
+  "shadowBias",
+  "shadowNormalBias",
+  "shadowType",
+  "staticPropCastShadows",
+  "staticPropReceiveShadows",
+  "scatterCastShadows",
+  "scatterReceiveShadows",
+  "groundReceiveShadows",
+  "terrainReceiveShadows"
+];
+
+function hasOwnValue(source, key) {
+  return Object.prototype.hasOwnProperty.call(source || {}, key);
+}
+
+function shadowLegacyField(source, prefix, key) {
+  const data = source || {};
+  const prefixedKey = prefix ? prefix + key.charAt(0).toUpperCase() + key.slice(1) : key;
+  if (hasOwnValue(data, prefixedKey)) return data[prefixedKey];
+  if (prefix && hasOwnValue(data, key)) return data[key];
+  return undefined;
+}
+
+function hasLegacyShadowFields(source, prefix) {
+  return SHADOW_LEGACY_FIELD_KEYS.some(function (key) {
+    return shadowLegacyField(source, prefix, key) !== undefined;
+  });
+}
+
+export function resolveGamePerformanceProfileConfig(profile, rendererProfile = { software: false }) {
+  const normalized = normalizeGamePerformanceProfile(profile);
+  const presets = {
+    quality: {
+      pixelRatioCap: 1.5,
+      shadowsEnabled: true,
+      shadowQuality: "high",
+      shadowMapType: THREE.PCFSoftShadowMap,
+      shadowMapSize: 4096,
+      antialias: true,
+      batchStaticProps: true,
+      batchScatterProps: true,
+      staticPropCastShadows: true,
+      staticPropReceiveShadows: true,
+      scatterCastShadows: true,
+      surfaceAnimationEnabled: true
+    },
+    balanced: {
+      pixelRatioCap: 1,
+      shadowsEnabled: true,
+      shadowQuality: "medium",
+      shadowMapType: THREE.PCFShadowMap,
+      shadowMapSize: 1024,
+      antialias: true,
+      batchStaticProps: true,
+      batchScatterProps: true,
+      staticPropCastShadows: false,
+      staticPropReceiveShadows: true,
+      scatterCastShadows: true,
+      surfaceAnimationEnabled: true
+    },
+    laptop: {
+      pixelRatioCap: 0.75,
+      shadowsEnabled: true,
+      shadowQuality: "low",
+      shadowMapType: THREE.PCFShadowMap,
+      shadowMapSize: 512,
+      antialias: false,
+      batchStaticProps: true,
+      batchScatterProps: true,
+      staticPropCastShadows: false,
+      staticPropReceiveShadows: true,
+      scatterCastShadows: false,
+      surfaceAnimationEnabled: true
+    },
+    potato: {
+      pixelRatioCap: 0.5,
+      shadowsEnabled: false,
+      shadowQuality: "off",
+      shadowMapType: THREE.PCFShadowMap,
+      shadowMapSize: 0,
+      antialias: false,
+      batchStaticProps: true,
+      batchScatterProps: true,
+      staticPropCastShadows: false,
+      staticPropReceiveShadows: false,
+      scatterCastShadows: false,
+      surfaceAnimationEnabled: false
+    }
+  };
+  const base = presets[normalized] || presets.balanced;
+  const software = rendererProfile?.software === true;
+  return {
+    profile: normalized,
+    pixelRatioCap: software ? Math.min(base.pixelRatioCap, 0.7) : base.pixelRatioCap,
+    shadowsEnabled: software ? false : base.shadowsEnabled,
+    shadowQuality: software ? "off" : base.shadowQuality,
+    shadowMapType: software ? THREE.PCFShadowMap : base.shadowMapType,
+    shadowMapSize: software ? 0 : base.shadowMapSize,
+    antialias: base.antialias,
+    batchStaticProps: base.batchStaticProps,
+    batchScatterProps: base.batchScatterProps,
+    staticPropCastShadows: base.staticPropCastShadows,
+    staticPropReceiveShadows: base.staticPropReceiveShadows,
+    scatterCastShadows: base.scatterCastShadows,
+    surfaceAnimationEnabled: base.surfaceAnimationEnabled
+  };
 }
 
 function shadowMapSizeForQuality(quality) {
   return SHADOW_QUALITY_MAP_SIZES[normalizeShadowQuality(quality)] || SHADOW_QUALITY_MAP_SIZES.medium;
 }
 
-export function resolveShadowPolicy(worldData, mode = "editor") {
-  const source = worldData?.world?.performance || {};
-  const shared = source.shared || {};
-  const game = source.game || {};
-  const editor = source.editor || {};
-  const quality = normalizeShadowQuality(shared.shadowQuality);
-  const modeEnabled = mode === "editor" ? editor.shadowsEnabled !== false : game.shadowsEnabled !== false;
+// Fase 9.0: resolve the canonical shadow block for one mode (editor or game). New published
+// worlds use `performance.<mode>.shadow`; legacy flat fields are only read when a world has not
+// yet been migrated.
+function resolveModeShadowPolicy(modePerformance, mode = "editor") {
+  const modeData = modePerformance || {};
+  const shadow = modeData.shadow && typeof modeData.shadow === "object" ? modeData.shadow : null;
+  const presetFallback = normalizeWorldSettingsPreset(modeData.preset, "middel_schaduw");
+  const requestedPreset = shadow?.preset ?? modeData.shadowPreset ?? modeData.preset ?? presetFallback;
+  const preset = normalizeWorldSettingsPreset(requestedPreset, presetFallback);
+  const presetValues = worldSettingsPresetValues(mode, preset) || worldSettingsPresetValues(mode, "middel_schaduw") || {};
+  const hasLegacyFields = hasLegacyShadowFields(modeData, "") || hasLegacyShadowFields(modeData, mode === "editor" ? "editor" : "game");
+  const legacyQuality = normalizeShadowQuality(modeData.shadowQuality || presetValues.shadowQuality || (preset === "geen_schaduw" ? "off" : "medium"));
+  const legacyType = normalizeShadowMapTypeName(modeData.shadowType || presetValues.type || "pcf_soft", presetValues.type || "pcf_soft");
+  const readShadowValue = function (key, legacyKey, fallback) {
+    if (shadow && shadow[key] !== undefined) return shadow[key];
+    if (!shadow) {
+      if (modeData[key] !== undefined) return modeData[key];
+      if (legacyKey && modeData[legacyKey] !== undefined) return modeData[legacyKey];
+    }
+    if (presetValues[key] !== undefined) return presetValues[key];
+    return fallback;
+  };
+  const enabled = preset !== "geen_schaduw";
+  const mapSize = enabled ? Math.max(0, Math.floor(num(readShadowValue("mapSize", "shadowMapSize", presetValues.mapSize || 0), presetValues.mapSize || 0))) : 0;
+  const cameraSize = enabled ? Math.max(1, Math.floor(num(readShadowValue("cameraSize", "shadowCameraSize", presetValues.cameraSize || 0), presetValues.cameraSize || 0))) : 0;
+  const cameraNear = enabled ? Math.max(0.1, num(readShadowValue("cameraNear", "shadowCameraNear", presetValues.cameraNear || 1), presetValues.cameraNear || 1)) : 1;
+  const cameraFar = enabled ? Math.max(1, Math.floor(num(readShadowValue("cameraFar", "shadowCameraFar", presetValues.cameraFar || 0), presetValues.cameraFar || 0))) : 0;
+  const bias = enabled ? clamp(num(readShadowValue("bias", "shadowBias", presetValues.bias ?? -0.0003), presetValues.bias ?? -0.0003), -0.01, 0.01) : 0;
+  const normalBias = enabled ? clamp(num(readShadowValue("normalBias", "shadowNormalBias", presetValues.normalBias ?? 0.04), presetValues.normalBias ?? 0.04), 0, 1) : 0;
+  const type = enabled
+    ? normalizeShadowMapTypeName(readShadowValue("type", "shadowType", presetValues.type || "pcf_soft"), presetValues.type || "pcf_soft")
+    : "basic";
+  const mapType = shadowMapTypeFromName(type) || THREE.PCFShadowMap;
+  const updateMode = enabled
+    ? String(readShadowValue("updateMode", "shadowUpdateMode", presetValues.updateMode || "stable_snapped") || "stable_snapped").trim() || "stable_snapped"
+    : "off";
+  const snapWorldUnits = enabled
+    ? Math.max(1, Math.floor(num(readShadowValue("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10), presetValues.snapWorldUnits || 10)))
+    : 0;
+  const focusMode = enabled
+    ? String(readShadowValue("focusMode", "shadowFocusMode", presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")) || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")).trim() || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")
+    : (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn");
+  const staticPropsCast = enabled && readShadowValue("staticPropsCast", "staticPropCastShadows", presetValues.staticPropsCast !== false) === true;
+  const staticPropsReceive = enabled && readShadowValue("staticPropsReceive", "staticPropReceiveShadows", presetValues.staticPropsReceive !== false) !== false;
+  const scatterCast = enabled && readShadowValue("scatterCast", "scatterCastShadows", presetValues.scatterCast === true) === true;
+  const scatterReceive = enabled && readShadowValue("scatterReceive", "scatterReceiveShadows", presetValues.scatterReceive !== false) !== false;
+  const groundReceives = enabled && readShadowValue("groundReceives", "groundReceiveShadows", presetValues.groundReceives !== false) !== false;
+  const terrainReceives = enabled && readShadowValue("terrainReceives", "terrainReceiveShadows", presetValues.terrainReceives !== false) !== false;
+  const shadowResidentMarginChunks = enabled
+    ? Math.max(0, Math.floor(num(readShadowValue("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0), presetValues.shadowResidentMarginChunks || 0)))
+    : 0;
   return {
-    enabled: quality !== "off" && modeEnabled,
-    quality: quality,
-    mapSize: shadowMapSizeForQuality(quality),
-    bias: clamp(num(shared.shadowBias, WORLD_PERFORMANCE_DEFAULTS.shared.shadowBias), -0.01, 0.01),
-    normalBias: clamp(num(shared.shadowNormalBias, WORLD_PERFORMANCE_DEFAULTS.shared.shadowNormalBias), 0, 1),
-    cameraSize: Math.max(5, num(shared.shadowCameraSize, WORLD_PERFORMANCE_DEFAULTS.shared.shadowCameraSize)),
-    cameraFar: Math.max(10, num(shared.shadowCameraFar, WORLD_PERFORMANCE_DEFAULTS.shared.shadowCameraFar))
+    source: enabled ? (shadow ? "shadow" : (hasLegacyFields ? "legacy" : "preset")) : "none",
+    enabled: enabled,
+    mode: stableShadowModeName(mode),
+    preset: preset,
+    quality: legacyQuality,
+    legacyQuality: legacyQuality,
+    legacyFieldsIgnored: Boolean(modeData.compatibility?.usedLegacyWorldSettingsPerformanceFields || modeData.compatibility?.legacyShadowFieldsMigrated || hasLegacyFields),
+    rendererShadowMapEnabled: enabled,
+    mapType: mapType,
+    mapTypeName: shadowMapTypeName(mapType),
+    mapSize: mapSize,
+    cameraSize: cameraSize,
+    cameraNear: cameraNear,
+    cameraFar: cameraFar,
+    bias: bias,
+    normalBias: normalBias,
+    type: type,
+    updateMode: updateMode,
+    snapWorldUnits: snapWorldUnits,
+    focusMode: focusMode,
+    staticPropsCast: staticPropsCast,
+    staticPropsReceive: staticPropsReceive,
+    scatterCast: scatterCast,
+    scatterReceive: scatterReceive,
+    groundReceives: groundReceives,
+    terrainReceives: terrainReceives,
+    shadowResidentMarginChunks: shadowResidentMarginChunks,
+    shadowsEnabled: enabled,
+    shadowQuality: legacyQuality,
+    shadowMapSize: mapSize,
+    shadowCameraSize: cameraSize,
+    shadowCameraNear: cameraNear,
+    shadowCameraFar: cameraFar,
+    shadowBias: bias,
+    shadowNormalBias: normalBias,
+    shadowType: type,
+    staticPropCastShadows: staticPropsCast,
+    staticPropReceiveShadows: staticPropsReceive,
+    scatterCastShadows: scatterCast,
+    scatterReceiveShadows: scatterReceive,
+    groundReceiveShadows: groundReceives,
+    terrainReceiveShadows: terrainReceives
   };
 }
+
+export function resolveShadowPolicy(worldData, mode = "editor") {
+  const source = worldData?.world?.performance || {};
+  const modePerformance = mode === "editor" ? (source.editor || {}) : (source.game || {});
+  return resolveModeShadowPolicy(modePerformance, mode);
+}
+
+function stableShadowModeName(mode) {
+  return mode === "game" ? "game" : "editor";
+}
+
+export function shadowSnapWorldUnitsForPolicy(policy, mode = "editor") {
+  const normalizedMode = stableShadowModeName(mode);
+  const chunkSize = chunkSizeForPolicy(policy || {});
+  const minChunkSize = Math.max(1, Math.min(chunkSize.width, chunkSize.depth));
+  const defaultSnap = normalizedMode === "game"
+    ? num(WORLD_PERFORMANCE_DEFAULTS.game.shadow?.snapWorldUnits, 10)
+    : num(WORLD_PERFORMANCE_DEFAULTS.editor.shadow?.snapWorldUnits, 10);
+  return Math.max(1, Math.floor(num(policy?.snapWorldUnits, defaultSnap)));
+}
+
+export function shadowResidentRadiusChunksForPolicy(policy, mode = "editor") {
+  const normalizedMode = stableShadowModeName(mode);
+  const chunkSize = chunkSizeForPolicy(policy || {});
+  const minChunkSize = Math.max(1, Math.min(chunkSize.width, chunkSize.depth));
+  const defaultCameraSize = normalizedMode === "game"
+    ? num(WORLD_PERFORMANCE_DEFAULTS.game.shadow?.cameraSize, WORLD_PERFORMANCE_DEFAULTS.game.shadowCameraSize)
+    : num(WORLD_PERFORMANCE_DEFAULTS.editor.shadow?.cameraSize, WORLD_PERFORMANCE_DEFAULTS.editor.shadowCameraSize);
+  const cameraSize = Math.max(5, num(policy?.cameraSize, defaultCameraSize));
+  const viewportRadiusChunks = Math.max(1, Math.ceil(cameraSize / minChunkSize));
+  const preloadRadiusChunks = Math.max(1,
+    chunkInteger(policy?.activeRadiusChunks, 0) + Math.max(1, chunkInteger(policy?.preloadMarginChunks, 1)));
+  const shadowMarginChunks = Math.max(0, chunkInteger(policy?.shadowResidentMarginChunks, 0));
+  return Math.max(viewportRadiusChunks, preloadRadiusChunks) + shadowMarginChunks;
+}
+
+export function resolveStableShadowFocus(options = {}) {
+  const mode = stableShadowModeName(options.mode);
+  const policy = options.policy || null;
+  const groundY = Number.isFinite(Number(options.groundY))
+    ? num(options.groundY, 0)
+    : 0;
+  const focusSource = options.focus
+    || (mode === "editor"
+      ? (options.contentCenter || options.worldCenter || options.startPosition || options.player || options.camTarget || options.camera?.target || options.camera?.position || null)
+      : (options.player || options.startPosition || options.worldCenter || options.camTarget || options.camera?.target || null));
+  const focus = {
+    x: num(focusSource?.x, 0),
+    y: num(focusSource?.y, groundY),
+    z: num(focusSource?.z, 0)
+  };
+  const snapWorldUnits = Math.max(1, num(options.snapWorldUnits, shadowSnapWorldUnitsForPolicy(policy, mode)));
+  const previousSnapCell = options.previous?.stableSnapCell || options.previousStableSnapCell || null;
+  const previousCellX = Number.isFinite(Number(previousSnapCell?.x)) ? Math.trunc(Number(previousSnapCell.x)) : null;
+  const previousCellZ = Number.isFinite(Number(previousSnapCell?.z)) ? Math.trunc(Number(previousSnapCell.z)) : null;
+  const hysteresis = Math.max(0.05, snapWorldUnits * 0.1);
+  function snapAxis(value, previousCell) {
+    if (Number.isFinite(previousCell)) {
+      const previousCenter = previousCell * snapWorldUnits;
+      const halfSpan = snapWorldUnits / 2;
+      if (Math.abs(value - previousCenter) <= Math.max(0, halfSpan - hysteresis)) {
+        return previousCell;
+      }
+    }
+    return Math.round(value / snapWorldUnits);
+  }
+  const stableCellX = snapAxis(focus.x, previousCellX);
+  const stableCellZ = snapAxis(focus.z, previousCellZ);
+  const snappedFocus = {
+    x: round(stableCellX * snapWorldUnits),
+    y: round(focus.y),
+    z: round(stableCellZ * snapWorldUnits)
+  };
+  const previousSnappedFocus = options.previous?.snappedFocus || null;
+  const lastJumpDistance = previousSnappedFocus
+    ? round(Math.hypot(snappedFocus.x - num(previousSnappedFocus.x, snappedFocus.x), snappedFocus.z - num(previousSnappedFocus.z, snappedFocus.z)))
+    : 0;
+  const jumpDetected = lastJumpDistance > snapWorldUnits * 1.5;
+  return {
+    mode: mode,
+    source: mode === "editor"
+      ? (options.orbitTarget ? "editor_target" : (options.camera?.target ? "editor_camera_target" : "editor_focus"))
+      : (options.player ? "player" : "game_focus"),
+    focus: focus,
+    rawFocus: focus,
+    snappedFocus: snappedFocus,
+    stableSnapCell: {
+      x: stableCellX,
+      z: stableCellZ,
+      worldUnits: snapWorldUnits
+    },
+    lastJumpDistance: lastJumpDistance,
+    jumpDetected: jumpDetected
+  };
+}
+
+export function resolveStableShadowChunkWindows(options = {}) {
+  const mode = stableShadowModeName(options.mode);
+  const policy = options.policy || null;
+  const focus = options.focus || resolveStableShadowFocus(options);
+  const renderResidentChunkKeys = sortChunkKeys(Array.isArray(options.renderResidentChunkKeys)
+    ? options.renderResidentChunkKeys
+    : Array.isArray(options.loadedChunkKeys)
+      ? options.loadedChunkKeys
+      : []);
+  const visibleChunkKeys = sortChunkKeys(Array.isArray(options.visibleChunkKeys) ? options.visibleChunkKeys : []);
+  const preloadChunkKeys = sortChunkKeys(Array.isArray(options.preloadChunkKeys) ? options.preloadChunkKeys : []);
+  const forwardChunkKeys = sortChunkKeys(Array.isArray(options.forwardChunkKeys) ? options.forwardChunkKeys : []);
+  const collisionResidentChunkKeys = sortChunkKeys(Array.isArray(options.collisionResidentChunkKeys)
+    ? options.collisionResidentChunkKeys
+    : visibleChunkKeys.concat(preloadChunkKeys));
+  if (!policy || policy.source === "none" || policy.enabled === false) {
+    return {
+      focus: focus,
+      renderResidentChunkKeys: renderResidentChunkKeys,
+      collisionResidentChunkKeys: collisionResidentChunkKeys,
+      shadowResidentChunkKeys: [],
+      shadowWindow: null,
+      shadowRadiusChunks: 0
+    };
+  }
+  const shadowRadiusChunks = shadowResidentRadiusChunksForPolicy(policy, mode);
+  const focusChunk = chunkCoordForPosition(focus.snappedFocus.x, focus.snappedFocus.z, policy);
+  const shadowPolicy = Object.assign({}, policy, {
+    activeRadiusChunks: shadowRadiusChunks,
+    preloadMarginChunks: Math.max(0, chunkInteger(policy.preloadMarginChunks, 1)),
+    unloadMarginChunks: Math.max(0, chunkInteger(policy.unloadMarginChunks, 1)),
+    maxLoadedChunks: Number.MAX_SAFE_INTEGER
+  });
+  const shadowWindow = buildChunkWindow(focusChunk, shadowPolicy, mode);
+  const shadowResident = new Set(renderResidentChunkKeys);
+  for (const key of visibleChunkKeys) shadowResident.add(key);
+  for (const key of preloadChunkKeys) shadowResident.add(key);
+  for (const key of forwardChunkKeys) shadowResident.add(key);
+  for (const key of shadowWindow.loadedChunkKeys || []) shadowResident.add(key);
+  return {
+    focus: focus,
+    renderResidentChunkKeys: renderResidentChunkKeys,
+    collisionResidentChunkKeys: collisionResidentChunkKeys,
+    shadowResidentChunkKeys: sortChunkKeys(Array.from(shadowResident)),
+    shadowWindow: shadowWindow,
+    shadowRadiusChunks: shadowRadiusChunks
+  };
+}
+
+// Fase 8.7: the renderer reads the concrete published editor/game fields directly. Presets are
+// already resolved into visible node values before publish, so runtime only normalizes old worlds
+// and applies the software-renderer fallback.
+export function resolveWorldPerformanceForRenderer(worldData, rendererProfile = { software: false }) {
+  const source = worldData?.world?.performance || {};
+  const worldRoot = worldData?.world || {};
+  const sharedSource = source.shared || {};
+  const shared = {
+    worldId: sharedSource.worldId ?? worldRoot.id ?? WORLD_PERFORMANCE_DEFAULTS.shared.worldId,
+    displayName: sharedSource.displayName ?? worldRoot.displayName ?? WORLD_PERFORMANCE_DEFAULTS.shared.displayName,
+    backgroundColor: sharedSource.backgroundColor ?? worldRoot.backgroundColor ?? WORLD_PERFORMANCE_DEFAULTS.shared.backgroundColor,
+    fogColor: sharedSource.fogColor ?? worldRoot.fogColor ?? WORLD_PERFORMANCE_DEFAULTS.shared.fogColor,
+    fogDensity: num(sharedSource.fogDensity ?? worldRoot.fogDensity, WORLD_PERFORMANCE_DEFAULTS.shared.fogDensity),
+    smoothShading: sharedSource.smoothShading !== false && worldRoot.smoothShading !== false
+  };
+  const gameSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.game, source.game || {});
+  const editorSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.editor, source.editor || {});
+  const gamePolicy = resolveModeShadowPolicy(gameSource, "game");
+  const editorPolicy = resolveModeShadowPolicy(editorSource, "editor");
+  const buildShadowReadModel = function (policy) {
+    return {
+      preset: policy.preset,
+      enabled: policy.enabled,
+      mapSize: policy.mapSize,
+      cameraSize: policy.cameraSize,
+      cameraNear: policy.cameraNear,
+      cameraFar: policy.cameraFar,
+      bias: policy.bias,
+      normalBias: policy.normalBias,
+      type: policy.type,
+      updateMode: policy.updateMode,
+      snapWorldUnits: policy.snapWorldUnits,
+      focusMode: policy.focusMode,
+      staticPropsCast: policy.staticPropsCast,
+      staticPropsReceive: policy.staticPropsReceive,
+      scatterCast: policy.scatterCast,
+      scatterReceive: policy.scatterReceive,
+      groundReceives: policy.groundReceives,
+      terrainReceives: policy.terrainReceives,
+      shadowResidentMarginChunks: policy.shadowResidentMarginChunks
+    };
+  };
+  const software = rendererProfile?.software === true;
+  const gamePerformance = Object.assign({}, gameSource, {
+    preset: normalizeWorldSettingsPreset(gameSource.preset ?? "", WORLD_PERFORMANCE_DEFAULTS.game.preset),
+    shadow: buildShadowReadModel(gamePolicy),
+    shadowsEnabled: gamePolicy.enabled,
+    shadowQuality: gamePolicy.quality,
+    shadowMapSize: gamePolicy.mapSize,
+    shadowCameraSize: gamePolicy.cameraSize,
+    shadowCameraNear: gamePolicy.cameraNear,
+    shadowCameraFar: gamePolicy.cameraFar,
+    shadowBias: gamePolicy.bias,
+    shadowNormalBias: gamePolicy.normalBias,
+    shadowType: gamePolicy.type,
+    staticPropCastShadows: gamePolicy.staticPropsCast,
+    staticPropReceiveShadows: gamePolicy.staticPropsReceive,
+    scatterCastShadows: gamePolicy.scatterCast,
+    scatterReceiveShadows: gamePolicy.scatterReceive,
+    groundReceiveShadows: gamePolicy.groundReceives,
+    terrainReceiveShadows: gamePolicy.terrainReceives
+  });
+  const editorPerformance = Object.assign({}, editorSource, {
+    preset: normalizeWorldSettingsPreset(editorSource.preset ?? "", WORLD_PERFORMANCE_DEFAULTS.editor.preset),
+    shadow: buildShadowReadModel(editorPolicy),
+    shadowsEnabled: editorPolicy.enabled,
+    shadowQuality: editorPolicy.quality,
+    shadowMapSize: editorPolicy.mapSize,
+    shadowCameraSize: editorPolicy.cameraSize,
+    shadowCameraNear: editorPolicy.cameraNear,
+    shadowCameraFar: editorPolicy.cameraFar,
+    shadowBias: editorPolicy.bias,
+    shadowNormalBias: editorPolicy.normalBias,
+    shadowType: editorPolicy.type,
+    staticPropCastShadows: editorPolicy.staticPropsCast,
+    staticPropReceiveShadows: editorPolicy.staticPropsReceive,
+    scatterCastShadows: editorPolicy.scatterCast,
+    scatterReceiveShadows: editorPolicy.scatterReceive,
+    groundReceiveShadows: editorPolicy.groundReceives,
+    terrainReceiveShadows: editorPolicy.terrainReceives
+  });
+  if (software) {
+    editorPerformance.pixelRatioCap = Math.min(num(editorPerformance.pixelRatioCap, WORLD_PERFORMANCE_DEFAULTS.editor.pixelRatioCap), 1);
+    gamePerformance.pixelRatioCap = Math.min(num(gamePerformance.pixelRatioCap, WORLD_PERFORMANCE_DEFAULTS.game.pixelRatioCap), 0.7);
+    if (gamePerformance.shadow) {
+      gamePerformance.shadow.enabled = false;
+      gamePerformance.shadow.preset = "geen_schaduw";
+      gamePerformance.shadow.mapSize = 0;
+      gamePerformance.shadow.cameraSize = 0;
+      gamePerformance.shadow.cameraFar = 0;
+      gamePerformance.shadow.shadowResidentMarginChunks = 0;
+    }
+    gamePerformance.shadowsEnabled = false;
+    gamePerformance.shadowQuality = "off";
+    gamePerformance.shadowMapSize = 0;
+    gamePerformance.shadowCameraSize = 0;
+    gamePerformance.shadowCameraFar = 0;
+    gamePerformance.shadowType = "basic";
+  }
+  const legacyPerformanceUsed = Boolean(
+    (source.compatibility?.usedLegacyWorldSettingsPerformanceFields ?? source.compatibility?.usedLegacySharedShadowFields) ||
+    gamePolicy.legacyFieldsIgnored ||
+    editorPolicy.legacyFieldsIgnored
+  );
+  return {
+    shared: shared,
+    game: gamePerformance,
+    editor: editorPerformance,
+    compatibility: {
+      usedLegacyWorldSettingsPerformanceFields: legacyPerformanceUsed,
+      legacyShadowFieldsMigrated: Boolean(
+        source.compatibility?.legacyShadowFieldsMigrated ??
+        source.compatibility?.usedLegacyWorldSettingsPerformanceFields ??
+        source.compatibility?.usedLegacySharedShadowFields ??
+        legacyPerformanceUsed
+      )
+    }
+  };
+}
+
+const RESIDENT_UNLOAD_HYSTERESIS_STREAK = 2;
 
 const CHUNK_POLICY_DEFAULTS = {
   editor: {
@@ -141,6 +984,13 @@ const CHUNK_POLICY_DEFAULTS = {
     unloadMarginChunks: 2,
     maxLoadedChunks: 49,
     debugOverlay: true,
+    residentEntityBudget: 200,
+    residentObjectBudget: 300,
+    residentScatterInstanceBudget: 500,
+    residentChunkBuildBudgetPerFrame: 2,
+    groundChunkingEnabled: true,
+    pathWaterSurfaceChunkingEnabled: false,
+    terrainVisualChunkingEnabled: false,
     showChunkGrid: true,
     showChunkLabels: false,
     keepSelectedChunkLoaded: true,
@@ -159,6 +1009,13 @@ const CHUNK_POLICY_DEFAULTS = {
     unloadMarginChunks: 1,
     maxLoadedChunks: 9,
     debugOverlay: false,
+    residentEntityBudget: 200,
+    residentObjectBudget: 300,
+    residentScatterInstanceBudget: 500,
+    residentChunkBuildBudgetPerFrame: 2,
+    groundChunkingEnabled: true,
+    pathWaterSurfaceChunkingEnabled: false,
+    terrainVisualChunkingEnabled: false,
     showChunkGrid: true,
     showChunkLabels: false,
     keepSelectedChunkLoaded: false,
@@ -213,19 +1070,31 @@ export function resolveChunkPolicy(worldData, mode = "editor") {
       loadedRadiusChunks: defaults.activeRadiusChunks + Math.max(defaults.preloadMarginChunks, defaults.unloadMarginChunks),
       maxLoadedChunks: defaults.maxLoadedChunks,
       debugOverlay: false,
+      residentEntityBudget: defaults.residentEntityBudget,
+      residentObjectBudget: defaults.residentObjectBudget,
+      residentScatterInstanceBudget: defaults.residentScatterInstanceBudget,
+      residentChunkBuildBudgetPerFrame: defaults.residentChunkBuildBudgetPerFrame,
+      groundChunkingEnabled: defaults.groundChunkingEnabled,
+      pathWaterSurfaceChunkingEnabled: defaults.pathWaterSurfaceChunkingEnabled,
+      terrainVisualChunkingEnabled: defaults.terrainVisualChunkingEnabled,
       showChunkGrid: false,
       showChunkLabels: false,
       keepSelectedChunkLoaded: defaults.keepSelectedChunkLoaded,
       cameraOnly: defaults.cameraOnly,
       fixedCameraPaddingTiles: defaults.fixedCameraPaddingTiles,
+      fixedCameraPaddingChunks: 0,
       strictUnloadOutsideCamera: defaults.strictUnloadOutsideCamera
     };
   }
   const chunkWidth = Math.max(1, chunkInteger(policy.chunkWidth, defaults.chunkWidth));
   const chunkDepth = Math.max(1, chunkInteger(policy.chunkDepth, defaults.chunkDepth));
   const tileSize = Math.max(0.01, num(policy.tileSize, defaults.tileSize));
+  const fixedCameraPaddingTiles = modeName === "game" ? chunkInteger(policy.fixedCameraPaddingTiles, defaults.fixedCameraPaddingTiles) : 0;
+  const fixedCameraPaddingChunks = modeName === "game"
+    ? Math.max(0, Math.floor(fixedCameraPaddingTiles / Math.max(1, Math.min(chunkWidth, chunkDepth))))
+    : 0;
   const activeRadiusChunks = modeName === "game"
-    ? chunkInteger(policy.gameViewRadiusChunks, defaults.activeRadiusChunks)
+    ? chunkInteger(policy.gameViewRadiusChunks, defaults.activeRadiusChunks) + fixedCameraPaddingChunks
     : chunkInteger(policy.editorViewRadiusChunks, defaults.activeRadiusChunks);
   const preloadMarginChunks = chunkInteger(policy.preloadMarginChunks, defaults.preloadMarginChunks);
   const unloadMarginChunks = chunkInteger(policy.unloadMarginChunks, defaults.unloadMarginChunks);
@@ -249,11 +1118,19 @@ export function resolveChunkPolicy(worldData, mode = "editor") {
     loadedRadiusChunks: activeRadiusChunks + Math.max(preloadMarginChunks, unloadMarginChunks),
     maxLoadedChunks: maxLoadedChunksForValue(policy.maxLoadedChunks, defaults.maxLoadedChunks),
     debugOverlay: policy.debugOverlay === true,
+    residentEntityBudget: numberOrFallback(policy.residentEntityBudget, defaults.residentEntityBudget),
+    residentObjectBudget: numberOrFallback(policy.residentObjectBudget, defaults.residentObjectBudget),
+    residentScatterInstanceBudget: numberOrFallback(policy.residentScatterInstanceBudget, defaults.residentScatterInstanceBudget),
+    residentChunkBuildBudgetPerFrame: Math.max(1, chunkInteger(policy.residentChunkBuildBudgetPerFrame, defaults.residentChunkBuildBudgetPerFrame)),
+    groundChunkingEnabled: policy.groundChunkingEnabled !== false,
+    pathWaterSurfaceChunkingEnabled: policy.pathWaterSurfaceChunkingEnabled === true,
+    terrainVisualChunkingEnabled: policy.terrainVisualChunkingEnabled === true,
     showChunkGrid: modeName === "editor" ? policy.showChunkGrid !== false : true,
     showChunkLabels: modeName === "editor" ? policy.showChunkLabels === true : false,
     keepSelectedChunkLoaded: modeName === "editor" ? policy.keepSelectedChunkLoaded !== false : false,
     cameraOnly: modeName === "game" ? policy.cameraOnly !== false : false,
-    fixedCameraPaddingTiles: modeName === "game" ? chunkInteger(policy.fixedCameraPaddingTiles, defaults.fixedCameraPaddingTiles) : 0,
+    fixedCameraPaddingTiles: fixedCameraPaddingTiles,
+    fixedCameraPaddingChunks: fixedCameraPaddingChunks,
     strictUnloadOutsideCamera: modeName === "game" ? policy.strictUnloadOutsideCamera !== false : false
   };
 }
@@ -269,6 +1146,10 @@ export function chunkSizeForPolicy(policy) {
   };
 }
 
+export function chunkWorldSize(policy) {
+  return chunkSizeForPolicy(policy);
+}
+
 export function chunkCoordForPosition(x, z, policy) {
   const size = chunkSizeForPolicy(policy);
   const safeX = Number.isFinite(Number(x)) ? Number(x) : 0;
@@ -281,6 +1162,10 @@ export function chunkCoordForPosition(x, z, policy) {
 
 export function chunkKey(coord) {
   return String(chunkCoordInteger(coord?.x, 0)) + "," + String(chunkCoordInteger(coord?.z, 0));
+}
+
+export function chunkKeyForPosition(x, z, policy) {
+  return chunkKey(chunkCoordForPosition(x, z, policy));
 }
 
 export function chunkDistanceFromCenter(coord, centerCoord) {
@@ -331,12 +1216,20 @@ export function buildChunkWindow(centerCoord, policy, mode = "editor") {
   }
   let clippedByMaxLoadedChunks = false;
   const maxLoadedChunks = maxLoadedChunksForValue(normalizedPolicy.maxLoadedChunks, candidates.length || 1);
-  let loadedCandidates = candidates.slice();
+  const activeTier = candidates.filter(function (coord) { return coord.chebyshev <= activeRadiusChunks; }).sort(chunkDistanceSort);
+  const preloadTier = candidates.filter(function (coord) { return coord.chebyshev > activeRadiusChunks && coord.chebyshev <= preloadRadiusChunks; }).sort(chunkDistanceSort);
+  const marginTier = candidates.filter(function (coord) { return coord.chebyshev > preloadRadiusChunks; }).sort(chunkDistanceSort);
+  const requiredActiveChunks = activeTier.length;
+  // Priority order active > preload > margin so a tight maxLoadedChunks budget never evicts a
+  // closer active/preload chunk in favor of a farther margin chunk (that silently broke the
+  // "active radius is always resident" contract and starved the preload ring to zero).
+  let loadedCandidates = activeTier.concat(preloadTier, marginTier);
   if (loadedCandidates.length > maxLoadedChunks) {
     clippedByMaxLoadedChunks = true;
-    loadedCandidates.sort(chunkDistanceSort);
     loadedCandidates = loadedCandidates.slice(0, maxLoadedChunks);
   }
+  const loadedActiveChunks = loadedCandidates.filter(function (coord) { return coord.chebyshev <= activeRadiusChunks; }).length;
+  const clippedActiveChunks = Math.max(0, requiredActiveChunks - loadedActiveChunks);
   loadedCandidates.sort(chunkCoordSort);
   const loadedChunkKeys = loadedCandidates.map(function (coord) { return coord.key; });
   const loadedChunkKeySet = new Set(loadedChunkKeys);
@@ -359,6 +1252,9 @@ export function buildChunkWindow(centerCoord, policy, mode = "editor") {
     loadedRadiusChunks: loadedRadiusChunks,
     maxLoadedChunks: maxLoadedChunks,
     clippedByMaxLoadedChunks: clippedByMaxLoadedChunks,
+    requiredActiveChunks: requiredActiveChunks,
+    clippedActiveChunks: clippedActiveChunks,
+    activeRadiusUnmet: clippedActiveChunks > 0,
     activeChunks: activeChunks,
     preloadChunks: preloadChunks,
     loadedOnlyChunks: loadedOnlyChunks,
@@ -372,6 +1268,1898 @@ export function buildChunkWindow(centerCoord, policy, mode = "editor") {
   };
 }
 
+function normalizeMaterialList(material) {
+  if (!material) return [];
+  return Array.isArray(material) ? material.filter(Boolean) : [material];
+}
+
+function materialColorSummary(material) {
+  if (!material) return null;
+  try {
+    if (material.color && material.color.isColor && typeof material.color.getHexString === "function") {
+      return "#" + material.color.getHexString();
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function geometryTypeSummary(geometry) {
+  if (!geometry) return null;
+  return String(geometry.type || geometry.constructor?.name || "unknown");
+}
+
+function worldVectorSummary(object, kind = "position") {
+  const vector = new THREE.Vector3();
+  try {
+    if (kind === "position" && typeof object?.getWorldPosition === "function") {
+      object.getWorldPosition(vector);
+      return { x: round(vector.x), y: round(vector.y), z: round(vector.z) };
+    }
+    if (kind === "scale" && typeof object?.getWorldScale === "function") {
+      object.getWorldScale(vector);
+      return { x: round(vector.x), y: round(vector.y), z: round(vector.z) };
+    }
+    if (kind === "rotation" && typeof object?.getWorldQuaternion === "function") {
+      const quaternion = new THREE.Quaternion();
+      const euler = new THREE.Euler();
+      object.getWorldQuaternion(quaternion);
+      euler.setFromQuaternion(quaternion, "XYZ");
+      return {
+        x: round(euler.x),
+        y: round(euler.y),
+        z: round(euler.z)
+      };
+    }
+  } catch {
+    // ignore
+  }
+  const source = kind === "scale" ? object?.scale : object?.position;
+  return {
+    x: round(num(source?.x, 0)),
+    y: round(num(source?.y, 0)),
+    z: round(num(source?.z, 0))
+  };
+}
+
+function objectBoundingBoxSummary(object) {
+  if (!object) return { x: 0, y: 0, z: 0 };
+  try {
+    const box = new THREE.Box3().setFromObject(object);
+    if (!box || box.isEmpty()) return { x: 0, y: 0, z: 0 };
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    return {
+      x: round(size.x),
+      y: round(size.y),
+      z: round(size.z)
+    };
+  } catch {
+    return { x: 0, y: 0, z: 0 };
+  }
+}
+
+function objectUserDataKeys(object) {
+  try {
+    return Object.keys(object?.userData || {}).sort();
+  } catch {
+    return [];
+  }
+}
+
+function objectAncestorChain(object, ancestor) {
+  let current = object || null;
+  while (current) {
+    if (current === ancestor) return true;
+    current = current.parent || null;
+  }
+  return false;
+}
+
+function objectNameSummary(object) {
+  return String(object?.name || "").trim();
+}
+
+function objectTypeSummary(object) {
+  return String(object?.type || object?.constructor?.name || "Object3D");
+}
+
+function hasWorldRuntimeMarkers(object) {
+  if (!object) return false;
+  const userData = object.userData || {};
+  if (userData.runtimeAlive === true) return true;
+  if (userData.runtimeResourcesShared === true) return true;
+  if (userData.terrainRuntime === true) return true;
+  if (userData.terrainChunkEntryId) return true;
+  if (userData.groundTile === true || userData.groundPlane === true) return true;
+  if (userData.chunkRuntimeType) return true;
+  if (userData.batchKind) return true;
+  if (userData.entityId || userData.playerId || userData.interactableId) return true;
+  if (userData.scatterInstance === true) return true;
+  if (userData.surfaceLayerId) return true;
+  if (userData.shadowProxy === true) return true;
+  return false;
+}
+
+function isMeshLikeObject(object) {
+  return Boolean(object && (object.isMesh === true || object.isInstancedMesh === true));
+}
+
+function isPlaneGeometryObject(object) {
+  const geometryType = geometryTypeSummary(object?.geometry);
+  return geometryType === "PlaneGeometry";
+}
+
+function isCircleOrPlaneGeometryObject(object) {
+  const geometryType = geometryTypeSummary(object?.geometry);
+  return geometryType === "PlaneGeometry" || geometryType === "CircleGeometry";
+}
+
+function isShadowProxyObject(object) {
+  return Boolean(object?.userData?.shadowProxy === true);
+}
+
+function isOverlayPlaneName(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  return normalized.includes("chunk overlay")
+    || normalized.includes("terrain overlay")
+    || normalized.includes("debug overlay")
+    || normalized.includes("editor terrain overlay")
+    || normalized.includes("editor scatter overlay")
+    || normalized.includes("camera overlay")
+    || normalized.includes("chunk fill")
+    || normalized.includes("chunk plane")
+    || normalized.includes("shadow helper plane")
+    || normalized.includes("shadow helper");
+}
+
+function collectGhostPlaneCandidateRecord(object, context = {}) {
+  if (!isMeshLikeObject(object)) return null;
+  const camera = context.camera || null;
+  const debugOverlayVisible = context.debugOverlayVisible === true;
+  const world = context.world || null;
+  const chunkedGround = context.chunkedGround === true;
+  const name = objectNameSummary(object);
+  const type = objectTypeSummary(object);
+  const parent = object.parent || null;
+  const parentName = objectNameSummary(parent);
+  const parentType = objectTypeSummary(parent);
+  const isCameraChild = Boolean(camera && objectAncestorChain(object, camera));
+  const geometryType = geometryTypeSummary(object.geometry);
+  const material = normalizeMaterialList(object.material)[0] || null;
+  const materialType = material ? String(material.type || material.constructor?.name || "Material") : null;
+  const materialColor = materialColorSummary(material);
+  const opacity = material ? round(num(material.opacity, 1)) : 1;
+  const userDataKeys = objectUserDataKeys(object);
+  const worldPosition = worldVectorSummary(object, "position");
+  const worldRotation = worldVectorSummary(object, "rotation");
+  const worldScale = worldVectorSummary(object, "scale");
+  const boundingSize = objectBoundingBoxSummary(object);
+  const isPlaneGeometry = isPlaneGeometryObject(object);
+  const isCircleOrPlaneGeometry = isCircleOrPlaneGeometryObject(object);
+  const isDebugOverlay = Boolean(isDebugOverlayObject(object) || object.userData?.debugOverlay === true || object.userData?.debugOverlayRoot === true);
+  const isRuntimeTerrain = Boolean(object.userData?.terrainRuntime === true || object.userData?.groundTile === true || object.userData?.groundPlane === true || object.userData?.terrainChunkEntryId);
+  const isAllowedWorldObject = Boolean(
+    isRuntimeTerrain
+    || object.userData?.shadowProxy === true
+    || object.userData?.runtimeAlive === true
+    || object.userData?.runtimeResourcesShared === true
+    || object.userData?.batchKind
+    || object.userData?.chunkRuntimeType
+    || object.userData?.entityId
+    || object.userData?.playerId
+    || object.userData?.interactableId
+    || object.userData?.scatterInstance === true
+    || object.userData?.surfaceLayerId
+  );
+  const suspiciousFlags = [];
+  if (isCameraChild) suspiciousFlags.push("cameraChild");
+  if (isDebugOverlay && !debugOverlayVisible) suspiciousFlags.push("debugOverlayOff");
+  if (isOverlayPlaneName(name)) suspiciousFlags.push("overlayName");
+  if (isPlaneGeometry && !isAllowedWorldObject) suspiciousFlags.push("planeGeometry");
+  if (isCircleOrPlaneGeometry && !isAllowedWorldObject) suspiciousFlags.push("flatGeometry");
+  if (!userDataKeys.length && (isPlaneGeometry || isCircleOrPlaneGeometry)) suspiciousFlags.push("missingUserData");
+  if (object.userData?.groundPlane === true && chunkedGround && object.userData?.terrainChunkDisposed !== true) {
+    suspiciousFlags.push("staleFullGroundPlane");
+  }
+  if (material && material.transparent === true && material.opacity < 1 && !isAllowedWorldObject) suspiciousFlags.push("transparentPlane");
+  if (material && material.depthTest === false && !isAllowedWorldObject) suspiciousFlags.push("depthTestOff");
+  if (material && material.depthWrite === false && !isAllowedWorldObject) suspiciousFlags.push("depthWriteOff");
+  if (material && material.side === THREE.DoubleSide && !isAllowedWorldObject && (isPlaneGeometry || isCircleOrPlaneGeometry)) suspiciousFlags.push("doubleSidedPlane");
+  const shouldFlag = suspiciousFlags.length > 0 && !(isDebugOverlay && debugOverlayVisible && !isCameraChild);
+  return {
+    object: object,
+    name: name,
+    uuid: String(object.uuid || ""),
+    type: type,
+    parentName: parentName,
+    parentType: parentType,
+    isCameraChild: isCameraChild,
+    visible: object.visible !== false,
+    castShadow: object.castShadow === true,
+    receiveShadow: object.receiveShadow === true,
+    geometryType: geometryType,
+    materialType: materialType,
+    materialColor: materialColor,
+    opacity: opacity,
+    worldPosition: worldPosition,
+    worldRotation: worldRotation,
+    worldScale: worldScale,
+    boundingSize: boundingSize,
+    userDataKeys: userDataKeys,
+    suspiciousFlags: suspiciousFlags,
+    reason: suspiciousFlags.join(", "),
+    isPlaneGeometry: isPlaneGeometry,
+    isCircleOrPlaneGeometry: isCircleOrPlaneGeometry,
+    isDebugOverlay: isDebugOverlay,
+    isAllowedWorldObject: isAllowedWorldObject,
+    shouldFlag: shouldFlag,
+    isShadowProxy: isShadowProxyObject(object)
+  };
+}
+
+function cloneMaterialForShadowProxy(material) {
+  if (!material) return material;
+  const clone = typeof material.clone === "function" ? material.clone() : material;
+  clone.colorWrite = false;
+  clone.depthWrite = true;
+  clone.depthTest = true;
+  clone.transparent = false;
+  clone.opacity = 1;
+  clone.needsUpdate = true;
+  return clone;
+}
+
+function restoreMaterialFromShadowProxy(material, snapshot) {
+  if (!material) return material;
+  const state = snapshot || material.userData?.shadowProxyOriginalState || null;
+  if (state) {
+    material.colorWrite = state.colorWrite;
+    material.depthWrite = state.depthWrite;
+    material.depthTest = state.depthTest;
+    material.transparent = state.transparent;
+    material.opacity = state.opacity;
+  } else {
+    material.colorWrite = true;
+  }
+  material.needsUpdate = true;
+  return material;
+}
+
+export function setShadowProxyState(object, enabled, options = {}) {
+  if (!object || typeof object.traverse !== "function") return 0;
+  const nextEnabled = enabled === true;
+  let changed = 0;
+  object.traverse(function (child) {
+    if (!child) return;
+    child.userData = child.userData || {};
+    if (!isMeshLikeObject(child)) {
+      if (nextEnabled) {
+        child.userData.shadowProxy = true;
+        child.userData.shadowProxyKind = String(options.kind || child.userData.shadowProxyKind || child.userData.batchKind || child.userData.chunkRuntimeType || "shadowProxy");
+        child.visible = true;
+      } else if (child.userData.shadowProxy === true) {
+        child.userData.shadowProxy = false;
+        if (child.userData.shadowProxyKind) delete child.userData.shadowProxyKind;
+      }
+      return;
+    }
+    const materials = normalizeMaterialList(child.material);
+    if (nextEnabled) {
+      if (!child.userData.shadowProxyOriginalState) {
+        child.userData.shadowProxyOriginalState = {
+          castShadow: child.castShadow === true,
+          receiveShadow: child.receiveShadow === true,
+          visible: child.visible !== false
+        };
+        child.userData.shadowProxyOriginalMaterials = materials.map(function (material) { return material; });
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map(function (material) { return cloneMaterialForShadowProxy(material); });
+        } else if (child.material) {
+          child.material = cloneMaterialForShadowProxy(child.material);
+        }
+      }
+      const nextMaterials = normalizeMaterialList(child.material);
+      for (const material of nextMaterials) {
+        if (!material) continue;
+        material.userData = material.userData || {};
+        if (!material.userData.shadowProxyOriginalState) {
+          material.userData.shadowProxyOriginalState = {
+            colorWrite: material.colorWrite !== false,
+            depthWrite: material.depthWrite !== false,
+            depthTest: material.depthTest !== false,
+            transparent: material.transparent === true,
+            opacity: num(material.opacity, 1)
+          };
+        }
+        material.colorWrite = false;
+        material.depthWrite = true;
+        material.depthTest = true;
+        material.transparent = false;
+        material.opacity = 1;
+        material.needsUpdate = true;
+      }
+      child.castShadow = child.userData.shadowProxyOriginalState.castShadow && child.castShadow !== false;
+      child.receiveShadow = false;
+      child.visible = true;
+      child.userData.shadowProxy = true;
+      child.userData.shadowProxyKind = String(options.kind || child.userData.shadowProxyKind || child.userData.batchKind || child.userData.chunkRuntimeType || "shadowProxy");
+      changed += 1;
+      return;
+    }
+    if (!child.userData.shadowProxy && !child.userData.shadowProxyOriginalState) return;
+    const originalMaterials = Array.isArray(child.userData.shadowProxyOriginalMaterials)
+      ? child.userData.shadowProxyOriginalMaterials.slice()
+      : null;
+    const currentMaterials = normalizeMaterialList(child.material);
+    if (originalMaterials && currentMaterials.length) {
+      for (const material of currentMaterials) {
+        if (material && originalMaterials.indexOf(material) < 0 && typeof material.dispose === "function") {
+          try { material.dispose(); } catch {}
+        }
+      }
+      child.material = originalMaterials.length === 1 ? originalMaterials[0] : originalMaterials.slice();
+      for (const material of normalizeMaterialList(child.material)) {
+        restoreMaterialFromShadowProxy(material, null);
+      }
+    } else {
+      for (const material of currentMaterials) restoreMaterialFromShadowProxy(material, null);
+    }
+    if (child.userData.shadowProxyOriginalState) {
+      child.castShadow = child.userData.shadowProxyOriginalState.castShadow;
+      child.receiveShadow = child.userData.shadowProxyOriginalState.receiveShadow;
+      child.visible = child.userData.shadowProxyOriginalState.visible;
+      delete child.userData.shadowProxyOriginalState;
+    }
+    if (child.userData.shadowProxyOriginalMaterials) delete child.userData.shadowProxyOriginalMaterials;
+    child.userData.shadowProxy = false;
+    if (child.userData.shadowProxyKind) delete child.userData.shadowProxyKind;
+    changed += 1;
+  });
+  return changed;
+}
+
+function scanSceneRootsForGhostPlanes(options = {}) {
+  const roots = [];
+  const seen = new Set();
+  const pushRoot = function (root) {
+    if (!root || typeof root.traverse !== "function") return;
+    if (seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+  };
+  for (const root of Array.isArray(options.roots) ? options.roots : []) pushRoot(root);
+  pushRoot(options.scene || null);
+  pushRoot(options.camera || null);
+  pushRoot(options.content || null);
+  pushRoot(options.terrainRuntimeGroup || null);
+  pushRoot(options.chunkDebugOverlay || null);
+  pushRoot(options.selectionHelper || null);
+  pushRoot(options.transformGuide || null);
+  pushRoot(options.terrainEditorOverlay || null);
+  pushRoot(options.scatterEditorOverlay || null);
+  const visited = new Set();
+  const records = [];
+  const camera = options.camera || null;
+  const debugOverlayVisible = options.debugOverlayVisible === true;
+  const mode = String(options.mode || "").trim();
+  const chunkedGround = Object.prototype.hasOwnProperty.call(options, "chunkedGround")
+    ? options.chunkedGround === true
+    : shouldUseChunkedGround(options.world || null, mode || "editor");
+  for (const root of roots) {
+    root.traverse(function (object) {
+      if (!object || visited.has(object)) return;
+      visited.add(object);
+      const record = collectGhostPlaneCandidateRecord(object, {
+        camera: camera,
+        world: options.world || null,
+        mode: mode,
+        debugOverlayVisible: debugOverlayVisible,
+        chunkedGround: chunkedGround
+      });
+      if (!record) return;
+      records.push(record);
+    });
+  }
+  return records;
+}
+
+export function resolveWorldContentCenter(worldData, options = {}) {
+  const groundBounds = effectiveGroundBounds(worldData?.ground);
+  if (groundBounds) {
+    return {
+      x: round((groundBounds.minX + groundBounds.maxX) / 2),
+      y: round(num(worldData?.ground?.y, 0)),
+      z: round((groundBounds.minZ + groundBounds.maxZ) / 2),
+      source: "groundCenter"
+    };
+  }
+  const samples = [];
+  const addSample = function (x, z) {
+    const px = Number(x);
+    const pz = Number(z);
+    if (!Number.isFinite(px) || !Number.isFinite(pz)) return;
+    samples.push({ x: px, z: pz });
+  };
+  for (const entity of Array.isArray(worldData?.entities) ? worldData.entities : []) {
+    addSample(entity?.transform?.position?.x, entity?.transform?.position?.z);
+  }
+  for (const inter of Array.isArray(worldData?.interactables) ? worldData.interactables : []) {
+    addSample(inter?.position?.x, inter?.position?.z);
+  }
+  for (const surface of Array.isArray(worldData?.terrain?.surfaces) ? worldData.terrain.surfaces : []) {
+    for (const point of Array.isArray(surface?.points) ? surface.points : []) addSample(point?.x, point?.z);
+  }
+  for (const blocker of Array.isArray(worldData?.collision?.blockers) ? worldData.collision.blockers : []) {
+    addSample(blocker?.x, blocker?.z);
+    for (const point of Array.isArray(blocker?.points) ? blocker.points : []) addSample(point?.x, point?.z);
+  }
+  for (const walkable of Array.isArray(worldData?.collision?.walkableSurfaces) ? worldData.collision.walkableSurfaces : []) {
+    addSample(walkable?.x, walkable?.z);
+    for (const point of Array.isArray(walkable?.points) ? walkable.points : []) addSample(point?.x, point?.z);
+  }
+  if (!samples.length) return null;
+  let minX = samples[0].x;
+  let maxX = samples[0].x;
+  let minZ = samples[0].z;
+  let maxZ = samples[0].z;
+  for (const sample of samples) {
+    minX = Math.min(minX, sample.x);
+    maxX = Math.max(maxX, sample.x);
+    minZ = Math.min(minZ, sample.z);
+    maxZ = Math.max(maxZ, sample.z);
+  }
+  return {
+    x: round((minX + maxX) / 2),
+    y: round(num(worldData?.ground?.y, 0)),
+    z: round((minZ + maxZ) / 2),
+    source: "contentCenter"
+  };
+}
+
+export function resolveEditorShadowFocus(options = {}) {
+  const groundY = Number.isFinite(Number(options.groundY))
+    ? num(options.groundY, 0)
+    : 0;
+  const snapWorldUnits = Math.max(1, num(options.snapWorldUnits, 10));
+  const previousRawFocus = options.previous?.rawFocus || options.previous?.focus || options.previous?.snappedFocus || null;
+  const selectionJumpThreshold = Math.max(1, snapWorldUnits * 1.5);
+  const selectedObject = options.selectedObject || null;
+  if (selectedObject && selectedObject.userData?.shadowProxy !== true) {
+    const worldPosition = worldVectorSummary(selectedObject, "position");
+    const selectedFocus = {
+      x: round(worldPosition.x),
+      y: round(Number.isFinite(Number(worldPosition.y)) ? worldPosition.y : groundY),
+      z: round(worldPosition.z),
+      source: "selected"
+    };
+    if (!previousRawFocus) return selectedFocus;
+    const distance = Math.hypot(selectedFocus.x - num(previousRawFocus.x, selectedFocus.x), selectedFocus.z - num(previousRawFocus.z, selectedFocus.z));
+    if (distance <= selectionJumpThreshold) return selectedFocus;
+  }
+  const selectedPosition = options.selectedPosition || null;
+  if (selectedPosition && Number.isFinite(Number(selectedPosition.x)) && Number.isFinite(Number(selectedPosition.z))) {
+    return {
+      x: round(num(selectedPosition.x, 0)),
+      y: round(num(selectedPosition.y, groundY)),
+      z: round(num(selectedPosition.z, 0)),
+      source: "selected_position"
+    };
+  }
+  const contentCenter = options.contentCenter || (options.worldData ? resolveWorldContentCenter(options.worldData) : null);
+  if (contentCenter && Number.isFinite(Number(contentCenter.x)) && Number.isFinite(Number(contentCenter.z))) {
+    return {
+      x: round(num(contentCenter.x, 0)),
+      y: round(num(contentCenter.y, groundY)),
+      z: round(num(contentCenter.z, 0)),
+      source: contentCenter.source || "contentCenter"
+    };
+  }
+  const worldCenter = options.worldCenter || null;
+  if (worldCenter && Number.isFinite(Number(worldCenter.x)) && Number.isFinite(Number(worldCenter.z))) {
+    return {
+      x: round(num(worldCenter.x, 0)),
+      y: round(num(worldCenter.y, groundY)),
+      z: round(num(worldCenter.z, 0)),
+      source: "worldCenter"
+    };
+  }
+  if (options.startPosition && Number.isFinite(Number(options.startPosition.x)) && Number.isFinite(Number(options.startPosition.z))) {
+    return {
+      x: round(num(options.startPosition.x, 0)),
+      y: round(num(options.startPosition.y, groundY)),
+      z: round(num(options.startPosition.z, 0)),
+      source: "start"
+    };
+  }
+  if (options.player && Number.isFinite(Number(options.player.x)) && Number.isFinite(Number(options.player.z))) {
+    return {
+      x: round(num(options.player.x, 0)),
+      y: round(num(options.player.y, groundY)),
+      z: round(num(options.player.z, 0)),
+      source: "player"
+    };
+  }
+  return {
+    x: 0,
+    y: groundY,
+    z: 0,
+    source: "worldCenter"
+  };
+}
+
+export function auditSceneObjectsForGhostPlanes(options = {}) {
+  const records = scanSceneRootsForGhostPlanes(options);
+  const suspiciousPlanes = records.filter(function (record) { return record.shouldFlag === true; }).map(function (record) {
+    return {
+      name: record.name,
+      uuid: record.uuid,
+      parentName: record.parentName,
+      parentType: record.parentType,
+      isCameraChild: record.isCameraChild,
+      visible: record.visible,
+      castShadow: record.castShadow,
+      receiveShadow: record.receiveShadow,
+      geometryType: record.geometryType,
+      materialType: record.materialType,
+      materialColor: record.materialColor,
+      opacity: record.opacity,
+      worldPosition: record.worldPosition,
+      worldRotation: record.worldRotation,
+      worldScale: record.worldScale,
+      boundingSize: record.boundingSize,
+      userDataKeys: record.userDataKeys,
+      suspiciousFlags: record.suspiciousFlags.slice(),
+      reason: record.reason
+    };
+  });
+  const scenePlaneCount = records.filter(function (record) {
+    return record.geometryType === "PlaneGeometry";
+  }).length;
+  const cameraChildMeshes = records.filter(function (record) {
+    return record.isCameraChild === true && (record.object?.isMesh === true || record.object?.isInstancedMesh === true);
+  }).length;
+  const cameraChildPlanes = records.filter(function (record) {
+    return record.isCameraChild === true && record.geometryType === "PlaneGeometry";
+  }).length;
+  const visibleDebugPlanes = records.filter(function (record) {
+    return record.isDebugOverlay === true && record.visible !== false && record.geometryType === "PlaneGeometry";
+  }).length;
+  const extraGroundPlanes = records.filter(function (record) {
+    return Array.isArray(record.suspiciousFlags) && record.suspiciousFlags.includes("staleFullGroundPlane");
+  }).length;
+  const sceneChildren = Array.isArray(options.scene?.children) ? options.scene.children : [];
+  const terrainRuntimeRootCount = sceneChildren.filter(function (child) {
+    return child?.name === "GK runtime terrain visuals";
+  }).length;
+  const chunkOverlayRootCount = sceneChildren.filter(function (child) {
+    return child?.name === "GK chunk debug overlay";
+  }).length;
+  const duplicateRuntimeRoots = Math.max(0, terrainRuntimeRootCount - 1) + Math.max(0, chunkOverlayRootCount - 1);
+  const terrainRuntimeGroups = Array.isArray(options.terrainRuntimeGroups)
+    ? options.terrainRuntimeGroups.length
+    : (options.terrainRuntimeGroup ? 1 : records.filter(function (record) {
+      return record.name === "GK runtime terrain visuals";
+    }).length);
+  const chunkOverlayGroups = Array.isArray(options.chunkOverlayGroups)
+    ? options.chunkOverlayGroups.length
+    : (options.chunkDebugOverlay ? 1 : records.filter(function (record) {
+      return record.name === "GK chunk debug overlay";
+    }).length);
+  const cameraChildOverlayGroups = Array.isArray(options.cameraChildOverlayGroups)
+    ? options.cameraChildOverlayGroups.length
+    : records.filter(function (record) {
+      return record.isCameraChild === true && record.isDebugOverlay === true;
+    }).length;
+  return {
+    suspiciousPlanes: suspiciousPlanes,
+    removedSuspiciousPlanes: 0,
+    cameraChildMeshes: cameraChildMeshes,
+    cameraChildPlanes: cameraChildPlanes,
+    visibleDebugPlanes: visibleDebugPlanes,
+    scenePlaneCount: scenePlaneCount,
+    terrainRuntimeGroups: terrainRuntimeGroups,
+    chunkOverlayGroups: chunkOverlayGroups,
+    duplicateRuntimeRoots: duplicateRuntimeRoots,
+    extraGroundPlanes: extraGroundPlanes,
+    cameraChildOverlayGroups: cameraChildOverlayGroups
+  };
+}
+
+export function removeGhostChunkPlanes(reason = "runtime-sync", options = {}) {
+  const scan = scanSceneRootsForGhostPlanes(options);
+  const debugOverlayVisible = options.debugOverlayVisible === true;
+  const removed = [];
+  const removedSet = new Set();
+  const isAllowedCameraChild = function (record) {
+    return Boolean(record?.object?.userData?.allowCameraChild === true || record?.object?.userData?.cameraHelper === true);
+  };
+  const shouldRemove = function (record) {
+    if (!record || !record.shouldFlag) return false;
+    if (record.isDebugOverlay && debugOverlayVisible && !record.isCameraChild) return false;
+    if (record.isShadowProxy) return false;
+    if (isAllowedCameraChild(record)) return false;
+    return true;
+  };
+  const candidates = scan.filter(shouldRemove).sort(function (left, right) {
+    const leftDepth = left.parentName ? 1 : 0;
+    const rightDepth = right.parentName ? 1 : 0;
+    return rightDepth - leftDepth;
+  });
+  for (const record of candidates) {
+    const object = record.object || null;
+    if (!object || removedSet.has(object)) continue;
+    let skip = false;
+    let parent = object.parent || null;
+    while (parent) {
+      if (removedSet.has(parent)) {
+        skip = true;
+        break;
+      }
+      parent = parent.parent || null;
+    }
+    if (skip) continue;
+    const markAndRemove = function (target) {
+      if (!target || removedSet.has(target)) return;
+      removedSet.add(target);
+      if (target.userData) {
+        target.userData.shadowProxy = false;
+        target.userData.shadowProxyKind = null;
+      }
+      if (target.castShadow === true) target.castShadow = false;
+      if (target.receiveShadow === true) target.receiveShadow = false;
+      if (target.parent) target.parent.remove(target);
+      disposeObject(target, { disposeTextures: true });
+      removed.push(target);
+    };
+    markAndRemove(object);
+  }
+  const diagnostics = auditSceneObjectsForGhostPlanes(options);
+  diagnostics.removedSuspiciousPlanes = removed.length;
+  if (removed.length > 0) {
+    console.warn("[ghost-plane] removed " + removed.length + " suspicious object(s) during " + reason + ".");
+  }
+  return diagnostics;
+}
+
+export function auditSceneObjectsForShadowCasters(options = {}) {
+  const roots = [];
+  const seen = new Set();
+  const pushRoot = function (root) {
+    if (!root || typeof root.traverse !== "function") return;
+    if (seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+  };
+  for (const root of Array.isArray(options.roots) ? options.roots : []) pushRoot(root);
+  pushRoot(options.scene || null);
+  pushRoot(options.content || null);
+  pushRoot(options.terrainRuntimeGroup || null);
+  pushRoot(options.chunkDebugOverlay || null);
+  pushRoot(options.selectionHelper || null);
+  pushRoot(options.transformGuide || null);
+  pushRoot(options.terrainEditorOverlay || null);
+  pushRoot(options.scatterEditorOverlay || null);
+  const visited = new Set();
+  const records = [];
+  const pushRecord = function (object) {
+    if (!object || visited.has(object)) return;
+    visited.add(object);
+    if (!(object.isMesh === true || object.isInstancedMesh === true)) return;
+    if (object.castShadow !== true) return;
+    const geometryType = geometryTypeSummary(object.geometry);
+    const material = normalizeMaterialList(object.material)[0] || null;
+    const materialType = material ? String(material.type || material.constructor?.name || "Material") : null;
+    const materialColor = materialColorSummary(material);
+    const opacity = material ? round(num(material.opacity, 1)) : 1;
+    const name = objectNameSummary(object);
+    const parentName = objectNameSummary(object.parent || null);
+    const ancestry = [];
+    for (let current = object; current; current = current.parent || null) ancestry.push(current);
+    const findAncestor = function (predicate) {
+      for (const candidate of ancestry) {
+        if (predicate(candidate, candidate?.userData || {})) return candidate;
+      }
+      return null;
+    };
+    const kind = (function () {
+      const userData = object.userData || {};
+      const debugOverlayNode = findAncestor(function (candidate, candidateUserData) {
+        return candidateUserData.debugOverlay === true || candidateUserData.debugOverlayRoot === true || isDebugOverlayObject(candidate);
+      });
+      if (debugOverlayNode) return "debugOverlay";
+      if (object === options.selectionHelper || name.includes("selection helper")) return "selection";
+      if (object === options.transformGuide || name.includes("transform guide")) return "helper";
+      if (name.includes("helper") || name.includes("guide")) return "helper";
+      const groundNode = findAncestor(function (candidate, candidateUserData) {
+        return candidateUserData.groundTile === true || candidateUserData.groundPlane === true || candidateUserData.terrainChunkEntryId || String(objectNameSummary(candidate)).includes("ground");
+      });
+      if (groundNode) return "ground";
+      const proxyNode = findAncestor(function (candidate, candidateUserData) {
+        return candidateUserData.shadowProxy === true;
+      });
+      if (proxyNode) {
+        const proxyUserData = proxyNode.userData || {};
+        const proxyKind = String(proxyUserData.shadowProxyKind || proxyUserData.batchKind || proxyUserData.chunkRuntimeType || "").trim();
+        if (proxyKind === "scatter" || proxyKind === "scatterShadowProxy" || proxyUserData.scatterInstance === true) return "scatterShadowProxy";
+        if (proxyKind === "staticProp" || proxyKind === "entity" || proxyKind === "interactable" || proxyUserData.entityId || proxyUserData.interactableId) return "staticProp";
+      }
+      const scatterNode = findAncestor(function (candidate, candidateUserData) {
+        return candidateUserData.batchKind === "scatter" || candidateUserData.scatterInstance === true || candidateUserData.chunkRuntimeType === "scatter";
+      });
+      if (scatterNode) return "scatterVisual";
+      const staticPropNode = findAncestor(function (candidate, candidateUserData) {
+        return candidateUserData.batchKind === "staticProp" || candidateUserData.entityId || candidateUserData.interactableId || candidateUserData.chunkRuntimeType === "entity" || candidateUserData.chunkRuntimeType === "interactable";
+      });
+      if (staticPropNode) return "staticProp";
+      if (userData.shadowProxy === true) {
+        const proxyKind = String(userData.shadowProxyKind || userData.batchKind || userData.chunkRuntimeType || "").trim();
+        if (proxyKind === "scatter" || proxyKind === "scatterShadowProxy" || userData.scatterInstance === true) return "scatterShadowProxy";
+        if (proxyKind === "staticProp" || proxyKind === "entity" || proxyKind === "interactable" || userData.entityId || userData.interactableId) return "staticProp";
+      }
+      return "unknown";
+    })();
+    const isCircleOrPlaneCaster = geometryType === "CircleGeometry" || geometryType === "PlaneGeometry";
+    const suspiciousFlags = [];
+    if (kind === "debugOverlay") suspiciousFlags.push("debugOverlay");
+    if (kind === "helper") suspiciousFlags.push("helper");
+    if (kind === "selection") suspiciousFlags.push("selection");
+    if (kind === "unknown") suspiciousFlags.push("unknown");
+    if (isCircleOrPlaneCaster && (kind === "scatterVisual" || kind === "scatterShadowProxy" || kind === "helper" || kind === "unknown")) suspiciousFlags.push("circleOrPlane");
+    records.push({
+      name: name,
+      uuid: String(object.uuid || ""),
+      kind: kind,
+      geometryType: geometryType,
+      parentName: parentName,
+      materialType: materialType,
+      materialColor: materialColor,
+      opacity: opacity,
+      isShadowProxy: Boolean(object.userData?.shadowProxy === true),
+      suspiciousFlags: suspiciousFlags,
+      reason: suspiciousFlags.join(", ")
+    });
+  };
+  for (const root of roots) {
+    root.traverse(function (object) {
+      if (!object) return;
+      pushRecord(object);
+    });
+  }
+  const totalCasters = records.length;
+  const castersByKind = {
+    staticProp: 0,
+    scatterVisual: 0,
+    scatterShadowProxy: 0,
+    ground: 0,
+    helper: 0,
+    debugOverlay: 0,
+    selection: 0,
+    unknown: 0
+  };
+  let circleOrPlaneCasterCount = 0;
+  let helperCasterCount = 0;
+  let unknownCasterCount = 0;
+  const suspiciousCasterList = [];
+  for (const record of records) {
+    if (Object.prototype.hasOwnProperty.call(castersByKind, record.kind)) {
+      castersByKind[record.kind] += 1;
+    } else {
+      castersByKind.unknown += 1;
+    }
+    if (record.kind === "helper") helperCasterCount += 1;
+    if (record.kind === "unknown") unknownCasterCount += 1;
+    if (record.geometryType === "CircleGeometry" || record.geometryType === "PlaneGeometry") circleOrPlaneCasterCount += 1;
+    if (record.suspiciousFlags.length) {
+      suspiciousCasterList.push({
+        name: record.name,
+        uuid: record.uuid,
+        kind: record.kind,
+        geometryType: record.geometryType,
+        parentName: record.parentName,
+        materialType: record.materialType,
+        materialColor: record.materialColor,
+        opacity: record.opacity,
+        isShadowProxy: record.isShadowProxy,
+        reason: record.reason
+      });
+    }
+  }
+  return {
+    totalCasters: totalCasters,
+    castersByKind: castersByKind,
+    suspiciousCasterList: suspiciousCasterList,
+    circleOrPlaneCasterCount: circleOrPlaneCasterCount,
+    helperCasterCount: helperCasterCount,
+    unknownCasterCount: unknownCasterCount
+  };
+}
+
+function buildCoverageCenterSignatureKey(centerChunk) {
+  return centerChunk ? chunkKey(centerChunk) : "none";
+}
+
+function resolveCoveragePrimaryPoint(options, mode, policy) {
+  if (mode === "editor") {
+    const target = options.camera?.target || options.camTarget || options.player || null;
+    return {
+      x: num(target?.x, 0),
+      z: num(target?.z, 0),
+      source: "editor-camera"
+    };
+  }
+  if (policy?.cameraOnly !== false) {
+    const target = options.camTarget || options.camera?.target || options.player || null;
+    return {
+      x: num(target?.x, 0),
+      z: num(target?.z, 0),
+      source: "game-camera"
+    };
+  }
+  const player = options.player || options.camTarget || null;
+  return {
+    x: num(player?.x, 0),
+    z: num(player?.z, 0),
+    source: "player"
+  };
+}
+
+/**
+ * The actual anchor that must stay visible (camera eye position in editor mode, real player
+ * position in game mode) can lag a chunk behind the primary point (orbit target / smoothed
+ * camTarget). This used to spin up a full second buildChunkWindow around that anchor and union
+ * the whole thing in, uncapped by maxLoadedChunks — that is what rendered as a second, independently
+ * moving block of resident ground trailing the camera. Only the anchor's own single chunk key is
+ * needed to keep it visible, so that is all this returns.
+ */
+function resolveCoveragePresenceChunkKey(options, mode, policy) {
+  let point = null;
+  if (mode === "editor") {
+    point = options.camera?.position || null;
+  } else if (policy?.cameraOnly !== false) {
+    point = options.player || null;
+  } else {
+    point = options.camTarget || options.camera?.target || null;
+  }
+  if (!point) return null;
+  return chunkKey(chunkCoordForPosition(num(point.x, 0), num(point.z, 0), policy));
+}
+
+function resolveCoverageHeading(options, mode) {
+  const current = mode === "game" ? options.player : (options.camera?.target || options.camTarget);
+  const last = mode === "game" ? options.lastPlayerPosition : options.lastCameraTarget;
+  if (!current || !last) return null;
+  const dx = num(current.x, 0) - num(last.x, 0);
+  const dz = num(current.z, 0) - num(last.z, 0);
+  const length = Math.hypot(dx, dz);
+  if (!Number.isFinite(length) || length < 0.001) return null;
+  return { x: dx / length, z: dz / length };
+}
+
+function computeForwardChunkKeysFromHeading(heading, primary, policy, mode) {
+  if (!heading) return [];
+  const size = chunkSizeForPolicy(policy);
+  const steps = Math.max(1, chunkInteger(policy?.preloadMarginChunks, 1)) + 1;
+  const seen = new Set();
+  const keys = [];
+  for (let step = 1; step <= steps; step += 1) {
+    const worldX = primary.x + heading.x * size.width * step;
+    const worldZ = primary.z + heading.z * size.depth * step;
+    const coord = chunkCoordForPosition(worldX, worldZ, policy);
+    const key = chunkKey(coord);
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * View-aware streaming coverage for chunk-resident content.
+ *
+ * This used to also build a second full chunk window around a secondary anchor point (camera eye
+ * position in editor mode, player position in game mode) and union it into the resident set on
+ * top of the primary window. That union was never re-clipped to maxLoadedChunks, so the real
+ * resident chunk count could run well past the configured budget (e.g. 35 resident chunks with
+ * maxLoadedChunks: 25) and rendered as a second, independently-moving block of loaded ground/
+ * terrain trailing the camera. There is now exactly one budget-clipped window (buildChunkWindow):
+ * the secondary anchor only contributes its own single chunk key (resolveCoveragePresenceChunkKey),
+ * so a lagged camTarget can never lose track of the actual player/camera chunk without spinning up
+ * a second window, plus a small bounded forward lookahead along the current movement heading.
+ */
+export function computeStreamingCoverage(options = {}) {
+  const mode = options.mode === "game" ? "game" : "editor";
+  const rawPolicy = options.policy || null;
+  const policy = rawPolicy && rawPolicy.chunkWorldWidth
+    ? rawPolicy
+    : resolveChunkPolicy({ chunkLoading: { [mode]: rawPolicy } }, mode);
+  const primary = resolveCoveragePrimaryPoint(options, mode, policy);
+  const centerChunk = chunkCoordForPosition(primary.x, primary.z, policy);
+  const baseWindow = buildChunkWindow(centerChunk, policy, mode);
+  const presenceChunkKey = resolveCoveragePresenceChunkKey(options, mode, policy);
+  const heading = resolveCoverageHeading(options, mode);
+  const forwardChunkKeys = computeForwardChunkKeysFromHeading(heading, primary, policy, mode);
+  const visibleSet = new Set(baseWindow.activeChunkKeys);
+  if (presenceChunkKey) visibleSet.add(presenceChunkKey);
+  const preloadSet = new Set(baseWindow.preloadChunkKeys);
+  for (const key of forwardChunkKeys) preloadSet.add(key);
+  const desiredSet = new Set(baseWindow.loadedChunkKeys);
+  for (const key of visibleSet) desiredSet.add(key);
+  for (const key of forwardChunkKeys) desiredSet.add(key);
+  const unloadSafeSet = new Set(desiredSet);
+  return {
+    centerChunk: baseWindow.centerChunk,
+    activeChunkKeys: baseWindow.activeChunkKeys.slice(),
+    visibleChunkKeys: sortChunkKeysByDistance(Array.from(visibleSet), centerChunk),
+    forwardChunkKeys: forwardChunkKeys.slice(),
+    preloadChunkKeys: sortChunkKeysByDistance(Array.from(preloadSet), centerChunk),
+    desiredResidentChunkKeys: sortChunkKeysByDistance(Array.from(desiredSet), centerChunk),
+    unloadSafeChunkKeys: Array.from(unloadSafeSet),
+    clippedByMaxLoadedChunks: baseWindow.clippedByMaxLoadedChunks === true,
+    requiredActiveChunks: num(baseWindow.requiredActiveChunks, 0),
+    clippedActiveChunks: num(baseWindow.clippedActiveChunks, 0),
+    activeRadiusUnmet: baseWindow.activeRadiusUnmet === true,
+    source: primary.source
+  };
+}
+
+/**
+ * Orders pending chunk keys so active/visible/forward chunks always build before far preload
+ * chunks. Previously the build queue was a flat FIFO gated only by residentChunkBuildBudgetPerFrame,
+ * so a visible chunk could sit pending behind chunks the player could not even see yet.
+ */
+export function prioritizeResidentChunkBuildQueue(options = {}) {
+  const centerChunk = options.centerChunk || null;
+  const residentSet = options.residentChunkKeys instanceof Set
+    ? options.residentChunkKeys
+    : new Set(Array.isArray(options.residentChunkKeys) ? options.residentChunkKeys : []);
+  const desired = Array.isArray(options.desiredResidentChunkKeys) ? options.desiredResidentChunkKeys : [];
+  const desiredSet = new Set(desired);
+  const buckets = [
+    Array.isArray(options.activeChunkKeys) ? options.activeChunkKeys : [],
+    Array.isArray(options.visibleChunkKeys) ? options.visibleChunkKeys : [],
+    Array.isArray(options.forwardChunkKeys) ? options.forwardChunkKeys : [],
+    sortChunkKeysByDistance(Array.isArray(options.preloadChunkKeys) ? options.preloadChunkKeys : [], centerChunk)
+  ];
+  const ordered = [];
+  const seen = new Set();
+  for (const bucket of buckets) {
+    for (const key of bucket) {
+      if (!key || seen.has(key) || residentSet.has(key) || !desiredSet.has(key)) continue;
+      seen.add(key);
+      ordered.push(key);
+    }
+  }
+  const leftover = sortChunkKeysByDistance(desired.filter(function (key) {
+    return !seen.has(key) && !residentSet.has(key);
+  }), centerChunk);
+  for (const key of leftover) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(key);
+  }
+  return ordered;
+}
+
+function pointDistance2D(a, b) {
+  const ax = Number(a?.x);
+  const az = Number(a?.z);
+  const bx = Number(b?.x);
+  const bz = Number(b?.z);
+  if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) return 0;
+  return Math.hypot(bx - ax, bz - az);
+}
+
+function interpolatePointBetween(start, end, t) {
+  const safeT = clamp(num(t, 0), 0, 1);
+  const point = {
+    x: num(start?.x, 0) + ((num(end?.x, 0) - num(start?.x, 0)) * safeT),
+    z: num(start?.z, 0) + ((num(end?.z, 0) - num(start?.z, 0)) * safeT)
+  };
+  const startHasY = Number.isFinite(Number(start?.y));
+  const endHasY = Number.isFinite(Number(end?.y));
+  if (startHasY || endHasY) {
+    point.y = num(start?.y, 0) + ((num(end?.y, start?.y ?? 0) - num(start?.y, 0)) * safeT);
+  }
+  return point;
+}
+
+function boundsForPoints(points, expand = 0) {
+  const valid = Array.isArray(points) ? points.filter(function (point) {
+    return Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.z));
+  }) : [];
+  if (!valid.length) return null;
+  let minX = num(valid[0].x, 0);
+  let maxX = minX;
+  let minZ = num(valid[0].z, 0);
+  let maxZ = minZ;
+  for (const point of valid) {
+    const x = num(point.x, 0);
+    const z = num(point.z, 0);
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  const margin = Math.max(0, num(expand, 0));
+  return {
+    minX: minX - margin,
+    maxX: maxX + margin,
+    minZ: minZ - margin,
+    maxZ: maxZ + margin
+  };
+}
+
+function chunkKeysForBounds(bounds, policy) {
+  if (!bounds || !policy) return [];
+  const size = chunkSizeForPolicy(policy);
+  const minChunkX = Math.floor(num(bounds.minX, 0) / size.width);
+  const maxChunkX = Math.floor((num(bounds.maxX, 0) - 0.000001) / size.width);
+  const minChunkZ = Math.floor(num(bounds.minZ, 0) / size.depth);
+  const maxChunkZ = Math.floor((num(bounds.maxZ, 0) - 0.000001) / size.depth);
+  if (maxChunkX < minChunkX || maxChunkZ < minChunkZ) return [];
+  const keys = [];
+  for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+    for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+      keys.push(chunkKey({ x: chunkX, z: chunkZ }));
+    }
+  }
+  return sortChunkKeys(keys);
+}
+
+export function chunkKeyForSegment(segment, policy) {
+  const midpoint = midpointForSegment(segment);
+  return midpoint ? chunkKeyForPosition(midpoint.x, midpoint.z, policy) : null;
+}
+
+export function midpointForSegment(segment) {
+  const points = Array.isArray(segment?.points) ? segment.points : Array.isArray(segment) ? segment : [];
+  if (!points.length) return null;
+  if (points.length === 1) {
+    const only = points[0];
+    return Number.isFinite(Number(only?.x)) && Number.isFinite(Number(only?.z))
+      ? { x: num(only.x, 0), z: num(only.z, 0), y: Number.isFinite(Number(only?.y)) ? num(only.y, 0) : undefined }
+      : null;
+  }
+  const lengths = [];
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const length = pointDistance2D(points[index - 1], points[index]);
+    lengths.push(length);
+    total += length;
+  }
+  if (total <= 0) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    return interpolatePointBetween(first, last, 0.5);
+  }
+  const target = total / 2;
+  let walked = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    const length = lengths[index - 1] || 0;
+    if (walked + length >= target) {
+      const localT = length <= 0 ? 0 : (target - walked) / length;
+      return interpolatePointBetween(start, end, localT);
+    }
+    walked += length;
+  }
+  return interpolatePointBetween(points[0], points[points.length - 1], 0.5);
+}
+
+export function segmentLineByMaxLength(start, end, maxLength) {
+  const length = pointDistance2D(start, end);
+  const safeMaxLength = Math.max(0.0001, num(maxLength, 1));
+  const steps = Math.max(1, Math.ceil(length / safeMaxLength));
+  const points = [];
+  for (let step = 0; step <= steps; step += 1) {
+    points.push(interpolatePointBetween(start, end, step / steps));
+  }
+  return points;
+}
+
+export function segmentPolylineForChunks(points, policy, options = {}) {
+  const normalized = normalizeWorldPointList(points);
+  if (normalized.length < 2) return [];
+  const size = chunkSizeForPolicy(policy);
+  const maxSegmentLength = Math.max(0.0001, num(options.maxSegmentLength, Math.min(size.width, size.depth) / 2));
+  const widthMargin = Math.max(0, num(options.width, 0)) / 2;
+  const segmentBaseId = String(options.segmentBaseId || options.layerId || options.id || "segment");
+
+  const tinySegments = [];
+  let cumulativeLength = 0;
+  for (let index = 1; index < normalized.length; index += 1) {
+    const splitPoints = segmentLineByMaxLength(normalized[index - 1], normalized[index], maxSegmentLength);
+    for (let splitIndex = 1; splitIndex < splitPoints.length; splitIndex += 1) {
+      const start = splitPoints[splitIndex - 1];
+      const end = splitPoints[splitIndex];
+      const length = pointDistance2D(start, end);
+      if (length <= 0) continue;
+      tinySegments.push({
+        start: start,
+        end: end,
+        length: length,
+        startLength: cumulativeLength
+      });
+      cumulativeLength += length;
+    }
+  }
+  if (!tinySegments.length) return [];
+
+  const pieces = [];
+  let currentPoints = [tinySegments[0].start, tinySegments[0].end];
+  let currentLength = tinySegments[0].length;
+  let currentPieceStart = tinySegments[0].startLength;
+  let pieceIndex = 0;
+
+  function finalizePiece() {
+    if (!currentPoints || currentPoints.length < 2 || currentLength <= 0) return;
+    const midpoint = midpointForSegment(currentPoints);
+    const bounds = boundsForPoints(currentPoints, widthMargin);
+    const chunkKeyValue = midpoint ? chunkKeyForPosition(midpoint.x, midpoint.z, policy) : null;
+    const chunkKeys = bounds ? chunkKeysForBounds(bounds, policy) : [];
+    pieces.push({
+      id: segmentBaseId + "::" + pieceIndex,
+      segmentId: pieceIndex,
+      points: currentPoints.map(function (point) {
+        return { x: num(point.x, 0), z: num(point.z, 0), y: Number.isFinite(Number(point?.y)) ? num(point.y, 0) : undefined };
+      }),
+      startLength: currentPieceStart,
+      endLength: currentPieceStart + currentLength,
+      length: currentLength,
+      midpoint: midpoint,
+      bounds: bounds,
+      chunkKey: chunkKeyValue,
+      chunkKeys: chunkKeys.length ? chunkKeys : (chunkKeyValue ? [chunkKeyValue] : [])
+    });
+    pieceIndex += 1;
+  }
+
+  for (let index = 1; index < tinySegments.length; index += 1) {
+    const segment = tinySegments[index];
+    if (currentLength > 0 && currentLength + segment.length > maxSegmentLength + 0.000001 && currentPoints.length >= 2) {
+      finalizePiece();
+      currentPoints = [segment.start, segment.end];
+      currentLength = segment.length;
+      currentPieceStart = segment.startLength;
+      continue;
+    }
+    if (!currentPoints.length) {
+      currentPoints = [segment.start];
+      currentPieceStart = segment.startLength;
+    } else if (currentPoints[currentPoints.length - 1].x !== segment.start.x || currentPoints[currentPoints.length - 1].z !== segment.start.z) {
+      currentPoints.push(segment.start);
+    }
+    currentPoints.push(segment.end);
+    currentLength += segment.length;
+  }
+  finalizePiece();
+  return pieces;
+}
+
+function clipPolygonToHalfPlane(points, axis, limit, keepGreater) {
+  const output = [];
+  if (!Array.isArray(points) || !points.length) return output;
+  const inside = function (point) {
+    const value = axis === "x" ? num(point?.x, 0) : num(point?.z, 0);
+    return keepGreater ? value >= limit - 0.000001 : value <= limit + 0.000001;
+  };
+  const intersect = function (start, end) {
+    const startValue = axis === "x" ? num(start?.x, 0) : num(start?.z, 0);
+    const endValue = axis === "x" ? num(end?.x, 0) : num(end?.z, 0);
+    const delta = endValue - startValue;
+    if (Math.abs(delta) <= 0.000001) return interpolatePointBetween(start, end, 0);
+    const t = (limit - startValue) / delta;
+    return interpolatePointBetween(start, end, t);
+  };
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const current = points[index];
+    const prior = points[previous];
+    const currentInside = inside(current);
+    const priorInside = inside(prior);
+    if (currentInside) {
+      if (!priorInside) output.push(intersect(prior, current));
+      output.push(current);
+    } else if (priorInside) {
+      output.push(intersect(prior, current));
+    }
+  }
+  return output;
+}
+
+function clipPolygonToRectangle(points, bounds) {
+  if (!Array.isArray(points) || points.length < 3 || !bounds) return [];
+  let clipped = points.slice();
+  clipped = clipPolygonToHalfPlane(clipped, "x", num(bounds.minX, 0), true);
+  clipped = clipPolygonToHalfPlane(clipped, "x", num(bounds.maxX, 0), false);
+  clipped = clipPolygonToHalfPlane(clipped, "z", num(bounds.minZ, 0), true);
+  clipped = clipPolygonToHalfPlane(clipped, "z", num(bounds.maxZ, 0), false);
+  return clipped.filter(function (point, index, array) {
+    if (!point) return false;
+    if (index === 0) return true;
+    const previous = array[index - 1];
+    return Math.abs(num(previous.x, 0) - num(point.x, 0)) > 0.000001 || Math.abs(num(previous.z, 0) - num(point.z, 0)) > 0.000001;
+  });
+}
+
+export function effectiveGroundBounds(ground) {
+  if (!ground) return null;
+  const boundsMode = String(ground?.boundsMode || "centerSize").trim() === "explicitBounds" ? "explicitBounds" : "centerSize";
+  if (boundsMode === "explicitBounds") {
+    const rawMinX = Number(ground?.minX);
+    const rawMaxX = Number(ground?.maxX);
+    const rawMinZ = Number(ground?.minZ);
+    const rawMaxZ = Number(ground?.maxZ);
+    if (Number.isFinite(rawMinX) && Number.isFinite(rawMaxX) && Number.isFinite(rawMinZ) && Number.isFinite(rawMaxZ)) {
+      const minX = Math.min(rawMinX, rawMaxX);
+      const maxX = Math.max(rawMinX, rawMaxX);
+      const minZ = Math.min(rawMinZ, rawMaxZ);
+      const maxZ = Math.max(rawMinZ, rawMaxZ);
+      if (maxX > minX && maxZ > minZ) {
+        return {
+          boundsMode: "explicitBounds",
+          minX: minX,
+          maxX: maxX,
+          minZ: minZ,
+          maxZ: maxZ,
+          width: maxX - minX,
+          depth: maxZ - minZ
+        };
+      }
+    }
+  }
+  const width = Math.max(0, num(ground?.width, 0));
+  const depth = Math.max(0, num(ground?.depth, 0));
+  if (width <= 0 || depth <= 0) return null;
+  return {
+    boundsMode: "centerSize",
+    minX: -width / 2,
+    maxX: width / 2,
+    minZ: -depth / 2,
+    maxZ: depth / 2,
+    width: width,
+    depth: depth
+  };
+}
+
+function worldGroundBounds(ground) {
+  return effectiveGroundBounds(ground);
+}
+
+function groundTextureWorldSize(ground) {
+  return {
+    x: Math.max(0.01, num(ground?.textureWorldSizeX, 10)),
+    z: Math.max(0.01, num(ground?.textureWorldSizeZ, 10))
+  };
+}
+
+export function worldSpaceGroundUv(worldX, worldZ, ground, textureWorldSize = null) {
+  const size = textureWorldSize && Number.isFinite(Number(textureWorldSize?.x)) && Number.isFinite(Number(textureWorldSize?.z))
+    ? {
+      x: Math.max(0.01, num(textureWorldSize.x, 10)),
+      z: Math.max(0.01, num(textureWorldSize.z, 10))
+    }
+    : groundTextureWorldSize(ground);
+  return {
+    u: num(worldX, 0) / size.x,
+    v: num(worldZ, 0) / size.z,
+    textureWorldSizeX: size.x,
+    textureWorldSizeZ: size.z
+  };
+}
+
+export function resolveGroundRenderMode(worldData, runtimeMode = "editor") {
+  const policy = resolveChunkPolicy(worldData, runtimeMode);
+  const shouldChunk = policy.enabled === true && policy.groundChunkingEnabled !== false;
+  return shouldChunk ? "chunked" : "full";
+}
+
+export function shouldUseChunkedGround(worldData, runtimeMode = "editor") {
+  return resolveGroundRenderMode(worldData, runtimeMode) === "chunked";
+}
+
+export function groundChunkTilesForBounds(ground, policy) {
+  const groundBounds = effectiveGroundBounds(ground);
+  const size = chunkSizeForPolicy(policy);
+  if (!groundBounds) return [];
+  const minChunkX = Math.floor(groundBounds.minX / size.width);
+  const maxChunkX = Math.floor((groundBounds.maxX - 0.000001) / size.width);
+  const minChunkZ = Math.floor(groundBounds.minZ / size.depth);
+  const maxChunkZ = Math.floor((groundBounds.maxZ - 0.000001) / size.depth);
+  const tiles = [];
+  for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+    for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+      const minX = Math.max(groundBounds.minX, chunkX * size.width);
+      const maxX = Math.min(groundBounds.maxX, (chunkX + 1) * size.width);
+      const minZ = Math.max(groundBounds.minZ, chunkZ * size.depth);
+      const maxZ = Math.min(groundBounds.maxZ, (chunkZ + 1) * size.depth);
+      if (maxX <= minX || maxZ <= minZ) continue;
+      const chunkCoord = { x: chunkX, z: chunkZ };
+      tiles.push({
+        chunkKey: chunkKey(chunkCoord),
+        chunkCoord: chunkCoord,
+        minX: minX,
+        maxX: maxX,
+        minZ: minZ,
+        maxZ: maxZ,
+        x: (minX + maxX) / 2,
+        z: (minZ + maxZ) / 2,
+        width: maxX - minX,
+        depth: maxZ - minZ
+      });
+    }
+  }
+  return tiles;
+}
+
+function cloneGroundChunkStats(stats = {}) {
+  return {
+    mode: String(stats.mode || "full"),
+    enabled: stats.enabled === true,
+    policySource: String(stats.policySource || "none"),
+    fullGroundPlaneActive: stats.fullGroundPlaneActive === true,
+    fullGroundPlaneName: stats.fullGroundPlaneName || null,
+    fullGroundPlaneVisible: stats.fullGroundPlaneVisible === true,
+    groundTilesBlueprint: Math.max(0, num(stats.groundTilesBlueprint, 0)),
+    groundTilesResident: Math.max(0, num(stats.groundTilesResident, 0)),
+    groundTilesVisible: Math.max(0, num(stats.groundTilesVisible, 0)),
+    groundTilesHidden: Math.max(0, num(stats.groundTilesHidden, 0)),
+    groundBoundsMode: String(stats.groundBoundsMode || "centerSize"),
+    groundWidth: Math.max(0, num(stats.groundWidth, 0)),
+    groundDepth: Math.max(0, num(stats.groundDepth, 0)),
+    groundMinX: Number.isFinite(Number(stats.groundMinX)) ? Number(stats.groundMinX) : null,
+    groundMaxX: Number.isFinite(Number(stats.groundMaxX)) ? Number(stats.groundMaxX) : null,
+    groundMinZ: Number.isFinite(Number(stats.groundMinZ)) ? Number(stats.groundMinZ) : null,
+    groundMaxZ: Number.isFinite(Number(stats.groundMaxZ)) ? Number(stats.groundMaxZ) : null,
+    groundAreaWorldUnits: Math.max(0, num(stats.groundAreaWorldUnits, 0)),
+    maxLoadedChunks: Math.max(0, num(stats.maxLoadedChunks, 0)),
+    groundBlueprintExceedsLoadBudget: stats.groundBlueprintExceedsLoadBudget === true,
+    loadedChunkKeys: Array.isArray(stats.loadedChunkKeys) ? sortChunkKeys(stats.loadedChunkKeys) : [],
+    residentChunkKeys: Array.isArray(stats.residentChunkKeys) ? sortChunkKeys(stats.residentChunkKeys) : [],
+    enteringChunkKeys: Array.isArray(stats.enteringChunkKeys) ? sortChunkKeys(stats.enteringChunkKeys) : [],
+    leavingChunkKeys: Array.isArray(stats.leavingChunkKeys) ? sortChunkKeys(stats.leavingChunkKeys) : [],
+    lastSyncReason: String(stats.lastSyncReason || "init")
+  };
+}
+
+export function createGroundChunkState() {
+  return {
+    mode: "full",
+    tilesByChunkKey: new Map(),
+    residentTiles: new Map(),
+    materialCache: new Map(),
+    textureRefs: new Map(),
+    lastLoadedChunkKeySet: new Set(),
+    stats: cloneGroundChunkStats()
+  };
+}
+
+function groundBlueprintForWorld(worldData, runtimeMode) {
+  const ground = worldData?.ground || null;
+  const policy = resolveChunkPolicy(worldData, runtimeMode);
+  const textureSize = groundTextureWorldSize(ground);
+  const bounds = effectiveGroundBounds(ground);
+  const tiles = bounds ? groundChunkTilesForBounds(ground, policy) : [];
+  const tilesByChunkKey = new Map();
+  for (const tile of tiles) {
+    tilesByChunkKey.set(tile.chunkKey, {
+      chunkKey: tile.chunkKey,
+      bounds: {
+        minX: tile.minX,
+        maxX: tile.maxX,
+        minZ: tile.minZ,
+        maxZ: tile.maxZ
+      },
+      textureWorldSizeX: textureSize.x,
+      textureWorldSizeZ: textureSize.z,
+      textureAssetId: ground?.textureAssetId || null,
+      materialColor: ground?.materialColor || "#ffffff",
+      groundId: ground?.id || null
+    });
+  }
+  return {
+    policy: policy,
+    ground: ground,
+    bounds: bounds,
+    textureSize: textureSize,
+    tiles: tiles,
+    tilesByChunkKey: tilesByChunkKey
+  };
+}
+
+export function groundBlueprintSignature(worldData, runtimeMode) {
+  const ground = worldData?.ground || null;
+  const policy = resolveChunkPolicy(worldData, runtimeMode);
+  const bounds = effectiveGroundBounds(ground);
+  return [
+    runtimeMode,
+    policy.source || "none",
+    policy.policyId || "",
+    policy.enabled === true ? 1 : 0,
+    policy.groundChunkingEnabled !== false ? 1 : 0,
+    ground?.id || "",
+    ground?.boundsMode || "centerSize",
+    bounds ? round(bounds.minX) : "",
+    bounds ? round(bounds.maxX) : "",
+    bounds ? round(bounds.minZ) : "",
+    bounds ? round(bounds.maxZ) : "",
+    round(num(ground?.y, 0)),
+    String(ground?.materialColor || ""),
+    String(ground?.textureAssetId || ""),
+    round(num(ground?.textureWorldSizeX, 10)),
+    round(num(ground?.textureWorldSizeZ, 10))
+  ].join("|");
+}
+
+function buildGroundChunkPlanFromBlueprint(blueprint, runtimeMode = "editor", windowState = null, previousState = null) {
+  const policy = blueprint.policy;
+  const renderMode = policy.enabled === true && policy.groundChunkingEnabled !== false && Boolean(blueprint.bounds)
+    ? "chunked"
+    : "full";
+  const shouldChunk = renderMode === "chunked";
+  const loadedChunkKeys = shouldChunk ? sortChunkKeys(windowState?.loadedChunkKeys || []) : [];
+  const loadedChunkKeySet = new Set(loadedChunkKeys);
+  const previousLoadedChunkKeySet = previousState?.lastLoadedChunkKeySet instanceof Set
+    ? previousState.lastLoadedChunkKeySet
+    : new Set();
+  const residentChunkKeys = shouldChunk
+    ? loadedChunkKeys.filter(function (key) { return blueprint.tilesByChunkKey.has(key); })
+    : [];
+  const enteringChunkKeys = shouldChunk
+    ? residentChunkKeys.filter(function (key) { return !previousLoadedChunkKeySet.has(key); })
+    : [];
+  const leavingChunkKeys = shouldChunk
+    ? Array.from(previousLoadedChunkKeySet).filter(function (key) { return !loadedChunkKeySet.has(key); })
+    : Array.from(previousLoadedChunkKeySet);
+  const fullGroundPlaneActive = !shouldChunk && Boolean(blueprint.bounds);
+  const fullGroundPlaneName = fullGroundPlaneActive ? "published-ground" : null;
+  const groundBoundsMode = blueprint.bounds?.boundsMode || blueprint.ground?.boundsMode || "centerSize";
+  const groundWidth = num(blueprint.bounds?.width, 0);
+  const groundDepth = num(blueprint.bounds?.depth, 0);
+  const maxLoadedChunks = num(policy.maxLoadedChunks, 0);
+  const stats = {
+    mode: renderMode,
+    enabled: shouldChunk,
+    policySource: policy.source || "none",
+    fullGroundPlaneActive: fullGroundPlaneActive,
+    fullGroundPlaneName: fullGroundPlaneName,
+    fullGroundPlaneVisible: fullGroundPlaneActive,
+    groundTilesBlueprint: blueprint.tiles.length,
+    groundTilesResident: residentChunkKeys.length,
+    groundTilesVisible: residentChunkKeys.length,
+    groundTilesHidden: 0,
+    groundBoundsMode: groundBoundsMode,
+    groundWidth: groundWidth,
+    groundDepth: groundDepth,
+    groundMinX: blueprint.bounds ? blueprint.bounds.minX : null,
+    groundMaxX: blueprint.bounds ? blueprint.bounds.maxX : null,
+    groundMinZ: blueprint.bounds ? blueprint.bounds.minZ : null,
+    groundMaxZ: blueprint.bounds ? blueprint.bounds.maxZ : null,
+    groundAreaWorldUnits: groundWidth * groundDepth,
+    maxLoadedChunks: maxLoadedChunks,
+    groundBlueprintExceedsLoadBudget: maxLoadedChunks > 0 && blueprint.tiles.length > maxLoadedChunks * 20,
+    loadedChunkKeys: loadedChunkKeys,
+    residentChunkKeys: residentChunkKeys,
+    enteringChunkKeys: enteringChunkKeys,
+    leavingChunkKeys: leavingChunkKeys,
+    lastSyncReason: previousState?.stats?.lastSyncReason || "plan"
+  };
+  return {
+    mode: renderMode,
+    enabled: shouldChunk,
+    policySource: policy.source || "none",
+    fullGroundPlaneActive: fullGroundPlaneActive,
+    fullGroundPlaneName: fullGroundPlaneName,
+    fullGroundPlaneVisible: fullGroundPlaneActive,
+    groundBounds: blueprint.bounds ? {
+      minX: blueprint.bounds.minX,
+      maxX: blueprint.bounds.maxX,
+      minZ: blueprint.bounds.minZ,
+      maxZ: blueprint.bounds.maxZ
+    } : null,
+    textureWorldSizeX: blueprint.textureSize.x,
+    textureWorldSizeZ: blueprint.textureSize.z,
+    groundTilesBlueprint: blueprint.tiles.length,
+    groundTilesResident: residentChunkKeys.length,
+    loadedChunkKeys: loadedChunkKeys,
+    residentChunkKeys: residentChunkKeys,
+    enteringChunkKeys: enteringChunkKeys,
+    leavingChunkKeys: leavingChunkKeys,
+    tiles: blueprint.tiles,
+    tilesByChunkKey: blueprint.tilesByChunkKey,
+    stats: stats,
+    lastSyncReason: previousState?.stats?.lastSyncReason || "plan"
+  };
+}
+
+export function buildGroundChunkPlan(worldData, runtimeMode = "editor", windowState = null, previousState = null) {
+  return buildGroundChunkPlanFromBlueprint(groundBlueprintForWorld(worldData, runtimeMode), runtimeMode, windowState, previousState);
+}
+
+export function applyGroundChunkPlan(state, plan, hooks = {}) {
+  if (!state || !plan) return null;
+  state.mode = plan.mode;
+  state.tilesByChunkKey = plan.tilesByChunkKey instanceof Map ? plan.tilesByChunkKey : new Map();
+  const previousResidentKeys = Array.from(state.residentTiles?.keys() || []);
+  const leavingChunkKeys = Array.isArray(plan.leavingChunkKeys) ? plan.leavingChunkKeys.slice() : [];
+  const enteringChunkKeys = Array.isArray(plan.enteringChunkKeys) ? plan.enteringChunkKeys.slice() : [];
+  const loadedChunkKeys = Array.isArray(plan.loadedChunkKeys) ? plan.loadedChunkKeys.slice() : [];
+  const residentChunkKeys = Array.isArray(plan.residentChunkKeys) ? plan.residentChunkKeys.slice() : [];
+
+  for (const key of leavingChunkKeys) {
+    const tile = state.residentTiles.get(key);
+    if (!tile) continue;
+    if (typeof hooks.disposeTile === "function") {
+      hooks.disposeTile(tile, key, plan, state);
+    }
+    state.residentTiles.delete(key);
+  }
+
+  for (const key of enteringChunkKeys) {
+    if (state.residentTiles.has(key)) {
+      const resident = state.residentTiles.get(key);
+      if (resident) resident.lastTouchedAt = performance.now();
+      continue;
+    }
+    const blueprint = state.tilesByChunkKey.get(key);
+    if (!blueprint) continue;
+    const tile = typeof hooks.createTile === "function"
+      ? hooks.createTile(blueprint, key, plan, state)
+      : blueprint;
+    if (!tile) continue;
+    state.residentTiles.set(key, tile);
+  }
+
+  const now = performance.now();
+  for (const key of loadedChunkKeys) {
+    const tile = state.residentTiles.get(key);
+    if (tile) tile.lastTouchedAt = now;
+  }
+
+  state.lastLoadedChunkKeySet = new Set(loadedChunkKeys);
+  state.stats = Object.assign(cloneGroundChunkStats(state.stats), {
+    mode: plan.mode,
+    enabled: plan.enabled === true,
+    policySource: plan.policySource || "none",
+    fullGroundPlaneActive: plan.fullGroundPlaneActive === true,
+    fullGroundPlaneName: plan.fullGroundPlaneName || null,
+    fullGroundPlaneVisible: plan.fullGroundPlaneVisible === true,
+    groundTilesBlueprint: Math.max(0, num(plan.groundTilesBlueprint, Array.isArray(plan.tiles) ? plan.tiles.length : 0)),
+    groundTilesResident: Math.max(0, residentChunkKeys.length),
+    groundTilesVisible: Math.max(0, residentChunkKeys.length),
+    groundTilesHidden: 0,
+    groundBoundsMode: plan.stats?.groundBoundsMode || (plan.groundBounds ? plan.groundBounds.boundsMode : "centerSize"),
+    groundWidth: num(plan.stats?.groundWidth, num(plan.groundBounds?.width, 0)),
+    groundDepth: num(plan.stats?.groundDepth, num(plan.groundBounds?.depth, 0)),
+    groundMinX: plan.stats?.groundMinX ?? (plan.groundBounds ? plan.groundBounds.minX : null),
+    groundMaxX: plan.stats?.groundMaxX ?? (plan.groundBounds ? plan.groundBounds.maxX : null),
+    groundMinZ: plan.stats?.groundMinZ ?? (plan.groundBounds ? plan.groundBounds.minZ : null),
+    groundMaxZ: plan.stats?.groundMaxZ ?? (plan.groundBounds ? plan.groundBounds.maxZ : null),
+    groundAreaWorldUnits: num(plan.stats?.groundAreaWorldUnits, 0),
+    maxLoadedChunks: num(plan.stats?.maxLoadedChunks, 0),
+    groundBlueprintExceedsLoadBudget: plan.stats?.groundBlueprintExceedsLoadBudget === true,
+    loadedChunkKeys: loadedChunkKeys,
+    residentChunkKeys: residentChunkKeys,
+    enteringChunkKeys: enteringChunkKeys,
+    leavingChunkKeys: leavingChunkKeys,
+    lastSyncReason: plan.lastSyncReason || state.stats.lastSyncReason || "runtime-sync"
+  });
+  return {
+    enteringChunkKeys: enteringChunkKeys,
+    leavingChunkKeys: leavingChunkKeys,
+    loadedChunkKeys: loadedChunkKeys,
+    residentChunkKeys: residentChunkKeys,
+    previousResidentKeys: previousResidentKeys
+  };
+}
+
+export function createTerrainVisualRegistryEntry(entry = {}) {
+  const chunkKeys = Array.isArray(entry.chunkKeys) && entry.chunkKeys.length
+    ? sortChunkKeys(entry.chunkKeys)
+    : (entry.chunkKey ? [entry.chunkKey] : []);
+  const chunkKeyValue = entry.chunkKey || chunkKeys[0] || null;
+  return {
+    id: entry.id || null,
+    type: entry.type || "terrainSurface",
+    terrainKind: entry.terrainKind || null,
+    layerId: entry.layerId || null,
+    segmentId: entry.segmentId ?? null,
+    chunkKey: chunkKeyValue,
+    chunkKeys: chunkKeys,
+    object: entry.object || null,
+    hasVisual: entry.hasVisual !== false,
+    visible: entry.visible !== false
+  };
+}
+
+function chunkCoordFromKey(key) {
+  const raw = String(key || "").split(",");
+  if (raw.length !== 2) return null;
+  const x = Number(raw[0]);
+  const z = Number(raw[1]);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return {
+    x: Math.floor(x),
+    z: Math.floor(z)
+  };
+}
+
+function sortChunkKeys(keys) {
+  return Array.from(new Set(keys || [])).map(function (value) {
+    const coord = chunkCoordFromKey(value);
+    return coord ? { key: chunkKey(coord), x: coord.x, z: coord.z } : null;
+  }).filter(Boolean).sort(chunkCoordSort).map(function (coord) { return coord.key; });
+}
+
+export function collectTerrainStreamingSnapshot(residentEntryIds, terrainEntries, terrainTextureRecordsMap, surfaceMaterialRecordsMap, nextState = {}) {
+  const residentChunkKeySet = new Set();
+  const residentAssetIds = new Set();
+  const ids = Array.isArray(residentEntryIds)
+    ? residentEntryIds.slice()
+    : (residentEntryIds instanceof Set ? Array.from(residentEntryIds) : []);
+  for (const entryId of ids) {
+    const entry = terrainEntries?.get(entryId);
+    if (!entry) continue;
+    const chunkKeys = Array.isArray(entry.chunkKeys) && entry.chunkKeys.length
+      ? entry.chunkKeys
+      : (entry.chunkKey ? [entry.chunkKey] : []);
+    for (const chunkKeyValue of chunkKeys) {
+      if (chunkKeyValue) residentChunkKeySet.add(String(chunkKeyValue));
+    }
+    const assetIds = Array.isArray(entry.assetIds) ? entry.assetIds : [];
+    for (const assetId of assetIds) {
+      const value = String(assetId || "").trim();
+      if (value) residentAssetIds.add(value);
+    }
+  }
+  const textureRefs = Array.from(terrainTextureRecordsMap?.values() || []).reduce(function (total, record) {
+    return total + Math.max(0, num(record?.refCount, 0));
+  }, 0);
+  const surfaceMaterials = Array.from(surfaceMaterialRecordsMap?.values() || []).reduce(function (total, records) {
+    return total + (records?.size || 0);
+  }, 0);
+  return {
+    loadedChunks: nextState?.loadedChunks || 0,
+    activeChunks: nextState?.activeChunks || 0,
+    preloadChunks: nextState?.preloadChunks || 0,
+    residentPieces: ids.length,
+    residentChunks: residentChunkKeySet.size,
+    residentChunkKeys: sortChunkKeys(Array.from(residentChunkKeySet)),
+    textureRefs: textureRefs,
+    textureAssets: residentAssetIds.size,
+    surfaceMaterials: surfaceMaterials,
+    lastUpdateReason: nextState?.lastUpdateReason || "runtime-sync"
+  };
+}
+
+export function isChunkActive(coordOrKey, windowState) {
+  const key = typeof coordOrKey === "string" ? coordOrKey : chunkKey(coordOrKey);
+  return Array.isArray(windowState?.activeChunkKeys) && windowState.activeChunkKeys.includes(key);
+}
+
+export function isChunkPreload(coordOrKey, windowState) {
+  const key = typeof coordOrKey === "string" ? coordOrKey : chunkKey(coordOrKey);
+  return Array.isArray(windowState?.preloadChunkKeys) && windowState.preloadChunkKeys.includes(key);
+}
+
+export function isChunkLoaded(coordOrKey, windowState) {
+  const key = typeof coordOrKey === "string" ? coordOrKey : chunkKey(coordOrKey);
+  if (windowState?.loadedChunkKeySet instanceof Set) return windowState.loadedChunkKeySet.has(key);
+  return Array.isArray(windowState?.loadedChunkKeys) && windowState.loadedChunkKeys.includes(key);
+}
+
+function resolveChunkEntryChunkInfo(entry, policy) {
+  if (!entry) return null;
+  const chunkKeys = Array.isArray(entry.chunkKeys) ? sortChunkKeys(entry.chunkKeys) : [];
+  if (chunkKeys.length) {
+    const primaryKey = typeof entry.chunkKey === "string" && entry.chunkKey.includes(",")
+      ? chunkKey(chunkCoordFromKey(entry.chunkKey) || chunkCoordFromKey(chunkKeys[0]) || { x: 0, z: 0 })
+      : chunkKeys[0];
+    return {
+      key: primaryKey || chunkKeys[0] || null,
+      keys: chunkKeys,
+      coord: chunkCoordFromKey(primaryKey || chunkKeys[0] || "")
+    };
+  }
+  if (typeof entry.chunkKey === "string" && entry.chunkKey.includes(",")) {
+    const coord = chunkCoordFromKey(entry.chunkKey);
+    return coord ? { key: chunkKey(coord), keys: [chunkKey(coord)], coord: coord } : null;
+  }
+  if (entry.chunkCoord && Number.isFinite(Number(entry.chunkCoord.x)) && Number.isFinite(Number(entry.chunkCoord.z))) {
+    const coord = {
+      x: Math.floor(Number(entry.chunkCoord.x)),
+      z: Math.floor(Number(entry.chunkCoord.z))
+    };
+    const key = chunkKey(coord);
+    return { key: key, keys: [key], coord: coord };
+  }
+  const x = entry.x ?? entry.position?.x;
+  const z = entry.z ?? entry.position?.z;
+  if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(z)) || !policy) return null;
+  const coord = chunkCoordForPosition(x, z, policy);
+  const key = chunkKey(coord);
+  return {
+    key: key,
+    keys: [key],
+    coord: coord
+  };
+}
+
+function cloneChunkWindow(windowState) {
+  const activeChunks = Array.isArray(windowState?.activeChunks) ? windowState.activeChunks.map(function (coord) {
+    return { x: coord.x, z: coord.z, key: coord.key };
+  }) : [];
+  const preloadChunks = Array.isArray(windowState?.preloadChunks) ? windowState.preloadChunks.map(function (coord) {
+    return { x: coord.x, z: coord.z, key: coord.key };
+  }) : [];
+  const loadedOnlyChunks = Array.isArray(windowState?.loadedOnlyChunks) ? windowState.loadedOnlyChunks.map(function (coord) {
+    return { x: coord.x, z: coord.z, key: coord.key };
+  }) : [];
+  const loadedChunks = Array.isArray(windowState?.loadedChunks) ? windowState.loadedChunks.map(function (coord) {
+    return { x: coord.x, z: coord.z, key: coord.key };
+  }) : [];
+  return {
+    centerChunk: windowState?.centerChunk ? { x: windowState.centerChunk.x, z: windowState.centerChunk.z, key: windowState.centerChunk.key } : null,
+    activeRadiusChunks: chunkInteger(windowState?.activeRadiusChunks, 0),
+    preloadRadiusChunks: chunkInteger(windowState?.preloadRadiusChunks, 0),
+    loadedRadiusChunks: chunkInteger(windowState?.loadedRadiusChunks, 0),
+    maxLoadedChunks: maxLoadedChunksForValue(windowState?.maxLoadedChunks, loadedChunks.length || 1),
+    clippedByMaxLoadedChunks: windowState?.clippedByMaxLoadedChunks === true,
+    requiredActiveChunks: chunkInteger(windowState?.requiredActiveChunks, 0),
+    clippedActiveChunks: chunkInteger(windowState?.clippedActiveChunks, 0),
+    activeRadiusUnmet: windowState?.activeRadiusUnmet === true,
+    activeChunks: activeChunks,
+    preloadChunks: preloadChunks,
+    loadedOnlyChunks: loadedOnlyChunks,
+    loadedChunks: loadedChunks,
+    activeChunkKeys: activeChunks.map(function (coord) { return coord.key; }),
+    preloadChunkKeys: preloadChunks.map(function (coord) { return coord.key; }),
+    loadedChunkKeys: loadedChunks.map(function (coord) { return coord.key; }),
+    loadedChunkKeySet: new Set(loadedChunks.map(function (coord) { return coord.key; }))
+  };
+}
+
+function mergeChunkWindowLoadedKeys(windowState, extraChunkKeys) {
+  const nextState = cloneChunkWindow(windowState);
+  const additions = [];
+  const extraKeys = sortChunkKeys(extraChunkKeys);
+  for (const key of extraKeys) {
+    if (nextState.loadedChunkKeySet.has(key)) continue;
+    const coord = chunkCoordFromKey(key);
+    if (!coord) continue;
+    const nextCoord = { x: coord.x, z: coord.z, key: key };
+    additions.push(nextCoord);
+    nextState.loadedChunkKeySet.add(key);
+    nextState.loadedChunkKeys.push(key);
+    nextState.loadedChunks.push(nextCoord);
+    if (!isChunkActive(key, nextState) && !isChunkPreload(key, nextState)) {
+      nextState.loadedOnlyChunks.push(nextCoord);
+    }
+  }
+  nextState.loadedChunks.sort(chunkCoordSort);
+  nextState.loadedOnlyChunks.sort(chunkCoordSort);
+  nextState.loadedChunkKeys = nextState.loadedChunks.map(function (coord) { return coord.key; });
+  return {
+    windowState: nextState,
+    addedChunkKeys: additions.map(function (coord) { return coord.key; }),
+    applied: additions.length > 0
+  };
+}
+
+function createEmptyTerrainVisualStats() {
+  return {
+    registered: 0,
+    visible: 0,
+    hidden: 0,
+    groundTilesVisible: 0,
+    groundTilesHidden: 0,
+    terrainLayerTilesVisible: 0,
+    terrainLayerTilesHidden: 0,
+    surfaceSegmentsVisible: 0,
+    surfaceSegmentsHidden: 0,
+    uncullableTerrainVisuals: 0
+  };
+}
+
+export function collectChunkCullingStats(entries, windowState, options = {}) {
+  const cullingEnabled = options.cullingEnabled !== false;
+  const policy = options.policy || null;
+  const loadedChunkKeys = sortChunkKeys(windowState?.loadedChunkKeys || []);
+  const renderResidentChunkKeys = sortChunkKeys(Array.isArray(options.renderResidentChunkKeys)
+    ? options.renderResidentChunkKeys
+    : loadedChunkKeys);
+  const activeChunkKeys = sortChunkKeys(windowState?.activeChunkKeys || []);
+  const preloadChunkKeys = sortChunkKeys(windowState?.preloadChunkKeys || []);
+  const loadedChunkKeySet = new Set(loadedChunkKeys);
+  const renderResidentChunkKeySet = new Set(renderResidentChunkKeys);
+  const terrainVisualStats = createEmptyTerrainVisualStats();
+  const result = {
+    items: [],
+    activeChunkKeys: activeChunkKeys,
+    preloadChunkKeys: preloadChunkKeys,
+    loadedChunkKeys: loadedChunkKeys,
+    renderResidentChunkKeys: renderResidentChunkKeys,
+    loadedChunkKeySet: loadedChunkKeySet,
+    activeChunks: activeChunkKeys.length,
+    preloadChunks: preloadChunkKeys.length,
+    loadedChunks: loadedChunkKeys.length,
+    hiddenObjects: 0,
+    visibleObjects: 0,
+    inactiveInteractables: 0,
+    inactiveSolids: 0,
+    culledEntities: 0,
+    culledScatter: 0,
+    culledInteractables: 0,
+    culledSolids: 0,
+    uncullableObjects: 0,
+    terrainVisuals: terrainVisualStats,
+    keepSelectedChunkLoadedApplied: options.keepSelectedChunkLoadedApplied === true
+  };
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const type = String(entry?.type || "entity");
+    const hasVisual = entry?.hasVisual !== false;
+    const chunkInfo = resolveChunkEntryChunkInfo(entry, policy);
+    const isTerrainVisual = type === "terrainGround" || type === "terrainLayer" || type === "terrainSurface";
+    const entryState = {
+      id: entry?.id || null,
+      type: type,
+      chunkKey: chunkInfo?.key || null,
+      chunkKeys: Array.isArray(chunkInfo?.keys) ? chunkInfo.keys.slice() : [],
+      visible: hasVisual ? true : null,
+      renderResident: hasVisual ? true : null,
+      active: true,
+      loaded: true,
+      uncullable: false
+    };
+    if (cullingEnabled && Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length) {
+      entryState.loaded = chunkInfo.keys.some(function (key) { return loadedChunkKeySet.has(key); });
+      entryState.renderResident = chunkInfo.keys.some(function (key) { return renderResidentChunkKeySet.has(key); });
+      entryState.active = entryState.loaded;
+      if (hasVisual) entryState.visible = entryState.loaded;
+      if (hasVisual) entryState.renderResident = entryState.renderResident && entryState.loaded;
+    } else if (cullingEnabled && !chunkInfo?.key) {
+      entryState.uncullable = true;
+      result.uncullableObjects += 1;
+      if (isTerrainVisual) result.terrainVisuals.uncullableTerrainVisuals += 1;
+    }
+    if (hasVisual) {
+      if (entryState.visible === false) result.hiddenObjects += 1;
+      else result.visibleObjects += 1;
+    }
+    if (isTerrainVisual) {
+      result.terrainVisuals.registered += 1;
+      if (entryState.visible === false) {
+        result.terrainVisuals.hidden += 1;
+        if (type === "terrainGround") result.terrainVisuals.groundTilesHidden += 1;
+        else if (type === "terrainLayer") result.terrainVisuals.terrainLayerTilesHidden += 1;
+        else if (type === "terrainSurface") result.terrainVisuals.surfaceSegmentsHidden += 1;
+      } else {
+        result.terrainVisuals.visible += 1;
+        if (type === "terrainGround") result.terrainVisuals.groundTilesVisible += 1;
+        else if (type === "terrainLayer") result.terrainVisuals.terrainLayerTilesVisible += 1;
+        else if (type === "terrainSurface") result.terrainVisuals.surfaceSegmentsVisible += 1;
+      }
+    }
+    if (entryState.loaded === false) {
+      if (type === "entity") result.culledEntities += 1;
+      if (type === "scatter") result.culledScatter += 1;
+      if (type === "interactable") {
+        result.culledInteractables += 1;
+        result.inactiveInteractables += 1;
+      }
+      if (type === "solid") {
+        result.culledSolids += 1;
+        result.inactiveSolids += 1;
+      }
+    }
+    result.items.push(entryState);
+  }
+  return result;
+}
+
 const TERRAIN_MATERIAL_PRESETS = {
   grass: "#6faa4f",
   sand: "#c8a968",
@@ -381,17 +3169,6 @@ const TERRAIN_MATERIAL_PRESETS = {
   village_square: "#b7b0a2"
 };
 
-const PATH_TYPE_PRESETS = {
-  sand: "#c4a05a",
-  stone: "#7a8088",
-  dirt: "#7a5230"
-};
-
-const WATER_TYPE_PRESETS = {
-  river: "#1e8ecf",
-  lake: "#1670a8",
-  pond: "#268a7a"
-};
 const SURFACE_KIND_FALLBACK_COLORS = {
   path: "#c8a46e",
   road: "#555555",
@@ -427,14 +3204,6 @@ function surfaceFloat(value, fallback) {
 
 function terrainPresetColor(materialName) {
   return TERRAIN_MATERIAL_PRESETS[String(materialName || "").trim().toLowerCase()] || TERRAIN_MATERIAL_PRESETS.grass;
-}
-
-function pathPresetColor(pathType) {
-  return PATH_TYPE_PRESETS[String(pathType || "").trim().toLowerCase()] || PATH_TYPE_PRESETS.sand;
-}
-
-function waterPresetColor(waterType) {
-  return WATER_TYPE_PRESETS[String(waterType || "").trim().toLowerCase()] || WATER_TYPE_PRESETS.river;
 }
 
 function surfaceKindFallbackColor(kind) {
@@ -482,7 +3251,6 @@ function smoothPolyline(points, samplesPerSegment) {
 function createEmptyWalkabilityIndex() {
   return {
     ground: null,
-    waters: [],
     surfaceBlockers: [],
     blockers: [],
     walkables: []
@@ -711,11 +3479,19 @@ function pointInRotatedRectangle(px, pz, rect, inflate = 0) {
 }
 
 function normalizeGroundForCollision(ground) {
-  const width = Math.max(0, num(ground?.width, 0));
-  const depth = Math.max(0, num(ground?.depth, 0));
+  const bounds = effectiveGroundBounds(ground);
   const y = num(ground?.y, 0);
-  if (width <= 0 || depth <= 0) return null;
-  return { width: width, depth: depth, y: y };
+  if (!bounds) return null;
+  return {
+    boundsMode: bounds.boundsMode || "centerSize",
+    minX: bounds.minX,
+    maxX: bounds.maxX,
+    minZ: bounds.minZ,
+    maxZ: bounds.maxZ,
+    width: bounds.width,
+    depth: bounds.depth,
+    y: y
+  };
 }
 
 export function createWalkabilityIndex(worldData) {
@@ -724,26 +3500,9 @@ export function createWalkabilityIndex(worldData) {
 
   const terrain = worldData?.terrain || {};
   const collision = worldData?.collision || {};
-  const waters = Array.isArray(terrain.waters) ? terrain.waters : [];
   const surfaces = Array.isArray(terrain.surfaces) ? terrain.surfaces : [];
   const blockers = Array.isArray(collision.blockers) ? collision.blockers : [];
   const walkables = Array.isArray(collision.walkableSurfaces) ? collision.walkableSurfaces : [];
-
-  for (const water of waters) {
-    if (water?.blocksPlayer === false) continue;
-    const width = Math.max(0, num(water?.width, 0));
-    const points = normalizeCollisionPointList(water?.points);
-    if (width <= 0 || points.length < 2) continue;
-    const waterType = String(water?.waterType || "river").trim().toLowerCase();
-    const usesPolygon = (waterType === "lake" || waterType === "pond") && points.length >= 3;
-    index.waters.push({
-      id: water?.id || null,
-      waterType: waterType,
-      width: width,
-      points: points,
-      mode: usesPolygon ? "polygon" : "ribbon"
-    });
-  }
 
   for (const surface of surfaces) {
     if (surface?.blocksPlayer !== true) continue;
@@ -822,7 +3581,7 @@ let activeWalkabilityIndex = createEmptyWalkabilityIndex();
 
 function resolveWalkabilitySource(source) {
   if (!source) return activeWalkabilityIndex;
-  if (Array.isArray(source.walkables) && Array.isArray(source.blockers) && Array.isArray(source.waters)) return source;
+  if (Array.isArray(source.walkables) && Array.isArray(source.blockers) && Array.isArray(source.surfaceBlockers)) return source;
   return activeWalkabilityIndex;
 }
 
@@ -923,25 +3682,6 @@ export function isPointBlockedByBlocker(source, x, z, radius = 0) {
   return false;
 }
 
-function isPointBlockedByWaterEntry(water, x, z, radius) {
-  if (water.mode === "polygon") {
-    return isPolygonBlockedAtRadius(water.points, x, z, radius);
-  }
-  const halfWidth = (water.width / 2) + Math.max(0, num(radius, 0));
-  if (halfWidth <= 0) return false;
-  const distanceSq = distanceSquaredToPolyline(x, z, water.points);
-  return distanceSq <= halfWidth * halfWidth + COLLISION_EPSILON;
-}
-
-export function isPointBlockedByWater(source, x, z, radius = 0) {
-  const index = resolveWalkabilitySource(source);
-  if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
-  for (const water of index.waters) {
-    if (isPointBlockedByWaterEntry(water, x, z, radius)) return true;
-  }
-  return false;
-}
-
 function isPointBlockedBySurfaceEntry(surface, x, z, radius) {
   const halfWidth = (surface.width / 2) + Math.max(0, num(radius, 0));
   if (halfWidth <= 0) return false;
@@ -964,16 +3704,20 @@ export function isPointBlockedByTerrain(source, x, z, radius = 0) {
   const index = resolveWalkabilitySource(source);
   if (isPointOnWalkableSurface(index, x, z, radius)) return false;
   return isPointBlockedByBlocker(index, x, z, radius)
-    || isPointBlockedByWater(index, x, z, radius)
     || isPointBlockedBySurface(index, x, z, radius);
 }
 
 function clampPointToGround(point, ground, radius) {
   if (!ground) return point;
-  const limitX = Math.max(0, num(ground.width, 0) / 2 - radius);
-  const limitZ = Math.max(0, num(ground.depth, 0) / 2 - radius);
-  if (Number.isFinite(limitX)) point.x = Math.min(limitX, Math.max(-limitX, point.x));
-  if (Number.isFinite(limitZ)) point.z = Math.min(limitZ, Math.max(-limitZ, point.z));
+  const bounds = effectiveGroundBounds(ground);
+  if (bounds) {
+    const minX = bounds.minX + radius;
+    const maxX = bounds.maxX - radius;
+    const minZ = bounds.minZ + radius;
+    const maxZ = bounds.maxZ - radius;
+    if (Number.isFinite(minX) && Number.isFinite(maxX) && minX <= maxX) point.x = Math.min(maxX, Math.max(minX, point.x));
+    if (Number.isFinite(minZ) && Number.isFinite(maxZ) && minZ <= maxZ) point.z = Math.min(maxZ, Math.max(minZ, point.z));
+  }
   if (Number.isFinite(ground.y)) point.y = ground.y;
   return point;
 }
@@ -1077,10 +3821,51 @@ export function resolveMovement(start, desired, options = {}) {
   return resolveMovementInto(result, start, desired, options);
 }
 
+function createWorldPlaneGeometry(minX, maxX, minZ, maxZ, y, uvBounds) {
+  const safeMinX = num(minX, 0);
+  const safeMaxX = num(maxX, 0);
+  const safeMinZ = num(minZ, 0);
+  const safeMaxZ = num(maxZ, 0);
+  if (safeMaxX <= safeMinX || safeMaxZ <= safeMinZ) return null;
+  const safeY = num(y, 0);
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array([
+    safeMinX, safeY, safeMinZ,
+    safeMaxX, safeY, safeMinZ,
+    safeMaxX, safeY, safeMaxZ,
+    safeMinX, safeY, safeMaxZ
+  ]);
+  const uvMinX = Number.isFinite(Number(uvBounds?.minX)) ? num(uvBounds.minX, safeMinX) : safeMinX;
+  const uvMaxX = Number.isFinite(Number(uvBounds?.maxX)) ? num(uvBounds.maxX, safeMaxX) : safeMaxX;
+  const uvMinZ = Number.isFinite(Number(uvBounds?.minZ)) ? num(uvBounds.minZ, safeMinZ) : safeMinZ;
+  const uvMaxZ = Number.isFinite(Number(uvBounds?.maxZ)) ? num(uvBounds.maxZ, safeMaxZ) : safeMaxZ;
+  const repeatX = Math.max(0.000001, num(uvBounds?.repeatX, 1));
+  const repeatZ = Math.max(0.000001, num(uvBounds?.repeatZ, 1));
+  const width = Math.max(0.000001, uvMaxX - uvMinX);
+  const depth = Math.max(0.000001, uvMaxZ - uvMinZ);
+  const u0 = ((safeMinX - uvMinX) / width) * repeatX;
+  const u1 = ((safeMaxX - uvMinX) / width) * repeatX;
+  const v0 = ((safeMinZ - uvMinZ) / depth) * repeatZ;
+  const v1 = ((safeMaxZ - uvMinZ) / depth) * repeatZ;
+  const uvs = new Float32Array([
+    u0, v0,
+    u1, v0,
+    u1, v1,
+    u0, v1
+  ]);
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.computeBoundingSphere();
+  geometry.computeBoundingBox();
+  return geometry;
+}
+
 export function buildSurfaceStripGeometry(points, options) {
   const halfWidth = Math.max(0, Number(options?.width || 0)) / 2;
   const y = Number(options?.y || 0);
   const uvScale = Math.max(0.001, Number(options?.uvScale || 1));
+  const uvStartLength = Math.max(0, Number(options?.uvStartLength || 0));
 
   if (!Array.isArray(points) || points.length < 2 || halfWidth <= 0) return null;
 
@@ -1144,21 +3929,20 @@ export function buildSurfaceStripGeometry(points, options) {
     }
 
     const base = i * 2;
-    const v = arcLengths[i] / uvScale;
 
     // Left vertex — U=0
     positions[base * 3] = points[i].x + nx;
     positions[base * 3 + 1] = y;
     positions[base * 3 + 2] = points[i].z + nz;
     uvCoords[base * 2] = 0;
-    uvCoords[base * 2 + 1] = v;
+    uvCoords[base * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
 
     // Right vertex — U=1
     positions[(base + 1) * 3] = points[i].x - nx;
     positions[(base + 1) * 3 + 1] = y;
     positions[(base + 1) * 3 + 2] = points[i].z - nz;
     uvCoords[(base + 1) * 2] = 1;
-    uvCoords[(base + 1) * 2 + 1] = v;
+    uvCoords[(base + 1) * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
 
     if (i < n - 1) {
       indices.push(base, base + 2, base + 1);
@@ -1196,9 +3980,16 @@ function createPolygonShapeGeometry(points) {
   return geometry;
 }
 
+function createClippedPolygonTileGeometry(points, bounds) {
+  const clipped = clipPolygonToRectangle(points, bounds);
+  if (!Array.isArray(clipped) || clipped.length < 3) return null;
+  return createPolygonShapeGeometry(clipped);
+}
+
 export function createGkWorldRuntime(canvas, options = {}) {
   const mode = options.mode || "editor";
   const hudElement = options.hud || null;
+  const rendererAntialias = options.antialias !== false;
 
   const worldPerformanceDefaults = WORLD_PERFORMANCE_DEFAULTS;
   let worldPerformance = {
@@ -1208,14 +3999,21 @@ export function createGkWorldRuntime(canvas, options = {}) {
   };
   let shadowPolicy = resolveShadowPolicy(null, mode);
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: rendererAntialias });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mode === "editor" ? worldPerformance.editor.pixelRatioCap : worldPerformance.game.pixelRatioCap));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1;
   renderer.info.autoReset = true;
   renderer.shadowMap.enabled = shadowPolicy.enabled;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = shadowPolicy.mapType || THREE.PCFSoftShadowMap;
+  const rendererProfile = detectRendererProfile(renderer);
+  if (rendererProfile.software === true) {
+    renderer.shadowMap.enabled = false;
+    if (mode === "editor") {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
+    }
+  }
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
@@ -1227,7 +4025,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const loader = new GLTFLoader();
   const textureLoader = new THREE.TextureLoader();
   const modelCache = new Map();
-  const textureCache = new Map();
   const entityRoots = new Map();
   const solids = [];
   const animationMixers = new Map();
@@ -1244,9 +4041,71 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let scatterEditorOverlayState = null;
   let terrainRuntimeGroup = null;
   let terrainRuntimeGeneration = 0;
+  let fullGroundPlane = null;
+  let fullGroundPlaneTextureAssetId = null;
+  let groundShadowAnchorKey = "";
+  let shadowAnchorState = {
+    mode: "static",
+    x: 0,
+    z: 0,
+    lastUpdatedReason: "init"
+  };
+  let stableSunShadowController = null;
+  let scatterShadowFallbacks = 0;
+  let nonInstancedShadowCasters = 0;
+  const directionalLights = [];
+  const groundChunkState = {
+    mode: "full",
+    tilesByChunkKey: new Map(),
+    residentTiles: new Map(),
+    materialCache: new Map(),
+    textureRefs: new Map(),
+    lastLoadedChunkKeySet: new Set(),
+    blueprintSignature: "",
+    blueprint: null,
+    stats: {
+      mode: "full",
+      enabled: false,
+      policySource: "none",
+      fullGroundPlaneActive: false,
+      fullGroundPlaneName: null,
+      fullGroundPlaneVisible: false,
+      groundTilesBlueprint: 0,
+      groundTilesResident: 0,
+      groundTilesVisible: 0,
+      groundTilesHidden: 0,
+      loadedChunkKeys: [],
+      residentChunkKeys: [],
+      enteringChunkKeys: [],
+      leavingChunkKeys: [],
+      lastSyncReason: "init"
+    }
+  };
   const terrainTextureRecords = new Map();
   const surfaceMaterialRecords = new Map();
-  let waterAnimMaterials = [];
+  const terrainRuntimeEntries = new Map();
+  const terrainRuntimeChunkIndex = new Map();
+  const terrainRuntimeResidentEntries = new Set();
+  const terrainStreamingState = {
+    blueprintPieces: 0,
+    residentPieces: 0,
+    builtPieces: 0,
+    disposedPieces: 0,
+    residentObjects: 0,
+    residentMeshes: 0,
+    residentChunks: 0,
+    residentChunkKeys: [],
+    loadedChunks: 0,
+    activeChunks: 0,
+    preloadChunks: 0,
+    textureRefs: 0,
+    textureAssets: 0,
+    surfaceMaterials: 0,
+    groundTilesResident: 0,
+    terrainLayerTilesResident: 0,
+    surfaceSegmentsResident: 0,
+    lastUpdateReason: "init"
+  };
   let surfaceAnimMaterials = [];
   let surfaceDefaultWhiteTex = null;
   let selectedEntityId = null;
@@ -1264,6 +4123,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let editorPointerDownCaptureHandler = null;
   let editorPointerUpCaptureHandler = null;
   let editorContextMenuHandler = null;
+  let editorAuxClickHandler = null;
   let editorKeyDownHandler = null;
   let editorKeyUpHandler = null;
   let editorDirectPointerMoveHandler = null;
@@ -1272,6 +4132,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let editorDirectMouseUpHandler = null;
   let lastEditorPointer = null;
   let viewportPanSession = null;
+  let viewportOrbitFallbackActive = false;
   let gamePointerDownHandler = null;
   let gameKeyDownHandler = null;
   let gameKeyUpHandler = null;
@@ -1322,7 +4183,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let previewAnimations = false;
   const DEBUG_RUNTIME = window.__GK_DEBUG_RUNTIME && typeof window.__GK_DEBUG_RUNTIME === "object"
     ? window.__GK_DEBUG_RUNTIME
-    : { enabled: false, activeLoopCount: 0, running: false, resizeCount: 0, renderCount: 0, lastRenderReasons: [], lastResizeSnapshot: null, activeResizeHandlers: 0 };
+    : { enabled: false, activeLoopCount: 0, running: false, resizeCount: 0, renderCount: 0, lastRenderReasons: [], lastResizeSnapshot: null, activeResizeHandlers: 0, lastFrameTiming: null };
   window.__GK_DEBUG_RUNTIME = DEBUG_RUNTIME;
   let lastTime = performance.now();
 
@@ -1353,70 +4214,214 @@ export function createGkWorldRuntime(canvas, options = {}) {
     meshes: 0,
     terrainVisuals: 0,
     terrainLayers: 0,
-    terrainPaths: 0,
-    terrainWaters: 0,
     terrainSurfaces: 0,
     collisionShapes: 0,
     entities: 0,
+    scatterInstances: 0,
     interactables: 0
   };
+  let publishedWorldItemCount = 0;
   let perfHudNextUpdateAt = 0;
   let perfHudFrameMs = 0;
   let perfHudWarmup = false;
+  const chunkSyncStats = {
+    syncCalls: 0,
+    heavySyncCalls: 0,
+    skippedSyncCalls: 0,
+    lastHeavyReason: "init",
+    lastHeavySyncMs: 0
+  };
+  const collisionPerfState = {
+    activeSolids: 0,
+    terrainBlockers: 0,
+    surfaceBlockers: 0,
+    checksLastFrame: 0,
+    lastResolveMs: 0
+  };
   let chunkDebugOverlay = null;
+  let overlayDiagnosticsState = {
+    debugOverlayEnabled: false,
+    chunkDebugOverlayVisible: false,
+    terrainRuntimeGroups: 0,
+    chunkDebugOverlayGroups: 0,
+    cameraChildOverlayGroups: 0,
+    sceneDebugOverlayGroups: 0,
+    sceneChildOverlayGroups: 0,
+    duplicateOverlayFound: false,
+    removedDuplicateOverlays: 0,
+    removedOverlayGroups: 0,
+    overlayShadowCasters: 0
+  };
   let chunkDebugStateCache = null;
   let chunkDebugSignature = "";
+  let contentBlueprintIndex = createEmptyContentBlueprintIndex();
+  let residentContentState = createEmptyResidentContentState();
+  const streamingHeadingState = { lastPlayerPosition: null, lastCameraTarget: null };
+  const unloadHysteresisState = { candidateStreaks: new Map() };
+  let residentBootstrapState = {
+    lastReason: "init",
+    worldGeneration: 0,
+    activeBuiltImmediately: 0,
+    visibleBuiltImmediately: 0,
+    preloadBuiltImmediately: 0,
+    pendingAfterBootstrap: 0,
+    emptyScenePrevented: true
+  };
+  const chunkRuntimeEntries = [];
+  let chunkRuntimeRegistryVersion = 0;
+  let chunkRuntimeState = {
+    policy: null,
+    centerChunk: null,
+    loadedChunkKeys: [],
+    renderChunkKeys: [],
+    shadowResidentChunkKeys: [],
+    collisionResidentChunkKeys: [],
+    shadowWindowChunkKeys: [],
+    activeChunkKeys: [],
+    preloadChunkKeys: [],
+    visibleChunkKeys: [],
+    forwardChunkKeys: [],
+    unloadSafeChunkKeys: [],
+    desiredResidentChunkKeys: [],
+    streamingCoverageSource: "none",
+    clippedByMaxLoadedChunks: false,
+    hiddenObjects: 0,
+    visibleObjects: 0,
+    inactiveInteractables: 0,
+    inactiveSolids: 0,
+    culledEntities: 0,
+    culledScatter: 0,
+    culledInteractables: 0,
+    culledSolids: 0,
+    uncullableObjects: 0,
+    terrainVisuals: createEmptyTerrainVisualStats(),
+    ground: cloneGroundChunkStats(),
+    terrainStreaming: Object.assign({}, terrainStreamingState, {
+      residentChunkKeys: terrainStreamingState.residentChunkKeys.slice()
+    }),
+    keepSelectedChunkLoadedApplied: false,
+    cullingEnabled: false,
+    lastSignature: "",
+    lastUpdateReason: "init"
+  };
+  const activeSolids = [];
+  let runtimeCollisionBaseCount = 0;
+  const frameProfileWaiters = [];
 
-  function resolveWorldPerformance(worldData) {
-    const source = worldData?.world?.performance || {};
-    const shared = source.shared || {};
-    const game = source.game || {};
-    const editor = source.editor || {};
-    return {
-      shared: {
-        shadowQuality: normalizeShadowQuality(shared.shadowQuality, worldPerformanceDefaults.shared.shadowQuality),
-        shadowBias: clamp(num(shared.shadowBias, worldPerformanceDefaults.shared.shadowBias), -0.01, 0.01),
-        shadowNormalBias: clamp(num(shared.shadowNormalBias, worldPerformanceDefaults.shared.shadowNormalBias), 0, 1),
-        shadowCameraSize: Math.max(5, num(shared.shadowCameraSize, worldPerformanceDefaults.shared.shadowCameraSize)),
-        shadowCameraFar: Math.max(10, num(shared.shadowCameraFar, worldPerformanceDefaults.shared.shadowCameraFar)),
-        smoothShading: shared.smoothShading !== false
-      },
-      game: {
-        pixelRatioCap: clamp(num(game.pixelRatioCap, worldPerformanceDefaults.game.pixelRatioCap), 0.5, 2),
-        shadowsEnabled: game.shadowsEnabled !== false,
-        batchStaticProps: game.batchStaticProps !== false,
-        batchScatterProps: game.batchScatterProps !== false,
-        staticPropCastShadows: game.staticPropCastShadows === true,
-        staticPropReceiveShadows: game.staticPropReceiveShadows !== false
-      },
-      editor: {
-        pixelRatioCap: clamp(num(editor.pixelRatioCap, worldPerformanceDefaults.editor.pixelRatioCap), 0.5, 2),
-        fogEnabled: editor.fogEnabled !== false,
-        shadowsEnabled: editor.shadowsEnabled !== false
+  function settleFrameProfileWaiters(frameTiming) {
+    if (!frameProfileWaiters.length) return;
+    const waiters = frameProfileWaiters.splice(0, frameProfileWaiters.length);
+    for (const waiter of waiters) {
+      if (waiter.timeoutId) clearTimeout(waiter.timeoutId);
+      waiter.resolve(frameTiming);
+    }
+  }
+
+  function rejectFrameProfileWaiters(error) {
+    if (!frameProfileWaiters.length) return;
+    const waiters = frameProfileWaiters.splice(0, frameProfileWaiters.length);
+    for (const waiter of waiters) {
+      if (waiter.timeoutId) clearTimeout(waiter.timeoutId);
+      waiter.reject(error);
+    }
+  }
+
+  function waitForNextFrameTiming(timeoutMs = 30000) {
+    return new Promise(function (resolve, reject) {
+      const waiter = {
+        resolve: resolve,
+        reject: reject,
+        timeoutId: null
+      };
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        waiter.timeoutId = setTimeout(function () {
+          const index = frameProfileWaiters.indexOf(waiter);
+          if (index >= 0) frameProfileWaiters.splice(index, 1);
+          reject(new Error("profilePerformance timed out after " + timeoutMs + "ms"));
+        }, timeoutMs);
       }
-    };
+      frameProfileWaiters.push(waiter);
+    });
+  }
+
+  // Fase 8.7: editor only ever reads performance.editor and game only ever reads
+  // performance.game. The published preset is just a visible field on that mode; there are no
+  // hidden profile overrides left in the runtime path.
+  function resolveWorldPerformance(worldData) {
+    return resolveWorldPerformanceForRenderer(worldData, rendererProfile);
   }
 
   function resolveShadowPolicyFromPerformance(performance, modeName) {
-    const shared = performance?.shared || worldPerformanceDefaults.shared;
-    const modePerformance = modeName === "editor" ? performance?.editor || worldPerformanceDefaults.editor : performance?.game || worldPerformanceDefaults.game;
-    const quality = normalizeShadowQuality(shared.shadowQuality, worldPerformanceDefaults.shared.shadowQuality);
-    return {
-      enabled: quality !== "off" && modePerformance.shadowsEnabled !== false,
-      quality: quality,
-      mapSize: shadowMapSizeForQuality(quality),
-      bias: clamp(num(shared.shadowBias, worldPerformanceDefaults.shared.shadowBias), -0.01, 0.01),
-      normalBias: clamp(num(shared.shadowNormalBias, worldPerformanceDefaults.shared.shadowNormalBias), 0, 1),
-      cameraSize: Math.max(5, num(shared.shadowCameraSize, worldPerformanceDefaults.shared.shadowCameraSize)),
-      cameraFar: Math.max(10, num(shared.shadowCameraFar, worldPerformanceDefaults.shared.shadowCameraFar))
-    };
+    const modePerformance = modeName === "editor" ? (performance?.editor || worldPerformanceDefaults.editor) : (performance?.game || worldPerformanceDefaults.game);
+    const policy = resolveModeShadowPolicy(modePerformance, modeName);
+    if (performance?.compatibility?.usedLegacyWorldSettingsPerformanceFields || performance?.compatibility?.legacyShadowFieldsMigrated) {
+      policy.legacyFieldsIgnored = true;
+    }
+    if (rendererProfile.software === true) {
+      return Object.assign({}, policy, {
+        enabled: false,
+        rendererShadowMapEnabled: false,
+        mapSize: 0,
+        cameraSize: 0,
+        cameraFar: 0,
+        snapWorldUnits: 0,
+        shadowResidentMarginChunks: 0,
+        shadowsEnabled: false
+      });
+    }
+    return policy;
   }
 
   function applyRendererShadowPolicy(policy) {
     const enabled = Boolean(policy?.enabled);
     renderer.shadowMap.enabled = enabled;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = policy?.mapType || THREE.PCFSoftShadowMap;
     return enabled;
+  }
+
+  function syncWorldShadowCasterState(enabled) {
+    if (!scene || typeof scene.traverse !== "function") return 0;
+    const restore = enabled === true;
+    let changed = 0;
+    const seen = new Set();
+    const visit = function (object) {
+      if (!object || seen.has(object)) return;
+      seen.add(object);
+      if (isDebugOverlayObject(object) || object.userData?.debugOverlay === true || object.userData?.debugOverlayRoot === true) return;
+      object.userData = object.userData || {};
+      const currentCast = object.castShadow === true;
+      const currentReceive = object.receiveShadow === true;
+      if (!restore) {
+        if (!object.userData.shadowDisabledOriginalState) {
+          object.userData.shadowDisabledOriginalState = {
+            castShadow: currentCast,
+            receiveShadow: currentReceive
+          };
+        }
+        if (currentCast !== false || currentReceive !== false) {
+          object.castShadow = false;
+          object.receiveShadow = false;
+          changed += 1;
+        }
+        return;
+      }
+      const original = object.userData.shadowDisabledOriginalState;
+      if (!original) return;
+      if (currentCast !== original.castShadow) {
+        object.castShadow = original.castShadow;
+        changed += 1;
+      }
+      if (currentReceive !== original.receiveShadow) {
+        object.receiveShadow = original.receiveShadow;
+        changed += 1;
+      }
+      delete object.userData.shadowDisabledOriginalState;
+    };
+    scene.traverse(visit);
+    if (content && content !== scene && typeof content.traverse === "function") {
+      content.traverse(visit);
+    }
+    return changed;
   }
 
   function applyDirectionalShadowPolicy(directional, policy) {
@@ -1438,9 +4443,882 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function applyWorldPerformance(worldData) {
     worldPerformance = resolveWorldPerformance(worldData);
+    if (rendererProfile.software === true) {
+      worldPerformance.editor.pixelRatioCap = Math.min(worldPerformance.editor.pixelRatioCap, 1);
+      worldPerformance.game.pixelRatioCap = Math.min(worldPerformance.game.pixelRatioCap, 0.7);
+      if (worldPerformance.game.shadow) {
+        worldPerformance.game.shadow.enabled = false;
+        worldPerformance.game.shadow.preset = "geen_schaduw";
+        worldPerformance.game.shadow.mapSize = 0;
+        worldPerformance.game.shadow.cameraSize = 0;
+        worldPerformance.game.shadow.cameraFar = 0;
+        worldPerformance.game.shadow.snapWorldUnits = 0;
+        worldPerformance.game.shadow.shadowResidentMarginChunks = 0;
+      }
+      worldPerformance.game.shadowsEnabled = false;
+      worldPerformance.game.shadowQuality = "off";
+      worldPerformance.game.shadowMapSize = 0;
+      worldPerformance.game.shadowCameraSize = 0;
+      worldPerformance.game.shadowCameraFar = 0;
+    }
     shadowPolicy = resolveShadowPolicyFromPerformance(worldPerformance, mode);
     applyRendererShadowPolicy(shadowPolicy);
+    syncWorldShadowCasterState(shadowPolicy.enabled === true);
     return worldPerformance;
+  }
+
+  function isChunkCullingRuntimeEnabled(policy = resolveChunkPolicy(world, mode)) {
+    return Boolean(policy?.enabled === true && policy?.source !== "none");
+  }
+
+  function registerChunkRuntimeEntry(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    chunkRuntimeEntries.push(entry);
+    chunkRuntimeRegistryVersion += 1;
+    return entry;
+  }
+
+  function resolveChunkRuntimeEntryPosition(entry) {
+    if (!entry) return null;
+    if (typeof entry.getPosition === "function") {
+      const value = entry.getPosition();
+      if (Number.isFinite(Number(value?.x)) && Number.isFinite(Number(value?.z))) {
+        return { x: Number(value.x), z: Number(value.z) };
+      }
+    }
+    if (Number.isFinite(Number(entry.x)) && Number.isFinite(Number(entry.z))) {
+      return { x: Number(entry.x), z: Number(entry.z) };
+    }
+    if (entry.position && Number.isFinite(Number(entry.position.x)) && Number.isFinite(Number(entry.position.z))) {
+      return { x: Number(entry.position.x), z: Number(entry.position.z) };
+    }
+    if (entry.object?.position && Number.isFinite(Number(entry.object.position.x)) && Number.isFinite(Number(entry.object.position.z))) {
+      return { x: Number(entry.object.position.x), z: Number(entry.object.position.z) };
+    }
+    if (entry.interactable && Number.isFinite(Number(entry.interactable.x)) && Number.isFinite(Number(entry.interactable.z))) {
+      return { x: Number(entry.interactable.x), z: Number(entry.interactable.z) };
+    }
+    if (entry.solid && Number.isFinite(Number(entry.solid.x)) && Number.isFinite(Number(entry.solid.z))) {
+      return { x: Number(entry.solid.x), z: Number(entry.solid.z) };
+    }
+    return null;
+  }
+
+  function resolveChunkRuntimeEntryChunkKey(entry, policy) {
+    if (!entry) return null;
+    if (typeof entry.chunkKey === "string" && entry.chunkKey.includes(",")) {
+      const coord = chunkCoordFromKey(entry.chunkKey);
+      return coord ? { key: chunkKey(coord), coord: coord } : null;
+    }
+    const position = resolveChunkRuntimeEntryPosition(entry);
+    if (!position || !policy) return null;
+    const coord = chunkCoordForPosition(position.x, position.z, policy);
+    return { key: chunkKey(coord), coord: coord };
+  }
+
+  function resolveSelectedKeepLoadedChunkKeys(policy) {
+    if (mode !== "editor" || policy?.keepSelectedChunkLoaded !== true) return [];
+    const root = selectedObjectRoot();
+    if (!root) return [];
+    const chunkInfo = resolveChunkRuntimeEntryChunkKey({ object: root }, policy);
+    return chunkInfo?.key ? [chunkInfo.key] : [];
+  }
+
+  function buildContentBlueprintIndex(worldData, runtimeMode = mode) {
+    const policy = resolveChunkPolicy(worldData, runtimeMode);
+    const index = createEmptyContentBlueprintIndex();
+    const addAlwaysLoaded = function (type, value) {
+      if (!value) return;
+      index.alwaysLoaded.push({
+        type: type,
+        id: value.id || null,
+        value: value
+      });
+    };
+    addAlwaysLoaded("world", worldData?.world || null);
+    addAlwaysLoaded("ground", worldData?.ground || null);
+    addAlwaysLoaded("camera", worldData?.camera || null);
+    addAlwaysLoaded("player", worldData?.player || null);
+    addAlwaysLoaded("spawn", worldData?.spawn || null);
+    for (const light of worldData?.lights || []) addAlwaysLoaded("light", light);
+    for (const entity of worldData?.entities || []) {
+      const position = entity?.transform?.position || {};
+      const chunkKeyValue = chunkKeyFromWorldPosition(position.x, position.z, policy);
+      const clone = Object.assign({}, entity, {
+        chunkKey: chunkKeyValue,
+        chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
+      });
+      if (entity?.type === "scatter" || entity?.kind === "scatter") {
+        if (chunkKeyValue) {
+          ensureChunkBucket(index.scatterByChunkKey, chunkKeyValue).push(clone);
+        } else {
+          index.alwaysLoaded.push({
+            type: "scatter",
+            id: clone.id || clone.nodeId || null,
+            value: clone
+          });
+        }
+        continue;
+      }
+      if (chunkKeyValue) {
+        ensureChunkBucket(index.entitiesByChunkKey, chunkKeyValue).push(clone);
+      } else {
+        index.alwaysLoaded.push({
+          type: "entity",
+          id: clone.id || clone.nodeId || null,
+          value: clone
+        });
+      }
+      if (entity?.solid && entity?.walkable !== true) {
+        const solidClone = {
+          id: String(entity.id || entity.nodeId || "entity") + "::solid",
+          entityId: entity.id || entity.nodeId || null,
+          x: num(entity?.transform?.position?.x, 0),
+          z: num(entity?.transform?.position?.z, 0),
+          radius: num(entity?.collisionRadius, 1),
+          enabled: true,
+          runtimeManaged: true,
+          chunkKey: chunkKeyValue,
+          chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
+        };
+        if (chunkKeyValue) ensureChunkBucket(index.solidsByChunkKey, chunkKeyValue).push(solidClone);
+        else index.alwaysLoaded.push({
+          type: "solid",
+          id: solidClone.id,
+          value: solidClone
+        });
+      }
+    }
+    for (const inter of worldData?.interactables || []) {
+      const chunkKeyValue = chunkKeyFromWorldPosition(inter?.position?.x, inter?.position?.z, policy);
+      const clone = Object.assign({}, inter, {
+        chunkKey: chunkKeyValue,
+        chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
+      });
+      if (chunkKeyValue) {
+        ensureChunkBucket(index.interactablesByChunkKey, chunkKeyValue).push(clone);
+      } else {
+        index.alwaysLoaded.push({
+          type: "interactable",
+          id: clone.id || null,
+          value: clone
+        });
+      }
+    }
+    index.blueprintEntityCount = countEntriesForChunkMap(index.entitiesByChunkKey);
+    index.blueprintScatterInstanceCount = countEntriesForChunkMap(index.scatterByChunkKey);
+    index.blueprintInteractableCount = countEntriesForChunkMap(index.interactablesByChunkKey);
+    index.blueprintSolidCount = countEntriesForChunkMap(index.solidsByChunkKey);
+    index.blueprintWorldItemCount = countPublishedWorldItems(worldData);
+    index.version = worldBuildGeneration;
+    index.lastBuildReason = "setWorld";
+    return index;
+  }
+
+  function registerResidentChunkRecord(kind, chunkKey, entryKey, entry) {
+    const key = String(chunkKey || "").trim();
+    const id = String(entryKey || "").trim();
+    if (!key || !id || !entry) return null;
+    const target = kind === "scatter"
+      ? residentContentState.scatterBatchesByKey
+      : kind === "interactable"
+        ? residentContentState.interactableObjectsByKey
+        : kind === "solid"
+          ? residentContentState.solidEntriesByKey
+          : residentContentState.entityObjectsByKey;
+    const bucket = ensureResidentChunkBucket(target, key);
+    if (!bucket) return null;
+    bucket.set(id, entry);
+    return entry;
+  }
+
+  function unregisterResidentChunkRecord(kind, chunkKey, entryKey) {
+    const key = String(chunkKey || "").trim();
+    const id = String(entryKey || "").trim();
+    if (!key || !id) return false;
+    const target = kind === "scatter"
+      ? residentContentState.scatterBatchesByKey
+      : kind === "interactable"
+        ? residentContentState.interactableObjectsByKey
+        : kind === "solid"
+          ? residentContentState.solidEntriesByKey
+          : residentContentState.entityObjectsByKey;
+    const bucket = target.get(key);
+    if (!bucket) return false;
+    const removed = bucket.delete(id);
+    if (!bucket.size) target.delete(key);
+    return removed;
+  }
+
+  function removeRuntimeEntryById(entryId) {
+    const id = String(entryId || "").trim();
+    if (!id) return false;
+    for (let index = chunkRuntimeEntries.length - 1; index >= 0; index -= 1) {
+      if (String(chunkRuntimeEntries[index]?.id || "") !== id) continue;
+      chunkRuntimeEntries.splice(index, 1);
+      chunkRuntimeRegistryVersion += 1;
+      return true;
+    }
+    return false;
+  }
+
+  function markRuntimeObjectAlive(object, alive) {
+    if (!object) return;
+    const nextAlive = alive !== false;
+    object.traverse(function (child) {
+      child.userData = child.userData || {};
+      child.userData.runtimeAlive = nextAlive;
+    });
+  }
+
+  function teardownResidentRuntimeEntry(entry, options = {}) {
+    if (!entry) return { objects: 0, meshes: 0 };
+    const object = entry.object || entry.root || null;
+    const counts = object ? countObjectTree(object) : { objects: 0, meshes: 0 };
+    const entryId = String(entry.id || "").trim();
+    const chunkKeyValue = String(entry.chunkKey || "").trim();
+    if (entry.type === "entity" && entryId) unregisterResidentChunkRecord("entity", chunkKeyValue, entryId);
+    else if (entry.type === "interactable" && entryId) unregisterResidentChunkRecord("interactable", chunkKeyValue, entryId);
+    else if (entry.type === "scatter" && entryId) unregisterResidentChunkRecord("scatter", chunkKeyValue, entryId);
+    else if (entry.type === "solid" && entryId) unregisterResidentChunkRecord("solid", chunkKeyValue, entryId);
+    removeRuntimeEntryById(entryId);
+    if (entry.type === "entity" && entryId && entityRoots.get(entryId) === object) entityRoots.delete(entryId);
+    if (entry.type === "scatter" && object?.userData?.entityId && entityRoots.get(object.userData.entityId) === object) {
+      entityRoots.delete(object.userData.entityId);
+    }
+    if (entry.type === "interactable" && entryId) {
+      const interactableIndex = interactables.findIndex(function (value) { return value && value.id === entryId; });
+      if (interactableIndex >= 0) interactables.splice(interactableIndex, 1);
+    }
+    if (entry.type === "solid" && entry.solid) {
+      const solidIndex = solids.indexOf(entry.solid);
+      if (solidIndex >= 0) solids.splice(solidIndex, 1);
+    }
+    if (object) {
+      markRuntimeObjectAlive(object, false);
+      if (object.parent) object.parent.remove(object);
+      const mixerRecord = animationMixers.get(object);
+      if (mixerRecord) {
+        try { mixerRecord.mixer.stopAllAction(); } catch {}
+        try { mixerRecord.mixer.uncacheRoot(mixerRecord.root); } catch {}
+        animationMixers.delete(object);
+      }
+      const disposeResources = options.disposeResources !== false;
+      if (disposeResources) {
+        disposeObject(object, { disposeTextures: true });
+      }
+    }
+    runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - counts.objects);
+    runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
+    return counts;
+  }
+
+  function summarizeResidentBlueprintCounts(chunkKeys) {
+    const summary = {
+      entityCount: 0,
+      scatterCount: 0,
+      interactableCount: 0,
+      solidCount: 0
+    };
+    for (const key of Array.isArray(chunkKeys) ? chunkKeys : []) {
+      summary.entityCount += contentBlueprintIndex.entitiesByChunkKey.get(key)?.length || 0;
+      summary.scatterCount += contentBlueprintIndex.scatterByChunkKey.get(key)?.length || 0;
+      summary.interactableCount += contentBlueprintIndex.interactablesByChunkKey.get(key)?.length || 0;
+      summary.solidCount += contentBlueprintIndex.solidsByChunkKey.get(key)?.length || 0;
+    }
+    return summary;
+  }
+
+  function estimateResidentChunkObjectCost(chunkKey, policy) {
+    const entityGroups = new Map();
+    const interactableGroups = new Map();
+    const scatterGroups = new Map();
+    const entityBlueprints = contentBlueprintIndex.entitiesByChunkKey.get(chunkKey) || [];
+    const interactableBlueprints = contentBlueprintIndex.interactablesByChunkKey.get(chunkKey) || [];
+    const scatterBlueprints = contentBlueprintIndex.scatterByChunkKey.get(chunkKey) || [];
+    let cost = 0;
+    const entityBatchingAllowed = shouldBatchStaticProps();
+    const scatterBatchingAllowed = shouldBatchScatterProps();
+    for (const entity of entityBlueprints) {
+      const assetId = entity?.modelAssetId || "";
+      if (entityBatchingAllowed && canBatchStaticProp(world, assetId)) {
+        let bucket = entityGroups.get(assetId);
+        if (!bucket) {
+          bucket = [];
+          entityGroups.set(assetId, bucket);
+        }
+        bucket.push(entity);
+      } else {
+        cost += 1;
+      }
+    }
+    for (const bucket of entityGroups.values()) {
+      cost += bucket.length >= 2 ? 1 : 2;
+    }
+    for (const inter of interactableBlueprints) {
+      const assetId = inter?.modelAssetId || "";
+      if (entityBatchingAllowed && canBatchStaticProp(world, assetId)) {
+        let bucket = interactableGroups.get(assetId);
+        if (!bucket) {
+          bucket = [];
+          interactableGroups.set(assetId, bucket);
+        }
+        bucket.push(inter);
+      } else {
+        cost += 1;
+      }
+    }
+    for (const bucket of interactableGroups.values()) {
+      cost += bucket.length >= 2 ? 1 : 1;
+    }
+    for (const scatter of scatterBlueprints) {
+      const assetId = scatter?.modelAssetId || scatter?.sourceAssetId || "";
+      if (scatterBatchingAllowed && canBatchStaticProp(world, assetId)) {
+        let bucket = scatterGroups.get(assetId);
+        if (!bucket) {
+          bucket = [];
+          scatterGroups.set(assetId, bucket);
+        }
+        bucket.push(scatter);
+      } else {
+        cost += 1;
+      }
+    }
+    for (const bucket of scatterGroups.values()) {
+      cost += bucket.length ? 1 : 0;
+    }
+    return cost;
+  }
+
+  function buildResidentChunkContentForChunk(chunkKey, policy, reason) {
+    const chunkEntities = contentBlueprintIndex.entitiesByChunkKey.get(chunkKey) || [];
+    const chunkInteractables = contentBlueprintIndex.interactablesByChunkKey.get(chunkKey) || [];
+    const chunkScatter = contentBlueprintIndex.scatterByChunkKey.get(chunkKey) || [];
+    const entityBatchGroups = new Map();
+    const interactableBatchGroups = new Map();
+    const scatterBatchGroups = new Map();
+    const shadowOptions = scatterShadowOptions();
+    const modelPolicy = { chunkKey: chunkKey, residentStreaming: true };
+    for (const entity of chunkEntities) {
+      const assetId = entity?.modelAssetId || "";
+      const batchable = shouldBatchStaticProps() && canBatchStaticProp(world, assetId);
+      if (batchable) {
+        addEntity(world, entity, Object.assign({ skipVisual: true }, modelShadowOptions(world, assetId), modelPolicy));
+        let bucket = entityBatchGroups.get(assetId);
+        if (!bucket) {
+          bucket = [];
+          entityBatchGroups.set(assetId, bucket);
+        }
+        bucket.push({
+          kind: "entity",
+          entity: entity,
+          transform: entity.transform
+        });
+      } else {
+        addEntity(world, entity, Object.assign({}, modelShadowOptions(world, assetId), modelPolicy));
+      }
+    }
+    for (const inter of chunkInteractables) {
+      const assetId = inter?.modelAssetId || "";
+      const batchable = shouldBatchStaticProps() && canBatchStaticProp(world, assetId);
+      if (batchable) {
+        addInteractable(world, inter, Object.assign({ skipVisual: true }, modelShadowOptions(world, assetId), modelPolicy));
+        let bucket = interactableBatchGroups.get(assetId);
+        if (!bucket) {
+          bucket = [];
+          interactableBatchGroups.set(assetId, bucket);
+        }
+        bucket.push({
+          kind: "interactable",
+          inter: inter,
+          transform: {
+            position: {
+              x: num(inter.position?.x, 0),
+              y: num(world?.ground?.y, 0),
+              z: num(inter.position?.z, 0)
+            },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 }
+          }
+        });
+      } else {
+        addInteractable(world, inter, Object.assign({}, modelShadowOptions(world, assetId), modelPolicy));
+      }
+    }
+    for (const scatter of chunkScatter) {
+      const assetId = scatter?.modelAssetId || scatter?.sourceAssetId || "";
+      if (!assetId) continue;
+      const nodeId = scatter?.nodeId || scatter?.scatterId || scatter?.id || "";
+      const groupKey = nodeId + "::" + assetId;
+      let bucket = scatterBatchGroups.get(groupKey);
+      if (!bucket) {
+        bucket = { nodeId: nodeId, assetId: assetId, instances: [] };
+        scatterBatchGroups.set(groupKey, bucket);
+      }
+      bucket.instances.push(scatter);
+    }
+    for (const [assetId, descriptors] of entityBatchGroups.entries()) {
+      if (!addStaticPropBatch(world, assetId, descriptors, {
+        residentStreaming: true,
+        chunkKey: chunkKey,
+        chunkKind: "entity"
+      })) {
+        for (const descriptor of descriptors) {
+          addEntity(world, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(world, assetId), modelPolicy));
+        }
+      }
+    }
+    for (const [assetId, descriptors] of interactableBatchGroups.entries()) {
+      if (!addStaticPropBatch(world, assetId, descriptors, {
+        residentStreaming: true,
+        chunkKey: chunkKey,
+        chunkKind: "interactable"
+      })) {
+        for (const descriptor of descriptors) {
+          addInteractable(world, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(world, assetId), modelPolicy));
+        }
+      }
+    }
+    for (const bucket of scatterBatchGroups.values()) {
+      const assetId = bucket.assetId;
+      const instances = bucket.instances;
+      const root = new THREE.Group();
+      const rootKey = String(chunkKey) + "::scatter::" + String(bucket.nodeId || "node") + "::" + String(assetId || "asset");
+      root.name = rootKey;
+      root.userData.chunkRuntimeType = "scatter";
+      root.userData.runtimeAlive = true;
+      root.userData.transformable = false;
+      root.userData.snapToGround = false;
+      root.userData.chunkKey = chunkKey;
+      if (bucket.nodeId) root.userData.entityId = bucket.nodeId;
+      content.add(root);
+      runtimeStats.sceneObjects += 1;
+      if (bucket.nodeId) entityRoots.set(bucket.nodeId, root);
+      registerChunkRuntimeEntry({
+        id: rootKey,
+        type: "scatter",
+        object: root,
+        chunkKey: chunkKey,
+        chunkKeys: [chunkKey],
+        hasVisual: true
+      });
+      registerResidentChunkRecord("scatter", chunkKey, rootKey, {
+        id: rootKey,
+        type: "scatter",
+        object: root,
+        chunkKey: chunkKey,
+        chunkKeys: [chunkKey]
+      });
+      loadScatterInstancesInto(root, assetId, instances, world, {
+        allowBatch: shouldBatchScatterProps(),
+        chunkPolicy: policy,
+        castShadow: shadowOptions.castShadow,
+        receiveShadow: shadowOptions.receiveShadow,
+        residentStreaming: true,
+        chunkKey: chunkKey,
+        fallbackCloneCap: 8
+      });
+    }
+    return {
+      chunkKey: chunkKey,
+      reason: reason || "resident-build"
+    };
+  }
+
+  function syncResidentChunkContent(nextChunkState, reason = "runtime-sync") {
+    const startedAt = performance.now();
+    const policy = resolveChunkPolicy(world, mode);
+    const enabled = Boolean(policy?.enabled === true && policy?.source !== "none");
+    const nextResidentState = residentContentState;
+    nextResidentState.mode = mode;
+    nextResidentState.policySource = policy.source || "none";
+    nextResidentState.eagerBuildDisabled = enabled;
+    nextResidentState.residentEntityBudget = Math.max(0, num(policy.residentEntityBudget, 200));
+    nextResidentState.residentObjectBudget = Math.max(0, num(policy.residentObjectBudget, 300));
+    nextResidentState.residentScatterInstanceBudget = Math.max(0, num(policy.residentScatterInstanceBudget, 500));
+    nextResidentState.residentChunkBuildBudgetPerFrame = Math.max(1, num(policy.residentChunkBuildBudgetPerFrame, 2));
+    if (!enabled) {
+      nextResidentState.residentChunkKeys = new Set();
+      nextResidentState.desiredChunkKeys = [];
+      nextResidentState.enteringChunkKeys = [];
+      nextResidentState.leavingChunkKeys = [];
+      nextResidentState.pendingChunkKeys = [];
+      nextResidentState.loadedEntityCount = 0;
+      nextResidentState.loadedScatterInstanceCount = 0;
+      nextResidentState.loadedScatterBatchCount = 0;
+      nextResidentState.loadedInteractableCount = 0;
+      nextResidentState.loadedSolidCount = 0;
+      nextResidentState.residentObject3DCount = runtimeStats.sceneObjects;
+      nextResidentState.residentWorldItemCount = 0;
+      nextResidentState.budgetClipped = false;
+      nextResidentState.lastSyncReason = reason || "disabled";
+      nextResidentState.lastSyncMs = round(performance.now() - startedAt);
+      unloadHysteresisState.candidateStreaks.clear();
+      return nextResidentState;
+    }
+    const desiredChunkKeys = Array.isArray(nextChunkState?.loadedChunkKeys) ? sortChunkKeys(nextChunkState.loadedChunkKeys) : [];
+    const desiredSet = new Set(desiredChunkKeys);
+    const activeChunkKeys = Array.isArray(nextChunkState?.activeChunkKeys) ? nextChunkState.activeChunkKeys : [];
+    const visibleChunkKeys = Array.isArray(nextChunkState?.visibleChunkKeys) ? nextChunkState.visibleChunkKeys : [];
+    const forwardChunkKeys = Array.isArray(nextChunkState?.forwardChunkKeys) ? nextChunkState.forwardChunkKeys : [];
+    const preloadChunkKeys = Array.isArray(nextChunkState?.preloadChunkKeys) ? nextChunkState.preloadChunkKeys : [];
+    const unloadSafeChunkKeys = Array.isArray(nextChunkState?.unloadSafeChunkKeys) && nextChunkState.unloadSafeChunkKeys.length
+      ? nextChunkState.unloadSafeChunkKeys
+      : desiredChunkKeys;
+    const unloadSafeSet = new Set(unloadSafeChunkKeys);
+    const centerChunk = nextChunkState?.centerChunk || null;
+    const residentSet = nextResidentState.residentChunkKeys;
+    const streaks = unloadHysteresisState.candidateStreaks;
+    const leavingChunkKeys = [];
+    for (const key of Array.from(residentSet)) {
+      if (unloadSafeSet.has(key)) {
+        streaks.delete(key);
+        continue;
+      }
+      const streak = (streaks.get(key) || 0) + 1;
+      if (streak >= RESIDENT_UNLOAD_HYSTERESIS_STREAK) {
+        streaks.delete(key);
+        leavingChunkKeys.push(key);
+      } else {
+        streaks.set(key, streak);
+      }
+    }
+    for (const key of Array.from(streaks.keys())) {
+      if (!residentSet.has(key)) streaks.delete(key);
+    }
+    for (const chunkKey of leavingChunkKeys) {
+      const buckets = [
+        ["entity", residentContentState.entityObjectsByKey.get(chunkKey)],
+        ["scatter", residentContentState.scatterBatchesByKey.get(chunkKey)],
+        ["interactable", residentContentState.interactableObjectsByKey.get(chunkKey)],
+        ["solid", residentContentState.solidEntriesByKey.get(chunkKey)]
+      ];
+      for (const [kind, bucket] of buckets) {
+        if (!(bucket instanceof Map)) continue;
+        for (const entry of Array.from(bucket.values())) teardownResidentRuntimeEntry(entry, { disposeResources: true });
+        if (kind === "entity") residentContentState.entityObjectsByKey.delete(chunkKey);
+        else if (kind === "scatter") residentContentState.scatterBatchesByKey.delete(chunkKey);
+        else if (kind === "interactable") residentContentState.interactableObjectsByKey.delete(chunkKey);
+        else if (kind === "solid") residentContentState.solidEntriesByKey.delete(chunkKey);
+      }
+      residentSet.delete(chunkKey);
+    }
+    nextResidentState.leavingChunkKeys = leavingChunkKeys.slice();
+    nextResidentState.desiredChunkKeys = desiredChunkKeys.slice();
+    const existingPendingKeys = Array.isArray(nextResidentState.pendingChunkKeys)
+      ? nextResidentState.pendingChunkKeys.filter(function (key) { return desiredSet.has(key) && !residentSet.has(key); })
+      : [];
+    const pendingSet = new Set(existingPendingKeys);
+    for (const key of desiredChunkKeys) {
+      if (!residentSet.has(key)) pendingSet.add(key);
+    }
+    const orderedPending = prioritizeResidentChunkBuildQueue({
+      centerChunk: centerChunk,
+      residentChunkKeys: residentSet,
+      desiredResidentChunkKeys: Array.from(pendingSet),
+      activeChunkKeys: activeChunkKeys,
+      visibleChunkKeys: visibleChunkKeys,
+      forwardChunkKeys: forwardChunkKeys,
+      preloadChunkKeys: preloadChunkKeys
+    });
+    nextResidentState.enteringChunkKeys = orderedPending.slice();
+    const mustBuildSet = new Set(activeChunkKeys.concat(visibleChunkKeys));
+    const builtChunkKeys = [];
+    const remainingQueue = [];
+    let buildBudget = nextResidentState.residentChunkBuildBudgetPerFrame;
+    let stopBudgetedBuilds = false;
+    const attemptBuild = function (chunkKey) {
+      const chunkCounts = summarizeResidentBlueprintCounts([chunkKey]);
+      const projectedEntityCount = nextResidentState.loadedEntityCount + chunkCounts.entityCount;
+      const projectedScatterCount = nextResidentState.loadedScatterInstanceCount + chunkCounts.scatterCount;
+      const projectedInteractableCount = nextResidentState.loadedInteractableCount + chunkCounts.interactableCount;
+      const projectedSolidCount = nextResidentState.loadedSolidCount + chunkCounts.solidCount;
+      const overBudget = projectedEntityCount > nextResidentState.residentEntityBudget
+        || projectedScatterCount > nextResidentState.residentScatterInstanceBudget;
+      residentSet.add(chunkKey);
+      buildResidentChunkContentForChunk(chunkKey, policy, reason);
+      builtChunkKeys.push(chunkKey);
+      nextResidentState.loadedEntityCount = projectedEntityCount;
+      nextResidentState.loadedScatterInstanceCount = projectedScatterCount;
+      nextResidentState.loadedInteractableCount = projectedInteractableCount;
+      nextResidentState.loadedSolidCount = projectedSolidCount;
+      return overBudget;
+    };
+    for (const chunkKey of orderedPending) {
+      if (residentSet.has(chunkKey)) continue;
+      if (mustBuildSet.has(chunkKey)) {
+        // Active/visible chunks are never left pending: the player or camera is looking at them
+        // right now, so they build immediately even if that means briefly exceeding the soft
+        // resident budget. Only the exceedance gets flagged; the chunk still gets built.
+        if (attemptBuild(chunkKey)) nextResidentState.budgetClipped = true;
+        continue;
+      }
+      if (stopBudgetedBuilds || buildBudget <= 0) {
+        remainingQueue.push(chunkKey);
+        continue;
+      }
+      const chunkCounts = summarizeResidentBlueprintCounts([chunkKey]);
+      const wouldExceedBudget = nextResidentState.loadedEntityCount + chunkCounts.entityCount > nextResidentState.residentEntityBudget
+        || nextResidentState.loadedScatterInstanceCount + chunkCounts.scatterCount > nextResidentState.residentScatterInstanceBudget;
+      if (wouldExceedBudget) {
+        nextResidentState.budgetClipped = true;
+        stopBudgetedBuilds = true;
+        remainingQueue.push(chunkKey);
+        continue;
+      }
+      attemptBuild(chunkKey);
+      buildBudget -= 1;
+    }
+    nextResidentState.pendingChunkKeys = remainingQueue;
+    nextResidentState.budgetClipped = Boolean(nextResidentState.pendingChunkKeys.length);
+    const loadedChunkKeys = Array.from(residentSet);
+    const residentCounts = summarizeResidentBlueprintCounts(loadedChunkKeys);
+    nextResidentState.loadedEntityCount = residentCounts.entityCount;
+    nextResidentState.loadedScatterInstanceCount = residentCounts.scatterCount;
+    nextResidentState.loadedInteractableCount = residentCounts.interactableCount;
+    nextResidentState.loadedSolidCount = residentCounts.solidCount;
+    nextResidentState.loadedScatterBatchCount = countResidentEntriesForChunkMap(nextResidentState.scatterBatchesByKey);
+    nextResidentState.residentObject3DCount = runtimeStats.sceneObjects;
+    nextResidentState.residentWorldItemCount = residentCounts.entityCount + residentCounts.scatterCount + residentCounts.interactableCount + residentCounts.solidCount + (Array.isArray(contentBlueprintIndex.alwaysLoaded) ? contentBlueprintIndex.alwaysLoaded.length : 0);
+    nextResidentState.blueprintEntityCount = contentBlueprintIndex.blueprintEntityCount;
+    nextResidentState.blueprintScatterInstanceCount = contentBlueprintIndex.blueprintScatterInstanceCount;
+    nextResidentState.blueprintInteractableCount = contentBlueprintIndex.blueprintInteractableCount;
+    nextResidentState.blueprintSolidCount = contentBlueprintIndex.blueprintSolidCount;
+    runtimeStats.entities = residentCounts.entityCount;
+    runtimeStats.scatterInstances = residentCounts.scatterCount;
+    runtimeStats.interactables = residentCounts.interactableCount;
+    nextResidentState.lastSyncReason = reason || "resident-sync";
+    nextResidentState.lastSyncMs = round(performance.now() - startedAt);
+    nextResidentState.lastDesiredSignature = loadedChunkKeys.join("|");
+    nextResidentState.pendingLoadCount = nextResidentState.pendingChunkKeys.length;
+    return nextResidentState;
+  }
+
+  /**
+   * The debug/culling window is memoized by chunk-center signature (see syncChunkDebugState) so
+   * that idle frames stay cheap. That memoization used to also skip syncResidentChunkContent
+   * entirely, which meant a resident build that got clipped by residentChunkBuildBudgetPerFrame
+   * would stay pending forever until the signature happened to change again (e.g. a full chunk
+   * crossing) - the root cause of content popping in only long after it should have been resident,
+   * and of resident content staying empty after setWorld when nothing moves right after load.
+   * This keeps draining the budgeted queue every frame using the last known coverage, without
+   * redoing the expensive culling/overlay recompute.
+   */
+  function drainPendingResidentChunkBuilds(reason) {
+    const policy = resolveChunkPolicy(world, mode);
+    if (!isChunkCullingRuntimeEnabled(policy)) return;
+    if (!residentContentState.pendingChunkKeys.length) return;
+    const pseudoWindowState = {
+      centerChunk: chunkRuntimeState.centerChunk,
+      loadedChunkKeys: chunkRuntimeState.loadedChunkKeys,
+      activeChunkKeys: chunkRuntimeState.activeChunkKeys,
+      preloadChunkKeys: chunkRuntimeState.preloadChunkKeys,
+      visibleChunkKeys: chunkRuntimeState.visibleChunkKeys,
+      forwardChunkKeys: chunkRuntimeState.forwardChunkKeys,
+      unloadSafeChunkKeys: chunkRuntimeState.unloadSafeChunkKeys
+    };
+    syncResidentChunkContent(pseudoWindowState, reason || "resident-pending-drain");
+    if (chunkDebugStateCache) {
+      chunkDebugStateCache.contentStreaming = buildContentStreamingDebugState();
+    }
+  }
+
+  /**
+   * Forces active/visible resident content to exist for the current view right after setWorld
+   * (fresh load, Save Draft/Save To Game reload, /game/ version reload, runtime recreate) so the
+   * first rendered frame is never an empty world while the budgeted queue catches up in the
+   * background. syncResidentChunkContent already force-builds active/visible chunks unconditionally,
+   * so this mostly records what happened for debugState().world.chunkLoading.residentBootstrap;
+   * it also runs one more drain pass in case setWorld ran before any window existed yet.
+   */
+  function bootstrapResidentContentForCurrentView(reason) {
+    const policy = resolveChunkPolicy(world, mode);
+    const enabled = isChunkCullingRuntimeEnabled(policy);
+    if (enabled) drainPendingResidentChunkBuilds(reason || "bootstrap");
+    const activeKeys = Array.isArray(chunkRuntimeState.activeChunkKeys) ? chunkRuntimeState.activeChunkKeys : [];
+    const visibleKeys = Array.isArray(chunkRuntimeState.visibleChunkKeys) ? chunkRuntimeState.visibleChunkKeys : [];
+    const residentKeys = residentContentState.residentChunkKeys;
+    const requiredKeys = new Set(activeKeys.concat(visibleKeys));
+    let activeBuiltImmediately = 0;
+    for (const key of activeKeys) if (residentKeys.has(key)) activeBuiltImmediately += 1;
+    let visibleBuiltImmediately = 0;
+    for (const key of visibleKeys) if (residentKeys.has(key)) visibleBuiltImmediately += 1;
+    let preloadBuiltImmediately = 0;
+    for (const key of residentKeys) if (!requiredKeys.has(key)) preloadBuiltImmediately += 1;
+    let missingRequired = 0;
+    for (const key of requiredKeys) if (!residentKeys.has(key)) missingRequired += 1;
+    residentBootstrapState = {
+      lastReason: reason || "bootstrap",
+      worldGeneration: worldBuildGeneration,
+      activeBuiltImmediately: activeBuiltImmediately,
+      visibleBuiltImmediately: visibleBuiltImmediately,
+      preloadBuiltImmediately: preloadBuiltImmediately,
+      pendingAfterBootstrap: residentContentState.pendingChunkKeys.length,
+      emptyScenePrevented: !enabled || requiredKeys.size === 0 || missingRequired === 0
+    };
+    if (chunkDebugStateCache) {
+      chunkDebugStateCache.residentBootstrap = Object.assign({}, residentBootstrapState);
+      chunkDebugStateCache.contentStreaming = buildContentStreamingDebugState();
+    }
+    return residentBootstrapState;
+  }
+
+  function buildContentStreamingDebugState() {
+    const policy = resolveChunkPolicy(world, mode);
+    const residentChunkKeys = Array.from(residentContentState.residentChunkKeys || []);
+    const chunkSizeWarning = policy.chunkWorldWidth < 25 || policy.chunkWorldDepth < 25
+      ? "Game Chunk Loading chunk size is very small; this can cause frequent chunk switching. Use 25-50 for laptop baseline unless intentionally testing micro chunks."
+      : null;
+    return {
+      enabled: isChunkCullingRuntimeEnabled(policy),
+      mode: mode,
+      policySource: policy.source || "none",
+      blueprintEntities: contentBlueprintIndex.blueprintEntityCount || 0,
+      blueprintScatterInstances: contentBlueprintIndex.blueprintScatterInstanceCount || 0,
+      blueprintInteractables: contentBlueprintIndex.blueprintInteractableCount || 0,
+      blueprintWorldItems: contentBlueprintIndex.blueprintWorldItemCount || 0,
+      residentChunks: residentChunkKeys.length,
+      residentChunkKeys: residentChunkKeys,
+      residentEntities: residentContentState.loadedEntityCount || 0,
+      residentScatterBatches: residentContentState.loadedScatterBatchCount || 0,
+      residentScatterInstances: residentContentState.loadedScatterInstanceCount || 0,
+      residentInteractables: residentContentState.loadedInteractableCount || 0,
+      residentSolids: residentContentState.loadedSolidCount || 0,
+      residentObject3D: residentContentState.residentObject3DCount || runtimeStats.sceneObjects || 0,
+      enteringChunkKeys: Array.isArray(residentContentState.enteringChunkKeys) ? residentContentState.enteringChunkKeys.slice() : [],
+      leavingChunkKeys: Array.isArray(residentContentState.leavingChunkKeys) ? residentContentState.leavingChunkKeys.slice() : [],
+      desiredChunkKeys: Array.isArray(residentContentState.desiredChunkKeys) ? residentContentState.desiredChunkKeys.slice() : [],
+      lastSyncReason: residentContentState.lastSyncReason || "init",
+      lastSyncMs: residentContentState.lastSyncMs || 0,
+      eagerBuildDisabled: Boolean(residentContentState.eagerBuildDisabled),
+      budgetClipped: Boolean(residentContentState.budgetClipped),
+      residentEntityBudget: residentContentState.residentEntityBudget || 0,
+      residentObjectBudget: residentContentState.residentObjectBudget || 0,
+      residentScatterInstanceBudget: residentContentState.residentScatterInstanceBudget || 0,
+      residentChunkBuildBudgetPerFrame: residentContentState.residentChunkBuildBudgetPerFrame || 0,
+      residentWorldItems: residentContentState.residentWorldItemCount || 0,
+      renderResidentChunks: Array.isArray(chunkRuntimeState.renderChunkKeys) ? chunkRuntimeState.renderChunkKeys.length : 0,
+      renderResidentChunkKeys: Array.isArray(chunkRuntimeState.renderChunkKeys) ? chunkRuntimeState.renderChunkKeys.slice() : [],
+      shadowResidentChunks: Array.isArray(chunkRuntimeState.shadowResidentChunkKeys) ? chunkRuntimeState.shadowResidentChunkKeys.length : 0,
+      shadowResidentChunkKeys: Array.isArray(chunkRuntimeState.shadowResidentChunkKeys) ? chunkRuntimeState.shadowResidentChunkKeys.slice() : [],
+      collisionResidentChunks: Array.isArray(chunkRuntimeState.collisionResidentChunkKeys) ? chunkRuntimeState.collisionResidentChunkKeys.length : 0,
+      collisionResidentChunkKeys: Array.isArray(chunkRuntimeState.collisionResidentChunkKeys) ? chunkRuntimeState.collisionResidentChunkKeys.slice() : [],
+      shadowWindowChunkKeys: Array.isArray(chunkRuntimeState.shadowWindowChunkKeys) ? chunkRuntimeState.shadowWindowChunkKeys.slice() : [],
+      chunkWorldWidth: policy.chunkWorldWidth,
+      chunkWorldDepth: policy.chunkWorldDepth,
+      chunkSizeWarning: chunkSizeWarning
+    };
+  }
+
+  function applyChunkCullingResult(cullingResult) {
+    activeSolids.length = 0;
+    let hudRefreshNeeded = false;
+    for (let index = 0; index < chunkRuntimeEntries.length; index += 1) {
+      const entry = chunkRuntimeEntries[index];
+      const item = cullingResult.items[index];
+      if (!entry || !item) continue;
+      const isTerrainVisual = entry.type === "terrainGround" || entry.type === "terrainLayer" || entry.type === "terrainSurface";
+      if (isTerrainVisual && entry.terrainStreamable === true && typeof entry.buildObject === "function") {
+        if (item.loaded === false) {
+          if (entry.object) releaseTerrainResidentObject(entry, "chunk-unload");
+        } else {
+          ensureTerrainResidentEntry(entry);
+          if (entry.object && item.visible !== null) {
+            entry.object.visible = item.visible !== false;
+            entry.object.userData.chunkCulled = item.visible === false;
+          }
+        }
+      } else if (entry.object && entry.hasVisual !== false && item.visible !== null) {
+        entry.object.visible = item.visible !== false;
+        entry.object.userData.chunkCulled = item.visible === false;
+        const shouldShadowProxy = item.loaded !== false
+          && item.renderResident === false
+          && (entry.type === "entity"
+            || entry.type === "scatter"
+            || entry.type === "staticProp"
+            || entry.object?.userData?.batchKind === "staticProp"
+            || entry.object?.userData?.batchKind === "scatter"
+            || entry.object?.userData?.scatterInstance === true
+            || entry.object?.userData?.chunkRuntimeType === "entity"
+            || entry.object?.userData?.chunkRuntimeType === "interactable"
+            || entry.object?.userData?.chunkRuntimeType === "scatter");
+        if (shouldShadowProxy) {
+          setShadowProxyState(entry.object, true, { kind: entry.type || entry.object?.userData?.batchKind || "shadowProxy" });
+        } else {
+          setShadowProxyState(entry.object, false, { kind: entry.type || entry.object?.userData?.batchKind || "shadowProxy" });
+        }
+        entry.object.userData.renderResident = item.renderResident === true;
+        entry.object.userData.shadowResident = item.loaded === true;
+        entry.object.userData.shadowProxy = shouldShadowProxy;
+      }
+      if (entry.interactable) {
+        const nextActive = item.active !== false;
+        if (entry.interactable.active !== nextActive) {
+          entry.interactable.active = nextActive;
+          hudRefreshNeeded = true;
+        }
+      }
+      if (entry.solid) {
+        entry.solid.enabled = item.active !== false;
+        if (entry.solid.enabled !== false) activeSolids.push(entry.solid);
+      }
+    }
+    runtimeStats.collisionShapes = runtimeCollisionBaseCount + activeSolids.length;
+    collisionPerfState.activeSolids = activeSolids.length;
+    if (activeInteractable && activeInteractable.active === false) {
+      activeInteractable = null;
+      hudRefreshNeeded = true;
+    }
+    if (mode === "editor") {
+      refreshSelectedRootReference();
+      if (selectedRoot?.visible === false) {
+        if (selectionHelper) selectionHelper.visible = false;
+        if (transformGuide) transformGuide.visible = false;
+      } else if (selectedRoot && selectionHelper) {
+        updateSelectionHelper();
+      }
+    }
+    syncWorldShadowCasterState(currentShadowPolicy().enabled === true);
+    if (hudRefreshNeeded) renderHud();
+  }
+
+  function resolveChunkRuntimeUpdateReason(nextState, requestedReason) {
+    const previous = chunkRuntimeState || {};
+    const previousPolicy = previous.policy || {};
+    if (!previous.lastSignature) return requestedReason || "setWorld";
+    if (
+      previousPolicy.policyId !== nextState.policyId
+      || previousPolicy.enabled !== nextState.enabled
+      || previousPolicy.source !== nextState.source
+      || previousPolicy.type !== nextState.type
+      || previousPolicy.chunkWidth !== nextState.chunkWidth
+      || previousPolicy.chunkDepth !== nextState.chunkDepth
+      || previousPolicy.tileSize !== nextState.tileSize
+      || previousPolicy.groundChunkingEnabled !== nextState.groundChunkingEnabled
+      || previousPolicy.pathWaterSurfaceChunkingEnabled !== nextState.pathWaterSurfaceChunkingEnabled
+      || previousPolicy.terrainVisualChunkingEnabled !== nextState.terrainVisualChunkingEnabled
+      || previousPolicy.debugOverlay !== nextState.debugOverlay
+      || previousPolicy.showChunkGrid !== nextState.showChunkGrid
+      || previousPolicy.showChunkLabels !== nextState.showChunkLabels
+      || previousPolicy.keepSelectedChunkLoaded !== nextState.keepSelectedChunkLoaded
+      || previousPolicy.activeRadiusChunks !== nextState.activeRadiusChunks
+      || previousPolicy.preloadMarginChunks !== nextState.preloadMarginChunks
+      || previousPolicy.unloadMarginChunks !== nextState.unloadMarginChunks
+      || previousPolicy.maxLoadedChunks !== nextState.maxLoadedChunks
+      || previousPolicy.residentEntityBudget !== nextState.residentEntityBudget
+      || previousPolicy.residentObjectBudget !== nextState.residentObjectBudget
+      || previousPolicy.residentScatterInstanceBudget !== nextState.residentScatterInstanceBudget
+      || previousPolicy.residentChunkBuildBudgetPerFrame !== nextState.residentChunkBuildBudgetPerFrame
+      || previousPolicy.fixedCameraPaddingChunks !== nextState.fixedCameraPaddingChunks
+      || previousPolicy.cameraOnly !== nextState.cameraOnly
+      || previousPolicy.strictUnloadOutsideCamera !== nextState.strictUnloadOutsideCamera
+    ) {
+      return "policy-change";
+    }
+    if (previous.centerChunk?.key !== nextState.centerChunk?.key) return "center-chunk-change";
+    if (previous.keepSelectedChunkLoadedApplied !== nextState.keepSelectedChunkLoadedApplied) return "selection-override";
+    if (previous.registryVersion !== chunkRuntimeRegistryVersion) return "registry-change";
+    return requestedReason || "runtime-sync";
   }
 
   function chunkWorldCenter(coord, policy) {
@@ -1463,12 +5341,132 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (!chunkDebugOverlay) {
       chunkDebugOverlay = new THREE.Group();
       chunkDebugOverlay.name = "GK chunk debug overlay";
+      chunkDebugOverlay.userData.chunkOverlayGroup = true;
+      chunkDebugOverlay.userData.runtimeAlive = true;
+      markDebugOverlayTree(chunkDebugOverlay, "chunk");
       scene.add(chunkDebugOverlay);
     }
     return chunkDebugOverlay;
   }
 
-  function resolveChunkDebugCenter(policy) {
+  const RUNTIME_TERRAIN_GROUP_NAME = "GK runtime terrain visuals";
+  const RUNTIME_CHUNK_OVERLAY_GROUP_NAME = "GK chunk debug overlay";
+
+  function countDebugOverlayRoots(parent) {
+    let count = 0;
+    for (const child of Array.from(parent?.children || [])) {
+      if (isDebugOverlayObject(child)) count += 1;
+    }
+    return count;
+  }
+
+  function countCameraDebugOverlayGroups() {
+    let count = 0;
+    const visit = function (parent) {
+      for (const child of Array.from(parent?.children || [])) {
+        if (isDebugOverlayObject(child)) count += 1;
+        if (child?.children?.length) visit(child);
+      }
+    };
+    visit(camera);
+    return count;
+  }
+
+  function assertNoCameraChildDebugOverlays(reason = "runtime-sync") {
+    let removed = 0;
+    const prune = function (parent) {
+      for (const child of Array.from(parent?.children || [])) {
+        if (isDebugOverlayObject(child)) {
+          parent.remove(child);
+          disposeObject(child, { disposeTextures: true });
+          removed += 1;
+          continue;
+        }
+        if (child?.children?.length) prune(child);
+      }
+    };
+    prune(camera);
+    if (removed > 0) {
+      console.warn("[overlay] removed " + removed + " camera-child debug overlay object(s) during " + reason + ".");
+    }
+    return removed;
+  }
+
+  function removeAllDebugOverlayObjects(reason = "runtime-sync", options = {}) {
+    const removeSceneOverlays = options.removeSceneOverlays === true;
+    const removeCameraOverlays = options.removeCameraOverlays !== false;
+    let removedOverlayGroups = 0;
+    if (removeCameraOverlays) {
+      removedOverlayGroups += assertNoCameraChildDebugOverlays(reason);
+    }
+    if (removeSceneOverlays) {
+      for (const child of Array.from(scene.children || [])) {
+        if (!isDebugOverlayObject(child)) continue;
+        scene.remove(child);
+        disposeObject(child, { disposeTextures: true });
+        removedOverlayGroups += 1;
+      }
+    }
+    return removedOverlayGroups;
+  }
+
+  // Fase 8.6 (DEEL I) + 8.8: guarantees at most one terrain-visuals group and one chunk-debug
+  // overlay group live in the scene, and that neither ever ends up parented under the camera
+  // (which would make it visually "follow"/rotate with the camera instead of staying in world
+  // space). Called from clearContent()/setWorld()/restoreViewState() and before every overlay
+  // rebuild so a stray duplicate never survives a viewport refresh.
+  function removeDuplicateRuntimeGroups() {
+    const stats = {
+      debugOverlayEnabled: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true),
+      chunkDebugOverlayVisible: Boolean(chunkDebugOverlay?.visible),
+      terrainRuntimeGroups: 0,
+      chunkDebugOverlayGroups: 0,
+      cameraChildOverlayGroups: 0,
+      duplicateRuntimeRoots: 0,
+      sceneDebugOverlayGroups: 0,
+      sceneChildOverlayGroups: 0,
+      duplicateOverlayFound: false,
+      removedDuplicateOverlays: 0,
+      removedOverlayGroups: 0,
+      overlayShadowCasters: 0
+    };
+    stats.removedOverlayGroups += assertNoCameraChildDebugOverlays("removeDuplicateRuntimeGroups");
+    const terrainGroups = [];
+    const chunkOverlayGroups = [];
+    for (const child of Array.from(scene.children || [])) {
+      if (child?.name === RUNTIME_TERRAIN_GROUP_NAME) terrainGroups.push(child);
+      if (child?.name === RUNTIME_CHUNK_OVERLAY_GROUP_NAME) chunkOverlayGroups.push(child);
+    }
+    const pruneDuplicates = function (list, keep) {
+      const keeper = list.includes(keep) ? keep : list[0];
+      for (const item of list) {
+        if (item === keeper) continue;
+        scene.remove(item);
+        disposeObject(item, { disposeTextures: true });
+        stats.removedDuplicateOverlays += 1;
+        stats.removedOverlayGroups += 1;
+      }
+      return keeper;
+    };
+    if (terrainGroups.length > 1) terrainRuntimeGroup = pruneDuplicates(terrainGroups, terrainRuntimeGroup);
+    stats.terrainRuntimeGroups = Math.min(terrainGroups.length, 1);
+    stats.chunkDebugOverlayGroups = Math.min(chunkOverlayGroups.length, 1);
+    stats.duplicateRuntimeRoots = Math.max(0, terrainGroups.length - 1) + Math.max(0, chunkOverlayGroups.length - 1);
+    stats.cameraChildOverlayGroups = countCameraDebugOverlayGroups();
+    stats.sceneDebugOverlayGroups = countDebugOverlayRoots(scene);
+    stats.sceneChildOverlayGroups = stats.terrainRuntimeGroups + stats.chunkDebugOverlayGroups;
+    stats.duplicateOverlayFound = terrainGroups.length > 1 || chunkOverlayGroups.length > 1 || stats.cameraChildOverlayGroups > 0;
+    stats.overlayShadowCasters =
+      countShadowUsage(selectionHelper).casters +
+      countShadowUsage(transformGuide).casters +
+      countShadowUsage(terrainEditorOverlay).casters +
+      countShadowUsage(scatterEditorOverlay).casters +
+      countShadowUsage(chunkDebugOverlay).casters;
+    overlayDiagnosticsState = stats;
+    return stats;
+  }
+
+function resolveChunkDebugCenter(policy) {
     if (mode === "editor") {
       if (orbitControls?.target) {
         return {
@@ -1497,8 +5495,96 @@ export function createGkWorldRuntime(canvas, options = {}) {
     };
   }
 
-  function createChunkDebugState() {
-    const policy = resolveChunkPolicy(world, mode);
+  function streamingCoverageForCenter(centerPosition, policy) {
+    if (!centerPosition || policy?.source === "none") return null;
+    const options = {
+      mode: mode,
+      policy: policy,
+      player: { x: num(player.pos.x, 0), z: num(player.pos.z, 0) },
+      camTarget: { x: num(camTarget.x, 0), z: num(camTarget.z, 0) },
+      lastPlayerPosition: streamingHeadingState.lastPlayerPosition,
+      lastCameraTarget: streamingHeadingState.lastCameraTarget
+    };
+    if (mode === "editor") {
+      options.camera = {
+        target: { x: num(centerPosition.x, 0), z: num(centerPosition.z, 0) }
+      };
+    }
+    return computeStreamingCoverage(options);
+  }
+
+  function updateStreamingHeadingState() {
+    streamingHeadingState.lastPlayerPosition = { x: num(player.pos.x, 0), z: num(player.pos.z, 0) };
+    streamingHeadingState.lastCameraTarget = mode === "editor" && orbitControls?.target
+      ? { x: num(orbitControls.target.x, 0), z: num(orbitControls.target.z, 0) }
+      : { x: num(camTarget.x, 0), z: num(camTarget.z, 0) };
+  }
+
+  function effectiveChunkDebugPolicy(policy) {
+    if (!policy) return policy;
+    const performance = activeModePerformance() || {};
+    return Object.assign({}, policy, {
+      debugOverlay: policy.debugOverlay === true && performance.debugChunkOverlayVisible === true,
+      showChunkGrid: policy.showChunkGrid !== false && performance.chunkGridVisible !== false,
+      showChunkLabels: policy.showChunkLabels === true && performance.chunkLabelsVisible === true,
+      streamingDebugVisible: performance.streamingDebugVisible === true
+    });
+  }
+
+  function buildChunkDebugSignature(policy, centerChunkKey, selectedChunkSignatureKey) {
+    const performance = activeModePerformance();
+    return [
+      worldBuildGeneration,
+      mode,
+      performance?.preset || "",
+      performance?.debugHelpersVisible ? 1 : 0,
+      performance?.debugChunkOverlayVisible ? 1 : 0,
+      performance?.chunkGridVisible ? 1 : 0,
+      performance?.chunkLabelsVisible ? 1 : 0,
+      performance?.streamingDebugVisible ? 1 : 0,
+      policy?.source || "none",
+      policy?.policyId || "",
+      policy?.enabled ? 1 : 0,
+      policy?.type || "",
+      policy?.chunkWidth || 0,
+      policy?.chunkDepth || 0,
+      policy?.tileSize || 0,
+      policy?.groundChunkingEnabled ? 1 : 0,
+      policy?.pathWaterSurfaceChunkingEnabled ? 1 : 0,
+      policy?.cameraOnly ? 1 : 0,
+      policy?.strictUnloadOutsideCamera ? 1 : 0,
+      policy?.debugOverlay ? 1 : 0,
+      policy?.terrainVisualChunkingEnabled ? 1 : 0,
+      policy?.showChunkGrid ? 1 : 0,
+      policy?.showChunkLabels ? 1 : 0,
+      policy?.activeRadiusChunks || 0,
+      policy?.preloadMarginChunks || 0,
+      policy?.unloadMarginChunks || 0,
+      policy?.maxLoadedChunks || 0,
+      policy?.residentEntityBudget || 0,
+      policy?.residentObjectBudget || 0,
+      policy?.residentScatterInstanceBudget || 0,
+      policy?.residentChunkBuildBudgetPerFrame || 0,
+      policy?.fixedCameraPaddingChunks || 0,
+      policy?.keepSelectedChunkLoaded ? 1 : 0,
+      selectedChunkSignatureKey || "",
+      centerChunkKey || "none",
+      chunkRuntimeRegistryVersion
+    ].join("|");
+  }
+
+  function createChunkDebugState(options = {}) {
+    const policy = effectiveChunkDebugPolicy(options.policy || resolveChunkPolicy(world, mode));
+    const centerPosition = options.centerPosition || resolveChunkDebugCenter(policy);
+    const centerChunk = options.centerChunk || (policy.source === "none"
+      ? null
+      : chunkCoordForPosition(centerPosition.x, centerPosition.z, policy));
+    const selectedChunkSignatureKey = Object.prototype.hasOwnProperty.call(options, "selectedChunkSignatureKey")
+      ? String(options.selectedChunkSignatureKey || "")
+      : (mode === "editor"
+        ? (resolveChunkRuntimeEntryChunkKey({ object: selectedObjectRoot() }, policy)?.key || "")
+        : "");
+    const includeWindow = options.includeWindow !== false;
     const state = {
       editor: world?.chunkLoading?.editor?.id || null,
       game: world?.chunkLoading?.game?.id || null,
@@ -1517,11 +5603,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
       unloadMarginChunks: policy.unloadMarginChunks,
       maxLoadedChunks: policy.maxLoadedChunks,
       debugOverlay: policy.debugOverlay,
+      groundChunkingEnabled: policy.groundChunkingEnabled,
+      pathWaterSurfaceChunkingEnabled: policy.pathWaterSurfaceChunkingEnabled,
+      terrainVisualChunkingEnabled: policy.terrainVisualChunkingEnabled,
       showChunkGrid: policy.showChunkGrid,
       showChunkLabels: policy.showChunkLabels,
       keepSelectedChunkLoaded: policy.keepSelectedChunkLoaded,
       cameraOnly: policy.cameraOnly,
       fixedCameraPaddingTiles: policy.fixedCameraPaddingTiles,
+      fixedCameraPaddingChunks: policy.fixedCameraPaddingChunks || 0,
       strictUnloadOutsideCamera: policy.strictUnloadOutsideCamera,
       centerSource: policy.source === "none" ? "none" : null,
       centerPosition: null,
@@ -1530,62 +5620,113 @@ export function createGkWorldRuntime(canvas, options = {}) {
       preloadChunks: 0,
       loadedChunks: 0,
       clippedByMaxLoadedChunks: false,
+      requiredActiveChunks: 0,
+      clippedActiveChunks: 0,
+      activeRadiusUnmet: false,
       activeChunkKeys: [],
       preloadChunkKeys: [],
       loadedChunkKeys: [],
+      renderLoadedChunkKeys: [],
+      renderLoadedChunkCoords: [],
+      renderLoadedChunks: 0,
+      visibleChunkKeys: [],
+      forwardChunkKeys: [],
+      unloadSafeChunkKeys: [],
+      desiredResidentChunkKeys: [],
+      shadowResidentChunkKeys: [],
+      collisionResidentChunkKeys: [],
+      streamingCoverageSource: "none",
       activeChunkCoords: [],
       preloadChunkCoords: [],
       loadedChunkCoords: [],
       loadedOnlyChunkCoords: [],
-      overlayVisible: false
+      overlayVisible: false,
+      hiddenObjects: 0,
+      visibleObjects: 0,
+      inactiveInteractables: 0,
+      inactiveSolids: 0,
+      culledEntities: 0,
+      culledScatter: 0,
+      culledInteractables: 0,
+      culledSolids: 0,
+      uncullableObjects: 0,
+      terrainVisuals: createEmptyTerrainVisualStats(),
+      ground: cloneGroundChunkStats(groundChunkState.stats),
+      terrainStreaming: Object.assign({}, terrainStreamingState, {
+        residentChunkKeys: terrainStreamingState.residentChunkKeys.slice()
+      }),
+      cullingEnabled: false,
+      keepSelectedChunkLoadedApplied: false,
+      lastUpdateReason: "init"
     };
-    if (policy.source === "none") {
-      state.signature = [
-        "none",
-        state.editor || "",
-        state.game || ""
-      ].join("|");
-      return state;
-    }
-    const centerPosition = resolveChunkDebugCenter(policy);
-    const centerChunk = chunkCoordForPosition(centerPosition.x, centerPosition.z, policy);
     state.centerSource = centerPosition.source;
     state.centerPosition = {
       x: round(centerPosition.x),
       z: round(centerPosition.z)
     };
-    state.centerChunk = {
-      x: centerChunk.x,
-      z: centerChunk.z,
-      key: chunkKey(centerChunk)
-    };
-    if (policy.enabled) {
-      const windowState = buildChunkWindow(centerChunk, policy, mode);
+    if (centerChunk) {
+      state.centerChunk = {
+        x: centerChunk.x,
+        z: centerChunk.z,
+        key: chunkKey(centerChunk)
+      };
+    }
+    if (includeWindow && policy.enabled === true && policy.source !== "none" && centerChunk) {
+      let windowState = buildChunkWindow(centerChunk, policy, mode);
+      const selectedKeepLoadedChunkKeys = resolveSelectedKeepLoadedChunkKeys(policy);
+      if (selectedKeepLoadedChunkKeys.length) {
+        const merged = mergeChunkWindowLoadedKeys(windowState, selectedKeepLoadedChunkKeys);
+        windowState = merged.windowState;
+        state.keepSelectedChunkLoadedApplied = merged.applied;
+      }
+      const coverage = streamingCoverageForCenter(centerPosition, policy);
+      if (coverage) {
+        const extraKeys = coverage.desiredResidentChunkKeys.filter(function (key) {
+          return key && !windowState.loadedChunkKeySet.has(key);
+        });
+        if (extraKeys.length) {
+          const extraCoords = extraKeys.map(function (key) {
+            const coord = chunkCoordFromKey(key);
+            return coord ? { x: coord.x, z: coord.z, key: key } : null;
+          }).filter(Boolean);
+          windowState = Object.assign({}, windowState, {
+            loadedOnlyChunks: windowState.loadedOnlyChunks.concat(extraCoords),
+            loadedChunks: windowState.loadedChunks.concat(extraCoords).slice().sort(chunkCoordSort),
+            loadedChunkKeys: sortChunkKeys(windowState.loadedChunkKeys.concat(extraKeys)),
+            loadedChunkKeySet: new Set(windowState.loadedChunkKeys.concat(extraKeys))
+          });
+        }
+        state.visibleChunkKeys = coverage.visibleChunkKeys.slice();
+        state.forwardChunkKeys = coverage.forwardChunkKeys.slice();
+        state.unloadSafeChunkKeys = Array.from(new Set(coverage.unloadSafeChunkKeys.concat(windowState.loadedChunkKeys)));
+        state.streamingCoverageSource = coverage.source;
+      } else {
+        state.unloadSafeChunkKeys = windowState.loadedChunkKeys.slice();
+      }
+      state.desiredResidentChunkKeys = windowState.loadedChunkKeys.slice();
       state.activeChunks = windowState.activeChunks.length;
       state.preloadChunks = windowState.preloadChunks.length;
       state.loadedChunks = windowState.loadedChunks.length;
       state.clippedByMaxLoadedChunks = windowState.clippedByMaxLoadedChunks;
+      state.requiredActiveChunks = num(windowState.requiredActiveChunks, 0);
+      state.clippedActiveChunks = num(windowState.clippedActiveChunks, 0);
+      state.activeRadiusUnmet = windowState.activeRadiusUnmet === true;
       state.activeChunkKeys = windowState.activeChunkKeys.slice();
       state.preloadChunkKeys = windowState.preloadChunkKeys.slice();
       state.loadedChunkKeys = windowState.loadedChunkKeys.slice();
+      state.renderLoadedChunkKeys = windowState.loadedChunkKeys.slice();
+      state.renderLoadedChunks = windowState.loadedChunks.length;
       state.activeChunkCoords = windowState.activeChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
       state.preloadChunkCoords = windowState.preloadChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
       state.loadedChunkCoords = windowState.loadedChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
+      state.renderLoadedChunkCoords = windowState.loadedChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
       state.loadedOnlyChunkCoords = windowState.loadedOnlyChunks.map(function (coord) { return { x: coord.x, z: coord.z, key: coord.key }; });
     }
+    state.shadowResidentChunkKeys = state.loadedChunkKeys.slice();
+    state.collisionResidentChunkKeys = Array.from(new Set(state.visibleChunkKeys.concat(state.preloadChunkKeys)));
     state.overlayVisible = state.enabled && state.debugOverlay && state.loadedChunkCoords.length > 0;
-    state.signature = [
-      state.editor || "",
-      state.game || "",
-      state.source,
-      state.policyId || "",
-      state.enabled ? 1 : 0,
-      state.debugOverlay ? 1 : 0,
-      state.showChunkGrid ? 1 : 0,
-      state.showChunkLabels ? 1 : 0,
-      state.centerChunk ? state.centerChunk.key : "none",
-      state.loadedChunkKeys.join(";")
-    ].join("|");
+    state.cullingEnabled = isChunkCullingRuntimeEnabled(policy);
+    state.signature = buildChunkDebugSignature(policy, buildCoverageCenterSignatureKey(centerChunk), selectedChunkSignatureKey);
     return state;
   }
 
@@ -1605,6 +5746,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const center = chunkWorldCenter(coord, policy);
     mesh.position.set(center.x, y, center.z);
     mesh.renderOrder = 996;
+    mesh.userData.debugOverlay = true;
+    mesh.userData.debugOverlayRoot = false;
+    mesh.userData.debugOverlayKind = "chunk";
+    mesh.userData.chunkOverlayFill = true;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     return mesh;
   }
 
@@ -1644,6 +5791,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     });
     const lines = new THREE.LineSegments(geometry, material);
     lines.renderOrder = 997;
+    lines.userData.debugOverlay = true;
+    lines.userData.debugOverlayKind = "chunk";
+    lines.castShadow = false;
+    lines.receiveShadow = false;
     return lines;
   }
 
@@ -1678,15 +5829,23 @@ export function createGkWorldRuntime(canvas, options = {}) {
     sprite.position.set(x, y, z);
     sprite.scale.set(Math.max(18, policy.chunkWorldWidth * 0.75), Math.max(10, policy.chunkWorldDepth * 0.3), 1);
     sprite.renderOrder = 998;
+    sprite.userData.debugOverlay = true;
+    sprite.userData.debugOverlayKind = "chunk";
+    sprite.castShadow = false;
+    sprite.receiveShadow = false;
     return sprite;
   }
 
   function rebuildChunkDebugOverlay(state) {
     clearChunkDebugOverlay();
+    removeDuplicateRuntimeGroups();
     if (!state?.overlayVisible || state.source === "none") return;
     const group = ensureChunkDebugOverlay();
     const policy = resolveChunkPolicy(world, mode);
     const baseY = num(world?.ground?.y, 0) + 0.05;
+    const renderLoadedChunkCoords = Array.isArray(state.renderLoadedChunkCoords) && state.renderLoadedChunkCoords.length
+      ? state.renderLoadedChunkCoords
+      : state.loadedChunkCoords;
     for (const coord of state.loadedOnlyChunkCoords) {
       group.add(createChunkFillMesh(coord, policy, 0x2f7891, 0.08, baseY));
     }
@@ -1697,25 +5856,271 @@ export function createGkWorldRuntime(canvas, options = {}) {
       group.add(createChunkFillMesh(coord, policy, 0x45d483, 0.18, baseY + 0.02));
     }
     if (state.showChunkGrid) {
-      const grid = createChunkGridLines(state.loadedChunkCoords, policy, baseY + 0.04);
+      const grid = createChunkGridLines(renderLoadedChunkCoords, policy, baseY + 0.04);
       if (grid) group.add(grid);
     }
     if (state.showChunkLabels) {
-      for (const coord of state.loadedChunkCoords) {
+      for (const coord of renderLoadedChunkCoords) {
         const center = chunkWorldCenter(coord, policy);
         const label = createChunkLabelSprite(coord.key, center.x, baseY + 0.12, center.z, policy);
         if (label) group.add(label);
       }
     }
+    sanitizeNonWorldShadowCasters(group);
     group.visible = true;
+    removeGhostChunkPlanes("rebuildChunkDebugOverlay", {
+      scene: scene,
+      camera: camera,
+      content: content,
+      terrainRuntimeGroup: terrainRuntimeGroup,
+      chunkDebugOverlay: group,
+      selectionHelper: selectionHelper,
+      transformGuide: transformGuide,
+      terrainEditorOverlay: terrainEditorOverlay,
+      scatterEditorOverlay: scatterEditorOverlay,
+      world: world,
+      debugOverlayVisible: state.overlayVisible === true
+    });
   }
 
-  function syncChunkDebugState() {
-    const nextState = createChunkDebugState();
-    chunkDebugStateCache = nextState;
-    if (nextState.signature !== chunkDebugSignature) {
-      chunkDebugSignature = nextState.signature;
+  function updateTerrainStreamingSnapshot(nextState) {
+    const snapshot = collectTerrainStreamingSnapshot(
+      terrainRuntimeResidentEntries,
+      terrainRuntimeEntries,
+      terrainTextureRecords,
+      surfaceMaterialRecords,
+      nextState
+    );
+    terrainStreamingState.loadedChunks = snapshot.loadedChunks;
+    terrainStreamingState.activeChunks = snapshot.activeChunks;
+    terrainStreamingState.preloadChunks = snapshot.preloadChunks;
+    terrainStreamingState.residentPieces = snapshot.residentPieces;
+    terrainStreamingState.residentChunks = snapshot.residentChunks;
+    terrainStreamingState.residentChunkKeys = snapshot.residentChunkKeys;
+    terrainStreamingState.textureRefs = snapshot.textureRefs;
+    terrainStreamingState.textureAssets = snapshot.textureAssets;
+    terrainStreamingState.surfaceMaterials = snapshot.surfaceMaterials;
+    terrainStreamingState.lastUpdateReason = snapshot.lastUpdateReason;
+  }
+
+  function syncChunkDebugState(reason = "runtime-sync", options = {}) {
+    const policy = effectiveChunkDebugPolicy(resolveChunkPolicy(world, mode));
+    const centerPosition = resolveChunkDebugCenter(policy);
+    const centerChunk = policy.source === "none"
+      ? null
+      : chunkCoordForPosition(centerPosition.x, centerPosition.z, policy);
+    const selectedChunkSignatureKey = mode === "editor"
+      ? (resolveChunkRuntimeEntryChunkKey({ object: selectedObjectRoot() }, policy)?.key || "")
+      : "";
+    const renderSignature = buildChunkDebugSignature(policy, buildCoverageCenterSignatureKey(centerChunk), selectedChunkSignatureKey);
+    const shouldAllowHeavySync = options.allowHeavy !== false;
+    chunkSyncStats.syncCalls += 1;
+    removeDuplicateRuntimeGroups();
+    const hasPendingResidentWork = isChunkCullingRuntimeEnabled(policy) && residentContentState.pendingChunkKeys.length > 0;
+    const nextState = createChunkDebugState({
+      policy: policy,
+      centerPosition: centerPosition,
+      centerChunk: centerChunk,
+      selectedChunkSignatureKey: selectedChunkSignatureKey,
+      includeWindow: shouldAllowHeavySync !== false
+    });
+    updateStreamingHeadingState();
+    const stableShadowSnapshot = updateShadowAnchor(nextState, reason) || null;
+    const shadowResidentChunkKeys = Array.isArray(stableShadowSnapshot?.shadowResidentChunkKeys) && stableShadowSnapshot.shadowResidentChunkKeys.length
+      ? stableShadowSnapshot.shadowResidentChunkKeys.slice()
+      : (Array.isArray(nextState.loadedChunkKeys) ? nextState.loadedChunkKeys.slice() : []);
+    const renderResidentChunkKeys = Array.isArray(stableShadowSnapshot?.renderResidentChunkKeys) && stableShadowSnapshot.renderResidentChunkKeys.length
+      ? stableShadowSnapshot.renderResidentChunkKeys.slice()
+      : (Array.isArray(nextState.renderLoadedChunkKeys) ? nextState.renderLoadedChunkKeys.slice() : nextState.loadedChunkKeys.slice());
+    const collisionResidentChunkKeys = Array.isArray(stableShadowSnapshot?.collisionResidentChunkKeys) && stableShadowSnapshot.collisionResidentChunkKeys.length
+      ? stableShadowSnapshot.collisionResidentChunkKeys.slice()
+      : Array.from(new Set(nextState.visibleChunkKeys.concat(nextState.preloadChunkKeys)));
+    const shadowWindowChunkKeys = Array.isArray(stableShadowSnapshot?.shadowWindowChunkKeys)
+      ? stableShadowSnapshot.shadowWindowChunkKeys.slice()
+      : [];
+    const shadowResidentChunkCoords = shadowResidentChunkKeys.map(function (key) {
+      const coord = chunkCoordFromKey(key);
+      return coord ? { x: coord.x, z: coord.z, key: chunkKey(coord) } : null;
+    }).filter(Boolean);
+    nextState.stableShadows = stableShadowSnapshot;
+    nextState.renderResidentChunkKeys = renderResidentChunkKeys.slice();
+    nextState.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
+    nextState.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
+    nextState.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
+    nextState.loadedChunkKeys = shadowResidentChunkKeys.slice();
+    nextState.loadedChunks = shadowResidentChunkKeys.length;
+    nextState.loadedChunkCoords = shadowResidentChunkCoords;
+    nextState.desiredResidentChunkKeys = shadowResidentChunkKeys.slice();
+    const stableSignature = [
+      renderSignature,
+      stableShadowSnapshot?.signature || [
+        stableShadowSnapshot?.mode || "",
+        round(num(stableShadowSnapshot?.snappedFocus?.x, 0)),
+        round(num(stableShadowSnapshot?.snappedFocus?.z, 0)),
+        stableShadowSnapshot?.shadowMapSize || 0,
+        stableShadowSnapshot?.shadowRadiusChunks || 0,
+        renderResidentChunkKeys.join(","),
+        shadowResidentChunkKeys.join(","),
+        collisionResidentChunkKeys.join(","),
+        shadowWindowChunkKeys.join(",")
+      ].join("|")
+    ].join("|");
+    const updateCacheShadowFields = function (target) {
+      if (!target) return target;
+      target.stableShadows = stableShadowSnapshot;
+      target.renderResidentChunkKeys = renderResidentChunkKeys.slice();
+      target.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
+      target.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
+      target.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
+      target.loadedChunkKeys = shadowResidentChunkKeys.slice();
+      target.loadedChunks = shadowResidentChunkKeys.length;
+      target.loadedChunkCoords = shadowResidentChunkCoords.slice();
+      target.desiredResidentChunkKeys = shadowResidentChunkKeys.slice();
+      target.renderLoadedChunkKeys = renderResidentChunkKeys.slice();
+      target.renderLoadedChunkCoords = Array.isArray(nextState.renderLoadedChunkCoords) ? nextState.renderLoadedChunkCoords.slice() : [];
+      target.lastUpdateReason = stableShadowSnapshot?.lastUpdateReason || target.lastUpdateReason || reason;
+      return target;
+    };
+    if (stableSignature === chunkDebugSignature && chunkDebugStateCache) {
+      chunkSyncStats.skippedSyncCalls += 1;
+      updateCacheShadowFields(chunkDebugStateCache);
+      if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
+      return chunkDebugStateCache;
+    }
+    if (!shouldAllowHeavySync && chunkDebugStateCache) {
+      chunkSyncStats.skippedSyncCalls += 1;
+      updateCacheShadowFields(chunkDebugStateCache);
+      if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
+      return chunkDebugStateCache;
+    }
+    const heavyStart = performance.now();
+    const cullingSignature = stableSignature + "|" + String(chunkRuntimeRegistryVersion);
+    const needsHeavySync = cullingSignature !== chunkRuntimeState.lastSignature;
+    if (needsHeavySync) {
+      const entryDescriptors = chunkRuntimeEntries.map(function (entry) {
+        const position = resolveChunkRuntimeEntryPosition(entry);
+        return {
+          id: entry.id,
+          type: entry.type,
+          hasVisual: entry.hasVisual !== false,
+          x: position?.x,
+          z: position?.z,
+          chunkKey: entry.chunkKey || null,
+          chunkKeys: Array.isArray(entry.chunkKeys) ? entry.chunkKeys.slice() : []
+        };
+      });
+      const cullingResult = collectChunkCullingStats(entryDescriptors, nextState, {
+        policy: policy,
+        cullingEnabled: nextState.cullingEnabled,
+        keepSelectedChunkLoadedApplied: nextState.keepSelectedChunkLoadedApplied,
+        renderResidentChunkKeys: renderResidentChunkKeys
+      });
+      applyChunkCullingResult(cullingResult);
+      nextState.hiddenObjects = cullingResult.hiddenObjects;
+      nextState.visibleObjects = cullingResult.visibleObjects;
+      nextState.inactiveInteractables = cullingResult.inactiveInteractables;
+      nextState.inactiveSolids = cullingResult.inactiveSolids;
+      nextState.culledEntities = cullingResult.culledEntities;
+      nextState.culledScatter = cullingResult.culledScatter;
+      nextState.culledInteractables = cullingResult.culledInteractables;
+      nextState.culledSolids = cullingResult.culledSolids;
+      nextState.uncullableObjects = cullingResult.uncullableObjects;
+      nextState.terrainVisuals = Object.assign(createEmptyTerrainVisualStats(), cullingResult.terrainVisuals || {});
+      nextState.activeChunkKeys = cullingResult.activeChunkKeys.slice();
+      nextState.preloadChunkKeys = cullingResult.preloadChunkKeys.slice();
+      nextState.loadedChunkKeys = cullingResult.loadedChunkKeys.slice();
+      nextState.activeChunks = cullingResult.activeChunks;
+      nextState.preloadChunks = cullingResult.preloadChunks;
+      nextState.loadedChunks = cullingResult.loadedChunks;
+      nextState.renderResidentChunkKeys = renderResidentChunkKeys.slice();
+      nextState.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
+      nextState.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
+      nextState.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
+      nextState.lastUpdateReason = resolveChunkRuntimeUpdateReason(nextState, reason);
+      updateTerrainStreamingSnapshot(nextState);
+      chunkRuntimeState = {
+        policy: policy,
+        centerChunk: nextState.centerChunk ? { x: nextState.centerChunk.x, z: nextState.centerChunk.z, key: nextState.centerChunk.key } : null,
+        loadedChunkKeys: nextState.loadedChunkKeys.slice(),
+        renderChunkKeys: nextState.renderResidentChunkKeys.slice(),
+        shadowResidentChunkKeys: nextState.shadowResidentChunkKeys.slice(),
+        collisionResidentChunkKeys: nextState.collisionResidentChunkKeys.slice(),
+        shadowWindowChunkKeys: nextState.shadowWindowChunkKeys.slice(),
+        activeChunkKeys: nextState.activeChunkKeys.slice(),
+        preloadChunkKeys: nextState.preloadChunkKeys.slice(),
+        visibleChunkKeys: Array.isArray(nextState.visibleChunkKeys) ? nextState.visibleChunkKeys.slice() : [],
+        forwardChunkKeys: Array.isArray(nextState.forwardChunkKeys) ? nextState.forwardChunkKeys.slice() : [],
+        unloadSafeChunkKeys: Array.isArray(nextState.unloadSafeChunkKeys) ? nextState.unloadSafeChunkKeys.slice() : [],
+        desiredResidentChunkKeys: Array.isArray(nextState.desiredResidentChunkKeys) ? nextState.desiredResidentChunkKeys.slice() : [],
+        streamingCoverageSource: nextState.streamingCoverageSource || "none",
+        clippedByMaxLoadedChunks: nextState.clippedByMaxLoadedChunks,
+        hiddenObjects: nextState.hiddenObjects,
+        visibleObjects: nextState.visibleObjects,
+        inactiveInteractables: nextState.inactiveInteractables,
+        inactiveSolids: nextState.inactiveSolids,
+        culledEntities: nextState.culledEntities,
+        culledScatter: nextState.culledScatter,
+        culledInteractables: nextState.culledInteractables,
+        culledSolids: nextState.culledSolids,
+        uncullableObjects: nextState.uncullableObjects,
+        terrainVisuals: Object.assign(createEmptyTerrainVisualStats(), nextState.terrainVisuals || {}),
+        terrainStreaming: Object.assign({}, terrainStreamingState, {
+          residentChunkKeys: Array.isArray(terrainStreamingState.residentChunkKeys)
+            ? terrainStreamingState.residentChunkKeys.slice()
+            : []
+        }),
+        keepSelectedChunkLoadedApplied: nextState.keepSelectedChunkLoadedApplied,
+        cullingEnabled: nextState.cullingEnabled,
+        registryVersion: chunkRuntimeRegistryVersion,
+        lastSignature: cullingSignature,
+        lastUpdateReason: nextState.lastUpdateReason
+      };
+      chunkSyncStats.heavySyncCalls += 1;
+      chunkSyncStats.lastHeavyReason = nextState.lastUpdateReason || reason;
+    } else {
+      nextState.hiddenObjects = chunkRuntimeState.hiddenObjects;
+      nextState.visibleObjects = chunkRuntimeState.visibleObjects;
+      nextState.inactiveInteractables = chunkRuntimeState.inactiveInteractables;
+      nextState.inactiveSolids = chunkRuntimeState.inactiveSolids;
+      nextState.culledEntities = chunkRuntimeState.culledEntities;
+      nextState.culledScatter = chunkRuntimeState.culledScatter;
+      nextState.culledInteractables = chunkRuntimeState.culledInteractables;
+      nextState.culledSolids = chunkRuntimeState.culledSolids;
+      nextState.uncullableObjects = chunkRuntimeState.uncullableObjects;
+      nextState.terrainVisuals = Object.assign(createEmptyTerrainVisualStats(), chunkRuntimeState.terrainVisuals || {});
+      nextState.cullingEnabled = chunkRuntimeState.cullingEnabled;
+      nextState.lastUpdateReason = chunkRuntimeState.lastUpdateReason;
+      nextState.renderResidentChunkKeys = Array.isArray(chunkRuntimeState.renderChunkKeys) ? chunkRuntimeState.renderChunkKeys.slice() : renderResidentChunkKeys.slice();
+      nextState.shadowResidentChunkKeys = Array.isArray(chunkRuntimeState.shadowResidentChunkKeys) ? chunkRuntimeState.shadowResidentChunkKeys.slice() : shadowResidentChunkKeys.slice();
+      nextState.collisionResidentChunkKeys = Array.isArray(chunkRuntimeState.collisionResidentChunkKeys) ? chunkRuntimeState.collisionResidentChunkKeys.slice() : collisionResidentChunkKeys.slice();
+      nextState.shadowWindowChunkKeys = Array.isArray(chunkRuntimeState.shadowWindowChunkKeys) ? chunkRuntimeState.shadowWindowChunkKeys.slice() : shadowWindowChunkKeys.slice();
+      updateTerrainStreamingSnapshot(nextState);
+    }
+    if (isChunkCullingRuntimeEnabled(policy)) {
+      syncResidentChunkContent(nextState, nextState.lastUpdateReason || reason);
+    }
+    if (needsHeavySync) {
+      syncGroundChunkState(world, nextState, nextState.lastUpdateReason || reason);
+      nextState.ground = cloneGroundChunkStats(groundChunkState.stats);
+      chunkRuntimeState.ground = cloneGroundChunkStats(groundChunkState.stats);
+      chunkRuntimeState.terrainStreaming = Object.assign({}, terrainStreamingState, {
+        residentChunkKeys: Array.isArray(terrainStreamingState.residentChunkKeys)
+          ? terrainStreamingState.residentChunkKeys.slice()
+          : []
+      });
+      chunkRuntimeState.lastUpdateReason = nextState.lastUpdateReason || reason;
+    } else {
+      nextState.ground = cloneGroundChunkStats(chunkRuntimeState.ground || groundChunkState.stats);
+    }
+    nextState.stableShadows = stableSunShadowController?.getSnapshot?.() || stableShadowSnapshot;
+    if (needsHeavySync || !chunkDebugStateCache) {
+      chunkDebugStateCache = nextState;
+      chunkDebugSignature = stableSignature;
+      updateCacheShadowFields(chunkDebugStateCache);
+    }
+    if (needsHeavySync) {
       rebuildChunkDebugOverlay(nextState);
+      chunkSyncStats.lastHeavySyncMs = round(performance.now() - heavyStart);
     } else if (chunkDebugOverlay) {
       chunkDebugOverlay.visible = nextState.overlayVisible;
     }
@@ -1743,6 +6148,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return mode === "editor" ? worldPerformance.editor : worldPerformance.game;
   }
 
+  function debugHelpersVisibleInCurrentMode() {
+    return mode !== "editor" ? false : activeModePerformance().debugHelpersVisible !== false;
+  }
+
   function sharedWorldPerformance() {
     return worldPerformance.shared;
   }
@@ -1751,21 +6160,717 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return shadowPolicy;
   }
 
-  function staticPropShadowOptions() {
-    const performance = activeModePerformance();
+  function createStableSunShadowController(options = {}) {
+    const controllerMode = stableShadowModeName(options.mode || mode);
+    const controllerScene = options.scene || scene;
+    const controllerRenderer = options.renderer || renderer;
+    const controllerCamera = options.camera || camera;
+    const lightEntries = [];
+    const updateHistory = [];
+    const state = {
+      enabled: false,
+      mode: controllerMode,
+      preset: "middel_schaduw",
+      legacyFieldsIgnored: false,
+      rendererShadowMapEnabled: false,
+      lightCount: 0,
+      sunDirection: { x: 0, y: -1, z: 0 },
+      focusMode: "editor_world_center_or_selected",
+      rawFocus: { x: 0, y: 0, z: 0 },
+      targetPosition: { x: 0, y: 0, z: 0 },
+      snappedFocus: { x: 0, y: 0, z: 0 },
+      snapWorldUnits: 0,
+      mapSize: 0,
+      cameraSize: 0,
+      cameraNear: 1,
+      cameraFar: 0,
+      bias: 0,
+      normalBias: 0,
+      shadowMapType: "unknown",
+      shadowType: "off",
+      shadowMapSize: 0,
+      shadowCameraBounds: { left: 0, right: 0, top: 0, bottom: 0, near: 0, far: 0, radius: 0 },
+      lastProjectionUpdateReason: "init",
+      projectionUpdateCount: 0,
+      framesSinceProjectionUpdate: 0,
+      lastUpdateReason: "init",
+      updatesThisSecond: 0,
+      stableSnapCell: { x: 0, z: 0, worldUnits: 0 },
+      renderResidentChunkKeys: [],
+      collisionResidentChunkKeys: [],
+      shadowResidentChunkKeys: [],
+      shadowWindowChunkKeys: [],
+      renderResidentChunkCount: 0,
+      shadowResidentChunkCount: 0,
+      shadowResidentMarginChunks: 0,
+      shadowCasterCount: 0,
+      shadowReceiverCount: 0,
+      casterCounts: {},
+      receiverCounts: {},
+      helperCasterCount: 0,
+      debugCasterCount: 0,
+      circleOrPlaneCasterCount: 0,
+      proxyCasterCount: 0,
+      instancedCasterCount: 0,
+      debugShadowCasterCount: 0,
+      overlayShadowCasterCount: 0,
+      cameraChildOverlayGroups: 0,
+      jumpDetected: false,
+      lastJumpDistance: 0,
+      shadowRadiusChunks: 0,
+      warnings: [],
+      signature: ""
+    };
+
+    function snapshotValue(value) {
+      return {
+        x: round(num(value?.x, 0)),
+        y: round(num(value?.y, 0)),
+        z: round(num(value?.z, 0))
+      };
+    }
+
+    function pruneUpdateHistory(now) {
+      while (updateHistory.length && now - updateHistory[0] > 1000) updateHistory.shift();
+      state.updatesThisSecond = updateHistory.length;
+    }
+
+    function countCameraChildOverlayGroups() {
+      let count = 0;
+      const visit = function (root) {
+        if (!root || !Array.isArray(root.children)) return;
+        for (const child of root.children) {
+          if (isDebugOverlayObject(child)) count += 1;
+          if (child?.children?.length) visit(child);
+        }
+      };
+      visit(controllerCamera);
+      return count;
+    }
+
+    function updateLightEntry(entry, focus, enabled, shadowCameraSize, shadowMapSize, shadowBias, shadowNormalBias, nearDistance, farDistance) {
+      if (!entry?.light) return;
+      const light = entry.light;
+      const basePosition = entry.basePosition || light.userData?.shadowBasePosition || new THREE.Vector3(light.position.x, light.position.y, light.position.z);
+      const baseTarget = entry.baseTarget || light.userData?.shadowBaseTarget || new THREE.Vector3(0, 0, 0);
+      const focusX = num(focus?.snappedFocus?.x, 0);
+      const focusZ = num(focus?.snappedFocus?.z, 0);
+      if (!light.userData) light.userData = {};
+      light.userData.shadowBasePosition = basePosition.clone();
+      light.userData.shadowBaseTarget = baseTarget.clone();
+      light.castShadow = enabled;
+      light.position.set(basePosition.x + focusX, basePosition.y, basePosition.z + focusZ);
+      if (light.target) {
+        light.target.position.set(baseTarget.x + focusX, baseTarget.y, baseTarget.z + focusZ);
+        if (!light.target.parent) controllerScene.add(light.target);
+        light.target.updateMatrixWorld(true);
+      }
+      if (light.shadow?.mapSize) light.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+      if (light.shadow) {
+        light.shadow.bias = shadowBias;
+        light.shadow.normalBias = shadowNormalBias;
+        if (light.shadow.camera) {
+          light.shadow.camera.left = -shadowCameraSize;
+          light.shadow.camera.right = shadowCameraSize;
+          light.shadow.camera.top = shadowCameraSize;
+          light.shadow.camera.bottom = -shadowCameraSize;
+          light.shadow.camera.near = nearDistance;
+          light.shadow.camera.far = farDistance;
+          if (typeof light.shadow.camera.updateProjectionMatrix === "function") {
+            light.shadow.camera.updateProjectionMatrix();
+          }
+        }
+      }
+      light.updateMatrixWorld(true);
+    }
+
+    function getSnapshot() {
+      return Object.assign({}, state, {
+        sunDirection: Object.assign({}, state.sunDirection),
+        rawFocus: Object.assign({}, state.rawFocus),
+        targetPosition: Object.assign({}, state.targetPosition),
+        snappedFocus: Object.assign({}, state.snappedFocus),
+        shadowCameraBounds: Object.assign({}, state.shadowCameraBounds),
+        stableSnapCell: Object.assign({}, state.stableSnapCell),
+        casterCounts: Object.assign({}, state.casterCounts),
+        receiverCounts: Object.assign({}, state.receiverCounts),
+        warnings: Array.isArray(state.warnings) ? state.warnings.slice() : [],
+        renderResidentChunkKeys: state.renderResidentChunkKeys.slice(),
+        collisionResidentChunkKeys: state.collisionResidentChunkKeys.slice(),
+        shadowResidentChunkKeys: state.shadowResidentChunkKeys.slice(),
+        shadowWindowChunkKeys: state.shadowWindowChunkKeys.slice()
+      });
+    }
+
     return {
-      castShadow: performance.staticPropCastShadows !== false,
-      receiveShadow: performance.staticPropReceiveShadows !== false
+      registerDirectionalLight(light) {
+        if (!light || lightEntries.some(function (entry) { return entry.light === light; })) return light;
+        const basePosition = light.userData?.shadowBasePosition instanceof THREE.Vector3
+          ? light.userData.shadowBasePosition.clone()
+          : new THREE.Vector3(num(light.position.x, 0), num(light.position.y, 0), num(light.position.z, 0));
+        const baseTarget = light.userData?.shadowBaseTarget instanceof THREE.Vector3
+          ? light.userData.shadowBaseTarget.clone()
+          : new THREE.Vector3(num(light.target?.position.x, 0), num(light.target?.position.y, 0), num(light.target?.position.z, 0));
+        const direction = basePosition.clone().sub(baseTarget);
+        if (direction.lengthSq() <= 0.000001) direction.set(0.35, -1, 0.2);
+        direction.normalize();
+        lightEntries.push({
+          light: light,
+          basePosition: basePosition,
+          baseTarget: baseTarget,
+          direction: direction
+        });
+        if (!light.userData) light.userData = {};
+        light.userData.shadowBasePosition = basePosition.clone();
+        light.userData.shadowBaseTarget = baseTarget.clone();
+        state.lightCount = lightEntries.length;
+        state.sunDirection = snapshotValue(direction);
+        return light;
+      },
+      clearDirectionalLights() {
+        lightEntries.length = 0;
+        updateHistory.length = 0;
+        state.policy = null;
+        state.enabled = false;
+        state.preset = "middel_schaduw";
+        state.legacyFieldsIgnored = false;
+        state.rendererShadowMapEnabled = false;
+        state.lightCount = 0;
+        state.sunDirection = { x: 0, y: -1, z: 0 };
+        state.focusMode = "editor_world_center_or_selected";
+        state.rawFocus = { x: 0, y: 0, z: 0 };
+        state.targetPosition = { x: 0, y: 0, z: 0 };
+        state.snappedFocus = { x: 0, y: 0, z: 0 };
+        state.snapWorldUnits = 0;
+        state.mapSize = 0;
+        state.cameraSize = 0;
+        state.cameraNear = 1;
+        state.cameraFar = 0;
+        state.shadowMapType = "unknown";
+        state.shadowCameraBounds = { left: 0, right: 0, top: 0, bottom: 0, near: 0, far: 0, radius: 0 };
+        state.shadowMapSize = 0;
+        state.shadowType = "off";
+        state.bias = 0;
+        state.normalBias = 0;
+        state.lastProjectionUpdateReason = "clear";
+        state.projectionUpdateCount = 0;
+        state.framesSinceProjectionUpdate = 0;
+        state.stableSnapCell = { x: 0, z: 0, worldUnits: 0 };
+        state.renderResidentChunkKeys = [];
+        state.collisionResidentChunkKeys = [];
+        state.shadowResidentChunkKeys = [];
+        state.shadowWindowChunkKeys = [];
+        state.renderResidentChunkCount = 0;
+        state.shadowResidentChunkCount = 0;
+        state.shadowResidentMarginChunks = 0;
+        state.shadowCasterCount = 0;
+        state.shadowReceiverCount = 0;
+        state.casterCounts = {};
+        state.receiverCounts = {};
+        state.helperCasterCount = 0;
+        state.debugCasterCount = 0;
+        state.circleOrPlaneCasterCount = 0;
+        state.proxyCasterCount = 0;
+        state.instancedCasterCount = 0;
+        state.debugShadowCasterCount = 0;
+        state.overlayShadowCasterCount = 0;
+        state.cameraChildOverlayGroups = 0;
+        state.jumpDetected = false;
+        state.lastJumpDistance = 0;
+        state.shadowRadiusChunks = 0;
+        state.warnings = [];
+        state.signature = "";
+        state.lastUpdateReason = "clear";
+        state.updatesThisSecond = 0;
+      },
+      setPolicy(policy) {
+        state.policy = policy ? Object.assign({}, policy) : null;
+        return state.policy;
+      },
+      update(nextState = {}, reason = "runtime-sync") {
+        const policy = state.policy || currentShadowPolicy();
+        const enabled = Boolean(policy?.enabled);
+        const preset = normalizeWorldSettingsPreset(policy?.preset || policy?.quality || state.preset || "middel_schaduw", "middel_schaduw");
+        const shadowType = enabled ? (policy?.mapTypeName || shadowMapTypeName(policy?.mapType) || "unknown") : "basic";
+        const shadowMapSize = enabled ? Math.max(0, num(policy?.mapSize, 0)) : 0;
+        const shadowCameraSize = enabled ? Math.max(1, num(policy?.cameraSize, 0)) : 0;
+        const shadowCameraNear = enabled ? Math.max(0.1, num(policy?.cameraNear, 1)) : 1;
+        const shadowCameraFar = enabled ? Math.max(10, num(policy?.cameraFar, 400)) : 0;
+        const shadowBias = enabled ? num(policy?.bias, 0) : 0;
+        const shadowNormalBias = enabled ? num(policy?.normalBias, 0) : 0;
+        const shadowResidentMarginChunks = enabled ? Math.max(0, chunkInteger(policy?.shadowResidentMarginChunks, 0)) : 0;
+        let clampedShadowMapSize = shadowMapSize;
+        const warnings = [];
+        const maxTextureSize = num(controllerRenderer?.capabilities?.maxTextureSize, 0);
+        if (enabled && preset === "extreem_schaduw" && clampedShadowMapSize > 2048 && maxTextureSize > 0 && maxTextureSize < 4096) {
+          const nextClamp = Math.min(2048, maxTextureSize);
+          if (nextClamp < clampedShadowMapSize) {
+            pushUniqueWarning(warnings, "Shadow preset extreem_schaduw clamped to " + nextClamp + " because the renderer reports maxTextureSize " + maxTextureSize + ".");
+            clampedShadowMapSize = nextClamp;
+          }
+        }
+        if (enabled && maxTextureSize > 0 && clampedShadowMapSize > maxTextureSize) {
+          pushUniqueWarning(warnings, "Shadow map size " + clampedShadowMapSize + " clamped to renderer maxTextureSize " + maxTextureSize + ".");
+          clampedShadowMapSize = maxTextureSize;
+        }
+        const focus = controllerMode === "editor"
+          ? resolveStableShadowFocus({
+            mode: controllerMode,
+            policy: policy,
+            groundY: num(world?.ground?.y, 0),
+            focus: resolveEditorShadowFocus({
+              selectedObject: selectedObjectRoot(),
+              worldData: world,
+              worldCenter: resolveWorldContentCenter(world),
+              groundY: num(world?.ground?.y, 0),
+              player: {
+                x: num(player.pos.x, 0),
+                y: num(player.pos.y, 0),
+                z: num(player.pos.z, 0)
+              },
+              startPosition: {
+                x: num(world?.spawn?.x, 0),
+                y: num(world?.spawn?.y, num(world?.ground?.y, 0)),
+                z: num(world?.spawn?.z, 0)
+              },
+              previous: state.signature ? state : null,
+              snapWorldUnits: policy?.snapWorldUnits || shadowSnapWorldUnitsForPolicy(policy, controllerMode)
+            }),
+            previous: state.signature ? state : null,
+            snapWorldUnits: policy?.snapWorldUnits || shadowSnapWorldUnitsForPolicy(policy, controllerMode)
+          })
+          : resolveStableShadowFocus({
+            mode: controllerMode,
+            policy: policy,
+            groundY: num(world?.ground?.y, 0),
+            player: {
+              x: num(player.pos.x, 0),
+              y: num(player.pos.y, 0),
+              z: num(player.pos.z, 0)
+            },
+            startPosition: {
+              x: num(world?.spawn?.x, 0),
+              y: num(world?.spawn?.y, num(world?.ground?.y, 0)),
+              z: num(world?.spawn?.z, 0)
+            },
+            worldCenter: resolveWorldContentCenter(world),
+            camera: {
+              target: camTarget,
+              position: controllerCamera?.position || null
+            },
+            camTarget: {
+              x: num(camTarget.x, 0),
+              y: num(camTarget.y, 0),
+              z: num(camTarget.z, 0)
+            },
+            previous: state.signature ? state : null,
+            snapWorldUnits: policy?.snapWorldUnits || shadowSnapWorldUnitsForPolicy(policy, controllerMode)
+          });
+        const renderResidentChunkKeys = sortChunkKeys(Array.isArray(nextState.renderResidentChunkKeys)
+          ? nextState.renderResidentChunkKeys
+          : Array.isArray(nextState.loadedChunkKeys)
+            ? nextState.loadedChunkKeys
+            : []);
+        const visibleChunkKeys = sortChunkKeys(Array.isArray(nextState.visibleChunkKeys) ? nextState.visibleChunkKeys : []);
+        const preloadChunkKeys = sortChunkKeys(Array.isArray(nextState.preloadChunkKeys) ? nextState.preloadChunkKeys : []);
+        const forwardChunkKeys = sortChunkKeys(Array.isArray(nextState.forwardChunkKeys) ? nextState.forwardChunkKeys : []);
+        const collisionResidentChunkKeys = sortChunkKeys(Array.isArray(nextState.collisionResidentChunkKeys)
+          ? nextState.collisionResidentChunkKeys
+          : visibleChunkKeys.concat(preloadChunkKeys));
+        const coverage = resolveStableShadowChunkWindows({
+          mode: controllerMode,
+          policy: policy,
+          focus: focus,
+          renderResidentChunkKeys: renderResidentChunkKeys,
+          visibleChunkKeys: visibleChunkKeys,
+          preloadChunkKeys: preloadChunkKeys,
+          forwardChunkKeys: forwardChunkKeys,
+          collisionResidentChunkKeys: collisionResidentChunkKeys
+        });
+        const shadowRadiusChunks = coverage.shadowRadiusChunks || shadowResidentRadiusChunksForPolicy(policy, controllerMode);
+        const shadowWindowChunkKeys = Array.isArray(coverage.shadowWindow?.loadedChunkKeys) ? coverage.shadowWindow.loadedChunkKeys.slice() : [];
+        const shadowResidentChunkKeys = Array.isArray(coverage.shadowResidentChunkKeys) ? coverage.shadowResidentChunkKeys.slice() : renderResidentChunkKeys.slice();
+        const sunDirection = lightEntries.length
+          ? snapshotValue(lightEntries[0].direction)
+          : { x: 0, y: -1, z: 0 };
+        for (const entry of lightEntries) {
+          updateLightEntry(entry, focus, enabled, shadowCameraSize, clampedShadowMapSize, shadowBias, shadowNormalBias, shadowCameraNear, shadowCameraFar);
+        }
+        const rendererShadowMapEnabled = Boolean(enabled && controllerRenderer?.shadowMap);
+        if (controllerRenderer?.shadowMap) {
+          controllerRenderer.shadowMap.enabled = enabled;
+          controllerRenderer.shadowMap.type = shadowMapTypeFromName(shadowType) || THREE.BasicShadowMap;
+        }
+        const sceneUsage = countShadowUsage(controllerScene);
+        const contentUsage = countShadowUsage(content);
+        const terrainUsage = countShadowUsage(terrainRuntimeGroup);
+        const chunkOverlayUsage = countShadowUsage(chunkDebugOverlay);
+        const selectionUsage = countShadowUsage(selectionHelper);
+        const transformUsage = countShadowUsage(transformGuide);
+        const terrainOverlayUsage = countShadowUsage(terrainEditorOverlay);
+        const scatterOverlayUsage = countShadowUsage(scatterEditorOverlay);
+        const shadowCasterAudit = auditSceneObjectsForShadowCasters({
+          scene: controllerScene,
+          content: content,
+          terrainRuntimeGroup: terrainRuntimeGroup,
+          chunkDebugOverlay: chunkDebugOverlay,
+          selectionHelper: selectionHelper,
+          transformGuide: transformGuide,
+          terrainEditorOverlay: terrainEditorOverlay,
+          scatterEditorOverlay: scatterEditorOverlay
+        });
+        let proxyCasterCount = 0;
+        let instancedCasterCount = 0;
+        controllerScene.traverse(function (child) {
+          if (!child) return;
+          if (child.isInstancedMesh === true && child.castShadow === true) instancedCasterCount += 1;
+          if (child.castShadow === true) {
+            let node = child;
+            while (node) {
+              if (node.userData?.shadowProxy === true) {
+                proxyCasterCount += 1;
+                return;
+              }
+              node = node.parent || null;
+            }
+          }
+        });
+        const casterCounts = {
+          scene: sceneUsage.casters,
+          content: contentUsage.casters,
+          terrainRuntimeGroup: terrainUsage.casters,
+          chunkDebugOverlay: chunkOverlayUsage.casters,
+          selectionHelper: selectionUsage.casters,
+          transformGuide: transformUsage.casters,
+          terrainEditorOverlay: terrainOverlayUsage.casters,
+          scatterEditorOverlay: scatterOverlayUsage.casters
+        };
+        const receiverCounts = {
+          scene: sceneUsage.receivers,
+          content: contentUsage.receivers,
+          terrainRuntimeGroup: terrainUsage.receivers,
+          chunkDebugOverlay: chunkOverlayUsage.receivers,
+          selectionHelper: selectionUsage.receivers,
+          transformGuide: transformUsage.receivers,
+          terrainEditorOverlay: terrainOverlayUsage.receivers,
+          scatterEditorOverlay: scatterOverlayUsage.receivers
+        };
+        const helperCasterCount = shadowCasterAudit.helperCasterCount;
+        const debugCasterCount = shadowCasterAudit.castersByKind.debugOverlay + shadowCasterAudit.castersByKind.helper + shadowCasterAudit.castersByKind.selection;
+        const circleOrPlaneCasterCount = shadowCasterAudit.circleOrPlaneCasterCount;
+        const shadowCasterCount = sceneUsage.casters;
+        const shadowReceiverCount = sceneUsage.receivers;
+        const cameraChildOverlayGroups = countCameraChildOverlayGroups();
+        const rawFocus = snapshotValue(focus.focus || focus.rawFocus || focus.snappedFocus);
+        const targetPosition = lightEntries.length
+          ? snapshotValue(lightEntries[0].light?.target?.position || lightEntries[0].baseTarget)
+          : snapshotValue(focus.snappedFocus);
+        const renderResidentChunkCount = renderResidentChunkKeys.length;
+        const shadowResidentChunkCount = shadowResidentChunkKeys.length;
+        const snapshot = {
+          enabled: enabled,
+          mode: controllerMode,
+          preset: preset,
+          legacyFieldsIgnored: Boolean(policy?.legacyFieldsIgnored),
+          rendererShadowMapEnabled: rendererShadowMapEnabled,
+          lightCount: lightEntries.length,
+          sunDirection: sunDirection,
+          focusMode: policy?.focusMode || (controllerMode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn"),
+          rawFocus: rawFocus,
+          targetPosition: targetPosition,
+          snappedFocus: snapshotValue(focus.snappedFocus),
+          snapWorldUnits: Math.max(1, Math.floor(num(policy?.snapWorldUnits, shadowSnapWorldUnitsForPolicy(policy, controllerMode)))),
+          shadowCameraBounds: {
+            left: round(-shadowCameraSize),
+            right: round(shadowCameraSize),
+            top: round(shadowCameraSize),
+            bottom: round(-shadowCameraSize),
+            near: round(shadowCameraNear),
+            far: round(shadowCameraFar),
+            radius: round(shadowCameraSize)
+          },
+          mapSize: clampedShadowMapSize,
+          shadowMapSize: clampedShadowMapSize,
+          shadowType: shadowType,
+          shadowMapType: shadowType,
+          cameraSize: shadowCameraSize,
+          cameraNear: shadowCameraNear,
+          cameraFar: shadowCameraFar,
+          bias: shadowBias,
+          normalBias: shadowNormalBias,
+          lastProjectionUpdateReason: reason || state.lastProjectionUpdateReason || "runtime-sync",
+          projectionUpdateCount: state.projectionUpdateCount,
+          framesSinceProjectionUpdate: state.framesSinceProjectionUpdate,
+          lastUpdateReason: reason || state.lastUpdateReason || "runtime-sync",
+          updatesThisSecond: state.updatesThisSecond,
+          stableSnapCell: Object.assign({}, focus.stableSnapCell),
+          renderResidentChunkKeys: renderResidentChunkKeys.slice(),
+          collisionResidentChunkKeys: collisionResidentChunkKeys.slice(),
+          shadowResidentChunkKeys: shadowResidentChunkKeys.slice(),
+          shadowWindowChunkKeys: shadowWindowChunkKeys.slice(),
+          renderResidentChunkCount: renderResidentChunkCount,
+          shadowResidentChunkCount: shadowResidentChunkCount,
+          shadowResidentMarginChunks: shadowResidentMarginChunks,
+          shadowCasterCount: shadowCasterCount,
+          shadowReceiverCount: shadowReceiverCount,
+          casterCounts: casterCounts,
+          receiverCounts: receiverCounts,
+          helperCasterCount: helperCasterCount,
+          debugCasterCount: debugCasterCount,
+          circleOrPlaneCasterCount: circleOrPlaneCasterCount,
+          proxyCasterCount: proxyCasterCount,
+          instancedCasterCount: instancedCasterCount,
+          debugShadowCasterCount: debugCasterCount,
+          overlayShadowCasterCount: debugCasterCount,
+          cameraChildOverlayGroups: cameraChildOverlayGroups,
+          jumpDetected: Boolean(focus.jumpDetected),
+          lastJumpDistance: focus.lastJumpDistance,
+          shadowRadiusChunks: shadowRadiusChunks,
+          warnings: warnings,
+          signature: [
+            enabled ? 1 : 0,
+            controllerMode,
+            preset,
+            clampedShadowMapSize,
+            shadowType,
+            round(focus.snappedFocus.x),
+            round(focus.snappedFocus.z),
+            shadowCameraSize,
+            lightEntries.length,
+            renderResidentChunkKeys.join(","),
+            shadowResidentChunkKeys.join(","),
+            shadowCasterCount,
+            shadowReceiverCount,
+            debugCasterCount,
+            cameraChildOverlayGroups,
+            runtimeStats.sceneObjects || 0,
+            shadowResidentMarginChunks,
+            shadowCameraNear,
+            rendererShadowMapEnabled ? 1 : 0
+          ].join("|")
+        };
+        state.enabled = enabled;
+        state.mode = controllerMode;
+        state.preset = preset;
+        state.legacyFieldsIgnored = Boolean(policy?.legacyFieldsIgnored);
+        state.rendererShadowMapEnabled = rendererShadowMapEnabled;
+        state.lightCount = lightEntries.length;
+        state.sunDirection = sunDirection;
+        state.focusMode = snapshot.focusMode;
+        state.rawFocus = Object.assign({}, snapshot.rawFocus);
+        state.targetPosition = targetPosition;
+        state.snappedFocus = snapshot.snappedFocus;
+        state.snapWorldUnits = snapshot.snapWorldUnits;
+        state.shadowCameraBounds = Object.assign({}, snapshot.shadowCameraBounds);
+        state.mapSize = clampedShadowMapSize;
+        state.shadowMapSize = clampedShadowMapSize;
+        state.shadowMapType = shadowType;
+        state.shadowType = shadowType;
+        state.cameraSize = shadowCameraSize;
+        state.cameraNear = shadowCameraNear;
+        state.cameraFar = shadowCameraFar;
+        state.bias = shadowBias;
+        state.normalBias = shadowNormalBias;
+        state.stableSnapCell = Object.assign({}, focus.stableSnapCell);
+        state.renderResidentChunkKeys = renderResidentChunkKeys.slice();
+        state.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
+        state.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
+        state.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
+        state.renderResidentChunkCount = renderResidentChunkCount;
+        state.shadowResidentChunkCount = shadowResidentChunkCount;
+        state.shadowResidentMarginChunks = shadowResidentMarginChunks;
+        state.shadowCasterCount = shadowCasterCount;
+        state.shadowReceiverCount = shadowReceiverCount;
+        state.casterCounts = Object.assign({}, casterCounts);
+        state.receiverCounts = Object.assign({}, receiverCounts);
+        state.helperCasterCount = helperCasterCount;
+        state.debugCasterCount = debugCasterCount;
+        state.circleOrPlaneCasterCount = circleOrPlaneCasterCount;
+        state.proxyCasterCount = proxyCasterCount;
+        state.instancedCasterCount = instancedCasterCount;
+        state.debugShadowCasterCount = debugCasterCount;
+        state.overlayShadowCasterCount = debugCasterCount;
+        state.cameraChildOverlayGroups = cameraChildOverlayGroups;
+        state.jumpDetected = Boolean(focus.jumpDetected);
+        state.lastJumpDistance = focus.lastJumpDistance;
+        state.shadowRadiusChunks = shadowRadiusChunks;
+        state.warnings = warnings.slice();
+        state.lastProjectionUpdateReason = snapshot.lastProjectionUpdateReason;
+        state.lastUpdateReason = reason || state.lastUpdateReason || "runtime-sync";
+        const now = performance.now();
+        if (state.signature !== snapshot.signature) {
+          updateHistory.push(now);
+          pruneUpdateHistory(now);
+          state.signature = snapshot.signature;
+          state.projectionUpdateCount += 1;
+          state.framesSinceProjectionUpdate = 0;
+        } else {
+          pruneUpdateHistory(now);
+          state.framesSinceProjectionUpdate += 1;
+        }
+        return getSnapshot();
+      },
+      getSnapshot() {
+        return getSnapshot();
+      }
+    };
+  }
+
+  stableSunShadowController = createStableSunShadowController({ mode: mode, scene: scene, renderer: renderer, camera: camera });
+
+  function staticPropShadowOptions() {
+    const policy = currentShadowPolicy();
+    const shadowEnabled = policy.enabled === true;
+    return {
+      castShadow: shadowEnabled && policy.staticPropsCast === true,
+      receiveShadow: shadowEnabled && policy.staticPropsReceive !== false
     };
   }
 
   function scatterShadowOptions() {
-    const performance = activeModePerformance();
-    const shadowsEnabled = performance.shadowsEnabled !== false;
+    const policy = currentShadowPolicy();
+    const shadowsEnabled = policy.enabled === true;
     return {
-      castShadow: shadowsEnabled,
-      receiveShadow: shadowsEnabled
+      castShadow: shadowsEnabled && policy.scatterCast === true,
+      receiveShadow: shadowsEnabled && policy.scatterReceive !== false
     };
+  }
+
+  function groundShadowOptions() {
+    const policy = currentShadowPolicy();
+    return {
+      receiveShadow: policy.enabled === true && policy.groundReceives !== false
+    };
+  }
+
+  function terrainShadowOptions() {
+    const policy = currentShadowPolicy();
+    return {
+      receiveShadow: policy.enabled === true && policy.terrainReceives !== false
+    };
+  }
+
+  function chunkKeyForTransform(transform, policy) {
+    if (!policy) return null;
+    const position = transform?.position || {};
+    const x = Number(position.x);
+    const z = Number(position.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    return chunkKeyForPosition(x, z, policy);
+  }
+
+  function groupEntriesByChunkKey(entries, policy, getTransform) {
+    const grouped = new Map();
+    const unchunked = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const transform = typeof getTransform === "function" ? getTransform(entry) : null;
+      const key = chunkKeyForTransform(transform, policy);
+      if (!key) {
+        unchunked.push(entry);
+        continue;
+      }
+      let bucket = grouped.get(key);
+      if (!bucket) {
+        bucket = [];
+        grouped.set(key, bucket);
+      }
+      bucket.push(entry);
+    }
+    return { grouped: grouped, unchunked: unchunked };
+  }
+
+  function resolveShadowAnchorTarget(nextState) {
+    const snapshot = stableSunShadowController?.getSnapshot?.() || null;
+    if (snapshot) {
+      return {
+        mode: snapshot.enabled ? "stableSun" : "static",
+        x: num(snapshot.snappedFocus?.x, 0),
+        z: num(snapshot.snappedFocus?.z, 0),
+        lastUpdatedReason: snapshot.lastUpdateReason || "runtime-sync"
+      };
+    }
+    const policy = resolveChunkPolicy(world, mode);
+    const editorFocus = mode === "editor"
+      ? resolveEditorShadowFocus({
+        selectedObject: selectedObjectRoot(),
+        worldData: world,
+        worldCenter: resolveWorldContentCenter(world),
+        groundY: num(world?.ground?.y, 0),
+        player: {
+          x: num(player.pos.x, 0),
+          y: num(player.pos.y, 0),
+          z: num(player.pos.z, 0)
+        },
+        startPosition: {
+          x: num(world?.spawn?.x, 0),
+          y: num(world?.spawn?.y, num(world?.ground?.y, 0)),
+          z: num(world?.spawn?.z, 0)
+        }
+      })
+      : null;
+    const focus = resolveStableShadowFocus({
+      mode: mode,
+      policy: policy,
+      focus: editorFocus || undefined,
+      camera: {
+        target: camTarget,
+        position: camera?.position || null
+      },
+      player: {
+        x: num(player.pos.x, 0),
+        y: num(player.pos.y, 0),
+        z: num(player.pos.z, 0)
+      },
+      camTarget: {
+        x: num(camTarget.x, 0),
+        y: num(camTarget.y, 0),
+        z: num(camTarget.z, 0)
+      },
+      previous: shadowAnchorState,
+      snapWorldUnits: shadowSnapWorldUnitsForPolicy(policy, mode)
+    });
+    return {
+      mode: focus.mode,
+      x: focus.snappedFocus.x,
+      z: focus.snappedFocus.z,
+      lastUpdatedReason: "stable-fallback"
+    };
+  }
+
+  function updateShadowAnchor(nextState, reason = "runtime-sync") {
+    const snapshot = stableSunShadowController?.update?.(nextState || {}, reason || "runtime-sync") || null;
+    if (!snapshot) {
+      const target = resolveShadowAnchorTarget(nextState);
+      const anchorKey = [
+        target.mode,
+        Math.round(target.x * 100) / 100,
+        Math.round(target.z * 100) / 100
+      ].join("|");
+      if (anchorKey === groundShadowAnchorKey) return shadowAnchorState;
+      groundShadowAnchorKey = anchorKey;
+      shadowAnchorState = {
+        mode: target.mode,
+        x: round(target.x),
+        z: round(target.z),
+        lastUpdatedReason: reason || target.lastUpdatedReason || "runtime-sync"
+      };
+      return shadowAnchorState;
+    }
+    const anchorKey = [
+      snapshot.mode || mode,
+      round(num(snapshot.snappedFocus?.x, 0)),
+      round(num(snapshot.snappedFocus?.z, 0)),
+      snapshot.shadowMapSize || 0,
+      snapshot.shadowRadiusChunks || 0
+    ].join("|");
+    if (anchorKey !== groundShadowAnchorKey) groundShadowAnchorKey = anchorKey;
+    shadowAnchorState = {
+      mode: snapshot.enabled ? "stableSun" : "static",
+      x: round(num(snapshot.snappedFocus?.x, 0)),
+      z: round(num(snapshot.snappedFocus?.z, 0)),
+      lastUpdatedReason: snapshot.lastUpdateReason || reason || "runtime-sync"
+    };
+    return snapshot;
   }
 
   function shouldBatchStaticProps() {
@@ -1796,12 +6901,17 @@ export function createGkWorldRuntime(canvas, options = {}) {
     selectionHelper.material.toneMapped = false;
     selectionHelper.renderOrder = 999;
     selectionHelper.raycast = function () {};
+    markDebugOverlayTree(selectionHelper, "selection");
+    sanitizeNonWorldShadowCasters(selectionHelper);
     scene.add(selectionHelper);
     transformGuide = createTransformGuide();
+    sanitizeNonWorldShadowCasters(transformGuide);
     scene.add(transformGuide);
     terrainEditorOverlay = createTerrainOverlay();
+    sanitizeNonWorldShadowCasters(terrainEditorOverlay);
     scene.add(terrainEditorOverlay);
     scatterEditorOverlay = createScatterOverlay();
+    sanitizeNonWorldShadowCasters(scatterEditorOverlay);
     scene.add(scatterEditorOverlay);
     editorPointerDownCaptureHandler = function (event) {
       if (!orbitControls) return;
@@ -1818,19 +6928,33 @@ export function createGkWorldRuntime(canvas, options = {}) {
         event.stopImmediatePropagation();
         return;
       }
-      if (event.button === 1 && event.shiftKey && !transformState.active) {
+      if ((event.button === 1 || event.button === 0) && event.shiftKey && !transformState.active) {
         if (beginViewportPan(event)) {
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
       }
+      if (event.button === 0 && event.altKey && !transformState.active) {
+        viewportOrbitFallbackActive = true;
+        orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        orbitControls.mouseButtons.RIGHT = THREE.MOUSE.NONE;
+        orbitControls.mouseButtons.MIDDLE = modifierState.ctrlKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+        event.preventDefault();
+        return;
+      }
       if (event.button === 1) updateOrbitMouseMapping(event.ctrlKey || event.metaKey);
+      if (event.button === 1) event.preventDefault();
     };
     editorContextMenuHandler = function (event) {
       event.preventDefault();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
       if (transformSession) cancelTransform();
+    };
+    editorAuxClickHandler = function (event) {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     };
     editorKeyDownHandler = function (event) {
       if (event.key === "Control" || event.key === "Meta") {
@@ -1848,6 +6972,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     };
     canvas.addEventListener("pointerdown", editorPointerDownCaptureHandler, true);
     canvas.addEventListener("contextmenu", editorContextMenuHandler);
+    canvas.addEventListener("auxclick", editorAuxClickHandler);
     window.addEventListener("keydown", editorKeyDownHandler);
     window.addEventListener("keyup", editorKeyUpHandler);
     editorDirectPointerMoveHandler = handleTransformPointerMove;
@@ -1872,6 +6997,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
         event.stopImmediatePropagation();
         return;
       }
+      if (viewportOrbitFallbackActive && event.button === 0) {
+        viewportOrbitFallbackActive = false;
+        updateOrbitMouseMapping();
+        event.preventDefault();
+        return;
+      }
       if (event.button !== 1) return;
       updateOrbitMouseMapping();
     };
@@ -1880,6 +7011,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     editorPointerDownHandler = function (event) {
       rememberEditorPointer(event);
       if (event.button !== 0) return;
+      if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return;
       if (transformSession) return;
       const entityId = pickEntity(event);
       if (entityId) {
@@ -2149,22 +7281,54 @@ export function createGkWorldRuntime(canvas, options = {}) {
     lastTime = time;
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
+    collisionPerfState.checksLastFrame = 0;
+    collisionPerfState.lastResolveMs = 0;
+    const frameTiming = {
+      frameMs: round(frameMs),
+      deltaMs: round(delta * 1000),
+      updatePlayerMs: 0,
+      animationMs: 0,
+      syncChunkMs: 0,
+      renderMs: 0,
+      hudMs: 0,
+      shouldAnimateModels: false,
+      shouldAnimateSurfaces: false
+    };
+    const modePerformance = activeModePerformance();
     const shouldAnimateModels = mode === "game" || (mode === "editor" && previewAnimations && animationMixers.size > 0);
-    const shouldAnimateSurfaces = surfaceAnimMaterials.length > 0 && (mode === "game" || mode === "editor");
+    const shouldAnimateSurfaces = surfaceAnimMaterials.length > 0 && (mode !== "game" || modePerformance.surfaceAnimationEnabled !== false) && (mode === "game" || mode === "editor");
     const shouldAnimate = shouldAnimateModels || shouldAnimateSurfaces;
+    frameTiming.shouldAnimateModels = shouldAnimateModels;
+    frameTiming.shouldAnimateSurfaces = shouldAnimateSurfaces;
+    let sectionStart = performance.now();
     if (shouldAnimateModels) {
-      for (const { mixer } of animationMixers.values()) {
+      for (const { mixer, root } of animationMixers.values()) {
+        if (root?.visible === false || root?.parent?.visible === false) continue;
         mixer.update(delta);
       }
     }
+    if (shouldAnimateSurfaces) updateSurfaceAnimation(time);
+    frameTiming.animationMs = round(performance.now() - sectionStart);
+    sectionStart = performance.now();
     if (selectionHelper?.visible) selectionHelper.update();
     if (transformGuide?.visible) updateTransformGuide();
     if (mode === "game") updatePlayer(delta);
-    if (waterAnimMaterials.length > 0 && mode === "game") updateWaterAnimation(time);
-    if (shouldAnimateSurfaces) updateSurfaceAnimation(time);
-    syncChunkDebugState();
+    frameTiming.updatePlayerMs = round(performance.now() - sectionStart);
+    sectionStart = performance.now();
+    syncChunkDebugState("frame");
+    if (residentContentState.pendingChunkKeys.length) requestRender("resident-pending-drain");
+    frameTiming.syncChunkMs = round(performance.now() - sectionStart);
+    sectionStart = performance.now();
     renderer.render(scene, camera);
+    frameTiming.renderMs = round(performance.now() - sectionStart);
+    sectionStart = performance.now();
     if (mode === "game") updatePerformanceHud(time);
+    frameTiming.hudMs = round(performance.now() - sectionStart);
+    frameTiming.updateAnimationMs = frameTiming.animationMs;
+    frameTiming.syncChunkDebugStateMs = frameTiming.syncChunkMs;
+    frameTiming.updatePerformanceHudMs = frameTiming.hudMs;
+    DEBUG_RUNTIME.lastFrameTiming = frameTiming;
+    settleFrameProfileWaiters(frameTiming);
     running = false;
     updateDebugLoopState();
     if (mode === "game") {
@@ -2181,6 +7345,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
     clearTerrainRuntimeVisuals();
+    removeDuplicateRuntimeGroups();
     clearWalkabilityIndex();
     resetRuntimeStats();
     viewportPanSession = null;
@@ -2209,7 +7374,22 @@ export function createGkWorldRuntime(canvas, options = {}) {
       disposeObject(child, { disposeTextures: false });
     }
     entityRoots.clear();
+    contentBlueprintIndex = createEmptyContentBlueprintIndex();
+    residentContentState = createEmptyResidentContentState();
+    unloadHysteresisState.candidateStreaks.clear();
+    residentBootstrapState = {
+      lastReason: "clearContent",
+      worldGeneration: worldBuildGeneration,
+      activeBuiltImmediately: 0,
+      visibleBuiltImmediately: 0,
+      preloadBuiltImmediately: 0,
+      pendingAfterBootstrap: 0,
+      emptyScenePrevented: true
+    };
+    chunkRuntimeEntries.length = 0;
+    chunkRuntimeRegistryVersion = 0;
     solids.length = 0;
+    activeSolids.length = 0;
     interactables.length = 0;
     activeInteractable = null;
     player.root = null;
@@ -2217,8 +7397,80 @@ export function createGkWorldRuntime(canvas, options = {}) {
     perfHudNextUpdateAt = 0;
     perfHudFrameMs = 0;
     perfHudWarmup = false;
+    runtimeCollisionBaseCount = 0;
+    publishedWorldItemCount = 0;
+    collisionPerfState.activeSolids = 0;
+    collisionPerfState.terrainBlockers = 0;
+    collisionPerfState.surfaceBlockers = 0;
+    collisionPerfState.checksLastFrame = 0;
+    collisionPerfState.lastResolveMs = 0;
+    chunkSyncStats.syncCalls = 0;
+    chunkSyncStats.heavySyncCalls = 0;
+    chunkSyncStats.skippedSyncCalls = 0;
+    chunkSyncStats.lastHeavyReason = "clearContent";
+    chunkSyncStats.lastHeavySyncMs = 0;
     chunkDebugStateCache = null;
     chunkDebugSignature = "";
+    scatterShadowFallbacks = 0;
+    chunkRuntimeState = {
+      policy: null,
+      centerChunk: null,
+      loadedChunkKeys: [],
+      renderChunkKeys: [],
+      shadowResidentChunkKeys: [],
+      collisionResidentChunkKeys: [],
+      shadowWindowChunkKeys: [],
+      activeChunkKeys: [],
+      preloadChunkKeys: [],
+      visibleChunkKeys: [],
+      forwardChunkKeys: [],
+      unloadSafeChunkKeys: [],
+      desiredResidentChunkKeys: [],
+      streamingCoverageSource: "none",
+      clippedByMaxLoadedChunks: false,
+      requiredActiveChunks: 0,
+      clippedActiveChunks: 0,
+      activeRadiusUnmet: false,
+      hiddenObjects: 0,
+      visibleObjects: 0,
+      inactiveInteractables: 0,
+      inactiveSolids: 0,
+      culledEntities: 0,
+      culledScatter: 0,
+      culledInteractables: 0,
+      culledSolids: 0,
+      uncullableObjects: 0,
+      terrainVisuals: createEmptyTerrainVisualStats(),
+      ground: cloneGroundChunkStats(),
+      terrainStreaming: Object.assign({}, terrainStreamingState, {
+        residentChunkKeys: terrainStreamingState.residentChunkKeys.slice()
+      }),
+      keepSelectedChunkLoadedApplied: false,
+      cullingEnabled: false,
+      lastSignature: "",
+      lastUpdateReason: "clearContent"
+    };
+    if (stableSunShadowController?.clearDirectionalLights) stableSunShadowController.clearDirectionalLights();
+    groundShadowAnchorKey = "";
+    shadowAnchorState = {
+      mode: "static",
+      x: 0,
+      z: 0,
+      lastUpdatedReason: "clearContent"
+    };
+    overlayDiagnosticsState = {
+      debugOverlayEnabled: false,
+      chunkDebugOverlayVisible: false,
+      terrainRuntimeGroups: 0,
+      chunkDebugOverlayGroups: 0,
+      cameraChildOverlayGroups: 0,
+      sceneDebugOverlayGroups: 0,
+      sceneChildOverlayGroups: 0,
+      duplicateOverlayFound: false,
+      removedDuplicateOverlays: 0,
+      removedOverlayGroups: 0,
+      overlayShadowCasters: 0
+    };
   }
 
   function captureViewState() {
@@ -2264,6 +7516,19 @@ export function createGkWorldRuntime(canvas, options = {}) {
     localViewActive = Boolean(viewState.localViewActive);
     applyLocalView();
     updateSelectionHelper();
+    removeGhostChunkPlanes("restoreViewState", {
+      scene: scene,
+      camera: camera,
+      content: content,
+      terrainRuntimeGroup: terrainRuntimeGroup,
+      chunkDebugOverlay: chunkDebugOverlay,
+      selectionHelper: selectionHelper,
+      transformGuide: transformGuide,
+      terrainEditorOverlay: terrainEditorOverlay,
+      scatterEditorOverlay: scatterEditorOverlay,
+      world: world,
+      debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
+    });
     requestRender();
     return true;
   }
@@ -2321,6 +7586,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       line.raycast = function () {};
       guide.add(line);
     }
+    markDebugOverlayTree(guide, "transform");
     guide.traverse(function (child) {
       child.raycast = function () {};
     });
@@ -2328,7 +7594,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function terrainOverlayColorForNode(nodeType) {
-    if (nodeType === "water_layer") return 0x43b4ff;
     if (nodeType === "walkable_surface") return 0x8fe0a8;
     if (nodeType === "blocker_area") return 0xf0b35a;
     return 0xf0b35a;
@@ -2340,6 +7605,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     group.visible = false;
     group.renderOrder = 2000;
     group.frustumCulled = false;
+    markDebugOverlayTree(group, "terrain");
     return group;
   }
 
@@ -2349,6 +7615,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     group.visible = false;
     group.renderOrder = 2001;
     group.frustumCulled = false;
+    markDebugOverlayTree(group, "scatter");
     return group;
   }
 
@@ -2368,6 +7635,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     line.frustumCulled = false;
     line.name = "GK terrain overlay line";
     line.raycast = function () {};
+    line.userData.debugOverlay = true;
+    line.userData.debugOverlayKind = "terrain";
+    line.castShadow = false;
+    line.receiveShadow = false;
     return line;
   }
 
@@ -2391,6 +7662,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     mesh.userData.handleRole = role;
     mesh.userData.pointIndex = Number.isInteger(pointIndex) ? pointIndex : null;
     mesh.userData.selected = Boolean(selected);
+    mesh.userData.debugOverlay = true;
+    mesh.userData.debugOverlayKind = "terrain";
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     return mesh;
   }
 
@@ -2542,7 +7817,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       return;
     }
 
-    if (nodeType === "path_layer" || nodeType === "water_layer" || nodeType === "surface_layer") {
+    if (nodeType === "surface_layer") {
       const line = terrainOverlayLine(points, false, lineColor, 0.95);
       if (line) terrainEditorOverlay.add(line);
       for (let index = 0; index < points.length; index += 1) {
@@ -2659,25 +7934,304 @@ export function createGkWorldRuntime(canvas, options = {}) {
     terrainRuntimeGroup = new THREE.Group();
     terrainRuntimeGroup.name = "GK runtime terrain visuals";
     terrainRuntimeGroup.frustumCulled = false;
+    terrainRuntimeGroup.userData.terrainRuntimeGroup = true;
+    terrainRuntimeGroup.userData.runtimeAlive = true;
     scene.add(terrainRuntimeGroup);
     runtimeStats.sceneObjects += 1;
     return terrainRuntimeGroup;
   }
 
+  function groundMaterialCacheKey(ground) {
+    return [
+      colorOrDefault(ground?.materialColor, "#ffffff"),
+      String(ground?.textureAssetId || ""),
+      sharedWorldPerformance().smoothShading === false ? "flat" : "smooth"
+    ].join("|");
+  }
+
+  function acquireGroundMaterialRecord(worldData, blueprint) {
+    const ground = worldData?.ground || {};
+    const key = groundMaterialCacheKey(ground);
+    let record = groundChunkState.materialCache.get(key);
+    if (!record) {
+      const material = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
+        roughness: 0.9,
+        metalness: 0,
+        flatShading: sharedWorldPerformance().smoothShading === false,
+        side: THREE.DoubleSide,
+        transparent: false,
+        depthWrite: true
+      });
+      record = {
+        key: key,
+        refCount: 0,
+        material: material,
+        texture: null,
+        textureAssetId: ground.textureAssetId || null,
+        disposed: false
+      };
+      groundChunkState.materialCache.set(key, record);
+      if (record.textureAssetId) {
+        const asset = assetById(worldData, record.textureAssetId);
+        if (asset?.sourcePath) {
+          retainTerrainTexture(asset, function (texture) {
+            if (groundChunkState.materialCache.get(key) !== record || record.disposed) return;
+            const clone = texture.clone();
+            clone.colorSpace = THREE.SRGBColorSpace;
+            clone.wrapS = THREE.RepeatWrapping;
+            clone.wrapT = THREE.RepeatWrapping;
+            clone.repeat.set(1, 1);
+            clone.needsUpdate = true;
+            if (record.texture && record.texture !== clone) {
+              try { record.texture.dispose(); } catch {}
+            }
+            record.texture = clone;
+            record.material.map = clone;
+            record.material.needsUpdate = true;
+          });
+        }
+      }
+    }
+    record.refCount += 1;
+    if (record.textureAssetId) {
+      const current = num(groundChunkState.textureRefs.get(record.textureAssetId), 0);
+      groundChunkState.textureRefs.set(record.textureAssetId, current + 1);
+    }
+    if (blueprint?.materialColor) {
+      record.material.color.copy(colorFromHex(blueprint.materialColor, "#ffffff"));
+    }
+    return record;
+  }
+
+  function releaseGroundMaterialRecord(record, reason = "chunk-unload") {
+    if (!record) return;
+    record.refCount = Math.max(0, num(record.refCount, 0) - 1);
+    if (record.textureAssetId) {
+      const nextCount = Math.max(0, num(groundChunkState.textureRefs.get(record.textureAssetId), 0) - 1);
+      if (nextCount > 0) groundChunkState.textureRefs.set(record.textureAssetId, nextCount);
+      else groundChunkState.textureRefs.delete(record.textureAssetId);
+    }
+    if (record.refCount > 0) return;
+    record.disposed = true;
+    groundChunkState.materialCache.delete(record.key);
+    if (record.texture) {
+      try { record.texture.dispose(); } catch {}
+      record.texture = null;
+    }
+    if (record.material) {
+      try { record.material.dispose(); } catch {}
+    }
+    if (record.textureAssetId) releaseTerrainTexture(record.textureAssetId);
+  }
+
+  function buildGroundTileGeometry(blueprint, ground) {
+    if (!blueprint?.bounds) return null;
+    const textureSize = groundTextureWorldSize(ground);
+    return createWorldPlaneGeometry(
+      blueprint.bounds.minX,
+      blueprint.bounds.maxX,
+      blueprint.bounds.minZ,
+      blueprint.bounds.maxZ,
+      num(ground?.y, 0),
+      {
+        minX: 0,
+        maxX: textureSize.x,
+        minZ: 0,
+        maxZ: textureSize.z,
+        repeatX: 1,
+        repeatZ: 1
+      }
+    );
+  }
+
+  function disposeGroundTile(tile, reason = "chunk-unload") {
+    if (!tile) return;
+    if (tile.mesh?.parent) tile.mesh.parent.remove(tile.mesh);
+    if (tile.geometry) {
+      try { tile.geometry.dispose(); } catch {}
+    }
+    releaseGroundMaterialRecord(tile.materialRecord || null, reason);
+    if (tile.mesh?.userData) tile.mesh.userData.terrainChunkDisposed = true;
+  }
+
+  function clearGroundChunkState(reason = "clear") {
+    for (const tile of Array.from(groundChunkState.residentTiles.values())) {
+      disposeGroundTile(tile, reason);
+    }
+    groundChunkState.mode = "full";
+    groundChunkState.tilesByChunkKey.clear();
+    groundChunkState.residentTiles.clear();
+    groundChunkState.materialCache.clear();
+    groundChunkState.textureRefs.clear();
+    groundChunkState.lastLoadedChunkKeySet.clear();
+    groundChunkState.blueprint = null;
+    groundChunkState.blueprintSignature = "";
+    groundChunkState.stats = cloneGroundChunkStats({
+      mode: "full",
+      enabled: false,
+      policySource: "none",
+      fullGroundPlaneActive: false,
+      fullGroundPlaneName: null,
+      fullGroundPlaneVisible: false,
+      groundTilesBlueprint: 0,
+      groundTilesResident: 0,
+      groundTilesVisible: 0,
+      groundTilesHidden: 0,
+      loadedChunkKeys: [],
+      residentChunkKeys: [],
+      enteringChunkKeys: [],
+      leavingChunkKeys: [],
+      lastSyncReason: reason
+    });
+  }
+
+  function syncGroundChunkState(worldData, nextState, reason = "runtime-sync") {
+    const blueprintSignature = groundBlueprintSignature(worldData, mode);
+    if (!groundChunkState.blueprint || groundChunkState.blueprintSignature !== blueprintSignature) {
+      groundChunkState.blueprint = groundBlueprintForWorld(worldData, mode);
+      groundChunkState.blueprintSignature = blueprintSignature;
+      groundChunkState.tilesByChunkKey = groundChunkState.blueprint.tilesByChunkKey;
+    }
+    const plan = buildGroundChunkPlanFromBlueprint(groundChunkState.blueprint, mode, nextState, groundChunkState);
+    if (plan.mode === "chunked" && fullGroundPlane) {
+      if (fullGroundPlane.parent) fullGroundPlane.parent.remove(fullGroundPlane);
+      fullGroundPlane.userData.terrainChunkDisposed = true;
+      disposeObject(fullGroundPlane, { disposeTextures: true });
+      if (fullGroundPlaneTextureAssetId) releaseTerrainTexture(fullGroundPlaneTextureAssetId);
+      runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - 1);
+      runtimeStats.meshes = Math.max(0, runtimeStats.meshes - 1);
+      fullGroundPlane = null;
+      fullGroundPlaneTextureAssetId = null;
+    }
+    const previousResidentKeys = new Set(groundChunkState.residentTiles.keys());
+    applyGroundChunkPlan(groundChunkState, plan, {
+      createTile: function (blueprint, chunkKey, nextPlan) {
+        const geometry = buildGroundTileGeometry(blueprint, worldData?.ground || null);
+        if (!geometry) return null;
+        const materialRecord = acquireGroundMaterialRecord(worldData, blueprint);
+        const mesh = new THREE.Mesh(geometry, materialRecord.material);
+        mesh.name = "GK ground tile " + chunkKey;
+        mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
+        mesh.userData.terrainRuntime = true;
+        mesh.userData.groundTile = true;
+        mesh.userData.groundChunkKey = chunkKey;
+        mesh.userData.terrainChunkDisposed = false;
+        const group = ensureTerrainRuntimeGroup();
+        group.add(mesh);
+        runtimeStats.sceneObjects += 1;
+        runtimeStats.meshes += 1;
+        const createdAt = performance.now();
+        const tile = {
+          chunkKey: chunkKey,
+          bounds: blueprint.bounds,
+          mesh: mesh,
+          geometry: geometry,
+          material: materialRecord.material,
+          materialRecord: materialRecord,
+          textureAssetId: blueprint.textureAssetId || null,
+          createdAt: createdAt,
+          lastTouchedAt: createdAt
+        };
+        groundChunkState.residentTiles.set(chunkKey, tile);
+        return tile;
+      },
+      disposeTile: function (tile) {
+        disposeGroundTile(tile, reason);
+        runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - 1);
+        runtimeStats.meshes = Math.max(0, runtimeStats.meshes - 1);
+      }
+    });
+    if (plan.mode === "full" && !fullGroundPlane && worldData?.ground) {
+      addGround(worldData);
+    }
+    groundChunkState.mode = plan.mode;
+    groundChunkState.stats = cloneGroundChunkStats(Object.assign({}, plan.stats, {
+      fullGroundPlaneActive: Boolean(fullGroundPlane && fullGroundPlane.parent),
+      fullGroundPlaneName: fullGroundPlane ? fullGroundPlane.name || null : plan.fullGroundPlaneName || null,
+      fullGroundPlaneVisible: fullGroundPlane ? fullGroundPlane.visible !== false : plan.fullGroundPlaneVisible === true,
+      lastSyncReason: reason || plan.lastSyncReason || "runtime-sync"
+    }));
+    groundChunkState.stats.groundTilesResident = groundChunkState.residentTiles.size;
+    groundChunkState.stats.groundTilesVisible = groundChunkState.residentTiles.size;
+    groundChunkState.stats.groundTilesHidden = 0;
+    terrainStreamingState.groundTilesResident = groundChunkState.stats.groundTilesResident;
+    terrainStreamingState.lastUpdateReason = reason || terrainStreamingState.lastUpdateReason;
+    return {
+      previousResidentKeys: Array.from(previousResidentKeys),
+      groundChunkState: groundChunkState
+    };
+  }
+
   function clearTerrainRuntimeVisuals() {
     terrainRuntimeGeneration += 1;
+    for (const record of terrainTextureRecords.values()) {
+      if (record?.texture) {
+        try { record.texture.dispose(); } catch {}
+      }
+      if (Array.isArray(record?.waiters)) record.waiters.length = 0;
+    }
     terrainTextureRecords.clear();
     surfaceMaterialRecords.clear();
-    waterAnimMaterials = [];
     surfaceAnimMaterials = [];
     surfaceDefaultWhiteTex = null;
+    terrainRuntimeEntries.clear();
+    terrainRuntimeChunkIndex.clear();
+    terrainRuntimeResidentEntries.clear();
+    clearGroundChunkState("clearTerrainRuntimeVisuals");
+    terrainStreamingState.blueprintPieces = 0;
+    terrainStreamingState.residentPieces = 0;
+    terrainStreamingState.builtPieces = 0;
+    terrainStreamingState.disposedPieces = 0;
+    terrainStreamingState.residentObjects = 0;
+    terrainStreamingState.residentMeshes = 0;
+    terrainStreamingState.residentChunks = 0;
+    terrainStreamingState.residentChunkKeys = [];
+    terrainStreamingState.loadedChunks = 0;
+    terrainStreamingState.activeChunks = 0;
+    terrainStreamingState.preloadChunks = 0;
+    terrainStreamingState.textureRefs = 0;
+    terrainStreamingState.textureAssets = 0;
+    terrainStreamingState.surfaceMaterials = 0;
+    terrainStreamingState.groundTilesResident = 0;
+    terrainStreamingState.terrainLayerTilesResident = 0;
+    terrainStreamingState.surfaceSegmentsResident = 0;
+    terrainStreamingState.lastUpdateReason = "clear";
+    if (fullGroundPlaneTextureAssetId) {
+      releaseTerrainTexture(fullGroundPlaneTextureAssetId);
+      fullGroundPlaneTextureAssetId = null;
+    }
+    fullGroundPlane = null;
+    if (stableSunShadowController?.clearDirectionalLights) stableSunShadowController.clearDirectionalLights();
+    for (const light of directionalLights) {
+      if (light?.target?.parent) light.target.parent.remove(light.target);
+    }
+    directionalLights.length = 0;
+    groundShadowAnchorKey = "";
+    shadowAnchorState = {
+      mode: "static",
+      x: 0,
+      z: 0,
+      lastUpdatedReason: "clear"
+    };
     if (!terrainRuntimeGroup) return;
     if (terrainRuntimeGroup.parent) terrainRuntimeGroup.parent.remove(terrainRuntimeGroup);
     disposeObject(terrainRuntimeGroup, { disposeTextures: true });
     terrainRuntimeGroup = null;
   }
 
-  function requestTerrainTexture(asset, applyTexture, repeatX, repeatZ) {
+  function cloneTerrainTexture(texture, repeatX, repeatZ) {
+    if (!texture) return null;
+    const clone = texture.clone();
+    clone.colorSpace = THREE.SRGBColorSpace;
+    clone.wrapS = THREE.RepeatWrapping;
+    clone.wrapT = THREE.RepeatWrapping;
+    clone.repeat.set(Math.max(0.0001, num(repeatX, 1)), Math.max(0.0001, num(repeatZ, 1)));
+    clone.needsUpdate = true;
+    return clone;
+  }
+
+  function requestTerrainTexture(asset, applyTexture) {
     if (!asset?.sourcePath || !["texture", "image"].includes(asset.assetType)) return false;
     const existing = terrainTextureRecords.get(asset.id);
     if (existing?.status === "ready" && existing.texture) {
@@ -2688,12 +8242,49 @@ export function createGkWorldRuntime(canvas, options = {}) {
       if (typeof applyTexture === "function") existing.waiters.push(applyTexture);
       return true;
     }
+    if (existing && existing.refCount > 0) {
+      existing.status = "loading";
+      if (typeof applyTexture === "function") existing.waiters.push(applyTexture);
+      try {
+        textureLoader.load(asset.sourcePath, function (texture) {
+          if (existing.generation !== terrainRuntimeGeneration || disposed || terrainTextureRecords.get(asset.id) !== existing) {
+            texture.dispose();
+            return;
+          }
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          existing.status = "ready";
+          existing.texture = texture;
+          if (existing.refCount <= 0) {
+            existing.status = "idle";
+            existing.texture = null;
+            texture.dispose();
+            terrainTextureRecords.delete(asset.id);
+            return;
+          }
+          for (const waiter of existing.waiters.splice(0)) waiter(texture);
+          requestRender("terrain-texture-loaded");
+        }, undefined, function () {
+          if (existing.generation !== terrainRuntimeGeneration || disposed || terrainTextureRecords.get(asset.id) !== existing) return;
+          existing.status = "error";
+          loadErrors.push("Terrain texture: " + (asset.name || asset.id));
+          renderHud();
+        });
+      } catch (error) {
+        existing.status = "error";
+        loadErrors.push("Terrain texture: " + (asset.name || asset.id));
+        renderHud();
+        console.warn("Terrain texture load failed for " + (asset.name || asset.id) + ".", error);
+        return false;
+      }
+      return true;
+    }
     const record = {
       status: "loading",
       texture: null,
       waiters: typeof applyTexture === "function" ? [applyTexture] : [],
-      repeatX: Math.max(1, num(repeatX, 1)),
-      repeatZ: Math.max(1, num(repeatZ, 1)),
+      refCount: 0,
       generation: terrainRuntimeGeneration
     };
     terrainTextureRecords.set(asset.id, record);
@@ -2706,9 +8297,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
-        texture.repeat.set(record.repeatX, record.repeatZ);
         record.status = "ready";
         record.texture = texture;
+        if (record.refCount <= 0) {
+          record.status = "idle";
+          record.texture = null;
+          texture.dispose();
+          terrainTextureRecords.delete(asset.id);
+          return;
+        }
         for (const waiter of record.waiters.splice(0)) waiter(texture);
         requestRender("terrain-texture-loaded");
       }, undefined, function () {
@@ -2725,6 +8322,194 @@ export function createGkWorldRuntime(canvas, options = {}) {
       return false;
     }
     return true;
+  }
+
+  function retainTerrainTexture(asset, applyTexture) {
+    if (!asset?.sourcePath || !["texture", "image"].includes(asset.assetType)) return null;
+    const existing = terrainTextureRecords.get(asset.id);
+    let record = existing || null;
+    if (!record) {
+      record = {
+        status: "idle",
+        texture: null,
+        waiters: [],
+        refCount: 0,
+        generation: terrainRuntimeGeneration
+      };
+      terrainTextureRecords.set(asset.id, record);
+    }
+    record.refCount += 1;
+    requestTerrainTexture(asset, applyTexture);
+    return record;
+  }
+
+  function releaseTerrainTexture(assetId) {
+    if (!assetId) return;
+    const record = terrainTextureRecords.get(assetId);
+    if (!record) return;
+    record.refCount = Math.max(0, num(record.refCount, 0) - 1);
+    if (record.refCount > 0) return;
+    if (record.texture) {
+      record.texture.dispose();
+      record.texture = null;
+    }
+    record.waiters.length = 0;
+    record.status = "idle";
+    terrainTextureRecords.delete(assetId);
+  }
+
+  function normalizeTerrainAssetIds(assetIds) {
+    return Array.from(new Set((Array.isArray(assetIds) ? assetIds : []).map(function (value) {
+      return String(value || "").trim();
+    }).filter(Boolean)));
+  }
+
+  function terrainEntryBucket(type) {
+    if (type === "terrainGround") return "groundTiles";
+    if (type === "terrainLayer") return "terrainLayerTiles";
+    if (type === "terrainSurface") return "surfaceSegments";
+    return null;
+  }
+
+  function adjustTerrainStreamingBucket(type, delta) {
+    const bucket = terrainEntryBucket(type);
+    if (!bucket) return;
+    if (bucket === "groundTiles") terrainStreamingState.groundTilesResident = Math.max(0, terrainStreamingState.groundTilesResident + delta);
+    else if (bucket === "terrainLayerTiles") terrainStreamingState.terrainLayerTilesResident = Math.max(0, terrainStreamingState.terrainLayerTilesResident + delta);
+    else if (bucket === "surfaceSegments") terrainStreamingState.surfaceSegmentsResident = Math.max(0, terrainStreamingState.surfaceSegmentsResident + delta);
+  }
+
+  function registerTerrainSurfaceMaterialRecord(surfaceId, record) {
+    const key = String(surfaceId || "").trim();
+    if (!key || !record) return;
+    let records = surfaceMaterialRecords.get(key);
+    if (!records) {
+      records = new Set();
+      surfaceMaterialRecords.set(key, records);
+    }
+    records.add(record);
+  }
+
+  function unregisterTerrainSurfaceMaterialRecord(surfaceId, record) {
+    const key = String(surfaceId || "").trim();
+    if (!key || !record) return;
+    const records = surfaceMaterialRecords.get(key);
+    if (!records) return;
+    records.delete(record);
+    if (!records.size) surfaceMaterialRecords.delete(key);
+  }
+
+  function removeAnimMaterialEntry(list, material) {
+    if (!Array.isArray(list) || !material) return;
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      if (list[index]?.material === material) list.splice(index, 1);
+    }
+  }
+
+  function registerTerrainRuntimeEntry(entry) {
+    const registered = registerChunkRuntimeEntry(entry);
+    if (!registered) return null;
+    terrainRuntimeEntries.set(registered.id, registered);
+    const chunkKeys = Array.isArray(registered.chunkKeys) && registered.chunkKeys.length
+      ? normalizeTerrainAssetIds(registered.chunkKeys)
+      : (registered.chunkKey ? [String(registered.chunkKey)] : []);
+    if (chunkKeys.length) {
+      registered.chunkKeys = chunkKeys;
+      registered.chunkKey = registered.chunkKey || chunkKeys[0] || null;
+      for (const chunkKey of chunkKeys) {
+        let ids = terrainRuntimeChunkIndex.get(chunkKey);
+        if (!ids) {
+          ids = new Set();
+          terrainRuntimeChunkIndex.set(chunkKey, ids);
+        }
+        ids.add(registered.id);
+      }
+    }
+    terrainStreamingState.blueprintPieces += 1;
+    return registered;
+  }
+
+  function terrainEntryTypeDelta(type) {
+    if (type === "terrainGround") return "groundTiles";
+    if (type === "terrainLayer") return "terrainLayerTiles";
+    if (type === "terrainSurface") return "surfaceSegments";
+    return null;
+  }
+
+  function buildTerrainResidentObject(entry) {
+    if (!entry || entry.object || typeof entry.buildObject !== "function") return entry?.object || null;
+    const result = entry.buildObject(entry);
+    const object = result && result.object ? result.object : (result && result.isObject3D ? result : null);
+    if (!object) return null;
+    const counts = result?.counts || countObjectTree(object);
+    const assetIds = normalizeTerrainAssetIds(result?.assetIds || entry.assetIds || []);
+    const cleanup = typeof result?.cleanup === "function" ? result.cleanup : null;
+    const onDispose = typeof result?.onDispose === "function" ? result.onDispose : null;
+    entry.object = object;
+    entry.assetIds = assetIds;
+    entry.cleanup = cleanup;
+    entry.onDispose = onDispose;
+    entry.objectCounts = counts;
+    entry.resident = true;
+    object.userData = object.userData || {};
+    object.userData.terrainChunkEntryId = entry.id;
+    object.userData.terrainChunkType = entry.type;
+    object.userData.terrainChunkDisposed = false;
+    const group = ensureTerrainRuntimeGroup();
+    group.add(object);
+    runtimeStats.sceneObjects += counts.objects;
+    runtimeStats.meshes += counts.meshes;
+    terrainRuntimeResidentEntries.add(entry.id);
+    terrainStreamingState.builtPieces += 1;
+    terrainStreamingState.residentPieces += 1;
+    terrainStreamingState.residentObjects += counts.objects;
+    terrainStreamingState.residentMeshes += counts.meshes;
+    adjustTerrainStreamingBucket(entry.type, 1);
+    return object;
+  }
+
+  function releaseTerrainResidentObject(entry, reason = "unload") {
+    if (!entry || !entry.object) return false;
+    const object = entry.object;
+    const counts = entry.objectCounts || countObjectTree(object);
+    entry.object = null;
+    entry.objectCounts = null;
+    entry.resident = false;
+    if (object.userData) object.userData.terrainChunkDisposed = true;
+    if (object.parent) object.parent.remove(object);
+    if (typeof entry.onDispose === "function") {
+      try {
+        entry.onDispose(object, entry, reason);
+      } catch (error) {
+        console.warn("Terrain chunk onDispose failed for " + String(entry.id || "unknown") + ".", error);
+      }
+    }
+    if (typeof entry.cleanup === "function") {
+      try {
+        entry.cleanup(object, entry, reason);
+      } catch (error) {
+        console.warn("Terrain chunk cleanup failed for " + String(entry.id || "unknown") + ".", error);
+      }
+    }
+    if (Array.isArray(entry.assetIds)) {
+      for (const assetId of entry.assetIds) releaseTerrainTexture(assetId);
+    }
+    disposeObject(object, { disposeTextures: true });
+    runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - counts.objects);
+    runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
+    terrainRuntimeResidentEntries.delete(entry.id);
+    terrainStreamingState.disposedPieces += 1;
+    terrainStreamingState.residentPieces = Math.max(0, terrainStreamingState.residentPieces - 1);
+    terrainStreamingState.residentObjects = Math.max(0, terrainStreamingState.residentObjects - counts.objects);
+    terrainStreamingState.residentMeshes = Math.max(0, terrainStreamingState.residentMeshes - counts.meshes);
+    adjustTerrainStreamingBucket(entry.type, -1);
+    return true;
+  }
+
+  function ensureTerrainResidentEntry(entry) {
+    if (!entry) return null;
+    if (entry.object) return entry.object;
+    return buildTerrainResidentObject(entry);
   }
 
   function createOverlayMaterial(color, opacity, options = {}) {
@@ -2746,21 +8531,20 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return material;
   }
 
-  function addTerrainRuntimeMesh(mesh) {
+  function addTerrainRuntimeMesh(mesh, entryOptions = {}) {
     if (!mesh) return;
+    mesh.castShadow = false;
+    mesh.receiveShadow = Boolean(terrainShadowOptions().receiveShadow);
     const group = ensureTerrainRuntimeGroup();
     group.add(mesh);
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
     runtimeStats.terrainVisuals += 1;
-  }
-
-  function updateWaterAnimation(time) {
-    for (const entry of waterAnimMaterials) {
-      const phase = (time * 0.001 * entry.flowSpeed * 0.8) % (Math.PI * 2);
-      const pulse = Math.sin(phase) * 0.04;
-      entry.material.color.setHSL(entry.baseH, entry.baseS, clamp(entry.baseL + pulse, 0.1, 0.9));
-    }
+    registerChunkRuntimeEntry(createTerrainVisualRegistryEntry(Object.assign({}, entryOptions, {
+      object: mesh,
+      hasVisual: true,
+      visible: true
+    })));
   }
 
   function updateSurfaceAnimation(time) {
@@ -2793,11 +8577,34 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return new THREE.Vector2(pair.x, pair.y);
   }
 
-  function cloneSurfaceTextureUniform(texture, hasTextureUniform) {
-    if (texture && hasTextureUniform && hasTextureUniform.value > 0.5) {
-      return texture;
+  function getOrCreateSurfaceDefaultWhiteTex() {
+    if (surfaceDefaultWhiteTex && !surfaceDefaultWhiteTex.isDisposed) return surfaceDefaultWhiteTex;
+    const data = new Uint8Array([255, 255, 255, 255]);
+    surfaceDefaultWhiteTex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+    surfaceDefaultWhiteTex.needsUpdate = true;
+    return surfaceDefaultWhiteTex;
+  }
+
+  function cloneSurfaceFallbackTexture() {
+    return cloneTerrainTexture(getOrCreateSurfaceDefaultWhiteTex(), 1, 1);
+  }
+
+  function replaceMaterialMapTexture(material, texture) {
+    if (!material) return;
+    const previous = material.map || null;
+    if (previous && previous !== texture && previous.isTexture && typeof previous.dispose === "function") {
+      previous.dispose();
     }
-    return getOrCreateSurfaceDefaultWhiteTex();
+    material.map = texture || null;
+  }
+
+  function replaceUniformTexture(uniform, texture) {
+    if (!uniform) return;
+    const previous = uniform.value || null;
+    if (previous && previous !== texture && previous.isTexture && typeof previous.dispose === "function") {
+      previous.dispose();
+    }
+    uniform.value = texture || null;
   }
 
   function updateSurfaceMaterialUniforms(material, patch = {}) {
@@ -2844,18 +8651,18 @@ export function createGkWorldRuntime(canvas, options = {}) {
     }
     if (surface.textureAssetId !== undefined) {
       if (!surface.textureAssetId) {
-        material.map = null;
+        replaceMaterialMapTexture(material, null);
         material.color.copy(uniforms.fallbackColor.value);
         material.needsUpdate = true;
       }
     }
     if (surface.secondaryTextureAssetId !== undefined) {
       uniforms.hasSecondaryTex.value = 0.0;
-      uniforms.secondaryTex.value = getOrCreateSurfaceDefaultWhiteTex();
+      replaceUniformTexture(uniforms.secondaryTex, cloneSurfaceFallbackTexture());
     }
     if (surface.edgeFadeNoiseAssetId !== undefined) {
       uniforms.hasEdgeNoiseTex.value = 0.0;
-      uniforms.edgeNoiseTex.value = getOrCreateSurfaceDefaultWhiteTex();
+      replaceUniformTexture(uniforms.edgeNoiseTex, cloneSurfaceFallbackTexture());
     }
     if (surface.opacity !== undefined || surface.edgeFadeWidth !== undefined) {
       const transparent = uniforms.opacity.value < 0.999 || uniforms.edgeFadeWidth.value > 0.0;
@@ -2867,53 +8674,85 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function setTerrainSurfacePreview(surfaceId, patch) {
     if (!surfaceId) return false;
-    const record = surfaceMaterialRecords.get(surfaceId);
-    if (!record?.material) return false;
-    updateSurfaceMaterialUniforms(record.material, patch || {});
-    return true;
+    const recordSet = surfaceMaterialRecords.get(surfaceId);
+    if (!recordSet) return false;
+    const records = recordSet instanceof Set ? Array.from(recordSet) : [recordSet];
+    let updated = false;
+    for (const record of records) {
+      if (!record?.material) continue;
+      updateSurfaceMaterialUniforms(record.material, patch || {});
+      updated = true;
+    }
+    return updated;
   }
 
-  function buildTerrainRuntimeVisuals(worldData) {
+  function buildTerrainRuntimeStreamingVisuals(worldData) {
     const terrain = worldData?.terrain || {};
     const ground = worldData?.ground || null;
-    const groundWidth = num(ground?.width, 0);
-    const groundDepth = num(ground?.depth, 0);
-    const groundY = num(ground?.y, 0);
-    const hasGroundPlane = groundWidth > 0 && groundDepth > 0;
-    const layers = Array.isArray(terrain.layers) ? terrain.layers.slice() : [];
-    const paths = Array.isArray(terrain.paths) ? terrain.paths : [];
-    const waters = Array.isArray(terrain.waters) ? terrain.waters : [];
+    const policy = resolveChunkPolicy(worldData, mode);
+    const terrainVisualChunkingEnabled = policy.terrainVisualChunkingEnabled === true;
+    const groundBounds = worldGroundBounds(ground);
+    const hasGroundPlane = Boolean(groundBounds);
+    const layers = Array.isArray(terrain.layers) ? terrain.layers.slice().sort(function (left, right) {
+      return num(left?.priority, 0) - num(right?.priority, 0);
+    }) : [];
     const surfaces = Array.isArray(terrain.surfaces) ? terrain.surfaces : [];
-    let renderIndex = 0;
+    const groundTiles = groundChunkTilesForBounds(ground, policy);
+    const terrainLayerUvBounds = groundBounds ? {
+      minX: groundBounds.minX,
+      maxX: groundBounds.maxX,
+      minZ: groundBounds.minZ,
+      maxZ: groundBounds.maxZ,
+      repeatX: num(ground?.width, 0) > 0 ? Math.max(1, num(ground.width, 0) / 8) : 1,
+      repeatZ: num(ground?.depth, 0) > 0 ? Math.max(1, num(ground.depth, 0) / 8) : 1
+    } : null;
+    const groundTextureRepeat = Math.max(1, num(ground?.textureRepeat, 1));
+    const terrainAssetIds = new Set();
+    const maxSegmentLength = Math.max(1, Math.min(policy.chunkWorldWidth, policy.chunkWorldDepth) / 2);
+    terrainStreamingState.lastUpdateReason = "blueprint";
 
-    function applyTextureToMaterial(material, textureAssetId) {
-      const asset = assetById(worldData, textureAssetId);
-      if (!asset) return;
-      requestTerrainTexture(asset, function (texture) {
-        material.map = texture;
-        material.needsUpdate = true;
-      }, groundWidth > 0 ? Math.max(1, groundWidth / 8) : 1, groundDepth > 0 ? Math.max(1, groundDepth / 8) : 1);
+    function rememberAssetId(assetId) {
+      const value = String(assetId || "").trim();
+      if (!value) return;
+      terrainAssetIds.add(value);
     }
 
-    // For path/water surfaces, UV tiling is done by geometry uvScale — texture repeat stays (1,1).
-    function applyPathSurfaceTexture(material, textureAssetId) {
-      const asset = assetById(worldData, textureAssetId);
-      if (!asset) return;
-      requestTerrainTexture(asset, function (texture) {
-        material.map = texture;
-        material.needsUpdate = true;
-      }, 1, 1);
+    function trackAssets(assetIds) {
+      for (const assetId of normalizeTerrainAssetIds(assetIds)) rememberAssetId(assetId);
     }
 
-    function getOrCreateSurfaceDefaultWhiteTex() {
-      if (surfaceDefaultWhiteTex && !surfaceDefaultWhiteTex.isDisposed) return surfaceDefaultWhiteTex;
-      const data = new Uint8Array([255, 255, 255, 255]);
-      surfaceDefaultWhiteTex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
-      surfaceDefaultWhiteTex.needsUpdate = true;
-      return surfaceDefaultWhiteTex;
+    function registerStreamableTerrainEntry(meta, buildObjectFactory) {
+      const entry = registerTerrainRuntimeEntry(Object.assign({}, meta, {
+        object: null,
+        hasVisual: true,
+        visible: true
+      }));
+      entry.buildObject = function () {
+        return buildObjectFactory(entry);
+      };
+      entry.terrainStreamable = true;
+      trackAssets(meta.assetIds || []);
+      runtimeStats.terrainVisuals += 1;
+      const bucket = terrainEntryTypeDelta(entry.type);
+      if (bucket === "groundTiles" || bucket === "terrainLayerTiles") runtimeStats.terrainLayers += 1;
+      else if (bucket === "surfaceSegments") runtimeStats.terrainSurfaces += 1;
+      return entry;
     }
 
-    function createSurfaceLayerMaterial(surface, options) {
+    function buildTextureClone(material, assetId, repeatX, repeatZ, apply) {
+      const asset = assetById(worldData, assetId);
+      if (!asset) return false;
+      retainTerrainTexture(asset, function (texture) {
+        if (!material || material.userData?.terrainChunkDisposed === true) return;
+        const clone = cloneTerrainTexture(texture, repeatX, repeatZ);
+        if (typeof apply === "function") {
+          apply(clone, texture);
+        }
+      });
+      return true;
+    }
+
+    function createTerrainSurfaceMaterial(surface, options) {
       const opacity = clamp(num(surface?.opacity, 1), 0, 1);
       const width = Math.max(0.1, num(surface?.width, 3));
       const mainScale = surfaceScalePair(surface, "textureScaleX", "textureScaleY", "textureScale");
@@ -2923,7 +8762,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
       const edgeFadeW = num(surface?.edgeFadeWidth, 0.8);
       const edgeFadeWidthUV = edgeFadeW > 0 ? clamp(edgeFadeW / width, 0, 0.45) : 0;
       const edgeNoiseStrength = clamp(num(surface?.edgeFadeNoiseStrength, 0.35), 0, 1);
-
       const isAnimated = surface?.animated === true;
       const flowSpeed = isAnimated ? num(surface?.flowSpeed, 0) : 0;
       const flowDir = isAnimated ? num(surface?.flowDirection, 0) : 0;
@@ -2933,7 +8771,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
       const ftl = String(surface?.flowTextureLayer || "main");
       const flowMain = (ftl === "main" || ftl === "both") ? 1.0 : 0.0;
       const flowSecondary = (ftl === "secondary" || ftl === "both") ? 1.0 : 0.0;
-      const whiteTex = getOrCreateSurfaceDefaultWhiteTex();
+      const whiteTex = cloneSurfaceFallbackTexture();
+      const edgeWhiteTex = cloneSurfaceFallbackTexture();
       const fallbackHex = surface?.fallbackColor || "#8a6f45";
       const uniforms = {
         secondaryTex: { value: whiteTex },
@@ -2941,7 +8780,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         secondaryStrength: { value: secondaryStrength },
         mainScale: { value: new THREE.Vector2(mainScale.x, mainScale.y) },
         secondaryScale: { value: new THREE.Vector2(secondaryScale.x, secondaryScale.y) },
-        edgeNoiseTex: { value: whiteTex },
+        edgeNoiseTex: { value: edgeWhiteTex },
         hasEdgeNoiseTex: { value: 0.0 },
         edgeFadeWidth: { value: edgeFadeWidthUV },
         edgeNoiseStrength: { value: edgeNoiseStrength },
@@ -2954,7 +8793,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         flowSecondary: { value: flowSecondary },
         fallbackColor: { value: colorFromHex(fallbackHex, "#8a6f45") }
       };
-      const mat = new THREE.MeshStandardMaterial({
+      const material = new THREE.MeshStandardMaterial({
         color: colorFromHex(fallbackHex, "#8a6f45"),
         roughness: 1,
         metalness: 0,
@@ -2965,13 +8804,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
         depthTest: true,
         depthWrite: opacity >= 0.999 && edgeFadeWidthUV <= 0
       });
-      mat.polygonOffset = true;
-      mat.polygonOffsetFactor = num(options?.polygonOffsetFactor, -5);
-      mat.polygonOffsetUnits = num(options?.polygonOffsetUnits, -5);
-      mat.customProgramCacheKey = function () {
+      material.polygonOffset = true;
+      material.polygonOffsetFactor = num(options?.polygonOffsetFactor, -5);
+      material.polygonOffsetUnits = num(options?.polygonOffsetUnits, -5);
+      material.customProgramCacheKey = function () {
         return "surface-layer-lit-v4";
       };
-      mat.onBeforeCompile = function (shader) {
+      material.onBeforeCompile = function (shader) {
         shader.uniforms.secondaryTex = uniforms.secondaryTex;
         shader.uniforms.hasSecondaryTex = uniforms.hasSecondaryTex;
         shader.uniforms.secondaryStrength = uniforms.secondaryStrength;
@@ -2996,41 +8835,41 @@ export function createGkWorldRuntime(canvas, options = {}) {
           .replace("#include <common>", "#include <common>\nvarying vec2 vSurfaceUv;\nuniform sampler2D secondaryTex;\nuniform float hasSecondaryTex;\nuniform float secondaryStrength;\nuniform vec2 secondaryScale;\nuniform sampler2D edgeNoiseTex;\nuniform float hasEdgeNoiseTex;\nuniform float edgeFadeWidth;\nuniform float edgeNoiseStrength;\nuniform vec2 edgeNoiseScale;\nuniform float time;\nuniform float flowSpeed;\nuniform vec2 flowDir;\nuniform float flowMain;\nuniform float flowSecondary;\nuniform vec3 fallbackColor;")
           .replace("#include <color_fragment>", "#include <color_fragment>\nvec2 surfaceFlow = flowDir * time * flowSpeed;\nvec2 surfaceSecondaryUv = vSurfaceUv * secondaryScale + surfaceFlow * flowSecondary;\nvec2 surfaceEdgeNoiseUv = vSurfaceUv * edgeNoiseScale;\nvec3 surfaceBaseColor = diffuseColor.rgb;\nvec4 surfaceSecondarySample = hasSecondaryTex > 0.5 ? sRGBTransferEOTF(texture2D(secondaryTex, surfaceSecondaryUv)) : vec4(surfaceBaseColor, diffuseColor.a);\nvec3 surfaceFinalColor = mix(surfaceBaseColor, surfaceSecondarySample.rgb, secondaryStrength * hasSecondaryTex);\nfloat surfaceEdgeDistance = min(vSurfaceUv.x, 1.0 - vSurfaceUv.x);\nfloat surfaceEdgeNoise = 0.0;\nif (hasEdgeNoiseTex > 0.5 && edgeNoiseStrength > 0.0 && edgeFadeWidth > 0.0) {\n  surfaceEdgeNoise = (texture2D(edgeNoiseTex, surfaceEdgeNoiseUv).r * 2.0 - 1.0) * edgeNoiseStrength * max(edgeFadeWidth, 0.001);\n}\nfloat surfaceEdgeAlpha = edgeFadeWidth > 0.001 ? smoothstep(0.0, edgeFadeWidth, surfaceEdgeDistance + surfaceEdgeNoise) : 1.0;\ndiffuseColor.rgb = surfaceFinalColor;\ndiffuseColor.a *= surfaceEdgeAlpha;");
       };
-      mat.userData.surfaceUniforms = uniforms;
-      mat.userData.surfaceState = Object.assign({}, surface);
-      return mat;
+      material.userData.surfaceUniforms = uniforms;
+      material.userData.surfaceState = Object.assign({}, surface);
+      return material;
     }
 
-    function applySurfaceLayerTexture(material, assetId, uniformName, hasUniformName) {
+    function applySurfaceLayerTexture(material, assetId, uniformName, hasUniformName, repeatX, repeatZ) {
       const asset = assetById(worldData, assetId);
-      if (!asset) return;
-      requestTerrainTexture(asset, function (texture) {
+      if (!asset) return false;
+      retainTerrainTexture(asset, function (texture) {
+        if (!material || material.userData?.terrainChunkDisposed === true) return;
         const uniforms = material?.userData?.surfaceUniforms || null;
         if (!uniforms) return;
-        const textureClone = texture.clone();
-        textureClone.colorSpace = THREE.SRGBColorSpace;
-        textureClone.wrapS = THREE.RepeatWrapping;
-        textureClone.wrapT = THREE.RepeatWrapping;
-        textureClone.needsUpdate = true;
-        const mainScale = uniforms.mainScale?.value || null;
+        const clone = cloneTerrainTexture(texture, repeatX, repeatZ);
         if (uniformName === "mainTex") {
-          textureClone.repeat.set(mainScale?.x || 1, mainScale?.y || 1);
-          material.map = textureClone;
+          clone.repeat.set(Math.max(0.0001, num(repeatX, 1)), Math.max(0.0001, num(repeatZ, 1)));
+          replaceMaterialMapTexture(material, clone);
           material.color.set(0xffffff);
           material.needsUpdate = true;
           requestRender("surface-main-texture-loaded");
           return;
         }
         if (!uniforms[uniformName] || !uniforms[hasUniformName]) return;
-        uniforms[uniformName].value = texture;
+        replaceUniformTexture(uniforms[uniformName], clone);
         uniforms[hasUniformName].value = 1.0;
         requestRender("surface-texture-loaded");
-      }, 1, 1);
+      });
+      return true;
     }
 
-    for (const layer of layers.sort(function (left, right) {
-      return num(left?.priority, 0) - num(right?.priority, 0);
-    })) {
+    function registerTerrainPiece(meta, buildObjectFactory) {
+      const entry = registerStreamableTerrainEntry(meta, buildObjectFactory);
+      return entry;
+    }
+
+    for (const layer of layers) {
       const shapeType = String(layer?.shapeType || "full").trim().toLowerCase();
       const presetColor = terrainPresetColor(layer?.material);
       const userColor = colorFromHex(layer?.color, presetColor);
@@ -3038,105 +8877,88 @@ export function createGkWorldRuntime(canvas, options = {}) {
       const opacity = clamp(num(layer?.opacity, 1), 0, 1);
       const priority = num(layer?.priority, 0);
       const yOffset = 0.05 + clamp(priority, -1000, 1000) * 0.001;
-      let geometry = null;
-      let positionY = groundY + yOffset;
-
-      if (shapeType === "polygon") {
-        geometry = createPolygonShapeGeometry(layer?.points);
-      } else if (hasGroundPlane) {
-        geometry = new THREE.PlaneGeometry(groundWidth, groundDepth, 1, 1);
-        geometry.rotateX(-Math.PI / 2);
+      const positionY = num(ground?.y, 0) + yOffset;
+      const layerKey = layer?.id || "terrain";
+      if (shapeType === "full") {
+        for (const tile of groundTiles) {
+          registerTerrainPiece({
+            id: layerKey + "::" + tile.chunkKey,
+            type: "terrainLayer",
+            terrainKind: "layer",
+            layerId: layerKey,
+            chunkKey: terrainVisualChunkingEnabled ? tile.chunkKey : null,
+            chunkKeys: terrainVisualChunkingEnabled ? [tile.chunkKey] : [],
+            segmentId: tile.chunkKey,
+            assetIds: layer?.textureAssetId ? [layer.textureAssetId] : []
+          }, function () {
+            const geometry = createWorldPlaneGeometry(tile.minX, tile.maxX, tile.minZ, tile.maxZ, positionY, terrainLayerUvBounds || {
+              minX: tile.minX,
+              maxX: tile.maxX,
+              minZ: tile.minZ,
+              maxZ: tile.maxZ,
+              repeatX: 1,
+              repeatZ: 1
+            });
+            if (!geometry) return null;
+            const material = createOverlayMaterial(finalColor, opacity, {
+              polygonOffsetFactor: -2,
+              polygonOffsetUnits: -2
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.name = "GK terrain layer " + layerKey + " tile " + tile.chunkKey;
+            mesh.renderOrder = 1000;
+            mesh.userData.terrainRuntime = true;
+            if (layer?.textureAssetId) {
+              buildTextureClone(material, layer.textureAssetId, terrainLayerUvBounds?.repeatX || 1, terrainLayerUvBounds?.repeatZ || 1, function (clone) {
+                if (!mesh || mesh.userData?.terrainChunkDisposed === true) {
+                  clone.dispose();
+                  return;
+                }
+                material.map = clone;
+                material.needsUpdate = true;
+              });
+            }
+            return { object: mesh, assetIds: layer?.textureAssetId ? [layer.textureAssetId] : [] };
+          });
+        }
+        continue;
       }
-      if (!geometry) continue;
-
-      const material = createOverlayMaterial(finalColor, opacity, {
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2
-      });
-      if (layer?.textureAssetId) applyTextureToMaterial(material, layer.textureAssetId);
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = "GK terrain layer " + String(layer?.id || "terrain");
-      mesh.position.y = positionY;
-      mesh.renderOrder = 1000 + renderIndex;
-      mesh.frustumCulled = false;
-      mesh.userData.terrainRuntime = true;
-      addTerrainRuntimeMesh(mesh);
-      runtimeStats.terrainLayers += 1;
-      renderIndex += 1;
-    }
-
-    const pathBaseY = groundY;
-    for (const path of paths) {
-      const width = Math.max(0, num(path?.width, 0));
-      if (width <= 0) continue;
-      const rawPoints = normalizeWorldPointList(path?.points);
-      if (rawPoints.length < 2) continue;
-      const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
-      const pathType = String(path?.pathType || "sand").trim().toLowerCase();
-      const presetColor = pathPresetColor(pathType);
-      const baseColor = colorFromHex(path?.color, presetColor);
-      const finalColor = mixColors(baseColor, presetColor, 0.2);
-      const slightlySunken = path?.slightlySunken === true || String(path?.slightlySunken || "").toLowerCase() === "true";
-      if (slightlySunken) finalColor.offsetHSL(0, 0.03, -0.05);
-      const yOffset = num(path?.yOffset, 0.01) + (slightlySunken ? -0.003 : 0);
-      const surfaceY = pathBaseY + yOffset;
-      const opacity = clamp(num(path?.opacity, 1), 0, 1);
-      const geometry = buildSurfaceStripGeometry(centerline, {
-        width: width,
-        y: surfaceY,
-        uvScale: Math.max(0.01, num(path?.textureScale, 1))
-      });
-      if (!geometry) continue;
-      const material = createOverlayMaterial(finalColor, opacity, {
-        polygonOffsetFactor: -3,
-        polygonOffsetUnits: -3
-      });
-      if (path?.materialMode === "texture" && path?.textureAssetId) applyPathSurfaceTexture(material, path.textureAssetId);
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = "GK path layer " + String(path?.id || "path");
-      mesh.renderOrder = 2000 + renderIndex;
-      mesh.frustumCulled = false;
-      mesh.userData.terrainRuntime = true;
-      addTerrainRuntimeMesh(mesh);
-      runtimeStats.terrainPaths += 1;
-      renderIndex += 1;
-    }
-
-    for (const water of waters) {
-      const width = Math.max(0, num(water?.width, 0));
-      if (width <= 0) continue;
-      const rawPoints = normalizeWorldPointList(water?.points);
-      if (rawPoints.length < 2) continue;
-      const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
-      const waterType = String(water?.waterType || "river").trim().toLowerCase();
-      const presetColor = waterPresetColor(waterType);
-      const baseColor = colorFromHex(water?.color, presetColor);
-      const finalColor = mixColors(baseColor, presetColor, 0.22);
-      if (waterType === "lake") finalColor.offsetHSL(-0.01, 0.04, -0.04);
-      if (waterType === "pond") finalColor.offsetHSL(0.03, 0.08, 0.02);
-      const requestedY = num(water?.y, groundY + 0.04);
-      const visualY = requestedY < groundY + 0.04 ? groundY + 0.04 : requestedY;
-      const opacity = clamp(num(water?.opacity, 1), 0, 1);
-      const geometry = buildSurfaceStripGeometry(centerline, {
-        width: width,
-        y: visualY,
-        uvScale: Math.max(0.01, num(water?.textureScale, 1))
-      });
-      if (!geometry) continue;
-      const material = createOverlayMaterial(finalColor, opacity, {
-        polygonOffsetFactor: -4,
-        polygonOffsetUnits: -4
-      });
-      if (water?.materialMode === "texture" && water?.textureAssetId) applyPathSurfaceTexture(material, water.textureAssetId);
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = "GK water layer " + String(water?.id || "water");
-      mesh.renderOrder = 3000 + renderIndex;
-      mesh.frustumCulled = false;
-      mesh.userData.terrainRuntime = true;
-      addTerrainRuntimeMesh(mesh);
-      runtimeStats.terrainWaters += 1;
-      renderIndex += 1;
-      // flowSpeed: UV scroll animation requires textureAssetId — not active in this phase
+      if (!hasGroundPlane || !Array.isArray(layer?.points) || layer.points.length < 3) continue;
+      for (const tile of groundTiles) {
+        registerTerrainPiece({
+          id: layerKey + "::" + tile.chunkKey,
+          type: "terrainLayer",
+          terrainKind: "layer",
+          layerId: layerKey,
+          chunkKey: terrainVisualChunkingEnabled ? tile.chunkKey : null,
+          chunkKeys: terrainVisualChunkingEnabled ? [tile.chunkKey] : [],
+          segmentId: tile.chunkKey,
+          assetIds: layer?.textureAssetId ? [layer.textureAssetId] : []
+        }, function () {
+          const geometry = createClippedPolygonTileGeometry(layer.points, tile);
+          if (!geometry) return null;
+          const material = createOverlayMaterial(finalColor, opacity, {
+            polygonOffsetFactor: -2,
+            polygonOffsetUnits: -2
+          });
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.name = "GK terrain layer " + layerKey + " tile " + tile.chunkKey;
+          mesh.position.y = positionY;
+          mesh.renderOrder = 1000;
+          mesh.userData.terrainRuntime = true;
+          if (layer?.textureAssetId) {
+            buildTextureClone(material, layer.textureAssetId, terrainLayerUvBounds?.repeatX || 1, terrainLayerUvBounds?.repeatZ || 1, function (clone) {
+              if (!mesh || mesh.userData?.terrainChunkDisposed === true) {
+                clone.dispose();
+                return;
+              }
+              material.map = clone;
+              material.needsUpdate = true;
+            });
+          }
+          return { object: mesh, assetIds: layer?.textureAssetId ? [layer.textureAssetId] : [] };
+        });
+      }
     }
 
     for (const surface of surfaces) {
@@ -3145,54 +8967,97 @@ export function createGkWorldRuntime(canvas, options = {}) {
       const rawPoints = normalizeWorldPointList(surface?.points);
       if (rawPoints.length < 2) continue;
       const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
-      const yOffset = num(surface?.yOffset, 0.02);
-      const surfaceY = groundY + yOffset;
-      const geometry = buildSurfaceStripGeometry(centerline, {
+      const surfaceY = num(ground?.y, 0) + num(surface?.yOffset, 0.02);
+      const pieces = segmentPolylineForChunks(centerline, policy, {
         width: width,
-        y: surfaceY,
-        uvScale: 1
+        maxSegmentLength: maxSegmentLength,
+        segmentBaseId: String(surface?.id || surface?.surfaceId || "surface")
       });
-      if (!geometry) continue;
-      const material = createSurfaceLayerMaterial(surface, {
-        polygonOffsetFactor: -5,
-        polygonOffsetUnits: -5
-      });
-      if (surface?.textureAssetId) {
-        applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex");
-      }
-      if (surface?.secondaryTextureAssetId && num(surface?.secondaryTextureStrength, 0) > 0) {
-        applySurfaceLayerTexture(material, surface.secondaryTextureAssetId, "secondaryTex", "hasSecondaryTex");
-      }
-      if (surface?.edgeFadeNoiseAssetId && num(surface?.edgeFadeNoiseStrength, 0) > 0) {
-        applySurfaceLayerTexture(material, surface.edgeFadeNoiseAssetId, "edgeNoiseTex", "hasEdgeNoiseTex");
-      }
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = "GK surface layer " + String(surface?.id || "surface");
-      mesh.renderOrder = 3500 + renderIndex;
-      mesh.frustumCulled = false;
-      mesh.castShadow = false;
-      mesh.receiveShadow = Boolean(currentShadowPolicy().enabled);
-      mesh.userData.terrainRuntime = true;
-      mesh.userData.surfaceLayerId = surface?.id || null;
-      mesh.userData.entityId = surface?.id || null;
-      addTerrainRuntimeMesh(mesh);
-      surfaceMaterialRecords.set(surface?.id || mesh.uuid, {
-        surfaceId: surface?.id || mesh.uuid,
-        material: material,
-        uniforms: material.userData.surfaceUniforms,
-        mesh: mesh
-      });
-      if (surface?.animated && num(surface?.flowSpeed, 0) !== 0) {
-        surfaceAnimMaterials.push({
-          material: material,
-          uniforms: material.userData.surfaceUniforms,
-          mainMap: null,
-          baseMainOffset: new THREE.Vector2()
+      for (const piece of pieces) {
+        registerTerrainPiece({
+          id: piece.id,
+          type: "terrainSurface",
+          terrainKind: "surface",
+          layerId: surface?.id || surface?.surfaceId || null,
+          segmentId: piece.segmentId,
+          chunkKey: piece.chunkKey,
+          chunkKeys: piece.chunkKeys,
+          assetIds: normalizeTerrainAssetIds([
+            surface?.textureAssetId,
+            surface?.secondaryTextureAssetId,
+            surface?.edgeFadeNoiseAssetId
+          ])
+        }, function () {
+          const material = createTerrainSurfaceMaterial(surface, {
+            polygonOffsetFactor: -5,
+            polygonOffsetUnits: -5
+          });
+          const geometry = buildSurfaceStripGeometry(piece.points, {
+            width: width,
+            y: surfaceY,
+            uvScale: 1,
+            uvStartLength: 0
+          });
+          if (!geometry) return null;
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.name = "GK surface layer " + String(surface?.id || "surface") + "::" + piece.segmentId;
+          mesh.renderOrder = 3500;
+          mesh.castShadow = false;
+          mesh.receiveShadow = Boolean(terrainShadowOptions().receiveShadow);
+          mesh.userData.terrainRuntime = true;
+          mesh.userData.surfaceLayerId = surface?.id || null;
+          mesh.userData.entityId = surface?.id || null;
+
+          const surfaceRecord = {
+            surfaceId: String(surface?.id || surface?.surfaceId || "surface"),
+            material: material,
+            uniforms: material.userData.surfaceUniforms,
+            mesh: mesh
+          };
+          registerTerrainSurfaceMaterialRecord(surfaceRecord.surfaceId, surfaceRecord);
+          if (surface?.animated && num(surface?.flowSpeed, 0) !== 0) {
+            surfaceAnimMaterials.push({
+              material: material,
+              uniforms: material.userData.surfaceUniforms,
+              mainMap: null,
+              baseMainOffset: new THREE.Vector2()
+            });
+          }
+          if (surface?.textureAssetId) {
+            const repeatX = Math.max(0.01, num(surface?.textureScaleX, num(surface?.textureScale, 1)));
+            const repeatY = Math.max(0.01, num(surface?.textureScaleY, num(surface?.textureScale, 1)));
+            applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex", repeatX, repeatY);
+          }
+          if (surface?.secondaryTextureAssetId && num(surface?.secondaryTextureStrength, 0) > 0) {
+            const repeatX = Math.max(0.01, num(surface?.secondaryTextureScaleX, num(surface?.secondaryTextureScale, 1)));
+            const repeatY = Math.max(0.01, num(surface?.secondaryTextureScaleY, num(surface?.secondaryTextureScale, 1)));
+            applySurfaceLayerTexture(material, surface.secondaryTextureAssetId, "secondaryTex", "hasSecondaryTex", repeatX, repeatY);
+          }
+          if (surface?.edgeFadeNoiseAssetId && num(surface?.edgeFadeNoiseStrength, 0) > 0) {
+            const repeatX = Math.max(0.01, num(surface?.edgeFadeNoiseScaleX, num(surface?.edgeFadeNoiseScale, 1)));
+            const repeatY = Math.max(0.01, num(surface?.edgeFadeNoiseScaleY, num(surface?.edgeFadeNoiseScale, 1)));
+            applySurfaceLayerTexture(material, surface.edgeFadeNoiseAssetId, "edgeNoiseTex", "hasEdgeNoiseTex", repeatX, repeatY);
+          }
+          return {
+            object: mesh,
+            assetIds: normalizeTerrainAssetIds([
+              surface?.textureAssetId,
+              surface?.secondaryTextureAssetId,
+              surface?.edgeFadeNoiseAssetId
+            ]),
+            cleanup: function () {
+              unregisterTerrainSurfaceMaterialRecord(surfaceRecord.surfaceId, surfaceRecord);
+              removeAnimMaterialEntry(surfaceAnimMaterials, material);
+            }
+          };
         });
       }
-      runtimeStats.terrainSurfaces += 1;
-      renderIndex += 1;
     }
+
+    terrainStreamingState.textureAssets = terrainAssetIds.size;
+    terrainStreamingState.surfaceMaterials = Array.from(surfaceMaterialRecords.values()).reduce(function (total, records) {
+      return total + (records?.size || 0);
+    }, 0);
   }
 
   function pickTerrainEditorHandle(clientX, clientY) {
@@ -3239,6 +9104,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function updateTransformGuide() {
     if (!transformGuide) return;
+    if (!debugHelpersVisibleInCurrentMode()) {
+      transformGuide.visible = false;
+      return;
+    }
     const object = selectedRoot;
     transformGuide.visible = Boolean(object);
     if (!object) return;
@@ -3278,6 +9147,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function updateSelectionHelper() {
     if (!selectionHelper) return;
+    if (!debugHelpersVisibleInCurrentMode()) {
+      selectionHelper.object = null;
+      selectionHelper.visible = false;
+      updateTransformGuide();
+      return;
+    }
     const object = refreshSelectedRootReference();
     if (!object) {
       selectionHelper.object = null;
@@ -4027,42 +9902,56 @@ export function createGkWorldRuntime(canvas, options = {}) {
   function addGround(worldData) {
     const ground = worldData?.ground;
     if (!ground?.width || !ground?.depth) return;
-    const geometry = new THREE.PlaneGeometry(num(ground.width, 1), num(ground.depth, 1), 1, 1);
-    geometry.rotateX(-Math.PI / 2);
-    const materialOptions = {
+    const bounds = effectiveGroundBounds(ground);
+    if (!bounds) return;
+    const geometry = createWorldPlaneGeometry(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, num(ground.y, 0), {
+      minX: 0,
+      maxX: groundTextureWorldSize(ground).x,
+      minZ: 0,
+      maxZ: groundTextureWorldSize(ground).z,
+      repeatX: 1,
+      repeatZ: 1
+    });
+    if (!geometry) return;
+    const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
       roughness: 0.9,
       metalness: 0,
       flatShading: sharedWorldPerformance().smoothShading === false
-    };
-    const textureAsset = assetById(worldData, ground.textureAssetId);
-    if (textureAsset?.sourcePath) {
-      let texture = textureCache.get(textureAsset.id);
-      if (!texture) {
-        texture = textureLoader.load(textureAsset.sourcePath, requestRender, undefined, function (error) {
-          loadErrors.push("Ground texture: " + textureAsset.name);
-          renderHud();
-        });
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
-        const repeat = num(ground.textureRepeat, 1);
-        texture.repeat.set(repeat, repeat);
-        textureCache.set(textureAsset.id, texture);
-      }
-      materialOptions.map = texture;
-    }
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial(materialOptions));
+    });
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "published-ground";
-    mesh.receiveShadow = Boolean(currentShadowPolicy().enabled);
-    mesh.position.y = num(ground.y, 0);
-    content.add(mesh);
+    mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
+    mesh.userData.terrainRuntime = true;
+    mesh.userData.groundPlane = true;
+    mesh.userData.terrainChunkDisposed = false;
+    const textureAsset = assetById(worldData, ground.textureAssetId);
+    fullGroundPlaneTextureAssetId = textureAsset?.id || null;
+    if (textureAsset?.sourcePath) {
+      retainTerrainTexture(textureAsset, function (texture) {
+        if (fullGroundPlane !== mesh || mesh.userData?.terrainChunkDisposed === true) {
+          return;
+        }
+        const clone = texture.clone();
+        clone.colorSpace = THREE.SRGBColorSpace;
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.repeat.set(1, 1);
+        clone.needsUpdate = true;
+        material.map = clone;
+        material.needsUpdate = true;
+      });
+    }
+    const group = ensureTerrainRuntimeGroup();
+    group.add(mesh);
+    fullGroundPlane = mesh;
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
   }
 
   function addLights(worldData) {
     const policy = currentShadowPolicy();
+    if (stableSunShadowController?.setPolicy) stableSunShadowController.setPolicy(policy);
     for (const light of worldData?.lights || []) {
       if (light.type === "ambient") {
         content.add(new THREE.AmbientLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0)));
@@ -4070,8 +9959,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
       } else if (light.type === "directional") {
         const directional = new THREE.DirectionalLight(colorOrDefault(light.color, "#ffffff"), num(light.intensity, 0));
         directional.position.set(num(light.position?.x, 0), num(light.position?.y, 0), num(light.position?.z, 0));
+        directional.userData.shadowBasePosition = directional.position.clone();
+        directional.userData.shadowBaseTarget = new THREE.Vector3(0, 0, 0);
         applyDirectionalShadowPolicy(directional, policy);
         content.add(directional);
+        if (directional.target && !directional.target.parent) scene.add(directional.target);
+        directionalLights.push(directional);
+        if (stableSunShadowController?.registerDirectionalLight) stableSunShadowController.registerDirectionalLight(directional);
         runtimeStats.sceneObjects += 1;
       }
     }
@@ -4143,16 +10037,23 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const generation = worldBuildGeneration;
     const attach = function (gltf) {
       if (generation !== worldBuildGeneration) return;
+      if (root?.userData?.runtimeAlive === false) return;
       const clone = SkeletonUtils.clone(gltf.scene);
       applySmoothShadingToObject(clone, worldData?.world?.performance?.shared?.smoothShading !== false);
       const castShadow = options.castShadow !== false;
       const receiveShadow = options.receiveShadow !== false;
       clone.traverse(function (child) {
-        if (child.isMesh) {
+        child.userData = child.userData || {};
+        child.userData.runtimeAlive = true;
+        child.userData.runtimeResourcesShared = true;
+        if (child.isMesh || child.isInstancedMesh) {
           child.castShadow = castShadow;
           child.receiveShadow = receiveShadow;
         }
       });
+      clone.userData = clone.userData || {};
+      clone.userData.runtimeAlive = true;
+      clone.userData.runtimeResourcesShared = true;
       root.add(clone);
       const cloneCounts = countObjectTree(clone);
       runtimeStats.sceneObjects += cloneCounts.objects;
@@ -4208,8 +10109,17 @@ export function createGkWorldRuntime(canvas, options = {}) {
     group.name = options.groupName || batchKind + "-batch";
     group.userData.batchKind = batchKind;
     group.userData[batchKind + "Batch"] = true;
+    group.userData.runtimeAlive = true;
     group.userData.transformable = false;
     group.userData.snapToGround = false;
+    group.matrixAutoUpdate = false;
+    const chunkKeys = Array.isArray(options.chunkKeys) && options.chunkKeys.length
+      ? Array.from(new Set(options.chunkKeys.map(function (key) { return String(key || "").trim(); }).filter(Boolean)))
+      : (options.chunkKey ? [String(options.chunkKey).trim()] : []);
+    if (chunkKeys.length) {
+      group.userData.chunkKeys = chunkKeys.slice();
+      group.userData.chunkKey = String(options.chunkKey || chunkKeys[0] || "");
+    }
     const instanceTransform = new THREE.Object3D();
     const instanceMatrix = new THREE.Matrix4();
     const instanceTransforms = instances.map(function (entity) { return entity?.transform || null; }).filter(Boolean);
@@ -4219,6 +10129,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
       mesh.name = template.name ? template.name + " [" + batchKind + "]" : batchKind + " [instances]";
       mesh.castShadow = options.castShadow !== false;
       mesh.receiveShadow = options.receiveShadow !== false;
+      mesh.frustumCulled = true;
+      mesh.matrixAutoUpdate = false;
       for (let index = 0; index < instanceTransforms.length; index += 1) {
         const transform = instanceTransforms[index];
         instanceTransform.position.set(num(transform?.position?.x, 0), num(transform?.position?.y, 0), num(transform?.position?.z, 0));
@@ -4245,39 +10157,128 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const record = ensureModelRecord(asset, worldData);
     if (!record) return;
     const generation = worldBuildGeneration;
+    const chunkPolicy = options.chunkPolicy || resolveChunkPolicy(worldData, mode);
     const attach = function (gltf) {
       if (generation !== worldBuildGeneration) return;
+      if (root?.userData?.runtimeAlive === false) return;
+      const residentChunkKey = String(options.chunkKey || "").trim();
+      if (options.residentStreaming === true && residentChunkKey && !residentContentState.residentChunkKeys.has(residentChunkKey)) return;
       const canBatch = options.allowBatch !== false;
-      const batch = canBatch ? createInstancedScatterBatch(gltf, instances, {
-        batchKind: "scatter",
-        groupName: asset.name || asset.id,
-        castShadow: options.castShadow !== false,
-        receiveShadow: options.receiveShadow !== false,
-        smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false
-      }) : null;
-      if (batch) {
+      const chunkGroups = canBatch
+        ? groupEntriesByChunkKey(instances, chunkPolicy, function (entity) { return entity?.transform || null; })
+        : { grouped: new Map(), unchunked: Array.isArray(instances) ? instances.slice() : [] };
+      let handledAny = false;
+      for (const [chunkKeyValue, chunkInstances] of chunkGroups.grouped.entries()) {
+        if (!Array.isArray(chunkInstances) || !chunkInstances.length) continue;
+        if (!canBatch || chunkInstances.length < 2) {
+          for (const entity of chunkInstances) {
+            const instanceRoot = new THREE.Group();
+            instanceRoot.userData.scatterInstance = true;
+            instanceRoot.userData.chunkRuntimeType = "scatter";
+            instanceRoot.userData.transformable = false;
+            instanceRoot.userData.snapToGround = false;
+            instanceRoot.userData.runtimeAlive = true;
+            instanceRoot.userData.chunkKey = chunkKeyValue;
+            instanceRoot.name = entity.id || (entity.nodeId + "::instance");
+            transformObject(instanceRoot, entity.transform);
+            root.add(instanceRoot);
+            runtimeStats.sceneObjects += 1;
+            registerChunkRuntimeEntry({
+              id: entity.id || (entity.nodeId + "::instance"),
+              type: "scatter",
+              object: instanceRoot,
+              chunkKey: chunkKeyValue,
+              chunkKeys: [chunkKeyValue],
+              hasVisual: true
+            });
+            loadModelInto(instanceRoot, assetId, worldData, null, {
+              castShadow: options.castShadow !== false,
+              receiveShadow: options.receiveShadow !== false
+            });
+            if (options.castShadow !== false) scatterShadowFallbacks += 1;
+          }
+          handledAny = true;
+          continue;
+        }
+        const batch = createInstancedScatterBatch(gltf, chunkInstances, {
+          batchKind: "scatter",
+          groupName: asset.name || asset.id,
+          castShadow: options.castShadow !== false,
+          receiveShadow: options.receiveShadow !== false,
+          smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue]
+        });
+        if (!batch) {
+          for (const entity of chunkInstances) {
+            const instanceRoot = new THREE.Group();
+            instanceRoot.userData.scatterInstance = true;
+            instanceRoot.userData.chunkRuntimeType = "scatter";
+            instanceRoot.userData.transformable = false;
+            instanceRoot.userData.snapToGround = false;
+            instanceRoot.userData.runtimeAlive = true;
+            instanceRoot.userData.chunkKey = chunkKeyValue;
+            instanceRoot.name = entity.id || (entity.nodeId + "::instance");
+            transformObject(instanceRoot, entity.transform);
+            root.add(instanceRoot);
+            runtimeStats.sceneObjects += 1;
+            registerChunkRuntimeEntry({
+              id: entity.id || (entity.nodeId + "::instance"),
+              type: "scatter",
+              object: instanceRoot,
+              chunkKey: chunkKeyValue,
+              chunkKeys: [chunkKeyValue],
+              hasVisual: true
+            });
+            loadModelInto(instanceRoot, assetId, worldData, null, {
+              castShadow: options.castShadow !== false,
+              receiveShadow: options.receiveShadow !== false
+            });
+            if (options.castShadow !== false) scatterShadowFallbacks += 1;
+          }
+          handledAny = true;
+          continue;
+        }
+        batch.userData.chunkKey = chunkKeyValue;
+        batch.userData.chunkKeys = [chunkKeyValue];
         root.add(batch);
         const batchCounts = countObjectTree(batch);
         runtimeStats.sceneObjects += batchCounts.objects;
         runtimeStats.meshes += batchCounts.meshes;
-        if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
-        requestRender();
-        return;
+        registerChunkRuntimeEntry({
+          id: (asset.id || assetId) + "::" + chunkKeyValue + "::scatter-batch",
+          type: "scatter",
+          object: batch,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue],
+          hasVisual: true
+        });
+        handledAny = true;
       }
-      for (const entity of instances) {
+      for (const entity of chunkGroups.unchunked) {
         const instanceRoot = new THREE.Group();
         instanceRoot.userData.scatterInstance = true;
+        instanceRoot.userData.chunkRuntimeType = "scatter";
         instanceRoot.userData.transformable = false;
         instanceRoot.userData.snapToGround = false;
         instanceRoot.name = entity.id || (entity.nodeId + "::instance");
         transformObject(instanceRoot, entity.transform);
         root.add(instanceRoot);
         runtimeStats.sceneObjects += 1;
+        registerChunkRuntimeEntry({
+          id: entity.id || (entity.nodeId + "::instance"),
+          type: "scatter",
+          object: instanceRoot,
+          hasVisual: true
+        });
         loadModelInto(instanceRoot, assetId, worldData, null, {
           castShadow: options.castShadow !== false,
           receiveShadow: options.receiveShadow !== false
         });
+        if (options.castShadow !== false) scatterShadowFallbacks += 1;
+        handledAny = true;
       }
+      if (!handledAny) return;
       if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
       requestRender();
     };
@@ -4306,10 +10307,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
       scaleY: round(object.scale.y),
       scaleZ: round(object.scale.z)
     };
-  }
-
-  function round(value) {
-    return Math.round(Number(value) * 1000) / 1000;
   }
 
   function normalizeAnimations(animations) {
@@ -4406,6 +10403,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function addEntity(worldData, entity, options = {}) {
     const isScatter = entity?.type === "scatter" || entity?.kind === "scatter";
+    const residentStreaming = options.residentStreaming === true;
+    const chunkKeyValue = String(options.chunkKey || entity?.chunkKey || (residentStreaming
+      ? chunkKeyForTransform(entity?.transform || null, resolveChunkPolicy(worldData, mode))
+      : "") || "").trim();
     if (isScatter) {
       const shadowOptions = scatterShadowOptions();
       let root = entityRoots.get(entity.nodeId) || null;
@@ -4414,6 +10415,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         root.userData.entityId = entity.nodeId;
         root.userData.transformable = false;
         root.userData.snapToGround = false;
+        root.userData.runtimeAlive = true;
         root.name = entity.nodeId;
         entityRoots.set(entity.nodeId, root);
         content.add(root);
@@ -4421,23 +10423,61 @@ export function createGkWorldRuntime(canvas, options = {}) {
       }
       const instanceRoot = new THREE.Group();
       instanceRoot.userData.scatterInstance = true;
+      instanceRoot.userData.chunkRuntimeType = "scatter";
       instanceRoot.userData.transformable = false;
       instanceRoot.userData.snapToGround = false;
+      instanceRoot.userData.runtimeAlive = true;
       instanceRoot.name = entity.id || (entity.nodeId + "::instance");
       transformObject(instanceRoot, entity.transform);
       root.add(instanceRoot);
       runtimeStats.sceneObjects += 1;
+      registerChunkRuntimeEntry({
+        id: entity.id || (entity.nodeId + "::instance"),
+        type: "scatter",
+        object: instanceRoot,
+        chunkKey: chunkKeyValue || null,
+        chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+        hasVisual: true
+      });
       loadModelInto(instanceRoot, entity.modelAssetId, worldData, null, shadowOptions);
+      if (shadowOptions.castShadow === true) scatterShadowFallbacks += 1;
       return;
     }
     if (entity.solid && entity.walkable !== true && options.skipCollision !== true) {
-      solids.push({ x: num(entity.transform?.position?.x, 0), z: num(entity.transform?.position?.z, 0), radius: num(entity.collisionRadius, 1) });
+      const solidEntry = {
+        x: num(entity.transform?.position?.x, 0),
+        z: num(entity.transform?.position?.z, 0),
+        radius: num(entity.collisionRadius, 1),
+        enabled: true,
+        runtimeManaged: true
+      };
+      solids.push(solidEntry);
+      if (residentStreaming && chunkKeyValue) {
+        registerResidentChunkRecord("solid", chunkKeyValue, solidEntry.id || ((entity.id || entity.nodeId || "entity") + "::solid"), {
+          id: solidEntry.id || ((entity.id || entity.nodeId || "entity") + "::solid"),
+          type: "solid",
+          solid: solidEntry,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue]
+        });
+      }
+      registerChunkRuntimeEntry({
+        id: (entity.id || entity.nodeId || "entity") + "::solid",
+        type: "solid",
+        solid: solidEntry,
+        chunkKey: chunkKeyValue || null,
+        chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+        hasVisual: false
+      });
     }
     if (options.skipVisual === true) return;
     const root = new THREE.Group();
     root.userData.entityId = entity.id;
+    root.userData.chunkRuntimeType = "entity";
     root.userData.transformable = true;
     root.userData.snapToGround = true;
+    root.userData.runtimeAlive = true;
+    if (chunkKeyValue) root.userData.chunkKey = chunkKeyValue;
     root.userData.animationClip = entity.animationClip || null;
     root.userData.idleAnimation = entity.idleAnimation || null;
     root.userData.walkAnimation = entity.walkAnimation || null;
@@ -4447,6 +10487,23 @@ export function createGkWorldRuntime(canvas, options = {}) {
     entityRoots.set(entity.id, root);
     content.add(root);
     runtimeStats.sceneObjects += 1;
+    registerChunkRuntimeEntry({
+      id: entity.id,
+      type: "entity",
+      object: root,
+      chunkKey: chunkKeyValue || null,
+      chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+      hasVisual: true
+    });
+    if (residentStreaming && chunkKeyValue) {
+      registerResidentChunkRecord("entity", chunkKeyValue, entity.id, {
+        id: entity.id,
+        type: "entity",
+        object: root,
+        chunkKey: chunkKeyValue,
+        chunkKeys: [chunkKeyValue]
+      });
+    }
     loadModelInto(root, entity.modelAssetId, worldData, null, {
       castShadow: options.castShadow !== undefined ? options.castShadow : true,
       receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
@@ -4457,20 +10514,80 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const x = num(inter.position?.x, 0);
     const z = num(inter.position?.z, 0);
     const groundY = num(worldData?.ground?.y, 0);
+    const residentStreaming = options.residentStreaming === true;
+    const chunkKeyValue = String(options.chunkKey || inter?.chunkKey || chunkKeyFromWorldPosition(x, z, resolveChunkPolicy(worldData, mode)) || "").trim();
+    const residentInteractableRecord = residentStreaming
+      ? (interactables.find(function (value) { return value && value.id === inter.id; }) || null)
+      : null;
+    let interactableRecord = null;
     if (options.skipRegistration !== true) {
-      interactables.push({ id: inter.id, x: x, z: z, radius: num(inter.radius, 2), prompt: inter.prompt, action: inter.action });
+      interactableRecord = { id: inter.id, x: x, z: z, radius: num(inter.radius, 2), prompt: inter.prompt, action: inter.action, active: true };
+      interactables.push(interactableRecord);
+      if (residentStreaming && chunkKeyValue) {
+        registerResidentChunkRecord("interactable", chunkKeyValue, inter.id, {
+          id: inter.id,
+          type: "interactable",
+          interactable: interactableRecord,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue]
+        });
+      }
     }
     if (options.skipVisual === true || !inter.modelAssetId) {
+      const recordForRuntime = interactableRecord || residentInteractableRecord;
+      if (recordForRuntime) {
+        registerChunkRuntimeEntry({
+          id: inter.id,
+          type: "interactable",
+          interactable: recordForRuntime,
+          x: x,
+          z: z,
+          chunkKey: chunkKeyValue || null,
+          chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+          hasVisual: false
+        });
+        if (residentStreaming && chunkKeyValue) {
+          registerResidentChunkRecord("interactable", chunkKeyValue, inter.id, {
+            id: inter.id,
+            type: "interactable",
+            interactable: recordForRuntime,
+            chunkKey: chunkKeyValue,
+            chunkKeys: [chunkKeyValue]
+          });
+        }
+      }
       return;
     }
     if (inter.modelAssetId) {
       const root = new THREE.Group();
       root.userData.interactableId = inter.id;
+      root.userData.chunkRuntimeType = "interactable";
       root.userData.transformable = false;
       root.userData.snapToGround = true;
+      root.userData.runtimeAlive = true;
+      if (chunkKeyValue) root.userData.chunkKey = chunkKeyValue;
       root.position.set(x, groundY, z);
       content.add(root);
       runtimeStats.sceneObjects += 1;
+      registerChunkRuntimeEntry({
+        id: inter.id,
+        type: "interactable",
+        interactable: interactableRecord || residentInteractableRecord,
+        object: root,
+        chunkKey: chunkKeyValue || null,
+        chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+        hasVisual: true
+      });
+      if (residentStreaming && chunkKeyValue) {
+        registerResidentChunkRecord("interactable", chunkKeyValue, inter.id, {
+          id: inter.id,
+          type: "interactable",
+          interactable: interactableRecord || residentInteractableRecord,
+          object: root,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue]
+        });
+      }
       loadModelInto(root, inter.modelAssetId, worldData, null, {
         castShadow: options.castShadow !== undefined ? options.castShadow : false,
         receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
@@ -4480,6 +10597,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function addScatterEntities(worldData, scatterEntities) {
     const grouped = new Map();
+    const chunkPolicy = resolveChunkPolicy(worldData, mode);
     for (const entity of scatterEntities || []) {
       const rootKey = entity?.nodeId || entity?.scatterId || entity?.id || entity?.modelAssetId || "scatter";
       let entry = grouped.get(rootKey);
@@ -4488,6 +10606,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         root.userData.entityId = rootKey;
         root.userData.transformable = false;
         root.userData.snapToGround = false;
+        root.userData.runtimeAlive = true;
         root.name = rootKey;
         entry = { root: root, byAsset: new Map() };
         grouped.set(rootKey, entry);
@@ -4509,6 +10628,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       for (const [assetId, instances] of entry.byAsset.entries()) {
         loadScatterInstancesInto(entry.root, assetId, instances, worldData, {
           allowBatch: shouldBatchScatterProps(),
+          chunkPolicy: chunkPolicy,
           castShadow: shadowOptions.castShadow,
           receiveShadow: shadowOptions.receiveShadow
         });
@@ -4531,45 +10651,149 @@ export function createGkWorldRuntime(canvas, options = {}) {
     return { castShadow: true, receiveShadow: true };
   }
 
-  function addStaticPropBatch(worldData, assetId, descriptors) {
+  function addStaticPropBatch(worldData, assetId, descriptors, options = {}) {
     const asset = assetById(worldData, assetId);
     if (!asset?.sourcePath || !Array.isArray(descriptors) || descriptors.length < 2) return false;
     const record = ensureModelRecord(asset, worldData);
     if (!record) return false;
-    const instances = descriptors.map(function (descriptor) {
-      return { transform: descriptor.transform };
-    }).filter(function (instance) { return Boolean(instance.transform); });
-    if (instances.length < 2) return false;
+    const chunkPolicy = resolveChunkPolicy(worldData, mode);
+    const chunkGroups = groupEntriesByChunkKey(descriptors, chunkPolicy, function (descriptor) {
+      return descriptor?.transform || null;
+    });
+    const fallbackShadowOptions = modelShadowOptions(worldData, assetId);
+    const residentStreaming = options.residentStreaming === true;
+    const residentChunkKey = String(options.chunkKey || "").trim();
+    const residentChunkKind = options.chunkKind === "interactable" ? "interactable" : "entity";
+    let handledAny = false;
     const generation = worldBuildGeneration;
-    const attach = function (gltf) {
+    const attach = function (gltf, chunkKeyValue, chunkDescriptors) {
       if (generation !== worldBuildGeneration) return;
+      if (residentStreaming && residentChunkKey && !residentContentState.residentChunkKeys.has(residentChunkKey)) return;
+      const instances = chunkDescriptors.map(function (descriptor) {
+        return { transform: descriptor.transform };
+      }).filter(function (instance) { return Boolean(instance.transform); });
+      if (instances.length < 2) {
+        for (const descriptor of chunkDescriptors) {
+          if (descriptor.kind === "entity") {
+            addEntity(worldData, descriptor.entity, Object.assign({
+              skipCollision: true,
+              residentStreaming: residentStreaming,
+              chunkKey: residentChunkKey || chunkKeyValue || null
+            }, modelShadowOptions(worldData, descriptor.entity?.modelAssetId)));
+          } else if (descriptor.kind === "interactable") {
+            addInteractable(worldData, descriptor.inter, Object.assign({
+              skipRegistration: true,
+              residentStreaming: residentStreaming,
+              chunkKey: residentChunkKey || chunkKeyValue || null
+            }, modelShadowOptions(worldData, descriptor.inter?.modelAssetId)));
+          }
+        }
+        return;
+      }
       const batch = createInstancedScatterBatch(gltf, instances, {
         batchKind: "staticProp",
         groupName: asset.name || asset.id,
         castShadow: staticPropShadowOptions().castShadow,
         receiveShadow: staticPropShadowOptions().receiveShadow,
-        smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false
+        smoothShading: worldData?.world?.performance?.shared?.smoothShading !== false,
+        chunkKey: chunkKeyValue,
+        chunkKeys: [chunkKeyValue]
       });
       if (batch) {
+        batch.userData.chunkKey = chunkKeyValue;
+        batch.userData.chunkKeys = [chunkKeyValue];
+        batch.userData.runtimeAlive = true;
         content.add(batch);
         const batchCounts = countObjectTree(batch);
         runtimeStats.sceneObjects += batchCounts.objects;
         runtimeStats.meshes += batchCounts.meshes;
+        registerChunkRuntimeEntry({
+          id: (asset.id || assetId) + "::" + chunkKeyValue + "::static-batch",
+          type: "staticProp",
+          object: batch,
+          chunkKey: chunkKeyValue,
+          chunkKeys: [chunkKeyValue],
+          hasVisual: true
+        });
+        if (residentStreaming && residentChunkKey) {
+          registerResidentChunkRecord(residentChunkKind, residentChunkKey, (asset.id || assetId) + "::" + chunkKeyValue + "::static-batch", {
+            id: (asset.id || assetId) + "::" + chunkKeyValue + "::static-batch",
+            type: residentChunkKind,
+            object: batch,
+            chunkKey: residentChunkKey,
+            chunkKeys: [residentChunkKey]
+          });
+        }
         if (selectedEntityId && selectableIdForObject(batch) === selectedEntityId) selectEntity(selectedEntityId);
         requestRender();
         return;
       }
-      for (const descriptor of descriptors) {
+      for (const descriptor of chunkDescriptors) {
         if (descriptor.kind === "entity") {
-          addEntity(worldData, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(worldData, descriptor.entity?.modelAssetId)));
+          addEntity(worldData, descriptor.entity, Object.assign({
+            skipCollision: true,
+            residentStreaming: residentStreaming,
+            chunkKey: residentChunkKey || chunkKeyValue || null
+          }, modelShadowOptions(worldData, descriptor.entity?.modelAssetId)));
         } else if (descriptor.kind === "interactable") {
-          addInteractable(worldData, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(worldData, descriptor.inter?.modelAssetId)));
+          addInteractable(worldData, descriptor.inter, Object.assign({
+            skipRegistration: true,
+            residentStreaming: residentStreaming,
+            chunkKey: residentChunkKey || chunkKeyValue || null
+          }, modelShadowOptions(worldData, descriptor.inter?.modelAssetId)));
         }
       }
-      requestRender();
     };
-    if (record.status === "ready") attach(record.gltf);
-    else if (record.status === "loading") record.waiters.push(attach);
+    const processChunkGroup = function (chunkKeyValue, chunkDescriptors) {
+      if (!Array.isArray(chunkDescriptors) || !chunkDescriptors.length) return;
+      if (chunkDescriptors.length < 2) {
+        for (const descriptor of chunkDescriptors) {
+          if (descriptor.kind === "entity") {
+            addEntity(worldData, descriptor.entity, Object.assign({
+              skipCollision: true,
+              residentStreaming: residentStreaming,
+              chunkKey: residentChunkKey || chunkKeyValue || null
+            }, fallbackShadowOptions));
+          } else if (descriptor.kind === "interactable") {
+            addInteractable(worldData, descriptor.inter, Object.assign({
+              skipRegistration: true,
+              residentStreaming: residentStreaming,
+              chunkKey: residentChunkKey || chunkKeyValue || null
+            }, fallbackShadowOptions));
+          }
+        }
+        handledAny = true;
+        return;
+      }
+      if (record.status === "ready") {
+        attach(record.gltf, chunkKeyValue, chunkDescriptors);
+      } else if (record.status === "loading") {
+        record.waiters.push(function (gltf) {
+          attach(gltf, chunkKeyValue, chunkDescriptors);
+        });
+      }
+      handledAny = true;
+    };
+    for (const [chunkKeyValue, chunkDescriptors] of chunkGroups.grouped.entries()) {
+      processChunkGroup(chunkKeyValue, chunkDescriptors);
+    }
+    for (const descriptor of chunkGroups.unchunked) {
+      if (descriptor.kind === "entity") {
+        addEntity(worldData, descriptor.entity, Object.assign({
+          skipCollision: true,
+          residentStreaming: residentStreaming,
+          chunkKey: residentChunkKey || null
+        }, fallbackShadowOptions));
+      } else if (descriptor.kind === "interactable") {
+        addInteractable(worldData, descriptor.inter, Object.assign({
+          skipRegistration: true,
+          residentStreaming: residentStreaming,
+          chunkKey: residentChunkKey || null
+        }, fallbackShadowOptions));
+      }
+      handledAny = true;
+    }
+    if (!handledAny) return false;
     return true;
   }
 
@@ -4626,6 +10850,16 @@ export function createGkWorldRuntime(canvas, options = {}) {
       let object = hit.object;
       while (object && object !== content) {
         if (object.visible === false) break;
+        let shadowProxyAncestor = object;
+        let blockedByShadowProxy = false;
+        while (shadowProxyAncestor && shadowProxyAncestor !== content) {
+          if (shadowProxyAncestor.userData?.shadowProxy === true) {
+            blockedByShadowProxy = true;
+            break;
+          }
+          shadowProxyAncestor = shadowProxyAncestor.parent || null;
+        }
+        if (blockedByShadowProxy) break;
         if (object === selectionHelper || object === transformGuide) break;
         if (object.name === "GK editor transform guide" || String(object.name || "").startsWith("GK editor transform guide")) break;
         if (object.userData?.entityId || object.userData?.playerId || object.userData?.surfaceLayerId) {
@@ -4647,6 +10881,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     let best = null;
     let bestDist = Infinity;
     for (const inter of interactables) {
+      if (inter.active === false) continue;
       const dist = Math.hypot(ground.x - inter.x, ground.z - inter.z);
       if (dist <= inter.radius && dist < bestDist) { best = inter; bestDist = dist; }
     }
@@ -4656,6 +10891,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function triggerInteractable(inter) {
+    if (!inter || inter.active === false) return;
     const action = inter.action || {};
     if (action.type === "teleport" && Number.isFinite(action.teleport?.x) && Number.isFinite(action.teleport?.z)) {
       player.pos.x = action.teleport.x;
@@ -4682,11 +10918,14 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
 
   function resolveCollision(target) {
+    const startedAt = performance.now();
+    collisionPerfState.checksLastFrame += 1;
     resolveMovementInto(target, player.pos, target, {
       radius: player.radius,
       ground: world?.ground,
-      solids: solids
+      solids: activeSolids
     });
+    collisionPerfState.lastResolveMs = round(collisionPerfState.lastResolveMs + (performance.now() - startedAt));
     return target;
   }
 
@@ -4774,6 +11013,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     let best = null;
     let bestDist = Infinity;
     for (const inter of interactables) {
+      if (inter.active === false) continue;
       const dist = Math.hypot(player.pos.x - inter.x, player.pos.z - inter.z);
       if (dist <= inter.radius && dist < bestDist) { best = inter; bestDist = dist; }
     }
@@ -4789,11 +11029,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     runtimeStats.meshes = 0;
     runtimeStats.terrainVisuals = 0;
     runtimeStats.terrainLayers = 0;
-    runtimeStats.terrainPaths = 0;
-    runtimeStats.terrainWaters = 0;
     runtimeStats.terrainSurfaces = 0;
     runtimeStats.collisionShapes = 0;
     runtimeStats.entities = 0;
+    runtimeStats.scatterInstances = 0;
     runtimeStats.interactables = 0;
   }
 
@@ -4812,8 +11051,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
     total += Array.isArray(worldData?.keybinds) ? worldData.keybinds.length : 0;
     total += Array.isArray(worldData?.ui) ? worldData.ui.length : 0;
     total += Array.isArray(worldData?.terrain?.layers) ? worldData.terrain.layers.length : 0;
-    total += Array.isArray(worldData?.terrain?.paths) ? worldData.terrain.paths.length : 0;
-    total += Array.isArray(worldData?.terrain?.waters) ? worldData.terrain.waters.length : 0;
     total += Array.isArray(worldData?.terrain?.surfaces) ? worldData.terrain.surfaces.length : 0;
     total += Array.isArray(worldData?.collision?.blockers) ? worldData.collision.blockers.length : 0;
     total += Array.isArray(worldData?.collision?.walkableSurfaces) ? worldData.collision.walkableSurfaces.length : 0;
@@ -4845,6 +11082,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const limit = formatFrameMs(target);
     if (current === "--" || limit === "--") return current;
     return current + " / " + limit;
+  }
+
+  function formatBlueprintLiveCount(blueprint, live) {
+    const blueprintText = formatCompactCount(blueprint);
+    const liveText = formatCompactCount(live);
+    if (blueprintText === "--" && liveText === "--") return "--";
+    if (blueprintText === "--") return "Live " + liveText;
+    if (liveText === "--") return "B " + blueprintText;
+    return "B " + blueprintText + " / Live " + liveText;
   }
 
   function toneHigherIsBetter(value, warn, danger) {
@@ -4937,10 +11183,18 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (metrics.showTextures !== false) addRow("textures", "Tex");
     if (metrics.showSceneObjects !== false) addRow("sceneObjects", "Objects");
     if (metrics.showEntities !== false) addRow("entities", "Entities");
+    if (metrics.showScatterInstances !== false) addRow("scatterInstances", "Scatter");
     if (metrics.showEntities !== false) addRow("interactables", "Interact");
     if (metrics.showTerrainVisuals !== false) addRow("terrainVisuals", "Terrain");
     if (metrics.showCollisionShapes !== false) addRow("collisionShapes", "Coll");
     if (metrics.showWorldSize === true) addRow("worldSize", "World");
+    if (metrics.showChunkCulling === true) addRow("loadedChunks", "Chunks");
+    if (metrics.showChunkCulling === true) addRow("hiddenObjects", "Hidden");
+    if (metrics.showChunkCulling === true) addRow("culledEntities", "Culled");
+    if (metrics.showChunkCulling === true) addRow("terrainVisible", "Terrain V");
+    if (metrics.showChunkCulling === true) addRow("terrainHidden", "Terrain H");
+    if (metrics.showChunkCulling === true) addRow("terrainResident", "Terrain R");
+    if (metrics.showChunkCulling === true) addRow("terrainChunks", "T Chunks");
     hudElement.appendChild(root);
     hudNodes.performance.set(mod.id || "perf_hud", {
       root: root,
@@ -4980,6 +11234,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const info = renderer.info || {};
     const renderInfo = info.render || {};
     const memoryInfo = info.memory || {};
+    const groundResidentVisuals = groundChunkState.stats.fullGroundPlaneActive === true
+      ? 1
+      : Math.max(0, groundChunkState.stats.groundTilesResident || 0);
     return {
       fps: perfHudFrameMs > 0 ? 1000 / perfHudFrameMs : 0,
       frameMs: perfHudFrameMs,
@@ -4988,41 +11245,433 @@ export function createGkWorldRuntime(canvas, options = {}) {
       triangles: Number(renderInfo.triangles) || 0,
       geometries: Number(memoryInfo.geometries) || 0,
       textures: Number(memoryInfo.textures) || 0,
+      sceneChildren: scene.children.length,
+      runtimeObjects: runtimeStats.sceneObjects,
+      hiddenObjects: chunkRuntimeState.hiddenObjects,
       sceneObjects: runtimeStats.sceneObjects,
       meshes: runtimeStats.meshes,
       entities: runtimeStats.entities,
+      scatterInstances: runtimeStats.scatterInstances,
       interactables: runtimeStats.interactables,
       terrainVisuals: runtimeStats.terrainVisuals,
       collisionShapes: runtimeStats.collisionShapes,
-      worldSize: countPublishedWorldItems(world)
+      worldSize: publishedWorldItemCount,
+      worldBlueprintItems: contentBlueprintIndex.blueprintWorldItemCount || publishedWorldItemCount,
+      worldResidentItems: residentContentState.residentWorldItemCount || 0,
+      blueprintEntities: contentBlueprintIndex.blueprintEntityCount || 0,
+      blueprintScatterInstances: contentBlueprintIndex.blueprintScatterInstanceCount || 0,
+      blueprintInteractables: contentBlueprintIndex.blueprintInteractableCount || 0,
+      residentChunks: residentContentState.residentChunkKeys.size || 0,
+      residentEntities: residentContentState.loadedEntityCount || 0,
+      residentScatterBatches: residentContentState.loadedScatterBatchCount || 0,
+      residentScatterInstances: residentContentState.loadedScatterInstanceCount || 0,
+      residentInteractables: residentContentState.loadedInteractableCount || 0,
+      residentSolids: residentContentState.loadedSolidCount || 0,
+      residentObject3D: residentContentState.residentObject3DCount || runtimeStats.sceneObjects,
+      loadedChunks: chunkRuntimeState.loadedChunkKeys.length,
+      culledEntities: chunkRuntimeState.culledEntities,
+      terrainVisible: chunkRuntimeState.terrainVisuals?.visible || 0,
+      terrainHidden: chunkRuntimeState.terrainVisuals?.hidden || 0,
+      terrainResident: terrainStreamingState.residentPieces + groundResidentVisuals,
+      terrainChunks: terrainStreamingState.residentChunks + groundResidentVisuals
+    };
+  }
+
+  function countShadowUsage(object) {
+    const stats = { casters: 0, receivers: 0 };
+    if (!object || typeof object.traverse !== "function") return stats;
+    object.traverse(function (child) {
+      if (!child) return;
+      if (child.isMesh || child.isInstancedMesh) {
+        if (child.castShadow) stats.casters += 1;
+        if (child.receiveShadow) stats.receivers += 1;
+      }
+    });
+    return stats;
+  }
+
+  function countTaggedShadowCasters(root, predicate) {
+    let casters = 0;
+    if (!root || typeof root.traverse !== "function") return casters;
+    root.traverse(function (child) {
+      if (!child || !(child.isMesh || child.isInstancedMesh) || child.castShadow !== true) return;
+      let node = child;
+      while (node && node !== root) {
+        if (predicate(node)) {
+          casters += 1;
+          return;
+        }
+        node = node.parent;
+      }
+    });
+    return casters;
+  }
+
+  // Fase 8.6 (DEEL G): proves debug/helper/chunk-overlay/selection meshes never cast/receive
+  // shadows, and gives Kevin a per-category breakdown of who is actually casting a shadow so a
+  // "round blob" report can be traced to a real cause (quality/camera-size/bias) instead of a
+  // stray helper mesh.
+  function buildShadowDiagnostics() {
+    sanitizeNonWorldShadowCasters(selectionHelper);
+    sanitizeNonWorldShadowCasters(transformGuide);
+    sanitizeNonWorldShadowCasters(terrainEditorOverlay);
+    sanitizeNonWorldShadowCasters(scatterEditorOverlay);
+    sanitizeNonWorldShadowCasters(chunkDebugOverlay);
+    const stableShadows = stableSunShadowController?.getSnapshot?.() || null;
+    const policy = currentShadowPolicy();
+    const snapshot = stableShadows || {
+      enabled: Boolean(policy?.enabled),
+      mode: stableShadowModeName(mode),
+      preset: policy?.preset || "middel_schaduw",
+      legacyFieldsIgnored: Boolean(policy?.legacyFieldsIgnored),
+      rendererShadowMapEnabled: Boolean(policy?.enabled),
+      shadowMapType: policy?.mapTypeName || "unknown",
+      mapSize: policy?.mapSize || 0,
+      cameraSize: policy?.cameraSize || 0,
+      cameraNear: policy?.cameraNear || 1,
+      cameraFar: policy?.cameraFar || 0,
+      bias: policy?.bias || 0,
+      normalBias: policy?.normalBias || 0,
+      sunDirection: { x: 0, y: -1, z: 0 },
+      focusMode: policy?.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn"),
+      rawFocus: { x: 0, y: 0, z: 0 },
+      snappedFocus: { x: 0, y: 0, z: 0 },
+      snapWorldUnits: policy?.snapWorldUnits || 0,
+      lastProjectionUpdateReason: "init",
+      projectionUpdateCount: 0,
+      framesSinceProjectionUpdate: 0,
+      renderResidentChunkCount: 0,
+      shadowResidentChunkCount: 0,
+      shadowResidentMarginChunks: policy?.shadowResidentMarginChunks || 0,
+      casterCounts: {},
+      receiverCounts: {},
+      helperCasterCount: 0,
+      debugCasterCount: 0,
+      circleOrPlaneCasterCount: 0,
+      proxyCasterCount: 0,
+      instancedCasterCount: 0,
+      jumpDetected: false,
+      lastJumpDistance: 0,
+      warnings: [],
+      shadowCasterCount: 0,
+      shadowReceiverCount: 0,
+      renderResidentChunkKeys: [],
+      shadowResidentChunkKeys: [],
+      shadowWindowChunkKeys: []
+    };
+    snapshot.mode = snapshot.mode || stableShadowModeName(mode);
+    snapshot.preset = snapshot.preset || policy?.preset || "middel_schaduw";
+    snapshot.legacyFieldsIgnored = Boolean(snapshot.legacyFieldsIgnored || policy?.legacyFieldsIgnored);
+    snapshot.rendererShadowMapEnabled = snapshot.rendererShadowMapEnabled === true;
+    snapshot.shadowMapType = snapshot.shadowMapType || snapshot.shadowType || policy?.mapTypeName || "unknown";
+    snapshot.mapSize = snapshot.mapSize || snapshot.shadowMapSize || 0;
+    snapshot.cameraSize = snapshot.cameraSize || snapshot.shadowCameraSize || 0;
+    snapshot.cameraNear = snapshot.cameraNear || 1;
+    snapshot.cameraFar = snapshot.cameraFar || snapshot.shadowCameraBounds?.far || 0;
+    snapshot.rawFocus = Object.assign({}, snapshot.rawFocus || {});
+    snapshot.snappedFocus = Object.assign({}, snapshot.snappedFocus || {});
+    snapshot.sunDirection = Object.assign({}, snapshot.sunDirection || { x: 0, y: -1, z: 0 });
+    snapshot.casterCounts = Object.assign({}, snapshot.casterCounts || {});
+    snapshot.receiverCounts = Object.assign({}, snapshot.receiverCounts || {});
+    snapshot.warnings = Array.isArray(snapshot.warnings) ? snapshot.warnings.slice() : [];
+    return snapshot;
+  }
+
+  // Fase 8.7: approximates "manual override" as a field whose resolved value differs from the
+  // visible preset table. The flat node-value schema can't distinguish "Kevin typed this value"
+  // from "this happens to equal the preset/default", so this diff is the honest signal once a
+  // preset has been selected.
+  function buildPerformanceProfileDiagnostics() {
+    const game = worldPerformance.game || {};
+    const editor = worldPerformance.editor || {};
+    const compareKeys = [
+      "pixelRatioCap",
+      "antialias",
+      "fogEnabled",
+      "maxFps",
+      "debugHelpersVisible",
+      "debugChunkOverlayVisible",
+      "chunkGridVisible",
+      "chunkLabelsVisible",
+      "streamingDebugVisible"
+    ];
+    const shadowCompareKeys = [
+      "enabled",
+      "mapSize",
+      "cameraSize",
+      "cameraNear",
+      "cameraFar",
+      "bias",
+      "normalBias",
+      "type",
+      "updateMode",
+      "snapWorldUnits",
+      "focusMode",
+      "staticPropsCast",
+      "staticPropsReceive",
+      "scatterCast",
+      "scatterReceive",
+      "groundReceives",
+      "terrainReceives",
+      "shadowResidentMarginChunks"
+    ];
+    const editorPresetValues = editor.preset ? worldSettingsPresetValues("editor", editor.preset) : null;
+    const gamePresetValues = game.preset ? worldSettingsPresetValues("game", game.preset) : null;
+    const editorManualOverrides = editorPresetValues ? compareKeys.filter(function (key) {
+      return editorPresetValues[key] !== undefined && editor[key] !== editorPresetValues[key];
+    }) : [];
+    const gameManualOverrides = gamePresetValues ? compareKeys.filter(function (key) {
+      return gamePresetValues[key] !== undefined && game[key] !== gamePresetValues[key];
+    }) : [];
+    const editorShadow = editor.shadow || {};
+    const gameShadow = game.shadow || {};
+    const editorShadowManualOverrides = editorPresetValues ? shadowCompareKeys.filter(function (key) {
+      return editorPresetValues[key] !== undefined && editorShadow[key] !== editorPresetValues[key];
+    }) : [];
+    const gameShadowManualOverrides = gamePresetValues ? shadowCompareKeys.filter(function (key) {
+      return gamePresetValues[key] !== undefined && gameShadow[key] !== gamePresetValues[key];
+    }) : [];
+    return {
+      editorPreset: editor.preset || "",
+      gamePreset: game.preset || "",
+      editorResolvedFromPreset: editorPresetValues,
+      gameResolvedFromPreset: gamePresetValues,
+      editorManualOverrides: editorManualOverrides,
+      gameManualOverrides: gameManualOverrides,
+      editorShadowManualOverrides: editorShadowManualOverrides,
+      gameShadowManualOverrides: gameShadowManualOverrides
     };
   }
 
   function debugCollisionAt(x, z, radius = 0) {
     return {
-      blockedByWater: isPointBlockedByWater(undefined, x, z, radius),
       blockedByBlocker: isPointBlockedByBlocker(undefined, x, z, radius),
       blockedByTerrain: isPointBlockedByTerrain(undefined, x, z, radius),
       onWalkableSurface: isPointOnWalkableSurface(undefined, x, z)
     };
   }
 
-  function debugState() {
-    const chunkLoadingState = syncChunkDebugState();
+  function debugState(options = {}) {
+    const includeShadowDiagnostics = options?.includeShadowDiagnostics !== false;
+    const chunkLoadingState = chunkDebugStateCache || createChunkDebugState({ includeWindow: false });
+    const performanceSnapshot = buildPerformanceSnapshot();
+    const lastFrameTiming = DEBUG_RUNTIME.lastFrameTiming || {};
+    const shadowStats = countShadowUsage(scene);
+    const currentShadowPolicyState = currentShadowPolicy();
+    const debugOverlayVisible = Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true);
+    const ghostPlaneDiagnostics = removeGhostChunkPlanes("debugState", {
+      scene: scene,
+      camera: camera,
+      content: content,
+      terrainRuntimeGroup: terrainRuntimeGroup,
+      chunkDebugOverlay: chunkDebugOverlay,
+      selectionHelper: selectionHelper,
+      transformGuide: transformGuide,
+      terrainEditorOverlay: terrainEditorOverlay,
+      scatterEditorOverlay: scatterEditorOverlay,
+      world: world,
+      debugOverlayVisible: debugOverlayVisible
+    });
+    const runtimeRoots = {
+      scene: {
+        name: scene?.name || "scene",
+        uuid: scene?.uuid || "",
+        visible: scene?.visible !== false,
+        childCount: Array.isArray(scene?.children) ? scene.children.length : 0
+      },
+      content: {
+        name: content?.name || "content",
+        uuid: content?.uuid || "",
+        visible: content?.visible !== false,
+        childCount: Array.isArray(content?.children) ? content.children.length : 0
+      },
+      terrainRuntimeGroup: terrainRuntimeGroup ? {
+        name: terrainRuntimeGroup.name || "",
+        uuid: terrainRuntimeGroup.uuid || "",
+        visible: terrainRuntimeGroup.visible !== false,
+        childCount: Array.isArray(terrainRuntimeGroup.children) ? terrainRuntimeGroup.children.length : 0
+      } : null,
+      chunkDebugOverlay: chunkDebugOverlay ? {
+        name: chunkDebugOverlay.name || "",
+        uuid: chunkDebugOverlay.uuid || "",
+        visible: chunkDebugOverlay.visible !== false,
+        childCount: Array.isArray(chunkDebugOverlay.children) ? chunkDebugOverlay.children.length : 0
+      } : null,
+      selectionHelper: selectionHelper ? {
+        name: selectionHelper.name || "",
+        uuid: selectionHelper.uuid || "",
+        visible: selectionHelper.visible !== false,
+        childCount: Array.isArray(selectionHelper.children) ? selectionHelper.children.length : 0
+      } : null,
+      transformGuide: transformGuide ? {
+        name: transformGuide.name || "",
+        uuid: transformGuide.uuid || "",
+        visible: transformGuide.visible !== false,
+        childCount: Array.isArray(transformGuide.children) ? transformGuide.children.length : 0
+      } : null,
+      terrainEditorOverlay: terrainEditorOverlay ? {
+        name: terrainEditorOverlay.name || "",
+        uuid: terrainEditorOverlay.uuid || "",
+        visible: terrainEditorOverlay.visible !== false,
+        childCount: Array.isArray(terrainEditorOverlay.children) ? terrainEditorOverlay.children.length : 0
+      } : null,
+      scatterEditorOverlay: scatterEditorOverlay ? {
+        name: scatterEditorOverlay.name || "",
+        uuid: scatterEditorOverlay.uuid || "",
+        visible: scatterEditorOverlay.visible !== false,
+        childCount: Array.isArray(scatterEditorOverlay.children) ? scatterEditorOverlay.children.length : 0
+      } : null,
+      sceneChildren: Array.isArray(scene?.children) ? scene.children.map(function (child) {
+        return {
+          name: child?.name || "",
+          uuid: child?.uuid || "",
+          type: child?.type || child?.constructor?.name || "Object3D",
+          visible: child?.visible !== false,
+          childCount: Array.isArray(child?.children) ? child.children.length : 0
+        };
+      }) : [],
+      contentChildren: Array.isArray(content?.children) ? content.children.map(function (child) {
+        return {
+          name: child?.name || "",
+          uuid: child?.uuid || "",
+          type: child?.type || child?.constructor?.name || "Object3D",
+          visible: child?.visible !== false,
+          childCount: Array.isArray(child?.children) ? child.children.length : 0
+        };
+      }) : [],
+      duplicateRuntimeRoots: Math.max(0, Array.isArray(scene?.children) ? scene.children.filter(function (child) {
+        return child?.name === RUNTIME_TERRAIN_GROUP_NAME;
+      }).length - 1 : 0) + Math.max(0, Array.isArray(scene?.children) ? scene.children.filter(function (child) {
+        return child?.name === RUNTIME_CHUNK_OVERLAY_GROUP_NAME;
+      }).length - 1 : 0),
+      cameraChildOverlayGroups: Number(overlayDiagnosticsState?.cameraChildOverlayGroups || 0)
+    };
+    const shadowCasterAudit = auditSceneObjectsForShadowCasters({
+      scene: scene,
+      content: content,
+      terrainRuntimeGroup: terrainRuntimeGroup,
+      chunkDebugOverlay: chunkDebugOverlay,
+      selectionHelper: selectionHelper,
+      transformGuide: transformGuide,
+      terrainEditorOverlay: terrainEditorOverlay,
+      scatterEditorOverlay: scatterEditorOverlay
+    });
+    const shadowSystem = includeShadowDiagnostics ? buildShadowDiagnostics() : null;
+    const groundResidentVisuals = chunkLoadingState.ground?.fullGroundPlaneActive === true
+      ? 1
+      : Math.max(0, chunkLoadingState.ground?.groundTilesResident || 0);
+    const contentStreaming = buildContentStreamingDebugState();
     return {
       mode: mode,
+      contentStreaming: contentStreaming,
       world: {
         terrain: {
           layers: Array.isArray(world?.terrain?.layers) ? world.terrain.layers.length : 0,
-          paths: Array.isArray(world?.terrain?.paths) ? world.terrain.paths.length : 0,
-          waters: Array.isArray(world?.terrain?.waters) ? world.terrain.waters.length : 0,
           surfaces: Array.isArray(world?.terrain?.surfaces) ? world.terrain.surfaces.length : 0
         },
         collision: {
           blockers: Array.isArray(world?.collision?.blockers) ? world.collision.blockers.length : 0,
           walkableSurfaces: Array.isArray(world?.collision?.walkableSurfaces) ? world.collision.walkableSurfaces.length : 0
         },
-        chunkLoading: Object.assign({}, chunkLoadingState),
+        chunkLoading: Object.assign({}, chunkLoadingState, {
+          terrainVisuals: Object.assign({}, chunkLoadingState.terrainVisuals || {}),
+          terrainStreaming: Object.assign({}, chunkLoadingState.terrainStreaming || {}, {
+            residentChunkKeys: Array.isArray(chunkLoadingState.terrainStreaming?.residentChunkKeys)
+              ? chunkLoadingState.terrainStreaming.residentChunkKeys.slice()
+              : []
+          }),
+          streamingCoverage: {
+            source: chunkLoadingState.streamingCoverageSource || "none",
+            centerChunk: chunkLoadingState.centerChunk || null,
+            activeChunkKeys: Array.isArray(chunkLoadingState.activeChunkKeys) ? chunkLoadingState.activeChunkKeys.slice() : [],
+            visibleChunkKeys: Array.isArray(chunkLoadingState.visibleChunkKeys) ? chunkLoadingState.visibleChunkKeys.slice() : [],
+            forwardChunkKeys: Array.isArray(chunkLoadingState.forwardChunkKeys) ? chunkLoadingState.forwardChunkKeys.slice() : [],
+            preloadChunkKeys: Array.isArray(chunkLoadingState.preloadChunkKeys) ? chunkLoadingState.preloadChunkKeys.slice() : [],
+            desiredResidentChunkKeys: Array.isArray(chunkLoadingState.desiredResidentChunkKeys) ? chunkLoadingState.desiredResidentChunkKeys.slice() : [],
+            unloadSafeChunkKeys: Array.isArray(chunkLoadingState.unloadSafeChunkKeys) ? chunkLoadingState.unloadSafeChunkKeys.slice() : [],
+            renderResidentChunkKeys: Array.isArray(chunkLoadingState.renderResidentChunkKeys) ? chunkLoadingState.renderResidentChunkKeys.slice() : [],
+            shadowResidentChunkKeys: Array.isArray(chunkLoadingState.shadowResidentChunkKeys) ? chunkLoadingState.shadowResidentChunkKeys.slice() : [],
+            collisionResidentChunkKeys: Array.isArray(chunkLoadingState.collisionResidentChunkKeys) ? chunkLoadingState.collisionResidentChunkKeys.slice() : [],
+            shadowWindowChunkKeys: Array.isArray(chunkLoadingState.shadowWindowChunkKeys) ? chunkLoadingState.shadowWindowChunkKeys.slice() : []
+          },
+          contentStreaming: contentStreaming,
+          residentBootstrap: Object.assign({}, residentBootstrapState)
+        }),
+        lighting: {
+          shadowAnchor: Object.assign({}, shadowAnchorState),
+          shadowsEnabled: currentShadowPolicyState.enabled === true,
+          shadowQuality: currentShadowPolicyState.quality || "off",
+          shadowMapType: currentShadowPolicyState.mapTypeName || shadowMapTypeName(currentShadowPolicyState.mapType),
+          shadowMapSize: currentShadowPolicyState.mapSize || 0,
+          shadowCasters: shadowStats.casters,
+          shadowReceivers: shadowStats.receivers
+        },
+        stableShadows: Object.assign({}, chunkLoadingState?.stableShadows || stableSunShadowController?.getSnapshot?.() || {}),
+        runtimeRoots: runtimeRoots,
+        frameStats: {
+          frameMs: performanceSnapshot.frameMs,
+          renderMs: round(lastFrameTiming.renderMs || 0),
+          syncChunkMs: round(lastFrameTiming.syncChunkMs || lastFrameTiming.syncChunkDebugStateMs || 0),
+          updatePlayerMs: round(lastFrameTiming.updatePlayerMs || 0),
+          hudMs: round(lastFrameTiming.hudMs || lastFrameTiming.updatePerformanceHudMs || 0),
+          animationMs: round(lastFrameTiming.animationMs || lastFrameTiming.updateAnimationMs || 0),
+          drawCalls: performanceSnapshot.drawCalls,
+          triangles: performanceSnapshot.triangles,
+          geometries: performanceSnapshot.geometries,
+          textures: performanceSnapshot.textures,
+          sceneChildren: performanceSnapshot.sceneChildren,
+          runtimeObjects: performanceSnapshot.runtimeObjects,
+          hiddenObjects: performanceSnapshot.hiddenObjects,
+          sceneObjects: performanceSnapshot.sceneObjects,
+          scatterInstances: performanceSnapshot.scatterInstances,
+          loadedChunks: performanceSnapshot.loadedChunks,
+          residentChunks: performanceSnapshot.residentChunks,
+          residentEntities: performanceSnapshot.residentEntities,
+          residentScatterInstances: performanceSnapshot.residentScatterInstances,
+          residentInteractables: performanceSnapshot.residentInteractables,
+          residentSolids: performanceSnapshot.residentSolids,
+          residentObject3D: performanceSnapshot.residentObject3D,
+          worldBlueprintItems: performanceSnapshot.worldBlueprintItems,
+          worldResidentItems: performanceSnapshot.worldResidentItems,
+          terrainResident: performanceSnapshot.terrainResident,
+          groundTilesResident: groundResidentVisuals,
+          sync: {
+            syncCalls: chunkSyncStats.syncCalls,
+            heavySyncCalls: chunkSyncStats.heavySyncCalls,
+            skippedSyncCalls: chunkSyncStats.skippedSyncCalls,
+            lastHeavyReason: chunkSyncStats.lastHeavyReason,
+            lastHeavySyncMs: chunkSyncStats.lastHeavySyncMs
+          }
+        },
+        rendering: {
+          api: rendererLabel,
+          name: rendererProfile.name,
+          vendor: rendererProfile.vendor,
+          software: rendererProfile.software,
+          antialias: renderer.getContext?.().getContextAttributes?.()?.antialias === true,
+          pixelRatio: renderer.getPixelRatio ? renderer.getPixelRatio() : activeModePerformance().pixelRatioCap,
+          canvasWidth: renderer.domElement?.width || canvas.width || 0,
+          canvasHeight: renderer.domElement?.height || canvas.height || 0
+        },
+        collisionPerformance: {
+          activeSolids: collisionPerfState.activeSolids,
+          terrainBlockers: collisionPerfState.terrainBlockers,
+          surfaceBlockers: collisionPerfState.surfaceBlockers,
+          checksLastFrame: collisionPerfState.checksLastFrame,
+          lastResolveMs: collisionPerfState.lastResolveMs
+        },
+        performance: {
+          shared: Object.assign({}, worldPerformance.shared),
+          editor: Object.assign({}, worldPerformance.editor),
+          game: Object.assign({}, worldPerformance.game),
+          compatibility: Object.assign({}, worldPerformance.compatibility)
+        },
+        performanceProfile: buildPerformanceProfileDiagnostics(),
+        ghostPlaneDiagnostics: ghostPlaneDiagnostics,
+        shadowCasterAudit: shadowCasterAudit,
+        shadowSystem: shadowSystem,
+        shadowDiagnostics: shadowSystem,
+        overlayDiagnostics: Object.assign({}, overlayDiagnosticsState),
         ui: Array.isArray(world?.ui) ? world.ui.length : 0
       },
       player: {
@@ -5036,9 +11685,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
         meshes: runtimeStats.meshes,
         terrainVisuals: runtimeStats.terrainVisuals,
         terrainLayers: runtimeStats.terrainLayers,
-        terrainPaths: runtimeStats.terrainPaths,
-        terrainWaters: runtimeStats.terrainWaters,
         terrainSurfaces: runtimeStats.terrainSurfaces,
+        drawCalls: performanceSnapshot.drawCalls,
+        textures: performanceSnapshot.textures,
+        frameMs: performanceSnapshot.frameMs,
+        scatterInstances: runtimeStats.scatterInstances,
+        terrainVisible: chunkLoadingState.terrainVisuals?.visible || 0,
+        terrainHidden: chunkLoadingState.terrainVisuals?.hidden || 0,
+        terrainResident: (chunkLoadingState.terrainStreaming?.residentPieces || 0) + groundResidentVisuals,
+        terrainChunks: (chunkLoadingState.terrainStreaming?.residentChunks || 0) + groundResidentVisuals,
         collisionShapes: runtimeStats.collisionShapes,
         entities: runtimeStats.entities,
         interactables: runtimeStats.interactables
@@ -5101,15 +11756,18 @@ export function createGkWorldRuntime(canvas, options = {}) {
       if (metrics.showTextures !== false && entry.rows.textures) {
         setPerformanceRowValue(entry.rows.textures, formatBudgetedCount(snapshot.textures, thresholds.texturesWarn), toneLowerIsBetter(snapshot.textures, thresholds.texturesWarn, thresholds.texturesDanger));
       }
-      if (metrics.showSceneObjects !== false && entry.rows.sceneObjects) {
-        setPerformanceRowValue(entry.rows.sceneObjects, formatBudgetedCount(snapshot.sceneObjects, thresholds.meshesWarn), toneLowerIsBetter(snapshot.sceneObjects, thresholds.meshesWarn, thresholds.meshesDanger));
-      }
-      if (metrics.showEntities !== false && entry.rows.entities) {
-        setPerformanceRowValue(entry.rows.entities, formatBudgetedCount(snapshot.entities, thresholds.meshesWarn), toneLowerIsBetter(snapshot.entities, thresholds.meshesWarn, thresholds.meshesDanger));
-      }
-      if (metrics.showEntities !== false && entry.rows.interactables) {
-        setPerformanceRowValue(entry.rows.interactables, formatBudgetedCount(snapshot.interactables, thresholds.meshesWarn), toneLowerIsBetter(snapshot.interactables, thresholds.meshesWarn, thresholds.meshesDanger));
-      }
+    if (metrics.showSceneObjects !== false && entry.rows.sceneObjects) {
+      setPerformanceRowValue(entry.rows.sceneObjects, formatBudgetedCount(snapshot.sceneObjects, thresholds.meshesWarn), toneLowerIsBetter(snapshot.sceneObjects, thresholds.meshesWarn, thresholds.meshesDanger));
+    }
+    if (metrics.showEntities !== false && entry.rows.entities) {
+      setPerformanceRowValue(entry.rows.entities, formatBlueprintLiveCount(snapshot.blueprintEntities, snapshot.entities), toneLowerIsBetter(snapshot.entities, thresholds.meshesWarn, thresholds.meshesDanger));
+    }
+    if (metrics.showScatterInstances !== false && entry.rows.scatterInstances) {
+      setPerformanceRowValue(entry.rows.scatterInstances, formatBlueprintLiveCount(snapshot.blueprintScatterInstances, snapshot.scatterInstances), toneLowerIsBetter(snapshot.scatterInstances, thresholds.meshesWarn, thresholds.meshesDanger));
+    }
+    if (metrics.showEntities !== false && entry.rows.interactables) {
+      setPerformanceRowValue(entry.rows.interactables, formatBudgetedCount(snapshot.interactables, thresholds.meshesWarn), toneLowerIsBetter(snapshot.interactables, thresholds.meshesWarn, thresholds.meshesDanger));
+    }
       if (metrics.showTerrainVisuals !== false && entry.rows.terrainVisuals) {
         setPerformanceRowValue(entry.rows.terrainVisuals, formatBudgetedCount(snapshot.terrainVisuals, thresholds.terrainVisualsWarn), toneLowerIsBetter(snapshot.terrainVisuals, thresholds.terrainVisualsWarn, thresholds.terrainVisualsDanger));
       }
@@ -5117,8 +11775,29 @@ export function createGkWorldRuntime(canvas, options = {}) {
         setPerformanceRowValue(entry.rows.collisionShapes, formatBudgetedCount(snapshot.collisionShapes, thresholds.collisionShapesWarn), toneLowerIsBetter(snapshot.collisionShapes, thresholds.collisionShapesWarn, thresholds.collisionShapesDanger));
       }
       if (metrics.showWorldSize === true && entry.rows.worldSize) {
-        setPerformanceRowValue(entry.rows.worldSize, formatBudgetedCount(snapshot.worldSize, thresholds.meshesWarn), toneLowerIsBetter(snapshot.worldSize, thresholds.meshesWarn, thresholds.meshesDanger));
+        setPerformanceRowValue(entry.rows.worldSize, formatBlueprintLiveCount(snapshot.worldBlueprintItems, snapshot.worldResidentItems), toneLowerIsBetter(snapshot.worldResidentItems, thresholds.meshesWarn, thresholds.meshesDanger));
       }
+      if (metrics.showChunkCulling === true && entry.rows.loadedChunks) {
+        setPerformanceRowValue(entry.rows.loadedChunks, formatCompactCount(snapshot.loadedChunks), "neutral");
+      }
+      if (metrics.showChunkCulling === true && entry.rows.hiddenObjects) {
+        setPerformanceRowValue(entry.rows.hiddenObjects, formatCompactCount(snapshot.hiddenObjects), "neutral");
+      }
+    if (metrics.showChunkCulling === true && entry.rows.culledEntities) {
+      setPerformanceRowValue(entry.rows.culledEntities, formatCompactCount(snapshot.culledEntities), "neutral");
+    }
+    if (metrics.showChunkCulling === true && entry.rows.terrainVisible) {
+      setPerformanceRowValue(entry.rows.terrainVisible, formatCompactCount(snapshot.terrainVisible), "neutral");
+    }
+    if (metrics.showChunkCulling === true && entry.rows.terrainHidden) {
+      setPerformanceRowValue(entry.rows.terrainHidden, formatCompactCount(snapshot.terrainHidden), "neutral");
+    }
+    if (metrics.showChunkCulling === true && entry.rows.terrainResident) {
+      setPerformanceRowValue(entry.rows.terrainResident, formatCompactCount(snapshot.terrainResident), "neutral");
+    }
+    if (metrics.showChunkCulling === true && entry.rows.terrainChunks) {
+      setPerformanceRowValue(entry.rows.terrainChunks, formatCompactCount(snapshot.terrainChunks), "neutral");
+    }
       entry.nextUpdateAt = now + entry.updateIntervalMs;
       nextUpdateAt = Math.min(nextUpdateAt, entry.nextUpdateAt);
     }
@@ -5141,88 +11820,123 @@ export function createGkWorldRuntime(canvas, options = {}) {
     if (!handleResize("world-performance")) scheduleResize("world-performance");
     const editorViewState = mode === "editor" && editorViewInitialized ? captureViewState() : null;
     clearContent();
+    contentBlueprintIndex = buildContentBlueprintIndex(world, mode);
     scene.background = new THREE.Color(colorOrDefault(world?.world?.backgroundColor, "#0b1622"));
-    const fogEnabled = mode === "editor" ? activeModePerformance().fogEnabled !== false : true;
+    const fogEnabled = activeModePerformance().fogEnabled !== false;
     if (fogEnabled && world?.world?.fogColor && num(world.world.fogDensity, 0) > 0) {
       scene.fog = new THREE.FogExp2(colorOrDefault(world.world.fogColor, "#0b1622"), num(world.world.fogDensity, 0));
     } else {
       scene.fog = null;
     }
-    addGround(world);
+    const useChunkedGround = shouldUseChunkedGround(world, mode);
+    const residentStreamingEnabled = isChunkCullingRuntimeEnabled(resolveChunkPolicy(world, mode));
+    if (!useChunkedGround) addGround(world);
     const nextWalkabilityIndex = buildWalkabilityIndex(world);
-    runtimeStats.collisionShapes = (nextWalkabilityIndex.waters?.length || 0) + (nextWalkabilityIndex.blockers?.length || 0) + (nextWalkabilityIndex.walkables?.length || 0);
-    runtimeStats.entities = Array.isArray(world?.entities) ? world.entities.length : 0;
-    runtimeStats.interactables = Array.isArray(world?.interactables) ? world.interactables.length : 0;
-    buildTerrainRuntimeVisuals(world);
+    runtimeCollisionBaseCount = (nextWalkabilityIndex.surfaceBlockers?.length || 0)
+      + (nextWalkabilityIndex.blockers?.length || 0)
+      + (nextWalkabilityIndex.walkables?.length || 0);
+    collisionPerfState.terrainBlockers = nextWalkabilityIndex.blockers?.length || 0;
+    collisionPerfState.surfaceBlockers = nextWalkabilityIndex.surfaceBlockers?.length || 0;
+    collisionPerfState.activeSolids = 0;
+    collisionPerfState.checksLastFrame = 0;
+    collisionPerfState.lastResolveMs = 0;
+    runtimeStats.collisionShapes = runtimeCollisionBaseCount;
+    buildTerrainRuntimeStreamingVisuals(world);
     addLights(world);
     spawnPlayer(world);
-    const scatterEntities = [];
-    const staticPropGroups = new Map();
-    const queueStaticPropGroup = function (assetId, descriptor) {
-      if (!assetId || !descriptor) return;
-      let group = staticPropGroups.get(assetId);
-      if (!group) {
-        group = { assetId: assetId, descriptors: [] };
-        staticPropGroups.set(assetId, group);
+    if (residentStreamingEnabled) {
+      runtimeStats.entities = 0;
+      runtimeStats.scatterInstances = 0;
+      runtimeStats.interactables = 0;
+    } else {
+      const scatterEntities = [];
+      const staticPropGroups = new Map();
+      const queueStaticPropGroup = function (assetId, descriptor) {
+        if (!assetId || !descriptor) return;
+        let group = staticPropGroups.get(assetId);
+        if (!group) {
+          group = { assetId: assetId, descriptors: [] };
+          staticPropGroups.set(assetId, group);
+        }
+        group.descriptors.push(descriptor);
+      };
+      for (const entity of world?.entities || []) {
+        if (entity?.type === "scatter" || entity?.kind === "scatter") {
+          scatterEntities.push(entity);
+          continue;
+        }
+        if (canBatchStaticProp(world, entity?.modelAssetId)) {
+          addEntity(world, entity, { skipVisual: true });
+          queueStaticPropGroup(entity.modelAssetId, {
+            kind: "entity",
+            entity: entity,
+            transform: entity.transform
+          });
+          continue;
+        }
+        addEntity(world, entity, modelShadowOptions(world, entity?.modelAssetId));
       }
-      group.descriptors.push(descriptor);
-    };
-    for (const entity of world?.entities || []) {
-      if (entity?.type === "scatter" || entity?.kind === "scatter") {
-        scatterEntities.push(entity);
-        continue;
+      if (scatterEntities.length) addScatterEntities(world, scatterEntities);
+      for (const inter of world?.interactables || []) {
+        if (canBatchStaticProp(world, inter?.modelAssetId)) {
+          addInteractable(world, inter, { skipVisual: true });
+          queueStaticPropGroup(inter.modelAssetId, {
+            kind: "interactable",
+            inter: inter,
+            transform: {
+              position: {
+                x: num(inter.position?.x, 0),
+                y: num(world?.ground?.y, 0),
+                z: num(inter.position?.z, 0)
+              },
+              rotation: { x: 0, y: 0, z: 0 },
+              scale: { x: 1, y: 1, z: 1 }
+            }
+          });
+          continue;
+        }
+        addInteractable(world, inter, modelShadowOptions(world, inter?.modelAssetId));
       }
-      if (canBatchStaticProp(world, entity?.modelAssetId)) {
-        addEntity(world, entity, { skipVisual: true });
-        queueStaticPropGroup(entity.modelAssetId, {
-          kind: "entity",
-          entity: entity,
-          transform: entity.transform
-        });
-        continue;
-      }
-      addEntity(world, entity, modelShadowOptions(world, entity?.modelAssetId));
-    }
-    if (scatterEntities.length) addScatterEntities(world, scatterEntities);
-    for (const inter of world?.interactables || []) {
-      if (canBatchStaticProp(world, inter?.modelAssetId)) {
-        addInteractable(world, inter, { skipVisual: true });
-        queueStaticPropGroup(inter.modelAssetId, {
-          kind: "interactable",
-          inter: inter,
-          transform: {
-            position: {
-              x: num(inter.position?.x, 0),
-              y: num(world?.ground?.y, 0),
-              z: num(inter.position?.z, 0)
-            },
-            rotation: { x: 0, y: 0, z: 0 },
-            scale: { x: 1, y: 1, z: 1 }
-          }
-        });
-        continue;
-      }
-      addInteractable(world, inter, modelShadowOptions(world, inter?.modelAssetId));
-    }
-    for (const group of staticPropGroups.values()) {
-      if (!group.descriptors.length) continue;
-      if (group.descriptors.length < 2 || !addStaticPropBatch(world, group.assetId, group.descriptors)) {
-        for (const descriptor of group.descriptors) {
-          if (descriptor.kind === "entity") {
-            addEntity(world, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(world, descriptor.entity?.modelAssetId)));
-          } else if (descriptor.kind === "interactable") {
-            addInteractable(world, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(world, descriptor.inter?.modelAssetId)));
+      for (const group of staticPropGroups.values()) {
+        if (!group.descriptors.length) continue;
+        if (!addStaticPropBatch(world, group.assetId, group.descriptors)) {
+          for (const descriptor of group.descriptors) {
+            if (descriptor.kind === "entity") {
+              addEntity(world, descriptor.entity, Object.assign({ skipCollision: true }, modelShadowOptions(world, descriptor.entity?.modelAssetId)));
+            } else if (descriptor.kind === "interactable") {
+              addInteractable(world, descriptor.inter, Object.assign({ skipRegistration: true }, modelShadowOptions(world, descriptor.inter?.modelAssetId)));
+            }
           }
         }
       }
+      runtimeStats.entities = contentBlueprintIndex.blueprintEntityCount;
+      runtimeStats.scatterInstances = contentBlueprintIndex.blueprintScatterInstanceCount;
+      runtimeStats.interactables = contentBlueprintIndex.blueprintInteractableCount;
     }
     buildKeyMap(world);
+    publishedWorldItemCount = contentBlueprintIndex.blueprintWorldItemCount;
     if (mode === "game") {
       setHudModules(world?.ui || []);
       camTarget.copy(player.pos);
     }
     applyCameraConfig(world);
     const restoredEditorView = editorViewState ? restoreViewState(editorViewState) : false;
+    removeDuplicateRuntimeGroups();
+    syncChunkDebugState("setWorld");
+    bootstrapResidentContentForCurrentView("setWorld");
+    removeGhostChunkPlanes("setWorld", {
+      scene: scene,
+      camera: camera,
+      content: content,
+      terrainRuntimeGroup: terrainRuntimeGroup,
+      chunkDebugOverlay: chunkDebugOverlay,
+      selectionHelper: selectionHelper,
+      transformGuide: transformGuide,
+      terrainEditorOverlay: terrainEditorOverlay,
+      scatterEditorOverlay: scatterEditorOverlay,
+      world: world,
+      debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
+    });
     renderHud();
     if (!restoredEditorView) requestRender();
     if (mode === "editor") editorViewInitialized = true;
@@ -5230,6 +11944,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function destroy() {
     disposed = true;
+    rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
     if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
@@ -5294,6 +12009,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       window.removeEventListener("mouseup", editorDirectMouseUpHandler, true);
     }
     if (editorContextMenuHandler) canvas.removeEventListener("contextmenu", editorContextMenuHandler);
+    if (editorAuxClickHandler) canvas.removeEventListener("auxclick", editorAuxClickHandler);
     if (editorKeyDownHandler) window.removeEventListener("keydown", editorKeyDownHandler);
     if (editorKeyUpHandler) window.removeEventListener("keyup", editorKeyUpHandler);
     if (editorPointerDownHandler) canvas.removeEventListener("pointerdown", editorPointerDownHandler);
@@ -5320,6 +12036,19 @@ export function createGkWorldRuntime(canvas, options = {}) {
   }
   scheduleResize("init");
   requestRender("init");
+  removeGhostChunkPlanes("runtime-init", {
+    scene: scene,
+    camera: camera,
+    content: content,
+    terrainRuntimeGroup: terrainRuntimeGroup,
+    chunkDebugOverlay: chunkDebugOverlay,
+    selectionHelper: selectionHelper,
+    transformGuide: transformGuide,
+    terrainEditorOverlay: terrainEditorOverlay,
+    scatterEditorOverlay: scatterEditorOverlay,
+    world: world,
+    debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
+  });
 
   function focusSelected() {
     return frameEntity(selectedEntityId);
@@ -5356,6 +12085,111 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   function getTransformDebugState() {
     return Object.assign({}, transformDebugState);
+  }
+
+  function summarizeSamples(samples) {
+    const values = Array.isArray(samples)
+      ? samples.filter(function (value) { return Number.isFinite(value); }).slice()
+      : [];
+    if (!values.length) {
+      return { avg: 0, p95: 0 };
+    }
+    values.sort(function (left, right) { return left - right; });
+    const total = values.reduce(function (sum, value) { return sum + value; }, 0);
+    const p95Index = Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * 0.95) - 1));
+    return {
+      avg: round(total / values.length),
+      p95: round(values[p95Index])
+    };
+  }
+
+  async function profilePerformance(options = {}) {
+    if (mode !== "game") {
+      throw new Error("profilePerformance is only available in game mode");
+    }
+    const frames = Math.max(1, Math.floor(num(options.frames, 300)));
+    const warmupFrames = Math.max(0, Math.floor(num(options.warmupFrames, 60)));
+    const label = String(options.label || "performance").trim() || "performance";
+    const timeoutMs = Math.max(1000, Math.floor(num(options.timeoutMs, Math.max(30000, (frames + warmupFrames) * 100))));
+    requestRender("profile-performance");
+    const samples = {
+      frameMs: [],
+      renderMs: [],
+      syncChunkMs: [],
+      updatePlayerMs: [],
+      animationMs: [],
+      hudMs: []
+    };
+    const totalFrames = warmupFrames + frames;
+    for (let index = 0; index < totalFrames; index += 1) {
+      const frameTiming = await waitForNextFrameTiming(timeoutMs);
+      if (index < warmupFrames) continue;
+      samples.frameMs.push(Number(frameTiming?.frameMs) || 0);
+      samples.renderMs.push(Number(frameTiming?.renderMs) || 0);
+      samples.syncChunkMs.push(Number(frameTiming?.syncChunkMs ?? frameTiming?.syncChunkDebugStateMs) || 0);
+      samples.updatePlayerMs.push(Number(frameTiming?.updatePlayerMs) || 0);
+      samples.animationMs.push(Number(frameTiming?.animationMs ?? frameTiming?.updateAnimationMs) || 0);
+      samples.hudMs.push(Number(frameTiming?.hudMs ?? frameTiming?.updatePerformanceHudMs) || 0);
+    }
+    const snapshot = buildPerformanceSnapshot();
+    const currentShadowPolicyState = currentShadowPolicy();
+    const contextAttributes = renderer.getContext?.()?.getContextAttributes?.() || null;
+    const chunkPolicy = resolveChunkPolicy(world, mode);
+    const frameStats = summarizeSamples(samples.frameMs);
+    const renderStats = summarizeSamples(samples.renderMs);
+    const syncStats = summarizeSamples(samples.syncChunkMs);
+    const playerStats = summarizeSamples(samples.updatePlayerMs);
+    const animationStats = summarizeSamples(samples.animationMs);
+    const hudStats = summarizeSamples(samples.hudMs);
+    return {
+      label: label,
+      mode: "game",
+      renderer: {
+        api: rendererLabel,
+        name: rendererProfile.name,
+        vendor: rendererProfile.vendor,
+        software: rendererProfile.software
+      },
+      averages: {
+        frameMs: frameStats.avg,
+        renderMs: renderStats.avg,
+        syncChunkMs: syncStats.avg,
+        updatePlayerMs: playerStats.avg,
+        animationMs: animationStats.avg,
+        hudMs: hudStats.avg
+      },
+      p95: {
+        frameMs: frameStats.p95,
+        renderMs: renderStats.p95,
+        syncChunkMs: syncStats.p95,
+        updatePlayerMs: playerStats.p95,
+        animationMs: animationStats.p95,
+        hudMs: hudStats.p95
+      },
+      counts: {
+        drawCalls: snapshot.drawCalls,
+        triangles: snapshot.triangles,
+        geometries: snapshot.geometries,
+        textures: snapshot.textures,
+        sceneObjects: snapshot.sceneObjects,
+        runtimeObjects: snapshot.runtimeObjects,
+        meshes: snapshot.meshes,
+        terrainResident: snapshot.terrainResident,
+        groundTilesResident: groundChunkState.stats.groundTilesResident || 0,
+        hiddenObjects: snapshot.hiddenObjects,
+        loadedChunks: snapshot.loadedChunks
+      },
+      settings: {
+        pixelRatio: renderer.getPixelRatio ? renderer.getPixelRatio() : activeModePerformance().pixelRatioCap,
+        shadowsEnabled: currentShadowPolicyState.enabled === true,
+        shadowQuality: currentShadowPolicyState.quality || "off",
+        antialias: contextAttributes?.antialias === true,
+        performanceHudEnabled: hudNodes.performance.size > 0,
+        chunkDebugOverlay: Boolean(chunkDebugStateCache?.debugOverlay),
+        chunkLoadingEnabled: Boolean(chunkPolicy?.enabled === true),
+        groundChunkingEnabled: Boolean(chunkPolicy?.groundChunkingEnabled !== false)
+      }
+    };
   }
 
   return {
@@ -5405,6 +12239,37 @@ export function createGkWorldRuntime(canvas, options = {}) {
     isTransformActive: isTransformActive,
     isTransformControlsAttached: isTransformControlsAttached,
     getTransformDebugState: getTransformDebugState,
+    profilePerformance: profilePerformance,
+    debugFindGhostPlanes: function () {
+      return auditSceneObjectsForGhostPlanes({
+        scene: scene,
+        camera: camera,
+        content: content,
+        terrainRuntimeGroup: terrainRuntimeGroup,
+        chunkDebugOverlay: chunkDebugOverlay,
+        selectionHelper: selectionHelper,
+        transformGuide: transformGuide,
+        terrainEditorOverlay: terrainEditorOverlay,
+        scatterEditorOverlay: scatterEditorOverlay,
+        world: world,
+        debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
+      });
+    },
+    debugRemoveGhostPlanes: function (reason = "debug-command") {
+      return removeGhostChunkPlanes(reason, {
+        scene: scene,
+        camera: camera,
+        content: content,
+        terrainRuntimeGroup: terrainRuntimeGroup,
+        chunkDebugOverlay: chunkDebugOverlay,
+        selectionHelper: selectionHelper,
+        transformGuide: transformGuide,
+        terrainEditorOverlay: terrainEditorOverlay,
+        scatterEditorOverlay: scatterEditorOverlay,
+        world: world,
+        debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
+      });
+    },
     getSelectedEntitySnapshot: getSelectedEntitySnapshot,
     getSelectedEntityId: function () { return selectedEntityId; },
     deselect: deselect,

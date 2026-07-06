@@ -1,4 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260701-chunkloading71";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260702-resident-streaming";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "../shared/node-types.js?v=20260702-resident-streaming";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
@@ -7,6 +8,18 @@ const overlayText = document.querySelector("#overlayText");
 
 let runtime = null;
 let lastPublishedAt = null;
+let runtimeAntialias = null;
+
+function requestedPerformanceProfile() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("gamePerformanceProfile") || params.get("perfProfile") || "";
+    return normalizeWorldSettingsPreset(requested, "");
+  } catch {
+    // Ignore malformed query strings and fall back to the published world profile.
+  }
+  return "";
+}
 
 function showOverlay(text) {
   overlayText.textContent = text;
@@ -29,15 +42,30 @@ async function loadWorld() {
   }
   const world = await response.json();
   lastPublishedAt = world.publishedAt || null;
+  const profileOverride = requestedPerformanceProfile();
+  if (profileOverride) {
+    const overrideValues = worldSettingsPresetValues("game", profileOverride);
+    world.world = world.world || {};
+    world.world.performance = world.world.performance || {};
+    world.world.performance.game = Object.assign({}, world.world.performance.game || {}, overrideValues || {}, { preset: profileOverride });
+  }
+  const desiredAntialias = world?.world?.performance?.game?.antialias !== false;
+  if (runtime && runtimeAntialias !== desiredAntialias) {
+    runtime.destroy();
+    runtime = null;
+    window.__GK_GAME_RUNTIME = null;
+  }
   if (!runtime) {
     runtime = createGkWorldRuntime(canvas, {
       mode: "game",
+      antialias: desiredAntialias,
       hud: hud,
       onLoadErrors: function (errors) {
         if (errors.length) showHudError(errors[0]);
       }
     });
     window.__GK_GAME_RUNTIME = runtime;
+    runtimeAntialias = desiredAntialias;
   }
   runtime.setWorld(world);
   hideOverlay();
