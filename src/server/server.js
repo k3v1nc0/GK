@@ -3,11 +3,13 @@ import http from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { loadEnvFile } from "./env.js";
 import { openDatabase } from "./db.js";
 import { AuthService } from "./auth-service.js";
 import { AssetService } from "./asset-service.js";
 import { GraphRepository } from "./graph-repository.js";
+import { MmoService } from "./mmo-service.js";
 import { PublishService } from "./publish-service.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,11 +31,18 @@ assetService.resumePendingThumbnailJobs();
 const repository = new GraphRepository(db);
 repository.seedIfEmpty();
 const publishService = new PublishService(repository, { assetService });
+const mmoService = new MmoService(db, authService, repository);
+const wss = new WebSocketServer({ noServer: true });
+mmoService.bindWebSocketServer(wss);
 const host = process.env.HOST || "127.0.0.1";
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
   return (performance.now() - startedAt).toFixed(1);
+}
+
+function round(value) {
+  return Math.round(Number(value) * 1000) / 1000;
 }
 
 function logTiming(label, startedAt, details) {
@@ -45,9 +54,11 @@ const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".ico": "image/x-icon",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml; charset=utf-8",
   ".webp": "image/webp",
   ".glb": "model/gltf-binary",
   ".mp3": "audio/mpeg",
@@ -173,14 +184,20 @@ function serveStatic(req, res, url) {
   let pathname = url.pathname;
   if (pathname === "/") return sendRedirect(res, "/editor/");
   if (pathname === "/editor") return sendRedirect(res, "/editor/");
-  if (pathname === "/game") return sendRedirect(res, "/game/");
+  if (pathname === "/game") {
+    return authService.currentUser(req)
+      ? sendRedirect(res, "/game/")
+      : sendRedirect(res, "/login/?next=" + encodeURIComponent("/game/"));
+  }
   if (pathname === "/login") return sendRedirect(res, "/login/");
   if (pathname.startsWith("/editor/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/editor/"));
+  if (pathname.startsWith("/game/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/game/"));
   if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300");
   if (pathname.startsWith("/vendor/three/")) {
     if (!fs.existsSync(vendorRoot)) return sendText(res, 503, "Three.js dependency ontbreekt. Run npm install.");
     return serveFile(res, safePath(vendorRoot, pathname.slice("/vendor/three/".length)), "public, max-age=3600");
   }
+  if (pathname === "/favicon.ico") return serveFile(res, path.join(rootDir, "favicon.ico"), "public, max-age=86400");
   if (pathname.endsWith("/")) pathname += "index.html";
   const ext = path.extname(pathname);
   const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-store" : "public, max-age=300";
@@ -193,20 +210,94 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/health") {
       return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: Boolean(repository.getPublishedWorld()) });
     }
+    if (req.method === "POST" && url.pathname === "/api/auth/register") {
+      const body = await readJson(req);
+      const result = authService.register(body.identifier || body.username || body.email, body.password, body.deviceLabel || req.headers["user-agent"] || null);
+      return sendJson(res, 201, { ok: true, registered: true, user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
+        "Set-Cookie": authService.sessionCookie(result.sessionToken)
+      });
+    }
     if (req.method === "POST" && url.pathname === "/api/auth/login") {
       const body = await readJson(req);
-      const result = authService.login(body.username, body.password);
+      const result = authService.login(body.identifier || body.username || body.email, body.password, body.deviceLabel || req.headers["user-agent"] || null);
       if (!result) return sendJson(res, 401, { ok: false, message: "Login mislukt." });
-      return sendJson(res, 200, { ok: true, user: result.user }, { "Set-Cookie": authService.sessionCookie(result.sessionId) });
+      return sendJson(res, 200, { ok: true, user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
+        "Set-Cookie": authService.sessionCookie(result.sessionToken)
+      });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/logout") {
-      authService.logout(authService.currentSessionId(req));
+      const current = authService.currentSession(req);
+      if (current) {
+        mmoService.closeSessionConnections(current.session.id, 4001, "logout");
+        authService.logout(current.session.id);
+      }
       return sendJson(res, 200, { ok: true }, { "Set-Cookie": authService.clearCookie() });
     }
     if (req.method === "GET" && url.pathname === "/api/auth/me") {
-      const user = authService.currentUser(req);
-      if (!user) return sendJson(res, 401, { ok: false, message: "Niet ingelogd." });
-      return sendJson(res, 200, { ok: true, user });
+      const snapshot = mmoService.getAuthMeSnapshot(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/player") {
+      const snapshot = mmoService.getPlayerSnapshot(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if ((req.method === "POST" || req.method === "PATCH") && url.pathname === "/api/game/player/position") {
+      const current = authService.currentSession(req);
+      if (!current) return sendJson(res, 401, { ok: false, message: "Niet ingelogd." });
+      const body = await readJson(req);
+      const connection = { user: current.user, session: current.session, player: null, worldId: null };
+      const useInputState = body && (
+        body.input ||
+        body.inputSeq !== undefined ||
+        body.clientInputSeq !== undefined ||
+        body.moveX !== undefined ||
+        body.moveZ !== undefined ||
+        body.pointerTarget !== undefined ||
+        body.stop !== undefined
+      );
+      const updated = useInputState
+        ? mmoService.applyInputState(connection, body, "http")
+        : mmoService.applyPositionIntent(connection, body, "http");
+      const worldContext = mmoService.getPublishedWorldContext();
+      const stateRecord = updated && updated.state ? updated.state : updated;
+      const positionPayload = stateRecord ? mmoService.publicPositionForPlayer(stateRecord, current.session, worldContext.worldId) : null;
+      if (updated.ignored === true) {
+        return sendJson(res, 200, {
+          ok: true,
+          ignored: true,
+          reason: updated.ignoreReason || "stale_client_input_seq",
+          user: authService.publicUser(current.user),
+          session: { id: current.session.id, deviceLabel: current.session.device_label || null, expiresAt: current.session.expires_at },
+          player: mmoService.getPlayerSummary(req).player,
+          position: positionPayload,
+          clientSessionId: positionPayload?.clientSessionId || body.clientSessionId || body.client_session_id || null,
+          clientInputSeq: positionPayload?.clientInputSeq || body.inputSeq || body.clientInputSeq || body.client_input_seq || 0,
+          clientIntentId: positionPayload?.clientIntentId || body.clientIntentId || body.client_intent_id || null,
+          clientSentAt: positionPayload?.clientSentAt || body.clientSentAt || body.client_sent_at || null,
+          serverReceivedAt: positionPayload?.serverReceivedAt || null,
+          controllerEpoch: positionPayload?.controllerEpoch || 0,
+          activeControllerSessionId: positionPayload?.activeControllerSessionId || null,
+          lastProcessedInputSeq: positionPayload?.lastProcessedInputSeq || 0,
+          transport: positionPayload?.transport || "http"
+        });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        user: authService.publicUser(current.user),
+        session: { id: current.session.id, deviceLabel: current.session.device_label || null, expiresAt: current.session.expires_at },
+        player: mmoService.getPlayerSummary(req).player,
+        position: positionPayload,
+        clientSessionId: positionPayload?.clientSessionId || body.clientSessionId || body.client_session_id || null,
+        clientInputSeq: positionPayload?.clientInputSeq || body.inputSeq || body.clientInputSeq || body.client_input_seq || 0,
+        clientIntentId: positionPayload?.clientIntentId || body.clientIntentId || body.client_intent_id || null,
+        clientSentAt: positionPayload?.clientSentAt || body.clientSentAt || body.client_sent_at || null,
+        serverReceivedAt: positionPayload?.serverReceivedAt || null,
+        controllerEpoch: positionPayload?.controllerEpoch || 0,
+        activeControllerSessionId: positionPayload?.activeControllerSessionId || null,
+        lastProcessedInputSeq: positionPayload?.lastProcessedInputSeq || 0,
+        transport: positionPayload?.transport || "http",
+        ignored: false
+      });
     }
     if (req.method === "GET" && url.pathname === "/api/node-types") {
       authService.requireEditor(req);
@@ -304,6 +395,32 @@ async function handleApi(req, res, url) {
       if (!asset) return sendJson(res, 404, { ok: false, message: "Asset bestaat niet." });
       return sendJson(res, 201, repository.createModelEntityFromAsset(asset, body.position || {}, body.parentId || null));
     }
+    if (req.method === "POST" && url.pathname === "/api/editor/minimap-bakes") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      let bounds = null;
+      try { bounds = multipart.fields.bounds ? JSON.parse(multipart.fields.bounds) : null; } catch { bounds = null; }
+      const result = assetService.saveMinimapBake({
+        nodeId: multipart.fields.nodeId,
+        minimapId: multipart.fields.minimapId,
+        worldHash: multipart.fields.worldHash,
+        resolution: multipart.fields.resolution,
+        width: multipart.fields.width,
+        height: multipart.fields.height,
+        bounds: bounds,
+        file: multipart.files.file
+      }, repository);
+      return sendJson(res, 201, {
+        ok: true,
+        bakedImageUrl: result.bakedImageUrl,
+        bakedImageWidth: result.bakedImageWidth,
+        bakedImageHeight: result.bakedImageHeight,
+        bakedAt: result.bakedAt,
+        bakedWorldHash: result.bakedWorldHash,
+        bakedBounds: result.bakedBounds,
+        graph: result.graph
+      });
+    }
     if (req.method === "POST" && url.pathname === RESTORE_GRAPH_ROUTE) {
       authService.requireEditor(req);
       const body = await readJson(req);
@@ -357,6 +474,19 @@ const server = http.createServer(async function (req, res) {
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
   return serveStatic(req, res, url);
+});
+
+server.on("upgrade", function (req, socket, head) {
+  const upgradeUrl = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+  if (upgradeUrl.pathname !== "/api/game/live") {
+    socket.destroy();
+    return;
+  }
+  try {
+    mmoService.handleUpgrade(req, socket, head);
+  } catch {
+    socket.destroy();
+  }
 });
 
 server.listen(port, host, function () {

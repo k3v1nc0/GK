@@ -3,6 +3,8 @@ export const DATA_TYPE_COLORS = {
   editorWorldSettings: "#8fd5ff",
   gameWorldSettings: "#ffb454",
   ground: "#7bd4ff",
+  terrain: "#7fcf68",
+  collision: "#f0b35a",
   camera: "#7bd4ff",
   light: "#7bd4ff",
   player: "#9be870",
@@ -12,6 +14,7 @@ export const DATA_TYPE_COLORS = {
   chunkLoading: "#67d8c4",
   keybind: "#ff8da3",
   ui: "#c9d4dc",
+  minimap: "#e0a6ff",
   group: "#8a97a3"
 };
 
@@ -19,7 +22,7 @@ export const DATA_TYPE_OPTIONS = Object.keys(DATA_TYPE_COLORS).filter(function (
   return dataType !== "group";
 });
 
-const MULTI_VALUE_TYPES = new Set(["light", "entity", "interactable", "chunkLoading", "keybind", "ui"]);
+const MULTI_VALUE_TYPES = new Set(["light", "entity", "interactable", "chunkLoading", "keybind", "ui", "minimap", "terrain", "collision"]);
 
 const WORLD_SHADOW_PRESET_NAMES = ["geen_schaduw", "lichte_schaduw", "middel_schaduw", "hoog_schaduw", "extreem_schaduw"];
 export const WORLD_SETTINGS_PRESET_NAMES = WORLD_SHADOW_PRESET_NAMES;

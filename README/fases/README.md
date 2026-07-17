@@ -4,6 +4,9 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 ## Actieve fasecontracten
 
+- [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
+- [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)
+- [Fase MMO-03 - Node-Driven Minimap: Bake Image + 2D Live Canvas Markers + Editor Minimap](./MMO-03-Node-Driven-Minimap-Bake-Canvas-Overlay.md)
 - [Fase 2 - Editor Paint Tools](./02-fase2-Editor-Paint-Tools.md)
 - [Fase 3 - Path en River Rendering](./03-fase3-Path-en-River-Rendering.md)
 - [Fase 4 - Collision, Water en Bruggen](./04-fase4-Collision-Water-en-Bruggen.md)

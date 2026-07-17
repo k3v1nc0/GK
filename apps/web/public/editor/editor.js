@@ -1,5 +1,20 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260702-resident-streaming";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260702-resident-streaming";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
+import {
+  resolveMinimapPoint,
+  drawTriangleMarker,
+  drawDotMarker,
+  drawDiamondMarker,
+  drawSquareMarker,
+  drawCrossMarker,
+  drawMarkerLabel,
+  squareGroundBounds,
+  createMinimapView,
+  clampMinimapView,
+  minimapViewBounds,
+  minimapImageSourceRect,
+  attachMinimapInteractions
+} from "../shared/minimap-utils.js?v=20260714-mmo11-camera-target-height";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -136,7 +151,14 @@ const state = {
   selectedNodeIds: [],
   selectedEdgeIds: [],
   clipboard: null,
-  marquee: null
+  marquee: null,
+  minimapBakeBusy: false,
+  minimapBakeMessage: "",
+  minimapBakeTone: "",
+  editorMinimapView: null,
+  editorMinimapUserOverride: false,
+  editorMinimapConfigKey: "",
+  editorMinimapInteractions: null
 };
 
 const el = {
@@ -169,6 +191,8 @@ const el = {
   terrainToolScaleButton: document.querySelector("[data-terrain-action='scale']"),
   terrainToolDeleteButton: document.querySelector("[data-terrain-action='delete']"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
+  editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
+  editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
   viewportErrors: document.querySelector("#viewportErrors"),
   statusText: document.querySelector("#statusText"),
   assetColumn: document.querySelector(".assetColumn"),
@@ -493,11 +517,35 @@ function renderUnsaved() {
 }
 
 function isBlankValue(value) {
-  return value === null || value === undefined || value === "";
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "") || value === "";
 }
 
 function effectiveFieldValue(field, value) {
-  return isBlankValue(value) ? field.default : value;
+  if (!isBlankValue(value)) return value;
+  const fallback = field.default;
+  return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+}
+
+function normalizeFieldInputValue(field, value) {
+  if (field.type === "boolean") {
+    return value === true || value === "true" || value === 1 || value === "1";
+  }
+  if (field.type === "number") {
+    return isBlankValue(value) ? field.default : Number(value);
+  }
+  if (field.type === "json") {
+    if (isBlankValue(value)) {
+      const fallback = field.default;
+      return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+    }
+    if (typeof value === "object") return clonePlain(value);
+    return JSON.parse(String(value));
+  }
+  if (isBlankValue(value)) {
+    const fallback = field.default;
+    return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+  }
+  return typeof value === "string" ? value.trim() : value;
 }
 
 function clonePlain(value) {
@@ -586,8 +634,11 @@ function animationClipsForAsset(asset) {
   const animations = asset?.metadata?.animations;
   if (!Array.isArray(animations)) return [];
   return animations.map(function (entry) {
+    const name = String(entry?.name || entry?.value || "").trim();
     return {
-      name: String(entry?.name || "").trim(),
+      name: name,
+      value: name,
+      label: name,
       index: Number.isFinite(Number(entry?.index)) ? Number(entry.index) : 0
     };
   }).filter(function (entry) { return Boolean(entry.name); });
@@ -3221,21 +3272,25 @@ async function boot() {
         clearSelection({ clearPendingEdge: true });
         renderGraph();
         setStatus("Deselected.", "");
+        redrawEditorMinimap();
         return;
       }
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
       focusGraphNode(node.id);
       selectNode(node.id, false);
+      redrawEditorMinimap();
     },
     onTransformChange: function () {
       renderViewportControls();
+      redrawEditorMinimap();
     },
     onTransformEnd: function (info) {
       if (!info) return;
       setViewportAxis(null);
       clearSelection({ clearPendingEdge: true });
       renderGraph();
+      redrawEditorMinimap();
       if (info.action === "confirm") {
         setStatus(info.changed ? "Transform confirmed." : "Transform unchanged: no mouse movement was received.", info.changed ? "success" : "error");
       } else if (info.action === "cancel") {
@@ -3258,6 +3313,7 @@ async function boot() {
   window.__GK_EDITOR_RUNTIME = runtime;
   state.viewportHelpOpen = false;
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
+  setInterval(redrawEditorMinimap, 250);
   await reloadGraph();
   await reloadAssets();
   renderViewportControls();
@@ -3393,6 +3449,12 @@ function nodeById(id) {
   return state.graph.nodes.find(function (n) { return n.id === id; });
 }
 
+function nodeDisplayTitle(node) {
+  if (!node) return "";
+  const customTitle = typeof node.values?.title === "string" ? node.values.title.trim() : "";
+  return customTitle || node.title;
+}
+
 function resolvedPorts(node) {
   if (node && node.ports) return node.ports;
   const def = state.nodeTypes[node?.type] || {};
@@ -3496,7 +3558,7 @@ function buildNodeElement(node) {
   accent.style.background = accentColor;
   const title = document.createElement("span");
   title.className = "gnodeTitle";
-  title.textContent = node.title;
+  title.textContent = nodeDisplayTitle(node);
   const typeTag = document.createElement("span");
   typeTag.className = "gnodeType";
   typeTag.textContent = def.label;
@@ -4165,7 +4227,7 @@ function renderInspector() {
       const toNode = nodeById(edge.toNodeId);
       const detail = document.createElement("div");
       detail.className = "inspectorEdgeSummary";
-      detail.textContent = (fromNode ? fromNode.title : edge.fromNodeId) + "." + edge.fromPort + " → " + (toNode ? toNode.title : edge.toNodeId) + "." + edge.toPort;
+      detail.textContent = (fromNode ? nodeDisplayTitle(fromNode) : edge.fromNodeId) + "." + edge.fromPort + " → " + (toNode ? nodeDisplayTitle(toNode) : edge.toNodeId) + "." + edge.toPort;
       el.inspectorForm.appendChild(detail);
     }
     const actions = document.createElement("div");
@@ -4191,7 +4253,7 @@ function renderInspector() {
   const def = state.nodeTypes[node.type];
   const heading = document.createElement("div");
   heading.className = "libGroupTitle";
-  heading.textContent = def.label + " - " + node.title;
+  heading.textContent = def.label + " - " + nodeDisplayTitle(node);
   el.inspectorForm.appendChild(heading);
   if (node.type === "group") {
     const hint = document.createElement("div");
@@ -4239,6 +4301,10 @@ function renderInspector() {
     previewRow.appendChild(preview);
     previewWrap.append(previewLabel, previewRow, previewHint);
     el.inspectorForm.appendChild(previewWrap);
+  }
+
+  if (node.type === "minimap_bake") {
+    el.inspectorForm.appendChild(buildMinimapBakeInspectorBlock(node));
   }
 
   let currentSection = null;
@@ -4345,12 +4411,18 @@ function buildField(node, key, field) {
       });
     for (const option of options) {
       const opt = document.createElement("option");
-      opt.value = option.value;
-      opt.textContent = option.label;
-      if (option.value === value) opt.selected = true;
+      const optionValue = option.value === undefined || option.value === null
+        ? (option.name === undefined || option.name === null ? "" : String(option.name))
+        : String(option.value);
+      const optionLabel = option.label === undefined || option.label === null
+        ? (option.name === undefined || option.name === null ? optionValue : String(option.name))
+        : String(option.label);
+      opt.value = optionValue;
+      opt.textContent = optionLabel;
+      if (optionValue === value) opt.selected = true;
       select.appendChild(opt);
     }
-    select.value = value || "";
+    select.value = isBlankValue(value) ? "" : String(value);
     select.addEventListener("change", function () {
       if (node.type === "editor_world_settings" && key === "editorPreset") {
         patchValues(node.id, worldSettingsPresetNodePatch("editor", select.value), {
@@ -4368,12 +4440,12 @@ function buildField(node, key, field) {
         });
         return;
       }
-      patchValues(node.id, makePatch(key, select.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, select.value)), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
     });
     wrap.appendChild(select);
     if (field.dynamicOptions === "assetAnimations") {
       const selectedAsset = assetById(node.values.modelAssetId);
-      const clipNames = options.map(function (option) { return option.name; });
+      const clipNames = options.map(function (option) { return option.value || option.name; });
       const hasClip = value && clipNames.includes(value);
       if (!selectedAsset) {
         const hint = document.createElement("div");
@@ -4406,9 +4478,9 @@ function buildField(node, key, field) {
       if (asset.id === value) opt.selected = true;
       select.appendChild(opt);
     }
-    select.value = value || "";
+    select.value = isBlankValue(value) ? "" : String(value);
     select.addEventListener("change", function () {
-      const patch = makePatch(key, select.value);
+      const patch = makePatch(key, normalizeFieldInputValue(field, select.value));
       if (key === "modelAssetId" && (node.type === "model_entity" || node.type === "player_character")) {
         const selectedAsset = assetById(select.value);
         const resolvedAnimationClip = resolveAnimationClipForAsset(selectedAsset, node.values.animationClip);
@@ -4429,26 +4501,28 @@ function buildField(node, key, field) {
     applyFieldHelp(row, help);
     const color = document.createElement("input");
     color.type = "color";
-    color.value = /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : "#ffffff";
+    const colorValue = isBlankValue(value) ? "" : String(value);
+    color.value = /^#[0-9a-fA-F]{6}$/.test(colorValue) ? colorValue : "#ffffff";
     applyFieldHelp(color, help);
     const text = document.createElement("input");
     text.type = "text";
-    text.value = value || "";
+    text.value = isBlankValue(value) ? "" : String(value);
     text.placeholder = "#ffffff";
     applyFieldHelp(text, help);
     let committedColorValue = text.value;
     let pendingColorValue = null;
     function commitColor(nextValue) {
-      if (nextValue === committedColorValue || nextValue === pendingColorValue) return;
-      pendingColorValue = nextValue;
-      patchValues(node.id, makePatch(key, nextValue), {
+      const normalizedValue = normalizeFieldInputValue(field, nextValue);
+      if (normalizedValue === committedColorValue || normalizedValue === pendingColorValue) return;
+      pendingColorValue = normalizedValue;
+      patchValues(node.id, makePatch(key, normalizedValue), {
         historyLabel: field.label,
         refreshViewport: shouldRefreshViewportForNode(node.id),
         refreshValidation: true
       }).then(function (result) {
-        if (result) committedColorValue = nextValue;
+        if (result) committedColorValue = normalizedValue;
       }).finally(function () {
-        if (pendingColorValue === nextValue) pendingColorValue = null;
+        if (pendingColorValue === normalizedValue) pendingColorValue = null;
       });
     }
     color.addEventListener("input", function () { text.value = color.value; });
@@ -4480,7 +4554,7 @@ function buildField(node, key, field) {
     }
     textarea.addEventListener("change", function () {
       try {
-        const parsed = JSON.parse(textarea.value || "{}");
+        const parsed = normalizeFieldInputValue(field, textarea.value);
         patchValues(node.id, makePatch(key, parsed), {
           historyLabel: field.label,
           refreshViewport: shouldRefreshViewportForNode(node.id),
@@ -4492,7 +4566,7 @@ function buildField(node, key, field) {
     });
     textarea.addEventListener("blur", function () {
       try {
-        const parsed = JSON.parse(textarea.value || "{}");
+        const parsed = normalizeFieldInputValue(field, textarea.value);
         patchValues(node.id, makePatch(key, parsed), {
           historyLabel: field.label,
           refreshViewport: shouldRefreshViewportForNode(node.id),
@@ -4507,10 +4581,10 @@ function buildField(node, key, field) {
     applyFieldHelp(row, help);
     const text = document.createElement("input");
     text.type = "text";
-    text.value = value || "";
+    text.value = isBlankValue(value) ? "" : String(value);
     text.placeholder = "KeyW";
     applyFieldHelp(text, help);
-    text.addEventListener("change", function () { patchValues(node.id, makePatch(key, text.value), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
+    text.addEventListener("change", function () { patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, text.value)), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
     const capture = document.createElement("button");
     capture.type = "button";
     capture.className = "mini";
@@ -4530,6 +4604,38 @@ function buildField(node, key, field) {
     });
     row.append(text, capture);
     wrap.appendChild(row);
+  } else if (field.type === "number" && field.editorControl === "range") {
+    const row = document.createElement("div");
+    row.className = "rangeRow";
+    applyFieldHelp(row, help);
+    const input = document.createElement("input");
+    input.type = "range";
+    if (field.step !== undefined) input.step = String(field.step);
+    if (field.min !== undefined) input.min = String(field.min);
+    if (field.max !== undefined) input.max = String(field.max);
+    const initialValue = Number.isFinite(Number(value)) ? Number(value) : Number(field.default || 0);
+    input.value = String(initialValue);
+    applyFieldHelp(input, help);
+    const output = document.createElement("span");
+    output.className = "rangeValue";
+    applyFieldHelp(output, help);
+    const updateOutput = function (nextValue) {
+      const numericValue = Number(nextValue);
+      output.textContent = Number.isFinite(numericValue) ? (Math.round(numericValue) + "%") : "0%";
+    };
+    updateOutput(input.value);
+    input.addEventListener("input", function () {
+      updateOutput(input.value);
+    });
+    input.addEventListener("change", function () {
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
+        historyLabel: field.label,
+        refreshViewport: shouldRefreshViewportForNode(node.id),
+        refreshValidation: true
+      });
+    });
+    row.append(input, output);
+    wrap.appendChild(row);
   } else {
     const input = document.createElement("input");
     input.type = field.type === "number" ? "number" : "text";
@@ -4539,9 +4645,9 @@ function buildField(node, key, field) {
       if (field.min !== undefined) input.min = String(field.min);
       if (field.max !== undefined) input.max = String(field.max);
     }
-    input.value = value === null || value === undefined ? "" : value;
+    input.value = isBlankValue(value) ? "" : value;
     input.addEventListener("change", function () {
-      patchValues(node.id, makePatch(key, field.type === "number" ? Number(input.value) : input.value), {
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
         historyLabel: field.label,
         refreshViewport: shouldRefreshViewportForNode(node.id),
         refreshValidation: true
@@ -4765,6 +4871,26 @@ function scatterSourceAssetIdsForNode(node) {
   return assetIds;
 }
 
+function scatterSourceScaleMultipliersForNode(node) {
+  const legacySource = node && node.values && typeof node.values.sourceHeightMultipliers === "object" && !Array.isArray(node.values.sourceHeightMultipliers)
+    ? node.values.sourceHeightMultipliers
+    : {};
+  const source = node && node.values && typeof node.values.sourceScaleMultipliers === "object" && !Array.isArray(node.values.sourceScaleMultipliers)
+    ? node.values.sourceScaleMultipliers
+    : {};
+  const multipliers = {};
+  for (const sourceMap of [legacySource, source]) {
+    for (const [assetIdRaw, multiplierRaw] of Object.entries(sourceMap)) {
+      const assetId = String(assetIdRaw || "").trim();
+      if (!assetId) continue;
+      const multiplier = Number(multiplierRaw);
+      if (!Number.isFinite(multiplier)) continue;
+      multipliers[assetId] = Math.min(1000, Math.max(0.001, multiplier));
+    }
+  }
+  return multipliers;
+}
+
 function buildScatterSourcePicker(node, key, value) {
   const wrap = document.createElement("div");
   wrap.className = "scatterSourcePicker";
@@ -4772,7 +4898,7 @@ function buildScatterSourcePicker(node, key, value) {
   header.className = "scatterSourcePickerHeader";
   const hint = document.createElement("div");
   hint.className = "inspectorHint";
-  hint.textContent = "Kies model-assets uit de assetkolom. De scatter maakt lichte instances van deze assets en laat de bronnodes met rust.";
+  hint.textContent = "Kies model-assets uit de assetkolom en stel per geselecteerd asset de scale in.";
   const actions = document.createElement("div");
   actions.className = "scatterSourceActions";
   const clear = document.createElement("button");
@@ -4783,6 +4909,8 @@ function buildScatterSourcePicker(node, key, value) {
   clear.addEventListener("click", function () {
     patchValues(node.id, {
       sourceAssetIds: [],
+      sourceScaleMultipliers: {},
+      sourceHeightMultipliers: {},
       sourceNodeIds: []
     }, {
       historyLabel: "Source assets",
@@ -4812,6 +4940,7 @@ function buildScatterSourcePicker(node, key, value) {
 
   const list = document.createElement("div");
   list.className = "scatterSourceList";
+  const scaleMultipliers = scatterSourceScaleMultipliersForNode(node);
   const commit = function () {
     const nextIds = Array.from(selectedIds).sort(function (left, right) {
       return String(left).localeCompare(String(right));
@@ -4826,8 +4955,15 @@ function buildScatterSourcePicker(node, key, value) {
     });
   };
   for (const source of sources) {
-    const item = document.createElement("label");
+    const item = document.createElement("div");
     item.className = "scatterSourceItem";
+    item.style.display = "grid";
+    item.style.gap = "6px";
+    const toggle = document.createElement("label");
+    toggle.style.display = "flex";
+    toggle.style.alignItems = "center";
+    toggle.style.gap = "8px";
+    toggle.style.minWidth = "0";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = selectedIds.has(source.id);
@@ -4838,7 +4974,53 @@ function buildScatterSourcePicker(node, key, value) {
     });
     const text = document.createElement("span");
     text.textContent = source.name + " · " + source.assetType;
-    item.append(checkbox, text);
+    toggle.append(checkbox, text);
+    item.appendChild(toggle);
+
+    if (selectedIds.has(source.id)) {
+      const scaleWrap = document.createElement("div");
+      scaleWrap.style.display = "grid";
+      scaleWrap.style.gap = "4px";
+      scaleWrap.style.paddingLeft = "26px";
+      const scaleLabel = document.createElement("span");
+      scaleLabel.textContent = "Scale";
+      scaleLabel.style.fontSize = "10px";
+      scaleLabel.style.color = "#7f8d99";
+      scaleLabel.style.textTransform = "uppercase";
+      scaleLabel.style.letterSpacing = "0.6px";
+      const scaleInput = document.createElement("input");
+      scaleInput.type = "number";
+      scaleInput.step = "0.05";
+      scaleInput.min = "0.001";
+      scaleInput.max = "1000";
+      scaleInput.style.width = "120px";
+      scaleInput.style.marginTop = "0";
+      const currentScale = Number(scaleMultipliers[source.id]);
+      scaleInput.value = Number.isFinite(currentScale) ? String(currentScale) : "1";
+      scaleInput.addEventListener("change", function () {
+        const rawScale = String(scaleInput.value || "").trim();
+        const nextScale = rawScale === "" ? 1 : Number(rawScale);
+        const normalizedScale = Number.isFinite(nextScale) ? Math.min(1000, Math.max(0.001, nextScale)) : 1;
+        const nextMultipliers = scatterSourceScaleMultipliersForNode(node);
+        nextMultipliers[source.id] = normalizedScale;
+        const orderedMultipliers = {};
+        for (const assetId of Object.keys(nextMultipliers).sort(function (left, right) {
+          return String(left).localeCompare(String(right));
+        })) {
+          orderedMultipliers[assetId] = nextMultipliers[assetId];
+        }
+        patchValues(node.id, {
+          sourceScaleMultipliers: orderedMultipliers,
+          sourceHeightMultipliers: {}
+        }, {
+          historyLabel: source.name + " scale",
+          refreshViewport: shouldRefreshViewportForNode(node.id),
+          refreshValidation: true
+        });
+      });
+      scaleWrap.append(scaleLabel, scaleInput);
+      item.appendChild(scaleWrap);
+    }
     list.appendChild(item);
   }
   wrap.appendChild(list);
@@ -4864,6 +5046,279 @@ async function patchValues(nodeId, patch, options = {}) {
     refreshEdgeList: options.refreshEdgeList !== false,
     refreshInspector: options.refreshInspector !== false
   }, options));
+}
+
+function minimapBakeThumbnailPreview(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "assetThumb minimapBakeThumb";
+  if (node.values.bakedImageUrl) {
+    const img = document.createElement("img");
+    img.src = node.values.bakedImageUrl;
+    img.alt = node.values.label || "Minimap preview";
+    wrap.appendChild(img);
+  } else {
+    const icon = document.createElement("div");
+    icon.className = "assetThumbIcon";
+    icon.textContent = "MAP";
+    wrap.appendChild(icon);
+  }
+  return wrap;
+}
+
+function buildMinimapBakeInspectorBlock(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "field minimapBakeField";
+  const label = document.createElement("label");
+  label.textContent = "Minimap bake";
+  wrap.appendChild(label);
+  wrap.appendChild(minimapBakeThumbnailPreview(node));
+  const meta = document.createElement("div");
+  meta.className = "inspectorHint";
+  meta.textContent = node.values.bakedImageUrl
+    ? ("Laatste bake: " + (node.values.bakedAt || "onbekend") + " - " + (node.values.bakedImageWidth || 0) + "x" + (node.values.bakedImageHeight || 0))
+    : "Nog geen minimap gebakken.";
+  wrap.appendChild(meta);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "mini";
+  button.textContent = state.minimapBakeBusy ? "Minimap wordt gebakken..." : "Maak minimap afbeelding";
+  button.disabled = state.minimapBakeBusy;
+  button.addEventListener("click", function () { bakeMinimapForNode(node.id); });
+  wrap.appendChild(button);
+  if (state.minimapBakeMessage) {
+    const status = document.createElement("div");
+    status.className = "inspectorHint" + (state.minimapBakeTone === "error" ? " err" : "");
+    status.textContent = state.minimapBakeMessage;
+    wrap.appendChild(status);
+  }
+  return wrap;
+}
+
+function resolveMinimapBakeBounds() {
+  return squareGroundBounds(state.viewportWorld?.ground || null);
+}
+
+function computeMinimapWorldHash() {
+  const nodeCount = state.graph?.nodes?.length || 0;
+  const edgeCount = state.graph?.edges?.length || 0;
+  return nodeCount + "n-" + edgeCount + "e";
+}
+
+async function bakeMinimapForNode(nodeId) {
+  const node = nodeById(nodeId);
+  if (!node || node.type !== "minimap_bake" || !runtime || state.minimapBakeBusy) return;
+  const bounds = resolveMinimapBakeBounds();
+  if (!bounds) {
+    state.minimapBakeMessage = "Kan geen minimap bakken: er is geen Ground Surface verbonden.";
+    state.minimapBakeTone = "error";
+    renderInspector();
+    return;
+  }
+  state.minimapBakeBusy = true;
+  state.minimapBakeMessage = "Minimap wordt gebakken...";
+  state.minimapBakeTone = "";
+  renderInspector();
+  try {
+    const result = await runtime.bakeMinimapImage({
+      bounds: bounds,
+      resolution: Number(node.values.resolution) || 1024,
+      quality: Number(node.values.imageQuality) || 0.78,
+      hideEditorHelpers: node.values.hideEditorHelpers !== false,
+      hideChunkDebugOverlay: node.values.hideEditorHelpers !== false,
+      hideTransformControls: node.values.hideEditorHelpers !== false,
+      includeStaticModels: node.values.includeStaticModels !== false
+    });
+    const formData = new FormData();
+    formData.append("nodeId", node.id);
+    formData.append("minimapId", node.values.minimapId || "main_minimap");
+    formData.append("worldHash", computeMinimapWorldHash());
+    formData.append("resolution", String(result.width));
+    formData.append("width", String(result.width));
+    formData.append("height", String(result.height));
+    formData.append("format", result.format);
+    formData.append("quality", String(result.quality));
+    formData.append("bounds", JSON.stringify(result.bounds));
+    formData.append("file", result.blob, "minimap." + result.format);
+    const response = await fetch("/api/editor/minimap-bakes", { method: "POST", body: formData });
+    const data = await response.json().catch(function () { return {}; });
+    if (!response.ok || !data.ok) throw new Error(data.message || "Minimap bake upload mislukt.");
+    if (data.graph) {
+      state.graph = data.graph;
+      state.nodeTypes = data.graph.nodeTypes || state.nodeTypes;
+    }
+    state.minimapBakeMessage = "Minimap image opgeslagen.";
+    state.minimapBakeTone = "success";
+    renderGraph();
+    await refreshViewport({ force: true });
+  } catch (error) {
+    state.minimapBakeMessage = error.message || "Minimap bake mislukt.";
+    state.minimapBakeTone = "error";
+  } finally {
+    state.minimapBakeBusy = false;
+    renderInspector();
+    redrawEditorMinimap();
+  }
+}
+
+const editorMinimapImageCache = { url: "", image: null };
+
+function loadedEditorMinimapImage(url) {
+  if (!url) return null;
+  if (editorMinimapImageCache.url === url && editorMinimapImageCache.image) return editorMinimapImageCache.image;
+  const image = new Image();
+  image.addEventListener("load", function () { redrawEditorMinimap(); });
+  image.src = url;
+  editorMinimapImageCache.url = url;
+  editorMinimapImageCache.image = image;
+  return image;
+}
+
+function applyEditorMinimapAnchor(config) {
+  const root = el.editorMinimapRoot;
+  if (!root) return;
+  root.style.top = "";
+  root.style.bottom = "";
+  root.style.left = "";
+  root.style.right = "";
+  const size = Math.max(64, Number(config.sizePx) || 180);
+  root.style.width = size + "px";
+  root.style.height = size + "px";
+  if (config.anchor === "top-left") { root.style.top = "12px"; root.style.left = "12px"; }
+  else if (config.anchor === "top-right") { root.style.top = "12px"; root.style.right = "12px"; }
+  else if (config.anchor === "bottom-left") { root.style.bottom = "12px"; root.style.left = "12px"; }
+  else { root.style.bottom = "12px"; root.style.right = "12px"; }
+}
+
+function ensureEditorMinimapView(config, groundBounds, cameraTarget) {
+  const configKey = (config.sourceMinimapId || "") + "|" + (config.hudId || "");
+  if (!state.editorMinimapView || state.editorMinimapConfigKey !== configKey) {
+    state.editorMinimapConfigKey = configKey;
+    state.editorMinimapUserOverride = false;
+    state.editorMinimapView = createMinimapView(
+      cameraTarget ? cameraTarget.x : 0,
+      cameraTarget ? cameraTarget.z : 0,
+      config.startDistance
+    );
+  }
+  if (config.followEditorCamera !== false && !state.editorMinimapUserOverride && cameraTarget) {
+    state.editorMinimapView = { centerX: cameraTarget.x, centerZ: cameraTarget.z, worldDistance: state.editorMinimapView.worldDistance };
+  }
+  state.editorMinimapView = clampMinimapView(state.editorMinimapView, groundBounds);
+  return state.editorMinimapView;
+}
+
+function ensureEditorMinimapInteractions() {
+  if (state.editorMinimapInteractions || !el.editorMinimapCanvas) return;
+  state.editorMinimapInteractions = attachMinimapInteractions(el.editorMinimapCanvas, {
+    getView: function () { return state.editorMinimapView; },
+    setView: function (view) {
+      state.editorMinimapView = view;
+      state.editorMinimapUserOverride = true;
+      redrawEditorMinimap();
+    },
+    getGroundBounds: resolveMinimapBakeBounds,
+    getCanvasSize: function () { return Math.max(64, Number(state.viewportWorld?.minimap?.editor?.sizePx) || 180); },
+    getMinDistance: function () { return state.viewportWorld?.minimap?.editor?.minDistance || 20; },
+    getMaxDistance: function () { return state.viewportWorld?.minimap?.editor?.maxDistance || 1000; },
+    allowZoom: function () { return state.viewportWorld?.minimap?.editor?.allowZoom !== false; },
+    allowPan: function () { return state.viewportWorld?.minimap?.editor?.allowPan !== false; },
+    allowPinchZoom: function () { return state.viewportWorld?.minimap?.editor?.allowPinchZoom !== false; },
+    onClick: function (worldX, worldZ) {
+      const config = state.viewportWorld?.minimap?.editor;
+      if (!config || config.clickToFocus === false || !runtime) return;
+      const bounds = resolveMinimapBakeBounds();
+      const clampedX = bounds ? Math.max(bounds.minX, Math.min(bounds.maxX, worldX)) : worldX;
+      const clampedZ = bounds ? Math.max(bounds.minZ, Math.min(bounds.maxZ, worldZ)) : worldZ;
+      runtime.focusGroundPoint(clampedX, clampedZ);
+      redrawEditorMinimap();
+    }
+  });
+}
+
+function redrawEditorMinimap() {
+  if (!el.editorMinimapRoot || !el.editorMinimapCanvas) return;
+  const config = state.viewportWorld?.minimap?.editor || null;
+  if (!config || config.enabled === false || !runtime) {
+    el.editorMinimapRoot.hidden = true;
+    return;
+  }
+  ensureEditorMinimapInteractions();
+  const bakes = Array.isArray(state.viewportWorld?.minimap?.bakes) ? state.viewportWorld.minimap.bakes : [];
+  const bake = bakes.find(function (candidate) { return candidate.minimapId === config.sourceMinimapId; }) || null;
+  applyEditorMinimapAnchor(config);
+  el.editorMinimapRoot.hidden = false;
+  const canvas = el.editorMinimapCanvas;
+  const size = Math.max(64, Number(config.sizePx) || 180);
+  // Backing store at devicePixelRatio, drawing math in logical px, for a sharp HiDPI minimap.
+  const dpr = Math.max(1, Math.min(3, Number(window.devicePixelRatio) || 1));
+  const backing = Math.round(size * dpr);
+  if (canvas.width !== backing || canvas.height !== backing) {
+    canvas.width = backing;
+    canvas.height = backing;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = "#0b131c";
+  ctx.fillRect(0, 0, size, size);
+  const bounds = bake?.bounds || null;
+  if (!bounds) {
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Geen Ground Surface", size / 2, size / 2);
+    return;
+  }
+  const snapshot = runtime.getMinimapMarkerSnapshot({
+    includeLocalPlayer: false,
+    includeRemotePlayers: false,
+    includeEntities: config.showModelEntities !== false,
+    includeInteractables: config.showInteractables !== false
+  });
+  const view = ensureEditorMinimapView(config, bounds, snapshot.cameraTarget);
+  if (bake?.bakedImageUrl) {
+    const image = loadedEditorMinimapImage(bake.bakedImageUrl);
+    if (image && image.complete && image.naturalWidth) {
+      const rect = minimapImageSourceRect(bounds, view, bake.bakedImageWidth || image.naturalWidth, bake.bakedImageHeight || image.naturalHeight);
+      if (rect) ctx.drawImage(image, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, size, size);
+    }
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Nog geen bake", size / 2, size / 2);
+  }
+  const viewBounds = minimapViewBounds(view);
+  if (config.showModelEntities !== false) {
+    for (const entity of snapshot.entities) {
+      const point = resolveMinimapPoint(entity.x, entity.z, viewBounds, size, size, false);
+      if (!point) continue;
+      drawDiamondMarker(ctx, point.x, point.y, 5, { fill: "#d59bff", stroke: "rgba(0,0,0,0.6)" });
+      if (config.showEntityNames !== false) drawMarkerLabel(ctx, entity.label, point.x, point.y, 9, 16);
+    }
+  }
+  if (config.showInteractables !== false) {
+    for (const item of snapshot.interactables) {
+      const point = resolveMinimapPoint(item.x, item.z, viewBounds, size, size, false);
+      if (!point) continue;
+      drawSquareMarker(ctx, point.x, point.y, 4, { fill: "#9be870", stroke: "rgba(0,0,0,0.6)" });
+    }
+  }
+  if (config.showPlayerSpawn !== false && state.viewportWorld?.spawn) {
+    const spawn = state.viewportWorld.spawn;
+    const point = resolveMinimapPoint(spawn.x, spawn.z, viewBounds, size, size, false);
+    if (point) drawCrossMarker(ctx, point.x, point.y, 6, { stroke: "#9be870" });
+  }
+  if (config.showSelectedObject !== false && snapshot.selectedEntity) {
+    const point = resolveMinimapPoint(snapshot.selectedEntity.x, snapshot.selectedEntity.z, viewBounds, size, size, false);
+    if (point) drawDiamondMarker(ctx, point.x, point.y, 7, { fill: "#ffe08a", stroke: "rgba(0,0,0,0.7)" });
+  }
+  if (config.showEditorCamera !== false) {
+    const point = resolveMinimapPoint(snapshot.cameraTarget.x, snapshot.cameraTarget.z, viewBounds, size, size, false);
+    if (point) drawDotMarker(ctx, point.x, point.y, 6, { fill: "#7bd4ff", stroke: "rgba(0,0,0,0.6)" });
+  }
 }
 
 async function duplicateNode(nodeId) {
@@ -4913,7 +5368,7 @@ function renderEdgeList() {
     row.className = "edgeRow";
     const text = document.createElement("span");
     text.className = cross ? "crossGroup" : "";
-    text.textContent = fromNode.title + " > " + toNode.title + (cross ? " (cross-group)" : "");
+    text.textContent = nodeDisplayTitle(fromNode) + " > " + nodeDisplayTitle(toNode) + (cross ? " (cross-group)" : "");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "x";
@@ -5672,6 +6127,7 @@ function applyViewportWorld(world) {
   clearViewportRefreshTimer();
   syncRuntimeSelection();
   renderViewportControls();
+  redrawEditorMinimap();
 }
 
 async function refreshViewport(options = {}) {

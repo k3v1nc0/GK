@@ -3,18 +3,54 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>GK Editor Login</title>
+    <title>GK Account</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <main>
-      <form id="loginForm">
-        <h1>GK Editor</h1>
-        <label>Gebruiker <input name="username" autocomplete="username" required></label>
-        <label>Wachtwoord <input name="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit">Login</button>
-        <p id="statusText"></p>
-      </form>
+    <main class="login-shell">
+      <section class="hero">
+        <p class="eyebrow">MMO-01 account layer</p>
+        <h1>GK account</h1>
+        <p class="lede">
+          Registreer een nieuw speleraccount of log in met een bestaande sessie.
+          De game blijft server-authoritative, ook na refresh en op een tweede device.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div id="sessionCard" class="session-card hidden">
+          <div class="session-row">
+            <span>Ingelogd als</span>
+            <strong id="currentUserText">-</strong>
+          </div>
+          <div class="session-row">
+            <span>Sessie</span>
+            <strong id="currentSessionText">-</strong>
+          </div>
+          <div class="session-actions">
+            <a id="continueLink" class="primary-link" href="/game/">Open game</a>
+            <button id="logoutButton" type="button" class="secondary-button">Logout</button>
+          </div>
+        </div>
+
+        <form id="accountForm" class="account-form">
+          <label>
+            Gebruikersnaam of e-mail
+            <input name="identifier" autocomplete="username" required placeholder="test_mmo_01 of naam@example.com">
+          </label>
+          <label>
+            Wachtwoord
+            <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+          </label>
+          <p class="hint">Registreren maakt direct een speleraccount aan en gaat naar de game.</p>
+          <div class="button-row">
+            <button type="submit" data-action="login" class="primary-button">Login</button>
+            <button type="submit" data-action="register" class="secondary-button">Registreren</button>
+          </div>
+          <p id="statusText" class="status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
     </main>
     <script type="module" src="./login.js"></script>
   </body>

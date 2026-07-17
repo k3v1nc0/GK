@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="./styles.css?v=20260715-bounded-area-scatter-edge-size">
     <script type="importmap">
       {
         "imports": {
@@ -132,6 +133,9 @@
           </div>
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
           <canvas id="viewportCanvas"></canvas>
+          <div class="editorMinimapRoot" id="editorMinimapRoot" hidden>
+            <canvas id="editorMinimapCanvas"></canvas>
+          </div>
           <div class="viewportErrors" id="viewportErrors"></div>
         </div>
         <div class="statusLine" id="statusText">Laden...</div>
@@ -194,6 +198,6 @@
         </form>
       </aside>
     </main>
-    <script type="module" src="./editor.js?v=20260702-resident-streaming"></script>
+    <script type="module" src="./editor.js?v=20260715-bounded-area-scatter-edge-size"></script>
   </body>
 </html>

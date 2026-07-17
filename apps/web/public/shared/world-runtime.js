@@ -2,9 +2,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260702-resident-streaming";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260714-mmo11-camera-target-height";
 
 const DEG_TO_RAD = Math.PI / 180;
+let objectResidencyState = null;
+let chunkResidencyState = null;
 
 function colorOrDefault(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || "")) ? value : fallback;
@@ -17,6 +19,11 @@ function assetById(world, id) {
 function num(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function numOrDefault(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  return num(value, fallback);
 }
 
 function numberOrFallback(value, fallback) {
@@ -284,6 +291,127 @@ function createEmptyResidentContentState() {
   };
 }
 
+function createEmptyObjectResidencyTracker() {
+  return {
+    recordsById: new Map(),
+    holdMs: OBJECT_VISIBILITY_HOLD_MS,
+    enterMarginChunks: 0,
+    exitMarginChunks: OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS,
+    visibilityToggleCount: 0,
+    visibilityToggleThisFrame: 0,
+    preventedVisibilityToggleCount: 0,
+    repeatedVisibilityToggleWarnings: 0,
+    chunkBoundaryObjectWarnings: 0,
+    lastVisibilityChangeReason: "init",
+    lastVisibilityChangeTime: 0,
+    rebuiltChunkGroupCount: 0,
+    disposedChunkGroupCount: 0
+  };
+}
+
+function createEmptyChunkResidencyTracker() {
+  return {
+    recordsByKey: new Map(),
+    holdMs: OBJECT_VISIBILITY_HOLD_MS,
+    enterMarginChunks: 0,
+    exitMarginChunks: OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS,
+    lastChunkToggleReason: "init",
+    lastChunkToggleTime: 0
+  };
+}
+
+function createEmptyObjectResidencySummary() {
+  return {
+    visibleObjectCount: 0,
+    renderResidentObjectCount: 0,
+    heldVisibleObjectCount: 0,
+    pendingUnloadObjectCount: 0,
+    unloadedObjectCount: 0,
+    visibilityToggleCount: 0,
+    visibilityToggleThisFrame: 0,
+    preventedVisibilityToggleCount: 0,
+    lastVisibilityChangeReason: "init",
+    lastVisibilityChangeTime: 0,
+    repeatedVisibilityToggleWarnings: 0,
+    chunkBoundaryObjectWarnings: 0,
+    scatterBatchCount: 0,
+    visibleScatterBatchCount: 0,
+    heldScatterBatchCount: 0,
+    rebuiltChunkGroupCount: 0,
+    disposedChunkGroupCount: 0,
+    entries: []
+  };
+}
+
+function createEmptyChunkResidencySummary() {
+  return {
+    activeChunks: 0,
+    heldChunks: 0,
+    pendingUnloadChunks: 0,
+    unloadedChunks: 0,
+    enterMargin: 0,
+    exitMargin: OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS,
+    holdMs: OBJECT_VISIBILITY_HOLD_MS,
+    lastChunkToggleReason: "init",
+    lastChunkToggleTime: 0,
+    activeChunkKeys: [],
+    heldChunkKeys: [],
+    pendingUnloadChunkKeys: [],
+    unloadedChunkKeys: [],
+    entries: []
+  };
+}
+
+function resetResidencyTrackers() {
+  if (!objectResidencyState || !chunkResidencyState) return;
+  objectResidencyState.recordsById.clear();
+  objectResidencyState.visibilityToggleCount = 0;
+  objectResidencyState.visibilityToggleThisFrame = 0;
+  objectResidencyState.preventedVisibilityToggleCount = 0;
+  objectResidencyState.repeatedVisibilityToggleWarnings = 0;
+  objectResidencyState.chunkBoundaryObjectWarnings = 0;
+  objectResidencyState.lastVisibilityChangeReason = "init";
+  objectResidencyState.lastVisibilityChangeTime = 0;
+  objectResidencyState.rebuiltChunkGroupCount = 0;
+  objectResidencyState.disposedChunkGroupCount = 0;
+  objectResidencyState.enterMarginChunks = 0;
+  objectResidencyState.exitMarginChunks = OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS;
+  objectResidencyState.holdMs = OBJECT_VISIBILITY_HOLD_MS;
+  chunkResidencyState.recordsByKey.clear();
+  chunkResidencyState.lastChunkToggleReason = "init";
+  chunkResidencyState.lastChunkToggleTime = 0;
+  chunkResidencyState.enterMarginChunks = 0;
+  chunkResidencyState.exitMarginChunks = OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS;
+  chunkResidencyState.holdMs = OBJECT_VISIBILITY_HOLD_MS;
+}
+
+function hasPendingObjectResidencyWork() {
+  if (!objectResidencyState) return false;
+  for (const record of objectResidencyState.recordsById.values()) {
+    if (record && record.pendingUnload === true) return true;
+  }
+  return false;
+}
+
+function cloneResidencySummary(summary) {
+  if (!summary) return null;
+  const cloned = Object.assign({}, summary);
+  if (Array.isArray(summary.entries)) {
+    cloned.entries = summary.entries.map(function (entry) { return Object.assign({}, entry); });
+  }
+  if (Array.isArray(summary.activeChunkKeys)) cloned.activeChunkKeys = summary.activeChunkKeys.slice();
+  if (Array.isArray(summary.heldChunkKeys)) cloned.heldChunkKeys = summary.heldChunkKeys.slice();
+  if (Array.isArray(summary.pendingUnloadChunkKeys)) cloned.pendingUnloadChunkKeys = summary.pendingUnloadChunkKeys.slice();
+  if (Array.isArray(summary.unloadedChunkKeys)) cloned.unloadedChunkKeys = summary.unloadedChunkKeys.slice();
+  if (Array.isArray(summary.renderResidentChunkKeys)) cloned.renderResidentChunkKeys = summary.renderResidentChunkKeys.slice();
+  if (Array.isArray(summary.visibleChunkKeys)) cloned.visibleChunkKeys = summary.visibleChunkKeys.slice();
+  if (Array.isArray(summary.forwardChunkKeys)) cloned.forwardChunkKeys = summary.forwardChunkKeys.slice();
+  if (Array.isArray(summary.preloadChunkKeys)) cloned.preloadChunkKeys = summary.preloadChunkKeys.slice();
+  if (Array.isArray(summary.loadedChunkKeys)) cloned.loadedChunkKeys = summary.loadedChunkKeys.slice();
+  if (Array.isArray(summary.chunkKeys)) cloned.chunkKeys = summary.chunkKeys.slice();
+  return cloned;
+}
+
 // Fase 8.6 shadow quality presets (DEEL H). `shadowMapSize`/`shadowCameraSize` of 0 on a mode's
 // own field means "auto: use this table"; any explicit value >0 on the node always wins and is
 // never reduced again by a performance profile.
@@ -350,6 +478,7 @@ const WORLD_PERFORMANCE_DEFAULTS = {
     fogEnabled: true,
     maxFps: 60,
     debugHelpersVisible: false,
+    debugWarningsVisible: false,
     debugChunkOverlayVisible: false,
     chunkGridVisible: false,
     chunkLabelsVisible: false,
@@ -397,6 +526,7 @@ const WORLD_PERFORMANCE_DEFAULTS = {
     fogEnabled: false,
     maxFps: 60,
     debugHelpersVisible: true,
+    debugWarningsVisible: true,
     debugChunkOverlayVisible: false,
     chunkGridVisible: true,
     chunkLabelsVisible: false,
@@ -970,7 +1100,8 @@ export function resolveWorldPerformanceForRenderer(worldData, rendererProfile = 
   };
 }
 
-const RESIDENT_UNLOAD_HYSTERESIS_STREAK = 2;
+const OBJECT_VISIBILITY_HOLD_MS = 350;
+const OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS = 1;
 
 const CHUNK_POLICY_DEFAULTS = {
   editor: {
@@ -995,32 +1126,34 @@ const CHUNK_POLICY_DEFAULTS = {
     showChunkLabels: false,
     keepSelectedChunkLoaded: true,
     cameraOnly: false,
+    cameraOffsetZChunks: 0,
     fixedCameraPaddingTiles: 0,
     strictUnloadOutsideCamera: false
   },
   game: {
     enabled: false,
     chunkProfileId: "game_chunks",
-    chunkWidth: 100,
-    chunkDepth: 100,
-    tileSize: 1,
-    activeRadiusChunks: 1,
+    chunkWidth: 14,
+    chunkDepth: 14,
+    tileSize: 0.5,
+    activeRadiusChunks: 3,
     preloadMarginChunks: 1,
     unloadMarginChunks: 1,
-    maxLoadedChunks: 9,
+    maxLoadedChunks: 81,
     debugOverlay: false,
     residentEntityBudget: 200,
     residentObjectBudget: 300,
     residentScatterInstanceBudget: 500,
     residentChunkBuildBudgetPerFrame: 2,
     groundChunkingEnabled: true,
-    pathWaterSurfaceChunkingEnabled: false,
-    terrainVisualChunkingEnabled: false,
+    pathWaterSurfaceChunkingEnabled: true,
+    terrainVisualChunkingEnabled: true,
     showChunkGrid: true,
     showChunkLabels: false,
     keepSelectedChunkLoaded: false,
     cameraOnly: true,
-    fixedCameraPaddingTiles: 10,
+    cameraOffsetZChunks: -1,
+    fixedCameraPaddingTiles: 0,
     strictUnloadOutsideCamera: true
   }
 };
@@ -1029,6 +1162,12 @@ function chunkInteger(value, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, Math.floor(parsed));
+}
+
+function signedChunkInteger(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.trunc(parsed);
 }
 
 function chunkCoordInteger(value, fallback) {
@@ -1041,6 +1180,16 @@ function maxLoadedChunksForValue(value, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
   return Math.floor(parsed);
+}
+
+function applyChunkLoadingZOffset(point, policy, mode) {
+  if (!point || mode !== "game") return point;
+  const offsetChunks = signedChunkInteger(policy?.cameraOffsetZChunks, 0);
+  if (!offsetChunks) return point;
+  const size = chunkSizeForPolicy(policy);
+  return Object.assign({}, point, {
+    z: num(point.z, 0) + (offsetChunks * size.depth)
+  });
 }
 
 export function resolveChunkPolicy(worldData, mode = "editor") {
@@ -1081,6 +1230,7 @@ export function resolveChunkPolicy(worldData, mode = "editor") {
       showChunkLabels: false,
       keepSelectedChunkLoaded: defaults.keepSelectedChunkLoaded,
       cameraOnly: defaults.cameraOnly,
+      cameraOffsetZChunks: defaults.cameraOffsetZChunks,
       fixedCameraPaddingTiles: defaults.fixedCameraPaddingTiles,
       fixedCameraPaddingChunks: 0,
       strictUnloadOutsideCamera: defaults.strictUnloadOutsideCamera
@@ -1093,6 +1243,7 @@ export function resolveChunkPolicy(worldData, mode = "editor") {
   const fixedCameraPaddingChunks = modeName === "game"
     ? Math.max(0, Math.floor(fixedCameraPaddingTiles / Math.max(1, Math.min(chunkWidth, chunkDepth))))
     : 0;
+  const cameraOffsetZChunks = signedChunkInteger(policy.cameraOffsetZChunks, defaults.cameraOffsetZChunks);
   const activeRadiusChunks = modeName === "game"
     ? chunkInteger(policy.gameViewRadiusChunks, defaults.activeRadiusChunks) + fixedCameraPaddingChunks
     : chunkInteger(policy.editorViewRadiusChunks, defaults.activeRadiusChunks);
@@ -1129,6 +1280,7 @@ export function resolveChunkPolicy(worldData, mode = "editor") {
     showChunkLabels: modeName === "editor" ? policy.showChunkLabels === true : false,
     keepSelectedChunkLoaded: modeName === "editor" ? policy.keepSelectedChunkLoaded !== false : false,
     cameraOnly: modeName === "game" ? policy.cameraOnly !== false : false,
+    cameraOffsetZChunks: cameraOffsetZChunks,
     fixedCameraPaddingTiles: fixedCameraPaddingTiles,
     fixedCameraPaddingChunks: fixedCameraPaddingChunks,
     strictUnloadOutsideCamera: modeName === "game" ? policy.strictUnloadOutsideCamera !== false : false
@@ -2076,33 +2228,34 @@ export function auditSceneObjectsForShadowCasters(options = {}) {
   };
 }
 
-function buildCoverageCenterSignatureKey(centerChunk) {
-  return centerChunk ? chunkKey(centerChunk) : "none";
+export function buildCoverageCenterSignatureKey(centerChunk, presenceChunkKey = null) {
+  if (!centerChunk) return "none";
+  return chunkKey(centerChunk) + "~" + (presenceChunkKey || "none");
 }
 
 function resolveCoveragePrimaryPoint(options, mode, policy) {
   if (mode === "editor") {
     const target = options.camera?.target || options.camTarget || options.player || null;
-    return {
+    return applyChunkLoadingZOffset({
       x: num(target?.x, 0),
       z: num(target?.z, 0),
       source: "editor-camera"
-    };
+    }, policy, mode);
   }
   if (policy?.cameraOnly !== false) {
     const target = options.camTarget || options.camera?.target || options.player || null;
-    return {
+    return applyChunkLoadingZOffset({
       x: num(target?.x, 0),
       z: num(target?.z, 0),
       source: "game-camera"
-    };
+    }, policy, mode);
   }
   const player = options.player || options.camTarget || null;
-  return {
+  return applyChunkLoadingZOffset({
     x: num(player?.x, 0),
     z: num(player?.z, 0),
     source: "player"
-  };
+  }, policy, mode);
 }
 
 /**
@@ -2165,9 +2318,10 @@ function computeForwardChunkKeysFromHeading(heading, primary, policy, mode) {
  * resident chunk count could run well past the configured budget (e.g. 35 resident chunks with
  * maxLoadedChunks: 25) and rendered as a second, independently-moving block of loaded ground/
  * terrain trailing the camera. There is now exactly one budget-clipped window (buildChunkWindow):
- * the secondary anchor only contributes its own single chunk key (resolveCoveragePresenceChunkKey),
- * so a lagged camTarget can never lose track of the actual player/camera chunk without spinning up
- * a second window, plus a small bounded forward lookahead along the current movement heading.
+ * the secondary anchor only contributes its own single chunk when it is still adjacent to the
+ * primary window. A stale lagging camTarget that has drifted many chunks away no longer revives a
+ * distant block of world content, and forward lookahead stays bounded along the current movement
+ * heading.
  */
 export function computeStreamingCoverage(options = {}) {
   const mode = options.mode === "game" ? "game" : "editor";
@@ -2179,10 +2333,13 @@ export function computeStreamingCoverage(options = {}) {
   const centerChunk = chunkCoordForPosition(primary.x, primary.z, policy);
   const baseWindow = buildChunkWindow(centerChunk, policy, mode);
   const presenceChunkKey = resolveCoveragePresenceChunkKey(options, mode, policy);
+  const presenceChunkCoord = presenceChunkKey ? chunkCoordFromKey(presenceChunkKey) : null;
+  const presenceChunkDistance = presenceChunkCoord ? chebyshevChunkDistance(presenceChunkCoord, centerChunk) : null;
+  const presenceChunkAccepted = Number.isFinite(presenceChunkDistance) ? presenceChunkDistance <= 1 : false;
   const heading = resolveCoverageHeading(options, mode);
   const forwardChunkKeys = computeForwardChunkKeysFromHeading(heading, primary, policy, mode);
   const visibleSet = new Set(baseWindow.activeChunkKeys);
-  if (presenceChunkKey) visibleSet.add(presenceChunkKey);
+  if (presenceChunkAccepted) visibleSet.add(presenceChunkKey);
   const preloadSet = new Set(baseWindow.preloadChunkKeys);
   for (const key of forwardChunkKeys) preloadSet.add(key);
   const desiredSet = new Set(baseWindow.loadedChunkKeys);
@@ -2197,6 +2354,9 @@ export function computeStreamingCoverage(options = {}) {
     preloadChunkKeys: sortChunkKeysByDistance(Array.from(preloadSet), centerChunk),
     desiredResidentChunkKeys: sortChunkKeysByDistance(Array.from(desiredSet), centerChunk),
     unloadSafeChunkKeys: Array.from(unloadSafeSet),
+    presenceChunkKey: presenceChunkKey || null,
+    presenceChunkDistance: Number.isFinite(presenceChunkDistance) ? presenceChunkDistance : null,
+    presenceChunkAccepted: presenceChunkAccepted,
     clippedByMaxLoadedChunks: baseWindow.clippedByMaxLoadedChunks === true,
     requiredActiveChunks: num(baseWindow.requiredActiveChunks, 0),
     clippedActiveChunks: num(baseWindow.clippedActiveChunks, 0),
@@ -3065,6 +3225,9 @@ function createEmptyTerrainVisualStats() {
 }
 
 export function collectChunkCullingStats(entries, windowState, options = {}) {
+  if (options.objectResidencyState || options.chunkResidencyState) {
+    return collectChunkCullingStatsWithResidency(entries, windowState, options);
+  }
   const cullingEnabled = options.cullingEnabled !== false;
   const policy = options.policy || null;
   const loadedChunkKeys = sortChunkKeys(windowState?.loadedChunkKeys || []);
@@ -3156,6 +3319,528 @@ export function collectChunkCullingStats(entries, windowState, options = {}) {
       }
     }
     result.items.push(entryState);
+  }
+  return result;
+}
+
+function collectChunkCullingStatsWithResidency(entries, windowState, options = {}) {
+  const cullingEnabled = options.cullingEnabled !== false;
+  const policy = options.policy || null;
+  const loadedChunkKeys = sortChunkKeys(windowState?.loadedChunkKeys || []);
+  const renderResidentChunkKeys = sortChunkKeys(Array.isArray(options.renderResidentChunkKeys)
+    ? options.renderResidentChunkKeys
+    : loadedChunkKeys);
+  const activeChunkKeys = sortChunkKeys(windowState?.activeChunkKeys || []);
+  const preloadChunkKeys = sortChunkKeys(windowState?.preloadChunkKeys || []);
+  const unloadSafeChunkKeys = sortChunkKeys(Array.isArray(windowState?.unloadSafeChunkKeys) && windowState.unloadSafeChunkKeys.length
+    ? windowState.unloadSafeChunkKeys
+    : loadedChunkKeys);
+  const loadedChunkKeySet = new Set(loadedChunkKeys);
+  const renderResidentChunkKeySet = new Set(renderResidentChunkKeys);
+  const unloadSafeChunkKeySet = new Set(unloadSafeChunkKeys);
+  const terrainVisualStats = createEmptyTerrainVisualStats();
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : performance.now();
+  const objectTracker = options.objectResidencyState || null;
+  const chunkTracker = options.chunkResidencyState || null;
+  const enterMarginChunks = chunkInteger(policy?.activeRadiusChunks, 0) + Math.max(chunkInteger(policy?.preloadMarginChunks, 0), chunkInteger(policy?.unloadMarginChunks, 0));
+  const exitMarginChunks = enterMarginChunks + OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS;
+  if (objectTracker) {
+    objectTracker.visibilityToggleThisFrame = 0;
+    objectTracker.enterMarginChunks = enterMarginChunks;
+    objectTracker.exitMarginChunks = exitMarginChunks;
+    objectTracker.holdMs = OBJECT_VISIBILITY_HOLD_MS;
+  }
+  if (chunkTracker) {
+    chunkTracker.enterMarginChunks = enterMarginChunks;
+    chunkTracker.exitMarginChunks = exitMarginChunks;
+    chunkTracker.holdMs = OBJECT_VISIBILITY_HOLD_MS;
+  }
+  const result = {
+    items: [],
+    activeChunkKeys: activeChunkKeys,
+    preloadChunkKeys: preloadChunkKeys,
+    loadedChunkKeys: loadedChunkKeys,
+    renderResidentChunkKeys: renderResidentChunkKeys,
+    loadedChunkKeySet: loadedChunkKeySet,
+    activeChunks: activeChunkKeys.length,
+    preloadChunks: preloadChunkKeys.length,
+    loadedChunks: loadedChunkKeys.length,
+    hiddenObjects: 0,
+    visibleObjects: 0,
+    renderResidentObjects: 0,
+    heldVisibleObjects: 0,
+    pendingUnloadObjects: 0,
+    unloadedObjects: 0,
+    inactiveInteractables: 0,
+    inactiveSolids: 0,
+    culledEntities: 0,
+    culledScatter: 0,
+    culledInteractables: 0,
+    culledSolids: 0,
+    uncullableObjects: 0,
+    terrainVisuals: terrainVisualStats,
+    keepSelectedChunkLoadedApplied: options.keepSelectedChunkLoadedApplied === true,
+    objectResidency: null,
+    chunkResidency: null
+  };
+  const objectRecords = objectTracker ? objectTracker.recordsById : null;
+  const currentHoldMs = objectTracker?.holdMs || OBJECT_VISIBILITY_HOLD_MS;
+  const currentEnterMargin = objectTracker?.enterMarginChunks ?? enterMarginChunks;
+  const currentExitMargin = objectTracker?.exitMarginChunks ?? exitMarginChunks;
+
+  function updateObjectRecord(record, entry, chunkInfo, type, currentLoaded, currentSafe) {
+    const previousVisible = record.visible === true;
+    const previousPending = record.pendingUnload === true;
+    const previousHoldUntil = Number(record.holdUntilAt || 0) || 0;
+    const entryType = String(type || record.type || "entity");
+    let nextVisible = previousVisible;
+    let nextRenderResident = currentLoaded;
+    let nextHeldVisible = false;
+    let nextPendingUnload = false;
+    let nextUnloaded = false;
+    let nextReason = record.lastVisibilityChangeReason || "init";
+    if (currentLoaded) {
+      nextVisible = true;
+      nextRenderResident = true;
+      nextHeldVisible = false;
+      nextPendingUnload = false;
+      nextUnloaded = false;
+      if (!previousVisible) nextReason = "enter-loaded";
+      record.holdUntilAt = 0;
+      record.preventedHold = false;
+      record.pendingUnloadStartedAt = 0;
+    } else if (previousVisible && currentSafe) {
+      nextVisible = true;
+      nextRenderResident = false;
+      nextHeldVisible = true;
+      nextPendingUnload = false;
+      nextUnloaded = false;
+      record.holdUntilAt = 0;
+      record.preventedHold = false;
+      record.pendingUnloadStartedAt = 0;
+    } else if (previousVisible && !currentSafe) {
+      if (!previousHoldUntil) record.holdUntilAt = now + currentHoldMs;
+      const holdUntilAt = Number(record.holdUntilAt || 0) || 0;
+      if (now < holdUntilAt) {
+        nextVisible = true;
+        nextRenderResident = false;
+        nextHeldVisible = true;
+        nextPendingUnload = true;
+        nextUnloaded = false;
+        if (!record.preventedHold) {
+          objectTracker.preventedVisibilityToggleCount += 1;
+          record.preventedVisibilityToggleCount = (record.preventedVisibilityToggleCount || 0) + 1;
+          record.preventedHold = true;
+        }
+        if (!previousPending && (entryType === "scatter" || entryType === "staticProp" || entryType === "entity" || entryType === "interactable" || entryType === "terrainGround" || entryType === "terrainLayer" || entryType === "terrainSurface")) {
+          objectTracker.chunkBoundaryObjectWarnings += 1;
+          record.chunkBoundaryObjectWarnings = (record.chunkBoundaryObjectWarnings || 0) + 1;
+        }
+        nextReason = record.lastVisibilityChangeReason || "hold-visible";
+        record.pendingUnloadStartedAt = record.pendingUnloadStartedAt || now;
+      } else {
+        nextVisible = false;
+        nextRenderResident = false;
+        nextHeldVisible = false;
+        nextPendingUnload = false;
+        nextUnloaded = true;
+        nextReason = "exit-expired";
+        record.holdUntilAt = 0;
+        record.preventedHold = false;
+        record.pendingUnloadStartedAt = 0;
+      }
+    } else {
+      nextVisible = false;
+      nextRenderResident = false;
+      nextHeldVisible = false;
+      nextPendingUnload = false;
+      nextUnloaded = true;
+      record.holdUntilAt = 0;
+      record.preventedHold = false;
+      record.pendingUnloadStartedAt = 0;
+    }
+    if (previousVisible !== nextVisible) {
+      record.visibilityToggleCount = (record.visibilityToggleCount || 0) + 1;
+      objectTracker.visibilityToggleCount += 1;
+      objectTracker.visibilityToggleThisFrame += 1;
+      const lastToggleAt = Number(record.lastVisibilityToggleTime || 0) || 0;
+      if (lastToggleAt > 0 && now - lastToggleAt < Math.max(currentHoldMs, 250)) {
+        record.repeatedVisibilityToggleWarnings = (record.repeatedVisibilityToggleWarnings || 0) + 1;
+        objectTracker.repeatedVisibilityToggleWarnings += 1;
+      }
+      record.lastVisibilityToggleTime = now;
+      record.lastVisibilityChangeReason = nextReason;
+      record.lastVisibilityChangeTime = now;
+      objectTracker.lastVisibilityChangeReason = nextReason;
+      objectTracker.lastVisibilityChangeTime = now;
+      if (entryType === "scatter" || entryType === "staticProp" || entryType === "entity" || entryType === "interactable") {
+        record.chunkBoundaryObjectWarnings = (record.chunkBoundaryObjectWarnings || 0) + 1;
+      }
+    }
+    record.id = String(entry?.id || record.id || "").trim();
+    record.type = entryType;
+    record.hasVisual = entry?.hasVisual !== false;
+    record.chunkKey = chunkInfo?.key || record.chunkKey || null;
+    record.chunkKeys = Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length ? chunkInfo.keys.slice() : (Array.isArray(record.chunkKeys) ? record.chunkKeys.slice() : []);
+    record.currentLoaded = currentLoaded;
+    record.currentSafe = currentSafe;
+    record.visible = nextVisible;
+    record.renderResident = nextRenderResident;
+    record.loaded = nextVisible;
+    record.active = nextVisible;
+    record.heldVisible = nextHeldVisible;
+    record.pendingUnload = nextPendingUnload;
+    record.unloaded = nextUnloaded;
+    if (!record.lastVisibilityChangeReason) record.lastVisibilityChangeReason = nextReason;
+    if (!Number.isFinite(Number(record.lastVisibilityChangeTime))) record.lastVisibilityChangeTime = 0;
+    return record;
+  }
+
+  function ensureObjectRecord(entry, chunkInfo, type) {
+    const key = String(entry?.id || "").trim() || String(chunkInfo?.key || "").trim();
+    if (!key) return null;
+    let record = objectRecords.get(key);
+    if (!record) {
+      record = {
+        id: key,
+        type: String(type || "entity"),
+        chunkKey: chunkInfo?.key || null,
+        chunkKeys: Array.isArray(chunkInfo?.keys) ? chunkInfo.keys.slice() : [],
+        hasVisual: entry?.hasVisual !== false,
+        visible: false,
+        renderResident: false,
+        loaded: false,
+        active: false,
+        heldVisible: false,
+        pendingUnload: false,
+        unloaded: true,
+        currentLoaded: false,
+        currentSafe: false,
+        holdUntilAt: 0,
+        preventedHold: false,
+        pendingUnloadStartedAt: 0,
+        lastVisibilityChangeReason: "init",
+        lastVisibilityChangeTime: 0,
+        lastVisibilityToggleTime: 0,
+        visibilityToggleCount: 0,
+        preventedVisibilityToggleCount: 0,
+        repeatedVisibilityToggleWarnings: 0,
+        chunkBoundaryObjectWarnings: 0,
+        scatterBatch: String(type || "").indexOf("scatter") !== -1 || String(type || "") === "staticProp"
+      };
+      objectRecords.set(key, record);
+    }
+    record.scatterBatch = record.scatterBatch === true || String(type || "").indexOf("scatter") !== -1 || String(type || "") === "staticProp";
+    return record;
+  }
+
+  function buildObjectResidencySummary() {
+    const entries = Array.from(objectRecords ? objectRecords.values() : []).sort(function (left, right) {
+      const leftKey = String(left?.chunkKey || "");
+      const rightKey = String(right?.chunkKey || "");
+      if (leftKey !== rightKey) return leftKey.localeCompare(rightKey);
+      return String(left?.id || "").localeCompare(String(right?.id || ""));
+    }).map(function (record) {
+      return {
+        id: record.id || null,
+        type: record.type || "entity",
+        chunkKey: record.chunkKey || null,
+        chunkKeys: Array.isArray(record.chunkKeys) ? record.chunkKeys.slice() : [],
+        visible: record.visible === true,
+        renderResident: record.renderResident === true,
+        loaded: record.loaded === true,
+        active: record.active === true,
+        heldVisible: record.heldVisible === true,
+        pendingUnload: record.pendingUnload === true,
+        unloaded: record.unloaded === true,
+        currentLoaded: record.currentLoaded === true,
+        currentSafe: record.currentSafe === true,
+        lastVisibilityChangeReason: record.lastVisibilityChangeReason || "init",
+        lastVisibilityChangeTime: Number(record.lastVisibilityChangeTime || 0) || 0,
+        visibilityToggleCount: Number(record.visibilityToggleCount || 0) || 0,
+        preventedVisibilityToggleCount: Number(record.preventedVisibilityToggleCount || 0) || 0,
+        repeatedVisibilityToggleWarnings: Number(record.repeatedVisibilityToggleWarnings || 0) || 0,
+        chunkBoundaryObjectWarnings: Number(record.chunkBoundaryObjectWarnings || 0) || 0,
+        scatterBatch: record.scatterBatch === true
+      };
+    });
+    let visibleObjectCount = 0;
+    let renderResidentObjectCount = 0;
+    let heldVisibleObjectCount = 0;
+    let pendingUnloadObjectCount = 0;
+    let unloadedObjectCount = 0;
+    let visibilityToggleCount = 0;
+    let preventedVisibilityToggleCount = 0;
+    let repeatedVisibilityToggleWarnings = 0;
+    let chunkBoundaryObjectWarnings = 0;
+    let scatterBatchCount = 0;
+    let visibleScatterBatchCount = 0;
+    let heldScatterBatchCount = 0;
+    for (const entry of entries) {
+      if (entry.hasVisual === false) continue;
+      if (entry.visible === true) visibleObjectCount += 1;
+      if (entry.renderResident === true) renderResidentObjectCount += 1;
+      if (entry.heldVisible === true) heldVisibleObjectCount += 1;
+      if (entry.pendingUnload === true) pendingUnloadObjectCount += 1;
+      if (entry.unloaded === true) unloadedObjectCount += 1;
+      visibilityToggleCount += Number(entry.visibilityToggleCount || 0) || 0;
+      preventedVisibilityToggleCount += Number(entry.preventedVisibilityToggleCount || 0) || 0;
+      repeatedVisibilityToggleWarnings += Number(entry.repeatedVisibilityToggleWarnings || 0) || 0;
+      chunkBoundaryObjectWarnings += Number(entry.chunkBoundaryObjectWarnings || 0) || 0;
+      if (entry.scatterBatch === true) {
+        scatterBatchCount += 1;
+        if (entry.visible === true) visibleScatterBatchCount += 1;
+        if (entry.heldVisible === true) heldScatterBatchCount += 1;
+      }
+    }
+    return {
+      visibleObjectCount: visibleObjectCount,
+      renderResidentObjectCount: renderResidentObjectCount,
+      heldVisibleObjectCount: heldVisibleObjectCount,
+      pendingUnloadObjectCount: pendingUnloadObjectCount,
+      unloadedObjectCount: unloadedObjectCount,
+      visibilityToggleCount: visibilityToggleCount,
+      visibilityToggleThisFrame: Number(objectTracker?.visibilityToggleThisFrame || 0) || 0,
+      preventedVisibilityToggleCount: preventedVisibilityToggleCount,
+      lastVisibilityChangeReason: objectTracker?.lastVisibilityChangeReason || "init",
+      lastVisibilityChangeTime: Number(objectTracker?.lastVisibilityChangeTime || 0) || 0,
+      repeatedVisibilityToggleWarnings: repeatedVisibilityToggleWarnings,
+      chunkBoundaryObjectWarnings: chunkBoundaryObjectWarnings,
+      scatterBatchCount: scatterBatchCount,
+      visibleScatterBatchCount: visibleScatterBatchCount,
+      heldScatterBatchCount: heldScatterBatchCount,
+      rebuiltChunkGroupCount: Number(objectTracker?.rebuiltChunkGroupCount || 0) || 0,
+      disposedChunkGroupCount: Number(objectTracker?.disposedChunkGroupCount || 0) || 0,
+      entries: entries
+    };
+  }
+
+  function buildChunkResidencySummary() {
+    const summariesByKey = new Map();
+    for (const record of objectRecords ? objectRecords.values() : []) {
+      const chunkKeys = Array.isArray(record.chunkKeys) && record.chunkKeys.length
+        ? record.chunkKeys.slice()
+        : (record.chunkKey ? [record.chunkKey] : []);
+      for (const key of chunkKeys) {
+        const chunkKeyValue = String(key || "").trim();
+        if (!chunkKeyValue) continue;
+        let summary = summariesByKey.get(chunkKeyValue);
+        if (!summary) {
+          summary = {
+            chunkKey: chunkKeyValue,
+            totalObjectCount: 0,
+            visibleObjectCount: 0,
+            renderResidentObjectCount: 0,
+            heldVisibleObjectCount: 0,
+            pendingUnloadObjectCount: 0,
+            unloadedObjectCount: 0,
+            scatterBatchCount: 0,
+            visibleScatterBatchCount: 0,
+            heldScatterBatchCount: 0,
+            lastChunkToggleReason: "init",
+            lastChunkToggleTime: 0,
+            enterMargin: currentEnterMargin,
+            exitMargin: currentExitMargin,
+            holdMs: currentHoldMs,
+            state: "unloaded"
+          };
+          summariesByKey.set(chunkKeyValue, summary);
+        }
+        summary.totalObjectCount += 1;
+        if (record.visible === true) summary.visibleObjectCount += 1;
+        if (record.renderResident === true) summary.renderResidentObjectCount += 1;
+        if (record.heldVisible === true) summary.heldVisibleObjectCount += 1;
+        if (record.pendingUnload === true) summary.pendingUnloadObjectCount += 1;
+        if (record.unloaded === true) summary.unloadedObjectCount += 1;
+        if (record.scatterBatch === true) {
+          summary.scatterBatchCount += 1;
+          if (record.visible === true) summary.visibleScatterBatchCount += 1;
+          if (record.heldVisible === true) summary.heldScatterBatchCount += 1;
+        }
+        if ((Number(record.lastVisibilityChangeTime || 0) || 0) >= (Number(summary.lastChunkToggleTime || 0) || 0)) {
+          summary.lastChunkToggleReason = record.lastVisibilityChangeReason || summary.lastChunkToggleReason;
+          summary.lastChunkToggleTime = Number(record.lastVisibilityChangeTime || 0) || 0;
+        }
+      }
+    }
+    const entries = Array.from(summariesByKey.values()).sort(function (left, right) {
+      return chunkCoordSort(chunkCoordFromKey(left.chunkKey), chunkCoordFromKey(right.chunkKey));
+    }).map(function (summary) {
+      let state = "unloaded";
+      if (summary.renderResidentObjectCount > 0) {
+        state = "active";
+      } else if (summary.pendingUnloadObjectCount > 0) {
+        state = "pendingUnload";
+      } else if (summary.visibleObjectCount > 0) {
+        state = "held";
+      }
+      return Object.assign({}, summary, { state: state });
+    });
+    if (chunkTracker) {
+      chunkTracker.recordsByKey.clear();
+      for (const entry of entries) {
+        chunkTracker.recordsByKey.set(entry.chunkKey, Object.assign({}, entry));
+      }
+      const latest = entries.slice().sort(function (left, right) {
+        return (Number(right.lastChunkToggleTime || 0) || 0) - (Number(left.lastChunkToggleTime || 0) || 0);
+      })[0] || null;
+      chunkTracker.lastChunkToggleReason = latest?.lastChunkToggleReason || "init";
+      chunkTracker.lastChunkToggleTime = Number(latest?.lastChunkToggleTime || 0) || 0;
+    }
+    const activeChunks = entries.filter(function (entry) { return entry.state === "active"; });
+    const heldChunks = entries.filter(function (entry) { return entry.state === "held"; });
+    const pendingUnloadChunks = entries.filter(function (entry) { return entry.state === "pendingUnload"; });
+    const unloadedChunks = entries.filter(function (entry) { return entry.state === "unloaded"; });
+    return {
+      activeChunks: activeChunks.length,
+      heldChunks: heldChunks.length,
+      pendingUnloadChunks: pendingUnloadChunks.length,
+      unloadedChunks: unloadedChunks.length,
+      enterMargin: currentEnterMargin,
+      exitMargin: currentExitMargin,
+      holdMs: currentHoldMs,
+      lastChunkToggleReason: chunkTracker?.lastChunkToggleReason || "init",
+      lastChunkToggleTime: Number(chunkTracker?.lastChunkToggleTime || 0) || 0,
+      activeChunkKeys: activeChunks.map(function (entry) { return entry.chunkKey; }),
+      heldChunkKeys: heldChunks.map(function (entry) { return entry.chunkKey; }),
+      pendingUnloadChunkKeys: pendingUnloadChunks.map(function (entry) { return entry.chunkKey; }),
+      unloadedChunkKeys: unloadedChunks.map(function (entry) { return entry.chunkKey; }),
+      entries: entries
+    };
+  }
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const type = String(entry?.type || "entity");
+    const hasVisual = entry?.hasVisual !== false;
+    const chunkInfo = resolveChunkEntryChunkInfo(entry, policy);
+    const isTerrainVisual = type === "terrainGround" || type === "terrainLayer" || type === "terrainSurface";
+    const currentLoaded = cullingEnabled && Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length
+      ? chunkInfo.keys.some(function (key) { return loadedChunkKeySet.has(key); })
+      : cullingEnabled && !chunkInfo?.key ? false : true;
+    const currentSafe = cullingEnabled && Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length
+      ? chunkInfo.keys.some(function (key) { return unloadSafeChunkKeySet.has(key); })
+      : cullingEnabled && !chunkInfo?.key ? false : true;
+    const entryState = {
+      id: entry?.id || null,
+      type: type,
+      chunkKey: chunkInfo?.key || null,
+      chunkKeys: Array.isArray(chunkInfo?.keys) ? chunkInfo.keys.slice() : [],
+      visible: hasVisual ? true : null,
+      renderResident: hasVisual ? true : null,
+      loaded: hasVisual ? true : null,
+      active: true,
+      heldVisible: false,
+      pendingUnload: false,
+      unloaded: false,
+      currentLoaded: currentLoaded,
+      currentSafe: currentSafe,
+      uncullable: false,
+      lastVisibilityChangeReason: "init",
+      lastVisibilityChangeTime: 0,
+      visibilityToggleCount: 0,
+      preventedVisibilityToggleCount: 0,
+      repeatedVisibilityToggleWarnings: 0,
+      chunkBoundaryObjectWarnings: 0,
+      state: "visible"
+    };
+    if (cullingEnabled && Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length) {
+      if (objectTracker) {
+        const record = ensureObjectRecord(entry, chunkInfo, type);
+        if (record) {
+          if (hasVisual) {
+            updateObjectRecord(record, entry, chunkInfo, type, currentLoaded, currentSafe);
+          } else {
+            record.id = String(entry?.id || record.id || "").trim();
+            record.type = type;
+            record.hasVisual = false;
+            record.chunkKey = chunkInfo?.key || record.chunkKey || null;
+            record.chunkKeys = Array.isArray(chunkInfo?.keys) && chunkInfo.keys.length ? chunkInfo.keys.slice() : (Array.isArray(record.chunkKeys) ? record.chunkKeys.slice() : []);
+            record.currentLoaded = currentLoaded;
+            record.currentSafe = currentSafe;
+            record.visible = false;
+            record.renderResident = currentLoaded;
+            record.loaded = currentLoaded;
+            record.active = currentLoaded;
+            record.heldVisible = false;
+            record.pendingUnload = false;
+            record.unloaded = !currentLoaded;
+            record.pendingUnloadStartedAt = 0;
+            record.preventedHold = false;
+            if (!record.lastVisibilityChangeReason) record.lastVisibilityChangeReason = "init";
+            if (!Number.isFinite(Number(record.lastVisibilityChangeTime))) record.lastVisibilityChangeTime = 0;
+          }
+          entryState.visible = hasVisual ? record.visible === true : null;
+          entryState.renderResident = record.renderResident === true;
+          entryState.loaded = record.loaded === true;
+          entryState.active = record.active === true;
+          entryState.heldVisible = record.heldVisible === true;
+          entryState.pendingUnload = record.pendingUnload === true;
+          entryState.unloaded = record.unloaded === true;
+          entryState.currentLoaded = record.currentLoaded === true;
+          entryState.currentSafe = record.currentSafe === true;
+          entryState.lastVisibilityChangeReason = record.lastVisibilityChangeReason || "init";
+          entryState.lastVisibilityChangeTime = Number(record.lastVisibilityChangeTime || 0) || 0;
+          entryState.visibilityToggleCount = Number(record.visibilityToggleCount || 0) || 0;
+          entryState.preventedVisibilityToggleCount = Number(record.preventedVisibilityToggleCount || 0) || 0;
+          entryState.repeatedVisibilityToggleWarnings = Number(record.repeatedVisibilityToggleWarnings || 0) || 0;
+          entryState.chunkBoundaryObjectWarnings = Number(record.chunkBoundaryObjectWarnings || 0) || 0;
+          entryState.state = hasVisual
+            ? (record.visible === true
+              ? (record.renderResident === true ? "active" : record.pendingUnload === true ? "pendingUnload" : "held")
+              : "unloaded")
+            : (record.loaded === true ? "active" : "unloaded");
+        }
+      } else {
+        entryState.loaded = currentLoaded;
+        entryState.active = currentLoaded;
+        entryState.renderResident = currentLoaded;
+        if (hasVisual) entryState.visible = currentLoaded;
+      }
+    } else if (cullingEnabled && !chunkInfo?.key) {
+      entryState.uncullable = true;
+      result.uncullableObjects += 1;
+      if (isTerrainVisual) result.terrainVisuals.uncullableTerrainVisuals += 1;
+    }
+    if (hasVisual) {
+      if (entryState.visible === false) result.hiddenObjects += 1;
+      else result.visibleObjects += 1;
+      if (entryState.renderResident === true) result.renderResidentObjects += 1;
+      if (entryState.heldVisible === true) result.heldVisibleObjects += 1;
+      if (entryState.pendingUnload === true) result.pendingUnloadObjects += 1;
+      if (entryState.unloaded === true) result.unloadedObjects += 1;
+    }
+    if (isTerrainVisual) {
+      result.terrainVisuals.registered += 1;
+      if (entryState.visible === false) {
+        result.terrainVisuals.hidden += 1;
+        if (type === "terrainGround") result.terrainVisuals.groundTilesHidden += 1;
+        else if (type === "terrainLayer") result.terrainVisuals.terrainLayerTilesHidden += 1;
+        else if (type === "terrainSurface") result.terrainVisuals.surfaceSegmentsHidden += 1;
+      } else {
+        result.terrainVisuals.visible += 1;
+        if (type === "terrainGround") result.terrainVisuals.groundTilesVisible += 1;
+        else if (type === "terrainLayer") result.terrainVisuals.terrainLayerTilesVisible += 1;
+        else if (type === "terrainSurface") result.terrainVisuals.surfaceSegmentsVisible += 1;
+      }
+    }
+    if (entryState.loaded === false) {
+      if (type === "entity") result.culledEntities += 1;
+      if (type === "scatter") result.culledScatter += 1;
+      if (type === "interactable") {
+        result.culledInteractables += 1;
+        result.inactiveInteractables += 1;
+      }
+      if (type === "solid") {
+        result.culledSolids += 1;
+        result.inactiveSolids += 1;
+      }
+    }
+    result.items.push(entryState);
+  }
+
+  if (objectTracker) {
+    result.objectResidency = buildObjectResidencySummary();
+    result.chunkResidency = buildChunkResidencySummary();
   }
   return result;
 }
@@ -4001,6 +4686,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const mode = options.mode || "editor";
   const hudElement = options.hud || null;
   const rendererAntialias = options.antialias !== false;
+  const externalPlayerAuthority = options.externalPlayerAuthority === true || options.disableGameInput === true;
 
   const worldPerformanceDefaults = WORLD_PERFORMANCE_DEFAULTS;
   let worldPerformance = {
@@ -4008,6 +4694,27 @@ export function createGkWorldRuntime(canvas, options = {}) {
     game: { ...worldPerformanceDefaults.game },
     editor: { ...worldPerformanceDefaults.editor }
   };
+  // Warnings are useful while debugging, but repeated warnings can stall the browser.
+  // Gate console.warn here so the world setting controls both three.js and runtime spam.
+  const originalConsoleWarn = console.warn.bind(console);
+  const consoleWarnGate = function (...params) {
+    if (!debugWarningsVisibleInCurrentMode()) return;
+    originalConsoleWarn(...params);
+  };
+  let consoleWarnPatched = false;
+  function installConsoleWarnGate() {
+    if (consoleWarnPatched) return;
+    consoleWarnPatched = true;
+    console.warn = consoleWarnGate;
+  }
+  function restoreConsoleWarnGate() {
+    if (!consoleWarnPatched) return;
+    if (console.warn === consoleWarnGate) {
+      console.warn = originalConsoleWarn;
+    }
+    consoleWarnPatched = false;
+  }
+  installConsoleWarnGate();
   let shadowPolicy = resolveShadowPolicy(null, mode);
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: rendererAntialias });
@@ -4197,21 +4904,44 @@ export function createGkWorldRuntime(canvas, options = {}) {
     ? window.__GK_DEBUG_RUNTIME
     : { enabled: false, activeLoopCount: 0, running: false, resizeCount: 0, renderCount: 0, lastRenderReasons: [], lastResizeSnapshot: null, activeResizeHandlers: 0, lastFrameTiming: null };
   window.__GK_DEBUG_RUNTIME = DEBUG_RUNTIME;
-  let lastTime = performance.now();
+  let lastTime = 0;
 
   // Game state
-  const player = { root: null, pos: new THREE.Vector3(), facing: 0, radius: 0.5, speed: 6, sprint: 1.6, turnSpeed: 600, animationState: "idle" };
+  const player = {
+    root: null,
+    pos: new THREE.Vector3(),
+    facing: 0,
+    radius: 0.5,
+    speed: 6,
+    sprint: 1.6,
+    turnSpeed: 600,
+    animationState: "idle",
+    displayName: String(options.localPlayerDisplayName || options.playerDisplayName || "").trim(),
+    nameplateRoot: null,
+    reconcileActive: false,
+    reconcileTarget: new THREE.Vector3(),
+    reconcileStart: new THREE.Vector3(),
+    reconcileTargetFacing: 0,
+    reconcileStartFacing: 0,
+    reconcileDurationMs: 120,
+    reconcileElapsedMs: 0,
+    pendingState: null
+  };
+  const remotePlayers = new Map();
   let camYaw = 0;
   let camPitch = 60;
   let camDistance = 24;
   let camMinDistance = 1;
   let camMaxDistance = 500;
   let camFollow = true;
+  let camTargetHeightOffset = 1.6;
   let camRotateSpeed = 90;
   const camTarget = new THREE.Vector3();
+  const playerCameraTargetCache = new THREE.Vector3();
   let clickTarget = null;
   const pressedKeys = new Set();
   const keyToAction = new Map();
+  const actionToKeyCodes = new Map();
   const moveVector = new THREE.Vector3();
   const cameraForward = new THREE.Vector3();
   const cameraRight = new THREE.Vector3();
@@ -4234,7 +4964,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     collisionShapes: 0,
     entities: 0,
     scatterInstances: 0,
-    interactables: 0
+    interactables: 0,
+    remotePlayers: 0
   };
   let publishedWorldItemCount = 0;
   let perfHudNextUpdateAt = 0;
@@ -4272,8 +5003,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let chunkDebugSignature = "";
   let contentBlueprintIndex = createEmptyContentBlueprintIndex();
   let residentContentState = createEmptyResidentContentState();
+  objectResidencyState = createEmptyObjectResidencyTracker();
+  chunkResidencyState = createEmptyChunkResidencyTracker();
   const streamingHeadingState = { lastPlayerPosition: null, lastCameraTarget: null };
-  const unloadHysteresisState = { candidateStreaks: new Map() };
   let residentBootstrapState = {
     lastReason: "init",
     worldGeneration: 0,
@@ -4299,10 +5031,17 @@ export function createGkWorldRuntime(canvas, options = {}) {
     forwardChunkKeys: [],
     unloadSafeChunkKeys: [],
     desiredResidentChunkKeys: [],
+    presenceChunkKey: null,
+    presenceChunkDistance: null,
+    presenceChunkAccepted: false,
     streamingCoverageSource: "none",
     clippedByMaxLoadedChunks: false,
     hiddenObjects: 0,
     visibleObjects: 0,
+    renderResidentObjects: 0,
+    heldVisibleObjects: 0,
+    pendingUnloadObjects: 0,
+    unloadedObjects: 0,
     inactiveInteractables: 0,
     inactiveSolids: 0,
     culledEntities: 0,
@@ -4310,6 +5049,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
     culledInteractables: 0,
     culledSolids: 0,
     uncullableObjects: 0,
+    objectResidency: null,
+    chunkResidency: null,
     terrainVisuals: createEmptyTerrainVisualStats(),
     ground: cloneGroundChunkStats(),
     terrainStreaming: Object.assign({}, terrainStreamingState, {
@@ -4969,7 +5710,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
       nextResidentState.budgetClipped = false;
       nextResidentState.lastSyncReason = reason || "disabled";
       nextResidentState.lastSyncMs = round(performance.now() - startedAt);
-      unloadHysteresisState.candidateStreaks.clear();
       return nextResidentState;
     }
     const desiredChunkKeys = Array.isArray(nextChunkState?.loadedChunkKeys) ? sortChunkKeys(nextChunkState.loadedChunkKeys) : [];
@@ -4984,23 +5724,12 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const unloadSafeSet = new Set(unloadSafeChunkKeys);
     const centerChunk = nextChunkState?.centerChunk || null;
     const residentSet = nextResidentState.residentChunkKeys;
-    const streaks = unloadHysteresisState.candidateStreaks;
     const leavingChunkKeys = [];
     for (const key of Array.from(residentSet)) {
-      if (unloadSafeSet.has(key)) {
-        streaks.delete(key);
-        continue;
-      }
-      const streak = (streaks.get(key) || 0) + 1;
-      if (streak >= RESIDENT_UNLOAD_HYSTERESIS_STREAK) {
-        streaks.delete(key);
-        leavingChunkKeys.push(key);
-      } else {
-        streaks.set(key, streak);
-      }
-    }
-    for (const key of Array.from(streaks.keys())) {
-      if (!residentSet.has(key)) streaks.delete(key);
+      if (unloadSafeSet.has(key)) continue;
+      const chunkRecord = chunkResidencyState.recordsByKey.get(key) || null;
+      if (chunkRecord && chunkRecord.state !== "unloaded") continue;
+      leavingChunkKeys.push(key);
     }
     for (const chunkKey of leavingChunkKeys) {
       const buckets = [
@@ -5018,6 +5747,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
         else if (kind === "solid") residentContentState.solidEntriesByKey.delete(chunkKey);
       }
       residentSet.delete(chunkKey);
+      objectResidencyState.disposedChunkGroupCount += 1;
+      chunkResidencyState.lastChunkToggleReason = reason || "chunk-unload";
+      chunkResidencyState.lastChunkToggleTime = startedAt;
     }
     nextResidentState.leavingChunkKeys = leavingChunkKeys.slice();
     nextResidentState.desiredChunkKeys = desiredChunkKeys.slice();
@@ -5054,6 +5786,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
       residentSet.add(chunkKey);
       buildResidentChunkContentForChunk(chunkKey, policy, reason);
       builtChunkKeys.push(chunkKey);
+      objectResidencyState.rebuiltChunkGroupCount += 1;
+      chunkResidencyState.lastChunkToggleReason = reason || "chunk-build";
+      chunkResidencyState.lastChunkToggleTime = startedAt;
       nextResidentState.loadedEntityCount = projectedEntityCount;
       nextResidentState.loadedScatterInstanceCount = projectedScatterCount;
       nextResidentState.loadedInteractableCount = projectedInteractableCount;
@@ -5263,6 +5998,19 @@ export function createGkWorldRuntime(canvas, options = {}) {
         } else {
           setShadowProxyState(entry.object, false, { kind: entry.type || entry.object?.userData?.batchKind || "shadowProxy" });
         }
+        entry.object.userData.objectResidency = {
+          visible: item.visible === true,
+          renderResident: item.renderResident === true,
+          loaded: item.loaded === true,
+          active: item.active !== false,
+          heldVisible: item.heldVisible === true,
+          pendingUnload: item.pendingUnload === true,
+          unloaded: item.unloaded === true,
+          lastVisibilityChangeReason: item.lastVisibilityChangeReason || "init",
+          lastVisibilityChangeTime: Number(item.lastVisibilityChangeTime || 0) || 0,
+          visibilityToggleCount: Number(item.visibilityToggleCount || 0) || 0,
+          preventedVisibilityToggleCount: Number(item.preventedVisibilityToggleCount || 0) || 0
+        };
         entry.object.userData.renderResident = item.renderResident === true;
         entry.object.userData.shadowResident = item.loaded === true;
         entry.object.userData.shadowProxy = shouldShadowProxy;
@@ -5325,6 +6073,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       || previousPolicy.residentObjectBudget !== nextState.residentObjectBudget
       || previousPolicy.residentScatterInstanceBudget !== nextState.residentScatterInstanceBudget
       || previousPolicy.residentChunkBuildBudgetPerFrame !== nextState.residentChunkBuildBudgetPerFrame
+      || previousPolicy.cameraOffsetZChunks !== nextState.cameraOffsetZChunks
       || previousPolicy.fixedCameraPaddingChunks !== nextState.fixedCameraPaddingChunks
       || previousPolicy.cameraOnly !== nextState.cameraOnly
       || previousPolicy.strictUnloadOutsideCamera !== nextState.strictUnloadOutsideCamera
@@ -5485,30 +6234,30 @@ export function createGkWorldRuntime(canvas, options = {}) {
 function resolveChunkDebugCenter(policy) {
     if (mode === "editor") {
       if (orbitControls?.target) {
-        return {
+        return applyChunkLoadingZOffset({
           x: num(orbitControls.target.x, 0),
           z: num(orbitControls.target.z, 0),
           source: "editor_target"
-        };
+        }, policy, mode);
       }
-      return {
+      return applyChunkLoadingZOffset({
         x: num(camTarget.x, num(player.pos.x, 0)),
         z: num(camTarget.z, num(player.pos.z, 0)),
         source: "editor_camera"
-      };
+      }, policy, mode);
     }
     if (policy.cameraOnly !== false) {
-      return {
+      return applyChunkLoadingZOffset({
         x: num(camTarget.x, num(player.pos.x, 0)),
         z: num(camTarget.z, num(player.pos.z, 0)),
         source: "game_camera"
-      };
+      }, policy, mode);
     }
-    return {
+    return applyChunkLoadingZOffset({
       x: num(player.pos.x, num(camTarget.x, 0)),
       z: num(player.pos.z, num(camTarget.z, 0)),
       source: "player"
-    };
+    }, policy, mode);
   }
 
   function streamingCoverageForCenter(centerPosition, policy) {
@@ -5581,12 +6330,28 @@ function resolveChunkDebugCenter(policy) {
       policy?.residentObjectBudget || 0,
       policy?.residentScatterInstanceBudget || 0,
       policy?.residentChunkBuildBudgetPerFrame || 0,
+      policy?.cameraOffsetZChunks || 0,
       policy?.fixedCameraPaddingChunks || 0,
       policy?.keepSelectedChunkLoaded ? 1 : 0,
       selectedChunkSignatureKey || "",
       centerChunkKey || "none",
       chunkRuntimeRegistryVersion
     ].join("|");
+  }
+
+  function buildChunkFrameSyncSignature(policy, selectedChunkSignatureKey = "") {
+    const effectivePolicy = effectiveChunkDebugPolicy(policy);
+    if (!effectivePolicy || effectivePolicy.source === "none") {
+      return buildChunkDebugSignature(effectivePolicy, "none", selectedChunkSignatureKey);
+    }
+    const centerPosition = resolveChunkDebugCenter(effectivePolicy);
+    const centerChunk = chunkCoordForPosition(centerPosition.x, centerPosition.z, effectivePolicy);
+    const coverage = streamingCoverageForCenter(centerPosition, effectivePolicy);
+    return buildChunkDebugSignature(
+      effectivePolicy,
+      buildCoverageCenterSignatureKey(centerChunk, coverage?.presenceChunkKey || null),
+      selectedChunkSignatureKey
+    );
   }
 
   function createChunkDebugState(options = {}) {
@@ -5601,6 +6366,9 @@ function resolveChunkDebugCenter(policy) {
         ? (resolveChunkRuntimeEntryChunkKey({ object: selectedObjectRoot() }, policy)?.key || "")
         : "");
     const includeWindow = options.includeWindow !== false;
+    const coverage = Object.prototype.hasOwnProperty.call(options, "coverage")
+      ? options.coverage
+      : null;
     const state = {
       editor: world?.chunkLoading?.editor?.id || null,
       game: world?.chunkLoading?.game?.id || null,
@@ -5626,6 +6394,7 @@ function resolveChunkDebugCenter(policy) {
       showChunkLabels: policy.showChunkLabels,
       keepSelectedChunkLoaded: policy.keepSelectedChunkLoaded,
       cameraOnly: policy.cameraOnly,
+      cameraOffsetZChunks: policy.cameraOffsetZChunks,
       fixedCameraPaddingTiles: policy.fixedCameraPaddingTiles,
       fixedCameraPaddingChunks: policy.fixedCameraPaddingChunks || 0,
       strictUnloadOutsideCamera: policy.strictUnloadOutsideCamera,
@@ -5649,6 +6418,9 @@ function resolveChunkDebugCenter(policy) {
       forwardChunkKeys: [],
       unloadSafeChunkKeys: [],
       desiredResidentChunkKeys: [],
+      presenceChunkKey: null,
+      presenceChunkDistance: null,
+      presenceChunkAccepted: false,
       shadowResidentChunkKeys: [],
       collisionResidentChunkKeys: [],
       streamingCoverageSource: "none",
@@ -5680,6 +6452,12 @@ function resolveChunkDebugCenter(policy) {
       x: round(centerPosition.x),
       z: round(centerPosition.z)
     };
+    state.renderResidentObjects = chunkRuntimeState.renderResidentObjects || 0;
+    state.heldVisibleObjects = chunkRuntimeState.heldVisibleObjects || 0;
+    state.pendingUnloadObjects = chunkRuntimeState.pendingUnloadObjects || 0;
+    state.unloadedObjects = chunkRuntimeState.unloadedObjects || 0;
+    state.objectResidency = cloneResidencySummary(chunkRuntimeState.objectResidency) || createEmptyObjectResidencySummary();
+    state.chunkResidency = cloneResidencySummary(chunkRuntimeState.chunkResidency) || createEmptyChunkResidencySummary();
     if (centerChunk) {
       state.centerChunk = {
         x: centerChunk.x,
@@ -5695,9 +6473,9 @@ function resolveChunkDebugCenter(policy) {
         windowState = merged.windowState;
         state.keepSelectedChunkLoadedApplied = merged.applied;
       }
-      const coverage = streamingCoverageForCenter(centerPosition, policy);
-      if (coverage) {
-        const extraKeys = coverage.desiredResidentChunkKeys.filter(function (key) {
+      const nextCoverage = coverage || streamingCoverageForCenter(centerPosition, policy);
+      if (nextCoverage) {
+        const extraKeys = nextCoverage.desiredResidentChunkKeys.filter(function (key) {
           return key && !windowState.loadedChunkKeySet.has(key);
         });
         if (extraKeys.length) {
@@ -5712,10 +6490,13 @@ function resolveChunkDebugCenter(policy) {
             loadedChunkKeySet: new Set(windowState.loadedChunkKeys.concat(extraKeys))
           });
         }
-        state.visibleChunkKeys = coverage.visibleChunkKeys.slice();
-        state.forwardChunkKeys = coverage.forwardChunkKeys.slice();
-        state.unloadSafeChunkKeys = Array.from(new Set(coverage.unloadSafeChunkKeys.concat(windowState.loadedChunkKeys)));
-        state.streamingCoverageSource = coverage.source;
+        state.visibleChunkKeys = nextCoverage.visibleChunkKeys.slice();
+        state.forwardChunkKeys = nextCoverage.forwardChunkKeys.slice();
+        state.unloadSafeChunkKeys = Array.from(new Set(nextCoverage.unloadSafeChunkKeys.concat(windowState.loadedChunkKeys)));
+        state.presenceChunkKey = nextCoverage.presenceChunkKey || null;
+        state.presenceChunkDistance = Number.isFinite(Number(nextCoverage.presenceChunkDistance)) ? Number(nextCoverage.presenceChunkDistance) : null;
+        state.presenceChunkAccepted = nextCoverage.presenceChunkAccepted === true;
+        state.streamingCoverageSource = nextCoverage.source;
       } else {
         state.unloadSafeChunkKeys = windowState.loadedChunkKeys.slice();
       }
@@ -5742,7 +6523,11 @@ function resolveChunkDebugCenter(policy) {
     state.collisionResidentChunkKeys = Array.from(new Set(state.visibleChunkKeys.concat(state.preloadChunkKeys)));
     state.overlayVisible = state.enabled && state.debugOverlay && state.loadedChunkCoords.length > 0;
     state.cullingEnabled = isChunkCullingRuntimeEnabled(policy);
-    state.signature = buildChunkDebugSignature(policy, buildCoverageCenterSignatureKey(centerChunk), selectedChunkSignatureKey);
+    state.signature = buildChunkDebugSignature(
+      policy,
+      buildCoverageCenterSignatureKey(centerChunk, (coverage && coverage.presenceChunkKey) || null),
+      selectedChunkSignatureKey
+    );
     return state;
   }
 
@@ -5853,9 +6638,16 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function rebuildChunkDebugOverlay(state) {
+    if (!state?.overlayVisible || state.source === "none") {
+      if (chunkDebugOverlay && chunkDebugOverlay.children.length > 0) {
+        clearChunkDebugOverlay();
+      } else if (chunkDebugOverlay) {
+        chunkDebugOverlay.visible = false;
+      }
+      return;
+    }
     clearChunkDebugOverlay();
     removeDuplicateRuntimeGroups();
-    if (!state?.overlayVisible || state.source === "none") return;
     const group = ensureChunkDebugOverlay();
     const policy = resolveChunkPolicy(world, mode);
     const baseY = num(world?.ground?.y, 0) + 0.05;
@@ -5928,17 +6720,26 @@ function resolveChunkDebugCenter(policy) {
     const selectedChunkSignatureKey = mode === "editor"
       ? (resolveChunkRuntimeEntryChunkKey({ object: selectedObjectRoot() }, policy)?.key || "")
       : "";
-    const renderSignature = buildChunkDebugSignature(policy, buildCoverageCenterSignatureKey(centerChunk), selectedChunkSignatureKey);
     const shouldAllowHeavySync = options.allowHeavy !== false;
     chunkSyncStats.syncCalls += 1;
-    removeDuplicateRuntimeGroups();
+    if (mode === "editor" || debugHelpersVisibleInCurrentMode()) {
+      removeDuplicateRuntimeGroups();
+    }
     const hasPendingResidentWork = isChunkCullingRuntimeEnabled(policy) && residentContentState.pendingChunkKeys.length > 0;
+    const hasPendingResidencyWork = isChunkCullingRuntimeEnabled(policy) && hasPendingObjectResidencyWork();
+    const coverage = streamingCoverageForCenter(centerPosition, policy);
+    const renderSignature = buildChunkDebugSignature(
+      policy,
+      buildCoverageCenterSignatureKey(centerChunk, coverage?.presenceChunkKey || null),
+      selectedChunkSignatureKey
+    );
     const nextState = createChunkDebugState({
       policy: policy,
       centerPosition: centerPosition,
       centerChunk: centerChunk,
       selectedChunkSignatureKey: selectedChunkSignatureKey,
-      includeWindow: shouldAllowHeavySync !== false
+      includeWindow: shouldAllowHeavySync !== false,
+      coverage: coverage
     });
     updateStreamingHeadingState();
     const stableShadowSnapshot = updateShadowAnchor(nextState, reason) || null;
@@ -5954,19 +6755,13 @@ function resolveChunkDebugCenter(policy) {
     const shadowWindowChunkKeys = Array.isArray(stableShadowSnapshot?.shadowWindowChunkKeys)
       ? stableShadowSnapshot.shadowWindowChunkKeys.slice()
       : [];
-    const shadowResidentChunkCoords = shadowResidentChunkKeys.map(function (key) {
-      const coord = chunkCoordFromKey(key);
-      return coord ? { x: coord.x, z: coord.z, key: chunkKey(coord) } : null;
-    }).filter(Boolean);
     nextState.stableShadows = stableShadowSnapshot;
     nextState.renderResidentChunkKeys = renderResidentChunkKeys.slice();
     nextState.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
     nextState.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
     nextState.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
-    nextState.loadedChunkKeys = shadowResidentChunkKeys.slice();
-    nextState.loadedChunks = shadowResidentChunkKeys.length;
-    nextState.loadedChunkCoords = shadowResidentChunkCoords;
-    nextState.desiredResidentChunkKeys = shadowResidentChunkKeys.slice();
+    // Keep the resident content window anchored to streaming coverage. Shadow residency stays
+    // separate so lighting/debug updates cannot pin chunk loading to the shadow focus.
     const stableSignature = [
       renderSignature,
       stableShadowSnapshot?.signature || [
@@ -5988,22 +6783,18 @@ function resolveChunkDebugCenter(policy) {
       target.shadowResidentChunkKeys = shadowResidentChunkKeys.slice();
       target.collisionResidentChunkKeys = collisionResidentChunkKeys.slice();
       target.shadowWindowChunkKeys = shadowWindowChunkKeys.slice();
-      target.loadedChunkKeys = shadowResidentChunkKeys.slice();
-      target.loadedChunks = shadowResidentChunkKeys.length;
-      target.loadedChunkCoords = shadowResidentChunkCoords.slice();
-      target.desiredResidentChunkKeys = shadowResidentChunkKeys.slice();
       target.renderLoadedChunkKeys = renderResidentChunkKeys.slice();
       target.renderLoadedChunkCoords = Array.isArray(nextState.renderLoadedChunkCoords) ? nextState.renderLoadedChunkCoords.slice() : [];
       target.lastUpdateReason = stableShadowSnapshot?.lastUpdateReason || target.lastUpdateReason || reason;
       return target;
     };
-    if (stableSignature === chunkDebugSignature && chunkDebugStateCache) {
+    if (stableSignature === chunkDebugSignature && chunkDebugStateCache && !hasPendingResidencyWork) {
       chunkSyncStats.skippedSyncCalls += 1;
       updateCacheShadowFields(chunkDebugStateCache);
       if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
       return chunkDebugStateCache;
     }
-    if (!shouldAllowHeavySync && chunkDebugStateCache) {
+    if (!shouldAllowHeavySync && chunkDebugStateCache && !hasPendingResidencyWork) {
       chunkSyncStats.skippedSyncCalls += 1;
       updateCacheShadowFields(chunkDebugStateCache);
       if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
@@ -6011,7 +6802,7 @@ function resolveChunkDebugCenter(policy) {
     }
     const heavyStart = performance.now();
     const cullingSignature = stableSignature + "|" + String(chunkRuntimeRegistryVersion);
-    const needsHeavySync = cullingSignature !== chunkRuntimeState.lastSignature;
+    const needsHeavySync = hasPendingResidencyWork || cullingSignature !== chunkRuntimeState.lastSignature;
     if (needsHeavySync) {
       const entryDescriptors = chunkRuntimeEntries.map(function (entry) {
         const position = resolveChunkRuntimeEntryPosition(entry);
@@ -6029,11 +6820,17 @@ function resolveChunkDebugCenter(policy) {
         policy: policy,
         cullingEnabled: nextState.cullingEnabled,
         keepSelectedChunkLoadedApplied: nextState.keepSelectedChunkLoadedApplied,
-        renderResidentChunkKeys: renderResidentChunkKeys
+        renderResidentChunkKeys: renderResidentChunkKeys,
+        objectResidencyState: objectResidencyState,
+        chunkResidencyState: chunkResidencyState
       });
       applyChunkCullingResult(cullingResult);
       nextState.hiddenObjects = cullingResult.hiddenObjects;
       nextState.visibleObjects = cullingResult.visibleObjects;
+      nextState.renderResidentObjects = cullingResult.renderResidentObjects || 0;
+      nextState.heldVisibleObjects = cullingResult.heldVisibleObjects || 0;
+      nextState.pendingUnloadObjects = cullingResult.pendingUnloadObjects || 0;
+      nextState.unloadedObjects = cullingResult.unloadedObjects || 0;
       nextState.inactiveInteractables = cullingResult.inactiveInteractables;
       nextState.inactiveSolids = cullingResult.inactiveSolids;
       nextState.culledEntities = cullingResult.culledEntities;
@@ -6041,6 +6838,12 @@ function resolveChunkDebugCenter(policy) {
       nextState.culledInteractables = cullingResult.culledInteractables;
       nextState.culledSolids = cullingResult.culledSolids;
       nextState.uncullableObjects = cullingResult.uncullableObjects;
+      nextState.objectResidency = cullingResult.objectResidency ? Object.assign({}, cullingResult.objectResidency, {
+        entries: Array.isArray(cullingResult.objectResidency.entries) ? cullingResult.objectResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+      }) : null;
+      nextState.chunkResidency = cullingResult.chunkResidency ? Object.assign({}, cullingResult.chunkResidency, {
+        entries: Array.isArray(cullingResult.chunkResidency.entries) ? cullingResult.chunkResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+      }) : null;
       nextState.terrainVisuals = Object.assign(createEmptyTerrainVisualStats(), cullingResult.terrainVisuals || {});
       nextState.activeChunkKeys = cullingResult.activeChunkKeys.slice();
       nextState.preloadChunkKeys = cullingResult.preloadChunkKeys.slice();
@@ -6068,10 +6871,17 @@ function resolveChunkDebugCenter(policy) {
         forwardChunkKeys: Array.isArray(nextState.forwardChunkKeys) ? nextState.forwardChunkKeys.slice() : [],
         unloadSafeChunkKeys: Array.isArray(nextState.unloadSafeChunkKeys) ? nextState.unloadSafeChunkKeys.slice() : [],
         desiredResidentChunkKeys: Array.isArray(nextState.desiredResidentChunkKeys) ? nextState.desiredResidentChunkKeys.slice() : [],
+        presenceChunkKey: nextState.presenceChunkKey || null,
+        presenceChunkDistance: Number.isFinite(Number(nextState.presenceChunkDistance)) ? Number(nextState.presenceChunkDistance) : null,
+        presenceChunkAccepted: nextState.presenceChunkAccepted === true,
         streamingCoverageSource: nextState.streamingCoverageSource || "none",
         clippedByMaxLoadedChunks: nextState.clippedByMaxLoadedChunks,
         hiddenObjects: nextState.hiddenObjects,
         visibleObjects: nextState.visibleObjects,
+        renderResidentObjects: nextState.renderResidentObjects || 0,
+        heldVisibleObjects: nextState.heldVisibleObjects || 0,
+        pendingUnloadObjects: nextState.pendingUnloadObjects || 0,
+        unloadedObjects: nextState.unloadedObjects || 0,
         inactiveInteractables: nextState.inactiveInteractables,
         inactiveSolids: nextState.inactiveSolids,
         culledEntities: nextState.culledEntities,
@@ -6079,6 +6889,12 @@ function resolveChunkDebugCenter(policy) {
         culledInteractables: nextState.culledInteractables,
         culledSolids: nextState.culledSolids,
         uncullableObjects: nextState.uncullableObjects,
+        objectResidency: nextState.objectResidency ? Object.assign({}, nextState.objectResidency, {
+          entries: Array.isArray(nextState.objectResidency.entries) ? nextState.objectResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+        }) : null,
+        chunkResidency: nextState.chunkResidency ? Object.assign({}, nextState.chunkResidency, {
+          entries: Array.isArray(nextState.chunkResidency.entries) ? nextState.chunkResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+        }) : null,
         terrainVisuals: Object.assign(createEmptyTerrainVisualStats(), nextState.terrainVisuals || {}),
         terrainStreaming: Object.assign({}, terrainStreamingState, {
           residentChunkKeys: Array.isArray(terrainStreamingState.residentChunkKeys)
@@ -6110,6 +6926,16 @@ function resolveChunkDebugCenter(policy) {
       nextState.shadowResidentChunkKeys = Array.isArray(chunkRuntimeState.shadowResidentChunkKeys) ? chunkRuntimeState.shadowResidentChunkKeys.slice() : shadowResidentChunkKeys.slice();
       nextState.collisionResidentChunkKeys = Array.isArray(chunkRuntimeState.collisionResidentChunkKeys) ? chunkRuntimeState.collisionResidentChunkKeys.slice() : collisionResidentChunkKeys.slice();
       nextState.shadowWindowChunkKeys = Array.isArray(chunkRuntimeState.shadowWindowChunkKeys) ? chunkRuntimeState.shadowWindowChunkKeys.slice() : shadowWindowChunkKeys.slice();
+      nextState.objectResidency = chunkRuntimeState.objectResidency ? Object.assign({}, chunkRuntimeState.objectResidency, {
+        entries: Array.isArray(chunkRuntimeState.objectResidency.entries) ? chunkRuntimeState.objectResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+      }) : null;
+      nextState.chunkResidency = chunkRuntimeState.chunkResidency ? Object.assign({}, chunkRuntimeState.chunkResidency, {
+        entries: Array.isArray(chunkRuntimeState.chunkResidency.entries) ? chunkRuntimeState.chunkResidency.entries.map(function (entry) { return Object.assign({}, entry); }) : []
+      }) : null;
+      nextState.renderResidentObjects = chunkRuntimeState.renderResidentObjects || 0;
+      nextState.heldVisibleObjects = chunkRuntimeState.heldVisibleObjects || 0;
+      nextState.pendingUnloadObjects = chunkRuntimeState.pendingUnloadObjects || 0;
+      nextState.unloadedObjects = chunkRuntimeState.unloadedObjects || 0;
       updateTerrainStreamingSnapshot(nextState);
     }
     if (isChunkCullingRuntimeEnabled(policy)) {
@@ -6162,6 +6988,10 @@ function resolveChunkDebugCenter(policy) {
 
   function activeModePerformance() {
     return mode === "editor" ? worldPerformance.editor : worldPerformance.game;
+  }
+
+  function debugWarningsVisibleInCurrentMode() {
+    return activeModePerformance().debugWarningsVisible === true;
   }
 
   function debugHelpersVisibleInCurrentMode() {
@@ -6234,6 +7064,9 @@ function resolveChunkDebugCenter(policy) {
       jumpDetected: false,
       lastJumpDistance: 0,
       shadowRadiusChunks: 0,
+      projectionSignature: "",
+      chunkSignature: "",
+      auditSignature: "",
       warnings: [],
       signature: ""
     };
@@ -6394,6 +7227,9 @@ function resolveChunkDebugCenter(policy) {
         state.jumpDetected = false;
         state.lastJumpDistance = 0;
         state.shadowRadiusChunks = 0;
+        state.projectionSignature = "";
+        state.chunkSignature = "";
+        state.auditSignature = "";
         state.warnings = [];
         state.signature = "";
         state.lastUpdateReason = "clear";
@@ -6509,74 +7345,171 @@ function resolveChunkDebugCenter(policy) {
         const sunDirection = lightEntries.length
           ? snapshotValue(lightEntries[0].direction)
           : { x: 0, y: -1, z: 0 };
-        for (const entry of lightEntries) {
-          updateLightEntry(entry, focus, enabled, shadowCameraSize, clampedShadowMapSize, shadowBias, shadowNormalBias, shadowCameraNear, shadowCameraFar);
-        }
         const rendererShadowMapEnabled = Boolean(enabled && controllerRenderer?.shadowMap);
         if (controllerRenderer?.shadowMap) {
           controllerRenderer.shadowMap.enabled = enabled;
           controllerRenderer.shadowMap.type = shadowMapTypeFromName(shadowType) || THREE.BasicShadowMap;
         }
-        const sceneUsage = countShadowUsage(controllerScene);
-        const contentUsage = countShadowUsage(content);
-        const terrainUsage = countShadowUsage(terrainRuntimeGroup);
-        const chunkOverlayUsage = countShadowUsage(chunkDebugOverlay);
-        const selectionUsage = countShadowUsage(selectionHelper);
-        const transformUsage = countShadowUsage(transformGuide);
-        const terrainOverlayUsage = countShadowUsage(terrainEditorOverlay);
-        const scatterOverlayUsage = countShadowUsage(scatterEditorOverlay);
-        const shadowCasterAudit = auditSceneObjectsForShadowCasters({
-          scene: controllerScene,
-          content: content,
-          terrainRuntimeGroup: terrainRuntimeGroup,
-          chunkDebugOverlay: chunkDebugOverlay,
-          selectionHelper: selectionHelper,
-          transformGuide: transformGuide,
-          terrainEditorOverlay: terrainEditorOverlay,
-          scatterEditorOverlay: scatterEditorOverlay
-        });
-        let proxyCasterCount = 0;
-        let instancedCasterCount = 0;
-        controllerScene.traverse(function (child) {
-          if (!child) return;
-          if (child.isInstancedMesh === true && child.castShadow === true) instancedCasterCount += 1;
-          if (child.castShadow === true) {
-            let node = child;
-            while (node) {
-              if (node.userData?.shadowProxy === true) {
-                proxyCasterCount += 1;
-                return;
-              }
-              node = node.parent || null;
-            }
+        const projectionSignature = [
+          enabled ? 1 : 0,
+          controllerMode,
+          preset,
+          clampedShadowMapSize,
+          shadowType,
+          round(focus.snappedFocus.x),
+          round(focus.snappedFocus.z),
+          shadowCameraSize,
+          lightEntries.length,
+          rendererShadowMapEnabled ? 1 : 0,
+          shadowCameraNear,
+          shadowCameraFar,
+          shadowBias,
+          shadowNormalBias
+        ].join("|");
+        const auditSignature = [
+          enabled ? 1 : 0,
+          controllerMode,
+          preset,
+          clampedShadowMapSize,
+          shadowType,
+          shadowResidentMarginChunks,
+          runtimeStats.sceneObjects || 0,
+          controllerScene?.children?.length || 0,
+          content?.children?.length || 0,
+          terrainRuntimeGroup?.children?.length || 0,
+          chunkDebugOverlay?.children?.length || 0,
+          selectionHelper?.children?.length || 0,
+          transformGuide?.children?.length || 0,
+          terrainEditorOverlay?.children?.length || 0,
+          scatterEditorOverlay?.children?.length || 0,
+          chunkRuntimeRegistryVersion,
+          debugHelpersVisibleInCurrentMode() ? 1 : 0,
+          debugWarningsVisibleInCurrentMode() ? 1 : 0,
+          lightEntries.length
+        ].join("|");
+        const projectionChanged = projectionSignature !== state.projectionSignature;
+        const chunkSignature = [
+          renderResidentChunkKeys.join(","),
+          shadowResidentChunkKeys.join(","),
+          collisionResidentChunkKeys.join(","),
+          shadowWindowChunkKeys.join(","),
+          shadowRadiusChunks,
+          shadowResidentMarginChunks
+        ].join("|");
+        const chunkChanged = chunkSignature !== state.chunkSignature;
+        const auditChanged = auditSignature !== state.auditSignature;
+        const now = performance.now();
+        if (!projectionChanged && !chunkChanged && !auditChanged) {
+          state.lastUpdateReason = reason || state.lastUpdateReason || "runtime-sync";
+          state.framesSinceProjectionUpdate += 1;
+          pruneUpdateHistory(now);
+          return getSnapshot();
+        }
+        if (projectionChanged) {
+          for (const entry of lightEntries) {
+            updateLightEntry(entry, focus, enabled, shadowCameraSize, clampedShadowMapSize, shadowBias, shadowNormalBias, shadowCameraNear, shadowCameraFar);
           }
-        });
-        const casterCounts = {
-          scene: sceneUsage.casters,
-          content: contentUsage.casters,
-          terrainRuntimeGroup: terrainUsage.casters,
-          chunkDebugOverlay: chunkOverlayUsage.casters,
-          selectionHelper: selectionUsage.casters,
-          transformGuide: transformUsage.casters,
-          terrainEditorOverlay: terrainOverlayUsage.casters,
-          scatterEditorOverlay: scatterOverlayUsage.casters
+        }
+        let sceneUsage = {
+          casters: state.shadowCasterCount,
+          receivers: state.shadowReceiverCount
         };
-        const receiverCounts = {
-          scene: sceneUsage.receivers,
-          content: contentUsage.receivers,
-          terrainRuntimeGroup: terrainUsage.receivers,
-          chunkDebugOverlay: chunkOverlayUsage.receivers,
-          selectionHelper: selectionUsage.receivers,
-          transformGuide: transformUsage.receivers,
-          terrainEditorOverlay: terrainOverlayUsage.receivers,
-          scatterEditorOverlay: scatterOverlayUsage.receivers
+        let contentUsage = {
+          casters: num(state.casterCounts?.content, 0),
+          receivers: num(state.receiverCounts?.content, 0)
         };
-        const helperCasterCount = shadowCasterAudit.helperCasterCount;
-        const debugCasterCount = shadowCasterAudit.castersByKind.debugOverlay + shadowCasterAudit.castersByKind.helper + shadowCasterAudit.castersByKind.selection;
-        const circleOrPlaneCasterCount = shadowCasterAudit.circleOrPlaneCasterCount;
-        const shadowCasterCount = sceneUsage.casters;
-        const shadowReceiverCount = sceneUsage.receivers;
-        const cameraChildOverlayGroups = countCameraChildOverlayGroups();
+        let terrainUsage = {
+          casters: num(state.casterCounts?.terrainRuntimeGroup, 0),
+          receivers: num(state.receiverCounts?.terrainRuntimeGroup, 0)
+        };
+        let chunkOverlayUsage = {
+          casters: num(state.casterCounts?.chunkDebugOverlay, 0),
+          receivers: num(state.receiverCounts?.chunkDebugOverlay, 0)
+        };
+        let selectionUsage = {
+          casters: num(state.casterCounts?.selectionHelper, 0),
+          receivers: num(state.receiverCounts?.selectionHelper, 0)
+        };
+        let transformUsage = {
+          casters: num(state.casterCounts?.transformGuide, 0),
+          receivers: num(state.receiverCounts?.transformGuide, 0)
+        };
+        let terrainOverlayUsage = {
+          casters: num(state.casterCounts?.terrainEditorOverlay, 0),
+          receivers: num(state.receiverCounts?.terrainEditorOverlay, 0)
+        };
+        let scatterOverlayUsage = {
+          casters: num(state.casterCounts?.scatterEditorOverlay, 0),
+          receivers: num(state.receiverCounts?.scatterEditorOverlay, 0)
+        };
+        let helperCasterCount = state.helperCasterCount;
+        let debugCasterCount = state.debugCasterCount;
+        let circleOrPlaneCasterCount = state.circleOrPlaneCasterCount;
+        let proxyCasterCount = state.proxyCasterCount;
+        let instancedCasterCount = state.instancedCasterCount;
+        let cameraChildOverlayGroups = state.cameraChildOverlayGroups;
+        let casterCounts = Object.assign({}, state.casterCounts);
+        let receiverCounts = Object.assign({}, state.receiverCounts);
+        if (auditChanged) {
+          sceneUsage = countShadowUsage(controllerScene);
+          contentUsage = countShadowUsage(content);
+          terrainUsage = countShadowUsage(terrainRuntimeGroup);
+          chunkOverlayUsage = countShadowUsage(chunkDebugOverlay);
+          selectionUsage = countShadowUsage(selectionHelper);
+          transformUsage = countShadowUsage(transformGuide);
+          terrainOverlayUsage = countShadowUsage(terrainEditorOverlay);
+          scatterOverlayUsage = countShadowUsage(scatterEditorOverlay);
+          const shadowCasterAudit = auditSceneObjectsForShadowCasters({
+            scene: controllerScene,
+            content: content,
+            terrainRuntimeGroup: terrainRuntimeGroup,
+            chunkDebugOverlay: chunkDebugOverlay,
+            selectionHelper: selectionHelper,
+            transformGuide: transformGuide,
+            terrainEditorOverlay: terrainEditorOverlay,
+            scatterEditorOverlay: scatterEditorOverlay
+          });
+          proxyCasterCount = 0;
+          instancedCasterCount = 0;
+          controllerScene.traverse(function (child) {
+            if (!child) return;
+            if (child.isInstancedMesh === true && child.castShadow === true) instancedCasterCount += 1;
+            if (child.castShadow === true) {
+              let node = child;
+              while (node) {
+                if (node.userData?.shadowProxy === true) {
+                  proxyCasterCount += 1;
+                  return;
+                }
+                node = node.parent || null;
+              }
+            }
+          });
+          casterCounts = {
+            scene: sceneUsage.casters,
+            content: contentUsage.casters,
+            terrainRuntimeGroup: terrainUsage.casters,
+            chunkDebugOverlay: chunkOverlayUsage.casters,
+            selectionHelper: selectionUsage.casters,
+            transformGuide: transformUsage.casters,
+            terrainEditorOverlay: terrainOverlayUsage.casters,
+            scatterEditorOverlay: scatterOverlayUsage.casters
+          };
+          receiverCounts = {
+            scene: sceneUsage.receivers,
+            content: contentUsage.receivers,
+            terrainRuntimeGroup: terrainUsage.receivers,
+            chunkDebugOverlay: chunkOverlayUsage.receivers,
+            selectionHelper: selectionUsage.receivers,
+            transformGuide: transformUsage.receivers,
+            terrainEditorOverlay: terrainOverlayUsage.receivers,
+            scatterEditorOverlay: scatterOverlayUsage.receivers
+          };
+          helperCasterCount = shadowCasterAudit.helperCasterCount;
+          debugCasterCount = shadowCasterAudit.castersByKind.debugOverlay + shadowCasterAudit.castersByKind.helper + shadowCasterAudit.castersByKind.selection;
+          circleOrPlaneCasterCount = shadowCasterAudit.circleOrPlaneCasterCount;
+          cameraChildOverlayGroups = countCameraChildOverlayGroups();
+        }
         const rawFocus = snapshotValue(focus.focus || focus.rawFocus || focus.snappedFocus);
         const targetPosition = lightEntries.length
           ? snapshotValue(lightEntries[0].light?.target?.position || lightEntries[0].baseTarget)
@@ -6627,8 +7560,8 @@ function resolveChunkDebugCenter(policy) {
           renderResidentChunkCount: renderResidentChunkCount,
           shadowResidentChunkCount: shadowResidentChunkCount,
           shadowResidentMarginChunks: shadowResidentMarginChunks,
-          shadowCasterCount: shadowCasterCount,
-          shadowReceiverCount: shadowReceiverCount,
+          shadowCasterCount: sceneUsage.casters,
+          shadowReceiverCount: sceneUsage.receivers,
           casterCounts: casterCounts,
           receiverCounts: receiverCounts,
           helperCasterCount: helperCasterCount,
@@ -6644,25 +7577,14 @@ function resolveChunkDebugCenter(policy) {
           shadowRadiusChunks: shadowRadiusChunks,
           warnings: warnings,
           signature: [
-            enabled ? 1 : 0,
-            controllerMode,
-            preset,
-            clampedShadowMapSize,
-            shadowType,
-            round(focus.snappedFocus.x),
-            round(focus.snappedFocus.z),
-            shadowCameraSize,
-            lightEntries.length,
-            renderResidentChunkKeys.join(","),
-            shadowResidentChunkKeys.join(","),
-            shadowCasterCount,
-            shadowReceiverCount,
+            projectionSignature,
+            chunkSignature,
+            auditSignature,
+            sceneUsage.casters,
+            sceneUsage.receivers,
             debugCasterCount,
             cameraChildOverlayGroups,
-            runtimeStats.sceneObjects || 0,
-            shadowResidentMarginChunks,
-            shadowCameraNear,
-            rendererShadowMapEnabled ? 1 : 0
+            runtimeStats.sceneObjects || 0
           ].join("|")
         };
         state.enabled = enabled;
@@ -6695,8 +7617,8 @@ function resolveChunkDebugCenter(policy) {
         state.renderResidentChunkCount = renderResidentChunkCount;
         state.shadowResidentChunkCount = shadowResidentChunkCount;
         state.shadowResidentMarginChunks = shadowResidentMarginChunks;
-        state.shadowCasterCount = shadowCasterCount;
-        state.shadowReceiverCount = shadowReceiverCount;
+        state.shadowCasterCount = sceneUsage.casters;
+        state.shadowReceiverCount = sceneUsage.receivers;
         state.casterCounts = Object.assign({}, casterCounts);
         state.receiverCounts = Object.assign({}, receiverCounts);
         state.helperCasterCount = helperCasterCount;
@@ -6710,20 +7632,21 @@ function resolveChunkDebugCenter(policy) {
         state.jumpDetected = Boolean(focus.jumpDetected);
         state.lastJumpDistance = focus.lastJumpDistance;
         state.shadowRadiusChunks = shadowRadiusChunks;
+        state.projectionSignature = projectionSignature;
+        state.chunkSignature = chunkSignature;
+        state.auditSignature = auditSignature;
         state.warnings = warnings.slice();
-        state.lastProjectionUpdateReason = snapshot.lastProjectionUpdateReason;
+        if (projectionChanged) state.lastProjectionUpdateReason = reason || state.lastProjectionUpdateReason || "runtime-sync";
         state.lastUpdateReason = reason || state.lastUpdateReason || "runtime-sync";
-        const now = performance.now();
-        if (state.signature !== snapshot.signature) {
+        if (projectionChanged) {
           updateHistory.push(now);
-          pruneUpdateHistory(now);
-          state.signature = snapshot.signature;
           state.projectionUpdateCount += 1;
           state.framesSinceProjectionUpdate = 0;
         } else {
-          pruneUpdateHistory(now);
           state.framesSinceProjectionUpdate += 1;
         }
+        state.signature = snapshot.signature;
+        pruneUpdateHistory(now);
         return getSnapshot();
       },
       getSnapshot() {
@@ -7107,77 +8030,78 @@ function resolveChunkDebugCenter(policy) {
       requestAnimationFrame(updateMuisDoelwit);
     }
 
-    gamePointerDownHandler = function (event) {
-      if (event.button !== 0 && event.button !== undefined && event.pointerType !== "touch") return;
-      if (!beginGamePointerCapture(event)) return;
+    if (!externalPlayerAuthority) {
+      gamePointerDownHandler = function (event) {
+        if (event.button !== 0 && event.button !== undefined && event.pointerType !== "touch") return;
+        if (!beginGamePointerCapture(event)) return;
 
-      isSpelerMuisIngedrukt = true;
-      muisSchermX = event.clientX;
-      muisSchermY = event.clientY;
+        isSpelerMuisIngedrukt = true;
+        muisSchermX = event.clientX;
+        muisSchermY = event.clientY;
 
-      const inter = pickInteractable(event);
-      if (inter) {
-        triggerInteractable(inter);
+        const inter = pickInteractable(event);
+        if (inter) {
+          triggerInteractable(inter);
+          endGamePointerCapture(event);
+          return;
+        }
+
+        pressedKeys.clear();
+        updateMuisDoelwit();
+      };
+
+      let gamePointerMoveHandler = function (event) {
+        if (!isSpelerMuisIngedrukt) return;
+        if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
+        muisSchermX = event.clientX;
+        muisSchermY = event.clientY;
+      };
+
+      let gamePointerUpHandler = function (event) {
+        if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
         endGamePointerCapture(event);
-        return;
-      }
+      };
 
-      pressedKeys.clear();
-      updateMuisDoelwit(); // Start de loop!
-    };
+      canvas.addEventListener("pointerdown", gamePointerDownHandler);
+      canvas.addEventListener("pointermove", gamePointerMoveHandler);
+      window.addEventListener("pointerup", gamePointerUpHandler);
+      window.addEventListener("pointercancel", gamePointerUpHandler);
 
-    let gamePointerMoveHandler = function (event) {
-      if (!isSpelerMuisIngedrukt) return;
-      if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
-      // We updaten nu alleen de coördinaten. De loop hierboven doet de rest!
-      muisSchermX = event.clientX;
-      muisSchermY = event.clientY;
-    };
+      // --- 2. TOETSENBORD BESTURING (WASD & Muiswiel) ---
+      gameKeyDownHandler = function (event) {
+        pressedKeys.add(event.code);
+        const action = keyToAction.get(event.code);
+        if (action === "interact" && activeInteractable) { triggerInteractable(activeInteractable); event.preventDefault(); }
 
-    let gamePointerUpHandler = function (event) {
-      if (activeGamePointerId !== null && event.pointerId !== activeGamePointerId) return;
-      endGamePointerCapture(event); // Dit stopt automatisch de loop
-    };
+        if (action === "cancel") {
+          clickTarget = null;
+          isSpelerMuisIngedrukt = false;
+        }
 
-    // Muis-acties koppelen
-    canvas.addEventListener("pointerdown", gamePointerDownHandler);
-    canvas.addEventListener("pointermove", gamePointerMoveHandler);
-    window.addEventListener("pointerup", gamePointerUpHandler);
-    window.addEventListener("pointercancel", gamePointerUpHandler);
+        if (action === "zoom_in") setZoom(camDistance - 4);
+        if (action === "zoom_out") setZoom(camDistance + 4);
 
+        if (movementActionFor(event.code)) {
+          clickTarget = null;
+          isSpelerMuisIngedrukt = false;
+        }
+      };
 
-    // --- 2. TOETSENBORD BESTURING (WASD & Muiswiel) ---
-    gameKeyDownHandler = function (event) {
-      pressedKeys.add(event.code);
-      const action = keyToAction.get(event.code);
-      if (action === "interact" && activeInteractable) { triggerInteractable(activeInteractable); event.preventDefault(); }
+      gameKeyUpHandler = function (event) {
+        pressedKeys.delete(event.code);
+      };
 
-      if (action === "cancel") {
-        clickTarget = null;
-        isSpelerMuisIngedrukt = false;
-      }
+      window.addEventListener("keydown", gameKeyDownHandler);
+      window.addEventListener("keyup", gameKeyUpHandler);
+    }
 
-      if (action === "zoom_in") setZoom(camDistance - 4);
-      if (action === "zoom_out") setZoom(camDistance + 4);
-
-      if (movementActionFor(event.code)) {
-        clickTarget = null;
-        isSpelerMuisIngedrukt = false;
-      }
-    };
-
-    gameKeyUpHandler = function (event) {
-      pressedKeys.delete(event.code);
-    };
-
+    // Muiswiel-zoom is een camera-only control (geen player movement), dus die moet ook
+    // geregistreerd worden wanneer de server autoritatief is over de spelerpositie
+    // (externalPlayerAuthority) - anders werken min/max zoom nooit in de gepubliceerde game.
     gameWheelHandler = function (event) {
       event.preventDefault();
       setZoom(camDistance + Math.sign(event.deltaY) * 4);
     };
-
-    // Toetsenbord-acties koppelen
-    window.addEventListener("keydown", gameKeyDownHandler);
-    window.addEventListener("keyup", gameKeyUpHandler);
     canvas.addEventListener("wheel", gameWheelHandler, { passive: false });
   }
 
@@ -7243,7 +8167,6 @@ function resolveChunkDebugCenter(policy) {
     if (disposed || rafId !== null) return;
     running = true;
     loopGeneration += 1;
-    lastTime = performance.now();
     updateDebugLoopState();
     rafId = requestAnimationFrame(renderFrame);
     if (reason) DEBUG_RUNTIME.lastStartReason = reason;
@@ -7254,6 +8177,7 @@ function resolveChunkDebugCenter(policy) {
     rafId = null;
     running = false;
     renderRequested = false;
+    lastTime = 0;
     updateDebugLoopState();
     if (reason) DEBUG_RUNTIME.lastStopReason = reason;
   }
@@ -7321,8 +8245,11 @@ function resolveChunkDebugCenter(policy) {
       return;
     }
     DEBUG_RUNTIME.renderCount += 1;
-    const frameMs = Math.max(0, Math.min(1000, time - lastTime));
-    const delta = Math.min(0.05, frameMs / 1000);
+    const previousFrameTime = Number(lastTime) || time;
+    const frameMs = Math.max(0, Math.min(1000, time - previousFrameTime));
+    const rawDelta = frameMs / 1000;
+    const delta = Math.min(0.05, rawDelta);
+    const animationDelta = rawDelta;
     lastTime = time;
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
@@ -7331,6 +8258,7 @@ function resolveChunkDebugCenter(policy) {
     const frameTiming = {
       frameMs: round(frameMs),
       deltaMs: round(delta * 1000),
+      animationDeltaMs: round(animationDelta * 1000),
       updatePlayerMs: 0,
       animationMs: 0,
       syncChunkMs: 0,
@@ -7350,7 +8278,7 @@ function resolveChunkDebugCenter(policy) {
     if (shouldAnimateModels) {
       for (const { mixer, root } of animationMixers.values()) {
         if (root?.visible === false || root?.parent?.visible === false) continue;
-        mixer.update(delta);
+        mixer.update(animationDelta);
       }
     }
     if (shouldAnimateSurfaces) updateSurfaceAnimation(time);
@@ -7362,7 +8290,14 @@ function resolveChunkDebugCenter(policy) {
     if (shouldFlyCamera) updateFlyCamera(delta);
     frameTiming.updatePlayerMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
-    syncChunkDebugState("frame");
+    const chunkPolicy = resolveChunkPolicy(world, mode);
+    let shouldSyncChunkState = true;
+    if (mode === "game" && !debugHelpersVisibleInCurrentMode()) {
+      shouldSyncChunkState = residentContentState.pendingChunkKeys.length > 0
+        || hasPendingObjectResidencyWork()
+        || buildChunkFrameSyncSignature(chunkPolicy) !== chunkDebugSignature;
+    }
+    if (shouldSyncChunkState) syncChunkDebugState("frame");
     if (residentContentState.pendingChunkKeys.length) requestRender("resident-pending-drain");
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
@@ -7423,7 +8358,7 @@ function resolveChunkDebugCenter(policy) {
     entityRoots.clear();
     contentBlueprintIndex = createEmptyContentBlueprintIndex();
     residentContentState = createEmptyResidentContentState();
-    unloadHysteresisState.candidateStreaks.clear();
+    resetResidencyTrackers();
     residentBootstrapState = {
       lastReason: "clearContent",
       worldGeneration: worldBuildGeneration,
@@ -7440,6 +8375,12 @@ function resolveChunkDebugCenter(policy) {
     interactables.length = 0;
     activeInteractable = null;
     player.root = null;
+    player.nameplateRoot = null;
+    player.animationState = "idle";
+    player.reconcileActive = false;
+    player.reconcileElapsedMs = 0;
+    player.pendingState = null;
+    clearRemotePlayers();
     loadErrors.length = 0;
     perfHudNextUpdateAt = 0;
     perfHudFrameMs = 0;
@@ -7473,6 +8414,9 @@ function resolveChunkDebugCenter(policy) {
       forwardChunkKeys: [],
       unloadSafeChunkKeys: [],
       desiredResidentChunkKeys: [],
+      presenceChunkKey: null,
+      presenceChunkDistance: null,
+      presenceChunkAccepted: false,
       streamingCoverageSource: "none",
       clippedByMaxLoadedChunks: false,
       requiredActiveChunks: 0,
@@ -9170,6 +10114,188 @@ function resolveChunkDebugCenter(policy) {
     transformGuide.scale.setScalar(Math.min(6, Math.max(0.75, maxSize * 0.65)));
   }
 
+  function bakeMinimapImage(config = {}) {
+    const bounds = config.bounds;
+    const minX = num(bounds?.minX, NaN);
+    const maxX = num(bounds?.maxX, NaN);
+    const minZ = num(bounds?.minZ, NaN);
+    const maxZ = num(bounds?.maxZ, NaN);
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ) || maxX <= minX || maxZ <= minZ) {
+      return Promise.reject(new Error("Minimap bake heeft geldige bounds nodig (minX < maxX, minZ < maxZ)."));
+    }
+    // 8192 is the practical ceiling: a 16k readback needs a ~1GB pixel buffer and exceeds many
+    // GPUs' max texture size. Also clamp to what this GPU actually supports.
+    const maxTextureSize = Math.max(2048, Number(renderer.capabilities?.maxTextureSize) || 8192);
+    const resolution = Math.max(64, Math.min(8192, maxTextureSize, Math.round(num(config.resolution, 1024))));
+    // MMO-03: format/background are no longer node-configurable - the bake is always an opaque
+    // webp using the real scene's own background/fog, matching the live 3D world exactly.
+    const format = "webp";
+    const quality = Math.max(0.1, Math.min(1, num(config.quality, 0.78)));
+    const backgroundColor = colorOrDefault(world?.world?.backgroundColor, "#101a26");
+    const transparentBackground = false;
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    const width = maxX - minX;
+    const depth = maxZ - minZ;
+    const groundY = num(world?.ground?.y, 0);
+    const highY = groundY + Math.max(20, Math.max(width, depth));
+
+    const hiddenRoots = [];
+    function hideRoot(root) {
+      if (root && root.visible !== false) {
+        hiddenRoots.push(root);
+        root.visible = false;
+      }
+    }
+    if (config.hideEditorHelpers !== false) {
+      hideRoot(selectionHelper);
+      hideRoot(terrainEditorOverlay);
+      hideRoot(scatterEditorOverlay);
+    }
+    if (config.hideTransformControls !== false) hideRoot(transformGuide);
+    if (config.hideChunkDebugOverlay !== false) hideRoot(chunkDebugOverlay);
+    if (config.includeStaticModels === false) {
+      for (const root of entityRoots.values()) hideRoot(root);
+    }
+
+    const bakeCamera = new THREE.OrthographicCamera(-width / 2, width / 2, depth / 2, -depth / 2, 0.1, (highY - groundY) + Math.max(width, depth) + 20);
+    bakeCamera.position.set(centerX, highY, centerZ);
+    bakeCamera.up.set(0, 0, -1);
+    bakeCamera.lookAt(centerX, groundY, centerZ);
+    bakeCamera.updateProjectionMatrix();
+
+    // renderer.outputColorSpace only applies to the default framebuffer; a plain render target
+    // stays linear, which made the bake visibly darker than the live 3D world. An sRGB render
+    // target makes the GPU encode on write so readRenderTargetPixels returns the same values the
+    // screen shows.
+    const renderTarget = new THREE.WebGLRenderTarget(resolution, resolution, {
+      type: THREE.UnsignedByteType,
+      colorSpace: THREE.SRGBColorSpace
+    });
+    const previousTarget = renderer.getRenderTarget();
+    const previousClearColor = new THREE.Color();
+    renderer.getClearColor(previousClearColor);
+    const previousClearAlpha = renderer.getClearAlpha();
+    const previousAutoClear = renderer.autoClear;
+    // Fog is distance-based and the bake camera sits at an artificial altitude far above anything
+    // the game camera ever reaches, so leaving fog on washes out the bake in a way the live world
+    // never looks. Temporarily disable it; ground/materials/lights/shadows stay identical.
+    const previousFog = scene.fog;
+    scene.fog = null;
+
+    let outputCanvas = null;
+    let bakeError = null;
+    try {
+      renderer.setRenderTarget(renderTarget);
+      renderer.setClearColor(new THREE.Color(backgroundColor), transparentBackground ? 0 : 1);
+      renderer.autoClear = true;
+      renderer.clear(true, true, true);
+      renderer.render(scene, bakeCamera);
+
+      const pixels = new Uint8Array(resolution * resolution * 4);
+      renderer.readRenderTargetPixels(renderTarget, 0, 0, resolution, resolution, pixels);
+
+      outputCanvas = document.createElement("canvas");
+      outputCanvas.width = resolution;
+      outputCanvas.height = resolution;
+      const ctx = outputCanvas.getContext("2d");
+      const imageData = ctx.createImageData(resolution, resolution);
+      const rowSize = resolution * 4;
+      for (let y = 0; y < resolution; y += 1) {
+        const srcStart = (resolution - y - 1) * rowSize;
+        imageData.data.set(pixels.subarray(srcStart, srcStart + rowSize), y * rowSize);
+      }
+      ctx.putImageData(imageData, 0, 0);
+    } catch (error) {
+      bakeError = error;
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      renderer.setClearColor(previousClearColor, previousClearAlpha);
+      renderer.autoClear = previousAutoClear;
+      scene.fog = previousFog;
+      renderTarget.dispose();
+      for (const root of hiddenRoots) root.visible = true;
+      requestRender("minimap-bake-restore");
+    }
+    if (bakeError) return Promise.reject(bakeError);
+
+    const finalBounds = { minX, maxX, minZ, maxZ, width, depth };
+    return new Promise(function (resolve, reject) {
+      outputCanvas.toBlob(function (resultBlob) {
+        if (!resultBlob) {
+          reject(new Error("Minimap bake kon geen afbeelding exporteren."));
+          return;
+        }
+        resolve({
+          blob: resultBlob,
+          width: resolution,
+          height: resolution,
+          bounds: finalBounds,
+          format: format,
+          quality: quality
+        });
+      }, "image/" + format, format === "webp" ? quality : undefined);
+    });
+  }
+
+  function getMinimapMarkerSnapshot(options = {}) {
+    const includeLocalPlayer = options.includeLocalPlayer !== false;
+    const includeRemotePlayers = options.includeRemotePlayers !== false;
+    const includeEntities = options.includeEntities !== false;
+    const includeInteractables = options.includeInteractables === true;
+    const snapshot = {
+      localPlayer: null,
+      remotePlayers: [],
+      entities: [],
+      interactables: [],
+      // Editor free-orbit/pan only mutates orbitControls.target (camTarget is a load-time cache
+      // that is not kept in sync), so prefer it here for a live editor-camera minimap marker.
+      cameraTarget: orbitControls
+        ? { x: orbitControls.target.x, z: orbitControls.target.z }
+        : { x: camTarget.x, z: camTarget.z },
+      selectedEntityId: selectedEntityId || null,
+      selectedEntity: null
+    };
+    if (includeLocalPlayer && player.root) {
+      const state = snapshotPlayerState();
+      snapshot.localPlayer = { x: state.x, z: state.z, rotationY: state.rotationY, animationState: state.animationState };
+    }
+    if (includeRemotePlayers) {
+      snapshot.remotePlayers = Array.from(remotePlayers.values()).map(function (record) {
+        const position = record.renderState?.position || record.position || null;
+        if (!position) return null;
+        return {
+          playerId: record.playerId,
+          displayName: record.displayName || "",
+          x: num(position.x, 0),
+          z: num(position.z, 0),
+          rotationY: num(position.rotationY, 0)
+        };
+      }).filter(Boolean);
+    }
+    if (includeEntities && world) {
+      snapshot.entities = (Array.isArray(world.entities) ? world.entities : []).map(function (entity) {
+        const position = entity?.transform?.position;
+        if (!position) return null;
+        return { id: entity.id, label: entity.label || entity.entityId || entity.id, x: num(position.x, 0), z: num(position.z, 0) };
+      }).filter(Boolean);
+    }
+    if (includeInteractables && world) {
+      snapshot.interactables = (Array.isArray(world.interactables) ? world.interactables : []).map(function (item) {
+        const position = item?.position;
+        if (!position) return null;
+        return { id: item.id, x: num(position.x, 0), z: num(position.z, 0) };
+      }).filter(Boolean);
+    }
+    if (selectedEntityId) {
+      const selected = getSelectedEntitySnapshot();
+      if (selected && selected.position) {
+        snapshot.selectedEntity = { id: selectedEntityId, x: num(selected.position.x, 0), z: num(selected.position.z, 0) };
+      }
+    }
+    return snapshot;
+  }
+
   function getSelectedEntitySnapshot() {
     const root = refreshSelectedRootReference();
     if (!root) return null;
@@ -9725,6 +10851,23 @@ function resolveChunkDebugCenter(policy) {
     return true;
   }
 
+  // MMO-03: editor minimap click-to-focus. Pans the editor camera target to a ground x/z while
+  // preserving the current distance/pitch/yaw (unlike frameWorldPoints, which re-fits zoom). Does
+  // not touch any node value - purely a viewport navigation convenience.
+  function focusGroundPoint(x, z) {
+    if (!orbitControls) return false;
+    const worldX = Number(x);
+    const worldZ = Number(z);
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) return false;
+    const offset = camera.position.clone().sub(orbitControls.target);
+    const nextTarget = new THREE.Vector3(worldX, orbitControls.target.y, worldZ);
+    orbitControls.target.copy(nextTarget);
+    camera.position.copy(nextTarget).add(offset);
+    orbitControls.update();
+    requestRender();
+    return true;
+  }
+
   function frameEntity(entityId) {
     const object = rootForSelectableId(entityId);
     if (!object) return false;
@@ -9884,7 +11027,8 @@ function resolveChunkDebugCenter(policy) {
       maxDistance: 48,
       fov: 50,
       follow: true,
-      rotateSpeed: 90
+      rotateSpeed: 90,
+      targetHeightOffset: 1.6
     };
     const editorCameraDefaults = {
       target: { x: 0, y: 0, z: 0 },
@@ -9908,6 +11052,7 @@ function resolveChunkDebugCenter(policy) {
     camMaxDistance = num(cam?.maxDistance, mode === "editor" ? editorCameraDefaults.maxDistance : gameCameraDefaults.maxDistance);
     camFollow = mode === "editor" ? false : cam?.follow !== false;
     camRotateSpeed = num(cam?.rotateSpeed, mode === "editor" ? editorCameraDefaults.rotateSpeed : gameCameraDefaults.rotateSpeed);
+    camTargetHeightOffset = mode === "game" ? numOrDefault(cam?.targetHeightOffset, gameCameraDefaults.targetHeightOffset) : 0;
     if (mode === "editor") {
       camTarget.set(
         num(cam?.target?.x, editorCameraDefaults.target.x),
@@ -9915,7 +11060,7 @@ function resolveChunkDebugCenter(policy) {
         num(cam?.target?.z, editorCameraDefaults.target.z)
       );
     } else {
-      camTarget.set(player.pos.x, player.pos.y, player.pos.z);
+      camTarget.copy(playerCameraTarget());
     }
     const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
     if (shouldApplyToViewport) {
@@ -9944,6 +11089,10 @@ function resolveChunkDebugCenter(policy) {
 
   function setZoom(value) {
     camDistance = Math.min(camMaxDistance, Math.max(camMinDistance, value));
+  }
+
+  function playerCameraTarget() {
+    return playerCameraTargetCache.set(player.pos.x, player.pos.y + camTargetHeightOffset, player.pos.z);
   }
 
   function addGround(worldData) {
@@ -10025,13 +11174,17 @@ function resolveChunkDebugCenter(policy) {
     record = { status: "loading", gltf: null, waiters: [] };
     modelCache.set(asset.id, record);
     const startedAt = performance.now();
-    console.info("[timing] GLTFLoader load start asset=" + asset.id + " path=" + asset.sourcePath);
+    if (debugWarningsVisibleInCurrentMode()) {
+      console.info("[timing] GLTFLoader load start asset=" + asset.id + " path=" + asset.sourcePath);
+    }
     try {
       loader.load(asset.sourcePath, function (gltf) {
         record.status = "ready";
         record.gltf = gltf;
         record.gltf.animations = normalizeAnimations(gltf.animations);
-        console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms");
+        if (debugWarningsVisibleInCurrentMode()) {
+          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms");
+        }
         if (typeof onModelLoadTiming === "function") {
           onModelLoadTiming({
             assetId: asset.id,
@@ -10046,7 +11199,9 @@ function resolveChunkDebugCenter(policy) {
         record.status = "error";
         loadErrors.push("Model: " + asset.name);
         renderHud();
-        console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+        if (debugWarningsVisibleInCurrentMode()) {
+          console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+        }
         if (typeof onModelLoadTiming === "function") {
           onModelLoadTiming({
             assetId: asset.id,
@@ -10061,7 +11216,9 @@ function resolveChunkDebugCenter(policy) {
       record.status = "error";
       loadErrors.push("Model: " + asset.name);
       renderHud();
-      console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+      if (debugWarningsVisibleInCurrentMode()) {
+        console.info("[timing] GLTFLoader load end asset=" + asset.id + " " + timingMs(startedAt) + "ms error");
+      }
       if (typeof onModelLoadTiming === "function") {
         onModelLoadTiming({
           assetId: asset.id,
@@ -10117,7 +11274,8 @@ function resolveChunkDebugCenter(policy) {
           clips: clips,
           assetMetadata: asset.metadata || {}
         });
-        playAnimationState(root, "idle", 0);
+        const initialAnimationState = root === player.root ? player.animationState || "idle" : "idle";
+        playAnimationState(root, initialAnimationState, 0);
       }
       if (onReady) onReady(clone);
       if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) selectEntity(selectedEntityId);
@@ -10380,28 +11538,80 @@ function resolveChunkDebugCenter(policy) {
     return null;
   }
 
+  function clipNameMatchesState(clipName, stateName) {
+    const text = String(clipName || "").trim().toLowerCase();
+    const state = String(stateName || "").trim().toLowerCase();
+    if (!text || !state) return false;
+    if (state === "idle") {
+      return text.includes("idle") || text.includes("stand") || text.includes("rest") || text.includes("breath");
+    }
+    if (state === "walk") {
+      return text.includes("walk") || text.includes("move") || text.includes("jog");
+    }
+    if (state === "run") {
+      return text.includes("run") || text.includes("sprint") || text.includes("dash");
+    }
+    return false;
+  }
+
   function resolveClipNameForState(root, clips, stateName, assetMetadata) {
     const state = String(stateName || "").trim().toLowerCase();
     const data = root?.userData || {};
     if (!Array.isArray(clips) || !clips.length) return null;
+    const defaultName = String(assetMetadata?.defaultAnimation || "").trim();
+    const firstName = String(clips[0]?.name || "").trim() || null;
+    const pick = function (preferredName, desiredState = state) {
+      const resolved = findClipName(clips, preferredName);
+      if (!resolved) return null;
+      if (!desiredState) return resolved;
+      return clipNameMatchesState(resolved, desiredState) ? resolved : null;
+    };
     if (state === "walk") {
-      return findClipName(clips, data.walkAnimation)
+      return pick(data.walkAnimation, "walk")
+        || pick("Walk", "walk")
+        || pick(data.animationClip, "walk")
+        || pick(defaultName, "walk")
+        || pick(data.idleAnimation, "idle")
+        || findClipName(clips, data.walkAnimation)
+        || findClipName(clips, data.animationClip)
+        || findClipName(clips, defaultName)
         || findClipName(clips, "Walk")
-        || resolveClipNameForState(root, clips, "idle", assetMetadata);
+        || findClipName(clips, "Idle")
+        || findClipName(clips, "Run")
+        || firstName
+        || null;
     }
     if (state === "run") {
-      return findClipName(clips, data.runAnimation)
+      return pick(data.runAnimation, "run")
+        || pick("Run", "run")
+        || pick(data.animationClip, "run")
+        || pick(defaultName, "run")
+        || pick(data.walkAnimation, "walk")
+        || findClipName(clips, data.runAnimation)
+        || findClipName(clips, data.animationClip)
+        || findClipName(clips, defaultName)
         || findClipName(clips, "Run")
-        || resolveClipNameForState(root, clips, "walk", assetMetadata)
-        || resolveClipNameForState(root, clips, "idle", assetMetadata);
+        || findClipName(clips, "Walk")
+        || findClipName(clips, "Idle")
+        || firstName
+        || null;
     }
-    const defaultName = String(assetMetadata?.defaultAnimation || "").trim();
-    return findClipName(clips, data.idleAnimation)
-      || findClipName(clips, data.animationClip)
+    return pick(data.idleAnimation, "idle")
+      || pick(defaultName, "idle")
+      || pick("Idle", "idle")
+      || pick(data.animationClip, "idle")
+      || findClipName(clips, data.idleAnimation)
       || findClipName(clips, defaultName)
+      || findClipName(clips, data.animationClip)
       || findClipName(clips, "Idle")
-      || String(clips[0]?.name || "").trim()
+      || findClipName(clips, "Walk")
+      || findClipName(clips, "Run")
+      || firstName
       || null;
+  }
+
+  function resolveAnimationPlaybackScale() {
+    return 1;
   }
 
   function getAnimationAction(record, clipName) {
@@ -10424,9 +11634,14 @@ function resolveChunkDebugCenter(policy) {
     if (!record || !Array.isArray(record.clips) || !record.clips.length) return null;
     const clipName = resolveClipNameForState(root, record.clips, stateName, record.assetMetadata || {});
     if (!clipName) return null;
-    if (record.currentClipName === clipName) return clipName;
     const nextAction = getAnimationAction(record, clipName);
     if (!nextAction) return null;
+    const nextClip = (record.clips || []).find(function (candidate) {
+      return String(candidate?.name || "").trim() === clipName;
+    }) || null;
+    const playbackScale = resolveAnimationPlaybackScale(root, nextClip, stateName, record);
+    nextAction.setEffectiveTimeScale(playbackScale);
+    if (record.currentClipName === clipName) return clipName;
     const previousAction = record.currentAction;
     nextAction.reset();
     nextAction.enabled = true;
@@ -10446,6 +11661,34 @@ function resolveChunkDebugCenter(policy) {
     record.currentAction = nextAction;
     record.currentClipName = clipName;
     return clipName;
+  }
+
+  function getAnimationDebugForRoot(root) {
+    const record = animationMixers.get(root) || animationMixers.get(root?.parent || null) || null;
+    if (!record) {
+      return {
+        animationClipName: null,
+        animationClipDuration: null,
+        animationPlaybackScale: null,
+        animationActionTime: null
+      };
+    }
+    const clipName = String(record.currentClipName || "").trim() || null;
+    const clip = clipName
+      ? (record.clips || []).find(function (candidate) {
+          return String(candidate?.name || "").trim() === clipName;
+        }) || null
+      : null;
+    const action = record.currentAction || null;
+    const effectiveTimeScale = action && typeof action.getEffectiveTimeScale === "function"
+      ? Number(action.getEffectiveTimeScale())
+      : Number(action?._effectiveTimeScale);
+    return {
+      animationClipName: clipName,
+      animationClipDuration: clip ? round(Number(clip.duration) || 0) : null,
+      animationPlaybackScale: Number.isFinite(effectiveTimeScale) ? round(effectiveTimeScale) : null,
+      animationActionTime: action && Number.isFinite(Number(action.time)) ? round(Number(action.time)) : null
+    };
   }
 
   function addEntity(worldData, entity, options = {}) {
@@ -10849,8 +12092,8 @@ function resolveChunkDebugCenter(policy) {
     const spawn = worldData?.spawn;
     if (!def || !spawn) return;
     const groundY = num(worldData?.ground?.y, 0);
-    player.speed = num(def.moveSpeed, 6);
-    player.sprint = num(def.sprintMultiplier, 1.6);
+    player.speed = Math.max(0.1, num(def.moveSpeed, 6));
+    player.sprint = Math.min(2.5, Math.max(1, num(def.sprintMultiplier, 1.6)));
     player.turnSpeed = num(def.turnSpeed, 600);
     player.radius = num(def.collisionRadius, 0.5);
     player.facing = num(spawn.facing, 0) * DEG_TO_RAD;
@@ -10872,7 +12115,464 @@ function resolveChunkDebugCenter(policy) {
     player.animationState = "idle";
     content.add(root);
     runtimeStats.sceneObjects += 1;
-    loadModelInto(root, def.modelAssetId, worldData);
+    const modelAsset = assetById(worldData, def.modelAssetId);
+    if (modelAsset?.sourcePath) {
+      updateLocalPlayerNameplate(root, player.displayName);
+      loadModelInto(root, def.modelAssetId, worldData, function (clone) {
+        updateLocalPlayerNameplate(root, player.displayName, clone);
+      });
+    } else {
+      const fallbackVisual = addPlayerFallbackVisual(root, {
+        name: "player-fallback",
+        color: "#7faeff",
+        castShadow: true,
+        receiveShadow: true
+      });
+      updateLocalPlayerNameplate(root, player.displayName, fallbackVisual);
+    }
+    if (player.pendingState) {
+      const pendingState = player.pendingState;
+      player.pendingState = null;
+      setPlayerState(pendingState.nextState, pendingState.options || { immediate: true });
+    }
+  }
+
+  function addPlayerFallbackVisual(root, options = {}) {
+    if (!root || root.userData?.playerFallbackVisual === true) return null;
+    const material = new THREE.MeshStandardMaterial({
+      color: colorOrDefault(options.color, "#7faeff"),
+      roughness: 0.65,
+      metalness: 0.05
+    });
+    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.0, 4, 8), material);
+    mesh.name = String(options.name || "player-fallback");
+    mesh.position.y = 0.85;
+    mesh.castShadow = options.castShadow !== false;
+    mesh.receiveShadow = options.receiveShadow !== false;
+    mesh.userData.runtimeAlive = true;
+    mesh.userData.playerFallbackVisual = true;
+    root.add(mesh);
+    runtimeStats.sceneObjects += 1;
+    runtimeStats.meshes += 1;
+    return mesh;
+  }
+
+  function createRemotePlayerNameplate(displayName) {
+    const label = String(displayName || "Player").trim().slice(0, 32) || "Player";
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "600 24px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#f4f7fb";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+    ctx.shadowBlur = 3;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 1;
+    const maxWidth = 220;
+    const textWidth = Math.max(1, ctx.measureText(label).width);
+    const scale = textWidth > maxWidth ? maxWidth / textWidth : 1;
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2 + 1);
+    ctx.scale(scale, scale);
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.name = "remote-player-nameplate";
+    sprite.position.set(0, 2.15, 0);
+    sprite.scale.set(3.2, 0.8, 1);
+    sprite.renderOrder = 4001;
+    sprite.userData.runtimeAlive = true;
+    sprite.userData.remotePlayerNameplate = true;
+    sprite.userData.remotePlayerLabelText = label;
+    sprite.userData.remotePlayerTexture = texture;
+    return sprite;
+  }
+
+  function updateRemotePlayerNameplate(root, displayName) {
+    if (!root) return null;
+    const label = String(displayName || "Player").trim().slice(0, 32) || "Player";
+    const existing = root.userData.remotePlayerNameplateRoot || null;
+    if (existing && existing.userData?.remotePlayerLabelText === label) return existing;
+    if (existing) {
+      root.remove(existing);
+      disposeObject(existing);
+      root.userData.remotePlayerNameplateRoot = null;
+    }
+    const next = createRemotePlayerNameplate(label);
+    if (!next) return null;
+    root.add(next);
+    root.userData.remotePlayerNameplateRoot = next;
+    return next;
+  }
+
+  function localPlayerNameplateEnabled(worldData = world) {
+    return mode === "game" && worldData?.player?.showNameplate !== false;
+  }
+
+  function updateLocalPlayerNameplateAnchor(nameplate, sourceObject = null) {
+    if (!nameplate) return null;
+    let anchorY = 2.15;
+    if (sourceObject) {
+      const box = new THREE.Box3().setFromObject(sourceObject);
+      if (!box.isEmpty()) {
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const padding = Math.max(0.25, size.y * 0.12);
+        anchorY = Math.max(anchorY, box.max.y + padding);
+      }
+    }
+    nameplate.position.set(0, anchorY, 0);
+    return nameplate;
+  }
+
+  function playerVisualObject(root) {
+    if (!root || !Array.isArray(root.children)) return null;
+    return root.children.find(function (child) {
+      return child && child.userData?.localPlayerNameplate !== true;
+    }) || null;
+  }
+
+  function updateLocalPlayerNameplate(root, displayName, sourceObject = null) {
+    if (!root) return null;
+    const label = String(displayName || "Player").trim().slice(0, 32) || "Player";
+    const existing = root.userData.localPlayerNameplateRoot || null;
+    if (!localPlayerNameplateEnabled()) {
+      if (existing) {
+        root.remove(existing);
+        disposeObject(existing);
+        root.userData.localPlayerNameplateRoot = null;
+        player.nameplateRoot = null;
+      }
+      return null;
+    }
+    if (existing && existing.userData?.localPlayerLabelText === label) {
+      updateLocalPlayerNameplateAnchor(existing, sourceObject || playerVisualObject(root));
+      existing.visible = true;
+      player.nameplateRoot = existing;
+      return existing;
+    }
+    if (existing) {
+      root.remove(existing);
+      disposeObject(existing);
+      root.userData.localPlayerNameplateRoot = null;
+      player.nameplateRoot = null;
+    }
+    const next = createRemotePlayerNameplate(label);
+    if (!next) return null;
+    next.name = "local-player-nameplate";
+    next.userData.remotePlayerNameplate = false;
+    next.userData.localPlayerNameplate = true;
+    next.userData.localPlayerLabelText = label;
+    updateLocalPlayerNameplateAnchor(next, sourceObject || playerVisualObject(root));
+    root.add(next);
+    root.userData.localPlayerNameplateRoot = next;
+    player.nameplateRoot = next;
+    return next;
+  }
+
+  function createRemotePlayerRoot(remotePlayer, worldData) {
+    const root = new THREE.Group();
+    root.name = "remote-player:" + String(remotePlayer?.playerId || crypto.randomUUID());
+    root.userData.playerId = remotePlayer?.playerId || null;
+    root.userData.remotePlayerId = remotePlayer?.playerId || null;
+    root.userData.remotePlayer = true;
+    root.userData.transformable = false;
+    root.userData.snapToGround = false;
+    root.userData.runtimeAlive = true;
+    root.userData.animationClip = remotePlayer?.animationClip || worldData?.player?.animationClip || null;
+    root.userData.idleAnimation = remotePlayer?.idleAnimation || worldData?.player?.idleAnimation || null;
+    root.userData.walkAnimation = remotePlayer?.walkAnimation || worldData?.player?.walkAnimation || null;
+    root.userData.runAnimation = remotePlayer?.runAnimation || worldData?.player?.runAnimation || null;
+    const scale = num(remotePlayer?.scale, num(worldData?.player?.scale, 1));
+    root.scale.set(scale, scale, scale);
+    updateRemotePlayerNameplate(root, remotePlayer?.displayName || remotePlayer?.playerId || "Player");
+    const modelAssetId = worldData?.player?.modelAssetId || null;
+    if (modelAssetId && assetById(worldData, modelAssetId)?.sourcePath) {
+      loadModelInto(root, modelAssetId, worldData, null, {
+        castShadow: true,
+        receiveShadow: true
+      });
+    } else {
+      addPlayerFallbackVisual(root, {
+        name: "remote-player-fallback",
+        color: "#7faeff",
+        castShadow: true,
+        receiveShadow: true
+      });
+    }
+    return root;
+  }
+
+  function snapshotRemotePlayerRecord(record) {
+    if (!record) return null;
+    const root = record.root || null;
+    const renderState = record.renderState || null;
+    return {
+      playerId: record.playerId || null,
+      userId: record.userId || null,
+      displayName: record.displayName || "",
+      selectedCharacterId: record.selectedCharacterId || null,
+      worldId: record.worldId || null,
+      position: renderState?.position ? Object.assign({}, renderState.position) : (record.position ? Object.assign({}, record.position) : null),
+      previousPosition: record.previousPosition ? Object.assign({}, record.previousPosition) : null,
+      targetPosition: record.targetPosition ? Object.assign({}, record.targetPosition) : null,
+      renderState: renderState ? Object.assign({}, renderState) : null,
+      revision: Number(record.revision) || 0,
+      updatedAt: record.updatedAt || null,
+      animationState: record.animationState || "idle",
+      moving: record.moving === true,
+      lastPacketAt: Number(record.lastPacketAt) || 0,
+      lastRenderAt: Number(record.lastRenderAt) || 0,
+      lastTeleportAt: Number(record.lastTeleportAt) || 0,
+      connectedSessionCount: Number(record.connectedSessionCount) || 0,
+      droppedStaleUpdates: Number(record.droppedStaleUpdates) || 0,
+      lastSnapshotSeq: Number(record.lastSnapshotSeq) || 0,
+      lastSnapshotAt: Number(record.lastSnapshotAt) || 0,
+      activeControllerSessionId: record.activeControllerSessionId || null,
+      controllerEpoch: Math.max(Number(record.controllerEpoch) || 0, Number(record.renderState?.controllerEpoch) || 0),
+      lastProcessedInputSeq: Math.max(Number(record.lastProcessedInputSeq) || 0, Number(record.renderState?.lastProcessedInputSeq) || 0),
+      visualFreezeMs: Number(record.visualFreezeMs) || 0,
+      observerLagMs: Number(record.observerLagMs) || 0,
+      visualVelocity: Number(record.visualVelocity) || 0,
+      maxRemoteJump: Number(record.maxRemoteJump || record.maxJumpMs || 0) || 0,
+      maxJumpMs: Number(record.maxRemoteJump || record.maxJumpMs || 0) || 0,
+      snapshotsLength: Array.isArray(record.snapshots) ? record.snapshots.length : 0,
+      interpolationBufferLength: Array.isArray(record.snapshots) ? record.snapshots.length : 0,
+      object: root,
+      root: root
+    };
+  }
+
+  function ensureRemotePlayerRecord(remotePlayer, worldData) {
+    const playerId = String(remotePlayer?.playerId || "").trim();
+    if (!playerId) return null;
+    let record = remotePlayers.get(playerId);
+    if (!record) {
+      record = {
+        playerId: playerId,
+        userId: remotePlayer?.userId || null,
+        displayName: remotePlayer?.displayName || playerId,
+        selectedCharacterId: remotePlayer?.selectedCharacterId || null,
+        worldId: remotePlayer?.worldId || worldData?.world?.id || worldData?.world?.worldId || null,
+        position: null,
+        previousPosition: null,
+        targetPosition: null,
+        renderState: null,
+        revision: 0,
+        updatedAt: null,
+        animationState: "idle",
+        moving: false,
+        lastPacketAt: 0,
+        lastRenderAt: 0,
+        lastTeleportAt: 0,
+        lastSnapshotSeq: 0,
+        lastSnapshotAt: 0,
+        activeControllerSessionId: null,
+        controllerEpoch: 0,
+        lastProcessedInputSeq: 0,
+        visualFreezeMs: 0,
+        observerLagMs: 0,
+        visualVelocity: 0,
+        maxRemoteJump: 0,
+        maxJumpMs: 0,
+        connectedSessionCount: Number(remotePlayer?.connectedSessionCount) || 0,
+        droppedStaleUpdates: 0,
+        object: null,
+        root: null,
+        snapshots: [],
+        sourceSessionId: remotePlayer?.sourceSessionId || null,
+        sourceDevice: remotePlayer?.sourceDevice || null
+      };
+      remotePlayers.set(playerId, record);
+    }
+    record.userId = remotePlayer?.userId || record.userId || null;
+    record.displayName = String(remotePlayer?.displayName || record.displayName || playerId).trim() || playerId;
+    record.selectedCharacterId = remotePlayer?.selectedCharacterId || record.selectedCharacterId || null;
+    record.worldId = remotePlayer?.worldId || record.worldId || worldData?.world?.id || worldData?.world?.worldId || null;
+    record.connectedSessionCount = Number(remotePlayer?.connectedSessionCount || record.connectedSessionCount || 0) || 0;
+    record.sourceSessionId = remotePlayer?.sourceSessionId || record.sourceSessionId || null;
+    record.sourceDevice = remotePlayer?.sourceDevice || record.sourceDevice || null;
+    if (!record.root || !record.root.parent) {
+      const root = createRemotePlayerRoot(record, worldData);
+      record.root = root;
+      record.object = root;
+      const initialPosition = record.renderState?.position || record.position || null;
+      root.position.copy(initialPosition ? new THREE.Vector3(initialPosition.x, initialPosition.y, initialPosition.z) : player.pos);
+      root.rotation.y = num(initialPosition?.rotationY, 0) * DEG_TO_RAD;
+      content.add(root);
+      runtimeStats.sceneObjects += 1;
+    }
+    updateRemotePlayerNameplate(record.root, record.displayName);
+    runtimeStats.remotePlayers = remotePlayers.size;
+    return record;
+  }
+
+  function applyRemotePlayerVisualState(record, nextState, options = {}) {
+    if (!record || !record.root || !nextState) return null;
+    const position = {
+      x: num(nextState.x, record.position?.x ?? 0),
+      y: Number.isFinite(Number(nextState.y)) ? num(nextState.y, record.position?.y ?? 0) : num(record.position?.y, 0),
+      z: num(nextState.z, record.position?.z ?? 0),
+      rotationY: Number.isFinite(Number(nextState.rotationY))
+        ? num(nextState.rotationY, record.position?.rotationY ?? 0)
+        : num(record.position?.rotationY, 0)
+    };
+    record.previousPosition = record.position ? Object.assign({}, record.position) : Object.assign({}, position);
+    record.targetPosition = Object.assign({}, position);
+    record.position = Object.assign({}, position);
+    record.revision = Number(nextState.revision || record.revision || 0) || 0;
+    record.updatedAt = nextState.updatedAt || record.updatedAt || null;
+    record.animationState = String(nextState.animationState || record.animationState || "idle").trim() || "idle";
+    record.moving = typeof nextState.moving === "boolean" ? nextState.moving : record.moving === true;
+    record.lastPacketAt = Number.isFinite(Number(nextState.lastPacketAt)) ? Number(nextState.lastPacketAt) : performance.now();
+    record.lastRenderAt = performance.now();
+    record.connectedSessionCount = Number(nextState.connectedSessionCount || record.connectedSessionCount || 0) || 0;
+    record.sourceSessionId = nextState.sourceSessionId || record.sourceSessionId || null;
+    record.sourceDevice = nextState.sourceDevice || record.sourceDevice || null;
+    record.worldId = nextState.worldId || record.worldId || null;
+    record.lastSnapshotSeq = Math.max(0, Math.floor(Number(nextState.snapshotSeq || nextState.serverSeq || record.lastSnapshotSeq || 0)) || 0);
+    record.lastSnapshotAt = Number.isFinite(Number(nextState.lastSnapshotAt)) ? Number(nextState.lastSnapshotAt) : (Number(nextState.serverTimeMs) || performance.now());
+    record.activeControllerSessionId = nextState.activeControllerSessionId || record.activeControllerSessionId || null;
+    record.controllerEpoch = Math.max(Number(record.controllerEpoch) || 0, Number(nextState.controllerEpoch) || 0);
+    record.lastProcessedInputSeq = Math.max(Number(record.lastProcessedInputSeq) || 0, Number(nextState.lastProcessedInputSeq) || 0);
+    record.visualFreezeMs = Number.isFinite(Number(nextState.visualFreezeMs)) ? Number(nextState.visualFreezeMs) : Number(record.visualFreezeMs) || 0;
+    record.observerLagMs = Number.isFinite(Number(nextState.observerLagMs)) ? Number(nextState.observerLagMs) : Number(record.observerLagMs) || 0;
+    record.visualVelocity = Number.isFinite(Number(nextState.visualVelocity)) ? Number(nextState.visualVelocity) : Number(record.visualVelocity) || 0;
+    record.maxRemoteJump = Math.max(Number(record.maxRemoteJump) || 0, Number(nextState.maxRemoteJump) || Number(nextState.maxJumpMs) || 0);
+    record.maxJumpMs = record.maxRemoteJump;
+    record.snapshots = Array.isArray(nextState.snapshots) ? nextState.snapshots.slice(-32) : record.snapshots || [];
+    record.renderState = {
+      position: Object.assign({}, position),
+      animationState: record.animationState,
+      moving: record.moving,
+      revision: record.revision,
+      updatedAt: record.updatedAt,
+      snapshotSeq: record.lastSnapshotSeq,
+      lastSnapshotAt: record.lastSnapshotAt,
+      activeControllerSessionId: record.activeControllerSessionId,
+      controllerEpoch: record.controllerEpoch,
+      lastProcessedInputSeq: record.lastProcessedInputSeq,
+      visualFreezeMs: record.visualFreezeMs,
+      observerLagMs: record.observerLagMs,
+      visualVelocity: record.visualVelocity,
+      maxRemoteJump: record.maxRemoteJump,
+      teleport: Boolean(nextState.teleport === true)
+    };
+    if (record.root) {
+      record.root.position.set(position.x, position.y, position.z);
+      record.root.rotation.y = position.rotationY * DEG_TO_RAD;
+      if (record.root.userData.remotePlayerLabelText !== record.displayName) {
+        updateRemotePlayerNameplate(record.root, record.displayName);
+      }
+      if (String(nextState.animationState || "").trim()) {
+        playAnimationState(record.root, record.animationState, 0.08);
+      } else {
+        playAnimationState(record.root, record.moving ? "walk" : "idle", 0.08);
+      }
+    }
+    return snapshotRemotePlayerRecord(record);
+  }
+
+  function applyRemotePlayerState(record, nextState, options = {}) {
+    return applyRemotePlayerVisualState(record, nextState, options);
+  }
+
+  function upsertRemotePlayer(remotePlayer, worldData = null) {
+    const contextWorld = worldData || world || null;
+    const record = ensureRemotePlayerRecord(remotePlayer, contextWorld);
+    if (!record) return null;
+    if (remotePlayer && remotePlayer.position) {
+      return applyRemotePlayerState(record, {
+        x: remotePlayer.position.x,
+        y: remotePlayer.position.y,
+        z: remotePlayer.position.z,
+        rotationY: remotePlayer.position.rotationY,
+        revision: remotePlayer.revision,
+        updatedAt: remotePlayer.updatedAt,
+        animationState: remotePlayer.animationState,
+        moving: remotePlayer.moving,
+        lastPacketAt: remotePlayer.lastPacketAt,
+        connectedSessionCount: remotePlayer.connectedSessionCount,
+        worldId: remotePlayer.worldId,
+        sourceSessionId: remotePlayer.sourceSessionId,
+        sourceDevice: remotePlayer.sourceDevice,
+        snapshotSeq: remotePlayer.snapshotSeq,
+        lastSnapshotAt: remotePlayer.lastSnapshotAt,
+        activeControllerSessionId: remotePlayer.activeControllerSessionId || null,
+        controllerEpoch: Number(remotePlayer.controllerEpoch) || 0,
+        lastProcessedInputSeq: Number(remotePlayer.lastProcessedInputSeq) || 0,
+        visualFreezeMs: remotePlayer.visualFreezeMs,
+        observerLagMs: remotePlayer.observerLagMs,
+        visualVelocity: remotePlayer.visualVelocity,
+        maxRemoteJump: remotePlayer.maxRemoteJump || remotePlayer.maxJumpMs || 0,
+        maxJumpMs: remotePlayer.maxRemoteJump || remotePlayer.maxJumpMs || 0,
+        teleport: remotePlayer.teleport === true
+      }, { immediate: true });
+    }
+    return snapshotRemotePlayerRecord(record);
+  }
+
+  function setRemotePlayerVisualState(playerId, nextState, options = {}) {
+    const record = ensureRemotePlayerRecord(Object.assign({
+      playerId: playerId,
+      displayName: options.displayName || playerId,
+      worldId: options.worldId || world?.world?.id || world?.world?.worldId || null
+    }, options.remotePlayer || {}), world || null);
+    if (!record) return null;
+    return applyRemotePlayerVisualState(record, nextState, options);
+  }
+
+  function setRemotePlayerState(playerId, nextState, options = {}) {
+    return setRemotePlayerVisualState(playerId, nextState, options);
+  }
+
+  function removeRemotePlayer(playerId) {
+    const record = remotePlayers.get(String(playerId || "").trim());
+    if (!record) return false;
+    if (record.root && record.root.parent) {
+      record.root.parent.remove(record.root);
+    }
+    const counts = countObjectTree(record.root || record.object || null);
+    runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - (counts.objects || 0));
+    runtimeStats.meshes = Math.max(0, runtimeStats.meshes - (counts.meshes || 0));
+    if (record.root) {
+      disposeObject(record.root);
+    }
+    remotePlayers.delete(record.playerId);
+    runtimeStats.remotePlayers = remotePlayers.size;
+    requestRender("remote-player-removed");
+    return true;
+  }
+
+  function clearRemotePlayers() {
+    const ids = Array.from(remotePlayers.keys());
+    for (const playerId of ids) {
+      removeRemotePlayer(playerId);
+    }
+    remotePlayers.clear();
+    runtimeStats.remotePlayers = 0;
+  }
+
+  function getRemotePlayerDebugState() {
+    return {
+      count: remotePlayers.size,
+      playerIds: Array.from(remotePlayers.keys()),
+      players: Array.from(remotePlayers.values()).map(snapshotRemotePlayerRecord)
+    };
   }
 
   function selectEntity(entityId) {
@@ -10976,10 +12676,93 @@ function resolveChunkDebugCenter(policy) {
     return target;
   }
 
+  function getPlayerState() {
+    return snapshotPlayerState();
+  }
+
+  function worldToScreen(position) {
+    const vector = new THREE.Vector3(num(position?.x, 0), num(position?.y, 0), num(position?.z, 0));
+    vector.project(camera);
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
+      y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top
+    };
+  }
+
+  function getCameraGroundBasis() {
+    updateCameraGroundBasis();
+    return {
+      forward: { x: cameraForward.x, z: cameraForward.z },
+      right: { x: cameraRight.x, z: cameraRight.z }
+    };
+  }
+
+  function resolvePlayerMovementIntent(startPosition, desiredPosition, options = {}) {
+    const radius = Math.max(0.05, num(options.radius, player.radius));
+    const start = {
+      x: num(startPosition?.x, player.pos.x),
+      y: num(startPosition?.y, player.pos.y),
+      z: num(startPosition?.z, player.pos.z)
+    };
+    const desired = {
+      x: num(desiredPosition?.x, start.x),
+      y: num(desiredPosition?.y, start.y),
+      z: num(desiredPosition?.z, start.z)
+    };
+    const resolved = resolveMovement(start, desired, {
+      radius: radius,
+      ground: options.ground || world?.ground || null,
+      solids: Array.isArray(options.solids) ? options.solids : activeSolids
+    });
+    const blocked = Math.hypot(resolved.x - desired.x, resolved.z - desired.z) > 0.0005;
+    const collided = blocked && Math.hypot(resolved.x - start.x, resolved.z - start.z) <= 0.0005
+      && Math.hypot(desired.x - start.x, desired.z - start.z) > 0.0005;
+    return {
+      x: resolved.x,
+      y: resolved.y,
+      z: resolved.z,
+      blocked: blocked,
+      collided: collided
+    };
+  }
+
+  function setPlayerAnimationState(animationState) {
+    if (!player.root) return snapshotPlayerState();
+    const next = typeof animationState === "string" && animationState.trim() ? animationState.trim() : "idle";
+    if (player.animationState !== next) {
+      playAnimationState(player.root, next);
+      player.animationState = next;
+      requestRender("player-animation-state");
+    }
+    return snapshotPlayerState();
+  }
+
+  function setLocalPlayerDisplayName(displayName) {
+    const next = String(displayName || "").trim();
+    if (player.displayName === next && (!player.root || player.root.userData?.localPlayerNameplateRoot)) {
+      return player.displayName;
+    }
+    player.displayName = next;
+    if (player.root) {
+      updateLocalPlayerNameplate(player.root, player.displayName);
+      requestRender("player-display-name");
+    }
+    return player.displayName;
+  }
+
   function buildKeyMap(worldData) {
     keyToAction.clear();
+    actionToKeyCodes.clear();
     for (const bind of worldData?.keybinds || []) {
-      if (bind.keyCode && bind.action) keyToAction.set(bind.keyCode, bind.action);
+      if (!bind.keyCode || !bind.action) continue;
+      keyToAction.set(bind.keyCode, bind.action);
+      const codes = actionToKeyCodes.get(bind.action);
+      if (codes) {
+        if (!codes.includes(bind.keyCode)) codes.push(bind.keyCode);
+      } else {
+        actionToKeyCodes.set(bind.action, [bind.keyCode]);
+      }
     }
   }
 
@@ -11007,11 +12790,32 @@ function resolveChunkDebugCenter(policy) {
     cameraForward.set(target.x - camera.position.x, 0, target.z - camera.position.z);
     if (cameraForward.lengthSq() < 0.0001) cameraForward.set(0, 0, -1);
     cameraForward.normalize();
-    cameraRight.set(cameraForward.z, 0, -cameraForward.x);
+    cameraRight.set(-cameraForward.z, 0, cameraForward.x);
   }
 
   function updatePlayer(delta) {
     if (mode !== "game" || !player.root) return;
+    if (externalPlayerAuthority) {
+      if (player.reconcileActive) {
+        const smoothing = clamp(1 - Math.exp(-(delta * 1000) / Math.max(1, player.reconcileDurationMs)), 0, 1);
+        player.pos.lerp(player.reconcileTarget, smoothing);
+        player.facing = lerpAngleTowards(player.facing, player.reconcileTargetFacing, smoothing);
+        player.reconcileElapsedMs += delta * 1000;
+        const positionSettled = player.pos.distanceToSquared(player.reconcileTarget) < 0.0004;
+        const facingGap = Math.abs(((player.reconcileTargetFacing - player.facing + Math.PI) % (Math.PI * 2)) - Math.PI);
+        if (positionSettled && facingGap < 0.002 && player.reconcileElapsedMs >= player.reconcileDurationMs) {
+          player.pos.copy(player.reconcileTarget);
+          player.facing = player.reconcileTargetFacing;
+          player.reconcileActive = false;
+        }
+      }
+      player.root.position.copy(player.pos);
+      player.root.rotation.y = player.facing;
+      if (camFollow) camTarget.lerp(playerCameraTarget(), Math.min(1, delta * 8));
+      updateCameraPosition();
+      updateInteractionFocus();
+      return;
+    }
     moveVector.set(0, 0, 0);
     updateCameraGroundBasis();
     let usingKeys = false;
@@ -11056,14 +12860,16 @@ function resolveChunkDebugCenter(policy) {
       player.animationState = desiredAnimationState;
     }
 
-    if (camFollow) camTarget.lerp(player.pos, Math.min(1, delta * 8));
+    if (camFollow) camTarget.lerp(playerCameraTarget(), Math.min(1, delta * 8));
     updateCameraPosition();
     updateInteractionFocus();
   }
 
   function isActionPressed(action) {
-    for (const [code, boundAction] of keyToAction) {
-      if (boundAction === action && pressedKeys.has(code)) return true;
+    const keyCodes = actionToKeyCodes.get(action);
+    if (!Array.isArray(keyCodes) || !keyCodes.length) return false;
+    for (const code of keyCodes) {
+      if (pressedKeys.has(code)) return true;
     }
     return false;
   }
@@ -11075,7 +12881,25 @@ function resolveChunkDebugCenter(policy) {
     return current + Math.sign(diff) * maxStep;
   }
 
+  function lerpAngleTowards(start, target, t) {
+    let diff = ((target - start + Math.PI) % (Math.PI * 2)) - Math.PI;
+    if (diff < -Math.PI) diff += Math.PI * 2;
+    return start + diff * clamp(t, 0, 1);
+  }
+
   function updateInteractionFocus() {
+    if (!interactables.length) {
+      if (activeInteractable !== null) {
+        activeInteractable = null;
+        renderHud();
+      }
+      return;
+    }
+    if (activeInteractable) {
+      const dx = player.pos.x - activeInteractable.x;
+      const dz = player.pos.z - activeInteractable.z;
+      if (dx * dx + dz * dz <= activeInteractable.radius * activeInteractable.radius) return;
+    }
     let best = null;
     let bestDist = Infinity;
     for (const inter of interactables) {
@@ -11100,6 +12924,7 @@ function resolveChunkDebugCenter(policy) {
     runtimeStats.entities = 0;
     runtimeStats.scatterInstances = 0;
     runtimeStats.interactables = 0;
+    runtimeStats.remotePlayers = 0;
   }
 
   function countPublishedWorldItems(worldData) {
@@ -11134,6 +12959,14 @@ function resolveChunkDebugCenter(policy) {
   function formatFrameMs(value) {
     if (!Number.isFinite(value)) return "--";
     return (value >= 10 ? value.toFixed(1) : value.toFixed(2)).replace(/\.0+$/, "") + "ms";
+  }
+
+  function formatTimingComparison(value, average) {
+    const current = formatFrameMs(value);
+    if (!Number.isFinite(average) || Number(average) <= 0) return current;
+    const avg = formatFrameMs(average);
+    if (current === "--" || avg === "--" || current === avg) return current;
+    return current + " / " + avg;
   }
 
   function formatBudgetedCount(value, budget) {
@@ -11242,6 +13075,9 @@ function resolveChunkDebugCenter(policy) {
     }
     if (metrics.showFps !== false) addRow("fps", "FPS");
     if (metrics.showFrameMs !== false) addRow("frameMs", "Frame");
+    if (metrics.showRemoteSyncMs !== false) addRow("remoteSyncMs", "Remote sync");
+    if (metrics.showMovementStepMs !== false) addRow("movementStepMs", "Movement");
+    if (metrics.showMinimapDrawMs !== false) addRow("minimapDrawMs", "Minimap");
     if (metrics.showRenderer !== false) addRow("renderer", "Renderer");
     if (metrics.showDrawCalls !== false) addRow("drawCalls", "Draw");
     if (metrics.showTriangles !== false) addRow("triangles", "Tris");
@@ -11296,6 +13132,47 @@ function resolveChunkDebugCenter(policy) {
     if (loadErrors.length && options.onLoadErrors) options.onLoadErrors(loadErrors.slice());
   }
 
+  function getGameLoopTimingsSnapshot() {
+    const empty = {
+      remoteSyncMs: 0,
+      remoteSyncAvgMs: 0,
+      remoteSyncCalls: 0,
+      remoteSyncLastAt: 0,
+      movementStepMs: 0,
+      movementStepAvgMs: 0,
+      movementStepCalls: 0,
+      movementStepLastAt: 0,
+      minimapDrawMs: 0,
+      minimapDrawAvgMs: 0,
+      minimapDrawCalls: 0,
+      minimapDrawLastAt: 0
+    };
+    const debug = window.__GK_GAME_CLIENT_DEBUG;
+    if (!debug) return empty;
+    try {
+      const source = typeof debug.getGameLoopTimings === "function"
+        ? debug.getGameLoopTimings()
+        : (typeof debug.getState === "function" ? debug.getState()?.gameLoopTimings : null);
+      if (!source || typeof source !== "object") return empty;
+      return {
+        remoteSyncMs: round(num(source.remoteSyncMs, 0)),
+        remoteSyncAvgMs: round(num(source.remoteSyncAvgMs, 0)),
+        remoteSyncCalls: Math.max(0, Math.floor(num(source.remoteSyncCalls, 0))),
+        remoteSyncLastAt: Math.max(0, round(num(source.remoteSyncLastAt, 0))),
+        movementStepMs: round(num(source.movementStepMs, 0)),
+        movementStepAvgMs: round(num(source.movementStepAvgMs, 0)),
+        movementStepCalls: Math.max(0, Math.floor(num(source.movementStepCalls, 0))),
+        movementStepLastAt: Math.max(0, round(num(source.movementStepLastAt, 0))),
+        minimapDrawMs: round(num(source.minimapDrawMs, 0)),
+        minimapDrawAvgMs: round(num(source.minimapDrawAvgMs, 0)),
+        minimapDrawCalls: Math.max(0, Math.floor(num(source.minimapDrawCalls, 0))),
+        minimapDrawLastAt: Math.max(0, round(num(source.minimapDrawLastAt, 0)))
+      };
+    } catch {
+      return empty;
+    }
+  }
+
   function buildPerformanceSnapshot() {
     const info = renderer.info || {};
     const renderInfo = info.render || {};
@@ -11319,6 +13196,7 @@ function resolveChunkDebugCenter(policy) {
       entities: runtimeStats.entities,
       scatterInstances: runtimeStats.scatterInstances,
       interactables: runtimeStats.interactables,
+      remotePlayers: runtimeStats.remotePlayers || 0,
       terrainVisuals: runtimeStats.terrainVisuals,
       collisionShapes: runtimeStats.collisionShapes,
       worldSize: publishedWorldItemCount,
@@ -11339,7 +13217,8 @@ function resolveChunkDebugCenter(policy) {
       terrainVisible: chunkRuntimeState.terrainVisuals?.visible || 0,
       terrainHidden: chunkRuntimeState.terrainVisuals?.hidden || 0,
       terrainResident: terrainStreamingState.residentPieces + groundResidentVisuals,
-      terrainChunks: terrainStreamingState.residentChunks + groundResidentVisuals
+      terrainChunks: terrainStreamingState.residentChunks + groundResidentVisuals,
+      gameLoopTimings: getGameLoopTimingsSnapshot()
     };
   }
 
@@ -11456,6 +13335,7 @@ function resolveChunkDebugCenter(policy) {
       "fogEnabled",
       "maxFps",
       "debugHelpersVisible",
+      "debugWarningsVisible",
       "debugChunkOverlayVisible",
       "chunkGridVisible",
       "chunkLabelsVisible",
@@ -11517,6 +13397,85 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function normalizePlayerState(nextState) {
+    const state = nextState && typeof nextState === "object" ? nextState : {};
+    const fallbackRotation = player.facing / DEG_TO_RAD;
+    return {
+      x: num(state.x, player.pos.x),
+      y: Number.isFinite(Number(state.y)) ? num(state.y, player.pos.y) : player.pos.y,
+      z: num(state.z, player.pos.z),
+      rotationY: Number.isFinite(Number(state.rotationY))
+        ? num(state.rotationY, fallbackRotation)
+        : fallbackRotation
+    };
+  }
+
+  function snapshotPlayerState() {
+    const animationDebug = getAnimationDebugForRoot(player.root);
+    return {
+      x: round(player.pos.x),
+      y: round(player.pos.y),
+      z: round(player.pos.z),
+      radius: round(player.radius),
+      rotationY: round(player.facing / DEG_TO_RAD),
+      animationState: player.animationState,
+      animationClipName: animationDebug.animationClipName,
+      animationClipDuration: animationDebug.animationClipDuration,
+      animationPlaybackScale: animationDebug.animationPlaybackScale,
+      animationActionTime: animationDebug.animationActionTime,
+      reconcileActive: player.reconcileActive
+    };
+  }
+
+  function setPlayerState(nextState, options = {}) {
+    if (!player.root) {
+      player.pendingState = {
+        nextState: nextState && typeof nextState === "object" ? Object.assign({}, nextState) : {},
+        options: Object.assign({}, options)
+      };
+      return snapshotPlayerState();
+    }
+    const normalized = normalizePlayerState(nextState);
+    const target = new THREE.Vector3(normalized.x, normalized.y, normalized.z);
+    const targetFacing = normalized.rotationY * DEG_TO_RAD;
+    const requestedAnimation = typeof options.animationState === "string" && options.animationState.trim()
+      ? options.animationState.trim()
+      : (player.pos.distanceTo(target) > 0.01 ? "walk" : "idle");
+    const shouldReconcile = options.immediate === false || options.reconcile === true;
+    const shouldSmooth = shouldReconcile && player.pos.distanceToSquared(target) > 0.0004;
+
+    player.pendingState = null;
+    if (shouldSmooth) {
+      player.reconcileActive = true;
+      player.reconcileTarget.copy(target);
+      player.reconcileTargetFacing = targetFacing;
+      player.reconcileDurationMs = Math.max(60, num(options.reconcileDurationMs, 120));
+      player.reconcileElapsedMs = 0;
+    } else {
+      player.reconcileActive = false;
+      player.pos.copy(target);
+      player.facing = targetFacing;
+      player.reconcileElapsedMs = 0;
+    }
+
+    if (player.root) {
+      if (player.animationState !== requestedAnimation) {
+        playAnimationState(player.root, requestedAnimation);
+        player.animationState = requestedAnimation;
+      }
+      if (!shouldSmooth) {
+        player.root.position.copy(player.pos);
+        player.root.rotation.y = player.facing;
+      }
+    }
+
+    if (camFollow) camTarget.lerp(playerCameraTarget(), 1);
+    updateCameraPosition();
+    updateInteractionFocus();
+    requestRender("player-state");
+    return snapshotPlayerState();
+  }
+
   function debugState(options = {}) {
     const includeShadowDiagnostics = options?.includeShadowDiagnostics !== false;
     const chunkLoadingState = chunkDebugStateCache || createChunkDebugState({ includeWindow: false });
@@ -11525,6 +13484,7 @@ function resolveChunkDebugCenter(policy) {
     const shadowStats = countShadowUsage(scene);
     const currentShadowPolicyState = currentShadowPolicy();
     const debugOverlayVisible = Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true);
+    const playerAnimationDebug = getAnimationDebugForRoot(player.root);
     const ghostPlaneDiagnostics = removeGhostChunkPlanes("debugState", {
       scene: scene,
       camera: camera,
@@ -11655,6 +13615,9 @@ function resolveChunkDebugCenter(policy) {
             preloadChunkKeys: Array.isArray(chunkLoadingState.preloadChunkKeys) ? chunkLoadingState.preloadChunkKeys.slice() : [],
             desiredResidentChunkKeys: Array.isArray(chunkLoadingState.desiredResidentChunkKeys) ? chunkLoadingState.desiredResidentChunkKeys.slice() : [],
             unloadSafeChunkKeys: Array.isArray(chunkLoadingState.unloadSafeChunkKeys) ? chunkLoadingState.unloadSafeChunkKeys.slice() : [],
+            presenceChunkKey: chunkLoadingState.presenceChunkKey || null,
+            presenceChunkDistance: Number.isFinite(Number(chunkLoadingState.presenceChunkDistance)) ? Number(chunkLoadingState.presenceChunkDistance) : null,
+            presenceChunkAccepted: chunkLoadingState.presenceChunkAccepted === true,
             renderResidentChunkKeys: Array.isArray(chunkLoadingState.renderResidentChunkKeys) ? chunkLoadingState.renderResidentChunkKeys.slice() : [],
             shadowResidentChunkKeys: Array.isArray(chunkLoadingState.shadowResidentChunkKeys) ? chunkLoadingState.shadowResidentChunkKeys.slice() : [],
             collisionResidentChunkKeys: Array.isArray(chunkLoadingState.collisionResidentChunkKeys) ? chunkLoadingState.collisionResidentChunkKeys.slice() : [],
@@ -11663,6 +13626,8 @@ function resolveChunkDebugCenter(policy) {
           contentStreaming: contentStreaming,
           residentBootstrap: Object.assign({}, residentBootstrapState)
         }),
+        objectResidency: cloneResidencySummary(chunkLoadingState.objectResidency) || createEmptyObjectResidencySummary(),
+        chunkResidency: cloneResidencySummary(chunkLoadingState.chunkResidency) || createEmptyChunkResidencySummary(),
         lighting: {
           shadowAnchor: Object.assign({}, shadowAnchorState),
           shadowsEnabled: currentShadowPolicyState.enabled === true,
@@ -11707,7 +13672,8 @@ function resolveChunkDebugCenter(policy) {
             skippedSyncCalls: chunkSyncStats.skippedSyncCalls,
             lastHeavyReason: chunkSyncStats.lastHeavyReason,
             lastHeavySyncMs: chunkSyncStats.lastHeavySyncMs
-          }
+          },
+          gameLoopTimings: Object.assign({}, performanceSnapshot.gameLoopTimings || {})
         },
         rendering: {
           api: rendererLabel,
@@ -11744,7 +13710,12 @@ function resolveChunkDebugCenter(policy) {
         x: round(player.pos.x),
         y: round(player.pos.y),
         z: round(player.pos.z),
-        radius: round(player.radius)
+        radius: round(player.radius),
+        animationState: player.animationState,
+        animationClipName: playerAnimationDebug.animationClipName,
+        animationClipDuration: playerAnimationDebug.animationClipDuration,
+        animationPlaybackScale: playerAnimationDebug.animationPlaybackScale,
+        animationActionTime: playerAnimationDebug.animationActionTime
       },
       stats: {
         sceneObjects: runtimeStats.sceneObjects,
@@ -11768,24 +13739,24 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function debugTeleportPlayer(x, z) {
-    if (!player.root) return debugState();
-    player.pos.set(num(x, player.pos.x), player.pos.y, num(z, player.pos.z));
-    player.root.position.copy(player.pos);
-    if (camFollow) camTarget.lerp(player.pos, 1);
-    updateCameraPosition();
-    requestRender("debug-teleport");
+    setPlayerState({
+      x: x,
+      y: player.pos.y,
+      z: z,
+      rotationY: player.facing / DEG_TO_RAD
+    }, { immediate: true, animationState: "idle" });
     return debugState();
   }
 
   function debugStepPlayerTo(x, z) {
-    if (!player.root) return debugState();
     movementTarget.set(num(x, player.pos.x), player.pos.y, num(z, player.pos.z));
     resolveCollision(movementTarget);
-    player.pos.copy(movementTarget);
-    player.root.position.copy(player.pos);
-    if (camFollow) camTarget.lerp(player.pos, 1);
-    updateCameraPosition();
-    requestRender("debug-step");
+    setPlayerState({
+      x: movementTarget.x,
+      y: movementTarget.y,
+      z: movementTarget.z,
+      rotationY: player.facing / DEG_TO_RAD
+    }, { immediate: true, animationState: "walk" });
     return debugState();
   }
 
@@ -11804,12 +13775,22 @@ function resolveChunkDebugCenter(policy) {
       if (metrics.showFps !== false && entry.rows.fps) {
         setPerformanceRowValue(entry.rows.fps, formatBudgetedCount(snapshot.fps, thresholds.fpsTarget), toneHigherIsBetter(snapshot.fps, thresholds.fpsWarn, thresholds.fpsDanger));
       }
-      if (metrics.showFrameMs !== false && entry.rows.frameMs) {
-        setPerformanceRowValue(entry.rows.frameMs, formatBudgetedFrameMs(snapshot.frameMs, thresholds.frameMsTarget), toneLowerIsBetter(snapshot.frameMs, thresholds.frameMsWarn, thresholds.frameMsDanger));
-      }
-      if (metrics.showRenderer !== false && entry.rows.renderer) {
-        setPerformanceRowValue(entry.rows.renderer, snapshot.renderer, "neutral");
-      }
+    if (metrics.showFrameMs !== false && entry.rows.frameMs) {
+      setPerformanceRowValue(entry.rows.frameMs, formatBudgetedFrameMs(snapshot.frameMs, thresholds.frameMsTarget), toneLowerIsBetter(snapshot.frameMs, thresholds.frameMsWarn, thresholds.frameMsDanger));
+    }
+    const gameLoopTimings = snapshot.gameLoopTimings || {};
+    if (metrics.showRemoteSyncMs !== false && entry.rows.remoteSyncMs) {
+      setPerformanceRowValue(entry.rows.remoteSyncMs, formatTimingComparison(gameLoopTimings.remoteSyncMs, gameLoopTimings.remoteSyncAvgMs), toneLowerIsBetter(gameLoopTimings.remoteSyncMs, 4, 10));
+    }
+    if (metrics.showMovementStepMs !== false && entry.rows.movementStepMs) {
+      setPerformanceRowValue(entry.rows.movementStepMs, formatTimingComparison(gameLoopTimings.movementStepMs, gameLoopTimings.movementStepAvgMs), toneLowerIsBetter(gameLoopTimings.movementStepMs, 4, 10));
+    }
+    if (metrics.showMinimapDrawMs !== false && entry.rows.minimapDrawMs) {
+      setPerformanceRowValue(entry.rows.minimapDrawMs, formatTimingComparison(gameLoopTimings.minimapDrawMs, gameLoopTimings.minimapDrawAvgMs), toneLowerIsBetter(gameLoopTimings.minimapDrawMs, 4, 10));
+    }
+    if (metrics.showRenderer !== false && entry.rows.renderer) {
+      setPerformanceRowValue(entry.rows.renderer, snapshot.renderer, "neutral");
+    }
       if (metrics.showDrawCalls !== false && entry.rows.drawCalls) {
         setPerformanceRowValue(entry.rows.drawCalls, formatBudgetedCount(snapshot.drawCalls, thresholds.drawCallsWarn), toneLowerIsBetter(snapshot.drawCalls, thresholds.drawCallsWarn, thresholds.drawCallsDanger));
       }
@@ -11881,6 +13862,21 @@ function resolveChunkDebugCenter(policy) {
 
   function setWorld(nextWorld) {
     worldBuildGeneration += 1;
+    // In game mode is de server (via game.js) eigenaar van de spelerpositie.
+    // spawnPlayer() zet de speler straks terug op world.spawn; zonder herstel
+    // bouwt de streaming na een live republish de wereld rond de origin op
+    // (het "dubbele chunk"-blok) terwijl de speler ergens anders staat, omdat
+    // de stale-revision guard in game.js dezelfde serverpositie niet opnieuw
+    // toepast.
+    const previousGamePlayerState = mode === "game" && player.root
+      ? {
+        x: player.pos.x,
+        y: player.pos.y,
+        z: player.pos.z,
+        rotationY: player.facing / DEG_TO_RAD,
+        animationState: player.animationState
+      }
+      : null;
     world = nextWorld || null;
     applyWorldPerformance(world);
     if (!handleResize("world-performance")) scheduleResize("world-performance");
@@ -11910,6 +13906,12 @@ function resolveChunkDebugCenter(policy) {
     buildTerrainRuntimeStreamingVisuals(world);
     addLights(world);
     spawnPlayer(world);
+    if (previousGamePlayerState && player.root) {
+      setPlayerState(previousGamePlayerState, {
+        immediate: true,
+        animationState: previousGamePlayerState.animationState
+      });
+    }
     if (residentStreamingEnabled) {
       runtimeStats.entities = 0;
       runtimeStats.scatterInstances = 0;
@@ -11983,7 +13985,7 @@ function resolveChunkDebugCenter(policy) {
     publishedWorldItemCount = contentBlueprintIndex.blueprintWorldItemCount;
     if (mode === "game") {
       setHudModules(world?.ui || []);
-      camTarget.copy(player.pos);
+      camTarget.copy(playerCameraTarget());
     }
     applyCameraConfig(world);
     const restoredEditorView = editorViewState ? restoreViewState(editorViewState) : false;
@@ -12085,7 +14087,9 @@ function resolveChunkDebugCenter(policy) {
     if (gameKeyDownHandler) window.removeEventListener("keydown", gameKeyDownHandler);
     if (gameKeyUpHandler) window.removeEventListener("keyup", gameKeyUpHandler);
     if (gameWheelHandler) canvas.removeEventListener("wheel", gameWheelHandler);
+    clearRemotePlayers();
     clearHudModules();
+    restoreConsoleWarnGate();
     DEBUG_RUNTIME.activeResizeHandlers = 0;
   }
 
@@ -12242,11 +14246,13 @@ function resolveChunkDebugCenter(policy) {
         sceneObjects: snapshot.sceneObjects,
         runtimeObjects: snapshot.runtimeObjects,
         meshes: snapshot.meshes,
+        remotePlayers: snapshot.remotePlayers || 0,
         terrainResident: snapshot.terrainResident,
         groundTilesResident: groundChunkState.stats.groundTilesResident || 0,
         hiddenObjects: snapshot.hiddenObjects,
         loadedChunks: snapshot.loadedChunks
       },
+      gameLoopTimings: Object.assign({}, snapshot.gameLoopTimings || {}),
       settings: {
         pixelRatio: renderer.getPixelRatio ? renderer.getPixelRatio() : activeModePerformance().pixelRatioCap,
         shadowsEnabled: currentShadowPolicyState.enabled === true,
@@ -12266,10 +14272,23 @@ function resolveChunkDebugCenter(policy) {
     destroy: destroy,
     dispose: destroy,
     screenToGround: screenToGround,
+    worldToScreen: worldToScreen,
+    getPlayerState: getPlayerState,
+    getCameraGroundBasis: getCameraGroundBasis,
+    resolvePlayerMovementIntent: resolvePlayerMovementIntent,
+    setPlayerAnimationState: setPlayerAnimationState,
+    setLocalPlayerDisplayName: setLocalPlayerDisplayName,
+    upsertRemotePlayer: upsertRemotePlayer,
+    removeRemotePlayer: removeRemotePlayer,
+    setRemotePlayerVisualState: setRemotePlayerVisualState,
+    setRemotePlayerState: setRemotePlayerState,
+    clearRemotePlayers: clearRemotePlayers,
+    getRemotePlayerDebugState: getRemotePlayerDebugState,
     debugState: debugState,
     debugCollisionAt: debugCollisionAt,
     debugTeleportPlayer: debugTeleportPlayer,
     debugStepPlayerTo: debugStepPlayerTo,
+    setPlayerState: setPlayerState,
     setTerrainEditorOverlay: setTerrainEditorOverlay,
     clearTerrainEditorOverlay: clearTerrainEditorOverlay,
     setScatterEditorOverlay: setScatterEditorOverlay,
@@ -12299,6 +14318,7 @@ function resolveChunkDebugCenter(policy) {
     toggleLocalView: toggleLocalView,
     isLocalViewActive: isLocalViewActive,
     focusSelected: focusSelected,
+    focusGroundPoint: focusGroundPoint,
     frameWorldPoints: frameWorldPoints,
     cancelTransform: cancelTransform,
     confirmTransform: confirmTransform,
@@ -12338,9 +14358,70 @@ function resolveChunkDebugCenter(policy) {
         debugOverlayVisible: Boolean(activeModePerformance().debugChunkOverlayVisible === true && resolveChunkPolicy(world, mode)?.debugOverlay === true)
       });
     },
+    debugAuditSceneAroundPoint: function (x = 0, z = 0, radius = 60) {
+      const centerX = num(x, 0);
+      const centerZ = num(z, 0);
+      const maxDistance = Math.max(1, num(radius, 60));
+      const worldPosition = new THREE.Vector3();
+      const boundingBox = new THREE.Box3();
+      const hits = [];
+      scene.updateMatrixWorld(true);
+      scene.traverse(function (object) {
+        if (!object || (!object.isMesh && !object.isInstancedMesh && !object.isSprite)) return;
+        object.getWorldPosition(worldPosition);
+        let boxSummary = null;
+        let insideByBox = false;
+        try {
+          boundingBox.setFromObject(object);
+          if (!boundingBox.isEmpty()) {
+            insideByBox = boundingBox.max.x >= centerX - maxDistance
+              && boundingBox.min.x <= centerX + maxDistance
+              && boundingBox.max.z >= centerZ - maxDistance
+              && boundingBox.min.z <= centerZ + maxDistance;
+            boxSummary = {
+              minX: round(boundingBox.min.x),
+              maxX: round(boundingBox.max.x),
+              minZ: round(boundingBox.min.z),
+              maxZ: round(boundingBox.max.z)
+            };
+          }
+        } catch {}
+        if (!insideByBox) return;
+        let visibleInScene = object.visible === true;
+        const parentChain = [];
+        let walker = object.parent;
+        while (walker) {
+          if (walker.visible === false) visibleInScene = false;
+          parentChain.push(walker.name || walker.type);
+          walker = walker.parent;
+        }
+        hits.push({
+          name: object.name || null,
+          type: object.type,
+          visible: object.visible === true,
+          visibleInScene: visibleInScene,
+          x: round(worldPosition.x),
+          y: round(worldPosition.y),
+          z: round(worldPosition.z),
+          box: boxSummary,
+          parentChain: parentChain.slice(0, 6).join(" < "),
+          geometryType: object.geometry?.type || null,
+          instanceCount: object.isInstancedMesh ? object.count : null,
+          userDataKeys: Object.keys(object.userData || {}).slice(0, 10)
+        });
+      });
+      return {
+        center: { x: centerX, z: centerZ },
+        radius: maxDistance,
+        count: hits.length,
+        hits: hits.slice(0, 250)
+      };
+    },
     getSelectedEntitySnapshot: getSelectedEntitySnapshot,
     getSelectedEntityId: function () { return selectedEntityId; },
     deselect: deselect,
-    getLoadErrors: function () { return loadErrors.slice(); }
+    getLoadErrors: function () { return loadErrors.slice(); },
+    bakeMinimapImage: bakeMinimapImage,
+    getMinimapMarkerSnapshot: getMinimapMarkerSnapshot
   };
 }

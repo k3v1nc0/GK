@@ -524,6 +524,82 @@ export class AssetService {
     }
   }
 
+  saveMinimapBake(input, graphRepository) {
+    const nodeId = String(input?.nodeId || "").trim();
+    if (!nodeId) {
+      const error = new Error("Minimap bake mist nodeId.");
+      error.status = 400;
+      throw error;
+    }
+    const graph = graphRepository.getGraph();
+    const node = graph.nodes.find(function (candidate) { return candidate.id === nodeId; });
+    if (!node) {
+      const error = new Error("Node bestaat niet: " + nodeId);
+      error.status = 404;
+      throw error;
+    }
+    if (node.type !== "minimap_bake") {
+      const error = new Error("Node " + nodeId + " is geen Minimap Bake node.");
+      error.status = 400;
+      throw error;
+    }
+    const file = input?.file;
+    if (!file?.data?.length) {
+      const error = new Error("Minimap bake upload mist een bestand.");
+      error.status = 400;
+      throw error;
+    }
+    if (file.data.length > 48 * 1024 * 1024) {
+      const error = new Error("Minimap bake upload is groter dan 48MB.");
+      error.status = 400;
+      throw error;
+    }
+    const ext = isPng(file.data) ? ".png" : (isWebp(file.data) ? ".webp" : null);
+    if (!ext) {
+      const error = new Error("Minimap bake bestandsinhoud moet PNG of WEBP zijn.");
+      error.status = 400;
+      throw error;
+    }
+    const minimapId = String(input.minimapId || node.values?.minimapId || "main_minimap").trim();
+    const safeMinimapId = assetSlugForName(minimapId) || "minimap";
+    const safeNodeShort = String(nodeId).replace(/[^a-z0-9]/gi, "").slice(-8) || "node";
+    const timestamp = Date.now();
+    const minimapBakesDir = path.join(this.assetsDir, "minimap-bakes");
+    fs.mkdirSync(minimapBakesDir, { recursive: true });
+    const stem = resolveStorageStem({
+      preferredStem: safeMinimapId + "-" + safeNodeShort + "-" + timestamp,
+      fallbackStem: "minimap-" + crypto.randomUUID().slice(0, 8),
+      directory: minimapBakesDir,
+      ext: ext,
+      currentFilePath: null
+    });
+    const bakeAssetPath = assetPathForStem(this.rootDir, "minimap-bakes", stem, ext);
+    fs.writeFileSync(bakeAssetPath.filePath, file.data);
+    const width = Math.max(1, Math.min(8192, Math.round(Number(input.width) || Number(input.resolution) || 0)));
+    const height = Math.max(1, Math.min(8192, Math.round(Number(input.height) || Number(input.resolution) || width)));
+    const bakedAt = now();
+    const bakedImageUrl = bakeAssetPath.path + "?v=" + timestamp;
+    const bakedBounds = input.bounds && typeof input.bounds === "object" ? input.bounds : null;
+    const patch = {
+      bakedImageUrl: bakedImageUrl,
+      bakedImageWidth: width,
+      bakedImageHeight: height,
+      bakedAt: bakedAt,
+      bakedWorldHash: String(input.worldHash || ""),
+      bakedBounds: bakedBounds
+    };
+    const updatedGraph = graphRepository.updateNodeValues(nodeId, patch);
+    return {
+      bakedImageUrl: bakedImageUrl,
+      bakedImageWidth: width,
+      bakedImageHeight: height,
+      bakedAt: bakedAt,
+      bakedWorldHash: patch.bakedWorldHash,
+      bakedBounds: bakedBounds,
+      graph: updatedGraph
+    };
+  }
+
   usageForAsset(id, graphRepository) {
     const asset = this.get(id);
     if (!asset) {
