@@ -4,12 +4,15 @@ import os from "node:os";
 import fs from "node:fs";
 import net from "node:net";
 import zlib from "node:zlib";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
+import WebSocket from "ws";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { applyGroundChunkPlan, auditSceneObjectsForGhostPlanes, auditSceneObjectsForShadowCasters, buildChunkWindow, buildGroundChunkPlan, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, chunkKeyForPosition, chunkKeyForSegment, chunkWorldSize, clearWalkabilityIndex, collectChunkCullingStats, collectTerrainStreamingSnapshot, computeStreamingCoverage, createGroundChunkState, createWalkabilityIndex, effectiveGroundBounds, groundBlueprintSignature, groundChunkTilesForBounds, isChunkActive, isChunkLoaded, isChunkPreload, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointOnWalkableSurface, midpointForSegment, prioritizeResidentChunkBuildQueue, removeGhostChunkPlanes, resolveChunkPolicy, resolveEditorShadowFocus, resolveGroundRenderMode, resolveMovement, resolveShadowPolicy, resolveStableShadowChunkWindows, resolveStableShadowFocus, resolveWorldContentCenter, resolveWorldPerformanceForRenderer, sanitizeNonWorldShadowCasters, segmentLineByMaxLength, segmentPolylineForChunks, setShadowProxyState, shadowResidentRadiusChunksForPolicy, shadowSnapWorldUnitsForPolicy, shouldUseChunkedGround, worldSpaceGroundUv } from "../apps/web/public/shared/world-runtime.js";
+import { applyGroundChunkPlan, auditSceneObjectsForGhostPlanes, auditSceneObjectsForShadowCasters, buildChunkWindow, buildCoverageCenterSignatureKey, buildGroundChunkPlan, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, chunkKeyForPosition, chunkKeyForSegment, chunkWorldSize, clearWalkabilityIndex, collectChunkCullingStats, collectTerrainStreamingSnapshot, computeStreamingCoverage, createGroundChunkState, createWalkabilityIndex, effectiveGroundBounds, groundBlueprintSignature, groundChunkTilesForBounds, isChunkActive, isChunkLoaded, isChunkPreload, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointOnWalkableSurface, midpointForSegment, prioritizeResidentChunkBuildQueue, removeGhostChunkPlanes, resolveChunkPolicy, resolveEditorShadowFocus, resolveGroundRenderMode, resolveMovement, resolveShadowPolicy, resolveStableShadowChunkWindows, resolveStableShadowFocus, resolveWorldContentCenter, resolveWorldPerformanceForRenderer, sanitizeNonWorldShadowCasters, segmentLineByMaxLength, segmentPolylineForChunks, setShadowProxyState, shadowResidentRadiusChunksForPolicy, shadowSnapWorldUnitsForPolicy, shouldUseChunkedGround, worldSpaceGroundUv } from "../apps/web/public/shared/world-runtime.js";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
 import { buildWorldFromGraph } from "../src/server/publish-service.js";
+import { shouldApplyServerPosition } from "../apps/web/public/shared/revision-guard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,17 +22,28 @@ const ADMIN_PASSWORD = "k1k2k3k4k5";
 const EXPECT_GLB_THUMBNAILS = String(process.env.EXPECT_GLB_THUMBNAILS || "").trim() === "1";
 
 let cookie = "";
+const defaultCookieJar = {
+  get value() {
+    return cookie;
+  },
+  set value(nextValue) {
+    cookie = nextValue;
+  }
+};
 let BASE = "";
 const cleanupAssetPaths = new Set();
 
-function setCookieFrom(response) {
+function setCookieFrom(response, jar = defaultCookieJar) {
   const raw = response.headers.get("set-cookie");
-  if (raw) cookie = raw.split(";")[0];
+  if (!raw) return;
+  const cookiePart = raw.split(";")[0];
+  const value = cookiePart.includes("=") ? cookiePart.slice(cookiePart.indexOf("=") + 1) : "";
+  jar.value = value ? cookiePart : "";
 }
 
-async function call(method, pathname, body, isForm) {
+async function call(method, pathname, body, isForm, jar = defaultCookieJar) {
   const headers = {};
-  if (cookie) headers.Cookie = cookie;
+  if (jar.value) headers.Cookie = jar.value;
   let payload = body;
   if (body && !isForm) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
   let response;
@@ -39,7 +53,7 @@ async function call(method, pathname, body, isForm) {
     console.error("FETCH FAIL", method, pathname, body || null, error?.message || error);
     throw error;
   }
-  setCookieFrom(response);
+  setCookieFrom(response, jar);
   const text = await response.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
@@ -247,6 +261,251 @@ function sleep(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
+function createCookieJar(initialValue = "") {
+  return { value: initialValue };
+}
+
+function createGameSocketClient(jar, label, options = {}) {
+  const url = BASE.replace(/^http/, "ws") + "/api/game/live";
+  const headers = {};
+  if (jar && jar.value) headers.Cookie = jar.value;
+  const autoPong = options.autoPong !== false;
+  const ws = new WebSocket(url, Object.keys(headers).length ? { headers: headers } : undefined);
+  const messages = [];
+  const waiters = [];
+  let openResolve = null;
+  let openReject = null;
+  let closeResolve = null;
+  let openSettled = false;
+  const opened = new Promise(function (resolve, reject) {
+    openResolve = resolve;
+    openReject = reject;
+  });
+  const closed = new Promise(function (resolve) {
+    closeResolve = resolve;
+  });
+  const client = {
+    label: label || "ws",
+    ws: ws,
+    messages: messages,
+    waiters: waiters,
+    opened: opened,
+    closed: closed,
+    waitForMessage: function (predicate, timeoutMs) {
+      return waitForSocketMessage(client, predicate, timeoutMs);
+    },
+    send: function (payload) {
+      ws.send(JSON.stringify(payload));
+    },
+    close: function () {
+      try { ws.close(); } catch {}
+    }
+  };
+
+  ws.on("open", function () {
+    openSettled = true;
+    if (openResolve) openResolve(client);
+  });
+  ws.on("unexpected-response", function (request, response) {
+    openSettled = true;
+    if (openReject) openReject(new Error((label || "ws") + " onverwachte HTTP response " + response.statusCode));
+  });
+  ws.on("message", function (data) {
+    const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
+    let message = null;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return;
+    }
+    messages.push(message);
+    if (autoPong && message.type === "ping") {
+      try {
+        ws.send(JSON.stringify({
+          type: "pong",
+          clientPingSeq: message.clientPingSeq || null,
+          clientSentAt: message.clientSentAt || null
+        }));
+      } catch {}
+    }
+    for (let index = waiters.length - 1; index >= 0; index -= 1) {
+      const waiter = waiters[index];
+      if (!waiter.predicate(message)) continue;
+      waiters.splice(index, 1);
+      clearTimeout(waiter.timer);
+      waiter.resolve(message);
+    }
+  });
+  ws.on("close", function (code, reason) {
+    if (closeResolve) closeResolve({ code: code, reason: String(reason || "") });
+    if (!openSettled && openReject) openReject(new Error((label || "ws") + " sloot vóór open"));
+  });
+  ws.on("error", function (error) {
+    if (!openSettled && openReject) openReject(error);
+  });
+
+  return client;
+}
+
+function buildInputStatePayload(options = {}) {
+  const input = options.input || {};
+  return {
+    type: "player:input_state",
+    payload: {
+      clientSessionId: options.clientSessionId || null,
+      inputSeq: Number(options.inputSeq || 0) || 0,
+      controllerEpoch: Number(options.controllerEpoch || 0) || 0,
+      clientSentAt: Number(options.clientSentAt || Date.now()) || Date.now(),
+      input: {
+        moveX: Number(input.moveX || 0) || 0,
+        moveZ: Number(input.moveZ || 0) || 0,
+        sprint: input.sprint === true,
+        pointerTarget: input.pointerTarget || null,
+        stop: input.stop === true
+      }
+    }
+  };
+}
+
+function sendInputState(socket, options = {}) {
+  socket.send(buildInputStatePayload(options));
+}
+
+function findSnapshotPlayer(snapshot, playerId) {
+  return snapshot && Array.isArray(snapshot.players)
+    ? snapshot.players.find(function (player) { return player && player.playerId === playerId; }) || null
+    : null;
+}
+
+function findLatestMessage(messages, predicate) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (predicate(message)) return message;
+  }
+  return null;
+}
+
+function waitForSocketMessage(client, predicate, timeoutMs = 8000) {
+  for (const message of client.messages) {
+    if (predicate(message)) return Promise.resolve(message);
+  }
+  return new Promise(function (resolve, reject) {
+    const timer = setTimeout(function () {
+      const index = client.messages.findIndex(predicate);
+      if (index !== -1) {
+        resolve(client.messages[index]);
+        return;
+      }
+      const recentTypes = client.messages.slice(-8).map(function (message) {
+        return String(message && message.type ? message.type : "unknown");
+      }).join(", ");
+      const snapshotSummaries = client.messages
+        .filter(function (message) { return message && message.type === "mmo:snapshot"; })
+        .slice(-3)
+        .map(function (message) {
+          const player = Array.isArray(message.players) && message.players.length ? message.players[0] : null;
+          return "#" + Number(message.snapshotSeq || 0) +
+            " active=" + (player && player.activeControllerSessionId ? player.activeControllerSessionId : "missing") +
+            " epoch=" + Number(player && player.controllerEpoch || 0) +
+            " moving=" + (player && player.moving === true ? "true" : "false") +
+            " lastSeq=" + Number(player && player.lastProcessedInputSeq || 0);
+        })
+        .join(" | ");
+      const interestingMessages = client.messages
+        .filter(function (message) { return message && (message.type === "error" || message.type === "player:input_ignored"); })
+        .slice(-3)
+        .map(function (message) {
+          if (message.type === "error") {
+            return "error:" + String(message.code || message.message || "unknown");
+          }
+          return "ignored:" + String(message.reason || "unknown") + "/seq=" + Number(message.clientInputSeq || 0) + "/epoch=" + Number(message.controllerEpoch || 0);
+        })
+        .join(" | ");
+      reject(new Error((client.label || "ws") + " wachtte te lang op WebSocket bericht. Recent: [" + recentTypes + "]" + (snapshotSummaries ? " snapshots: [" + snapshotSummaries + "]" : "") + (interestingMessages ? " details: [" + interestingMessages + "]" : "")));
+    }, timeoutMs);
+    const waiter = {
+      predicate: predicate,
+      resolve: resolve,
+      timer: timer
+    };
+    client.waiters.push(waiter);
+  });
+}
+
+function waitForSocketClose(client, timeoutMs = 8000) {
+  return new Promise(function (resolve, reject) {
+    const timer = setTimeout(function () {
+      reject(new Error((client.label || "ws") + " sloot niet binnen de timeout."));
+    }, timeoutMs);
+    client.closed.then(function (value) {
+      clearTimeout(timer);
+      resolve(value);
+    }).catch(function (error) {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function findForbiddenKeys(value, forbiddenKeys, path = "", hits = [], seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return hits;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      findForbiddenKeys(value[index], forbiddenKeys, path + "[" + index + "]", hits, seen);
+    }
+    return hits;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const nextPath = path ? path + "." + key : key;
+    if (forbiddenKeys.has(key)) {
+      hits.push(nextPath);
+      continue;
+    }
+    findForbiddenKeys(child, forbiddenKeys, nextPath, hits, seen);
+  }
+  return hits;
+}
+
+function assertNoForbiddenKeys(value, label, extraForbiddenKeys = []) {
+  const forbiddenKeys = new Set(["password", "passwordHash", "password_hash", "token", "secret", "cookie", "csrf", "sessionToken", "authToken", "accessToken", "refreshToken"].concat(extraForbiddenKeys || []));
+  const hits = findForbiddenKeys(value, forbiddenKeys);
+  assert(hits.length === 0, label + " bevat geen verboden secret-velden" + (hits.length ? " (" + hits.join(", ") + ")" : ""));
+}
+
+function probeUnauthenticatedGameSocket() {
+  return new Promise(function (resolve) {
+    const url = BASE.replace(/^http/, "ws") + "/api/game/live";
+    const ws = new WebSocket(url);
+    const timer = setTimeout(function () {
+      try { ws.terminate(); } catch {}
+      resolve({ kind: "timeout" });
+    }, 5000);
+    ws.on("unexpected-response", function (request, response) {
+      clearTimeout(timer);
+      resolve({ kind: "unexpected-response", statusCode: response.statusCode });
+    });
+    ws.on("open", function () {
+      clearTimeout(timer);
+      resolve({ kind: "open" });
+      try { ws.close(); } catch {}
+    });
+    ws.on("error", function (error) {
+      clearTimeout(timer);
+      resolve({ kind: "error", message: error.message || String(error) });
+    });
+  });
+}
+
+function readPlayerPosition(dbPath, playerId, worldId) {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db.prepare("SELECT * FROM player_positions WHERE player_id = ? AND world_id = ?").get(playerId, worldId) || null;
+  } finally {
+    try { db.close(); } catch {}
+  }
+}
+
 async function waitForThumbnailReady(assetId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -329,6 +588,12 @@ function roundSignature(value) {
   return String(Math.round(number * 1000) / 1000);
 }
 
+function round(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * 1000) / 1000;
+}
+
 function entitySignature(entity) {
   const transform = entity?.transform || {};
   const position = transform.position || {};
@@ -361,6 +626,183 @@ function scatterSignature(world, scatterNodeId) {
     })
     .map(entitySignature)
     .join(";;");
+}
+
+function scatterEntitiesFor(world, scatterNodeId) {
+  return (Array.isArray(world?.entities) ? world.entities : []).filter(function (entity) {
+    return entity && entity.nodeId === scatterNodeId;
+  });
+}
+
+function scatterPositionsFor(world, scatterNodeId) {
+  return scatterEntitiesFor(world, scatterNodeId).map(function (entity) {
+    const position = entity?.transform?.position || {};
+    return {
+      x: Number(position.x) || 0,
+      y: Number(position.y) || 0,
+      z: Number(position.z) || 0
+    };
+  });
+}
+
+function pointInPolygon2D(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  let inside = false;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const current = points[index];
+    const prior = points[previous];
+    const intersects = ((current.z > pz) !== (prior.z > pz))
+      && (px < ((prior.x - current.x) * (pz - current.z)) / ((prior.z - current.z) || 0.000001) + current.x);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonSegments(points) {
+  if (!Array.isArray(points) || points.length < 2) return [];
+  const segments = [];
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const start = points[previous];
+    const end = points[index];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    segments.push({
+      index: index,
+      start: start,
+      end: end,
+      dx: dx,
+      dz: dz
+    });
+  }
+  return segments;
+}
+
+function boundarySegmentIndexForPoint(point, points) {
+  const segments = polygonSegments(points);
+  let bestIndex = -1;
+  let bestDistanceSq = Infinity;
+  for (const segment of segments) {
+    const candidate = closestPointOnSegment2D(point.x, point.z, segment.start.x, segment.start.z, segment.end.x, segment.end.z);
+    if (candidate.distanceSq < bestDistanceSq) {
+      bestDistanceSq = candidate.distanceSq;
+      bestIndex = segment.index;
+    }
+  }
+  return bestIndex;
+}
+
+function scatterPairwiseMinDistance(world, scatterNodeId) {
+  const positions = scatterPositionsFor(world, scatterNodeId);
+  let minDistance = Infinity;
+  for (let left = 0; left < positions.length; left += 1) {
+    for (let right = left + 1; right < positions.length; right += 1) {
+      const dx = positions[left].x - positions[right].x;
+      const dz = positions[left].z - positions[right].z;
+      minDistance = Math.min(minDistance, Math.hypot(dx, dz));
+    }
+  }
+  return minDistance;
+}
+
+function scatterCoverageScore(world, scatterNodeId, points, samples = 10) {
+  const positions = scatterPositionsFor(world, scatterNodeId);
+  if (!positions.length || !Array.isArray(points) || points.length < 3) return Infinity;
+  let minX = points[0].x;
+  let maxX = points[0].x;
+  let minZ = points[0].z;
+  let maxZ = points[0].z;
+  for (const point of points) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.z < minZ) minZ = point.z;
+    if (point.z > maxZ) maxZ = point.z;
+  }
+  let worst = 0;
+  const width = Math.max(0.000001, maxX - minX);
+  const depth = Math.max(0.000001, maxZ - minZ);
+  for (let xIndex = 0; xIndex < samples; xIndex += 1) {
+    for (let zIndex = 0; zIndex < samples; zIndex += 1) {
+      const x = minX + (((xIndex + 0.5) / samples) * width);
+      const z = minZ + (((zIndex + 0.5) / samples) * depth);
+      if (!pointInPolygon2D(x, z, points)) continue;
+      let nearest = Infinity;
+      for (const position of positions) {
+        nearest = Math.min(nearest, Math.hypot(position.x - x, position.z - z));
+      }
+      if (nearest > worst) worst = nearest;
+    }
+  }
+  return worst;
+}
+
+function mockScatterAssetService() {
+  return {
+    get: function (id) {
+      return { id: id, assetType: "model", metadata: {} };
+    },
+    manifestForIds: function (ids) {
+      return Array.isArray(ids) ? ids.map(function (id) {
+        return { id: id, assetType: "model", metadata: {} };
+      }) : [];
+    }
+  };
+}
+
+function buildScatterWorld(baseGraph, scatterNodeId, scatterValues) {
+  const graph = JSON.parse(JSON.stringify(baseGraph));
+  const scatterNode = graph.nodes.find(function (node) {
+    return node.id === scatterNodeId;
+  });
+  if (!scatterNode) throw new Error("Scatter node niet gevonden in test graph.");
+  scatterNode.values = Object.assign({}, scatterNode.values, scatterValues || {});
+  return buildWorldFromGraph(graph, { assetService: mockScatterAssetService() }, { includeEditorCamera: true });
+}
+
+function closestPointOnSegment2D(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const lengthSq = abx * abx + abz * abz;
+  if (lengthSq <= 0.000001) {
+    const dx = px - ax;
+    const dz = pz - az;
+    return {
+      x: ax,
+      z: az,
+      t: 0,
+      distanceSq: dx * dx + dz * dz
+    };
+  }
+  const t = Math.min(1, Math.max(0, (((px - ax) * abx) + ((pz - az) * abz)) / lengthSq));
+  const x = ax + (abx * t);
+  const z = az + (abz * t);
+  const dx = px - x;
+  const dz = pz - z;
+  return {
+    x: x,
+    z: z,
+    t: t,
+    distanceSq: dx * dx + dz * dz
+  };
+}
+
+function closestPointOnPolygonBoundary(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let best = null;
+  for (let index = 0, previousIndex = points.length - 1; index < points.length; previousIndex = index, index += 1) {
+    const start = points[previousIndex];
+    const end = points[index];
+    const candidate = closestPointOnSegment2D(px, pz, start.x, start.z, end.x, end.z);
+    if (!best || candidate.distanceSq < best.distanceSq) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function scatterBoundaryDistance(entity, points) {
+  if (!entity || !entity.transform || !entity.transform.position) return Infinity;
+  const boundary = closestPointOnPolygonBoundary(entity.transform.position.x, entity.transform.position.z, points);
+  return boundary ? Math.sqrt(boundary.distanceSq) : Infinity;
 }
 
 function runSurfaceGeometryChecks() {
@@ -872,12 +1314,14 @@ function runWorldSettingsSplitChecks() {
   assert(freshWorld.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "lege world_settings gebruikt geen legacy fallback");
   assert(freshWorld.world.performance.editor.preset === "middel_schaduw", "editor default preset blijft middel_schaduw");
   assert(freshWorld.world.performance.editor.debugChunkOverlayVisible === false, "editor default debugChunkOverlayVisible blijft uit");
+  assert(freshWorld.world.performance.editor.debugWarningsVisible === true, "editor default debugWarningsVisible blijft aan");
   assert(freshWorld.world.performance.editor.shadow.preset === "middel_schaduw", "editor shadow block gebruikt middel_schaduw");
   assert(freshWorld.world.performance.editor.shadow.mapSize === 1024, "editor default shadow mapSize blijft 1024");
   assert(freshWorld.world.performance.editor.shadow.cameraSize === 100, "editor default shadow cameraSize blijft 100");
   assert(freshWorld.world.performance.editor.shadow.staticPropsCast === true, "editor default staticPropsCast blijft aan");
   assert(freshWorld.world.performance.game.preset === "middel_schaduw", "game default preset blijft middel_schaduw");
   assert(freshWorld.world.performance.game.debugChunkOverlayVisible === false, "game default debugChunkOverlayVisible blijft uit");
+  assert(freshWorld.world.performance.game.debugWarningsVisible === false, "game default debugWarningsVisible blijft uit");
   assert(freshWorld.world.performance.game.shadow.preset === "middel_schaduw", "game shadow block gebruikt middel_schaduw");
   assert(freshWorld.world.performance.game.shadow.mapSize === 1024, "game default shadow mapSize blijft 1024");
   assert(freshWorld.world.performance.game.shadow.cameraSize === 85, "game default shadow cameraSize blijft 85");
@@ -900,8 +1344,11 @@ function runWorldSettingsSplitChecks() {
   assert(legacyWorld.world.performance.editor.shadow.preset === "lichte_schaduw", "legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor editor");
   assert(legacyWorld.world.performance.game.shadow.preset === "lichte_schaduw", "legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor game");
   assert(legacyWorld.world.performance.editor.shadow.mapSize === 512, "legacy low quality valt terug naar 512 mapSize");
-  assert(legacyWorld.world.performance.editor.shadow.cameraSize === 90, "legacy shadowCameraSize valt terug naar editor");
-  assert(legacyWorld.world.performance.game.shadow.cameraFar === 700, "legacy shadowCameraFar valt terug naar game");
+  assert(legacyWorld.world.performance.editor.shadow.cameraSize === 90, "legacy editor shadowCameraSize volgt de lichte preset");
+  assert(legacyWorld.world.performance.editor.shadow.cameraFar === 350, "legacy editor shadowCameraFar volgt de lichte preset");
+  assert(legacyWorld.world.performance.game.shadow.cameraSize === 75, "legacy game shadowCameraSize volgt de lichte preset");
+  assert(legacyWorld.world.performance.game.shadow.cameraFar === 350, "legacy game shadowCameraFar volgt de lichte preset");
+  assert(legacyWorld.world.performance.game.shadow.staticPropsCast === true, "legacy game staticPropsCast volgt de lichte preset");
 
   const splitWorld = buildWorldFromGraph(worldSettingsGraph({
     worldValues: { worldId: "split" },
@@ -1556,7 +2003,8 @@ function runStreamingCorrectnessChecks() {
         preloadMarginChunks: 0,
         unloadMarginChunks: 0,
         maxLoadedChunks: 25,
-        cameraOnly: false
+        cameraOnly: false,
+        cameraOffsetZChunks: 0
       }
     }
   }, "game");
@@ -1608,7 +2056,8 @@ function runStreamingCorrectnessChecks() {
         preloadMarginChunks: 0,
         unloadMarginChunks: 0,
         maxLoadedChunks: 25,
-        cameraOnly: true
+        cameraOnly: true,
+        cameraOffsetZChunks: 0
       }
     }
   }, "game");
@@ -1621,6 +2070,37 @@ function runStreamingCorrectnessChecks() {
   });
   assert(laggedCoverage.visibleChunkKeys.includes("1,0"), "speler-chunk blijft visible ook als de (gelerpte) camTarget nog in de vorige chunk hangt");
   assert(laggedCoverage.desiredResidentChunkKeys.includes("1,0"), "resident content voor de speler-chunk blijft desired ondanks camera-lag");
+
+  const staleTargetPolicy = resolveChunkPolicy({
+    chunkLoading: {
+      game: {
+        id: "game_chunks_stale_target",
+        type: "game",
+        enabled: true,
+        chunkWidth: 100,
+        chunkDepth: 100,
+        gameViewRadiusChunks: 0,
+        preloadMarginChunks: 0,
+        unloadMarginChunks: 0,
+        maxLoadedChunks: 25,
+        cameraOnly: false,
+        cameraOffsetZChunks: 0
+      }
+    }
+  }, "game");
+  const staleTargetCoverage = computeStreamingCoverage({
+    mode: "game",
+    policy: staleTargetPolicy,
+    player: { x: 1400, z: 0 },
+    camTarget: { x: 40, z: 0 },
+    lastPlayerPosition: { x: 1390, z: 0 }
+  });
+  assert(!staleTargetCoverage.visibleChunkKeys.includes("0,0"), "verafliggende camTarget trekt geen tweede visible chunk mee");
+  assert(!staleTargetCoverage.desiredResidentChunkKeys.includes("0,0"), "verafliggende camTarget trekt geen tweede resident chunk mee");
+  const coverageSignatureNear = buildCoverageCenterSignatureKey({ x: 0, z: 0 }, "1,0");
+  const coverageSignatureFar = buildCoverageCenterSignatureKey({ x: 0, z: 0 }, "2,0");
+  assert(coverageSignatureNear === "0,0~1,0", "coverage signature gebruikt primary~secondary vorm");
+  assert(coverageSignatureNear !== coverageSignatureFar, "coverage signature verandert ook als alleen de secundaire chunk wijzigt");
 
   // Test 4 - build queue prioriteit: active/visible moeten altijd vóór verre preload chunks
   // gebouwd worden, en mogen nooit als "leftover" achteraan de rij belanden.
@@ -1679,6 +2159,17 @@ function runStreamingCorrectnessChecks() {
   assert(hysteresisCoverage.unloadSafeChunkKeys.includes("0,0"), "center chunk blijft altijd unload-safe");
 }
 
+// MMO-01-FIX-4: de client-side revision guard (apps/web/public/shared/revision-guard.js) is een
+// pure functie zodat we hem hier los van een browser kunnen bewijzen, in plaats van alleen te
+// vertrouwen op een self-fulfilling assertie binnen dezelfde runtime.
+function runRevisionGuardChecks() {
+  assert(shouldApplyServerPosition(5, 6) === true, "nieuwere revision wordt toegepast");
+  assert(shouldApplyServerPosition(5, 5) === true, "gelijke revision wordt toegepast");
+  assert(shouldApplyServerPosition(5, 4) === false, "oudere (stale) revision wordt genegeerd");
+  assert(shouldApplyServerPosition(0, 1) === true, "eerste server revision na cold state wordt toegepast");
+  assert(shouldApplyServerPosition(undefined, 1) === true, "ontbrekende huidige revision blokkeert de eerste update niet");
+}
+
 async function main() {
   let child = null;
   let tmpDir = "";
@@ -1702,9 +2193,19 @@ async function main() {
     runGroundRootCauseChecks();
     runTerrainStreamingSnapshotChecks();
     runStreamingCorrectnessChecks();
+    runRevisionGuardChecks();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
-      env: Object.assign({}, process.env, { PORT: PORT, DATABASE_PATH: dbPath, ADMIN_PASSWORD: ADMIN_PASSWORD, ADMIN_USERNAME: "kevin" }),
+      env: Object.assign({}, process.env, {
+        PORT: PORT,
+        DATABASE_PATH: dbPath,
+        ADMIN_PASSWORD: ADMIN_PASSWORD,
+        ADMIN_USERNAME: "kevin",
+        GAME_WS_HEARTBEAT_INTERVAL_MS: "1000",
+        GAME_WS_HEARTBEAT_TIMEOUT_MS: "2500",
+        GAME_POSITION_PERSIST_DEBOUNCE_MS: "150",
+        GAME_WS_RATE_LIMIT_PER_SECOND: "20"
+      }),
       stdio: ["pipe", "pipe", "pipe"]
     });
     child.stderr.on("data", function (data) { process.stderr.write("[server] " + data); });
@@ -1876,6 +2377,7 @@ async function main() {
     assert(playerNode.values.idleAnimation === "Idle", "player_character bewaart idleAnimation");
     assert(playerNode.values.walkAnimation === "Walk", "player_character bewaart walkAnimation");
     assert(playerNode.values.runAnimation === "Run", "player_character bewaart runAnimation");
+    assert(playerNode.values.showNameplate === true, "player_character toont naam boven character standaard aan");
     graph = (await createNode("player_spawn", { spawnId: "spawn", x: 0, z: 0, facing: 0 })).graph;
     const spawnNode = graph.nodes.find(function (n) { return n.type === "player_spawn"; });
     graph = (await createNode("model_entity", { entityId: "entity_walk", label: "Walker", modelAssetId: modelId, animationClip: "Walk", idleAnimation: "Idle", walkAnimation: "Walk", runAnimation: "Run", x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1, solid: false, collisionRadius: 1 })).graph;
@@ -2028,6 +2530,97 @@ async function main() {
       updateIntervalMs: 500
     })).graph;
     const ghostPerfHudNode = findNode(graph, function (n) { return n.type === "debug_performance_hud" && n.values.hudId === "perf_hud_ghost"; }, "ongekoppelde performance hud aangemaakt");
+
+    graph = (await createNode("debug_mmo_hud", {
+      hudId: "mmo_debug_main",
+      enabled: true,
+      anchor: "bottom-left",
+      compact: false,
+      startCollapsed: false,
+      showWsStatus: true,
+      showUser: true,
+      showPlayer: true,
+      showSession: false,
+      showPosition: true,
+      showRevision: true,
+      showSessions: false,
+      showLastSent: true,
+      showLastSentSeq: true,
+      showLastAckedSeq: true,
+      showPendingInputs: false,
+      showController: false,
+      showLastTransport: false,
+      showLastIgnored: false,
+      showServerSeq: true,
+      showLastReceived: true,
+      showLastSource: false,
+      showLastError: true
+    })).graph;
+    const mmoDebugHudNode = findNode(graph, function (n) { return n.type === "debug_mmo_hud" && n.values.hudId === "mmo_debug_main"; }, "debug mmo hud node aangemaakt");
+
+    graph = (await createNode("debug_mmo_hud", {
+      hudId: "mmo_debug_ghost",
+      enabled: true,
+      anchor: "top-left",
+      compact: true,
+      startCollapsed: true
+    })).graph;
+    const ghostMmoDebugHudNode = findNode(graph, function (n) { return n.type === "debug_mmo_hud" && n.values.hudId === "mmo_debug_ghost"; }, "ongekoppelde debug mmo hud aangemaakt");
+
+    // MMO-03: minimap bake + game/editor minimap HUD nodes.
+    graph = (await createNode("minimap_bake", {
+      minimapId: "main_minimap",
+      label: "Main Minimap",
+      enabled: true,
+      boundsMode: "ground_bounds",
+      paddingWorldUnits: 2,
+      resolution: "1024",
+      imageFormat: "webp",
+      imageQuality: 0.78,
+      backgroundColor: "#101a26"
+    })).graph;
+    const minimapBakeNode = findNode(graph, function (n) { return n.type === "minimap_bake" && n.values.minimapId === "main_minimap"; }, "minimap bake node aangemaakt");
+
+    graph = (await createNode("game_minimap_hud", {
+      hudId: "game_minimap_main",
+      sourceMinimapId: "main_minimap",
+      enabled: true,
+      anchor: "top-right"
+    })).graph;
+    const gameMinimapHudNode = findNode(graph, function (n) { return n.type === "game_minimap_hud" && n.values.hudId === "game_minimap_main"; }, "game minimap hud node aangemaakt");
+    assert(gameMinimapHudNode.values.debugMode === false && gameMinimapHudNode.values.liteMode === true, "game minimap default debugMode is uit en legacy liteMode aan");
+
+    graph = (await createNode("editor_minimap_hud", {
+      hudId: "editor_minimap_main",
+      sourceMinimapId: "main_minimap",
+      enabled: true,
+      anchor: "bottom-right"
+    })).graph;
+    const editorMinimapHudNode = findNode(graph, function (n) { return n.type === "editor_minimap_hud" && n.values.hudId === "editor_minimap_main"; }, "editor minimap node aangemaakt");
+
+    graph = (await createNode("minimap_bake", {
+      minimapId: "ghost_minimap",
+      label: "Ghost Minimap",
+      enabled: true
+    })).graph;
+    const ghostMinimapBakeNode = findNode(graph, function (n) { return n.type === "minimap_bake" && n.values.minimapId === "ghost_minimap"; }, "ongekoppelde minimap bake aangemaakt");
+
+    const minimapNodeSchema = await call("GET", "/api/editor/graph");
+    assert(minimapNodeSchema.status === 200 && minimapNodeSchema.json.nodeTypes.minimap_bake && minimapNodeSchema.json.nodeTypes.minimap_bake.outputs.minimap.dataType === "minimap", "node schema kent minimap_bake met dataType minimap");
+    assert(minimapNodeSchema.json.nodeTypes.game_minimap_hud && minimapNodeSchema.json.nodeTypes.game_minimap_hud.outputs.minimap.dataType === "minimap", "node schema kent game_minimap_hud met dataType minimap");
+    assert(minimapNodeSchema.json.nodeTypes.game_minimap_hud.fields.debugMode && minimapNodeSchema.json.nodeTypes.game_minimap_hud.fields.debugMode.default === false, "node schema kent game_minimap_hud debugMode checkbox");
+    assert(minimapNodeSchema.json.nodeTypes.game_minimap_hud.fields.liteMode && minimapNodeSchema.json.nodeTypes.game_minimap_hud.fields.liteMode.hidden === true, "legacy game_minimap_hud liteMode blijft verborgen");
+    assert(minimapNodeSchema.json.nodeTypes.editor_minimap_hud && minimapNodeSchema.json.nodeTypes.editor_minimap_hud.outputs.minimap.dataType === "minimap", "node schema kent editor_minimap_hud met dataType minimap");
+    assert(minimapNodeSchema.json.nodeTypes.game_output.inputs.minimap && minimapNodeSchema.json.nodeTypes.game_output.inputs.minimap.dataType === "minimap" && minimapNodeSchema.json.nodeTypes.game_output.inputs.minimap.required === false && minimapNodeSchema.json.nodeTypes.game_output.inputs.minimap.multiple === true, "Game Output heeft optionele, multiple minimap input");
+    const scatterNodeSchema = minimapNodeSchema.json.nodeTypes.bounded_area_scatter;
+    assert(scatterNodeSchema && scatterNodeSchema.fields.edgeDensity && scatterNodeSchema.fields.edgeDensity.type === "number" && scatterNodeSchema.fields.edgeDensity.editorControl === "range", "bounded_area_scatter heeft edgeDensity slider metadata");
+    assert(scatterNodeSchema.fields.edgeDensity.default === 0 && scatterNodeSchema.fields.edgeDensity.min === 0 && scatterNodeSchema.fields.edgeDensity.max === 100 && scatterNodeSchema.fields.edgeDensity.step === 1, "edgeDensity gebruikt 0-100 defaults");
+    assert(scatterNodeSchema.fields.sizeInwardInfluence && scatterNodeSchema.fields.sizeInwardInfluence.type === "number" && scatterNodeSchema.fields.sizeInwardInfluence.editorControl === "range", "bounded_area_scatter heeft sizeInwardInfluence slider metadata");
+    assert(scatterNodeSchema.fields.sizeInwardInfluence.default === 0 && scatterNodeSchema.fields.sizeInwardInfluence.min === 0 && scatterNodeSchema.fields.sizeInwardInfluence.max === 100 && scatterNodeSchema.fields.sizeInwardInfluence.step === 1, "sizeInwardInfluence gebruikt 0-100 defaults");
+    assert(scatterNodeSchema.fields.sizeCurve && scatterNodeSchema.fields.sizeCurve.type === "select" && scatterNodeSchema.fields.sizeCurve.default === "linear", "bounded_area_scatter heeft sizeCurve default");
+    assert(Array.isArray(scatterNodeSchema.fields.sizeCurve.options) && scatterNodeSchema.fields.sizeCurve.options.some(function (option) { return option && option.value === "linear"; }) && scatterNodeSchema.fields.sizeCurve.options.some(function (option) { return option && option.value === "smooth"; }) && scatterNodeSchema.fields.sizeCurve.options.some(function (option) { return option && option.value === "steep"; }) && scatterNodeSchema.fields.sizeCurve.options.some(function (option) { return option && option.value === "instant"; }), "sizeCurve biedt linear, smooth, steep en instant");
+    assert(scatterNodeSchema.fields.sourceScaleMultipliers && scatterNodeSchema.fields.sourceScaleMultipliers.hidden === true && scatterNodeSchema.fields.sourceScaleMultipliers.type === "json", "bounded_area_scatter heeft per-object scale multipliers");
+    assert(scatterNodeSchema.fields.sourceScaleMultipliers.default && Object.keys(scatterNodeSchema.fields.sourceScaleMultipliers.default).length === 0, "sourceScaleMultipliers default is leeg");
 
     graph = (await createNode("editor_chunk_loading", {})).graph;
     const editorChunkLoadingNode = findNode(graph, function (n) { return n.type === "editor_chunk_loading"; }, "editor chunk loading aangemaakt");
@@ -2199,8 +2792,12 @@ async function main() {
     graph = await connect(graph, hudTextNode.id, "ui", gameOutputNode.id, "ui");
     graph = await connect(graph, perfHudNode.id, "ui", gameOutputNode.id, "ui");
     graph = await connect(graph, disabledPerfHudNode.id, "ui", gameOutputNode.id, "ui");
+    graph = await connect(graph, mmoDebugHudNode.id, "ui", gameOutputNode.id, "ui");
     graph = await connect(graph, editorChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
     graph = await connect(graph, gameChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
+    graph = await connect(graph, minimapBakeNode.id, "minimap", gameOutputNode.id, "minimap");
+    graph = await connect(graph, gameMinimapHudNode.id, "minimap", gameOutputNode.id, "minimap");
+    graph = await connect(graph, editorMinimapHudNode.id, "minimap", gameOutputNode.id, "minimap");
 
     const validate = await call("GET", "/api/editor/validate");
     if (!validate.json.ok) console.error("VALIDATE ERRORS", validate.json.errors);
@@ -2208,6 +2805,89 @@ async function main() {
     assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
       return String(message || "").includes("chunk size is very small");
     }), "kleine chunk size geeft een waarschuwing");
+    assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
+      return String(message || "").includes("nog geen minimap image gebakken");
+    }), "validatie waarschuwt dat Game Minimap HUD nog geen gebakken image heeft");
+    assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
+      return String(message || "").includes("blocks player but has no dense fill or min spacing");
+    }), "scatter boundaryBlocksPlayer zonder dense fill/min spacing geeft minimap-gap waarschuwing");
+
+    const scatterNodeBaseline = JSON.parse(JSON.stringify(scatterNode.values));
+    const scatterBasePoints = Array.isArray(scatterNodeBaseline.points) ? scatterNodeBaseline.points : [];
+
+    const antiOverlapWorld = buildScatterWorld(graph, scatterNode.id, {
+      count: 30,
+      minSpacing: 1.5,
+      spacingStrength: 100,
+      distributionMode: "blue_noise",
+      edgeDensity: 0,
+      edgeSpacing: 0,
+      edgeJitter: 20
+    });
+    const antiOverlapPositions = scatterPositionsFor(antiOverlapWorld, scatterNode.id);
+    const antiOverlapWarnings = Array.isArray(antiOverlapWorld.scatterAreas) && antiOverlapWorld.scatterAreas[0] ? antiOverlapWorld.scatterAreas[0].placementWarnings || [] : [];
+    const antiOverlapMinDistance = scatterPairwiseMinDistance(antiOverlapWorld, scatterNode.id);
+    assert(antiOverlapPositions.length > 0, "anti-overlap scatter publiceert instances");
+    assert(antiOverlapMinDistance >= 1.5 - 0.01 || antiOverlapWarnings.length > 0, "anti-overlap houdt minSpacing aan of meldt fallback");
+
+    const edgeArclengthWorld = buildScatterWorld(graph, scatterNode.id, {
+      count: 24,
+      edgeDensity: 100,
+      edgeSpacing: 1,
+      spacingStrength: 100,
+      distributionMode: "random",
+      minSpacing: 0,
+      edgeJitter: 20
+    });
+    const edgePositions = scatterPositionsFor(edgeArclengthWorld, scatterNode.id);
+    const edgeBoundaryDistances = edgePositions.map(function (position) {
+      const boundary = closestPointOnPolygonBoundary(position.x, position.z, scatterBasePoints);
+      return boundary ? Math.sqrt(boundary.distanceSq) : Infinity;
+    });
+    const usedBoundarySegments = new Set(edgePositions.map(function (position) {
+      return boundarySegmentIndexForPoint(position, scatterBasePoints);
+    }).filter(function (index) {
+      return index >= 0;
+    }));
+    assert(edgePositions.length > 0, "edgeDensity 100 scatter publiceert instances");
+    assert(edgeBoundaryDistances.every(function (distance) {
+      return distance <= 0.4;
+    }), "edgeDensity 100 houdt bomen op de boundary");
+    assert(usedBoundarySegments.size >= 3, "edgeDensity 100 gebruikt meerdere boundary segmenten");
+
+    const randomCoverageWorld = buildScatterWorld(graph, scatterNode.id, {
+      count: 36,
+      minSpacing: 0,
+      spacingStrength: 0,
+      distributionMode: "random",
+      edgeDensity: 0,
+      edgeSpacing: 0
+    });
+    const denseFillWorld = buildScatterWorld(graph, scatterNode.id, {
+      count: 36,
+      minSpacing: 1.5,
+      spacingStrength: 100,
+      distributionMode: "dense_fill",
+      edgeDensity: 0,
+      edgeSpacing: 0,
+      edgeJitter: 20
+    });
+    const randomCoverage = scatterCoverageScore(randomCoverageWorld, scatterNode.id, scatterBasePoints, 10);
+    const denseFillCoverage = scatterCoverageScore(denseFillWorld, scatterNode.id, scatterBasePoints, 10);
+    assert(denseFillCoverage < randomCoverage, "dense_fill heeft betere coverage dan random");
+
+    const impossibleWorld = buildScatterWorld(graph, scatterNode.id, {
+      count: 40,
+      minSpacing: 12,
+      spacingStrength: 100,
+      distributionMode: "blue_noise",
+      edgeDensity: 0,
+      edgeSpacing: 0,
+      edgeJitter: 20
+    });
+    const impossibleScatterArea = Array.isArray(impossibleWorld.scatterAreas) ? impossibleWorld.scatterAreas[0] || null : null;
+    assert(impossibleScatterArea && Array.isArray(impossibleScatterArea.placementWarnings) && impossibleScatterArea.placementWarnings.length > 0, "onmogelijke spacing geeft een duidelijke warning");
+    assert(impossibleScatterArea && Number(impossibleScatterArea.placedCount) < 40, "onmogelijke spacing plaatst alleen wat past");
 
     const draft = await call("POST", "/api/editor/save-draft");
     assert(draft.status === 200 && draft.json.ok, "draft opslaan werkt");
@@ -2227,6 +2907,7 @@ async function main() {
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.smoothShading === true, "draft world publiceert shared smoothShading");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "draft world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.preset === "hoog_schaduw", "draft world publiceert editor preset");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.debugWarningsVisible === true, "draft world publiceert editor debugWarningsVisible");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow && draftWorld.json.world.performance.editor.shadow.preset === "hoog_schaduw", "draft world publiceert editor shadow block");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.enabled === true, "draft world zet editor shadows aan");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.mapSize === 2048, "draft world publiceert editor shadow mapSize");
@@ -2236,6 +2917,7 @@ async function main() {
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.scatterCast === true, "draft world publiceert editor scatter cast");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.shadow.shadowResidentMarginChunks === 1, "draft world publiceert editor shadow resident margin");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.preset === "lichte_schaduw", "draft world publiceert game preset");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.debugWarningsVisible === false, "draft world publiceert game debugWarningsVisible");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.pixelRatioCap === 1, "draft world publiceert game preset pixelRatioCap");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.antialias === true, "draft world publiceert game preset antialias");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow && draftWorld.json.world.performance.game.shadow.preset === "lichte_schaduw", "draft world publiceert game shadow block");
@@ -2272,6 +2954,11 @@ async function main() {
     assert(draftDuplicatedModelEntity.walkable === true, "walkable publiceert naar draft world");
     assert(Array.isArray(draftWorld.json.scatterAreas[0].sourceAssetIds) && draftWorld.json.scatterAreas[0].sourceAssetIds.includes(modelId) && draftWorld.json.scatterAreas[0].sourceAssetIds.includes(treeAssetId), "scatter area bewaart bron assets");
     assert(draftWorld.json.scatterAreas[0].seed === "scatter_seed_01" && draftWorld.json.scatterAreas[0].count === 6 && draftWorld.json.scatterAreas[0].enabled === true, "scatter area bewaart instellingen");
+    assert(draftWorld.json.minimap && Array.isArray(draftWorld.json.minimap.bakes) && draftWorld.json.minimap.bakes.length === 1, "draft world publiceert 1 minimap bake");
+    assert(draftWorld.json.minimap.bakes[0].minimapId === "main_minimap" && draftWorld.json.minimap.bakes[0].bounds && draftWorld.json.minimap.bakes[0].bounds.maxX > draftWorld.json.minimap.bakes[0].bounds.minX, "draft world minimap bake heeft geldige bounds");
+    assert(draftWorld.json.minimap.bakes[0].bakedImageUrl === "", "draft world minimap bake heeft nog geen bakedImageUrl");
+    assert(draftWorld.json.minimap.game && draftWorld.json.minimap.game.hudId === "game_minimap_main" && draftWorld.json.minimap.game.sourceMinimapId === "main_minimap" && draftWorld.json.minimap.game.debugMode === false && draftWorld.json.minimap.game.liteMode === true, "draft world publiceert minimap.game met debugMode uit");
+    assert(draftWorld.json.minimap.editor && draftWorld.json.minimap.editor.hudId === "editor_minimap_main", "draft world publiceert minimap.editor (editor-only preview)");
 
     graph = await patchNodeValues(scatterNode.id, { seed: "scatter_seed_02" });
     const draftAfterScatterSeedChange = await call("POST", "/api/editor/save-draft");
@@ -2309,6 +2996,7 @@ async function main() {
     assert(after.json.world && after.json.world.fogDensity === 0.18, "game world publiceert fogDensity");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "game world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.preset === "hoog_schaduw", "game world publiceert editor preset");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.debugWarningsVisible === true, "game world publiceert editor debugWarningsVisible");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.pixelRatioCap === 2, "game world publiceert editor preset pixelRatioCap");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow && after.json.world.performance.editor.shadow.preset === "hoog_schaduw", "game world publiceert editor shadow block");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.enabled === true, "game world zet editor shadows aan");
@@ -2319,6 +3007,7 @@ async function main() {
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.scatterCast === true, "game world publiceert editor scatter cast");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.shadow.shadowResidentMarginChunks === 1, "game world publiceert editor shadow resident margin");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.preset === "lichte_schaduw", "game world publiceert game preset");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.debugWarningsVisible === false, "game world publiceert game debugWarningsVisible");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.pixelRatioCap === 1, "game world publiceert game preset pixelRatioCap");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow && after.json.world.performance.game.shadow.preset === "lichte_schaduw", "game world publiceert game shadow block");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.enabled === true, "game world zet game shadows aan");
@@ -2437,6 +3126,22 @@ async function main() {
     assert(publishedMountainBlocker && publishedMountainBlocker.reason === "mountain", "blocker area publiceert reason");
     assert(publishedScatterBlocker && Array.isArray(publishedScatterBlocker.points) && publishedScatterBlocker.points.length >= 6, "scatter boundary publiceert polygon points");
     assert(publishedScatterBlocker && publishedScatterBlocker.reason === "scatter_forest_patch", "scatter boundary publiceert reason");
+
+    // MMO-01-FIX-2: boundaryBlocksPlayer op een Bounded Area Scatter moet beweging er echt doorheen tegenhouden.
+    const scatterBoundaryOutside = { x: -20, y: 0, z: -3 };
+    const scatterBoundaryInsideTarget = { x: 8, y: 0, z: -3 };
+    assert(!isPointBlockedByBlocker(publishedWalkability, scatterBoundaryOutside.x, scatterBoundaryOutside.z, 0.5), "startpunt buiten de scatter boundary is niet geblokkeerd");
+    assert(isPointBlockedByBlocker(publishedWalkability, scatterBoundaryInsideTarget.x, scatterBoundaryInsideTarget.z, 0.5), "doelpunt binnen de scatter boundary is geblokkeerd");
+    const scatterBoundaryMove = resolveMovement(
+      scatterBoundaryOutside,
+      scatterBoundaryInsideTarget,
+      { radius: 0.5, ground: after.json.ground, solids: [], index: publishedWalkability }
+    );
+    assert(!isPointBlockedByBlocker(publishedWalkability, scatterBoundaryMove.x, scatterBoundaryMove.z, 0.5), "resolveMovement laat de speler niet door de scatter boundary heen lopen");
+    const scatterBoundaryTraveled = Math.hypot(scatterBoundaryMove.x - scatterBoundaryOutside.x, scatterBoundaryMove.z - scatterBoundaryOutside.z);
+    const scatterBoundaryDesired = Math.hypot(scatterBoundaryInsideTarget.x - scatterBoundaryOutside.x, scatterBoundaryInsideTarget.z - scatterBoundaryOutside.z);
+    assert(scatterBoundaryTraveled < scatterBoundaryDesired - 1, "beweging naar de scatter boundary stopt ruim voor het volledige doel");
+
     assert(Array.isArray(after.json.collision.walkableSurfaces) && after.json.collision.walkableSurfaces.length === 1, "walkable surfaces zijn gepubliceerd");
     assert(after.json.collision.walkableSurfaces[0].width === 6 && after.json.collision.walkableSurfaces[0].depth === 2.5, "walkable surface publiceert afmetingen");
     assert(Array.isArray(after.json.collision.walkableSurfaces[0].points) && after.json.collision.walkableSurfaces[0].points.length === walkableSurfacePoints.length, "walkable surface publiceert polygon points");
@@ -2457,6 +3162,102 @@ async function main() {
     const publishedDisabledPerformanceHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "perf_hud_disabled"; }) : null;
     assert(publishedDisabledPerformanceHud && publishedDisabledPerformanceHud.type === "debug_performance_hud" && publishedDisabledPerformanceHud.enabled === false, "disabled performance HUD publiceert disabled config");
     assert(!Array.isArray(after.json.ui) || !after.json.ui.some(function (entry) { return entry.id === "perf_hud_ghost"; }), "ongekoppelde performance HUD wordt niet gepubliceerd");
+
+    // MMO-01-FIX-4: Debug MMO HUD is een echte node, geen hardcoded panel.
+    const publishedMmoDebugHud = Array.isArray(after.json.ui) ? after.json.ui.find(function (entry) { return entry.id === "mmo_debug_main"; }) : null;
+    assert(publishedMmoDebugHud && publishedMmoDebugHud.type === "debug_mmo_hud" && publishedMmoDebugHud.enabled === true, "debug_mmo_hud publiceert read-model");
+    assert(publishedMmoDebugHud && publishedMmoDebugHud.anchor === "bottom-left" && publishedMmoDebugHud.compact === false && publishedMmoDebugHud.startCollapsed === false, "debug_mmo_hud publiceert anchor/compact/startCollapsed");
+    assert(publishedMmoDebugHud && publishedMmoDebugHud.show && publishedMmoDebugHud.show.wsStatus === true && publishedMmoDebugHud.show.session === false && publishedMmoDebugHud.show.sessions === false && publishedMmoDebugHud.show.lastSource === false, "debug_mmo_hud publiceert per-veld show-flags");
+    assert(publishedMmoDebugHud && publishedMmoDebugHud.show && publishedMmoDebugHud.show.lastSentSeq === true && publishedMmoDebugHud.show.lastAckedSeq === true && publishedMmoDebugHud.show.serverSeq === true, "debug_mmo_hud publiceert seq-velden");
+    assert(publishedMmoDebugHud && publishedMmoDebugHud.show && publishedMmoDebugHud.show.pendingInputs === false && publishedMmoDebugHud.show.controller === false && publishedMmoDebugHud.show.lastTransport === false && publishedMmoDebugHud.show.lastIgnored === false, "debug_mmo_hud publiceert verborgen extra velden");
+    assert(!Array.isArray(after.json.ui) || !after.json.ui.some(function (entry) { return entry.id === "mmo_debug_ghost"; }), "ongekoppelde debug_mmo_hud wordt niet gepubliceerd");
+
+    // MMO-03: minimap read-model op published /api/game/world.
+    assert(after.json.minimap && Array.isArray(after.json.minimap.bakes) && after.json.minimap.bakes.length === 1, "published world publiceert minimap bakes");
+    assert(after.json.minimap.bakes[0].minimapId === "main_minimap", "published minimap bake heeft juiste minimapId");
+    assert(after.json.minimap.game && after.json.minimap.game.hudId === "game_minimap_main" && after.json.minimap.game.anchor === "top-right" && after.json.minimap.game.debugMode === false && after.json.minimap.game.liteMode === true, "published world publiceert minimap.game met debugMode uit");
+    assert(!("editor" in after.json.minimap), "published world bevat geen minimap.editor (editor-only config)");
+    assert(!after.json.minimap.bakes.some(function (b) { return b.minimapId === "ghost_minimap"; }), "ongekoppelde minimap bake wordt niet gepubliceerd");
+
+    graph = await patchNodeValues(minimapBakeNode.id, {
+      bakedImageUrl: "/assets/minimap-bakes/fake-main-minimap.webp",
+      bakedImageWidth: 1024,
+      bakedImageHeight: 1024,
+      bakedAt: new Date().toISOString(),
+      bakedWorldHash: "fake-hash",
+      bakedBounds: { minX: -32, maxX: 32, minZ: -32, maxZ: 32, width: 64, depth: 64 }
+    });
+    const publishAfterFakeBake = await call("POST", "/api/editor/publish");
+    assert(publishAfterFakeBake.status === 200 && publishAfterFakeBake.json.ok, "publiceren werkt na fake bake patch");
+    assert(!publishAfterFakeBake.json.validation.warnings.some(function (message) {
+      return String(message || "").includes("nog geen minimap image gebakken");
+    }), "warning voor ongebakken minimap verdwijnt zodra bakedImageUrl gezet is");
+    const afterFakeBake = await call("GET", "/api/game/world");
+    assert(afterFakeBake.status === 200 && afterFakeBake.json.minimap.bakes[0].bakedImageUrl === "/assets/minimap-bakes/fake-main-minimap.webp", "fake bakedImageUrl blijft intact door draft/publish");
+    assert(afterFakeBake.json.minimap.bakes[0].bakedImageWidth === 1024 && afterFakeBake.json.minimap.bakes[0].bakedImageHeight === 1024, "baked afmetingen blijven intact door draft/publish");
+
+    graph = (await createNode("minimap_bake", {
+      minimapId: "main_minimap",
+      label: "Duplicate Minimap",
+      enabled: true
+    })).graph;
+    const duplicateMinimapBakeNode = findNode(graph, function (n) { return n.type === "minimap_bake" && n.values.label === "Duplicate Minimap"; }, "duplicate minimap bake aangemaakt");
+    assert(duplicateMinimapBakeNode.values.minimapId !== "main_minimap", "node aanmaken uniquificeert minimapId automatisch (main_minimap_2)");
+    graph = await connect(graph, duplicateMinimapBakeNode.id, "minimap", gameOutputNode.id, "minimap");
+    // PATCH omzeilt de create-time auto-uniquify, zodat we de echte duplicate-id-bij-publish situatie
+    // kunnen testen (bv. iemand typt het minimapId veld in de inspector handmatig terug naar "main_minimap").
+    graph = await patchNodeValues(duplicateMinimapBakeNode.id, { minimapId: "main_minimap" });
+    const validateDuplicateMinimap = await call("GET", "/api/editor/validate");
+    assert(!validateDuplicateMinimap.json.ok && Array.isArray(validateDuplicateMinimap.json.errors) && validateDuplicateMinimap.json.errors.some(function (message) {
+      return String(message || "").includes("meerdere enabled Minimap Bake nodes");
+    }), "duplicate enabled minimapId geeft een harde validatiefout");
+    graph = await patchNodeValues(duplicateMinimapBakeNode.id, { enabled: false });
+    const validateAfterDisableDuplicate = await call("GET", "/api/editor/validate");
+    assert(validateAfterDisableDuplicate.status === 200 && validateAfterDisableDuplicate.json.ok, "validatie is weer groen nadat de duplicate minimap bake is uitgeschakeld");
+
+    const minimapBakeNoAuthForm = new FormData();
+    minimapBakeNoAuthForm.append("nodeId", minimapBakeNode.id);
+    minimapBakeNoAuthForm.append("minimapId", "main_minimap");
+    minimapBakeNoAuthForm.append("resolution", "64");
+    minimapBakeNoAuthForm.append("file", buildTinyPngBlob(10, 20, 30, 255), "minimap.png");
+    const minimapBakeNoAuth = await call("POST", "/api/editor/minimap-bakes", minimapBakeNoAuthForm, true, createCookieJar());
+    assert(minimapBakeNoAuth.status === 401, "POST /api/editor/minimap-bakes zonder auth faalt");
+
+    const minimapBakeForm = new FormData();
+    minimapBakeForm.append("nodeId", minimapBakeNode.id);
+    minimapBakeForm.append("minimapId", "main_minimap");
+    minimapBakeForm.append("worldHash", "smoke-test-hash");
+    minimapBakeForm.append("resolution", "64");
+    minimapBakeForm.append("width", "64");
+    minimapBakeForm.append("height", "64");
+    minimapBakeForm.append("format", "png");
+    minimapBakeForm.append("bounds", JSON.stringify({ minX: -32, maxX: 32, minZ: -32, maxZ: 32 }));
+    minimapBakeForm.append("file", buildTinyPngBlob(40, 90, 140, 255), "minimap.png");
+    const minimapBakeUpload = await call("POST", "/api/editor/minimap-bakes", minimapBakeForm, true);
+    assert(minimapBakeUpload.status === 201 && minimapBakeUpload.json.ok, "POST /api/editor/minimap-bakes met geldige auth en PNG slaat het bestand op");
+    assert(typeof minimapBakeUpload.json.bakedImageUrl === "string" && minimapBakeUpload.json.bakedImageUrl.startsWith("/assets/minimap-bakes/"), "response bevat bakedImageUrl onder /assets/minimap-bakes/");
+    cleanupAssetPaths.add(minimapBakeUpload.json.bakedImageUrl.split("?")[0]);
+    const bakedNodeAfterUpload = findNode(minimapBakeUpload.json.graph, function (n) { return n.id === minimapBakeNode.id; }, "minimap bake node na echte upload");
+    assert(bakedNodeAfterUpload.values.bakedImageUrl === minimapBakeUpload.json.bakedImageUrl, "node values worden gepatcht met de echte bakedImageUrl");
+    assert(bakedNodeAfterUpload.values.bakedImageWidth === 64 && bakedNodeAfterUpload.values.bakedImageHeight === 64, "node values bevatten de echte baked afmetingen");
+    const bakedFileResponse = await fetch(BASE + minimapBakeUpload.json.bakedImageUrl.split("?")[0]);
+    assert(bakedFileResponse.status === 200, "de gebakken minimap image wordt publiek geserveerd via /assets/");
+
+    const minimapBakeTooLargeForm = new FormData();
+    minimapBakeTooLargeForm.append("nodeId", minimapBakeNode.id);
+    minimapBakeTooLargeForm.append("minimapId", "main_minimap");
+    minimapBakeTooLargeForm.append("resolution", "64");
+    minimapBakeTooLargeForm.append("file", new Blob([new Uint8Array(48 * 1024 * 1024 + 10)], { type: "image/png" }), "too-large.png");
+    const minimapBakeTooLarge = await call("POST", "/api/editor/minimap-bakes", minimapBakeTooLargeForm, true);
+    assert(minimapBakeTooLarge.status === 400, "minimap bake upload groter dan 48MB wordt geweigerd");
+
+    const minimapBakeWrongMimeForm = new FormData();
+    minimapBakeWrongMimeForm.append("nodeId", minimapBakeNode.id);
+    minimapBakeWrongMimeForm.append("minimapId", "main_minimap");
+    minimapBakeWrongMimeForm.append("resolution", "64");
+    minimapBakeWrongMimeForm.append("file", buildJsonBlob({ not: "an image" }), "fake.png");
+    const minimapBakeWrongMime = await call("POST", "/api/editor/minimap-bakes", minimapBakeWrongMimeForm, true);
+    assert(minimapBakeWrongMime.status === 400, "minimap bake upload met verkeerd bestandstype wordt geweigerd");
 
     graph = (await createNode("editor_chunk_loading", {
       chunkProfileId: "editor_chunks_ghost",
@@ -2640,6 +3441,572 @@ async function main() {
     assert(cycleValidation.status === 200 && !cycleValidation.json.ok && cycleValidation.json.errors.some(function (message) {
       return message.includes("Group connection cycle detected");
     }), "group cycle faalt validatie");
+
+    // MMO-01 regressieproof: account, multi-sessie, auth, WebSocket sync en persistence.
+    const mmoUsername = "test_mmo_01";
+    const mmoPassword = "mmo_01_password";
+    const pcJar = createCookieJar();
+    const mobileJar = createCookieJar();
+    const badJar = createCookieJar();
+    const anonymousJar = createCookieJar();
+
+    const registerPc = await call("POST", "/api/auth/register", {
+      identifier: mmoUsername,
+      password: mmoPassword,
+      deviceLabel: "pc"
+    }, false, pcJar);
+    assert(registerPc.status === 201 && registerPc.json.ok === true && registerPc.json.user && registerPc.json.user.username === mmoUsername, "MMO register maakt nieuw account aan en logt direct in");
+    assert(registerPc.json.user.password_hash === undefined, "register response lekt geen password_hash");
+
+    const duplicateRegister = await call("POST", "/api/auth/register", {
+      identifier: mmoUsername,
+      password: mmoPassword,
+      deviceLabel: "mobile"
+    }, false, mobileJar);
+    assert(duplicateRegister.status === 409, "duplicate register wordt netjes geweigerd");
+
+    const loginMobile = await call("POST", "/api/auth/login", {
+      identifier: mmoUsername,
+      password: mmoPassword,
+      deviceLabel: "mobile"
+    }, false, mobileJar);
+    assert(loginMobile.status === 200 && loginMobile.json.ok === true && loginMobile.json.user && loginMobile.json.user.username === mmoUsername, "login op tweede device werkt");
+
+    const badLogin = await call("POST", "/api/auth/login", {
+      identifier: mmoUsername,
+      password: "wrong_password",
+      deviceLabel: "bad"
+    }, false, badJar);
+    assert(badLogin.status === 401, "verkeerde credentials falen netjes");
+
+    const mePc = await call("GET", "/api/auth/me", null, false, pcJar);
+    assert(mePc.status === 200 && mePc.json.user && mePc.json.user.username === mmoUsername && !("password_hash" in mePc.json.user), "/api/auth/me geeft huidige user zonder password_hash");
+
+    const gameRequiresAuth = await call("GET", "/api/game/player", null, false, anonymousJar);
+    assert(gameRequiresAuth.status === 401, "game/player vereist login");
+
+    const unauthenticatedSocketProbe = await probeUnauthenticatedGameSocket();
+    assert(unauthenticatedSocketProbe.kind !== "open" && (unauthenticatedSocketProbe.statusCode === 401 || unauthenticatedSocketProbe.kind === "unexpected-response" || unauthenticatedSocketProbe.kind === "error"), "WebSocket weigert anonieme verbinding");
+
+    const playerLoadPc = await call("GET", "/api/game/player", null, false, pcJar);
+    assert(playerLoadPc.status === 200 && playerLoadPc.json.player && playerLoadPc.json.position && playerLoadPc.json.spawn, "eerste game start maakt/laadt player profile en positie");
+    assert(playerLoadPc.json.position.playerId === playerLoadPc.json.player.id, "player position hoort bij het player profile");
+    assert(playerLoadPc.json.position.revision === 1, "eerste player positie krijgt revision 1");
+    assert(playerLoadPc.json.position.sourceSessionId === playerLoadPc.json.session.id, "eerste player positie bewaart sourceSessionId van de sessie");
+    assert(playerLoadPc.json.activeSessionCount === 2, "twee actieve sessies zijn toegestaan voor hetzelfde account");
+
+    const playerLoadMobile = await call("GET", "/api/game/player", null, false, mobileJar);
+    assert(playerLoadMobile.status === 200 && playerLoadMobile.json.player && playerLoadMobile.json.position, "tweede sessie leest dezelfde player state");
+    assert(playerLoadMobile.json.player.id === playerLoadPc.json.player.id, "beide sessies delen hetzelfde player profile");
+    assert(playerLoadMobile.json.position.playerId === playerLoadPc.json.player.id, "beide sessies delen dezelfde player entity");
+    assert(playerLoadMobile.json.position.x === playerLoadPc.json.position.x && playerLoadMobile.json.position.z === playerLoadPc.json.position.z, "beide sessies starten op dezelfde serverpositie");
+    assert(playerLoadMobile.json.activeSessionCount === 2, "tweede login verwijdert eerste sessie niet");
+
+    const wsPc = createGameSocketClient(pcJar, "mmo-pc");
+    await wsPc.opened;
+    const wsPcReady = await wsPc.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    const wsPcState = await wsPc.waitForMessage(function (message) { return message.type === "player:state"; });
+    assert(wsPcReady.sessionId === playerLoadPc.json.session.id, "WebSocket auth gebruikt de huidige sessiecookie");
+    assert(wsPcReady.playerId === playerLoadPc.json.player.id, "WebSocket krijgt server-side playerId");
+    assert(wsPcReady.position.playerId === playerLoadPc.json.player.id, "connection:ready publiceert dezelfde player position");
+    assert(wsPcState.position.sourceSessionId === playerLoadPc.json.session.id, "player:state gebruikt server-side sourceSessionId");
+    assert(wsPcReady.connectedSessionCount === 1, "eerste WebSocket telt als één connected session");
+
+    const wsMobile = createGameSocketClient(mobileJar, "mmo-mobile");
+    await wsMobile.opened;
+    const wsMobileReady = await wsMobile.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    const wsMobileState = await wsMobile.waitForMessage(function (message) { return message.type === "player:state"; });
+    assert(wsMobileReady.sessionId === playerLoadMobile.json.session.id, "tweede WebSocket gebruikt eigen sessie");
+    assert(wsMobileReady.playerId === playerLoadPc.json.player.id, "tweede WebSocket deelt dezelfde player");
+    assert(wsMobileReady.connectedSessionCount === 2, "beide sessions zijn tegelijk connected");
+    assert(wsMobileState.position.playerId === playerLoadPc.json.player.id, "tweede WebSocket ziet dezelfde player entity");
+
+    const presenceOnPc = await wsPc.waitForMessage(function (message) {
+      return message.type === "player:presence" && message.connected === true && message.connectedSessionCount === 2;
+    });
+    assert(presenceOnPc.sessionId === playerLoadMobile.json.session.id, "presence meldt de tweede sessie");
+    const pcClientSessionId = "mmo-smoke-pc-client";
+    const mobileClientSessionId = "mmo-smoke-mobile-client";
+    const sharedPlayerId = playerLoadPc.json.player.id;
+    const sharedWorldId = playerLoadPc.json.worldId;
+
+    const remoteUsername = "test_mmo_02_remote";
+    const remotePassword = "mmo_02_password";
+    const remoteJar = createCookieJar();
+    const remoteRegister = await call("POST", "/api/auth/register", {
+      identifier: remoteUsername,
+      password: remotePassword,
+      deviceLabel: "remote"
+    }, false, remoteJar);
+    assert(remoteRegister.status === 201 && remoteRegister.json && remoteRegister.json.ok === true, "remote account kan registreren en inloggen");
+    const remotePlayerLoad = await call("GET", "/api/game/player", null, false, remoteJar);
+    assert(remotePlayerLoad.status === 200 && remotePlayerLoad.json && remotePlayerLoad.json.player, "remote account kan /api/game/player laden");
+    assert(remotePlayerLoad.json.worldId === sharedWorldId, "remote account landt in dezelfde world");
+    assert(remotePlayerLoad.json.player.id !== sharedPlayerId, "remote account krijgt een ander player id");
+    const remoteWorldId = sharedWorldId;
+
+    const remoteJoinOnPcPromise = wsPc.waitForMessage(function (message) {
+      return message.type === "remote_player:joined" && message.playerId === remotePlayerLoad.json.player.id && message.worldId === remoteWorldId;
+    });
+    const remoteJoinOnMobilePromise = wsMobile.waitForMessage(function (message) {
+      return message.type === "remote_player:joined" && message.playerId === remotePlayerLoad.json.player.id && message.worldId === remoteWorldId;
+    });
+    const wsRemote = createGameSocketClient(remoteJar, "mmo-remote");
+    await wsRemote.opened;
+    const remoteReady = await wsRemote.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    const remoteState = await wsRemote.waitForMessage(function (message) { return message.type === "player:state"; });
+    const remoteSnapshot = await wsRemote.waitForMessage(function (message) { return message.type === "world:presence_snapshot"; });
+    const [remoteJoinOnPc, remoteJoinOnMobile] = await Promise.all([remoteJoinOnPcPromise, remoteJoinOnMobilePromise]);
+    assert(remoteReady.worldId === sharedWorldId, "remote connection:ready is world-scoped");
+    assert(remoteReady.playerId === remotePlayerLoad.json.player.id, "remote connection:ready gebruikt het remote player id");
+    assert(remoteState.position.worldId === sharedWorldId, "remote player:state is world-scoped");
+    assert(remoteSnapshot.worldId === sharedWorldId, "presence snapshot is world-scoped");
+    assert(Array.isArray(remoteSnapshot.players) && remoteSnapshot.players.length === 1, "remote presence snapshot toont precies één andere avatar");
+    const remoteSnapshotA = findSnapshotPlayer(remoteSnapshot, sharedPlayerId);
+    assert(remoteSnapshotA !== null, "remote presence snapshot bevat account A");
+    assert(remoteSnapshotA.connectedSessionCount === 2, "remote presence snapshot dedupliceert A tot één avatar met twee sessies");
+    assert(remoteSnapshotA.isSelfAccount === false, "remote presence snapshot markeert A als niet-self");
+    assert(remoteSnapshot.players.every(function (player) { return player.worldId === sharedWorldId; }), "presence snapshot is worldId-scoped");
+    assert(remoteSnapshot.players.every(function (player) { return player.playerId !== remotePlayerLoad.json.player.id; }), "presence snapshot bevat geen eigen player als remote avatar");
+    assert(new Set(remoteSnapshot.players.map(function (player) { return player.playerId; })).size === remoteSnapshot.players.length, "presence snapshot bevat geen dubbele player ids");
+    assert(remoteJoinOnPc.playerId === remotePlayerLoad.json.player.id, "A ziet B via remote_player:joined");
+    assert(remoteJoinOnMobile.playerId === remotePlayerLoad.json.player.id, "tweede A-sessie ziet B ook via remote_player:joined");
+    assert(remoteJoinOnPc.worldId === remoteWorldId && remoteJoinOnMobile.worldId === remoteWorldId, "remote_player:joined is world-scoped");
+    assert(remoteJoinOnPc.connectedSessionCount === 1, "remote_player:joined meldt één connected session");
+    assert(remoteJoinOnPc.isSelfAccount === false, "remote_player:joined markeert isSelfAccount=false");
+    assertNoForbiddenKeys(remoteJoinOnPc, "remote_player:joined");
+    assertNoForbiddenKeys(remoteJoinOnMobile, "remote_player:joined (tweede sessie)");
+    assertNoForbiddenKeys(remoteSnapshot, "world:presence_snapshot");
+
+    const pcMovementSnapshotPromise = wsPc.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    });
+    const mobileMovementSnapshotPromise = wsMobile.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    });
+    const remoteMovementSnapshotPromise = wsRemote.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    });
+    sendInputState(wsPc, {
+      clientSessionId: pcClientSessionId,
+      inputSeq: 1,
+      controllerEpoch: 1,
+      input: {
+        moveX: 1,
+        moveZ: 0,
+        sprint: false,
+        pointerTarget: null,
+        stop: false
+      }
+    });
+    const [pcMovementSnapshot, mobileMovementSnapshot, remoteMovementSnapshot] = await Promise.all([
+      pcMovementSnapshotPromise,
+      mobileMovementSnapshotPromise,
+      remoteMovementSnapshotPromise
+    ]);
+    const pcMovementPlayer = findSnapshotPlayer(pcMovementSnapshot, sharedPlayerId);
+    const mobileMovementPlayer = findSnapshotPlayer(mobileMovementSnapshot, sharedPlayerId);
+    const remoteMovementPlayer = findSnapshotPlayer(remoteMovementSnapshot, sharedPlayerId);
+    assert(pcMovementSnapshot.protocolVersion === 3, "normale movement gebruikt protocolVersion 3 snapshots");
+    assert(pcMovementSnapshot.worldId === sharedWorldId, "mmo:snapshot is world-scoped");
+    assert(pcMovementSnapshot.players.length === 1, "normale movement verstuurt alleen changed players");
+    assert(pcMovementPlayer !== null, "mmo:snapshot bevat het gedeelde player id");
+    assert(pcMovementPlayer.activeControllerSessionId === wsPcReady.sessionId, "pc is de actieve controller na input_state");
+    assert(pcMovementPlayer.controllerEpoch === 1, "controllerEpoch reist mee in de snapshot");
+    assert(pcMovementPlayer.lastProcessedInputSeq === 1, "lastProcessedInputSeq ack't de eerste input");
+    assert(pcMovementPlayer.moving === true, "normale movement zet moving=true in de snapshot");
+    assert(pcMovementPlayer.animationState === "walk" || pcMovementPlayer.animationState === "run", "normale movement zet walk/run in de snapshot");
+    assert(pcMovementPlayer.teleport === false, "normale movement is geen teleport");
+    assert(mobileMovementPlayer !== null && mobileMovementPlayer.activeControllerSessionId === wsPcReady.sessionId, "mobile ontvangt dezelfde authoritative snapshot");
+    assert(remoteMovementPlayer !== null && remoteMovementPlayer.activeControllerSessionId === wsPcReady.sessionId, "remote observer ontvangt dezelfde authoritative snapshot");
+    assert(wsPc.messages.some(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    }), "normale movement loopt via mmo:snapshot");
+    assert(wsMobile.messages.some(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    }), "tweede session ontvangt dezelfde mmo:snapshot");
+    assert(wsRemote.messages.some(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && player && Number(player.lastProcessedInputSeq || 0) >= 1;
+    }), "remote observer ontvangt dezelfde mmo:snapshot");
+
+    const stalePcIgnoredPromise = wsPc.waitForMessage(function (message) {
+      return message.type === "player:input_ignored" && message.reason === "stale_input_seq" && message.clientSessionId === pcClientSessionId;
+    });
+    sendInputState(wsPc, {
+      clientSessionId: pcClientSessionId,
+      inputSeq: 1,
+      controllerEpoch: 1,
+      input: {
+        moveX: 0,
+        moveZ: 0,
+        sprint: false,
+        pointerTarget: null,
+        stop: false
+      }
+    });
+    const stalePcIgnored = await stalePcIgnoredPromise;
+    assert(stalePcIgnored.clientSessionId === pcClientSessionId, "stale input echo't clientSessionId");
+    assert(stalePcIgnored.clientInputSeq === 1, "stale input echo't clientInputSeq");
+    assert(stalePcIgnored.controllerEpoch === 1, "stale input echo't controllerEpoch");
+    assert(stalePcIgnored.transport === "ws", "stale input meldt transport=ws");
+
+    const mobileTakeoverSnapshotPromise = wsPc.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && Number(message.snapshotSeq || 0) > Number(pcMovementSnapshot.snapshotSeq || 0) && player && player.activeControllerSessionId === wsMobileReady.sessionId;
+    });
+    const mobileTakeoverRemotePromise = wsRemote.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && Number(message.snapshotSeq || 0) > Number(pcMovementSnapshot.snapshotSeq || 0) && player && player.activeControllerSessionId === wsMobileReady.sessionId;
+    });
+    const mobileTakeoverMobilePromise = wsMobile.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && Number(message.snapshotSeq || 0) > Number(pcMovementSnapshot.snapshotSeq || 0) && player && player.activeControllerSessionId === wsMobileReady.sessionId;
+    });
+    sendInputState(wsMobile, {
+      clientSessionId: mobileClientSessionId,
+      inputSeq: 1,
+      controllerEpoch: 2,
+      input: {
+        moveX: 0,
+        moveZ: 1,
+        sprint: true,
+        pointerTarget: null,
+        stop: false
+      }
+    });
+    const [mobileTakeoverSnapshot, mobileTakeoverRemote, mobileTakeoverMobile] = await Promise.all([
+      mobileTakeoverSnapshotPromise,
+      mobileTakeoverRemotePromise,
+      mobileTakeoverMobilePromise
+    ]);
+    const mobileTakeoverPlayer = findSnapshotPlayer(mobileTakeoverSnapshot, sharedPlayerId);
+    const mobileTakeoverRemotePlayer = findSnapshotPlayer(mobileTakeoverRemote, sharedPlayerId);
+    const mobileTakeoverMobilePlayer = findSnapshotPlayer(mobileTakeoverMobile, sharedPlayerId);
+    assert(mobileTakeoverPlayer !== null, "takeover snapshot bevat de gedeelde player");
+    assert(mobileTakeoverPlayer.activeControllerSessionId === wsMobileReady.sessionId, "laatste actieve controller wint op mobile");
+    assert(mobileTakeoverPlayer.controllerEpoch >= 1, "controllerEpoch neemt over op mobile");
+    assert(mobileTakeoverPlayer.moving === true, "mobile takeover houdt beweging actief");
+    assert(mobileTakeoverPlayer.animationState === "walk" || mobileTakeoverPlayer.animationState === "run", "mobile takeover zet walk/run in de snapshot");
+    assert(mobileTakeoverRemotePlayer !== null && mobileTakeoverRemotePlayer.activeControllerSessionId === wsMobileReady.sessionId, "remote observer ziet mobile als actieve controller");
+    assert(mobileTakeoverMobilePlayer !== null && mobileTakeoverMobilePlayer.activeControllerSessionId === wsMobileReady.sessionId, "mobile ziet zijn eigen takeover snapshot");
+
+    sendInputState(wsPc, {
+      clientSessionId: pcClientSessionId,
+      inputSeq: 2,
+      controllerEpoch: 1,
+      input: {
+        moveX: 0,
+        moveZ: 0,
+        sprint: false,
+        pointerTarget: null,
+        stop: true
+      }
+    });
+    await sleep(500);
+    const latestSnapshotAfterOldStop = findLatestMessage(wsRemote.messages, function (message) {
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && findSnapshotPlayer(message, sharedPlayerId);
+    });
+    const latestPlayerAfterOldStop = findSnapshotPlayer(latestSnapshotAfterOldStop, sharedPlayerId);
+    assert(latestPlayerAfterOldStop !== null, "oude stop laat minstens één snapshot achter");
+    assert(latestPlayerAfterOldStop.activeControllerSessionId === wsMobileReady.sessionId, "oude idle input van een vorig device zet de actieve controller niet terug");
+    assert(latestPlayerAfterOldStop.moving === true, "oude idle input stopt de actieve controller niet");
+
+    const mobileStopSnapshotPromise = wsRemote.waitForMessage(function (message) {
+      const player = findSnapshotPlayer(message, sharedPlayerId);
+      return message.type === "mmo:snapshot" && message.worldId === sharedWorldId && Number(message.snapshotSeq || 0) > Number(mobileTakeoverSnapshot.snapshotSeq || 0) && player && player.moving === false;
+    });
+    sendInputState(wsMobile, {
+      clientSessionId: mobileClientSessionId,
+      inputSeq: 2,
+      controllerEpoch: 2,
+      input: {
+        moveX: 0,
+        moveZ: 0,
+        sprint: false,
+        pointerTarget: null,
+        stop: true
+      }
+    });
+    const mobileStopSnapshot = await mobileStopSnapshotPromise;
+    const mobileStopPlayer = findSnapshotPlayer(mobileStopSnapshot, sharedPlayerId);
+    assert(mobileStopPlayer !== null, "stop snapshot bevat de gedeelde player");
+    assert(mobileStopPlayer.activeControllerSessionId === wsMobileReady.sessionId, "stop snapshot blijft op de nieuwe actieve controller");
+    assert(mobileStopPlayer.moving === false, "stop snapshot zet moving=false");
+    assert(mobileStopPlayer.animationState === "idle", "stop snapshot zet animationState idle");
+
+    const persistedDeadline = Date.now() + 5000;
+    let persistedRow = null;
+    while (Date.now() < persistedDeadline) {
+      persistedRow = readPlayerPosition(dbPath, playerLoadPc.json.player.id, playerLoadPc.json.worldId);
+      if (persistedRow && persistedRow.player_id === sharedPlayerId && persistedRow.world_id === sharedWorldId && Math.abs(Number(persistedRow.x || 0) - Number(mobileStopPlayer.x || 0)) <= 0.001) {
+        break;
+      }
+      await sleep(200);
+    }
+    assert(persistedRow && persistedRow.player_id === sharedPlayerId && persistedRow.world_id === sharedWorldId, "player position wordt server-side in de database bewaard");
+    assertNear(persistedRow.x, mobileStopPlayer.x, 0.001, "database bevat de laatste officiële x-positie");
+
+    const refreshPc = await call("GET", "/api/game/player", null, false, pcJar);
+    const refreshMobile = await call("GET", "/api/game/player", null, false, mobileJar);
+    assertNear(refreshPc.json.position.x, persistedRow.x, 0.001, "refresh op pc houdt de laatste serverpositie vast");
+    assertNear(refreshMobile.json.position.x, persistedRow.x, 0.001, "refresh op mobile houdt de laatste serverpositie vast");
+    assert(refreshPc.json.player.id === sharedPlayerId && refreshMobile.json.player.id === sharedPlayerId, "refresh levert dezelfde player entity terug");
+
+    const remoteLeftToPcPromise = wsPc.waitForMessage(function (message) {
+      return message.type === "remote_player:left" && message.playerId === remotePlayerLoad.json.player.id && message.worldId === remoteWorldId;
+    });
+    const remoteLeftToMobilePromise = wsMobile.waitForMessage(function (message) {
+      return message.type === "remote_player:left" && message.playerId === remotePlayerLoad.json.player.id && message.worldId === remoteWorldId;
+    });
+    const remoteClosePromise = wsRemote.closed;
+    const remoteLogout = await call("POST", "/api/auth/logout", null, false, remoteJar);
+    assert(remoteLogout.status === 200 && remoteLogout.json && remoteLogout.json.ok === true, "logout van remote account werkt");
+    assert(remoteJar.value === "", "logout van remote account wist alleen die cookie");
+    const remoteClose = await remoteClosePromise;
+    assert([4000, 4001, 1000, 1005, 1006].includes(Number(remoteClose.code)), "logout van remote account sluit de websocket (actual=" + remoteClose.code + ")");
+    const remoteLeftToPc = await remoteLeftToPcPromise;
+    const remoteLeftToMobile = await remoteLeftToMobilePromise;
+    assert(remoteLeftToPc.connectedSessionCount === 0, "remote left meldt connectedSessionCount=0");
+    assert(remoteLeftToPc.worldId === remoteWorldId, "remote left is world-scoped");
+    assert(remoteLeftToMobile.playerId === remotePlayerLoad.json.player.id, "tweede sessie ziet remote left ook");
+    assertNoForbiddenKeys(remoteLeftToPc, "remote_player:left");
+    const remoteMeAfterLogout = await call("GET", "/api/auth/me", null, false, remoteJar);
+    assert(remoteMeAfterLogout.status === 401, "remote logout invalideert alleen de remote sessie");
+
+    const mobileClosePromise = wsMobile.closed;
+    const logoutMobile = await call("POST", "/api/auth/logout", null, false, mobileJar);
+    assert(logoutMobile.status === 200 && logoutMobile.json.ok === true, "logout invalideert alleen de huidige sessie");
+    assert(mobileJar.value === "", "logout verwijdert de cookie voor alleen de huidige sessie");
+    const mobileClose = await mobileClosePromise;
+    assert([4000, 4001, 1000, 1005, 1006].includes(Number(mobileClose.code)), "logout sluit de websocket van de uitgelogde sessie (actual=" + mobileClose.code + ")");
+    const meAfterLogoutPc = await call("GET", "/api/auth/me", null, false, pcJar);
+    const meAfterLogoutMobile = await call("GET", "/api/auth/me", null, false, mobileJar);
+    assert(meAfterLogoutPc.status === 200 && meAfterLogoutPc.json.user && meAfterLogoutPc.json.user.username === mmoUsername, "logout op mobile laat pc ingelogd");
+    assert(meAfterLogoutMobile.status === 401, "logout verwijdert alleen de huidige sessie");
+    const pcPresenceAfterLogout = await wsPc.waitForMessage(function (message) {
+      return message.type === "player:presence" && message.sessionId === playerLoadMobile.json.session.id && message.connected === false;
+    });
+    assert(pcPresenceAfterLogout.connectedSessionCount === 1, "presence event meldt dat de mobile sessie offline ging");
+
+    wsPc.close();
+    await wsPc.closed;
+
+    const rateUsername = "test_mmo_rate_limit";
+    const ratePassword = "mmo_rate_limit_password";
+    const rateJar = createCookieJar();
+    const rateRegister = await call("POST", "/api/auth/register", {
+      identifier: rateUsername,
+      password: ratePassword,
+      deviceLabel: "rate"
+    }, false, rateJar);
+    assert(rateRegister.status === 201, "rate-limit test account kan registreren");
+    const ratePlayer = await call("GET", "/api/game/player", null, false, rateJar);
+    assert(ratePlayer.status === 200 && ratePlayer.json.position, "rate-limit test krijgt player state");
+    const rateSocket = createGameSocketClient(rateJar, "mmo-rate-limit");
+    await rateSocket.opened;
+    await rateSocket.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    await rateSocket.waitForMessage(function (message) { return message.type === "player:state"; });
+    const rateBefore = readPlayerPosition(dbPath, ratePlayer.json.player.id, ratePlayer.json.worldId);
+    await sleep(200);
+    for (let index = 0; index < 50; index += 1) {
+      try {
+        sendInputState(rateSocket, {
+          clientSessionId: "mmo-rate-limit-client",
+          inputSeq: index + 1,
+          controllerEpoch: 1,
+          clientSentAt: Date.now(),
+          input: {
+            moveX: round(index * 0.05),
+            moveZ: 0,
+            sprint: false,
+            pointerTarget: null,
+            stop: false
+          }
+        });
+      } catch {
+        break;
+      }
+    }
+    await sleep(1200);
+    const rateClose = await waitForSocketClose(rateSocket, 1000).catch(function () { return null; });
+    const rateAfter = readPlayerPosition(dbPath, ratePlayer.json.player.id, ratePlayer.json.worldId);
+    assert(
+      (rateClose && rateClose.code === 4408) ||
+      rateSocket.messages.some(function (message) {
+        return message.type === "error" && message.code === "rate_limited";
+      }) ||
+      (rateBefore && rateAfter && rateAfter.revision <= rateBefore.revision + 30),
+      "WebSocket rate limiting wordt afgedwongen per connection"
+    );
+    await sleep(200);
+
+    const heartbeatUsername = "test_mmo_heartbeat";
+    const heartbeatPassword = "mmo_heartbeat_password";
+    const heartbeatJar = createCookieJar();
+    const heartbeatRegister = await call("POST", "/api/auth/register", {
+      identifier: heartbeatUsername,
+      password: heartbeatPassword,
+      deviceLabel: "heartbeat"
+    }, false, heartbeatJar);
+    assert(heartbeatRegister.status === 201, "heartbeat test account kan registreren");
+    const heartbeatPlayer = await call("GET", "/api/game/player", null, false, heartbeatJar);
+    assert(heartbeatPlayer.status === 200 && heartbeatPlayer.json.position, "heartbeat test krijgt player state");
+    const heartbeatSocket = createGameSocketClient(heartbeatJar, "mmo-heartbeat", { autoPong: false });
+    await heartbeatSocket.opened;
+    await heartbeatSocket.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    await heartbeatSocket.waitForMessage(function (message) { return message.type === "player:state"; });
+    await heartbeatSocket.waitForMessage(function (message) { return message.type === "ping"; }, 15000);
+    const heartbeatClose = await waitForSocketClose(heartbeatSocket, 40000);
+    assert(heartbeatSocket.messages.some(function (message) { return message.type === "ping"; }), "server stuurt ping heartbeats");
+    assert(heartbeatClose.code === 4000, "zombie connection cleanup sluit inactieve websocket na heartbeat timeout");
+
+    graph = await patchNodeValues(scatterNode.id, {
+      count: 24,
+      seed: "scatter_seed_01",
+      scaleMin: 0.5,
+      scaleMax: 2,
+      edgeDensity: 0,
+      sizeInwardInfluence: 0,
+      sizeCurve: "linear"
+    });
+    const scatterDefaultsDraft = await call("POST", "/api/editor/save-draft");
+    assert(scatterDefaultsDraft.status === 200 && scatterDefaultsDraft.json.ok, "save-draft werkt voor scatter edge-density test");
+    const scatterDefaultsWorld = await call("GET", "/api/editor/draft-world");
+    assert(scatterDefaultsWorld.status === 200, "draft world laadt voor scatter edge-density test");
+    const scatterDefaultsArea = (scatterDefaultsWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
+    assert(scatterDefaultsArea && scatterDefaultsArea.edgeDensity === 0 && scatterDefaultsArea.sizeInwardInfluence === 0 && scatterDefaultsArea.sizeCurve === "linear", "scatter area publiceert edge en size defaults");
+    const scatterDefaultsPoints = scatterDefaultsArea.points || [];
+    const scatterDefaultsEntities = (Array.isArray(scatterDefaultsWorld.json.entities) ? scatterDefaultsWorld.json.entities : [])
+      .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
+      .slice()
+      .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
+    const scatterDefaultsDistances = scatterDefaultsEntities.map(function (entity) {
+      return scatterBoundaryDistance(entity, scatterDefaultsPoints);
+    });
+    assert(scatterDefaultsEntities.length === 24, "edgeDensity 0 publiceert alle scatter instances in de area");
+    assert(scatterDefaultsDistances.some(function (distance) { return distance > 0.0001; }), "edgeDensity 0 houdt bomen binnen de area");
+
+    graph = await patchNodeValues(scatterNode.id, {
+      edgeDensity: 100
+    });
+    const scatterEdgeDraft = await call("POST", "/api/editor/save-draft");
+    assert(scatterEdgeDraft.status === 200 && scatterEdgeDraft.json.ok, "save-draft werkt voor edgeDensity 100");
+    const scatterEdgeWorld = await call("GET", "/api/editor/draft-world");
+    assert(scatterEdgeWorld.status === 200, "draft world blijft beschikbaar voor edgeDensity 100");
+    const scatterEdgeArea = (scatterEdgeWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
+    assert(scatterEdgeArea && scatterEdgeArea.edgeDensity === 100, "scatter area publiceert edgeDensity 100");
+    const scatterEdgePoints = scatterEdgeArea.points || [];
+    const scatterEdgeEntities = (Array.isArray(scatterEdgeWorld.json.entities) ? scatterEdgeWorld.json.entities : [])
+      .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
+      .slice()
+      .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
+    const scatterEdgeDistances = scatterEdgeEntities.map(function (entity) {
+      return scatterBoundaryDistance(entity, scatterEdgePoints);
+    });
+    assert(scatterEdgeDistances.every(function (distance) { return distance <= 0.001; }), "edgeDensity 100 zet alle bomen op de rand");
+
+    graph = await patchNodeValues(scatterNode.id, {
+      edgeDensity: 0,
+      sizeInwardInfluence: 100,
+      sizeCurve: "linear",
+      scaleMin: 0.5,
+      scaleMax: 2
+    });
+    const scatterSizeDraft = await call("POST", "/api/editor/save-draft");
+    assert(scatterSizeDraft.status === 200 && scatterSizeDraft.json.ok, "save-draft werkt voor size influence");
+    const scatterSizeWorld = await call("GET", "/api/editor/draft-world");
+    assert(scatterSizeWorld.status === 200, "draft world blijft beschikbaar voor size influence");
+    const scatterSizeArea = (scatterSizeWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
+    assert(scatterSizeArea && scatterSizeArea.sizeInwardInfluence === 100 && scatterSizeArea.sizeCurve === "linear", "scatter area publiceert size influence linear");
+    const scatterSizePoints = scatterSizeArea.points || [];
+    const scatterSizeEntities = (Array.isArray(scatterSizeWorld.json.entities) ? scatterSizeWorld.json.entities : [])
+      .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
+      .slice()
+      .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
+    const scatterSizeDetails = scatterSizeEntities.map(function (entity) {
+      return {
+        distance: scatterBoundaryDistance(entity, scatterSizePoints),
+        scale: Number(entity.transform && entity.transform.scale ? entity.transform.scale.x : 0)
+      };
+    }).sort(function (left, right) {
+      return left.distance - right.distance;
+    });
+    assert(scatterSizeDetails.length === 24, "sizeInfluence test publiceert alle scatter instances");
+    assert(scatterSizeDetails[scatterSizeDetails.length - 1].scale > scatterSizeDetails[0].scale + 0.1, "sizeInwardInfluence 100 maakt binnenpunten groter dan randpunten");
+
+    graph = await patchNodeValues(scatterNode.id, {
+      sizeCurve: "instant"
+    });
+    const scatterInstantDraft = await call("POST", "/api/editor/save-draft");
+    assert(scatterInstantDraft.status === 200 && scatterInstantDraft.json.ok, "save-draft werkt voor instant curve");
+    const scatterInstantWorld = await call("GET", "/api/editor/draft-world");
+    assert(scatterInstantWorld.status === 200, "draft world blijft beschikbaar voor instant curve");
+    const scatterInstantArea = (scatterInstantWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
+    assert(scatterInstantArea && scatterInstantArea.sizeCurve === "instant", "scatter area publiceert instant curve");
+    const scatterInstantPoints = scatterInstantArea.points || [];
+    const scatterInstantEntities = (Array.isArray(scatterInstantWorld.json.entities) ? scatterInstantWorld.json.entities : [])
+      .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
+      .slice()
+      .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
+    const scatterInstantDetails = scatterInstantEntities.map(function (entity) {
+      return {
+        distance: scatterBoundaryDistance(entity, scatterInstantPoints),
+        scale: Number(entity.transform && entity.transform.scale ? entity.transform.scale.x : 0)
+      };
+    }).sort(function (left, right) {
+      return left.distance - right.distance;
+    });
+    assert(scatterInstantDetails.length === 24, "instant curve behoudt de instance count");
+    assert(scatterInstantDetails[0].scale <= 0.55, "instant curve houdt randbomen klein");
+    assert(scatterInstantDetails[scatterInstantDetails.length - 1].scale >= 1.9, "instant curve maakt binnenpunten direct hoog");
+
+    graph = await patchNodeValues(scatterNode.id, {
+      count: 4,
+      randomObjectSelection: false,
+      distributionMode: "random",
+      minSpacing: 0,
+      spacingStrength: 0,
+      edgeDensity: 0,
+      sizeInwardInfluence: 0,
+      sizeCurve: "linear",
+      scaleMin: 1,
+      scaleMax: 1,
+      sourceScaleMultipliers: {
+        [modelId]: 0.5,
+        [treeAssetId]: 1.75
+      }
+    });
+    const scatterScaleDraft = await call("POST", "/api/editor/save-draft");
+    assert(scatterScaleDraft.status === 200 && scatterScaleDraft.json.ok, "save-draft werkt voor per-object scale");
+    const scatterScaleWorld = await call("GET", "/api/editor/draft-world");
+    assert(scatterScaleWorld.status === 200, "draft world blijft beschikbaar voor per-object scale");
+    const scatterScaleArea = (scatterScaleWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
+    assert(scatterScaleArea && scatterScaleArea.sourceScaleMultipliers && scatterScaleArea.sourceScaleMultipliers[modelId] === 0.5 && scatterScaleArea.sourceScaleMultipliers[treeAssetId] === 1.75, "scatter area publiceert per-object scale multipliers");
+    const scatterScaleEntities = (Array.isArray(scatterScaleWorld.json.entities) ? scatterScaleWorld.json.entities : [])
+      .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
+      .slice()
+      .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
+    const modelScaleVectors = scatterScaleEntities.filter(function (entity) {
+      return entity && entity.sourceAssetId === modelId;
+    }).map(function (entity) {
+      const scale = entity.transform && entity.transform.scale ? entity.transform.scale : {};
+      return [Number(scale.x || 0), Number(scale.y || 0), Number(scale.z || 0)];
+    });
+    const treeScaleVectors = scatterScaleEntities.filter(function (entity) {
+      return entity && entity.sourceAssetId === treeAssetId;
+    }).map(function (entity) {
+      const scale = entity.transform && entity.transform.scale ? entity.transform.scale : {};
+      return [Number(scale.x || 0), Number(scale.y || 0), Number(scale.z || 0)];
+    });
+    assert(modelScaleVectors.length > 0 && treeScaleVectors.length > 0, "per-object scale test publiceert beide sources");
+    assert(modelScaleVectors.every(function (scale) { return Math.abs(scale[0] - 0.5) < 0.0001 && Math.abs(scale[1] - 0.5) < 0.0001 && Math.abs(scale[2] - 0.5) < 0.0001; }), "eerste bron krijgt eigen scale");
+    assert(treeScaleVectors.every(function (scale) { return Math.abs(scale[0] - 1.75) < 0.0001 && Math.abs(scale[1] - 1.75) < 0.0001 && Math.abs(scale[2] - 1.75) < 0.0001; }), "tweede bron krijgt eigen scale");
 
     console.log("\nSMOKE TEST GESLAAGD");
   } catch (error) {

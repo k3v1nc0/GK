@@ -35,6 +35,7 @@ export const DATA_TYPE_COLORS = {
   chunkLoading: "#67d8c4",
   keybind: "#ff8da3",
   ui: "#c9d4dc",
+  minimap: "#e0a6ff",
   group: "#8a97a3"
 };
 
@@ -102,6 +103,7 @@ const GAME_CAMERA_FIELDS = {
   minDistance: { label: "Min zoom", type: "number", default: 10, min: 1, max: 400, step: 0.5, required: true },
   maxDistance: { label: "Max zoom", type: "number", default: 48, min: 2, max: 400, step: 0.5, required: true },
   fov: { label: "FOV", type: "number", default: 50, min: 20, max: 110, step: 1, required: true },
+  targetHeightOffset: { label: "Target height offset", type: "number", default: 1.6, min: -10, max: 20, step: 0.05, required: true },
   follow: { label: "Follow player", type: "boolean", default: true, required: false },
   rotateSpeed: { label: "Rotate speed", type: "number", default: 90, min: 0, max: 360, step: 1, required: true }
 };
@@ -427,7 +429,9 @@ function worldSettingsModeHelpText(modeLabel, key) {
     case "Max FPS":
       return "Cap de renderloop. Lager is rustiger voor CPU/batterij; hoger voelt vloeiender. Aanbevolen voor editor en game: 60, lager voor laptop/potato.";
     case "Debug helpers":
-      return "Toont selectie- en transform-hulplijnen. Uit is rustiger en iets lichter; aan is aanbevolen tijdens bouwen.";
+      return "Toont selectie- en transform-hulplijnen. Uit is rustiger en iets lichter; aan is aanbevolen tijdens bouwen. Dit is alleen visueel; console warnings zijn een aparte toggle.";
+    case "Debug warnings":
+      return "Toont console warnings van three.js en de runtime. Uit is rustiger en voorkomt logspam in de gewone game; aan gebruik je tijdens debuggen.";
     case "Debug chunk overlay":
       return "Toont de chunk/terrain debug-overlay. Uit is standaard; aan gebruik je alleen om culling en streaming te inspecteren.";
     case "Chunk grid visible":
@@ -504,6 +508,14 @@ function buildWorldSettingsModeFields(mode, defaults = {}, hidden = false) {
       required: true,
       help: worldSettingsModeHelpText(modeLabel, "Debug helpers")
     }),
+    [prefix + "DebugWarningsVisible"]: field("Debug warnings", {
+      section: "Render",
+      label: "Debug warnings",
+      type: "boolean",
+      default: defaults.debugWarningsVisible,
+      required: true,
+      help: worldSettingsModeHelpText(modeLabel, "Debug warnings")
+    }),
     [prefix + "DebugChunkOverlayVisible"]: field("Debug chunk overlay", {
       section: "Render",
       label: "Debug chunk overlay",
@@ -547,6 +559,7 @@ const WORLD_SETTINGS_EDITOR_FIELDS = buildWorldSettingsModeFields("editor", {
   fogEnabled: false,
   maxFps: 60,
   debugHelpersVisible: true,
+  debugWarningsVisible: true,
   debugChunkOverlayVisible: false,
   chunkGridVisible: true,
   chunkLabelsVisible: false,
@@ -560,6 +573,7 @@ const WORLD_SETTINGS_GAME_FIELDS = buildWorldSettingsModeFields("game", {
   fogEnabled: true,
   maxFps: 60,
   debugHelpersVisible: false,
+  debugWarningsVisible: false,
   debugChunkOverlayVisible: false,
   chunkGridVisible: false,
   chunkLabelsVisible: false,
@@ -628,12 +642,175 @@ const EDITOR_CHUNK_LOADING_FIELDS = {
 };
 
 const GAME_CHUNK_LOADING_FIELDS = {
-  ...chunkLoadingSharedFields({ chunkProfileId: "game_chunks", unloadMarginChunks: 1, unloadMarginMax: 20, maxLoadedChunks: 9, debugOverlay: false, terrainVisualChunkingEnabled: false, groundChunkingEnabled: true, pathWaterSurfaceChunkingEnabled: false }),
-  cameraOnly: { label: "Camera only", type: "boolean", default: true, required: true },
-  gameViewRadiusChunks: { label: "Game view radius", type: "number", default: 1, min: 0, max: 20, step: 1, required: true },
-  fixedCameraPaddingTiles: { label: "Camera padding tiles", type: "number", default: 10, min: 0, max: 10000, step: 1, required: true },
-  strictUnloadOutsideCamera: { label: "Strict unload outside camera", type: "boolean", default: true, required: true },
-  loadBudgetPerFrame: { label: "Load budget per frame", type: "number", default: 2, min: 1, max: 1000, step: 1, required: true }
+  ...chunkLoadingSharedFields({
+    chunkProfileId: "game_chunks",
+    unloadMarginChunks: 1,
+    unloadMarginMax: 20,
+    maxLoadedChunks: 81,
+    debugOverlay: false,
+    terrainVisualChunkingEnabled: true,
+    groundChunkingEnabled: true,
+    pathWaterSurfaceChunkingEnabled: true,
+    residentEntityBudget: 200,
+    residentObjectBudget: 300,
+    residentScatterInstanceBudget: 500,
+    residentChunkBuildBudgetPerFrame: 2
+  }),
+  chunkWidth: {
+    label: "Chunk width",
+    type: "number",
+    default: 14,
+    min: 1,
+    max: 10000,
+    step: 1,
+    required: true,
+    help: "Samen met Chunk depth en Tile size bepaalt dit de echte chunkgrootte. Kleine chunks geven scherpere streaming, maar maken maxLoadedChunks belangrijker."
+  },
+  chunkDepth: {
+    label: "Chunk depth",
+    type: "number",
+    default: 14,
+    min: 1,
+    max: 10000,
+    step: 1,
+    required: true,
+    help: "Samen met Chunk width en Tile size bepaalt dit de echte chunkgrootte. Houd dit gelijk aan Chunk width voor vierkante streaming."
+  },
+  tileSize: {
+    label: "Tile size",
+    type: "number",
+    default: 0.5,
+    min: 0.01,
+    max: 1000,
+    step: 0.01,
+    required: true,
+    help: "De wereldgrootte van één tile. Chunk width x depth x tile size bepaalt hoeveel world units een chunk inneemt."
+  },
+  cameraOnly: {
+    label: "Camera only",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Laat de game-chunk focus aan de camera vastplakken. Voor runtime streaming is dit meestal de snelste en meest stabiele stand."
+  },
+  gameViewRadiusChunks: {
+    label: "Game view radius",
+    type: "number",
+    default: 3,
+    min: 0,
+    max: 20,
+    step: 1,
+    required: true,
+    help: "De actieve radius rond de game camera in hele chunks. Dit is de belangrijkste snelheidsknop: verlaag hem tot de camera-frustum net past."
+  },
+  cameraOffsetZChunks: {
+    label: "Camera Z offset (chunks)",
+    type: "number",
+    default: -1,
+    min: -20,
+    max: 20,
+    step: 1,
+    required: true,
+    help: "Verplaatst het chunk-load center over de Z-as. Negatief = achter, positief = voor."
+  },
+  fixedCameraPaddingTiles: {
+    label: "Camera padding tiles",
+    type: "number",
+    default: 0,
+    min: 0,
+    max: 10000,
+    step: 1,
+    required: true,
+    help: "Extra marge buiten de camera in tiles. Pas zodra je minstens één hele chunk vult, telt dit mee als extra chunk. Kleine waarden onder één chunk hebben dus geen effect."
+  },
+  strictUnloadOutsideCamera: {
+    label: "Strict unload outside camera",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Houdt het resident window strak tegen de camera aan. Aan laat sneller opruimen buiten beeld; uit geeft meer speelruimte, maar ook meer resident chunks."
+  },
+  loadBudgetPerFrame: {
+    label: "Load budget per frame",
+    type: "number",
+    default: 2,
+    min: 1,
+    max: 1000,
+    step: 1,
+    required: true,
+    help: "Hoeveel nieuwe chunk-loads per frame mogen starten. Verhoog dit alleen als chunks te traag opbouwen; een hogere waarde kan kortere pieken geven."
+  },
+  maxLoadedChunks: {
+    label: "Max loaded chunks",
+    type: "number",
+    default: 81,
+    min: 1,
+    max: 10000,
+    step: 1,
+    required: true,
+    help: "Hard budget voor resident chunks. Zet dit minimaal op de volledige actieve vierkant; lager dan de actieve window veroorzaakt clipping en pop-in."
+  },
+  residentEntityBudget: {
+    label: "Resident entity budget",
+    type: "number",
+    default: 200,
+    min: 0,
+    max: 100000,
+    step: 1,
+    required: true,
+    help: "Soft cap voor entities in resident chunks. 0 is een harde throttle en kan preload-chunks met entities laten hangen tot ze direct zichtbaar worden."
+  },
+  residentObjectBudget: {
+    label: "Resident object budget",
+    type: "number",
+    default: 300,
+    min: 0,
+    max: 100000,
+    step: 1,
+    required: true,
+    help: "Soft cap voor objecten in resident chunks. Houd dit ruim genoeg om chunks vóór de camera te kunnen opbouwen."
+  },
+  residentScatterInstanceBudget: {
+    label: "Resident scatter budget",
+    type: "number",
+    default: 500,
+    min: 0,
+    max: 100000,
+    step: 1,
+    required: true,
+    help: "Soft cap voor scatter-instances in resident chunks. 0 houdt preload van scatter-heavy chunks effectief tegen."
+  },
+  residentChunkBuildBudgetPerFrame: {
+    label: "Resident build budget/frame",
+    type: "number",
+    default: 2,
+    min: 1,
+    max: 1000,
+    step: 1,
+    required: true,
+    help: "Hoeveel resident chunks per frame gebouwd mogen worden. Hogere waarden laden sneller in, lagere waarden geven rustiger frame-tijden."
+  },
+  terrainVisualChunkingEnabled: {
+    label: "Terrain visual chunking",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Chunk-aware terrain visuals. Aan is meestal sneller voor deze small-chunk setup, omdat de runtime minder hoeft te dragen aan één groot vlak."
+  },
+  groundChunkingEnabled: {
+    label: "Ground chunking",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Laat de Ground Surface in chunks renderen. Voor een snelle streaming-setup hoort dit doorgaans aan te staan."
+  },
+  pathWaterSurfaceChunkingEnabled: {
+    label: "Path/water/surface chunking",
+    type: "boolean",
+    default: true,
+    required: true,
+    help: "Chunk-aware path, water en surface. Gebruik dit alleen als deze lagen echt chunky moeten mee lopen; anders is uitzetten lichter."
+  }
 };
 
 function coerceGroupPort(port, fallbackName) {
@@ -797,6 +974,7 @@ export const NODE_TYPES = {
       chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
       keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       ui: { label: "UI", dataType: "ui", required: false, multiple: true },
+      minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
       terrain: { label: "Terrain Layers", dataType: "terrain", required: false, multiple: true },
       collision: { label: "Collision", dataType: "collision", required: false, multiple: true }
     },
@@ -850,7 +1028,7 @@ export const NODE_TYPES = {
     label: "Game Chunk Loading",
     group: "World",
     accent: "#67d8c4",
-    description: "Game loading policy for keeping runtime chunks limited to the fixed game camera view.",
+    description: "Game loading policy for keeping runtime chunks just outside the game camera. Tune the active chunk square to stay inside the frustum without clipping maxLoadedChunks.",
     inputs: {},
     outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
     fields: GAME_CHUNK_LOADING_FIELDS
@@ -1066,10 +1244,11 @@ export const NODE_TYPES = {
       walkAnimation: { label: "Walk animation", type: "select", options: [], dynamicOptions: "assetAnimations", default: null, required: false },
       runAnimation: { label: "Run animation", type: "select", options: [], dynamicOptions: "assetAnimations", default: null, required: false },
       moveSpeed: { label: "Move speed", type: "number", default: 6, min: 0.1, max: 100, step: 0.1, required: true },
-      sprintMultiplier: { label: "Sprint x", type: "number", default: 1.6, min: 1, max: 8, step: 0.1, required: true },
+      sprintMultiplier: { label: "Sprint x", type: "number", default: 1.6, min: 1, max: 2.5, step: 0.1, required: true },
       turnSpeed: { label: "Turn speed", type: "number", default: 540, min: 1, max: 4000, step: 1, required: true },
       collisionRadius: { label: "Collision radius", type: "number", default: 0.5, min: 0.05, max: 50, step: 0.05, required: true },
-      scale: { label: "Model scale", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true }
+      scale: { label: "Model scale", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
+      showNameplate: { section: "Display", label: "Show name above character", type: "boolean", default: true, required: true, help: "Toont de naam van de ingelogde speler boven de character in de game." }
     }
   },
 
@@ -1135,12 +1314,110 @@ export const NODE_TYPES = {
       areaRotationY: { label: "Area rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
       count: { label: "Count", type: "number", default: 10, min: 0, max: 100000, step: 1, required: true },
       sourceAssetIds: { label: "Source assets", type: "json", default: [], required: true },
+      sourceScaleMultipliers: { label: "Source scale multipliers", type: "json", default: {}, required: true, hidden: true },
       sourceNodeIds: { label: "Source meshes (legacy)", type: "json", default: [], required: true, hidden: true },
       randomObjectSelection: { label: "Random object selection", type: "boolean", default: false, required: true },
       boundaryBlocksPlayer: { label: "Boundary blocks player", type: "boolean", default: false, required: true },
+      minSpacing: {
+        section: "Placement",
+        label: "Min spacing",
+        type: "number",
+        default: 0,
+        min: 0,
+        max: 1000,
+        step: 0.05,
+        required: true,
+        help: "Minimale afstand tussen scatter instances. 0 houdt het oude gedrag."
+      },
+      edgeSpacing: {
+        section: "Placement",
+        label: "Edge spacing",
+        type: "number",
+        default: 0,
+        min: 0,
+        max: 1000,
+        step: 0.05,
+        required: true,
+        help: "Minimale afstand tussen bomen op de rand. 0 gebruikt min spacing."
+      },
+      spacingStrength: {
+        section: "Placement",
+        label: "Spacing strength",
+        type: "number",
+        default: 0,
+        min: 0,
+        max: 100,
+        step: 1,
+        required: true,
+        editorControl: "range",
+        help: "0% houdt het oude scattergedrag. 100% probeert overlap zo hard mogelijk te voorkomen."
+      },
+      edgeJitter: {
+        section: "Placement",
+        label: "Edge jitter",
+        type: "number",
+        default: 20,
+        min: 0,
+        max: 100,
+        step: 1,
+        required: true,
+        editorControl: "range",
+        help: "Maakt de rand natuurlijker door randbomen licht naar binnen en langs de rand te variëren."
+      },
+      distributionMode: {
+        section: "Placement",
+        label: "Distribution mode",
+        type: "select",
+        options: [
+          { value: "random", label: "Random" },
+          { value: "blue_noise", label: "Blue noise" },
+          { value: "dense_fill", label: "Dense fill" }
+        ],
+        default: "random",
+        required: true,
+        help: "Random houdt oud gedrag. Blue noise vermindert overlap. Dense fill probeert zichtbare gaten te beperken."
+      },
+      edgeDensity: {
+        section: "Placement",
+        label: "Edge density",
+        type: "number",
+        default: 0,
+        min: 0,
+        max: 100,
+        step: 1,
+        required: true,
+        editorControl: "range",
+        help: "0% houdt het huidige willekeurige binnenpunt-gedrag aan. 100% zet elke boom op de rand. Tussenin verschuift de scatter deterministisch naar de boundary."
+      },
       seed: { label: "Seed", type: "text", default: "scatter_seed", required: true, maxLength: 128 },
       scaleMin: { label: "Scale min", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
       scaleMax: { label: "Scale max", type: "number", default: 1, min: 0.001, max: 1000, step: 0.01, required: true },
+      sizeInwardInfluence: {
+        section: "Size",
+        label: "Size inward influence",
+        type: "number",
+        default: 0,
+        min: 0,
+        max: 100,
+        step: 1,
+        required: true,
+        editorControl: "range",
+        help: "0% houdt de huidige random schaal tussen scale min en max. 100% laat schaal volledig afhangen van afstand tot de rand."
+      },
+      sizeCurve: {
+        section: "Size",
+        label: "Size curve",
+        type: "select",
+        options: [
+          { value: "linear", label: "Linear" },
+          { value: "smooth", label: "Smooth" },
+          { value: "steep", label: "Steep" },
+          { value: "instant", label: "Instant" }
+        ],
+        default: "linear",
+        required: true,
+        help: "Bepaalt hoe snel bomen van klein aan de rand naar groot richting het midden groeien."
+      },
       rotationYMin: { label: "Rotation Y min", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
       rotationYMax: { label: "Rotation Y max", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
       points: { label: "Boundary points", type: "json", default: [], required: false, hidden: true }
@@ -1202,7 +1479,7 @@ export const NODE_TYPES = {
     label: "Performance HUD",
     group: "UI",
     accent: "#e0b15a",
-    description: "A diagnostic HUD that reports runtime cost for the published game world.",
+    description: "A diagnostic HUD that reports runtime and selected game-loop cost for the published game world.",
     inputs: {},
     outputs: { ui: { label: "UI", dataType: "ui" } },
     fields: {
@@ -1226,6 +1503,9 @@ export const NODE_TYPES = {
       showCollisionShapes: { label: "Show collision shapes", type: "boolean", default: true, required: true },
       showWorldSize: { label: "Show world size", type: "boolean", default: false, required: true },
       showChunkCulling: { label: "Show chunk culling", type: "boolean", default: false, required: true },
+      showRemoteSyncMs: { section: "Game loop", label: "Show remote sync", type: "boolean", default: true, required: true, help: "Tonen hoeveel tijd de remote player sync per update kost." },
+      showMovementStepMs: { section: "Game loop", label: "Show movement step", type: "boolean", default: true, required: true, help: "Tonen hoeveel tijd de lokale movement-step per update kost." },
+      showMinimapDrawMs: { section: "Game loop", label: "Show minimap draw", type: "boolean", default: true, required: true, help: "Tonen hoeveel tijd het bijwerken van de minimap per draw kost." },
       fpsTarget: { label: "FPS target", type: "number", default: 60, min: 1, max: 240, step: 1, required: true },
       fpsWarn: { label: "FPS warning", type: "number", default: 45, min: 1, max: 240, step: 1, required: true },
       fpsDanger: { label: "FPS danger", type: "number", default: 30, min: 1, max: 240, step: 1, required: true },
@@ -1244,6 +1524,175 @@ export const NODE_TYPES = {
       terrainVisualsDanger: { label: "Terrain visuals danger", type: "number", default: 100, min: 1, max: 10000, step: 1, required: true },
       collisionShapesWarn: { label: "Collision shapes warning", type: "number", default: 50, min: 1, max: 10000, step: 1, required: true },
       collisionShapesDanger: { label: "Collision shapes danger", type: "number", default: 150, min: 1, max: 10000, step: 1, required: true }
+    }
+  },
+
+  debug_mmo_hud: {
+    label: "Debug MMO HUD",
+    group: "UI",
+    accent: "#7bd4ff",
+    description: "A collapsible MMO diagnostics panel (WS status, session, position, revision, seq/ack, controller). Only visible in-game when connected to Game Output.",
+    inputs: {},
+    outputs: { ui: { label: "UI", dataType: "ui" } },
+    fields: {
+      hudId: { label: "HUD id", type: "text", default: "mmo_debug_hud", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      anchor: { label: "Anchor", type: "select", options: ["top-left", "top-right", "bottom-left", "bottom-right"], default: "top-left", required: true },
+      compact: { label: "Compact layout", type: "boolean", default: true, required: true },
+      startCollapsed: { label: "Start collapsed", type: "boolean", default: true, required: true },
+      showWsStatus: { label: "Show WS status", type: "boolean", default: true, required: true },
+      showUser: { label: "Show user", type: "boolean", default: true, required: true },
+      showPlayer: { label: "Show player", type: "boolean", default: true, required: true },
+      showSession: { label: "Show session", type: "boolean", default: true, required: true },
+      showPosition: { label: "Show position", type: "boolean", default: true, required: true },
+      showRevision: { label: "Show revision", type: "boolean", default: true, required: true },
+      showSessions: { label: "Show sessions", type: "boolean", default: true, required: true },
+      showLastSent: { label: "Show last sent", type: "boolean", default: true, required: true },
+      showLastSentSeq: { label: "Show last sent seq", type: "boolean", default: true, required: true },
+      showLastAckedSeq: { label: "Show last acked seq", type: "boolean", default: true, required: true },
+      showPendingInputs: { label: "Show pending inputs", type: "boolean", default: true, required: true },
+      showController: { label: "Show controller", type: "boolean", default: true, required: true },
+      showLastTransport: { label: "Show transport", type: "boolean", default: true, required: true },
+      showLastIgnored: { label: "Show last ignored", type: "boolean", default: true, required: true },
+      showServerSeq: { label: "Show server seq", type: "boolean", default: true, required: true },
+      showLastReceived: { label: "Show last received", type: "boolean", default: true, required: true },
+      showLastSource: { label: "Show last source", type: "boolean", default: true, required: true },
+      showLastError: { label: "Show last error", type: "boolean", default: true, required: true },
+      showWsRawState: { label: "Show WS raw", type: "boolean", default: true, required: true },
+      showWsVisibleState: { label: "Show WS visible", type: "boolean", default: true, required: true },
+      showReconnectAttempt: { label: "Show reconnect attempt", type: "boolean", default: true, required: true },
+      showReconnectSuppressedCount: { label: "Show reconnect suppression", type: "boolean", default: true, required: true },
+      showLastClose: { label: "Show last close", type: "boolean", default: true, required: true },
+      showLastConnected: { label: "Show last connected", type: "boolean", default: true, required: true },
+      showLastDisconnected: { label: "Show last disconnected", type: "boolean", default: true, required: true },
+      showPing: { label: "Show ping", type: "boolean", default: true, required: true },
+      showAvgPing: { label: "Show avg ping", type: "boolean", default: true, required: true },
+      showJitter: { label: "Show jitter", type: "boolean", default: true, required: true },
+      showLastPongAge: { label: "Show last pong age", type: "boolean", default: true, required: true },
+      showPacketAge: { label: "Show packet age", type: "boolean", default: true, required: true },
+      showRemoteBufferSizes: { label: "Show remote buffer sizes", type: "boolean", default: true, required: true },
+      showRemoteHardSnapCount: { label: "Show remote hard snaps", type: "boolean", default: true, required: true },
+      showRemoteSmoothFrameCount: { label: "Show remote smooth frames", type: "boolean", default: true, required: true },
+      showLastRemoteEventType: { label: "Show last remote event", type: "boolean", default: true, required: true }
+    }
+  },
+
+  minimap_bake: {
+    label: "Minimap Bake",
+    group: "UI",
+    accent: "#ffcf5c",
+    description: "Bakt een top-down minimap image vanuit de editor viewport/world.",
+    inputs: {},
+    outputs: { minimap: { label: "Minimap", dataType: "minimap" } },
+    fields: {
+      minimapId: { label: "Minimap id", type: "text", default: "main_minimap", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      label: { label: "Label", type: "text", default: "Main Minimap", required: true, maxLength: 96 },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      resolution: { label: "Resolution", type: "select", options: ["512", "768", "1024", "1536", "2048", "4096", "8192"], default: "2048", required: true, help: "De bake gebruikt altijd de hele Ground Surface, vierkant (1:1). Hoger = scherper bij inzoomen maar zwaarder om te bakken. 8192 is het maximum; 16k wordt door de meeste GPU's/browsers niet ondersteund." },
+      imageQuality: { label: "Image quality", type: "number", default: 0.78, min: 0.1, max: 1, step: 0.01, required: true },
+      includeStaticModels: { label: "Include static models", type: "boolean", default: true, required: true },
+      includeInteractables: { label: "Include interactables", type: "boolean", default: false, required: true },
+      hideEditorHelpers: { label: "Hide editor helpers", type: "boolean", default: true, required: true, help: "Verbergt transform controls, selection outlines, chunk debug grid en labels tijdens de bake. Echte wereldcontent (ground, terrain, modellen, licht, schaduw) blijft altijd zichtbaar." },
+      bakedImageUrl: { label: "Baked image url", type: "text", default: "", required: false, maxLength: 300, hidden: true },
+      bakedImageWidth: { label: "Baked image width", type: "number", default: 0, min: 0, max: 8192, step: 1, required: false, hidden: true },
+      bakedImageHeight: { label: "Baked image height", type: "number", default: 0, min: 0, max: 8192, step: 1, required: false, hidden: true },
+      bakedAt: { label: "Baked at", type: "text", default: "", required: false, maxLength: 64, hidden: true },
+      bakedWorldHash: { label: "Baked world hash", type: "text", default: "", required: false, maxLength: 128, hidden: true },
+      bakedBounds: { label: "Baked bounds", type: "json", default: null, required: false, hidden: true }
+    }
+  },
+
+  game_minimap_hud: {
+    label: "Game Minimap HUD",
+    group: "UI",
+    accent: "#8de0c0",
+    description: "Toont de gebakken minimap in de game HUD met live 2D markers.",
+    inputs: {},
+    outputs: { minimap: { label: "Minimap", dataType: "minimap" } },
+    fields: {
+      hudId: { label: "HUD id", type: "text", default: "game_minimap", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      sourceMinimapId: { label: "Source minimap id", type: "text", default: "main_minimap", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      anchor: { label: "Anchor", type: "select", options: ["top-left", "top-right", "bottom-left", "bottom-right"], default: "top-right", required: true },
+      sizePx: { label: "Size (px)", type: "number", default: 180, min: 64, max: 512, step: 1, required: true },
+      marginPx: { label: "Margin (px)", type: "number", default: 12, min: 0, max: 80, step: 1, required: true },
+      borderRadiusPx: { label: "Border radius (px)", type: "number", default: 14, min: 0, max: 64, step: 1, required: true },
+      backgroundOpacity: { label: "Background opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
+      markerUpdateMs: { label: "Marker update (ms)", type: "number", default: 100, min: 33, max: 1000, step: 1, required: true, help: "Begrenst hoe vaak de canvas markers herrekend worden." },
+      debugMode: { label: "Debug mode", type: "boolean", default: false, required: true, help: "Aan: extra markers, labels en viewport cone tekenen. Uit: alleen de snelle minimap en je eigen speler." },
+      liteMode: { label: "Legacy lite mode", type: "boolean", default: true, required: true, hidden: true },
+      rotationMode: {
+        label: "Rotation mode",
+        type: "select",
+        options: ["north_up", "player_facing", "camera_yaw"],
+        default: "north_up",
+        required: true,
+        help: "In MMO-03 is alleen north_up volledig gegarandeerd; overige modi vallen veilig terug op north_up."
+      },
+      startDistance: { label: "Start character zoom distance", type: "number", default: 120, min: 5, max: 10000, step: 1, required: true, help: "Hoeveel world-units de minimap rond de character toont bij het openen/starten." },
+      minDistance: { label: "Min zoom distance", type: "number", default: 20, min: 1, max: 10000, step: 1, required: true },
+      maxDistance: { label: "Max zoom distance", type: "number", default: 1000, min: 1, max: 100000, step: 1, required: true },
+      followPlayer: { label: "Follow player", type: "boolean", default: true, required: true, help: "Zolang de gebruiker niet handmatig pant/zoomt, volgt de minimap de character." },
+      clickToMove: { label: "Click to move", type: "boolean", default: true, required: true, help: "Klik/tap op de minimap stuurt een move-intent naar de bestaande server-authoritative movement." },
+      allowZoom: { label: "Allow zoom", type: "boolean", default: true, required: true },
+      allowPan: { label: "Allow pan", type: "boolean", default: true, required: true },
+      allowPinchZoom: { label: "Allow pinch zoom", type: "boolean", default: true, required: true },
+      showLocalPlayer: { label: "Show local player", type: "boolean", default: true, required: true },
+      showRemotePlayers: { label: "Show remote players", type: "boolean", default: true, required: true },
+      showRemotePlayerNames: { label: "Show remote player names", type: "boolean", default: true, required: true },
+      showPlayerName: { label: "Show local player name", type: "boolean", default: true, required: true },
+      showSpawn: { label: "Show spawn", type: "boolean", default: false, required: true },
+      showNpcEntities: { label: "Show NPC/model entities", type: "boolean", default: true, required: true },
+      showInteractables: { label: "Show interactables", type: "boolean", default: false, required: true },
+      showQuestMarkers: { label: "Show quest markers", type: "boolean", default: false, required: true },
+      showEnemies: { label: "Show enemies", type: "boolean", default: false, required: true },
+      showViewportCone: { label: "Show viewport cone", type: "boolean", default: true, required: true },
+      clampOutsideMarkers: { label: "Clamp outside markers", type: "boolean", default: true, required: true },
+      iconSizePx: { label: "Icon size (px)", type: "number", default: 9, min: 3, max: 48, step: 1, required: true },
+      fontSizePx: { label: "Font size (px)", type: "number", default: 10, min: 6, max: 24, step: 1, required: true },
+      nameMaxLength: { label: "Name max length", type: "number", default: 14, min: 3, max: 48, step: 1, required: true },
+      zIndex: { label: "Z-index", type: "number", default: 20, min: 0, max: 999, step: 1, required: true }
+    }
+  },
+
+  editor_minimap_hud: {
+    label: "Editor Minimap",
+    group: "UI",
+    accent: "#c9a0ff",
+    description: "Editor-only minimap overlay voor authoring. Wordt nooit als game-HUD gedrag gepubliceerd.",
+    inputs: {},
+    outputs: { minimap: { label: "Minimap", dataType: "minimap" } },
+    fields: {
+      hudId: { label: "HUD id", type: "text", default: "editor_minimap", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      sourceMinimapId: { label: "Source minimap id", type: "text", default: "main_minimap", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true },
+      anchor: { label: "Anchor", type: "select", options: ["top-left", "top-right", "bottom-left", "bottom-right"], default: "bottom-right", required: true },
+      sizePx: { label: "Size (px)", type: "number", default: 180, min: 64, max: 512, step: 1, required: true },
+      expandedSizePx: { label: "Expanded size (px)", type: "number", default: 320, min: 128, max: 720, step: 1, required: true },
+      startExpanded: { label: "Start expanded", type: "boolean", default: false, required: true },
+      startDistance: { label: "Start editor camera zoom distance", type: "number", default: 120, min: 5, max: 10000, step: 1, required: true, help: "Hoeveel world-units de minimap rond de editor camera/viewport target toont bij openen." },
+      minDistance: { label: "Min zoom distance", type: "number", default: 20, min: 1, max: 10000, step: 1, required: true },
+      maxDistance: { label: "Max zoom distance", type: "number", default: 1000, min: 1, max: 100000, step: 1, required: true },
+      followEditorCamera: { label: "Follow editor camera", type: "boolean", default: true, required: true, help: "Zolang de gebruiker niet handmatig pant/zoomt, volgt de minimap het editor camera target." },
+      showEditorCamera: { label: "Show editor camera", type: "boolean", default: true, required: true },
+      showEditorCameraViewBounds: { label: "Show editor camera view bounds", type: "boolean", default: true, required: true },
+      showSelectedObject: { label: "Show selected object", type: "boolean", default: true, required: true },
+      showPlayerSpawn: { label: "Show player spawn", type: "boolean", default: true, required: true },
+      showModelEntities: { label: "Show model entities", type: "boolean", default: true, required: true },
+      showEntityNames: { label: "Show entity names", type: "boolean", default: true, required: true },
+      showInteractables: { label: "Show interactables", type: "boolean", default: true, required: true },
+      showChunkGrid: { label: "Show chunk grid", type: "boolean", default: false, required: true },
+      showBakeBounds: { label: "Show bake bounds", type: "boolean", default: true, required: true },
+      clickToFocus: {
+        label: "Click to focus",
+        type: "boolean",
+        default: true,
+        required: true,
+        help: "Wanneer aan: klik op de minimap zet de editor camera target naar world x/z, zonder node values te wijzigen."
+      },
+      allowZoom: { label: "Allow zoom", type: "boolean", default: true, required: true },
+      allowPan: { label: "Allow pan", type: "boolean", default: true, required: true },
+      allowPinchZoom: { label: "Allow pinch zoom", type: "boolean", default: true, required: true }
     }
   },
 

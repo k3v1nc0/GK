@@ -219,6 +219,97 @@ function numberOrFallback(value, fallback) {
   return number === null ? fallback : number;
 }
 
+function stringOrFallback(value, fallback) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  return text || fallback;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function normalizeAnimationName(value) {
+  return String(value === null || value === undefined ? "" : value).trim();
+}
+
+function animationNameMatchesRole(name, role) {
+  const text = normalizeAnimationName(name).toLowerCase();
+  const state = String(role || "").trim().toLowerCase();
+  if (!text || !state) return false;
+  if (state === "idle") {
+    return text.includes("idle") || text.includes("stand") || text.includes("rest") || text.includes("breath");
+  }
+  if (state === "walk") {
+    return text.includes("walk") || text.includes("move") || text.includes("jog");
+  }
+  if (state === "run") {
+    return text.includes("run") || text.includes("sprint") || text.includes("dash");
+  }
+  return false;
+}
+
+function assetAnimationNames(asset) {
+  return Array.isArray(asset?.metadata?.animations)
+    ? asset.metadata.animations.map(function (animation) {
+      return normalizeAnimationName(animation?.name);
+    }).filter(Boolean)
+    : [];
+}
+
+function findAssetAnimationName(names, preferredName) {
+  const list = Array.isArray(names) ? names : [];
+  if (!list.length) return null;
+  const preferred = normalizeAnimationName(preferredName);
+  if (!preferred) return null;
+  const exact = list.find(function (name) {
+    return name === preferred;
+  });
+  if (exact) return exact;
+  const lower = preferred.toLowerCase();
+  const caseMatch = list.find(function (name) {
+    return name.toLowerCase() === lower;
+  });
+  if (caseMatch) return caseMatch;
+  const contains = list.find(function (name) {
+    return name.toLowerCase().includes(lower);
+  });
+  return contains || null;
+}
+
+function findRoleAnimationName(names, role) {
+  return (Array.isArray(names) ? names : []).find(function (name) {
+    return animationNameMatchesRole(name, role);
+  }) || null;
+}
+
+function resolveCanonicalAnimationConfig(asset, values = {}) {
+  const names = assetAnimationNames(asset);
+  if (!names.length) {
+    return {
+      animationClip: null,
+      idleAnimation: null,
+      walkAnimation: null,
+      runAnimation: null
+    };
+  }
+  const defaultName = findAssetAnimationName(names, asset?.metadata?.defaultAnimation);
+  const rawIdle = findAssetAnimationName(names, values.idleAnimation);
+  const rawWalk = findAssetAnimationName(names, values.walkAnimation);
+  const rawRun = findAssetAnimationName(names, values.runAnimation);
+  const rawClip = findAssetAnimationName(names, values.animationClip);
+  const idle = findRoleAnimationName(names, "idle") || defaultName || rawIdle || rawClip || names[0] || null;
+  const walk = findRoleAnimationName(names, "walk") || rawWalk || rawClip || names[0] || null;
+  const run = findRoleAnimationName(names, "run") || rawRun || rawClip || rawWalk || names[0] || null;
+  return {
+    animationClip: idle,
+    idleAnimation: idle,
+    walkAnimation: walk,
+    runAnimation: run
+  };
+}
+
 const SHADOW_LEGACY_FIELD_KEYS = [
   "shadowsEnabled",
   "shadowQuality",
@@ -476,6 +567,7 @@ function buildWalkableSurfaceReadModel(node) {
 
 function buildGameCameraReadModel(node) {
   const startDistance = numberOrNull(node.values.startDistance);
+  const targetHeightOffset = numberOrNull(node.values.targetHeightOffset);
   return {
     id: node.values.cameraId,
     cameraId: node.values.cameraId,
@@ -486,6 +578,7 @@ function buildGameCameraReadModel(node) {
     minDistance: numberOrNull(node.values.minDistance),
     maxDistance: numberOrNull(node.values.maxDistance),
     fov: numberOrNull(node.values.fov),
+    targetHeightOffset: targetHeightOffset !== null ? targetHeightOffset : 1.6,
     follow: node.values.follow !== false,
     rotateSpeed: numberOrNull(node.values.rotateSpeed)
   };
@@ -620,9 +713,294 @@ function createDeterministicRandom(seed) {
   };
 }
 
+const SCATTER_SIZE_CURVES = new Set(["linear", "smooth", "steep", "instant"]);
+const SCATTER_DISTRIBUTION_MODES = new Set(["random", "blue_noise", "dense_fill"]);
+const SCATTER_INSTANT_THRESHOLD = 0.08;
+const SCATTER_EDGE_EPSILON = 0.000001;
+
+function clamp01(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.min(1, Math.max(0, number));
+}
+
+function lerpNumber(start, end, t) {
+  return start + ((end - start) * t);
+}
+
+function normalizeScatterPercent(value, fallback = 0) {
+  const fallbackValue = Math.max(0, Math.min(100, Math.round(Number(fallback) || 0)));
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallbackValue;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function normalizeScatterCurve(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return SCATTER_SIZE_CURVES.has(normalized) ? normalized : "linear";
+}
+
+function normalizeScatterDistributionMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return SCATTER_DISTRIBUTION_MODES.has(normalized) ? normalized : "random";
+}
+
+function normalizeScatterScaleMultipliers(value, legacyValue) {
+  const normalized = {};
+  function ingest(source) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) return;
+    for (const [assetIdRaw, multiplierRaw] of Object.entries(source)) {
+      const assetId = String(assetIdRaw || "").trim();
+      if (!assetId) continue;
+      normalized[assetId] = clampNumber(multiplierRaw, 0.001, 1000, 1);
+    }
+  }
+  ingest(legacyValue);
+  ingest(value);
+  return Object.keys(normalized).sort().reduce(function (result, assetId) {
+    result[assetId] = normalized[assetId];
+    return result;
+  }, {});
+}
+
+function closestPointOnSegment2D(px, pz, ax, az, bx, bz) {
+  const abx = bx - ax;
+  const abz = bz - az;
+  const lengthSq = abx * abx + abz * abz;
+  if (lengthSq <= SCATTER_EDGE_EPSILON) {
+    const dx = px - ax;
+    const dz = pz - az;
+    return {
+      x: ax,
+      z: az,
+      t: 0,
+      distanceSq: dx * dx + dz * dz
+    };
+  }
+  const t = Math.min(1, Math.max(0, (((px - ax) * abx) + ((pz - az) * abz)) / lengthSq));
+  const x = ax + (abx * t);
+  const z = az + (abz * t);
+  const dx = px - x;
+  const dz = pz - z;
+  return {
+    x: x,
+    z: z,
+    t: t,
+    distanceSq: dx * dx + dz * dz
+  };
+}
+
+function closestPointOnPolygonBoundary(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let best = null;
+  for (let index = 0, previousIndex = points.length - 1; index < points.length; previousIndex = index, index += 1) {
+    const start = points[previousIndex];
+    const end = points[index];
+    const candidate = closestPointOnSegment2D(px, pz, start.x, start.z, end.x, end.z);
+    if (!best || candidate.distanceSq < best.distanceSq) {
+      best = {
+        x: candidate.x,
+        z: candidate.z,
+        t: candidate.t,
+        distanceSq: candidate.distanceSq
+      };
+    }
+  }
+  return best;
+}
+
+function scatterInteriorAnchor(points, bounds) {
+  if (!bounds) return { x: 0, z: 0 };
+  const candidates = [
+    { x: bounds.centerX, z: bounds.centerZ }
+  ];
+  const seed = JSON.stringify(Array.isArray(points) ? points.map(function (point) {
+    return [point.x, point.z];
+  }) : []);
+  const random = createDeterministicRandom(seed);
+  const width = Math.max(SCATTER_EDGE_EPSILON, bounds.maxX - bounds.minX);
+  const depth = Math.max(SCATTER_EDGE_EPSILON, bounds.maxZ - bounds.minZ);
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    candidates.push({
+      x: bounds.minX + (width * random()),
+      z: bounds.minZ + (depth * random())
+    });
+  }
+  let best = null;
+  for (const candidate of candidates) {
+    if (!pointInPolygon2D(candidate.x, candidate.z, points)) continue;
+    const boundary = closestPointOnPolygonBoundary(candidate.x, candidate.z, points);
+    const distanceSq = boundary ? boundary.distanceSq : 0;
+    if (!best || distanceSq > best.distanceSq) {
+      best = {
+        x: candidate.x,
+        z: candidate.z,
+        distanceSq: distanceSq
+      };
+    }
+  }
+  return best ? { x: best.x, z: best.z } : { x: bounds.centerX, z: bounds.centerZ };
+}
+
+function scatterSizeCurveValue(curve, t) {
+  const value = clamp01(t);
+  switch (normalizeScatterCurve(curve)) {
+    case "smooth":
+      return value * value * (3 - (2 * value));
+    case "steep":
+      return Math.sqrt(value);
+    case "instant":
+      return value >= SCATTER_INSTANT_THRESHOLD ? 1 : 0;
+    case "linear":
+    default:
+      return value;
+  }
+}
+
+function polygonSegments(points) {
+  const valid = normalizeFinitePointList(points);
+  if (valid.length < 2) return [];
+  const segments = [];
+  let perimeter = 0;
+  for (let index = 0, previousIndex = valid.length - 1; index < valid.length; previousIndex = index, index += 1) {
+    const start = valid[previousIndex];
+    const end = valid[index];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const lengthSq = (dx * dx) + (dz * dz);
+    const length = Math.sqrt(lengthSq);
+    segments.push({
+      index: index,
+      start: start,
+      end: end,
+      dx: dx,
+      dz: dz,
+      length: length,
+      lengthSq: lengthSq,
+      perimeterStart: perimeter,
+      perimeterEnd: perimeter + length
+    });
+    perimeter += length;
+  }
+  return segments;
+}
+
+function polygonPerimeter(points) {
+  return polygonSegments(points).reduce(function (total, segment) {
+    return total + segment.length;
+  }, 0);
+}
+
+function pointAtBoundaryDistance(points, distance) {
+  const valid = normalizeFinitePointList(points);
+  const segments = polygonSegments(valid);
+  if (!segments.length) return null;
+  const perimeter = segments.reduce(function (total, segment) {
+    return total + segment.length;
+  }, 0);
+  const firstPoint = segments[0].start;
+  if (perimeter <= SCATTER_EDGE_EPSILON) {
+    return {
+      x: firstPoint.x,
+      z: firstPoint.z,
+      segmentIndex: 0,
+      t: 0,
+      distance: 0,
+      perimeter: 0,
+      tangentX: 0,
+      tangentZ: 0,
+      inwardX: 0,
+      inwardZ: 0,
+      segment: segments[0]
+    };
+  }
+  let normalizedDistance = Number(distance);
+  if (!Number.isFinite(normalizedDistance)) normalizedDistance = 0;
+  normalizedDistance = ((normalizedDistance % perimeter) + perimeter) % perimeter;
+  let chosen = segments[0];
+  for (const segment of segments) {
+    if (normalizedDistance <= segment.perimeterEnd || segment === segments[segments.length - 1]) {
+      chosen = segment;
+      break;
+    }
+  }
+  const segmentLength = Math.max(chosen.length, SCATTER_EDGE_EPSILON);
+  const t = Math.min(1, Math.max(0, (normalizedDistance - chosen.perimeterStart) / segmentLength));
+  const x = chosen.start.x + (chosen.dx * t);
+  const z = chosen.start.z + (chosen.dz * t);
+  let signedArea = 0;
+  for (let index = 0, previousIndex = valid.length - 1; index < valid.length; previousIndex = index, index += 1) {
+    const current = valid[index];
+    const previous = valid[previousIndex];
+    signedArea += (previous.x * current.z) - (current.x * previous.z);
+  }
+  const tangentLength = Math.max(chosen.length, SCATTER_EDGE_EPSILON);
+  const tangentX = chosen.dx / tangentLength;
+  const tangentZ = chosen.dz / tangentLength;
+  const leftNormalX = -tangentZ;
+  const leftNormalZ = tangentX;
+  const inwardIsLeft = signedArea >= 0;
+  const inwardX = inwardIsLeft ? leftNormalX : -leftNormalX;
+  const inwardZ = inwardIsLeft ? leftNormalZ : -leftNormalZ;
+  return {
+    x: x,
+    z: z,
+    segmentIndex: chosen.index,
+    t: t,
+    distance: normalizedDistance,
+    perimeter: perimeter,
+    tangentX: tangentX,
+    tangentZ: tangentZ,
+    inwardX: inwardX,
+    inwardZ: inwardZ,
+    segment: chosen
+  };
+}
+
+function deterministicShuffleOrOffset(random) {
+  const value = typeof random === "function" ? Number(random()) : 0;
+  if (!Number.isFinite(value)) return 0;
+  return Math.floor(Math.abs(value) * 2147483647);
+}
+
+function isFarEnough(candidate, accepted, minDistance) {
+  const candidateX = Number(candidate?.x ?? candidate?.position?.x);
+  const candidateZ = Number(candidate?.z ?? candidate?.position?.z);
+  if (!Number.isFinite(candidateX) || !Number.isFinite(candidateZ)) return false;
+  const threshold = Math.max(0, Number(minDistance) || 0);
+  if (threshold <= SCATTER_EDGE_EPSILON) return true;
+  const thresholdSq = threshold * threshold;
+  for (const entry of Array.isArray(accepted) ? accepted : []) {
+    const acceptedX = Number(entry?.x ?? entry?.position?.x);
+    const acceptedZ = Number(entry?.z ?? entry?.position?.z);
+    if (!Number.isFinite(acceptedX) || !Number.isFinite(acceptedZ)) continue;
+    const acceptedThreshold = Math.max(threshold, Number(entry?.spacing) || 0);
+    const acceptedThresholdSq = acceptedThreshold * acceptedThreshold;
+    const dx = candidateX - acceptedX;
+    const dz = candidateZ - acceptedZ;
+    if (((dx * dx) + (dz * dz)) + SCATTER_EDGE_EPSILON < acceptedThresholdSq) return false;
+  }
+  return true;
+}
+
+function candidateSpacingFor(settings, candidate, isEdge) {
+  const strength = clamp01((Number(settings?.spacingStrength) || 0) / 100);
+  if (strength <= SCATTER_EDGE_EPSILON) return 0;
+  const edgeCandidate = isEdge || candidate?.isEdge === true;
+  const baseSpacing = edgeCandidate
+    ? (Number(settings?.edgeSpacing) > 0 ? Number(settings.edgeSpacing) : Number(settings?.minSpacing) || 0)
+    : (Number(settings?.minSpacing) || 0);
+  return Math.max(0, baseSpacing) * strength;
+}
+
+function scatterSourceScaleMultiplier(settings, sourceId) {
+  const value = settings?.sourceScaleMultipliers ? settings.sourceScaleMultipliers[sourceId] : null;
+  return clampNumber(value, 0.001, 1000, 1);
+}
+
 function scatterSettingsSeed(settings, sourceAssetIds) {
   const points = scatterPointsForSettings(settings);
-  return JSON.stringify({
+  const seed = {
     seed: String(settings.seed || ""),
     enabled: settings.enabled === true,
     points: points.map(function (point) {
@@ -636,7 +1014,16 @@ function scatterSettingsSeed(settings, sourceAssetIds) {
     scaleMax: settings.scaleMax,
     rotationYMin: settings.rotationYMin,
     rotationYMax: settings.rotationYMax
-  });
+  };
+  if (settings.minSpacing > 0 && (settings.spacingStrength > 0 || settings.distributionMode === "dense_fill")) seed.minSpacing = settings.minSpacing;
+  if (settings.edgeSpacing > 0 && settings.spacingStrength > 0 && settings.edgeDensity > 0) seed.edgeSpacing = settings.edgeSpacing;
+  if (settings.spacingStrength > 0) seed.spacingStrength = settings.spacingStrength;
+  if (settings.distributionMode !== "random") seed.distributionMode = settings.distributionMode;
+  if (normalizeScatterPercent(settings.edgeDensity, 0) > 0) {
+    seed.edgeDensity = normalizeScatterPercent(settings.edgeDensity, 0);
+    seed.edgeJitter = settings.edgeJitter;
+  }
+  return JSON.stringify(seed);
 }
 
 function normalizeScatterSettings(node) {
@@ -645,6 +1032,12 @@ function normalizeScatterSettings(node) {
   const rotationYMin = numberOrNull(node.values.rotationYMin) ?? 0;
   const rotationYMax = numberOrNull(node.values.rotationYMax) ?? 0;
   const points = normalizeFinitePointList(node.values.points);
+  const minSpacing = Math.min(1000, Math.max(0, numberOrNull(node.values.minSpacing) ?? 0));
+  const edgeSpacing = Math.min(1000, Math.max(0, numberOrNull(node.values.edgeSpacing) ?? 0));
+  const sourceScaleMultipliers = normalizeScatterScaleMultipliers(
+    node.values.sourceScaleMultipliers,
+    node.values.sourceHeightMultipliers
+  );
   return {
     enabled: node.values.enabled !== false,
     areaCenterX: numberOrNull(node.values.areaCenterX) ?? 0,
@@ -657,9 +1050,18 @@ function normalizeScatterSettings(node) {
     sourceNodeIds: normalizeNodeIdList(node.values.sourceNodeIds),
     randomObjectSelection: node.values.randomObjectSelection === true,
     boundaryBlocksPlayer: node.values.boundaryBlocksPlayer === true,
+    minSpacing: minSpacing,
+    edgeSpacing: edgeSpacing,
+    spacingStrength: normalizeScatterPercent(node.values.spacingStrength, 0),
+    edgeJitter: normalizeScatterPercent(node.values.edgeJitter, 20),
+    distributionMode: normalizeScatterDistributionMode(node.values.distributionMode),
+    sourceScaleMultipliers: sourceScaleMultipliers,
     seed: String(node.values.seed || ""),
+    edgeDensity: normalizeScatterPercent(node.values.edgeDensity, 0),
     scaleMin: Math.min(scaleMin, scaleMax),
     scaleMax: Math.max(scaleMin, scaleMax),
+    sizeInwardInfluence: normalizeScatterPercent(node.values.sizeInwardInfluence, 0),
+    sizeCurve: normalizeScatterCurve(node.values.sizeCurve),
     rotationYMin: Math.min(rotationYMin, rotationYMax),
     rotationYMax: Math.max(rotationYMin, rotationYMax),
     points: points
@@ -722,38 +1124,56 @@ function resolveScatterSources(node, nodeMap, services, errors, labelPrefix) {
   };
 }
 
-function buildScatterAreaReadModel(node, resolvedSources) {
+function buildScatterAreaReadModel(node, resolvedSources, placementInfo = {}) {
   const settings = normalizeScatterSettings(node);
   const sourceAssets = Array.isArray(resolvedSources?.sourceAssets) ? resolvedSources.sourceAssets : [];
   const points = scatterPointsForSettings(settings);
+  const placementWarnings = Array.isArray(placementInfo?.placementWarnings) ? placementInfo.placementWarnings.filter(Boolean) : [];
+  const sourceScaleMultipliers = Object.keys(settings.sourceScaleMultipliers || {}).sort().reduce(function (result, sourceId) {
+    const multiplier = scatterSourceScaleMultiplier(settings, sourceId);
+    if (Number.isFinite(multiplier)) result[sourceId] = multiplier;
+    return result;
+  }, {});
   return {
     id: node.id,
     scatterId: node.values.scatterId,
     enabled: settings.enabled,
     boundaryBlocksPlayer: settings.boundaryBlocksPlayer,
+    minSpacing: settings.minSpacing,
+    edgeSpacing: settings.edgeSpacing,
+    spacingStrength: settings.spacingStrength,
+    edgeJitter: settings.edgeJitter,
+    distributionMode: settings.distributionMode,
     areaCenterX: settings.areaCenterX,
     areaCenterZ: settings.areaCenterZ,
     areaWidth: settings.areaWidth,
     areaDepth: settings.areaDepth,
     areaRotationY: settings.areaRotationY,
     count: settings.count,
+    requestedCount: settings.count,
+    placedCount: numberOrNull(placementInfo?.placedCount) ?? null,
     sourceNodeIds: Array.from(new Set((resolvedSources?.sourceNodeIds || settings.sourceNodeIds || []).filter(Boolean))).sort(),
     sourceAssetIds: Array.from(new Set([
       ...settings.sourceAssetIds,
       ...sourceAssets.map(function (source) { return source.id; }).filter(Boolean),
       ...(resolvedSources?.sourceAssetIds || [])
     ].filter(Boolean))).sort(),
+    sourceScaleMultipliers: sourceScaleMultipliers,
     randomObjectSelection: settings.randomObjectSelection,
     seed: settings.seed,
+    edgeDensity: settings.edgeDensity,
     scaleMin: settings.scaleMin,
     scaleMax: settings.scaleMax,
+    sizeInwardInfluence: settings.sizeInwardInfluence,
+    sizeCurve: settings.sizeCurve,
     rotationYMin: settings.rotationYMin,
     rotationYMax: settings.rotationYMax,
+    placementWarnings: placementWarnings,
     points: points
   };
 }
 
-function buildScatterInstances(node, sourceAssets, groundY) {
+function buildLegacyScatterInstances(node, sourceAssets, groundY) {
   const settings = normalizeScatterSettings(node);
   const sourceList = Array.isArray(sourceAssets) ? sourceAssets.slice().sort(function (left, right) {
     return String(left.id || "").localeCompare(String(right.id || ""));
@@ -761,7 +1181,16 @@ function buildScatterInstances(node, sourceAssets, groundY) {
   if (!settings.enabled || !settings.count || !sourceList.length) return [];
   const points = scatterPointsForSettings(settings);
   const bounds = scatterPointBounds(points);
-  const random = createDeterministicRandom(scatterSettingsSeed(settings, sourceList.map(function (source) { return source.id; })));
+  const sourceIds = sourceList.map(function (source) { return source.id; });
+  const random = createDeterministicRandom(scatterSettingsSeed(Object.assign({}, settings, { edgeDensity: 0 }), sourceIds));
+  const edgeDensity = settings.edgeDensity / 100;
+  const edgeRandom = settings.edgeDensity > 0 && settings.edgeDensity < 100
+    ? createDeterministicRandom(scatterSettingsSeed(settings, sourceIds))
+    : null;
+  const sizeInfluence = settings.sizeInwardInfluence / 100;
+  const scatterCenter = scatterInteriorAnchor(points, bounds);
+  const scatterCenterBoundary = closestPointOnPolygonBoundary(scatterCenter.x, scatterCenter.z, points);
+  const scatterCenterDepth = scatterCenterBoundary ? Math.sqrt(scatterCenterBoundary.distanceSq) : 0;
   const instances = [];
   const samplePointInPolygon = function () {
     if (!bounds) return { x: settings.areaCenterX, z: settings.areaCenterZ };
@@ -779,8 +1208,26 @@ function buildScatterInstances(node, sourceAssets, groundY) {
       ? Math.floor(random() * sourceList.length) % sourceList.length
       : index % sourceList.length;
     const source = sourceList[sourceIndex];
-    const position = samplePointInPolygon();
-    const scale = Math.max(0.001, settings.scaleMin + ((settings.scaleMax - settings.scaleMin) * random()));
+    const innerPosition = samplePointInPolygon();
+    let position = innerPosition;
+    if (settings.edgeDensity >= 100) {
+      const boundaryPosition = closestPointOnPolygonBoundary(innerPosition.x, innerPosition.z, points);
+      if (boundaryPosition) position = { x: boundaryPosition.x, z: boundaryPosition.z };
+    } else if (settings.edgeDensity > 0 && edgeRandom && edgeRandom() < edgeDensity) {
+      const boundaryPosition = closestPointOnPolygonBoundary(innerPosition.x, innerPosition.z, points);
+      if (boundaryPosition) position = { x: boundaryPosition.x, z: boundaryPosition.z };
+    }
+    const randomScale = Math.max(0.001, settings.scaleMin + ((settings.scaleMax - settings.scaleMin) * random()));
+    let scale = randomScale;
+    if (settings.sizeInwardInfluence > 0 && scatterCenterDepth > SCATTER_EDGE_EPSILON) {
+      const positionBoundary = closestPointOnPolygonBoundary(position.x, position.z, points);
+      const positionDepth = positionBoundary ? Math.sqrt(positionBoundary.distanceSq) : 0;
+      const normalizedDepth = clamp01(positionDepth / scatterCenterDepth);
+      const curvedDepth = scatterSizeCurveValue(settings.sizeCurve, normalizedDepth);
+      const deterministicScale = lerpNumber(settings.scaleMin, settings.scaleMax, curvedDepth);
+      scale = lerpNumber(randomScale, deterministicScale, sizeInfluence);
+    }
+    const scaleMultiplier = scatterSourceScaleMultiplier(settings, source.id);
     const rotationY = settings.rotationYMin + ((settings.rotationYMax - settings.rotationYMin) * random());
     const defaultAnimation = source.metadata?.defaultAnimation || null;
     instances.push({
@@ -812,13 +1259,266 @@ function buildScatterInstances(node, sourceAssets, groundY) {
           z: 0
         },
         scale: {
-          x: scale,
-          y: scale,
-          z: scale
+          x: scale * scaleMultiplier,
+          y: scale * scaleMultiplier,
+          z: scale * scaleMultiplier
         }
       }
     });
   }
+  return instances;
+}
+
+function buildScatterInstances(node, sourceAssets, groundY) {
+  const settings = normalizeScatterSettings(node);
+  const sourceList = Array.isArray(sourceAssets) ? sourceAssets.slice().sort(function (left, right) {
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  }) : [];
+  const emptyInstances = [];
+  emptyInstances.placementWarnings = [];
+  emptyInstances.placedCount = 0;
+  emptyInstances.requestedCount = settings.count;
+  if (!settings.enabled || !settings.count || !sourceList.length) return emptyInstances;
+
+  const points = scatterPointsForSettings(settings);
+  const bounds = scatterPointBounds(points);
+  const sourceIds = sourceList.map(function (source) { return source.id; });
+  const legacyMode = settings.spacingStrength === 0
+    && settings.distributionMode === "random"
+    && settings.edgeDensity === 0;
+  if (legacyMode) {
+    const legacyInstances = buildLegacyScatterInstances(node, sourceAssets, groundY);
+    legacyInstances.placementWarnings = [];
+    legacyInstances.placedCount = legacyInstances.length;
+    legacyInstances.requestedCount = settings.count;
+    return legacyInstances;
+  }
+
+  const random = createDeterministicRandom(scatterSettingsSeed(settings, sourceIds));
+  const instances = [];
+  const accepted = [];
+  const placementWarnings = [];
+  const scatterCenter = scatterInteriorAnchor(points, bounds);
+  const scatterCenterBoundary = closestPointOnPolygonBoundary(scatterCenter.x, scatterCenter.z, points);
+  const scatterCenterDepth = scatterCenterBoundary ? Math.sqrt(scatterCenterBoundary.distanceSq) : 0;
+  const polygonPerimeterValue = polygonPerimeter(points);
+  const spacingStrengthFactor = clamp01(settings.spacingStrength / 100);
+  const spacingBase = Math.max(0.5, Math.max(settings.minSpacing, settings.edgeSpacing || settings.minSpacing, 1));
+  const spacingCellSize = Math.max(0.5, spacingBase * Math.max(spacingStrengthFactor, 0.5));
+  const spacingGrid = new Map();
+
+  function spacingGridKey(x, z) {
+    return Math.floor(x / spacingCellSize) + ":" + Math.floor(z / spacingCellSize);
+  }
+
+  function nearbyAcceptedFor(candidate, candidateSpacing) {
+    if (candidateSpacing <= SCATTER_EDGE_EPSILON || accepted.length < 4) return accepted;
+    const range = Math.max(1, Math.ceil(candidateSpacing / spacingCellSize));
+    const cellX = Math.floor(candidate.x / spacingCellSize);
+    const cellZ = Math.floor(candidate.z / spacingCellSize);
+    const nearby = [];
+    for (let offsetX = -range; offsetX <= range; offsetX += 1) {
+      for (let offsetZ = -range; offsetZ <= range; offsetZ += 1) {
+        const bucket = spacingGrid.get((cellX + offsetX) + ":" + (cellZ + offsetZ));
+        if (bucket && bucket.length) nearby.push.apply(nearby, bucket);
+      }
+    }
+    return nearby.length ? nearby : accepted;
+  }
+
+  function registerAccepted(candidate) {
+    const entry = {
+      x: candidate.x,
+      z: candidate.z,
+      spacing: candidate.spacing
+    };
+    accepted.push(entry);
+    const key = spacingGridKey(entry.x, entry.z);
+    if (!spacingGrid.has(key)) spacingGrid.set(key, []);
+    spacingGrid.get(key).push(entry);
+  }
+
+  function sampleInteriorCandidate() {
+    if (!bounds) return { x: settings.areaCenterX, z: settings.areaCenterZ };
+    const width = Math.max(SCATTER_EDGE_EPSILON, bounds.maxX - bounds.minX);
+    const depth = Math.max(SCATTER_EDGE_EPSILON, bounds.maxZ - bounds.minZ);
+    for (let attempt = 0; attempt < 96; attempt += 1) {
+      const x = bounds.minX + (width * random());
+      const z = bounds.minZ + (depth * random());
+      if (pointInPolygon2D(x, z, points)) return { x, z };
+    }
+    return { x: bounds.centerX, z: bounds.centerZ };
+  }
+
+  function makeEdgeCandidate(anchor, factor) {
+    if (!anchor) return sampleInteriorCandidate();
+    const jitterScale = Math.max(0, settings.edgeJitter) / 100;
+    const span = Math.max(SCATTER_EDGE_EPSILON, Math.min(anchor?.segment?.length || 0, polygonPerimeterValue / Math.max(1, settings.count)) || 0.0001);
+    const tangentRange = span * 0.25 * jitterScale * factor;
+    const inwardRange = span * 0.08 * jitterScale * factor;
+    const tangentOffset = (random() * 2 - 1) * tangentRange;
+    const inwardOffset = inwardRange * (0.5 + (random() * 0.5));
+    return {
+      x: anchor.x + ((anchor.tangentX || 0) * tangentOffset) + ((anchor.inwardX || 0) * inwardOffset),
+      z: anchor.z + ((anchor.tangentZ || 0) * tangentOffset) + ((anchor.inwardZ || 0) * inwardOffset),
+      isEdge: true
+    };
+  }
+
+  const edgeDensity = clamp01(settings.edgeDensity / 100);
+  const boundaryCount = settings.edgeDensity > 0
+    ? Math.min(settings.count, Math.max(1, Math.round(settings.count * edgeDensity)))
+    : 0;
+  const slotKinds = new Array(settings.count).fill("interior");
+  if (boundaryCount > 0) {
+    const slotOffset = deterministicShuffleOrOffset(random) % Math.max(1, settings.count);
+    for (let boundarySlot = 0; boundarySlot < boundaryCount; boundarySlot += 1) {
+      const slotIndex = (slotOffset + Math.floor((boundarySlot * settings.count) / boundaryCount)) % settings.count;
+      slotKinds[slotIndex] = "edge";
+    }
+  }
+
+  const boundaryAnchors = [];
+  if (boundaryCount > 0) {
+    if (polygonPerimeterValue > SCATTER_EDGE_EPSILON) {
+      const boundaryStartDistance = random() * polygonPerimeterValue;
+      const boundaryStep = polygonPerimeterValue / boundaryCount;
+      for (let boundaryIndex = 0; boundaryIndex < boundaryCount; boundaryIndex += 1) {
+        const anchor = pointAtBoundaryDistance(points, boundaryStartDistance + (boundaryStep * boundaryIndex));
+        if (anchor) boundaryAnchors.push(anchor);
+      }
+    }
+  }
+
+  const denseFillCandidates = [];
+  let denseFillCursor = 0;
+  if (settings.distributionMode === "dense_fill" && bounds) {
+    const denseArea = Math.max(SCATTER_EDGE_EPSILON, bounds.width * bounds.depth);
+    const denseCellSize = Math.max(0.5, settings.minSpacing > 0 ? settings.minSpacing : Math.sqrt(denseArea / Math.max(1, settings.count)));
+    const cols = Math.max(1, Math.ceil(Math.max(bounds.width, SCATTER_EDGE_EPSILON) / denseCellSize));
+    const rows = Math.max(1, Math.ceil(Math.max(bounds.depth, SCATTER_EDGE_EPSILON) / denseCellSize));
+    const cellWidth = Math.max(SCATTER_EDGE_EPSILON, bounds.width / cols);
+    const cellDepth = Math.max(SCATTER_EDGE_EPSILON, bounds.depth / rows);
+    const totalCells = cols * rows;
+    const cellOffset = deterministicShuffleOrOffset(random) % Math.max(1, totalCells);
+    for (let cellAttempt = 0; cellAttempt < totalCells && denseFillCandidates.length < settings.count; cellAttempt += 1) {
+      const cellIndex = (cellAttempt + cellOffset) % totalCells;
+      const col = cellIndex % cols;
+      const row = Math.floor(cellIndex / cols);
+      const candidate = {
+        x: bounds.minX + (cellWidth * col) + (cellWidth * random()),
+        z: bounds.minZ + (cellDepth * row) + (cellDepth * random())
+      };
+      if (pointInPolygon2D(candidate.x, candidate.z, points)) denseFillCandidates.push(candidate);
+    }
+  }
+
+  const attemptFactors = settings.distributionMode === "dense_fill"
+    ? [1, 0.85, 0.7, 0.5]
+    : [1, 0.75, 0.5, 0.25];
+  const attemptsPerFactor = 16;
+  const sourceCount = sourceList.length;
+  let boundaryCursor = 0;
+  let placedCount = 0;
+
+  for (let slotIndex = 0; slotIndex < settings.count; slotIndex += 1) {
+    const isEdgeSlot = slotKinds[slotIndex] === "edge" && boundaryCursor < boundaryAnchors.length;
+    const sourceIndex = settings.randomObjectSelection && sourceCount > 1
+      ? Math.floor(random() * sourceCount) % sourceCount
+      : slotIndex % sourceCount;
+    const source = sourceList[sourceIndex];
+    let acceptedCandidate = null;
+    let usedDenseFillCandidate = false;
+
+    for (let factorIndex = 0; factorIndex < attemptFactors.length && !acceptedCandidate; factorIndex += 1) {
+      const factor = attemptFactors[factorIndex];
+      for (let attemptIndex = 0; attemptIndex < attemptsPerFactor && !acceptedCandidate; attemptIndex += 1) {
+        let candidate = null;
+        if (isEdgeSlot) {
+          candidate = makeEdgeCandidate(boundaryAnchors[boundaryCursor], factor);
+        } else if (settings.distributionMode === "dense_fill" && !usedDenseFillCandidate && denseFillCursor < denseFillCandidates.length) {
+          candidate = denseFillCandidates[denseFillCursor];
+          denseFillCursor += 1;
+          usedDenseFillCandidate = true;
+        } else {
+          candidate = sampleInteriorCandidate();
+        }
+        if (!candidate) continue;
+        if (!isEdgeSlot && !pointInPolygon2D(candidate.x, candidate.z, points)) continue;
+        const candidateSpacing = candidateSpacingFor(settings, candidate, isEdgeSlot) * factor;
+        candidate.spacing = candidateSpacing;
+        const nearby = nearbyAcceptedFor(candidate, candidateSpacing);
+        if (!isFarEnough(candidate, nearby, candidateSpacing)) continue;
+        acceptedCandidate = candidate;
+      }
+    }
+
+    if (!acceptedCandidate) {
+      if (isEdgeSlot) boundaryCursor += 1;
+      continue;
+    }
+
+    if (isEdgeSlot) boundaryCursor += 1;
+    registerAccepted(acceptedCandidate);
+
+    const randomScale = Math.max(0.001, settings.scaleMin + ((settings.scaleMax - settings.scaleMin) * random()));
+    let scale = randomScale;
+    if (settings.sizeInwardInfluence > 0 && scatterCenterDepth > SCATTER_EDGE_EPSILON) {
+      const positionBoundary = closestPointOnPolygonBoundary(acceptedCandidate.x, acceptedCandidate.z, points);
+      const positionDepth = positionBoundary ? Math.sqrt(positionBoundary.distanceSq) : 0;
+      const normalizedDepth = clamp01(positionDepth / scatterCenterDepth);
+      const curvedDepth = scatterSizeCurveValue(settings.sizeCurve, normalizedDepth);
+      const deterministicScale = lerpNumber(settings.scaleMin, settings.scaleMax, curvedDepth);
+      scale = lerpNumber(randomScale, deterministicScale, settings.sizeInwardInfluence / 100);
+    }
+    const scaleMultiplier = scatterSourceScaleMultiplier(settings, source.id);
+    const rotationY = settings.rotationYMin + ((settings.rotationYMax - settings.rotationYMin) * random());
+    const defaultAnimation = source.metadata?.defaultAnimation || null;
+    instances.push({
+      id: node.id + "::" + slotIndex,
+      nodeId: node.id,
+      scatterId: node.values.scatterId || node.id,
+      type: "scatter",
+      kind: "scatter",
+      sourceNodeId: null,
+      sourceAssetId: source.id,
+      label: source.name || source.id,
+      modelAssetId: source.id,
+      animationClip: defaultAnimation,
+      idleAnimation: defaultAnimation,
+      walkAnimation: null,
+      runAnimation: null,
+      solid: false,
+      walkable: true,
+      collisionRadius: null,
+      transform: {
+        position: {
+          x: acceptedCandidate.x,
+          y: groundY,
+          z: acceptedCandidate.z
+        },
+        rotation: {
+          x: 0,
+          y: rotationY,
+          z: 0
+        },
+        scale: {
+          x: scale * scaleMultiplier,
+          y: scale * scaleMultiplier,
+          z: scale * scaleMultiplier
+        }
+      }
+    });
+    placedCount += 1;
+  }
+
+  if (placedCount < settings.count) {
+    placementWarnings.push("Scatter '" + (node.values.scatterId || node.id) + "' could only place " + placedCount + " of " + settings.count + " instances with distribution mode '" + settings.distributionMode + "'.");
+  }
+
+  instances.placementWarnings = placementWarnings;
+  instances.placedCount = placedCount;
+  instances.requestedCount = settings.count;
   return instances;
 }
 
@@ -887,7 +1587,10 @@ function buildPerformanceHudReadModel(node) {
       showTerrainVisuals: node.values.showTerrainVisuals !== false,
       showCollisionShapes: node.values.showCollisionShapes !== false,
       showWorldSize: node.values.showWorldSize === true,
-      showChunkCulling: node.values.showChunkCulling === true
+      showChunkCulling: node.values.showChunkCulling === true,
+      showRemoteSyncMs: node.values.showRemoteSyncMs !== false,
+      showMovementStepMs: node.values.showMovementStepMs !== false,
+      showMinimapDrawMs: node.values.showMinimapDrawMs !== false
     },
     thresholds: {
       fpsTarget: numberOrNull(node.values.fpsTarget),
@@ -912,8 +1615,56 @@ function buildPerformanceHudReadModel(node) {
   };
 }
 
+function buildMmoDebugHudReadModel(node) {
+  return {
+    id: node.values.hudId,
+    type: "debug_mmo_hud",
+    enabled: node.values.enabled !== false,
+    anchor: node.values.anchor,
+    compact: node.values.compact !== false,
+    startCollapsed: node.values.startCollapsed !== false,
+    show: {
+      wsStatus: node.values.showWsStatus !== false,
+      user: node.values.showUser !== false,
+      player: node.values.showPlayer !== false,
+      session: node.values.showSession !== false,
+      position: node.values.showPosition !== false,
+      revision: node.values.showRevision !== false,
+      sessions: node.values.showSessions !== false,
+      lastSent: node.values.showLastSent !== false,
+      lastSentSeq: node.values.showLastSentSeq !== false,
+      lastAckedSeq: node.values.showLastAckedSeq !== false,
+      pendingInputs: node.values.showPendingInputs !== false,
+      controller: node.values.showController !== false,
+      lastTransport: node.values.showLastTransport !== false,
+      lastIgnored: node.values.showLastIgnored !== false,
+      serverSeq: node.values.showServerSeq !== false,
+      lastReceived: node.values.showLastReceived !== false,
+      lastSource: node.values.showLastSource !== false,
+      lastError: node.values.showLastError !== false,
+      wsRawState: node.values.showWsRawState !== false,
+      wsVisibleState: node.values.showWsVisibleState !== false,
+      reconnectAttempt: node.values.showReconnectAttempt !== false,
+      reconnectSuppressedCount: node.values.showReconnectSuppressedCount !== false,
+      lastClose: node.values.showLastClose !== false,
+      lastConnected: node.values.showLastConnected !== false,
+      lastDisconnected: node.values.showLastDisconnected !== false,
+      ping: node.values.showPing !== false,
+      avgPing: node.values.showAvgPing !== false,
+      jitter: node.values.showJitter !== false,
+      lastPongAge: node.values.showLastPongAge !== false,
+      packetAge: node.values.showPacketAge !== false,
+      remoteBufferSizes: node.values.showRemoteBufferSizes !== false,
+      remoteHardSnapCount: node.values.showRemoteHardSnapCount !== false,
+      remoteSmoothFrameCount: node.values.showRemoteSmoothFrameCount !== false,
+      lastRemoteEventType: node.values.showLastRemoteEventType !== false
+    }
+  };
+}
+
 function buildUiReadModel(node) {
   if (node.type === "debug_performance_hud") return buildPerformanceHudReadModel(node);
+  if (node.type === "debug_mmo_hud") return buildMmoDebugHudReadModel(node);
   return buildHudTextReadModel(node);
 }
 
@@ -946,10 +1697,6 @@ function buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode = nul
     const presetValues = worldSettingsPresetValues(mode, resolvedPreset) || worldSettingsPresetValues(mode, fallbackPreset) || {};
     const readShadow = function (key, legacyKey, fallback) {
       if (shadowSource && shadowSource[key] !== undefined) return shadowSource[key];
-      if (!shadowSource) {
-        const legacyValue = shadowLegacyField(source, prefix, legacyKey);
-        if (legacyValue !== undefined) return legacyValue;
-      }
       if (presetValues[key] !== undefined) return presetValues[key];
       return fallback;
     };
@@ -996,6 +1743,7 @@ function buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode = nul
       fogEnabled: source[prefix + "FogEnabled"] !== undefined ? source[prefix + "FogEnabled"] === true : defaults.fogEnabled === true,
       maxFps: numberOrFallback(source[prefix + "MaxFps"], defaults.maxFps),
       debugHelpersVisible: source[prefix + "DebugHelpersVisible"] !== undefined ? source[prefix + "DebugHelpersVisible"] === true : defaults.debugHelpersVisible === true,
+      debugWarningsVisible: source[prefix + "DebugWarningsVisible"] !== undefined ? source[prefix + "DebugWarningsVisible"] === true : defaults.debugWarningsVisible === true,
       debugChunkOverlayVisible: source[prefix + "DebugChunkOverlayVisible"] !== undefined ? source[prefix + "DebugChunkOverlayVisible"] === true : defaults.debugChunkOverlayVisible === true,
       chunkGridVisible: source[prefix + "ChunkGridVisible"] !== undefined ? source[prefix + "ChunkGridVisible"] === true : defaults.chunkGridVisible === true,
       chunkLabelsVisible: source[prefix + "ChunkLabelsVisible"] !== undefined ? source[prefix + "ChunkLabelsVisible"] === true : defaults.chunkLabelsVisible === true,
@@ -1085,7 +1833,7 @@ function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
   return {
     id: node.id,
     type: readModelType,
-    chunkProfileId: values.chunkProfileId,
+    chunkProfileId: stringOrFallback(values.chunkProfileId, defaults.chunkProfileId),
     enabled: values.enabled !== false,
     chunkWidth: numberOrFallback(values.chunkWidth, defaults.chunkWidth),
     chunkDepth: numberOrFallback(values.chunkDepth, defaults.chunkDepth),
@@ -1098,6 +1846,8 @@ function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
     residentObjectBudget: numberOrFallback(values.residentObjectBudget, defaults.residentObjectBudget),
     residentScatterInstanceBudget: numberOrFallback(values.residentScatterInstanceBudget, defaults.residentScatterInstanceBudget),
     residentChunkBuildBudgetPerFrame: numberOrFallback(values.residentChunkBuildBudgetPerFrame, defaults.residentChunkBuildBudgetPerFrame),
+    groundChunkingEnabled: values.groundChunkingEnabled !== false,
+    pathWaterSurfaceChunkingEnabled: values.pathWaterSurfaceChunkingEnabled === true,
     terrainVisualChunkingEnabled: values.terrainVisualChunkingEnabled === true
   };
 }
@@ -1114,14 +1864,16 @@ function buildEditorChunkLoadingReadModel(node) {
 }
 
 function buildGameChunkLoadingReadModel(node) {
+  const defaults = defaultValuesForType("game_chunk_loading");
   const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game");
-  const values = Object.assign({}, defaultValuesForType("game_chunk_loading"), node?.values || {});
+  const values = Object.assign({}, defaults, node?.values || {});
   return Object.assign(base, {
     cameraOnly: values.cameraOnly !== false,
-    gameViewRadiusChunks: numberOrFallback(values.gameViewRadiusChunks, defaultValuesForType("game_chunk_loading").gameViewRadiusChunks),
-    fixedCameraPaddingTiles: numberOrFallback(values.fixedCameraPaddingTiles, defaultValuesForType("game_chunk_loading").fixedCameraPaddingTiles),
+    gameViewRadiusChunks: numberOrFallback(values.gameViewRadiusChunks, defaults.gameViewRadiusChunks),
+    cameraOffsetZChunks: numberOrFallback(values.cameraOffsetZChunks, defaults.cameraOffsetZChunks),
+    fixedCameraPaddingTiles: numberOrFallback(values.fixedCameraPaddingTiles, defaults.fixedCameraPaddingTiles),
     strictUnloadOutsideCamera: values.strictUnloadOutsideCamera !== false,
-    loadBudgetPerFrame: numberOrFallback(values.loadBudgetPerFrame, defaultValuesForType("game_chunk_loading").loadBudgetPerFrame)
+    loadBudgetPerFrame: numberOrFallback(values.loadBudgetPerFrame, defaults.loadBudgetPerFrame)
   });
 }
 
@@ -1157,10 +1909,43 @@ function validateChunkLoadingReadModel(chunkLoading, warnings) {
     pushUniqueWarning(warnings, "Game Chunk Loading cameraOnly staat uit; dit kan meer chunks laden dan de vaste game camera nodig heeft.");
   }
   if (chunkLoading.game) {
-    const chunkWorldWidth = numberOrNull(chunkLoading.game.chunkWidth) * numberOrNull(chunkLoading.game.tileSize);
-    const chunkWorldDepth = numberOrNull(chunkLoading.game.chunkDepth) * numberOrNull(chunkLoading.game.tileSize);
-    if (Number.isFinite(chunkWorldWidth) && Number.isFinite(chunkWorldDepth) && (chunkWorldWidth < 25 || chunkWorldDepth < 25)) {
-      pushUniqueWarning(warnings, "Game Chunk Loading chunk size is very small; this can cause frequent chunk switching. Use 25-50 for laptop baseline unless intentionally testing micro chunks.");
+    const game = chunkLoading.game;
+    const chunkWidth = numberOrNull(game.chunkWidth);
+    const chunkDepth = numberOrNull(game.chunkDepth);
+    const tileSize = numberOrNull(game.tileSize);
+    const chunkWorldWidth = Number.isFinite(chunkWidth) && Number.isFinite(tileSize) ? chunkWidth * tileSize : null;
+    const chunkWorldDepth = Number.isFinite(chunkDepth) && Number.isFinite(tileSize) ? chunkDepth * tileSize : null;
+    const minChunkTiles = Number.isFinite(chunkWidth) && Number.isFinite(chunkDepth)
+      ? Math.max(1, Math.min(chunkWidth, chunkDepth))
+      : null;
+    const fixedCameraPaddingTiles = numberOrNull(game.fixedCameraPaddingTiles);
+    const fixedCameraPaddingChunks = Number.isFinite(fixedCameraPaddingTiles) && Number.isFinite(minChunkTiles)
+      ? Math.floor(fixedCameraPaddingTiles / minChunkTiles)
+      : null;
+    const gameViewRadiusChunks = numberOrNull(game.gameViewRadiusChunks);
+    const preloadMarginChunks = numberOrNull(game.preloadMarginChunks);
+    const unloadMarginChunks = numberOrNull(game.unloadMarginChunks);
+    const activeRadiusChunks = Number.isFinite(gameViewRadiusChunks) && Number.isFinite(fixedCameraPaddingChunks)
+      ? gameViewRadiusChunks + fixedCameraPaddingChunks
+      : null;
+    const loadedRadiusChunks = Number.isFinite(activeRadiusChunks) && Number.isFinite(preloadMarginChunks) && Number.isFinite(unloadMarginChunks)
+      ? activeRadiusChunks + Math.max(preloadMarginChunks, unloadMarginChunks)
+      : null;
+    const requiredLoadedChunks = Number.isFinite(loadedRadiusChunks)
+      ? Math.pow((loadedRadiusChunks * 2) + 1, 2)
+      : null;
+    const maxLoadedChunks = numberOrNull(game.maxLoadedChunks);
+    if (game.enabled !== false && Number.isFinite(fixedCameraPaddingTiles) && fixedCameraPaddingTiles > 0 && Number.isFinite(minChunkTiles) && fixedCameraPaddingTiles < minChunkTiles) {
+      pushUniqueWarning(warnings, "Game Chunk Loading camera padding is kleiner dan één hele chunk; dit heeft nog geen effect totdat je minstens één volledige chunk padding hebt.");
+    }
+    if (game.enabled !== false && Number.isFinite(requiredLoadedChunks) && Number.isFinite(maxLoadedChunks) && maxLoadedChunks < requiredLoadedChunks) {
+      pushUniqueWarning(warnings, "Game Chunk Loading maxLoadedChunks is kleiner dan de actieve window (" + requiredLoadedChunks + " nodig, " + maxLoadedChunks + " ingesteld); de runtime zal chunks clippen en de cameraring niet volledig resident houden.");
+    }
+    const residentEntityBudget = numberOrNull(game.residentEntityBudget);
+    const residentObjectBudget = numberOrNull(game.residentObjectBudget);
+    const residentScatterBudget = numberOrNull(game.residentScatterInstanceBudget);
+    if (game.enabled !== false && (residentEntityBudget === 0 || residentObjectBudget === 0 || residentScatterBudget === 0)) {
+      pushUniqueWarning(warnings, "Game Chunk Loading resident budgets staan op 0; preload-chunks met content kunnen dan blijven pending tot ze direct zichtbaar worden.");
     }
   }
   for (const model of [chunkLoading.editor, chunkLoading.game]) {
@@ -1171,6 +1956,160 @@ function validateChunkLoadingReadModel(chunkLoading, warnings) {
       pushUniqueWarning(warnings, "Chunk Loading unload margin is kleiner dan preload margin; chunks kunnen snel laden/lossen.");
     }
   }
+}
+
+// The minimap always bakes the entire Ground Surface as a single square (1:1) area, centered on
+// the ground's own center. No bounds UI is exposed to Kevin; this is the only bounds computation.
+export function squareGroundBounds(ground) {
+  if (!ground) return null;
+  const hasExplicitBounds = [ground.minX, ground.maxX, ground.minZ, ground.maxZ].every(Number.isFinite);
+  let minX, maxX, minZ, maxZ;
+  if (hasExplicitBounds) {
+    const centerX = (ground.minX + ground.maxX) / 2;
+    const centerZ = (ground.minZ + ground.maxZ) / 2;
+    const groundWidth = ground.maxX - ground.minX;
+    const groundDepth = ground.maxZ - ground.minZ;
+    const side = Math.max(groundWidth, groundDepth, 0.01);
+    minX = centerX - side / 2;
+    maxX = centerX + side / 2;
+    minZ = centerZ - side / 2;
+    maxZ = centerZ + side / 2;
+  } else {
+    const width = numberOrFallback(ground.width, 60);
+    const depth = numberOrFallback(ground.depth, 60);
+    const side = Math.max(width, depth, 0.01);
+    minX = -side / 2;
+    maxX = side / 2;
+    minZ = -side / 2;
+    maxZ = side / 2;
+  }
+  return { minX, maxX, minZ, maxZ, width: maxX - minX, depth: maxZ - minZ };
+}
+
+function buildMinimapBakeReadModel(node, groundNode) {
+  const defaults = defaultValuesForType("minimap_bake");
+  const values = Object.assign({}, defaults, node?.values || {});
+  const bounds = groundNode ? squareGroundBounds(buildGroundReadModel(groundNode)) : null;
+  return {
+    id: node.id,
+    nodeId: node.id,
+    minimapId: values.minimapId,
+    label: values.label,
+    enabled: values.enabled !== false,
+    bounds: bounds,
+    resolution: Math.max(64, Math.min(8192, Math.round(numberOrFallback(values.resolution, 2048)))),
+    imageFormat: "webp",
+    imageQuality: numberOrFallback(values.imageQuality, defaults.imageQuality),
+    includeStaticModels: values.includeStaticModels !== false,
+    includeInteractables: values.includeInteractables === true,
+    hideEditorHelpers: values.hideEditorHelpers !== false,
+    bakedImageUrl: values.bakedImageUrl || "",
+    bakedImageWidth: numberOrNull(values.bakedImageWidth) || 0,
+    bakedImageHeight: numberOrNull(values.bakedImageHeight) || 0,
+    bakedAt: values.bakedAt || "",
+    bakedWorldHash: values.bakedWorldHash || "",
+    bakedBounds: values.bakedBounds || null
+  };
+}
+
+function buildGameMinimapHudReadModel(node) {
+  const defaults = defaultValuesForType("game_minimap_hud");
+  const rawValues = node?.values || {};
+  const values = Object.assign({}, defaults, rawValues);
+  const hasDebugMode = Object.prototype.hasOwnProperty.call(rawValues, "debugMode");
+  const debugMode = hasDebugMode ? rawValues.debugMode === true : rawValues.liteMode === false;
+  const rotationMode = values.rotationMode === "player_facing" || values.rotationMode === "camera_yaw" ? values.rotationMode : "north_up";
+  return {
+    id: node.id,
+    nodeId: node.id,
+    hudId: values.hudId,
+    sourceMinimapId: values.sourceMinimapId,
+    enabled: values.enabled !== false,
+    anchor: values.anchor,
+    sizePx: numberOrFallback(values.sizePx, defaults.sizePx),
+    marginPx: numberOrFallback(values.marginPx, defaults.marginPx),
+    borderRadiusPx: numberOrFallback(values.borderRadiusPx, defaults.borderRadiusPx),
+    backgroundOpacity: numberOrFallback(values.backgroundOpacity, defaults.backgroundOpacity),
+    markerUpdateMs: numberOrFallback(values.markerUpdateMs, defaults.markerUpdateMs),
+    debugMode: debugMode,
+    liteMode: !debugMode,
+    rotationMode: rotationMode,
+    startDistance: numberOrFallback(values.startDistance, defaults.startDistance),
+    minDistance: numberOrFallback(values.minDistance, defaults.minDistance),
+    maxDistance: numberOrFallback(values.maxDistance, defaults.maxDistance),
+    followPlayer: values.followPlayer !== false,
+    clickToMove: values.clickToMove !== false,
+    allowZoom: values.allowZoom !== false,
+    allowPan: values.allowPan !== false,
+    allowPinchZoom: values.allowPinchZoom !== false,
+    showLocalPlayer: values.showLocalPlayer !== false,
+    showRemotePlayers: values.showRemotePlayers !== false,
+    showRemotePlayerNames: values.showRemotePlayerNames !== false,
+    showPlayerName: values.showPlayerName !== false,
+    showSpawn: values.showSpawn === true,
+    showNpcEntities: values.showNpcEntities !== false,
+    showInteractables: values.showInteractables === true,
+    showQuestMarkers: values.showQuestMarkers === true,
+    showEnemies: values.showEnemies === true,
+    showViewportCone: values.showViewportCone !== false,
+    clampOutsideMarkers: values.clampOutsideMarkers !== false,
+    iconSizePx: numberOrFallback(values.iconSizePx, defaults.iconSizePx),
+    fontSizePx: numberOrFallback(values.fontSizePx, defaults.fontSizePx),
+    nameMaxLength: numberOrFallback(values.nameMaxLength, defaults.nameMaxLength),
+    zIndex: numberOrFallback(values.zIndex, defaults.zIndex)
+  };
+}
+
+function buildEditorMinimapHudReadModel(node) {
+  const defaults = defaultValuesForType("editor_minimap_hud");
+  const values = Object.assign({}, defaults, node?.values || {});
+  return {
+    id: node.id,
+    nodeId: node.id,
+    hudId: values.hudId,
+    sourceMinimapId: values.sourceMinimapId,
+    enabled: values.enabled !== false,
+    anchor: values.anchor,
+    sizePx: numberOrFallback(values.sizePx, defaults.sizePx),
+    expandedSizePx: numberOrFallback(values.expandedSizePx, defaults.expandedSizePx),
+    startExpanded: values.startExpanded === true,
+    startDistance: numberOrFallback(values.startDistance, defaults.startDistance),
+    minDistance: numberOrFallback(values.minDistance, defaults.minDistance),
+    maxDistance: numberOrFallback(values.maxDistance, defaults.maxDistance),
+    followEditorCamera: values.followEditorCamera !== false,
+    showEditorCamera: values.showEditorCamera !== false,
+    showEditorCameraViewBounds: values.showEditorCameraViewBounds !== false,
+    showSelectedObject: values.showSelectedObject !== false,
+    showPlayerSpawn: values.showPlayerSpawn !== false,
+    showModelEntities: values.showModelEntities !== false,
+    showEntityNames: values.showEntityNames !== false,
+    showInteractables: values.showInteractables !== false,
+    showChunkGrid: values.showChunkGrid === true,
+    showBakeBounds: values.showBakeBounds !== false,
+    clickToFocus: values.clickToFocus !== false,
+    allowZoom: values.allowZoom !== false,
+    allowPan: values.allowPan !== false,
+    allowPinchZoom: values.allowPinchZoom !== false
+  };
+}
+
+function collectMinimapReadModel(nodes, groundNode, includeEditor, warnings = []) {
+  const bakeNodes = [];
+  const gameNodes = [];
+  const editorNodes = [];
+  for (const node of nodes || []) {
+    if (node.type === "minimap_bake") bakeNodes.push(node);
+    else if (node.type === "game_minimap_hud") gameNodes.push(node);
+    else if (node.type === "editor_minimap_hud") editorNodes.push(node);
+  }
+  if (gameNodes.length > 1) pushUniqueWarning(warnings, "Er zijn meerdere Game Minimap HUD nodes verbonden. De eerste wordt gebruikt.");
+  if (editorNodes.length > 1) pushUniqueWarning(warnings, "Er zijn meerdere Editor Minimap nodes verbonden. De eerste wordt gebruikt.");
+  const minimap = {
+    bakes: bakeNodes.map(function (node) { return buildMinimapBakeReadModel(node, groundNode); }),
+    game: gameNodes[0] ? buildGameMinimapHudReadModel(gameNodes[0]) : null
+  };
+  if (includeEditor) minimap.editor = editorNodes[0] ? buildEditorMinimapHudReadModel(editorNodes[0]) : null;
+  return minimap;
 }
 
 function collectTerrainReadModel(nodes) {
@@ -1373,6 +2312,9 @@ export function validateGraphForPublish(graph, services = {}) {
       if (settings.enabled && settings.count > 0 && !resolved.sourceAssets.length) {
         errors.push(label + " heeft minstens één bron mesh nodig.");
       }
+      if (settings.boundaryBlocksPlayer && settings.distributionMode !== "dense_fill" && settings.minSpacing === 0) {
+        pushUniqueWarning(warnings, label + " blocks player but has no dense fill or min spacing; minimap may show misleading gaps.");
+      }
       for (const source of resolved.sourceAssets) {
         requireAsset(services.assetService, source.id, "model", label + " bron " + source.id, errors);
       }
@@ -1394,6 +2336,59 @@ export function validateGraphForPublish(graph, services = {}) {
     }) || [];
     const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings);
     validateChunkLoadingReadModel(chunkLoading, warnings);
+
+    const minimapNodes = collectResolutionError(errors, function () {
+      return incomingNodes(graph, output, "minimap", nodeMap);
+    }) || [];
+    const minimapBakeNodes = minimapNodes.filter(function (node) { return node.type === "minimap_bake"; });
+    const gameMinimapNodes = minimapNodes.filter(function (node) { return node.type === "game_minimap_hud"; });
+    const editorMinimapNodes = minimapNodes.filter(function (node) { return node.type === "editor_minimap_hud"; });
+    if (gameMinimapNodes.length > 1) pushUniqueWarning(warnings, "Er zijn meerdere Game Minimap HUD nodes verbonden. De eerste wordt gebruikt.");
+    if (editorMinimapNodes.length > 1) pushUniqueWarning(warnings, "Er zijn meerdere Editor Minimap nodes verbonden. De eerste wordt gebruikt.");
+
+    const enabledBakeMinimapIds = new Set();
+    for (const node of minimapBakeNodes) {
+      const label = "Minimap Bake '" + (node.values.label || node.values.minimapId || node.id) + "'";
+      const minimapId = String(node.values.minimapId || "").trim();
+      const enabled = node.values.enabled !== false;
+      const resolution = numberOrNull(node.values.resolution);
+      if (resolution !== null && resolution > 8192) {
+        errors.push(label + " heeft een resolution groter dan 8192.");
+      }
+      if (enabled && minimapId) {
+        if (enabledBakeMinimapIds.has(minimapId)) {
+          errors.push("Er zijn meerdere enabled Minimap Bake nodes met minimapId '" + minimapId + "'.");
+        }
+        enabledBakeMinimapIds.add(minimapId);
+      }
+    }
+
+    const gameMinimapHudIds = new Set();
+    for (const node of gameMinimapNodes) {
+      const label = "Game Minimap HUD '" + (node.values.hudId || node.id) + "'";
+      const hudId = String(node.values.hudId || "").trim();
+      const sizePx = numberOrNull(node.values.sizePx);
+      if (sizePx !== null && sizePx <= 0) errors.push(label + " heeft een ongeldige sizePx.");
+      if (hudId) {
+        if (gameMinimapHudIds.has(hudId)) errors.push("Er zijn meerdere Game Minimap HUD nodes met hudId '" + hudId + "'.");
+        gameMinimapHudIds.add(hudId);
+      }
+      if (node.values.enabled !== false) {
+        const sourceMinimapId = String(node.values.sourceMinimapId || "").trim();
+        const matchingBake = minimapBakeNodes.find(function (bakeNode) {
+          return String(bakeNode.values.minimapId || "").trim() === sourceMinimapId;
+        });
+        if (!matchingBake) {
+          pushUniqueWarning(warnings, label + " verwijst naar minimap_bake '" + sourceMinimapId + "', maar die node bestaat niet of is niet verbonden.");
+        } else if (!matchingBake.values.bakedImageUrl) {
+          pushUniqueWarning(warnings, label + " verwijst naar minimap_bake " + sourceMinimapId + ", maar er is nog geen minimap image gebakken.");
+        }
+      }
+    }
+    for (const node of editorMinimapNodes) {
+      const sizePx = numberOrNull(node.values.sizePx);
+      if (sizePx !== null && sizePx <= 0) errors.push("Editor Minimap '" + (node.values.hudId || node.id) + "' heeft een ongeldige sizePx.");
+    }
   }
   return { ok: errors.length === 0, errors, warnings };
 }
@@ -1412,6 +2407,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     chunkLoading: { editor: null, game: null },
     keybinds: [],
     ui: [],
+    minimap: { bakes: [], game: null },
     terrain: emptyTerrainReadModel(),
     collision: emptyCollisionReadModel()
   };
@@ -1430,6 +2426,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const chunkLoadingNodes = incomingNodes(graph, outputNode, "chunkLoading", nodeMap);
   const keybindNodes = incomingNodes(graph, outputNode, "keybinds", nodeMap);
   const uiNodes = incomingNodes(graph, outputNode, "ui", nodeMap);
+  const minimapNodes = incomingNodes(graph, outputNode, "minimap", nodeMap);
   const terrainNodes = incomingNodes(graph, outputNode, "terrain", nodeMap);
   const collisionNodes = incomingNodes(graph, outputNode, "collision", nodeMap);
   const modelEntityNodes = entityNodes.filter(function (node) {
@@ -1463,13 +2460,20 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     const resolved = resolveScatterSources(node, nodeMap, services, [], label);
     for (const assetId of resolved.sourceAssetIds) assetIds.add(assetId);
     const settings = normalizeScatterSettings(node);
-    scatterAreas.push(buildScatterAreaReadModel(node, resolved));
-    scatterEntities.push.apply(scatterEntities, buildScatterInstances(node, resolved.sourceAssets, groundY));
+    const scatterInstances = buildScatterInstances(node, resolved.sourceAssets, groundY);
+    scatterAreas.push(buildScatterAreaReadModel(node, resolved, {
+      placedCount: scatterInstances.placedCount ?? scatterInstances.length,
+      placementWarnings: scatterInstances.placementWarnings || []
+    }));
+    scatterEntities.push.apply(scatterEntities, scatterInstances);
     if (settings.boundaryBlocksPlayer) {
       scatterCollisionBlockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
     }
   }
   const assets = services.assetService ? services.assetService.manifestForIds(Array.from(assetIds)) : [];
+  const assetLookup = new Map(assets.map(function (asset) {
+    return [asset.id, asset];
+  }));
   const editorCamera = includeEditorCamera && editorCameraNode ? buildEditorCameraReadModel(editorCameraNode) : null;
   const collision = collectCollisionReadModel(collisionNodes);
   collision.blockers.push.apply(collision.blockers, scatterCollisionBlockers);
@@ -1507,15 +2511,13 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     player: playerNode ? {
       id: playerNode.values.playerId,
       modelAssetId: playerNode.values.modelAssetId,
-      animationClip: playerNode.values.animationClip || null,
-      idleAnimation: playerNode.values.idleAnimation || null,
-      walkAnimation: playerNode.values.walkAnimation || null,
-      runAnimation: playerNode.values.runAnimation || null,
-      moveSpeed: numberOrNull(playerNode.values.moveSpeed),
-      sprintMultiplier: numberOrNull(playerNode.values.sprintMultiplier),
-      turnSpeed: numberOrNull(playerNode.values.turnSpeed),
-      collisionRadius: numberOrNull(playerNode.values.collisionRadius),
-      scale: numberOrNull(playerNode.values.scale)
+      ...resolveCanonicalAnimationConfig(assetLookup.get(playerNode.values.modelAssetId), playerNode.values),
+      moveSpeed: clampNumber(numberOrNull(playerNode.values.moveSpeed), 0.1, 100, 6),
+      sprintMultiplier: clampNumber(numberOrNull(playerNode.values.sprintMultiplier), 1, 2.5, 1.6),
+      turnSpeed: clampNumber(numberOrNull(playerNode.values.turnSpeed), 1, 4000, 540),
+      collisionRadius: clampNumber(numberOrNull(playerNode.values.collisionRadius), 0.05, 50, 0.5),
+      scale: clampNumber(numberOrNull(playerNode.values.scale), 0.001, 1000, 1),
+      showNameplate: playerNode.values.showNameplate !== false
     } : null,
     spawn: spawnNode ? {
       id: spawnNode.values.spawnId,
@@ -1535,13 +2537,10 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
         label: node.values.label,
         type: "model",
         modelAssetId: node.values.modelAssetId,
-        animationClip: node.values.animationClip || null,
-        idleAnimation: node.values.idleAnimation || null,
-        walkAnimation: node.values.walkAnimation || null,
-        runAnimation: node.values.runAnimation || null,
+        ...resolveCanonicalAnimationConfig(assetLookup.get(node.values.modelAssetId), node.values),
         solid: node.values.solid === true,
         walkable: node.values.walkable === true,
-        collisionRadius: numberOrNull(node.values.collisionRadius),
+        collisionRadius: clampNumber(numberOrNull(node.values.collisionRadius), 0.05, 100, 1),
         transform: {
           position: { x: numberOrNull(node.values.x), y: numberOrNull(node.values.y), z: numberOrNull(node.values.z) },
           rotation: {
@@ -1573,6 +2572,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
       return { id: node.values.bindingId, action: node.values.action, keyCode: node.values.keyCode };
     }),
     ui: uiNodes.map(buildUiReadModel),
+    minimap: collectMinimapReadModel(minimapNodes, groundNode, includeEditorCamera),
     terrain: collectTerrainReadModel(terrainNodes),
     collision: collision,
     scatterAreas: scatterAreas,

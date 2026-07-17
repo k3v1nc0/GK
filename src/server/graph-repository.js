@@ -234,21 +234,33 @@ function deleteGroupPortEdges(db, groupId, removedInputPorts, removedOutputPorts
   const groupInput = db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_input' LIMIT 1").get(groupId);
   const groupOutput = db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_output' LIMIT 1").get(groupId);
   let changed = false;
-  const deleteInputEdge = db.prepare("DELETE FROM editor_node_edges WHERE from_node_id = ? AND from_port = ?");
-  const deleteOutputEdge = db.prepare("DELETE FROM editor_node_edges WHERE to_node_id = ? AND to_port = ?");
+  const deleteInternalInputEdge = db.prepare("DELETE FROM editor_node_edges WHERE from_node_id = ? AND from_port = ?");
+  const deleteInternalOutputEdge = db.prepare("DELETE FROM editor_node_edges WHERE to_node_id = ? AND to_port = ?");
+  // Edges outside the group that use the group node itself as the endpoint (the interface port
+  // exposed to siblings) also need to go, or they dangle referencing a port that no longer exists.
+  const deleteExternalInputEdge = db.prepare("DELETE FROM editor_node_edges WHERE to_node_id = ? AND to_port = ?");
+  const deleteExternalOutputEdge = db.prepare("DELETE FROM editor_node_edges WHERE from_node_id = ? AND from_port = ?");
   db.exec("BEGIN");
   try {
     if (groupInput) {
       for (const portName of inputPorts) {
-        const result = deleteInputEdge.run(groupInput.id, portName);
+        const result = deleteInternalInputEdge.run(groupInput.id, portName);
         changed = changed || result.changes > 0;
       }
     }
     if (groupOutput) {
       for (const portName of outputPorts) {
-        const result = deleteOutputEdge.run(groupOutput.id, portName);
+        const result = deleteInternalOutputEdge.run(groupOutput.id, portName);
         changed = changed || result.changes > 0;
       }
+    }
+    for (const portName of inputPorts) {
+      const result = deleteExternalInputEdge.run(groupId, portName);
+      changed = changed || result.changes > 0;
+    }
+    for (const portName of outputPorts) {
+      const result = deleteExternalOutputEdge.run(groupId, portName);
+      changed = changed || result.changes > 0;
     }
     db.exec("COMMIT");
     return changed;
@@ -268,6 +280,13 @@ function pruneInvalidEdges(db, edges, nodeMap) {
       continue;
     }
     if ((fromNode.parentId || null) !== (toNode.parentId || null)) {
+      invalidEdgeIds.push(edge.id);
+      continue;
+    }
+    // Ports can disappear (e.g. a group interface port gets removed) without the edge that
+    // used them being cleaned up everywhere; drop those here so a leftover dangling edge
+    // doesn't keep failing full-graph validation for unrelated edits forever.
+    if (!resolveNodePort(fromNode, edge.fromPort, "output", nodeMap) || !resolveNodePort(toNode, edge.toPort, "input", nodeMap)) {
       invalidEdgeIds.push(edge.id);
     }
   }

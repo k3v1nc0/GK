@@ -14,5 +14,11 @@ git push origin HEAD --force
 git config pull.rebase false
 git pull && git push
 
-//npm uit aan script
+//npm uit aan script en opschonen RAM
 scripts/reset.sh
+CLEAN_CODE_SERVER=1 RESET_SWAP=1 bash scripts/reset.sh
+
+// herstart code-server
+sudo systemctl restart code-server@$USER
+
+

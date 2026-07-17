@@ -12,10 +12,14 @@
     "start": "sh scripts/run-node24.sh src/server/server.js",
     "check": "sh scripts/run-node24.sh scripts/check.js",
     "smoke": "sh scripts/run-node24.sh scripts/smoke-test.js",
-    "perf:game": "sh scripts/run-node24.sh scripts/perf-game.js"
+    "inspect:chunks": "sh scripts/run-node24.sh scripts/inspect-world-chunks.js",
+    "perf:game": "sh scripts/run-node24.sh scripts/perf-game.js",
+    "game:browser-check": "sh scripts/run-node24.sh scripts/game-browser-check.js"
   },
   "dependencies": {
     "@shopify/screenshot-glb": "^4.1.0",
-    "three": "^0.184.0"
+    "puppeteer": "^24.10.0",
+    "three": "^0.184.0",
+    "ws": "^8.18.0"
   }
 }
