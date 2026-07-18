@@ -1,0 +1,41 @@
+
+> gk-real-node-editor@2.0.0 check
+> sh scripts/run-node24.sh scripts/check.js
+
+ok   src/server/asset-service.js
+ok   src/server/auth-service.js
+ok   src/server/db.js
+ok   src/server/env.js
+ok   src/server/field-validation.js
+ok   src/server/game-project-compiler.js
+ok   src/server/graph-migration-service.js
+ok   src/server/graph-repository.js
+ok   src/server/mmo-service.js
+ok   src/server/publish-service.js
+ok   src/server/server.js
+ok   src/server/symbol-index-service.js
+ok   src/server/token-resolver.js
+ok   src/shared/node-contract.js
+ok   src/shared/node-types.js
+ok   src/shared/reference-utils.js
+ok   src/shared/token-contract.js
+ok   src/shared/token-preview.js
+ok   apps/web/public/editor/editor.js
+ok   apps/web/public/game/game.js
+ok   apps/web/public/login/login.js
+ok   apps/web/public/shared/minimap-utils.js
+ok   apps/web/public/shared/node-contract.js
+ok   apps/web/public/shared/node-types.js
+ok   apps/web/public/shared/reference-utils.js
+ok   apps/web/public/shared/revision-guard.js
+ok   apps/web/public/shared/token-contract.js
+ok   apps/web/public/shared/token-preview.js
+ok   apps/web/public/shared/world-runtime.js
+ok   scripts/check.js
+ok   scripts/game-browser-check.js
+ok   scripts/inspect-world-chunks.js
+ok   scripts/perf-game.js
+ok   scripts/run-node24.js
+ok   scripts/smoke-test.js
+
+35/35 bestanden syntactisch ok.

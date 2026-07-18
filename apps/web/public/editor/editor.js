@@ -1,6 +1,13 @@
 import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
 import {
+  normalizeCanonicalId,
+  normalizeReferenceList,
+  normalizeTagList,
+  normalizeTagQuery
+} from "../shared/node-contract.js?v=20260717-node01-foundation";
+import { referenceKindFromId, referenceMatchesKinds } from "../shared/reference-utils.js?v=20260717-node01-foundation";
+import {
   resolveMinimapPoint,
   drawTriangleMarker,
   drawDotMarker,
@@ -20,8 +27,9 @@ const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 const HEAD = 34;
 const PAD = 8;
-const ROW = 20;
-const NODE_WIDTH = 210;
+const PORT_ROW = 24;
+const PORT_GAP = 4;
+const NODE_WIDTH = 260;
 const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "world_settings",
@@ -527,6 +535,53 @@ function effectiveFieldValue(field, value) {
 }
 
 function normalizeFieldInputValue(field, value) {
+  if (field.type === "identity") {
+    return isBlankValue(value) ? field.default : normalizeCanonicalId(value, field.default);
+  }
+  if (field.type === "reference") {
+    return isBlankValue(value) ? field.default : normalizeCanonicalId(value, field.default);
+  }
+  if (field.type === "referenceList") {
+    return normalizeReferenceList(isBlankValue(value) ? field.default : splitDelimitedValues(value));
+  }
+  if (field.type === "tagList") {
+    return normalizeTagList(isBlankValue(value) ? field.default : splitDelimitedValues(value));
+  }
+  if (field.type === "tagQuery") {
+    if (isBlankValue(value)) {
+      const fallback = field.default;
+      return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+    }
+    if (typeof value === "object") return normalizeTagQuery(value);
+    return normalizeTagQuery(JSON.parse(String(value)));
+  }
+  if (field.type === "tokenText") {
+    return isBlankValue(value) ? field.default : String(value);
+  }
+  if (field.type === "formula") {
+    if (isBlankValue(value)) {
+      const fallback = field.default;
+      return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+    }
+    if (typeof value === "object") return clonePlain(value);
+    return JSON.parse(String(value));
+  }
+  if (field.type === "localizedText") {
+    if (isBlankValue(value)) {
+      const fallback = field.default;
+      return fallback && typeof fallback === "object" ? clonePlain(fallback) : fallback;
+    }
+    if (typeof value === "string") {
+      return { key: normalizeCanonicalId(value, ""), fallbackText: "" };
+    }
+    if (value && typeof value === "object") {
+      return {
+        key: normalizeCanonicalId(value.key, ""),
+        fallbackText: isBlankValue(value.fallbackText) ? "" : String(value.fallbackText)
+      };
+    }
+    return { key: "", fallbackText: "" };
+  }
   if (field.type === "boolean") {
     return value === true || value === "true" || value === 1 || value === "1";
   }
@@ -550,6 +605,43 @@ function normalizeFieldInputValue(field, value) {
 
 function clonePlain(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function splitDelimitedValues(value) {
+  if (Array.isArray(value)) {
+    return value.map(function (entry) {
+      return String(entry === null || entry === undefined ? "" : entry).trim();
+    }).filter(Boolean);
+  }
+  return String(value === null || value === undefined ? "" : value)
+    .split(/[\n,]+/g)
+    .map(function (entry) {
+      return entry.trim();
+    })
+    .filter(Boolean);
+}
+
+function stringifyListValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(function (entry) {
+      return String(entry === null || entry === undefined ? "" : entry);
+    }).join("\n");
+  }
+  return isBlankValue(value) ? "" : String(value);
+}
+
+function stringifyJsonValue(value, fallback = null) {
+  try {
+    return JSON.stringify(value === undefined ? fallback : value, null, 2);
+  } catch {
+    return JSON.stringify(fallback, null, 2);
+  }
+}
+
+function validationIssueText(issue) {
+  if (typeof issue === "string") return issue;
+  if (issue && typeof issue === "object") return String(issue.message || issue.code || JSON.stringify(issue));
+  return String(issue || "");
 }
 
 function assetById(assetId) {
@@ -2898,6 +2990,8 @@ function focusGraphNode(nodeId) {
   return true;
 }
 
+editorDebug.focusGraphNode = focusGraphNode;
+
 function snapshotNode(node) {
   return {
     id: node.id,
@@ -3375,14 +3469,57 @@ function renderNodeLibrary() {
     }
     el.nodeLibrary.appendChild(wrap);
   }
+  renderSpecialGroupLibrary();
 }
 
-async function addNode(type) {
+function renderSpecialGroupLibrary() {
+  if (!state.nodeTypes.group) return;
+  const presets = [
+    { kind: "catalog", title: "Catalog" },
+    { kind: "zone", title: "Zones" },
+    { kind: "campaign", title: "Campaigns" },
+    { kind: "player_rules", title: "Player Rules" },
+    { kind: "ui", title: "UI" }
+  ];
+  const wrap = document.createElement("div");
+  wrap.className = "libGroup";
+  const title = document.createElement("div");
+  title.className = "libGroupTitle";
+  title.textContent = "Specialized Groups";
+  wrap.appendChild(title);
+  for (const preset of presets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "libButton";
+    const dot = document.createElement("span");
+    dot.className = "libDot";
+    dot.style.background = dataTypeColor(preset.kind === "player_rules" ? "playerRules" : (preset.kind === "ui" ? "uiPackage" : preset.kind + "Package"));
+    const label = document.createElement("span");
+    label.textContent = preset.title;
+    const plus = document.createElement("span");
+    plus.className = "plus";
+    plus.textContent = "+";
+    button.append(dot, label, plus);
+    button.addEventListener("click", function () { addSpecialGroup(preset); });
+    wrap.appendChild(button);
+  }
+  el.nodeLibrary.prepend(wrap);
+}
+
+async function addSpecialGroup(preset) {
+  await addNode("group", {
+    groupId: slugifyGroupPortName(preset.title, preset.kind),
+    title: preset.title,
+    groupKind: preset.kind
+  });
+}
+
+async function addNode(type, values = {}) {
   const center = viewportCenterInGraph();
   await applyGraphMutation(function () {
     return api("/api/editor/nodes", {
       method: "POST",
-      body: JSON.stringify({ type: type, position: center, parentId: state.currentGroupId })
+      body: JSON.stringify({ type: type, position: center, values: values, parentId: state.currentGroupId })
     });
   }, {
     historyLabel: "Node toegevoegd",
@@ -3420,6 +3557,15 @@ function clientToViewportPoint(clientX, clientY) {
   };
 }
 
+function clientToGraphContentPoint(clientX, clientY) {
+  const rect = el.graphContent.getBoundingClientRect();
+  const scale = state.view.scale || 1;
+  return {
+    x: (clientX - rect.left) / scale,
+    y: (clientY - rect.top) / scale
+  };
+}
+
 function graphPointToClientPoint(point) {
   const rect = el.graphViewport.getBoundingClientRect();
   const scale = state.view.scale || 1;
@@ -3440,9 +3586,20 @@ function isFiniteGraphPoint(point) {
   return point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) < 100000 && Math.abs(point.y) < 100000;
 }
 
+function isFiniteGraphPosition(position) {
+  return position
+    && Number.isFinite(Number(position.x))
+    && Number.isFinite(Number(position.y))
+    && Math.abs(Number(position.x)) <= 100000
+    && Math.abs(Number(position.y)) <= 100000;
+}
+
 // ---------- Graph render ----------
 function visibleNodes() {
-  return state.graph.nodes.filter(function (n) { return (n.parentId || null) === state.currentGroupId; });
+  return state.graph.nodes.filter(function (n) {
+    const def = state.nodeTypes[n.type] || {};
+    return (n.parentId || null) === state.currentGroupId && !def.hidden && !def.internal;
+  });
 }
 
 function nodeById(id) {
@@ -3466,7 +3623,7 @@ function resolvedPorts(node) {
 
 function nodeWidth(node) {
   const def = state.nodeTypes[node.type] || {};
-  return def.container ? 200 : NODE_WIDTH;
+  return def.container ? 240 : NODE_WIDTH;
 }
 
 function nodePositionForRender(node) {
@@ -3498,7 +3655,9 @@ function readNodeCardPosition(node, card) {
 
 function portEntriesForNode(node, direction) {
   const ports = resolvedPorts(node);
-  return Object.entries(direction === "input" ? ports.inputs || {} : ports.outputs || {});
+  return Object.entries(direction === "input" ? ports.inputs || {} : ports.outputs || {}).filter(function ([, port]) {
+    return !port.hidden && !port.internal;
+  });
 }
 
 function portIndexForNode(node, portName, direction) {
@@ -3519,15 +3678,33 @@ function groupAccentForNode(node) {
 }
 
 function inputAnchor(node, portName) {
+  const dotAnchor = portDotAnchor(node, portName, "input");
+  if (dotAnchor) return dotAnchor;
   const pos = nodePositionForRender(node);
   const idx = Math.max(0, portIndexForNode(node, portName, "input"));
-  return { x: pos.x + 10, y: pos.y + HEAD + PAD + idx * ROW + ROW / 2 };
+  return { x: pos.x + 1, y: pos.y + HEAD + PAD + idx * (PORT_ROW + PORT_GAP) + PORT_ROW / 2 + 1 };
 }
 function outputAnchor(node, portName) {
+  const dotAnchor = portDotAnchor(node, portName, "output");
+  if (dotAnchor) return dotAnchor;
   const pos = nodePositionForRender(node);
   const idx = Math.max(0, portIndexForNode(node, portName, "output"));
   const width = nodeWidth(node);
-  return { x: pos.x + width - 10, y: pos.y + HEAD + PAD + idx * ROW + ROW / 2 };
+  return { x: pos.x + width - 1, y: pos.y + HEAD + PAD + idx * (PORT_ROW + PORT_GAP) + PORT_ROW / 2 + 1 };
+}
+
+function cssEscapeValue(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function portDotAnchor(node, portName, direction) {
+  const selector = '.gnode[data-node-id="' + cssEscapeValue(node.id) + '"] .port[data-port-name="' + cssEscapeValue(portName) + '"][data-port-direction="' + direction + '"] .portDot';
+  const dot = el.nodeLayer.querySelector(selector);
+  if (!dot) return null;
+  const rect = dot.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return clientToGraphContentPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
 }
 
 function renderGraph() {
@@ -3575,12 +3752,12 @@ function buildNodeElement(node) {
   body.className = "gnodeBody";
   const inputs = document.createElement("div");
   inputs.className = "portCol inputs";
-  for (const [portName, port] of Object.entries(resolvedPorts(node).inputs || {})) {
+  for (const [portName, port] of portEntriesForNode(node, "input")) {
     inputs.appendChild(buildPort(node, portName, port, "input"));
   }
   const outputs = document.createElement("div");
   outputs.className = "portCol outputs";
-  for (const [portName, port] of Object.entries(resolvedPorts(node).outputs || {})) {
+  for (const [portName, port] of portEntriesForNode(node, "output")) {
     outputs.appendChild(buildPort(node, portName, port, "output"));
   }
   body.append(inputs, outputs);
@@ -3644,13 +3821,19 @@ function identityValue(node) {
 function buildPort(node, portName, port, direction) {
   const wrap = document.createElement("div");
   wrap.className = "port";
+  wrap.dataset.portName = portName;
+  wrap.dataset.portDirection = direction;
   const dot = document.createElement("span");
   dot.className = "portDot";
   dot.style.borderColor = dataTypeColor(port.dataType);
   dot.style.background = dataTypeColor(port.dataType);
   if (state.pendingEdge && state.pendingEdge.fromNodeId === node.id && state.pendingEdge.fromPort === portName) wrap.classList.add("armed");
   const label = document.createElement("span");
-  label.textContent = port.label;
+  label.className = "portLabel";
+  const cardinality = port.multiple ? "multiple" : "single";
+  const required = port.required ? "required" : "optional";
+  label.textContent = portDisplayName(port.dataType);
+  wrap.title = port.label + " - " + port.dataType + " - " + required + " " + cardinality + (port.help ? " - " + port.help : "");
   wrap.append(dot, label);
   wrap.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
   wrap.addEventListener("click", function (event) {
@@ -3658,6 +3841,49 @@ function buildPort(node, portName, port, direction) {
     onPortClick(node, portName, port, direction);
   });
   return wrap;
+}
+
+const PORT_DISPLAY_NAMES = {
+  world: "world",
+  editorWorldSettings: "editor",
+  gameWorldSettings: "game",
+  ground: "ground",
+  terrain: "terrain",
+  collision: "block",
+  camera: "camera",
+  light: "light",
+  player: "player",
+  spawn: "spawn",
+  entity: "entity",
+  interactable: "interact",
+  chunkLoading: "loading",
+  keybind: "keys",
+  ui: "ui",
+  minimap: "map",
+  value: "value",
+  projectSettings: "project",
+  chunkGrid: "grid",
+  chunkPolicy: "policy",
+  legacyWorldPackage: "legacy",
+  globalValueDef: "global",
+  tagDef: "tag",
+  textTemplate: "text",
+  localizedTextDef: "locale",
+  catalogDefinition: "catDef",
+  catalogPackage: "catPkg",
+  catalogRegistry: "catReg",
+  zonePackage: "zonePkg",
+  zoneRegistry: "zoneReg",
+  campaignPackage: "campPkg",
+  campaignRegistry: "campReg",
+  playerRules: "rules",
+  uiPackage: "uiPkg",
+  gameProject: "gameProject",
+  group: "group"
+};
+
+function portDisplayName(dataType) {
+  return PORT_DISPLAY_NAMES[dataType] || String(dataType || "port");
 }
 
 function onPortClick(node, portName, port, direction) {
@@ -3671,7 +3897,70 @@ function onPortClick(node, portName, port, direction) {
     setStatus("Kies eerst een output-poort.", "");
     return;
   }
+  const sourceNode = nodeById(state.pendingEdge.fromNodeId);
+  const sourcePort = sourceNode ? resolvedPorts(sourceNode).outputs?.[state.pendingEdge.fromPort] : null;
+  const reason = connectionInvalidReason(sourceNode, sourcePort, node, port, portName);
+  if (reason) {
+    setStatus(reason, "error");
+    return;
+  }
   connectEdge(state.pendingEdge, { toNodeId: node.id, toPort: portName });
+}
+
+function readableDataType(dataType) {
+  const raw = String(dataType || "unknown");
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_:-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, function (char) { return char.toUpperCase(); }) || raw;
+}
+
+function tokenMatches(text) {
+  return Array.from(String(text || "").matchAll(/@\{([^}]+)\}/g)).map(function (match) {
+    return String(match[1] || "").trim();
+  }).filter(Boolean);
+}
+
+function renderTokenTextPreview(textarea, container) {
+  const raw = String(textarea.value || "");
+  const tokens = tokenMatches(raw);
+  container.textContent = "Tokens: " + (tokens.length ? tokens.join(", ") : "geen") + ". Preview laden...";
+  api("/api/editor/tokens/preview", {
+    method: "POST",
+    body: JSON.stringify({ text: raw, staticContextOnly: true })
+  }).then(function (preview) {
+    const errors = Array.isArray(preview?.errors) ? preview.errors : [];
+    const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
+    const sourceText = tokens.includes("global.game_name") ? " Source: Game Project Settings.gameName." : "";
+    container.textContent = [
+      "Raw: " + raw,
+      "Tokens: " + (tokens.length ? tokens.join(", ") : "geen"),
+      "Static preview: " + String(preview?.text || ""),
+      sourceText.trim(),
+      errors.length ? "Errors: " + errors.map(function (error) { return error.message || error.code || String(error); }).join("; ") : "",
+      warnings.length ? "Warnings: " + warnings.map(function (warning) { return warning.message || warning.code || String(warning); }).join("; ") : ""
+    ].filter(Boolean).join("\n");
+    container.classList.toggle("err", errors.length > 0);
+  }).catch(function (error) {
+    container.textContent = "Token preview kon niet worden geladen: " + (error?.message || String(error));
+    container.classList.add("err");
+  });
+}
+
+function connectionInvalidReason(sourceNode, sourcePort, targetNode, targetPort, targetPortName) {
+  if (!sourceNode || !sourcePort) return "De gekozen output bestaat niet meer.";
+  if (!targetPort) return "De gekozen input bestaat niet meer.";
+  if (targetNode?.type === "game_output" && targetPortName !== "gameProject") {
+    return "Game Output accepteert alleen Game Project. Verbind World Assembly.gameProject naar Game Output.gameProject.";
+  }
+  if (sourcePort.dataType !== targetPort.dataType) {
+    return "Ongeldige verbinding: " + readableDataType(sourcePort.dataType) + " past niet op " + readableDataType(targetPort.dataType) + ".";
+  }
+  if ((sourceNode.parentId || null) !== (targetNode.parentId || null)) {
+    return "Ongeldige verbinding: gebruik de group interface om group-grenzen te passeren.";
+  }
+  return "";
 }
 
 async function connectEdge(from, to) {
@@ -3907,10 +4196,18 @@ function startNodeDrag(event, node, card) {
     if (!commit) return;
     const nextGraph = cloneGraphForRestore(state.graph);
     for (const [nodeId, position] of committedPositions) {
+      if (!isFiniteGraphPosition(position)) {
+        for (const [originNodeId, originPosition] of origins.entries()) {
+          delete state.dragPreviewPositions[originNodeId];
+          syncNodeCardPosition(originNodeId, originPosition);
+        }
+        setStatus("Ongeldige sleep-coördinaten voor " + node.title + ".", "error");
+        return;
+      }
       const graphNode = nextGraph.nodes.find(function (candidate) { return candidate.id === nodeId; });
       if (!graphNode) continue;
-      graphNode.x = position.x;
-      graphNode.y = position.y;
+      graphNode.x = Math.round(Number(position.x));
+      graphNode.y = Math.round(Number(position.y));
     }
     const result = await restoreGraphObject(nextGraph, {
       historySnapshot: historySnapshot,
@@ -4495,6 +4792,115 @@ function buildField(node, key, field) {
       patchValues(node.id, patch, { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
     });
     wrap.appendChild(select);
+  } else if (field.type === "identity" || field.type === "reference") {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.autocapitalize = "none";
+    input.value = isBlankValue(value) ? "" : String(value);
+    input.placeholder = field.type === "reference"
+      ? ((Array.isArray(field.referenceKinds) && field.referenceKinds.length) ? field.referenceKinds.join(", ") : "reference.id")
+      : (field.pattern || "canonical.id");
+    applyFieldHelp(input, help);
+    input.addEventListener("change", function () {
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
+        historyLabel: field.label,
+        refreshViewport: shouldRefreshViewportForNode(node.id),
+        refreshValidation: true
+      });
+    });
+    wrap.appendChild(input);
+    if (field.type === "reference") {
+      const expectedKinds = Array.isArray(field.referenceKinds)
+        ? field.referenceKinds.map(function (kind) { return String(kind || "").trim().toLowerCase(); }).filter(Boolean)
+        : [];
+      if (expectedKinds.length) {
+        const hint = document.createElement("div");
+        hint.className = "inspectorHint";
+        const currentKind = referenceKindFromId(value);
+        hint.textContent = "Verwacht reference kind: " + expectedKinds.join(", ") + "." + (currentKind ? " Huidig: " + currentKind + "." : "");
+        if (!isBlankValue(value) && !referenceMatchesKinds(String(value), expectedKinds)) {
+          hint.classList.add("err");
+        }
+        wrap.appendChild(hint);
+      }
+    }
+  } else if (field.type === "referenceList" || field.type === "tagList" || field.type === "tokenText") {
+    const textarea = document.createElement("textarea");
+    textarea.rows = field.type === "tokenText" ? 5 : 4;
+    textarea.spellcheck = field.type === "tokenText";
+    textarea.value = stringifyListValue(value);
+    textarea.placeholder = field.type === "referenceList"
+      ? "global.game_name\nzone.start\nspawn.default"
+      : field.type === "tagList"
+        ? "global\nui\ncampaign.main"
+        : "Welkom in @{global.game_name}";
+    applyFieldHelp(textarea, help);
+    textarea.addEventListener("change", function () {
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, textarea.value)), {
+        historyLabel: field.label,
+        refreshViewport: shouldRefreshViewportForNode(node.id),
+        refreshValidation: true
+      });
+    });
+    wrap.appendChild(textarea);
+    const hint = document.createElement("div");
+    hint.className = "inspectorHint";
+    if (field.type === "referenceList") {
+      hint.textContent = "Een canonical reference per regel of komma-gescheiden.";
+    } else if (field.type === "tagList") {
+      hint.textContent = "Een canonical tag per regel of komma-gescheiden.";
+    } else {
+      hint.textContent = "Tokentekst ondersteunt @{...} placeholders.";
+    }
+    wrap.appendChild(hint);
+    if (field.type === "tokenText") {
+      const preview = document.createElement("pre");
+      preview.className = "tokenPreview inspectorHint";
+      let previewTimer = null;
+      const queuePreview = function () {
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(function () {
+          previewTimer = null;
+          renderTokenTextPreview(textarea, preview);
+        }, 250);
+      };
+      textarea.addEventListener("input", queuePreview);
+      wrap.appendChild(preview);
+      renderTokenTextPreview(textarea, preview);
+    }
+  } else if (field.type === "localizedText") {
+    const keyRow = document.createElement("div");
+    keyRow.className = "colorRow";
+    const keyInput = document.createElement("input");
+    keyInput.type = "text";
+    keyInput.spellcheck = false;
+    keyInput.autocomplete = "off";
+    keyInput.autocapitalize = "none";
+    keyInput.placeholder = "localization.nl.game_name";
+    keyInput.value = value && typeof value === "object" && !isBlankValue(value.key) ? String(value.key) : "";
+    applyFieldHelp(keyInput, help);
+    const fallbackInput = document.createElement("textarea");
+    fallbackInput.rows = 3;
+    fallbackInput.placeholder = "Fallback tekst";
+    fallbackInput.value = value && typeof value === "object" && !isBlankValue(value.fallbackText) ? String(value.fallbackText) : "";
+    applyFieldHelp(fallbackInput, help);
+    const commitLocalizedText = function () {
+      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, {
+        key: keyInput.value,
+        fallbackText: fallbackInput.value
+      })), {
+        historyLabel: field.label,
+        refreshViewport: shouldRefreshViewportForNode(node.id),
+        refreshValidation: true
+      });
+    };
+    keyInput.addEventListener("change", commitLocalizedText);
+    fallbackInput.addEventListener("change", commitLocalizedText);
+    keyRow.append(keyInput);
+    wrap.appendChild(keyRow);
+    wrap.appendChild(fallbackInput);
   } else if (field.type === "color") {
     const row = document.createElement("div");
     row.className = "colorRow";
@@ -4538,17 +4944,21 @@ function buildField(node, key, field) {
     });
     row.append(color, text);
     wrap.appendChild(row);
-  } else if (field.type === "json") {
+  } else if (field.type === "json" || field.type === "formula" || field.type === "tagQuery") {
     if (node.type === "group" && key === "groupInterface") {
       wrap.appendChild(buildGroupInterfaceEditor(node, key, value));
       return wrap;
     }
     const textarea = document.createElement("textarea");
-    textarea.rows = 6;
-    textarea.placeholder = JSON.stringify(groupInterfaceDefault(), null, 2);
+    textarea.rows = field.type === "formula" ? 7 : 6;
+    textarea.placeholder = field.type === "formula"
+      ? stringifyJsonValue({ operator: "add", operands: [] })
+      : field.type === "tagQuery"
+        ? stringifyJsonValue({ all: [], any: [], none: [] })
+        : stringifyJsonValue(field.default === undefined ? {} : field.default);
     applyFieldHelp(textarea, help);
     try {
-      textarea.value = JSON.stringify(value === undefined ? {} : value, null, 2);
+      textarea.value = stringifyJsonValue(value, field.default === undefined ? {} : field.default);
     } catch {
       textarea.value = "{}";
     }
@@ -6153,7 +6563,7 @@ function renderViewportErrors(errors) {
   for (const message of errors) {
     const div = document.createElement("div");
     div.className = "err";
-    div.textContent = "Laadfout: " + message;
+    div.textContent = "Laadfout: " + validationIssueText(message);
     el.viewportErrors.appendChild(div);
   }
 }
@@ -6172,13 +6582,13 @@ async function refreshValidation() {
     for (const message of result.errors || []) {
       const div = document.createElement("div");
       div.className = "vErr";
-      div.textContent = "- " + message;
+      div.textContent = "- " + validationIssueText(message);
       el.validationPanel.appendChild(div);
     }
     for (const message of result.warnings || []) {
       const div = document.createElement("div");
       div.className = "vWarn";
-      div.textContent = "! " + message;
+      div.textContent = "! " + validationIssueText(message);
       el.validationPanel.appendChild(div);
     }
     el.publishButton.disabled = !result.ok;

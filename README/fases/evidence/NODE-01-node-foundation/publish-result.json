@@ -1,0 +1,3172 @@
+{
+  "status": 200,
+  "json": {
+    "ok": true,
+    "world": {
+      "schemaVersion": "gk-game-project-v3",
+      "source": "editor-node-graph",
+      "outputNodeId": "node_output",
+      "world": null,
+      "ground": null,
+      "camera": null,
+      "player": null,
+      "spawn": null,
+      "lights": [],
+      "entities": [],
+      "interactables": [],
+      "keybinds": [],
+      "ui": [
+        {
+          "id": "hud_game_name",
+          "type": "hud_text",
+          "anchor": "top-left",
+          "text": "Welkom in @{global.game_name}",
+          "fontSize": 18,
+          "color": "#ffffff"
+        }
+      ],
+      "minimap": {
+        "bakes": [],
+        "game": null
+      },
+      "terrain": {
+        "layers": [],
+        "surfaces": []
+      },
+      "collision": {
+        "blockers": [],
+        "walkableSurfaces": []
+      },
+      "scatterAreas": [],
+      "chunkLoading": {
+        "editor": null,
+        "game": null
+      },
+      "assets": [],
+      "buildId": "gk-33fb36b90b34",
+      "contentHash": "sha256:33fb36b90b34b95557f05483bce52acfe22a936f9c464ece1877e8e0f076a80b",
+      "gameProject": {
+        "schemaVersion": "gk-game-project-v3",
+        "project": {
+          "id": "gk.project",
+          "gameName": "GK Game",
+          "defaultLanguage": "nl",
+          "contentVersion": "0.1.0",
+          "startZoneRef": null,
+          "startSpawnRef": null
+        },
+        "chunkGrid": {
+          "id": "chunk_grid.main",
+          "chunkWidth": 14,
+          "chunkDepth": 14,
+          "tileSize": 1,
+          "maxLoadedChunks": 81,
+          "edgeMode": "clip_to_zone_bounds"
+        },
+        "catalogs": {
+          "definitions": {
+            "global.game_name": {
+              "id": "global.game_name",
+              "kind": "globalValue",
+              "nodeId": "node_global_value_definition_c06f9b86",
+              "parentId": null,
+              "label": "Game Name",
+              "value": {
+                "valueId": "global.game_name",
+                "valueType": "text",
+                "value": "",
+                "text": "",
+                "format": "raw",
+                "label": "Game Name",
+                "description": "",
+                "tags": []
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "format": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "tags": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "global_value_definition",
+              "groupKind": null
+            },
+            "global.project": {
+              "id": "global.project",
+              "kind": "tagDefinition",
+              "nodeId": "node_tag_definition_68c99484",
+              "parentId": null,
+              "label": "Project",
+              "value": {
+                "tagId": "global.project",
+                "label": "Project",
+                "description": "",
+                "parentTagRef": null,
+                "allowedKinds": [],
+                "restricted": false,
+                "owner": ""
+              },
+              "properties": {
+                "tagId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "parentTagRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowedKinds": {
+                  "valueType": "referenceList",
+                  "tokenSafe": true
+                },
+                "restricted": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "owner": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "tag_definition",
+              "groupKind": null
+            },
+            "localization.nl.game_name": {
+              "id": "localization.nl.game_name",
+              "kind": "localizedText",
+              "nodeId": "node_localization_entry_e62c18a4",
+              "parentId": null,
+              "label": "Localization Entry 01",
+              "value": {
+                "localizationId": "localization.nl.game_name",
+                "language": "nl",
+                "text": "Welkom",
+                "fallbackText": ""
+              },
+              "properties": {
+                "localizationId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "language": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "localization_entry",
+              "groupKind": null
+            },
+            "text.template_01": {
+              "id": "text.template_01",
+              "kind": "textTemplate",
+              "nodeId": "node_text_template_f9edbecf",
+              "parentId": null,
+              "label": "Template",
+              "value": {
+                "templateId": "text.template_01",
+                "label": "Template",
+                "text": "Welkom in @{global.game_name}",
+                "contextKinds": [
+                  "global"
+                ],
+                "fallbackText": "",
+                "maxRenderedLength": 240
+              },
+              "properties": {
+                "templateId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "contextKinds": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "maxRenderedLength": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "text_template",
+              "groupKind": null
+            },
+            "value.constant_01": {
+              "id": "value.constant_01",
+              "kind": "value",
+              "nodeId": "node_constant_value_ee24d64d",
+              "parentId": null,
+              "label": "Constant Value 01",
+              "value": {
+                "valueId": "value.constant_01",
+                "valueType": "text",
+                "value": "",
+                "text": ""
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "jsonValue": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "constant_value",
+              "groupKind": null
+            },
+            "value.formula_01": {
+              "id": "value.formula_01",
+              "kind": "valueFormula",
+              "nodeId": "node_value_formula_ce664ec3",
+              "parentId": null,
+              "label": "Value Formula 01",
+              "value": {
+                "formulaId": "value.formula_01",
+                "resultType": "number",
+                "expressionJson": {
+                  "operator": "add",
+                  "operands": []
+                },
+                "roundMode": "round",
+                "clampMin": null,
+                "clampMax": null
+              },
+              "properties": {
+                "formulaId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "resultType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "expressionJson": {
+                  "valueType": "formula",
+                  "tokenSafe": true
+                },
+                "roundMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "clampMin": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "clampMax": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "value_formula",
+              "groupKind": null
+            }
+          },
+          "tags": {
+            "global.project": {
+              "id": "global.project",
+              "kind": "tagDefinition",
+              "nodeId": "node_tag_definition_68c99484",
+              "parentId": null,
+              "label": "Project",
+              "value": {
+                "tagId": "global.project",
+                "label": "Project",
+                "description": "",
+                "parentTagRef": null,
+                "allowedKinds": [],
+                "restricted": false,
+                "owner": ""
+              },
+              "properties": {
+                "tagId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "parentTagRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowedKinds": {
+                  "valueType": "referenceList",
+                  "tokenSafe": true
+                },
+                "restricted": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "owner": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "tag_definition",
+              "groupKind": null
+            }
+          },
+          "values": {
+            "global.game_name": {
+              "id": "global.game_name",
+              "kind": "globalValue",
+              "nodeId": "node_global_value_definition_c06f9b86",
+              "parentId": null,
+              "label": "Game Name",
+              "value": {
+                "valueId": "global.game_name",
+                "valueType": "text",
+                "value": "",
+                "text": "",
+                "format": "raw",
+                "label": "Game Name",
+                "description": "",
+                "tags": []
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "format": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "tags": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "global_value_definition",
+              "groupKind": null
+            },
+            "value.constant_01": {
+              "id": "value.constant_01",
+              "kind": "value",
+              "nodeId": "node_constant_value_ee24d64d",
+              "parentId": null,
+              "label": "Constant Value 01",
+              "value": {
+                "valueId": "value.constant_01",
+                "valueType": "text",
+                "value": "",
+                "text": ""
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "jsonValue": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "constant_value",
+              "groupKind": null
+            }
+          },
+          "textTemplates": {
+            "text.template_01": {
+              "id": "text.template_01",
+              "kind": "textTemplate",
+              "nodeId": "node_text_template_f9edbecf",
+              "parentId": null,
+              "label": "Template",
+              "value": {
+                "templateId": "text.template_01",
+                "label": "Template",
+                "text": "Welkom in @{global.game_name}",
+                "contextKinds": [
+                  "global"
+                ],
+                "fallbackText": "",
+                "maxRenderedLength": 240
+              },
+              "properties": {
+                "templateId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "contextKinds": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "maxRenderedLength": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "text_template",
+              "groupKind": null
+            }
+          },
+          "localization": {
+            "localization.nl.game_name": {
+              "id": "localization.nl.game_name",
+              "kind": "localizedText",
+              "nodeId": "node_localization_entry_e62c18a4",
+              "parentId": null,
+              "label": "Localization Entry 01",
+              "value": {
+                "localizationId": "localization.nl.game_name",
+                "language": "nl",
+                "text": "Welkom",
+                "fallbackText": ""
+              },
+              "properties": {
+                "localizationId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "language": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "localization_entry",
+              "groupKind": null
+            }
+          }
+        },
+        "zones": {
+          "zone_registry.main": {
+            "id": "zone_registry.main",
+            "kind": "zoneRegistry",
+            "nodeId": "foundation.zone_registry",
+            "parentId": null,
+            "label": "Zone Registry",
+            "value": {
+              "registryId": "zone_registry.main"
+            },
+            "properties": {
+              "registryId": {
+                "valueType": "identity",
+                "tokenSafe": true
+              }
+            },
+            "tags": [],
+            "published": false,
+            "aliases": [],
+            "nodeType": "zone_registry",
+            "groupKind": null
+          }
+        },
+        "campaigns": {
+          "campaign_registry.main": {
+            "id": "campaign_registry.main",
+            "kind": "campaignRegistry",
+            "nodeId": "foundation.campaign_registry",
+            "parentId": null,
+            "label": "Campaign Registry",
+            "value": {
+              "registryId": "campaign_registry.main"
+            },
+            "properties": {
+              "registryId": {
+                "valueType": "identity",
+                "tokenSafe": true
+              }
+            },
+            "tags": [],
+            "published": false,
+            "aliases": [],
+            "nodeType": "campaign_registry",
+            "groupKind": null
+          }
+        },
+        "playerRules": {
+          "player_rules.main": {
+            "id": "player_rules.main",
+            "kind": "playerRules",
+            "nodeId": "foundation.player_rules_output",
+            "parentId": null,
+            "label": "Player Rules Output",
+            "value": {
+              "rulesId": "player_rules.main"
+            },
+            "properties": {
+              "rulesId": {
+                "valueType": "identity",
+                "tokenSafe": true
+              }
+            },
+            "tags": [],
+            "published": false,
+            "aliases": [],
+            "nodeType": "player_rules_output",
+            "groupKind": null
+          }
+        },
+        "ui": {
+          "ui.main": {
+            "id": "ui.main",
+            "kind": "uiPackage",
+            "nodeId": "foundation.ui_output",
+            "parentId": null,
+            "label": "UI Output",
+            "value": {
+              "uiId": "ui.main"
+            },
+            "properties": {
+              "uiId": {
+                "valueType": "identity",
+                "tokenSafe": true
+              }
+            },
+            "tags": [],
+            "published": false,
+            "aliases": [],
+            "nodeType": "ui_output",
+            "groupKind": null
+          }
+        },
+        "symbols": {
+          "graphRevision": 169,
+          "contentSchemaVersion": "gk-node-content-v1",
+          "byId": {
+            "group": {
+              "id": "group",
+              "kind": "group",
+              "nodeId": "node_group_60599924",
+              "parentId": null,
+              "label": "New Group",
+              "value": {
+                "groupId": "group",
+                "title": "New Group",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "output_keybinds",
+                      "name": "keybinds_out",
+                      "label": "Keybinds",
+                      "dataType": "keybind",
+                      "multiple": true
+                    }
+                  ]
+                },
+                "groupKind": "generic",
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.generic"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "generic"
+            },
+            "group_2": {
+              "id": "group_2",
+              "kind": "group",
+              "nodeId": "node_group_7c932d09",
+              "parentId": null,
+              "label": "New Group",
+              "value": {
+                "groupId": "group_2",
+                "title": "New Group",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "output_keybinds",
+                      "name": "keybinds_out",
+                      "label": "Keybinds",
+                      "dataType": "entity",
+                      "multiple": true
+                    },
+                    {
+                      "id": "output_output_1",
+                      "name": "output_1",
+                      "label": "Output",
+                      "dataType": "interactable",
+                      "multiple": true
+                    }
+                  ]
+                },
+                "groupKind": "generic",
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.generic"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "generic"
+            },
+            "gk.project": {
+              "id": "gk.project",
+              "kind": "projectSettings",
+              "nodeId": "foundation.game_project_settings",
+              "parentId": null,
+              "label": "GK Game",
+              "value": {
+                "projectId": "gk.project",
+                "gameName": "GK Game",
+                "defaultLanguage": "nl",
+                "contentVersion": "0.1.0",
+                "startZoneRef": null,
+                "startSpawnRef": null,
+                "allowLegacyWorld": true
+              },
+              "properties": {
+                "projectId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "gameName": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "defaultLanguage": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "contentVersion": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "startZoneRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "startSpawnRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowLegacyWorld": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "game_project_settings",
+              "groupKind": null
+            },
+            "chunk_grid.main": {
+              "id": "chunk_grid.main",
+              "kind": "chunkGrid",
+              "nodeId": "foundation.chunk_grid_definition",
+              "parentId": null,
+              "label": "Chunk Grid Definition",
+              "value": {
+                "gridId": "chunk_grid.main",
+                "chunkWidth": 14,
+                "chunkDepth": 14,
+                "tileSize": 1,
+                "maxLoadedChunks": 81,
+                "maxWindowWidth": 9,
+                "maxWindowDepth": 9,
+                "originX": 0,
+                "originZ": 0,
+                "edgeMode": "clip_to_zone_bounds"
+              },
+              "properties": {
+                "gridId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "chunkWidth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "chunkDepth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "tileSize": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxLoadedChunks": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxWindowWidth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxWindowDepth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "originX": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "originZ": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "edgeMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "chunk_grid_definition",
+              "groupKind": null
+            },
+            "world_assembly.main": {
+              "id": "world_assembly.main",
+              "kind": "gameProject",
+              "nodeId": "foundation.world_assembly",
+              "parentId": null,
+              "label": "World Assembly",
+              "value": {
+                "assemblyId": "world_assembly.main",
+                "schemaVersion": "gk-game-project-v3",
+                "validationMode": "strict",
+                "includeEditorDiagnostics": false
+              },
+              "properties": {
+                "assemblyId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "schemaVersion": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "validationMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "includeEditorDiagnostics": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "world_assembly",
+              "groupKind": null
+            },
+            "catalog": {
+              "id": "catalog",
+              "kind": "group",
+              "nodeId": "foundation.group.catalog",
+              "parentId": null,
+              "label": "Catalog",
+              "value": {
+                "groupId": "catalog",
+                "title": "Catalog",
+                "groupKind": "catalog",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "catalog_package",
+                      "name": "catalogpackage",
+                      "label": "Catalog Package",
+                      "dataType": "catalogPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.catalog"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "catalog"
+            },
+            "zones": {
+              "id": "zones",
+              "kind": "group",
+              "nodeId": "foundation.group.zones",
+              "parentId": null,
+              "label": "Zones",
+              "value": {
+                "groupId": "zones",
+                "title": "Zones",
+                "groupKind": "zone",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "zone_package",
+                      "name": "zonepackage",
+                      "label": "Zone Package",
+                      "dataType": "zonePackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.zone"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "zone"
+            },
+            "campaigns": {
+              "id": "campaigns",
+              "kind": "group",
+              "nodeId": "foundation.group.campaigns",
+              "parentId": null,
+              "label": "Campaigns",
+              "value": {
+                "groupId": "campaigns",
+                "title": "Campaigns",
+                "groupKind": "campaign",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "campaign_package",
+                      "name": "campaignpackage",
+                      "label": "Campaign Package",
+                      "dataType": "campaignPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.campaign"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "campaign"
+            },
+            "player_rules": {
+              "id": "player_rules",
+              "kind": "group",
+              "nodeId": "foundation.group.player_rules",
+              "parentId": null,
+              "label": "Player Rules",
+              "value": {
+                "groupId": "player_rules",
+                "title": "Player Rules",
+                "groupKind": "player_rules",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "player_rules",
+                      "name": "playerrules",
+                      "label": "Player Rules",
+                      "dataType": "playerRules",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.player_rules"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "player_rules"
+            },
+            "ui": {
+              "id": "ui",
+              "kind": "group",
+              "nodeId": "foundation.group.ui",
+              "parentId": null,
+              "label": "UI",
+              "value": {
+                "groupId": "ui",
+                "title": "UI",
+                "groupKind": "ui",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "ui_package",
+                      "name": "uipackage",
+                      "label": "UI Package",
+                      "dataType": "uiPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.ui"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "ui"
+            },
+            "legacy_world.main": {
+              "id": "legacy_world.main",
+              "kind": "legacyWorld",
+              "nodeId": "node_legacy_world_adapter_1714c6a3",
+              "parentId": null,
+              "label": "Legacy World Adapter 01",
+              "value": {
+                "adapterId": "legacy_world.main"
+              },
+              "properties": {
+                "adapterId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "legacy_world_adapter",
+              "groupKind": null
+            },
+            "catalog_registry.main": {
+              "id": "catalog_registry.main",
+              "kind": "catalogRegistry",
+              "nodeId": "foundation.catalog_registry",
+              "parentId": null,
+              "label": "Catalog Registry",
+              "value": {
+                "registryId": "catalog_registry.main",
+                "duplicatePolicy": "error",
+                "missingOptionalPolicy": "warning"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "duplicatePolicy": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "missingOptionalPolicy": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "catalog_registry",
+              "groupKind": null
+            },
+            "zone_registry.main": {
+              "id": "zone_registry.main",
+              "kind": "zoneRegistry",
+              "nodeId": "foundation.zone_registry",
+              "parentId": null,
+              "label": "Zone Registry",
+              "value": {
+                "registryId": "zone_registry.main"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "zone_registry",
+              "groupKind": null
+            },
+            "campaign_registry.main": {
+              "id": "campaign_registry.main",
+              "kind": "campaignRegistry",
+              "nodeId": "foundation.campaign_registry",
+              "parentId": null,
+              "label": "Campaign Registry",
+              "value": {
+                "registryId": "campaign_registry.main"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "campaign_registry",
+              "groupKind": null
+            },
+            "player_rules.main": {
+              "id": "player_rules.main",
+              "kind": "playerRules",
+              "nodeId": "foundation.player_rules_output",
+              "parentId": null,
+              "label": "Player Rules Output",
+              "value": {
+                "rulesId": "player_rules.main"
+              },
+              "properties": {
+                "rulesId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "player_rules_output",
+              "groupKind": null
+            },
+            "ui.main": {
+              "id": "ui.main",
+              "kind": "uiPackage",
+              "nodeId": "foundation.ui_output",
+              "parentId": null,
+              "label": "UI Output",
+              "value": {
+                "uiId": "ui.main"
+              },
+              "properties": {
+                "uiId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "ui_output",
+              "groupKind": null
+            },
+            "global.game_name": {
+              "id": "global.game_name",
+              "kind": "globalValue",
+              "nodeId": "node_global_value_definition_c06f9b86",
+              "parentId": null,
+              "label": "Game Name",
+              "value": {
+                "valueId": "global.game_name",
+                "valueType": "text",
+                "value": "",
+                "text": "",
+                "format": "raw",
+                "label": "Game Name",
+                "description": "",
+                "tags": []
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "format": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "tags": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "global_value_definition",
+              "groupKind": null
+            },
+            "text.template_01": {
+              "id": "text.template_01",
+              "kind": "textTemplate",
+              "nodeId": "node_text_template_f9edbecf",
+              "parentId": null,
+              "label": "Template",
+              "value": {
+                "templateId": "text.template_01",
+                "label": "Template",
+                "text": "Welkom in @{global.game_name}",
+                "contextKinds": [
+                  "global"
+                ],
+                "fallbackText": "",
+                "maxRenderedLength": 240
+              },
+              "properties": {
+                "templateId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "contextKinds": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "maxRenderedLength": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "text_template",
+              "groupKind": null
+            },
+            "global.project": {
+              "id": "global.project",
+              "kind": "tagDefinition",
+              "nodeId": "node_tag_definition_68c99484",
+              "parentId": null,
+              "label": "Project",
+              "value": {
+                "tagId": "global.project",
+                "label": "Project",
+                "description": "",
+                "parentTagRef": null,
+                "allowedKinds": [],
+                "restricted": false,
+                "owner": ""
+              },
+              "properties": {
+                "tagId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "parentTagRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowedKinds": {
+                  "valueType": "referenceList",
+                  "tokenSafe": true
+                },
+                "restricted": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "owner": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "tag_definition",
+              "groupKind": null
+            },
+            "value.formula_01": {
+              "id": "value.formula_01",
+              "kind": "valueFormula",
+              "nodeId": "node_value_formula_ce664ec3",
+              "parentId": null,
+              "label": "Value Formula 01",
+              "value": {
+                "formulaId": "value.formula_01",
+                "resultType": "number",
+                "expressionJson": {
+                  "operator": "add",
+                  "operands": []
+                },
+                "roundMode": "round",
+                "clampMin": null,
+                "clampMax": null
+              },
+              "properties": {
+                "formulaId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "resultType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "expressionJson": {
+                  "valueType": "formula",
+                  "tokenSafe": true
+                },
+                "roundMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "clampMin": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "clampMax": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "value_formula",
+              "groupKind": null
+            },
+            "value.constant_01": {
+              "id": "value.constant_01",
+              "kind": "value",
+              "nodeId": "node_constant_value_ee24d64d",
+              "parentId": null,
+              "label": "Constant Value 01",
+              "value": {
+                "valueId": "value.constant_01",
+                "valueType": "text",
+                "value": "",
+                "text": ""
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "jsonValue": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "constant_value",
+              "groupKind": null
+            },
+            "localization.nl.game_name": {
+              "id": "localization.nl.game_name",
+              "kind": "localizedText",
+              "nodeId": "node_localization_entry_e62c18a4",
+              "parentId": null,
+              "label": "Localization Entry 01",
+              "value": {
+                "localizationId": "localization.nl.game_name",
+                "language": "nl",
+                "text": "Welkom",
+                "fallbackText": ""
+              },
+              "properties": {
+                "localizationId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "language": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "localization_entry",
+              "groupKind": null
+            }
+          },
+          "aliases": {},
+          "records": [
+            {
+              "id": "group",
+              "kind": "group",
+              "nodeId": "node_group_60599924",
+              "parentId": null,
+              "label": "New Group",
+              "value": {
+                "groupId": "group",
+                "title": "New Group",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "output_keybinds",
+                      "name": "keybinds_out",
+                      "label": "Keybinds",
+                      "dataType": "keybind",
+                      "multiple": true
+                    }
+                  ]
+                },
+                "groupKind": "generic",
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.generic"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "generic"
+            },
+            {
+              "id": "group_2",
+              "kind": "group",
+              "nodeId": "node_group_7c932d09",
+              "parentId": null,
+              "label": "New Group",
+              "value": {
+                "groupId": "group_2",
+                "title": "New Group",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "output_keybinds",
+                      "name": "keybinds_out",
+                      "label": "Keybinds",
+                      "dataType": "entity",
+                      "multiple": true
+                    },
+                    {
+                      "id": "output_output_1",
+                      "name": "output_1",
+                      "label": "Output",
+                      "dataType": "interactable",
+                      "multiple": true
+                    }
+                  ]
+                },
+                "groupKind": "generic",
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.generic"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "generic"
+            },
+            {
+              "id": "gk.project",
+              "kind": "projectSettings",
+              "nodeId": "foundation.game_project_settings",
+              "parentId": null,
+              "label": "GK Game",
+              "value": {
+                "projectId": "gk.project",
+                "gameName": "GK Game",
+                "defaultLanguage": "nl",
+                "contentVersion": "0.1.0",
+                "startZoneRef": null,
+                "startSpawnRef": null,
+                "allowLegacyWorld": true
+              },
+              "properties": {
+                "projectId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "gameName": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "defaultLanguage": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "contentVersion": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "startZoneRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "startSpawnRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowLegacyWorld": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "game_project_settings",
+              "groupKind": null
+            },
+            {
+              "id": "chunk_grid.main",
+              "kind": "chunkGrid",
+              "nodeId": "foundation.chunk_grid_definition",
+              "parentId": null,
+              "label": "Chunk Grid Definition",
+              "value": {
+                "gridId": "chunk_grid.main",
+                "chunkWidth": 14,
+                "chunkDepth": 14,
+                "tileSize": 1,
+                "maxLoadedChunks": 81,
+                "maxWindowWidth": 9,
+                "maxWindowDepth": 9,
+                "originX": 0,
+                "originZ": 0,
+                "edgeMode": "clip_to_zone_bounds"
+              },
+              "properties": {
+                "gridId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "chunkWidth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "chunkDepth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "tileSize": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxLoadedChunks": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxWindowWidth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "maxWindowDepth": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "originX": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "originZ": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "edgeMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "chunk_grid_definition",
+              "groupKind": null
+            },
+            {
+              "id": "world_assembly.main",
+              "kind": "gameProject",
+              "nodeId": "foundation.world_assembly",
+              "parentId": null,
+              "label": "World Assembly",
+              "value": {
+                "assemblyId": "world_assembly.main",
+                "schemaVersion": "gk-game-project-v3",
+                "validationMode": "strict",
+                "includeEditorDiagnostics": false
+              },
+              "properties": {
+                "assemblyId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "schemaVersion": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "validationMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "includeEditorDiagnostics": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "world_assembly",
+              "groupKind": null
+            },
+            {
+              "id": "catalog",
+              "kind": "group",
+              "nodeId": "foundation.group.catalog",
+              "parentId": null,
+              "label": "Catalog",
+              "value": {
+                "groupId": "catalog",
+                "title": "Catalog",
+                "groupKind": "catalog",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "catalog_package",
+                      "name": "catalogpackage",
+                      "label": "Catalog Package",
+                      "dataType": "catalogPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.catalog"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "catalog"
+            },
+            {
+              "id": "zones",
+              "kind": "group",
+              "nodeId": "foundation.group.zones",
+              "parentId": null,
+              "label": "Zones",
+              "value": {
+                "groupId": "zones",
+                "title": "Zones",
+                "groupKind": "zone",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "zone_package",
+                      "name": "zonepackage",
+                      "label": "Zone Package",
+                      "dataType": "zonePackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.zone"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "zone"
+            },
+            {
+              "id": "campaigns",
+              "kind": "group",
+              "nodeId": "foundation.group.campaigns",
+              "parentId": null,
+              "label": "Campaigns",
+              "value": {
+                "groupId": "campaigns",
+                "title": "Campaigns",
+                "groupKind": "campaign",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "campaign_package",
+                      "name": "campaignpackage",
+                      "label": "Campaign Package",
+                      "dataType": "campaignPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.campaign"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "campaign"
+            },
+            {
+              "id": "player_rules",
+              "kind": "group",
+              "nodeId": "foundation.group.player_rules",
+              "parentId": null,
+              "label": "Player Rules",
+              "value": {
+                "groupId": "player_rules",
+                "title": "Player Rules",
+                "groupKind": "player_rules",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "player_rules",
+                      "name": "playerrules",
+                      "label": "Player Rules",
+                      "dataType": "playerRules",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.player_rules"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "player_rules"
+            },
+            {
+              "id": "ui",
+              "kind": "group",
+              "nodeId": "foundation.group.ui",
+              "parentId": null,
+              "label": "UI",
+              "value": {
+                "groupId": "ui",
+                "title": "UI",
+                "groupKind": "ui",
+                "groupInterface": {
+                  "inputs": [],
+                  "outputs": [
+                    {
+                      "id": "ui_package",
+                      "name": "uipackage",
+                      "label": "UI Package",
+                      "dataType": "uiPackage",
+                      "multiple": false
+                    }
+                  ]
+                },
+                "interfacePresetVersion": 1,
+                "collapsedSummary": false
+              },
+              "properties": {
+                "groupId": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "title": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "groupInterface": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "groupKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "interfacePresetVersion": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "collapsedSummary": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [
+                "group.ui"
+              ],
+              "published": false,
+              "aliases": [],
+              "nodeType": "group",
+              "groupKind": "ui"
+            },
+            {
+              "id": "legacy_world.main",
+              "kind": "legacyWorld",
+              "nodeId": "node_legacy_world_adapter_1714c6a3",
+              "parentId": null,
+              "label": "Legacy World Adapter 01",
+              "value": {
+                "adapterId": "legacy_world.main"
+              },
+              "properties": {
+                "adapterId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "legacy_world_adapter",
+              "groupKind": null
+            },
+            {
+              "id": "catalog_registry.main",
+              "kind": "catalogRegistry",
+              "nodeId": "foundation.catalog_registry",
+              "parentId": null,
+              "label": "Catalog Registry",
+              "value": {
+                "registryId": "catalog_registry.main",
+                "duplicatePolicy": "error",
+                "missingOptionalPolicy": "warning"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "duplicatePolicy": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "missingOptionalPolicy": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "catalog_registry",
+              "groupKind": null
+            },
+            {
+              "id": "zone_registry.main",
+              "kind": "zoneRegistry",
+              "nodeId": "foundation.zone_registry",
+              "parentId": null,
+              "label": "Zone Registry",
+              "value": {
+                "registryId": "zone_registry.main"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "zone_registry",
+              "groupKind": null
+            },
+            {
+              "id": "campaign_registry.main",
+              "kind": "campaignRegistry",
+              "nodeId": "foundation.campaign_registry",
+              "parentId": null,
+              "label": "Campaign Registry",
+              "value": {
+                "registryId": "campaign_registry.main"
+              },
+              "properties": {
+                "registryId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "campaign_registry",
+              "groupKind": null
+            },
+            {
+              "id": "player_rules.main",
+              "kind": "playerRules",
+              "nodeId": "foundation.player_rules_output",
+              "parentId": null,
+              "label": "Player Rules Output",
+              "value": {
+                "rulesId": "player_rules.main"
+              },
+              "properties": {
+                "rulesId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "player_rules_output",
+              "groupKind": null
+            },
+            {
+              "id": "ui.main",
+              "kind": "uiPackage",
+              "nodeId": "foundation.ui_output",
+              "parentId": null,
+              "label": "UI Output",
+              "value": {
+                "uiId": "ui.main"
+              },
+              "properties": {
+                "uiId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "ui_output",
+              "groupKind": null
+            },
+            {
+              "id": "global.game_name",
+              "kind": "globalValue",
+              "nodeId": "node_global_value_definition_c06f9b86",
+              "parentId": null,
+              "label": "Game Name",
+              "value": {
+                "valueId": "global.game_name",
+                "valueType": "text",
+                "value": "",
+                "text": "",
+                "format": "raw",
+                "label": "Game Name",
+                "description": "",
+                "tags": []
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "format": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "tags": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "global_value_definition",
+              "groupKind": null
+            },
+            {
+              "id": "text.template_01",
+              "kind": "textTemplate",
+              "nodeId": "node_text_template_f9edbecf",
+              "parentId": null,
+              "label": "Template",
+              "value": {
+                "templateId": "text.template_01",
+                "label": "Template",
+                "text": "Welkom in @{global.game_name}",
+                "contextKinds": [
+                  "global"
+                ],
+                "fallbackText": "",
+                "maxRenderedLength": 240
+              },
+              "properties": {
+                "templateId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "contextKinds": {
+                  "valueType": "tagList",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "maxRenderedLength": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "text_template",
+              "groupKind": null
+            },
+            {
+              "id": "global.project",
+              "kind": "tagDefinition",
+              "nodeId": "node_tag_definition_68c99484",
+              "parentId": null,
+              "label": "Project",
+              "value": {
+                "tagId": "global.project",
+                "label": "Project",
+                "description": "",
+                "parentTagRef": null,
+                "allowedKinds": [],
+                "restricted": false,
+                "owner": ""
+              },
+              "properties": {
+                "tagId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "label": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "description": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "parentTagRef": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                },
+                "allowedKinds": {
+                  "valueType": "referenceList",
+                  "tokenSafe": true
+                },
+                "restricted": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "owner": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "tag_definition",
+              "groupKind": null
+            },
+            {
+              "id": "value.formula_01",
+              "kind": "valueFormula",
+              "nodeId": "node_value_formula_ce664ec3",
+              "parentId": null,
+              "label": "Value Formula 01",
+              "value": {
+                "formulaId": "value.formula_01",
+                "resultType": "number",
+                "expressionJson": {
+                  "operator": "add",
+                  "operands": []
+                },
+                "roundMode": "round",
+                "clampMin": null,
+                "clampMax": null
+              },
+              "properties": {
+                "formulaId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "resultType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "expressionJson": {
+                  "valueType": "formula",
+                  "tokenSafe": true
+                },
+                "roundMode": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "clampMin": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "clampMax": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "value_formula",
+              "groupKind": null
+            },
+            {
+              "id": "value.constant_01",
+              "kind": "value",
+              "nodeId": "node_constant_value_ee24d64d",
+              "parentId": null,
+              "label": "Constant Value 01",
+              "value": {
+                "valueId": "value.constant_01",
+                "valueType": "text",
+                "value": "",
+                "text": ""
+              },
+              "properties": {
+                "valueId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "valueType": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "textValue": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                },
+                "numberValue": {
+                  "valueType": "number",
+                  "tokenSafe": false
+                },
+                "booleanValue": {
+                  "valueType": "boolean",
+                  "tokenSafe": false
+                },
+                "colorValue": {
+                  "valueType": "color",
+                  "tokenSafe": false
+                },
+                "jsonValue": {
+                  "valueType": "json",
+                  "tokenSafe": false
+                },
+                "referenceKind": {
+                  "valueType": "select",
+                  "tokenSafe": false
+                },
+                "referenceValue": {
+                  "valueType": "reference",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "constant_value",
+              "groupKind": null
+            },
+            {
+              "id": "localization.nl.game_name",
+              "kind": "localizedText",
+              "nodeId": "node_localization_entry_e62c18a4",
+              "parentId": null,
+              "label": "Localization Entry 01",
+              "value": {
+                "localizationId": "localization.nl.game_name",
+                "language": "nl",
+                "text": "Welkom",
+                "fallbackText": ""
+              },
+              "properties": {
+                "localizationId": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "language": {
+                  "valueType": "identity",
+                  "tokenSafe": true
+                },
+                "text": {
+                  "valueType": "tokenText",
+                  "tokenSafe": true
+                },
+                "fallbackText": {
+                  "valueType": "text",
+                  "tokenSafe": true
+                }
+              },
+              "tags": [],
+              "published": false,
+              "aliases": [],
+              "nodeType": "localization_entry",
+              "groupKind": null
+            }
+          ],
+          "errors": [
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: legacy_world.main.",
+              "nodeId": "foundation.legacy_world_adapter",
+              "referenceId": "legacy_world.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: gk.project.",
+              "nodeId": "node_game_project_settings_8388c1af",
+              "referenceId": "gk.project"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: chunk_grid.main.",
+              "nodeId": "node_chunk_grid_definition_7f4107d4",
+              "referenceId": "chunk_grid.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: zone_registry.main.",
+              "nodeId": "node_zone_registry_652b8600",
+              "referenceId": "zone_registry.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: world_assembly.main.",
+              "nodeId": "node_world_assembly_0b9d27b3",
+              "referenceId": "world_assembly.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: catalog_registry.main.",
+              "nodeId": "node_catalog_output_e1383ecc",
+              "referenceId": "catalog_registry.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: catalog_registry.main.",
+              "nodeId": "node_catalog_registry_e987e1d7",
+              "referenceId": "catalog_registry.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: ui.main.",
+              "nodeId": "node_ui_output_c64deec5",
+              "referenceId": "ui.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: player_rules.main.",
+              "nodeId": "node_player_rules_output_5e96a10f",
+              "referenceId": "player_rules.main"
+            },
+            {
+              "code": "SYMBOL_DUPLICATE_ID",
+              "message": "Dubbele symbol id: campaign_registry.main.",
+              "nodeId": "node_campaign_registry_10cadfad",
+              "referenceId": "campaign_registry.main"
+            }
+          ],
+          "warnings": []
+        },
+        "assetManifest": [
+          {
+            "id": "asset_08d5b230-dfb1-4cdd-9cf1-4667edbc3b62",
+            "name": "forest_ground_04_diff_1k",
+            "category": "uncategorized",
+            "assetType": "image",
+            "mimeType": "image/jpeg",
+            "metadata": {
+              "importedAt": "2026-06-26T22:06:27.152Z",
+              "sha256": "50a4dda30875020c64385261aa7e00e2155b592302fa6794165f58fae73cbd2c",
+              "contentType": "image/jpeg",
+              "format": "jpg",
+              "thumbnailStartedAt": null,
+              "thumbnailFinishedAt": null,
+              "thumbnailDurationMs": null,
+              "thumbnailError": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_3278d92b-54da-41c4-9d9d-02078dcfa0a3",
+            "name": "Taverne",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-23T21:33:41.276Z",
+              "sha256": "5a06e48495e4fa0df2bbec072ef7806beba759d6bf89b68f489181c8b76d445a",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-06-23T21:34:41.390Z",
+              "thumbnailFinishedAt": "2026-06-23T21:34:49.434Z",
+              "thumbnailDurationMs": 8044.6,
+              "thumbnailError": null,
+              "animationCount": 0,
+              "animations": [],
+              "defaultAnimation": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_3e5cc4d3-927c-4715-b2e5-bc2b03171c41",
+            "name": "stylize_tree_lowpoly",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-29T06:39:06.756Z",
+              "sha256": "280a43dfe39e0b09fdb4f879d28b2bac856ac18fc54c3875484aa642d1f3b902",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-06-29T06:39:06.767Z",
+              "thumbnailFinishedAt": "2026-06-29T06:45:49.200Z",
+              "thumbnailDurationMs": 402432.5,
+              "thumbnailError": null,
+              "animationCount": 0,
+              "animations": [],
+              "defaultAnimation": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_4220e56f-a50c-43d5-a1c9-5a5c4251331e",
+            "name": "ChatGPT Image 23 jun 2026, 23_52_14",
+            "category": "uncategorized",
+            "assetType": "image",
+            "mimeType": "image/png",
+            "metadata": {
+              "importedAt": "2026-06-24T08:27:35.071Z",
+              "sha256": "c5fdd361c06aedde3d285125f22e549e1678bf2896833224731c725d79578217",
+              "contentType": "image/png",
+              "format": "png",
+              "thumbnailStartedAt": null,
+              "thumbnailFinishedAt": null,
+              "thumbnailDurationMs": null,
+              "thumbnailError": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_74948957-7106-4c24-835e-4d817ddfdc76",
+            "name": "Blacksmit",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-23T21:33:41.102Z",
+              "sha256": "9a54d4ac82feb96eea31f5c459c8d82481a33c79a8d5ec747fec798327b33eeb",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-06-23T21:34:22.877Z",
+              "thumbnailFinishedAt": "2026-06-23T21:34:41.384Z",
+              "thumbnailDurationMs": 18507.5,
+              "thumbnailError": null,
+              "animationCount": 3,
+              "animations": [
+                {
+                  "name": "Blacksmit Run",
+                  "index": 0
+                },
+                {
+                  "name": "Blacksmit Walk",
+                  "index": 1
+                },
+                {
+                  "name": "Blacksmit Idle",
+                  "index": 2
+                }
+              ],
+              "defaultAnimation": "Blacksmit Idle",
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_855c702a-9edc-4ada-a7c1-f33d0000a928",
+            "name": "Wizard",
+            "category": "zone 1",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-23T13:53:48.786Z",
+              "sha256": "9a1cafbf80ed6f43dbd5e0465636a5262a8aeab9884c06265cdb29fbf0527030",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "animationCount": 3,
+              "animations": [
+                {
+                  "name": "Run",
+                  "index": 0
+                },
+                {
+                  "name": "Walk",
+                  "index": 1
+                },
+                {
+                  "name": "Idle",
+                  "index": 2
+                }
+              ],
+              "defaultAnimation": "Idle",
+              "thumbnailStartedAt": null,
+              "thumbnailFinishedAt": null,
+              "thumbnailDurationMs": null,
+              "thumbnailError": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_8f3fe87f-55a7-4933-a875-03e84f695457",
+            "name": "light_river_seamless_texture",
+            "category": "uncategorized",
+            "assetType": "image",
+            "mimeType": "image/png",
+            "metadata": {
+              "importedAt": "2026-06-27T20:44:26.892Z",
+              "sha256": "0ff0ae31af35953a22c27b0982f8298b80b6b0817203bd134289b5d7cf9f163b",
+              "contentType": "image/png",
+              "format": "png",
+              "thumbnailStartedAt": null,
+              "thumbnailFinishedAt": null,
+              "thumbnailDurationMs": null,
+              "thumbnailError": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_ac271a8c-da70-471e-8a72-3d7ece0b40a3",
+            "name": "Blacksmit forge",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-29T14:05:40.878Z",
+              "sha256": "b2d5c5d8b7abf07112ca54a86f62a20829b1ab1661769b3bf57c8aedc576231f",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-07-09T11:46:02.647Z",
+              "thumbnailFinishedAt": "2026-07-09T11:52:43.951Z",
+              "thumbnailDurationMs": 401304.1,
+              "thumbnailError": null,
+              "animationCount": 0,
+              "animations": [],
+              "defaultAnimation": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_c5211e52-119b-4b14-a3f1-4f6f3e855ebd",
+            "name": "Alchemy Lab",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-29T14:58:46.512Z",
+              "sha256": "b93c426eb1f904519195791901acaa29e1f0a4cc88a65ad50d59fc54fea14895",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-07-01T07:17:45.290Z",
+              "thumbnailFinishedAt": "2026-07-01T07:24:29.868Z",
+              "thumbnailDurationMs": 404578.5,
+              "thumbnailError": null,
+              "animationCount": 0,
+              "animations": [],
+              "defaultAnimation": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_d03d9d8b-c47b-4e93-8655-feffe0a5397d",
+            "name": "stone_bridge1",
+            "category": "uncategorized",
+            "assetType": "model",
+            "mimeType": "application/octet-stream",
+            "metadata": {
+              "importedAt": "2026-06-27T20:51:28.443Z",
+              "sha256": "24e7673717b42ba1f1790b00a22da39b6fe7e55753a143c502e2c395aa3b3e95",
+              "contentType": "application/octet-stream",
+              "format": "glb",
+              "thumbnailStartedAt": "2026-06-27T20:51:35.281Z",
+              "thumbnailFinishedAt": "2026-06-27T20:58:16.024Z",
+              "thumbnailDurationMs": 400743.6,
+              "thumbnailError": null,
+              "animationCount": 0,
+              "animations": [],
+              "defaultAnimation": null,
+              "thumbnailStatus": "ready"
+            }
+          },
+          {
+            "id": "asset_dcb7d09a-d782-4492-8750-4dc536262270",
+            "name": "Poliigon_GrassPatchyGround_4585_BaseColor",
+            "category": "uncategorized",
+            "assetType": "image",
+            "mimeType": "image/jpeg",
+            "metadata": {
+              "importedAt": "2026-06-27T21:17:33.788Z",
+              "sha256": "2bfbf5fc6069cfaaf092ca4f4c00d33350766225c1601f07679b92aa6e2a5e33",
+              "contentType": "image/jpeg",
+              "format": "jpg",
+              "thumbnailStartedAt": null,
+              "thumbnailFinishedAt": null,
+              "thumbnailDurationMs": null,
+              "thumbnailError": null,
+              "thumbnailStatus": "ready"
+            }
+          }
+        ],
+        "legacyWorld": {
+          "schemaVersion": "2.0.0",
+          "source": "editor-node-graph",
+          "outputNodeId": "node_output",
+          "world": null,
+          "ground": null,
+          "camera": null,
+          "player": null,
+          "spawn": null,
+          "lights": [],
+          "entities": [],
+          "interactables": [],
+          "keybinds": [],
+          "ui": [
+            {
+              "id": "hud_game_name",
+              "type": "hud_text",
+              "anchor": "top-left",
+              "text": "Welkom in @{global.game_name}",
+              "fontSize": 18,
+              "color": "#ffffff"
+            }
+          ],
+          "minimap": {
+            "bakes": [],
+            "game": null
+          },
+          "terrain": {
+            "layers": [],
+            "surfaces": []
+          },
+          "collision": {
+            "blockers": [],
+            "walkableSurfaces": []
+          },
+          "scatterAreas": [],
+          "chunkLoading": {
+            "editor": null,
+            "game": null
+          },
+          "assets": []
+        },
+        "diagnostics": {
+          "warnings": [],
+          "counts": {
+            "nodes": 0,
+            "symbols": 22,
+            "errors": 0,
+            "warnings": 0,
+            "references": 0
+          }
+        },
+        "buildId": "gk-33fb36b90b34",
+        "contentHash": "sha256:33fb36b90b34b95557f05483bce52acfe22a936f9c464ece1877e8e0f076a80b"
+      },
+      "publishedAt": "2026-07-18T18:41:54.061Z"
+    },
+    "validation": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "Geen bewegings-keybinds. De speler kan alleen via klik-naar-lopen bewegen.",
+        "Geen interact-keybind. Interactie werkt alleen via klikken op het object."
+      ]
+    }
+  }
+}

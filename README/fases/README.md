@@ -4,6 +4,7 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 ## Actieve fasecontracten
 
+- [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - next NODE phase after accepted NODE-01 cutover.
 - [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
 - [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)
 - [Fase MMO-03 - Node-Driven Minimap: Bake Image + 2D Live Canvas Markers + Editor Minimap](./MMO-03-Node-Driven-Minimap-Bake-Canvas-Overlay.md)
@@ -25,6 +26,10 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 - [Fase 8.9 - Kill Ghost Chunk Plane & Shadow Caster Residency Repair](./08-9-fase8-9-Ghost-Plane-Shadow-Caster-Repair.md)
 - [Fase 9.0 - Shadow System Rebuild & Ghost Chunk Group Removal](./09-fase9-Shadow-System-Rebuild.md)
 
+## Afgesloten fasecontracten
+
+- [NODE-01 - Fundering: Referenties, Tokens, Registries, World Assembly](./NODE-01-Fundering-Referenties-Tokens-Registries-World-Assembly.md) - accepted/closed on 2026-07-18. Normal publish route is `World Assembly.gameProject -> Game Output.gameProject`; legacy authoring remains hidden/internal/migration-only.
+
 ## Regie-regels voor elke fase
 
 1. Werk alleen de afgesproken fase of microfase uit.
@@ -35,3 +40,4 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 6. Voeg geen zware runtime systemen toe zonder fase-opdracht.
 7. Draai `npm run check` en `npm run smoke` als code of publish/dataflow is aangepast.
 8. Lever altijd iets op dat Kevin zelf kan inspecteren, testen of bewust afkeuren.
+9. Voor NODE-01 en later geldt: geen legacy-plus-new authoring workflow. Legacycompatibiliteit mag alleen intern, hidden en migration-only bestaan.

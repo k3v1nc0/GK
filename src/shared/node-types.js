@@ -20,23 +20,23 @@ export const GAME_ACTIONS = [
 ];
 
 export const DATA_TYPE_COLORS = {
-  world: "#7bd4ff",
-  editorWorldSettings: "#8fd5ff",
-  gameWorldSettings: "#ffb454",
-  ground: "#7bd4ff",
-  terrain: "#7fcf68",
-  collision: "#f0b35a",
-  camera: "#7bd4ff",
-  light: "#7bd4ff",
-  player: "#9be870",
-  spawn: "#9be870",
-  entity: "#d59bff",
-  interactable: "#9be870",
-  chunkLoading: "#67d8c4",
-  keybind: "#ff8da3",
-  ui: "#c9d4dc",
-  minimap: "#e0a6ff",
-  group: "#8a97a3"
+  world: "#38bdf8",
+  editorWorldSettings: "#0ea5e9",
+  gameWorldSettings: "#f97316",
+  ground: "#84cc16",
+  terrain: "#22c55e",
+  collision: "#ef4444",
+  camera: "#6366f1",
+  light: "#facc15",
+  player: "#14b8a6",
+  spawn: "#a3e635",
+  entity: "#b000ff",
+  interactable: "#ec4899",
+  chunkLoading: "#06b6d4",
+  keybind: "#f43f5e",
+  ui: "#f8fafc",
+  minimap: "#00ff66",
+  group: "#64748b"
 };
 
 export const DATA_TYPE_OPTIONS = Object.keys(DATA_TYPE_COLORS).filter(function (dataType) {
@@ -884,7 +884,11 @@ function portMapFromEntries(entries) {
       label: port.label || portName,
       dataType: port.dataType,
       required: Boolean(port.required),
-      multiple: port.multiple === undefined ? isMultiValueDataType(port.dataType) : Boolean(port.multiple)
+      multiple: port.multiple === undefined ? isMultiValueDataType(port.dataType) : Boolean(port.multiple),
+      hidden: Boolean(port.hidden),
+      internal: Boolean(port.internal),
+      deprecated: Boolean(port.deprecated),
+      help: port.help || ""
     };
   }
   return map;
@@ -1746,7 +1750,7 @@ export const STARTER_EDGES = [];
 
 export function defaultValuesForType(type) {
   const nodeType = NODE_TYPES[type];
-  if (!nodeType) return {};
+  if (!nodeType || !nodeType.fields) return {};
   return Object.fromEntries(Object.entries(nodeType.fields).map(function (entry) {
     return [entry[0], cloneDefaultValue(entry[1].default === undefined ? null : entry[1].default)];
   }));
@@ -1755,3 +1759,403 @@ export function defaultValuesForType(type) {
 export function isContainer(type) {
   return Boolean(NODE_TYPES[type] && NODE_TYPES[type].container);
 }
+
+const FOUNDATION_REFERENCE_KINDS = [
+  "project",
+  "item",
+  "ability",
+  "currency",
+  "zone",
+  "quest",
+  "target",
+  "enemy",
+  "npc",
+  "audio",
+  "vfx",
+  "policy",
+  "spawn",
+  "tag"
+];
+
+const EXTRA_DATA_TYPE_COLORS = {
+  value: "#8b5cf6",
+  policy: "#00f0ff",
+  projectSettings: "#2563eb",
+  chunkGrid: "#0891b2",
+  chunkPolicy: "#ff006e",
+  legacyWorldPackage: "#78716c",
+  globalValueDef: "#9333ea",
+  tagDef: "#db2777",
+  textTemplate: "#7c3aed",
+  localizedTextDef: "#be185d",
+  catalogDefinition: "#65a30d",
+  catalogPackage: "#16a34a",
+  catalogRegistry: "#15803d",
+  zonePackage: "#0284c7",
+  zoneRegistry: "#0369a1",
+  campaignPackage: "#d97706",
+  campaignRegistry: "#b45309",
+  playerRules: "#0d9488",
+  uiPackage: "#e11d48",
+  gameProject: "#f59e0b"
+};
+
+Object.assign(DATA_TYPE_COLORS, EXTRA_DATA_TYPE_COLORS);
+for (const dataType of Object.keys(EXTRA_DATA_TYPE_COLORS)) {
+  if (!DATA_TYPE_OPTIONS.includes(dataType)) DATA_TYPE_OPTIONS.push(dataType);
+}
+
+export function normalizeGroupKind(value) {
+  const kind = String(value || "generic").trim().toLowerCase();
+  return ["generic", "catalog", "zone", "area", "campaign", "quest", "dialogue", "player_rules", "ui"].includes(kind) ? kind : "generic";
+}
+
+export function groupInterfacePresetForKind(groupKind) {
+  const kind = normalizeGroupKind(groupKind);
+  if (kind === "catalog") {
+    return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
+  }
+  if (kind === "zone") {
+    return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
+  }
+  if (kind === "campaign") {
+    return { inputs: [], outputs: [{ id: "campaign_package", name: "campaignPackage", label: "Campaign Package", dataType: "campaignPackage", multiple: false }] };
+  }
+  if (kind === "player_rules") {
+    return { inputs: [], outputs: [{ id: "player_rules", name: "playerRules", label: "Player Rules", dataType: "playerRules", multiple: false }] };
+  }
+  if (kind === "ui") {
+    return { inputs: [], outputs: [{ id: "ui_package", name: "uiPackage", label: "UI Package", dataType: "uiPackage", multiple: false }] };
+  }
+  return groupInterfaceDefault();
+}
+
+const GAME_OUTPUT_BASE = NODE_TYPES.game_output;
+const FOUNDATION_NODE_DEFS = {
+  game_project_settings: {
+    label: "Game Project Settings",
+    group: "Project",
+    accent: "#8fd5ff",
+    description: "Root project settings for the published game project.",
+    inputs: {},
+    outputs: { projectSettings: { label: "Project Settings", dataType: "projectSettings" } },
+    fields: {
+      projectId: { label: "Project id", type: "identity", default: "gk.project", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      gameName: { label: "Game name", type: "text", default: "GK Game", required: true, maxLength: 120 },
+      defaultLanguage: { label: "Default language", type: "identity", default: "nl", required: true, maxLength: 16, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      contentVersion: { label: "Content version", type: "text", default: "0.1.0", required: true, maxLength: 32 },
+      startZoneRef: { label: "Start zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false, maxLength: 160 },
+      startSpawnRef: { label: "Start spawn", type: "reference", referenceKinds: ["spawn"], allowNull: true, default: null, required: false, maxLength: 160 },
+      allowLegacyWorld: { label: "Allow legacy world", type: "boolean", default: true, required: true, hidden: true }
+    }
+  },
+  chunk_grid_definition: {
+    label: "Chunk Grid Definition",
+    group: "Project",
+    accent: "#67d8c4",
+    description: "Global chunk grid definition for the published project.",
+    inputs: {},
+    outputs: { chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid" } },
+    fields: {
+      gridId: { label: "Grid id", type: "identity", default: "chunk_grid.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      chunkWidth: { label: "Chunk width", type: "number", default: 14, min: 14, max: 14, step: 1, required: true, locked: true },
+      chunkDepth: { label: "Chunk depth", type: "number", default: 14, min: 14, max: 14, step: 1, required: true, locked: true },
+      tileSize: { label: "Tile size", type: "number", default: 1, min: 0.01, max: 1000, step: 0.01, required: true },
+      maxLoadedChunks: { label: "Max loaded chunks", type: "number", default: 81, min: 81, max: 81, step: 1, required: true, locked: true },
+      maxWindowWidth: { label: "Max window width", type: "number", default: 9, min: 9, max: 9, step: 1, required: true, locked: true, hidden: true },
+      maxWindowDepth: { label: "Max window depth", type: "number", default: 9, min: 9, max: 9, step: 1, required: true, locked: true, hidden: true },
+      originX: { label: "Origin X", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      originZ: { label: "Origin Z", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      edgeMode: { label: "Edge mode", type: "select", options: ["clip_to_zone_bounds"], default: "clip_to_zone_bounds", required: true, locked: true }
+    }
+  },
+  constant_value: {
+    label: "Constant Value",
+    group: "Values",
+    accent: "#d59bff",
+    description: "A typed constant value that can be reused by catalog content.",
+    inputs: {},
+    outputs: { value: { label: "Value", dataType: "value" } },
+    fields: {
+      valueId: { label: "Value id", type: "identity", default: "value.constant_01", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      valueType: { label: "Value type", type: "select", options: ["text", "number", "boolean", "color", "vector2", "vector3", "reference"], default: "text", required: true },
+      textValue: { label: "Text value", type: "text", default: "", required: false, maxLength: 240 },
+      numberValue: { label: "Number value", type: "number", default: 0, required: false },
+      booleanValue: { label: "Boolean value", type: "boolean", default: false, required: false },
+      colorValue: { label: "Color value", type: "color", default: "#ffffff", required: false },
+      jsonValue: { label: "JSON value", type: "json", default: null, required: false },
+      referenceKind: { label: "Reference kind", type: "select", options: FOUNDATION_REFERENCE_KINDS, default: "", required: false, allowBlank: true },
+      referenceValue: { label: "Reference value", type: "reference", referenceKinds: FOUNDATION_REFERENCE_KINDS, allowNull: true, default: null, required: false }
+    }
+  },
+  global_value_definition: {
+    label: "Global Value Definition",
+    group: "Values",
+    accent: "#d59bff",
+    description: "Defines a global value and its token-safe metadata.",
+    inputs: {},
+    outputs: {
+      globalValueDef: { label: "Global Value", dataType: "globalValueDef" },
+      catalogDefinition: { label: "Catalog Definition", dataType: "catalogDefinition" }
+    },
+    fields: {
+      valueId: { label: "Value id", type: "identity", default: "global.game_name", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      valueType: { label: "Value type", type: "select", options: ["text", "number", "boolean", "color", "reference"], default: "text", required: true },
+      textValue: { label: "Text value", type: "text", default: "", required: false, maxLength: 240 },
+      numberValue: { label: "Number value", type: "number", default: 0, required: false },
+      booleanValue: { label: "Boolean value", type: "boolean", default: false, required: false },
+      colorValue: { label: "Color value", type: "color", default: "#ffffff", required: false },
+      referenceKind: { label: "Reference kind", type: "select", options: FOUNDATION_REFERENCE_KINDS, default: "", required: false, allowBlank: true },
+      referenceValue: { label: "Reference value", type: "reference", referenceKinds: FOUNDATION_REFERENCE_KINDS, allowNull: true, default: null, required: false },
+      format: { label: "Format", type: "select", options: ["raw", "integer", "decimal", "percent", "currency", "duration"], default: "raw", required: true },
+      label: { label: "Label", type: "text", default: "Game Name", required: true, maxLength: 96 },
+      description: { label: "Description", type: "tokenText", default: "", required: false, maxLength: 500 },
+      tags: { label: "Tags", type: "tagList", default: [], required: false }
+    }
+  },
+  tag_definition: {
+    label: "Tag Definition",
+    group: "Values",
+    accent: "#e0a6ff",
+    description: "Defines a canonical tag and optional restrictions.",
+    inputs: {},
+    outputs: {
+      tagDef: { label: "Tag Definition", dataType: "tagDef" },
+      catalogDefinition: { label: "Catalog Definition", dataType: "catalogDefinition" }
+    },
+    fields: {
+      tagId: { label: "Tag id", type: "identity", default: "global.project", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      label: { label: "Label", type: "text", default: "Project", required: true, maxLength: 96 },
+      description: { label: "Description", type: "text", default: "", required: false, maxLength: 500 },
+      parentTagRef: { label: "Parent tag", type: "reference", referenceKinds: ["tag"], allowNull: true, default: null, required: false },
+      allowedKinds: { label: "Allowed kinds", type: "referenceList", referenceKinds: FOUNDATION_REFERENCE_KINDS, default: [], required: false },
+      restricted: { label: "Restricted", type: "boolean", default: false, required: true },
+      owner: { label: "Owner", type: "text", default: "", required: false, maxLength: 96 }
+    }
+  },
+  text_template: {
+    label: "Text Template",
+    group: "Values",
+    accent: "#d59bff",
+    description: "A tokenized text template for UI and catalog content.",
+    inputs: {},
+    outputs: {
+      textTemplate: { label: "Text Template", dataType: "textTemplate" },
+      catalogDefinition: { label: "Catalog Definition", dataType: "catalogDefinition" }
+    },
+    fields: {
+      templateId: { label: "Template id", type: "identity", default: "text.template_01", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      label: { label: "Label", type: "text", default: "Template", required: true, maxLength: 96 },
+      text: { label: "Text", type: "tokenText", default: "Welkom in @{global.game_name}", required: true, maxLength: 1000 },
+      contextKinds: { label: "Context kinds", type: "tagList", default: ["global"], required: false },
+      fallbackText: { label: "Fallback text", type: "text", default: "", required: false, maxLength: 500 },
+      maxRenderedLength: { label: "Max rendered length", type: "number", default: 240, min: 1, max: 100000, step: 1, required: true }
+    }
+  },
+  localization_entry: {
+    label: "Localization Entry",
+    group: "Values",
+    accent: "#d59bff",
+    description: "A single localized text entry.",
+    inputs: {},
+    outputs: {
+      localizedTextDef: { label: "Localized Text", dataType: "localizedTextDef" },
+      catalogDefinition: { label: "Catalog Definition", dataType: "catalogDefinition" }
+    },
+    fields: {
+      localizationId: { label: "Localization id", type: "identity", default: "localization.nl.game_name", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      language: { label: "Language", type: "identity", default: "nl", required: true, maxLength: 16, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      text: { label: "Text", type: "tokenText", default: "", required: true, maxLength: 1000 },
+      fallbackText: { label: "Fallback text", type: "text", default: "", required: false, maxLength: 500 }
+    }
+  },
+  value_formula: {
+    label: "Value Formula",
+    group: "Values",
+    accent: "#d59bff",
+    description: "A safe declarative formula that outputs a typed value.",
+    inputs: { value: { label: "Value", dataType: "value", required: false, multiple: true } },
+    outputs: { value: { label: "Value", dataType: "value" } },
+    fields: {
+      formulaId: { label: "Formula id", type: "identity", default: "value.formula_01", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      resultType: { label: "Result type", type: "select", options: ["number", "boolean"], default: "number", required: true },
+      expressionJson: { label: "Expression", type: "formula", default: { operator: "add", operands: [] }, required: true },
+      roundMode: { label: "Round mode", type: "select", options: ["none", "floor", "ceil", "round"], default: "none", required: true },
+      clampMin: { label: "Clamp min", type: "number", default: null, required: false },
+      clampMax: { label: "Clamp max", type: "number", default: null, required: false }
+    }
+  },
+  curve_lookup: {
+    label: "Curve Lookup",
+    group: "Values",
+    accent: "#d59bff",
+    description: "Generic curve lookup placeholder for future stats.",
+    inputs: {
+      curve: { label: "Curve", dataType: "value", required: false, multiple: false },
+      input: { label: "Input", dataType: "value", required: true, multiple: false }
+    },
+    outputs: { value: { label: "Value", dataType: "value" } },
+    fields: {
+      lookupId: { label: "Lookup id", type: "identity", default: "curve.lookup_01", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  catalog_output: {
+    label: "Catalog Output",
+    group: "Catalog",
+    accent: "#7fcf68",
+    description: "Bundles catalog definitions into a catalog package.",
+    inputs: {},
+    outputs: { catalogPackage: { label: "Catalog Package", dataType: "catalogPackage" } },
+    fields: {
+      catalogId: { label: "Catalog id", type: "identity", default: "catalog_registry.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      catalogVersion: { label: "Catalog version", type: "text", default: "0.1.0", required: true, maxLength: 32 },
+      namespaceOwnership: { label: "Namespace ownership", type: "json", default: ["global"], required: false }
+    }
+  },
+  catalog_registry: {
+    label: "Catalog Registry",
+    group: "Catalog",
+    accent: "#6ac16a",
+    description: "Aggregates catalog packages into a registry.",
+    inputs: { catalogPackage: { label: "Catalog Package", dataType: "catalogPackage", required: false, multiple: true } },
+    outputs: { catalogRegistry: { label: "Catalog Registry", dataType: "catalogRegistry" } },
+    fields: {
+      registryId: { label: "Registry id", type: "identity", default: "catalog_registry.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      duplicatePolicy: { label: "Duplicate policy", type: "select", options: ["error", "ignore", "replace"], default: "error", required: true },
+      missingOptionalPolicy: { label: "Missing optional policy", type: "select", options: ["warning", "ignore", "error"], default: "warning", required: true }
+    }
+  },
+  zone_registry: {
+    label: "Zone Registry",
+    group: "Zones",
+    accent: "#7bd4ff",
+    description: "Aggregates zone packages into a registry.",
+    inputs: { zonePackage: { label: "Zone Package", dataType: "zonePackage", required: false, multiple: true } },
+    outputs: { zoneRegistry: { label: "Zone Registry", dataType: "zoneRegistry" } },
+    fields: {
+      registryId: { label: "Registry id", type: "identity", default: "zone_registry.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  campaign_registry: {
+    label: "Campaign Registry",
+    group: "Campaigns",
+    accent: "#f0b35a",
+    description: "Aggregates campaign packages into a registry.",
+    inputs: { campaignPackage: { label: "Campaign Package", dataType: "campaignPackage", required: false, multiple: true } },
+    outputs: { campaignRegistry: { label: "Campaign Registry", dataType: "campaignRegistry" } },
+    fields: {
+      registryId: { label: "Registry id", type: "identity", default: "campaign_registry.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  player_rules_output: {
+    label: "Player Rules Output",
+    group: "Player Rules",
+    accent: "#67d8c4",
+    description: "Publishes player rules.",
+    inputs: { policy: { label: "Policy", dataType: "policy", required: false, multiple: true } },
+    outputs: { playerRules: { label: "Player Rules", dataType: "playerRules" } },
+    fields: {
+      rulesId: { label: "Rules id", type: "identity", default: "player_rules.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  ui_output: {
+    label: "UI Output",
+    group: "UI",
+    accent: "#ff8da3",
+    description: "Publishes HUD and UI packages.",
+    inputs: {
+      ui: { label: "UI", dataType: "ui", required: false, multiple: true },
+      minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
+      uiLayout: { label: "UI Layout", dataType: "uiPackage", required: false, multiple: true }
+    },
+    outputs: { uiPackage: { label: "UI Package", dataType: "uiPackage" } },
+    fields: {
+      uiId: { label: "UI id", type: "identity", default: "ui.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  legacy_world_adapter: {
+    label: "Legacy World Adapter",
+    group: "Legacy",
+    accent: "#b0bec5",
+    description: "Wraps the legacy direct Game Output chain for compatibility.",
+    hidden: true,
+    system: true,
+    internal: true,
+    inputs: {
+      world: { label: "World", dataType: "world", required: true, multiple: false },
+      editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
+      gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
+      ground: { label: "Ground", dataType: "ground", required: true, multiple: false },
+      camera: { label: "Camera", dataType: "camera", required: true, multiple: true },
+      lights: { label: "Lights", dataType: "light", required: true, multiple: true },
+      player: { label: "Player", dataType: "player", required: true, multiple: false },
+      spawn: { label: "Spawn", dataType: "spawn", required: true, multiple: false },
+      entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
+      interactables: { label: "Interactables", dataType: "interactable", required: false, multiple: true },
+      chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
+      keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
+      ui: { label: "UI", dataType: "ui", required: false, multiple: true },
+      minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
+      terrain: { label: "Terrain Layers", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true }
+    },
+    outputs: { legacyWorldPackage: { label: "Legacy World Package", dataType: "legacyWorldPackage" } },
+    fields: {
+      adapterId: { label: "Adapter id", type: "identity", default: "legacy_world.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" }
+    }
+  },
+  world_assembly: {
+    label: "World Assembly",
+    group: "Project",
+    accent: "#ffb454",
+    description: "Assembles the final game project manifest.",
+    inputs: {
+      projectSettings: { label: "Project Settings", dataType: "projectSettings", required: true, multiple: false },
+      chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: true, multiple: false },
+      editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
+      gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
+      chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
+      catalogs: { label: "Catalogs", dataType: "catalogRegistry", required: false, multiple: false },
+      zones: { label: "Zones", dataType: "zoneRegistry", required: false, multiple: false },
+      campaigns: { label: "Campaigns", dataType: "campaignRegistry", required: false, multiple: false },
+      playerRules: { label: "Player Rules", dataType: "playerRules", required: false, multiple: false },
+      ui: { label: "UI", dataType: "uiPackage", required: false, multiple: false },
+      legacyWorld: {
+        label: "Legacy World",
+        dataType: "legacyWorldPackage",
+        required: false,
+        multiple: false,
+        hidden: true,
+        internal: true,
+        deprecated: true,
+        help: "Internal migration compatibility only. Normal authoring uses specialized packages into World Assembly and Game Output.gameProject."
+      }
+    },
+    outputs: { gameProject: { label: "Game Project", dataType: "gameProject" } },
+    fields: {
+      assemblyId: { label: "Assembly id", type: "identity", default: "world_assembly.main", required: true, maxLength: 160, pattern: "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$" },
+      schemaVersion: { label: "Schema version", type: "text", default: "gk-game-project-v3", required: true, maxLength: 64, locked: true },
+      validationMode: { label: "Validation mode", type: "select", options: ["strict", "warn"], default: "strict", required: true },
+      includeEditorDiagnostics: { label: "Include editor diagnostics", type: "boolean", default: false, required: true }
+    }
+  }
+};
+
+Object.assign(NODE_TYPES, FOUNDATION_NODE_DEFS);
+NODE_TYPES.game_output = Object.assign({}, GAME_OUTPUT_BASE, {
+  inputs: Object.assign({}, Object.fromEntries(Object.entries(GAME_OUTPUT_BASE?.inputs || {}).map(function ([portName, port]) {
+    return [portName, Object.assign({}, port, {
+      hidden: true,
+      internal: true,
+      deprecated: true,
+      required: false,
+      help: "Legacy direct Game Output input. Use World Assembly.gameProject -> Game Output.gameProject."
+    })];
+  })), {
+    gameProject: { label: "Game Project", dataType: "gameProject", required: false, multiple: false }
+  })
+});
+NODE_TYPES.ui_hud_text.fields.text.type = "tokenText";
+NODE_TYPES.group.fields.groupKind = { label: "Group kind", type: "select", options: ["generic", "catalog", "zone", "area", "campaign", "quest", "dialogue", "player_rules", "ui"], default: "generic", required: true };
+NODE_TYPES.group.fields.interfacePresetVersion = { label: "Interface preset version", type: "number", default: 1, min: 1, max: 1000, step: 1, required: true };
+NODE_TYPES.group.fields.collapsedSummary = { label: "Collapsed summary", type: "boolean", default: false, required: true };

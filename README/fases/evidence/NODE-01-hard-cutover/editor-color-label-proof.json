@@ -1,0 +1,443 @@
+{
+  "nodeCount": 24,
+  "labels": [
+    {
+      "nodeId": "foundation.game_project_settings",
+      "portName": "projectSettings",
+      "direction": "output",
+      "text": "project",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.chunk_grid_definition",
+      "portName": "chunkGrid",
+      "direction": "output",
+      "text": "grid",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node_editor_world_settings_c0091997",
+      "portName": "editorWorldSettings",
+      "direction": "output",
+      "text": "editor",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node_game_world_settings_d187d25e",
+      "portName": "gameWorldSettings",
+      "direction": "output",
+      "text": "game",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.settings",
+      "portName": "world",
+      "direction": "output",
+      "text": "world",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.ground",
+      "portName": "ground",
+      "direction": "output",
+      "text": "ground",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.tree",
+      "portName": "entity",
+      "direction": "output",
+      "text": "entity",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.catalog_registry",
+      "portName": "catalogPackage",
+      "direction": "input",
+      "text": "catPkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.catalog_registry",
+      "portName": "catalogRegistry",
+      "direction": "output",
+      "text": "catReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.ambient",
+      "portName": "light",
+      "direction": "output",
+      "text": "light",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.sun",
+      "portName": "light",
+      "direction": "output",
+      "text": "light",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.tavern",
+      "portName": "entity",
+      "direction": "output",
+      "text": "entity",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.camera",
+      "portName": "camera",
+      "direction": "output",
+      "text": "camera",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "projectSettings",
+      "direction": "input",
+      "text": "project",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "chunkGrid",
+      "direction": "input",
+      "text": "grid",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "editorWorldSettings",
+      "direction": "input",
+      "text": "editor",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "gameWorldSettings",
+      "direction": "input",
+      "text": "game",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "chunkPolicies",
+      "direction": "input",
+      "text": "policy",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "catalogs",
+      "direction": "input",
+      "text": "catReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "zones",
+      "direction": "input",
+      "text": "zoneReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "campaigns",
+      "direction": "input",
+      "text": "campReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "playerRules",
+      "direction": "input",
+      "text": "rules",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "ui",
+      "direction": "input",
+      "text": "uiPkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "portName": "gameProject",
+      "direction": "output",
+      "text": "gameProject",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node_output",
+      "portName": "gameProject",
+      "direction": "input",
+      "text": "gameProject",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.zone_registry",
+      "portName": "zonePackage",
+      "direction": "input",
+      "text": "zonePkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.zone_registry",
+      "portName": "zoneRegistry",
+      "direction": "output",
+      "text": "zoneReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.forge",
+      "portName": "entity",
+      "direction": "output",
+      "text": "entity",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.player",
+      "portName": "player",
+      "direction": "output",
+      "text": "player",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node01.visible_world.spawn",
+      "portName": "spawn",
+      "direction": "output",
+      "text": "spawn",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.campaign_registry",
+      "portName": "campaignPackage",
+      "direction": "input",
+      "text": "campPkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.campaign_registry",
+      "portName": "campaignRegistry",
+      "direction": "output",
+      "text": "campReg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.hud_game_name",
+      "portName": "ui",
+      "direction": "output",
+      "text": "ui",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.player_rules_output",
+      "portName": "policy",
+      "direction": "input",
+      "text": "policy",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.player_rules_output",
+      "portName": "playerRules",
+      "direction": "output",
+      "text": "rules",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node_editor_minimap_hud_1eed557a",
+      "portName": "minimap",
+      "direction": "output",
+      "text": "map",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "portName": "ui",
+      "direction": "input",
+      "text": "ui",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "portName": "minimap",
+      "direction": "input",
+      "text": "map",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "portName": "uiLayout",
+      "direction": "input",
+      "text": "uiPkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "portName": "uiPackage",
+      "direction": "output",
+      "text": "uiPkg",
+      "labelFits": true
+    },
+    {
+      "nodeId": "node_group_7e378033",
+      "portName": "uipackage",
+      "direction": "output",
+      "text": "uiPkg",
+      "labelFits": true
+    }
+  ],
+  "truncatedLabels": [],
+  "nonRoundDots": [],
+  "worldAssemblyPorts": [
+    {
+      "portName": "projectSettings",
+      "direction": "input",
+      "text": "project",
+      "color": "rgb(37, 99, 235)",
+      "labelFits": true
+    },
+    {
+      "portName": "chunkGrid",
+      "direction": "input",
+      "text": "grid",
+      "color": "rgb(8, 145, 178)",
+      "labelFits": true
+    },
+    {
+      "portName": "editorWorldSettings",
+      "direction": "input",
+      "text": "editor",
+      "color": "rgb(14, 165, 233)",
+      "labelFits": true
+    },
+    {
+      "portName": "gameWorldSettings",
+      "direction": "input",
+      "text": "game",
+      "color": "rgb(249, 115, 22)",
+      "labelFits": true
+    },
+    {
+      "portName": "chunkPolicies",
+      "direction": "input",
+      "text": "policy",
+      "color": "rgb(15, 118, 110)",
+      "labelFits": true
+    },
+    {
+      "portName": "catalogs",
+      "direction": "input",
+      "text": "catReg",
+      "color": "rgb(21, 128, 61)",
+      "labelFits": true
+    },
+    {
+      "portName": "zones",
+      "direction": "input",
+      "text": "zoneReg",
+      "color": "rgb(3, 105, 161)",
+      "labelFits": true
+    },
+    {
+      "portName": "campaigns",
+      "direction": "input",
+      "text": "campReg",
+      "color": "rgb(180, 83, 9)",
+      "labelFits": true
+    },
+    {
+      "portName": "playerRules",
+      "direction": "input",
+      "text": "rules",
+      "color": "rgb(13, 148, 136)",
+      "labelFits": true
+    },
+    {
+      "portName": "ui",
+      "direction": "input",
+      "text": "uiPkg",
+      "color": "rgb(225, 29, 72)",
+      "labelFits": true
+    },
+    {
+      "portName": "gameProject",
+      "direction": "output",
+      "text": "gameProject",
+      "color": "rgb(245, 158, 11)",
+      "labelFits": true
+    }
+  ],
+  "worldAssemblyUniqueColorCount": 11,
+  "worldAssemblyPortCount": 11,
+  "edgeAnchors": [
+    {
+      "id": "edge_4a08ba78-c",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "edge_4dee1b38-6",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "edge_b93adf2b-5",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "edge_ef2e3bbe-f",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.campaign_registry_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.catalog_registry_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.chunk_grid_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.hud_game_name_to_ui",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.player_rules_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.project_settings_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.ui_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "foundation.edge.zone_registry_to_assembly",
+      "startDistance": 0,
+      "endDistance": 0
+    },
+    {
+      "id": "edge_e4a29286-3",
+      "startDistance": 0,
+      "endDistance": 0
+    }
+  ],
+  "badEdgeAnchors": []
+}

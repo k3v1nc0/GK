@@ -1,0 +1,7 @@
+{
+  "url": "http://127.0.0.1:3001/game/",
+  "bodyHasTokenProof": true,
+  "bodyHasRawToken": false,
+  "debugAvailable": true,
+  "title": "GK Game"
+}

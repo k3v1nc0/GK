@@ -110,6 +110,11 @@ const state = {
   runtimeWorldKey: "",
   lastPublishedAt: null,
   worldId: null,
+  publishedAt: null,
+  schemaVersion: null,
+  buildId: null,
+  contentHash: null,
+  gameProject: null,
   gameWorld: null,
   user: null,
   session: null,
@@ -2542,6 +2547,11 @@ function buildMmoDebugHudDom(config) {
   if (show.lastPongAge !== false) { const r = createInfoRow("Last pong", "hudLastPongAgeMs"); grid.appendChild(r.row); elements.hudLastPongAgeMs = r.strong; }
   if (show.packetAge !== false) { const r = createInfoRow("Packet age", "hudPacketAgeMs"); grid.appendChild(r.row); elements.hudPacketAgeMs = r.strong; }
   if (show.worldId !== false) { const r = createInfoRow("World", "hudWorldId"); grid.appendChild(r.row); elements.hudWorldId = r.strong; }
+  if (show.gameProject !== false) { const r = createInfoRow("Game project", "hudGameProject"); grid.appendChild(r.row); elements.hudGameProject = r.strong; }
+  if (show.schemaVersion !== false) { const r = createInfoRow("Schema", "hudSchemaVersion"); grid.appendChild(r.row); elements.hudSchemaVersion = r.strong; }
+  if (show.buildId !== false) { const r = createInfoRow("Build", "hudBuildId"); grid.appendChild(r.row); elements.hudBuildId = r.strong; }
+  if (show.contentHash !== false) { const r = createInfoRow("Content hash", "hudContentHash", true); grid.appendChild(r.row); elements.hudContentHash = r.strong; }
+  if (show.publishedAt !== false) { const r = createInfoRow("Published", "hudPublishedAt", true); grid.appendChild(r.row); elements.hudPublishedAt = r.strong; }
   if (show.localPlayerId !== false) { const r = createInfoRow("Local player", "hudLocalPlayerId", true); grid.appendChild(r.row); elements.hudLocalPlayerId = r.strong; }
   if (show.remoteCount !== false) { const r = createInfoRow("Remote", "hudRemotePlayers"); grid.appendChild(r.row); elements.hudRemotePlayers = r.strong; }
   if (show.worldPlayers !== false) { const r = createInfoRow("World players", "hudWorldPlayers"); grid.appendChild(r.row); elements.hudWorldPlayers = r.strong; }
@@ -3099,6 +3109,15 @@ function updateHud() {
   if (els.hudWorldPlayers) els.hudWorldPlayers.textContent = String((debugState.remotePlayerCount || 0) + (state.player ? 1 : 0));
   if (els.hudRemotePacketAge) els.hudRemotePacketAge.textContent = formatMetricMs(debugState.remotePacketAgeMs);
   if (els.hudRemoteDelay) els.hudRemoteDelay.textContent = formatMetricMs(debugState.remoteInterpolationDelayMs);
+  if (els.hudGameProject) {
+    const projectName = state.gameProject?.project?.gameName || state.gameProject?.project?.id || state.gameProject?.projectId || "-";
+    const schema = state.gameProject?.schemaVersion || state.schemaVersion || "-";
+    els.hudGameProject.textContent = projectName === "-" ? schema : projectName + " · " + schema;
+  }
+  if (els.hudSchemaVersion) els.hudSchemaVersion.textContent = state.schemaVersion || state.gameProject?.schemaVersion || "-";
+  if (els.hudBuildId) els.hudBuildId.textContent = state.buildId || "-";
+  if (els.hudContentHash) els.hudContentHash.textContent = state.contentHash || "-";
+  if (els.hudPublishedAt) els.hudPublishedAt.textContent = state.publishedAt || state.lastPublishedAt || "-";
   if (els.hudRemoteBufferSizes) {
     const bufferSizes = Array.isArray(debugState.remoteBufferSizes) ? debugState.remoteBufferSizes : [];
     const display = bufferSizes.length
@@ -3296,6 +3315,21 @@ function currentCollisionRadius() {
   return Math.max(0.05, num(state.gameWorld?.player?.collisionRadius, 0.5));
 }
 
+function snapshotWorldKey(snapshot) {
+  const world = snapshot?.gameWorld || null;
+  return String(
+    snapshot?.worldPublishedAt
+    || snapshot?.publishedAt
+    || world?.publishedAt
+    || snapshot?.contentHash
+    || world?.contentHash
+    || snapshot?.buildId
+    || world?.buildId
+    || snapshot?.worldId
+    || ""
+  );
+}
+
 function applyRuntimePosition(position, options = {}) {
   if (!state.runtime || !position) return;
   state.runtime.setPlayerState(position, {
@@ -3316,6 +3350,11 @@ function primeHttpSnapshotState(snapshot) {
   state.connectedSessionCount = snapshot.connectedSessionCount || 0;
   state.worldId = snapshot.worldId || state.worldId;
   state.gameWorld = snapshot.gameWorld || state.gameWorld;
+  state.gameProject = snapshot.gameProject || state.gameWorld?.gameProject || state.gameProject;
+  state.schemaVersion = snapshot.schemaVersion || state.gameWorld?.schemaVersion || state.gameProject?.schemaVersion || state.schemaVersion;
+  state.buildId = snapshot.buildId || state.gameWorld?.buildId || state.gameProject?.buildId || state.buildId;
+  state.contentHash = snapshot.contentHash || state.gameWorld?.contentHash || state.gameProject?.contentHash || state.contentHash;
+  state.publishedAt = snapshot.publishedAt || snapshot.worldPublishedAt || state.gameWorld?.publishedAt || state.publishedAt;
   state.remote.worldId = state.worldId;
   state.mmoReady.httpSnapshotLoaded = true;
 }
@@ -3331,7 +3370,7 @@ function applySnapshotToRuntime(snapshot, options = {}) {
   if (state.gameWorld) {
     const runtime = ensureRuntime(state.gameWorld);
     syncLocalPlayerNameplate();
-    const nextWorldKey = String(snapshot.worldPublishedAt || state.worldId || "");
+    const nextWorldKey = snapshotWorldKey(snapshot);
     if (!state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey || options.forceWorld === true) {
       clearRemotePlayers("world-reset");
       runtime.setWorld(state.gameWorld);
@@ -3823,9 +3862,9 @@ async function loadSessionState(options = {}) {
     return false;
   }
   const snapshot = await response.json();
-  const nextWorldKey = String(snapshot.worldPublishedAt || snapshot.worldId || "");
+  const nextWorldKey = snapshotWorldKey(snapshot);
   const worldChanged = !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
-  state.lastPublishedAt = snapshot.worldPublishedAt || state.lastPublishedAt;
+  state.lastPublishedAt = snapshot.worldPublishedAt || snapshot.publishedAt || snapshot.gameWorld?.publishedAt || state.lastPublishedAt;
   primeHttpSnapshotState(snapshot);
   primeConnectedSocketReadiness();
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
@@ -4347,7 +4386,7 @@ async function pollVersion() {
     }
     if (!response.ok) return;
     const data = await response.json();
-    if (data.publishedAt && data.publishedAt !== state.lastPublishedAt) {
+    if (data.publishedAt && data.publishedAt !== (state.publishedAt || state.lastPublishedAt)) {
       await loadSessionState({
         forceWorld: true,
         showLoading: false,

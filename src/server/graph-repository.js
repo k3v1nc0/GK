@@ -32,6 +32,7 @@ function toNode(row) {
     parentId: row.parent_id || null,
     values: values,
     definition,
+    schemaVersion: Number(row.schema_version || 1),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -41,6 +42,46 @@ function graphError(message) {
   const error = new Error(message);
   error.status = 400;
   return error;
+}
+
+function parseGraphCoordinate(value, label) {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+    throw graphError(label + " moet een geldig nummer zijn.");
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || Math.abs(number) > 100000) {
+    throw graphError(label + " moet een geldig nummer binnen de graph bounds zijn.");
+  }
+  return Math.round(number);
+}
+
+function normalAuthoringPortError(fromNode, fromPort, toNode, toPort) {
+  if (toNode?.type === "game_output" && toPort !== "gameProject") {
+    return "Game Output publiceert alleen Game Project. Verbind World Assembly.gameProject naar Game Output.gameProject; routeer " + toPort + " eerst naar World Assembly of de passende gespecialiseerde output.";
+  }
+  const sourcePort = NODE_TYPES[fromNode?.type]?.outputs?.[fromPort];
+  const targetPort = NODE_TYPES[toNode?.type]?.inputs?.[toPort];
+  if (sourcePort?.hidden || sourcePort?.internal || targetPort?.hidden || targetPort?.internal) {
+    return "Deze poort is intern/deprecated en niet beschikbaar in de normale editor authoring path.";
+  }
+  return "";
+}
+
+function edgeStorageKey(edge) {
+  return [edge.fromNodeId, edge.fromPort, edge.toNodeId, edge.toPort].join("\u001f");
+}
+
+function isInternalEdge(fromNode, fromPort, toNode, toPort, nodeMap) {
+  const fromDefinition = NODE_TYPES[fromNode?.type] || {};
+  const toDefinition = NODE_TYPES[toNode?.type] || {};
+  const sourcePort = resolveNodePort(fromNode, fromPort, "output", nodeMap);
+  const targetPort = resolveNodePort(toNode, toPort, "input", nodeMap);
+  return Boolean(
+    fromDefinition.hidden || fromDefinition.internal || fromDefinition.system
+    || toDefinition.hidden || toDefinition.internal || toDefinition.system
+    || sourcePort?.hidden || sourcePort?.internal
+    || targetPort?.hidden || targetPort?.internal
+  );
 }
 
 function identityFieldKeys(definition) {
@@ -272,6 +313,10 @@ function deleteGroupPortEdges(db, groupId, removedInputPorts, removedOutputPorts
 
 function pruneInvalidEdges(db, edges, nodeMap) {
   const invalidEdgeIds = [];
+  const singleInputEdgeKeys = new Set();
+  const hasFoundationGameProjectEdge = edges.some(function (edge) {
+    return edge.fromNodeId === "foundation.world_assembly" && edge.fromPort === "gameProject" && edge.toNodeId === "node_output" && edge.toPort === "gameProject";
+  });
   for (const edge of edges) {
     const fromNode = nodeMap.get(edge.fromNodeId);
     const toNode = nodeMap.get(edge.toNodeId);
@@ -286,9 +331,22 @@ function pruneInvalidEdges(db, edges, nodeMap) {
     // Ports can disappear (e.g. a group interface port gets removed) without the edge that
     // used them being cleaned up everywhere; drop those here so a leftover dangling edge
     // doesn't keep failing full-graph validation for unrelated edits forever.
-    if (!resolveNodePort(fromNode, edge.fromPort, "output", nodeMap) || !resolveNodePort(toNode, edge.toPort, "input", nodeMap)) {
+    const fromPort = resolveNodePort(fromNode, edge.fromPort, "output", nodeMap);
+    const toPort = resolveNodePort(toNode, edge.toPort, "input", nodeMap);
+    if (!fromPort || !toPort) {
       invalidEdgeIds.push(edge.id);
+      continue;
     }
+    const edgeKey = edge.toNodeId + "::" + edge.toPort;
+    if (hasFoundationGameProjectEdge && edgeKey === "node_output::gameProject" && edge.fromNodeId !== "foundation.world_assembly") {
+      invalidEdgeIds.push(edge.id);
+      continue;
+    }
+    if (!toPort.multiple && singleInputEdgeKeys.has(edgeKey)) {
+      invalidEdgeIds.push(edge.id);
+      continue;
+    }
+    if (!toPort.multiple) singleInputEdgeKeys.add(edgeKey);
   }
   if (!invalidEdgeIds.length) return false;
   db.exec("BEGIN");
@@ -314,8 +372,8 @@ function normalizeSnapshotNode(node) {
     id: node.id,
     type: node.type,
     title: title,
-    x: Number.isFinite(Number(node.x)) ? Math.round(Number(node.x)) : 0,
-    y: Number.isFinite(Number(node.y)) ? Math.round(Number(node.y)) : 0,
+    x: parseGraphCoordinate(node.x, "Graph snapshot node " + node.id + " x"),
+    y: parseGraphCoordinate(node.y, "Graph snapshot node " + node.id + " y"),
     parentId: node.parentId || null,
     values: cleanValuesForType(node.type, values, {}, NODE_TYPES)
   };
@@ -345,8 +403,72 @@ function sortNodesForRestore(nodes) {
 }
 
 export class GraphRepository {
-  constructor(db) {
+  constructor(db, services = {}) {
     this.db = db;
+    this.services = services;
+  }
+
+  setServices(services = {}) {
+    this.services = services;
+  }
+
+  getGraphMeta() {
+    const row = this.db.prepare("SELECT graph_revision, content_schema_version, last_mutation_at FROM editor_graph_meta WHERE id = 1").get();
+    return row ? {
+      graphRevision: Number(row.graph_revision || 0),
+      contentSchemaVersion: String(row.content_schema_version || "gk-node-content-v1"),
+      lastMutationAt: row.last_mutation_at || null
+    } : {
+      graphRevision: 0,
+      contentSchemaVersion: "gk-node-content-v1",
+      lastMutationAt: null
+    };
+  }
+
+  getGraphRevision() {
+    return this.getGraphMeta().graphRevision;
+  }
+
+  touchGraphRevision(dbOrTransaction = this.db) {
+    const handle = dbOrTransaction || this.db;
+    const nextAt = now();
+    handle.prepare(`
+      INSERT INTO editor_graph_meta (id, graph_revision, content_schema_version, last_mutation_at)
+      VALUES (1, 1, 'gk-node-content-v1', ?)
+      ON CONFLICT(id) DO UPDATE SET
+        graph_revision = graph_revision + 1,
+        content_schema_version = excluded.content_schema_version,
+        last_mutation_at = excluded.last_mutation_at
+    `).run(nextAt);
+    return this.getGraphRevision();
+  }
+
+  invalidateSymbolIndex() {
+    if (this.services?.symbolIndexService && typeof this.services.symbolIndexService.invalidate === "function") {
+      this.services.symbolIndexService.invalidate();
+    }
+  }
+
+  recordContentAlias(oldId, newId, symbolKind, reason, createdByUserId = null, dbOrTransaction = this.db) {
+    const oldCanonical = String(oldId || "").trim();
+    const newCanonical = String(newId || "").trim();
+    if (!oldCanonical || !newCanonical || oldCanonical === newCanonical) return false;
+    const handle = dbOrTransaction || this.db;
+    handle.prepare(`
+      INSERT INTO content_id_aliases (old_id, new_id, symbol_kind, reason, created_at, created_by_user_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(old_id) DO UPDATE SET
+        new_id = excluded.new_id,
+        symbol_kind = excluded.symbol_kind,
+        reason = excluded.reason,
+        created_at = excluded.created_at,
+        created_by_user_id = excluded.created_by_user_id
+    `).run(oldCanonical, newCanonical, String(symbolKind || ""), String(reason || ""), now(), createdByUserId || null);
+    return true;
+  }
+
+  getContentAliases() {
+    return this.db.prepare("SELECT old_id, new_id, symbol_kind, reason, created_at, created_by_user_id FROM content_id_aliases ORDER BY created_at, old_id").all();
   }
 
   seedIfEmpty() {
@@ -393,12 +515,11 @@ export class GraphRepository {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    if (changed) this.clearDraftWorld();
     return changed;
   }
 
   getGraph() {
-    this.ensureGroupSystemNodes();
+    const repairedGroupNodes = this.ensureGroupSystemNodes();
     const nodes = this.db.prepare("SELECT * FROM editor_nodes ORDER BY y, x").all().map(toNode);
     const nodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
     let edges = this.db.prepare("SELECT * FROM editor_node_edges ORDER BY created_at, id").all().map(function (row) {
@@ -411,7 +532,8 @@ export class GraphRepository {
         createdAt: row.created_at
       };
     });
-    if (pruneInvalidEdges(this.db, edges, nodeMap)) {
+    const repairedInvalidEdges = pruneInvalidEdges(this.db, edges, nodeMap);
+    if (repairedInvalidEdges) {
       this.clearDraftWorld();
       edges = this.db.prepare("SELECT * FROM editor_node_edges ORDER BY created_at, id").all().map(function (row) {
         return {
@@ -439,10 +561,18 @@ export class GraphRepository {
         this.db.exec("ROLLBACK");
         throw error;
       }
+      this.touchGraphRevision(this.db);
+      this.invalidateSymbolIndex();
+    } else if (repairedGroupNodes || repairedInvalidEdges) {
+      if (repairedGroupNodes) this.clearDraftWorld();
+      this.touchGraphRevision(this.db);
+      this.invalidateSymbolIndex();
     }
     const refreshedNodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
     for (const node of nodes) node.ports = resolveNodePorts(node, refreshedNodeMap);
-    return { schemaVersion: "2.0.0", nodes, edges, nodeTypes: NODE_TYPES };
+    const meta = this.getGraphMeta();
+    const aliases = this.getContentAliases();
+    return { schemaVersion: "2.0.0", nodes, edges, nodeTypes: NODE_TYPES, graphRevision: meta.graphRevision, contentSchemaVersion: meta.contentSchemaVersion, contentAliases: aliases };
   }
 
   nodeExists(id) {
@@ -475,8 +605,7 @@ export class GraphRepository {
       if (!targetNode) return changed;
       targetPort = ensured.portName;
     } else {
-      targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE type = 'game_output' LIMIT 1").get();
-      if (!targetNode) return false;
+      return false;
     }
     const alreadyConnected = this.db.prepare("SELECT id FROM editor_node_edges WHERE from_node_id = ? AND from_port = 'entity' AND to_node_id = ? AND to_port = ? LIMIT 1")
       .get(nodeId, targetNode.id, targetPort);
@@ -489,6 +618,11 @@ export class GraphRepository {
     const definition = NODE_TYPES[type];
     if (!definition) {
       const error = new Error("Onbekend node-type: " + type);
+      error.status = 400;
+      throw error;
+    }
+    if (definition.hidden || definition.internal) {
+      const error = new Error("Node-type " + definition.label + " is intern en kan niet handmatig worden aangemaakt.");
       error.status = 400;
       throw error;
     }
@@ -516,7 +650,9 @@ export class GraphRepository {
     this.db.prepare("INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, type, title, Math.round(x), Math.round(y), parentId || null, JSON.stringify(nextValues), now(), now());
     if (type === "model_entity") this.ensureModelEntityWiring(id);
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return { graph: this.getGraph(), nodeId: id };
   }
 
@@ -538,7 +674,9 @@ export class GraphRepository {
       throw error;
     }
     this.db.prepare("DELETE FROM editor_nodes WHERE id = ?").run(nodeId);
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
@@ -603,6 +741,17 @@ export class GraphRepository {
     }
     const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
     const cleanValues = cleanValuesForType(row.type, nextValues || {}, currentValues, NODE_TYPES);
+    const definition = NODE_TYPES[row.type];
+    const identityFields = Object.entries(definition?.fields || {}).filter(function ([, field]) {
+      return field && field.type === "identity";
+    });
+    for (const [fieldName] of identityFields) {
+      const previousId = String(currentValues?.[fieldName] || "").trim();
+      const nextId = String(cleanValues?.[fieldName] || "").trim();
+      if (previousId && nextId && previousId !== nextId) {
+        this.recordContentAlias(previousId, nextId, row.type, "identity-change");
+      }
+    }
     if (row.type === "group") {
       const currentInterface = normalizeGroupInterface(currentValues.groupInterface);
       const nextInterface = normalizeGroupInterface(cleanValues.groupInterface);
@@ -614,26 +763,25 @@ export class GraphRepository {
     }
     this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(cleanValues), now(), nodeId);
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
   updateNodePosition(nodeId, position) {
-    const x = Number(position?.x);
-    const y = Number(position?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      const error = new Error("Nodepositie moet geldige x/y nummers bevatten.");
-      error.status = 400;
-      throw error;
-    }
+    const x = parseGraphCoordinate(position?.x, "Nodepositie x");
+    const y = parseGraphCoordinate(position?.y, "Nodepositie y");
     const result = this.db.prepare("UPDATE editor_nodes SET x = ?, y = ?, updated_at = ? WHERE id = ?")
-      .run(Math.round(x), Math.round(y), now(), nodeId);
+      .run(x, y, now(), nodeId);
     if (result.changes === 0) {
       const error = new Error("Node bestaat niet: " + nodeId);
       error.status = 404;
       throw error;
     }
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
@@ -659,6 +807,12 @@ export class GraphRepository {
       error.status = 400;
       throw error;
     }
+    const authoringError = normalAuthoringPortError(from, edge.fromPort, to, edge.toPort);
+    if (authoringError) {
+      const error = new Error(authoringError);
+      error.status = 400;
+      throw error;
+    }
     if (fromPort.dataType !== toPort.dataType) {
       const error = new Error("Poorttypes passen niet: " + fromPort.dataType + " naar " + toPort.dataType + ".");
       error.status = 400;
@@ -679,13 +833,18 @@ export class GraphRepository {
     }
     this.db.prepare("INSERT INTO editor_node_edges (id, from_node_id, from_port, to_node_id, to_port, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("edge_" + crypto.randomUUID().slice(0, 10), from.id, edge.fromPort, to.id, edge.toPort, now());
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
   deleteEdge(edgeId) {
-    this.db.prepare("DELETE FROM editor_node_edges WHERE id = ?").run(edgeId);
+    const result = this.db.prepare("DELETE FROM editor_node_edges WHERE id = ?").run(edgeId);
+    if (!result.changes) return this.getGraph();
+    this.touchGraphRevision(this.db);
     this.clearDraftWorld();
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
@@ -719,6 +878,9 @@ export class GraphRepository {
     });
     applyGroupInterfaceBackfill(nodes, edges, nodeMap);
     const refreshedNodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
+    const existingEdgeKeyById = new Map(this.db.prepare("SELECT id, from_node_id, from_port, to_node_id, to_port FROM editor_node_edges").all().map(function (row) {
+      return [row.id, [row.from_node_id, row.from_port, row.to_node_id, row.to_port].join("\u001f")];
+    }));
     const edgeCounts = new Map();
     for (const edge of edges) {
       const fromNode = refreshedNodeMap.get(edge.fromNodeId);
@@ -730,6 +892,10 @@ export class GraphRepository {
       const toPort = resolveNodePort(toNode, edge.toPort, "input", refreshedNodeMap);
       if (!fromPort) throw graphError("Graph snapshot edge " + edge.id + " gebruikt onbekende outputpoort " + edge.fromPort + ".");
       if (!toPort) throw graphError("Graph snapshot edge " + edge.id + " gebruikt onbekende inputpoort " + edge.toPort + ".");
+      const existingInternalEdge = existingEdgeKeyById.get(edge.id) === edgeStorageKey(edge)
+        && isInternalEdge(fromNode, edge.fromPort, toNode, edge.toPort, refreshedNodeMap);
+      const authoringError = existingInternalEdge ? "" : normalAuthoringPortError(fromNode, edge.fromPort, toNode, edge.toPort);
+      if (authoringError) throw graphError("Graph snapshot edge " + edge.id + ": " + authoringError);
       if (fromPort.dataType !== toPort.dataType) {
         throw graphError("Graph snapshot edge " + edge.id + " verbindt " + fromPort.dataType + " met " + toPort.dataType + ".");
       }
@@ -755,40 +921,77 @@ export class GraphRepository {
       for (const node of orderedNodes) {
         if (node.type === "model_entity") this.ensureModelEntityWiring(node.id);
       }
+      this.touchGraphRevision(this.db);
       this.clearDraftWorld();
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+    this.invalidateSymbolIndex();
     return this.getGraph();
   }
 
-  saveDraftWorld(world) {
-    this.db.prepare("INSERT INTO draft_world_state (id, world_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET world_json = excluded.world_json, updated_at = excluded.updated_at")
-      .run(JSON.stringify(world), now());
+  saveDraftWorld(world, meta = {}) {
+    const buildId = meta.buildId || world?.buildId || null;
+    const schemaVersion = meta.schemaVersion || world?.schemaVersion || null;
+    const contentHash = meta.contentHash || world?.contentHash || null;
+    this.db.prepare(`
+      INSERT INTO draft_world_state (id, world_json, build_id, schema_version, content_hash, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        world_json = excluded.world_json,
+        build_id = excluded.build_id,
+        schema_version = excluded.schema_version,
+        content_hash = excluded.content_hash,
+        updated_at = excluded.updated_at
+    `).run(JSON.stringify(world), buildId, schemaVersion, contentHash, now());
   }
 
-  publishWorld(world, actorUserId) {
+  publishWorld(world, actorUserId, meta = {}) {
     const publishedAt = now();
-    this.db.prepare("INSERT INTO published_world_state (id, world_json, published_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET world_json = excluded.world_json, published_at = excluded.published_at")
-      .run(JSON.stringify(world), publishedAt);
-    this.db.prepare("INSERT INTO publish_history (id, world_json, actor_user_id, published_at) VALUES (?, ?, ?, ?)")
-      .run(crypto.randomUUID(), JSON.stringify(world), actorUserId || null, publishedAt);
+    const buildId = meta.buildId || world?.buildId || null;
+    const schemaVersion = meta.schemaVersion || world?.schemaVersion || null;
+    const contentHash = meta.contentHash || world?.contentHash || null;
+    this.db.prepare(`
+      INSERT INTO published_world_state (id, world_json, build_id, schema_version, content_hash, published_at)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        world_json = excluded.world_json,
+        build_id = excluded.build_id,
+        schema_version = excluded.schema_version,
+        content_hash = excluded.content_hash,
+        published_at = excluded.published_at
+    `).run(JSON.stringify(world), buildId, schemaVersion, contentHash, publishedAt);
+    this.db.prepare(`
+      INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(crypto.randomUUID(), JSON.stringify(world), buildId, schemaVersion, contentHash, actorUserId || null, publishedAt);
   }
 
   getDraftWorld() {
-    const row = this.db.prepare("SELECT world_json FROM draft_world_state WHERE id = 1").get();
-    return row ? parseJson(row.world_json, null) : null;
+    const row = this.db.prepare("SELECT world_json, build_id, schema_version, content_hash, updated_at FROM draft_world_state WHERE id = 1").get();
+    if (!row) return null;
+    return Object.assign(parseJson(row.world_json, {}), {
+      buildId: row.build_id || null,
+      schemaVersion: row.schema_version || null,
+      contentHash: row.content_hash || null,
+      updatedAt: row.updated_at || null
+    });
   }
 
   getPublishedWorld() {
-    const row = this.db.prepare("SELECT world_json, published_at FROM published_world_state WHERE id = 1").get();
+    const row = this.db.prepare("SELECT world_json, build_id, schema_version, content_hash, published_at FROM published_world_state WHERE id = 1").get();
     if (!row) return null;
-    return Object.assign(parseJson(row.world_json, {}), { publishedAt: row.published_at });
+    return Object.assign(parseJson(row.world_json, {}), {
+      buildId: row.build_id || null,
+      schemaVersion: row.schema_version || null,
+      contentHash: row.content_hash || null,
+      publishedAt: row.published_at
+    });
   }
 
   publishHistory(limit = 20) {
-    return this.db.prepare("SELECT id, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC LIMIT ?").all(limit);
+    return this.db.prepare("SELECT id, build_id, schema_version, content_hash, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC LIMIT ?").all(limit);
   }
 }

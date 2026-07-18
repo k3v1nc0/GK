@@ -1,0 +1,243 @@
+{
+  "visibleEdgeCount": 13,
+  "maxStartDistance": 56.568542494923804,
+  "maxEndDistance": 56.568542494923804,
+  "badEdges": [
+    {
+      "id": "edge_4a08ba78-c",
+      "fromNodeId": "node_group_7e378033",
+      "fromPort": "uipackage",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "uiLayout",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_4dee1b38-6",
+      "fromNodeId": "foundation.world_assembly",
+      "fromPort": "gameProject",
+      "toNodeId": "node_output",
+      "toPort": "gameProject",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_b93adf2b-5",
+      "fromNodeId": "node_editor_world_settings_c0091997",
+      "fromPort": "editorWorldSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "editorWorldSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_ef2e3bbe-f",
+      "fromNodeId": "node_game_world_settings_d187d25e",
+      "fromPort": "gameWorldSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "gameWorldSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_f9038ee6-a",
+      "fromNodeId": "node_editor_minimap_hud_1eed557a",
+      "fromPort": "minimap",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "minimap",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.campaign_registry_to_assembly",
+      "fromNodeId": "foundation.campaign_registry",
+      "fromPort": "campaignRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "campaigns",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.catalog_registry_to_assembly",
+      "fromNodeId": "foundation.catalog_registry",
+      "fromPort": "catalogRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "catalogs",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.chunk_grid_to_assembly",
+      "fromNodeId": "foundation.chunk_grid_definition",
+      "fromPort": "chunkGrid",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "chunkGrid",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.hud_game_name_to_ui",
+      "fromNodeId": "foundation.hud_game_name",
+      "fromPort": "ui",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "ui",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.player_rules_to_assembly",
+      "fromNodeId": "foundation.player_rules_output",
+      "fromPort": "playerRules",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "playerRules",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.project_settings_to_assembly",
+      "fromNodeId": "foundation.game_project_settings",
+      "fromPort": "projectSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "projectSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.ui_to_assembly",
+      "fromNodeId": "foundation.ui_output",
+      "fromPort": "uiPackage",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "ui",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.zone_registry_to_assembly",
+      "fromNodeId": "foundation.zone_registry",
+      "fromPort": "zoneRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "zones",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_4a08ba78-c",
+      "fromNodeId": "node_group_7e378033",
+      "fromPort": "uipackage",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "uiLayout",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_4dee1b38-6",
+      "fromNodeId": "foundation.world_assembly",
+      "fromPort": "gameProject",
+      "toNodeId": "node_output",
+      "toPort": "gameProject",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_b93adf2b-5",
+      "fromNodeId": "node_editor_world_settings_c0091997",
+      "fromPort": "editorWorldSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "editorWorldSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_ef2e3bbe-f",
+      "fromNodeId": "node_game_world_settings_d187d25e",
+      "fromPort": "gameWorldSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "gameWorldSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "edge_f9038ee6-a",
+      "fromNodeId": "node_editor_minimap_hud_1eed557a",
+      "fromPort": "minimap",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "minimap",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.campaign_registry_to_assembly",
+      "fromNodeId": "foundation.campaign_registry",
+      "fromPort": "campaignRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "campaigns",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.catalog_registry_to_assembly",
+      "fromNodeId": "foundation.catalog_registry",
+      "fromPort": "catalogRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "catalogs",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.chunk_grid_to_assembly",
+      "fromNodeId": "foundation.chunk_grid_definition",
+      "fromPort": "chunkGrid",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "chunkGrid",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.hud_game_name_to_ui",
+      "fromNodeId": "foundation.hud_game_name",
+      "fromPort": "ui",
+      "toNodeId": "foundation.ui_output",
+      "toPort": "ui",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.player_rules_to_assembly",
+      "fromNodeId": "foundation.player_rules_output",
+      "fromPort": "playerRules",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "playerRules",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.project_settings_to_assembly",
+      "fromNodeId": "foundation.game_project_settings",
+      "fromPort": "projectSettings",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "projectSettings",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.ui_to_assembly",
+      "fromNodeId": "foundation.ui_output",
+      "fromPort": "uiPackage",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "ui",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    },
+    {
+      "id": "foundation.edge.zone_registry_to_assembly",
+      "fromNodeId": "foundation.zone_registry",
+      "fromPort": "zoneRegistry",
+      "toNodeId": "foundation.world_assembly",
+      "toPort": "zones",
+      "startDistance": 56.568542494923804,
+      "endDistance": 56.568542494923804
+    }
+  ]
+}
