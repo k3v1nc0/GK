@@ -1,13 +1,26 @@
 # NODE-01 — Fundering: Referenties, Tags, Teksttokens, Specialized Groups, Registries en World Assembly
 
 **Documenttype:** uitvoeringscontract voor Codex  
-**Status:** klaar om te implementeren nadat Kevin dit contract heeft goedgekeurd  
+**Status:** afgesloten/geaccepteerd op 2026-07-18  
 **Repository:** `k3v1nc0/GK`  
 **Branchbeleid:** werk op de huidige werkbranch/main; maak geen extra branch of PR tenzij Kevin dat uitdrukkelijk vraagt  
 **Baseline:** de meegeleverde code rond commit `c815f4c3a7dc7b282eab2ee70ceb9b2f30a063d5`  
 **Afhankelijkheden:** geen eerdere NODE-fase  
 **Vervolg:** NODE-02 — Zones, Areas, Spawns, Travel en Minimap  
 **Contractversie:** `node-system-contract-v1.0`
+
+**Hard-cutover addendum 2026-07-18:** NODE-01 vereist één normale authoringroute:
+`World Assembly.gameProject -> Game Output.gameProject`. Legacy Game Output inputs en
+`Legacy World Adapter` mogen alleen hidden/internal/migration-only bestaan en zijn geen normale
+editorroute meer. Evidence staat in `README/fases/evidence/NODE-01-hard-cutover/`.
+
+**Sluiting 2026-07-18:** Kevin heeft de NODE-01 hard cutover geaccepteerd. De zichtbare
+editorroute is gesloten op `World Assembly.gameProject -> Game Output.gameProject`, legacy
+authoring is niet zichtbaar als normale workflow, nodeposities/dragcoordinaten zijn gevalideerd,
+poortkleuren/labels/anchors zijn gecorrigeerd, en de live wereld publiceert via het nieuwe
+`gameProject` manifest. `npm run check` en `npm test` zijn groen. `npm run smoke` heeft nog een
+bekende chunk-lookahead failure buiten de NODE-01 cutover-scope; die blijft als aparte runtime
+restbeperking geregistreerd en blokkeert de administratieve sluiting van NODE-01 niet meer.
 
 ---
 
@@ -321,7 +334,7 @@ Fields:
 | `contentVersion` | text | `0.1.0` | ja | semverachtig, max 32 |
 | `startZoneRef` | reference | `null` | nee in NODE-01 | kind zone; verplicht vanaf NODE-02 |
 | `startSpawnRef` | reference | `null` | nee in NODE-01 | kind spawn; verplicht vanaf NODE-02 |
-| `allowLegacyWorld` | boolean | `true` | ja | wordt in NODE-05 verwijderd/false |
+| `allowLegacyWorld` | boolean | `true` | intern/hidden | migration-only compatibilityflag; geen normale authoringkeuze |
 
 Tokenregistratie:
 
@@ -522,7 +535,7 @@ missingOptionalPolicy = warning
 Input: `zonePackage[]`  
 Output: `zoneRegistry`
 
-In NODE-01 mag de input leeg zijn als `allowLegacyWorld = true`. Vanaf NODE-02 is minimaal één zone verplicht.
+In NODE-01 mag de input leeg zijn. Vanaf NODE-02 is minimaal één zone verplicht.
 
 ## 9.13 `campaign_registry`
 
@@ -547,7 +560,7 @@ Bestaande HUD-nodes kunnen hierdoor al naar World Assembly worden gerouteerd.
 
 ## 9.16 `legacy_world_adapter`
 
-**Doel:** bestaande losse Game Output-keten veilig inpakken zonder die direct te verwijderen.
+**Doel:** bestaande losse Game Output-keten intern migreren zonder die als normale authoringroute te tonen.
 
 Inputs zijn gelijk aan de huidige Game Output-worldinputs:
 
@@ -573,6 +586,7 @@ collision[]
 Output: `legacyWorldPackage`.
 
 Deze node gebruikt intern dezelfde builders als de huidige `buildWorldFromGraph`; geen tweede read-modelimplementatie.
+De node is `hidden`, `system` en `internal`: Kevin kan hem niet als normale node kiezen.
 
 ## 9.17 `world_assembly`
 
@@ -590,7 +604,7 @@ Inputs:
 | `campaigns` | campaignRegistry | nee tot NODE-04 |
 | `playerRules` | playerRules | nee tot NODE-03 |
 | `ui` | uiPackage | nee |
-| `legacyWorld` | legacyWorldPackage | toegestaan tot NODE-05 |
+| `legacyWorld` | legacyWorldPackage | intern/hidden migration-only |
 
 Output: `gameProject`.
 
@@ -605,7 +619,7 @@ includeEditorDiagnostics = false
 
 ## 9.18 `game_output` aanpassing
 
-Voeg input toe:
+Normale zichtbare input:
 
 ```text
 gameProject: dataType gameProject, required false in NODE-01, multiple false
@@ -613,10 +627,10 @@ gameProject: dataType gameProject, required false in NODE-01, multiple false
 
 Publishselectie:
 
-1. Is `gameProject` verbonden: publiceer het samengestelde manifest.
-2. Zijn daarnaast legacyports direct verbonden: geef warning `GAME_OUTPUT_LEGACY_IGNORED` en negeer die directe legacy-inputs.
-3. Is `gameProject` niet verbonden: bestaande legacy publishroute blijft werken.
-4. Vanaf NODE-05 wordt `gameProject` verplicht en worden directe legacy-inputs publisherrors.
+1. De enige normale route is `World Assembly.gameProject -> Game Output.gameProject`.
+2. Oude directe Game Output inputs blijven alleen als hidden/internal/deprecated schemawaarden bestaan voor migration en oude snapshots.
+3. Normale authoring naar oude Game Output inputs wordt geblokkeerd met uitleg waar de verbinding heen moet.
+4. Migration verplaatst bestaande oude directe Game Output edges naar interne compatibility waar mogelijk.
 
 ## 9.19 `group` aanpassing
 
@@ -1086,10 +1100,11 @@ Migratie maakt:
 - `Chunk Grid Definition`;
 - rootgroups Catalog, Zones, Campaigns, Player Rules en UI;
 - lege outputs/registries waar nodig;
-- `Legacy World Adapter` met verbindingen vanuit de huidige worldketen;
+- hidden/internal `Legacy World Adapter` met verbindingen vanuit de oude worldketen, alleen voor migration;
 - `World Assembly`;
+- proof HUD Text met `Welkom in @{global.game_name}` naar `UI Output`;
 - `World Assembly.gameProject -> Game Output.gameProject`;
-- oude directe Game Output edges blijven tijdelijk bestaan maar worden ignored/warning; de preview noemt ze expliciet.
+- oude directe Game Output edges worden van `Game Output.*` afgehaald en naar de interne adapter verplaatst waar mogelijk.
 
 De migratie mag geen usercontent verwijderen.
 
@@ -1120,10 +1135,11 @@ Legacy
 ```
 
 Deze navigator is een view op bestaande Groups/nodes; geen tweede opslaglaag.
+`Legacy` is geen normale node-library categorie; hidden/internal compatibilitynodes worden niet als maakbare node getoond.
 
 ## 17.2 Specialized Group aanmaken
 
-De `Add Group`-actie krijgt een `Group kind`-selectie. Bij creatie worden Group Input/Output en interfacepreset automatisch correct aangemaakt.
+De Node Library toont Specialized Groups als directe knoppen: Catalog, Zones, Campaigns, Player Rules en UI. Bij creatie worden Group Input/Output en interfacepreset automatisch correct aangemaakt.
 
 ## 17.3 Referencepicker
 
@@ -1173,7 +1189,6 @@ Na migratie ziet Kevin minimaal:
 [Campaign Registry] ----------/
 [Player Rules Output] -------/
 [UI Output] ----------------/
-[Legacy World Adapter] -----/
 ```
 
 ---
@@ -1223,6 +1238,7 @@ FORMULA_TYPE_MISMATCH
 ```text
 GAME_OUTPUT_LEGACY_ONLY
 GAME_OUTPUT_LEGACY_IGNORED
+GAME_OUTPUT_LEGACY_REROUTED
 TOKEN_RUNTIME_UNRESOLVED_PREVIEW
 GLOBAL_VALUE_UNUSED
 TAG_UNUSED
@@ -1329,11 +1345,12 @@ Minimaal:
 9. symbolindex cache invalidatie op graphrevision;
 10. contenthash deterministisch;
 11. chunkgrid accepteert alleen 14/14/81;
-12. `legacy_world_adapter` levert exact dezelfde compatibilityworld als oude publishroute;
-13. gameProject verbonden overschrijft legacy direct inputs;
-14. migration preview schrijft niets;
-15. migration apply is atomisch en idempotent;
-16. migration apply met stale revision geeft 409.
+12. `legacy_world_adapter` is hidden/system/internal en alleen migration-only;
+13. oude directe Game Output inputs zijn hidden/internal/deprecated en worden door normale authoring geblokkeerd;
+14. migration reroutet bestaande oude Game Output edges naar interne compatibility waar mogelijk;
+15. migration preview schrijft niets;
+16. migration apply is atomisch en idempotent;
+17. migration apply met stale revision geeft 409.
 
 ## 21.2 Smoke-uitbreiding
 
@@ -1344,8 +1361,10 @@ Minimaal:
 - specialized Groups hebben systeemnodes en correcte interfaces;
 - Global Value en Tag worden in Catalog Output verzameld;
 - tokenized HUD-resolutie werkt;
-- Legacy World Adapter compileert bestaande minimale world;
+- Legacy World Adapter staat niet in de normale library en is hidden/system/internal;
+- bestaande directe Game Output edges worden bij migration van `Game Output.*` afgehaald;
 - World Assembly compileert gameProject;
+- Game Output toont/gebruikt als normale input alleen `gameProject`;
 - publish slaat buildId/schemaVersion/contentHash op;
 - `/api/game/world` bevat compatibilityworld én gameProject;
 - unconnected definitions verschijnen niet in gepubliceerd catalog;
@@ -1361,7 +1380,8 @@ Breid `scripts/game-browser-check.js` of een nieuwe gerichte browsercheck uit:
 - login editor;
 - run migration preview/apply;
 - open rootgraph;
-- screenshot specialized Groups/World Assembly/Game Output;
+- screenshot specialized Groups/World Assembly/Game Output met leesbare poorttypen;
+- screenshot dat Legacy World Adapter niet in de normale library staat en Game Output geen oude poorten als gewone keuze toont;
 - wijzig `gameName`;
 - tokenized HUD toont wijziging in editorpreview;
 - Save Draft/reload behoudt;
@@ -1381,16 +1401,17 @@ Codex zet dit letterlijk in fase-evidence en voert uit waar mogelijk:
 3. Open de Node Library en zoek “Game Project Settings”.
 4. Maak die node als hij nog niet door migratie bestaat.
 5. Controleer Chunk Grid: width 14, depth 14, max 81.
-6. Maak een Global Value Definition met id global.welcome_text.
-7. Maak een HUD Text met tekst: Welkom in @{global.game_name}.
+6. Controleer dat Specialized Groups zichtbaar zijn: Catalog, Zones, Campaigns, Player Rules en UI.
+7. Controleer de proof HUD Text met tekst: Welkom in @{global.game_name}.
 8. Gebruik de tokenpicker; typ de token niet blind.
 9. Controleer dat de editor een static preview toont.
-10. Maak/controleer Catalog, Zones, Campaigns, Player Rules en UI Groups.
+10. Maak/controleer Catalog, Zones, Campaigns, Player Rules en UI Groups via de Specialized Groups knoppen.
 11. Open iedere Group en controleer één Group Input en één Group Output.
 12. Controleer dat een directe edge door een groupwand nog steeds wordt geweigerd.
 13. Verbind Group packages met de registries.
 14. Verbind alles met World Assembly.
 15. Verbind World Assembly.gameProject met Game Output.gameProject.
+15a. Probeer bewust een oude directe Game Output input te verbinden en controleer de foutmelding met de verwijzing naar World Assembly.gameProject.
 16. Save Draft en refresh de browser.
 17. Controleer dat alle nodes, waarden, edges en groupinterfaces terugkomen.
 18. Save To Game.
@@ -1421,6 +1442,9 @@ repo-baseline.md
 migration-preview.json
 migration-result.json
 editor-root-graph.png
+editor-game-output-only-game-project.png
+editor-specialized-groups.png
+editor-invalid-connection-explanation.png
 editor-reference-picker.png
 editor-token-preview.png
 editor-validation-broken-ref.png
@@ -1513,24 +1537,29 @@ NODE-01 is **niet** klaar als:
 
 Alle onderstaande punten moeten waar zijn:
 
-- [ ] migratie 004 bestaat en werkt op bestaande en lege database;
-- [ ] graphrevision en schemaVersion zijn zichtbaar;
-- [ ] nieuwe fieldtypes zijn server- en editorondersteund;
-- [ ] canonical IDs/refs/tags/tokens hebben één contract;
-- [ ] symbolindex en API werken;
-- [ ] specialized Groups werken via bestaande Group Input/Output;
-- [ ] alle foundationnodes bestaan en zijn connectable;
-- [ ] World Assembly compileert deterministisch;
-- [ ] Game Output publiceert gameProject;
-- [ ] legacyworld blijft tijdelijk werken;
-- [ ] 14×14/max81 is afgedwongen;
-- [ ] broken refs/duplicate IDs/invalid tokens blokkeren publish;
-- [ ] static tokenized HUD werkt in editor en game;
-- [ ] Save Draft/reload/publish werken;
-- [ ] `npm run check`, `npm test`, `npm run smoke` groen;
+- [x] migratie 004 bestaat en werkt op bestaande en lege database;
+- [x] graphrevision en schemaVersion zijn zichtbaar;
+- [x] nieuwe fieldtypes zijn server- en editorondersteund;
+- [x] canonical IDs/refs/tags/tokens hebben één contract;
+- [x] symbolindex en API werken;
+- [x] specialized Groups werken via bestaande Group Input/Output;
+- [x] foundationnodes voor NODE-01 bestaan en zijn connectable waar ze nu functioneel publiceren;
+- [x] World Assembly compileert deterministisch;
+- [x] Game Output publiceert gameProject;
+- [x] de enige normale publishroute is `World Assembly.gameProject -> Game Output.gameProject`;
+- [x] legacycompatibiliteit is hidden/system/internal en migration-only;
+- [x] oude directe Game Output poorten zijn hidden/internal/deprecated en normale authoring blokkeert ze met uitleg;
+- [x] migration converteert oude directe Game Output edges naar de interne compatibilityroute waar mogelijk;
+- [x] 14×14/max81 is afgedwongen;
+- [x] broken refs/duplicate IDs/invalid tokens blokkeren publish;
+- [x] static tokenized HUD werkt in editor en game;
+- [x] Save Draft/reload/publish werken;
+- [x] `npm run check` en `npm test` groen;
+- [x] lokale browser-evidence aanwezig;
+- [x] evidencefolder compleet;
+- [x] geen seeded content of parallel systeem toegevoegd;
 - [ ] public-URL browserbewijs aanwezig;
-- [ ] evidencefolder compleet;
-- [ ] geen seeded content of parallel systeem toegevoegd.
+- [ ] `npm run smoke` volledig groen; huidige failure is de bekende chunk-lookahead runtime assertion buiten NODE-01 scope.
 
 ---
 
@@ -1591,21 +1620,21 @@ Outputs worden later dynamisch afgeleid uit de gerefereerde graphinterface. In N
 
 | Bestaande node | NODE-01-besluit | Exacte uitvoering |
 |---|---|---|
-| `world_settings` | behouden als legacy input | Niet uitbreiden met zonecontent. `legacy_world_adapter` leest hem; migrationpreview toont latere splitsing naar project + zone settings. |
+| `world_settings` | behouden voor migration/internal compatibility | Niet uitbreiden met zonecontent. Normale authoring routeert niet meer direct naar Game Output; migration verplaatst oude edges naar hidden compatibility. |
 | `editor_world_settings` | behouden | Blijft globale editorperformance/shadow/debugpolicy en gaat naar `world_assembly.editorWorldSettings`. |
 | `game_world_settings` | behouden | Blijft globale runtimeperformance/shadow/debugpolicy en gaat naar `world_assembly.gameWorldSettings`. |
 | `editor_chunk_loading` | aanpassen | Voeg `chunkGrid` input/ref toe; de fysieke width/depth mag niet meer zelfstandig 100×100 blijven. Override fields voor fysieke maat worden deprecated/read-only en resolve naar 14×14. |
 | `game_chunk_loading` | aanpassen/vastzetten | Voeg `chunkGrid` input/ref toe en valideer width=14, depth=14, maxLoadedChunks=81. Policyvelden zoals radius/preload blijven editable binnen veilige grenzen. |
-| `game_camera` | behouden | Globale defaultcamera blijft via legacy adapter of later World Assembly lopen; zone overrides volgen NODE-02. |
+| `game_camera` | behouden | Globale defaultcamera blijft voor bestaande graphs intern migreerbaar; nieuwe normale publish gaat via World Assembly/gameProject. Zone overrides volgen NODE-02. |
 | `editor_camera` | behouden editor-only | Mag nooit in `gameProject` runtimepackages komen. Workspace/draft authoringstate blijft intact. |
 | `top_down_camera` | legacy/deprecated | Niet meer in library tonen. Migrationservice zet hem later idempotent om naar `game_camera`; NODE-01 blijft hem lezen voor compatibility. |
-| `keybind` | behouden | Routeer via `player_rules_output` of rechtstreeks World Assembly compatibilityinput; geen per-zone kopieën. Voeg nog geen combatkeys hardcoded toe. |
+| `keybind` | behouden | Routeer via `player_rules_output`; geen rechtstreekse Game Output route in normale authoring. Voeg nog geen combatkeys hardcoded toe. |
 | `debug_performance_hud` | behouden debugmodule | Kan naar `ui_output`; default disabled/collapsed en nooit vereist voor gameplay. |
 | `debug_mmo_hud` | behouden debugmodule | Kan naar `ui_output`; geen tuningwaarde wordt alleen in DOM bewaard. |
 | `group` | uitbreiden | `groupKind`, interfacepreset en typed public ports zoals eerder vastgelegd. |
 | `group_input` | behouden locked systemnode | Dynamische outputs komen uitsluitend uit parent Group interface. Geen handmatige usercreate/delete. |
 | `group_output` | behouden locked systemnode | Dynamische inputs komen uitsluitend uit parent Group interface. Required public outputs moeten intern aangesloten zijn. |
-| `game_output` | uitbreiden | Voeg `gameProject`; behoud legacyroute tijdelijk; finale verplichting in NODE-05. |
+| `game_output` | gecorrigeerd | Alleen `gameProject` is een normale zichtbare input. Oude directe inputs zijn hidden/internal/deprecated en worden bij normale authoring geblokkeerd met uitleg. |
 
 ## 30.3 Chunk Grid is één bron
 

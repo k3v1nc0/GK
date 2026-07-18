@@ -1,21 +1,21 @@
 export const DATA_TYPE_COLORS = {
-  world: "#7bd4ff",
-  editorWorldSettings: "#8fd5ff",
-  gameWorldSettings: "#ffb454",
-  ground: "#7bd4ff",
-  terrain: "#7fcf68",
-  collision: "#f0b35a",
-  camera: "#7bd4ff",
-  light: "#7bd4ff",
-  player: "#9be870",
-  spawn: "#9be870",
-  entity: "#d59bff",
-  interactable: "#9be870",
-  chunkLoading: "#67d8c4",
-  keybind: "#ff8da3",
-  ui: "#c9d4dc",
-  minimap: "#e0a6ff",
-  group: "#8a97a3"
+  world: "#38bdf8",
+  editorWorldSettings: "#0ea5e9",
+  gameWorldSettings: "#f97316",
+  ground: "#84cc16",
+  terrain: "#22c55e",
+  collision: "#ef4444",
+  camera: "#6366f1",
+  light: "#facc15",
+  player: "#14b8a6",
+  spawn: "#a3e635",
+  entity: "#b000ff",
+  interactable: "#ec4899",
+  chunkLoading: "#06b6d4",
+  keybind: "#f43f5e",
+  ui: "#f8fafc",
+  minimap: "#00ff66",
+  group: "#64748b"
 };
 
 export const DATA_TYPE_OPTIONS = Object.keys(DATA_TYPE_COLORS).filter(function (dataType) {
@@ -351,4 +351,60 @@ export function groupInterfaceDefault() {
       }
     ]
   };
+}
+
+const EXTRA_DATA_TYPE_COLORS = {
+  value: "#8b5cf6",
+  policy: "#00f0ff",
+  projectSettings: "#2563eb",
+  chunkGrid: "#0891b2",
+  chunkPolicy: "#ff006e",
+  legacyWorldPackage: "#78716c",
+  globalValueDef: "#9333ea",
+  tagDef: "#db2777",
+  textTemplate: "#7c3aed",
+  localizedTextDef: "#be185d",
+  catalogDefinition: "#65a30d",
+  catalogPackage: "#16a34a",
+  catalogRegistry: "#15803d",
+  zonePackage: "#0284c7",
+  zoneRegistry: "#0369a1",
+  campaignPackage: "#d97706",
+  campaignRegistry: "#b45309",
+  playerRules: "#0d9488",
+  uiPackage: "#e11d48",
+  gameProject: "#f59e0b"
+};
+
+Object.assign(DATA_TYPE_COLORS, EXTRA_DATA_TYPE_COLORS);
+for (const dataType of Object.keys(EXTRA_DATA_TYPE_COLORS)) {
+  if (!DATA_TYPE_OPTIONS.includes(dataType)) DATA_TYPE_OPTIONS.push(dataType);
+}
+for (const type of ["catalogPackage", "zonePackage", "campaignPackage", "uiPackage"]) {
+  MULTI_VALUE_TYPES.add(type);
+}
+
+export function normalizeGroupKind(value) {
+  const kind = String(value || "generic").trim().toLowerCase();
+  return ["generic", "catalog", "zone", "area", "campaign", "quest", "dialogue", "player_rules", "ui"].includes(kind) ? kind : "generic";
+}
+
+export function groupInterfacePresetForKind(groupKind) {
+  const kind = normalizeGroupKind(groupKind);
+  if (kind === "catalog") {
+    return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
+  }
+  if (kind === "zone") {
+    return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
+  }
+  if (kind === "campaign") {
+    return { inputs: [], outputs: [{ id: "campaign_package", name: "campaignPackage", label: "Campaign Package", dataType: "campaignPackage", multiple: false }] };
+  }
+  if (kind === "player_rules") {
+    return { inputs: [], outputs: [{ id: "player_rules", name: "playerRules", label: "Player Rules", dataType: "playerRules", multiple: false }] };
+  }
+  if (kind === "ui") {
+    return { inputs: [], outputs: [{ id: "ui_package", name: "uiPackage", label: "UI Package", dataType: "uiPackage", multiple: false }] };
+  }
+  return groupInterfaceDefault();
 }

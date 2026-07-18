@@ -1,0 +1,16 @@
+{
+  "outputDotRound": true,
+  "inputDotRound": true,
+  "outputDotSize": {
+    "width": 12,
+    "height": 12
+  },
+  "inputDotSize": {
+    "width": 12,
+    "height": 12
+  },
+  "endpointDistance": {
+    "startToOutputDot": 0,
+    "endToInputDot": 0
+  }
+}

@@ -150,18 +150,19 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
 }
 
 .gnode {
-  position: absolute; width: 210px; border-radius: 10px;
+  position: absolute; width: 210px; border-radius: 8px;
   background: #121b24; border: 1px solid #28384a; box-shadow: 0 8px 22px rgba(0,0,0,0.45);
   user-select: none;
+  overflow: visible;
 }
 .gnode.selected { border-color: #7bd4ff; box-shadow: 0 0 0 1px #7bd4ff, 0 10px 26px rgba(0,0,0,0.5); }
 .gnode.dragging { z-index: 2; }
-.gnode.isGroup { width: 200px; background: #161d22; border-style: dashed; }
+.gnode.isGroup { width: 240px; background: #161d22; border-style: dashed; }
 .gnode.isSystem { background: #101820; border-style: dashed; border-color: #3c5569; }
 .gnode.isLocked .gnodeHead { cursor: default; }
 .gnodeHead {
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: grab;
-  border-bottom: 1px solid #20303f; border-radius: 10px 10px 0 0;
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; cursor: grab;
+  border-bottom: 1px solid #20303f; border-radius: 8px 8px 0 0;
 }
 .gnode.dragging .gnodeHead { cursor: grabbing; }
 .gnodeAccent { width: 8px; height: 8px; border-radius: 50%; }
@@ -176,16 +177,42 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
   border-radius: 999px;
   margin-left: 8px;
 }
-.gnodeBody { padding: 6px 6px 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-.portCol { display: grid; gap: 4px; }
+.gnodeBody { padding: 8px 12px 8px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+.portCol { display: grid; gap: 4px; min-width: 0; }
 .portCol.outputs { justify-items: end; }
 .port {
-  display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #9fb0bc;
-  padding: 2px 4px; border-radius: 5px; cursor: pointer;
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; height: 24px; min-width: 0;
+  font-size: 10px; color: #9fb0bc;
+  padding: 0 8px 0 12px; border-radius: 5px; cursor: pointer;
 }
 .port:hover { background: #1b2733; color: #fff; }
-.outputs .port { flex-direction: row-reverse; }
-.portDot { width: 9px; height: 9px; border-radius: 50%; background: #3c4d5e; border: 2px solid #6b7d8d; }
+.outputs .port { flex-direction: row-reverse; justify-content: flex-start; text-align: right; padding: 0 12px 0 8px; }
+.portLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.outputs .portLabel { text-align: right; }
+.portDot {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  min-width: 12px;
+  box-sizing: border-box;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: #3c4d5e;
+  border: 2px solid #0a0e13;
+  box-shadow: 0 0 0 1px #6b7d8d, 0 0 0 3px rgba(10,14,19,0.9);
+  flex: 0 0 auto;
+}
+.inputs .portDot { left: -18px; }
+.outputs .portDot { right: -18px; }
 .port.armed .portDot { background: #ffb454; border-color: #ffb454; }
 .gnodeFoot { padding: 4px 10px 8px; font-size: 10px; color: #5f6f7b; }
 .enterGroup { margin: 0 8px 8px; }
@@ -529,6 +556,14 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
   font-variant-numeric: tabular-nums;
 }
 .inspectorHint { font-size: 11px; color: #7b8a96; line-height: 1.4; margin-bottom: 6px; }
+.tokenPreview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #101820;
+  border: 1px solid #243140;
+  border-radius: 6px;
+  padding: 8px;
+}
 .inspectorSectionTitle {
   margin: 10px 0 2px;
   font-size: 11px;

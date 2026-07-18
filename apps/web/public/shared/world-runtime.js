@@ -3,6 +3,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260714-mmo11-camera-target-height";
+import { previewTokenText } from "./token-preview.js?v=20260717-node01-foundation";
 
 const DEG_TO_RAD = Math.PI / 180;
 let objectResidencyState = null;
@@ -4682,6 +4683,73 @@ function createClippedPolygonTileGeometry(points, bounds) {
   return createPolygonShapeGeometry(clipped);
 }
 
+function assignPath(target, path, value) {
+  const segments = Array.isArray(path) ? path : [];
+  if (!segments.length) return;
+  let current = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (!current[segment] || typeof current[segment] !== "object" || Array.isArray(current[segment])) {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  current[segments[segments.length - 1]] = value;
+}
+
+function buildHudTokenContext(world) {
+  const manifest = world?.gameProject || {};
+  const context = {
+    static: {
+      global: {},
+      project: manifest.project || {},
+      catalogs: manifest.catalogs || {},
+      zones: manifest.zones || {},
+      campaigns: manifest.campaigns || {},
+      playerRules: manifest.playerRules || {},
+      ui: manifest.ui || {},
+      symbols: manifest.symbols || {}
+    },
+    runtime: {},
+    symbols: manifest.symbols || {}
+  };
+  const byId = manifest?.symbols?.byId || {};
+  for (const [id, record] of Object.entries(byId)) {
+    if (!record || typeof record !== "object" || record.kind !== "globalValue") continue;
+    const parts = String(id || "").split(".").filter(Boolean);
+    if (parts[0] !== "global" || parts.length < 2) continue;
+    const rawValue = record.value && typeof record.value === "object" && Object.prototype.hasOwnProperty.call(record.value, "value")
+      ? record.value.value
+      : record.value;
+    assignPath(context.static, parts, {
+      id: id,
+      label: record.label || parts[parts.length - 1],
+      value: rawValue,
+      text: rawValue === null || rawValue === undefined ? "" : String(rawValue)
+    });
+  }
+  if (manifest?.project?.gameName) {
+    const record = {
+      id: "global.game_name",
+      kind: "globalValue",
+      label: "Game Name",
+      value: {
+        value: manifest.project.gameName,
+        text: String(manifest.project.gameName)
+      }
+    };
+    context.static.global.game_name = {
+      id: "global.game_name",
+      label: "Game Name",
+      value: manifest.project.gameName,
+      text: String(manifest.project.gameName)
+    };
+    if (context.symbols?.byId) context.symbols.byId["global.game_name"] = record;
+    if (context.static.symbols?.byId) context.static.symbols.byId["global.game_name"] = record;
+  }
+  return context;
+}
+
 export function createGkWorldRuntime(canvas, options = {}) {
   const mode = options.mode || "editor";
   const hudElement = options.hud || null;
@@ -4749,6 +4817,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const modifierState = { ctrlKey: false, shiftKey: false };
 
   let world = null;
+  let hudTokenContext = buildHudTokenContext(null);
   let worldBuildGeneration = 0;
   let orbitControls = null;
   let selectionHelper = null;
@@ -13046,9 +13115,18 @@ function resolveChunkDebugCenter(policy) {
   function buildHudTextModule(mod) {
     const el = document.createElement("div");
     el.className = "hud-text anchor-" + (mod.anchor || "top-left");
-    el.textContent = mod.text || "";
+    const preview = previewTokenText(mod.text || "", {
+      context: hudTokenContext || buildHudTokenContext(world),
+      staticContextOnly: true
+    });
+    el.textContent = preview.text || "";
     el.style.fontSize = num(mod.fontSize, 16) + "px";
     el.style.color = colorOrDefault(mod.color, "#ffffff");
+    if (Array.isArray(preview.errors) && preview.errors.length) {
+      el.title = preview.errors.map(function (issue) { return issue.message || issue.code || "Token error"; }).join("\n");
+    } else if (Array.isArray(preview.warnings) && preview.warnings.length) {
+      el.title = preview.warnings.map(function (issue) { return issue.message || issue.code || "Token warning"; }).join("\n");
+    }
     hudElement.appendChild(el);
     hudNodes.anchored.set(mod.id, el);
   }
@@ -13984,6 +14062,7 @@ function resolveChunkDebugCenter(policy) {
     buildKeyMap(world);
     publishedWorldItemCount = contentBlueprintIndex.blueprintWorldItemCount;
     if (mode === "game") {
+      hudTokenContext = buildHudTokenContext(world);
       setHudModules(world?.ui || []);
       camTarget.copy(playerCameraTarget());
     }

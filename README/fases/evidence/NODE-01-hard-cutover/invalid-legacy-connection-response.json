@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "ok": false,
+    "message": "Game Output publiceert alleen Game Project. Verbind World Assembly.gameProject naar Game Output.gameProject; routeer ui eerst naar World Assembly of de passende gespecialiseerde output."
+  }
+}

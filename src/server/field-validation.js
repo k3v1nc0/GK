@@ -1,4 +1,7 @@
-import { NODE_TYPES, defaultValuesForType, normalizeGroupInterface } from "../shared/node-types.js";
+import { NODE_TYPES, defaultValuesForType, groupInterfaceDefault, groupInterfacePresetForKind, normalizeGroupInterface, normalizeGroupKind } from "../shared/node-types.js";
+import { referenceKindFromId, referenceMatchesKinds } from "../shared/reference-utils.js";
+import { parseTokenText, validateFormulaExpression } from "../shared/token-contract.js";
+import { isCanonicalId, isCanonicalTag, normalizeCanonicalId, normalizeCanonicalTag, normalizeTagQuery, normalizeReferenceList, normalizeTagList } from "../shared/node-contract.js";
 
 function isEmpty(value) {
   return value === null || value === undefined || value === "";
@@ -33,7 +36,83 @@ function isKnownDataType(dataType) {
 export function coerceAndValidateField(field, value, label) {
   const errors = [];
   let clean = value;
-  if (field.type === "number") {
+  if (field.locked === true || field.readOnly === true) {
+    clean = fieldDefault(field);
+    if (!isEmpty(value) && JSON.stringify(clean) !== JSON.stringify(value)) {
+      errors.push(label + " is vergrendeld en kan niet worden aangepast.");
+    }
+  } else if (field.type === "identity") {
+    clean = isEmpty(value) ? fieldDefault(field) : normalizeCanonicalId(value, fieldDefault(field));
+    if (clean && !isCanonicalId(clean)) errors.push(label + " heeft een ongeldig formaat.");
+    if (clean && field.maxLength && clean.length > field.maxLength) errors.push(label + " is langer dan " + field.maxLength + " tekens.");
+    if (clean && field.pattern && !(new RegExp(field.pattern).test(clean))) errors.push(label + " heeft een ongeldig formaat.");
+  } else if (field.type === "reference") {
+    clean = isEmpty(value) ? (field.allowNull === true ? null : fieldDefault(field)) : normalizeCanonicalId(value, fieldDefault(field));
+    if (!isEmpty(clean) && !isCanonicalId(clean)) errors.push(label + " heeft een ongeldig formaat.");
+    if (!isEmpty(clean) && field.referenceKinds && Array.isArray(field.referenceKinds) && field.referenceKinds.length && !referenceMatchesKinds(clean, field.referenceKinds)) {
+      errors.push(label + " verwacht een verwijzing van type " + field.referenceKinds.join(", ") + ".");
+    }
+    if (isEmpty(clean) && field.required && field.allowNull !== true) errors.push(label + " is verplicht.");
+  } else if (field.type === "referenceList") {
+    const list = normalizeReferenceList(isEmpty(value) ? fieldDefault(field) : (Array.isArray(value) ? value : String(value).split(/[,\n]/g)));
+    clean = list;
+    const expectedKinds = Array.isArray(field.referenceKinds) ? field.referenceKinds.map(function (kind) { return String(kind || "").trim().toLowerCase(); }).filter(Boolean) : [];
+    for (const entry of list) {
+      if (!isCanonicalId(entry)) errors.push(label + " bevat een ongeldige reference: " + entry + ".");
+      if (expectedKinds.length && !referenceMatchesKinds(entry, expectedKinds)) {
+        errors.push(label + " verwacht references van type " + expectedKinds.join(", ") + ".");
+      }
+    }
+  } else if (field.type === "tagList") {
+    const list = normalizeTagList(isEmpty(value) ? fieldDefault(field) : (Array.isArray(value) ? value : String(value).split(/[,\n]/g)));
+    clean = list;
+    for (const entry of list) {
+      if (!isCanonicalTag(entry)) errors.push(label + " bevat een ongeldige tag: " + entry + ".");
+    }
+  } else if (field.type === "tagQuery") {
+    clean = normalizeTagQuery(isEmpty(value) ? fieldDefault(field) : value);
+    const all = new Set(clean.all);
+    const any = new Set(clean.any);
+    const none = new Set(clean.none);
+    for (const tag of all) {
+      if (none.has(tag)) errors.push(label + " mag tag " + tag + " niet tegelijk in ALL en NONE bevatten.");
+    }
+    for (const tag of any) {
+      if (none.has(tag)) errors.push(label + " mag tag " + tag + " niet tegelijk in ANY en NONE bevatten.");
+    }
+  } else if (field.type === "tokenText") {
+    clean = isEmpty(value) ? fieldDefault(field) : String(value);
+    if (clean && field.maxLength && clean.length > field.maxLength) errors.push(label + " is langer dan " + field.maxLength + " tekens.");
+    const parsed = parseTokenText(clean, { staticContextOnly: field.allowRuntimeTokens !== true });
+    for (const issue of parsed.errors || []) errors.push(label + ": " + issue.message);
+  } else if (field.type === "formula") {
+    if (isEmpty(value)) {
+      clean = fieldDefault(field);
+    } else if (typeof value === "object") {
+      clean = JSON.parse(JSON.stringify(value));
+    } else {
+      try { clean = JSON.parse(String(value)); } catch { errors.push(label + " moet geldige JSON zijn."); }
+    }
+    if (clean !== null && clean !== undefined) {
+      const validation = validateFormulaExpression(clean, {});
+      for (const issue of validation.errors || []) errors.push(label + ": " + issue.message);
+    }
+  } else if (field.type === "localizedText") {
+    if (isEmpty(value)) {
+      clean = fieldDefault(field);
+    } else if (typeof value === "string") {
+      clean = { key: normalizeCanonicalId(value, ""), fallbackText: "" };
+    } else if (value && typeof value === "object") {
+      clean = {
+        key: normalizeCanonicalId(value.key, ""),
+        fallbackText: isEmpty(value.fallbackText) ? "" : String(value.fallbackText)
+      };
+    } else {
+      errors.push(label + " heeft een ongeldig formaat.");
+      clean = fieldDefault(field);
+    }
+    if (clean && clean.key && !isCanonicalId(clean.key)) errors.push(label + " heeft een ongeldige sleutel.");
+  } else if (field.type === "number") {
     if (isEmpty(value)) {
       clean = fieldDefault(field);
     } else {
@@ -82,7 +161,15 @@ export function validateNodeValues(type, values, nodeTypes = NODE_TYPES) {
     errors.push.apply(errors, result.errors);
   }
   if (type === "group") {
-    cleaned.groupInterface = normalizeGroupInterface(cleaned.groupInterface);
+    cleaned.groupKind = normalizeGroupKind(cleaned.groupKind);
+    const preset = groupInterfacePresetForKind(cleaned.groupKind);
+    const currentInterface = normalizeGroupInterface(cleaned.groupInterface);
+    const defaultInterface = normalizeGroupInterface(preset);
+    const genericInterface = normalizeGroupInterface(groupInterfaceDefault());
+    const looksGeneric = JSON.stringify(currentInterface) === JSON.stringify(genericInterface);
+    cleaned.groupInterface = currentInterface && currentInterface.inputs && currentInterface.outputs
+      ? ((cleaned.groupKind === "generic" || !looksGeneric) ? currentInterface : defaultInterface)
+      : defaultInterface;
     const seen = new Set();
     const allPorts = [
       ...cleaned.groupInterface.inputs.map(function (port) { return Object.assign({ direction: "input" }, port); }),

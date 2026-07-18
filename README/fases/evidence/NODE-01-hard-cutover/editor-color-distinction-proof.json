@@ -1,0 +1,182 @@
+{
+  "cssColors": {
+    "entity": "#b000ff",
+    "minimap": "#00ff66",
+    "ui": "#f8fafc",
+    "chunkPolicy": "#ff006e",
+    "policy": "#00f0ff"
+  },
+  "targetSamples": [
+    {
+      "nodeId": "node01.visible_world.tree",
+      "text": "entity",
+      "portName": "entity",
+      "color": "rgb(176, 0, 255)",
+      "title": "Entity - entity - optional single"
+    },
+    {
+      "nodeId": "node01.visible_world.tavern",
+      "text": "entity",
+      "portName": "entity",
+      "color": "rgb(176, 0, 255)",
+      "title": "Entity - entity - optional single"
+    },
+    {
+      "nodeId": "node01.visible_world.forge",
+      "text": "entity",
+      "portName": "entity",
+      "color": "rgb(176, 0, 255)",
+      "title": "Entity - entity - optional single"
+    },
+    {
+      "nodeId": "foundation.world_assembly",
+      "text": "policy",
+      "portName": "chunkPolicies",
+      "color": "rgb(255, 0, 110)",
+      "title": "Chunk Policies - chunkPolicy - optional multiple"
+    },
+    {
+      "nodeId": "foundation.hud_game_name",
+      "text": "ui",
+      "portName": "ui",
+      "color": "rgb(248, 250, 252)",
+      "title": "UI - ui - optional multiple"
+    },
+    {
+      "nodeId": "foundation.player_rules_output",
+      "text": "policy",
+      "portName": "policy",
+      "color": "rgb(0, 240, 255)",
+      "title": "Policy - policy - optional multiple"
+    },
+    {
+      "nodeId": "node_editor_minimap_hud_1eed557a",
+      "text": "map",
+      "portName": "minimap",
+      "color": "rgb(0, 255, 102)",
+      "title": "Minimap - minimap - optional multiple"
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "text": "ui",
+      "portName": "ui",
+      "color": "rgb(248, 250, 252)",
+      "title": "UI - ui - optional multiple"
+    },
+    {
+      "nodeId": "foundation.ui_output",
+      "text": "map",
+      "portName": "minimap",
+      "color": "rgb(0, 255, 102)",
+      "title": "Minimap - minimap - optional multiple"
+    }
+  ],
+  "expandedNodes": [
+    {
+      "id": "node_catalog_output_14ab6ce6",
+      "type": "catalog_output",
+      "title": "Catalog Output 01",
+      "x": 747,
+      "y": -102,
+      "values": {
+        "catalogId": "catalog.world",
+        "catalogVersion": "0.1.0",
+        "namespaceOwnership": [
+          "global",
+          "ui",
+          "zone"
+        ]
+      }
+    },
+    {
+      "id": "node_global_value_definition_9ca74131",
+      "type": "global_value_definition",
+      "title": "Global Value Definition 01",
+      "x": 400,
+      "y": 48,
+      "values": {
+        "valueId": "global.game_name",
+        "valueType": "text",
+        "textValue": "GK Node World",
+        "numberValue": 0,
+        "booleanValue": false,
+        "colorValue": "#ffffff",
+        "referenceKind": "",
+        "referenceValue": null,
+        "format": "raw",
+        "label": "Game Name",
+        "description": "Naam die in de HUD token proof gebruikt wordt.",
+        "tags": [
+          "global",
+          "ui"
+        ]
+      }
+    },
+    {
+      "id": "node_tag_definition_cc17ef48",
+      "type": "tag_definition",
+      "title": "Tag Definition 01",
+      "x": 398,
+      "y": 191,
+      "values": {
+        "tagId": "world.visible",
+        "label": "Visible World",
+        "description": "Content dat nu zichtbaar is in de testwereld.",
+        "parentTagRef": null,
+        "allowedKinds": [],
+        "restricted": false,
+        "owner": "foundation"
+      }
+    },
+    {
+      "id": "node_text_template_05548cb9",
+      "type": "text_template",
+      "title": "Text Template 01",
+      "x": 399,
+      "y": 340,
+      "values": {
+        "templateId": "text.welcome",
+        "label": "Welcome",
+        "text": "Welkom in @{global.game_name}",
+        "contextKinds": [
+          "global",
+          "ui"
+        ],
+        "fallbackText": "Welkom",
+        "maxRenderedLength": 120
+      }
+    },
+    {
+      "id": "node_localization_entry_35c4c1aa",
+      "type": "localization_entry",
+      "title": "Localization Entry 01",
+      "x": 399,
+      "y": 495,
+      "values": {
+        "localizationId": "localization.nl.welcome",
+        "language": "nl",
+        "text": "Welkom in @{global.game_name}",
+        "fallbackText": "Welkom"
+      }
+    },
+    {
+      "id": "node_constant_value_90fcdfe0",
+      "type": "constant_value",
+      "title": "Constant Value 01",
+      "x": 398,
+      "y": 655,
+      "values": {
+        "valueId": "value.player.walk_speed",
+        "valueType": "number",
+        "textValue": "",
+        "numberValue": 5,
+        "booleanValue": false,
+        "colorValue": "#ffffff",
+        "jsonValue": null,
+        "referenceKind": "",
+        "referenceValue": null
+      }
+    }
+  ],
+  "catalogEdge": true
+}

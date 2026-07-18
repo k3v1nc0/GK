@@ -1,0 +1,22 @@
+
+> gk-real-node-editor@2.0.0 test
+> sh scripts/run-node24.sh --test tests/*.test.js
+
+✔ game project compiler produces a connected manifest (9.924342ms)
+✔ game project compiler carries the UI proof chain package (3.981963ms)
+✔ foundation migration preview stays read-only and apply writes the plan (9.043673ms)
+✔ foundation migration reroutes legacy Game Output edges to internal adapter (3.444853ms)
+✔ root model placement does not create legacy Game Output entity edges (7.929373ms)
+✔ canonical ids and tag queries normalize consistently (3.341751ms)
+✔ Game Output exposes only gameProject as the normal authoring input (0.470464ms)
+✔ symbol index resolves aliases and reference kinds (9.64359ms)
+✔ token resolver previews static tokens from the graph (10.35083ms)
+✔ token resolver maps project gameName to global.game_name without a global value node (0.90773ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 881.357578

@@ -1,0 +1,16 @@
+{
+  "previewId": "57912930-76df-40eb-812a-7358dfa85cb5",
+  "migrationKey": "node-system-foundation-v1",
+  "graphRevision": 169,
+  "alreadyApplied": true,
+  "nodesToCreate": [],
+  "nodesToUpdate": [],
+  "edgesToCreate": [],
+  "warnings": [],
+  "summary": {
+    "desiredNodes": 15,
+    "desiredEdges": 10,
+    "currentNodes": 85,
+    "currentEdges": 55
+  }
+}

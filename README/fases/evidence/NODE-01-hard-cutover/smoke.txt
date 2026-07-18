@@ -1,0 +1,254 @@
+
+> gk-real-node-editor@2.0.0 smoke
+> sh scripts/run-node24.sh scripts/smoke-test.js
+
+  ok - buildSurfaceStripGeometry: 2 punten geeft geometry
+  ok - 2-punt geometry heeft 4 vertices
+  ok - 2-punt geometry heeft uv attribute
+  ok - 2-punt geometry heeft 6 indices (2 triangles)
+  ok - buildSurfaceStripGeometry: 4 punten met bocht geeft geometry
+  ok - 4-punt geometry heeft 8 vertices
+  ok - 4-punt geometry heeft 18 indices (6 triangles)
+  ok - UV V loopt door langs het pad (laatste vertex V > 0)
+  ok - UV V begint bij 0 voor het eerste punt
+  ok - linker vertex heeft U=0
+  ok - rechter vertex heeft U=1
+  ok - lege puntenlijst geeft null
+  ok - één punt geeft null
+  ok - width=0 geeft null
+  ok - null options geeft null (geen crash)
+  ok - shadow policy defaults aan in de editor
+  ok - shadow policy default preset is middel_schaduw
+  ok - middel schaduw gebruikt 1024 mapSize
+  ok - middel schaduw gebruikt editor camera size 100
+  ok - middel schaduw gebruikt editor camera far 450
+  ok - middel schaduw gebruikt snapWorldUnits 10
+  ok - middel schaduw gebruikt resident margin 1
+  ok - game preset wordt uit shadow block gelezen
+  ok - lichte schaduw zet shadows aan
+  ok - lichte schaduw gebruikt 512 mapSize
+  ok - lichte schaduw gebruikt game camera size 75
+  ok - lichte schaduw gebruikt far 350
+  ok - lichte schaduw zet scatter shadows uit
+  ok - lichte schaduw laat static props casten
+  ok - editor preset blijft los van game preset
+  ok - hoog schaduw gebruikt 2048 mapSize
+  ok - hoog schaduw gebruikt editor camera size 120
+  ok - editor shadows blijven aan met hoog_schaduw
+  ok - shadow preset blijft hoog in de editor policy
+  ok - hoog schaduw gebruikt 2048 mapSize
+  ok - shadow bias wordt gelezen
+  ok - shadow normal bias wordt gelezen
+  ok - shadow camera size wordt gelezen (expliciete override wint)
+  ok - shadow distance wordt gelezen (expliciete override wint)
+  ok - geen_schaduw schakelt editor shadows uit
+  ok - geen_schaduw rapporteert mapSize 0
+  ok - extreem schaduw gebruikt 4096 mapSize in de policy
+  ok - extreem schaduw gebruikt editor camera size 140
+  ok - editor shadow snap gebruikt 10 world units
+  ok - game shadow snap gebruikt 10 world units
+  ok - editor shadow radius is minstens game radius
+  ok - shadow focus snapt op de verwachte cel
+  ok - kleine camerabeweging verandert de shadow snap niet
+  ok - shadow focus verandert pas na de snap threshold
+  ok - camera orbit rond dezelfde target verandert de shadow focus niet
+  ok - game shadow snap blijft stabiel bij kleine spelerbeweging
+  ok - shadow resident bevat visible chunks
+  ok - shadow resident bevat preload chunks
+  ok - shadow resident bevat forward chunks
+  ok - shadow resident is een superset van render resident
+  ok - camera-child plane wordt gedetecteerd
+  ok - ghost plane verschijnt in suspiciousPlanes
+[ghost-plane] removed 1 suspicious object(s) during smoke-ghost-plane.
+  ok - ghost plane wordt verwijderd
+  ok - ghost plane is na cleanup niet meer suspicious
+  ok - cameraChildPlanes is na cleanup 0
+  ok - ghost plane is uit de camera subtree verwijderd
+  ok - debug overlay plane wordt als suspicious gezien als debug uit staat
+[ghost-plane] removed 1 suspicious object(s) during smoke-overlay-plane.
+  ok - debug overlay plane wordt verwijderd als debug uit staat
+  ok - overlay plane is verwijderd
+  ok - overlay plane cast/receive shadow is uit
+  ok - helper caster wordt vóór saneren geteld
+  ok - CircleGeometry helper caster wordt geteld
+  ok - helper shadow caster is gesaneerd
+  ok - helperCasterCount is na saneren 0
+  ok - circleOrPlaneCasterCount is na saneren 0
+  ok - helper mesh cast/receive shadow is uit
+  ok - scatter shadow proxy wordt geactiveerd
+  ok - scatter root is shadowProxy
+  ok - scatter shadow proxy schrijft geen kleur
+  ok - scatter shadow proxy cast nog steeds schaduw
+  ok - scatter shadow proxy ontvangt geen schaduw
+  ok - scatter shadow proxy gebruikt geen circle/plane geometry
+  ok - scatter shadow proxy wordt geteld als scatterShadowProxy
+  ok - scatter shadow proxy veroorzaakt geen circleOrPlaneCaster
+  ok - static prop shadow proxy wordt geactiveerd
+  ok - static prop shadow proxy schrijft geen kleur
+  ok - static prop shadow caster blijft beschikbaar
+  ok - static prop audit telt geen helper caster
+  ok - static prop audit telt geen circle/plane caster
+  ok - resolveWorldContentCenter gebruikt de ground center
+  ok - geselecteerd object bepaalt de editor shadow focus
+  ok - editor shadow focus volgt de geselecteerde world position
+  ok - editor shadow focus blijft stabiel als de camera orbit target verandert
+  ok - editor shadow jumpDetected blijft false
+  ok - editor shadow snap blijft stabiel
+  ok - resident streaming houdt de volgende chunk tijdig desired
+  ok - shadow resident blijft een superset van render resident
+  ok - save/reload bootstrap houdt preload chunk in shadow resident
+  ok - editor preset patch zet preset zichtbaar
+  ok - game preset patch zet preset zichtbaar
+  ok - shared worldId publiceert
+  ok - lege world_settings gebruikt geen legacy fallback
+  ok - editor default preset blijft middel_schaduw
+  ok - editor default debugChunkOverlayVisible blijft uit
+  ok - editor default debugWarningsVisible blijft aan
+  ok - editor shadow block gebruikt middel_schaduw
+  ok - editor default shadow mapSize blijft 1024
+  ok - editor default shadow cameraSize blijft 100
+  ok - editor default staticPropsCast blijft aan
+  ok - game default preset blijft middel_schaduw
+  ok - game default debugChunkOverlayVisible blijft uit
+  ok - game default debugWarningsVisible blijft uit
+  ok - game shadow block gebruikt middel_schaduw
+  ok - game default shadow mapSize blijft 1024
+  ok - game default shadow cameraSize blijft 85
+  ok - game default staticPropsCast blijft aan
+  ok - legacy-only world meldt gebruik van de oude fallback
+  ok - legacy-only world meldt migratie van legacy shadow velden
+  ok - legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor editor
+  ok - legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor game
+  ok - legacy low quality valt terug naar 512 mapSize
+  ok - legacy editor shadowCameraSize volgt de lichte preset
+  ok - legacy editor shadowCameraFar volgt de lichte preset
+  ok - legacy game shadowCameraSize volgt de lichte preset
+  ok - legacy game shadowCameraFar volgt de lichte preset
+  ok - legacy game staticPropsCast volgt de lichte preset
+  ok - nieuwe editor/game nodes winnen van legacy world_settings
+  ok - editor preset is zichtbaar
+  ok - game preset is zichtbaar
+  ok - editor shadow mapSize komt uit hoog preset
+  ok - game shadow mapSize komt uit lichte preset
+  ok - editor shadow cameraSize komt uit hoog preset
+  ok - game shadow cameraSize komt uit lichte preset
+  ok - surface (river) met blocksPlayer=true blokkeert
+  ok - surface (river) met blocksPlayer=false blokkeert niet
+  ok - surface met blocksPlayer=true blokkeert
+  ok - surface met blocksPlayer=false blokkeert niet
+  ok - surface blocksPlayer telt mee als terrain collision
+  ok - blocker polygon blokkeert
+  ok - walkable surface override werkt
+  ok - geroteerde walkable surface wordt herkend
+  ok - polygon walkable surface wordt herkend
+  ok - polygon walkable surface volgt eigen vorm
+  ok - walkable surface houdt rekening met collision radius langs rand
+  ok - walkable surface wint boven blokkerende surface
+  ok - walkable surface voorkomt jitter op polygon-rand
+  ok - walkable surface laat brugpassage toe
+  ok - walkable surface interpoleert punt-hoogte
+  ok - walkable surface beweegt soepel langs schuine rand
+  ok - walkable surface houdt randhoogte stabiel tijdens randbeweging
+  ok - bewegingsfallback schuift soepel langs blokkerende surface-rand
+  ok - bewegingsfallback eindigt buiten terrain collision
+  ok - buildWalkabilityIndex activeert runtime collision
+  ok - clearWalkabilityIndex wist de actieve collision index
+  ok - resolveChunkPolicy leest editor chunk policy
+  ok - resolveChunkPolicy leest game chunk policy
+  ok - editor overlay-flags worden gelezen
+  ok - game overlay gebruikt game policy en grid default
+  ok - chunkCoordForPosition gebruikt floor voor negatieve coordinaten
+  ok - chunkCoordForPosition houdt 0,0 in center chunk
+  ok - chunkKey volgt de berekende chunkcoord
+  ok - active radius 1 levert 9 active chunks
+  ok - preload margin vergroot het chunk window
+  ok - loaded window bevat active plus preload chunks zonder clipping
+  ok - maxLoadedChunks clipt het game window
+  ok - buildChunkWindow markeert clipping door maxLoadedChunks
+  ok - maxLoadedChunks clipping blijft deterministisch
+  ok - editor policy laadt meer chunks dan game policy
+  ok - enabled=false schakelt runtime chunk proof uit
+  ok - isChunkActive herkent center chunk
+  ok - isChunkPreload herkent preload ring
+  ok - isChunkLoaded weigert chunk buiten loaded window
+  ok - entity binnen loaded chunks blijft zichtbaar en actief
+  ok - entity buiten loaded chunks wordt geculled
+  ok - interactable buiten loaded chunks wordt inactief
+  ok - solid buiten loaded chunks wordt inactief
+  ok - hiddenObjects telt verborgen visuals
+  ok - culledEntities telt verborgen entities
+  ok - inactiveInteractables telt uitgeschakelde interactables
+  ok - inactiveSolids telt uitgeschakelde solids
+  ok - uncullableObjects telt objecten zonder position
+  ok - moving center chunk verandert de loaded set
+  ok - terug in loaded set maakt entity weer zichtbaar en actief
+  ok - chunkWorldSize berekent chunk world size incl. tileSize
+  ok - chunkKeyForPosition floort negatieve coordinaten
+  ok - chunkCoordForPosition blijft consistent met chunkKeyForPosition
+  ok - terrainVisualChunkingEnabled staat standaard uit
+  ok - terrainVisualChunkingEnabled kan expliciet aan
+  ok - midpointForSegment pakt het midden van een segment
+  ok - chunkKeyForSegment volgt het midpoint
+  ok - segmentLineByMaxLength splitst een lijn in vaste stappen
+  ok - segmentLineByMaxLength bewaart startpunt
+  ok - segmentLineByMaxLength bewaart eindpunt
+  ok - segmentPolylineForChunks splitst een lange lijn over meerdere stukken
+  ok - segmentPolylineForChunks houdt chunkKeys per stuk bij
+  ok - segmentPolylineForChunks bewaart chunkKeys over chunkgrenzen
+  ok - groundChunkTilesForBounds splitst grote ground in chunk tiles
+  ok - eerste ground tile wordt goed gesneden
+  ok - laatste ground tile wordt goed gesneden
+  ok - terrain ground blijft zichtbaar in loaded chunk
+  ok - terrain layer zonder chunking blijft zichtbaar
+  ok - terrain surface zonder chunk info blijft uncullable zichtbaar
+  ok - terrain visuals worden meegeteld
+  ok - terrain visuals zichtbaar tellen mee
+  ok - terrain visuals verborgen tellen mee
+  ok - ground tile visibility wordt geteld
+  ok - terrain layer zichtbaarheid wordt geteld
+  ok - terrain surface visibility wordt geteld
+  ok - uncullable terrain visuals worden geteld
+  ok - terrain layer chunking kan verborgen tile cullen
+  ok - terrain layer chunking houdt loaded tile zichtbaar
+  ok - effectiveGroundBounds houdt centerSize symmetrisch
+  ok - effectiveGroundBounds respecteert explicitBounds
+  ok - effectiveGroundBounds berekent explicitBounds width/depth
+  ok - worldSpaceGroundUv blijft world-space op X
+  ok - worldSpaceGroundUv blijft world-space op Z
+  ok - game chunk loading schakelt ground naar chunked mode
+  ok - shouldUseChunkedGround volgt game chunk loading
+  ok - editor chunk loading kan ook chunked ground gebruiken
+  ok - uitgeschakelde game chunk loading houdt full mode
+  ok - shouldUseChunkedGround geeft false als chunk loading uit staat
+  ok - groundBlueprintSignature berekent een geldige signature
+  ok - groundChunkTilesForBounds splitst explicitBounds in 4 tiles
+  ok - eerste ground tile respecteert explicit bounds
+  ok - laatste ground tile respecteert explicit bounds
+  ok - buildGroundChunkPlan kiest chunked mode voor game chunk loading
+  ok - chunked ground plan schakelt de full plane uit
+  ok - chunked ground plan heeft geen full-plane naam
+  ok - chunked plan houdt alleen resident ground chunk keys over
+  ok - eerste ground plan start zonder vorige resident tiles
+  ok - applyGroundChunkPlan bouwt de verwachte resident ground tiles
+  ok - groundChunkState bewaart resident tiles
+  ok - verlatende ground tiles worden bepaald bij window-shift
+  ok - verlatende ground tiles worden gedeactiveerd
+  ok - groundChunkState laat alleen de loaded tile resident
+  ok - uitgeschakelde chunk loading levert full ground mode op
+  ok - full plan verwacht een actieve full ground plane
+  ok - full plan bewaart de legacy plane naam
+  ok - full plan heeft geen resident chunk tiles
+  ok - full plan ruimt de laatste resident chunk tile op
+  ok - full plan laat geen resident ground tiles achter
+  ok - terrain streaming snapshot bewaart loadedChunks
+  ok - terrain streaming snapshot bewaart activeChunks
+  ok - terrain streaming snapshot bewaart preloadChunks
+  ok - terrain streaming snapshot telt resident pieces
+  ok - terrain streaming snapshot telt unieke resident chunks
+  ok - terrain streaming snapshot sorteert resident chunk keys
+  ok - terrain streaming snapshot telt texture refcounts
+  ok - terrain streaming snapshot telt unieke resident asset ids
+  ok - terrain streaming snapshot telt surface material records
+  ok - terrain streaming snapshot bewaart update reason
+
+SMOKE TEST MISLUKT: ASSERT: forward lookahead bevat de volgende chunk vóórdat de speler de grens oversteekt

@@ -9,11 +9,18 @@ import {
   isContainer
 } from "../shared/node-types.js";
 import { validateNodeValues } from "./field-validation.js";
+import { GameProjectCompiler } from "./game-project-compiler.js";
 
 function graphError(message) {
   const error = new Error(message);
   error.status = 400;
   return error;
+}
+
+function validationIssueMessage(issue) {
+  if (typeof issue === "string") return issue;
+  if (issue && typeof issue === "object") return String(issue.message || issue.code || JSON.stringify(issue));
+  return String(issue || "");
 }
 
 function directIncomingEdges(graph, outputNode, portName) {
@@ -2178,6 +2185,9 @@ export function validateGraphForPublish(graph, services = {}) {
       const outputNodes = graph.nodes.filter(function (candidate) {
         return candidate.parentId === node.id && candidate.type === "group_output";
       });
+      const contentNodes = graph.nodes.filter(function (candidate) {
+        return candidate.parentId === node.id && candidate.type !== "group_input" && candidate.type !== "group_output";
+      });
       if (inputNodes.length !== 1) errors.push("Group " + node.id + " moet exact één Group Input node hebben.");
       if (outputNodes.length !== 1) errors.push("Group " + node.id + " moet exact één Group Output node hebben.");
       if (outputNodes.length === 1) {
@@ -2185,6 +2195,7 @@ export function validateGraphForPublish(graph, services = {}) {
         for (const [portName, port] of Object.entries(groupPorts)) {
           const internalSources = directIncomingEdges(graph, outputNodes[0], portName);
           if (!internalSources.length) {
+            if (contentNodes.length === 0) continue;
             errors.push("Group output '" + (port.label || portName) + "' is not connected inside the group.");
             continue;
           }
@@ -2583,35 +2594,153 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   return world;
 }
 
+function graphWithLegacyAdapterAsOutput(graph) {
+  const outputNode = graph?.nodes?.find(function (node) { return node.type === "game_output"; });
+  const adapterNode = graph?.nodes?.find(function (node) { return node.type === "legacy_world_adapter"; });
+  if (!outputNode) return graph;
+  const syntheticEdges = [];
+  const nodeMap = nodeMapForGraph(graph);
+  const assemblyNode = graph?.nodes?.find(function (node) {
+    return node.type === "world_assembly" && directIncomingEdges(graph, outputNode, "gameProject").some(function (edge) {
+      return edge.fromNodeId === node.id;
+    });
+  }) || null;
+  if (assemblyNode) {
+    for (const uiEdge of directIncomingEdges(graph, assemblyNode, "ui")) {
+      const uiOutputNode = nodeMap.get(uiEdge.fromNodeId);
+      if (!uiOutputNode || uiOutputNode.type !== "ui_output") continue;
+      for (const edge of directIncomingEdges(graph, uiOutputNode, "ui")) {
+        syntheticEdges.push(Object.assign({}, edge, {
+          id: "synthetic_world_assembly_ui_" + edge.id,
+          toNodeId: outputNode.id,
+          toPort: "ui"
+        }));
+      }
+      for (const edge of directIncomingEdges(graph, uiOutputNode, "minimap")) {
+        syntheticEdges.push(Object.assign({}, edge, {
+          id: "synthetic_world_assembly_minimap_" + edge.id,
+          toNodeId: outputNode.id,
+          toPort: "minimap"
+        }));
+      }
+    }
+  }
+  if (!adapterNode) {
+    return syntheticEdges.length ? Object.assign({}, graph, { edges: (graph.edges || []).concat(syntheticEdges) }) : graph;
+  }
+  const directLegacyEdges = (graph.edges || []).filter(function (edge) {
+    return edge.toNodeId === outputNode.id && edge.toPort !== "gameProject";
+  });
+  if (directLegacyEdges.length) {
+    return syntheticEdges.length ? Object.assign({}, graph, { edges: (graph.edges || []).concat(syntheticEdges) }) : graph;
+  }
+  const adapterEdges = (graph.edges || []).filter(function (edge) {
+    return edge.toNodeId === adapterNode.id;
+  });
+  if (!adapterEdges.length && !syntheticEdges.length) return graph;
+  return Object.assign({}, graph, {
+    edges: (graph.edges || []).concat(adapterEdges.map(function (edge) {
+      return Object.assign({}, edge, {
+        id: "synthetic_legacy_output_" + edge.id,
+        toNodeId: outputNode.id
+      });
+    })).concat(syntheticEdges)
+  });
+}
+
 export class PublishService {
   constructor(repository, services = {}) {
     this.repository = repository;
     this.services = services;
   }
 
+  getCompiler() {
+    if (!this.services.gameProjectCompiler) {
+      this.services.gameProjectCompiler = new GameProjectCompiler(this.services);
+    }
+    return this.services.gameProjectCompiler;
+  }
+
+  buildLegacyWorld(graph, includeEditorCamera) {
+    return buildWorldFromGraph(graphWithLegacyAdapterAsOutput(graph), this.services, { includeEditorCamera: includeEditorCamera !== false });
+  }
+
+  compileGameProject(graph, options = {}) {
+    const compiler = this.getCompiler();
+    return compiler.compile(graph, Object.assign({}, options, {
+      legacyWorldBuilder: (g, services, compileOptions) => buildWorldFromGraph(graphWithLegacyAdapterAsOutput(g), services, Object.assign({}, compileOptions, { includeEditorCamera: false })),
+      legacyWorldOptions: Object.assign({}, options.legacyWorldOptions || {}, { includeEditorCamera: false })
+    }));
+  }
+
+  mergeWorldWithGameProject(world, compilation, publishedAt = null) {
+    if (!compilation || !compilation.connected || !compilation.manifest) return world;
+    return Object.assign({}, world, {
+      schemaVersion: compilation.manifest.schemaVersion || world.schemaVersion,
+      buildId: compilation.buildId || world.buildId || null,
+      contentHash: compilation.contentHash || world.contentHash || null,
+      gameProject: compilation.manifest,
+      publishedAt: publishedAt || world.publishedAt || undefined
+    });
+  }
+
+  buildValidation(graph) {
+    const legacyValidation = validateGraphForPublish(graph, this.services);
+    const compilation = this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
+    if (!compilation.connected) return legacyValidation;
+    return {
+      ok: legacyValidation.ok && compilation.validation.ok,
+      errors: legacyValidation.errors.concat(compilation.validation.errors || []),
+      warnings: legacyValidation.warnings.concat(compilation.validation.warnings || [])
+    };
+  }
+
+  previewManifest() {
+    const graph = this.repository.getGraph();
+    return this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
+  }
+
   saveDraft() {
-    const world = buildWorldFromGraph(this.repository.getGraph(), this.services, { includeEditorCamera: true });
-    this.repository.saveDraftWorld(world);
+    const graph = this.repository.getGraph();
+    const compilation = this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
+    const draftWorld = this.buildLegacyWorld(graph, true);
+    const world = this.mergeWorldWithGameProject(draftWorld, compilation);
+    this.repository.saveDraftWorld(world, {
+      buildId: world.buildId || null,
+      schemaVersion: world.schemaVersion || null,
+      contentHash: world.contentHash || null
+    });
     return world;
   }
 
   validate() {
-    return validateGraphForPublish(this.repository.getGraph(), this.services);
+    return this.buildValidation(this.repository.getGraph());
   }
 
   publish(actorUserId) {
     const graph = this.repository.getGraph();
-    const validation = validateGraphForPublish(graph, this.services);
+    const compilation = this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
+    const validation = compilation.connected ? this.buildValidation(graph) : validateGraphForPublish(graph, this.services);
     if (!validation.ok) {
-      const error = new Error(validation.errors.join(" "));
+      const error = new Error((validation.errors || []).map(validationIssueMessage).join(" "));
       error.status = 400;
       error.details = validation;
       throw error;
     }
-    const draftWorld = buildWorldFromGraph(graph, this.services, { includeEditorCamera: true });
-    const publishedWorld = buildWorldFromGraph(graph, this.services, { includeEditorCamera: false });
-    this.repository.saveDraftWorld(draftWorld);
-    this.repository.publishWorld(publishedWorld, actorUserId);
-    return { world: publishedWorld, validation };
+    const draftWorld = this.buildLegacyWorld(graph, true);
+    const publishedWorld = this.buildLegacyWorld(graph, false);
+    const mergedDraftWorld = this.mergeWorldWithGameProject(draftWorld, compilation);
+    const mergedPublishedWorld = this.mergeWorldWithGameProject(publishedWorld, compilation, new Date().toISOString());
+    this.repository.saveDraftWorld(mergedDraftWorld, {
+      buildId: mergedDraftWorld.buildId || null,
+      schemaVersion: mergedDraftWorld.schemaVersion || null,
+      contentHash: mergedDraftWorld.contentHash || null
+    });
+    this.repository.publishWorld(mergedPublishedWorld, actorUserId, {
+      buildId: mergedPublishedWorld.buildId || null,
+      schemaVersion: mergedPublishedWorld.schemaVersion || null,
+      contentHash: mergedPublishedWorld.contentHash || null
+    });
+    return { world: mergedPublishedWorld, validation };
   }
 }

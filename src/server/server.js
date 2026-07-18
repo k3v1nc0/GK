@@ -9,8 +9,12 @@ import { openDatabase } from "./db.js";
 import { AuthService } from "./auth-service.js";
 import { AssetService } from "./asset-service.js";
 import { GraphRepository } from "./graph-repository.js";
+import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
 import { PublishService } from "./publish-service.js";
+import { SymbolIndexService } from "./symbol-index-service.js";
+import { TokenResolver } from "./token-resolver.js";
+import { GameProjectCompiler } from "./game-project-compiler.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,9 +32,13 @@ authService.ensureAdmin();
 authService.cleanupExpiredSessions();
 const assetService = new AssetService(db, rootDir);
 assetService.resumePendingThumbnailJobs();
-const repository = new GraphRepository(db);
+const symbolIndexService = new SymbolIndexService();
+const tokenResolver = new TokenResolver({ symbolIndexService });
+const repository = new GraphRepository(db, { symbolIndexService });
 repository.seedIfEmpty();
-const publishService = new PublishService(repository, { assetService });
+const gameProjectCompiler = new GameProjectCompiler({ symbolIndexService, tokenResolver, assetService });
+const publishService = new PublishService(repository, { assetService, symbolIndexService, tokenResolver, gameProjectCompiler });
+const graphMigrationService = new GraphMigrationService(repository, { symbolIndexService });
 const mmoService = new MmoService(db, authService, repository);
 const wss = new WebSocketServer({ noServer: true });
 mmoService.bindWebSocketServer(wss);
@@ -429,6 +437,54 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/editor/validate") {
       authService.requireEditor(req);
       return sendJson(res, 200, publishService.validate());
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/symbols") {
+      authService.requireEditor(req);
+      const graph = repository.getGraph();
+      const result = symbolIndexService.search(graph, {
+        q: url.searchParams.get("q") || "",
+        kind: url.searchParams.get("kind") || "",
+        parentId: url.searchParams.get("parentId") || "",
+        limit: url.searchParams.get("limit") || 50,
+        includeProperties: url.searchParams.get("includeProperties") === "true"
+      });
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/references/validate") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      const graph = repository.getGraph();
+      return sendJson(res, 200, symbolIndexService.validateReferences(graph, body.references || []));
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/tokens/preview") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      const graph = repository.getGraph();
+      return sendJson(res, 200, tokenResolver.preview(graph, body.text || "", {
+        staticContextOnly: body.staticContextOnly !== false,
+        sampleRuntimeContext: body.sampleRuntimeContext || null
+      }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/manifest-preview") {
+      authService.requireEditor(req);
+      const result = publishService.previewManifest();
+      return sendJson(res, 200, {
+        ok: true,
+        manifest: result.manifest,
+        validation: result.validation,
+        buildId: result.buildId,
+        contentHash: result.contentHash,
+        dependencySummary: result.dependencySummary
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/migrations/node-system-foundation-v1/preview") {
+      authService.requireEditor(req);
+      return sendJson(res, 200, graphMigrationService.preview());
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/migrations/node-system-foundation-v1/apply") {
+      const user = authService.requireEditor(req);
+      const body = await readJson(req);
+      return sendJson(res, 200, graphMigrationService.apply(body, user.id));
     }
     if (req.method === "POST" && url.pathname === "/api/editor/save-draft") {
       authService.requireEditor(req);
