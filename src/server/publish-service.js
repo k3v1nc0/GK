@@ -237,6 +237,16 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
+function uniqueById(records) {
+  const map = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record) continue;
+    const key = record.id || record.assetId || record.nodeId || JSON.stringify(record);
+    map.set(key, record);
+  }
+  return Array.from(map.values());
+}
+
 function normalizeAnimationName(value) {
   return String(value === null || value === undefined ? "" : value).trim();
 }
@@ -2594,6 +2604,98 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   return world;
 }
 
+function buildZoneLightReadModel(light) {
+  if (!light) return null;
+  if (light.nodeType === "ambient_light") {
+    return {
+      id: light.lightId || light.nodeId || "zone_ambient_light",
+      type: "ambient",
+      color: light.color,
+      intensity: numberOrNull(light.intensity)
+    };
+  }
+  if (light.nodeType === "directional_light") {
+    return {
+      id: light.lightId || light.nodeId || "zone_directional_light",
+      type: "directional",
+      color: light.color,
+      intensity: numberOrNull(light.intensity),
+      position: {
+        x: numberOrNull(light.x),
+        y: numberOrNull(light.y),
+        z: numberOrNull(light.z)
+      }
+    };
+  }
+  return null;
+}
+
+function buildZoneCameraReadModel(camera) {
+  if (!camera) return null;
+  return {
+    id: camera.cameraId || camera.id || camera.nodeId || "zone_camera",
+    mode: "top-down",
+    cameraId: camera.cameraId || camera.id || camera.nodeId || "zone_camera",
+    pitch: numberOrNull(camera.pitch),
+    yaw: numberOrNull(camera.yaw),
+    startDistance: numberOrNull(camera.startDistance) ?? numberOrNull(camera.distance),
+    distance: numberOrNull(camera.distance),
+    minDistance: numberOrNull(camera.minDistance),
+    maxDistance: numberOrNull(camera.maxDistance),
+    fov: numberOrNull(camera.fov),
+    follow: camera.follow !== false,
+    rotateSpeed: numberOrNull(camera.rotateSpeed)
+  };
+}
+
+function buildZonePlayerReadModel(player, assetLookup) {
+  if (!player) return null;
+  return {
+    id: player.playerId || player.id || player.nodeId || "zone_player",
+    modelAssetId: player.modelAssetId || null,
+    ...resolveCanonicalAnimationConfig(assetLookup.get(player.modelAssetId), player),
+    moveSpeed: clampNumber(numberOrNull(player.moveSpeed), 0.1, 100, 6),
+    sprintMultiplier: clampNumber(numberOrNull(player.sprintMultiplier), 1, 2.5, 1.6),
+    turnSpeed: clampNumber(numberOrNull(player.turnSpeed), 1, 4000, 540),
+    collisionRadius: clampNumber(numberOrNull(player.collisionRadius), 0.05, 50, 0.5),
+    scale: clampNumber(numberOrNull(player.scale), 0.001, 1000, 1),
+    showNameplate: player.showNameplate !== false
+  };
+}
+
+function buildZoneEntityReadModel(entity, assetLookup) {
+  if (!entity || entity.nodeType !== "model_entity") return null;
+  return {
+    id: entity.nodeId || entity.entityId,
+    nodeId: entity.nodeId || null,
+    entityId: entity.entityId || entity.nodeId,
+    label: entity.label,
+    type: "model",
+    modelAssetId: entity.modelAssetId || null,
+    ...resolveCanonicalAnimationConfig(assetLookup.get(entity.modelAssetId), entity),
+    solid: entity.solid === true,
+    walkable: entity.walkable === true,
+    collisionRadius: clampNumber(numberOrNull(entity.collisionRadius), 0.05, 100, 1),
+    transform: {
+      position: {
+        x: numberOrNull(entity.x),
+        y: numberOrNull(entity.y),
+        z: numberOrNull(entity.z)
+      },
+      rotation: {
+        x: numberOrNull(entity.rotationX) ?? 0,
+        y: numberOrNull(entity.rotationY) ?? 0,
+        z: numberOrNull(entity.rotationZ) ?? 0
+      },
+      scale: {
+        x: numberOrNull(entity.scaleX),
+        y: numberOrNull(entity.scaleY),
+        z: numberOrNull(entity.scaleZ)
+      }
+    }
+  };
+}
+
 function graphWithLegacyAdapterAsOutput(graph) {
   const outputNode = graph?.nodes?.find(function (node) { return node.type === "game_output"; });
   const adapterNode = graph?.nodes?.find(function (node) { return node.type === "legacy_world_adapter"; });
@@ -2685,6 +2787,19 @@ export class PublishService {
     const activeMinimap = activeZone && Array.isArray(activeZone.minimaps)
       ? activeZone.minimaps.find(function (minimap) { return minimap.enabled !== false; }) || null
       : null;
+    const zoneAssetIds = new Set();
+    if (activeZone?.ground?.textureAssetId) zoneAssetIds.add(activeZone.ground.textureAssetId);
+    if (activeZone?.player?.modelAssetId) zoneAssetIds.add(activeZone.player.modelAssetId);
+    for (const entity of Array.isArray(activeZone?.entities) ? activeZone.entities : []) {
+      if (entity?.modelAssetId) zoneAssetIds.add(entity.modelAssetId);
+    }
+    const zoneAssets = this.services.assetService && zoneAssetIds.size
+      ? this.services.assetService.manifestForIds(Array.from(zoneAssetIds))
+      : [];
+    const mergedAssets = uniqueById((world.assets || []).concat(zoneAssets));
+    const assetLookup = new Map(mergedAssets.map(function (asset) {
+      return [asset.id, asset];
+    }));
     const zoneGround = activeZone?.ground ? {
       groundId: activeZone.ground.groundId || activeZone.ground.id || "zone_ground",
       width: activeZone.ground.width || activeZone.zone?.width || 500,
@@ -2705,6 +2820,12 @@ export class PublishService {
       }),
       editor: world.minimap?.editor || null
     } : null;
+    const zoneLights = (Array.isArray(activeZone?.lights) ? activeZone.lights : []).map(buildZoneLightReadModel).filter(Boolean);
+    const zoneEntities = (Array.isArray(activeZone?.entities) ? activeZone.entities : []).map(function (entity) {
+      return buildZoneEntityReadModel(entity, assetLookup);
+    }).filter(Boolean);
+    const zoneCamera = buildZoneCameraReadModel(activeZone?.camera);
+    const zonePlayer = buildZonePlayerReadModel(activeZone?.player, assetLookup);
     return Object.assign({}, world, {
       schemaVersion: manifest.schemaVersion || world.schemaVersion,
       buildId: compilation.buildId || world.buildId || null,
@@ -2723,7 +2844,12 @@ export class PublishService {
         facing: Number(startSpawn.facing) || 0
       }) : world.spawn,
       ground: zoneGround || world.ground,
+      camera: zoneCamera || world.camera,
+      player: zonePlayer || world.player,
+      lights: zoneLights.length ? zoneLights : world.lights,
+      entities: zoneEntities.length ? zoneEntities : world.entities,
       minimap: zoneMinimap || world.minimap,
+      assets: mergedAssets,
       publishedAt: publishedAt || world.publishedAt || undefined
     });
   }

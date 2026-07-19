@@ -1,0 +1,18 @@
+{
+  "gameState": {
+    "title": "GK Game",
+    "text": "Welkom in GK Game",
+    "canvasCount": 2,
+    "overlay": null
+  },
+  "gameLogs": [
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x23cc0013f600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x23cc0013f600]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    }
+  ]
+}

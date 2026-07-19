@@ -1,0 +1,45 @@
+{
+  "before": {
+    "id": "foundation.zone_registry",
+    "x": 380,
+    "y": 580
+  },
+  "after": {
+    "id": "foundation.zone_registry",
+    "x": 380,
+    "y": 580
+  },
+  "moved": false,
+  "box": {
+    "x": 671,
+    "y": 680,
+    "w": 258,
+    "h": 34
+  },
+  "logs": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x24dc0013bc00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "info",
+      "text": "[timing] renderAssets 1.3ms"
+    },
+    {
+      "type": "info",
+      "text": "[timing] refreshViewport 25.3ms force=true"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x24dc0013bc00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x24dc0013bc00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    }
+  ]
+}

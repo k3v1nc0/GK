@@ -306,6 +306,8 @@ function buildZonePackage(graph, zoneOutputNode, nodeMap) {
     terrain: recordsFromSources(graph, zoneOutputNode, "terrain", nodeMap),
     collision: recordsFromSources(graph, zoneOutputNode, "collision", nodeMap),
     lights: recordsFromSources(graph, zoneOutputNode, "lights", nodeMap),
+    camera: valuePayload(firstIncomingNode(graph, zoneOutputNode, "camera", nodeMap), "cameraId"),
+    player: valuePayload(firstIncomingNode(graph, zoneOutputNode, "player", nodeMap), "playerId"),
     cameraOverrides: recordsFromSources(graph, zoneOutputNode, "cameraOverrides", nodeMap),
     areas: areaOutputs.map(function (areaOutput) { return buildAreaPackage(graph, areaOutput, nodeMap); }),
     entities: recordsFromSources(graph, zoneOutputNode, "entities", nodeMap),

@@ -1,0 +1,197 @@
+{
+  "generatedAt": "2026-07-19T18:22:41.535Z",
+  "editorRoot": {
+    "path": "/editor/",
+    "title": "GK Game Editor",
+    "nodeCount": 16,
+    "canvasCount": 2,
+    "requiredNodesFound": {
+      "Zone Definition": true,
+      "Spawn Point": true,
+      "Entity Assembly": true,
+      "Game Minimap HUD": true,
+      "Minimap Bake": true,
+      "Zone Output": true,
+      "Map Marker Definition": true
+    },
+    "groupCardVisible": true,
+    "groupCardText": "NODE-02 Demo Zone Group\nGROUP\nzonePkg\nentity\nOpen group\nEdit the group interface in the inspector."
+  },
+  "editorGroup": {
+    "path": "/editor/",
+    "nodeCount": 30,
+    "hasGroupOutput": true,
+    "groupOutputText": "Group Output\nGROUP OUTPUT\nSYSTEM\nzonePkg\nentity\nLocked system node",
+    "hasZoneOutput": true,
+    "hasAreaGroup": true,
+    "bodySample": "GK\nGAME EDITOR\nROOT\n>\nNODE-02 Demo Zone Group\n0 actions unsaved\nSAVE DRAFT\nSAVE TO GAME\nLOGOUT\nVALIDATION\nKlaar om te publiceren.\n! Geen bewegings-keybinds. De speler kan alleen via klik-naar-lopen bewegen.\n! Geen interact-keybind. Interactie werkt alleen via klikken op het object.\nNODE LIBRARY\nSPECIALIZED GROUPS\nCatalog\n+\nZones\n+\nCampaigns\n+\nPlayer Rules\n+\nUI\n+\nWORLD\nWorld Settings\n+\nEditor World Settings\n+\nGame World Settings\n+\nEditor Chunk Loading\n+\nGame Chunk Loading\n+\nGround Surface\n+\nGame Camera\n+\nEditor Camera\n+\nAmbient Light\n+\nDirectional Light\n+\nTERRAIN\nTerrain Layer\n+\nSurface Layer\n+\nCOLLISION\nBlocker Area\n+\nWalkable Surface\n+\nGAMEPLAY\nPlayer Character\n+\nPlayer Spawn\n+\nInteractable\n+\nENTITIES\nModel Entity\n+\nBounded Area Scatter\n+\nEntity Assembly\n+\nInteraction Component\n+\nINPUT\nKeybind\n+\nUI\nHUD Text\n+\nPerformance HUD\n+\nDebug MMO HUD\n+\nMinimap Bake\n+\nGame Minimap HUD\n+\nEditor Minimap\n+\nUI Output\n+\nORGANIZE\nGroup\n+\nPROJECT\nGame Project Settings\n+\nChunk Grid Definition\n+\nWorld Assembly\n+\nVALUES\nConstant Value\n+\nGlobal Value Definition\n+\nTag Definition\n+\nText Template\n+\nLocalization Entry\n+\nValue Formula\n+\nCurve Lookup\n+\nCATALOG\nCatalog Output\n+\nCatalog Registry\n+\nZONES\nZone Registry\n+\nZone Definition\n+\nZone Environment Settings\n+\nZone Gameplay Rules\n+\nArea Definition\n+\nArea Environment Override\n+\nArea Output\n+\nLocation Anchor\n+\nSpawn Point\n+\nCheckpoint\n+\nZone Link\n+\nDiscovery Area\n+\nSafe Rule Area\n+\nMap Marker Definition\n+\nMarker Visibility Rule\n+\nQuest Target Binding\n+\nZone Output\n+\nCAMPAIGNS\nCampaign Registry\n+\nPLAYER RULES\nPlayer Rules Output\n+\nZone Definition 01\nZ"
+  },
+  "gameProof": {
+    "path": "/game/",
+    "title": "GK Game",
+    "canvasCount": 2,
+    "bodyText": "Welkom in NODE-02 Demo Zone",
+    "world": {
+      "activeZoneId": "zone.node02.demo",
+      "runtime": {
+        "activeZoneId": "zone.node02.demo",
+        "startSpawnId": "spawn.node02.default"
+      },
+      "spawn": {
+        "spawnId": "spawn.node02.default",
+        "role": "zone_default",
+        "zoneRef": "zone.node02.demo",
+        "x": 25,
+        "y": 0,
+        "z": 30,
+        "facing": 90
+      },
+      "ground": {
+        "groundId": "ground_node02_demo",
+        "width": 500,
+        "depth": 500,
+        "y": 0,
+        "boundsMode": "explicitBounds",
+        "minX": 0,
+        "maxX": 500,
+        "minZ": 0,
+        "maxZ": 500
+      },
+      "camera": {
+        "id": "node02_camera",
+        "mode": "top-down",
+        "cameraId": "node02_camera",
+        "pitch": 58,
+        "yaw": 35,
+        "startDistance": 46,
+        "distance": 38,
+        "minDistance": 10,
+        "maxDistance": 80,
+        "fov": 55,
+        "follow": true,
+        "rotateSpeed": 90
+      },
+      "player": {
+        "id": "node02_player",
+        "modelAssetId": "asset_d84789ca-ce2d-47ff-b442-c165ee26652f",
+        "idleAnimation": "Idle"
+      },
+      "lights": [
+        {
+          "id": "node02_ambient",
+          "type": "ambient"
+        },
+        {
+          "id": "node02_sun",
+          "type": "directional"
+        }
+      ],
+      "entities": [
+        {
+          "id": "node_model_entity_bdb9267b",
+          "entityId": "entity_node02_tree",
+          "modelAssetId": "asset_55dea892-bf86-4edd-9365-7e18e019b301",
+          "position": {
+            "x": 110,
+            "y": 0,
+            "z": 120
+          }
+        },
+        {
+          "id": "node_model_entity_50cdbbbb",
+          "entityId": "entity_node02_forge",
+          "modelAssetId": "asset_6b87168b-662d-4235-a4cd-dff32d24e27f",
+          "position": {
+            "x": 260,
+            "y": 0,
+            "z": 240
+          }
+        }
+      ],
+      "assets": [
+        {
+          "id": "asset_d84789ca-ce2d-47ff-b442-c165ee26652f",
+          "name": "node02_wizard_player",
+          "sourcePath": "/assets/uploads/asset_d84789ca-ce2d-47ff-b442-c165ee26652f.glb"
+        },
+        {
+          "id": "asset_55dea892-bf86-4edd-9365-7e18e019b301",
+          "name": "node02_tree_entity",
+          "sourcePath": "/assets/uploads/asset_55dea892-bf86-4edd-9365-7e18e019b301.glb"
+        },
+        {
+          "id": "asset_6b87168b-662d-4235-a4cd-dff32d24e27f",
+          "name": "node02_forge_entity",
+          "sourcePath": "/assets/uploads/asset_6b87168b-662d-4235-a4cd-dff32d24e27f.glb"
+        }
+      ]
+    }
+  },
+  "logs": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "warn",
+      "text": "[GroupMarkerNotSet(crbug.com/242999)!:16AC002970A0]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content."
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x3ab400137c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "info",
+      "text": "[timing] renderAssets 16.5ms"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x3ab400137c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load start asset=asset_d84789ca-ce2d-47ff-b442-c165ee26652f path=/assets/uploads/asset_d84789ca-ce2d-47ff-b442-c165ee26652f.glb"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load start asset=asset_55dea892-bf86-4edd-9365-7e18e019b301 path=/assets/uploads/asset_55dea892-bf86-4edd-9365-7e18e019b301.glb"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load start asset=asset_6b87168b-662d-4235-a4cd-dff32d24e27f path=/assets/uploads/asset_6b87168b-662d-4235-a4cd-dff32d24e27f.glb"
+    },
+    {
+      "type": "info",
+      "text": "[timing] refreshViewport 208.4ms force=true"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x3ab400137c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load end asset=asset_d84789ca-ce2d-47ff-b442-c165ee26652f 657.7ms"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load end asset=asset_55dea892-bf86-4edd-9365-7e18e019b301 662.9ms"
+    },
+    {
+      "type": "info",
+      "text": "[timing] GLTFLoader load end asset=asset_6b87168b-662d-4235-a4cd-dff32d24e27f 663.4ms"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0x3ab400137c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    },
+    {
+      "type": "info",
+      "text": "[timing] renderAssets 0.7ms"
+    },
+    {
+      "type": "warn",
+      "text": "[GroupMarkerNotSet(crbug.com/242999)!:16AC002970A0]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content."
+    }
+  ],
+  "pageErrors": []
+}

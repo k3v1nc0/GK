@@ -2571,6 +2571,8 @@ const ZONE_NODE_DEFS = {
       terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
       collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
       lights: { label: "Lights", dataType: "light", required: false, multiple: true },
+      camera: { label: "Camera", dataType: "camera", required: false, multiple: false },
+      player: { label: "Player", dataType: "player", required: false, multiple: false },
       cameraOverrides: { label: "Camera Overrides", dataType: "cameraOverride", required: false, multiple: true },
       areas: { label: "Areas", dataType: "areaPackage", required: false, multiple: true },
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },

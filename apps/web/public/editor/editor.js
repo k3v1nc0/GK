@@ -3598,7 +3598,8 @@ function isFiniteGraphPosition(position) {
 function visibleNodes() {
   return state.graph.nodes.filter(function (n) {
     const def = state.nodeTypes[n.type] || {};
-    return (n.parentId || null) === state.currentGroupId && !def.hidden && !def.internal;
+    const isGroupInterfaceNode = n.type === "group_input" || n.type === "group_output";
+    return (n.parentId || null) === state.currentGroupId && !def.internal && (!def.hidden || isGroupInterfaceNode);
   });
 }
 
@@ -4113,6 +4114,7 @@ function startNodeDrag(event, node, card) {
   }
   const historySnapshot = captureHistorySnapshot(movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst");
   const dragBounds = 100000;
+  let dragFinished = false;
   card.classList.add("dragging");
   for (const [nodeId, position] of origins.entries()) {
     state.dragPreviewPositions[nodeId] = { x: position.x, y: position.y };
@@ -4188,6 +4190,8 @@ function startNodeDrag(event, node, card) {
   }
 
   async function finishDrag(commit) {
+    if (dragFinished) return;
+    dragFinished = true;
     const sessionState = state.dragSession;
     const committedPositions = sessionState && sessionState.nextPositions && sessionState.nextPositions.size
       ? Array.from(sessionState.nextPositions.entries())
@@ -4254,7 +4258,8 @@ function startNodeDrag(event, node, card) {
 
   function onLostPointerCapture(lostEvent) {
     if (lostEvent.pointerId !== pointerId) return;
-    onCancel(lostEvent);
+    const shouldCommit = Boolean(state.dragSession && state.dragSession.sessionId === sessionId && state.dragSession.didMove && state.dragSession.nextPositions);
+    finishDrag(shouldCommit);
   }
 
   window.addEventListener("pointermove", onMove);
