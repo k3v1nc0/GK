@@ -153,6 +153,12 @@ function firstGraphNodeOfType(graph, type) {
   }) || null;
 }
 
+function nodesOfType(graph, type) {
+  return (Array.isArray(graph?.nodes) ? graph.nodes : []).filter(function (node) {
+    return node.type === type;
+  });
+}
+
 function sortPlainObjectByKey(source) {
   const output = {};
   for (const key of Object.keys(source || {}).sort()) {
@@ -210,6 +216,168 @@ function buildChunkGridPayload(node) {
     tileSize: Number(values.tileSize) || 0,
     maxLoadedChunks: Number(values.maxLoadedChunks) || 0,
     edgeMode: safeString(values.edgeMode || "")
+  };
+}
+
+function readBoundsFromZone(zoneValues) {
+  const originX = Number(zoneValues?.originX) || 0;
+  const originY = Number(zoneValues?.originY) || 0;
+  const originZ = Number(zoneValues?.originZ) || 0;
+  const width = Number(zoneValues?.width) || 0;
+  const depth = Number(zoneValues?.depth) || 0;
+  return {
+    originX,
+    originY,
+    originZ,
+    width,
+    depth,
+    minX: originX,
+    minZ: originZ,
+    maxX: originX + width,
+    maxZ: originZ + depth,
+    minY: Number(zoneValues?.minY) || -100,
+    maxY: Number(zoneValues?.maxY) || 500
+  };
+}
+
+function isPointInsideBounds(x, z, bounds) {
+  return Number(x) >= bounds.minX && Number(x) <= bounds.maxX && Number(z) >= bounds.minZ && Number(z) <= bounds.maxZ;
+}
+
+function valuePayload(node, idField) {
+  if (!node) return null;
+  return Object.assign({ id: node.values?.[idField] || null, nodeId: node.id }, clone(node.values || {}));
+}
+
+function recordsFromSources(graph, outputNode, portName, nodeMap) {
+  return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
+    const values = clone(node.values || {});
+    return Object.assign({ nodeId: node.id, nodeType: node.type }, values);
+  });
+}
+
+function buildAreaPackage(graph, areaOutputNode, nodeMap) {
+  const areaNode = firstIncomingNode(graph, areaOutputNode, "area", nodeMap);
+  const area = valuePayload(areaNode, "areaId");
+  return {
+    id: areaOutputNode.values?.packageId || (area?.areaId ? area.areaId + ".package" : areaOutputNode.id),
+    packageVersion: Number(areaOutputNode.values?.packageVersion) || 1,
+    area,
+    environmentOverrides: recordsFromSources(graph, areaOutputNode, "environmentOverrides", nodeMap),
+    areaRules: recordsFromSources(graph, areaOutputNode, "areaRules", nodeMap),
+    terrain: recordsFromSources(graph, areaOutputNode, "terrain", nodeMap),
+    collision: recordsFromSources(graph, areaOutputNode, "collision", nodeMap),
+    lights: recordsFromSources(graph, areaOutputNode, "lights", nodeMap),
+    entities: recordsFromSources(graph, areaOutputNode, "entities", nodeMap),
+    spawns: recordsFromSources(graph, areaOutputNode, "spawns", nodeMap),
+    questTargets: recordsFromSources(graph, areaOutputNode, "questTargets", nodeMap),
+    markers: recordsFromSources(graph, areaOutputNode, "markers", nodeMap),
+    audioAssignments: recordsFromSources(graph, areaOutputNode, "audioAssignments", nodeMap),
+    paths: recordsFromSources(graph, areaOutputNode, "paths", nodeMap),
+    encounterAreas: recordsFromSources(graph, areaOutputNode, "encounterAreas", nodeMap)
+  };
+}
+
+function buildZonePackage(graph, zoneOutputNode, nodeMap) {
+  const zoneNode = firstIncomingNode(graph, zoneOutputNode, "zone", nodeMap);
+  const zone = valuePayload(zoneNode, "zoneId");
+  const zoneId = normalizeCanonicalId(zone?.zoneId, "") || null;
+  const bounds = readBoundsFromZone(zone || {});
+  const areaOutputs = resolveInputSources(graph, zoneOutputNode, "areas", nodeMap).filter(function (node) {
+    return node.type === "area_output";
+  });
+  const minimaps = recordsFromSources(graph, zoneOutputNode, "minimap", nodeMap).map(function (minimap) {
+    return Object.assign({}, minimap, {
+      zoneRef: minimap.zoneRef || zoneId,
+      bounds: minimap.bakedBounds || bounds,
+      resolution: Number(minimap.resolution) || 2048,
+      imageFormat: "webp"
+    });
+  });
+  return {
+    id: zoneOutputNode.values?.packageId || (zoneId ? zoneId + ".package" : zoneOutputNode.id),
+    zoneId,
+    packageVersion: Number(zoneOutputNode.values?.packageVersion) || 1,
+    includeEditorOnlyData: zoneOutputNode.values?.includeEditorOnlyData === true,
+    zone: Object.assign({}, zone || {}, { bounds }),
+    environment: valuePayload(firstIncomingNode(graph, zoneOutputNode, "environment", nodeMap), "environmentId"),
+    rules: valuePayload(firstIncomingNode(graph, zoneOutputNode, "rules", nodeMap), "rulesId"),
+    ground: valuePayload(firstIncomingNode(graph, zoneOutputNode, "ground", nodeMap), "groundId"),
+    terrain: recordsFromSources(graph, zoneOutputNode, "terrain", nodeMap),
+    collision: recordsFromSources(graph, zoneOutputNode, "collision", nodeMap),
+    lights: recordsFromSources(graph, zoneOutputNode, "lights", nodeMap),
+    cameraOverrides: recordsFromSources(graph, zoneOutputNode, "cameraOverrides", nodeMap),
+    areas: areaOutputs.map(function (areaOutput) { return buildAreaPackage(graph, areaOutput, nodeMap); }),
+    entities: recordsFromSources(graph, zoneOutputNode, "entities", nodeMap),
+    spawns: recordsFromSources(graph, zoneOutputNode, "spawns", nodeMap).map(function (spawn) {
+      return Object.assign({}, spawn, { zoneRef: spawn.zoneRef || zoneId });
+    }),
+    checkpoints: recordsFromSources(graph, zoneOutputNode, "checkpoints", nodeMap),
+    links: recordsFromSources(graph, zoneOutputNode, "links", nodeMap).map(function (link) {
+      return Object.assign({}, link, { fromZoneRef: link.fromZoneRef || zoneId });
+    }),
+    discoveries: recordsFromSources(graph, zoneOutputNode, "discoveries", nodeMap),
+    questTargets: recordsFromSources(graph, zoneOutputNode, "questTargets", nodeMap),
+    markers: recordsFromSources(graph, zoneOutputNode, "markers", nodeMap),
+    minimaps,
+    audioAssignments: recordsFromSources(graph, zoneOutputNode, "audioAssignments", nodeMap),
+    paths: recordsFromSources(graph, zoneOutputNode, "paths", nodeMap),
+    encounterAreas: recordsFromSources(graph, zoneOutputNode, "encounterAreas", nodeMap)
+  };
+}
+
+function buildZoneRegistryPayload(graph, zoneRegistryNode, nodeMap) {
+  const zoneOutputs = resolveInputSources(graph, zoneRegistryNode, "zonePackage", nodeMap).filter(function (node) {
+    return node.type === "zone_output";
+  });
+  const packages = zoneOutputs.map(function (zoneOutput) {
+    return buildZonePackage(graph, zoneOutput, nodeMap);
+  }).filter(function (pkg) {
+    return Boolean(pkg.zoneId);
+  }).sort(function (left, right) {
+    return String(left.zoneId).localeCompare(String(right.zoneId));
+  });
+  const byId = {};
+  for (const pkg of packages) byId[pkg.zoneId] = pkg;
+  return {
+    id: zoneRegistryNode?.values?.registryId || "zone_registry.main",
+    packages,
+    byId,
+    zoneCount: packages.length
+  };
+}
+
+function buildZonePackagesFromGraph(graph, worldAssemblyNode, nodeMap) {
+  const zoneRegistryNode = worldAssemblyNode ? firstIncomingNode(graph, worldAssemblyNode, "zones", nodeMap) : firstGraphNodeOfType(graph, "zone_registry");
+  if (!zoneRegistryNode) return { id: "zone_registry.main", packages: [], byId: {}, zoneCount: 0 };
+  return buildZoneRegistryPayload(graph, zoneRegistryNode, nodeMap);
+}
+
+function firstZoneDefaultSpawn(zonePackage) {
+  return (Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : []).find(function (spawn) {
+    return spawn.role === "zone_default";
+  }) || null;
+}
+
+function buildRuntimeZoneProjection(projectPayload, zoneRegistry) {
+  const packages = Array.isArray(zoneRegistry?.packages) ? zoneRegistry.packages : [];
+  const startZoneId = normalizeCanonicalId(projectPayload?.startZoneRef, "") || packages[0]?.zoneId || null;
+  const startZone = packages.find(function (pkg) { return pkg.zoneId === startZoneId; }) || packages[0] || null;
+  const startSpawnId = normalizeCanonicalId(projectPayload?.startSpawnRef, "");
+  const startSpawn = startZone
+    ? ((Array.isArray(startZone.spawns) ? startZone.spawns : []).find(function (spawn) {
+      return spawn.spawnId === startSpawnId;
+    }) || firstZoneDefaultSpawn(startZone))
+    : null;
+  const minimap = startZone && Array.isArray(startZone.minimaps) ? startZone.minimaps.find(function (bake) {
+    return bake.enabled !== false;
+  }) || null : null;
+  return {
+    activeZoneId: startZone?.zoneId || null,
+    startSpawnId: startSpawn?.spawnId || null,
+    startSpawn,
+    activeZone: startZone,
+    activeMinimap: minimap
   };
 }
 
@@ -349,6 +517,71 @@ function buildValidationContext(graph, symbolIndex, tokenResolver) {
     }
   }
 
+  const zoneDefinitions = nodesOfType(graph, "zone_definition");
+  const zoneIds = new Map();
+  for (const zoneNode of zoneDefinitions) {
+    const zoneId = normalizeCanonicalId(zoneNode.values?.zoneId, "");
+    if (!zoneId) continue;
+    if (zoneIds.has(zoneId)) {
+      errors.push(buildError("ZONE_DEFINITION_DUPLICATE", "Dubbele zoneId: " + zoneId + ".", { nodeId: zoneNode.id, referenceId: zoneId }));
+      continue;
+    }
+    zoneIds.set(zoneId, zoneNode);
+    const zoneType = safeString(zoneNode.values?.zoneType || "outdoor_normal");
+    const width = Number(zoneNode.values?.width);
+    const depth = Number(zoneNode.values?.depth);
+    if (zoneType === "outdoor_normal" && (width !== 500 || depth !== 500)) {
+      errors.push(buildError("ZONE_BOUNDS_INVALID", "Outdoor zone " + zoneId + " moet exact 500 x 500 zijn.", { nodeId: zoneNode.id, referenceId: zoneId }));
+    } else if (zoneType !== "outdoor_normal" && (!(width >= 1 && width <= 5000) || !(depth >= 1 && depth <= 5000))) {
+      errors.push(buildError("ZONE_BOUNDS_INVALID", "Zone " + zoneId + " heeft ongeldige bounds.", { nodeId: zoneNode.id, referenceId: zoneId }));
+    }
+  }
+
+  const zoneOutputs = nodesOfType(graph, "zone_output");
+  for (const zoneOutput of zoneOutputs) {
+    const zoneNode = firstIncomingNode(graph, zoneOutput, "zone", nodeMap);
+    const zoneId = normalizeCanonicalId(zoneNode?.values?.zoneId, "");
+    if (!zoneNode || !zoneId) {
+      errors.push(buildError("ZONE_DEFINITION_MISSING", "Zone Output mist een geldige Zone Definition.", { nodeId: zoneOutput.id }));
+      continue;
+    }
+    const zoneValues = zoneNode.values || {};
+    const bounds = readBoundsFromZone(zoneValues);
+    const spawns = recordsFromSources(graph, zoneOutput, "spawns", nodeMap);
+    const defaultSpawns = spawns.filter(function (spawn) {
+      return spawn.role === "zone_default";
+    });
+    if (defaultSpawns.length === 0) {
+      errors.push(buildError("ZONE_DEFAULT_SPAWN_MISSING", "Zone " + zoneId + " mist exact één zone_default spawn.", { nodeId: zoneOutput.id, referenceId: zoneId }));
+    }
+    if (defaultSpawns.length > 1) {
+      errors.push(buildError("ZONE_DEFAULT_SPAWN_DUPLICATE", "Zone " + zoneId + " heeft meerdere zone_default spawns.", { nodeId: zoneOutput.id, referenceId: zoneId }));
+    }
+    for (const spawn of spawns) {
+      if (!isPointInsideBounds(spawn.x, spawn.z, bounds)) {
+        errors.push(buildError("ZONE_SPAWN_OUT_OF_BOUNDS", "Spawn " + (spawn.spawnId || spawn.nodeId) + " ligt buiten zone " + zoneId + ".", { nodeId: spawn.nodeId, referenceId: spawn.spawnId || null }));
+      }
+      if (Number(spawn.safeRadius) <= 0.5) {
+        warnings.push(buildWarning("ZONE_SPAWN_OUT_OF_BOUNDS", "Spawn " + (spawn.spawnId || spawn.nodeId) + " heeft een kleine safeRadius.", { nodeId: spawn.nodeId, referenceId: spawn.spawnId || null }));
+      }
+    }
+    const minimaps = recordsFromSources(graph, zoneOutput, "minimap", nodeMap).filter(function (bake) {
+      return bake.enabled !== false;
+    });
+    if (["outdoor_normal", "hub"].includes(safeString(zoneValues.zoneType || "outdoor_normal")) && minimaps.length === 0) {
+      warnings.push(buildWarning("MINIMAP_ZONE_BAKE_MISSING", "Zone " + zoneId + " heeft nog geen enabled Minimap Bake.", { nodeId: zoneOutput.id, referenceId: zoneId }));
+    }
+  }
+
+  for (const groupNode of nodesOfType(graph, "group")) {
+    if (safeLower(groupNode.values?.groupKind) === "area") {
+      const parent = nodeMap.get(groupNode.parentId);
+      if (!parent || safeLower(parent.values?.groupKind) !== "zone") {
+        errors.push(buildError("AREA_GROUP_INVALID", "Area Group moet child zijn van een Zone Group.", { nodeId: groupNode.id }));
+      }
+    }
+  }
+
   return {
     errors,
     warnings,
@@ -458,16 +691,25 @@ export class GameProjectCompiler {
 
     const projectNode = validation.projectNode || firstIncomingNode(graph, gameProjectSource, "projectSettings", nodeMapForGraph(graph));
     const chunkGridNode = validation.chunkGridNode || firstIncomingNode(graph, gameProjectSource, "chunkGrid", nodeMapForGraph(graph));
-    const worldAssemblyNode = validation.worldAssemblyNode || firstIncomingNode(graph, gameOutput, "gameProject", nodeMapForGraph(graph));
+    const nodeMap = nodeMapForGraph(graph);
+    const worldAssemblyNode = validation.worldAssemblyNode || firstIncomingNode(graph, gameOutput, "gameProject", nodeMap);
+    const projectPayload = buildProjectPayload(projectNode);
+    const chunkGridPayload = buildChunkGridPayload(chunkGridNode);
+    const zoneRegistry = buildZonePackagesFromGraph(graph, worldAssemblyNode, nodeMap);
+    const runtimeZones = buildRuntimeZoneProjection(projectPayload, zoneRegistry);
     const manifestCore = {
       schemaVersion: GAME_PROJECT_SCHEMA_VERSION,
-      project: buildProjectPayload(projectNode),
-      chunkGrid: buildChunkGridPayload(chunkGridNode),
+      project: projectPayload,
+      chunkGrid: chunkGridPayload,
       catalogs: buildSymbolSections(symbolIndex),
-      zones: buildSectionObject(symbolIndex, ["zoneRegistry"]),
+      zones: zoneRegistry,
       campaigns: buildSectionObject(symbolIndex, ["campaignRegistry"]),
       playerRules: buildSectionObject(symbolIndex, ["playerRules"]),
       ui: buildSectionObject(symbolIndex, ["uiPackage"]),
+      runtime: {
+        activeZoneId: runtimeZones.activeZoneId,
+        startSpawnId: runtimeZones.startSpawnId
+      },
       symbols: serializeSymbolIndex(symbolIndex),
       assetManifest: buildAssetManifest(this.services.assetService || options.assetService || null),
       legacyWorld: legacyWorld || {},

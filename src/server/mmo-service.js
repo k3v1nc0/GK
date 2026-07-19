@@ -113,6 +113,8 @@ function spawnFromWorld(world) {
   const hasSpawn = world && world.spawn && Number.isFinite(Number(world.spawn.x)) && Number.isFinite(Number(world.spawn.z));
   const groundY = worldGroundY(world);
   return {
+    spawnId: hasSpawn ? world.spawn.spawnId || world.spawn.id || null : null,
+    zoneId: hasSpawn ? world.spawn.zoneRef || world.activeZoneId || world.gameProject?.runtime?.activeZoneId || null : world.activeZoneId || world.gameProject?.runtime?.activeZoneId || null,
     x: hasSpawn ? num(world.spawn.x, 0) : 0,
     y: groundY,
     z: hasSpawn ? num(world.spawn.z, 0) : 0,
@@ -123,6 +125,10 @@ function spawnFromWorld(world) {
 
 function positionKey(playerId, worldId) {
   return playerId + "::" + worldId;
+}
+
+function activeZoneIdForWorld(world) {
+  return String(world?.activeZoneId || world?.gameProject?.runtime?.activeZoneId || world?.spawn?.zoneRef || "").trim() || null;
 }
 
 function publicSession(session) {
@@ -169,6 +175,7 @@ function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, wo
     connectedSessionCount: Number(connectedSessionCount) || 0,
     isSelfAccount: false,
     worldId: worldId || position.world_id || null,
+    zoneId: position.current_zone_id || null,
     serverReceivedAt: position.server_received_at || position.serverReceivedAt || null,
     serverSentAtMs: position.server_sent_at_ms || position.serverSentAtMs || null,
     serverTimeMs: position.server_time_ms || position.serverTimeMs || null,
@@ -204,6 +211,9 @@ function publicPosition(position, session, worldId) {
   return {
     playerId: position.player_id,
     worldId: position.world_id || worldId,
+    zoneId: position.current_zone_id || null,
+    spawnId: position.current_spawn_id || null,
+    activeCheckpointId: position.active_checkpoint_id || null,
     x: round(position.x),
     y: round(position.y),
     z: round(position.z),
@@ -230,6 +240,7 @@ function publicRemoteStateChange(position, session, worldId, sourceDeviceOverrid
     playerId: position.player_id,
     userId: session?.user_id || null,
     worldId: position.world_id || worldId,
+    zoneId: position.current_zone_id || null,
     position: {
       x: round(position.x),
       y: round(position.y),
@@ -441,20 +452,21 @@ export class MmoService {
   ensurePlayerProfile(user, worldContext) {
     const existing = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? LIMIT 1").get(user.id);
     const currentWorldId = worldContext.worldId;
+    const currentZoneId = activeZoneIdForWorld(worldContext.world);
     const displayName = String(existing?.display_name || user.username || "player").trim() || "player";
     const selectedCharacterId = existing?.selected_character_id || null;
     const nowIso = now();
     if (existing) {
-      if (existing.current_world_id !== currentWorldId || existing.display_name !== displayName) {
-        this.db.prepare("UPDATE player_profiles SET display_name = ?, selected_character_id = ?, current_world_id = ?, updated_at = ? WHERE id = ?")
-          .run(displayName, selectedCharacterId, currentWorldId, nowIso, existing.id);
+      if (existing.current_world_id !== currentWorldId || existing.current_zone_id !== currentZoneId || existing.display_name !== displayName) {
+        this.db.prepare("UPDATE player_profiles SET display_name = ?, selected_character_id = ?, current_world_id = ?, current_zone_id = ?, updated_at = ? WHERE id = ?")
+          .run(displayName, selectedCharacterId, currentWorldId, currentZoneId, nowIso, existing.id);
         return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(existing.id);
       }
       return existing;
     }
     const profileId = "player_" + crypto.randomUUID();
-    this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(profileId, user.id, displayName, null, currentWorldId, nowIso, nowIso);
+    this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, current_zone_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(profileId, user.id, displayName, null, currentWorldId, currentZoneId, nowIso, nowIso);
     return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(profileId);
   }
 
@@ -482,10 +494,14 @@ export class MmoService {
       return normalized;
     }
     const spawn = spawnFromWorld(worldContext.world);
+    const currentZoneId = spawn.zoneId || activeZoneIdForWorld(worldContext.world);
     const createdAt = now();
     const record = {
       player_id: profile.id,
       world_id: worldId,
+      current_zone_id: currentZoneId,
+      current_spawn_id: spawn.spawnId || null,
+      active_checkpoint_id: null,
       x: spawn.x,
       y: spawn.y,
       z: spawn.z,
@@ -506,8 +522,8 @@ export class MmoService {
       last_input_received_at_ms: 0,
       teleport: false
     };
-    this.db.prepare("INSERT INTO player_positions (player_id, world_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(record.player_id, record.world_id, record.x, record.y, record.z, record.rotation_y, record.revision, record.last_update_source_session_id, record.updated_at);
+    this.db.prepare("INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(record.player_id, record.world_id, record.current_zone_id, record.current_spawn_id, record.active_checkpoint_id, record.x, record.y, record.z, record.rotation_y, record.revision, record.last_update_source_session_id, record.updated_at);
     const normalized = this.normalizePositionRecord(record, sessionContext, worldId);
     this.playerStateCache.set(cacheKey, normalized);
     this.recordEvent("player_position_created", sessionContext?.user?.id || profile.user_id, profile.id, sessionContext?.session?.id || null);
@@ -521,6 +537,9 @@ export class MmoService {
     return {
       player_id: record.player_id,
       world_id: record.world_id || worldId,
+      current_zone_id: record.current_zone_id || null,
+      current_spawn_id: record.current_spawn_id || null,
+      active_checkpoint_id: record.active_checkpoint_id || null,
       x: num(record.x, 0),
       y: num(record.y, 0),
       z: num(record.z, 0),
@@ -577,6 +596,9 @@ export class MmoService {
     return {
       playerId: position.player_id,
       worldId: position.world_id || worldId,
+      zoneId: position.current_zone_id || null,
+      spawnId: position.current_spawn_id || null,
+      activeCheckpointId: position.active_checkpoint_id || null,
       x: round(position.x),
       y: round(position.y),
       z: round(position.z),
@@ -609,6 +631,7 @@ export class MmoService {
     return {
       playerId: position.player_id,
       worldId: position.world_id || worldId,
+      zoneId: position.current_zone_id || null,
       position: {
         x: round(position.x),
         y: round(position.y),
@@ -1041,9 +1064,13 @@ export class MmoService {
     const current = this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection);
     const raw = payload && typeof payload === "object" ? payload : {};
     const position = raw.position && typeof raw.position === "object" ? raw.position : raw;
+    const targetZoneId = String(raw.zoneId || raw.currentZoneId || raw.current_zone_id || current.current_zone_id || activeZoneIdForWorld(worldContext.world) || "").trim() || null;
     const nextState = Object.assign({}, current, {
       player_id: profile.id,
       world_id: worldId,
+      current_zone_id: targetZoneId,
+      current_spawn_id: raw.spawnId || raw.currentSpawnId || raw.current_spawn_id || current.current_spawn_id || null,
+      active_checkpoint_id: raw.checkpointId || raw.activeCheckpointId || raw.active_checkpoint_id || current.active_checkpoint_id || null,
       x: num(position.x, current.x),
       y: Number.isFinite(Number(position.y)) ? num(position.y, current.y) : current.y,
       z: num(position.z, current.z),
@@ -1096,6 +1123,74 @@ export class MmoService {
     }
     this.broadcastRemotePlayerState(connection, nextState, connection.sourceDevice || null);
     return nextState;
+  }
+
+  findZoneLink(world, linkId) {
+    const targetId = String(linkId || "").trim();
+    if (!targetId) return null;
+    const packages = Array.isArray(world?.gameProject?.zones?.packages) ? world.gameProject.zones.packages : [];
+    for (const zonePackage of packages) {
+      for (const link of Array.isArray(zonePackage.links) ? zonePackage.links : []) {
+        if (link && link.linkId === targetId) return { link, fromZone: zonePackage };
+      }
+    }
+    return null;
+  }
+
+  findZoneSpawn(world, zoneId, spawnId) {
+    const zonePackage = world?.gameProject?.zones?.byId?.[zoneId] || null;
+    if (!zonePackage) return null;
+    const spawn = (Array.isArray(zonePackage.spawns) ? zonePackage.spawns : []).find(function (candidate) {
+      return candidate && candidate.spawnId === spawnId;
+    }) || null;
+    return spawn ? { zonePackage, spawn } : null;
+  }
+
+  travelByZoneLink(req, payload = {}) {
+    const sessionContext = this.getSessionContextFromRequest(req);
+    this.authService.touchSession(sessionContext.session.id, false);
+    const worldContext = this.getPublishedWorldContext();
+    const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
+    const linkResult = this.findZoneLink(worldContext.world, payload.linkId || payload.zoneLinkId || payload.link_id);
+    if (!linkResult) {
+      const error = new Error("Zone Link niet gevonden.");
+      error.status = 404;
+      throw error;
+    }
+    const link = linkResult.link;
+    const target = this.findZoneSpawn(worldContext.world, link.toZoneRef, link.toSpawnRef);
+    if (!target) {
+      const error = new Error("Target zone/spawn voor Zone Link ontbreekt.");
+      error.status = 400;
+      throw error;
+    }
+    const connection = { user: sessionContext.user, session: sessionContext.session, player: profile, worldId: worldContext.worldId };
+    const nextState = this.applyTeleportState(connection, {
+      zoneId: link.toZoneRef,
+      spawnId: link.toSpawnRef,
+      position: {
+        x: target.spawn.x,
+        y: target.spawn.y,
+        z: target.spawn.z,
+        rotationY: target.spawn.facing || 0
+      },
+      animationState: "idle"
+    }, { transport: "http-zone-link" });
+    this.db.prepare("UPDATE player_profiles SET current_zone_id = ?, current_world_id = ?, updated_at = ? WHERE id = ?")
+      .run(link.toZoneRef, worldContext.worldId, now(), profile.id);
+    this.schedulePersist(nextState, connection, true);
+    return {
+      ok: true,
+      linkId: link.linkId,
+      fromZoneId: link.fromZoneRef || linkResult.fromZone?.zoneId || null,
+      zoneId: link.toZoneRef,
+      spawnId: link.toSpawnRef,
+      position: this.publicPositionForPlayer(nextState, sessionContext.session, worldContext.worldId),
+      gameWorld: Object.assign({}, worldContext.world, {
+        activeZoneId: link.toZoneRef,
+        zonePackage: target.zonePackage
+      })
+    };
   }
 
   simulatePlayerTick(state, inputState, worldContext, tickDeltaMs, tickInfo = {}) {
@@ -1790,10 +1885,10 @@ export class MmoService {
       this.lastPersistAtMsByKey.set(key, nowMs());
       const current = this.playerStateCache.get(key) || positionRow;
       this.db.prepare(
-        "INSERT INTO player_positions (player_id, world_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(player_id, world_id) DO UPDATE SET x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
-      ).run(current.player_id, current.world_id, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
+        "INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(player_id, world_id) DO UPDATE SET current_zone_id = excluded.current_zone_id, current_spawn_id = excluded.current_spawn_id, active_checkpoint_id = excluded.active_checkpoint_id, x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
+      ).run(current.player_id, current.world_id, current.current_zone_id || null, current.current_spawn_id || null, current.active_checkpoint_id || null, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
     };
     // FIX: tijdens continu bewegen werd de debounce-timer elke tick gereset
     // waardoor de positie pas na het stoppen werd opgeslagen. Nu schrijven we

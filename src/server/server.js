@@ -307,6 +307,11 @@ async function handleApi(req, res, url) {
         ignored: false
       });
     }
+    if (req.method === "POST" && url.pathname === "/api/game/travel/zone-link") {
+      const body = await readJson(req);
+      const result = mmoService.travelByZoneLink(req, body);
+      return sendJson(res, 200, result);
+    }
     if (req.method === "GET" && url.pathname === "/api/node-types") {
       authService.requireEditor(req);
       return sendJson(res, 200, { nodeTypes: repository.getGraph().nodeTypes });

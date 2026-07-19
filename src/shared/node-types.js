@@ -36,6 +36,29 @@ export const DATA_TYPE_COLORS = {
   keybind: "#f43f5e",
   ui: "#f8fafc",
   minimap: "#00ff66",
+  zoneDef: "#1d4ed8",
+  environment: "#2dd4bf",
+  zoneRules: "#ea580c",
+  area: "#a855f7",
+  areaPackage: "#7e22ce",
+  environmentOverride: "#0f766e",
+  anchor: "#94a3b8",
+  spawnPoint: "#bef264",
+  checkpoint: "#4d7c0f",
+  zoneLink: "#0e7490",
+  discoveryDef: "#22d3ee",
+  areaRule: "#fdba74",
+  markerDef: "#e879f9",
+  markerRule: "#be123c",
+  audioAssignment: "#c084fc",
+  path: "#fde047",
+  encounterArea: "#dc2626",
+  cameraOverride: "#818cf8",
+  entityBase: "#c026d3",
+  entityComponent: "#f472b6",
+  questTarget: "#10b981",
+  action: "#fb7185",
+  zonePackageRef: "#075985",
   group: "#64748b"
 };
 
@@ -1818,6 +1841,9 @@ export function groupInterfacePresetForKind(groupKind) {
   if (kind === "zone") {
     return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
   }
+  if (kind === "area") {
+    return { inputs: [], outputs: [{ id: "area_package", name: "areaPackage", label: "Area Package", dataType: "areaPackage", multiple: false }] };
+  }
   if (kind === "campaign") {
     return { inputs: [], outputs: [{ id: "campaign_package", name: "campaignPackage", label: "Campaign Package", dataType: "campaignPackage", multiple: false }] };
   }
@@ -2141,7 +2167,450 @@ const FOUNDATION_NODE_DEFS = {
   }
 };
 
-Object.assign(NODE_TYPES, FOUNDATION_NODE_DEFS);
+const CANONICAL_FIELD_PATTERN = "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$";
+const ZONE_NODE_DEFS = {
+  zone_definition: {
+    label: "Zone Definition",
+    group: "Zones",
+    accent: "#0ea5e9",
+    description: "Defines one playable zone and its fixed physical bounds.",
+    inputs: {},
+    outputs: { zone: { label: "Zone", dataType: "zoneDef" } },
+    fields: {
+      zoneId: { label: "Zone id", type: "identity", default: "zone.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      displayName: { label: "Display name", type: "text", default: "New Zone", required: true, maxLength: 120 },
+      zoneType: { label: "Zone type", type: "select", options: ["outdoor_normal", "interior", "dungeon", "instance", "hub", "custom"], default: "outdoor_normal", required: true },
+      originX: { label: "Origin X", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      originY: { label: "Origin Y", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      originZ: { label: "Origin Z", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      width: { label: "Width", type: "number", default: 500, min: 1, max: 5000, step: 1, required: true },
+      depth: { label: "Depth", type: "number", default: 500, min: 1, max: 5000, step: 1, required: true },
+      minY: { label: "Min Y", type: "number", default: -100, min: -10000, max: 10000, step: 1, required: true },
+      maxY: { label: "Max Y", type: "number", default: 500, min: -10000, max: 10000, step: 1, required: true },
+      recommendedLevelMin: { label: "Recommended min level", type: "number", default: 1, min: 1, max: 999, step: 1, required: true },
+      recommendedLevelMax: { label: "Recommended max level", type: "number", default: 10, min: 1, max: 999, step: 1, required: true },
+      biomeTags: { label: "Biome tags", type: "tagList", default: [], required: false },
+      zoneTags: { label: "Zone tags", type: "tagList", default: [], required: false },
+      allowFastTravel: { label: "Allow fast travel", type: "boolean", default: true, required: true },
+      allowRespawn: { label: "Allow respawn", type: "boolean", default: true, required: true },
+      activeByDefault: { label: "Active by default", type: "boolean", default: true, required: true }
+    }
+  },
+  zone_environment_settings: {
+    label: "Zone Environment Settings",
+    group: "Zones",
+    accent: "#14b8a6",
+    description: "Per-zone render, audio and atmosphere settings.",
+    inputs: {},
+    outputs: { environment: { label: "Environment", dataType: "environment" } },
+    fields: {
+      environmentId: { label: "Environment id", type: "identity", default: "environment.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      backgroundColor: { label: "Background color", type: "color", default: "#101a26", required: false },
+      fogColor: { label: "Fog color", type: "color", default: "#101a26", required: false },
+      fogDensity: { label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+      smoothShading: { label: "Smooth shading", type: "boolean", default: true, required: true },
+      timeOfDayOffset: { label: "Time of day offset", type: "number", default: 0, min: -24, max: 24, step: 0.25, required: true },
+      weatherProfileRef: { label: "Weather profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      musicPlaylistRef: { label: "Music playlist", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      ambienceRef: { label: "Ambience", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      cameraOverrideRef: { label: "Camera override", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      shadowPresetOverride: { label: "Shadow preset override", type: "select", options: ["inherit", "geen", "licht", "middel", "hoog", "extreem"], default: "inherit", required: true }
+    }
+  },
+  zone_gameplay_rules: {
+    label: "Zone Gameplay Rules",
+    group: "Zones",
+    accent: "#f59e0b",
+    description: "Zone-local gameplay multipliers and permissions.",
+    inputs: {},
+    outputs: { rules: { label: "Rules", dataType: "zoneRules" } },
+    fields: {
+      rulesId: { label: "Rules id", type: "identity", default: "zone_rules.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      pveEnabled: { label: "PvE enabled", type: "boolean", default: true, required: true },
+      pvpMode: { label: "PvP mode", type: "select", options: ["disabled", "duel_only", "open", "faction"], default: "disabled", required: true },
+      levelScalingMode: { label: "Level scaling", type: "select", options: ["fixed_range", "clamp_to_range", "party_average", "custom"], default: "fixed_range", required: true },
+      resourceYieldMultiplier: { label: "Resource yield x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      enemyHealthMultiplier: { label: "Enemy health x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      enemyDamageMultiplier: { label: "Enemy damage x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      lootMultiplier: { label: "Loot x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      xpMultiplier: { label: "XP x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      respawnPolicyRef: { label: "Respawn policy", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      networkInterestProfileRef: { label: "Network interest profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      allowTrade: { label: "Allow trade", type: "boolean", default: true, required: true },
+      allowMarketAccess: { label: "Allow market access", type: "boolean", default: false, required: true },
+      allowUnstuck: { label: "Allow unstuck", type: "boolean", default: true, required: true }
+    }
+  },
+  area_definition: {
+    label: "Area Definition",
+    group: "Zones",
+    accent: "#a855f7",
+    description: "Defines a named area inside its owning zone.",
+    inputs: {},
+    outputs: { area: { label: "Area", dataType: "area" } },
+    fields: {
+      areaId: { label: "Area id", type: "identity", default: "area.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      zoneRef: { label: "Owning zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      label: { label: "Label", type: "text", default: "New Area", required: true, maxLength: 120 },
+      shapeType: { label: "Shape", type: "select", options: ["polygon", "box", "circle"], default: "box", required: true },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      width: { label: "Width", type: "number", default: 50, min: 0, max: 5000, step: 0.1, required: true },
+      depth: { label: "Depth", type: "number", default: 50, min: 0, max: 5000, step: 0.1, required: true },
+      radius: { label: "Radius", type: "number", default: 25, min: 0, max: 5000, step: 0.1, required: true },
+      points: { label: "Points", type: "json", default: [], required: false },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      recommendedLevelMin: { label: "Recommended min level", type: "number", default: 1, min: 1, max: 999, step: 1, required: true },
+      recommendedLevelMax: { label: "Recommended max level", type: "number", default: 10, min: 1, max: 999, step: 1, required: true },
+      areaTags: { label: "Area tags", type: "tagList", default: [], required: false },
+      mapRevealMode: { label: "Map reveal", type: "select", options: ["hidden", "outline", "full"], default: "outline", required: true }
+    }
+  },
+  area_environment_override: {
+    label: "Area Environment Override",
+    group: "Zones",
+    accent: "#0f766e",
+    description: "Optional area-level environment overrides.",
+    inputs: { area: { label: "Area", dataType: "area", required: true, multiple: false }, conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true } },
+    outputs: { environmentOverride: { label: "Environment Override", dataType: "environmentOverride" } },
+    fields: {
+      overrideId: { label: "Override id", type: "identity", default: "environment_override.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      fogMode: { label: "Fog mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      fogColor: { label: "Fog color", type: "color", default: "#101a26", required: false },
+      fogDensity: { label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+      backgroundMode: { label: "Background mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      backgroundColor: { label: "Background color", type: "color", default: "#101a26", required: false },
+      musicMode: { label: "Music mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      musicPlaylistRef: { label: "Music playlist", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      ambienceMode: { label: "Ambience mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      ambienceRef: { label: "Ambience", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      weatherMode: { label: "Weather mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      weatherProfileRef: { label: "Weather profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      lightIntensityMultiplier: { label: "Light intensity x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true }
+    }
+  },
+  area_output: {
+    label: "Area Output",
+    group: "Zones",
+    accent: "#7e22ce",
+    description: "Bundles area content into one area package.",
+    inputs: {
+      area: { label: "Area", dataType: "area", required: true, multiple: false },
+      environmentOverrides: { label: "Environment Overrides", dataType: "environmentOverride", required: false, multiple: true },
+      areaRules: { label: "Area Rules", dataType: "areaRule", required: false, multiple: true },
+      terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
+      lights: { label: "Lights", dataType: "light", required: false, multiple: true },
+      entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
+      spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },
+      questTargets: { label: "Quest Targets", dataType: "questTarget", required: false, multiple: true },
+      markers: { label: "Markers", dataType: "markerDef", required: false, multiple: true },
+      audioAssignments: { label: "Audio Assignments", dataType: "audioAssignment", required: false, multiple: true },
+      paths: { label: "Paths", dataType: "path", required: false, multiple: true },
+      encounterAreas: { label: "Encounter Areas", dataType: "encounterArea", required: false, multiple: true }
+    },
+    outputs: { areaPackage: { label: "Area Package", dataType: "areaPackage" } },
+    fields: {
+      packageId: { label: "Package id", type: "identity", default: "area.new_area.package", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      packageVersion: { label: "Package version", type: "number", default: 1, min: 1, max: 1000000, step: 1, required: true }
+    }
+  },
+  location_anchor: {
+    label: "Location Anchor",
+    group: "Zones",
+    accent: "#64748b",
+    description: "Meshless selectable location helper.",
+    inputs: {},
+    outputs: {
+      anchor: { label: "Anchor", dataType: "anchor" },
+      entityBase: { label: "Entity Base", dataType: "entityBase" }
+    },
+    fields: {
+      anchorId: { label: "Anchor id", type: "identity", default: "anchor.new_anchor", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Anchor", required: true, maxLength: 120 },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      shapeType: { label: "Shape", type: "select", options: ["point", "circle", "box"], default: "point", required: true },
+      radius: { label: "Radius", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      width: { label: "Width", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      depth: { label: "Depth", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      visibleInEditor: { label: "Visible in editor", type: "boolean", default: true, required: true },
+      visibleInGame: { label: "Visible in game", type: "boolean", default: false, required: true },
+      editorIcon: { label: "Editor icon", type: "select", options: ["anchor", "spawn", "target", "portal", "custom"], default: "anchor", required: true },
+      anchorTags: { label: "Anchor tags", type: "tagList", default: [], required: false }
+    }
+  },
+  spawn_point: {
+    label: "Spawn Point",
+    group: "Zones",
+    accent: "#a3e635",
+    description: "A zone-local player spawn, checkpoint target or travel arrival.",
+    inputs: { anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false } },
+    outputs: { spawnPoint: { label: "Spawn Point", dataType: "spawnPoint" } },
+    fields: {
+      spawnId: { label: "Spawn id", type: "identity", default: "spawn.zone_default", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      role: { label: "Role", type: "select", options: ["zone_default", "entry", "checkpoint", "respawn", "bind", "instance", "fast_travel_arrival"], default: "zone_default", required: true },
+      zoneRef: { label: "Zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      label: { label: "Label", type: "text", default: "Zone Default", required: true, maxLength: 120 },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      facing: { label: "Facing", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
+      safeRadius: { label: "Safe radius", type: "number", default: 1.25, min: 0.1, max: 100, step: 0.05, required: true },
+      snapToGround: { label: "Snap to ground", type: "boolean", default: true, required: true },
+      validateCollision: { label: "Validate collision", type: "boolean", default: true, required: true },
+      activationConditionRef: { label: "Activation condition", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true }
+    }
+  },
+  checkpoint: {
+    label: "Checkpoint",
+    group: "Zones",
+    accent: "#84cc16",
+    description: "Activatable checkpoint backed by a spawn point.",
+    inputs: {
+      spawnPoint: { label: "Spawn Point", dataType: "spawnPoint", required: true, multiple: false },
+      activationConditions: { label: "Activation Conditions", dataType: "policy", required: false, multiple: true },
+      onActivateActions: { label: "On Activate Actions", dataType: "action", required: false, multiple: true },
+      marker: { label: "Marker", dataType: "markerDef", required: false, multiple: false }
+    },
+    outputs: { checkpoint: { label: "Checkpoint", dataType: "checkpoint" } },
+    fields: {
+      checkpointId: { label: "Checkpoint id", type: "identity", default: "checkpoint.new_checkpoint", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Checkpoint", required: true, maxLength: 120 },
+      activationMode: { label: "Activation mode", type: "select", options: ["proximity", "interact", "quest_action", "automatic_entry"], default: "proximity", required: true },
+      saveScope: { label: "Save scope", type: "select", options: ["character", "party", "instance"], default: "character", required: true },
+      respawnEligible: { label: "Respawn eligible", type: "boolean", default: true, required: true },
+      fastTravelEligible: { label: "Fast travel eligible", type: "boolean", default: false, required: true },
+      healPolicy: { label: "Heal policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      healAmount: { label: "Heal amount", type: "number", default: 0, min: 0, max: 1000000, step: 1, required: true },
+      manaPolicy: { label: "Mana policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      staminaPolicy: { label: "Stamina policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      activationRadius: { label: "Activation radius", type: "number", default: 2.5, min: 0.1, max: 100, step: 0.1, required: true },
+      oneTimeMessage: { label: "One-time message", type: "tokenText", default: "", required: false, maxLength: 500 }
+    }
+  },
+  zone_link: {
+    label: "Zone Link",
+    group: "Zones",
+    accent: "#06b6d4",
+    description: "Server-authoritative travel from one zone to another.",
+    inputs: {
+      fromAnchor: { label: "From Anchor", dataType: "anchor", required: false, multiple: false },
+      fromSpawn: { label: "From Spawn", dataType: "spawnPoint", required: false, multiple: false },
+      conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true }
+    },
+    outputs: { zoneLink: { label: "Zone Link", dataType: "zoneLink" } },
+    fields: {
+      linkId: { label: "Link id", type: "identity", default: "zone_link.new_link", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      fromZoneRef: { label: "From zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      fromTargetRef: { label: "From target", type: "reference", referenceKinds: ["spawn", "target"], allowNull: true, default: null, required: false },
+      toZoneRef: { label: "To zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: true },
+      toSpawnRef: { label: "To spawn", type: "reference", referenceKinds: ["spawn"], allowNull: true, default: null, required: true },
+      mode: { label: "Mode", type: "select", options: ["door", "portal", "teleport", "fast_travel", "seamless_boundary", "scripted_transport"], default: "portal", required: true },
+      bidirectional: { label: "Bidirectional", type: "boolean", default: false, required: true },
+      reverseLinkRef: { label: "Reverse link", type: "reference", referenceKinds: ["zone_link"], allowNull: true, default: null, required: false },
+      transitionVisual: { label: "Transition visual", type: "select", options: ["none", "fade", "loading_screen"], default: "fade", required: true },
+      loadingText: { label: "Loading text", type: "tokenText", default: "Reizen naar @{zone.name}", required: false, maxLength: 240 },
+      preloadDistance: { label: "Preload distance", type: "number", default: 30, min: 0, max: 500, step: 1, required: true },
+      interactionRequired: { label: "Interaction required", type: "boolean", default: true, required: true },
+      prompt: { label: "Prompt", type: "tokenText", default: "Gebruik doorgang", required: false, maxLength: 240 },
+      oneWayReason: { label: "One-way reason", type: "tokenText", default: "", required: false, maxLength: 240 }
+    }
+  },
+  discovery_area: {
+    label: "Discovery Area",
+    group: "Zones",
+    accent: "#22d3ee",
+    description: "Unlocks minimap/world-map discovery state.",
+    inputs: {
+      area: { label: "Area", dataType: "area", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false }
+    },
+    outputs: { discovery: { label: "Discovery", dataType: "discoveryDef" } },
+    fields: {
+      discoveryId: { label: "Discovery id", type: "identity", default: "discovery.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Discovery", required: true, maxLength: 120 },
+      revealZoneMap: { label: "Reveal zone map", type: "boolean", default: true, required: true },
+      revealAreaMap: { label: "Reveal area map", type: "boolean", default: true, required: true },
+      unlockFastTravelRef: { label: "Unlock fast travel", type: "reference", referenceKinds: ["zone_link"], allowNull: true, default: null, required: false },
+      xpRewardFormula: { label: "XP reward", type: "formula", default: { operator: "add", operands: [] }, required: false },
+      notificationTemplate: { label: "Notification", type: "tokenText", default: "", required: false, maxLength: 500 },
+      oneTimePerCharacter: { label: "One time per character", type: "boolean", default: true, required: true }
+    }
+  },
+  safe_rule_area: {
+    label: "Safe Rule Area",
+    group: "Zones",
+    accent: "#f97316",
+    description: "Area-level safe/combat/trade permissions.",
+    inputs: { area: { label: "Area", dataType: "area", required: true, multiple: false } },
+    outputs: { areaRule: { label: "Area Rule", dataType: "areaRule" } },
+    fields: {
+      ruleId: { label: "Rule id", type: "identity", default: "area_rule.safe_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      safeZone: { label: "Safe zone", type: "boolean", default: true, required: true },
+      combatAllowed: { label: "Combat allowed", type: "boolean", default: false, required: true },
+      pvpAllowed: { label: "PvP allowed", type: "boolean", default: false, required: true },
+      tradeAllowed: { label: "Trade allowed", type: "boolean", default: true, required: true },
+      marketAllowed: { label: "Market allowed", type: "boolean", default: false, required: true },
+      unstuckAllowed: { label: "Unstuck allowed", type: "boolean", default: true, required: true },
+      mountAllowed: { label: "Mount allowed", type: "boolean", default: false, required: true },
+      respawnAllowed: { label: "Respawn allowed", type: "boolean", default: true, required: true },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true }
+    }
+  },
+  map_marker_definition: {
+    label: "Map Marker Definition",
+    group: "Zones",
+    accent: "#f43f5e",
+    description: "Marker for minimap, world map and compass.",
+    inputs: {
+      entity: { label: "Entity", dataType: "entity", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false },
+      area: { label: "Area", dataType: "area", required: false, multiple: false },
+      questTarget: { label: "Quest Target", dataType: "questTarget", required: false, multiple: false },
+      spawnPoint: { label: "Spawn Point", dataType: "spawnPoint", required: false, multiple: false },
+      checkpoint: { label: "Checkpoint", dataType: "checkpoint", required: false, multiple: false },
+      zoneLink: { label: "Zone Link", dataType: "zoneLink", required: false, multiple: false }
+    },
+    outputs: { marker: { label: "Marker", dataType: "markerDef" } },
+    fields: {
+      markerId: { label: "Marker id", type: "identity", default: "marker.new_marker", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "tokenText", default: "Marker", required: true, maxLength: 240 },
+      iconAssetId: { label: "Icon asset", type: "asset", assetTypes: ["image"], default: null, required: false },
+      markerType: { label: "Marker type", type: "select", options: ["npc", "enemy", "quest", "resource", "portal", "checkpoint", "vendor", "market", "crafting", "custom"], default: "custom", required: true },
+      showOnMinimap: { label: "Show on minimap", type: "boolean", default: true, required: true },
+      showOnWorldMap: { label: "Show on world map", type: "boolean", default: true, required: true },
+      showOnCompass: { label: "Show on compass", type: "boolean", default: false, required: true },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      clampOutside: { label: "Clamp outside", type: "boolean", default: true, required: true },
+      minDistance: { label: "Min distance", type: "number", default: 0, min: 0, max: 100000, step: 1, required: true },
+      maxDistance: { label: "Max distance", type: "number", default: 100000, min: 0, max: 100000, step: 1, required: true },
+      iconSizePx: { label: "Icon size", type: "number", default: 18, min: 4, max: 128, step: 1, required: true },
+      labelVisibility: { label: "Label visibility", type: "select", options: ["never", "hover", "always", "near"], default: "hover", required: true }
+    }
+  },
+  marker_visibility_rule: {
+    label: "Marker Visibility Rule",
+    group: "Zones",
+    accent: "#e11d48",
+    description: "Visibility rule for map markers.",
+    inputs: { conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true } },
+    outputs: { markerRule: { label: "Marker Rule", dataType: "markerRule" } },
+    fields: {
+      ruleId: { label: "Rule id", type: "identity", default: "marker_rule.always", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      visibilityMode: { label: "Visibility mode", type: "select", options: ["always", "discovered", "not_discovered"], default: "always", required: true },
+      defaultVisible: { label: "Default visible", type: "boolean", default: true, required: true },
+      hideWhenTargetUnloaded: { label: "Hide when target unloaded", type: "boolean", default: false, required: true },
+      fallbackToZoneEntry: { label: "Fallback to zone entry", type: "boolean", default: true, required: true }
+    }
+  },
+  entity_assembly: {
+    label: "Entity Assembly",
+    group: "Entities",
+    accent: "#b000ff",
+    description: "Composes one entity from a mesh/base and behavior components.",
+    inputs: {
+      base: { label: "Base", dataType: "entityBase", required: false, multiple: false },
+      model: { label: "Model Entity", dataType: "entity", required: false, multiple: false },
+      components: { label: "Components", dataType: "entityComponent", required: false, multiple: true },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false }
+    },
+    outputs: { entity: { label: "Entity", dataType: "entity" } },
+    fields: {
+      entityId: { label: "Entity id", type: "identity", default: "entity.new_entity", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Entity", required: true, maxLength: 120 },
+      entityTags: { label: "Entity tags", type: "tagList", default: [], required: false }
+    }
+  },
+  interaction_component: {
+    label: "Interaction Component",
+    group: "Entities",
+    accent: "#db2777",
+    description: "Behavior component that replaces standalone interactable ownership.",
+    inputs: {},
+    outputs: { component: { label: "Entity Component", dataType: "entityComponent" } },
+    fields: {
+      componentId: { label: "Component id", type: "identity", default: "component.interaction", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      interactionType: { label: "Interaction type", type: "select", options: ["inspect", "talk", "loot", "open", "craft", "custom"], default: "inspect", required: true },
+      prompt: { label: "Prompt", type: "tokenText", default: "Gebruik", required: false, maxLength: 240 },
+      radius: { label: "Radius", type: "number", default: 2, min: 0.1, max: 100, step: 0.1, required: true },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true }
+    }
+  },
+  quest_target_binding: {
+    label: "Quest Target Binding",
+    group: "Zones",
+    accent: "#10b981",
+    description: "Stable target binding id for future quest phases.",
+    inputs: {
+      entity: { label: "Entity", dataType: "entity", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false },
+      area: { label: "Area", dataType: "area", required: false, multiple: false }
+    },
+    outputs: { questTarget: { label: "Quest Target", dataType: "questTarget" } },
+    fields: {
+      targetId: { label: "Target id", type: "identity", default: "target.new_target", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Quest Target", required: true, maxLength: 120 },
+      targetTags: { label: "Target tags", type: "tagList", default: [], required: false }
+    }
+  },
+  zone_output: {
+    label: "Zone Output",
+    group: "Zones",
+    accent: "#0284c7",
+    description: "Bundles zone content into one Zone Package.",
+    inputs: {
+      zone: { label: "Zone", dataType: "zoneDef", required: true, multiple: false },
+      environment: { label: "Environment", dataType: "environment", required: true, multiple: false },
+      rules: { label: "Rules", dataType: "zoneRules", required: false, multiple: false },
+      ground: { label: "Ground", dataType: "ground", required: false, multiple: false },
+      terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
+      lights: { label: "Lights", dataType: "light", required: false, multiple: true },
+      cameraOverrides: { label: "Camera Overrides", dataType: "cameraOverride", required: false, multiple: true },
+      areas: { label: "Areas", dataType: "areaPackage", required: false, multiple: true },
+      entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
+      spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },
+      checkpoints: { label: "Checkpoints", dataType: "checkpoint", required: false, multiple: true },
+      links: { label: "Links", dataType: "zoneLink", required: false, multiple: true },
+      discoveries: { label: "Discoveries", dataType: "discoveryDef", required: false, multiple: true },
+      questTargets: { label: "Quest Targets", dataType: "questTarget", required: false, multiple: true },
+      markers: { label: "Markers", dataType: "markerDef", required: false, multiple: true },
+      minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
+      audioAssignments: { label: "Audio Assignments", dataType: "audioAssignment", required: false, multiple: true },
+      paths: { label: "Paths", dataType: "path", required: false, multiple: true },
+      encounterAreas: { label: "Encounter Areas", dataType: "encounterArea", required: false, multiple: true }
+    },
+    outputs: { zonePackage: { label: "Zone Package", dataType: "zonePackage" } },
+    fields: {
+      packageId: { label: "Package id", type: "identity", default: "zone.new_zone.package", required: false, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      packageVersion: { label: "Package version", type: "number", default: 1, min: 1, max: 1000000, step: 1, required: true },
+      includeEditorOnlyData: { label: "Include editor-only data", type: "boolean", default: false, required: true }
+    }
+  }
+};
+
+Object.assign(NODE_TYPES, FOUNDATION_NODE_DEFS, ZONE_NODE_DEFS);
+NODE_TYPES.minimap_bake.inputs = Object.assign({}, NODE_TYPES.minimap_bake.inputs || {}, {
+  zone: { label: "Zone", dataType: "zoneDef", required: false, multiple: false },
+  ground: { label: "Ground", dataType: "ground", required: false, multiple: false }
+});
+NODE_TYPES.minimap_bake.fields = Object.assign({}, NODE_TYPES.minimap_bake.fields, {
+  zoneRef: { label: "Zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false, maxLength: 160 },
+  sourceMode: { label: "Bake source mode", type: "select", options: ["zone_bounds", "legacy_ground"], default: "zone_bounds", required: true }
+});
+NODE_TYPES.game_minimap_hud.fields = Object.assign({}, NODE_TYPES.game_minimap_hud.fields, {
+  sourceMode: { label: "Source mode", type: "select", options: ["active_zone_registry", "fixed_legacy"], default: "active_zone_registry", required: true },
+  fallbackMinimapRef: { label: "Fallback minimap", type: "reference", referenceKinds: ["minimap"], allowNull: true, default: null, required: false },
+  transitionMode: { label: "Transition mode", type: "select", options: ["instant", "fade"], default: "instant", required: true }
+});
+NODE_TYPES.model_entity.outputs = Object.assign({}, NODE_TYPES.model_entity.outputs || {}, {
+  entityBase: { label: "Entity Base", dataType: "entityBase" }
+});
 NODE_TYPES.game_output = Object.assign({}, GAME_OUTPUT_BASE, {
   inputs: Object.assign({}, Object.fromEntries(Object.entries(GAME_OUTPUT_BASE?.inputs || {}).map(function ([portName, port]) {
     return [portName, Object.assign({}, port, {

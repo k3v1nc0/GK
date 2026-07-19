@@ -2675,11 +2675,55 @@ export class PublishService {
 
   mergeWorldWithGameProject(world, compilation, publishedAt = null) {
     if (!compilation || !compilation.connected || !compilation.manifest) return world;
+    const manifest = compilation.manifest;
+    const activeZoneId = manifest.runtime?.activeZoneId || null;
+    const activeZone = activeZoneId ? manifest.zones?.byId?.[activeZoneId] || null : null;
+    const startSpawnId = manifest.runtime?.startSpawnId || null;
+    const startSpawn = activeZone && Array.isArray(activeZone.spawns)
+      ? activeZone.spawns.find(function (spawn) { return spawn.spawnId === startSpawnId; }) || activeZone.spawns.find(function (spawn) { return spawn.role === "zone_default"; }) || null
+      : null;
+    const activeMinimap = activeZone && Array.isArray(activeZone.minimaps)
+      ? activeZone.minimaps.find(function (minimap) { return minimap.enabled !== false; }) || null
+      : null;
+    const zoneGround = activeZone?.ground ? {
+      groundId: activeZone.ground.groundId || activeZone.ground.id || "zone_ground",
+      width: activeZone.ground.width || activeZone.zone?.width || 500,
+      depth: activeZone.ground.depth || activeZone.zone?.depth || 500,
+      y: activeZone.ground.y || activeZone.zone?.originY || 0,
+      boundsMode: "explicitBounds",
+      minX: activeZone.zone?.bounds?.minX ?? activeZone.zone?.originX ?? 0,
+      maxX: activeZone.zone?.bounds?.maxX ?? ((activeZone.zone?.originX || 0) + (activeZone.zone?.width || 500)),
+      minZ: activeZone.zone?.bounds?.minZ ?? activeZone.zone?.originZ ?? 0,
+      maxZ: activeZone.zone?.bounds?.maxZ ?? ((activeZone.zone?.originZ || 0) + (activeZone.zone?.depth || 500))
+    } : null;
+    const zoneMinimap = activeMinimap ? {
+      bakes: [activeMinimap],
+      game: Object.assign({}, world.minimap?.game || {}, {
+        enabled: world.minimap?.game?.enabled !== false,
+        sourceMode: "active_zone_registry",
+        sourceMinimapId: activeMinimap.minimapId || activeMinimap.id || "zone_minimap"
+      }),
+      editor: world.minimap?.editor || null
+    } : null;
     return Object.assign({}, world, {
-      schemaVersion: compilation.manifest.schemaVersion || world.schemaVersion,
+      schemaVersion: manifest.schemaVersion || world.schemaVersion,
       buildId: compilation.buildId || world.buildId || null,
       contentHash: compilation.contentHash || world.contentHash || null,
-      gameProject: compilation.manifest,
+      gameProject: manifest,
+      activeZoneId: activeZoneId || world.activeZoneId || null,
+      zonePackage: activeZone || world.zonePackage || null,
+      zones: manifest.zones || world.zones || {},
+      spawn: startSpawn ? Object.assign({}, world.spawn || {}, {
+        spawnId: startSpawn.spawnId,
+        role: startSpawn.role,
+        zoneRef: startSpawn.zoneRef || activeZoneId,
+        x: Number(startSpawn.x) || 0,
+        y: Number(startSpawn.y) || Number(world.ground?.y) || 0,
+        z: Number(startSpawn.z) || 0,
+        facing: Number(startSpawn.facing) || 0
+      }) : world.spawn,
+      ground: zoneGround || world.ground,
+      minimap: zoneMinimap || world.minimap,
       publishedAt: publishedAt || world.publishedAt || undefined
     });
   }

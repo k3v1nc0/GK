@@ -4,7 +4,7 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 ## Actieve fasecontracten
 
-- [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - next NODE phase after accepted NODE-01 cutover.
+- [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - implemented on 2026-07-19; unit/check green, full smoke still blocked by existing chunk forward-lookahead assertion. Evidence: [NODE-02 zones composition](./evidence/NODE-02-zones-composition/README.md).
 - [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
 - [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)
 - [Fase MMO-03 - Node-Driven Minimap: Bake Image + 2D Live Canvas Markers + Editor Minimap](./MMO-03-Node-Driven-Minimap-Bake-Canvas-Overlay.md)
