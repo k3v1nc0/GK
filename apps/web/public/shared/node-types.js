@@ -2140,6 +2140,7 @@ const FOUNDATION_NODE_DEFS = {
       chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: true, multiple: false },
       editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
       gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
+      camera: { label: "Camera", dataType: "camera", required: false, multiple: true },
       chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
       catalogs: { label: "Catalogs", dataType: "catalogRegistry", required: false, multiple: false },
       zones: { label: "Zones", dataType: "zoneRegistry", required: false, multiple: false },

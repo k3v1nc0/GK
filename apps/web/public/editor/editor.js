@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260721-node02-camera-save";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260721-node02-camera-save";
 import {
   normalizeCanonicalId,
   normalizeReferenceList,
@@ -21,7 +21,7 @@ import {
   minimapViewBounds,
   minimapImageSourceRect,
   attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260714-mmo11-camera-target-height";
+} from "../shared/minimap-utils.js?v=20260721-node02-camera-save";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -3429,7 +3429,28 @@ async function boot() {
       });
       setViewportAxis(null);
     },
-    onLoadErrors: renderViewportErrors
+    onLoadErrors: renderViewportErrors,
+    onEditorCameraChange: function (fields) {
+      const node = state.graph.nodes.find(function (n) { return n.type === "editor_camera"; });
+      if (!node) return;
+      patchValues(node.id, {
+        targetX: fields.targetX,
+        targetY: fields.targetY,
+        targetZ: fields.targetZ,
+        pitch: fields.pitch,
+        yaw: fields.yaw,
+        distance: fields.distance
+      }, {
+        historyLabel: "",
+        countUnsaved: false,
+        refreshViewport: false,
+        refreshValidation: false,
+        refreshGraph: false,
+        refreshEdgeList: false,
+        refreshInspector: false,
+        refreshAssetUsage: false
+      });
+    }
   });
   window.__GK_EDITOR_RUNTIME = runtime;
   state.viewportHelpOpen = false;

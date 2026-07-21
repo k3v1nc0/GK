@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260714-mmo11-camera-target-height";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260721-node02-camera-save";
 import { previewTokenText } from "./token-preview.js?v=20260717-node01-foundation";
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -5020,6 +5020,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let camFollow = true;
   let camTargetHeightOffset = 1.6;
   let camRotateSpeed = 90;
+  let editorCameraSaveTimer = null;
   const camTarget = new THREE.Vector3();
   const playerCameraTargetCache = new THREE.Vector3();
   let clickTarget = null;
@@ -7915,6 +7916,7 @@ function resolveChunkDebugCenter(policy) {
     updateOrbitMouseMapping();
     orbitControls.enableKeys = false;
     orbitControls.addEventListener("change", requestRender);
+    orbitControls.addEventListener("change", scheduleEditorCameraSave);
     selectionHelper = new THREE.BoxHelper(new THREE.Object3D(), 0x7bd4ff);
     selectionHelper.visible = false;
     selectionHelper.material.depthTest = false;
@@ -11533,6 +11535,36 @@ function resolveChunkDebugCenter(policy) {
     camDistance = Math.min(camMaxDistance, Math.max(camMinDistance, value));
   }
 
+  // Inverse of updateCameraPosition(): reads the live orbitControls camera back into
+  // pitch/yaw/distance/target so it can be persisted onto the editor_camera node.
+  function captureEditorCameraFields() {
+    if (!orbitControls) return null;
+    const target = orbitControls.target;
+    const offset = camera.position.clone().sub(target);
+    const distance = offset.length();
+    if (!Number.isFinite(distance) || distance < 0.001) return null;
+    const pitch = Math.asin(Math.min(1, Math.max(-1, offset.y / distance))) / DEG_TO_RAD;
+    const yaw = Math.atan2(offset.x, offset.z) / DEG_TO_RAD;
+    return {
+      targetX: target.x,
+      targetY: target.y,
+      targetZ: target.z,
+      pitch: pitch,
+      yaw: yaw,
+      distance: distance
+    };
+  }
+
+  function scheduleEditorCameraSave() {
+    if (mode !== "editor" || typeof options.onEditorCameraChange !== "function") return;
+    if (editorCameraSaveTimer) clearTimeout(editorCameraSaveTimer);
+    editorCameraSaveTimer = setTimeout(function () {
+      editorCameraSaveTimer = null;
+      const fields = captureEditorCameraFields();
+      if (fields) options.onEditorCameraChange(fields);
+    }, 700);
+  }
+
   function playerCameraTarget() {
     return playerCameraTargetCache.set(player.pos.x, player.pos.y + camTargetHeightOffset, player.pos.z);
   }
@@ -14492,8 +14524,13 @@ function resolveChunkDebugCenter(policy) {
     resizeObserver = null;
     if (windowResizeHandler) window.removeEventListener("resize", windowResizeHandler);
     windowResizeHandler = null;
+    if (editorCameraSaveTimer) {
+      clearTimeout(editorCameraSaveTimer);
+      editorCameraSaveTimer = null;
+    }
     if (orbitControls) {
       orbitControls.removeEventListener("change", requestRender);
+      orbitControls.removeEventListener("change", scheduleEditorCameraSave);
       if (typeof orbitControls.dispose === "function") orbitControls.dispose();
     }
     if (selectionHelper) {

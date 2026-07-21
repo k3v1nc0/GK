@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260721-node02-camera-save";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "../shared/node-types.js?v=20260721-node02-camera-save";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
   resolveMinimapPoint,
@@ -16,7 +16,7 @@ import {
   minimapViewBounds,
   minimapImageSourceRect,
   attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260714-mmo11-camera-target-height";
+} from "../shared/minimap-utils.js?v=20260721-node02-camera-save";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
