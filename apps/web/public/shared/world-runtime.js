@@ -4831,6 +4831,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let worldBuildGeneration = 0;
   let orbitControls = null;
   let selectionHelper = null;
+  let multiSelectionHelpers = [];
   let transformGuide = null;
   let terrainEditorOverlay = null;
   let terrainEditorOverlayState = null;
@@ -4906,9 +4907,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let surfaceAnimMaterials = [];
   let surfaceDefaultWhiteTex = null;
   let selectedEntityId = null;
+  let selectedEntityIds = new Set();
   let selectedRoot = null;
   let transformSession = null;
   let onSelectEntity = options.onSelectEntity || function () {};
+  let onSelectEntities = options.onSelectEntities || function () {};
+  let onMarqueeRect = options.onMarqueeRect || function () {};
+  let onMarqueeSelect = options.onMarqueeSelect || function () {};
   let onTransformCommit = options.onTransformCommit || function () {};
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
@@ -7946,13 +7951,8 @@ function resolveChunkDebugCenter(policy) {
         event.stopImmediatePropagation();
         return;
       }
-      if (event.button === 0 && event.shiftKey && !transformState.active) {
-        if (beginViewportPan(event)) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          return;
-        }
-      }
+      // Shift+LMB used to pan here too, but the left button is now fully dedicated to
+      // selection (click/marquee, see editorPointerDownHandler) - RMB remains the pan trigger.
       if (event.button === 2 && !transformState.active) {
         if (beginViewportPan(event)) {
           event.preventDefault();
@@ -8062,16 +8062,66 @@ function resolveChunkDebugCenter(policy) {
     };
     canvas.addEventListener("pointerup", editorPointerUpCaptureHandler, true);
     canvas.addEventListener("pointercancel", editorPointerUpCaptureHandler, true);
+    // Left button is fully dedicated to selection: a plain click/drag replaces the
+    // selection, Shift always adds (click or marquee box), Ctrl/Meta always removes.
+    // A click is a drag that never crossed the movement threshold - RMB remains the pan
+    // gesture (see editorPointerDownCaptureHandler) so there's no conflict to resolve here.
     editorPointerDownHandler = function (event) {
       rememberEditorPointer(event);
       if (event.button !== 0) return;
-      if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return;
+      if (event.altKey) return;
       if (transformSession) return;
+      event.preventDefault();
+      const additive = event.shiftKey;
+      const subtractive = event.ctrlKey || event.metaKey;
       const entityId = pickEntity(event);
-      if (entityId) {
-        selectEntity(entityId);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const pointerId = event.pointerId;
+      let moved = false;
+      function onMove(moveEvent) {
+        if (moveEvent.pointerId !== pointerId) return;
+        if (Math.abs(moveEvent.clientX - startX) > 3 || Math.abs(moveEvent.clientY - startY) > 3) moved = true;
+        if (moved) onMarqueeRect(rectFromPoints(startX, startY, moveEvent.clientX, moveEvent.clientY));
       }
-      onSelectEntity(entityId || null);
+      function finish(finalEvent) {
+        window.removeEventListener("pointermove", onMove, true);
+        window.removeEventListener("pointerup", onUp, true);
+        window.removeEventListener("pointercancel", onCancel, true);
+        onMarqueeRect(null);
+        if (!moved) {
+          if (entityId) {
+            if (!additive && !subtractive) {
+              selectEntity(entityId);
+              onSelectEntity(entityId);
+              return;
+            }
+            const current = getSelectedEntityIds();
+            const nextIds = subtractive
+              ? current.filter(function (id) { return id !== entityId; })
+              : Array.from(new Set(current.concat(entityId)));
+            selectEntities(nextIds);
+            onSelectEntities(nextIds);
+            return;
+          }
+          if (!additive && !subtractive) {
+            selectEntities([]);
+            onSelectEntity(null);
+          }
+          return;
+        }
+        // The editor knows about node types this runtime has no live mesh for at all
+        // (Location Anchor) or no single pickable root for (Walkable Surface/Surface
+        // Layer, rendered as many chunked pieces) - so rect hit-testing for a drag is
+        // fully delegated to it instead of only scanning entityRoots here.
+        const rect = rectFromPoints(startX, startY, finalEvent.clientX, finalEvent.clientY);
+        onMarqueeSelect(rect, additive, subtractive);
+      }
+      function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent); }
+      function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent); }
+      window.addEventListener("pointermove", onMove, true);
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onCancel, true);
     };
     canvas.addEventListener("pointerdown", editorPointerDownHandler);
 } else {
@@ -8224,6 +8274,9 @@ function resolveChunkDebugCenter(policy) {
 
   function configureCallbacks(callbacks) {
     onSelectEntity = callbacks.onSelectEntity || onSelectEntity;
+    onSelectEntities = callbacks.onSelectEntities || onSelectEntities;
+    onMarqueeRect = callbacks.onMarqueeRect || onMarqueeRect;
+    onMarqueeSelect = callbacks.onMarqueeSelect || onMarqueeSelect;
     onTransformCommit = callbacks.onTransformCommit || onTransformCommit;
     onTransformEnd = callbacks.onTransformEnd || onTransformEnd;
     onTransformChange = callbacks.onTransformChange || onTransformChange;
@@ -10366,14 +10419,59 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  // Same setup as the singular selectionHelper (world-runtime.js ~7916-7927) - kept as a
+  // factory so a multi-select outline can be grown on demand without re-deriving it.
+  function createSelectionOutlineHelper() {
+    const helper = new THREE.BoxHelper(new THREE.Object3D(), 0x7bd4ff);
+    helper.visible = false;
+    helper.material.depthTest = false;
+    helper.material.depthWrite = false;
+    helper.material.transparent = true;
+    helper.material.opacity = 0.9;
+    helper.material.toneMapped = false;
+    helper.renderOrder = 999;
+    helper.raycast = function () {};
+    markDebugOverlayTree(helper, "selection");
+    sanitizeNonWorldShadowCasters(helper);
+    scene.add(helper);
+    return helper;
+  }
+
+  function hideMultiSelectionHelpers() {
+    for (const helper of multiSelectionHelpers) helper.visible = false;
+  }
+
+  function updateMultiSelectionHelpers(roots) {
+    while (multiSelectionHelpers.length < roots.length) multiSelectionHelpers.push(createSelectionOutlineHelper());
+    roots.forEach(function (root, index) {
+      const helper = multiSelectionHelpers[index];
+      root.updateWorldMatrix(true, true);
+      helper.setFromObject(root);
+      helper.visible = true;
+    });
+    for (let index = roots.length; index < multiSelectionHelpers.length; index += 1) {
+      multiSelectionHelpers[index].visible = false;
+    }
+  }
+
   function updateSelectionHelper() {
     if (!selectionHelper) return;
     if (!debugHelpersVisibleInCurrentMode()) {
       selectionHelper.object = null;
       selectionHelper.visible = false;
+      hideMultiSelectionHelpers();
       updateTransformGuide();
       return;
     }
+    if (selectedEntityIds.size > 1) {
+      selectionHelper.object = null;
+      selectionHelper.visible = false;
+      const roots = Array.from(selectedEntityIds).map(rootForSelectableId).filter(Boolean);
+      updateMultiSelectionHelpers(roots);
+      updateTransformGuide();
+      return;
+    }
+    hideMultiSelectionHelpers();
     const object = refreshSelectedRootReference();
     if (!object) {
       selectionHelper.object = null;
@@ -10398,11 +10496,13 @@ function resolveChunkDebugCenter(policy) {
 
   function clearSelectedRuntimeEntity() {
     selectedEntityId = null;
+    selectedEntityIds.clear();
     selectedRoot = null;
     transformSession = null;
     transformState.active = false;
     transformState.cancelled = false;
     transformState.object = null;
+    transformState.objects = null;
     transformState.rootId = null;
     transformState.start = null;
     transformState.axis = null;
@@ -10410,6 +10510,7 @@ function resolveChunkDebugCenter(policy) {
       selectionHelper.object = null;
       selectionHelper.visible = false;
     }
+    hideMultiSelectionHelpers();
     if (transformGuide) transformGuide.visible = false;
     transformAxisConstraint = null;
     if (orbitControls) orbitControls.enabled = true;
@@ -10432,11 +10533,12 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
-  function restoreTransformStart(state) {
-    if (!state || !transformSession?.object) return;
-    transformSession.object.position.copy(state.position);
-    transformSession.object.rotation.copy(state.rotation);
-    transformSession.object.scale.copy(state.scale);
+  function restoreTransformStart(state, object) {
+    const target = object || transformSession?.object;
+    if (!state || !target) return;
+    target.position.copy(state.position);
+    target.rotation.copy(state.rotation);
+    target.scale.copy(state.scale);
   }
 
   function constraintKeyToAxis(axisKey) {
@@ -10482,6 +10584,15 @@ function resolveChunkDebugCenter(policy) {
     return {
       x: rect.left + (ndc.x + 1) * 0.5 * rect.width,
       y: rect.top + (-ndc.y + 1) * 0.5 * rect.height
+    };
+  }
+
+  function rectFromPoints(x1, y1, x2, y2) {
+    return {
+      left: Math.min(x1, x2),
+      right: Math.max(x1, x2),
+      top: Math.min(y1, y2),
+      bottom: Math.max(y1, y2)
     };
   }
 
@@ -10582,6 +10693,12 @@ function resolveChunkDebugCenter(policy) {
     return selectedRoot || rootForSelectableId(selectedEntityId);
   }
 
+  // A session is active whether it holds a single object (the everyday case) or a
+  // group (objects) - callers just need to know "is a modal transform in progress".
+  function transformSessionActive() {
+    return Boolean(transformSession?.object || transformSession?.objects);
+  }
+
   function isPointerOverTransformControls() {
     return false;
   }
@@ -10663,6 +10780,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function applyTransformPreview(pointer, triggerChange = true) {
+    if (transformSession?.objects) return applyGroupTransformPreview(pointer, triggerChange);
     if (!transformSession?.object) return false;
     const object = transformSession.object;
     const session = transformSession;
@@ -10689,8 +10807,137 @@ function resolveChunkDebugCenter(policy) {
     return changed;
   }
 
+  // Group counterpart of applyTransformToObject/applyTransformPreview: move applies the
+  // same world-space delta to every selected object's own start position (no pivot math
+  // needed). Rotate/scale compute the delta once from the shared pivot's screen position,
+  // then spin/scale each object in place - and, for the default (unconstrained) case, also
+  // revolve each object's position around the pivot, exactly like terrainPreviewGroupTransform
+  // does for points. Axis-locked rotate/scale only spins/scales objects in place (no orbit) -
+  // a deliberate scope cut, ground-plane group move/rotate/scale is the common case.
+  function applyGroupTransformPreview(pointer, triggerChange = true) {
+    if (!transformSession?.objects) return false;
+    const session = transformSession;
+    session.currentPointer = { x: pointer.x, y: pointer.y };
+    const mode = session.mode;
+    const axis = session.axis || null;
+    const pivot = session.pivot;
+    let changed = false;
+    if (mode === "move") {
+      const scale = worldUnitsPerPixel();
+      const basis = cameraGroundBasis();
+      const dx = pointer.x - session.startPointer.x;
+      const dy = pointer.y - session.startPointer.y;
+      const groundDelta = new THREE.Vector3();
+      groundDelta.addScaledVector(basis.right, dx * scale);
+      groundDelta.addScaledVector(basis.forward, -dy * scale);
+      // Recorded regardless of whether any live object actually moved (there may be
+      // none - forceGroup sessions can hold a selection with zero live meshes), so
+      // finishGroupTransform can still hand this ground-plane delta to the caller for
+      // value-only nodes (Walkable Surface, Location Anchor, ...) to apply on commit.
+      session.moveDelta = {
+        x: (!axis || axis === "x") ? groundDelta.x : 0,
+        z: (!axis || axis === "y") ? groundDelta.z : 0
+      };
+      for (const entry of session.objects) {
+        const next = entry.startPosition.clone();
+        if (!axis) {
+          next.x += groundDelta.x;
+          next.z += groundDelta.z;
+        } else if (axis === "x") {
+          next.x += groundDelta.x;
+        } else if (axis === "y") {
+          next.z += groundDelta.z;
+        } else if (axis === "z") {
+          next.y += -dy * scale;
+        }
+        if (snapState.mode === "grid" || (snapState.mode === "off" && modifierState.ctrlKey)) {
+          const gridSize = Math.max(0.0001, num(snapState.gridSize, 1));
+          if (!axis || axis === "x") next.x = Math.round(next.x / gridSize) * gridSize;
+          if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
+          if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
+        }
+        if (snapState.mode === "ground" && entry.object.userData.snapToGround !== false) {
+          next.y = num(world?.ground?.y, 0);
+        }
+        if (!entry.object.position.equals(next)) {
+          entry.object.position.copy(next);
+          changed = true;
+        }
+      }
+    } else if (mode === "rotate") {
+      const rotationAxis = constraintKeyToAxis(axis || "z") || "y";
+      const deltaAngle = radialRotationDelta(session, pointer);
+      if (Number.isFinite(deltaAngle)) {
+        const cos = Math.cos(deltaAngle);
+        const sin = Math.sin(deltaAngle);
+        for (const entry of session.objects) {
+          const nextRotation = entry.startRotation.clone();
+          nextRotation[rotationAxis] = entry.startRotation[rotationAxis] + deltaAngle;
+          if (!entry.object.rotation.equals(nextRotation)) {
+            entry.object.rotation.copy(nextRotation);
+            changed = true;
+          }
+          if (rotationAxis === "y" && pivot) {
+            // Matches THREE's own makeRotationY(deltaAngle) (x'=x*cos+z*sin, z'=-x*sin+z*cos)
+            // rather than the unrelated 2D-math convention used for path/scatter points
+            // elsewhere in this file - points have no orientation of their own to stay
+            // rigid with, but these objects do, so this must agree with entry.object's
+            // own rotation.y increment above or the group would spin one way and orbit
+            // the other.
+            const offsetX = entry.startPosition.x - pivot.x;
+            const offsetZ = entry.startPosition.z - pivot.z;
+            const nextPosition = new THREE.Vector3(
+              pivot.x + (offsetX * cos + offsetZ * sin),
+              entry.startPosition.y,
+              pivot.z + (-offsetX * sin + offsetZ * cos)
+            );
+            if (!entry.object.position.equals(nextPosition)) {
+              entry.object.position.copy(nextPosition);
+              changed = true;
+            }
+          }
+        }
+      }
+    } else if (mode === "scale") {
+      const factor = radialScaleFactor(session, pointer);
+      const revolvePosition = pivot && (!axis || axis === "x" || axis === "y");
+      for (const entry of session.objects) {
+        const nextScale = entry.startScale.clone();
+        if (!axis) {
+          const uniform = Math.max(0.001, entry.startScale.x * factor);
+          nextScale.set(uniform, uniform, uniform);
+        } else if (axis === "x") {
+          nextScale.x = Math.max(0.001, entry.startScale.x * factor);
+        } else if (axis === "y") {
+          nextScale.z = Math.max(0.001, entry.startScale.z * factor);
+        } else if (axis === "z") {
+          nextScale.y = Math.max(0.001, entry.startScale.y * factor);
+        }
+        if (!entry.object.scale.equals(nextScale)) {
+          entry.object.scale.copy(nextScale);
+          changed = true;
+        }
+        if (revolvePosition) {
+          const nextPosition = entry.startPosition.clone();
+          if (!axis || axis === "x") nextPosition.x = pivot.x + (entry.startPosition.x - pivot.x) * factor;
+          if (!axis || axis === "y") nextPosition.z = pivot.z + (entry.startPosition.z - pivot.z) * factor;
+          if (!entry.object.position.equals(nextPosition)) {
+            entry.object.position.copy(nextPosition);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) {
+      updateSelectionHelper();
+      if (triggerChange) onTransformChange(session.rootId, null);
+      requestRender();
+    }
+    return changed;
+  }
+
   function previewTransformAt(clientX, clientY, triggerChange = true) {
-    if (!transformSession?.object) return false;
+    if (!transformSessionActive()) return false;
     const x = Number(clientX);
     const y = Number(clientY);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -10698,8 +10945,9 @@ function resolveChunkDebugCenter(policy) {
     return applyTransformPreview({ x: x, y: y }, triggerChange);
   }
 
-  function beginTransform(modeName) {
-    if (transformSession?.object) return false;
+  function beginTransform(modeName, options = {}) {
+    if (transformSessionActive()) return false;
+    if (selectedEntityIds.size > 1 || options.forceGroup) return beginGroupTransform(modeName, options);
     const root = rootForSelectedTransform();
     if (!root || root.userData.transformable === false) return false;
     viewportPanSession = null;
@@ -10747,6 +10995,91 @@ function resolveChunkDebugCenter(policy) {
     return true;
   }
 
+  function beginGroupTransform(modeName, options = {}) {
+    const entries = Array.from(selectedEntityIds)
+      .map(function (id) { return { id: id, root: rootForSelectableId(id) }; })
+      .filter(function (entry) { return entry.root && entry.root.userData.transformable !== false; });
+    if (!options.forceGroup && entries.length < 2) {
+      // Fewer than two actually-transformable roots (e.g. the rest were scatter areas) -
+      // fall back to the ordinary single-object session for whichever one remains.
+      if (entries.length === 1) {
+        selectEntity(entries[0].id);
+        return beginTransform(modeName);
+      }
+      return false;
+    }
+    // forceGroup means the editor's own selection has more nodes than this runtime found
+    // live meshes for (Location Anchor has none; Walkable Surface/Surface Layer aren't a
+    // single pickable root) - entries can legitimately be 0 or 1 here. Move still works via
+    // the pointer-only delta reported on commit; there's just nothing to live-preview.
+    viewportPanSession = null;
+    const mode = modeName === "translate" ? "move" : modeName === "rotate" || modeName === "scale" ? modeName : "move";
+    const rect = canvas.getBoundingClientRect();
+    const startPointer = lastEditorPointer
+      ? { x: lastEditorPointer.clientX, y: lastEditorPointer.clientY }
+      : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const pivotBox = new THREE.Box3();
+    for (const entry of entries) {
+      entry.root.updateWorldMatrix(true, true);
+      const worldPosition = new THREE.Vector3();
+      entry.root.getWorldPosition(worldPosition);
+      pivotBox.expandByPoint(worldPosition);
+    }
+    let pivot;
+    if (pivotBox.isEmpty()) {
+      const ground = screenToGround(startPointer.x, startPointer.y);
+      pivot = new THREE.Vector3(ground?.x || 0, 0, ground?.z || 0);
+    } else {
+      pivot = pivotBox.getCenter(new THREE.Vector3());
+    }
+    const radialCenter = mode === "rotate" || mode === "scale" ? worldToScreen(pivot) : null;
+    const objects = entries.map(function (entry) {
+      return {
+        object: entry.root,
+        rootId: entry.id,
+        start: captureTransformStart(entry.root),
+        startPosition: entry.root.position.clone(),
+        startRotation: entry.root.rotation.clone(),
+        startScale: entry.root.scale.clone()
+      };
+    });
+    transformState = {
+      active: true,
+      cancelled: false,
+      object: null,
+      objects: objects,
+      pivot: pivot,
+      rootId: objects.length ? objects[0].rootId : (selectedEntityId || null),
+      start: null,
+      mode: mode,
+      axis: transformAxisConstraint,
+      startPointer: startPointer,
+      currentPointer: { x: startPointer.x, y: startPointer.y },
+      radialCenter: radialCenter,
+      radialStartAngle: radialAngleForPointer(radialCenter, startPointer),
+      radialStartDistance: radialDistanceForPointer(radialCenter, startPointer)
+    };
+    transformSession = transformState;
+    transformDebugState = {
+      active: true,
+      rootId: transformState.rootId,
+      mode: transformState.mode,
+      axis: transformState.axis,
+      dx: 0,
+      dy: 0,
+      changed: false,
+      previews: 0,
+      lastInputAt: Date.now()
+    };
+    if (orbitControls) orbitControls.enabled = false;
+    canvas.style.cursor = mode === "rotate" ? "ew-resize" : mode === "scale" ? "nwse-resize" : "move";
+    applyGroupTransformPreview(startPointer, false);
+    updateSelectionHelper();
+    onTransformChange(transformState.rootId, null);
+    requestRender();
+    return true;
+  }
+
   function beginKeyboardTransform() {
     return beginTransform(transformState.mode || "move");
   }
@@ -10772,6 +11105,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function finishTransform(commit) {
+    if (transformSession?.objects) return finishGroupTransform(commit);
     if (!transformSession?.object) return false;
     const session = transformSession;
     const object = session.object;
@@ -10816,8 +11150,68 @@ function resolveChunkDebugCenter(policy) {
     return shouldCommit;
   }
 
+  // Group counterpart of finishTransform - commits every changed object in a single
+  // onTransformCommit(commits) call (an array) so the caller can fold the whole group
+  // move/rotate/scale into one undo step instead of one per object.
+  function finishGroupTransform(commit) {
+    const session = transformSession;
+    const commits = [];
+    let anyChanged = false;
+    for (const entry of session.objects) {
+      const current = objectToTransform(entry.object);
+      const changed = Boolean(entry.start && JSON.stringify(current) !== JSON.stringify(entry.start.values));
+      if (changed) anyChanged = true;
+      if (!commit) {
+        if (entry.start) restoreTransformStart(entry.start, entry.object);
+      } else if (changed) {
+        commits.push({ entityId: entry.rootId, transform: current });
+      }
+    }
+    // Move's ground-plane delta applies to every selected node, live-dragged or not -
+    // the caller uses it to patch whichever selected nodes had no live object above
+    // (Walkable Surface, Location Anchor, ...). Rotate/scale don't carry a delta: that
+    // combination isn't supported for value-only nodes yet.
+    const delta = session.mode === "move" ? session.moveDelta : null;
+    const deltaChanged = Boolean(delta && (Math.abs(delta.x) > 1e-6 || Math.abs(delta.z) > 1e-6));
+    if (deltaChanged) anyChanged = true;
+    transformSession = null;
+    transformState.active = false;
+    transformState.cancelled = !commit;
+    transformState.object = null;
+    transformState.objects = null;
+    transformState.pivot = null;
+    transformState.rootId = null;
+    transformState.start = null;
+    transformState.axis = null;
+    transformDebugState = Object.assign({}, transformDebugState, {
+      active: false,
+      rootId: session.rootId,
+      mode: session.mode,
+      axis: session.axis,
+      changed: anyChanged,
+      lastInputAt: Date.now()
+    });
+    if (orbitControls) orbitControls.enabled = true;
+    canvas.style.cursor = "";
+    transformAxisConstraint = null;
+    clearSelectedRuntimeEntity();
+    const shouldCommit = Boolean(commit && (commits.length || deltaChanged));
+    if (shouldCommit) onTransformCommit({ commits: commits, mode: session.mode, delta: deltaChanged ? delta : null });
+    onTransformEnd({
+      action: commit ? "confirm" : "cancel",
+      entityId: session.rootId,
+      mode: session.mode,
+      axis: session.axis,
+      transform: null,
+      changed: anyChanged
+    });
+    updateSelectionHelper();
+    requestRender();
+    return shouldCommit;
+  }
+
   function confirmTransform() {
-    if (transformSession?.object && lastEditorPointer) {
+    if (transformSessionActive() && lastEditorPointer) {
       previewTransformAt(lastEditorPointer.clientX, lastEditorPointer.clientY, true);
     }
     return finishTransform(true);
@@ -10829,7 +11223,7 @@ function resolveChunkDebugCenter(policy) {
 
   function handleTransformPointerMove(event) {
     rememberEditorPointer(event);
-    if (transformSession?.object) {
+    if (transformSessionActive()) {
       event.preventDefault();
       event.stopImmediatePropagation();
       previewTransformAt(event.clientX, event.clientY, true);
@@ -10840,7 +11234,7 @@ function resolveChunkDebugCenter(policy) {
 
   function handleTransformPointerUp(event) {
     rememberEditorPointer(event);
-    if (transformSession?.object) {
+    if (transformSessionActive()) {
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.button === 2 || event.button === 1) {
@@ -10858,7 +11252,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function applyTransformSnapState() {
-    if (!transformSession?.object) return;
+    if (!transformSessionActive()) return;
     if (transformSession.currentPointer) {
       applyTransformPreview(transformSession.currentPointer, false);
     }
@@ -12625,10 +13019,28 @@ function resolveChunkDebugCenter(policy) {
 
   function selectEntity(entityId) {
     selectedEntityId = entityId || null;
+    selectedEntityIds = new Set(entityId ? [entityId] : []);
     refreshSelectedRootReference();
     applyLocalView();
     if (selectionHelper) updateSelectionHelper();
     requestRender();
+  }
+
+  // Multi-select: selects a whole set at once (marquee, or a Shift/Ctrl click resolved by
+  // the caller into the next full set). The first id becomes "primary" for focus/frame/
+  // inspector purposes; the modal G/R/S transform activates its group path once size > 1.
+  function selectEntities(entityIds) {
+    const ids = Array.from(new Set((entityIds || []).filter(Boolean)));
+    selectedEntityIds = new Set(ids);
+    selectedEntityId = ids.length ? ids[0] : null;
+    refreshSelectedRootReference();
+    applyLocalView();
+    if (selectionHelper) updateSelectionHelper();
+    requestRender();
+  }
+
+  function getSelectedEntityIds() {
+    return Array.from(selectedEntityIds);
   }
 
   function pickEntity(event) {
@@ -12731,6 +13143,7 @@ function resolveChunkDebugCenter(policy) {
   function worldToScreen(position) {
     const vector = new THREE.Vector3(num(position?.x, 0), num(position?.y, 0), num(position?.z, 0));
     vector.project(camera);
+    if (!Number.isFinite(vector.x) || !Number.isFinite(vector.y) || !Number.isFinite(vector.z) || vector.z < -1 || vector.z > 1) return null;
     const rect = canvas.getBoundingClientRect();
     return {
       x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
@@ -14089,6 +14502,12 @@ function resolveChunkDebugCenter(policy) {
       if (selectionHelper.material) selectionHelper.material.dispose();
       selectionHelper = null;
     }
+    for (const helper of multiSelectionHelpers) {
+      scene.remove(helper);
+      if (helper.geometry) helper.geometry.dispose();
+      if (helper.material) helper.material.dispose();
+    }
+    multiSelectionHelpers = [];
     clearTerrainRuntimeVisuals();
     clearWalkabilityIndex();
     if (transformGuide) {
@@ -14206,7 +14625,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function isTransformActive() {
-    return Boolean(transformSession?.object);
+    return transformSessionActive();
   }
 
   function isTransformControlsAttached() {
@@ -14356,6 +14775,8 @@ function resolveChunkDebugCenter(policy) {
     pickScatterEditorHandle: pickScatterEditorHandle,
     pickEntityAt: pickEntityAt,
     selectEntity: selectEntity,
+    selectEntities: selectEntities,
+    getSelectedEntityIds: getSelectedEntityIds,
     frameEntity: frameEntity,
     frameAll: frameAll,
     captureViewState: captureViewState,

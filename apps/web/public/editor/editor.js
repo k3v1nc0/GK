@@ -228,7 +228,8 @@ const el = {
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
   logoutButton: document.querySelector("#logoutButton"),
-  zoomResetButton: document.querySelector("#zoomResetButton")
+  zoomResetButton: document.querySelector("#zoomResetButton"),
+  viewportSelectionBox: document.querySelector("#viewportSelectionBox")
 };
 
 let runtime = null;
@@ -1772,15 +1773,19 @@ function terrainSetSelection(pointIndex, handleRole) {
   state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndex !== null ? [state.terrainTool.selectedPointIndex] : [];
 }
 
-function terrainTogglePointSelection(pointIndex) {
+// Shift always adds, Ctrl/Meta always removes - no toggling, so box-select and click-select
+// behave the same regardless of what was already selected.
+function terrainAddPointToSelection(pointIndex) {
   if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
   const existing = state.terrainTool.selectedPointIndices;
-  const pos = existing.indexOf(pointIndex);
-  if (pos === -1) {
-    state.terrainTool.selectedPointIndices = existing.concat(pointIndex);
-  } else {
-    state.terrainTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
-  }
+  if (!existing.includes(pointIndex)) state.terrainTool.selectedPointIndices = existing.concat(pointIndex);
+  state.terrainTool.selectedPointIndex = pointIndex;
+  state.terrainTool.selectedHandleRole = "point";
+}
+
+function terrainRemovePointFromSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndices.filter(function (i) { return i !== pointIndex; });
   const last = state.terrainTool.selectedPointIndices.length
     ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
     : null;
@@ -1924,15 +1929,18 @@ function scatterSetSelection(pointIndex, handleRole) {
   state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndex !== null ? [state.scatterTool.selectedPointIndex] : [];
 }
 
-function scatterTogglePointSelection(pointIndex) {
+// Shift always adds, Ctrl/Meta always removes - see terrainAddPointToSelection.
+function scatterAddPointToSelection(pointIndex) {
   if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
   const existing = state.scatterTool.selectedPointIndices;
-  const pos = existing.indexOf(pointIndex);
-  if (pos === -1) {
-    state.scatterTool.selectedPointIndices = existing.concat(pointIndex);
-  } else {
-    state.scatterTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
-  }
+  if (!existing.includes(pointIndex)) state.scatterTool.selectedPointIndices = existing.concat(pointIndex);
+  state.scatterTool.selectedPointIndex = pointIndex;
+  state.scatterTool.selectedHandleRole = "point";
+}
+
+function scatterRemovePointFromSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndices.filter(function (i) { return i !== pointIndex; });
   const last = state.scatterTool.selectedPointIndices.length
     ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
     : null;
@@ -2696,6 +2704,11 @@ function setViewportSnap(mode, gridSize) {
 
 function syncRuntimeModelSelectionForTransform() {
   if (!runtime || runtimeTransformActive()) return selectedModelNode();
+  // A multi-selection already active in the runtime must not get collapsed back down to
+  // one entity right before G/R/S starts - that was silently breaking group transforms.
+  if (typeof runtime.getSelectedEntityIds === "function" && runtime.getSelectedEntityIds().length > 1) {
+    return selectedModelNode();
+  }
   let node = selectedModelNode();
   let runtimeId = runtimeNodeId(node);
   if (!runtimeId) {
@@ -2714,8 +2727,15 @@ function beginRuntimeTransformFromShortcut(mode, statusText) {
     return true;
   }
   syncRuntimeModelSelectionForTransform();
+  // forceGroup: the editor's own selection (state.selectedNodeIds) can include node types
+  // the runtime has no live mesh for at all (Location Anchor) or no single draggable root
+  // for (Walkable Surface/Surface Layer, rendered as chunked strips) - so it can undercount
+  // vs. what the runtime tracks in selectedEntityIds. When the editor knows more than one
+  // node is actually selected, force a group session even if the runtime found 0 or 1 live
+  // objects to drag; commitGroupTransform() below applies the resulting move delta to
+  // whichever selected nodes don't have a live object of their own.
   const started = typeof runtime.beginTransform === "function"
-    ? runtime.beginTransform(mode)
+    ? runtime.beginTransform(mode, { forceGroup: state.selectedNodeIds.length > 1 })
     : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
   const selectedId = runtimeSelectedEntityId() || runtimeModelEntityIdAtLastPointer();
   setStatus(started ? statusText : "No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", started ? "" : "error");
@@ -3114,10 +3134,16 @@ function syncSelectedEdgeCard() {
 
 function syncRuntimeSelection() {
   if (!runtime) return;
-  const node = nodeById(state.selectedNodeId);
-  const runtimeId = runtimeNodeId(node);
-  if (runtimeId) runtime.selectEntity(runtimeId);
-  else runtime.deselect();
+  const runtimeIds = state.selectedNodeIds
+    .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
+    .filter(Boolean);
+  if (typeof runtime.selectEntities === "function") {
+    runtime.selectEntities(runtimeIds);
+  } else if (runtimeIds.length) {
+    runtime.selectEntity(runtimeIds[0]);
+  } else {
+    runtime.deselect();
+  }
 }
 
 function breadcrumbForGroup(groupId) {
@@ -3327,16 +3353,48 @@ async function boot() {
     },
     onSelectEntity: function (entityId) {
       if (!entityId) {
-        clearSelection({ clearPendingEdge: true });
-        renderGraph();
-        setStatus("Deselected.", "");
-        redrawEditorMinimap();
+        deselectViewportClick();
         return;
       }
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
       focusGraphNode(node.id);
       selectNode(node.id, false);
+      redrawEditorMinimap();
+    },
+    onSelectEntities: function (entityIds) {
+      const nodeIds = Array.from(new Set((entityIds || [])
+        .map(function (id) { return nodeByRuntimeId(id)?.id; })
+        .filter(Boolean)));
+      if (!nodeIds.length) {
+        deselectViewportClick();
+        return;
+      }
+      setSelection(nodeIds, [], { primaryNodeId: nodeIds[0], clearPendingEdge: true });
+      renderGraph();
+      redrawEditorMinimap();
+    },
+    onMarqueeRect: function (rect) {
+      if (!rect) hideViewportSelectionBox();
+      else showViewportSelectionBox(rect.left, rect.top, rect.right, rect.bottom);
+    },
+    onMarqueeSelect: function (rect, additive, subtractive) {
+      const hitNodeIds = viewportMarqueeNodeIds(rect);
+      let nextIds;
+      if (subtractive) {
+        const remove = new Set(hitNodeIds);
+        nextIds = state.selectedNodeIds.filter(function (id) { return !remove.has(id); });
+      } else if (additive) {
+        nextIds = Array.from(new Set(state.selectedNodeIds.concat(hitNodeIds)));
+      } else {
+        nextIds = hitNodeIds;
+      }
+      if (!nextIds.length) {
+        deselectViewportClick();
+        return;
+      }
+      setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true });
+      renderGraph();
       redrawEditorMinimap();
     },
     onTransformChange: function () {
@@ -3355,8 +3413,13 @@ async function boot() {
         setStatus("Transform cancelled.", "");
       }
     },
-    onTransformCommit: function (entityId, transform) {
-      const node = nodeByRuntimeId(entityId);
+    onTransformCommit: function (entityIdOrPayload, transform) {
+      if (entityIdOrPayload && typeof entityIdOrPayload === "object" && Array.isArray(entityIdOrPayload.commits)) {
+        void commitGroupTransform(entityIdOrPayload);
+        setViewportAxis(null);
+        return;
+      }
+      const node = nodeByRuntimeId(entityIdOrPayload);
       if (!node || node.type !== "model_entity") return;
       patchValues(node.id, transform, {
         historyLabel: "Transform",
@@ -4026,6 +4089,67 @@ el.edgeLayer.addEventListener("pointerdown", function (event) {
   }
 });
 
+// Folds a group move/rotate/scale into a single restoreGraphObject call, same batching
+// pattern as deleteSelectedNodes/pasteSelection, so undo/redo treats the whole group
+// transform as one step. payload.commits is one {entityId, transform} per model_entity
+// that was live-dragged; payload.delta (move only) is the ground-plane distance the drag
+// covered, applied on top of that to whichever selected nodes have no live mesh of their
+// own (Walkable Surface, Surface Layer, Blocker Area, Area Definition, Location Anchor) by
+// translating their points wholesale, the same way the single-node "move via center
+// handle" already does (terrainPointsPatch/scatterTranslatePoints).
+async function commitGroupTransform(payload) {
+  const commits = payload?.commits || [];
+  const patchedNodeIds = new Set();
+  const patches = commits
+    .map(function (entry) {
+      const node = nodeByRuntimeId(entry.entityId);
+      if (!node || node.type !== "model_entity") return null;
+      patchedNodeIds.add(node.id);
+      return { nodeId: node.id, values: entry.transform };
+    })
+    .filter(Boolean);
+  const delta = payload?.mode === "move" ? payload.delta : null;
+  if (delta && (delta.x || delta.z)) {
+    for (const nodeId of state.selectedNodeIds) {
+      if (patchedNodeIds.has(nodeId)) continue;
+      const node = nodeById(nodeId);
+      if (!node) continue;
+      if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+        const explicitPoints = Array.isArray(node.values?.points) ? node.values.points : [];
+        if (explicitPoints.length > 0) {
+          // A genuinely edited polygon - shift every point, same as the single-node
+          // "move via center handle" (terrainCommitSurfaceDrag).
+          const nextPoints = scatterTranslatePoints(terrainNodePoints(node), delta.x, delta.z);
+          patches.push({ nodeId: node.id, values: terrainPointsPatch(node, nextPoints) });
+          continue;
+        }
+        // No explicit points yet (still the default rectangle/point derived from x/z) -
+        // just shift x/z directly below. Reusing terrainPointsPatch here would write a
+        // points array and force shapeType to "polygon", silently changing how the node
+        // edits, which a plain move shouldn't do.
+      }
+      // Generic locator fallback (Player Spawn, and anything else with a plain x/z
+      // world position but no points array) - same field check as nodeCoordinatePoint.
+      const fields = state.nodeTypes?.[node.type]?.fields;
+      if (!fields || !fields.x || !fields.z) continue;
+      const values = { x: Number(node.values?.x || 0) + delta.x, z: Number(node.values?.z || 0) + delta.z };
+      patches.push({ nodeId: node.id, values: values });
+    }
+  }
+  if (!patches.length) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  for (const patch of patches) {
+    const target = nextGraph.nodes.find(function (node) { return node.id === patch.nodeId; });
+    if (target) target.values = Object.assign({}, target.values, patch.values);
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Groep transform",
+    refreshViewport: true,
+    refreshEdgeList: false,
+    refreshValidation: false
+  });
+}
+
 function cloneGraphForRestore(graph) {
   return clonePlain(snapshotGraph(graph || state.graph));
 }
@@ -4280,6 +4404,77 @@ function hideSelectionBox() {
   selectionBox.style.top = "0px";
   selectionBox.style.width = "0px";
   selectionBox.style.height = "0px";
+}
+
+// Marquee box for the 3D viewport (object picking + point-edit mode). Unlike the graph
+// canvas, the viewport isn't panned/scaled in CSS space, so plain client coordinates
+// (minus the wrap's own offset) are enough - no clientToViewportPoint conversion needed.
+function showViewportSelectionBox(startX, startY, endX, endY) {
+  if (!el.viewportSelectionBox || !el.viewportWrap) return;
+  const wrapRect = el.viewportWrap.getBoundingClientRect();
+  const left = Math.min(startX, endX) - wrapRect.left;
+  const top = Math.min(startY, endY) - wrapRect.top;
+  const width = Math.max(0, Math.abs(endX - startX));
+  const height = Math.max(0, Math.abs(endY - startY));
+  el.viewportSelectionBox.hidden = false;
+  el.viewportSelectionBox.style.left = left + "px";
+  el.viewportSelectionBox.style.top = top + "px";
+  el.viewportSelectionBox.style.width = width + "px";
+  el.viewportSelectionBox.style.height = height + "px";
+}
+
+function hideViewportSelectionBox() {
+  if (!el.viewportSelectionBox) return;
+  el.viewportSelectionBox.hidden = true;
+  el.viewportSelectionBox.style.width = "0px";
+  el.viewportSelectionBox.style.height = "0px";
+}
+
+function rectFromClientPoints(x1, y1, x2, y2) {
+  return {
+    left: Math.min(x1, x2),
+    right: Math.max(x1, x2),
+    top: Math.min(y1, y2),
+    bottom: Math.max(y1, y2)
+  };
+}
+
+// A representative world point for whatever kind of node this is, so it can be marquee-
+// selected in the 3D viewport even when it has no single live mesh to raycast against
+// (Location Anchor has none at all; Walkable Surface/Surface Layer are chunked into many
+// mesh pieces, not one pickable root). Mirrors terrainAllNodeMarkers()'s per-type geometry
+// lookups (editor.js ~2553) - same node types, same "one point per node" idea.
+function viewportSelectablePoint(node) {
+  if (!node || !node.values) return null;
+  if (node.type === "model_entity") {
+    const x = Number(node.values.x);
+    const y = Number(node.values.y);
+    const z = Number(node.values.z);
+    return Number.isFinite(x) && Number.isFinite(z) ? { x: x, y: Number.isFinite(y) ? y : terrainGroundY(), z: z } : null;
+  }
+  if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+    const points = terrainNodePoints(node);
+    const geometry = terrainWalkableSurfaceGeometry(node, points);
+    if (!Number.isFinite(geometry.x) || !Number.isFinite(geometry.z)) return null;
+    return { x: geometry.x, y: node.type === "walkable_surface" ? geometry.y : terrainGroundY(), z: geometry.z };
+  }
+  if (node.type === "bounded_area_scatter") {
+    const center = scatterPointCenter(scatterNodePoints(node));
+    return Number.isFinite(center.x) && Number.isFinite(center.z) ? { x: center.x, y: terrainGroundY(), z: center.z } : null;
+  }
+  return nodeCoordinatePoint(node);
+}
+
+function viewportMarqueeNodeIds(rect) {
+  if (!runtime || typeof runtime.worldToScreen !== "function") return [];
+  const ids = [];
+  for (const node of state.graph.nodes || []) {
+    const point = viewportSelectablePoint(node);
+    if (!point) continue;
+    const screen = runtime.worldToScreen(point);
+    if (screen && rectContainsPoint(rect, screen)) ids.push(node.id);
+  }
+  return ids;
 }
 
 function marqueeIntersectingNodeIds(rect) {
@@ -7042,7 +7237,10 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
   return true;
 }
 
-async function terrainPatchPoints(node, nextPoints, historyLabel) {
+// Pure: builds the values patch for a points update, without sending it anywhere -
+// shared by the single-node terrain tool (which patches immediately) and the cross-type
+// group move (which folds several nodes' patches into one batched commit).
+function terrainPointsPatch(node, nextPoints) {
   const normalizedPoints = terrainClonePoints(nextPoints);
   const patch = { points: normalizedPoints };
   const fields = state.nodeTypes?.[node.type]?.fields || {};
@@ -7059,6 +7257,11 @@ async function terrainPatchPoints(node, nextPoints, historyLabel) {
     if (fields.y && node.type === "walkable_surface") patch.y = geometry.y;
   }
   if (fields.shapeType && node.values?.shapeType !== "polygon") patch.shapeType = "polygon";
+  return patch;
+}
+
+async function terrainPatchPoints(node, nextPoints, historyLabel) {
+  const patch = terrainPointsPatch(node, nextPoints);
   const result = await patchValues(node.id, patch, {
     historyLabel: historyLabel,
     refreshViewport: true,
@@ -7307,6 +7510,85 @@ async function terrainCommitScale(node) {
   return ok;
 }
 
+// ---------- Point-edit marquee (box) selection ----------
+// Shared by the terrain tool (Surface Layer/Walkable Surface/Blocker Area/Area Definition)
+// and the scatter tool - both already have working group move/rotate/scale for whatever is
+// in selectedPointIndices, so this only needs to fill that array from a screen-space rect.
+function pointIndicesInRect(points, yForPoint, rect) {
+  if (!runtime || typeof runtime.worldToScreen !== "function") return [];
+  const indices = [];
+  points.forEach(function (point, index) {
+    const screen = runtime.worldToScreen({ x: point.x, y: yForPoint(point, index), z: point.z });
+    if (screen && rectContainsPoint(rect, screen)) indices.push(index);
+  });
+  return indices;
+}
+
+function applyMarqueeSelection(toolState, hitIndices, additive, subtractive) {
+  if (subtractive) {
+    if (!hitIndices.length) return;
+    const remove = new Set(hitIndices);
+    toolState.selectedPointIndices = toolState.selectedPointIndices.filter(function (i) { return !remove.has(i); });
+  } else if (additive) {
+    const combined = new Set(toolState.selectedPointIndices);
+    for (const i of hitIndices) combined.add(i);
+    toolState.selectedPointIndices = Array.from(combined);
+  } else {
+    toolState.selectedPointIndices = hitIndices.slice();
+  }
+  const last = toolState.selectedPointIndices.length
+    ? toolState.selectedPointIndices[toolState.selectedPointIndices.length - 1]
+    : null;
+  toolState.selectedPointIndex = last;
+  toolState.selectedHandleRole = last !== null ? "point" : null;
+}
+
+// Starts tracking a potential drag from an empty-space pointerdown. If the pointer never
+// moves it's a plain click (falls back to options.onEmptyClick, e.g. the existing "click
+// empty space to deselect" behavior); if it does move, it's a marquee box-select.
+function beginPointMarqueeSession(event, options) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const pointerId = event.pointerId;
+  const additive = event.shiftKey;
+  const subtractive = event.ctrlKey || event.metaKey;
+  let moved = false;
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== pointerId) return;
+    if (Math.abs(moveEvent.clientX - startX) > 3 || Math.abs(moveEvent.clientY - startY) > 3) moved = true;
+    if (moved) showViewportSelectionBox(startX, startY, moveEvent.clientX, moveEvent.clientY);
+  }
+  function finish(finalEvent) {
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onCancel, true);
+    hideViewportSelectionBox();
+    if (!moved) {
+      if (!additive && !subtractive) options.onEmptyClick();
+      return;
+    }
+    const rect = rectFromClientPoints(startX, startY, finalEvent.clientX, finalEvent.clientY);
+    const hitIndices = pointIndicesInRect(options.getPoints(), options.yForPoint, rect);
+    applyMarqueeSelection(options.toolState, hitIndices, additive, subtractive);
+    options.onApplied();
+  }
+  function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent); }
+  function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent); }
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onCancel, true);
+}
+
+function deselectViewportClick() {
+  clearSelection({ clearPendingEdge: true });
+  renderGraph();
+  setStatus("Deselected.", "");
+  redrawEditorMinimap();
+}
+
 function handleTerrainPointerDown(event) {
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
@@ -7364,7 +7646,20 @@ function handleTerrainPointerDown(event) {
     || mode === "extrude"
     || mode === "scale";
   if (meshEntityId && !(hit && hit.nodeId === node.id)) return;
-  if (!shouldConsumeTerrainClick) return;
+  if (!shouldConsumeTerrainClick) {
+    if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
+      beginPointMarqueeSession(event, {
+        getPoints: function () { return terrainNodePoints(node); },
+        yForPoint: function (point) {
+          return node.type === "walkable_surface" ? terrainPointHeight(point, terrainGroundY()) : terrainGroundY();
+        },
+        toolState: state.terrainTool,
+        onApplied: terrainFinishWithRender,
+        onEmptyClick: deselectViewportClick
+      });
+    }
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
@@ -7389,8 +7684,9 @@ function handleTerrainPointerDown(event) {
       return;
     }
     if (capabilities.pointEditing && Number.isInteger(hit.pointIndex)) {
-      if (event.shiftKey && (state.terrainTool.mode === "select" || state.terrainTool.mode === "move")) {
-        terrainTogglePointSelection(hit.pointIndex);
+      if ((event.shiftKey || event.ctrlKey || event.metaKey) && (state.terrainTool.mode === "select" || state.terrainTool.mode === "move")) {
+        if (event.ctrlKey || event.metaKey) terrainRemovePointFromSelection(hit.pointIndex);
+        else terrainAddPointToSelection(hit.pointIndex);
         terrainFinishWithRender();
         return;
       }
@@ -7480,14 +7776,28 @@ function handleScatterPointerDown(event) {
   const hit = scatterHandleFromEvent(event);
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.scatterTool.mode;
-  if (!hit || hit.nodeId !== node.id) return false;
+  if (!hit || hit.nodeId !== node.id) {
+    const meshEntityId = runtimeEntityIdFromPointer(event);
+    if (!hit && !meshEntityId && (mode === "select" || mode === "move")) {
+      beginPointMarqueeSession(event, {
+        getPoints: function () { return scatterNodePoints(node); },
+        yForPoint: function () { return terrainGroundY(); },
+        toolState: state.scatterTool,
+        onApplied: scatterFinishWithRender,
+        onEmptyClick: deselectViewportClick
+      });
+      return true;
+    }
+    return false;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
 
   if (Number.isInteger(hit.pointIndex)) {
-    if (event.shiftKey && (mode === "select" || mode === "move")) {
-      scatterTogglePointSelection(hit.pointIndex);
+    if ((event.shiftKey || event.ctrlKey || event.metaKey) && (mode === "select" || mode === "move")) {
+      if (event.ctrlKey || event.metaKey) scatterRemovePointFromSelection(hit.pointIndex);
+      else scatterAddPointToSelection(hit.pointIndex);
       scatterFinishWithRender();
       return true;
     }

@@ -74,7 +74,7 @@
                 <div class="viewportHelpGrid">
                   <span class="viewportHelpKey">MMB</span><span>Orbit</span>
                   <span class="viewportHelpKey">Alt+LMB</span><span>Orbit fallback</span>
-                  <span class="viewportHelpKey">Shift+LMB / RMB</span><span>Pan</span>
+                  <span class="viewportHelpKey">RMB</span><span>Pan</span>
                   <span class="viewportHelpKey">Scroll</span><span>Zoom</span>
                   <span class="viewportHelpKey">F</span><span>Frame selected</span>
                   <span class="viewportHelpKey">Home</span><span>Frame all</span>
@@ -84,11 +84,20 @@
                 </div>
               </div>
               <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Selection (objects and points)</div>
+                <div class="viewportHelpGrid">
+                  <span class="viewportHelpKey">LMB drag</span><span>Box select everything in the box</span>
+                  <span class="viewportHelpKey">Shift (+drag)</span><span>Add to selection</span>
+                  <span class="viewportHelpKey">Ctrl (+drag)</span><span>Remove from selection</span>
+                </div>
+              </div>
+              <div class="viewportHelpSection">
                 <div class="viewportHelpTitle">Model transform</div>
                 <div class="viewportHelpGrid">
-                  <span class="viewportHelpKey">G</span><span>Move</span>
-                  <span class="viewportHelpKey">R</span><span>Rotate</span>
-                  <span class="viewportHelpKey">T</span><span>Scale</span>
+                  <span class="viewportHelpKey">G</span><span>Move (selection, together if multiple)</span>
+                  <span class="viewportHelpKey">R</span><span>Rotate (selection, around shared center if multiple)</span>
+                  <span class="viewportHelpKey">T</span><span>Scale (selection, around shared center if multiple)</span>
+                  <span class="viewportHelpKey">Ctrl+D</span><span>Duplicate selection</span>
                   <span class="viewportHelpKey">X/Y/Z</span><span>Constrain axis</span>
                   <span class="viewportHelpKey">Alt+G</span><span>Reset location</span>
                   <span class="viewportHelpKey">Alt+R</span><span>Reset rotation</span>
@@ -102,8 +111,8 @@
                 <div class="viewportHelpGrid">
                   <span class="viewportHelpKey">1/2/3</span><span>Main/secondary/edge channel</span>
                   <span class="viewportHelpKey">Click</span><span>Select point / center</span>
-                  <span class="viewportHelpKey">Shift+Click</span><span>Multi-select points</span>
-                  <span class="viewportHelpKey">G</span><span>Move point, or whole shape via center</span>
+                  <span class="viewportHelpKey">Shift/Ctrl+Click, drag</span><span>Add/remove points, or box select</span>
+                  <span class="viewportHelpKey">G</span><span>Move point(s), or whole shape via center</span>
                   <span class="viewportHelpKey">R</span><span>Rotate selection, or whole shape</span>
                   <span class="viewportHelpKey">S</span><span>Scale selection, or whole shape</span>
                   <span class="viewportHelpKey">F</span><span>Extrude new point</span>
@@ -119,8 +128,8 @@
                 <div class="viewportHelpTitle">Scatter area</div>
                 <div class="viewportHelpGrid">
                   <span class="viewportHelpKey">Click</span><span>Select point / center</span>
-                  <span class="viewportHelpKey">Shift+Click</span><span>Multi-select points</span>
-                  <span class="viewportHelpKey">G</span><span>Move point, or whole area via center</span>
+                  <span class="viewportHelpKey">Shift/Ctrl+Click, drag</span><span>Add/remove points, or box select</span>
+                  <span class="viewportHelpKey">G</span><span>Move point(s), or whole area via center</span>
                   <span class="viewportHelpKey">R</span><span>Rotate whole area</span>
                   <span class="viewportHelpKey">T</span><span>Scale whole area</span>
                   <span class="viewportHelpKey">F</span><span>Extrude new point</span>
@@ -148,6 +157,7 @@
           </div>
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
           <canvas id="viewportCanvas"></canvas>
+          <div id="viewportSelectionBox" class="selectionBox" hidden></div>
           <div class="editorMinimapRoot" id="editorMinimapRoot" hidden>
             <canvas id="editorMinimapCanvas"></canvas>
           </div>
