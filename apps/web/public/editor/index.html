@@ -70,21 +70,61 @@
             </div>
             <div class="viewportHelpPanel" id="viewportHelpPanel" hidden>
               <div class="viewportHelpSection">
-                <div class="viewportHelpTitle">Hotkeys</div>
+                <div class="viewportHelpTitle">Camera</div>
                 <div class="viewportHelpGrid">
                   <span class="viewportHelpKey">MMB</span><span>Orbit</span>
                   <span class="viewportHelpKey">Alt+LMB</span><span>Orbit fallback</span>
-                  <span class="viewportHelpKey">Shift+LMB</span><span>Pan</span>
+                  <span class="viewportHelpKey">Shift+LMB / RMB</span><span>Pan</span>
                   <span class="viewportHelpKey">Scroll</span><span>Zoom</span>
                   <span class="viewportHelpKey">F</span><span>Frame selected</span>
                   <span class="viewportHelpKey">Home</span><span>Frame all</span>
+                  <span class="viewportHelpKey">Numpad 1/3/7</span><span>Front/right/top view</span>
+                  <span class="viewportHelpKey">/</span><span>Toggle local view</span>
+                  <span class="viewportHelpKey">.</span><span>Focus selected</span>
+                </div>
+              </div>
+              <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Model transform</div>
+                <div class="viewportHelpGrid">
                   <span class="viewportHelpKey">G</span><span>Move</span>
                   <span class="viewportHelpKey">R</span><span>Rotate</span>
-                  <span class="viewportHelpKey">S</span><span>Scale</span>
+                  <span class="viewportHelpKey">T</span><span>Scale</span>
                   <span class="viewportHelpKey">X/Y/Z</span><span>Constrain axis</span>
                   <span class="viewportHelpKey">Alt+G</span><span>Reset location</span>
                   <span class="viewportHelpKey">Alt+R</span><span>Reset rotation</span>
-                  <span class="viewportHelpKey">Alt+S</span><span>Reset scale</span>
+                  <span class="viewportHelpKey">Alt+T</span><span>Reset scale</span>
+                  <span class="viewportHelpKey">Esc</span><span>Cancel</span>
+                  <span class="viewportHelpKey">Enter</span><span>Confirm</span>
+                </div>
+              </div>
+              <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Terrain points (Walkable Surface, Blocker Area, Area Definition, Surface Layer)</div>
+                <div class="viewportHelpGrid">
+                  <span class="viewportHelpKey">1/2/3</span><span>Main/secondary/edge channel</span>
+                  <span class="viewportHelpKey">Click</span><span>Select point / center</span>
+                  <span class="viewportHelpKey">Shift+Click</span><span>Multi-select points</span>
+                  <span class="viewportHelpKey">G</span><span>Move point, or whole shape via center</span>
+                  <span class="viewportHelpKey">R</span><span>Rotate selection, or whole shape</span>
+                  <span class="viewportHelpKey">S</span><span>Scale selection, or whole shape</span>
+                  <span class="viewportHelpKey">F</span><span>Extrude new point</span>
+                  <span class="viewportHelpKey">T</span><span>Scale active texture channel</span>
+                  <span class="viewportHelpKey">X/Y</span><span>Constrain move/rotate/scale axis</span>
+                  <span class="viewportHelpKey">Z</span><span>Height (Walkable Surface only)</span>
+                  <span class="viewportHelpKey">Del</span><span>Delete point(s)</span>
+                  <span class="viewportHelpKey">Esc</span><span>Cancel</span>
+                  <span class="viewportHelpKey">Enter</span><span>Confirm</span>
+                </div>
+              </div>
+              <div class="viewportHelpSection">
+                <div class="viewportHelpTitle">Scatter area</div>
+                <div class="viewportHelpGrid">
+                  <span class="viewportHelpKey">Click</span><span>Select point / center</span>
+                  <span class="viewportHelpKey">Shift+Click</span><span>Multi-select points</span>
+                  <span class="viewportHelpKey">G</span><span>Move point, or whole area via center</span>
+                  <span class="viewportHelpKey">R</span><span>Rotate whole area</span>
+                  <span class="viewportHelpKey">T</span><span>Scale whole area</span>
+                  <span class="viewportHelpKey">F</span><span>Extrude new point</span>
+                  <span class="viewportHelpKey">Del</span><span>Delete point(s)</span>
                   <span class="viewportHelpKey">Esc</span><span>Cancel</span>
                   <span class="viewportHelpKey">Enter</span><span>Confirm</span>
                 </div>
@@ -104,31 +144,6 @@
                   <input id="snapGridInput" type="number" min="0.1" step="0.1" value="1">
                 </label>
               </div>
-            </div>
-            <div class="terrainToolPanel" id="terrainToolPanel" hidden>
-              <div class="terrainToolHeader">
-                <div class="terrainToolTitle">Terrain Tool</div>
-                <div class="terrainToolNode" id="terrainToolNodeLabel"></div>
-              </div>
-              <div class="terrainToolRow terrainToolChannels">
-                <span class="terrainToolLabel">Edit</span>
-                <button type="button" class="terrainToolChip active" data-terrain-channel="main">1 Main</button>
-                <button type="button" class="terrainToolChip" data-terrain-channel="secondary">2 Secondary</button>
-                <button type="button" class="terrainToolChip" data-terrain-channel="edge">3 Edge</button>
-              </div>
-              <div class="terrainToolRow terrainToolActions">
-                <span class="terrainToolLabel">Point</span>
-                <button type="button" class="terrainToolChip" data-terrain-action="move">G Move</button>
-                <button type="button" class="terrainToolChip" data-terrain-action="extrude">F Extrude</button>
-                <button type="button" class="terrainToolChip" data-terrain-action="delete">Del Delete</button>
-                <span class="terrainToolSubhint">X/Y move, Z height</span>
-              </div>
-              <div class="terrainToolRow terrainToolActions">
-                <span class="terrainToolLabel">Material</span>
-                <button type="button" class="terrainToolChip" data-terrain-action="scale">S Scale</button>
-                <span class="terrainToolSubhint">X/Y axis</span>
-              </div>
-              <div class="terrainToolHint" id="terrainToolHint">Esc to Select</div>
             </div>
           </div>
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>

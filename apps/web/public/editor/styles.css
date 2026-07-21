@@ -261,7 +261,10 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
   color: #d8f1ff;
 }
 .viewportHelpPanel {
-  width: min(220px, calc(100vw - 20px));
+  height: calc(100% - 60px);
+  width: min(260px, calc(100vw - 20px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   padding: 6px 7px;
   border-radius: 10px;
   background: rgba(28, 28, 28, 0.96);
@@ -272,8 +275,7 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
   gap: 6px;
 }
 .viewportHelpPanel[hidden],
-.viewportTransformPanel[hidden],
-.terrainToolPanel[hidden] {
+.viewportTransformPanel[hidden] {
   display: none !important;
 }
 .viewportHelpSection {
@@ -314,89 +316,6 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
 .viewportHelpPanel .snapControl select,
 .viewportHelpPanel .snapControl input {
   min-width: 92px;
-}
-.terrainToolPanel {
-  width: min(250px, calc(100vw - 20px));
-  padding: 6px 7px;
-  border-radius: 10px;
-  background: rgba(14, 20, 28, 0.96);
-  border: 1px solid #35506a;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(6px);
-  display: grid;
-  gap: 6px;
-}
-.terrainToolHeader {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.terrainToolTitle {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: #f0b35a;
-}
-.terrainToolNode {
-  margin-left: auto;
-  min-width: 0;
-  font-size: 11px;
-  line-height: 1.25;
-  color: #c8d3db;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-.terrainToolRow {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-.terrainToolLabel {
-  flex: 0 0 auto;
-  min-width: 44px;
-  font-size: 10px;
-  color: #8ea0ad;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-.terrainToolChip {
-  flex: 1 1 0;
-  background: #101924;
-  color: #dbe3e9;
-  border: 1px solid #274055;
-  padding: 5px 6px;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  text-align: center;
-}
-.terrainToolChip:hover:not(:disabled) {
-  border-color: #4e6d86;
-  background: #132130;
-}
-.terrainToolChip.active {
-  background: #1b2a39;
-  border-color: #5b88ab;
-  color: #d8f1ff;
-}
-.terrainToolChip:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.terrainToolHint {
-  font-size: 10.5px;
-  color: #8ea0ad;
-  line-height: 1.25;
-}
-.terrainToolSubhint {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: #8ea0ad;
-  line-height: 1.25;
 }
 .snapControl {
   display: inline-flex;
@@ -486,7 +405,7 @@ button.mini { background: #18212c; color: #cdd6dd; border: 1px solid #2c3845; pa
   display: none;
 }
 .viewportStatus {
-  display: inline-flex;
+  display: none;
   align-items: center;
   gap: 8px;
   font-size: 11px;

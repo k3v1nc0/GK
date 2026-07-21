@@ -54,7 +54,17 @@ const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
 const TERRAIN_TOOL_NODE_TYPES = new Set([
   "surface_layer",
   "blocker_area",
-  "walkable_surface"
+  "walkable_surface",
+  "area_definition",
+  "location_anchor"
+]);
+// surface_layer is an open path the user builds point-by-point; the rest are
+// closed shapes that behave like Walkable Surface and start from a 4-corner rectangle.
+const TERRAIN_CLOSED_SHAPE_NODE_TYPES = new Set([
+  "walkable_surface",
+  "blocker_area",
+  "area_definition",
+  "location_anchor"
 ]);
 
 const state = {
@@ -122,6 +132,10 @@ const state = {
     dragPointerId: null,
     dragStartGround: null,
     dragCurrentGround: null,
+    dragStartPivot: null,
+    dragStartAngle: null,
+    dragStartDistance: null,
+    dragTransformIndices: null,
     dragMoved: false
   },
   scatterTool: {
@@ -188,16 +202,6 @@ const el = {
   viewportStatus: document.querySelector("#viewportStatus"),
   viewportInfoButton: document.querySelector("#viewportInfoButton"),
   viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
-  terrainToolPanel: document.querySelector("#terrainToolPanel"),
-  terrainToolNodeLabel: document.querySelector("#terrainToolNodeLabel"),
-  terrainToolHint: document.querySelector("#terrainToolHint"),
-  terrainToolChannelMainButton: document.querySelector("[data-terrain-channel='main']"),
-  terrainToolChannelSecondaryButton: document.querySelector("[data-terrain-channel='secondary']"),
-  terrainToolChannelEdgeButton: document.querySelector("[data-terrain-channel='edge']"),
-  terrainToolMoveButton: document.querySelector("[data-terrain-action='move']"),
-  terrainToolExtrudeButton: document.querySelector("[data-terrain-action='extrude']"),
-  terrainToolScaleButton: document.querySelector("[data-terrain-action='scale']"),
-  terrainToolDeleteButton: document.querySelector("[data-terrain-action='delete']"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
   editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
@@ -252,27 +256,6 @@ const edgePanel = el.edgeList && typeof el.edgeList.closest === "function" ? el.
 if (edgePanel) edgePanel.style.display = "none";
 syncAsideContext();
 applyAssetCardSize(state.assetCardSize, false);
-for (const button of [
-  el.terrainToolChannelMainButton,
-  el.terrainToolChannelSecondaryButton,
-  el.terrainToolChannelEdgeButton
-]) {
-  if (!button) continue;
-  button.addEventListener("click", function () {
-    setTerrainActiveChannel(String(button.dataset.terrainChannel || "main"));
-  });
-}
-for (const button of [
-  el.terrainToolMoveButton,
-  el.terrainToolExtrudeButton,
-  el.terrainToolScaleButton,
-  el.terrainToolDeleteButton
-]) {
-  if (!button) continue;
-  button.addEventListener("click", function () {
-    setTerrainToolMode(String(button.dataset.terrainAction || "select"));
-  });
-}
 const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR === "object"
   ? window.__GK_DEBUG_EDITOR
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
@@ -763,7 +746,6 @@ function focusAssetUsage(usage) {
   const node = nodeById(usage.nodeId);
   if (!node) return;
   selectNode(usage.nodeId, true, { clearPendingEdge: true });
-  focusGraphNode(usage.nodeId);
   if (!runtime) return;
   const runtimeId = runtimeNodeId(node);
   if (!runtimeId || typeof runtime.selectEntity !== "function") return;
@@ -1310,7 +1292,7 @@ function terrainNodeLabel(node) {
 
 const TERRAIN_HEIGHT_DRAG_STEP = 0.02;
 
-function walkableSurfaceFallbackPoints(node) {
+function terrainFallbackRectanglePoints(node) {
   const surface = terrainSurfaceSnapshot(node);
   const x = surface.x;
   const y = surface.y;
@@ -1354,8 +1336,8 @@ function terrainNodePoints(node) {
       normalized.push({ x: x, z: z });
     }
   }
-  if (node?.type === "walkable_surface" && normalized.length === 0) {
-    return walkableSurfaceFallbackPoints(node);
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(node?.type) && normalized.length === 0) {
+    return terrainFallbackRectanglePoints(node);
   }
   return normalized;
 }
@@ -1692,36 +1674,31 @@ function terrainHasActiveSession() {
   return Boolean(state.terrainTool.dragNodeId && state.terrainTool.draggingHandleRole);
 }
 
-function terrainActiveSessionModeLabel() {
-  if (!terrainHasActiveSession()) return "Select";
-  if (state.terrainTool.draggingHandleRole === "extrude") return "Extrude";
-  if (state.terrainTool.draggingHandleRole === "scale") return "Scale " + terrainChannelLabel(state.terrainTool.dragScaleChannel || terrainActiveChannel());
-  return "Move";
-}
-
 function terrainShortcutSummaryText() {
-  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, F extrude, Z height, Del delete | Material: S scale, X/Y/Z axis";
+  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, R rotate, S scale, F extrude, Z height, Del delete | Material: T texture scale, X/Y/Z axis";
 }
 
 function terrainNodeCapabilities(node) {
   const nodeType = String(node?.type || "");
-  const shapeType = String(node?.values?.shapeType || "").trim().toLowerCase();
   const walkableSurface = nodeType === "walkable_surface";
-  const polygonEditable = nodeType === "surface_layer"
-    || walkableSurface
-    || (nodeType === "blocker_area" && shapeType === "polygon");
+  // All four terrain-tool node types edit identically to Walkable Surface: a
+  // point/line polygon with a center handle, regardless of any legacy shapeType
+  // field (box/circle become "polygon" the moment points are edited, see
+  // terrainPatchPoints). Only surface_layer stays an open path.
+  const polygonEditable = TERRAIN_TOOL_NODE_TYPES.has(nodeType);
   return {
     visible: Boolean(node && TERRAIN_TOOL_NODE_TYPES.has(nodeType)),
     nodeType: nodeType,
-    shapeType: shapeType,
     walkableSurface: walkableSurface,
     polygonEditable: polygonEditable,
     pointEditing: polygonEditable,
-    outlineOnly: nodeType === "blocker_area" && !polygonEditable,
-    centerEditable: walkableSurface,
+    closedLoop: TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(nodeType),
+    centerEditable: polygonEditable,
     allowSelect: true,
-    allowMove: polygonEditable || walkableSurface,
+    allowMove: polygonEditable,
     allowExtrude: polygonEditable,
+    allowRotate: polygonEditable,
+    allowGeoScale: polygonEditable,
     allowScale: nodeType === "surface_layer",
     allowDelete: polygonEditable
   };
@@ -1732,6 +1709,8 @@ function terrainModeAllowed(mode, capabilities) {
   if (mode === "select") return Boolean(capabilities.allowSelect);
   if (mode === "move") return Boolean(capabilities.allowMove);
   if (mode === "extrude") return Boolean(capabilities.allowExtrude);
+  if (mode === "rotate") return Boolean(capabilities.allowRotate);
+  if (mode === "geoscale") return Boolean(capabilities.allowGeoScale);
   if (mode === "scale") return Boolean(capabilities.allowScale);
   if (mode === "delete") return Boolean(capabilities.allowDelete);
   return false;
@@ -1740,31 +1719,22 @@ function terrainModeAllowed(mode, capabilities) {
 function terrainSelectionText(node, capabilities) {
   if (!node || !capabilities) return "";
   const title = terrainTypeLabel(node.type);
-  if (capabilities.outlineOnly) {
-    return title + " - Outline only: set shapeType to polygon to edit points";
-  }
   const channel = terrainChannelLabel(terrainActiveChannel());
   const channelSummary = "Edit: 1 Main, 2 Secondary, 3 Edge | Active: " + channel;
   const shortcutSummary = terrainShortcutSummaryText();
-  if (node.type === "walkable_surface") {
-    const base = title + " - Elevated polygon walk area | " + shortcutSummary;
-    if (state.terrainTool.mode === "move" && state.terrainTool.selectedHandleRole === "center") return title + " - Moving full surface | " + shortcutSummary;
-    if (state.terrainTool.mode === "move") return title + " - Moving points | " + shortcutSummary;
-    if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
-    if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
-    return base + " | Select center to move all points, use Z for height";
-  }
   const pointCount = terrainNodePoints(node).length;
   const base = title + " - " + channelSummary + " | " + shortcutSummary;
   if (pointCount < terrainMinPointCount(node.type)) {
     return base + " | Click ground to place the first points";
   }
-  if (pointCount < 2) return base + (node.type === "surface_layer" ? " | Needs at least 2 points" : "");
-  if (state.terrainTool.mode === "move") return title + " - Moving points | " + channelSummary + " | " + shortcutSummary;
-  if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + channelSummary + " | " + shortcutSummary;
+  if (state.terrainTool.mode === "move" && state.terrainTool.selectedHandleRole === "center") return title + " - Moving full shape | " + shortcutSummary;
+  if (state.terrainTool.mode === "move") return title + " - Moving points | " + shortcutSummary;
+  if (state.terrainTool.mode === "rotate") return title + " - Rotating | " + shortcutSummary;
+  if (state.terrainTool.mode === "geoscale") return title + " - Scaling | " + shortcutSummary;
+  if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
-  return base;
+  return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
 
 function terrainSelectedPointText() {
@@ -1789,6 +1759,10 @@ function terrainClearDragState() {
   state.terrainTool.dragPointerId = null;
   state.terrainTool.dragStartGround = null;
   state.terrainTool.dragCurrentGround = null;
+  state.terrainTool.dragStartPivot = null;
+  state.terrainTool.dragStartAngle = null;
+  state.terrainTool.dragStartDistance = null;
+  state.terrainTool.dragTransformIndices = null;
   state.terrainTool.dragMoved = false;
 }
 
@@ -1820,6 +1794,8 @@ function terrainCancelActiveSession() {
     || state.terrainTool.draggingHandleRole === "extrude"
     || state.terrainTool.draggingHandleRole === "point"
     || state.terrainTool.draggingHandleRole === "center"
+    || state.terrainTool.draggingHandleRole === "rotate"
+    || state.terrainTool.draggingHandleRole === "geoscale"
   );
   terrainClearDragState();
   state.terrainTool.mode = "select";
@@ -2103,7 +2079,7 @@ function scatterOverlayState() {
     groundY: groundY,
     enabled: node.values?.enabled !== false,
     boundaryBlocksPlayer: node.values?.boundaryBlocksPlayer === true,
-    color: node.values?.enabled === false ? "#9c9c9c" : "#d59bff",
+    color: node.values?.enabled === false ? "#9c9c9c" : accentColorForNodeDef(state.nodeTypes[node.type]),
     points: previewPoints,
     selectedPointIndex: selectedIndex,
     selectedPointIndices: selectedIndices,
@@ -2502,7 +2478,7 @@ function terrainSelectedNodeSummary() {
 function terrainOverlayState() {
   const summary = terrainSelectedNodeSummary();
   if (!summary) return null;
-  const { node, capabilities, points, surface } = summary;
+  const { node, points, surface } = summary;
   const groundY = terrainGroundY();
   const dragGround = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround || null;
   let previewPoints = terrainClonePoints(points);
@@ -2517,13 +2493,8 @@ function terrainOverlayState() {
     selectedHandleRole: state.terrainTool.selectedHandleRole,
     draggingHandleRole: state.terrainTool.draggingHandleRole,
     points: points,
-    shapeType: capabilities.shapeType,
     groundY: groundY,
-    color: node.type === "surface_layer"
-      ? "#8fbf6a"
-      : node.type === "walkable_surface"
-        ? "#8fe0a8"
-        : "#f0b35a"
+    color: accentColorForNodeDef(state.nodeTypes[node.type])
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -2533,10 +2504,12 @@ function terrainOverlayState() {
       dragGround,
       state.terrainTool.dragStartGround
     );
-  } else if (state.terrainTool.draggingHandleRole === "center" && node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
+  } else if (state.terrainTool.draggingHandleRole === "center" && state.terrainTool.dragStartPoints) {
     const startGround = state.terrainTool.dragStartGround
       || (state.terrainTool.dragStartSurface ? { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z } : null);
     previewPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, dragGround, startGround);
+  } else if ((state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") && state.terrainTool.dragStartPoints) {
+    previewPoints = terrainPreviewGroupTransform(state.terrainTool.dragStartPoints, dragGround, state.terrainTool.draggingHandleRole);
   } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragStartPoints) {
     const anchor = state.terrainTool.dragStartGround || dragGround;
     const previewPoint = dragGround && Number.isFinite(dragGround.x) && Number.isFinite(dragGround.z)
@@ -2561,19 +2534,60 @@ function terrainOverlayState() {
     overlay.previewScale = Object.assign({}, state.terrainTool.dragStartScale);
   }
   overlay.points = previewPoints;
-  if (node.type === "walkable_surface") {
-    Object.assign(overlay, terrainWalkableSurfaceGeometry(node, previewPoints));
-  }
+  Object.assign(overlay, terrainWalkableSurfaceGeometry(node, previewPoints));
   return overlay;
+}
+
+// Big center-handle markers for every points-based node except the currently
+// selected one (which already renders its own, richer, editable center handle).
+// Lets you spot and jump straight to any Walkable Surface / Blocker Area / Area
+// Definition / Surface Layer / Bounded Area Scatter node from the 3D viewport.
+function terrainAllNodeMarkers() {
+  const groundY = terrainGroundY();
+  const selectedId = state.selectedNodeId;
+  const markers = [];
+  for (const node of state.graph.nodes || []) {
+    if (node.id === selectedId) continue;
+    if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+      const points = terrainNodePoints(node);
+      const geometry = terrainWalkableSurfaceGeometry(node, points);
+      markers.push({
+        nodeId: node.id,
+        x: geometry.x,
+        y: node.type === "walkable_surface" ? geometry.y : groundY + 0.03,
+        z: geometry.z,
+        color: accentColorForNodeDef(state.nodeTypes[node.type])
+      });
+    } else if (node.type === "bounded_area_scatter") {
+      const center = scatterPointCenter(scatterNodePoints(node));
+      markers.push({
+        nodeId: node.id,
+        x: center.x,
+        y: groundY + 0.05,
+        z: center.z,
+        color: node.values?.enabled === false ? "#9c9c9c" : accentColorForNodeDef(state.nodeTypes[node.type])
+      });
+    }
+  }
+  return markers;
+}
+
+function pushTerrainOverlay(overlay) {
+  if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
+  const markers = terrainAllNodeMarkers();
+  if (overlay) {
+    runtime.setTerrainEditorOverlay(Object.assign({}, overlay, { markers: markers }));
+  } else if (markers.length) {
+    runtime.setTerrainEditorOverlay({ markers: markers });
+  } else if (typeof runtime.clearTerrainEditorOverlay === "function") {
+    runtime.clearTerrainEditorOverlay();
+  }
 }
 
 function syncTerrainToolPanel() {
   const summary = terrainSelectedNodeSummary();
   const node = summary?.node || null;
   const capabilities = summary?.capabilities || null;
-  const panel = el.terrainToolPanel;
-  const nodeLabel = el.terrainToolNodeLabel;
-  const hint = el.terrainToolHint;
 
   if (!node || !capabilities) {
     const hadActiveSession = terrainHasActiveSession();
@@ -2582,66 +2596,13 @@ function syncTerrainToolPanel() {
     terrainSetSelection(null, null);
     state.terrainTool.mode = "select";
     state.terrainTool.axisConstraint = null;
-    if (panel) panel.hidden = true;
-    if (nodeLabel) nodeLabel.textContent = "";
-    if (hint) hint.textContent = "";
     if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
-    if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") runtime.clearTerrainEditorOverlay();
+    pushTerrainOverlay(null);
     return;
   }
 
   terrainResetForNode(node, capabilities);
-
-  if (panel) panel.hidden = false;
-  if (nodeLabel) {
-    const labelText = terrainNodeLabel(node);
-    nodeLabel.textContent = labelText ? labelText : terrainTypeLabel(node.type);
-  }
-  if (hint) {
-    const channel = terrainChannelLabel(terrainActiveChannel());
-    const modeText = terrainHasActiveSession()
-      ? terrainActiveSessionModeLabel()
-      : state.terrainTool.mode === "select"
-        ? "Select"
-        : terrainTypeLabel(state.terrainTool.mode);
-    hint.textContent = capabilities.outlineOnly
-      ? "Outline only"
-      : modeText + " | " + terrainShortcutSummaryText() + " | Active channel: " + channel + (state.terrainTool.axisConstraint ? " | Axis " + state.terrainTool.axisConstraint.toUpperCase() : "");
-  }
-
-  const overlay = terrainOverlayState();
-  if (runtime && typeof runtime.setTerrainEditorOverlay === "function" && overlay) {
-    runtime.setTerrainEditorOverlay(overlay);
-  } else if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") {
-    runtime.clearTerrainEditorOverlay();
-  }
-
-  const sessionActive = terrainHasActiveSession();
-  for (const button of [
-    el.terrainToolChannelMainButton,
-    el.terrainToolChannelSecondaryButton,
-    el.terrainToolChannelEdgeButton
-  ]) {
-    if (!button) continue;
-    const channel = String(button.dataset.terrainChannel || "main");
-    button.disabled = sessionActive;
-    button.classList.toggle("active", channel === terrainActiveChannel());
-    button.setAttribute("aria-pressed", channel === terrainActiveChannel() ? "true" : "false");
-  }
-
-  for (const button of [
-    el.terrainToolMoveButton,
-    el.terrainToolExtrudeButton,
-    el.terrainToolScaleButton,
-    el.terrainToolDeleteButton
-  ]) {
-    if (!button) continue;
-    const action = String(button.dataset.terrainAction || "");
-    const allowed = terrainModeAllowed(action, capabilities);
-    button.disabled = !allowed || sessionActive;
-    button.classList.toggle("active", action === state.terrainTool.mode);
-    button.setAttribute("aria-pressed", action === state.terrainTool.mode ? "true" : "false");
-  }
+  pushTerrainOverlay(terrainOverlayState());
 }
 
 function renderStatusLine() {
@@ -3109,8 +3070,11 @@ function selectNode(nodeId, scroll, options = {}) {
     setSelection([nodeId], [], { primaryNodeId: nodeId, clearPendingEdge: options.clearPendingEdge });
   }
   if (scroll) {
-    const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + nodeId + '"]');
-    if (card && typeof card.scrollIntoView === "function") card.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Never use the browser's native scrollIntoView here: .graphViewport is a fixed-size
+    // canvas panned/zoomed via CSS transform + state.view, not native scrolling. Nudging
+    // its real scroll offset desyncs state.view from the DOM, which then throws off every
+    // mouse-to-graph coordinate conversion (zoom direction, click position, ...).
+    focusGraphNode(nodeId);
   }
 }
 
@@ -3457,7 +3421,7 @@ function renderNodeLibrary() {
       button.className = "libButton";
       const dot = document.createElement("span");
       dot.className = "libDot";
-      dot.style.background = def.accent || "#7bd4ff";
+      dot.style.background = accentColorForNodeDef(def);
       const label = document.createElement("span");
       label.textContent = def.label;
       const plus = document.createElement("span");
@@ -3514,12 +3478,27 @@ async function addSpecialGroup(preset) {
   });
 }
 
+// Where a new node's x/z should land: the point on the ground the 3D viewport
+// camera is currently centered on, instead of always the schema's default (usually
+// the world origin, which is often nowhere near what the user is looking at).
+function viewportCenterWorldValues(type) {
+  const fields = state.nodeTypes?.[type]?.fields;
+  if (!fields || !fields.x || !fields.z) return {};
+  if (!runtime || typeof runtime.screenToGround !== "function" || !el.viewportCanvas) return {};
+  const rect = el.viewportCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return {};
+  const ground = runtime.screenToGround(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  if (!ground || !Number.isFinite(ground.x) || !Number.isFinite(ground.z)) return {};
+  return { x: ground.x, z: ground.z };
+}
+
 async function addNode(type, values = {}) {
   const center = viewportCenterInGraph();
+  const spawnValues = Object.assign({}, viewportCenterWorldValues(type), values);
   await applyGraphMutation(function () {
     return api("/api/editor/nodes", {
       method: "POST",
-      body: JSON.stringify({ type: type, position: center, values: values, parentId: state.currentGroupId })
+      body: JSON.stringify({ type: type, position: center, values: spawnValues, parentId: state.currentGroupId })
     });
   }, {
     historyLabel: "Node toegevoegd",
@@ -3665,17 +3644,27 @@ function portIndexForNode(node, portName, direction) {
   return portEntriesForNode(node, direction).findIndex(function (entry) { return entry[0] === portName; });
 }
 
-function primaryOutputType(node) {
-  const outputs = portEntriesForNode(node, "output");
-  return outputs.length === 1 ? outputs[0][1].dataType : "";
+// Single source of truth for "the color that represents this node": when there is
+// exactly one output port, use its data type color so this always matches the
+// port dot / connection line color for that node. Falls back otherwise (0 or
+// multiple outputs) since there is no single data type to key off of.
+function accentColorFromOutputs(outputEntries, fallbackColor) {
+  if (outputEntries.length === 1 && outputEntries[0][1] && outputEntries[0][1].dataType) {
+    return dataTypeColor(outputEntries[0][1].dataType);
+  }
+  return fallbackColor;
 }
 
 function groupAccentForNode(node) {
   const outputs = portEntriesForNode(node, "output");
-  if (outputs.length === 1 && outputs[0][1] && outputs[0][1].dataType) {
-    return dataTypeColor(outputs[0][1].dataType);
-  }
-  return (state.nodeTypes.group && state.nodeTypes.group.accent) || "#8a97a3";
+  return accentColorFromOutputs(outputs, (state.nodeTypes.group && state.nodeTypes.group.accent) || "#8a97a3");
+}
+
+function accentColorForNodeDef(def) {
+  const outputs = Object.entries(def?.outputs || {}).filter(function ([, port]) {
+    return port && !port.hidden && !port.internal;
+  });
+  return accentColorFromOutputs(outputs, def?.accent || "#7bd4ff");
 }
 
 function inputAnchor(node, portName) {
@@ -3732,7 +3721,7 @@ function buildNodeElement(node) {
   accent.className = "gnodeAccent";
   const accentColor = def.container
     ? groupAccentForNode(node)
-    : def.accent || dataTypeColor(primaryOutputType(node)) || "#7bd4ff";
+    : accentColorFromOutputs(portEntriesForNode(node, "output"), def.accent || "#7bd4ff");
   accent.style.background = accentColor;
   const title = document.createElement("span");
   title.className = "gnodeTitle";
@@ -3807,6 +3796,7 @@ function buildNodeElement(node) {
       return;
     }
     selectNode(node.id, false, { clearPendingEdge: true });
+    focusTerrainOrSelected();
   });
   return card;
 }
@@ -6673,9 +6663,8 @@ function scatterHandleFromEvent(event) {
 }
 
 function terrainRenderOverlayPreview() {
-  if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
   const overlay = terrainOverlayState();
-  if (overlay) runtime.setTerrainEditorOverlay(overlay);
+  if (overlay) pushTerrainOverlay(overlay);
 }
 
 function scatterRenderOverlayPreview() {
@@ -6687,6 +6676,19 @@ function scatterRenderOverlayPreview() {
 
 function terrainFinishWithRender() {
   renderViewportControls();
+}
+
+// Generic fallback for any node type that stores a plain world-space x/z (optionally
+// y) position but has no runtime mesh to select/frame - Location Anchor, Player Spawn,
+// and anything else with coordinate fields, present or future, without hardcoding types.
+function nodeCoordinatePoint(node) {
+  const fields = state.nodeTypes?.[node?.type]?.fields;
+  if (!fields || !fields.x || !fields.z) return null;
+  const x = Number(node.values?.x);
+  const z = Number(node.values?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const y = fields.y ? Number(node.values?.y) : NaN;
+  return { x: x, y: Number.isFinite(y) ? y : terrainGroundY(), z: z };
 }
 
 function focusTerrainOrSelected() {
@@ -6713,56 +6715,48 @@ function focusTerrainOrSelected() {
     return;
   }
   const node = selectedTerrainNode();
-  if (!node) {
-    if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-    return;
-  }
-  const capabilities = terrainNodeCapabilities(node);
-  const groundY = terrainGroundY();
-  if (capabilities.walkableSurface || capabilities.polygonEditable || capabilities.pointEditing) {
-    const points = terrainNodePoints(node);
-    if (!points.length) {
-      if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-      return;
-    }
-    const selectedIdx = state.terrainTool.selectedPointIndex;
-    if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
-      const p = points[selectedIdx];
-      if (typeof runtime.frameWorldPoints === "function") {
-        runtime.frameWorldPoints([{
-          x: p.x,
-          y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
-          z: p.z
-        }]);
+  if (node) {
+    const capabilities = terrainNodeCapabilities(node);
+    const groundY = terrainGroundY();
+    if (capabilities.walkableSurface || capabilities.polygonEditable || capabilities.pointEditing) {
+      const points = terrainNodePoints(node);
+      if (points.length) {
+        const selectedIdx = state.terrainTool.selectedPointIndex;
+        if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
+          const p = points[selectedIdx];
+          if (typeof runtime.frameWorldPoints === "function") {
+            runtime.frameWorldPoints([{
+              x: p.x,
+              y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+              z: p.z
+            }]);
+          }
+          return;
+        }
+        const positions = points.map(function (p) {
+          return {
+            x: p.x,
+            y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+            z: p.z
+          };
+        });
+        if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
+        return;
       }
+    }
+  }
+  // No mesh-editable points to frame - if the selected node has no real runtime
+  // mesh either (Location Anchor, Player Spawn, ...) but does store a plain x/z
+  // position, frame that point directly instead of leaving the camera untouched.
+  const selectedNode = node || nodeById(state.selectedNodeId);
+  if (selectedNode && !runtimeNodeId(selectedNode)) {
+    const point = nodeCoordinatePoint(selectedNode);
+    if (point && typeof runtime.frameWorldPoints === "function") {
+      runtime.frameWorldPoints([point]);
       return;
     }
-    const positions = points.map(function (p) {
-      return {
-        x: p.x,
-        y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
-        z: p.z
-      };
-    });
-    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
-    return;
   }
   if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-}
-
-function setTerrainToolMode(mode) {
-  const node = selectedTerrainNode();
-  if (!node) return;
-  const capabilities = terrainNodeCapabilities(node);
-  const nextMode = terrainModeAllowed(mode, capabilities) ? mode : "select";
-  state.terrainTool.mode = nextMode;
-  if (nextMode === "select") {
-    state.terrainTool.axisConstraint = null;
-    if (terrainHasActiveSession()) terrainClearDragState();
-  } else if (terrainHasActiveSession() && state.terrainTool.dragNodeId !== node.id) {
-    terrainClearDragState();
-  }
-  terrainFinishWithRender();
 }
 
 function setTerrainActiveChannel(channel) {
@@ -6819,6 +6813,120 @@ function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
   terrainRenderOverlayPreview();
   terrainFinishWithRender();
   return true;
+}
+
+// Rotate/scale the current selection as a group: shift-selected points rotate/scale
+// around their own centroid, a single selected point is a no-op pivot-of-one, and no
+// selection (the center handle) rotates/scales every point in the shape together.
+function terrainGroupTransformIndices(node, points) {
+  if (state.terrainTool.selectedPointIndices.length > 1) return state.terrainTool.selectedPointIndices.slice();
+  if (Number.isInteger(state.terrainTool.selectedPointIndex)) return [state.terrainTool.selectedPointIndex];
+  return points.map(function (_, index) { return index; });
+}
+
+function terrainBeginGroupTransformSession(node, groundPoint, pointerId, kind) {
+  const capabilities = terrainNodeCapabilities(node);
+  if (kind === "rotate" && !capabilities.allowRotate) {
+    setStatus("Rotate is not available here.", "error");
+    return false;
+  }
+  if (kind === "geoscale" && !capabilities.allowGeoScale) {
+    setStatus("Scale is not available here.", "error");
+    return false;
+  }
+  const points = terrainNodePoints(node);
+  const startGround = groundPoint || (terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null);
+  if (!startGround) {
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const targetIndices = terrainGroupTransformIndices(node, points);
+  if (!targetIndices.length) {
+    setStatus("Nothing to transform.", "error");
+    return false;
+  }
+  const pivot = scatterPointCenter(targetIndices.map(function (index) { return points[index]; }).filter(Boolean));
+  const selectedPointIndex = state.terrainTool.selectedPointIndex;
+  const selectedPointIndices = state.terrainTool.selectedPointIndices.slice();
+  const selectedHandleRole = state.terrainTool.selectedHandleRole;
+  terrainClearDragState();
+  state.terrainTool.mode = kind;
+  state.terrainTool.selectedPointIndex = selectedPointIndex;
+  state.terrainTool.selectedPointIndices = selectedPointIndices;
+  state.terrainTool.selectedHandleRole = selectedHandleRole;
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = selectedPointIndex;
+  state.terrainTool.draggingHandleRole = kind;
+  state.terrainTool.dragTransformIndices = targetIndices;
+  state.terrainTool.dragStartPoints = terrainClonePoints(points);
+  state.terrainTool.dragStartGround = { x: startGround.x, z: startGround.z };
+  state.terrainTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
+  state.terrainTool.dragPointerId = pointerId;
+  state.terrainTool.dragMoved = false;
+  state.terrainTool.dragStartPivot = pivot;
+  state.terrainTool.dragStartAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
+  state.terrainTool.dragStartDistance = Math.max(0.0001, Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
+  state.terrainTool.axisConstraint = null;
+  terrainRenderOverlayPreview();
+  terrainFinishWithRender();
+  return true;
+}
+
+function terrainPreviewGroupTransform(startPoints, groundPoint, kind) {
+  const nextPoints = terrainClonePoints(startPoints);
+  const pivot = state.terrainTool.dragStartPivot;
+  const indices = state.terrainTool.dragTransformIndices || [];
+  if (!pivot || !groundPoint || !indices.length) return nextPoints;
+  const subset = indices.map(function (index) { return nextPoints[index]; }).filter(Boolean);
+  let transformed;
+  if (kind === "rotate") {
+    const startAngle = state.terrainTool.dragStartAngle;
+    if (!Number.isFinite(startAngle)) return nextPoints;
+    const currentAngle = Math.atan2(groundPoint.z - pivot.z, groundPoint.x - pivot.x);
+    const deltaDegrees = (currentAngle - startAngle) * (180 / Math.PI);
+    transformed = scatterRotatePoints(subset, pivot, deltaDegrees);
+  } else {
+    const startDistance = Math.max(0.0001, state.terrainTool.dragStartDistance || 1);
+    const currentDistance = Math.hypot(groundPoint.x - pivot.x, groundPoint.z - pivot.z);
+    const factor = Math.max(0.05, currentDistance / startDistance);
+    transformed = scatterScalePoints(subset, pivot, factor);
+  }
+  let cursor = 0;
+  for (const index of indices) {
+    if (!nextPoints[index]) continue;
+    nextPoints[index] = Object.assign({}, nextPoints[index], transformed[cursor]);
+    cursor += 1;
+  }
+  return nextPoints;
+}
+
+async function terrainCommitGroupTransform(node, kind) {
+  const startPoints = terrainClonePoints(state.terrainTool.dragStartPoints || terrainNodePoints(node));
+  const groundPoint = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround;
+  if (!groundPoint || !state.terrainTool.dragStartPivot) {
+    terrainClearDragState();
+    state.terrainTool.mode = "select";
+    terrainFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const nextPoints = terrainPreviewGroupTransform(startPoints, groundPoint, kind);
+  const selectedIndexBefore = state.terrainTool.selectedPointIndex;
+  const selectedIndicesBefore = state.terrainTool.selectedPointIndices.slice();
+  const selectedRoleBefore = state.terrainTool.selectedHandleRole;
+  const ok = await terrainPatchPoints(node, nextPoints, kind === "rotate" ? "Terrain shape rotated" : "Terrain shape scaled");
+  terrainClearDragState();
+  state.terrainTool.mode = "select";
+  if (ok) {
+    state.terrainTool.selectedPointIndex = selectedIndexBefore;
+    state.terrainTool.selectedPointIndices = selectedIndicesBefore;
+    state.terrainTool.selectedHandleRole = selectedRoleBefore;
+    setStatus(kind === "rotate" ? "Rotated." : "Scaled.", "success");
+  }
+  terrainFinishWithRender();
+  return ok;
 }
 
 function terrainBeginScaleSession(node, pointerEvent, pointerId) {
@@ -6916,9 +7024,7 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
   state.terrainTool.dragNodeId = node.id;
   state.terrainTool.draggingPointIndex = null;
   state.terrainTool.draggingHandleRole = "center";
-  state.terrainTool.dragStartPoints = node.type === "walkable_surface"
-    ? terrainClonePoints(terrainNodePoints(node))
-    : null;
+  state.terrainTool.dragStartPoints = terrainClonePoints(terrainNodePoints(node));
   state.terrainTool.dragStartSurface = terrainSurfaceSnapshot(node);
   state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
@@ -6939,13 +7045,20 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
 async function terrainPatchPoints(node, nextPoints, historyLabel) {
   const normalizedPoints = terrainClonePoints(nextPoints);
   const patch = { points: normalizedPoints };
-  if (node.type === "walkable_surface") {
+  const fields = state.nodeTypes?.[node.type]?.fields || {};
+  // Only the closed shapes (walkable_surface/blocker_area/area_definition) use
+  // x/z/width/depth as a bounding box to keep resynced. Surface Layer also has a
+  // "width" field, but that's the path's stroke width, not a bounding box - patching
+  // it from point bounds would clobber it with an unrelated number.
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(node.type) && (fields.x || fields.z || fields.width || fields.depth || fields.y)) {
     const geometry = terrainWalkableSurfaceGeometry(node, normalizedPoints);
-    patch.x = geometry.x;
-    patch.z = geometry.z;
-    patch.width = geometry.width;
-    patch.depth = geometry.depth;
+    if (fields.x) patch.x = geometry.x;
+    if (fields.z) patch.z = geometry.z;
+    if (fields.width) patch.width = geometry.width;
+    if (fields.depth) patch.depth = geometry.depth;
+    if (fields.y && node.type === "walkable_surface") patch.y = geometry.y;
   }
+  if (fields.shapeType && node.values?.shapeType !== "polygon") patch.shapeType = "polygon";
   const result = await patchValues(node.id, patch, {
     historyLabel: historyLabel,
     refreshViewport: true,
@@ -6979,15 +7092,6 @@ async function terrainAddPoint(node, groundPoint) {
     return false;
   }
   const capabilities = terrainNodeCapabilities(node);
-  if (capabilities.centerEditable && !capabilities.pointEditing) {
-    const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
-    if (ok) {
-      terrainSetSelection(null, "center");
-      setStatus("Surface centered.", "success");
-      terrainFinishWithRender();
-    }
-    return ok;
-  }
   if (!capabilities.allowExtrude) return false;
   const currentPoints = terrainNodePoints(node);
   const surface = terrainSurfaceSnapshot(node);
@@ -7043,8 +7147,7 @@ async function terrainDeletePoint(node, pointIndex) {
 
 function terrainMinPointCount(nodeType) {
   if (nodeType === "surface_layer") return 2;
-  if (nodeType === "blocker_area") return 3;
-  if (nodeType === "walkable_surface") return 3;
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(nodeType)) return 3;
   return 1;
 }
 
@@ -7158,20 +7261,20 @@ async function terrainCommitSurfaceDrag(node) {
     return false;
   }
   let ok = false;
-  if (node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
+  if (state.terrainTool.dragStartPoints) {
     const startGround = state.terrainTool.dragStartGround
       || { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z };
     const nextPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, groundPoint, startGround);
-    ok = await terrainPatchPoints(node, nextPoints, "Terrain surface moved");
+    ok = await terrainPatchPoints(node, nextPoints, "Terrain shape moved");
   } else {
-    ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+    ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain shape moved");
   }
   terrainClearDragState();
   state.terrainTool.axisConstraint = null;
   state.terrainTool.mode = "select";
   if (ok) {
     terrainSetSelection(null, "center");
-    setStatus("Surface moved.", "success");
+    setStatus("Shape moved.", "success");
   }
   terrainFinishWithRender();
   return ok;
@@ -7225,14 +7328,30 @@ function handleTerrainPointerDown(event) {
       void terrainCommitSurfaceDrag(node);
       return;
     }
+    if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+      void terrainCommitGroupTransform(node, state.terrainTool.draggingHandleRole);
+      return;
+    }
     void terrainCommitPointDrag(node);
     return;
   }
   if (!terrainCanvasTarget(event) || event.button !== 0) return;
   const node = selectedTerrainNode();
+  const hit = terrainHandleFromEvent(event);
+  // A hit for a node other than the currently selected one can only be one of the
+  // always-visible "go to this node" markers - jump to it instead of editing.
+  if (hit && hit.nodeId && hit.nodeId !== node?.id) {
+    const markerNode = nodeById(hit.nodeId);
+    if (markerNode) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      selectNode(markerNode.id, true, { clearPendingEdge: true });
+      return;
+    }
+  }
   if (!node) return;
   const capabilities = terrainNodeCapabilities(node);
-  const hit = terrainHandleFromEvent(event);
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.terrainTool.mode;
   const meshEntityId = runtimeEntityIdFromPointer(event);
@@ -7251,7 +7370,7 @@ function handleTerrainPointerDown(event) {
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
 
   if (hit && hit.nodeId === node.id) {
-    if (node.type === "walkable_surface" && hit.handleRole === "center") {
+    if (capabilities.centerEditable && hit.handleRole === "center") {
       if (state.terrainTool.mode === "delete") {
         setStatus("Select a point to delete.", "error");
         terrainFinishWithRender();
@@ -7726,16 +7845,18 @@ function handleEditorKeyDown(event) {
       }
     }
     if (event.key === "Delete" || event.key === "Backspace") {
-      consumeShortcutEvent(event);
       if (state.scatterTool.selectedPointIndices.length > 1) {
+        consumeShortcutEvent(event);
         void scatterDeleteMultiPoint(scatterNode);
         return;
       }
       if (Number.isInteger(state.scatterTool.selectedPointIndex)) {
+        consumeShortcutEvent(event);
         void scatterDeletePoint(scatterNode, state.scatterTool.selectedPointIndex);
         return;
       }
-      return;
+      // No point selected - fall through to the generic "delete selected node" handler
+      // below instead of swallowing the key with nothing to delete.
     }
     if (event.code === "NumpadDecimal" || event.key === ".") {
       consumeShortcutEvent(event);
@@ -7798,6 +7919,22 @@ function handleEditorKeyDown(event) {
       setStatus("Scale ready. Click or Enter to confirm.", "");
       return;
     }
+    if (!event.altKey && !meta && keyMatches(event, "r")) {
+      consumeShortcutEvent(event);
+      if (!terrainBeginGroupTransformSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null, "rotate")) {
+        return;
+      }
+      setStatus("Rotate ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "s")) {
+      consumeShortcutEvent(event);
+      if (!terrainBeginGroupTransformSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null, "geoscale")) {
+        return;
+      }
+      setStatus("Scale ready. Click or Enter to confirm.", "");
+      return;
+    }
     if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y") || keyMatches(event, "z"))) {
       consumeShortcutEvent(event);
       if (keyMatches(event, "z")) {
@@ -7855,6 +7992,8 @@ function handleEditorKeyDown(event) {
           void terrainCommitScale(activeNode);
         } else if (state.terrainTool.draggingHandleRole === "center") {
           void terrainCommitSurfaceDrag(activeNode);
+        } else if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+          void terrainCommitGroupTransform(activeNode, state.terrainTool.draggingHandleRole);
         } else {
           void terrainCommitPointDrag(activeNode);
         }
@@ -7867,16 +8006,18 @@ function handleEditorKeyDown(event) {
       }
     }
     if (event.key === "Delete" || event.key === "Backspace") {
-      consumeShortcutEvent(event);
       if (state.terrainTool.selectedPointIndices.length > 1) {
+        consumeShortcutEvent(event);
         void terrainDeleteMultiPoint(terrainNode);
         return;
       }
       if (Number.isInteger(state.terrainTool.selectedPointIndex)) {
+        consumeShortcutEvent(event);
         void terrainDeletePoint(terrainNode, state.terrainTool.selectedPointIndex);
         return;
       }
-      return;
+      // No point selected - fall through to the generic "delete selected node" handler
+      // below instead of swallowing the key with nothing to delete.
     }
     if (event.key === ".") {
       consumeShortcutEvent(event);

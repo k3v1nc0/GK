@@ -4550,9 +4550,19 @@ function createWorldPlaneGeometry(minX, maxX, minZ, maxZ, y, uvBounds) {
     u1, v1,
     u0, v1
   ]);
+  const normals = new Float32Array([
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0
+  ]);
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  // Winding order 0-2-1 / 0-3-2 (not 0-1-2 / 0-2-3) is what actually faces up given
+  // this vertex layout - the "obvious" winding faces down, which flips lighting and
+  // makes the ground look upside down.
+  geometry.setIndex([0, 2, 1, 0, 3, 2]);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
   return geometry;
@@ -7943,6 +7953,13 @@ function resolveChunkDebugCenter(policy) {
           return;
         }
       }
+      if (event.button === 2 && !transformState.active) {
+        if (beginViewportPan(event)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
       if (event.button === 0 && event.altKey && !transformState.active) {
         viewportOrbitFallbackActive = true;
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
@@ -8655,7 +8672,8 @@ function resolveChunkDebugCenter(policy) {
 
   function terrainOverlayColorForNode(nodeType) {
     if (nodeType === "walkable_surface") return 0x8fe0a8;
-    if (nodeType === "blocker_area") return 0xf0b35a;
+    if (nodeType === "surface_layer") return 0x8fbf6a;
+    if (nodeType === "area_definition") return 0xa855f7;
     return 0xf0b35a;
   }
 
@@ -8703,7 +8721,12 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function terrainOverlayHandle(position, color, role, nodeId, pointIndex, selected) {
-    const geometry = new THREE.SphereGeometry(selected ? 0.18 : 0.14, 10, 8);
+    // Point handles are 4x their original size (doubled twice) so they stay clickable
+    // even when zoomed out. The center handle keeps its original absolute size (~5x
+    // the *original* point radius) rather than also growing with the points.
+    const basePointRadius = selected ? 0.18 : 0.14;
+    const radius = role === "center" ? basePointRadius * 5 : basePointRadius * 4;
+    const geometry = new THREE.SphereGeometry(radius, role === "center" ? 16 : 10, role === "center" ? 12 : 8);
     const material = new THREE.MeshBasicMaterial({
       color: selected ? 0xffffff : color,
       depthTest: false,
@@ -8748,17 +8771,6 @@ function resolveChunkDebugCenter(policy) {
     return terrainOverlayRectanglePoints(state);
   }
 
-  function terrainOverlayCirclePoints(state, segments = 24) {
-    const radius = Math.max(0, num(state?.radius, 0));
-    const center = new THREE.Vector3(num(state?.x, 0), num(state?.y, 0), num(state?.z, 0));
-    const points = [];
-    for (let index = 0; index < Math.max(8, segments); index += 1) {
-      const angle = (Math.PI * 2 * index) / Math.max(8, segments);
-      points.push(new THREE.Vector3(center.x + Math.cos(angle) * radius, center.y, center.z + Math.sin(angle) * radius));
-    }
-    return points;
-  }
-
   function clearTerrainEditorOverlay() {
     if (!terrainEditorOverlay) return;
     if (!terrainEditorOverlay.visible && terrainEditorOverlay.children.length === 0) {
@@ -8789,16 +8801,46 @@ function resolveChunkDebugCenter(policy) {
     requestRender("scatter-overlay-clear");
   }
 
+  // Walkable Surface, Blocker Area, Area Definition and Surface Layer all share one
+  // point/line/center-handle editing UI. The only real difference is that the first
+  // three are closed shapes (line loops back to the first point) while Surface Layer
+  // is an open path the user extends point by point.
   function buildTerrainEditorOverlay(nextOverlay) {
     if (!terrainEditorOverlay || mode !== "editor") return;
     clearTerrainEditorOverlay();
-    if (!nextOverlay || !nextOverlay.nodeType) return;
+    const markers = Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
+    const hasSelected = Boolean(nextOverlay && nextOverlay.nodeType);
+    if (!hasSelected && !markers.length) return;
     terrainEditorOverlayState = nextOverlay;
     terrainEditorOverlay.visible = true;
+
+    // Always-visible "go to this node" markers for every other points-based node -
+    // just the big center handle, not clickable/editable points or lines, so the
+    // viewport doesn't get cluttered with the whole shape of every unselected node.
+    for (const marker of markers) {
+      const markerHandle = terrainOverlayHandle(
+        new THREE.Vector3(num(marker?.x, 0), num(marker?.y, 0), num(marker?.z, 0)),
+        marker?.color ? new THREE.Color(marker.color) : new THREE.Color(0x7bd4ff),
+        "center",
+        marker?.nodeId || null,
+        null,
+        false
+      );
+      terrainEditorOverlay.add(markerHandle);
+    }
+
+    if (!hasSelected) {
+      requestRender("terrain-overlay-update");
+      return;
+    }
     const nodeId = String(nextOverlay.nodeId || "");
     const nodeType = String(nextOverlay.nodeType || "");
-    const color = terrainOverlayColorForNode(nodeType);
-    const lineColor = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(color);
+    const closed = nodeType !== "surface_layer";
+    // The line and both handle kinds all share one color - the node's own accent
+    // color, passed through from the editor - so the shape reads as "this node" at
+    // a glance in the viewport.
+    const color = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(terrainOverlayColorForNode(nodeType));
+    const lineColor = color;
     const y = nodeType === "walkable_surface"
       ? num(nextOverlay.y, 0)
       : num(nextOverlay.groundY, 0) + 0.03;
@@ -8806,48 +8848,14 @@ function resolveChunkDebugCenter(policy) {
     const selectedIndices = Array.isArray(nextOverlay.selectedPointIndices) ? new Set(nextOverlay.selectedPointIndices) : null;
     const selectedRole = String(nextOverlay.selectedHandleRole || "");
 
-    if (nodeType === "walkable_surface") {
-      const hasPoints = Array.isArray(nextOverlay.points) && nextOverlay.points.length > 0;
-      const rawPoints = hasPoints
-        ? nextOverlay.points
-        : terrainOverlayRectanglePoints({
-          x: nextOverlay.x,
-          y: y,
-          z: nextOverlay.z,
-          width: nextOverlay.width,
-          depth: nextOverlay.depth,
-          rotationY: nextOverlay.rotationY
-        });
-      const points = rawPoints.map(function (point) {
-        return new THREE.Vector3(num(point?.x, 0), num(point?.y, y), num(point?.z, 0));
-      });
-      const line = terrainOverlayLine(points, hasPoints ? points.length >= 3 : true, lineColor, 0.92);
-      if (line) terrainEditorOverlay.add(line);
-      const center = terrainOverlayHandle(
-        new THREE.Vector3(num(nextOverlay.x, 0), num(nextOverlay.y, 0), num(nextOverlay.z, 0)),
-        color,
-        "center",
-        nodeId,
-        null,
-        selectedRole === "center" || nextOverlay.draggingHandleRole === "center"
-      );
-      terrainEditorOverlay.add(center);
-      if (hasPoints) {
-        for (let index = 0; index < points.length; index += 1) {
-          terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, selectedIndices ? selectedIndices.has(index) : index === selectedIndex));
-        }
-      }
-      requestRender("terrain-overlay-update");
-      return;
-    }
-
     const rawPoints = Array.isArray(nextOverlay.points) ? nextOverlay.points : [];
     const points = [];
     for (const point of rawPoints) {
       const x = Number(point?.x);
       const z = Number(point?.z);
       if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-      points.push(new THREE.Vector3(x, y, z));
+      const py = nodeType === "walkable_surface" ? num(point?.y, y) : y;
+      points.push(new THREE.Vector3(x, py, z));
     }
     const extrudePreviewPoint = nextOverlay.draggingHandleRole === "extrude" && nextOverlay.previewPoint
       ? new THREE.Vector3(
@@ -8867,57 +8875,28 @@ function resolveChunkDebugCenter(policy) {
       return index === selectedIndex;
     };
 
-    if (nodeType === "blocker_area" && String(nextOverlay.shapeType || "").toLowerCase() === "polygon") {
-      const line = terrainOverlayLine(points, points.length >= 3, lineColor, 0.9);
-      if (line) terrainEditorOverlay.add(line);
-      for (let index = 0; index < points.length; index += 1) {
-        terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
-      }
-      requestRender("terrain-overlay-update");
-      return;
+    const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
+    if (line) terrainEditorOverlay.add(line);
+
+    if (points.length > 0) {
+      const centerSelected = selectedRole === "center"
+        || nextOverlay.draggingHandleRole === "center"
+        || nextOverlay.draggingHandleRole === "rotate"
+        || nextOverlay.draggingHandleRole === "geoscale";
+      const centerY = nodeType === "walkable_surface" ? num(nextOverlay.y, y) : y;
+      const center = terrainOverlayHandle(
+        new THREE.Vector3(num(nextOverlay.x, 0), centerY, num(nextOverlay.z, 0)),
+        color,
+        "center",
+        nodeId,
+        null,
+        centerSelected
+      );
+      terrainEditorOverlay.add(center);
     }
 
-    if (nodeType === "surface_layer") {
-      const line = terrainOverlayLine(points, false, lineColor, 0.95);
-      if (line) terrainEditorOverlay.add(line);
-      for (let index = 0; index < points.length; index += 1) {
-        terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
-      }
-      requestRender("terrain-overlay-update");
-      return;
-    }
-
-    if (nodeType === "blocker_area") {
-      const shapeType = String(nextOverlay.shapeType || "").toLowerCase();
-      if (shapeType === "box") {
-        const boxPoints = terrainOverlayRectanglePoints({
-          x: nextOverlay.x,
-          y: num(nextOverlay.groundY, 0) + 0.03,
-          z: nextOverlay.z,
-          width: nextOverlay.width,
-          depth: nextOverlay.depth,
-          rotationY: 0
-        });
-        const line = terrainOverlayLine(boxPoints, true, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-      } else if (shapeType === "circle") {
-        const circlePoints = terrainOverlayCirclePoints({
-          x: nextOverlay.x,
-          y: num(nextOverlay.groundY, 0) + 0.03,
-          z: nextOverlay.z,
-          radius: nextOverlay.radius
-        });
-        const line = terrainOverlayLine(circlePoints, true, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-      } else {
-        const line = terrainOverlayLine(points, points.length >= 3, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-        for (let index = 0; index < points.length; index += 1) {
-          terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
-        }
-      }
-      requestRender("terrain-overlay-update");
-      return;
+    for (let index = 0; index < points.length; index += 1) {
+      terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
     }
 
     requestRender("terrain-overlay-update");
