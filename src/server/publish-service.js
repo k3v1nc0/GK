@@ -2787,11 +2787,33 @@ export class PublishService {
     const activeMinimap = activeZone && Array.isArray(activeZone.minimaps)
       ? activeZone.minimaps.find(function (minimap) { return minimap.enabled !== false; }) || null
       : null;
+    // Terrain (surface_layer/terrain_layer) and collision (blocker_area/walkable_surface)
+    // nodes wired only to a Zone Output's "terrain"/"collision" ports never reach the
+    // legacy world.terrain/world.collision at all - they're only visible through
+    // activeZone.terrain/activeZone.collision (raw node-value records from
+    // recordsFromSources). Re-wrap them into {type, values} and run them through the
+    // same read-model builders the legacy path uses, then merge below.
+    const zoneTerrainNodes = (Array.isArray(activeZone?.terrain) ? activeZone.terrain : []).map(function (record) {
+      return { type: record.nodeType, values: record };
+    });
+    const zoneCollisionNodes = (Array.isArray(activeZone?.collision) ? activeZone.collision : []).map(function (record) {
+      return { type: record.nodeType, values: record };
+    });
+    const zoneTerrain = collectTerrainReadModel(zoneTerrainNodes);
+    const zoneCollision = collectCollisionReadModel(zoneCollisionNodes);
     const zoneAssetIds = new Set();
     if (activeZone?.ground?.textureAssetId) zoneAssetIds.add(activeZone.ground.textureAssetId);
     if (activeZone?.player?.modelAssetId) zoneAssetIds.add(activeZone.player.modelAssetId);
     for (const entity of Array.isArray(activeZone?.entities) ? activeZone.entities : []) {
       if (entity?.modelAssetId) zoneAssetIds.add(entity.modelAssetId);
+    }
+    for (const layer of zoneTerrain.layers) {
+      if (layer?.textureAssetId) zoneAssetIds.add(layer.textureAssetId);
+    }
+    for (const surface of zoneTerrain.surfaces) {
+      if (surface?.textureAssetId) zoneAssetIds.add(surface.textureAssetId);
+      if (surface?.secondaryTextureAssetId) zoneAssetIds.add(surface.secondaryTextureAssetId);
+      if (surface?.edgeFadeNoiseAssetId) zoneAssetIds.add(surface.edgeFadeNoiseAssetId);
     }
     const zoneAssets = this.services.assetService && zoneAssetIds.size
       ? this.services.assetService.manifestForIds(Array.from(zoneAssetIds))
@@ -2800,17 +2822,13 @@ export class PublishService {
     const assetLookup = new Map(mergedAssets.map(function (asset) {
       return [asset.id, asset];
     }));
-    const zoneGround = activeZone?.ground ? {
-      groundId: activeZone.ground.groundId || activeZone.ground.id || "zone_ground",
-      width: activeZone.ground.width || activeZone.zone?.width || 500,
-      depth: activeZone.ground.depth || activeZone.zone?.depth || 500,
-      y: activeZone.ground.y || activeZone.zone?.originY || 0,
-      boundsMode: "explicitBounds",
-      minX: activeZone.zone?.bounds?.minX ?? activeZone.zone?.originX ?? 0,
-      maxX: activeZone.zone?.bounds?.maxX ?? ((activeZone.zone?.originX || 0) + (activeZone.zone?.width || 500)),
-      minZ: activeZone.zone?.bounds?.minZ ?? activeZone.zone?.originZ ?? 0,
-      maxZ: activeZone.zone?.bounds?.maxZ ?? ((activeZone.zone?.originZ || 0) + (activeZone.zone?.depth || 500))
-    } : null;
+    // activeZone.ground is a raw clone of whatever ground_surface node is wired to the
+    // zone output's "ground" port (via valuePayload) - i.e. the SAME node that produced
+    // world.ground. Run it through the same read-model builder the legacy path uses
+    // instead of re-deriving bounds from the Zone Definition node's own width/depth/
+    // origin, which describe the zone's overall extent, not the ground mesh's size -
+    // using those clobbered any explicitly configured ground bounds with the zone's.
+    const zoneGround = activeZone?.ground ? buildGroundReadModel({ values: activeZone.ground }) : null;
     const zoneMinimap = activeMinimap ? {
       bakes: [activeMinimap],
       game: Object.assign({}, world.minimap?.game || {}, {
@@ -2843,11 +2861,19 @@ export class PublishService {
         z: Number(startSpawn.z) || 0,
         facing: Number(startSpawn.facing) || 0
       }) : world.spawn,
-      ground: zoneGround || world.ground,
+      ground: zoneGround ? Object.assign({}, world.ground, zoneGround) : world.ground,
       camera: zoneCamera || world.camera,
       player: zonePlayer || world.player,
       lights: zoneLights.length ? zoneLights : world.lights,
       entities: zoneEntities.length ? zoneEntities : world.entities,
+      terrain: {
+        layers: uniqueById((world.terrain?.layers || []).concat(zoneTerrain.layers)),
+        surfaces: uniqueById((world.terrain?.surfaces || []).concat(zoneTerrain.surfaces))
+      },
+      collision: {
+        blockers: uniqueById((world.collision?.blockers || []).concat(zoneCollision.blockers)),
+        walkableSurfaces: uniqueById((world.collision?.walkableSurfaces || []).concat(zoneCollision.walkableSurfaces))
+      },
       minimap: zoneMinimap || world.minimap,
       assets: mergedAssets,
       publishedAt: publishedAt || world.publishedAt || undefined
