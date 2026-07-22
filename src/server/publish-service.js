@@ -1844,20 +1844,35 @@ function pushUniqueWarning(warnings, message) {
   if (!warnings.includes(message)) warnings.push(message);
 }
 
-function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
+function chunkGridValuesForNode(graph, node, nodeMap) {
+  if (!graph || !node || !nodeMap) return null;
+  const connected = firstIncomingNode(graph, node, "chunkGrid", nodeMap);
+  const fallback = graph.nodes.find(function (candidate) {
+    return candidate.type === "chunk_grid_definition" && (candidate.parentId || null) === (node.parentId || null);
+  }) || graph.nodes.find(function (candidate) {
+    return candidate.type === "chunk_grid_definition";
+  }) || null;
+  const gridNode = connected || fallback;
+  if (!gridNode) return null;
+  return Object.assign({}, defaultValuesForType("chunk_grid_definition"), gridNode.values || {});
+}
+
+function buildChunkLoadingBaseReadModel(node, nodeType, readModelType, graph, nodeMap) {
   const defaults = defaultValuesForType(nodeType);
   const values = Object.assign({}, defaults, node?.values || {});
+  const gridValues = chunkGridValuesForNode(graph, node, nodeMap);
   return {
     id: node.id,
     type: readModelType,
     chunkProfileId: stringOrFallback(values.chunkProfileId, defaults.chunkProfileId),
     enabled: values.enabled !== false,
-    chunkWidth: numberOrFallback(values.chunkWidth, defaults.chunkWidth),
-    chunkDepth: numberOrFallback(values.chunkDepth, defaults.chunkDepth),
-    tileSize: numberOrFallback(values.tileSize, defaults.tileSize),
+    chunkGridId: gridValues ? stringOrFallback(gridValues.gridId, "chunk_grid.main") : null,
+    chunkWidth: gridValues ? numberOrFallback(gridValues.chunkWidth, 14) : numberOrFallback(values.chunkWidth, defaults.chunkWidth),
+    chunkDepth: gridValues ? numberOrFallback(gridValues.chunkDepth, 14) : numberOrFallback(values.chunkDepth, defaults.chunkDepth),
+    tileSize: gridValues ? numberOrFallback(gridValues.tileSize, 1) : numberOrFallback(values.tileSize, defaults.tileSize),
     preloadMarginChunks: numberOrFallback(values.preloadMarginChunks, defaults.preloadMarginChunks),
     unloadMarginChunks: numberOrFallback(values.unloadMarginChunks, defaults.unloadMarginChunks),
-    maxLoadedChunks: numberOrFallback(values.maxLoadedChunks, defaults.maxLoadedChunks),
+    maxLoadedChunks: gridValues ? numberOrFallback(gridValues.maxLoadedChunks, 81) : numberOrFallback(values.maxLoadedChunks, defaults.maxLoadedChunks),
     debugOverlay: values.debugOverlay === true,
     residentEntityBudget: numberOrFallback(values.residentEntityBudget, defaults.residentEntityBudget),
     residentObjectBudget: numberOrFallback(values.residentObjectBudget, defaults.residentObjectBudget),
@@ -1869,8 +1884,8 @@ function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
   };
 }
 
-function buildEditorChunkLoadingReadModel(node) {
-  const base = buildChunkLoadingBaseReadModel(node, "editor_chunk_loading", "editor");
+function buildEditorChunkLoadingReadModel(node, graph, nodeMap) {
+  const base = buildChunkLoadingBaseReadModel(node, "editor_chunk_loading", "editor", graph, nodeMap);
   const values = Object.assign({}, defaultValuesForType("editor_chunk_loading"), node?.values || {});
   return Object.assign(base, {
     editorViewRadiusChunks: numberOrFallback(values.editorViewRadiusChunks, defaultValuesForType("editor_chunk_loading").editorViewRadiusChunks),
@@ -1880,9 +1895,9 @@ function buildEditorChunkLoadingReadModel(node) {
   });
 }
 
-function buildGameChunkLoadingReadModel(node) {
+function buildGameChunkLoadingReadModel(node, graph, nodeMap) {
   const defaults = defaultValuesForType("game_chunk_loading");
-  const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game");
+  const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game", graph, nodeMap);
   const values = Object.assign({}, defaults, node?.values || {});
   return Object.assign(base, {
     cameraOnly: values.cameraOnly !== false,
@@ -1894,7 +1909,7 @@ function buildGameChunkLoadingReadModel(node) {
   });
 }
 
-function collectChunkLoadingReadModel(nodes, warnings = []) {
+function collectChunkLoadingReadModel(nodes, warnings = [], graph = null, nodeMap = null) {
   const editorNodes = [];
   const gameNodes = [];
   for (const node of nodes || []) {
@@ -1908,8 +1923,8 @@ function collectChunkLoadingReadModel(nodes, warnings = []) {
     pushUniqueWarning(warnings, "Er zijn meerdere Game Chunk Loading nodes verbonden. De eerste wordt gebruikt.");
   }
   return {
-    editor: editorNodes[0] ? buildEditorChunkLoadingReadModel(editorNodes[0]) : null,
-    game: gameNodes[0] ? buildGameChunkLoadingReadModel(gameNodes[0]) : null
+    editor: editorNodes[0] ? buildEditorChunkLoadingReadModel(editorNodes[0], graph, nodeMap) : null,
+    game: gameNodes[0] ? buildGameChunkLoadingReadModel(gameNodes[0], graph, nodeMap) : null
   };
 }
 
@@ -2290,8 +2305,20 @@ export function validateGraphForPublish(graph, services = {}) {
       }
     }
 
+    // Keybinds authored through World Assembly.keybinds never reach Game Output as a
+    // direct edge (that only happens via the synthetic bridge in
+    // graphWithLegacyAdapterAsOutput, applied later when building the actual world) -
+    // so without this, wiring keybinds the supported new-architecture way still
+    // triggered "no keybinds" warnings here.
+    const assemblyNode = graph.nodes.find(function (node) {
+      return node.type === "world_assembly" && directIncomingEdges(graph, output, "gameProject").some(function (edge) {
+        return edge.fromNodeId === node.id;
+      });
+    }) || null;
     const keybinds = collectResolutionError(errors, function () {
-      return incomingNodes(graph, output, "keybinds", nodeMap);
+      const direct = incomingNodes(graph, output, "keybinds", nodeMap);
+      const viaAssembly = assemblyNode ? incomingNodes(graph, assemblyNode, "keybinds", nodeMap) : [];
+      return uniqueNodes(direct.concat(viaAssembly));
     }) || [];
     const boundActions = new Set(keybinds.map(function (node) { return node.values.action; }));
     const movementActions = ["move_forward", "move_back", "move_left", "move_right"];
@@ -2355,7 +2382,7 @@ export function validateGraphForPublish(graph, services = {}) {
     const chunkLoadingNodes = collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "chunkLoading", nodeMap);
     }) || [];
-    const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings);
+    const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings, graph, nodeMap);
     validateChunkLoadingReadModel(chunkLoading, warnings);
 
     const minimapNodes = collectResolutionError(errors, function () {
@@ -2498,7 +2525,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const editorCamera = includeEditorCamera && editorCameraNode ? buildEditorCameraReadModel(editorCameraNode) : null;
   const collision = collectCollisionReadModel(collisionNodes);
   collision.blockers.push.apply(collision.blockers, scatterCollisionBlockers);
-  const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes);
+  const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, [], graph, nodeMap);
 
   const world = {
     schemaVersion: graph.schemaVersion,
@@ -2726,6 +2753,20 @@ function graphWithLegacyAdapterAsOutput(graph) {
         }));
       }
     }
+    for (const edge of directIncomingEdges(graph, assemblyNode, "keybinds")) {
+      syntheticEdges.push(Object.assign({}, edge, {
+        id: "synthetic_world_assembly_keybinds_" + edge.id,
+        toNodeId: outputNode.id,
+        toPort: "keybinds"
+      }));
+    }
+    for (const edge of directIncomingEdges(graph, assemblyNode, "chunkLoading")) {
+      syntheticEdges.push(Object.assign({}, edge, {
+        id: "synthetic_world_assembly_chunk_loading_" + edge.id,
+        toNodeId: outputNode.id,
+        toPort: "chunkLoading"
+      }));
+    }
   }
   if (!adapterNode) {
     return syntheticEdges.length ? Object.assign({}, graph, { edges: (graph.edges || []).concat(syntheticEdges) }) : graph;
@@ -2775,9 +2816,11 @@ export class PublishService {
     }));
   }
 
-  mergeWorldWithGameProject(world, compilation, publishedAt = null) {
+  mergeWorldWithGameProject(world, compilation, publishedAt = null, graph = null) {
     if (!compilation || !compilation.connected || !compilation.manifest) return world;
     const manifest = compilation.manifest;
+    const services = this.services;
+    const nodeMap = graph ? nodeMapForGraph(graph) : new Map();
     const activeZoneId = manifest.runtime?.activeZoneId || null;
     const activeZone = activeZoneId ? manifest.zones?.byId?.[activeZoneId] || null : null;
     const startSpawnId = manifest.runtime?.startSpawnId || null;
@@ -2807,6 +2850,31 @@ export class PublishService {
     for (const entity of Array.isArray(activeZone?.entities) ? activeZone.entities : []) {
       if (entity?.modelAssetId) zoneAssetIds.add(entity.modelAssetId);
     }
+    // Bounded Area Scatter nodes wired to a Zone Output's "entities" port arrive here as
+    // a single raw node-value record (via recordsFromSources), not the expanded
+    // per-instance placements the legacy path produces - and buildZoneEntityReadModel
+    // only accepts nodeType "model_entity", so the record was silently dropped and
+    // nothing ever got placed no matter what the node's fields were set to. Resolve
+    // sources now (asset ids are needed below before the asset manifest is built) and
+    // place the actual instances further down, once groundY is known.
+    const zoneScatterSources = [];
+    const zoneScatterCollisionBlockers = [];
+    for (const record of Array.isArray(activeZone?.entities) ? activeZone.entities : []) {
+      if (record?.nodeType !== "bounded_area_scatter") continue;
+      const node = { id: record.nodeId, type: "bounded_area_scatter", values: record };
+      const label = "Scatter '" + (record.scatterId || record.nodeId) + "'";
+      const resolved = resolveScatterSources(node, nodeMap, services, [], label);
+      for (const assetId of resolved.sourceAssetIds) zoneAssetIds.add(assetId);
+      zoneScatterSources.push({ node, resolved });
+      // Same silent-drop as the entities above: "Boundary blocks player" was only ever
+      // wired up in the legacy Output "entities" path (see buildWorldFromGraph), so a
+      // scatter node routed through World Assembly placed its instances fine but the
+      // toggle did nothing - no blocker polygon was ever built for this path.
+      const settings = normalizeScatterSettings(node);
+      if (settings.boundaryBlocksPlayer) {
+        zoneScatterCollisionBlockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
+      }
+    }
     for (const layer of zoneTerrain.layers) {
       if (layer?.textureAssetId) zoneAssetIds.add(layer.textureAssetId);
     }
@@ -2815,8 +2883,8 @@ export class PublishService {
       if (surface?.secondaryTextureAssetId) zoneAssetIds.add(surface.secondaryTextureAssetId);
       if (surface?.edgeFadeNoiseAssetId) zoneAssetIds.add(surface.edgeFadeNoiseAssetId);
     }
-    const zoneAssets = this.services.assetService && zoneAssetIds.size
-      ? this.services.assetService.manifestForIds(Array.from(zoneAssetIds))
+    const zoneAssets = services.assetService && zoneAssetIds.size
+      ? services.assetService.manifestForIds(Array.from(zoneAssetIds))
       : [];
     const mergedAssets = uniqueById((world.assets || []).concat(zoneAssets));
     const assetLookup = new Map(mergedAssets.map(function (asset) {
@@ -2829,6 +2897,11 @@ export class PublishService {
     // origin, which describe the zone's overall extent, not the ground mesh's size -
     // using those clobbered any explicitly configured ground bounds with the zone's.
     const zoneGround = activeZone?.ground ? buildGroundReadModel({ values: activeZone.ground }) : null;
+    const zoneScatterGroundY = numberOrNull(zoneGround?.y) ?? numberOrNull(world.ground?.y) ?? 0;
+    const zoneScatterEntities = [];
+    for (const { node, resolved } of zoneScatterSources) {
+      zoneScatterEntities.push.apply(zoneScatterEntities, buildScatterInstances(node, resolved.sourceAssets, zoneScatterGroundY));
+    }
     const zoneMinimap = activeMinimap ? {
       bakes: [activeMinimap],
       game: Object.assign({}, world.minimap?.game || {}, {
@@ -2841,7 +2914,7 @@ export class PublishService {
     const zoneLights = (Array.isArray(activeZone?.lights) ? activeZone.lights : []).map(buildZoneLightReadModel).filter(Boolean);
     const zoneEntities = (Array.isArray(activeZone?.entities) ? activeZone.entities : []).map(function (entity) {
       return buildZoneEntityReadModel(entity, assetLookup);
-    }).filter(Boolean);
+    }).filter(Boolean).concat(zoneScatterEntities);
     const zoneCamera = buildZoneCameraReadModel(activeZone?.camera);
     const zonePlayer = buildZonePlayerReadModel(activeZone?.player, assetLookup);
     return Object.assign({}, world, {
@@ -2871,7 +2944,7 @@ export class PublishService {
         surfaces: uniqueById((world.terrain?.surfaces || []).concat(zoneTerrain.surfaces))
       },
       collision: {
-        blockers: uniqueById((world.collision?.blockers || []).concat(zoneCollision.blockers)),
+        blockers: uniqueById((world.collision?.blockers || []).concat(zoneCollision.blockers, zoneScatterCollisionBlockers)),
         walkableSurfaces: uniqueById((world.collision?.walkableSurfaces || []).concat(zoneCollision.walkableSurfaces))
       },
       minimap: zoneMinimap || world.minimap,
@@ -2900,7 +2973,7 @@ export class PublishService {
     const graph = this.repository.getGraph();
     const compilation = this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
     const draftWorld = this.buildLegacyWorld(graph, true);
-    const world = this.mergeWorldWithGameProject(draftWorld, compilation);
+    const world = this.mergeWorldWithGameProject(draftWorld, compilation, null, graph);
     this.repository.saveDraftWorld(world, {
       buildId: world.buildId || null,
       schemaVersion: world.schemaVersion || null,
@@ -2925,8 +2998,8 @@ export class PublishService {
     }
     const draftWorld = this.buildLegacyWorld(graph, true);
     const publishedWorld = this.buildLegacyWorld(graph, false);
-    const mergedDraftWorld = this.mergeWorldWithGameProject(draftWorld, compilation);
-    const mergedPublishedWorld = this.mergeWorldWithGameProject(publishedWorld, compilation, new Date().toISOString());
+    const mergedDraftWorld = this.mergeWorldWithGameProject(draftWorld, compilation, null, graph);
+    const mergedPublishedWorld = this.mergeWorldWithGameProject(publishedWorld, compilation, new Date().toISOString(), graph);
     this.repository.saveDraftWorld(mergedDraftWorld, {
       buildId: mergedDraftWorld.buildId || null,
       schemaVersion: mergedDraftWorld.schemaVersion || null,

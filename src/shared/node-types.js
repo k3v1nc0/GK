@@ -1046,7 +1046,7 @@ export const NODE_TYPES = {
     group: "World",
     accent: "#67d8c4",
     description: "Editor loading policy for showing more world chunks around the editor camera while authoring.",
-    inputs: {},
+    inputs: { chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: false, multiple: false } },
     outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
     fields: EDITOR_CHUNK_LOADING_FIELDS
   },
@@ -1056,7 +1056,7 @@ export const NODE_TYPES = {
     group: "World",
     accent: "#67d8c4",
     description: "Game loading policy for keeping runtime chunks just outside the game camera. Tune the active chunk square to stay inside the frustum without clipping maxLoadedChunks.",
-    inputs: {},
+    inputs: { chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: false, multiple: false } },
     outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
     fields: GAME_CHUNK_LOADING_FIELDS
   },
@@ -2142,11 +2142,13 @@ const FOUNDATION_NODE_DEFS = {
       gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
       camera: { label: "Camera", dataType: "camera", required: false, multiple: true },
       chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
+      chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
       catalogs: { label: "Catalogs", dataType: "catalogRegistry", required: false, multiple: false },
       zones: { label: "Zones", dataType: "zoneRegistry", required: false, multiple: false },
       campaigns: { label: "Campaigns", dataType: "campaignRegistry", required: false, multiple: false },
       playerRules: { label: "Player Rules", dataType: "playerRules", required: false, multiple: false },
       ui: { label: "UI", dataType: "uiPackage", required: false, multiple: false },
+      keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       legacyWorld: {
         label: "Legacy World",
         dataType: "legacyWorldPackage",

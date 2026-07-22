@@ -249,7 +249,8 @@ const state = {
     screenY: 0,
     downAt: 0,
     moved: false,
-    dragged: false
+    dragged: false,
+    sprintPointerId: null
   },
   lastAnimationState: "idle",
   debug: {
@@ -3617,7 +3618,7 @@ function handleSocketClose(socket, event) {
   state.lastCloseCode = Number(event?.code) || null;
   state.lastCloseReason = String(event?.reason || "");
   state.debug.lastError = "WS close " + event.code + " " + (event.reason || "");
-  clearMovementInput("ws-close");
+  clearMovementInput("ws-close", { resetSprint: true });
   if (socket._gkIntentionalClose) {
     updateWsStatus("disconnected", "disconnected", { immediate: true, final: true });
     return;
@@ -4065,13 +4066,19 @@ function setMovementAnimationState(nextState) {
 
 // FIX-5: single choke point that clears every movement input source and notifies the server
 // immediately, so nothing (alt-tab, pointer loss, ws drop, logout) can leave movement "stuck".
-function clearMovementInput(reason) {
+// Sprint is intentionally left alone here: it tracks the physical Shift key via its own
+// keydown/keyup handlers, and this function also fires on routine "stopped moving for a
+// moment" transitions (keyup, pointer arrival, a single idle frame between releasing one
+// direction key and pressing the opposite one) - resetting sprint there dropped it even
+// though Shift was still held. Only the true can't-trust-key-state resets (blur, ws drop,
+// logout) opt back in via resetSprint.
+function clearMovementInput(reason, options = {}) {
   state.ownCorrection = null;
   state.input.move_forward = false;
   state.input.move_back = false;
   state.input.move_left = false;
   state.input.move_right = false;
-  state.input.sprint = false;
+  if (options.resetSprint) state.input.sprint = false;
   state.net.localControllerActive = false;
   state.control.passiveSince = 0;
   clearPointerTarget(false);
@@ -4234,6 +4241,18 @@ function bindPointerControls() {
     if (event.pointerType !== "touch" && event.button !== 0) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
+    // Second finger while the first is already driving movement: hold-to-sprint, the
+    // touch equivalent of holding Shift. Mirrors the keyboard sprint handler below rather
+    // than restarting click-to-move tracking with this finger's position.
+    if (event.pointerType === "touch" && state.pointer.active && event.pointerId !== state.pointer.pointerId) {
+      state.pointer.sprintPointerId = event.pointerId;
+      state.input.sprint = true;
+      if (typeof canvas.setPointerCapture === "function") {
+        try { canvas.setPointerCapture(event.pointerId); } catch {}
+      }
+      if (hasMovementInput()) sendInputState({ force: true });
+      return;
+    }
     noteLocalControlStart(true, "pointer");
     state.input.move_forward = false;
     state.input.move_back = false;
@@ -4274,6 +4293,13 @@ function bindPointerControls() {
     updatePointerTargetFromEvent(event);
   });
   const releasePointer = function (event) {
+    if (event && event.pointerId !== undefined && state.pointer.sprintPointerId !== null && event.pointerId === state.pointer.sprintPointerId) {
+      event.preventDefault();
+      state.pointer.sprintPointerId = null;
+      state.input.sprint = false;
+      if (hasMovementInput()) sendInputState({ force: true });
+      return;
+    }
     if (event && event.pointerId !== undefined && state.pointer.pointerId !== null && event.pointerId !== state.pointer.pointerId) return;
     if (event) event.preventDefault();
     const hadKeyboardMovement = hasKeyboardMovementInput();
@@ -4313,7 +4339,7 @@ function handleInputCancel(reason) {
     state.lastFrameAt = 0;
     return;
   }
-  clearMovementInput(reason);
+  clearMovementInput(reason, { resetSprint: true });
   state.lastFrameAt = 0;
 }
 
@@ -4363,7 +4389,7 @@ async function logout() {
   state.wantReconnect = false;
   stopMovementFrameLoop();
   stopRemoteFrameLoop();
-  clearMovementInput("logout");
+  clearMovementInput("logout", { resetSprint: true });
   closeWebSocket(true);
   clearRemotePlayers("logout");
   try {

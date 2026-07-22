@@ -3910,7 +3910,7 @@ function buildPort(node, portName, port, direction) {
   label.textContent = portDisplayName(port.dataType);
   wrap.title = port.label + " - " + port.dataType + " - " + required + " " + cardinality + (port.help ? " - " + port.help : "");
   wrap.append(dot, label);
-  wrap.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
+  wrap.addEventListener("pointerdown", function (event) { if (event.button === 0) event.stopPropagation(); });
   wrap.addEventListener("click", function (event) {
     event.stopPropagation();
     onPortClick(node, portName, port, direction);
@@ -4097,6 +4097,7 @@ function edgeDataType(node, portName) {
 }
 
 el.edgeLayer.addEventListener("pointerdown", function (event) {
+  if (event.button !== 0) return;
   const path = event.target.closest ? event.target.closest("[data-edge-id]") : null;
   if (!path) return;
   event.stopPropagation();
@@ -7310,6 +7311,46 @@ async function terrainPatchSurface(node, patch, historyLabel) {
   return true;
 }
 
+// Walkable Surface points form a "ladder": point i on one rail always pairs with point
+// (n-1-i) on the return rail at the same rung across the surface (see
+// triangulateWalkableSurfaceLadder in world-runtime.js, which triangulates rung-to-rung
+// instead of guessing diagonals from the flattened outline). Extruding only one point at
+// a time leaves its twin behind wherever it happened to be, which desyncs the ladder and
+// is exactly what made the collision mesh look twisted around a freshly-extruded point.
+// So for Walkable Surface, extrude always adds a full rung: the new point plus a twin
+// mirrored across the rung being extruded from, offset by that rung's own left/right
+// vector so the new pair opens up the strip by the same width as its neighbors.
+function terrainWalkableRungInsert(currentPoints, effectiveSelectedIndex, newPoint) {
+  const n = currentPoints.length;
+  const anchor = currentPoints[effectiveSelectedIndex];
+  const mirrorSource = currentPoints[n - 1 - effectiveSelectedIndex];
+  const offset = mirrorSource && anchor
+    ? {
+      x: mirrorSource.x - anchor.x,
+      y: terrainPointHeight(mirrorSource, newPoint.y) - terrainPointHeight(anchor, newPoint.y),
+      z: mirrorSource.z - anchor.z
+    }
+    : { x: 0, y: 0, z: 0 };
+  const mirrorPoint = { x: newPoint.x + offset.x, y: newPoint.y + offset.y, z: newPoint.z + offset.z };
+
+  const insertIndex = effectiveSelectedIndex <= 0
+    ? 0
+    : effectiveSelectedIndex >= n - 1
+      ? n
+      : effectiveSelectedIndex + 1;
+  const mirrorInsertIndex = n - insertIndex;
+
+  const nextPoints = currentPoints.slice();
+  if (insertIndex >= mirrorInsertIndex) {
+    nextPoints.splice(insertIndex, 0, newPoint);
+    nextPoints.splice(mirrorInsertIndex, 0, mirrorPoint);
+  } else {
+    nextPoints.splice(mirrorInsertIndex, 0, mirrorPoint);
+    nextPoints.splice(insertIndex, 0, newPoint);
+  }
+  return { points: nextPoints, insertIndex: insertIndex };
+}
+
 async function terrainAddPoint(node, groundPoint) {
   if (!groundPoint) {
     setStatus("No ground hit.", "error");
@@ -7329,6 +7370,19 @@ async function terrainAddPoint(node, groundPoint) {
     : (state.terrainTool.selectedPointIndices.length
       ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
       : null);
+
+  if (node.type === "walkable_surface" && currentPoints.length >= 2 && currentPoints.length % 2 === 0) {
+    const effectiveSelectedIndex = hasSelection ? selectedIndex : currentPoints.length - 1;
+    const rung = terrainWalkableRungInsert(currentPoints, effectiveSelectedIndex, newPoint);
+    const ok = await terrainPatchPoints(node, rung.points, "Terrain rung added");
+    if (ok) {
+      terrainSetSelection(rung.insertIndex, "point");
+      setStatus("Rung extruded.", "success");
+      terrainFinishWithRender();
+    }
+    return ok;
+  }
+
   const insertIndex = !hasSelection
     ? currentPoints.length
     : selectedIndex <= 0
@@ -8403,7 +8457,7 @@ function handleEditorKeyDown(event) {
     setStatus("Deselected.", "");
     return;
   }
-  if ((event.key === "Delete" || event.key === "Backspace") && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
+  if (event.key === "Delete" && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
     event.preventDefault();
     deleteSelectedNodes();
     return;

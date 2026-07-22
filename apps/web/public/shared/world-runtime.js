@@ -2554,20 +2554,32 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
   let currentPoints = [tinySegments[0].start, tinySegments[0].end];
   let currentLength = tinySegments[0].length;
   let currentPieceStart = tinySegments[0].startLength;
+  let segmentStartIndex = 0;
   let pieceIndex = 0;
 
-  function finalizePiece() {
+  // Ribbon strips are built per piece (see buildSurfaceStripGeometry), and its edge
+  // vertices at each end need the true neighboring tangent to miter-join correctly -
+  // otherwise every chunk cut recomputes that shared boundary point from only its own
+  // side, and two independently-guessed offsets at the same world position don't agree,
+  // showing up as gaps/spikes in the geometry and a restarted (non-continuous) texture V
+  // coordinate. So each piece also carries the one real point just outside its own
+  // range on each side, purely as miter context - not part of the piece's own strip.
+  function finalizePiece(segmentEndIndexExclusive) {
     if (!currentPoints || currentPoints.length < 2 || currentLength <= 0) return;
     const midpoint = midpointForSegment(currentPoints);
     const bounds = boundsForPoints(currentPoints, widthMargin);
     const chunkKeyValue = midpoint ? chunkKeyForPosition(midpoint.x, midpoint.z, policy) : null;
     const chunkKeys = bounds ? chunkKeysForBounds(bounds, policy) : [];
+    const prevSegment = segmentStartIndex > 0 ? tinySegments[segmentStartIndex - 1] : null;
+    const nextSegment = segmentEndIndexExclusive < tinySegments.length ? tinySegments[segmentEndIndexExclusive] : null;
     pieces.push({
       id: segmentBaseId + "::" + pieceIndex,
       segmentId: pieceIndex,
       points: currentPoints.map(function (point) {
         return { x: num(point.x, 0), z: num(point.z, 0), y: Number.isFinite(Number(point?.y)) ? num(point.y, 0) : undefined };
       }),
+      prevPoint: prevSegment ? { x: num(prevSegment.start.x, 0), z: num(prevSegment.start.z, 0) } : null,
+      nextPoint: nextSegment ? { x: num(nextSegment.end.x, 0), z: num(nextSegment.end.z, 0) } : null,
       startLength: currentPieceStart,
       endLength: currentPieceStart + currentLength,
       length: currentLength,
@@ -2582,10 +2594,11 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
   for (let index = 1; index < tinySegments.length; index += 1) {
     const segment = tinySegments[index];
     if (currentLength > 0 && currentLength + segment.length > maxSegmentLength + 0.000001 && currentPoints.length >= 2) {
-      finalizePiece();
+      finalizePiece(index);
       currentPoints = [segment.start, segment.end];
       currentLength = segment.length;
       currentPieceStart = segment.startLength;
+      segmentStartIndex = index;
       continue;
     }
     if (!currentPoints.length) {
@@ -2597,7 +2610,7 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
     currentPoints.push(segment.end);
     currentLength += segment.length;
   }
-  finalizePiece();
+  finalizePiece(tinySegments.length);
   return pieces;
 }
 
@@ -3922,6 +3935,21 @@ function normalizeWorldPointList(points) {
   return normalized;
 }
 
+function catmullRomKnotDelta(a, b) {
+  // Centripetal parameterization (sqrt of chord length). Unlike uniform Catmull-Rom,
+  // this provably never loops/self-intersects between control points, even when a
+  // dragged point creates unevenly spaced or sharply folded segments.
+  return Math.max(0.0001, Math.sqrt(Math.hypot(b.x - a.x, b.z - a.z)));
+}
+
+function catmullRomBlend(pa, pb, ta, tb, t) {
+  const denom = tb - ta;
+  if (Math.abs(denom) < 0.0001) return { x: pa.x, z: pa.z };
+  const wa = (tb - t) / denom;
+  const wb = (t - ta) / denom;
+  return { x: (pa.x * wa) + (pb.x * wb), z: (pa.z * wa) + (pb.z * wb) };
+}
+
 function smoothPolyline(points, samplesPerSegment) {
   if (!Array.isArray(points) || points.length < 3) return points;
   const samples = Math.max(2, Math.min(12, num(samplesPerSegment, 8)));
@@ -3931,14 +3959,21 @@ function smoothPolyline(points, samplesPerSegment) {
     const p1 = points[i];
     const p2 = points[i + 1];
     const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    const t0 = 0;
+    const t1 = t0 + catmullRomKnotDelta(p0, p1);
+    const t2 = t1 + catmullRomKnotDelta(p1, p2);
+    const t3 = t2 + catmullRomKnotDelta(p2, p3);
+
     for (let s = 0; s < samples; s += 1) {
-      const t = s / samples;
-      const t2 = t * t;
-      const t3 = t2 * t;
-      result.push({
-        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-        z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3)
-      });
+      const t = t1 + ((t2 - t1) * (s / samples));
+      const a1 = catmullRomBlend(p0, p1, t0, t1, t);
+      const a2 = catmullRomBlend(p1, p2, t1, t2, t);
+      const a3 = catmullRomBlend(p2, p3, t2, t3, t);
+      const b1 = catmullRomBlend(a1, a2, t0, t2, t);
+      const b2 = catmullRomBlend(a2, a3, t1, t3, t);
+      const c = catmullRomBlend(b1, b2, t1, t2, t);
+      result.push({ x: c.x, z: c.z });
     }
   }
   result.push(points[points.length - 1]);
@@ -3990,8 +4025,47 @@ function normalizeWalkableCollisionPointList(points, fallbackY = 0) {
   return normalized;
 }
 
-function triangulateWalkableSurface(points) {
-  if (!Array.isArray(points) || points.length < 3) return [];
+function makeCollisionTriangle(a, b, c) {
+  if (!a || !b || !c) return null;
+  return {
+    a: a,
+    b: b,
+    c: c,
+    minX: Math.min(a.x, b.x, c.x),
+    maxX: Math.max(a.x, b.x, c.x),
+    minZ: Math.min(a.z, b.z, c.z),
+    maxZ: Math.max(a.z, b.z, c.z)
+  };
+}
+
+// Walkable surfaces are authored by walking down one edge and back along the other
+// (extrude-point-by-point, closed loop) - so for an even point count, point i on one
+// rail always pairs with point (n-1-i) on the return rail at the same "rung" across the
+// surface. Triangulating rung-to-rung (like a quad strip) matches that authored shape.
+// Generic boundary ear-clipping (triangulateShape) instead picks diagonals purely from
+// the flattened outline with no notion of "which points belong to the same rung", so it
+// can connect a low point on one rail to a high point on a distant rung - producing
+// triangles that don't correspond to any real part of the ramp/bridge and interpolate a
+// bogus up-down-up-down height profile along an otherwise smooth, single-arc surface.
+function triangulateWalkableSurfaceLadder(points) {
+  const n = points.length;
+  if (n < 4 || n % 2 !== 0) return null;
+  const half = n / 2;
+  const triangles = [];
+  for (let i = 0; i < half - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    const c = points[n - 2 - i];
+    const d = points[n - 1 - i];
+    const t1 = makeCollisionTriangle(a, b, c);
+    const t2 = makeCollisionTriangle(a, c, d);
+    if (!t1 || !t2) return null;
+    triangles.push(t1, t2);
+  }
+  return triangles;
+}
+
+function triangulateWalkableSurfaceEarClip(points) {
   const contour = points.map(function (point) {
     return new THREE.Vector2(point.x, point.z);
   });
@@ -4009,21 +4083,17 @@ function triangulateWalkableSurface(points) {
     const bi = Number(triangle[1]);
     const ci = Number(triangle[2]);
     if (!Number.isInteger(ai) || !Number.isInteger(bi) || !Number.isInteger(ci)) continue;
-    const a = points[ai];
-    const b = points[bi];
-    const c = points[ci];
-    if (!a || !b || !c) continue;
-    triangles.push({
-      a: a,
-      b: b,
-      c: c,
-      minX: Math.min(a.x, b.x, c.x),
-      maxX: Math.max(a.x, b.x, c.x),
-      minZ: Math.min(a.z, b.z, c.z),
-      maxZ: Math.max(a.z, b.z, c.z)
-    });
+    const t = makeCollisionTriangle(points[ai], points[bi], points[ci]);
+    if (t) triangles.push(t);
   }
   return triangles;
+}
+
+function triangulateWalkableSurface(points) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  const ladder = triangulateWalkableSurfaceLadder(points);
+  if (ladder) return ladder;
+  return triangulateWalkableSurfaceEarClip(points);
 }
 
 function barycentricHeightAtXZ(px, pz, triangle) {
@@ -4036,6 +4106,21 @@ function barycentricHeightAtXZ(px, pz, triangle) {
   const wc = 1 - wa - wb;
   if (wa < -COLLISION_EPSILON || wb < -COLLISION_EPSILON || wc < -COLLISION_EPSILON) return null;
   return (a.y * wa) + (b.y * wb) + (c.y * wc);
+}
+
+// Membership must match walkableSurfaceHeightSample's triangle loop exactly, so a point
+// with real triangulated geometry under it is never rejected by the separate contour
+// (even-odd) test below - those two can disagree once a hand-authored polygon is
+// non-simple (self-intersecting), which is normal for complex walkable shapes like
+// bridges with points on both rails.
+function pointInAnyTriangle(px, pz, triangles) {
+  if (!Array.isArray(triangles)) return false;
+  for (const triangle of triangles) {
+    if (px < triangle.minX - COLLISION_EPSILON || px > triangle.maxX + COLLISION_EPSILON) continue;
+    if (pz < triangle.minZ - COLLISION_EPSILON || pz > triangle.maxZ + COLLISION_EPSILON) continue;
+    if (barycentricHeightAtXZ(px, pz, triangle) !== null) return true;
+  }
+  return false;
 }
 
 function pointOnSegment(px, pz, ax, az, bx, bz) {
@@ -4204,7 +4289,12 @@ export function createWalkabilityIndex(worldData) {
   for (const surface of surfaces) {
     if (surface?.blocksPlayer !== true) continue;
     const width = Math.max(0, num(surface?.width, 0));
-    const points = normalizeCollisionPointList(surface?.points);
+    const rawPoints = normalizeCollisionPointList(surface?.points);
+    // Mirror the render path (see the surface_layer mesh builder), which runs the raw
+    // path through the same Catmull-Rom smoothing before turning it into a strip -
+    // otherwise the blocker follows the straight point-to-point line while the mesh
+    // the player actually sees follows the curve, and the two disagree on every bend.
+    const points = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
     if (width <= 0 || points.length < 2) continue;
     index.surfaceBlockers.push({
       id: surface?.id || surface?.surfaceId || null,
@@ -4287,6 +4377,7 @@ function findWalkableSurfaceEntry(index, x, z, inflate = 0) {
   const extraRadius = Math.max(0, num(inflate, 0));
   for (const walkable of walkables) {
     if (walkable?.mode === "polygon") {
+      if (pointInAnyTriangle(x, z, walkable.triangles)) return walkable;
       if (extraRadius > COLLISION_EPSILON ? isPolygonBlockedAtRadius(walkable.points, x, z, extraRadius) : pointInPolygon2D(x, z, walkable.points)) {
         return walkable;
       }
@@ -4568,11 +4659,112 @@ function createWorldPlaneGeometry(minX, maxX, minZ, maxZ, y, uvBounds) {
   return geometry;
 }
 
+function stripEndOffset(from, to, halfWidth) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz) || 1;
+  return { nx: (-dz / len) * halfWidth, nz: (dx / len) * halfWidth };
+}
+
+function stripFoldDot(prev, curr, next) {
+  const dx1 = curr.x - prev.x;
+  const dz1 = curr.z - prev.z;
+  const l1 = Math.hypot(dx1, dz1) || 1;
+  const dx2 = next.x - curr.x;
+  const dz2 = next.z - curr.z;
+  const l2 = Math.hypot(dx2, dz2) || 1;
+  const n1x = -dz1 / l1;
+  const n1z = dx1 / l1;
+  const n2x = -dz2 / l2;
+  const n2z = dx2 / l2;
+  const mx = n1x + n2x;
+  const mz = n1z + n2z;
+  const mlen = Math.hypot(mx, mz);
+  if (mlen < 0.0001) return -1; // fully reversed
+  return (mx * n1x + mz * n1z) / mlen;
+}
+
+// A shared miter vertex is only safe when it stays within reach of both of its
+// neighboring segments. Two ways that can fail:
+//  - The turn itself is too sharp (roughly >157 degrees): the miter vertex would have
+//    to sit on the far side of one of the two segments - "left" relative to the
+//    incoming one and "right" relative to the outgoing one (or vice versa).
+//  - The turn is only moderate, but one of the adjacent segments is short (closely
+//    spaced points, or a smoothed curve resampled into many small steps): the miter
+//    vertex can still overshoot past that segment's far end even though the angle
+//    alone looks fine.
+// Either way, using the miter vertex flips the winding of whichever triangle relies on
+// it and folds the ribbon over itself right there; clamping its length instead just
+// trades that for a hard pinch to near-zero width (which is what made the strip look
+// like it kept going thick and thin along an ordinary, closely-sampled curve). A bevel
+// (see buildSurfaceStripGeometry) is the only join that stays full-width and
+// non-self-overlapping in both cases.
+function stripFoldIsSharp(prev, curr, next, halfWidth) {
+  const l1 = Math.hypot(curr.x - prev.x, curr.z - prev.z) || 1;
+  const l2 = Math.hypot(next.x - curr.x, next.z - curr.z) || 1;
+  const dot = stripFoldDot(prev, curr, next);
+  if (dot < 0.2) return true;
+  const rawScale = Math.min(halfWidth * 2.5, halfWidth / dot);
+  return rawScale > Math.min(l1, l2);
+}
+
+function stripMiterOffset(prev, curr, next, halfWidth) {
+  // Miter join: average incoming and outgoing normals, scale to keep strip width
+  const dx1 = curr.x - prev.x;
+  const dz1 = curr.z - prev.z;
+  const l1 = Math.hypot(dx1, dz1) || 1;
+  const dx2 = next.x - curr.x;
+  const dz2 = next.z - curr.z;
+  const l2 = Math.hypot(dx2, dz2) || 1;
+  const n1x = -dz1 / l1;
+  const n1z = dx1 / l1;
+  const n2x = -dz2 / l2;
+  const n2z = dx2 / l2;
+  let mx = n1x + n2x;
+  let mz = n1z + n2z;
+  const mlen = Math.hypot(mx, mz);
+  if (mlen < 0.0001) {
+    // Nearly 180-degree bend — use incoming normal
+    return { nx: n1x * halfWidth, nz: n1z * halfWidth };
+  }
+  mx /= mlen;
+  mz /= mlen;
+  const dot = mx * n1x + mz * n1z;
+  if (dot < 0.2) {
+    // Caller should have routed this point through the bevel path instead (see
+    // stripFoldIsSharp). Kept as a safety fallback so this function alone never
+    // produces a self-overlapping vertex.
+    return { nx: n1x * halfWidth, nz: n1z * halfWidth };
+  }
+  // Clamp miter scale to 2.5x to prevent spikes at sharp bends. There's no extra
+  // length-based cap here (there used to be one, to stop a fold next to a short segment
+  // from overshooting past that segment's far end) - now that stripFoldIsSharp routes
+  // every fold sharp enough for that to matter through the bevel path above instead,
+  // adding it back here would just pinch the width on ordinary curves with closely
+  // spaced points (dense point placement, or tight bends), for no safety benefit.
+  const scale = Math.min(halfWidth * 2.5, halfWidth / dot);
+  return { nx: mx * scale, nz: mz * scale };
+}
+
 export function buildSurfaceStripGeometry(points, options) {
   const halfWidth = Math.max(0, Number(options?.width || 0)) / 2;
   const y = Number(options?.y || 0);
   const uvScale = Math.max(0.001, Number(options?.uvScale || 1));
   const uvStartLength = Math.max(0, Number(options?.uvStartLength || 0));
+  // When this strip is one piece of a longer path split across chunks, the real point
+  // just outside each end (from the unsplit centerline) lets that boundary vertex use a
+  // proper miter join instead of a naive single-segment perpendicular. Both neighboring
+  // pieces then compute the exact same shared boundary vertex the exact same way, so the
+  // seam between chunks lines up instead of showing a gap or spike. Boundary points
+  // deliberately never use the bevel path below (see the `prev && next` branch) - a
+  // bevel needs both its "incoming" and "outgoing" fan triangles built from the same
+  // vertex buffer, which two independently-built chunk pieces don't share.
+  const prevContext = options?.prevPoint && Number.isFinite(Number(options.prevPoint.x)) && Number.isFinite(Number(options.prevPoint.z))
+    ? { x: Number(options.prevPoint.x), z: Number(options.prevPoint.z) }
+    : null;
+  const nextContext = options?.nextPoint && Number.isFinite(Number(options.nextPoint.x)) && Number.isFinite(Number(options.nextPoint.z))
+    ? { x: Number(options.nextPoint.x), z: Number(options.nextPoint.z) }
+    : null;
 
   if (!Array.isArray(points) || points.length < 2 || halfWidth <= 0) return null;
 
@@ -4586,80 +4778,78 @@ export function buildSurfaceStripGeometry(points, options) {
     arcLengths.push(arcLengths[i - 1] + Math.hypot(dx, dz));
   }
 
-  const positions = new Float32Array(n * 2 * 3);
-  const uvCoords = new Float32Array(n * 2 * 2);
+  const positions = [];
+  const uvCoords = [];
   const indices = [];
 
+  function pushVertex(x, z, u, v) {
+    const index = positions.length / 3;
+    positions.push(x, y, z);
+    uvCoords.push(u, v);
+    return index;
+  }
+
+  // For each point, either one {left,right} vertex pair (straight run, chunk boundary,
+  // or a gentle-enough turn for a miter) or a split {inLeft,inRight,outLeft,outRight}
+  // quad (a sharp interior fold, bridged by its own bevel fan below) - so the strip
+  // never has to pick one ambiguous "shared" offset for two segments pointing in very
+  // different directions.
+  const pointVerts = [];
+
   for (let i = 0; i < n; i++) {
-    let nx, nz; // miter offset vector (left perpendicular * scale)
+    const prev = i === 0 ? prevContext : points[i - 1];
+    const next = i === n - 1 ? nextContext : points[i + 1];
+    const v = (uvStartLength + arcLengths[i]) / uvScale;
+    const isInteriorPoint = i > 0 && i < n - 1;
 
-    if (i === 0) {
-      const dx = points[1].x - points[0].x;
-      const dz = points[1].z - points[0].z;
-      const len = Math.hypot(dx, dz) || 1;
-      nx = (-dz / len) * halfWidth;
-      nz = (dx / len) * halfWidth;
-    } else if (i === n - 1) {
-      const dx = points[n - 1].x - points[n - 2].x;
-      const dz = points[n - 1].z - points[n - 2].z;
-      const len = Math.hypot(dx, dz) || 1;
-      nx = (-dz / len) * halfWidth;
-      nz = (dx / len) * halfWidth;
-    } else {
-      // Miter join: average incoming and outgoing normals, scale to keep strip width
-      const dx1 = points[i].x - points[i - 1].x;
-      const dz1 = points[i].z - points[i - 1].z;
-      const l1 = Math.hypot(dx1, dz1) || 1;
-      const dx2 = points[i + 1].x - points[i].x;
-      const dz2 = points[i + 1].z - points[i].z;
-      const l2 = Math.hypot(dx2, dz2) || 1;
-      const n1x = -dz1 / l1;
-      const n1z = dx1 / l1;
-      const n2x = -dz2 / l2;
-      const n2z = dx2 / l2;
-      let mx = n1x + n2x;
-      let mz = n1z + n2z;
-      const mlen = Math.hypot(mx, mz);
-      if (mlen < 0.0001) {
-        // Nearly 180-degree bend — use incoming normal
-        nx = n1x * halfWidth;
-        nz = n1z * halfWidth;
-      } else {
-        mx /= mlen;
-        mz /= mlen;
-        const dot = mx * n1x + mz * n1z;
-        // Clamp miter scale to 2.5x to prevent spikes at sharp bends (bevel-like)
-        const scale = Math.min(halfWidth * 2.5, Math.abs(dot) > 0.0001 ? halfWidth / dot : halfWidth * 2.5);
-        nx = mx * scale;
-        nz = mz * scale;
-      }
+    if (prev && next && isInteriorPoint && stripFoldIsSharp(prev, points[i], next, halfWidth)) {
+      const inOffset = stripEndOffset(prev, points[i], halfWidth);
+      const outOffset = stripEndOffset(points[i], next, halfWidth);
+      const inLeft = pushVertex(points[i].x + inOffset.nx, points[i].z + inOffset.nz, 0, v);
+      const inRight = pushVertex(points[i].x - inOffset.nx, points[i].z - inOffset.nz, 1, v);
+      const outLeft = pushVertex(points[i].x + outOffset.nx, points[i].z + outOffset.nz, 0, v);
+      const outRight = pushVertex(points[i].x - outOffset.nx, points[i].z - outOffset.nz, 1, v);
+      pointVerts.push({ split: true, inLeft: inLeft, inRight: inRight, outLeft: outLeft, outRight: outRight });
+      continue;
     }
 
-    const base = i * 2;
+    let offset;
+    if (prev && next) offset = stripMiterOffset(prev, points[i], next, halfWidth);
+    else if (next) offset = stripEndOffset(points[i], next, halfWidth);
+    else offset = stripEndOffset(prev, points[i], halfWidth);
 
-    // Left vertex — U=0
-    positions[base * 3] = points[i].x + nx;
-    positions[base * 3 + 1] = y;
-    positions[base * 3 + 2] = points[i].z + nz;
-    uvCoords[base * 2] = 0;
-    uvCoords[base * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
+    const left = pushVertex(points[i].x + offset.nx, points[i].z + offset.nz, 0, v);
+    const right = pushVertex(points[i].x - offset.nx, points[i].z - offset.nz, 1, v);
+    pointVerts.push({ split: false, left: left, right: right });
+  }
 
-    // Right vertex — U=1
-    positions[(base + 1) * 3] = points[i].x - nx;
-    positions[(base + 1) * 3 + 1] = y;
-    positions[(base + 1) * 3 + 2] = points[i].z - nz;
-    uvCoords[(base + 1) * 2] = 1;
-    uvCoords[(base + 1) * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
+  for (let i = 0; i < n - 1; i++) {
+    const a = pointVerts[i];
+    const b = pointVerts[i + 1];
+    const aLeft = a.split ? a.outLeft : a.left;
+    const aRight = a.split ? a.outRight : a.right;
+    const bLeft = b.split ? b.inLeft : b.left;
+    const bRight = b.split ? b.inRight : b.right;
+    indices.push(aLeft, bLeft, aRight);
+    indices.push(aRight, bLeft, bRight);
+  }
 
-    if (i < n - 1) {
-      indices.push(base, base + 2, base + 1);
-      indices.push(base + 1, base + 2, base + 3);
-    }
+  // Bevel fan: closes the wedge a split point leaves open on the outside of the turn,
+  // through a single unoffset vertex right on the centerline. The inside of the turn
+  // gets a harmless, slightly overlapping sliver instead of a gap - normal for a strip
+  // this width making that sharp a turn, and much less visible than a hole or a flip.
+  for (let i = 0; i < n; i++) {
+    const point = pointVerts[i];
+    if (!point.split) continue;
+    const v = (uvStartLength + arcLengths[i]) / uvScale;
+    const center = pushVertex(points[i].x, points[i].z, 0.5, v);
+    indices.push(point.inLeft, center, point.outLeft);
+    indices.push(point.inRight, center, point.outRight);
   }
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvCoords, 2));
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvCoords), 2));
   geometry.setIndex(indices);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
@@ -8184,7 +8374,13 @@ function resolveChunkDebugCenter(policy) {
           return;
         }
 
-        pressedKeys.clear();
+        // Cancel any WASD-driven movement so click-to-walk takes over cleanly, but leave
+        // other held keys alone - clearing the whole set dropped a still-held sprint key
+        // with no keydown left to re-add it (held keys don't re-fire keydown), so sprint
+        // silently stayed off until the key was released and pressed again.
+        for (const code of Array.from(pressedKeys)) {
+          if (movementActionFor(code)) pressedKeys.delete(code);
+        }
         updateMuisDoelwit();
       };
 
@@ -8932,6 +9128,43 @@ function resolveChunkDebugCenter(policy) {
 
     const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
     if (line) terrainEditorOverlay.add(line);
+
+    // Walkable Surface points form a ladder - point i always pairs with point
+    // (n-1-i) as one "rung" across the surface (matches triangulateWalkableSurfaceLadder
+    // in the collision code). Draw those pairings as faint cross-lines so the quad
+    // structure is visible while editing - without this the perimeter line alone looks
+    // like an arbitrary, sometimes self-crossing outline, and dragging one point without
+    // seeing its twin is what desyncs the ladder into a twisted collision mesh.
+    if (nodeType === "walkable_surface" && points.length >= 4 && points.length % 2 === 0) {
+      const rungPositions = [];
+      const half = points.length / 2;
+      for (let index = 0; index < half; index += 1) {
+        const a = points[index];
+        const b = points[points.length - 1 - index];
+        if (a && b) rungPositions.push(a, b);
+      }
+      if (rungPositions.length >= 2) {
+        const rungGeometry = new THREE.BufferGeometry().setFromPoints(rungPositions);
+        const rungMaterial = new THREE.LineBasicMaterial({
+          color: lineColor,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.35,
+          toneMapped: false
+        });
+        const rungLines = new THREE.LineSegments(rungGeometry, rungMaterial);
+        rungLines.renderOrder = 1999;
+        rungLines.frustumCulled = false;
+        rungLines.name = "GK terrain overlay rung lines";
+        rungLines.raycast = function () {};
+        rungLines.userData.debugOverlay = true;
+        rungLines.userData.debugOverlayKind = "terrain";
+        rungLines.castShadow = false;
+        rungLines.receiveShadow = false;
+        terrainEditorOverlay.add(rungLines);
+      }
+    }
 
     if (points.length > 0) {
       const centerSelected = selectedRole === "center"
@@ -9802,7 +10035,15 @@ function resolveChunkDebugCenter(policy) {
     } : null;
     const groundTextureRepeat = Math.max(1, num(ground?.textureRepeat, 1));
     const terrainAssetIds = new Set();
-    const maxSegmentLength = Math.max(1, Math.min(policy.chunkWorldWidth, policy.chunkWorldDepth) / 2);
+    // Surface Layer (path/water) pieces always split at the game's chunk size, even
+    // while running in the editor. Editor and game chunk grids are configured
+    // separately (different sizes are normal for ground/entity streaming), but a
+    // ribbon strip built from a bigger editor grid simply doesn't hit the same seams
+    // the smaller game grid does - so what looked fine in the editor could still break
+    // on the exact same world in-game. Previewing with the game's own split points
+    // means the editor shows exactly what will actually ship.
+    const gamePolicyForSurfaces = mode === "game" ? policy : resolveChunkPolicy(worldData, "game");
+    const maxSegmentLength = Math.max(1, Math.min(gamePolicyForSurfaces.chunkWorldWidth, gamePolicyForSurfaces.chunkWorldDepth) / 2);
     terrainStreamingState.lastUpdateReason = "blueprint";
 
     function rememberAssetId(assetId) {
@@ -10090,7 +10331,9 @@ function resolveChunkDebugCenter(policy) {
             width: width,
             y: surfaceY,
             uvScale: 1,
-            uvStartLength: 0
+            uvStartLength: piece.startLength,
+            prevPoint: piece.prevPoint,
+            nextPoint: piece.nextPoint
           });
           if (!geometry) return null;
           const mesh = new THREE.Mesh(geometry, material);
@@ -13334,7 +13577,9 @@ function resolveChunkDebugCenter(policy) {
 
     if (moveVector.lengthSq() > 0.0001) {
       moveVector.normalize();
-      const wantsSprint = usingKeys && isActionPressed("sprint");
+      // Sprint applies to click-to-walk too, not just WASD - holding the sprint key
+      // should keep the player running no matter how movement is currently driven.
+      const wantsSprint = isActionPressed("sprint");
       const speed = player.speed * (wantsSprint ? player.sprint : 1);
       movementTarget.set(player.pos.x + moveVector.x * speed * delta, player.pos.y, player.pos.z + moveVector.z * speed * delta);
       resolveCollision(movementTarget);
