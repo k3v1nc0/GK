@@ -2011,22 +2011,22 @@ function runStreamingCorrectnessChecks() {
 
   // Test 1 - boom vóór zichtbare rand: met activeRadius=0 en preloadMargin=0 zou het oude
   // center-only window (buildChunkWindow) alléén chunk 0,0 laden. Zodra de speler richting de
-  // grens beweegt (x=60 -> x=85) moet de forward-bias chunk 1,0 al in desiredResidentChunkKeys
-  // zetten, ruim vóórdat x=100 (de grens) of x=150 (het midden van chunk 1) bereikt is.
+  // grens beweegt (x=20 -> x=40) moet de forward-bias chunk 1,0 al in desiredResidentChunkKeys
+  // zetten, ruim vóórdat x=50 (de effectieve grens bij tileSize 0.5) bereikt is.
   const approachingCoverage = computeStreamingCoverage({
     mode: "game",
     policy: forwardPolicy,
-    player: { x: 85, z: 0 },
-    camTarget: { x: 85, z: 0 },
-    lastPlayerPosition: { x: 60, z: 0 }
+    player: { x: 40, z: 0 },
+    camTarget: { x: 40, z: 0 },
+    lastPlayerPosition: { x: 20, z: 0 }
   });
   assert(approachingCoverage.forwardChunkKeys.includes("1,0"), "forward lookahead bevat de volgende chunk vóórdat de speler de grens oversteekt");
   assert(approachingCoverage.desiredResidentChunkKeys.includes("1,0"), "desired resident set bevat forward chunk vóór grensoversteek (geen center-only bug)");
   assert(!approachingCoverage.activeChunkKeys.includes("1,0"), "chunk 1,0 is nog geen active chunk (test bewijst dat forward-bias het gat dicht, niet activeRadius)");
 
-  // Test 2 - pop-in-na-midden bug: loop x=40 -> 60 -> 90 -> 110 en controleer dat de volgende
-  // chunk al vóór x=100 desired is, niet pas nadat de speler al voorbij het midden van chunk 1 is.
-  const walkSequence = [40, 60, 90, 110];
+  // Test 2 - pop-in-na-midden bug: loop x=10 -> 25 -> 45 -> 55 en controleer dat de volgende
+  // chunk al vóór x=50 desired is, niet pas nadat de speler al in chunk 1 staat.
+  const walkSequence = [10, 25, 45, 55];
   let previousPoint = { x: 0, z: 0 };
   let sawForwardBeforeCrossing = false;
   for (const x of walkSequence) {
@@ -2037,7 +2037,7 @@ function runStreamingCorrectnessChecks() {
       camTarget: { x: x, z: 0 },
       lastPlayerPosition: previousPoint
     });
-    if (x < 100 && coverage.desiredResidentChunkKeys.includes("1,0")) sawForwardBeforeCrossing = true;
+    if (x < 50 && coverage.desiredResidentChunkKeys.includes("1,0")) sawForwardBeforeCrossing = true;
     previousPoint = { x: x, z: 0 };
   }
   assert(sawForwardBeforeCrossing, "volgende chunk wordt desired vóór de grens, niet pas nadat speler al voorbij het midden is");
@@ -2064,9 +2064,9 @@ function runStreamingCorrectnessChecks() {
   const laggedCoverage = computeStreamingCoverage({
     mode: "game",
     policy: lagPolicy,
-    player: { x: 140, z: 0 },
-    camTarget: { x: 40, z: 0 },
-    lastPlayerPosition: { x: 130, z: 0 }
+    player: { x: 65, z: 0 },
+    camTarget: { x: 35, z: 0 },
+    lastPlayerPosition: { x: 55, z: 0 }
   });
   assert(laggedCoverage.visibleChunkKeys.includes("1,0"), "speler-chunk blijft visible ook als de (gelerpte) camTarget nog in de vorige chunk hangt");
   assert(laggedCoverage.desiredResidentChunkKeys.includes("1,0"), "resident content voor de speler-chunk blijft desired ondanks camera-lag");
@@ -2421,9 +2421,9 @@ async function main() {
     assert(duplicatedModelEntityNode.type === "model_entity", "duplicaat is model_entity");
     assert(duplicatedModelEntityNode.values.entityId !== modelEntityNode.values.entityId && duplicatedModelEntityNode.values.entityId !== secondModelEntityNode.values.entityId, "duplicaat krijgt unieke entityId");
     assert(duplicatedModelEntityNode.values.walkable === false, "walkable checkbox defaultt false");
-    assert((graph.edges || []).some(function (edge) {
+    assert(!(graph.edges || []).some(function (edge) {
       return edge.fromNodeId === duplicatedModelEntityNode.id && edge.fromPort === "entity" && edge.toPort === "entities";
-    }), "duplicaat blijft automatisch verbonden");
+    }), "duplicaat maakt geen legacy Game Output entities verbinding");
 
     graph = await patchNodeValues(modelEntityNode.id, { x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1 });
     graph = await patchNodeValues(secondModelEntityNode.id, { x: 12, y: 0, z: 3, rotationX: -5, rotationY: 45, rotationZ: 12, scaleX: 1.25, scaleY: 1.25, scaleZ: 1.25 });
@@ -2480,15 +2480,15 @@ async function main() {
     const groupInputNode = findNode(graph, function (n) { return n.parentId === groupNode.id && n.type === "group_input"; }, "group input bestaat");
     const groupOutputNode = findNode(graph, function (n) { return n.parentId === groupNode.id && n.type === "group_output"; }, "group output bestaat");
     const gameOutputNode = findNode(graph, function (n) { return n.type === "game_output"; }, "game output bestaat");
-    assert((graph.edges || []).some(function (edge) {
+    assert(!(graph.edges || []).some(function (edge) {
       return edge.fromNodeId === modelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
-    }), "eerste model_entity blijft automatisch verbonden");
-    assert((graph.edges || []).some(function (edge) {
+    }), "eerste model_entity heeft geen legacy Game Output entities verbinding");
+    assert(!(graph.edges || []).some(function (edge) {
       return edge.fromNodeId === secondModelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
-    }), "tweede model_entity blijft automatisch verbonden");
-    assert((graph.edges || []).some(function (edge) {
+    }), "tweede model_entity heeft geen legacy Game Output entities verbinding");
+    assert(!(graph.edges || []).some(function (edge) {
       return edge.fromNodeId === duplicatedModelEntityNode.id && edge.fromPort === "entity" && edge.toNodeId === gameOutputNode.id && edge.toPort === "entities";
-    }), "gedupliceerde model_entity blijft automatisch verbonden");
+    }), "gedupliceerde model_entity heeft geen legacy Game Output entities verbinding");
 
     graph = (await createNode("ui_hud_text", {
       moduleId: "hud_status",

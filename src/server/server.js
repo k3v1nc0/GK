@@ -249,6 +249,15 @@ async function handleApi(req, res, url) {
       const snapshot = mmoService.getPlayerSnapshot(req);
       return sendJson(res, 200, snapshot);
     }
+    if (req.method === "GET" && url.pathname === "/api/game/fog/discovery") {
+      const snapshot = mmoService.getFogDiscoverySnapshot(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/fog/discovery") {
+      const body = await readJson(req);
+      const result = mmoService.updateFogDiscoveryForCurrentPlayer(req, body);
+      return sendJson(res, 200, result);
+    }
     if ((req.method === "POST" || req.method === "PATCH") && url.pathname === "/api/game/player/position") {
       const current = authService.currentSession(req);
       if (!current) return sendJson(res, 401, { ok: false, message: "Niet ingelogd." });
@@ -306,6 +315,11 @@ async function handleApi(req, res, url) {
         transport: positionPayload?.transport || "http",
         ignored: false
       });
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/travel/zone-link") {
+      const body = await readJson(req);
+      const result = mmoService.travelByZoneLink(req, body);
+      return sendJson(res, 200, result);
     }
     if (req.method === "GET" && url.pathname === "/api/node-types") {
       authService.requireEditor(req);
@@ -488,7 +502,8 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "POST" && url.pathname === "/api/editor/save-draft") {
       authService.requireEditor(req);
-      return sendJson(res, 200, { ok: true, world: publishService.saveDraft() });
+      publishService.saveDraft();
+      return sendJson(res, 200, { ok: true });
     }
     if (req.method === "GET" && url.pathname === "/api/editor/draft-world") {
       authService.requireEditor(req);
@@ -497,7 +512,7 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/editor/publish") {
       const user = authService.requireEditor(req);
       const result = publishService.publish(user.id);
-      return sendJson(res, 200, { ok: true, world: result.world, validation: result.validation });
+      return sendJson(res, 200, { ok: true, publishedAt: result.world?.publishedAt || null, validation: result.validation });
     }
     if (req.method === "GET" && url.pathname === "/api/editor/publish-history") {
       authService.requireEditor(req);

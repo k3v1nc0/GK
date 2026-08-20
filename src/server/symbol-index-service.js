@@ -77,6 +77,33 @@ function specForNodeType(type) {
       return { kind: "catalogRegistry", identityField: "registryId", labelField: "registryId" };
     case "zone_registry":
       return { kind: "zoneRegistry", identityField: "registryId", labelField: "registryId" };
+    case "zone_definition":
+      return { kind: "zone", identityField: "zoneId", labelField: "displayName" };
+    case "area_definition":
+      return { kind: "area", identityField: "areaId", labelField: "label" };
+    case "spawn_point":
+      return { kind: "spawn", identityField: "spawnId", labelField: "label" };
+    case "checkpoint":
+      return { kind: "checkpoint", identityField: "checkpointId", labelField: "label" };
+    case "zone_link":
+      return { kind: "zone_link", identityField: "linkId", labelField: "linkId" };
+    case "location_anchor":
+      return { kind: "target", identityField: "anchorId", labelField: "label" };
+    case "map_marker_definition":
+      return { kind: "marker", identityField: "markerId", labelField: "label" };
+    case "minimap_bake":
+      return { kind: "minimap", identityField: "minimapId", labelField: "label" };
+    case "entity_assembly":
+    case "model_entity":
+      return { kind: "entity", identityField: "entityId", labelField: "label" };
+    case "interaction_component":
+      return { kind: "entity_component", identityField: "componentId", labelField: "interactionType" };
+    case "quest_target_binding":
+      return { kind: "target", identityField: "targetId", labelField: "label" };
+    case "area_output":
+      return { kind: "areaPackage", identityField: "packageId", labelField: "packageId" };
+    case "zone_output":
+      return { kind: "zonePackage", identityField: "packageId", labelField: "packageId" };
     case "campaign_registry":
       return { kind: "campaignRegistry", identityField: "registryId", labelField: "registryId" };
     case "player_rules_output":

@@ -98,20 +98,29 @@ export function minimapViewBounds(view) {
 // than the ground on an axis, that axis is centered instead of clamped.
 export function clampMinimapView(view, groundBounds) {
   if (!groundBounds) return view;
-  const half = view.worldDistance / 2;
   const groundWidth = groundBounds.maxX - groundBounds.minX;
   const groundDepth = groundBounds.maxZ - groundBounds.minZ;
-  const centerX = groundWidth <= view.worldDistance
+  const maxDistance = Math.max(1, groundWidth || 1, groundDepth || 1);
+  const worldDistance = clampNum(Number(view.worldDistance) || maxDistance, 1, maxDistance);
+  const half = worldDistance / 2;
+  const centerX = groundWidth <= worldDistance
     ? (groundBounds.minX + groundBounds.maxX) / 2
     : clampNum(view.centerX, groundBounds.minX + half, groundBounds.maxX - half);
-  const centerZ = groundDepth <= view.worldDistance
+  const centerZ = groundDepth <= worldDistance
     ? (groundBounds.minZ + groundBounds.maxZ) / 2
     : clampNum(view.centerZ, groundBounds.minZ + half, groundBounds.maxZ - half);
-  return { centerX, centerZ, worldDistance: view.worldDistance };
+  return { centerX, centerZ, worldDistance };
 }
 
 export function zoomMinimapView(view, factor, minDistance, maxDistance, groundBounds) {
-  const worldDistance = clampNum(view.worldDistance * factor, Math.max(1, Number(minDistance) || 1), Math.max(1, Number(maxDistance) || 100000));
+  const groundMaxDistance = groundBounds
+    ? Math.max(1, groundBounds.maxX - groundBounds.minX || 1, groundBounds.maxZ - groundBounds.minZ || 1)
+    : Math.max(1, Number(maxDistance) || 100000);
+  const worldDistance = clampNum(
+    view.worldDistance * factor,
+    Math.max(1, Number(minDistance) || 1),
+    Math.min(Math.max(1, Number(maxDistance) || 100000), groundMaxDistance)
+  );
   return clampMinimapView({ centerX: view.centerX, centerZ: view.centerZ, worldDistance }, groundBounds);
 }
 
@@ -238,17 +247,18 @@ export function drawStarMarker(ctx, x, y, size, style) {
   });
 }
 
-export function drawMarkerLabel(ctx, text, x, y, fontSizePx, maxLength) {
+export function drawMarkerLabel(ctx, text, x, y, fontSizePx, maxLength, yOffsetPx, minFontSizePx) {
   const label = String(text || "").slice(0, Math.max(1, Number(maxLength) || 14));
   if (!label) return;
   ctx.save();
-  ctx.font = Math.max(6, Number(fontSizePx) || 10) + "px sans-serif";
+  const fontSize = Math.max(Number(minFontSizePx) || 6, Number(fontSizePx) || 10);
+  ctx.font = fontSize + "px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.lineWidth = 3;
+  ctx.lineWidth = Math.max(0.75, fontSize * 0.34);
   ctx.strokeStyle = "rgba(0,0,0,0.75)";
   ctx.fillStyle = "#ffffff";
-  const labelY = y + 4;
+  const labelY = y + Math.max(fontSize * 0.38, Number(yOffsetPx) || 4);
   ctx.strokeText(label, x, labelY);
   ctx.fillText(label, x, labelY);
   ctx.restore();
@@ -356,15 +366,20 @@ export function attachMinimapInteractions(canvas, opts) {
   function zoomAroundPixel(px, factor) {
     const view = opts.getView();
     const size = canvasSize();
-    const before = minimapPointToWorld(px.x, px.y, minimapViewBounds(view), size, size);
-    const targetDistance = clampNum(view.worldDistance * factor, minDistance(), maxDistance());
+    const bounds = groundBounds();
+    const clampedView = clampMinimapView(view, bounds);
+    const before = minimapPointToWorld(px.x, px.y, minimapViewBounds(clampedView), size, size);
+    const groundMaxDistance = bounds
+      ? Math.max(1, bounds.maxX - bounds.minX || 1, bounds.maxZ - bounds.minZ || 1)
+      : maxDistance();
+    const targetDistance = clampNum(view.worldDistance * factor, minDistance(), Math.min(maxDistance(), groundMaxDistance));
     const u = px.x / size;
     const v = px.y / size;
     const nextView = clampMinimapView({
       centerX: before.x - (u - 0.5) * targetDistance,
       centerZ: before.z - (v - 0.5) * targetDistance,
       worldDistance: targetDistance
-    }, groundBounds());
+    }, bounds);
     opts.setView(nextView);
     notifyInteraction();
   }

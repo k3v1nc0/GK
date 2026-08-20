@@ -24,6 +24,24 @@ function fieldOptionValue(option) {
   return option === undefined || option === null ? "" : String(option);
 }
 
+function normalizeDegrees(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  let normalized = number % 360;
+  if (normalized > 180) normalized -= 360;
+  if (normalized < -180) normalized += 360;
+  return Math.round(normalized * 1000) / 1000;
+}
+
+function normalizeValuesForType(type, values) {
+  if (type !== "model_entity") return values;
+  const next = Object.assign({}, values);
+  for (const key of ["rotationX", "rotationY", "rotationZ"]) {
+    if (next[key] !== null && next[key] !== undefined && next[key] !== "") next[key] = normalizeDegrees(next[key]);
+  }
+  return next;
+}
+
 function isKnownDataType(dataType) {
   return Object.values(NODE_TYPES).some(function (definition) {
     const inputs = Object.values(definition.inputs || {});
@@ -194,5 +212,5 @@ export function validateNodeValues(type, values, nodeTypes = NODE_TYPES) {
 
 export function cleanValuesForType(type, nextValues, previousValues = {}, nodeTypes = NODE_TYPES) {
   const baseValues = Object.assign({}, defaultValuesForType(type), previousValues || {}, nextValues || {});
-  return validateNodeValues(type, baseValues, nodeTypes).values;
+  return normalizeValuesForType(type, validateNodeValues(type, baseValues, nodeTypes).values);
 }

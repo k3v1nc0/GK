@@ -1,0 +1,56 @@
+{
+  "proof": {
+    "before": {
+      "id": "foundation.zone_registry",
+      "x": 380,
+      "y": 580
+    },
+    "after": {
+      "id": "foundation.zone_registry",
+      "x": 470,
+      "y": 640
+    },
+    "moved": true,
+    "box": {},
+    "start": {
+      "x": 731,
+      "y": 698
+    },
+    "end": {
+      "x": 821,
+      "y": 758
+    },
+    "debug": null,
+    "bodyText": "GK\nGAME EDITOR\nROOT\n1 action unsaved\nSAVE DRAFT\nSAVE TO GAME\nLOGOUT\nVALIDATION\nKlaar om te publiceren.\n! Geen bewegings-keybinds. De speler kan alleen via klik-naar-lopen bewegen.\n! Geen interact-keybind. Interactie werkt alleen via klikken op het object.\nINSPECTOR\nZONE REGISTRY - ZONE REGISTRY\nRegistry id\nDupliceer\nVerwijder\nGame Project Settings\nGAME PROJECT SETTINGS\nproject\n(geen id)\nChunk Grid Definition\nCHUNK GRID DEFINITION\ngrid\n(geen id)\nWorld Assembly\nWORLD ASSEMBLY\nproject\ngrid\neditor\ng"
+  },
+  "logs": [
+    {
+      "type": "warn",
+      "text": "[.WebGL-0xe6c0013d400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "info",
+      "text": "[timing] renderAssets 0.1ms"
+    },
+    {
+      "type": "info",
+      "text": "[timing] refreshViewport 29.3ms force=true"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0xe6c0013d400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0xe6c0013d400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels"
+    },
+    {
+      "type": "warn",
+      "text": "[.WebGL-0xe6c0013d400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+    }
+  ]
+}

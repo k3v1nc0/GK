@@ -1,7 +1,8 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260729-zones-save-fix15";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
+  worldToMinimapPoint,
   resolveMinimapPoint,
   drawTriangleMarker,
   drawDotMarker,
@@ -14,9 +15,8 @@ import {
   createMinimapView,
   clampMinimapView,
   minimapViewBounds,
-  minimapImageSourceRect,
   attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260714-mmo11-camera-target-height";
+} from "../shared/minimap-utils.js?v=20260729-zones-save-fix15";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
@@ -25,30 +25,69 @@ const overlay = document.querySelector("#gameOverlay");
 const overlayText = document.querySelector("#overlayText");
 
 // FIX-5 authoritative movement / rubberband prevention. See README/fases/MMO-01-FIX-5-*.md.
-const OWN_SMALL_CORRECTION_THRESHOLD = 0.75;
+const OWN_SMALL_CORRECTION_THRESHOLD = 1.0;
 const OWN_HARD_CORRECTION_THRESHOLD = 3.0;
 // FIX-10: reconciliation van de eigen speler. Afwijkingen kleiner dan de
 // deadzone worden genegeerd; grotere afwijkingen worden als correctievector
 // opgeslagen en per movement-tick geleidelijk weggesmeerd i.p.v. gesnapt.
-const OWN_PREDICTION_DEADZONE = 0.25;
-const OWN_CORRECTION_BLEND_RATE = 0.3;
+const OWN_PREDICTION_DEADZONE = 0.35;
+const OWN_CORRECTION_BLEND_MS = 300;
+const OWN_CORRECTION_BLEND_RATE = 0.393;
+const OWN_KEEP_PREDICTION_DURING_INPUT = true;
+const OWN_ACTIVE_CORRECTION_MAX_UNITS = 0.08;
+const OWN_CORRECTION_MERGE_FACTOR = 0.35;
+const OWN_POST_INPUT_HOLD_MS = 650;
+const OWN_STOP_RESYNC_MAX_UNITS = 40;
 const REMOTE_HARD_CORRECTION_THRESHOLD = 5.0;
 const OWN_RECONCILE_MS = 120;
 const REMOTE_RECONCILE_MS = 100;
 const REMOTE_TELEPORT_DISTANCE = 5.0;
-const REMOTE_INTERPOLATION_BASE_DELAY_MS = 90;
-const REMOTE_INTERPOLATION_MIN_DELAY_MS = 60;
-const REMOTE_INTERPOLATION_MAX_DELAY_MS = 140;
+const SERVER_TICK_RATE_HZ = 30;
+const SNAPSHOT_RATE_HZ = 20;
+const INPUT_SEND_RATE_HZ = 30;
+const REMOTE_INTERPOLATION_BASE_DELAY_MS = 200;
+const REMOTE_INTERPOLATION_MIN_DELAY_MS = 160;
+const REMOTE_INTERPOLATION_MAX_DELAY_MS = 280;
 const REMOTE_INTERPOLATION_BUFFER_LIMIT = 32;
 const REMOTE_INTERPOLATION_SAMPLE_TTL_MS = 2000;
-const REMOTE_INTERPOLATION_MAX_EXTRAPOLATION_MS = 60;
-const WS_STATUS_HYSTERESIS_MS = 800;
-const MMO_READY_TIMEOUT_MS = 8000;
+const REMOTE_INTERPOLATION_MAX_EXTRAPOLATION_MS = 80;
+const WS_STATUS_HYSTERESIS_MS = 250;
+const MMO_READY_TIMEOUT_MS = 12000;
 const CLIENT_PING_INTERVAL_MS = 2000;
 const PING_SAMPLE_WINDOW_SIZE = 20;
 const MOVE_SEND_INTERVAL_MS = 33; // Throttle input/network sync to ~30 Hz.
+const DEFAULT_MMO_NETWORK_SETTINGS = {
+  enabled: true,
+  networkPreset: "custom",
+  serverTickRateHz: SERVER_TICK_RATE_HZ,
+  snapshotRateHz: SNAPSHOT_RATE_HZ,
+  inputSendRateHz: INPUT_SEND_RATE_HZ,
+  moveSendIntervalMs: MOVE_SEND_INTERVAL_MS,
+  predictionEnabled: true,
+  reconciliationEnabled: true,
+  ownPredictionDeadzone: OWN_PREDICTION_DEADZONE,
+  ownCorrectionBlendMs: OWN_CORRECTION_BLEND_MS,
+  ownCorrectionBlendRate: OWN_CORRECTION_BLEND_RATE,
+  ownSmallCorrectionThreshold: OWN_SMALL_CORRECTION_THRESHOLD,
+  ownHardCorrectionThreshold: OWN_HARD_CORRECTION_THRESHOLD,
+  ownKeepPredictionDuringInput: OWN_KEEP_PREDICTION_DURING_INPUT,
+  ownActiveCorrectionMaxUnits: OWN_ACTIVE_CORRECTION_MAX_UNITS,
+  ownCorrectionMergeFactor: OWN_CORRECTION_MERGE_FACTOR,
+  ownPostInputHoldMs: OWN_POST_INPUT_HOLD_MS,
+  ownStopResyncMaxUnits: OWN_STOP_RESYNC_MAX_UNITS,
+  remoteInterpolationBaseDelayMs: REMOTE_INTERPOLATION_BASE_DELAY_MS,
+  remoteInterpolationMinDelayMs: REMOTE_INTERPOLATION_MIN_DELAY_MS,
+  remoteInterpolationMaxDelayMs: REMOTE_INTERPOLATION_MAX_DELAY_MS,
+  remoteMaxExtrapolationMs: REMOTE_INTERPOLATION_MAX_EXTRAPOLATION_MS,
+  readyTimeoutMs: MMO_READY_TIMEOUT_MS,
+  wsStatusHysteresisMs: WS_STATUS_HYSTERESIS_MS,
+  clientPingIntervalMs: CLIENT_PING_INTERVAL_MS
+};
 const CLICK_MOVE_START_RADIUS = 0.04;
 const CLICK_MOVE_ARRIVAL_RADIUS = 0.06;
+const CLICK_MOVE_SELF_RADIUS_MULTIPLIER = 1.35;
+const CLICK_MOVE_BLOCKED_RADIUS = 0.015;
+const CLICK_MOVE_BLOCKED_TIMEOUT_MS = 420;
 const POINTER_HOLD_RELEASE_THRESHOLD_MS = 180;
 const POINTER_DRAG_THRESHOLD_PX = 6;
 const CLIENT_NET_STORAGE_KEY = "gk:mmo01:movement-net";
@@ -137,6 +176,7 @@ const state = {
     lastAppliedServerUpdatedAt: "",
     pendingInputs: [],
     lastLocalInputAt: 0,
+    postInputPredictionHoldUntil: 0,
     localControllerActive: false,
     controllerEpoch: persistedNetState.controllerEpoch,
     lastRemoteControllerSessionId: null,
@@ -248,8 +288,11 @@ const state = {
     screenX: 0,
     screenY: 0,
     downAt: 0,
+    blockedSince: 0,
+    lastDistanceToTarget: -1,
     moved: false,
-    dragged: false
+    dragged: false,
+    sprintPointerId: null
   },
   lastAnimationState: "idle",
   debug: {
@@ -293,6 +336,7 @@ const state = {
     elements: null,
     signature: null,
     image: null,
+    images: new Map(),
     dirty: false,
     lastDrawAt: 0,
     lastDrawKey: null,
@@ -305,6 +349,27 @@ const state = {
     userOverride: false,
     configKey: "",
     interactions: null
+  },
+  minimapFog: {
+    worldId: null,
+    mapLayer: "overworld",
+    configKey: "",
+    discoveredCells: new Set(),
+    loaded: false,
+    loadInFlight: false,
+    saveInFlight: false,
+    lastLoadAttemptAt: 0,
+    dirty: true,
+    lastDrawKey: "",
+    lastClientCellKey: null,
+    lastClientCellX: null,
+    lastClientCellZ: null,
+    lastSaveAt: 0,
+    pendingSaveTimerId: 0,
+    lastDiscoveredCount: 0,
+    suppressDiscoveryUntil: 0,
+    maskCanvas: null,
+    maskCtx: null
   },
   gameLoopTimings: {
     remoteSyncMs: 0,
@@ -387,6 +452,62 @@ function epochNow(now = performance.now()) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function mmoNetworkSettings() {
+  const source = state.gameWorld?.mmo?.network;
+  const enabled = source && source.enabled !== false;
+  const values = enabled ? source : {};
+  const presetValues = values && values.networkPreset ? (mmoNetworkPresetValues(values.networkPreset) || {}) : {};
+  const hasValue = function (key) {
+    return values && Object.prototype.hasOwnProperty.call(values, key);
+  };
+  const read = function (key, min, max) {
+    const fallback = presetValues[key] ?? DEFAULT_MMO_NETWORK_SETTINGS[key];
+    return clamp(num(values[key], fallback), min, max);
+  };
+  const correctionBlendRateForMs = function (durationMs) {
+    const duration = clamp(num(durationMs, OWN_CORRECTION_BLEND_MS), 50, 1000);
+    return clamp(1 - Math.pow(0.05, 50 / duration), 0, 1);
+  };
+  const minDelay = read("remoteInterpolationMinDelayMs", 0, 300);
+  const maxDelay = Math.max(minDelay, read("remoteInterpolationMaxDelayMs", 0, 500));
+  const baseDelay = clamp(read("remoteInterpolationBaseDelayMs", 0, 300), minDelay, maxDelay);
+  const inputSendRateHz = hasValue("inputSendRateHz")
+    ? read("inputSendRateHz", 10, 60)
+    : clamp(1000 / read("moveSendIntervalMs", 16, 120), 10, 60);
+  const correctionBlendMs = hasValue("ownCorrectionBlendMs")
+    ? read("ownCorrectionBlendMs", 50, 1000)
+    : null;
+  return {
+    enabled: enabled,
+    networkPreset: String(values.networkPreset || DEFAULT_MMO_NETWORK_SETTINGS.networkPreset || "custom"),
+    serverTickRateHz: read("serverTickRateHz", 10, 60),
+    snapshotRateHz: read("snapshotRateHz", 5, 30),
+    inputSendRateHz: inputSendRateHz,
+    moveSendIntervalMs: Math.max(16, Math.min(120, Math.round(1000 / inputSendRateHz))),
+    predictionEnabled: values.predictionEnabled !== false,
+    reconciliationEnabled: values.reconciliationEnabled !== false,
+    ownPredictionDeadzone: read("ownPredictionDeadzone", 0, 2),
+    ownCorrectionBlendMs: correctionBlendMs || DEFAULT_MMO_NETWORK_SETTINGS.ownCorrectionBlendMs,
+    ownCorrectionBlendRate: correctionBlendMs
+      ? correctionBlendRateForMs(correctionBlendMs)
+      : read("ownCorrectionBlendRate", 0, 1),
+    ownSmallCorrectionThreshold: read("ownSmallCorrectionThreshold", 0, 5),
+    ownHardCorrectionThreshold: read("ownHardCorrectionThreshold", 0.5, 20),
+    ownKeepPredictionDuringInput: values.ownKeepPredictionDuringInput !== false,
+    ownActiveCorrectionMaxUnits: read("ownActiveCorrectionMaxUnits", 0, 2),
+    ownCorrectionMergeFactor: read("ownCorrectionMergeFactor", 0, 1),
+    ownPostInputHoldMs: read("ownPostInputHoldMs", 0, 2000),
+    ownStopResyncMaxUnits: read("ownStopResyncMaxUnits", 0, 200),
+    remoteInterpolationBaseDelayMs: baseDelay,
+    remoteInterpolationMinDelayMs: minDelay,
+    remoteInterpolationMaxDelayMs: maxDelay,
+    remoteMaxExtrapolationMs: read("remoteMaxExtrapolationMs", 0, 250),
+    readyTimeoutMs: read("readyTimeoutMs", 1000, 30000),
+    wsStatusHysteresisMs: read("wsStatusHysteresisMs", 0, 2000),
+    clientPingIntervalMs: read("clientPingIntervalMs", 500, 10000)
+  };
 }
 
 function normalizePointerTarget(value) {
@@ -472,7 +593,8 @@ function clearMmoReadyTimeout() {
 
 function scheduleMmoReadyTimeout() {
   clearMmoReadyTimeout();
-  state.mmoReady.timeoutAt = performance.now() + MMO_READY_TIMEOUT_MS;
+  const timeoutMs = mmoNetworkSettings().readyTimeoutMs;
+  state.mmoReady.timeoutAt = performance.now() + timeoutMs;
   state.mmoReady.timeoutId = window.setTimeout(function () {
     if (state.mmoReady.onlineReady) return;
     const blocker = getMmoReadinessBlocker();
@@ -481,13 +603,13 @@ function scheduleMmoReadyTimeout() {
     state.debug.lastError = "MMO readiness timeout: " + blocker;
     showOverlay("MMO verbinden mislukt: " + blocker);
     updateHud();
-  }, MMO_READY_TIMEOUT_MS);
+  }, timeoutMs);
 }
 
 function getMmoReadinessBlocker() {
   if (!state.mmoReady.httpSnapshotLoaded) return "waiting_for_http_snapshot";
   if (!state.mmoReady.runtimeReady) return "waiting_for_runtime";
-  if (!state.mmoReady.socketOpen || state.wsStateVisible !== "connected") return "waiting_for_socket";
+  if (!state.mmoReady.socketOpen || !state.ws || state.ws.readyState !== WebSocket.OPEN) return "waiting_for_socket";
   if (!state.mmoReady.connectionReadyReceived) return "waiting_for_connection_ready";
   if (!state.mmoReady.playerStateReceived) return "waiting_for_player_state";
   if (!state.mmoReady.presenceSnapshotReceived) return "waiting_for_presence_snapshot";
@@ -499,7 +621,7 @@ function updateMmoReadyOverlay() {
   const blocker = getMmoReadinessBlocker() || "waiting_for_unknown";
   state.mmoReady.lastBlocker = blocker;
   const elapsed = state.mmoReady.startedAt ? performance.now() - state.mmoReady.startedAt : 0;
-  const prefix = elapsed >= MMO_READY_TIMEOUT_MS ? "MMO verbinden mislukt: " : "MMO verbinden... ";
+  const prefix = elapsed >= mmoNetworkSettings().readyTimeoutMs ? "MMO verbinden mislukt: " : "MMO verbinden... ";
   showOverlay(prefix + blocker);
 }
 
@@ -1372,7 +1494,7 @@ function interpolateRemoteEntry(entry, renderTimelineMs) {
     const previous = samples[samples.length - 2] || lastSample;
     const previousPos = cloneRemotePosition(previous.position);
     const lastPos = cloneRemotePosition(lastSample.position);
-    const extraMs = clamp(renderTimelineMs - lastTimeline, 0, REMOTE_INTERPOLATION_MAX_EXTRAPOLATION_MS);
+    const extraMs = clamp(renderTimelineMs - lastTimeline, 0, mmoNetworkSettings().remoteMaxExtrapolationMs);
     if (extraMs <= 0 || lastSample.moving === false || remoteSampleDistance(previousPos, lastPos) <= 0.01) {
       return {
         position: cloneRemotePosition(lastPos),
@@ -1460,7 +1582,8 @@ function syncRemotePlayers(now = performance.now()) {
   if (!state.runtime || (typeof state.runtime.setRemotePlayerVisualState !== "function" && typeof state.runtime.setRemotePlayerState !== "function")) return;
   const syncStartedAt = performance.now();
   try {
-  const renderDelay = clamp(Number(state.remote.interpolationDelayMs) || REMOTE_INTERPOLATION_BASE_DELAY_MS, REMOTE_INTERPOLATION_MIN_DELAY_MS, REMOTE_INTERPOLATION_MAX_DELAY_MS);
+  const netSettings = mmoNetworkSettings();
+  const renderDelay = clamp(Number(state.remote.interpolationDelayMs) || netSettings.remoteInterpolationBaseDelayMs, netSettings.remoteInterpolationMinDelayMs, netSettings.remoteInterpolationMaxDelayMs);
   const serverNowEpoch = estimateServerEpochNow(now);
   state.remote.remoteRenderDelayMs = round(renderDelay);
   for (const entry of state.remote.players.values()) {
@@ -1652,9 +1775,10 @@ function summarizePingSamples(samples) {
 }
 
 function updateRemoteInterpolationDelay() {
+  const netSettings = mmoNetworkSettings();
   const pingStats = summarizePingSamples(state.netPing.samples);
   const jitter = Number.isFinite(pingStats.jitterMs) ? pingStats.jitterMs : 0;
-  const targetDelay = clamp(REMOTE_INTERPOLATION_BASE_DELAY_MS + (jitter * 2), REMOTE_INTERPOLATION_MIN_DELAY_MS, REMOTE_INTERPOLATION_MAX_DELAY_MS);
+  const targetDelay = clamp(netSettings.remoteInterpolationBaseDelayMs + (jitter * 2), netSettings.remoteInterpolationMinDelayMs, netSettings.remoteInterpolationMaxDelayMs);
   state.remote.interpolationDelayMs = round(targetDelay);
   state.remote.remoteRenderDelayMs = round(targetDelay);
   return pingStats;
@@ -1738,14 +1862,14 @@ function updateWsStatus(kind, text = kind, options = {}) {
       clearWsStatusVisibleTimer();
       commitWsVisibleStatus("disconnected", nextText);
     } else {
-      scheduleWsVisibleStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? "reconnecting" : "connecting", options.delayMs || WS_STATUS_HYSTERESIS_MS, options.attemptId || state.wsConnectionAttemptId);
+      scheduleWsVisibleStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? "reconnecting" : "connecting", options.delayMs ?? mmoNetworkSettings().wsStatusHysteresisMs, options.attemptId || state.wsConnectionAttemptId);
     }
     updateHud();
     return;
   }
   if (nextKind === "connecting") {
     if (state.wsConnectedOnce && options.immediate !== true) {
-      scheduleWsVisibleStatus("reconnecting", "reconnecting", options.delayMs || WS_STATUS_HYSTERESIS_MS, options.attemptId || state.wsConnectionAttemptId);
+      scheduleWsVisibleStatus("reconnecting", "reconnecting", options.delayMs ?? mmoNetworkSettings().wsStatusHysteresisMs, options.attemptId || state.wsConnectionAttemptId);
     } else {
       clearWsStatusVisibleTimer();
       commitWsVisibleStatus("connecting", nextText);
@@ -1758,7 +1882,7 @@ function updateWsStatus(kind, text = kind, options = {}) {
       clearWsStatusVisibleTimer();
       commitWsVisibleStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? nextText : "connecting");
     } else {
-      scheduleWsVisibleStatus("reconnecting", nextText, options.delayMs || WS_STATUS_HYSTERESIS_MS, options.attemptId || state.wsConnectionAttemptId);
+      scheduleWsVisibleStatus("reconnecting", nextText, options.delayMs ?? mmoNetworkSettings().wsStatusHysteresisMs, options.attemptId || state.wsConnectionAttemptId);
     }
     updateHud();
     return;
@@ -1832,7 +1956,7 @@ function startPingLoop(socket, attemptId) {
       return;
     }
     sendPing();
-  }, CLIENT_PING_INTERVAL_MS);
+  }, mmoNetworkSettings().clientPingIntervalMs);
 }
 
 function stopPingLoop() {
@@ -1954,6 +2078,8 @@ function buildClientDebugState() {
   const maxSnapshotIntervalMs = snapshotIntervals.length
     ? round(snapshotIntervals.reduce(function (max, value) { return Math.max(max, value); }, 0))
     : (Number.isFinite(Number(state.remote.maxSnapshotIntervalMs)) ? Number(state.remote.maxSnapshotIntervalMs) : 0);
+  const activeMmoNetworkSettings = mmoNetworkSettings();
+  const minimapFogConfig = resolveMinimapFogConfig();
   const mmoReady = {
     httpSnapshotLoaded: state.mmoReady.httpSnapshotLoaded === true,
     runtimeReady: state.mmoReady.runtimeReady === true,
@@ -1990,6 +2116,7 @@ function buildClientDebugState() {
     maxPingMs: pingStats.maxPingMs,
     lastPongAgeMs: state.netPing.lastPongAt ? round(Math.max(0, now - state.netPing.lastPongAt)) : null,
     packetAgeMs: state.net.lastServerPacketAt ? round(Math.max(0, now - state.net.lastServerPacketAt)) : null,
+    mmoNetworkSettings: activeMmoNetworkSettings,
     remoteBufferDelayMs: state.remote.interpolationDelayMs,
     remoteRenderDelayMs: remoteMetrics.remoteRenderDelayMs,
     remotePlayerCount: state.remote.players.size || 0,
@@ -2017,6 +2144,26 @@ function buildClientDebugState() {
     remoteCatchupCount: state.remote.remoteCatchupCount || remoteMetrics.remoteCatchupCount || 0,
     latestRemoteSampleAgeMs: remoteMetrics.latestRemoteSampleAgeMs,
     interpolationBacklogMs: remoteMetrics.interpolationBacklogMs,
+    minimapFog: {
+      enabled: minimapFogConfig.enabled === true,
+      configSource: state.gameWorld?.minimap?.game?.fogOfWar ? "published" : (state.gameWorld?.minimap?.game ? "hud_defaults" : "none"),
+      fogColor: minimapFogConfig.fogColor,
+      fogOpacity: minimapFogConfig.fogOpacity,
+      cellSize: minimapFogConfig.cellSize,
+      revealRadius: minimapFogConfig.revealRadius,
+      saveIntervalMs: minimapFogConfig.saveIntervalMs,
+      movementThreshold: minimapFogConfig.movementThreshold,
+      smoothFog: minimapFogConfig.smoothFog,
+      fogFeatherRadius: minimapFogConfig.fogFeatherRadius,
+      revealShape: minimapFogConfig.revealShape,
+      loaded: state.minimapFog.loaded === true,
+      worldId: state.minimapFog.worldId || null,
+      mapLayer: state.minimapFog.mapLayer || "overworld",
+      discoveredCount: state.minimapFog.discoveredCells.size || 0,
+      lastClientCellKey: state.minimapFog.lastClientCellKey || null,
+      saveInFlight: state.minimapFog.saveInFlight === true,
+      loadInFlight: state.minimapFog.loadInFlight === true
+    },
     clockOffsetMs: round(state.net.clockOffsetMs || 0),
     serverSeq: state.net.lastServerSeq || 0,
     gameLoopTimings: {
@@ -2135,6 +2282,44 @@ function removeAckedInputs(clientInputSeq) {
   state.net.lastAckedInputSeq = Math.max(state.net.lastAckedInputSeq || 0, ackSeq);
   syncNetDebugState();
   persistNetState();
+  return true;
+}
+
+function queueOwnCorrection(deltaX, deltaZ, netSettings) {
+  const rawX = Number(deltaX) || 0;
+  const rawZ = Number(deltaZ) || 0;
+  const maxUnits = clamp(num(netSettings?.ownActiveCorrectionMaxUnits, OWN_ACTIVE_CORRECTION_MAX_UNITS), 0, 2);
+  if (maxUnits <= 0) return false;
+  const distance = Math.hypot(rawX, rawZ);
+  if (!Number.isFinite(distance) || distance <= 0.0001) return false;
+  const scale = distance > maxUnits ? maxUnits / distance : 1;
+  const nextX = rawX * scale;
+  const nextZ = rawZ * scale;
+  if (!state.ownCorrection) {
+    state.ownCorrection = { x: nextX, z: nextZ };
+    return true;
+  }
+  const merge = clamp(num(netSettings?.ownCorrectionMergeFactor, OWN_CORRECTION_MERGE_FACTOR), 0, 1);
+  state.ownCorrection = {
+    x: (state.ownCorrection.x * (1 - merge)) + (nextX * merge),
+    z: (state.ownCorrection.z * (1 - merge)) + (nextZ * merge)
+  };
+  if (Math.hypot(state.ownCorrection.x, state.ownCorrection.z) < 0.01) state.ownCorrection = null;
+  return true;
+}
+
+function postInputPredictionHoldActive(nowMsValue = Date.now()) {
+  return Number(state.net.postInputPredictionHoldUntil || 0) > Number(nowMsValue || Date.now());
+}
+
+function startPostInputPredictionHold(reason = null) {
+  const holdMs = clamp(num(mmoNetworkSettings().ownPostInputHoldMs, OWN_POST_INPUT_HOLD_MS), 0, 2000);
+  if (holdMs <= 0) {
+    state.net.postInputPredictionHoldUntil = 0;
+    return false;
+  }
+  state.net.postInputPredictionHoldUntil = Date.now() + holdMs;
+  state.net.lastIgnoredReason = reason ? "post_input_hold_" + reason : "post_input_hold";
   return true;
 }
 
@@ -2269,7 +2454,13 @@ function applyAuthoritativeUpdate(update, options = {}) {
   const distance = previousPosition ? Math.hypot(previousPosition.x - nextPosition.x, previousPosition.z - nextPosition.z) : 0;
   const nextTransport = options.transport || nextPosition.transport || null;
   const localInputActive = hasMovementInput();
-  const shouldKeepPrediction = options.keepPrediction === true && localInputActive;
+  const netSettings = mmoNetworkSettings();
+  const postInputHoldActive = postInputPredictionHoldActive();
+  const localPredictionHoldActive = localInputActive || postInputHoldActive;
+  const shouldKeepPrediction = netSettings.predictionEnabled !== false
+    && localPredictionHoldActive
+    && nextPosition.teleport !== true
+    && (options.keepPrediction === true || netSettings.ownKeepPredictionDuringInput !== false);
 
   state.net.lastAppliedServerRevision = Number(nextPosition.revision) || state.net.lastAppliedServerRevision || 0;
   state.net.lastAppliedServerUpdatedAt = nextPosition.updatedAt || state.net.lastAppliedServerUpdatedAt || "";
@@ -2285,7 +2476,7 @@ function applyAuthoritativeUpdate(update, options = {}) {
     applyRuntimePosition(nextPosition, { immediate: true, animationState: authoritativeAnimation });
   }
 
-if (isLocalPlayer) {
+  if (isLocalPlayer) {
     // FIX-10: vergelijk de serverpositie met de positie die WIJ hadden bij
     // dezelfde inputSeq (opgeslagen in pendingInputs), niet met waar we nu
     // zijn. De server loopt altijd ping+tick achter op de prediction, dus de
@@ -2294,12 +2485,22 @@ if (isLocalPlayer) {
     const ackedPendingEntry = clientInputSeq > 0
       ? state.net.pendingInputs.find(function (item) { return Number(item.seq) === clientInputSeq; })
       : null;
-    const referencePosition = ackedPendingEntry && ackedPendingEntry.position
+    const hasAckedReferencePosition = Boolean(ackedPendingEntry && ackedPendingEntry.position);
+    const referencePosition = hasAckedReferencePosition
       ? ackedPendingEntry.position
       : previousPosition;
     if (clientInputSeq > 0 && isLocalControllerSnapshot) removeAckedInputs(clientInputSeq);
     state.authoritativePosition = clonePosition(nextPosition);
-    state.position = clonePosition(nextPosition);
+    if (localPredictionHoldActive && state.predictedPosition) {
+      state.position = Object.assign(clonePosition(nextPosition), {
+        x: state.predictedPosition.x,
+        y: state.predictedPosition.y,
+        z: state.predictedPosition.z,
+        rotationY: state.predictedPosition.rotationY
+      });
+    } else {
+      state.position = clonePosition(nextPosition);
+    }
     state.net.lastAckedInputSeq = isLocalControllerSnapshot
       ? Math.max(state.net.lastAckedInputSeq || 0, clientInputSeq || 0)
       : state.net.lastAckedInputSeq || 0;
@@ -2313,32 +2514,50 @@ if (isLocalPlayer) {
     }
     syncNetDebugState();
 
-    if (shouldKeepPrediction) {
-      state.net.lastIgnoredReason = "silent_resync_kept_prediction";
+    const animationState = incomingAnimationState || deriveRemoteAnimationState(nextPosition, distance);
+    if (netSettings.predictionEnabled === false || netSettings.reconciliationEnabled === false) {
+      state.ownCorrection = null;
+      state.lastAnimationState = animationState;
+      state.position = clonePosition(nextPosition);
+      state.predictedPosition = clonePosition(nextPosition);
+      applyRuntimePosition(nextPosition, { immediate: true, animationState: animationState });
       syncNetDebugState();
+      scheduleMinimapFogDiscovery(nextPosition.teleport === true ? "teleport" : "movement", { force: nextPosition.teleport === true });
       return nextPosition;
     }
 
-    const animationState = incomingAnimationState || deriveRemoteAnimationState(nextPosition, distance);
+    if (shouldKeepPrediction) {
+      state.ownCorrection = null;
+      state.net.lastIgnoredReason = postInputHoldActive ? "post_input_kept_prediction" : "active_input_kept_prediction";
+      syncNetDebugState();
+      scheduleMinimapFogDiscovery(nextPosition.teleport === true ? "teleport" : "movement", { force: nextPosition.teleport === true });
+      return nextPosition;
+    }
+
     const predictionError = referencePosition
       ? Math.hypot(referencePosition.x - nextPosition.x, referencePosition.z - nextPosition.z)
       : distance;
 
-    if (nextPosition.teleport === true || predictionError > OWN_HARD_CORRECTION_THRESHOLD) {
-      // Echte teleport of grote desync: dit is de enige plek waar we snappen.
+    if (nextPosition.teleport === true) {
+      // Echte teleport: dit blijft de enige plek waar we tijdens actieve input snappen.
       state.ownCorrection = null;
       state.lastAnimationState = animationState;
+      state.position = clonePosition(nextPosition);
       state.predictedPosition = clonePosition(nextPosition);
       applyRuntimePosition(nextPosition, { immediate: true, animationState: animationState });
     } else if (localInputActive) {
       // FIX-10: tijdens actief bewegen raken we predictedPosition en de
       // runtime NOOIT direct aan. Een afwijking boven de deadzone wordt als
       // correctievector opgeslagen en in stepMovement per tick weggesmeerd.
-      if (predictionError > OWN_PREDICTION_DEADZONE) {
-        state.ownCorrection = {
-          x: nextPosition.x - referencePosition.x,
-          z: nextPosition.z - referencePosition.z
-        };
+      // Als de ack niet meer in pendingInputs zit, vergelijken we niet met de
+      // huidige prediction: dat is gewone netwerk-lag en gaf zichtbaar terugtrekken.
+      if (hasAckedReferencePosition && predictionError > netSettings.ownPredictionDeadzone) {
+        const queued = queueOwnCorrection(
+          nextPosition.x - referencePosition.x,
+          nextPosition.z - referencePosition.z,
+          netSettings
+        );
+        state.net.lastIgnoredReason = queued ? "active_correction_capped" : "active_correction_disabled";
       }
     } else {
       // Speler staat stil: veilig om de serverpositie over te nemen, maar
@@ -2352,17 +2571,18 @@ if (isLocalPlayer) {
       // server stuurt daarna niets meer (er verandert niets), en de
       // boekhouding dacht al dat het idle was.
       setMovementAnimationState(animationState);
-      if (distance <= OWN_PREDICTION_DEADZONE) {
+      if (distance <= netSettings.ownPredictionDeadzone) {
         // Positie laten staan; de animatie is hierboven al gesynct.
-      } else if (distance > OWN_SMALL_CORRECTION_THRESHOLD) {
+      } else if (distance > netSettings.ownSmallCorrectionThreshold) {
         state.predictedPosition = clonePosition(nextPosition);
-        applyRuntimePosition(nextPosition, { immediate: false, reconcile: true, reconcileDurationMs: OWN_RECONCILE_MS, animationState: animationState });
+        applyRuntimePosition(nextPosition, { immediate: false, reconcile: true, reconcileDurationMs: netSettings.ownCorrectionBlendMs || OWN_RECONCILE_MS, animationState: animationState });
       } else {
         state.predictedPosition = clonePosition(nextPosition);
         applyRuntimePosition(nextPosition, { immediate: true, animationState: animationState });
       }
     }
     syncNetDebugState();
+    scheduleMinimapFogDiscovery(nextPosition.teleport === true ? "teleport" : "movement", { force: nextPosition.teleport === true });
     return nextPosition;
   }
 
@@ -2376,6 +2596,7 @@ if (isLocalPlayer) {
   const animationState = deriveRemoteAnimationState(nextPosition, distance);
   applyRuntimePosition(nextPosition, { immediate: true, animationState: animationState });
   syncNetDebugState();
+  scheduleMinimapFogDiscovery(nextPosition.teleport === true ? "teleport" : "movement", { force: nextPosition.teleport === true });
   return nextPosition;
 }
 
@@ -2403,7 +2624,8 @@ function defaultMmoDebugConfig() {
       lastDisconnected: true, ping: true, avgPing: true, jitter: true,
       lastPongAge: true, packetAge: true, remoteBufferSizes: true,
       remoteHardSnapCount: true, remoteSmoothFrameCount: true,
-      lastRemoteEventType: true
+      lastRemoteEventType: true, mmoSettings: true, mmoHealth: true,
+      minimapFog: true
     }
   };
 }
@@ -2427,8 +2649,10 @@ function resolveMmoDebugConfig() {
 function computeMmoDebugSignature(config) {
   return JSON.stringify({
     id: config.id,
+    enabled: config.enabled !== false,
     anchor: config.anchor,
     compact: config.compact !== false,
+    startCollapsed: config.startCollapsed !== false,
     show: config.show || {}
   });
 }
@@ -2563,6 +2787,21 @@ function buildMmoDebugHudDom(config) {
   if (show.remoteSmoothFrameCount !== false) { const r = createInfoRow("Smooth frames", "hudRemoteSmoothFrameCount"); grid.appendChild(r.row); elements.hudRemoteSmoothFrameCount = r.strong; }
   if (show.lastRemoteEventType !== false) { const r = createInfoRow("Remote event", "hudLastRemoteEventType", true); grid.appendChild(r.row); elements.hudLastRemoteEventType = r.strong; }
   if (show.remoteIds !== false) { const r = createInfoRow("Remote ids", "hudRemoteIds", true); grid.appendChild(r.row); elements.hudRemoteIds = r.strong; }
+  if (show.mmoSettings !== false) {
+    const r = createInfoRow("MMO settings", "hudMmoSettings", true);
+    grid.appendChild(r.row);
+    elements.hudMmoSettings = r.strong;
+  }
+  if (show.mmoHealth !== false) {
+    const r = createInfoRow("MMO health", "hudMmoHealth", true);
+    grid.appendChild(r.row);
+    elements.hudMmoHealth = r.strong;
+  }
+  if (show.minimapFog !== false) {
+    const r = createInfoRow("Fog of war", "hudMinimapFog", true);
+    grid.appendChild(r.row);
+    elements.hudMinimapFog = r.strong;
+  }
   body.appendChild(grid);
 
   const actions = document.createElement("div");
@@ -2579,17 +2818,8 @@ function buildMmoDebugHudDom(config) {
   logoutButton.className = "secondary-button";
   logoutButton.textContent = "Logout";
   logoutButton.addEventListener("click", function () { logout(); });
-  const editorLink = document.createElement("a");
-  editorLink.className = "primary-link";
-  editorLink.href = "/editor/";
-  editorLink.textContent = "Editor";
-  actions.append(refreshButton, logoutButton, editorLink);
+  actions.append(refreshButton, logoutButton);
   body.appendChild(actions);
-
-  const hint = document.createElement("p");
-  hint.className = "movement-hint";
-  hint.textContent = "WASD/pijltjes of klik/touch op de grond om te lopen.";
-  body.appendChild(hint);
 
   root.appendChild(body);
   toggle.addEventListener("click", function () {
@@ -2630,6 +2860,387 @@ function refreshMmoDebugHud() {
   updateHud();
 }
 
+function resetMmoDebugRuntimeState() {
+  state.debug.lastSentType = null;
+  state.debug.lastSentAt = null;
+  state.debug.lastSentSeq = 0;
+  state.debug.lastReceivedType = null;
+  state.debug.lastReceivedAt = null;
+  state.debug.lastPacketType = null;
+  state.debug.lastPacketAt = null;
+  state.debug.lastSourceSessionId = null;
+  state.debug.lastAckedSeq = 0;
+  state.debug.lastIgnoredReason = null;
+  state.debug.lastTransport = null;
+  state.debug.lastServerRevision = 0;
+  state.debug.lastServerClientInputSeq = 0;
+  state.debug.lastServerControllerEpoch = 0;
+  state.debug.lastServerSeq = 0;
+  state.debug.lastError = null;
+  state.debug.pingMs = null;
+  state.debug.avgPingMs = null;
+  state.debug.jitterMs = null;
+  state.debug.maxPingMs = null;
+  state.debug.lastPongAgeMs = null;
+  state.debug.packetAgeMs = null;
+  state.debug.remoteBufferDelayMs = null;
+  state.net.lastSentInputSeq = 0;
+  state.net.lastAckedInputSeq = 0;
+  state.net.lastAppliedServerRevision = 0;
+  state.net.lastAppliedServerUpdatedAt = "";
+  state.net.pendingInputs = [];
+  state.net.lastLocalInputAt = 0;
+  state.net.postInputPredictionHoldUntil = 0;
+  state.net.lastServerPositionAt = 0;
+  state.net.lastServerClientInputSeq = 0;
+  state.net.lastServerControllerEpoch = 0;
+  state.net.lastServerSeq = 0;
+  state.net.lastServerPacketAt = 0;
+  state.net.clockOffsetMs = 0;
+  state.net.lastTransport = null;
+  state.net.lastIgnoredReason = null;
+  state.netPing.samples = [];
+  state.netPing.lastSentAt = 0;
+  state.netPing.lastPongAt = 0;
+  state.netPing.lastRttMs = null;
+  state.remote.players.clear();
+  state.remote.tombstones.clear();
+  state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
+  state.remote.remoteRenderDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
+  state.remote.lastPacketAt = 0;
+  state.remote.lastPacketType = null;
+  state.remote.lastRemoteEventType = null;
+  state.remote.droppedStaleUpdates = 0;
+  state.remote.droppedRemoteSamples = 0;
+  state.remote.hardSnapCount = 0;
+  state.remote.smoothFrameCount = 0;
+  state.remote.remoteCatchupCount = 0;
+  state.remote.lastSnapshotAt = 0;
+  state.remote.lastSnapshotSeq = 0;
+  state.remote.lastSnapshotServerTimeMs = 0;
+  state.remote.lastSnapshotIntervals = [];
+  state.remote.avgSnapshotIntervalMs = 0;
+  state.remote.maxSnapshotIntervalMs = 0;
+  state.remote.maxVisualFreezeMs = 0;
+  state.remote.maxObserverLagMs = 0;
+  state.remote.maxRemoteJump = 0;
+  state.remote.lastSnapshotPlayerIds = [];
+  state.remote.remotePlayerIds = [];
+  state.remote.lastPacketAgeMs = 0;
+  resetMinimapFogState({ keepCells: false });
+  state.minimapFog.suppressDiscoveryUntil = performance.now() + 1500;
+  if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  updateHud();
+}
+
+async function resetPersistedMinimapFogDiscovery() {
+  try {
+    const response = await fetch("/api/game/fog/discovery", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ reset: true })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return false;
+    }
+    return response.ok;
+  } catch {
+    state.debug.lastError = "Kon minimap fog discovery niet resetten.";
+    updateHud();
+    return false;
+  }
+}
+
+function resolveMinimapFogConfig(config = resolveGameMinimapConfig()) {
+  const raw = config?.fogOfWar && typeof config.fogOfWar === "object" ? config.fogOfWar : null;
+  if (!config) {
+    return {
+      enabled: false,
+      fogColor: "#05070a",
+      fogOpacity: 0.72,
+      cellSize: 24,
+      fogChunkSize: 24,
+      revealRadius: 3,
+      saveIntervalMs: 1500,
+      movementThreshold: 1,
+      smoothFog: true,
+      fogFeatherRadius: 1.5,
+      revealShape: "circle",
+      debugOverlay: false,
+      mapLayer: minimapFogMapLayer(null, null, 24)
+    };
+  }
+  if (!raw) {
+    return {
+      enabled: true,
+      fogColor: "#05070a",
+      fogOpacity: 0.72,
+      cellSize: 24,
+      fogChunkSize: 24,
+      revealRadius: 3,
+      saveIntervalMs: 1500,
+      movementThreshold: 1,
+      smoothFog: true,
+      fogFeatherRadius: 1.5,
+      revealShape: "circle",
+      debugOverlay: false,
+      mapLayer: minimapFogMapLayer(null, config.sourceMinimapId, 24)
+    };
+  }
+  const cellSize = Math.max(1, Math.min(1000, Math.round(num(raw.cellSize ?? raw.fogChunkSize, 24))));
+  return {
+    enabled: raw.enabled !== false,
+    fogColor: typeof raw.fogColor === "string" && raw.fogColor.trim() ? raw.fogColor.trim() : "#05070a",
+    fogOpacity: clamp(num(raw.fogOpacity, 0.72), 0, 1),
+    cellSize: cellSize,
+    fogChunkSize: cellSize,
+    revealRadius: Math.max(0, Math.min(64, Math.floor(num(raw.revealRadius, 3)))),
+    saveIntervalMs: Math.max(250, Math.min(60000, Math.floor(num(raw.saveIntervalMs, 1500)))),
+    movementThreshold: Math.max(1, Math.min(64, Math.floor(num(raw.movementThreshold, 1)))),
+    smoothFog: raw.smoothFog !== false,
+    fogFeatherRadius: clamp(num(raw.fogFeatherRadius, 1.5), 0, 8),
+    revealShape: ["circle", "roundedCells", "hardCells"].includes(raw.revealShape) ? raw.revealShape : "circle",
+    debugOverlay: raw.debugOverlay === true,
+    mapLayer: minimapFogMapLayer(raw.mapLayer, config.sourceMinimapId, cellSize),
+    heightThreshold: num(raw.heightThreshold ?? raw.revealHeight, 0)
+  };
+}
+
+function minimapFogMapLayer(rawLayer, sourceMinimapId, cellSize) {
+  const base = String(rawLayer || "overworld").trim() || "overworld";
+  if (base.includes(":minimap:")) return base;
+  const source = String(sourceMinimapId || "main_minimap").trim() || "main_minimap";
+  const safeSource = source.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 64) || "main_minimap";
+  const safeCellSize = Math.max(1, Math.min(1000, Math.round(num(cellSize, 24))));
+  return base + ":minimap:" + safeSource + ":cell:" + safeCellSize;
+}
+
+function minimapFogConfigKey(config) {
+  const fog = resolveMinimapFogConfig(config);
+  return JSON.stringify({
+    enabled: fog.enabled,
+    fogColor: fog.fogColor,
+    fogOpacity: fog.fogOpacity,
+    cellSize: fog.cellSize,
+    revealRadius: fog.revealRadius,
+    saveIntervalMs: fog.saveIntervalMs,
+    movementThreshold: fog.movementThreshold,
+    smoothFog: fog.smoothFog,
+    fogFeatherRadius: fog.fogFeatherRadius,
+    revealShape: fog.revealShape,
+    debugOverlay: fog.debugOverlay,
+    mapLayer: fog.mapLayer,
+    worldId: state.worldId || null
+  });
+}
+
+function parseMinimapFogCellKey(cellKey) {
+  const value = String(cellKey || "").trim();
+  if (!/^-?\d+:-?\d+$/.test(value)) return null;
+  const parts = value.split(":");
+  return { x: Math.floor(Number(parts[0]) || 0), z: Math.floor(Number(parts[1]) || 0), key: value };
+}
+
+function minimapFogCellForPosition(position, fogConfig) {
+  const cellSize = Math.max(1, num(fogConfig?.cellSize ?? fogConfig?.fogChunkSize, 24));
+  return {
+    x: Math.floor(num(position?.x, 0) / cellSize),
+    z: Math.floor(num(position?.z, 0) / cellSize)
+  };
+}
+
+function revealLocalMinimapFogCells(position, fogConfig) {
+  if (!position || !fogConfig?.enabled) return false;
+  const center = minimapFogCellForPosition(position, fogConfig);
+  const radius = Math.max(0, Math.min(64, Math.floor(num(fogConfig.revealRadius, 3))));
+  const shape = fogConfig.revealShape || "circle";
+  let changed = false;
+  for (let dz = -radius; dz <= radius; dz += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      if (shape === "circle" && (dx * dx + dz * dz) > ((radius + 0.35) * (radius + 0.35))) continue;
+      const key = (center.x + dx) + ":" + (center.z + dz);
+      if (state.minimapFog.discoveredCells.has(key)) continue;
+      state.minimapFog.discoveredCells.add(key);
+      changed = true;
+    }
+  }
+  if (changed) {
+    state.minimapFog.dirty = true;
+    state.minimapFog.lastDiscoveredCount = state.minimapFog.discoveredCells.size;
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  }
+  return changed;
+}
+
+function resetMinimapFogState(options = {}) {
+  if (state.minimapFog.pendingSaveTimerId) {
+    window.clearTimeout(state.minimapFog.pendingSaveTimerId);
+    state.minimapFog.pendingSaveTimerId = 0;
+  }
+  if (options.keepCells !== true) state.minimapFog.discoveredCells = new Set();
+  state.minimapFog.loaded = false;
+  state.minimapFog.loadInFlight = false;
+  state.minimapFog.saveInFlight = false;
+  state.minimapFog.lastLoadAttemptAt = 0;
+  state.minimapFog.dirty = true;
+  state.minimapFog.lastDrawKey = "";
+  state.minimapFog.lastClientCellKey = null;
+  state.minimapFog.lastClientCellX = null;
+  state.minimapFog.lastClientCellZ = null;
+  state.minimapFog.lastSaveAt = 0;
+  state.minimapFog.lastDiscoveredCount = state.minimapFog.discoveredCells.size;
+}
+
+function syncMinimapFogWorld(config = resolveGameMinimapConfig()) {
+  const fog = resolveMinimapFogConfig(config);
+  const worldId = state.worldId || null;
+  const mapLayer = fog.mapLayer || "overworld";
+  const configKey = minimapFogConfigKey(config);
+  const worldChanged = state.minimapFog.worldId !== worldId || state.minimapFog.mapLayer !== mapLayer;
+  if (worldChanged) {
+    state.minimapFog.worldId = worldId;
+    state.minimapFog.mapLayer = mapLayer;
+    state.minimapFog.configKey = configKey;
+    resetMinimapFogState({ keepCells: false });
+    return fog;
+  }
+  if (state.minimapFog.configKey !== configKey) {
+    state.minimapFog.configKey = configKey;
+    state.minimapFog.dirty = true;
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  }
+  if (!fog.enabled && state.minimapFog.pendingSaveTimerId) {
+    window.clearTimeout(state.minimapFog.pendingSaveTimerId);
+    state.minimapFog.pendingSaveTimerId = 0;
+  }
+  return fog;
+}
+
+function applyMinimapFogDiscoveryPayload(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return false;
+  const worldId = payload.worldId || payload.world_id || state.worldId || null;
+  if (worldId && state.worldId && String(worldId) !== String(state.worldId)) return false;
+  const mapLayer = payload.mapLayer || payload.map_layer || state.minimapFog.mapLayer || "overworld";
+  if (mapLayer && state.minimapFog.mapLayer && String(mapLayer) !== String(state.minimapFog.mapLayer)) return false;
+  const replace = options.replace === true;
+  const incoming = replace
+    ? (Array.isArray(payload.discoveredCellKeys) ? payload.discoveredCellKeys : [])
+    : (Array.isArray(payload.newlyDiscoveredCellKeys) ? payload.newlyDiscoveredCellKeys : []);
+  if (replace) state.minimapFog.discoveredCells = new Set();
+  let changed = replace;
+  for (const key of incoming) {
+    const parsed = parseMinimapFogCellKey(key);
+    if (!parsed) continue;
+    if (!state.minimapFog.discoveredCells.has(parsed.key)) {
+      state.minimapFog.discoveredCells.add(parsed.key);
+      changed = true;
+    }
+  }
+  state.minimapFog.worldId = worldId || state.minimapFog.worldId || null;
+  state.minimapFog.mapLayer = mapLayer || state.minimapFog.mapLayer || "overworld";
+  state.minimapFog.loaded = true;
+  state.minimapFog.lastDiscoveredCount = state.minimapFog.discoveredCells.size;
+  if (changed) {
+    state.minimapFog.dirty = true;
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(performance.now());
+  }
+  return changed;
+}
+
+async function loadMinimapFogDiscovery(config = resolveGameMinimapConfig()) {
+  const fog = syncMinimapFogWorld(config);
+  if (performance.now() < Number(state.minimapFog.suppressDiscoveryUntil || 0)) return;
+  if (!fog.enabled || state.minimapFog.loaded || state.minimapFog.loadInFlight || !state.worldId) return;
+  const now = performance.now();
+  if (state.minimapFog.lastLoadAttemptAt && now - state.minimapFog.lastLoadAttemptAt < 5000) return;
+  state.minimapFog.lastLoadAttemptAt = now;
+  state.minimapFog.loadInFlight = true;
+  try {
+    const response = await fetch("/api/game/fog/discovery", { headers: { Accept: "application/json" } });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const payload = await response.json().catch(function () { return null; });
+    if (response.ok && payload && payload.ok === true) {
+      applyMinimapFogDiscoveryPayload(payload, { replace: true });
+    }
+  } catch {
+    state.debug.lastError = "Kon minimap fog discovery niet laden.";
+    updateHud();
+  } finally {
+    state.minimapFog.loadInFlight = false;
+  }
+}
+
+async function flushMinimapFogDiscovery(reason = "movement", options = {}) {
+  const config = resolveGameMinimapConfig();
+  const fog = syncMinimapFogWorld(config);
+  if (!fog.enabled || state.minimapFog.saveInFlight || !state.worldId || !state.player) return;
+  state.minimapFog.saveInFlight = true;
+  state.minimapFog.lastSaveAt = performance.now();
+  try {
+    const response = await fetch("/api/game/fog/discovery", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        reason: reason,
+        force: options.force === true
+      })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const payload = await response.json().catch(function () { return null; });
+    if (response.ok && payload && payload.ok === true) {
+      applyMinimapFogDiscoveryPayload(payload, { replace: false });
+    }
+  } catch {
+    state.debug.lastError = "Kon minimap fog discovery niet opslaan.";
+    updateHud();
+  } finally {
+    state.minimapFog.saveInFlight = false;
+  }
+}
+
+function scheduleMinimapFogDiscovery(reason = "movement", options = {}) {
+  const config = resolveGameMinimapConfig();
+  const fog = syncMinimapFogWorld(config);
+  if (!fog.enabled || !state.worldId || !state.player) return;
+  const position = currentLocalPlayerPosition();
+  if (!position) return;
+  revealLocalMinimapFogCells(position, fog);
+  if (performance.now() < Number(state.minimapFog.suppressDiscoveryUntil || 0)) return;
+  const cell = minimapFogCellForPosition(position, fog);
+  const cellKey = cell.x + ":" + cell.z;
+  const previousCellKey = state.minimapFog.lastClientCellKey;
+  const previousX = Number(state.minimapFog.lastClientCellX);
+  const previousZ = Number(state.minimapFog.lastClientCellZ);
+  const movedCells = previousCellKey
+    ? Math.max(Math.abs(cell.x - previousX), Math.abs(cell.z - previousZ))
+    : Infinity;
+  if (options.force !== true && previousCellKey && movedCells < fog.movementThreshold) return;
+  state.minimapFog.lastClientCellKey = cellKey;
+  state.minimapFog.lastClientCellX = cell.x;
+  state.minimapFog.lastClientCellZ = cell.z;
+  const elapsed = performance.now() - Number(state.minimapFog.lastSaveAt || 0);
+  const delay = options.force === true ? 0 : Math.max(0, fog.saveIntervalMs - elapsed);
+  if (state.minimapFog.pendingSaveTimerId) {
+    if (options.force !== true) return;
+    window.clearTimeout(state.minimapFog.pendingSaveTimerId);
+    state.minimapFog.pendingSaveTimerId = 0;
+  }
+  state.minimapFog.pendingSaveTimerId = window.setTimeout(function () {
+    state.minimapFog.pendingSaveTimerId = 0;
+    flushMinimapFogDiscovery(reason, options);
+  }, delay);
+}
+
 function resolveGameMinimapConfig() {
   const config = state.gameWorld?.minimap?.game;
   return config && config.enabled !== false ? config : null;
@@ -2637,11 +3248,78 @@ function resolveGameMinimapConfig() {
 
 function resolveGameMinimapBake(config) {
   if (!config) return null;
+  const bakes = resolveGameMinimapBakes(config);
+  const localPosition = currentLocalPlayerPosition();
+  return bakes.find(function (bake) {
+    const bounds = minimapBakeBounds(bake);
+    return localPosition && boundsContainsPoint(bounds, localPosition.x, localPosition.z);
+  })
+    || bakes.find(function (bake) { return bake.minimapId === config.sourceMinimapId; })
+    || bakes.find(function (bake) { return bake.enabled !== false && bake.bakedImageUrl; })
+    || bakes.find(function (bake) { return bake.enabled !== false; })
+    || null;
+}
+
+function minimapBakeBounds(bake) {
+  return bake?.bounds || bake?.bakedBounds || null;
+}
+
+function resolveGameMinimapBakes(config) {
+  if (!config) return [];
   const bakes = Array.isArray(state.gameWorld?.minimap?.bakes) ? state.gameWorld.minimap.bakes : [];
-  return bakes.find(function (bake) { return bake.minimapId === config.sourceMinimapId; }) || null;
+  const enabled = bakes.filter(function (bake) {
+    return bake && bake.enabled !== false && minimapBakeBounds(bake);
+  });
+  const sourceId = String(config.sourceMinimapId || "").trim();
+  if (!sourceId) return enabled;
+  return enabled.slice().sort(function (left, right) {
+    const leftMatch = String(left?.minimapId || "") === sourceId ? 0 : 1;
+    const rightMatch = String(right?.minimapId || "") === sourceId ? 0 : 1;
+    return leftMatch - rightMatch;
+  });
+}
+
+function boundsContainsPoint(bounds, x, z) {
+  if (!bounds) return false;
+  const px = Number(x);
+  const pz = Number(z);
+  return Number.isFinite(px) && Number.isFinite(pz)
+    && px >= Number(bounds.minX) && px <= Number(bounds.maxX)
+    && pz >= Number(bounds.minZ) && pz <= Number(bounds.maxZ);
+}
+
+function unionMinimapBounds(boundsList) {
+  const valid = boundsList.filter(function (bounds) {
+    return bounds
+      && Number.isFinite(Number(bounds.minX))
+      && Number.isFinite(Number(bounds.maxX))
+      && Number.isFinite(Number(bounds.minZ))
+      && Number.isFinite(Number(bounds.maxZ))
+      && Number(bounds.maxX) > Number(bounds.minX)
+      && Number(bounds.maxZ) > Number(bounds.minZ);
+  });
+  if (!valid.length) return null;
+  let minX = Number(valid[0].minX);
+  let maxX = Number(valid[0].maxX);
+  let minZ = Number(valid[0].minZ);
+  let maxZ = Number(valid[0].maxZ);
+  for (const bounds of valid.slice(1)) {
+    minX = Math.min(minX, Number(bounds.minX));
+    maxX = Math.max(maxX, Number(bounds.maxX));
+    minZ = Math.min(minZ, Number(bounds.minZ));
+    maxZ = Math.max(maxZ, Number(bounds.maxZ));
+  }
+  return { minX, maxX, minZ, maxZ, width: maxX - minX, depth: maxZ - minZ };
 }
 
 function computeGameMinimapSignature(config, bake) {
+  const bakes = resolveGameMinimapBakes(config).map(function (item) {
+    return {
+      minimapId: item.minimapId || item.id || null,
+      bakedImageUrl: item.bakedImageUrl || null,
+      bounds: minimapBakeBounds(item)
+    };
+  });
   return JSON.stringify({
     hudId: config.hudId,
     anchor: config.anchor,
@@ -2650,15 +3328,92 @@ function computeGameMinimapSignature(config, bake) {
     borderRadiusPx: config.borderRadiusPx,
     backgroundOpacity: config.backgroundOpacity,
     zIndex: config.zIndex,
+    fogOfWar: config.fogOfWar || null,
     bakedImageUrl: bake ? bake.bakedImageUrl : null,
-    bounds: bake ? bake.bounds : null
+    bounds: resolveGameMinimapBakeBounds(bake),
+    bakes: bakes
   });
+}
+
+function resolveGameMinimapBakeBounds(bake) {
+  const config = resolveGameMinimapConfig();
+  const unionBounds = unionMinimapBounds(resolveGameMinimapBakes(config).map(minimapBakeBounds));
+  return unionBounds || minimapBakeBounds(bake);
+}
+
+function normalizeMinimapImageUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith("/")) return value;
+  return "/" + value;
+}
+
+function minimapImageForBake(bake) {
+  const url = normalizeMinimapImageUrl(bake?.bakedImageUrl || "");
+  if (!url) return null;
+  if (!state.minimapHud.images) state.minimapHud.images = new Map();
+  let image = state.minimapHud.images.get(url) || null;
+  if (image) return image;
+  image = new Image();
+  image.addEventListener("load", function () {
+    state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(performance.now());
+  });
+  image.addEventListener("error", function () {
+    state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(performance.now());
+  });
+  image.src = url;
+  state.minimapHud.images.set(url, image);
+  return image;
+}
+
+function intersectMinimapBounds(a, b) {
+  if (!a || !b) return null;
+  const minX = Math.max(Number(a.minX), Number(b.minX));
+  const maxX = Math.min(Number(a.maxX), Number(b.maxX));
+  const minZ = Math.max(Number(a.minZ), Number(b.minZ));
+  const maxZ = Math.min(Number(a.maxZ), Number(b.maxZ));
+  if (![minX, maxX, minZ, maxZ].every(Number.isFinite) || maxX <= minX || maxZ <= minZ) return null;
+  return { minX, maxX, minZ, maxZ };
+}
+
+function drawMinimapBakeIntoView(ctx, image, bakeBounds, viewBounds, size) {
+  if (!ctx || !image || !bakeBounds || !viewBounds || !image.complete || !image.naturalWidth) return false;
+  const visibleBounds = intersectMinimapBounds(bakeBounds, viewBounds);
+  if (!visibleBounds) return false;
+  const imageWidth = image.naturalWidth || image.width || 1;
+  const imageHeight = image.naturalHeight || image.height || 1;
+  const sourceA = worldToMinimapPoint(visibleBounds.minX, visibleBounds.minZ, bakeBounds, imageWidth, imageHeight);
+  const sourceB = worldToMinimapPoint(visibleBounds.maxX, visibleBounds.maxZ, bakeBounds, imageWidth, imageHeight);
+  const destA = worldToMinimapPoint(visibleBounds.minX, visibleBounds.minZ, viewBounds, size, size);
+  const destB = worldToMinimapPoint(visibleBounds.maxX, visibleBounds.maxZ, viewBounds, size, size);
+  const sx = Math.min(sourceA.x, sourceB.x);
+  const sy = Math.min(sourceA.y, sourceB.y);
+  const sw = Math.abs(sourceB.x - sourceA.x);
+  const sh = Math.abs(sourceB.y - sourceA.y);
+  const dx = Math.min(destA.x, destB.x);
+  const dy = Math.min(destA.y, destB.y);
+  const dw = Math.abs(destB.x - destA.x);
+  const dh = Math.abs(destB.y - destA.y);
+  if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return false;
+  ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh);
+  return true;
+}
+
+function shouldShowRemotePlayerNames(config, performanceMode) {
+  if (!config || config.showRemotePlayerNames === false) return false;
+  return performanceMode !== "ultra";
 }
 
 function removeGameMinimapHud() {
   if (state.minimapHud.refreshTimerId) {
     window.clearTimeout(state.minimapHud.refreshTimerId);
     state.minimapHud.refreshTimerId = 0;
+  }
+  if (state.minimapFog.pendingSaveTimerId) {
+    window.clearTimeout(state.minimapFog.pendingSaveTimerId);
+    state.minimapFog.pendingSaveTimerId = 0;
   }
   if (state.minimapHud.interactions) {
     state.minimapHud.interactions.destroy();
@@ -2670,11 +3425,15 @@ function removeGameMinimapHud() {
   state.minimapHud.elements = null;
   state.minimapHud.signature = null;
   state.minimapHud.image = null;
+  if (state.minimapHud.images) state.minimapHud.images.clear();
+  else state.minimapHud.images = new Map();
   state.minimapHud.lastDrawKey = null;
   state.minimapHud.lastDrawDurationMs = 0;
   state.minimapHud.drawDurationEmaMs = 0;
   state.minimapHud.performanceMode = null;
   state.minimapHud.performanceModeUntil = 0;
+  state.minimapFog.dirty = true;
+  state.minimapFog.lastDrawKey = "";
 }
 
 function currentLocalPlayerPosition() {
@@ -2687,10 +3446,10 @@ function gameMinimapRefreshInterval(config, performanceMode = null) {
     ? configured
     : (isGameMinimapLite(config) ? 250 : 120);
   const floor = performanceMode === "ultra"
-    ? 500
+    ? 120
     : performanceMode === "lite"
-      ? 250
-      : 120;
+      ? 50
+      : 33;
   return Math.max(floor, baseInterval);
 }
 
@@ -2738,8 +3497,8 @@ function noteGameMinimapPerformance(drawDurationMs, now = performance.now()) {
 function buildGameMinimapDrawKey(bake, view, performanceMode) {
   const localPosition = currentLocalPlayerPosition();
   const liteMode = performanceMode !== "full";
-  const positionQuantum = performanceMode === "ultra" ? 6 : liteMode ? 2 : 0.1;
-  const viewQuantum = performanceMode === "ultra" ? 6 : liteMode ? 2 : 0.1;
+  const positionQuantum = performanceMode === "ultra" ? 1.5 : liteMode ? 0.5 : 0.05;
+  const viewQuantum = performanceMode === "ultra" ? 1.5 : liteMode ? 0.5 : 0.05;
   const viewKey = view
     ? [
         Math.round((Number(view.centerX) || 0) / viewQuantum),
@@ -2765,6 +3524,17 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
         .sort()
         .join(";")
     : "noremote";
+  const bakesKey = resolveGameMinimapBakes(resolveGameMinimapConfig()).map(function (item) {
+    const bounds = minimapBakeBounds(item) || {};
+    return [
+      item?.minimapId || item?.id || "",
+      item?.bakedImageUrl || "",
+      Math.round(Number(bounds.minX) || 0),
+      Math.round(Number(bounds.maxX) || 0),
+      Math.round(Number(bounds.minZ) || 0),
+      Math.round(Number(bounds.maxZ) || 0)
+    ].join(",");
+  }).join(";");
   return [
     liteMode ? "lite" : "debug",
     bake?.bakedImageUrl || "",
@@ -2772,7 +3542,8 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
     bake?.bakedImageHeight || 0,
     viewKey,
     localKey,
-    remoteKey
+    remoteKey,
+    bakesKey
   ].join("|");
 }
 
@@ -2815,7 +3586,8 @@ function recenterGameMinimap() {
     const config = resolveGameMinimapConfig();
     const bake = config ? resolveGameMinimapBake(config) : null;
     const nextView = { centerX: localPos.x, centerZ: localPos.z, worldDistance: hudState.view.worldDistance };
-    hudState.view = bake?.bounds ? clampMinimapView(nextView, bake.bounds) : nextView;
+    const bounds = resolveGameMinimapBakeBounds(bake);
+    hudState.view = bounds ? clampMinimapView(nextView, bounds) : nextView;
   }
   hudState.userOverride = false;
   hudState.dirty = true;
@@ -2835,6 +3607,10 @@ function buildGameMinimapDom(config, bake) {
   const canvas = document.createElement("canvas");
   canvas.className = "gameMinimapCanvas";
   root.appendChild(canvas);
+  const fogCanvas = document.createElement("canvas");
+  fogCanvas.className = "gameMinimapFogCanvas";
+  fogCanvas.setAttribute("aria-hidden", "true");
+  root.appendChild(fogCanvas);
   const recenterBtn = document.createElement("button");
   recenterBtn.type = "button";
   recenterBtn.className = "gameMinimapRecenter";
@@ -2846,14 +3622,9 @@ function buildGameMinimapDom(config, bake) {
     recenterGameMinimap();
   });
   root.appendChild(recenterBtn);
-  const elements = { root: root, canvas: canvas, ctx: canvas.getContext("2d"), recenterBtn: recenterBtn };
-  let image = null;
-  if (bake && bake.bakedImageUrl) {
-    image = new Image();
-    image.addEventListener("load", function () { state.minimapHud.dirty = true; });
-    image.src = bake.bakedImageUrl;
-  }
-  state.minimapHud.image = image;
+  const elements = { root: root, canvas: canvas, ctx: canvas.getContext("2d"), fogCanvas: fogCanvas, fogCtx: fogCanvas.getContext("2d"), recenterBtn: recenterBtn };
+  for (const item of resolveGameMinimapBakes(config)) minimapImageForBake(item);
+  state.minimapHud.image = minimapImageForBake(bake);
   state.minimapHud.interactions = attachMinimapInteractions(canvas, {
     getView: function () { return state.minimapHud.view; },
     setView: function (view) {
@@ -2863,18 +3634,24 @@ function buildGameMinimapDom(config, bake) {
     },
     getGroundBounds: function () {
       const liveConfig = resolveGameMinimapConfig();
-      return liveConfig ? (resolveGameMinimapBake(liveConfig)?.bounds || null) : null;
+      return liveConfig ? resolveGameMinimapBakeBounds(resolveGameMinimapBake(liveConfig)) : null;
     },
     getCanvasSize: function () { return Math.max(64, Number(resolveGameMinimapConfig()?.sizePx) || 180); },
     getMinDistance: function () { return resolveGameMinimapConfig()?.minDistance || 20; },
-    getMaxDistance: function () { return resolveGameMinimapConfig()?.maxDistance || 1000; },
+    getMaxDistance: function () {
+      const liveConfig = resolveGameMinimapConfig();
+      const configuredMax = liveConfig?.maxDistance || 1000;
+      const bounds = liveConfig ? resolveGameMinimapBakeBounds(resolveGameMinimapBake(liveConfig)) : null;
+      const worldMax = bounds ? Math.max(Number(bounds.maxX) - Number(bounds.minX), Number(bounds.maxZ) - Number(bounds.minZ), 1) : 1;
+      return Math.max(configuredMax, worldMax);
+    },
     allowZoom: function () { return resolveGameMinimapConfig()?.allowZoom !== false; },
     allowPan: function () { return resolveGameMinimapConfig()?.allowPan !== false; },
     allowPinchZoom: function () { return resolveGameMinimapConfig()?.allowPinchZoom !== false; },
     onClick: function (worldX, worldZ) {
       const clickConfig = resolveGameMinimapConfig();
       if (!clickConfig || clickConfig.clickToMove === false || !isMmoGameplayReady()) return;
-      const clickBounds = resolveGameMinimapBake(clickConfig)?.bounds || null;
+      const clickBounds = resolveGameMinimapBakeBounds(resolveGameMinimapBake(clickConfig));
       const clampedX = clickBounds ? Math.max(clickBounds.minX, Math.min(clickBounds.maxX, worldX)) : worldX;
       const clampedZ = clickBounds ? Math.max(clickBounds.minZ, Math.min(clickBounds.maxZ, worldZ)) : worldZ;
       if (!startClickToMoveTarget(clampedX, clampedZ, "minimap-click")) return;
@@ -2922,6 +3699,227 @@ function scheduleGameMinimapRefresh() {
   }, gameMinimapRefreshInterval(config));
 }
 
+function clearGameMinimapFogCanvas() {
+  const elements = state.minimapHud.elements;
+  if (!elements?.fogCanvas || !elements?.fogCtx) return;
+  const canvas = elements.fogCanvas;
+  const ctx = elements.fogCtx;
+  const width = canvas.width || 0;
+  const height = canvas.height || 0;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  state.minimapFog.dirty = false;
+  state.minimapFog.lastDrawKey = "";
+}
+
+function ensureMinimapFogMask(size) {
+  const maskSize = Math.max(1, Math.ceil(Number(size) || 1));
+  let canvas = state.minimapFog.maskCanvas;
+  let ctx = state.minimapFog.maskCtx;
+  if (!canvas || !ctx) {
+    canvas = document.createElement("canvas");
+    ctx = canvas.getContext("2d");
+    state.minimapFog.maskCanvas = canvas;
+    state.minimapFog.maskCtx = ctx;
+  }
+  if (canvas.width !== maskSize || canvas.height !== maskSize) {
+    canvas.width = maskSize;
+    canvas.height = maskSize;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, maskSize, maskSize);
+  return { canvas: canvas, ctx: ctx, size: maskSize };
+}
+
+function drawMinimapFogDebug(ctx, fogConfig, viewBounds, size) {
+  const cellSize = Math.max(1, num(fogConfig.cellSize, 24));
+  const spanX = viewBounds.maxX - viewBounds.minX || 1;
+  const spanZ = viewBounds.maxZ - viewBounds.minZ || 1;
+  const minCellX = Math.floor(viewBounds.minX / cellSize);
+  const maxCellX = Math.floor(viewBounds.maxX / cellSize);
+  const minCellZ = Math.floor(viewBounds.minZ / cellSize);
+  const maxCellZ = Math.floor(viewBounds.maxZ / cellSize);
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.strokeStyle = "rgba(125, 211, 252, 0.32)";
+  ctx.lineWidth = 1;
+  ctx.font = "8px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  for (let z = minCellZ; z <= maxCellZ; z += 1) {
+    for (let x = minCellX; x <= maxCellX; x += 1) {
+      const px = ((x * cellSize) - viewBounds.minX) / spanX * size;
+      const py = ((z * cellSize) - viewBounds.minZ) / spanZ * size;
+      const pw = cellSize / spanX * size;
+      const ph = cellSize / spanZ * size;
+      if (px > size || py > size || px + pw < 0 || py + ph < 0) continue;
+      ctx.strokeRect(px, py, pw, ph);
+      if (pw >= 28 && ph >= 16) {
+        const key = x + ":" + z;
+        ctx.fillStyle = state.minimapFog.discoveredCells.has(key) ? "rgba(134, 239, 172, 0.88)" : "rgba(248, 250, 252, 0.62)";
+        ctx.fillText(key, px + 2, py + 2);
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function minimapFogCellRect(cell, fogConfig, viewBounds, size) {
+  const cellSize = Math.max(1, num(fogConfig.cellSize, 24));
+  const spanX = viewBounds.maxX - viewBounds.minX || 1;
+  const spanZ = viewBounds.maxZ - viewBounds.minZ || 1;
+  const minX = cell.x * cellSize;
+  const minZ = cell.z * cellSize;
+  const maxX = minX + cellSize;
+  const maxZ = minZ + cellSize;
+  if (maxX < viewBounds.minX || minX > viewBounds.maxX || maxZ < viewBounds.minZ || minZ > viewBounds.maxZ) return null;
+  return {
+    x: (minX - viewBounds.minX) / spanX * size,
+    y: (minZ - viewBounds.minZ) / spanZ * size,
+    w: cellSize / spanX * size,
+    h: cellSize / spanZ * size
+  };
+}
+
+function drawRoundedFogRect(ctx, x, y, w, h, radius) {
+  const r = Math.max(0, Math.min(radius, Math.abs(w) / 2, Math.abs(h) / 2));
+  if (r <= 0.25) {
+    ctx.fillRect(x, y, w, h);
+    return;
+  }
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+    ctx.fill();
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.fill();
+}
+
+function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size) {
+  const cellSize = Math.max(1, num(fogConfig.cellSize, 24));
+  const spanX = viewBounds.maxX - viewBounds.minX || 1;
+  const spanZ = viewBounds.maxZ - viewBounds.minZ || 1;
+  const pxPerCellX = cellSize / spanX * size;
+  const pxPerCellZ = cellSize / spanZ * size;
+  const pxPerCell = Math.max(pxPerCellX, pxPerCellZ);
+  const baseRadius = pxPerCell * 0.72;
+  const featherPx = Math.max(0, num(fogConfig.fogFeatherRadius, 1.5)) * Math.max(pxPerCellX, pxPerCellZ);
+  const shape = fogConfig.smoothFog === false ? "hardCells" : (fogConfig.revealShape || "circle");
+  const mask = shape === "hardCells" || fogConfig.debugOverlay === true
+    ? null
+    : ensureMinimapFogMask(size);
+  const targetCtx = mask ? mask.ctx : ctx;
+  targetCtx.save();
+  targetCtx.globalAlpha = 1;
+  targetCtx.globalCompositeOperation = "source-over";
+  targetCtx.fillStyle = "rgba(0,0,0,1)";
+
+  const featherCells = shape === "hardCells" ? 0 : Math.ceil(Math.max(0, num(fogConfig.fogFeatherRadius, 1.5)));
+  const minCellX = Math.floor(viewBounds.minX / cellSize) - featherCells - 1;
+  const maxCellX = Math.floor(viewBounds.maxX / cellSize) + featherCells + 1;
+  const minCellZ = Math.floor(viewBounds.minZ / cellSize) - featherCells - 1;
+  const maxCellZ = Math.floor(viewBounds.maxZ / cellSize) + featherCells + 1;
+  for (let z = minCellZ; z <= maxCellZ; z += 1) {
+    for (let x = minCellX; x <= maxCellX; x += 1) {
+      const cellKey = x + ":" + z;
+      if (!state.minimapFog.discoveredCells.has(cellKey)) continue;
+      const rect = minimapFogCellRect({ x: x, z: z }, fogConfig, viewBounds, size);
+      if (!rect) continue;
+      if (shape === "circle") {
+        const cx = rect.x + rect.w / 2;
+        const cy = rect.y + rect.h / 2;
+        if (pxPerCell < 3) {
+          targetCtx.fillRect(rect.x - 0.5, rect.y - 0.5, rect.w + 1, rect.h + 1);
+        } else {
+          targetCtx.beginPath();
+          targetCtx.arc(cx, cy, Math.max(0.5, baseRadius), 0, Math.PI * 2);
+          targetCtx.fill();
+        }
+      } else if (shape === "roundedCells") {
+        const expand = Math.min(featherPx * 0.15, pxPerCell * 0.35);
+        drawRoundedFogRect(targetCtx, rect.x - expand, rect.y - expand, rect.w + expand * 2, rect.h + expand * 2, Math.max(1, Math.min(rect.w, rect.h) * 0.45 + expand));
+      } else {
+        targetCtx.fillRect(rect.x - 0.5, rect.y - 0.5, rect.w + 1, rect.h + 1);
+      }
+    }
+  }
+  targetCtx.restore();
+  if (mask) {
+    ctx.save();
+    if (featherPx > 0.25 && typeof ctx.filter === "string") ctx.filter = "blur(" + Math.min(16, Math.round(featherPx * 10) / 10) + "px)";
+    ctx.drawImage(mask.canvas, 0, 0, size, size);
+    ctx.filter = "none";
+    ctx.restore();
+  }
+}
+
+function drawGameMinimapFogOverlay(config, activeView, size, dpr) {
+  const elements = state.minimapHud.elements;
+  if (!elements?.fogCanvas || !elements?.fogCtx) return;
+  const fogConfig = syncMinimapFogWorld(config);
+  const canvas = elements.fogCanvas;
+  const ctx = elements.fogCtx;
+  const backing = Math.round(size * dpr);
+  if (canvas.width !== backing || canvas.height !== backing) {
+    canvas.width = backing;
+    canvas.height = backing;
+    state.minimapFog.dirty = true;
+  }
+  if (!fogConfig.enabled || !activeView) {
+    clearGameMinimapFogCanvas();
+    return;
+  }
+  loadMinimapFogDiscovery(config);
+  revealLocalMinimapFogCells(currentLocalPlayerPosition(), fogConfig);
+  const viewBounds = minimapViewBounds(activeView);
+  const drawKey = [
+    state.worldId || "",
+    fogConfig.mapLayer || "overworld",
+    fogConfig.fogColor,
+    Math.round(fogConfig.fogOpacity * 1000),
+    fogConfig.cellSize,
+    fogConfig.smoothFog ? "smooth" : "flat",
+    Math.round(num(fogConfig.fogFeatherRadius, 0) * 100),
+    fogConfig.revealShape || "circle",
+    fogConfig.debugOverlay ? "debug" : "normal",
+    state.minimapFog.discoveredCells.size,
+    Math.round(viewBounds.minX * 100) / 100,
+    Math.round(viewBounds.maxX * 100) / 100,
+    Math.round(viewBounds.minZ * 100) / 100,
+    Math.round(viewBounds.maxZ * 100) / 100,
+    size,
+    dpr
+  ].join("|");
+  if (!state.minimapFog.dirty && state.minimapFog.lastDrawKey === drawKey) return;
+  state.minimapFog.lastDrawKey = drawKey;
+  state.minimapFog.dirty = false;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = clamp(fogConfig.fogOpacity, 0, 1);
+  ctx.fillStyle = fogConfig.fogColor || "#05070a";
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "destination-out";
+
+  drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size);
+  ctx.globalCompositeOperation = "source-over";
+  if (fogConfig.debugOverlay) drawMinimapFogDebug(ctx, fogConfig, viewBounds, size);
+}
+
 function drawGameMinimap(config, bake, view, performanceMode) {
   const elements = state.minimapHud.elements;
   if (!elements) return;
@@ -2946,19 +3944,29 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   ctx.globalAlpha = Math.max(0, Math.min(1, config.backgroundOpacity === undefined || config.backgroundOpacity === null ? 1 : Number(config.backgroundOpacity)));
   ctx.fillStyle = "#0b131c";
   ctx.fillRect(0, 0, size, size);
-  const bounds = bake?.bounds || null;
+  const bounds = resolveGameMinimapBakeBounds(bake);
   if (!bounds) {
     ctx.globalAlpha = 1;
+    clearGameMinimapFogCanvas();
     return;
   }
   const activeView = view || ensureGameMinimapView(config, bounds);
-  const image = state.minimapHud.image;
-  if (image && image.complete && image.naturalWidth) {
-    const rect = minimapImageSourceRect(bounds, activeView, bake.bakedImageWidth || image.naturalWidth, bake.bakedImageHeight || image.naturalHeight);
-    if (rect) ctx.drawImage(image, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, size, size);
+  const viewBounds = minimapViewBounds(activeView);
+  let drewBakeImage = false;
+  for (const item of resolveGameMinimapBakes(config)) {
+    if (!item?.bakedImageUrl) continue;
+    const itemBounds = minimapBakeBounds(item);
+    const image = minimapImageForBake(item);
+    if (drawMinimapBakeIntoView(ctx, image, itemBounds, viewBounds, size)) drewBakeImage = true;
+  }
+  if (!drewBakeImage && bake?.bakedImageUrl) {
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Minimap laden", size / 2, size / 2);
   }
   ctx.globalAlpha = 1;
-  const viewBounds = minimapViewBounds(activeView);
+  drawGameMinimapFogOverlay(config, activeView, size, dpr);
   const clampOutside = config.clampOutsideMarkers !== false;
   const iconSize = Math.max(3, Number(config.iconSizePx) || 9);
 
@@ -2996,22 +4004,31 @@ function drawGameMinimap(config, bake, view, performanceMode) {
       const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
       if (!point) continue;
       drawDotMarker(ctx, point.x, point.y, iconSize, { fill: "#7bd4ff", stroke: "rgba(0,0,0,0.6)" });
-      if (performanceMode === "full" && config.showRemotePlayerNames !== false) {
+      if (shouldShowRemotePlayerNames(config, performanceMode)) {
         const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
         const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
-        drawMarkerLabel(ctx, entry.displayName || entry.playerId, point.x, point.y, fontSize, nameMaxLength);
+        drawMarkerLabel(ctx, entry.displayName || entry.playerId, point.x, point.y, fontSize, nameMaxLength, iconSize + 3);
       }
     }
   }
   if (liteMode) return;
 
-  if (config.showNpcEntities !== false && Array.isArray(state.gameWorld?.entities)) {
+  if ((config.showNpcEntities !== false || config.showScatterInstances === true) && Array.isArray(state.gameWorld?.entities)) {
     for (const entity of state.gameWorld.entities) {
       const position = entity?.transform?.position;
       if (!position) continue;
+      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      if (isScatter && config.showScatterInstances !== true) continue;
+      if (!isScatter && config.showNpcEntities === false) continue;
       const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
       if (!point) continue;
-      drawDiamondMarker(ctx, point.x, point.y, iconSize, { fill: "#d59bff", stroke: "rgba(0,0,0,0.6)" });
+      drawDiamondMarker(ctx, point.x, point.y, iconSize, { fill: isScatter ? "#7ccf6b" : "#d59bff", stroke: "rgba(0,0,0,0.6)" });
+      const showName = isScatter ? config.showScatterNames === true : config.showNpcEntityNames === true;
+      if (showName) {
+        const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
+        const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
+        drawMarkerLabel(ctx, entity.label || entity.entityId || entity.id, point.x, point.y, fontSize, nameMaxLength);
+      }
     }
   }
   if (config.showInteractables === true && Array.isArray(state.gameWorld?.interactables)) {
@@ -3039,14 +4056,15 @@ function drawGameMinimapIfDue(now) {
 
   const performanceMode = resolveGameMinimapPerformanceMode(config, now);
   const intervalMs = gameMinimapRefreshInterval(config, performanceMode);
-  if (!hudState.dirty && now - hudState.lastDrawAt < intervalMs) {
+  const fogDirty = state.minimapFog.dirty === true;
+  if (!hudState.dirty && !fogDirty && now - hudState.lastDrawAt < intervalMs) {
     return;
   }
   const bake = resolveGameMinimapBake(config);
-  const bounds = bake?.bounds || null;
+  const bounds = resolveGameMinimapBakeBounds(bake);
   const view = bounds ? ensureGameMinimapView(config, bounds) : null;
   const drawKey = performanceMode === "full" ? null : buildGameMinimapDrawKey(bake, view, performanceMode);
-  if (!hudState.dirty && performanceMode !== "full" && hudState.lastDrawKey === drawKey) {
+  if (!hudState.dirty && !fogDirty && performanceMode !== "full" && hudState.lastDrawKey === drawKey) {
     return;
   }
 
@@ -3073,8 +4091,8 @@ function updateHud() {
   if (els.hudSessions) els.hudSessions.textContent = `${state.connectedSessionCount || 0} live / ${state.activeSessionCount || 0} total`;
   if (els.hudRevision) els.hudRevision.textContent = state.position ? String(state.position.revision) : "-";
   if (els.hudLastSent) els.hudLastSent.textContent = state.debug.lastSentType ? (state.debug.lastSentType + " · " + formatDebugTimestamp(state.debug.lastSentAt)) : "-";
-  if (els.hudLastSentSeq) els.hudLastSentSeq.textContent = state.net.lastSentInputSeq ? String(state.net.lastSentInputSeq) : "-";
-  if (els.hudLastAckedSeq) els.hudLastAckedSeq.textContent = state.net.lastAckedInputSeq ? String(state.net.lastAckedInputSeq) : "-";
+  if (els.hudLastSentSeq) els.hudLastSentSeq.textContent = String(state.net.lastSentInputSeq || 0);
+  if (els.hudLastAckedSeq) els.hudLastAckedSeq.textContent = String(state.net.lastAckedInputSeq || 0);
   if (els.hudPendingInputs) els.hudPendingInputs.textContent = String(state.net.pendingInputs.length || 0);
   if (els.hudController) {
     const controllerSession = state.control.activeControllerSessionId || state.net.lastRemoteControllerSessionId || "-";
@@ -3083,7 +4101,7 @@ function updateHud() {
   }
   if (els.hudLastTransport) els.hudLastTransport.textContent = state.net.lastTransport || "-";
   if (els.hudLastIgnored) els.hudLastIgnored.textContent = state.net.lastIgnoredReason || "-";
-  if (els.hudServerSeq) els.hudServerSeq.textContent = state.net.lastServerSeq ? String(state.net.lastServerSeq) : "-";
+  if (els.hudServerSeq) els.hudServerSeq.textContent = String(state.net.lastServerSeq || 0);
   if (els.hudLastReceived) els.hudLastReceived.textContent = state.debug.lastReceivedType ? (state.debug.lastReceivedType + " · " + formatDebugTimestamp(state.debug.lastReceivedAt)) : "-";
   if (els.hudLastSource) els.hudLastSource.textContent = state.debug.lastSourceSessionId ? state.debug.lastSourceSessionId.slice(0, 8) : "-";
   if (els.hudLastError) els.hudLastError.textContent = state.debug.lastError || "-";
@@ -3136,6 +4154,52 @@ function updateHud() {
     const ids = Array.from(state.remote.players.keys());
     const display = ids.length ? ids.slice(0, 6).join(", ") + (ids.length > 6 ? " +" + (ids.length - 6) : "") : "-";
     els.hudRemoteIds.textContent = display;
+  }
+  if (els.hudMmoSettings) {
+    const settings = debugState.mmoNetworkSettings || {};
+    els.hudMmoSettings.textContent = [
+      "preset " + (settings.networkPreset || "custom"),
+      "tick " + Math.round(num(settings.serverTickRateHz, 0)) + "hz",
+      "snap " + Math.round(num(settings.snapshotRateHz, 0)) + "hz",
+      "input " + Math.round(num(settings.inputSendRateHz, 0)) + "hz",
+      "send " + Math.round(num(settings.moveSendIntervalMs, 0)) + "ms",
+      "interp " + Math.round(num(settings.remoteInterpolationBaseDelayMs, 0)) + "ms (" + Math.round(num(settings.remoteInterpolationMinDelayMs, 0)) + "-" + Math.round(num(settings.remoteInterpolationMaxDelayMs, 0)) + ")",
+      "extra " + Math.round(num(settings.remoteMaxExtrapolationMs, 0)) + "ms",
+      "reconcile " + (settings.reconciliationEnabled !== false ? "aan" : "uit") + " / pred " + (settings.predictionEnabled !== false ? "aan" : "uit"),
+      "hold " + (settings.ownKeepPredictionDuringInput !== false ? "aan" : "uit"),
+      "post " + Math.round(num(settings.ownPostInputHoldMs, 0)) + "ms",
+      "stop " + Math.round(num(settings.ownStopResyncMaxUnits, 0)),
+      "cap " + num(settings.ownActiveCorrectionMaxUnits, 0).toFixed(2),
+      "smooth " + Math.round(num(settings.ownCorrectionBlendMs, 0)) + "ms",
+      "snap " + num(settings.ownHardCorrectionThreshold, 0).toFixed(1)
+    ].join(" · ");
+  }
+  if (els.hudMmoHealth) {
+    const ready = debugState.mmoReady || {};
+    els.hudMmoHealth.textContent = [
+      "ready " + (ready.onlineReady ? "ja" : "nee"),
+      "blocker " + (ready.blocker || "geen"),
+      "protocol " + (debugState.movementProtocol || "geen"),
+      "snap avg " + Math.round(num(debugState.avgSnapshotIntervalMs, 0)) + "ms",
+      "max " + Math.round(num(debugState.maxSnapshotIntervalMs, 0)) + "ms",
+      "backlog " + formatMetricMs(debugState.interpolationBacklogMs),
+      "lag " + formatMetricMs(debugState.maxObserverLagMs),
+      "jump " + num(debugState.maxRemoteJump, 0).toFixed(2),
+      "drops " + String(debugState.droppedRemoteSamples || 0)
+    ].join(" · ");
+  }
+  if (els.hudMinimapFog) {
+    const fog = debugState.minimapFog || {};
+    els.hudMinimapFog.textContent = [
+      fog.enabled ? "aan" : "uit",
+      "bron " + (fog.configSource || "geen"),
+      "cells " + String(fog.discoveredCount || 0),
+      "loaded " + (fog.loaded ? "ja" : "nee"),
+      "cell " + String(fog.cellSize || 0),
+      "radius " + String(fog.revealRadius || 0),
+      "save " + String(fog.saveIntervalMs || 0) + "ms",
+      "layer " + (fog.mapLayer || "overworld")
+    ].join(" · ");
   }
 }
 
@@ -3192,6 +4256,14 @@ function pointerTargetDistance() {
   return Math.hypot(state.pointer.target.x - state.predictedPosition.x, state.pointer.target.z - state.predictedPosition.z);
 }
 
+function clickMoveSelfRadius() {
+  return Math.max(CLICK_MOVE_START_RADIUS, currentCollisionRadius() * CLICK_MOVE_SELF_RADIUS_MULTIPLIER);
+}
+
+function clickMoveArrivalRadius() {
+  return Math.max(CLICK_MOVE_ARRIVAL_RADIUS, currentCollisionRadius() * 0.9);
+}
+
 function hasMovementInput() {
   if (hasKeyboardMovementInput()) return true;
   return state.pointer.active && state.pointer.moved && (state.pointer.target || state.pointer.lastHoldVector);
@@ -3227,6 +4299,15 @@ function refreshPointerTargetFromActivePointer(options = {}) {
   return refreshPointerTargetFromScreenPosition(state.pointer.screenX, state.pointer.screenY);
 }
 
+function shouldSendPointerTargetToServer() {
+  if (!state.pointer.target) return false;
+  // While the mouse/finger is held down the client uses the pointer as a
+  // direction hold. Sending the ground point would make the server walk to a
+  // stale target and stop there while local prediction keeps moving.
+  if (state.pointer.active && state.pointer.moved && isPointerHoldActive()) return false;
+  return true;
+}
+
 function startClickToMoveTarget(worldX, worldZ, source = null) {
   if (!isMmoGameplayReady()) return false;
   clearPointerTarget(false);
@@ -3238,11 +4319,13 @@ function startClickToMoveTarget(worldX, worldZ, source = null) {
   state.pointer.screenX = 0;
   state.pointer.screenY = 0;
   state.pointer.downAt = performance.now();
+  state.pointer.blockedSince = 0;
+  state.pointer.lastDistanceToTarget = -1;
   state.pointer.moved = true;
   state.pointer.dragged = false;
   state.pointer.lastHoldVector = null;
   state.pointer.target = { x: Number(worldX) || 0, z: Number(worldZ) || 0 };
-  if (pointerTargetDistance() <= CLICK_MOVE_START_RADIUS) {
+  if (pointerTargetDistance() <= clickMoveSelfRadius()) {
     clearPointerTarget(false);
     return false;
   }
@@ -3275,7 +4358,7 @@ function currentMoveVector() {
       x = state.pointer.target.x - state.predictedPosition.x;
       z = state.pointer.target.z - state.predictedPosition.z;
       const length = Math.hypot(x, z);
-      if (length <= CLICK_MOVE_ARRIVAL_RADIUS) {
+      if (length <= clickMoveArrivalRadius()) {
         if (pointerHeld && state.pointer.lastHoldVector) {
           return { x: state.pointer.lastHoldVector.x, z: state.pointer.lastHoldVector.z };
         }
@@ -3351,6 +4434,8 @@ function primeHttpSnapshotState(snapshot) {
   state.worldId = snapshot.worldId || state.worldId;
   state.gameWorld = snapshot.gameWorld || state.gameWorld;
   state.gameProject = snapshot.gameProject || state.gameWorld?.gameProject || state.gameProject;
+  state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
+  state.remote.remoteRenderDelayMs = state.remote.interpolationDelayMs;
   state.schemaVersion = snapshot.schemaVersion || state.gameWorld?.schemaVersion || state.gameProject?.schemaVersion || state.schemaVersion;
   state.buildId = snapshot.buildId || state.gameWorld?.buildId || state.gameProject?.buildId || state.buildId;
   state.contentHash = snapshot.contentHash || state.gameWorld?.contentHash || state.gameProject?.contentHash || state.contentHash;
@@ -3388,6 +4473,7 @@ function applySnapshotToRuntime(snapshot, options = {}) {
   }
   refreshMmoDebugHud();
   refreshGameMinimapHud();
+  loadMinimapFogDiscovery(resolveGameMinimapConfig());
   maybeMarkMmoOnlineReady("snapshot");
 }
 
@@ -3617,7 +4703,7 @@ function handleSocketClose(socket, event) {
   state.lastCloseCode = Number(event?.code) || null;
   state.lastCloseReason = String(event?.reason || "");
   state.debug.lastError = "WS close " + event.code + " " + (event.reason || "");
-  clearMovementInput("ws-close");
+  clearMovementInput("ws-close", { resetSprint: true });
   if (socket._gkIntentionalClose) {
     updateWsStatus("disconnected", "disconnected", { immediate: true, final: true });
     return;
@@ -3640,7 +4726,7 @@ function handleSocketClose(socket, event) {
   }
   updateWsStatus("reconnecting", "reconnecting", {
     attemptId: socket._gkConnectionAttemptId,
-    delayMs: WS_STATUS_HYSTERESIS_MS
+    delayMs: mmoNetworkSettings().wsStatusHysteresisMs
   });
   scheduleReconnect();
 }
@@ -3742,6 +4828,11 @@ function handleSocketMessage(raw) {
     if (localStillActive) state.control.passiveSince = 0;
     syncNetDebugState();
     updateHud();
+    return;
+  }
+  if (message.type === "fog:discovery") {
+    applyMinimapFogDiscoveryPayload(message, { replace: false });
+    markWsConnected();
     return;
   }
   if (message.type === "mmo:snapshot") {
@@ -3879,6 +4970,8 @@ async function loadSessionState(options = {}) {
 
 async function refreshState() {
   try {
+    resetMmoDebugRuntimeState();
+    await resetPersistedMinimapFogDiscovery();
     await loadSessionState({ forceWorld: false, showLoading: true });
   } catch {
     clearMmoReadyTimeout();
@@ -3949,7 +5042,7 @@ function buildCurrentInputState(options = {}) {
     ? null
     : override && override.pointerTarget !== undefined
       ? normalizePointerTarget(override.pointerTarget)
-      : state.pointer.target
+      : shouldSendPointerTargetToServer()
         ? normalizePointerTarget(state.pointer.target)
         : null;
   return {
@@ -3988,29 +5081,17 @@ function sendInputState(options = {}) {
   state.debug.lastSentType = "player:input_state";
   state.debug.lastSentAt = nowPerf;
   state.debug.lastSentSeq = seq;
-  queuePendingInput({
-    seq: seq,
-    position: clonePosition(state.predictedPosition || state.position || state.authoritativePosition),
-    input: {
-      moveX: input.moveX,
-      moveZ: input.moveZ,
-      sprint: input.sprint === true,
-      pointerTarget: input.pointerTarget ? { x: input.pointerTarget.x, z: input.pointerTarget.z } : null,
-      stop: input.stop === true
-    },
-    moving: moving,
-    animationState: moving ? (state.input.sprint ? "run" : "walk") : "idle",
-    sentAt: nowWall,
-    controllerEpoch: controllerEpoch,
-    clientSessionId: clientSessionId,
-    clientIntentId: clientIntentId
-  });
-  syncNetDebugState();
   const inputStatePayload = {
     clientSessionId: clientSessionId,
     inputSeq: seq,
     clientSentAt: nowWall,
     controllerEpoch: controllerEpoch,
+    clientPredictedPosition: input.stop === true && state.predictedPosition ? {
+      x: state.predictedPosition.x,
+      y: state.predictedPosition.y,
+      z: state.predictedPosition.z,
+      rotationY: state.predictedPosition.rotationY
+    } : null,
     input: {
       moveX: input.moveX,
       moveZ: input.moveZ,
@@ -4020,7 +5101,26 @@ function sendInputState(options = {}) {
     },
     sourceDevice: sourceDevice
   };
-  const canSendNow = options.force === true || nowPerf - state.lastSendAt >= MOVE_SEND_INTERVAL_MS;
+  const queueSentInput = function (sentAt) {
+    queuePendingInput({
+      seq: seq,
+      position: clonePosition(state.predictedPosition || state.position || state.authoritativePosition),
+      input: {
+        moveX: input.moveX,
+        moveZ: input.moveZ,
+        sprint: input.sprint === true,
+        pointerTarget: input.pointerTarget ? { x: input.pointerTarget.x, z: input.pointerTarget.z } : null,
+        stop: input.stop === true
+      },
+      moving: moving,
+      animationState: moving ? (state.input.sprint ? "run" : "walk") : "idle",
+      sentAt: sentAt || nowWall,
+      controllerEpoch: controllerEpoch,
+      clientSessionId: clientSessionId,
+      clientIntentId: clientIntentId
+    });
+  };
+  const canSendNow = options.force === true || nowPerf - state.lastSendAt >= mmoNetworkSettings().moveSendIntervalMs;
   if (!canSendNow) {
     state.net.lastTransport = state.net.lastTransport || "queued";
     syncNetDebugState();
@@ -4030,6 +5130,7 @@ function sendInputState(options = {}) {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     state.lastSendAt = nowPerf;
     state.net.lastTransport = "ws";
+    queueSentInput(nowWall);
     syncNetDebugState();
     state.ws.send(JSON.stringify({ type: "player:input_state", payload: inputStatePayload }));
     updateHud();
@@ -4038,6 +5139,7 @@ function sendInputState(options = {}) {
   if (shouldUseHttpFallback()) {
     state.lastSendAt = nowPerf;
     state.net.lastTransport = "http";
+    queueSentInput(nowWall);
     syncNetDebugState();
     sendInputStateViaHttp(inputStatePayload);
     updateHud();
@@ -4065,18 +5167,26 @@ function setMovementAnimationState(nextState) {
 
 // FIX-5: single choke point that clears every movement input source and notifies the server
 // immediately, so nothing (alt-tab, pointer loss, ws drop, logout) can leave movement "stuck".
-function clearMovementInput(reason) {
+// Sprint is intentionally left alone here: it tracks the physical Shift key via its own
+// keydown/keyup handlers, and this function also fires on routine "stopped moving for a
+// moment" transitions (keyup, pointer arrival, a single idle frame between releasing one
+// direction key and pressing the opposite one) - resetting sprint there dropped it even
+// though Shift was still held. Only the true can't-trust-key-state resets (blur, ws drop,
+// logout) opt back in via resetSprint.
+function clearMovementInput(reason, options = {}) {
+  const sendFinalIntent = shouldSendLocalFinalIntent(reason);
+  if (sendFinalIntent && options.resetSprint !== true) startPostInputPredictionHold(reason);
   state.ownCorrection = null;
   state.input.move_forward = false;
   state.input.move_back = false;
   state.input.move_left = false;
   state.input.move_right = false;
-  state.input.sprint = false;
+  if (options.resetSprint) state.input.sprint = false;
   state.net.localControllerActive = false;
   state.control.passiveSince = 0;
   clearPointerTarget(false);
   setMovementAnimationState("idle");
-  if (shouldSendLocalFinalIntent(reason)) {
+  if (sendFinalIntent) {
     sendInputState({ force: true, stop: true, reason: reason });
   }
   syncNetDebugState();
@@ -4091,6 +5201,7 @@ function stepMovement(now) {
   if (!state.lastFrameAt) state.lastFrameAt = now;
   const dt = clamp((now - state.lastFrameAt) / 1000, 0, 0.05);
   state.lastFrameAt = now;
+  const netSettings = mmoNetworkSettings();
 
   if (!hasMovementInput()) {
     if (state.lastAnimationState !== "idle") {
@@ -4099,6 +5210,9 @@ function stepMovement(now) {
     return;
   }
   if (!state.control.isLocalController) {
+    if (state.pointer.active && !hasKeyboardMovementInput()) {
+      clearMovementInput("controller-lost-with-pointer");
+    }
     return;
   }
 
@@ -4107,8 +5221,8 @@ function stepMovement(now) {
   // ooit te snappen of terug te trekken.
   const stepStartedAt = performance.now();
   try {
-  if (state.ownCorrection && state.predictedPosition) {
-    const correctionBlend = clamp(1 - Math.pow(1 - OWN_CORRECTION_BLEND_RATE, dt / 0.05), 0, 1);
+  if (state.ownCorrection && state.predictedPosition && netSettings.reconciliationEnabled !== false) {
+    const correctionBlend = clamp(1 - Math.pow(1 - netSettings.ownCorrectionBlendRate, dt / 0.05), 0, 1);
     const blendX = state.ownCorrection.x * correctionBlend;
     const blendZ = state.ownCorrection.z * correctionBlend;
     state.predictedPosition.x += blendX;
@@ -4118,6 +5232,8 @@ function stepMovement(now) {
     if (Math.hypot(state.ownCorrection.x, state.ownCorrection.z) < 0.01) {
       state.ownCorrection = null;
     }
+  } else if (state.ownCorrection && netSettings.reconciliationEnabled === false) {
+    state.ownCorrection = null;
   }
 
   const vector = currentMoveVector();
@@ -4143,10 +5259,37 @@ function stepMovement(now) {
     z: resolved.z,
     rotationY: Math.atan2(nx, nz) * 180 / Math.PI
   };
-  state.predictedPosition = clonePosition(nextPosition);
+  const movedDistance = Math.hypot(nextPosition.x - state.predictedPosition.x, nextPosition.z - state.predictedPosition.z);
+  if (state.pointer.active && state.pointer.mode === "click_to_move" && state.pointer.target) {
+    const remainingDistance = Math.hypot(state.pointer.target.x - nextPosition.x, state.pointer.target.z - nextPosition.z);
+    const previousRemainingDistance = Number.isFinite(Number(state.pointer.lastDistanceToTarget))
+      ? Number(state.pointer.lastDistanceToTarget)
+      : remainingDistance;
+    const madeProgress = movedDistance > CLICK_MOVE_BLOCKED_RADIUS || remainingDistance < previousRemainingDistance - CLICK_MOVE_BLOCKED_RADIUS;
+    if (madeProgress) {
+      state.pointer.blockedSince = 0;
+    } else {
+      state.pointer.blockedSince = state.pointer.blockedSince || now;
+    }
+    state.pointer.lastDistanceToTarget = remainingDistance;
+    if (state.pointer.blockedSince && now - state.pointer.blockedSince >= CLICK_MOVE_BLOCKED_TIMEOUT_MS) {
+      clearMovementInput("click-target-blocked");
+      return;
+    }
+  }
+  if (netSettings.predictionEnabled !== false) {
+    state.predictedPosition = clonePosition(nextPosition);
+  }
+  scheduleMinimapFogDiscovery("movement");
   setMovementAnimationState(state.input.sprint ? "run" : "walk");
-  applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
-  if (now - state.lastSendAt >= MOVE_SEND_INTERVAL_MS) {
+  if (netSettings.predictionEnabled !== false) {
+    applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
+  }
+  if (state.minimapHud.elements) {
+    state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(now);
+  }
+  if (now - state.lastSendAt >= netSettings.moveSendIntervalMs) {
     sendInputState({ force: true });
   }
   } finally {
@@ -4216,6 +5359,8 @@ function clearPointerTarget(keepTarget = false) {
   state.pointer.screenX = 0;
   state.pointer.screenY = 0;
   state.pointer.downAt = 0;
+  state.pointer.blockedSince = 0;
+  state.pointer.lastDistanceToTarget = -1;
   state.pointer.moved = false;
   state.pointer.dragged = false;
   state.pointer.lastHoldVector = null;
@@ -4234,7 +5379,18 @@ function bindPointerControls() {
     if (event.pointerType !== "touch" && event.button !== 0) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
-    noteLocalControlStart(true, "pointer");
+    // Second finger while the first is already driving movement: hold-to-sprint, the
+    // touch equivalent of holding Shift. Mirrors the keyboard sprint handler below rather
+    // than restarting click-to-move tracking with this finger's position.
+    if (event.pointerType === "touch" && state.pointer.active && event.pointerId !== state.pointer.pointerId) {
+      state.pointer.sprintPointerId = event.pointerId;
+      state.input.sprint = true;
+      if (typeof canvas.setPointerCapture === "function") {
+        try { canvas.setPointerCapture(event.pointerId); } catch {}
+      }
+      if (hasMovementInput()) sendInputState({ force: true });
+      return;
+    }
     state.input.move_forward = false;
     state.input.move_back = false;
     state.input.move_left = false;
@@ -4254,9 +5410,12 @@ function bindPointerControls() {
       try { canvas.setPointerCapture(event.pointerId); } catch {}
     }
     updatePointerTargetFromEvent(event);
-    state.pointer.moved = pointerTargetDistance() > CLICK_MOVE_START_RADIUS;
+    state.pointer.moved = pointerTargetDistance() > clickMoveSelfRadius();
     if (hasMovementInput()) {
+      noteLocalControlStart(true, "pointer");
       sendInputState({ force: true });
+    } else {
+      clearPointerTarget(false);
     }
   });
   canvas.addEventListener("pointermove", function (event) {
@@ -4274,6 +5433,13 @@ function bindPointerControls() {
     updatePointerTargetFromEvent(event);
   });
   const releasePointer = function (event) {
+    if (event && event.pointerId !== undefined && state.pointer.sprintPointerId !== null && event.pointerId === state.pointer.sprintPointerId) {
+      event.preventDefault();
+      state.pointer.sprintPointerId = null;
+      state.input.sprint = false;
+      if (hasMovementInput()) sendInputState({ force: true });
+      return;
+    }
     if (event && event.pointerId !== undefined && state.pointer.pointerId !== null && event.pointerId !== state.pointer.pointerId) return;
     if (event) event.preventDefault();
     const hadKeyboardMovement = hasKeyboardMovementInput();
@@ -4313,7 +5479,7 @@ function handleInputCancel(reason) {
     state.lastFrameAt = 0;
     return;
   }
-  clearMovementInput(reason);
+  clearMovementInput(reason, { resetSprint: true });
   state.lastFrameAt = 0;
 }
 
@@ -4363,7 +5529,7 @@ async function logout() {
   state.wantReconnect = false;
   stopMovementFrameLoop();
   stopRemoteFrameLoop();
-  clearMovementInput("logout");
+  clearMovementInput("logout", { resetSprint: true });
   closeWebSocket(true);
   clearRemotePlayers("logout");
   try {
