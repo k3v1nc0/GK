@@ -2,12 +2,14 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260714-mmo11-camera-target-height";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260728-zone-canvas-fix23";
 import { previewTokenText } from "./token-preview.js?v=20260717-node01-foundation";
 
 const DEG_TO_RAD = Math.PI / 180;
 let objectResidencyState = null;
 let chunkResidencyState = null;
+let minimapBakeChunkOverride = false;
+let minimapBakeShadowFocusOverride = null;
 
 function colorOrDefault(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || "")) ? value : fallback;
@@ -34,6 +36,15 @@ function numberOrFallback(value, fallback) {
 
 function round(value) {
   return Math.round(Number(value) * 1000) / 1000;
+}
+
+function normalizeDegrees(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  let normalized = number % 360;
+  if (normalized > 180) normalized -= 360;
+  if (normalized < -180) normalized += 360;
+  return round(normalized);
 }
 
 function detectRendererProfile(renderer) {
@@ -439,7 +450,7 @@ const SHADOW_QUALITY_TYPE_FALLBACK = {
 
 function shadowMapTypeFromName(name) {
   const normalized = String(name === undefined || name === null ? "" : name).trim().toLowerCase().replace(/[\s_-]+/g, "");
-  if (name === THREE.PCFSoftShadowMap || normalized === "pcfsoft" || normalized === "pcfsoftshadowmap") return THREE.PCFSoftShadowMap;
+  if (name === THREE.PCFSoftShadowMap || normalized === "pcfsoft" || normalized === "pcfsoftshadowmap") return THREE.PCFShadowMap;
   if (name === THREE.PCFShadowMap || normalized === "pcf" || normalized === "pcfshadowmap") return THREE.PCFShadowMap;
   if (name === THREE.BasicShadowMap || normalized === "basic" || normalized === "basicshadowmap") return THREE.BasicShadowMap;
   if (name === THREE.VSMShadowMap || normalized === "vsm" || normalized === "vsmshadowmap") return THREE.VSMShadowMap;
@@ -475,7 +486,7 @@ const WORLD_PERFORMANCE_DEFAULTS = {
   game: {
     preset: "middel_schaduw",
     pixelRatioCap: 1,
-    antialias: true,
+    antialias: false,
     fogEnabled: true,
     maxFps: 60,
     debugHelpersVisible: false,
@@ -485,39 +496,39 @@ const WORLD_PERFORMANCE_DEFAULTS = {
     chunkLabelsVisible: false,
     streamingDebugVisible: false,
     shadowsEnabled: true,
-    shadowQuality: "medium",
-    shadowMapSize: 1024,
-    shadowCameraSize: 85,
-    shadowCameraFar: 450,
+    shadowQuality: "low",
+    shadowMapSize: 512,
+    shadowCameraSize: 70,
+    shadowCameraFar: 300,
     shadowBias: -0.0003,
     shadowNormalBias: 0.04,
-    shadowType: "pcf_soft",
-    staticPropCastShadows: true,
+    shadowType: "pcf",
+    staticPropCastShadows: false,
     staticPropReceiveShadows: true,
-    scatterCastShadows: true,
+    scatterCastShadows: false,
     scatterReceiveShadows: true,
     groundReceiveShadows: true,
     terrainReceiveShadows: true,
     shadow: {
       preset: "middel_schaduw",
       enabled: true,
-      mapSize: 1024,
-      cameraSize: 85,
+      mapSize: 512,
+      cameraSize: 70,
       cameraNear: 1,
-      cameraFar: 450,
+      cameraFar: 300,
       bias: -0.0003,
       normalBias: 0.04,
-      type: "pcf_soft",
+      type: "pcf",
       updateMode: "stable_snapped",
       snapWorldUnits: 10,
       focusMode: "player_or_spawn",
-      staticPropsCast: true,
+      staticPropsCast: false,
       staticPropsReceive: true,
-      scatterCast: true,
+      scatterCast: false,
       scatterReceive: true,
       groundReceives: true,
       terrainReceives: true,
-      shadowResidentMarginChunks: 1
+      shadowResidentMarginChunks: 0
     }
   },
   editor: {
@@ -627,16 +638,20 @@ const SHADOW_LEGACY_FIELD_KEYS = [
   "shadowQuality",
   "shadowMapSize",
   "shadowCameraSize",
+  "shadowCameraNear",
   "shadowCameraFar",
   "shadowBias",
   "shadowNormalBias",
   "shadowType",
+  "shadowSnapWorldUnits",
+  "shadowFocusMode",
   "staticPropCastShadows",
   "staticPropReceiveShadows",
   "scatterCastShadows",
   "scatterReceiveShadows",
   "groundReceiveShadows",
-  "terrainReceiveShadows"
+  "terrainReceiveShadows",
+  "shadowResidentMarginChunks"
 ];
 
 function hasOwnValue(source, key) {
@@ -664,7 +679,7 @@ export function resolveGamePerformanceProfileConfig(profile, rendererProfile = {
       pixelRatioCap: 1.5,
       shadowsEnabled: true,
       shadowQuality: "high",
-      shadowMapType: THREE.PCFSoftShadowMap,
+      shadowMapType: THREE.PCFShadowMap,
       shadowMapSize: 4096,
       antialias: true,
       batchStaticProps: true,
@@ -740,6 +755,13 @@ function shadowMapSizeForQuality(quality) {
   return SHADOW_QUALITY_MAP_SIZES[normalizeShadowQuality(quality)] || SHADOW_QUALITY_MAP_SIZES.medium;
 }
 
+function clampShadowMapSize(value, fallback = 0) {
+  const fallbackSize = Math.max(0, Math.floor(num(fallback, 0)));
+  const requested = Math.floor(num(value, fallbackSize));
+  if (requested <= 0) return fallbackSize;
+  return Math.min(4096, Math.max(256, requested));
+}
+
 // Fase 9.0: resolve the canonical shadow block for one mode (editor or game). New published
 // worlds use `performance.<mode>.shadow`; legacy flat fields are only read when a world has not
 // yet been migrated.
@@ -753,20 +775,51 @@ function resolveModeShadowPolicy(modePerformance, mode = "editor") {
   const hasLegacyFields = hasLegacyShadowFields(modeData, "") || hasLegacyShadowFields(modeData, mode === "editor" ? "editor" : "game");
   const legacyQuality = normalizeShadowQuality(modeData.shadowQuality || presetValues.shadowQuality || (preset === "geen_schaduw" ? "off" : "medium"));
   const legacyType = normalizeShadowMapTypeName(modeData.shadowType || presetValues.type || "pcf_soft", presetValues.type || "pcf_soft");
-  const readShadowValue = function (key, legacyKey, fallback) {
-    if (shadow && shadow[key] !== undefined) return shadow[key];
-    if (!shadow) {
-      if (modeData[key] !== undefined) return modeData[key];
-      if (legacyKey && modeData[legacyKey] !== undefined) return modeData[legacyKey];
+  const readFlatShadowValue = function (key, legacyKey) {
+    if (legacyKey) {
+      const prefix = mode === "editor" ? "editor" : "game";
+      const prefixedKey = prefix + legacyKey.charAt(0).toUpperCase() + legacyKey.slice(1);
+      const prefixedLegacyValue = modeData[prefixedKey];
+      if (prefixedLegacyValue !== undefined && prefixedLegacyValue !== null && String(prefixedLegacyValue).trim() !== "") return prefixedLegacyValue;
     }
+    if (!shadow) {
+      if (modeData[key] !== undefined && modeData[key] !== null && String(modeData[key]).trim() !== "") return modeData[key];
+      if (legacyKey && modeData[legacyKey] !== undefined && modeData[legacyKey] !== null && String(modeData[legacyKey]).trim() !== "") return modeData[legacyKey];
+    }
+    return undefined;
+  };
+  const readShadowValue = function (key, legacyKey, fallback) {
+    const flatValue = readFlatShadowValue(key, legacyKey);
+    if (flatValue !== undefined) return flatValue;
+    if (shadow && shadow[key] !== undefined) return shadow[key];
     if (presetValues[key] !== undefined) return presetValues[key];
     return fallback;
   };
+  const positiveShadowNumber = function (key, legacyKey, fallback) {
+    const presetFallback = num(fallback, 0);
+    const value = num(readShadowValue(key, legacyKey, presetFallback), presetFallback);
+    return value > 0 ? value : presetFallback;
+  };
+  const inheritedPositiveShadowInteger = function (key, legacyKey, fallback) {
+    return Math.max(0, Math.floor(positiveShadowNumber(key, legacyKey, fallback)));
+  };
+  const inheritedShadowMapSize = function (key, legacyKey, fallback) {
+    return clampShadowMapSize(readShadowValue(key, legacyKey, fallback), fallback);
+  };
+  const inheritedShadowInteger = function (key, legacyKey, fallback) {
+    const presetFallback = Math.max(0, Math.floor(num(fallback, 0)));
+    const value = Math.floor(num(readShadowValue(key, legacyKey, presetFallback), presetFallback));
+    return value >= 0 ? value : presetFallback;
+  };
   const enabled = preset !== "geen_schaduw";
-  const mapSize = enabled ? Math.max(0, Math.floor(num(readShadowValue("mapSize", "shadowMapSize", presetValues.mapSize || 0), presetValues.mapSize || 0))) : 0;
-  const cameraSize = enabled ? Math.max(1, Math.floor(num(readShadowValue("cameraSize", "shadowCameraSize", presetValues.cameraSize || 0), presetValues.cameraSize || 0))) : 0;
-  const cameraNear = enabled ? Math.max(0.1, num(readShadowValue("cameraNear", "shadowCameraNear", presetValues.cameraNear || 1), presetValues.cameraNear || 1)) : 1;
-  const cameraFar = enabled ? Math.max(1, Math.floor(num(readShadowValue("cameraFar", "shadowCameraFar", presetValues.cameraFar || 0), presetValues.cameraFar || 0))) : 0;
+  const mapSize = enabled ? inheritedShadowMapSize("mapSize", "shadowMapSize", presetValues.mapSize || 0) : 0;
+  const cameraSize = enabled ? Math.max(1, Math.floor(positiveShadowNumber("cameraSize", "shadowCameraSize", presetValues.cameraSize || 0))) : 0;
+  const cameraFar = enabled ? Math.max(1, Math.floor(positiveShadowNumber("cameraFar", "shadowCameraFar", presetValues.cameraFar || 0))) : 0;
+  const requestedCameraNear = enabled ? Math.max(0.1, positiveShadowNumber("cameraNear", "shadowCameraNear", presetValues.cameraNear || 1)) : 1;
+  const fallbackCameraNear = Math.max(0.1, num(presetValues.cameraNear, 1));
+  const cameraNear = enabled && requestedCameraNear >= cameraFar
+    ? Math.min(fallbackCameraNear, Math.max(0.1, cameraFar - 0.1))
+    : requestedCameraNear;
   const bias = enabled ? clamp(num(readShadowValue("bias", "shadowBias", presetValues.bias ?? -0.0003), presetValues.bias ?? -0.0003), -0.01, 0.01) : 0;
   const normalBias = enabled ? clamp(num(readShadowValue("normalBias", "shadowNormalBias", presetValues.normalBias ?? 0.04), presetValues.normalBias ?? 0.04), 0, 1) : 0;
   const type = enabled
@@ -777,10 +830,12 @@ function resolveModeShadowPolicy(modePerformance, mode = "editor") {
     ? String(readShadowValue("updateMode", "shadowUpdateMode", presetValues.updateMode || "stable_snapped") || "stable_snapped").trim() || "stable_snapped"
     : "off";
   const snapWorldUnits = enabled
-    ? Math.max(1, Math.floor(num(readShadowValue("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10), presetValues.snapWorldUnits || 10)))
+    ? Math.max(1, inheritedPositiveShadowInteger("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10))
     : 0;
+  const presetFocusMode = presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn");
+  const explicitFocusMode = String(readShadowValue("focusMode", "shadowFocusMode", presetFocusMode) || "").trim();
   const focusMode = enabled
-    ? String(readShadowValue("focusMode", "shadowFocusMode", presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")) || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")).trim() || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")
+    ? (explicitFocusMode || presetFocusMode)
     : (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn");
   const staticPropsCast = enabled && readShadowValue("staticPropsCast", "staticPropCastShadows", presetValues.staticPropsCast !== false) === true;
   const staticPropsReceive = enabled && readShadowValue("staticPropsReceive", "staticPropReceiveShadows", presetValues.staticPropsReceive !== false) !== false;
@@ -789,7 +844,7 @@ function resolveModeShadowPolicy(modePerformance, mode = "editor") {
   const groundReceives = enabled && readShadowValue("groundReceives", "groundReceiveShadows", presetValues.groundReceives !== false) !== false;
   const terrainReceives = enabled && readShadowValue("terrainReceives", "terrainReceiveShadows", presetValues.terrainReceives !== false) !== false;
   const shadowResidentMarginChunks = enabled
-    ? Math.max(0, Math.floor(num(readShadowValue("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0), presetValues.shadowResidentMarginChunks || 0)))
+    ? inheritedShadowInteger("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0)
     : 0;
   return {
     source: enabled ? (shadow ? "shadow" : (hasLegacyFields ? "legacy" : "preset")) : "none",
@@ -878,10 +933,19 @@ export function resolveStableShadowFocus(options = {}) {
   const groundY = Number.isFinite(Number(options.groundY))
     ? num(options.groundY, 0)
     : 0;
-  const focusSource = options.focus
-    || (mode === "editor"
-      ? (options.contentCenter || options.worldCenter || options.startPosition || options.player || options.camTarget || options.camera?.target || options.camera?.position || null)
-      : (options.player || options.startPosition || options.worldCenter || options.camTarget || options.camera?.target || null));
+  const focusMode = String(options.focusMode || policy?.focusMode || "").trim();
+  let focusSource = options.focus || null;
+  if (!focusSource && mode === "editor") {
+    focusSource = options.contentCenter || options.worldCenter || options.startPosition || options.player || options.camTarget || options.camera?.target || options.camera?.position || null;
+  } else if (!focusSource && mode === "game") {
+    if (focusMode === "camera_target") {
+      focusSource = options.camTarget || options.camera?.target || options.player || options.startPosition || options.worldCenter || null;
+    } else if (focusMode === "world_center") {
+      focusSource = options.worldCenter || options.startPosition || options.player || options.camTarget || options.camera?.target || null;
+    } else {
+      focusSource = options.player || options.startPosition || options.worldCenter || options.camTarget || options.camera?.target || null;
+    }
+  }
   const focus = {
     x: num(focusSource?.x, 0),
     y: num(focusSource?.y, groundY),
@@ -996,8 +1060,12 @@ export function resolveWorldPerformanceForRenderer(worldData, rendererProfile = 
     fogDensity: num(sharedSource.fogDensity ?? worldRoot.fogDensity, WORLD_PERFORMANCE_DEFAULTS.shared.fogDensity),
     smoothShading: sharedSource.smoothShading !== false && worldRoot.smoothShading !== false
   };
-  const gameSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.game, source.game || {});
-  const editorSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.editor, source.editor || {});
+  const gameInput = source.game || {};
+  const editorInput = source.editor || {};
+  const gameSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.game, gameInput);
+  const editorSource = Object.assign({}, WORLD_PERFORMANCE_DEFAULTS.editor, editorInput);
+  if (!hasOwnValue(gameInput, "shadow")) delete gameSource.shadow;
+  if (!hasOwnValue(editorInput, "shadow")) delete editorSource.shadow;
   const gamePolicy = resolveModeShadowPolicy(gameSource, "game");
   const editorPolicy = resolveModeShadowPolicy(editorSource, "editor");
   const buildShadowReadModel = function (policy) {
@@ -1195,6 +1263,45 @@ function applyChunkLoadingZOffset(point, policy, mode) {
 
 export function resolveChunkPolicy(worldData, mode = "editor") {
   const modeName = mode === "game" ? "game" : "editor";
+  if (minimapBakeChunkOverride === true && modeName === "editor") {
+    const defaults = CHUNK_POLICY_DEFAULTS.editor;
+    const fallbackSize = chunkSizeForPolicy(defaults);
+    return {
+      mode: modeName,
+      source: "minimap-bake-disabled",
+      policyId: null,
+      type: modeName,
+      enabled: false,
+      chunkProfileId: defaults.chunkProfileId,
+      chunkWidth: defaults.chunkWidth,
+      chunkDepth: defaults.chunkDepth,
+      tileSize: defaults.tileSize,
+      chunkWorldWidth: fallbackSize.width,
+      chunkWorldDepth: fallbackSize.depth,
+      activeRadiusChunks: defaults.activeRadiusChunks,
+      preloadMarginChunks: defaults.preloadMarginChunks,
+      unloadMarginChunks: defaults.unloadMarginChunks,
+      preloadRadiusChunks: defaults.activeRadiusChunks + defaults.preloadMarginChunks,
+      loadedRadiusChunks: defaults.activeRadiusChunks + Math.max(defaults.preloadMarginChunks, defaults.unloadMarginChunks),
+      maxLoadedChunks: defaults.maxLoadedChunks,
+      debugOverlay: false,
+      residentEntityBudget: defaults.residentEntityBudget,
+      residentObjectBudget: defaults.residentObjectBudget,
+      residentScatterInstanceBudget: defaults.residentScatterInstanceBudget,
+      residentChunkBuildBudgetPerFrame: defaults.residentChunkBuildBudgetPerFrame,
+      groundChunkingEnabled: false,
+      pathWaterSurfaceChunkingEnabled: false,
+      terrainVisualChunkingEnabled: false,
+      showChunkGrid: false,
+      showChunkLabels: false,
+      keepSelectedChunkLoaded: false,
+      cameraOnly: defaults.cameraOnly,
+      cameraOffsetZChunks: defaults.cameraOffsetZChunks,
+      fixedCameraPaddingTiles: defaults.fixedCameraPaddingTiles,
+      fixedCameraPaddingChunks: 0,
+      strictUnloadOutsideCamera: defaults.strictUnloadOutsideCamera
+    };
+  }
   const policy = modeName === "game"
     ? worldData?.chunkLoading?.game || null
     : worldData?.chunkLoading?.editor || null;
@@ -1819,7 +1926,7 @@ function scanSceneRootsForGhostPlanes(options = {}) {
 }
 
 export function resolveWorldContentCenter(worldData, options = {}) {
-  const groundBounds = effectiveGroundBounds(worldData?.ground);
+  const groundBounds = effectiveWorldGroundBounds(worldData);
   if (groundBounds) {
     return {
       x: round((groundBounds.minX + groundBounds.maxX) / 2),
@@ -1878,8 +1985,30 @@ export function resolveEditorShadowFocus(options = {}) {
   const snapWorldUnits = Math.max(1, num(options.snapWorldUnits, 10));
   const previousRawFocus = options.previous?.rawFocus || options.previous?.focus || options.previous?.snappedFocus || null;
   const selectionJumpThreshold = Math.max(1, snapWorldUnits * 1.5);
+  const focusMode = String(options.focusMode || "editor_world_center_or_selected").trim() || "editor_world_center_or_selected";
+  const focusFromPosition = function (source, label) {
+    if (!source || !Number.isFinite(Number(source.x)) || !Number.isFinite(Number(source.z))) return null;
+    return {
+      x: round(num(source.x, 0)),
+      y: round(num(source.y, groundY)),
+      z: round(num(source.z, 0)),
+      source: label
+    };
+  };
+  if (focusMode === "editor_camera_target" || focusMode === "camera_target") {
+    const cameraFocus = focusFromPosition(options.camTarget || options.camera?.target || options.camera?.position, "editor_camera_target");
+    if (cameraFocus) return cameraFocus;
+  }
+  if (focusMode === "editor_world_center") {
+    const contentFocus = focusFromPosition(options.contentCenter || (options.worldData ? resolveWorldContentCenter(options.worldData) : null) || options.worldCenter, "contentCenter");
+    if (contentFocus) return contentFocus;
+  }
+  if (focusMode === "spawn") {
+    const spawnFocus = focusFromPosition(options.startPosition, "start");
+    if (spawnFocus) return spawnFocus;
+  }
   const selectedObject = options.selectedObject || null;
-  if (selectedObject && selectedObject.userData?.shadowProxy !== true) {
+  if (focusMode === "editor_world_center_or_selected" && selectedObject && selectedObject.userData?.shadowProxy !== true) {
     const worldPosition = worldVectorSummary(selectedObject, "position");
     const selectedFocus = {
       x: round(worldPosition.x),
@@ -2470,6 +2599,30 @@ function chunkKeysForBounds(bounds, policy) {
   return sortChunkKeys(keys);
 }
 
+function chunkBoundsForKey(key, policy) {
+  const coord = chunkCoordFromKey(key);
+  if (!coord || !policy) return null;
+  const size = chunkSizeForPolicy(policy);
+  const minX = coord.x * size.width;
+  const minZ = coord.z * size.depth;
+  return {
+    minX: minX,
+    maxX: minX + size.width,
+    minZ: minZ,
+    maxZ: minZ + size.depth
+  };
+}
+
+function intersectBounds(left, right) {
+  if (!left || !right) return null;
+  const minX = Math.max(num(left.minX, 0), num(right.minX, 0));
+  const maxX = Math.min(num(left.maxX, 0), num(right.maxX, 0));
+  const minZ = Math.max(num(left.minZ, 0), num(right.minZ, 0));
+  const maxZ = Math.min(num(left.maxZ, 0), num(right.maxZ, 0));
+  if (maxX <= minX || maxZ <= minZ) return null;
+  return { minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ };
+}
+
 export function chunkKeyForSegment(segment, policy) {
   const midpoint = midpointForSegment(segment);
   return midpoint ? chunkKeyForPosition(midpoint.x, midpoint.z, policy) : null;
@@ -2554,20 +2707,32 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
   let currentPoints = [tinySegments[0].start, tinySegments[0].end];
   let currentLength = tinySegments[0].length;
   let currentPieceStart = tinySegments[0].startLength;
+  let segmentStartIndex = 0;
   let pieceIndex = 0;
 
-  function finalizePiece() {
+  // Ribbon strips are built per piece (see buildSurfaceStripGeometry), and its edge
+  // vertices at each end need the true neighboring tangent to miter-join correctly -
+  // otherwise every chunk cut recomputes that shared boundary point from only its own
+  // side, and two independently-guessed offsets at the same world position don't agree,
+  // showing up as gaps/spikes in the geometry and a restarted (non-continuous) texture V
+  // coordinate. So each piece also carries the one real point just outside its own
+  // range on each side, purely as miter context - not part of the piece's own strip.
+  function finalizePiece(segmentEndIndexExclusive) {
     if (!currentPoints || currentPoints.length < 2 || currentLength <= 0) return;
     const midpoint = midpointForSegment(currentPoints);
     const bounds = boundsForPoints(currentPoints, widthMargin);
     const chunkKeyValue = midpoint ? chunkKeyForPosition(midpoint.x, midpoint.z, policy) : null;
     const chunkKeys = bounds ? chunkKeysForBounds(bounds, policy) : [];
+    const prevSegment = segmentStartIndex > 0 ? tinySegments[segmentStartIndex - 1] : null;
+    const nextSegment = segmentEndIndexExclusive < tinySegments.length ? tinySegments[segmentEndIndexExclusive] : null;
     pieces.push({
       id: segmentBaseId + "::" + pieceIndex,
       segmentId: pieceIndex,
       points: currentPoints.map(function (point) {
         return { x: num(point.x, 0), z: num(point.z, 0), y: Number.isFinite(Number(point?.y)) ? num(point.y, 0) : undefined };
       }),
+      prevPoint: prevSegment ? { x: num(prevSegment.start.x, 0), z: num(prevSegment.start.z, 0) } : null,
+      nextPoint: nextSegment ? { x: num(nextSegment.end.x, 0), z: num(nextSegment.end.z, 0) } : null,
       startLength: currentPieceStart,
       endLength: currentPieceStart + currentLength,
       length: currentLength,
@@ -2582,10 +2747,11 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
   for (let index = 1; index < tinySegments.length; index += 1) {
     const segment = tinySegments[index];
     if (currentLength > 0 && currentLength + segment.length > maxSegmentLength + 0.000001 && currentPoints.length >= 2) {
-      finalizePiece();
+      finalizePiece(index);
       currentPoints = [segment.start, segment.end];
       currentLength = segment.length;
       currentPieceStart = segment.startLength;
+      segmentStartIndex = index;
       continue;
     }
     if (!currentPoints.length) {
@@ -2597,7 +2763,7 @@ export function segmentPolylineForChunks(points, policy, options = {}) {
     currentPoints.push(segment.end);
     currentLength += segment.length;
   }
-  finalizePiece();
+  finalizePiece(tinySegments.length);
   return pieces;
 }
 
@@ -2684,6 +2850,74 @@ export function effectiveGroundBounds(ground) {
     width: width,
     depth: depth
   };
+}
+
+export function effectiveWorldGroundBounds(worldData) {
+  const boundsList = [];
+  const mainBounds = effectiveGroundBounds(worldData?.ground || null);
+  if (mainBounds) boundsList.push(mainBounds);
+  const zoneGrounds = Array.isArray(worldData?.zoneGrounds) ? worldData.zoneGrounds : [];
+  for (const ground of zoneGrounds) {
+    const bounds = effectiveGroundBounds(ground);
+    if (bounds) boundsList.push(bounds);
+  }
+  if (!boundsList.length) return null;
+  let minX = boundsList[0].minX;
+  let maxX = boundsList[0].maxX;
+  let minZ = boundsList[0].minZ;
+  let maxZ = boundsList[0].maxZ;
+  for (const bounds of boundsList.slice(1)) {
+    minX = Math.min(minX, bounds.minX);
+    maxX = Math.max(maxX, bounds.maxX);
+    minZ = Math.min(minZ, bounds.minZ);
+    maxZ = Math.max(maxZ, bounds.maxZ);
+  }
+  return {
+    boundsMode: "explicitBounds",
+    minX: minX,
+    maxX: maxX,
+    minZ: minZ,
+    maxZ: maxZ,
+    width: maxX - minX,
+    depth: maxZ - minZ
+  };
+}
+
+function groundIdentityForBounds(ground, bounds, index = 0) {
+  const id = String(ground?.id || ground?.groundId || ground?.zoneRef || ground?.zoneId || "").trim();
+  return [
+    id || "ground_" + index,
+    bounds ? round(bounds.minX) : "",
+    bounds ? round(bounds.maxX) : "",
+    bounds ? round(bounds.minZ) : "",
+    bounds ? round(bounds.maxZ) : ""
+  ].join(":");
+}
+
+function chunkableGroundEntriesForWorld(worldData) {
+  const entries = [];
+  const seen = new Set();
+  function addGround(ground) {
+    if (!ground) return;
+    const bounds = effectiveGroundBounds(ground);
+    if (!bounds) return;
+    const key = groundIdentityForBounds(ground, bounds, entries.length);
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ ground: ground, bounds: bounds, key: key });
+  }
+  addGround(worldData?.ground || null);
+  for (const ground of Array.isArray(worldData?.zoneGrounds) ? worldData.zoneGrounds : []) addGround(ground);
+  return entries;
+}
+
+function worldGroundForCollision(worldData) {
+  const bounds = effectiveWorldGroundBounds(worldData);
+  if (!bounds) return null;
+  return Object.assign({}, bounds, {
+    boundsMode: "explicitBounds",
+    y: num(worldData?.ground?.y, 0)
+  });
 }
 
 function worldGroundBounds(ground) {
@@ -2799,31 +3033,69 @@ export function createGroundChunkState() {
 }
 
 function groundBlueprintForWorld(worldData, runtimeMode) {
-  const ground = worldData?.ground || null;
   const policy = resolveChunkPolicy(worldData, runtimeMode);
+  const groundEntries = chunkableGroundEntriesForWorld(worldData);
+  const ground = worldData?.ground || groundEntries[0]?.ground || null;
   const textureSize = groundTextureWorldSize(ground);
-  const bounds = effectiveGroundBounds(ground);
-  const tiles = bounds ? groundChunkTilesForBounds(ground, policy) : [];
+  const bounds = effectiveWorldGroundBounds(worldData);
+  const tiles = [];
   const tilesByChunkKey = new Map();
-  for (const tile of tiles) {
-    tilesByChunkKey.set(tile.chunkKey, {
-      chunkKey: tile.chunkKey,
-      bounds: {
-        minX: tile.minX,
-        maxX: tile.maxX,
-        minZ: tile.minZ,
-        maxZ: tile.maxZ
-      },
-      textureWorldSizeX: textureSize.x,
-      textureWorldSizeZ: textureSize.z,
-      textureAssetId: ground?.textureAssetId || null,
-      materialColor: ground?.materialColor || "#ffffff",
-      groundId: ground?.id || null
-    });
+  for (const entry of groundEntries) {
+    const entryTextureSize = groundTextureWorldSize(entry.ground);
+    for (const tile of groundChunkTilesForBounds(entry.ground, policy)) {
+      const tileEntry = {
+        chunkKey: tile.chunkKey,
+        bounds: {
+          minX: tile.minX,
+          maxX: tile.maxX,
+          minZ: tile.minZ,
+          maxZ: tile.maxZ
+        },
+        textureWorldSizeX: entryTextureSize.x,
+        textureWorldSizeZ: entryTextureSize.z,
+        textureAssetId: entry.ground?.textureAssetId || null,
+        materialColor: entry.ground?.materialColor || "#ffffff",
+        groundId: entry.ground?.id || entry.ground?.groundId || null,
+        zoneRef: entry.ground?.zoneRef || entry.ground?.zoneId || null,
+        groundKey: entry.key,
+        ground: entry.ground
+      };
+      let chunkBlueprint = tilesByChunkKey.get(tile.chunkKey);
+      if (!chunkBlueprint) {
+        chunkBlueprint = {
+          chunkKey: tile.chunkKey,
+          bounds: {
+            minX: tile.minX,
+            maxX: tile.maxX,
+            minZ: tile.minZ,
+            maxZ: tile.maxZ
+          },
+          entries: [],
+          groundId: tileEntry.groundId,
+          zoneRef: tileEntry.zoneRef
+        };
+        tilesByChunkKey.set(tile.chunkKey, chunkBlueprint);
+        tiles.push(chunkBlueprint);
+      } else {
+        chunkBlueprint.bounds = {
+          minX: Math.min(chunkBlueprint.bounds.minX, tile.minX),
+          maxX: Math.max(chunkBlueprint.bounds.maxX, tile.maxX),
+          minZ: Math.min(chunkBlueprint.bounds.minZ, tile.minZ),
+          maxZ: Math.max(chunkBlueprint.bounds.maxZ, tile.maxZ)
+        };
+      }
+      chunkBlueprint.entries.push(tileEntry);
+      chunkBlueprint.textureWorldSizeX = tileEntry.textureWorldSizeX;
+      chunkBlueprint.textureWorldSizeZ = tileEntry.textureWorldSizeZ;
+      chunkBlueprint.textureAssetId = tileEntry.textureAssetId;
+      chunkBlueprint.materialColor = tileEntry.materialColor;
+      chunkBlueprint.ground = tileEntry.ground;
+    }
   }
   return {
     policy: policy,
     ground: ground,
+    grounds: groundEntries.map(function (entry) { return entry.ground; }),
     bounds: bounds,
     textureSize: textureSize,
     tiles: tiles,
@@ -2832,26 +3104,38 @@ function groundBlueprintForWorld(worldData, runtimeMode) {
 }
 
 export function groundBlueprintSignature(worldData, runtimeMode) {
-  const ground = worldData?.ground || null;
   const policy = resolveChunkPolicy(worldData, runtimeMode);
-  const bounds = effectiveGroundBounds(ground);
+  const bounds = effectiveWorldGroundBounds(worldData);
+  const groundParts = chunkableGroundEntriesForWorld(worldData).map(function (entry) {
+    const ground = entry.ground || {};
+    return [
+      entry.key,
+      ground?.id || "",
+      ground?.groundId || "",
+      ground?.zoneRef || "",
+      ground?.boundsMode || "centerSize",
+      entry.bounds ? round(entry.bounds.minX) : "",
+      entry.bounds ? round(entry.bounds.maxX) : "",
+      entry.bounds ? round(entry.bounds.minZ) : "",
+      entry.bounds ? round(entry.bounds.maxZ) : "",
+      round(num(ground?.y, 0)),
+      String(ground?.materialColor || ""),
+      String(ground?.textureAssetId || ""),
+      round(num(ground?.textureWorldSizeX, 10)),
+      round(num(ground?.textureWorldSizeZ, 10))
+    ].join(",");
+  }).join(";");
   return [
     runtimeMode,
     policy.source || "none",
     policy.policyId || "",
     policy.enabled === true ? 1 : 0,
     policy.groundChunkingEnabled !== false ? 1 : 0,
-    ground?.id || "",
-    ground?.boundsMode || "centerSize",
     bounds ? round(bounds.minX) : "",
     bounds ? round(bounds.maxX) : "",
     bounds ? round(bounds.minZ) : "",
     bounds ? round(bounds.maxZ) : "",
-    round(num(ground?.y, 0)),
-    String(ground?.materialColor || ""),
-    String(ground?.textureAssetId || ""),
-    round(num(ground?.textureWorldSizeX, 10)),
-    round(num(ground?.textureWorldSizeZ, 10))
+    groundParts
   ].join("|");
 }
 
@@ -3922,6 +4206,21 @@ function normalizeWorldPointList(points) {
   return normalized;
 }
 
+function catmullRomKnotDelta(a, b) {
+  // Centripetal parameterization (sqrt of chord length). Unlike uniform Catmull-Rom,
+  // this provably never loops/self-intersects between control points, even when a
+  // dragged point creates unevenly spaced or sharply folded segments.
+  return Math.max(0.0001, Math.sqrt(Math.hypot(b.x - a.x, b.z - a.z)));
+}
+
+function catmullRomBlend(pa, pb, ta, tb, t) {
+  const denom = tb - ta;
+  if (Math.abs(denom) < 0.0001) return { x: pa.x, z: pa.z };
+  const wa = (tb - t) / denom;
+  const wb = (t - ta) / denom;
+  return { x: (pa.x * wa) + (pb.x * wb), z: (pa.z * wa) + (pb.z * wb) };
+}
+
 function smoothPolyline(points, samplesPerSegment) {
   if (!Array.isArray(points) || points.length < 3) return points;
   const samples = Math.max(2, Math.min(12, num(samplesPerSegment, 8)));
@@ -3931,14 +4230,21 @@ function smoothPolyline(points, samplesPerSegment) {
     const p1 = points[i];
     const p2 = points[i + 1];
     const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    const t0 = 0;
+    const t1 = t0 + catmullRomKnotDelta(p0, p1);
+    const t2 = t1 + catmullRomKnotDelta(p1, p2);
+    const t3 = t2 + catmullRomKnotDelta(p2, p3);
+
     for (let s = 0; s < samples; s += 1) {
-      const t = s / samples;
-      const t2 = t * t;
-      const t3 = t2 * t;
-      result.push({
-        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-        z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3)
-      });
+      const t = t1 + ((t2 - t1) * (s / samples));
+      const a1 = catmullRomBlend(p0, p1, t0, t1, t);
+      const a2 = catmullRomBlend(p1, p2, t1, t2, t);
+      const a3 = catmullRomBlend(p2, p3, t2, t3, t);
+      const b1 = catmullRomBlend(a1, a2, t0, t2, t);
+      const b2 = catmullRomBlend(a2, a3, t1, t3, t);
+      const c = catmullRomBlend(b1, b2, t1, t2, t);
+      result.push({ x: c.x, z: c.z });
     }
   }
   result.push(points[points.length - 1]);
@@ -3990,8 +4296,47 @@ function normalizeWalkableCollisionPointList(points, fallbackY = 0) {
   return normalized;
 }
 
-function triangulateWalkableSurface(points) {
-  if (!Array.isArray(points) || points.length < 3) return [];
+function makeCollisionTriangle(a, b, c) {
+  if (!a || !b || !c) return null;
+  return {
+    a: a,
+    b: b,
+    c: c,
+    minX: Math.min(a.x, b.x, c.x),
+    maxX: Math.max(a.x, b.x, c.x),
+    minZ: Math.min(a.z, b.z, c.z),
+    maxZ: Math.max(a.z, b.z, c.z)
+  };
+}
+
+// Walkable surfaces are authored by walking down one edge and back along the other
+// (extrude-point-by-point, closed loop) - so for an even point count, point i on one
+// rail always pairs with point (n-1-i) on the return rail at the same "rung" across the
+// surface. Triangulating rung-to-rung (like a quad strip) matches that authored shape.
+// Generic boundary ear-clipping (triangulateShape) instead picks diagonals purely from
+// the flattened outline with no notion of "which points belong to the same rung", so it
+// can connect a low point on one rail to a high point on a distant rung - producing
+// triangles that don't correspond to any real part of the ramp/bridge and interpolate a
+// bogus up-down-up-down height profile along an otherwise smooth, single-arc surface.
+function triangulateWalkableSurfaceLadder(points) {
+  const n = points.length;
+  if (n < 4 || n % 2 !== 0) return null;
+  const half = n / 2;
+  const triangles = [];
+  for (let i = 0; i < half - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    const c = points[n - 2 - i];
+    const d = points[n - 1 - i];
+    const t1 = makeCollisionTriangle(a, b, c);
+    const t2 = makeCollisionTriangle(a, c, d);
+    if (!t1 || !t2) return null;
+    triangles.push(t1, t2);
+  }
+  return triangles;
+}
+
+function triangulateWalkableSurfaceEarClip(points) {
   const contour = points.map(function (point) {
     return new THREE.Vector2(point.x, point.z);
   });
@@ -4009,21 +4354,17 @@ function triangulateWalkableSurface(points) {
     const bi = Number(triangle[1]);
     const ci = Number(triangle[2]);
     if (!Number.isInteger(ai) || !Number.isInteger(bi) || !Number.isInteger(ci)) continue;
-    const a = points[ai];
-    const b = points[bi];
-    const c = points[ci];
-    if (!a || !b || !c) continue;
-    triangles.push({
-      a: a,
-      b: b,
-      c: c,
-      minX: Math.min(a.x, b.x, c.x),
-      maxX: Math.max(a.x, b.x, c.x),
-      minZ: Math.min(a.z, b.z, c.z),
-      maxZ: Math.max(a.z, b.z, c.z)
-    });
+    const t = makeCollisionTriangle(points[ai], points[bi], points[ci]);
+    if (t) triangles.push(t);
   }
   return triangles;
+}
+
+function triangulateWalkableSurface(points) {
+  if (!Array.isArray(points) || points.length < 3) return [];
+  const ladder = triangulateWalkableSurfaceLadder(points);
+  if (ladder) return ladder;
+  return triangulateWalkableSurfaceEarClip(points);
 }
 
 function barycentricHeightAtXZ(px, pz, triangle) {
@@ -4036,6 +4377,21 @@ function barycentricHeightAtXZ(px, pz, triangle) {
   const wc = 1 - wa - wb;
   if (wa < -COLLISION_EPSILON || wb < -COLLISION_EPSILON || wc < -COLLISION_EPSILON) return null;
   return (a.y * wa) + (b.y * wb) + (c.y * wc);
+}
+
+// Membership must match walkableSurfaceHeightSample's triangle loop exactly, so a point
+// with real triangulated geometry under it is never rejected by the separate contour
+// (even-odd) test below - those two can disagree once a hand-authored polygon is
+// non-simple (self-intersecting), which is normal for complex walkable shapes like
+// bridges with points on both rails.
+function pointInAnyTriangle(px, pz, triangles) {
+  if (!Array.isArray(triangles)) return false;
+  for (const triangle of triangles) {
+    if (px < triangle.minX - COLLISION_EPSILON || px > triangle.maxX + COLLISION_EPSILON) continue;
+    if (pz < triangle.minZ - COLLISION_EPSILON || pz > triangle.maxZ + COLLISION_EPSILON) continue;
+    if (barycentricHeightAtXZ(px, pz, triangle) !== null) return true;
+  }
+  return false;
 }
 
 function pointOnSegment(px, pz, ax, az, bx, bz) {
@@ -4193,7 +4549,7 @@ function normalizeGroundForCollision(ground) {
 
 export function createWalkabilityIndex(worldData) {
   const index = createEmptyWalkabilityIndex();
-  index.ground = normalizeGroundForCollision(worldData?.ground);
+  index.ground = worldGroundForCollision(worldData);
 
   const terrain = worldData?.terrain || {};
   const collision = worldData?.collision || {};
@@ -4204,7 +4560,12 @@ export function createWalkabilityIndex(worldData) {
   for (const surface of surfaces) {
     if (surface?.blocksPlayer !== true) continue;
     const width = Math.max(0, num(surface?.width, 0));
-    const points = normalizeCollisionPointList(surface?.points);
+    const rawPoints = normalizeCollisionPointList(surface?.points);
+    // Mirror the render path (see the surface_layer mesh builder), which runs the raw
+    // path through the same Catmull-Rom smoothing before turning it into a strip -
+    // otherwise the blocker follows the straight point-to-point line while the mesh
+    // the player actually sees follows the curve, and the two disagree on every bend.
+    const points = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
     if (width <= 0 || points.length < 2) continue;
     index.surfaceBlockers.push({
       id: surface?.id || surface?.surfaceId || null,
@@ -4287,6 +4648,7 @@ function findWalkableSurfaceEntry(index, x, z, inflate = 0) {
   const extraRadius = Math.max(0, num(inflate, 0));
   for (const walkable of walkables) {
     if (walkable?.mode === "polygon") {
+      if (pointInAnyTriangle(x, z, walkable.triangles)) return walkable;
       if (extraRadius > COLLISION_EPSILON ? isPolygonBlockedAtRadius(walkable.points, x, z, extraRadius) : pointInPolygon2D(x, z, walkable.points)) {
         return walkable;
       }
@@ -4550,12 +4912,109 @@ function createWorldPlaneGeometry(minX, maxX, minZ, maxZ, y, uvBounds) {
     u1, v1,
     u0, v1
   ]);
+  const normals = new Float32Array([
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0
+  ]);
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  // Winding order 0-2-1 / 0-3-2 (not 0-1-2 / 0-2-3) is what actually faces up given
+  // this vertex layout - the "obvious" winding faces down, which flips lighting and
+  // makes the ground look upside down.
+  geometry.setIndex([0, 2, 1, 0, 3, 2]);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
   return geometry;
+}
+
+function stripEndOffset(from, to, halfWidth) {
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const len = Math.hypot(dx, dz) || 1;
+  return { nx: (-dz / len) * halfWidth, nz: (dx / len) * halfWidth };
+}
+
+function stripFoldDot(prev, curr, next) {
+  const dx1 = curr.x - prev.x;
+  const dz1 = curr.z - prev.z;
+  const l1 = Math.hypot(dx1, dz1) || 1;
+  const dx2 = next.x - curr.x;
+  const dz2 = next.z - curr.z;
+  const l2 = Math.hypot(dx2, dz2) || 1;
+  const n1x = -dz1 / l1;
+  const n1z = dx1 / l1;
+  const n2x = -dz2 / l2;
+  const n2z = dx2 / l2;
+  const mx = n1x + n2x;
+  const mz = n1z + n2z;
+  const mlen = Math.hypot(mx, mz);
+  if (mlen < 0.0001) return -1; // fully reversed
+  return (mx * n1x + mz * n1z) / mlen;
+}
+
+// A shared miter vertex is only safe when it stays within reach of both of its
+// neighboring segments. Two ways that can fail:
+//  - The turn itself is too sharp (roughly >157 degrees): the miter vertex would have
+//    to sit on the far side of one of the two segments - "left" relative to the
+//    incoming one and "right" relative to the outgoing one (or vice versa).
+//  - The turn is only moderate, but one of the adjacent segments is short (closely
+//    spaced points, or a smoothed curve resampled into many small steps): the miter
+//    vertex can still overshoot past that segment's far end even though the angle
+//    alone looks fine.
+// Either way, using the miter vertex flips the winding of whichever triangle relies on
+// it and folds the ribbon over itself right there; clamping its length instead just
+// trades that for a hard pinch to near-zero width (which is what made the strip look
+// like it kept going thick and thin along an ordinary, closely-sampled curve). A bevel
+// (see buildSurfaceStripGeometry) is the only join that stays full-width and
+// non-self-overlapping in both cases.
+function stripFoldIsSharp(prev, curr, next, halfWidth) {
+  const l1 = Math.hypot(curr.x - prev.x, curr.z - prev.z) || 1;
+  const l2 = Math.hypot(next.x - curr.x, next.z - curr.z) || 1;
+  const dot = stripFoldDot(prev, curr, next);
+  if (dot < 0.2) return true;
+  const rawScale = Math.min(halfWidth * 2.5, halfWidth / dot);
+  return rawScale > Math.min(l1, l2);
+}
+
+function stripMiterOffset(prev, curr, next, halfWidth) {
+  // Miter join: average incoming and outgoing normals, scale to keep strip width
+  const dx1 = curr.x - prev.x;
+  const dz1 = curr.z - prev.z;
+  const l1 = Math.hypot(dx1, dz1) || 1;
+  const dx2 = next.x - curr.x;
+  const dz2 = next.z - curr.z;
+  const l2 = Math.hypot(dx2, dz2) || 1;
+  const n1x = -dz1 / l1;
+  const n1z = dx1 / l1;
+  const n2x = -dz2 / l2;
+  const n2z = dx2 / l2;
+  let mx = n1x + n2x;
+  let mz = n1z + n2z;
+  const mlen = Math.hypot(mx, mz);
+  if (mlen < 0.0001) {
+    // Nearly 180-degree bend — use incoming normal
+    return { nx: n1x * halfWidth, nz: n1z * halfWidth };
+  }
+  mx /= mlen;
+  mz /= mlen;
+  const dot = mx * n1x + mz * n1z;
+  if (dot < 0.2) {
+    // Caller should have routed this point through the bevel path instead (see
+    // stripFoldIsSharp). Kept as a safety fallback so this function alone never
+    // produces a self-overlapping vertex.
+    return { nx: n1x * halfWidth, nz: n1z * halfWidth };
+  }
+  // Clamp miter scale to 2.5x to prevent spikes at sharp bends. There's no extra
+  // length-based cap here (there used to be one, to stop a fold next to a short segment
+  // from overshooting past that segment's far end) - now that stripFoldIsSharp routes
+  // every fold sharp enough for that to matter through the bevel path above instead,
+  // adding it back here would just pinch the width on ordinary curves with closely
+  // spaced points (dense point placement, or tight bends), for no safety benefit.
+  const scale = Math.min(halfWidth * 2.5, halfWidth / dot);
+  return { nx: mx * scale, nz: mz * scale };
 }
 
 export function buildSurfaceStripGeometry(points, options) {
@@ -4563,6 +5022,20 @@ export function buildSurfaceStripGeometry(points, options) {
   const y = Number(options?.y || 0);
   const uvScale = Math.max(0.001, Number(options?.uvScale || 1));
   const uvStartLength = Math.max(0, Number(options?.uvStartLength || 0));
+  // When this strip is one piece of a longer path split across chunks, the real point
+  // just outside each end (from the unsplit centerline) lets that boundary vertex use a
+  // proper miter join instead of a naive single-segment perpendicular. Both neighboring
+  // pieces then compute the exact same shared boundary vertex the exact same way, so the
+  // seam between chunks lines up instead of showing a gap or spike. Boundary points
+  // deliberately never use the bevel path below (see the `prev && next` branch) - a
+  // bevel needs both its "incoming" and "outgoing" fan triangles built from the same
+  // vertex buffer, which two independently-built chunk pieces don't share.
+  const prevContext = options?.prevPoint && Number.isFinite(Number(options.prevPoint.x)) && Number.isFinite(Number(options.prevPoint.z))
+    ? { x: Number(options.prevPoint.x), z: Number(options.prevPoint.z) }
+    : null;
+  const nextContext = options?.nextPoint && Number.isFinite(Number(options.nextPoint.x)) && Number.isFinite(Number(options.nextPoint.z))
+    ? { x: Number(options.nextPoint.x), z: Number(options.nextPoint.z) }
+    : null;
 
   if (!Array.isArray(points) || points.length < 2 || halfWidth <= 0) return null;
 
@@ -4576,80 +5049,78 @@ export function buildSurfaceStripGeometry(points, options) {
     arcLengths.push(arcLengths[i - 1] + Math.hypot(dx, dz));
   }
 
-  const positions = new Float32Array(n * 2 * 3);
-  const uvCoords = new Float32Array(n * 2 * 2);
+  const positions = [];
+  const uvCoords = [];
   const indices = [];
 
+  function pushVertex(x, z, u, v) {
+    const index = positions.length / 3;
+    positions.push(x, y, z);
+    uvCoords.push(u, v);
+    return index;
+  }
+
+  // For each point, either one {left,right} vertex pair (straight run, chunk boundary,
+  // or a gentle-enough turn for a miter) or a split {inLeft,inRight,outLeft,outRight}
+  // quad (a sharp interior fold, bridged by its own bevel fan below) - so the strip
+  // never has to pick one ambiguous "shared" offset for two segments pointing in very
+  // different directions.
+  const pointVerts = [];
+
   for (let i = 0; i < n; i++) {
-    let nx, nz; // miter offset vector (left perpendicular * scale)
+    const prev = i === 0 ? prevContext : points[i - 1];
+    const next = i === n - 1 ? nextContext : points[i + 1];
+    const v = (uvStartLength + arcLengths[i]) / uvScale;
+    const isInteriorPoint = i > 0 && i < n - 1;
 
-    if (i === 0) {
-      const dx = points[1].x - points[0].x;
-      const dz = points[1].z - points[0].z;
-      const len = Math.hypot(dx, dz) || 1;
-      nx = (-dz / len) * halfWidth;
-      nz = (dx / len) * halfWidth;
-    } else if (i === n - 1) {
-      const dx = points[n - 1].x - points[n - 2].x;
-      const dz = points[n - 1].z - points[n - 2].z;
-      const len = Math.hypot(dx, dz) || 1;
-      nx = (-dz / len) * halfWidth;
-      nz = (dx / len) * halfWidth;
-    } else {
-      // Miter join: average incoming and outgoing normals, scale to keep strip width
-      const dx1 = points[i].x - points[i - 1].x;
-      const dz1 = points[i].z - points[i - 1].z;
-      const l1 = Math.hypot(dx1, dz1) || 1;
-      const dx2 = points[i + 1].x - points[i].x;
-      const dz2 = points[i + 1].z - points[i].z;
-      const l2 = Math.hypot(dx2, dz2) || 1;
-      const n1x = -dz1 / l1;
-      const n1z = dx1 / l1;
-      const n2x = -dz2 / l2;
-      const n2z = dx2 / l2;
-      let mx = n1x + n2x;
-      let mz = n1z + n2z;
-      const mlen = Math.hypot(mx, mz);
-      if (mlen < 0.0001) {
-        // Nearly 180-degree bend — use incoming normal
-        nx = n1x * halfWidth;
-        nz = n1z * halfWidth;
-      } else {
-        mx /= mlen;
-        mz /= mlen;
-        const dot = mx * n1x + mz * n1z;
-        // Clamp miter scale to 2.5x to prevent spikes at sharp bends (bevel-like)
-        const scale = Math.min(halfWidth * 2.5, Math.abs(dot) > 0.0001 ? halfWidth / dot : halfWidth * 2.5);
-        nx = mx * scale;
-        nz = mz * scale;
-      }
+    if (prev && next && isInteriorPoint && stripFoldIsSharp(prev, points[i], next, halfWidth)) {
+      const inOffset = stripEndOffset(prev, points[i], halfWidth);
+      const outOffset = stripEndOffset(points[i], next, halfWidth);
+      const inLeft = pushVertex(points[i].x + inOffset.nx, points[i].z + inOffset.nz, 0, v);
+      const inRight = pushVertex(points[i].x - inOffset.nx, points[i].z - inOffset.nz, 1, v);
+      const outLeft = pushVertex(points[i].x + outOffset.nx, points[i].z + outOffset.nz, 0, v);
+      const outRight = pushVertex(points[i].x - outOffset.nx, points[i].z - outOffset.nz, 1, v);
+      pointVerts.push({ split: true, inLeft: inLeft, inRight: inRight, outLeft: outLeft, outRight: outRight });
+      continue;
     }
 
-    const base = i * 2;
+    let offset;
+    if (prev && next) offset = stripMiterOffset(prev, points[i], next, halfWidth);
+    else if (next) offset = stripEndOffset(points[i], next, halfWidth);
+    else offset = stripEndOffset(prev, points[i], halfWidth);
 
-    // Left vertex — U=0
-    positions[base * 3] = points[i].x + nx;
-    positions[base * 3 + 1] = y;
-    positions[base * 3 + 2] = points[i].z + nz;
-    uvCoords[base * 2] = 0;
-    uvCoords[base * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
+    const left = pushVertex(points[i].x + offset.nx, points[i].z + offset.nz, 0, v);
+    const right = pushVertex(points[i].x - offset.nx, points[i].z - offset.nz, 1, v);
+    pointVerts.push({ split: false, left: left, right: right });
+  }
 
-    // Right vertex — U=1
-    positions[(base + 1) * 3] = points[i].x - nx;
-    positions[(base + 1) * 3 + 1] = y;
-    positions[(base + 1) * 3 + 2] = points[i].z - nz;
-    uvCoords[(base + 1) * 2] = 1;
-    uvCoords[(base + 1) * 2 + 1] = (uvStartLength + arcLengths[i]) / uvScale;
+  for (let i = 0; i < n - 1; i++) {
+    const a = pointVerts[i];
+    const b = pointVerts[i + 1];
+    const aLeft = a.split ? a.outLeft : a.left;
+    const aRight = a.split ? a.outRight : a.right;
+    const bLeft = b.split ? b.inLeft : b.left;
+    const bRight = b.split ? b.inRight : b.right;
+    indices.push(aLeft, bLeft, aRight);
+    indices.push(aRight, bLeft, bRight);
+  }
 
-    if (i < n - 1) {
-      indices.push(base, base + 2, base + 1);
-      indices.push(base + 1, base + 2, base + 3);
-    }
+  // Bevel fan: closes the wedge a split point leaves open on the outside of the turn,
+  // through a single unoffset vertex right on the centerline. The inside of the turn
+  // gets a harmless, slightly overlapping sliver instead of a gap - normal for a strip
+  // this width making that sharp a turn, and much less visible than a hole or a flip.
+  for (let i = 0; i < n; i++) {
+    const point = pointVerts[i];
+    if (!point.split) continue;
+    const v = (uvStartLength + arcLengths[i]) / uvScale;
+    const center = pushVertex(points[i].x, points[i].z, 0.5, v);
+    indices.push(point.inLeft, center, point.outLeft);
+    indices.push(point.inRight, center, point.outRight);
   }
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvCoords, 2));
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvCoords), 2));
   geometry.setIndex(indices);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
@@ -4792,7 +5263,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   renderer.toneMappingExposure = 1;
   renderer.info.autoReset = true;
   renderer.shadowMap.enabled = shadowPolicy.enabled;
-  renderer.shadowMap.type = shadowPolicy.mapType || THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = shadowPolicy.mapType || THREE.PCFShadowMap;
   const rendererProfile = detectRendererProfile(renderer);
   if (rendererProfile.software === true) {
     renderer.shadowMap.enabled = false;
@@ -4821,6 +5292,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let worldBuildGeneration = 0;
   let orbitControls = null;
   let selectionHelper = null;
+  let multiSelectionHelpers = [];
   let transformGuide = null;
   let terrainEditorOverlay = null;
   let terrainEditorOverlayState = null;
@@ -4896,9 +5368,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let surfaceAnimMaterials = [];
   let surfaceDefaultWhiteTex = null;
   let selectedEntityId = null;
+  let selectedEntityIds = new Set();
   let selectedRoot = null;
   let transformSession = null;
   let onSelectEntity = options.onSelectEntity || function () {};
+  let onSelectEntities = options.onSelectEntities || function () {};
+  let onMarqueeRect = options.onMarqueeRect || function () {};
+  let onMarqueeSelect = options.onMarqueeSelect || function () {};
   let onTransformCommit = options.onTransformCommit || function () {};
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
@@ -4909,8 +5385,21 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let editorPointerDownHandler = null;
   let editorPointerDownCaptureHandler = null;
   let editorPointerUpCaptureHandler = null;
+  let editorTouchPointers = new Map();
+  const TOUCH_ENTITY_MOVE_HOLD_MS = 500;
+  // A toolbar Move/Rotate/Scale button press on touch has no driving gesture yet - the
+  // transform used to start right on click, before any touch existed for it to react to.
+  // That's structurally different from the entity-hold-to-move gesture below, where
+  // beginTransform() only ever runs at the exact instant a touch is already in progress,
+  // which is why that flow doesn't suffer the native long-press interference seen here.
+  // Arming a pending mode and only calling beginTransform() from the next real canvas
+  // touchdown (see editorPointerDownCaptureHandler) gives button-triggered transforms the
+  // same timing shape instead.
+  let pendingTouchTransformMode = null;
+  let editorTouchSuppressHandler = null;
   let editorContextMenuHandler = null;
   let editorAuxClickHandler = null;
+  let editorClickHandler = null;
   let editorKeyDownHandler = null;
   let editorKeyUpHandler = null;
   let editorWindowBlurHandler = null;
@@ -4920,7 +5409,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let editorDirectMouseUpHandler = null;
   let lastEditorPointer = null;
   let viewportPanSession = null;
+  let viewportTouchPointers = new Map();
+  let viewportTouchZoomSession = null;
+  let viewportTouchSuppressSingleOrbit = false;
   let viewportOrbitFallbackActive = false;
+  const viewportTouchZoomMinDistancePx = 24;
+  const viewportTouchZoomDeltaPx = 12;
+  const viewportTouchZoomStepPx = 3;
   let gamePointerDownHandler = null;
   let gameKeyDownHandler = null;
   let gameKeyUpHandler = null;
@@ -5005,6 +5500,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let camFollow = true;
   let camTargetHeightOffset = 1.6;
   let camRotateSpeed = 90;
+  let editorCameraSaveTimer = null;
   const camTarget = new THREE.Vector3();
   const playerCameraTargetCache = new THREE.Vector3();
   let clickTarget = null;
@@ -5055,6 +5551,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     lastResolveMs: 0
   };
   let chunkDebugOverlay = null;
+  let chunkFrameDebugSignature = "";
   let overlayDiagnosticsState = {
     debugOverlayEnabled: false,
     chunkDebugOverlayVisible: false,
@@ -5201,7 +5698,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   function applyRendererShadowPolicy(policy) {
     const enabled = Boolean(policy?.enabled);
     renderer.shadowMap.enabled = enabled;
-    renderer.shadowMap.type = policy?.mapType || THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = policy?.mapType || THREE.PCFShadowMap;
     return enabled;
   }
 
@@ -5261,6 +5758,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     directional.shadow.camera.right = policy.cameraSize;
     directional.shadow.camera.top = policy.cameraSize;
     directional.shadow.camera.bottom = -policy.cameraSize;
+    directional.shadow.camera.near = policy.cameraNear;
     directional.shadow.camera.far = policy.cameraFar;
     if (directional.shadow.camera && typeof directional.shadow.camera.updateProjectionMatrix === "function") {
       directional.shadow.camera.updateProjectionMatrix();
@@ -5777,6 +6275,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
       nextResidentState.residentObject3DCount = runtimeStats.sceneObjects;
       nextResidentState.residentWorldItemCount = 0;
       nextResidentState.budgetClipped = false;
+      nextResidentState.pendingBuildBlockedByBudget = false;
+      nextResidentState.pendingBuildDrainable = false;
       nextResidentState.lastSyncReason = reason || "disabled";
       nextResidentState.lastSyncMs = round(performance.now() - startedAt);
       return nextResidentState;
@@ -5840,10 +6340,13 @@ export function createGkWorldRuntime(canvas, options = {}) {
     });
     nextResidentState.enteringChunkKeys = orderedPending.slice();
     const mustBuildSet = new Set(activeChunkKeys.concat(visibleChunkKeys));
+    const enforceEditorResidentBudget = mode === "editor"
+      && contentBlueprintIndex.blueprintScatterInstanceCount > nextResidentState.residentScatterInstanceBudget;
     const builtChunkKeys = [];
     const remainingQueue = [];
     let buildBudget = nextResidentState.residentChunkBuildBudgetPerFrame;
     let stopBudgetedBuilds = false;
+    let pendingBlockedByBudget = false;
     const attemptBuild = function (chunkKey) {
       const chunkCounts = summarizeResidentBlueprintCounts([chunkKey]);
       const projectedEntityCount = nextResidentState.loadedEntityCount + chunkCounts.entityCount;
@@ -5870,6 +6373,16 @@ export function createGkWorldRuntime(canvas, options = {}) {
         // Active/visible chunks are never left pending: the player or camera is looking at them
         // right now, so they build immediately even if that means briefly exceeding the soft
         // resident budget. Only the exceedance gets flagged; the chunk still gets built.
+        const chunkCounts = summarizeResidentBlueprintCounts([chunkKey]);
+        const wouldExceedEditorBudget = enforceEditorResidentBudget
+          && builtChunkKeys.length > 0
+          && nextResidentState.loadedScatterInstanceCount + chunkCounts.scatterCount > nextResidentState.residentScatterInstanceBudget;
+        if (wouldExceedEditorBudget) {
+          nextResidentState.budgetClipped = true;
+          pendingBlockedByBudget = true;
+          remainingQueue.push(chunkKey);
+          continue;
+        }
         if (attemptBuild(chunkKey)) nextResidentState.budgetClipped = true;
         continue;
       }
@@ -5882,6 +6395,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
         || nextResidentState.loadedScatterInstanceCount + chunkCounts.scatterCount > nextResidentState.residentScatterInstanceBudget;
       if (wouldExceedBudget) {
         nextResidentState.budgetClipped = true;
+        pendingBlockedByBudget = true;
         stopBudgetedBuilds = true;
         remainingQueue.push(chunkKey);
         continue;
@@ -5890,7 +6404,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
       buildBudget -= 1;
     }
     nextResidentState.pendingChunkKeys = remainingQueue;
-    nextResidentState.budgetClipped = Boolean(nextResidentState.pendingChunkKeys.length);
+    nextResidentState.pendingBuildBlockedByBudget = pendingBlockedByBudget;
+    nextResidentState.pendingBuildDrainable = nextResidentState.pendingChunkKeys.length > 0 && !pendingBlockedByBudget;
+    nextResidentState.budgetClipped = pendingBlockedByBudget;
     const loadedChunkKeys = Array.from(residentSet);
     const residentCounts = summarizeResidentBlueprintCounts(loadedChunkKeys);
     nextResidentState.loadedEntityCount = residentCounts.entityCount;
@@ -5928,6 +6444,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const policy = resolveChunkPolicy(world, mode);
     if (!isChunkCullingRuntimeEnabled(policy)) return;
     if (!residentContentState.pendingChunkKeys.length) return;
+    if (residentContentState.pendingBuildBlockedByBudget === true) return;
     const pseudoWindowState = {
       centerChunk: chunkRuntimeState.centerChunk,
       loadedChunkKeys: chunkRuntimeState.loadedChunkKeys,
@@ -6012,6 +6529,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
       lastSyncMs: residentContentState.lastSyncMs || 0,
       eagerBuildDisabled: Boolean(residentContentState.eagerBuildDisabled),
       budgetClipped: Boolean(residentContentState.budgetClipped),
+      pendingBuildBlockedByBudget: Boolean(residentContentState.pendingBuildBlockedByBudget),
+      pendingBuildDrainable: Boolean(residentContentState.pendingBuildDrainable),
       residentEntityBudget: residentContentState.residentEntityBudget || 0,
       residentObjectBudget: residentContentState.residentObjectBudget || 0,
       residentScatterInstanceBudget: residentContentState.residentScatterInstanceBudget || 0,
@@ -6791,10 +7310,13 @@ function resolveChunkDebugCenter(policy) {
       : "";
     const shouldAllowHeavySync = options.allowHeavy !== false;
     chunkSyncStats.syncCalls += 1;
-    if (mode === "editor" || debugHelpersVisibleInCurrentMode()) {
+    const shouldAuditRuntimeGroups = reason !== "frame" || options.force === true;
+    if (shouldAuditRuntimeGroups && (mode === "editor" || debugHelpersVisibleInCurrentMode())) {
       removeDuplicateRuntimeGroups();
     }
-    const hasPendingResidentWork = isChunkCullingRuntimeEnabled(policy) && residentContentState.pendingChunkKeys.length > 0;
+    const hasPendingResidentWork = isChunkCullingRuntimeEnabled(policy)
+      && residentContentState.pendingChunkKeys.length > 0
+      && residentContentState.pendingBuildBlockedByBudget !== true;
     const hasPendingResidencyWork = isChunkCullingRuntimeEnabled(policy) && hasPendingObjectResidencyWork();
     const coverage = streamingCoverageForCenter(centerPosition, policy);
     const renderSignature = buildChunkDebugSignature(
@@ -6859,12 +7381,14 @@ function resolveChunkDebugCenter(policy) {
     };
     if (stableSignature === chunkDebugSignature && chunkDebugStateCache && !hasPendingResidencyWork) {
       chunkSyncStats.skippedSyncCalls += 1;
+      chunkFrameDebugSignature = renderSignature;
       updateCacheShadowFields(chunkDebugStateCache);
       if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
       return chunkDebugStateCache;
     }
     if (!shouldAllowHeavySync && chunkDebugStateCache && !hasPendingResidencyWork) {
       chunkSyncStats.skippedSyncCalls += 1;
+      chunkFrameDebugSignature = renderSignature;
       updateCacheShadowFields(chunkDebugStateCache);
       if (hasPendingResidentWork) drainPendingResidentChunkBuilds(reason);
       return chunkDebugStateCache;
@@ -7027,6 +7551,7 @@ function resolveChunkDebugCenter(policy) {
     if (needsHeavySync || !chunkDebugStateCache) {
       chunkDebugStateCache = nextState;
       chunkDebugSignature = stableSignature;
+      chunkFrameDebugSignature = renderSignature;
       updateCacheShadowFields(chunkDebugStateCache);
     }
     if (needsHeavySync) {
@@ -7073,6 +7598,10 @@ function resolveChunkDebugCenter(policy) {
 
   function currentShadowPolicy() {
     return shadowPolicy;
+  }
+
+  function liveEditorCameraTarget() {
+    return mode === "editor" && orbitControls?.target ? orbitControls.target : camTarget;
   }
 
   function createStableSunShadowController(options = {}) {
@@ -7172,14 +7701,23 @@ function resolveChunkDebugCenter(policy) {
       const basePosition = entry.basePosition || light.userData?.shadowBasePosition || new THREE.Vector3(light.position.x, light.position.y, light.position.z);
       const baseTarget = entry.baseTarget || light.userData?.shadowBaseTarget || new THREE.Vector3(0, 0, 0);
       const focusX = num(focus?.snappedFocus?.x, 0);
+      const focusY = num(focus?.snappedFocus?.y, 0);
       const focusZ = num(focus?.snappedFocus?.z, 0);
+      const direction = entry.direction instanceof THREE.Vector3
+        ? entry.direction.clone()
+        : basePosition.clone().sub(baseTarget);
+      if (direction.lengthSq() <= 0.000001) direction.set(0.35, 1, 0.2);
+      direction.normalize();
+      const depthDistance = Math.max(nearDistance + 0.1, (nearDistance + farDistance) * 0.5);
+      const shadowTarget = new THREE.Vector3(baseTarget.x + focusX, baseTarget.y + focusY, baseTarget.z + focusZ);
+      const shadowPosition = shadowTarget.clone().addScaledVector(direction, depthDistance);
       if (!light.userData) light.userData = {};
       light.userData.shadowBasePosition = basePosition.clone();
       light.userData.shadowBaseTarget = baseTarget.clone();
       light.castShadow = enabled;
-      light.position.set(basePosition.x + focusX, basePosition.y, basePosition.z + focusZ);
+      light.position.copy(shadowPosition);
       if (light.target) {
-        light.target.position.set(baseTarget.x + focusX, baseTarget.y, baseTarget.z + focusZ);
+        light.target.position.copy(shadowTarget);
         if (!light.target.parent) controllerScene.add(light.target);
         light.target.updateMatrixWorld(true);
       }
@@ -7334,16 +7872,30 @@ function resolveChunkDebugCenter(policy) {
           pushUniqueWarning(warnings, "Shadow map size " + clampedShadowMapSize + " clamped to renderer maxTextureSize " + maxTextureSize + ".");
           clampedShadowMapSize = maxTextureSize;
         }
+        const editorCameraTarget = liveEditorCameraTarget();
+        const bakeShadowFocus = controllerMode === "editor" && minimapBakeShadowFocusOverride
+          ? minimapBakeShadowFocusOverride
+          : null;
         const focus = controllerMode === "editor"
           ? resolveStableShadowFocus({
             mode: controllerMode,
             policy: policy,
-            groundY: num(world?.ground?.y, 0),
-            focus: resolveEditorShadowFocus({
+            groundY: bakeShadowFocus ? num(bakeShadowFocus.y, 0) : num(world?.ground?.y, 0),
+            focus: bakeShadowFocus || resolveEditorShadowFocus({
               selectedObject: selectedObjectRoot(),
               worldData: world,
               worldCenter: resolveWorldContentCenter(world),
               groundY: num(world?.ground?.y, 0),
+              focusMode: policy?.focusMode,
+              camera: {
+                target: editorCameraTarget,
+                position: controllerCamera?.position || null
+              },
+              camTarget: {
+                x: num(editorCameraTarget.x, 0),
+                y: num(editorCameraTarget.y, 0),
+                z: num(editorCameraTarget.z, 0)
+              },
               player: {
                 x: num(player.pos.x, 0),
                 y: num(player.pos.y, 0),
@@ -7357,7 +7909,8 @@ function resolveChunkDebugCenter(policy) {
               previous: state.signature ? state : null,
               snapWorldUnits: policy?.snapWorldUnits || shadowSnapWorldUnitsForPolicy(policy, controllerMode)
             }),
-            previous: state.signature ? state : null,
+            focusMode: policy?.focusMode,
+            previous: bakeShadowFocus ? null : (state.signature ? state : null),
             snapWorldUnits: policy?.snapWorldUnits || shadowSnapWorldUnitsForPolicy(policy, controllerMode)
           })
           : resolveStableShadowFocus({
@@ -7729,8 +8282,9 @@ function resolveChunkDebugCenter(policy) {
   function staticPropShadowOptions() {
     const policy = currentShadowPolicy();
     const shadowEnabled = policy.enabled === true;
+    const multiZoneWorld = Array.isArray(world?.zoneGrounds) && world.zoneGrounds.length > 1;
     return {
-      castShadow: shadowEnabled && policy.staticPropsCast === true,
+      castShadow: shadowEnabled && (policy.staticPropsCast === true || (mode === "game" && multiZoneWorld)),
       receiveShadow: shadowEnabled && policy.staticPropsReceive !== false
     };
   }
@@ -7798,12 +8352,23 @@ function resolveChunkDebugCenter(policy) {
       };
     }
     const policy = resolveChunkPolicy(world, mode);
+    const editorCameraTarget = liveEditorCameraTarget();
     const editorFocus = mode === "editor"
       ? resolveEditorShadowFocus({
         selectedObject: selectedObjectRoot(),
         worldData: world,
         worldCenter: resolveWorldContentCenter(world),
         groundY: num(world?.ground?.y, 0),
+        focusMode: policy?.focusMode,
+        camera: {
+          target: editorCameraTarget,
+          position: camera?.position || null
+        },
+        camTarget: {
+          x: num(editorCameraTarget.x, 0),
+          y: num(editorCameraTarget.y, 0),
+          z: num(editorCameraTarget.z, 0)
+        },
         player: {
           x: num(player.pos.x, 0),
           y: num(player.pos.y, 0),
@@ -7820,8 +8385,9 @@ function resolveChunkDebugCenter(policy) {
       mode: mode,
       policy: policy,
       focus: editorFocus || undefined,
+      focusMode: policy?.focusMode,
       camera: {
-        target: camTarget,
+        target: mode === "editor" ? editorCameraTarget : camTarget,
         position: camera?.position || null
       },
       player: {
@@ -7830,9 +8396,9 @@ function resolveChunkDebugCenter(policy) {
         z: num(player.pos.z, 0)
       },
       camTarget: {
-        x: num(camTarget.x, 0),
-        y: num(camTarget.y, 0),
-        z: num(camTarget.z, 0)
+        x: num((mode === "editor" ? editorCameraTarget : camTarget).x, 0),
+        y: num((mode === "editor" ? editorCameraTarget : camTarget).y, 0),
+        z: num((mode === "editor" ? editorCameraTarget : camTarget).z, 0)
       },
       previous: shadowAnchorState,
       snapWorldUnits: shadowSnapWorldUnitsForPolicy(policy, mode)
@@ -7886,20 +8452,25 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function shouldBatchScatterProps() {
-    return mode === "game" && activeModePerformance().batchScatterProps !== false;
+    return activeModePerformance().batchScatterProps !== false;
   }
 
   if (mode === "editor") {
     orbitControls = new OrbitControls(camera, canvas);
     orbitControls.zoomSpeed = 6.0; 
+    orbitControls.enablePan = true;
     orbitControls.enableDamping = false;
     orbitControls.dampingFactor = 0.08;
     orbitControls.screenSpacePanning = true;
     orbitControls.minPolarAngle = 0.001;
     orbitControls.maxPolarAngle = Math.PI - 0.001;
     updateOrbitMouseMapping();
+    orbitControls.touches.ONE = THREE.TOUCH.ROTATE;
+    orbitControls.touches.TWO = null;
     orbitControls.enableKeys = false;
     orbitControls.addEventListener("change", requestRender);
+    orbitControls.addEventListener("change", scheduleEditorCameraSave);
+    orbitControls.addEventListener("end", flushEditorCameraSave);
     selectionHelper = new THREE.BoxHelper(new THREE.Object3D(), 0x7bd4ff);
     selectionHelper.visible = false;
     selectionHelper.material.depthTest = false;
@@ -7923,8 +8494,29 @@ function resolveChunkDebugCenter(policy) {
     scene.add(scatterEditorOverlay);
     editorPointerDownCaptureHandler = function (event) {
       if (!orbitControls) return;
+      // preventDefault() below (needed to suppress native touch gestures) also suppresses
+      // the browser's own default "tapping elsewhere blurs the focused input" behavior, so
+      // a numeric field left focused from an earlier edit can stay focused indefinitely.
+      // While that's the case, every keydown - including Escape/Delete - targets that input
+      // and gets silently swallowed by isEditableTarget() in editor.js, instead of reaching
+      // the viewport shortcut handling. A genuine viewport touch/click always means the
+      // user's attention has moved on, so blur it explicitly here.
+      const active = document.activeElement;
+      if (active && active !== document.body && typeof active.blur === "function") {
+        const tag = String(active.tagName || "").toUpperCase();
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") active.blur();
+      }
       rememberEditorPointer(event);
+      updateViewportTouchZoomSession(event);
       if (viewportPanSession && event.pointerId === viewportPanSession.pointerId) return;
+      if (!transformSession && pendingTouchTransformMode && event.pointerType === "touch") {
+        const mode = pendingTouchTransformMode;
+        pendingTouchTransformMode = null;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        beginTransform(mode);
+        return;
+      }
       if (transformSession) {
         if (event.button === 2) {
           event.preventDefault();
@@ -7934,9 +8526,31 @@ function resolveChunkDebugCenter(policy) {
         }
         event.preventDefault();
         event.stopImmediatePropagation();
+        // Touch has no keyboard fallback (no Escape/Enter) to get out of a stuck
+        // transform, so a new touch elsewhere must reliably confirm it in place -
+        // otherwise there would be no way at all to escape it on a touch-only device.
+        // BUT: a transform started from a toolbar button (Move/Rot/Scale) has no driving
+        // touch yet - its very first canvas touchdown IS the drag starting, not an escape
+        // tap, so only treat this as "confirm elsewhere" once the transform has actually
+        // received at least one real preview update from some touch.
+        if (event.pointerType === "touch" && (transformDebugState.previews || 0) > 0) {
+          confirmTransform();
+          return;
+        }
+        // Claim the pointer explicitly for this drag-starting touch. Without this,
+        // some browsers still run their own long-press/context-menu gesture
+        // recognizer on top of a plain preventDefault()'d pointerdown, and fire a
+        // pointercancel ~500ms in even while the finger keeps moving - which
+        // handleTransformPointerUp below would otherwise read as a real release
+        // and confirm the rotate/scale prematurely, right as the drag was starting.
+        if (event.pointerType === "touch" && typeof canvas.setPointerCapture === "function" && event.pointerId !== undefined) {
+          try { canvas.setPointerCapture(event.pointerId); } catch {}
+        }
         return;
       }
-      if (event.button === 0 && event.shiftKey && !transformState.active) {
+      // Shift+LMB used to pan here too, but the left button is now fully dedicated to
+      // selection (click/marquee, see editorPointerDownHandler) - RMB remains the pan trigger.
+      if (event.button === 2 && !transformState.active) {
         if (beginViewportPan(event)) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -7967,12 +8581,38 @@ function resolveChunkDebugCenter(policy) {
     editorContextMenuHandler = function (event) {
       event.preventDefault();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-      if (transformSession) cancelTransform();
+      // Right-click-to-cancel a transform is already fully handled on the originating
+      // mouse pointerdown itself (button === 2, see editorPointerDownCaptureHandler),
+      // which fires - and preventDefault()s - before this contextmenu would even occur,
+      // so a genuine desktop right-click never actually reaches here while a transform is
+      // active. This handler's only remaining job is suppressing the native menu itself;
+      // it must never also cancel a transform, since on some mobile browsers a native
+      // long-press can still fire a stray contextmenu mid-hold or on a toolbar-button-
+      // started Move/Rotate/Scale's very first driving touch, and no "was this already
+      // dragged" signal has proven reliable enough to tell that apart in both directions
+      // without breaking one of the two flows.
     };
     editorAuxClickHandler = function (event) {
       if (event.button !== 1) return;
       event.preventDefault();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    };
+    // Robust fallback deselect: the browser's own synthesized "click" event already
+    // knows how to tell a genuine tap/click apart from a drag (it only fires when
+    // pointerdown/pointerup landed on the same element without a real drag in between),
+    // so this doesn't depend on any of the custom pointerdown/move/up bookkeeping above.
+    // If a transform is active this tap is what confirms/positions it, not a deselect.
+    editorClickHandler = function (event) {
+      if (transformSession || event.altKey) return;
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+      // The native "click" that ends a drag-to-place fires just after the transform
+      // already confirmed (transformSession is null again by then) - if that release
+      // happens to land a pixel or two off the model's actual raycast geometry, don't
+      // let this same click immediately deselect the thing that was just placed.
+      if (Date.now() - (transformDebugState.lastInputAt || 0) < 300) return;
+      if (pickEntity(event)) return;
+      selectEntities([]);
+      onSelectEntity(null);
     };
     editorKeyDownHandler = function (event) {
       if (event.key === "Control" || event.key === "Meta") {
@@ -8005,10 +8645,26 @@ function resolveChunkDebugCenter(policy) {
     editorWindowBlurHandler = function () {
       flyCameraKeys.clear();
       modifierState.shiftKey = false;
+      viewportTouchPointers.clear();
+      viewportTouchZoomSession = null;
+      viewportTouchSuppressSingleOrbit = false;
+      pendingTouchTransformMode = null;
     };
     canvas.addEventListener("pointerdown", editorPointerDownCaptureHandler, true);
+    // Pointer Events are a translation layer sitting on top of the browser's own raw
+    // touch gesture recognizer (long-press-to-context-menu/text-callout, ...), most
+    // aggressively on WebKit - preventDefault() on the translated pointerdown does not
+    // reliably reach down far enough to disable that recognizer, which is how a native
+    // long-press could still fire mid-drag despite every pointer-event-level mitigation
+    // elsewhere in this file. Hooking the raw touch events directly and unconditionally
+    // preventing their default is what actually disables it at the source.
+    editorTouchSuppressHandler = function (event) { event.preventDefault(); };
+    canvas.addEventListener("touchstart", editorTouchSuppressHandler, { passive: false });
+    canvas.addEventListener("touchmove", editorTouchSuppressHandler, { passive: false });
+    canvas.addEventListener("touchend", editorTouchSuppressHandler, { passive: false });
     canvas.addEventListener("contextmenu", editorContextMenuHandler);
     canvas.addEventListener("auxclick", editorAuxClickHandler);
+    canvas.addEventListener("click", editorClickHandler);
     window.addEventListener("keydown", editorKeyDownHandler);
     window.addEventListener("keyup", editorKeyUpHandler);
     window.addEventListener("blur", editorWindowBlurHandler);
@@ -8028,6 +8684,7 @@ function resolveChunkDebugCenter(policy) {
     window.addEventListener("mouseup", editorDirectMouseUpHandler, true);
     editorPointerUpCaptureHandler = function (event) {
       rememberEditorPointer(event);
+      removeViewportTouchZoomPointer(event.pointerId);
       if (viewportPanSession && event.pointerId === viewportPanSession.pointerId) {
         handleViewportPanUp(event);
         event.preventDefault();
@@ -8045,16 +8702,153 @@ function resolveChunkDebugCenter(policy) {
     };
     canvas.addEventListener("pointerup", editorPointerUpCaptureHandler, true);
     canvas.addEventListener("pointercancel", editorPointerUpCaptureHandler, true);
+    // Left button is fully dedicated to selection: a plain click/drag replaces the
+    // selection, Shift always adds (click or marquee box), Ctrl/Meta always removes.
+    // A click is a drag that never crossed the movement threshold - RMB remains the pan
+    // gesture (see editorPointerDownCaptureHandler) so there's no conflict to resolve here.
     editorPointerDownHandler = function (event) {
       rememberEditorPointer(event);
-      if (event.button !== 0) return;
-      if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return;
-      if (transformSession) return;
-      const entityId = pickEntity(event);
-      if (entityId) {
-        selectEntity(entityId);
+      if (event.pointerType === "touch") {
+        if (event.altKey) return;
+        if (transformSession) return;
+        // Suppress the browser's own native long-press handling (context menu, text/image
+        // callout, etc.) for this touch - its timing lands right around our own hold
+        // threshold below, and a native "contextmenu" event firing mid-hold reaches
+        // editorContextMenuHandler, which cancels any transform that was just started.
+        event.preventDefault();
+        const pointerId = event.pointerId;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const record = {
+          startX,
+          startY,
+          moved: false,
+          multiTouch: editorTouchPointers.size > 0,
+          entityId: pickEntity(event),
+          holdTimer: null,
+          handled: false
+        };
+        editorTouchPointers.set(pointerId, record);
+        if (editorTouchPointers.size > 1) {
+          for (const active of editorTouchPointers.values()) {
+            active.multiTouch = true;
+            if (active.holdTimer) {
+              clearTimeout(active.holdTimer);
+              active.holdTimer = null;
+            }
+          }
+        }
+        // A held (not just tapped) touch on an entity selects it AND immediately starts
+        // moving it, same as holding a point/center handle in the editor overlay - a
+        // plain quick tap still just selects (see finish() below), matching a mouse click.
+        if (record.entityId) {
+          record.holdTimer = setTimeout(function () {
+            record.holdTimer = null;
+            const active = editorTouchPointers.get(pointerId);
+            if (!active || active.moved || active.multiTouch || active.handled) return;
+            active.handled = true;
+            selectEntity(active.entityId);
+            onSelectEntity(active.entityId);
+            beginTransform("move");
+          }, TOUCH_ENTITY_MOVE_HOLD_MS);
+        }
+        function onMove(moveEvent) {
+          if (moveEvent.pointerId !== pointerId) return;
+          const active = editorTouchPointers.get(pointerId);
+          if (!active) return;
+          if (Math.abs(moveEvent.clientX - startX) > 8 || Math.abs(moveEvent.clientY - startY) > 8) {
+            active.moved = true;
+            if (active.holdTimer) {
+              clearTimeout(active.holdTimer);
+              active.holdTimer = null;
+            }
+          }
+        }
+        function finish(finalEvent, cancelled) {
+          window.removeEventListener("pointermove", onMove, true);
+          window.removeEventListener("pointerup", onUp, true);
+          window.removeEventListener("pointercancel", onCancel, true);
+          const active = editorTouchPointers.get(pointerId);
+          editorTouchPointers.delete(pointerId);
+          if (active?.holdTimer) clearTimeout(active.holdTimer);
+          if (cancelled || !active || active.moved || active.multiTouch || active.handled) return;
+          const entityId = pickEntity(finalEvent) || active.entityId;
+          if (entityId) {
+            selectEntity(entityId);
+            onSelectEntity(entityId);
+          } else {
+            selectEntities([]);
+            onSelectEntity(null);
+          }
+        }
+        function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent, false); }
+        function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent, true); }
+        window.addEventListener("pointermove", onMove, true);
+        window.addEventListener("pointerup", onUp, true);
+        window.addEventListener("pointercancel", onCancel, true);
+        return;
       }
-      onSelectEntity(entityId || null);
+      if (event.button !== 0) return;
+      if (event.altKey) return;
+      if (transformSession) return;
+      event.preventDefault();
+      const additive = event.shiftKey;
+      const subtractive = event.ctrlKey || event.metaKey;
+      const entityId = pickEntity(event);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const pointerId = event.pointerId;
+      let moved = false;
+      function onMove(moveEvent) {
+        if (moveEvent.pointerId !== pointerId) return;
+        if (Math.abs(moveEvent.clientX - startX) > 3 || Math.abs(moveEvent.clientY - startY) > 3) moved = true;
+        if (moved) onMarqueeRect(rectFromPoints(startX, startY, moveEvent.clientX, moveEvent.clientY));
+      }
+      function finish(finalEvent) {
+        window.removeEventListener("pointermove", onMove, true);
+        window.removeEventListener("pointerup", onUp, true);
+        window.removeEventListener("pointercancel", onCancel, true);
+        onMarqueeRect(null);
+        if (!moved) {
+          // Thin line/point geometry (Walkable Surface, Path, Surface Layer, ...) is much
+          // easier for the raycaster to miss than a solid model mesh, so a single pick at
+          // mousedown alone can land empty even on a deliberate click. The touch path above
+          // already re-picks at release as a fallback (see its own finish()) - mirror that
+          // here instead of trusting only the mousedown-time pick, which otherwise reads as
+          // a spurious deselect ("clicked next to it") on exactly these node types.
+          const resolvedEntityId = entityId || pickEntity(finalEvent);
+          if (resolvedEntityId) {
+            if (!additive && !subtractive) {
+              selectEntity(resolvedEntityId);
+              onSelectEntity(resolvedEntityId);
+              return;
+            }
+            const current = getSelectedEntityIds();
+            const nextIds = subtractive
+              ? current.filter(function (id) { return id !== resolvedEntityId; })
+              : Array.from(new Set(current.concat(resolvedEntityId)));
+            selectEntities(nextIds);
+            onSelectEntities(nextIds);
+            return;
+          }
+          if (!additive && !subtractive) {
+            selectEntities([]);
+            onSelectEntity(null);
+          }
+          return;
+        }
+        // The editor knows about node types this runtime has no live mesh for at all
+        // (Location Anchor) or no single pickable root for (Walkable Surface/Surface
+        // Layer, rendered as many chunked pieces) - so rect hit-testing for a drag is
+        // fully delegated to it instead of only scanning entityRoots here.
+        const rect = rectFromPoints(startX, startY, finalEvent.clientX, finalEvent.clientY);
+        onMarqueeSelect(rect, additive, subtractive);
+      }
+      function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent); }
+      function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent); }
+      window.addEventListener("pointermove", onMove, true);
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onCancel, true);
     };
     canvas.addEventListener("pointerdown", editorPointerDownHandler);
 } else {
@@ -8115,7 +8909,13 @@ function resolveChunkDebugCenter(policy) {
           return;
         }
 
-        pressedKeys.clear();
+        // Cancel any WASD-driven movement so click-to-walk takes over cleanly, but leave
+        // other held keys alone - clearing the whole set dropped a still-held sprint key
+        // with no keydown left to re-add it (held keys don't re-fire keydown), so sprint
+        // silently stayed off until the key was released and pressed again.
+        for (const code of Array.from(pressedKeys)) {
+          if (movementActionFor(code)) pressedKeys.delete(code);
+        }
         updateMuisDoelwit();
       };
 
@@ -8207,6 +9007,9 @@ function resolveChunkDebugCenter(policy) {
 
   function configureCallbacks(callbacks) {
     onSelectEntity = callbacks.onSelectEntity || onSelectEntity;
+    onSelectEntities = callbacks.onSelectEntities || onSelectEntities;
+    onMarqueeRect = callbacks.onMarqueeRect || onMarqueeRect;
+    onMarqueeSelect = callbacks.onMarqueeSelect || onMarqueeSelect;
     onTransformCommit = callbacks.onTransformCommit || onTransformCommit;
     onTransformEnd = callbacks.onTransformEnd || onTransformEnd;
     onTransformChange = callbacks.onTransformChange || onTransformChange;
@@ -8338,7 +9141,8 @@ function resolveChunkDebugCenter(policy) {
     };
     const modePerformance = activeModePerformance();
     const shouldAnimateModels = mode === "game" || (mode === "editor" && previewAnimations && animationMixers.size > 0);
-    const shouldAnimateSurfaces = surfaceAnimMaterials.length > 0 && (mode !== "game" || modePerformance.surfaceAnimationEnabled !== false) && (mode === "game" || mode === "editor");
+    const shouldAnimateSurfaces = surfaceAnimMaterials.length > 0
+      && (mode === "game" ? modePerformance.surfaceAnimationEnabled !== false : previewAnimations === true);
     const shouldFlyCamera = mode === "editor" && flyCameraKeys.size > 0;
     const shouldAnimate = shouldAnimateModels || shouldAnimateSurfaces || shouldFlyCamera;
     frameTiming.shouldAnimateModels = shouldAnimateModels;
@@ -8360,14 +9164,23 @@ function resolveChunkDebugCenter(policy) {
     frameTiming.updatePlayerMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
     const chunkPolicy = resolveChunkPolicy(world, mode);
+    const hasDrainableResidentWork = residentContentState.pendingChunkKeys.length > 0
+      && residentContentState.pendingBuildBlockedByBudget !== true;
     let shouldSyncChunkState = true;
-    if (mode === "game" && !debugHelpersVisibleInCurrentMode()) {
-      shouldSyncChunkState = residentContentState.pendingChunkKeys.length > 0
+    if (mode === "editor") {
+      const selectedChunkSignatureKey = resolveChunkRuntimeEntryChunkKey({ object: selectedObjectRoot() }, chunkPolicy)?.key || "";
+      shouldSyncChunkState = hasDrainableResidentWork
         || hasPendingObjectResidencyWork()
-        || buildChunkFrameSyncSignature(chunkPolicy) !== chunkDebugSignature;
+        || buildChunkFrameSyncSignature(chunkPolicy, selectedChunkSignatureKey) !== chunkFrameDebugSignature;
+    } else if (mode === "game" && !debugHelpersVisibleInCurrentMode()) {
+      shouldSyncChunkState = hasDrainableResidentWork
+        || hasPendingObjectResidencyWork()
+        || buildChunkFrameSyncSignature(chunkPolicy) !== chunkFrameDebugSignature;
     }
     if (shouldSyncChunkState) syncChunkDebugState("frame");
-    if (residentContentState.pendingChunkKeys.length) requestRender("resident-pending-drain");
+    if (residentContentState.pendingChunkKeys.length && residentContentState.pendingBuildBlockedByBudget !== true) {
+      requestRender("resident-pending-drain");
+    }
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
     renderer.render(scene, camera);
@@ -8468,6 +9281,7 @@ function resolveChunkDebugCenter(policy) {
     chunkSyncStats.lastHeavySyncMs = 0;
     chunkDebugStateCache = null;
     chunkDebugSignature = "";
+    chunkFrameDebugSignature = "";
     scatterShadowFallbacks = 0;
     chunkRuntimeState = {
       policy: null,
@@ -8511,6 +9325,10 @@ function resolveChunkDebugCenter(policy) {
       lastUpdateReason: "clearContent"
     };
     if (stableSunShadowController?.clearDirectionalLights) stableSunShadowController.clearDirectionalLights();
+    for (const light of directionalLights) {
+      if (light?.target?.parent) light.target.parent.remove(light.target);
+    }
+    directionalLights.length = 0;
     groundShadowAnchorKey = "";
     shadowAnchorState = {
       mode: "static",
@@ -8655,7 +9473,8 @@ function resolveChunkDebugCenter(policy) {
 
   function terrainOverlayColorForNode(nodeType) {
     if (nodeType === "walkable_surface") return 0x8fe0a8;
-    if (nodeType === "blocker_area") return 0xf0b35a;
+    if (nodeType === "surface_layer") return 0x8fbf6a;
+    if (nodeType === "area_definition") return 0xa855f7;
     return 0xf0b35a;
   }
 
@@ -8703,7 +9522,12 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function terrainOverlayHandle(position, color, role, nodeId, pointIndex, selected) {
-    const geometry = new THREE.SphereGeometry(selected ? 0.18 : 0.14, 10, 8);
+    // Point handles are 4x their original size (doubled twice) so they stay clickable
+    // even when zoomed out. The center handle keeps its original absolute size (~5x
+    // the *original* point radius) rather than also growing with the points.
+    const basePointRadius = selected ? 0.18 : 0.14;
+    const radius = role === "center" ? basePointRadius * 5 : basePointRadius * 4;
+    const geometry = new THREE.SphereGeometry(radius, role === "center" ? 16 : 10, role === "center" ? 12 : 8);
     const material = new THREE.MeshBasicMaterial({
       color: selected ? 0xffffff : color,
       depthTest: false,
@@ -8748,17 +9572,6 @@ function resolveChunkDebugCenter(policy) {
     return terrainOverlayRectanglePoints(state);
   }
 
-  function terrainOverlayCirclePoints(state, segments = 24) {
-    const radius = Math.max(0, num(state?.radius, 0));
-    const center = new THREE.Vector3(num(state?.x, 0), num(state?.y, 0), num(state?.z, 0));
-    const points = [];
-    for (let index = 0; index < Math.max(8, segments); index += 1) {
-      const angle = (Math.PI * 2 * index) / Math.max(8, segments);
-      points.push(new THREE.Vector3(center.x + Math.cos(angle) * radius, center.y, center.z + Math.sin(angle) * radius));
-    }
-    return points;
-  }
-
   function clearTerrainEditorOverlay() {
     if (!terrainEditorOverlay) return;
     if (!terrainEditorOverlay.visible && terrainEditorOverlay.children.length === 0) {
@@ -8789,16 +9602,46 @@ function resolveChunkDebugCenter(policy) {
     requestRender("scatter-overlay-clear");
   }
 
+  // Walkable Surface, Blocker Area, Area Definition and Surface Layer all share one
+  // point/line/center-handle editing UI. The only real difference is that the first
+  // three are closed shapes (line loops back to the first point) while Surface Layer
+  // is an open path the user extends point by point.
   function buildTerrainEditorOverlay(nextOverlay) {
     if (!terrainEditorOverlay || mode !== "editor") return;
     clearTerrainEditorOverlay();
-    if (!nextOverlay || !nextOverlay.nodeType) return;
+    const markers = Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
+    const hasSelected = Boolean(nextOverlay && nextOverlay.nodeType);
+    if (!hasSelected && !markers.length) return;
     terrainEditorOverlayState = nextOverlay;
     terrainEditorOverlay.visible = true;
+
+    // Always-visible "go to this node" markers for every other points-based node -
+    // just the big center handle, not clickable/editable points or lines, so the
+    // viewport doesn't get cluttered with the whole shape of every unselected node.
+    for (const marker of markers) {
+      const markerHandle = terrainOverlayHandle(
+        new THREE.Vector3(num(marker?.x, 0), num(marker?.y, 0), num(marker?.z, 0)),
+        marker?.color ? new THREE.Color(marker.color) : new THREE.Color(0x7bd4ff),
+        "center",
+        marker?.nodeId || null,
+        null,
+        false
+      );
+      terrainEditorOverlay.add(markerHandle);
+    }
+
+    if (!hasSelected) {
+      requestRender("terrain-overlay-update");
+      return;
+    }
     const nodeId = String(nextOverlay.nodeId || "");
     const nodeType = String(nextOverlay.nodeType || "");
-    const color = terrainOverlayColorForNode(nodeType);
-    const lineColor = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(color);
+    const closed = nodeType !== "surface_layer";
+    // The line and both handle kinds all share one color - the node's own accent
+    // color, passed through from the editor - so the shape reads as "this node" at
+    // a glance in the viewport.
+    const color = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(terrainOverlayColorForNode(nodeType));
+    const lineColor = color;
     const y = nodeType === "walkable_surface"
       ? num(nextOverlay.y, 0)
       : num(nextOverlay.groundY, 0) + 0.03;
@@ -8806,48 +9649,14 @@ function resolveChunkDebugCenter(policy) {
     const selectedIndices = Array.isArray(nextOverlay.selectedPointIndices) ? new Set(nextOverlay.selectedPointIndices) : null;
     const selectedRole = String(nextOverlay.selectedHandleRole || "");
 
-    if (nodeType === "walkable_surface") {
-      const hasPoints = Array.isArray(nextOverlay.points) && nextOverlay.points.length > 0;
-      const rawPoints = hasPoints
-        ? nextOverlay.points
-        : terrainOverlayRectanglePoints({
-          x: nextOverlay.x,
-          y: y,
-          z: nextOverlay.z,
-          width: nextOverlay.width,
-          depth: nextOverlay.depth,
-          rotationY: nextOverlay.rotationY
-        });
-      const points = rawPoints.map(function (point) {
-        return new THREE.Vector3(num(point?.x, 0), num(point?.y, y), num(point?.z, 0));
-      });
-      const line = terrainOverlayLine(points, hasPoints ? points.length >= 3 : true, lineColor, 0.92);
-      if (line) terrainEditorOverlay.add(line);
-      const center = terrainOverlayHandle(
-        new THREE.Vector3(num(nextOverlay.x, 0), num(nextOverlay.y, 0), num(nextOverlay.z, 0)),
-        color,
-        "center",
-        nodeId,
-        null,
-        selectedRole === "center" || nextOverlay.draggingHandleRole === "center"
-      );
-      terrainEditorOverlay.add(center);
-      if (hasPoints) {
-        for (let index = 0; index < points.length; index += 1) {
-          terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, selectedIndices ? selectedIndices.has(index) : index === selectedIndex));
-        }
-      }
-      requestRender("terrain-overlay-update");
-      return;
-    }
-
     const rawPoints = Array.isArray(nextOverlay.points) ? nextOverlay.points : [];
     const points = [];
     for (const point of rawPoints) {
       const x = Number(point?.x);
       const z = Number(point?.z);
       if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
-      points.push(new THREE.Vector3(x, y, z));
+      const py = nodeType === "walkable_surface" ? num(point?.y, y) : y;
+      points.push(new THREE.Vector3(x, py, z));
     }
     const extrudePreviewPoint = nextOverlay.draggingHandleRole === "extrude" && nextOverlay.previewPoint
       ? new THREE.Vector3(
@@ -8867,57 +9676,65 @@ function resolveChunkDebugCenter(policy) {
       return index === selectedIndex;
     };
 
-    if (nodeType === "blocker_area" && String(nextOverlay.shapeType || "").toLowerCase() === "polygon") {
-      const line = terrainOverlayLine(points, points.length >= 3, lineColor, 0.9);
-      if (line) terrainEditorOverlay.add(line);
-      for (let index = 0; index < points.length; index += 1) {
-        terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
+    const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
+    if (line) terrainEditorOverlay.add(line);
+
+    // Walkable Surface points form a ladder - point i always pairs with point
+    // (n-1-i) as one "rung" across the surface (matches triangulateWalkableSurfaceLadder
+    // in the collision code). Draw those pairings as faint cross-lines so the quad
+    // structure is visible while editing - without this the perimeter line alone looks
+    // like an arbitrary, sometimes self-crossing outline, and dragging one point without
+    // seeing its twin is what desyncs the ladder into a twisted collision mesh.
+    if (nodeType === "walkable_surface" && points.length >= 4 && points.length % 2 === 0) {
+      const rungPositions = [];
+      const half = points.length / 2;
+      for (let index = 0; index < half; index += 1) {
+        const a = points[index];
+        const b = points[points.length - 1 - index];
+        if (a && b) rungPositions.push(a, b);
       }
-      requestRender("terrain-overlay-update");
-      return;
+      if (rungPositions.length >= 2) {
+        const rungGeometry = new THREE.BufferGeometry().setFromPoints(rungPositions);
+        const rungMaterial = new THREE.LineBasicMaterial({
+          color: lineColor,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.35,
+          toneMapped: false
+        });
+        const rungLines = new THREE.LineSegments(rungGeometry, rungMaterial);
+        rungLines.renderOrder = 1999;
+        rungLines.frustumCulled = false;
+        rungLines.name = "GK terrain overlay rung lines";
+        rungLines.raycast = function () {};
+        rungLines.userData.debugOverlay = true;
+        rungLines.userData.debugOverlayKind = "terrain";
+        rungLines.castShadow = false;
+        rungLines.receiveShadow = false;
+        terrainEditorOverlay.add(rungLines);
+      }
     }
 
-    if (nodeType === "surface_layer") {
-      const line = terrainOverlayLine(points, false, lineColor, 0.95);
-      if (line) terrainEditorOverlay.add(line);
-      for (let index = 0; index < points.length; index += 1) {
-        terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
-      }
-      requestRender("terrain-overlay-update");
-      return;
+    if (points.length > 0) {
+      const centerSelected = selectedRole === "center"
+        || nextOverlay.draggingHandleRole === "center"
+        || nextOverlay.draggingHandleRole === "rotate"
+        || nextOverlay.draggingHandleRole === "geoscale";
+      const centerY = nodeType === "walkable_surface" ? num(nextOverlay.y, y) : y;
+      const center = terrainOverlayHandle(
+        new THREE.Vector3(num(nextOverlay.x, 0), centerY, num(nextOverlay.z, 0)),
+        color,
+        "center",
+        nodeId,
+        null,
+        centerSelected
+      );
+      terrainEditorOverlay.add(center);
     }
 
-    if (nodeType === "blocker_area") {
-      const shapeType = String(nextOverlay.shapeType || "").toLowerCase();
-      if (shapeType === "box") {
-        const boxPoints = terrainOverlayRectanglePoints({
-          x: nextOverlay.x,
-          y: num(nextOverlay.groundY, 0) + 0.03,
-          z: nextOverlay.z,
-          width: nextOverlay.width,
-          depth: nextOverlay.depth,
-          rotationY: 0
-        });
-        const line = terrainOverlayLine(boxPoints, true, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-      } else if (shapeType === "circle") {
-        const circlePoints = terrainOverlayCirclePoints({
-          x: nextOverlay.x,
-          y: num(nextOverlay.groundY, 0) + 0.03,
-          z: nextOverlay.z,
-          radius: nextOverlay.radius
-        });
-        const line = terrainOverlayLine(circlePoints, true, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-      } else {
-        const line = terrainOverlayLine(points, points.length >= 3, lineColor, 0.85);
-        if (line) terrainEditorOverlay.add(line);
-        for (let index = 0; index < points.length; index += 1) {
-          terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
-        }
-      }
-      requestRender("terrain-overlay-update");
-      return;
+    for (let index = 0; index < points.length; index += 1) {
+      terrainEditorOverlay.add(terrainOverlayHandle(points[index], color, "point", nodeId, index, isPointSelected(index)));
     }
 
     requestRender("terrain-overlay-update");
@@ -9001,28 +9818,47 @@ function resolveChunkDebugCenter(policy) {
     return terrainRuntimeGroup;
   }
 
+  function groundBlendSideCacheKey(side) {
+    if (!side) return "";
+    const color = side.color instanceof THREE.Color ? side.color.getHexString() : String(side.color || "");
+    return [
+      color,
+      String(side.textureAssetId || ""),
+      round(num(side.textureWorldSizeX, 10)),
+      round(num(side.textureWorldSizeZ, 10)),
+      round(num(side.width, 0))
+    ].join(":");
+  }
+
+  function groundBlendConfigCacheKey(config) {
+    if (!config) return "no-edge-blend";
+    return [
+      "edge-blend",
+      groundBlendSideCacheKey(config.left),
+      groundBlendSideCacheKey(config.right),
+      groundBlendSideCacheKey(config.top),
+      groundBlendSideCacheKey(config.bottom)
+    ].join("|");
+  }
+
   function groundMaterialCacheKey(ground) {
     return [
       colorOrDefault(ground?.materialColor, "#ffffff"),
       String(ground?.textureAssetId || ""),
-      sharedWorldPerformance().smoothShading === false ? "flat" : "smooth"
+      round(num(ground?.textureWorldSizeX, 10)),
+      round(num(ground?.textureWorldSizeZ, 10)),
+      sharedWorldPerformance().smoothShading === false ? "flat" : "smooth",
+      round(num(ground?.edgeFadeWidth, 0))
     ].join("|");
   }
 
   function acquireGroundMaterialRecord(worldData, blueprint) {
-    const ground = worldData?.ground || {};
+    const ground = blueprint?.ground || worldData?.ground || {};
     const key = groundMaterialCacheKey(ground);
     let record = groundChunkState.materialCache.get(key);
     if (!record) {
-      const material = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
-        roughness: 0.9,
-        metalness: 0,
-        flatShading: sharedWorldPerformance().smoothShading === false,
-        side: THREE.DoubleSide,
-        transparent: false,
-        depthWrite: true
-      });
+      const bounds = effectiveGroundBounds(ground);
+      const material = createGroundPlaneMaterial(ground, bounds, null);
       record = {
         key: key,
         refCount: 0,
@@ -9087,7 +9923,10 @@ function resolveChunkDebugCenter(policy) {
 
   function buildGroundTileGeometry(blueprint, ground) {
     if (!blueprint?.bounds) return null;
-    const textureSize = groundTextureWorldSize(ground);
+    const textureSize = {
+      x: Math.max(0.01, num(blueprint.textureWorldSizeX, groundTextureWorldSize(ground).x)),
+      z: Math.max(0.01, num(blueprint.textureWorldSizeZ, groundTextureWorldSize(ground).z))
+    };
     return createWorldPlaneGeometry(
       blueprint.bounds.minX,
       blueprint.bounds.maxX,
@@ -9108,11 +9947,23 @@ function resolveChunkDebugCenter(policy) {
   function disposeGroundTile(tile, reason = "chunk-unload") {
     if (!tile) return;
     if (tile.mesh?.parent) tile.mesh.parent.remove(tile.mesh);
-    if (tile.geometry) {
-      try { tile.geometry.dispose(); } catch {}
+    const entries = Array.isArray(tile.entries) && tile.entries.length
+      ? tile.entries
+      : [{ mesh: tile.mesh, geometry: tile.geometry, materialRecord: tile.materialRecord }];
+    for (const entry of entries) {
+      if (entry.geometry) {
+        try { entry.geometry.dispose(); } catch {}
+      }
+      releaseGroundMaterialRecord(entry.materialRecord || null, reason);
+      if (entry.mesh?.userData) entry.mesh.userData.terrainChunkDisposed = true;
     }
-    releaseGroundMaterialRecord(tile.materialRecord || null, reason);
-    if (tile.mesh?.userData) tile.mesh.userData.terrainChunkDisposed = true;
+    if (tile.mesh?.traverse) {
+      tile.mesh.traverse(function (child) {
+        if (child?.userData) child.userData.terrainChunkDisposed = true;
+      });
+    } else if (tile.mesh?.userData) {
+      tile.mesh.userData.terrainChunkDisposed = true;
+    }
   }
 
   function clearGroundChunkState(reason = "clear") {
@@ -9167,39 +10018,67 @@ function resolveChunkDebugCenter(policy) {
     const previousResidentKeys = new Set(groundChunkState.residentTiles.keys());
     applyGroundChunkPlan(groundChunkState, plan, {
       createTile: function (blueprint, chunkKey, nextPlan) {
-        const geometry = buildGroundTileGeometry(blueprint, worldData?.ground || null);
-        if (!geometry) return null;
-        const materialRecord = acquireGroundMaterialRecord(worldData, blueprint);
-        const mesh = new THREE.Mesh(geometry, materialRecord.material);
-        mesh.name = "GK ground tile " + chunkKey;
-        mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
-        mesh.userData.terrainRuntime = true;
-        mesh.userData.groundTile = true;
-        mesh.userData.groundChunkKey = chunkKey;
-        mesh.userData.terrainChunkDisposed = false;
+        const entries = Array.isArray(blueprint?.entries) && blueprint.entries.length ? blueprint.entries : [blueprint];
+        const tileEntries = [];
+        const root = entries.length > 1 ? new THREE.Group() : null;
+        if (root) {
+          root.name = "GK ground tile " + chunkKey;
+          root.userData.terrainRuntime = true;
+          root.userData.groundTile = true;
+          root.userData.groundChunkKey = chunkKey;
+          root.userData.terrainChunkDisposed = false;
+        }
+        for (const entry of entries) {
+          const ground = entry?.ground || worldData?.ground || null;
+          const geometry = buildGroundTileGeometry(entry, ground);
+          if (!geometry) continue;
+          const materialRecord = acquireGroundMaterialRecord(worldData, entry);
+          const mesh = new THREE.Mesh(geometry, materialRecord.material);
+          mesh.name = "GK ground tile " + chunkKey + (entry?.zoneRef ? " " + String(entry.zoneRef) : "");
+          mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
+          mesh.userData.terrainRuntime = true;
+          mesh.userData.groundTile = true;
+          mesh.userData.groundChunkKey = chunkKey;
+          mesh.userData.groundId = entry?.groundId || null;
+          mesh.userData.zoneRef = entry?.zoneRef || null;
+          mesh.userData.terrainChunkDisposed = false;
+          if (root) root.add(mesh);
+          tileEntries.push({
+            bounds: entry.bounds,
+            mesh: mesh,
+            geometry: geometry,
+            material: materialRecord.material,
+            materialRecord: materialRecord,
+            textureAssetId: entry.textureAssetId || null
+          });
+        }
+        if (!tileEntries.length) return null;
+        const mesh = root || tileEntries[0].mesh;
         const group = ensureTerrainRuntimeGroup();
         group.add(mesh);
-        runtimeStats.sceneObjects += 1;
-        runtimeStats.meshes += 1;
+        const counts = countObjectTree(mesh);
+        runtimeStats.sceneObjects += counts.objects;
+        runtimeStats.meshes += counts.meshes;
         const createdAt = performance.now();
         const tile = {
           chunkKey: chunkKey,
           bounds: blueprint.bounds,
           mesh: mesh,
-          geometry: geometry,
-          material: materialRecord.material,
-          materialRecord: materialRecord,
-          textureAssetId: blueprint.textureAssetId || null,
+          geometry: tileEntries[0].geometry,
+          material: tileEntries[0].material,
+          materialRecord: tileEntries[0].materialRecord,
+          textureAssetId: tileEntries[0].textureAssetId || null,
+          entries: tileEntries,
           createdAt: createdAt,
           lastTouchedAt: createdAt
         };
-        groundChunkState.residentTiles.set(chunkKey, tile);
         return tile;
       },
       disposeTile: function (tile) {
+        const counts = tile?.mesh ? countObjectTree(tile.mesh) : { objects: 1, meshes: 1 };
         disposeGroundTile(tile, reason);
-        runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - 1);
-        runtimeStats.meshes = Math.max(0, runtimeStats.meshes - 1);
+        runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - counts.objects);
+        runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
       }
     });
     if (plan.mode === "full" && !fullGroundPlane && worldData?.ground) {
@@ -9262,11 +10141,6 @@ function resolveChunkDebugCenter(policy) {
       fullGroundPlaneTextureAssetId = null;
     }
     fullGroundPlane = null;
-    if (stableSunShadowController?.clearDirectionalLights) stableSunShadowController.clearDirectionalLights();
-    for (const light of directionalLights) {
-      if (light?.target?.parent) light.target.parent.remove(light.target);
-    }
-    directionalLights.length = 0;
     groundShadowAnchorKey = "";
     shadowAnchorState = {
       mode: "static",
@@ -9489,6 +10363,20 @@ function resolveChunkDebugCenter(policy) {
     return registered;
   }
 
+  function registerStreamableTerrainRuntimeEntry(meta, buildObjectFactory) {
+    const entry = registerTerrainRuntimeEntry(Object.assign({}, meta, {
+      object: null,
+      hasVisual: true,
+      visible: true
+    }));
+    if (!entry) return null;
+    entry.buildObject = function () {
+      return typeof buildObjectFactory === "function" ? buildObjectFactory(entry) : null;
+    };
+    entry.terrainStreamable = true;
+    return entry;
+  }
+
   function terrainEntryTypeDelta(type) {
     if (type === "terrainGround") return "groundTiles";
     if (type === "terrainLayer") return "terrainLayerTiles";
@@ -9519,6 +10407,10 @@ function resolveChunkDebugCenter(policy) {
     group.add(object);
     runtimeStats.sceneObjects += counts.objects;
     runtimeStats.meshes += counts.meshes;
+    runtimeStats.terrainVisuals += 1;
+    const bucket = terrainEntryTypeDelta(entry.type);
+    if (bucket === "groundTiles" || bucket === "terrainLayerTiles") runtimeStats.terrainLayers += 1;
+    else if (bucket === "surfaceSegments") runtimeStats.terrainSurfaces += 1;
     terrainRuntimeResidentEntries.add(entry.id);
     terrainStreamingState.builtPieces += 1;
     terrainStreamingState.residentPieces += 1;
@@ -9557,6 +10449,10 @@ function resolveChunkDebugCenter(policy) {
     disposeObject(object, { disposeTextures: true });
     runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - counts.objects);
     runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
+    runtimeStats.terrainVisuals = Math.max(0, runtimeStats.terrainVisuals - 1);
+    const bucket = terrainEntryTypeDelta(entry.type);
+    if (bucket === "groundTiles" || bucket === "terrainLayerTiles") runtimeStats.terrainLayers = Math.max(0, runtimeStats.terrainLayers - 1);
+    else if (bucket === "surfaceSegments") runtimeStats.terrainSurfaces = Math.max(0, runtimeStats.terrainSurfaces - 1);
     terrainRuntimeResidentEntries.delete(entry.id);
     terrainStreamingState.disposedPieces += 1;
     terrainStreamingState.residentPieces = Math.max(0, terrainStreamingState.residentPieces - 1);
@@ -9605,6 +10501,154 @@ function resolveChunkDebugCenter(policy) {
       hasVisual: true,
       visible: true
     })));
+  }
+
+  const zoneCanvasTextureCache = new Map();
+
+  function zoneCanvasPackagesForWorld(worldData) {
+    const packages = Array.isArray(worldData?.zones?.packages) ? worldData.zones.packages : [];
+    const result = [];
+    const seen = new Set();
+    function addPackage(pkg) {
+      if (!pkg) return;
+      const key = String(pkg.zoneId || pkg.id || result.length);
+      if (seen.has(key)) return;
+      seen.add(key);
+      result.push(pkg);
+    }
+    for (const pkg of packages) addPackage(pkg);
+    addPackage(worldData?.zonePackage || null);
+    return result;
+  }
+
+  function zoneCanvasBoundsForPackage(pkg) {
+    const bounds = pkg?.zone?.bounds || pkg?.bounds || null;
+    const zone = pkg?.zone || {};
+    const originX = num(zone.originX, 0);
+    const originZ = num(zone.originZ, 0);
+    const width = num(zone.width, 500);
+    const depth = num(zone.depth, 500);
+    const minX = Number.isFinite(Number(bounds?.minX)) ? Number(bounds.minX) : originX;
+    const minZ = Number.isFinite(Number(bounds?.minZ)) ? Number(bounds.minZ) : originZ;
+    const maxX = Number.isFinite(Number(bounds?.maxX)) ? Number(bounds.maxX) : minX + width;
+    const maxZ = Number.isFinite(Number(bounds?.maxZ)) ? Number(bounds.maxZ) : minZ + depth;
+    if (maxX <= minX || maxZ <= minZ) return null;
+    return { minX, minZ, maxX, maxZ, width: maxX - minX, depth: maxZ - minZ };
+  }
+
+  function zoneCanvasTexture(colorHex) {
+    const color = colorOrDefault(colorHex, "#38bdf8");
+    if (zoneCanvasTextureCache.has(color)) return zoneCanvasTextureCache.get(color);
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 96;
+    const ctx = canvas.getContext("2d");
+    const rgb = colorFromHex(color, "#38bdf8");
+    const data = ctx.createImageData(canvas.width, canvas.height);
+    const edge = 18;
+    for (let y = 0; y < canvas.height; y += 1) {
+      for (let x = 0; x < canvas.width; x += 1) {
+        const distance = Math.min(x, y, canvas.width - 1 - x, canvas.height - 1 - y);
+        const t = clamp(distance / edge, 0, 1);
+        const alpha = Math.round((t * t * (3 - 2 * t)) * 70);
+        const index = (y * canvas.width + x) * 4;
+        data.data[index] = Math.round(rgb.r * 255);
+        data.data[index + 1] = Math.round(rgb.g * 255);
+        data.data[index + 2] = Math.round(rgb.b * 255);
+        data.data[index + 3] = alpha;
+      }
+    }
+    ctx.putImageData(data, 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    zoneCanvasTextureCache.set(color, texture);
+    return texture;
+  }
+
+  function createZoneCanvasLineGeometry(bounds, y) {
+    const positions = [
+      bounds.minX, y, bounds.minZ, bounds.maxX, y, bounds.minZ,
+      bounds.maxX, y, bounds.minZ, bounds.maxX, y, bounds.maxZ,
+      bounds.maxX, y, bounds.maxZ, bounds.minX, y, bounds.maxZ,
+      bounds.minX, y, bounds.maxZ, bounds.minX, y, bounds.minZ
+    ];
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    return geometry;
+  }
+
+  function addZoneCanvasBounds(worldData) {
+    if (mode !== "editor") return;
+    const packages = zoneCanvasPackagesForWorld(worldData);
+    if (!packages.length) return;
+    const group = ensureTerrainRuntimeGroup();
+    const activeZoneId = String(worldData?.activeZoneId || worldData?.zonePackage?.zoneId || "");
+    const y = num(worldData?.ground?.y, 0) + 0.13;
+    for (const pkg of packages) {
+      const bounds = zoneCanvasBoundsForPackage(pkg);
+      if (!bounds) continue;
+      const isActive = String(pkg.zoneId || "") === activeZoneId;
+      const color = isActive ? "#7bd4ff" : "#2dd4bf";
+      const root = new THREE.Group();
+      root.name = "GK zone canvas " + String(pkg.zoneId || pkg.id || "zone");
+      root.frustumCulled = false;
+      root.userData.terrainRuntime = true;
+      root.userData.zoneCanvasRuntime = true;
+      root.userData.runtimeAlive = true;
+
+      const fillGeometry = createWorldPlaneGeometry(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, y, {
+        minX: bounds.minX,
+        maxX: bounds.maxX,
+        minZ: bounds.minZ,
+        maxZ: bounds.maxZ,
+        repeatX: 1,
+        repeatZ: 1
+      });
+      if (fillGeometry) {
+        const fillMaterial = new THREE.MeshBasicMaterial({
+          map: zoneCanvasTexture(color),
+          transparent: true,
+          opacity: isActive ? 0.85 : 0.62,
+          depthTest: true,
+          depthWrite: false,
+          toneMapped: false,
+          side: THREE.DoubleSide
+        });
+        const fill = new THREE.Mesh(fillGeometry, fillMaterial);
+        fill.name = root.name + " fade";
+        fill.renderOrder = 2820;
+        fill.castShadow = false;
+        fill.receiveShadow = false;
+        fill.frustumCulled = false;
+        fill.userData.terrainRuntime = true;
+        fill.userData.zoneCanvasRuntime = true;
+        root.add(fill);
+      }
+
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: colorFromHex(color, "#7bd4ff"),
+        transparent: true,
+        opacity: isActive ? 0.86 : 0.58,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false
+      });
+      const lines = new THREE.LineSegments(createZoneCanvasLineGeometry(bounds, y + 0.025), lineMaterial);
+      lines.name = root.name + " bounds";
+      lines.renderOrder = 2830;
+      lines.frustumCulled = false;
+      lines.userData.terrainRuntime = true;
+      lines.userData.zoneCanvasRuntime = true;
+      root.add(lines);
+
+      markDebugOverlayTree(root, "zone-canvas");
+      group.add(root);
+      const counts = countObjectTree(root);
+      runtimeStats.sceneObjects += counts.objects;
+      runtimeStats.meshes += counts.meshes;
+      runtimeStats.terrainVisuals += 1;
+    }
   }
 
   function updateSurfaceAnimation(time) {
@@ -9751,6 +10795,7 @@ function resolveChunkDebugCenter(policy) {
     const ground = worldData?.ground || null;
     const policy = resolveChunkPolicy(worldData, mode);
     const terrainVisualChunkingEnabled = policy.terrainVisualChunkingEnabled === true;
+    const surfaceVisualChunkingEnabled = policy.pathWaterSurfaceChunkingEnabled === true;
     const groundBounds = worldGroundBounds(ground);
     const hasGroundPlane = Boolean(groundBounds);
     const layers = Array.isArray(terrain.layers) ? terrain.layers.slice().sort(function (left, right) {
@@ -9768,7 +10813,15 @@ function resolveChunkDebugCenter(policy) {
     } : null;
     const groundTextureRepeat = Math.max(1, num(ground?.textureRepeat, 1));
     const terrainAssetIds = new Set();
-    const maxSegmentLength = Math.max(1, Math.min(policy.chunkWorldWidth, policy.chunkWorldDepth) / 2);
+    // Surface Layer (path/water) pieces always split at the game's chunk size, even
+    // while running in the editor. Editor and game chunk grids are configured
+    // separately (different sizes are normal for ground/entity streaming), but a
+    // ribbon strip built from a bigger editor grid simply doesn't hit the same seams
+    // the smaller game grid does - so what looked fine in the editor could still break
+    // on the exact same world in-game. Previewing with the game's own split points
+    // means the editor shows exactly what will actually ship.
+    const gamePolicyForSurfaces = mode === "game" ? policy : resolveChunkPolicy(worldData, "game");
+    const maxSegmentLength = Math.max(1, Math.min(gamePolicyForSurfaces.chunkWorldWidth, gamePolicyForSurfaces.chunkWorldDepth) / 2);
     terrainStreamingState.lastUpdateReason = "blueprint";
 
     function rememberAssetId(assetId) {
@@ -9782,20 +10835,8 @@ function resolveChunkDebugCenter(policy) {
     }
 
     function registerStreamableTerrainEntry(meta, buildObjectFactory) {
-      const entry = registerTerrainRuntimeEntry(Object.assign({}, meta, {
-        object: null,
-        hasVisual: true,
-        visible: true
-      }));
-      entry.buildObject = function () {
-        return buildObjectFactory(entry);
-      };
-      entry.terrainStreamable = true;
+      const entry = registerStreamableTerrainRuntimeEntry(meta, buildObjectFactory);
       trackAssets(meta.assetIds || []);
-      runtimeStats.terrainVisuals += 1;
-      const bucket = terrainEntryTypeDelta(entry.type);
-      if (bucket === "groundTiles" || bucket === "terrainLayerTiles") runtimeStats.terrainLayers += 1;
-      else if (bucket === "surfaceSegments") runtimeStats.terrainSurfaces += 1;
       return entry;
     }
 
@@ -10040,8 +11081,8 @@ function resolveChunkDebugCenter(policy) {
           terrainKind: "surface",
           layerId: surface?.id || surface?.surfaceId || null,
           segmentId: piece.segmentId,
-          chunkKey: piece.chunkKey,
-          chunkKeys: piece.chunkKeys,
+          chunkKey: surfaceVisualChunkingEnabled ? piece.chunkKey : null,
+          chunkKeys: surfaceVisualChunkingEnabled ? piece.chunkKeys : [],
           assetIds: normalizeTerrainAssetIds([
             surface?.textureAssetId,
             surface?.secondaryTextureAssetId,
@@ -10056,7 +11097,9 @@ function resolveChunkDebugCenter(policy) {
             width: width,
             y: surfaceY,
             uvScale: 1,
-            uvStartLength: 0
+            uvStartLength: piece.startLength,
+            prevPoint: piece.prevPoint,
+            nextPoint: piece.nextPoint
           });
           if (!geometry) return null;
           const mesh = new THREE.Mesh(geometry, material);
@@ -10120,45 +11163,57 @@ function resolveChunkDebugCenter(policy) {
     }, 0);
   }
 
-  function pickTerrainEditorHandle(clientX, clientY) {
-    if (mode !== "editor" || !terrainEditorOverlay || !terrainEditorOverlay.visible) return null;
+  function editorOverlayHandlePayload(object) {
+    return {
+      nodeId: object.userData.nodeId || null,
+      handleRole: object.userData.handleRole || null,
+      pointIndex: Number.isInteger(object.userData.pointIndex) ? object.userData.pointIndex : null
+    };
+  }
+
+  function pickEditorOverlayHandle(overlay, handleFlag, clientX, clientY, hitRadiusPx) {
+    if (mode !== "editor" || !overlay || !overlay.visible) return null;
     const rect = canvas.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects(terrainEditorOverlay.children, true);
-    if (!hits.length) return null;
+    const hits = raycaster.intersectObjects(overlay.children, true);
     for (const hit of hits) {
       const object = hit.object;
-      if (object?.userData?.terrainHandle) {
-        return {
-          nodeId: object.userData.nodeId || null,
-          handleRole: object.userData.handleRole || null,
-          pointIndex: Number.isInteger(object.userData.pointIndex) ? object.userData.pointIndex : null
-        };
-      }
+      if (object?.userData?.[handleFlag]) return editorOverlayHandlePayload(object);
     }
+    const radius = Math.max(0, Number(hitRadiusPx) || 0);
+    if (radius <= 0) return null;
+    const worldPosition = new THREE.Vector3();
+    let best = null;
+    let bestDistanceSq = radius * radius;
+    overlay.traverse(function (object) {
+      if (!object?.userData?.[handleFlag]) return;
+      object.getWorldPosition(worldPosition);
+      const screen = worldToScreen(worldPosition);
+      if (!screen) return;
+      const dx = screen.x - clientX;
+      const dy = screen.y - clientY;
+      const distanceSq = (dx * dx) + (dy * dy);
+      if (distanceSq <= bestDistanceSq) {
+        bestDistanceSq = distanceSq;
+        best = editorOverlayHandlePayload(object);
+      }
+    });
+    return best;
+  }
+
+  function pickTerrainEditorHandle(clientX, clientY, hitRadiusPx = 0) {
+    if (mode !== "editor" || !terrainEditorOverlay || !terrainEditorOverlay.visible) return null;
+    const picked = pickEditorOverlayHandle(terrainEditorOverlay, "terrainHandle", clientX, clientY, hitRadiusPx);
+    if (picked) return picked;
     return null;
   }
 
-  function pickScatterEditorHandle(clientX, clientY) {
+  function pickScatterEditorHandle(clientX, clientY, hitRadiusPx = 0) {
     if (mode !== "editor" || !scatterEditorOverlay || !scatterEditorOverlay.visible) return null;
-    const rect = canvas.getBoundingClientRect();
-    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
-    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
-    raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects(scatterEditorOverlay.children, true);
-    if (!hits.length) return null;
-    for (const hit of hits) {
-      const object = hit.object;
-      if (object?.userData?.scatterHandle) {
-        return {
-          nodeId: object.userData.nodeId || null,
-          handleRole: object.userData.handleRole || null,
-          pointIndex: Number.isInteger(object.userData.pointIndex) ? object.userData.pointIndex : null
-        };
-      }
-    }
+    const picked = pickEditorOverlayHandle(scatterEditorOverlay, "scatterHandle", clientX, clientY, hitRadiusPx);
+    if (picked) return picked;
     return null;
   }
 
@@ -10183,7 +11238,328 @@ function resolveChunkDebugCenter(policy) {
     transformGuide.scale.setScalar(Math.min(6, Math.max(0.75, maxSize * 0.65)));
   }
 
-  function bakeMinimapImage(config = {}) {
+  function getMinimapBakeBounds() {
+    const bounds = effectiveWorldGroundBounds(world || null);
+    if (!bounds) return null;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const side = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 0.01);
+    return {
+      minX: centerX - side / 2,
+      maxX: centerX + side / 2,
+      minZ: centerZ - side / 2,
+      maxZ: centerZ + side / 2,
+      width: side,
+      depth: side
+    };
+  }
+
+  function createTemporaryMinimapGroundPlane(worldData = world) {
+    const ground = worldData?.ground;
+    const bounds = effectiveGroundBounds(ground);
+    if (!ground || !bounds) return null;
+    const geometry = createWorldPlaneGeometry(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, num(ground.y, 0), {
+      minX: 0,
+      maxX: groundTextureWorldSize(ground).x,
+      minZ: 0,
+      maxZ: groundTextureWorldSize(ground).z,
+      repeatX: 1,
+      repeatZ: 1
+    });
+    if (!geometry) return null;
+    const material = createGroundPlaneMaterial(ground, bounds, null);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = "GK minimap bake full ground";
+    mesh.renderOrder = -1000;
+    mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
+    mesh.userData.terrainRuntime = true;
+    mesh.userData.minimapBakeGround = true;
+    const textureAsset = assetById(worldData, ground.textureAssetId);
+    if (textureAsset?.sourcePath) {
+      retainTerrainTexture(textureAsset, function (texture) {
+        if (mesh.userData?.terrainChunkDisposed === true) return;
+        const clone = texture.clone();
+        clone.colorSpace = THREE.SRGBColorSpace;
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.repeat.set(1, 1);
+        clone.needsUpdate = true;
+        material.map = clone;
+        material.needsUpdate = true;
+      });
+    }
+    return { mesh: mesh, geometry: geometry, material: material, textureAssetId: textureAsset?.id || null };
+  }
+
+  function minimapBakeWorldForZone(zoneRef) {
+    const wantedZoneRef = String(zoneRef || "").trim();
+    if (!wantedZoneRef || !world) return world;
+    const packages = Array.isArray(world?.zones?.packages) ? world.zones.packages : [];
+    const zonePackage = packages.find(function (pkg) {
+      return [pkg?.zoneId, pkg?.id, pkg?.packageId].some(function (value) {
+        return String(value || "").trim() === wantedZoneRef;
+      });
+    }) || null;
+    const zoneGrounds = Array.isArray(world?.zoneGrounds) ? world.zoneGrounds : [];
+    const zoneGround = zoneGrounds.find(function (ground) {
+      return [ground?.zoneRef, ground?.zoneId, ground?.id, ground?.groundId].some(function (value) {
+        return String(value || "").trim() === wantedZoneRef;
+      });
+    }) || (zonePackage?.ground ? Object.assign({}, zonePackage.ground, { zoneRef: zonePackage.zoneId || wantedZoneRef }) : null);
+    if (!zoneGround) return world;
+    return Object.assign({}, world, {
+      activeZoneId: zonePackage?.zoneId || zoneGround.zoneRef || wantedZoneRef,
+      ground: zoneGround,
+      zonePackage: zonePackage || world.zonePackage || null
+    });
+  }
+
+  function buildAllResidentContentForMinimapBake() {
+    const policy = resolveChunkPolicy(world, mode);
+    if (!isChunkCullingRuntimeEnabled(policy)) return null;
+    const chunkKeys = sortChunkKeys(Array.from(new Set(
+      Array.from(contentBlueprintIndex.entitiesByChunkKey.keys())
+        .concat(Array.from(contentBlueprintIndex.scatterByChunkKey.keys()))
+        .concat(Array.from(contentBlueprintIndex.interactablesByChunkKey.keys()))
+        .concat(Array.from(contentBlueprintIndex.solidsByChunkKey.keys()))
+    )));
+    if (!chunkKeys.length) return null;
+    const previousWindowState = {
+      centerChunk: chunkRuntimeState.centerChunk || null,
+      loadedChunkKeys: Array.isArray(chunkRuntimeState.loadedChunkKeys) ? chunkRuntimeState.loadedChunkKeys.slice() : [],
+      activeChunkKeys: Array.isArray(chunkRuntimeState.activeChunkKeys) ? chunkRuntimeState.activeChunkKeys.slice() : [],
+      preloadChunkKeys: Array.isArray(chunkRuntimeState.preloadChunkKeys) ? chunkRuntimeState.preloadChunkKeys.slice() : [],
+      visibleChunkKeys: Array.isArray(chunkRuntimeState.visibleChunkKeys) ? chunkRuntimeState.visibleChunkKeys.slice() : [],
+      forwardChunkKeys: Array.isArray(chunkRuntimeState.forwardChunkKeys) ? chunkRuntimeState.forwardChunkKeys.slice() : [],
+      unloadSafeChunkKeys: Array.isArray(chunkRuntimeState.unloadSafeChunkKeys) ? chunkRuntimeState.unloadSafeChunkKeys.slice() : []
+    };
+    syncResidentChunkContent({
+      centerChunk: chunkRuntimeState.centerChunk || null,
+      loadedChunkKeys: chunkKeys,
+      activeChunkKeys: chunkKeys,
+      visibleChunkKeys: chunkKeys,
+      forwardChunkKeys: [],
+      preloadChunkKeys: [],
+      unloadSafeChunkKeys: chunkKeys
+    }, "minimap-bake-all-content");
+    return previousWindowState;
+  }
+
+  function waitForModelAssetRecord(assetId, worldData = world) {
+    const asset = assetById(worldData, assetId) || assetById(world, assetId);
+    if (!asset?.sourcePath) return Promise.resolve();
+    const record = ensureModelRecord(asset, worldData);
+    if (!record || record.status === "ready" || record.status === "error") return Promise.resolve();
+    return new Promise(function (resolve) {
+      record.waiters.push(function () { resolve(); });
+      window.setTimeout(resolve, 15000);
+    });
+  }
+
+  function waitForMinimapBakeModelAssets(worldData = world) {
+    const assetIds = new Set();
+    for (const entity of Array.isArray(worldData?.entities) ? worldData.entities : []) {
+      const assetId = entity?.modelAssetId || entity?.sourceAssetId;
+      if (assetId) assetIds.add(assetId);
+    }
+    for (const item of Array.isArray(worldData?.interactables) ? worldData.interactables : []) {
+      if (item?.modelAssetId) assetIds.add(item.modelAssetId);
+    }
+    for (const bucket of contentBlueprintIndex.entitiesByChunkKey.values()) {
+      for (const entity of bucket || []) if (entity?.modelAssetId) assetIds.add(entity.modelAssetId);
+    }
+    for (const bucket of contentBlueprintIndex.scatterByChunkKey.values()) {
+      for (const entity of bucket || []) {
+        const assetId = entity?.modelAssetId || entity?.sourceAssetId;
+        if (assetId) assetIds.add(assetId);
+      }
+    }
+    for (const bucket of contentBlueprintIndex.interactablesByChunkKey.values()) {
+      for (const item of bucket || []) if (item?.modelAssetId) assetIds.add(item.modelAssetId);
+    }
+    if (!assetIds.size) return Promise.resolve();
+    return Promise.all(Array.from(assetIds).map(function (assetId) {
+      return waitForModelAssetRecord(assetId, worldData);
+    })).then(function () {});
+  }
+
+  function waitForTerrainTextureRecord(record) {
+    if (!record || record.status === "ready" || record.status === "error") return Promise.resolve();
+    return new Promise(function (resolve) {
+      let finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        resolve();
+      }
+      if (Array.isArray(record.waiters)) record.waiters.push(finish);
+      window.setTimeout(finish, 5000);
+    });
+  }
+
+  function waitForMinimapBakeTerrainTextures() {
+    const records = Array.from(terrainTextureRecords.values()).filter(function (record) {
+      return record && num(record.refCount, 0) > 0 && record.status !== "ready" && record.status !== "error";
+    });
+    if (!records.length) return Promise.resolve();
+    return Promise.all(records.map(waitForTerrainTextureRecord)).then(function () {});
+  }
+
+  function restoreResidentContentAfterMinimapBake(previousWindowState) {
+    if (!previousWindowState) return;
+    syncResidentChunkContent(previousWindowState, "minimap-bake-restore-content");
+  }
+
+  function buildAllTerrainVisualsForMinimapBake() {
+    const previousResidentChunkKeys = Array.isArray(terrainStreamingState.residentChunkKeys)
+      ? terrainStreamingState.residentChunkKeys.slice()
+      : [];
+    const previousVisibleEntries = [];
+    const previousRenderStates = [];
+    const builtEntries = [];
+    const previousResidentSet = new Set(previousResidentChunkKeys);
+    for (const entry of chunkRuntimeEntries) {
+      const isTerrainVisual = entry?.type === "terrainGround" || entry?.type === "terrainLayer" || entry?.type === "terrainSurface";
+      if (!isTerrainVisual || entry.terrainStreamable !== true || typeof entry.buildObject !== "function") continue;
+      const hadObject = Boolean(entry.object);
+      ensureTerrainResidentEntry(entry);
+      if (entry.object) {
+        previousVisibleEntries.push({ entry: entry, visible: entry.object.visible !== false });
+        entry.object.visible = true;
+        entry.object.userData.chunkCulled = false;
+        entry.object.traverse(function (child) {
+          if (!child.isMesh && !child.isInstancedMesh) return;
+          const materials = child.material ? (Array.isArray(child.material) ? child.material : [child.material]) : [];
+          previousRenderStates.push({
+            object: child,
+            renderOrder: child.renderOrder,
+            materials: materials.map(function (material) {
+              return {
+                material: material,
+                depthTest: material.depthTest,
+                depthWrite: material.depthWrite
+              };
+            })
+          });
+          child.renderOrder = Math.max(Number(child.renderOrder) || 0, entry.type === "terrainSurface" ? 5000 : 4000);
+          for (const material of materials) {
+            material.depthTest = true;
+            material.depthWrite = false;
+            material.needsUpdate = true;
+          }
+        });
+      }
+      if (!hadObject && entry.object) builtEntries.push(entry);
+    }
+    return {
+      previousResidentChunkKeys: previousResidentChunkKeys,
+      previousResidentSet: previousResidentSet,
+      previousVisibleEntries: previousVisibleEntries,
+      previousRenderStates: previousRenderStates,
+      builtEntries: builtEntries
+    };
+  }
+
+  function restoreTerrainVisualsAfterMinimapBake(state) {
+    if (!state) return;
+    for (const item of state.previousVisibleEntries || []) {
+      if (item.entry?.object) item.entry.object.visible = item.visible !== false;
+    }
+    for (const item of state.previousRenderStates || []) {
+      if (!item.object) continue;
+      item.object.renderOrder = item.renderOrder;
+      for (const materialState of item.materials || []) {
+        if (!materialState.material) continue;
+        materialState.material.depthTest = materialState.depthTest;
+        materialState.material.depthWrite = materialState.depthWrite;
+        materialState.material.needsUpdate = true;
+      }
+    }
+    for (const entry of state.builtEntries || []) {
+      const chunkKeys = Array.isArray(entry.chunkKeys) && entry.chunkKeys.length
+        ? entry.chunkKeys
+        : (entry.chunkKey ? [entry.chunkKey] : []);
+      const wasPreviouslyResident = chunkKeys.length === 0
+        ? false
+        : chunkKeys.some(function (key) { return state.previousResidentSet.has(key); });
+      if (!wasPreviouslyResident && entry.object) releaseTerrainResidentObject(entry, "minimap-bake-restore");
+    }
+    terrainStreamingState.residentChunkKeys = state.previousResidentChunkKeys.slice();
+  }
+
+  function applyTransformToTemporaryBakeRoot(root, transform = {}, worldData = world) {
+    const position = transform.position || {};
+    const rotation = transform.rotation || {};
+    const scale = transform.scale || {};
+    root.position.set(num(position.x, 0), num(position.y, num(worldData?.ground?.y, 0)), num(position.z, 0));
+    root.rotation.set(num(rotation.x, 0) * DEG_TO_RAD, num(rotation.y, 0) * DEG_TO_RAD, num(rotation.z, 0) * DEG_TO_RAD);
+    root.scale.set(num(scale.x, 1), num(scale.y, 1), num(scale.z, 1));
+  }
+
+  function createTemporaryMinimapWorldContent(worldData = world) {
+    const group = new THREE.Group();
+    group.name = "GK minimap bake full world content";
+    group.userData.runtimeAlive = true;
+    group.userData.minimapBakeContent = true;
+    const scatterGroups = new Map();
+    for (const entity of Array.isArray(worldData?.entities) ? worldData.entities : []) {
+      const assetId = entity?.modelAssetId || entity?.sourceAssetId || "";
+      if (!assetId) continue;
+      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      if (isScatter) {
+        const key = (entity.scatterId || entity.nodeId || "scatter") + "::" + assetId;
+        if (!scatterGroups.has(key)) scatterGroups.set(key, { assetId: assetId, instances: [] });
+        scatterGroups.get(key).instances.push(entity);
+        continue;
+      }
+      const root = new THREE.Group();
+      root.name = "GK minimap bake entity " + (entity.id || entity.entityId || assetId);
+      root.userData.runtimeAlive = true;
+      applyTransformToTemporaryBakeRoot(root, entity.transform || {}, worldData);
+      group.add(root);
+      loadModelInto(root, assetId, worldData, null, Object.assign({}, modelShadowOptions(worldData, assetId)));
+    }
+    for (const bucket of scatterGroups.values()) {
+      const root = new THREE.Group();
+      root.name = "GK minimap bake scatter " + bucket.assetId;
+      root.userData.runtimeAlive = true;
+      group.add(root);
+      loadScatterInstancesInto(root, bucket.assetId, bucket.instances, worldData, {
+        allowBatch: false,
+        chunkPolicy: null,
+        castShadow: scatterShadowOptions().castShadow,
+        receiveShadow: scatterShadowOptions().receiveShadow,
+        forceRealModels: true,
+        registerChildRuntimeEntries: false,
+        fallbackCloneCap: 100000
+      });
+    }
+    for (const inter of Array.isArray(worldData?.interactables) ? worldData.interactables : []) {
+      if (!inter?.modelAssetId) continue;
+      const root = new THREE.Group();
+      root.name = "GK minimap bake interactable " + (inter.id || inter.modelAssetId);
+      root.userData.runtimeAlive = true;
+      root.position.set(num(inter.position?.x, 0), num(worldData?.ground?.y, 0), num(inter.position?.z, 0));
+      group.add(root);
+      loadModelInto(root, inter.modelAssetId, worldData, null, Object.assign({}, modelShadowOptions(worldData, inter.modelAssetId)));
+    }
+    content.add(group);
+    runtimeStats.sceneObjects += 1;
+    return group;
+  }
+
+  function disposeTemporaryMinimapWorldContent(group) {
+    if (!group) return;
+    markRuntimeObjectAlive(group, false);
+    const counts = countObjectTree(group);
+    if (group.parent) group.parent.remove(group);
+    disposeObject(group, { disposeTextures: true });
+    runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - counts.objects);
+    runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
+  }
+
+  async function bakeMinimapImage(config = {}) {
+    const bakeWorld = minimapBakeWorldForZone(config.zoneRef);
     const bounds = config.bounds;
     const minX = num(bounds?.minX, NaN);
     const maxX = num(bounds?.maxX, NaN);
@@ -10200,13 +11576,13 @@ function resolveChunkDebugCenter(policy) {
     // webp using the real scene's own background/fog, matching the live 3D world exactly.
     const format = "webp";
     const quality = Math.max(0.1, Math.min(1, num(config.quality, 0.78)));
-    const backgroundColor = colorOrDefault(world?.world?.backgroundColor, "#101a26");
+    const backgroundColor = colorOrDefault(bakeWorld?.world?.backgroundColor, "#101a26");
     const transparentBackground = false;
     const centerX = (minX + maxX) / 2;
     const centerZ = (minZ + maxZ) / 2;
     const width = maxX - minX;
     const depth = maxZ - minZ;
-    const groundY = num(world?.ground?.y, 0);
+    const groundY = num(bakeWorld?.ground?.y, 0);
     const highY = groundY + Math.max(20, Math.max(width, depth));
 
     const hiddenRoots = [];
@@ -10225,6 +11601,45 @@ function resolveChunkDebugCenter(policy) {
     if (config.hideChunkDebugOverlay !== false) hideRoot(chunkDebugOverlay);
     if (config.includeStaticModels === false) {
       for (const root of entityRoots.values()) hideRoot(root);
+    }
+    const previousMinimapBakeChunkOverride = minimapBakeChunkOverride;
+    const previousMinimapBakeShadowFocusOverride = minimapBakeShadowFocusOverride;
+    const previousShadowPolicy = currentShadowPolicy();
+    const bakeShadowCameraSize = Math.max(
+      num(previousShadowPolicy?.cameraSize, 0),
+      Math.max(width, depth) / 2 + Math.max(4, Math.min(width, depth) * 0.05)
+    );
+    const bakeShadowPolicy = Object.assign({}, previousShadowPolicy, {
+      cameraSize: bakeShadowCameraSize,
+      shadowCameraSize: bakeShadowCameraSize,
+      snapWorldUnits: 1
+    });
+    minimapBakeChunkOverride = true;
+    minimapBakeShadowFocusOverride = { x: centerX, y: groundY, z: centerZ };
+    if (stableSunShadowController?.setPolicy) stableSunShadowController.setPolicy(bakeShadowPolicy);
+    clearGroundChunkState("minimap-bake-disable-chunks");
+    clearTerrainRuntimeVisuals();
+    if (bakeWorld?.ground) addGround(bakeWorld);
+    buildTerrainRuntimeStreamingVisuals(bakeWorld);
+    addZoneGrounds(bakeWorld);
+    addZoneEdgeFadeOverlays(bakeWorld);
+    syncWorldShadowCasterState(currentShadowPolicy().enabled === true);
+    for (const entry of chunkRuntimeEntries) {
+      if (entry?.object && (entry.type === "entity" || entry.type === "scatter" || entry.type === "interactable" || entry.type === "staticProp")) {
+        hideRoot(entry.object);
+      }
+    }
+    const temporaryWorldContent = config.includeStaticModels !== false ? createTemporaryMinimapWorldContent(bakeWorld) : null;
+    const previousResidentWindowState = null;
+    const previousTerrainVisualState = buildAllTerrainVisualsForMinimapBake();
+    let temporaryGround = null;
+    if (groundChunkState.mode === "chunked") {
+      for (const tile of groundChunkState.residentTiles.values()) hideRoot(tile.mesh);
+      temporaryGround = createTemporaryMinimapGroundPlane(bakeWorld);
+      if (temporaryGround?.mesh) {
+        const group = ensureTerrainRuntimeGroup();
+        group.add(temporaryGround.mesh);
+      }
     }
 
     const bakeCamera = new THREE.OrthographicCamera(-width / 2, width / 2, depth / 2, -depth / 2, 0.1, (highY - groundY) + Math.max(width, depth) + 20);
@@ -10255,6 +11670,22 @@ function resolveChunkDebugCenter(policy) {
     let outputCanvas = null;
     let bakeError = null;
     try {
+      await waitForMinimapBakeTerrainTextures();
+      await waitForMinimapBakeModelAssets(bakeWorld);
+      await new Promise(function (resolve) {
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () { resolve(); });
+        });
+      });
+      scene.updateMatrixWorld(true);
+      stableSunShadowController?.update?.({
+        renderResidentChunkKeys: [],
+        loadedChunkKeys: [],
+        visibleChunkKeys: [],
+        preloadChunkKeys: [],
+        collisionResidentChunkKeys: []
+      }, "minimap-bake-zone");
+      if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
       renderer.setRenderTarget(renderTarget);
       renderer.setClearColor(new THREE.Color(backgroundColor), transparentBackground ? 0 : 1);
       renderer.autoClear = true;
@@ -10283,6 +11714,33 @@ function resolveChunkDebugCenter(policy) {
       renderer.autoClear = previousAutoClear;
       scene.fog = previousFog;
       renderTarget.dispose();
+      restoreResidentContentAfterMinimapBake(previousResidentWindowState);
+      restoreTerrainVisualsAfterMinimapBake(previousTerrainVisualState);
+      disposeTemporaryMinimapWorldContent(temporaryWorldContent);
+      minimapBakeChunkOverride = previousMinimapBakeChunkOverride;
+      minimapBakeShadowFocusOverride = previousMinimapBakeShadowFocusOverride;
+      if (stableSunShadowController?.setPolicy) stableSunShadowController.setPolicy(previousShadowPolicy);
+      clearTerrainRuntimeVisuals();
+      if (!shouldUseChunkedGround(world, mode) && world?.ground) addGround(world);
+      buildTerrainRuntimeStreamingVisuals(world);
+      addZoneGrounds(world);
+      addZoneEdgeFadeOverlays(world);
+      syncWorldShadowCasterState(currentShadowPolicy().enabled === true);
+      syncChunkDebugState("minimap-bake-restore-chunks", { force: true });
+      if (temporaryGround?.mesh) {
+        temporaryGround.mesh.userData.terrainChunkDisposed = true;
+        if (temporaryGround.mesh.parent) temporaryGround.mesh.parent.remove(temporaryGround.mesh);
+        if (temporaryGround.geometry) {
+          try { temporaryGround.geometry.dispose(); } catch {}
+        }
+        if (temporaryGround.material?.map) {
+          try { temporaryGround.material.map.dispose(); } catch {}
+        }
+        if (temporaryGround.material) {
+          try { temporaryGround.material.dispose(); } catch {}
+        }
+        if (temporaryGround.textureAssetId) releaseTerrainTexture(temporaryGround.textureAssetId);
+      }
       for (const root of hiddenRoots) root.visible = true;
       requestRender("minimap-bake-restore");
     }
@@ -10346,7 +11804,15 @@ function resolveChunkDebugCenter(policy) {
       snapshot.entities = (Array.isArray(world.entities) ? world.entities : []).map(function (entity) {
         const position = entity?.transform?.position;
         if (!position) return null;
-        return { id: entity.id, label: entity.label || entity.entityId || entity.id, x: num(position.x, 0), z: num(position.z, 0) };
+        return {
+          id: entity.id,
+          label: entity.label || entity.entityId || entity.id,
+          kind: entity.kind || entity.type || null,
+          type: entity.type || entity.kind || null,
+          scatterId: entity.scatterId || null,
+          x: num(position.x, 0),
+          z: num(position.z, 0)
+        };
       }).filter(Boolean);
     }
     if (includeInteractables && world) {
@@ -10387,14 +11853,75 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function getSelectedEntityTransform() {
+    const root = refreshSelectedRootReference();
+    if (!root) return null;
+    return {
+      entityId: selectableIdForObject(root),
+      type: root.userData?.playerId ? "player_character" : "model_entity",
+      position: { x: round(root.position.x), y: round(root.position.y), z: round(root.position.z) },
+      rotation: {
+        x: normalizeDegrees(root.rotation.x / DEG_TO_RAD),
+        y: normalizeDegrees(root.rotation.y / DEG_TO_RAD),
+        z: normalizeDegrees(root.rotation.z / DEG_TO_RAD)
+      },
+      scale: { x: round(root.scale.x), y: round(root.scale.y), z: round(root.scale.z) }
+    };
+  }
+
+  // Same setup as the singular selectionHelper (world-runtime.js ~7916-7927) - kept as a
+  // factory so a multi-select outline can be grown on demand without re-deriving it.
+  function createSelectionOutlineHelper() {
+    const helper = new THREE.BoxHelper(new THREE.Object3D(), 0x7bd4ff);
+    helper.visible = false;
+    helper.material.depthTest = false;
+    helper.material.depthWrite = false;
+    helper.material.transparent = true;
+    helper.material.opacity = 0.9;
+    helper.material.toneMapped = false;
+    helper.renderOrder = 999;
+    helper.raycast = function () {};
+    markDebugOverlayTree(helper, "selection");
+    sanitizeNonWorldShadowCasters(helper);
+    scene.add(helper);
+    return helper;
+  }
+
+  function hideMultiSelectionHelpers() {
+    for (const helper of multiSelectionHelpers) helper.visible = false;
+  }
+
+  function updateMultiSelectionHelpers(roots) {
+    while (multiSelectionHelpers.length < roots.length) multiSelectionHelpers.push(createSelectionOutlineHelper());
+    roots.forEach(function (root, index) {
+      const helper = multiSelectionHelpers[index];
+      root.updateWorldMatrix(true, true);
+      helper.setFromObject(root);
+      helper.visible = true;
+    });
+    for (let index = roots.length; index < multiSelectionHelpers.length; index += 1) {
+      multiSelectionHelpers[index].visible = false;
+    }
+  }
+
   function updateSelectionHelper() {
     if (!selectionHelper) return;
-    if (!debugHelpersVisibleInCurrentMode()) {
+    if (mode === "editor" || !debugHelpersVisibleInCurrentMode()) {
       selectionHelper.object = null;
       selectionHelper.visible = false;
+      hideMultiSelectionHelpers();
       updateTransformGuide();
       return;
     }
+    if (selectedEntityIds.size > 1) {
+      selectionHelper.object = null;
+      selectionHelper.visible = false;
+      const roots = Array.from(selectedEntityIds).map(rootForSelectableId).filter(Boolean);
+      updateMultiSelectionHelpers(roots);
+      updateTransformGuide();
+      return;
+    }
+    hideMultiSelectionHelpers();
     const object = refreshSelectedRootReference();
     if (!object) {
       selectionHelper.object = null;
@@ -10419,11 +11946,13 @@ function resolveChunkDebugCenter(policy) {
 
   function clearSelectedRuntimeEntity() {
     selectedEntityId = null;
+    selectedEntityIds.clear();
     selectedRoot = null;
     transformSession = null;
     transformState.active = false;
     transformState.cancelled = false;
     transformState.object = null;
+    transformState.objects = null;
     transformState.rootId = null;
     transformState.start = null;
     transformState.axis = null;
@@ -10431,6 +11960,7 @@ function resolveChunkDebugCenter(policy) {
       selectionHelper.object = null;
       selectionHelper.visible = false;
     }
+    hideMultiSelectionHelpers();
     if (transformGuide) transformGuide.visible = false;
     transformAxisConstraint = null;
     if (orbitControls) orbitControls.enabled = true;
@@ -10453,11 +11983,12 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
-  function restoreTransformStart(state) {
-    if (!state || !transformSession?.object) return;
-    transformSession.object.position.copy(state.position);
-    transformSession.object.rotation.copy(state.rotation);
-    transformSession.object.scale.copy(state.scale);
+  function restoreTransformStart(state, object) {
+    const target = object || transformSession?.object;
+    if (!state || !target) return;
+    target.position.copy(state.position);
+    target.rotation.copy(state.rotation);
+    target.scale.copy(state.scale);
   }
 
   function constraintKeyToAxis(axisKey) {
@@ -10506,6 +12037,15 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function rectFromPoints(x1, y1, x2, y2) {
+    return {
+      left: Math.min(x1, x2),
+      right: Math.max(x1, x2),
+      top: Math.min(y1, y2),
+      bottom: Math.max(y1, y2)
+    };
+  }
+
   function radialAngleForPointer(center, pointer) {
     if (!center || !pointer) return null;
     const dx = pointer.x - center.x;
@@ -10524,14 +12064,26 @@ function resolveChunkDebugCenter(policy) {
 
   function radialRotationDelta(transform, pointer) {
     const center = transform?.radialCenter || getObjectScreenCenter(transform?.object);
-    const startAngle = Number.isFinite(transform?.radialStartAngle)
+    let startAngle = Number.isFinite(transform?.radialStartAngle)
       ? transform.radialStartAngle
       : radialAngleForPointer(center, transform?.startPointer);
     const currentAngle = radialAngleForPointer(center, pointer);
+    // radialAngleForPointer returns null within 8px of the pivot - a transform that
+    // starts right where the object already sits on screen (common right after
+    // selecting/tapping it, before pressing Rotate) can have a startPointer that close,
+    // which used to permanently stick this whole drag with the cruder pixel-delta
+    // fallback below. Once the drag first reaches a usable angle, adopt that as the
+    // baseline instead, so the rest of the gesture uses the proper angle math.
+    if (!Number.isFinite(startAngle) && Number.isFinite(currentAngle) && transform) {
+      transform.radialStartAngle = currentAngle;
+      startAngle = currentAngle;
+    }
     if (!Number.isFinite(startAngle) || !Number.isFinite(currentAngle)) {
+      // Plain horizontal delta, not (dx - dy): that combination cancels toward
+      // zero on an ordinary diagonal drag (dx roughly equal to dy), which made
+      // this crude fallback silently produce near-zero rotation most of the time.
       const dx = pointer.x - transform.startPointer.x;
-      const dy = pointer.y - transform.startPointer.y;
-      return -(dx - dy) * 0.01;
+      return -dx * 0.01;
     }
     const delta = normalizeAngleDelta(currentAngle - startAngle);
     return Number.isFinite(delta) ? -delta : 0;
@@ -10552,9 +12104,11 @@ function resolveChunkDebugCenter(policy) {
       : radialDistanceForPointer(center, transform?.startPointer);
     const currentDistance = radialDistanceForPointer(center, pointer);
     if (!Number.isFinite(startDistance) || !Number.isFinite(currentDistance)) {
-      const dx = pointer.x - transform.startPointer.x;
+      // Plain vertical delta, not (dx - dy): see the matching comment in
+      // radialRotationDelta - that combination cancelled toward zero on an
+      // ordinary diagonal drag.
       const dy = pointer.y - transform.startPointer.y;
-      return Math.max(0.001, 1 + (dx - dy) * 0.005);
+      return Math.max(0.001, 1 - dy * 0.005);
     }
     return Math.max(0.001, 1 + (currentDistance - startDistance) * 0.005);
   }
@@ -10603,6 +12157,12 @@ function resolveChunkDebugCenter(policy) {
     return selectedRoot || rootForSelectableId(selectedEntityId);
   }
 
+  // A session is active whether it holds a single object (the everyday case) or a
+  // group (objects) - callers just need to know "is a modal transform in progress".
+  function transformSessionActive() {
+    return Boolean(transformSession?.object || transformSession?.objects);
+  }
+
   function isPointerOverTransformControls() {
     return false;
   }
@@ -10629,8 +12189,21 @@ function resolveChunkDebugCenter(policy) {
       const groundDelta = new THREE.Vector3();
       groundDelta.addScaledVector(basis.right, dx * scale);
       groundDelta.addScaledVector(basis.forward, -dy * scale);
+      const ground = screenToGround(pointer.x, pointer.y);
       const next = transform.startPosition.clone();
-      if (!axis) {
+      if (ground && Number.isFinite(ground.x) && Number.isFinite(ground.z)) {
+        if (!axis) {
+          next.x = ground.x;
+          next.z = ground.z;
+          next.y = transform.startPosition.y;
+        } else if (axis === "x") {
+          next.x = ground.x;
+        } else if (axis === "y") {
+          next.z = ground.z;
+        } else if (axis === "z") {
+          next.y += -dy * scale;
+        }
+      } else if (!axis) {
         next.x += groundDelta.x;
         next.z += groundDelta.z;
         next.y = transform.startPosition.y;
@@ -10684,6 +12257,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function applyTransformPreview(pointer, triggerChange = true) {
+    if (transformSession?.objects) return applyGroupTransformPreview(pointer, triggerChange);
     if (!transformSession?.object) return false;
     const object = transformSession.object;
     const session = transformSession;
@@ -10710,8 +12284,154 @@ function resolveChunkDebugCenter(policy) {
     return changed;
   }
 
+  // Group counterpart of applyTransformToObject/applyTransformPreview: move applies the
+  // same world-space delta to every selected object's own start position (no pivot math
+  // needed). Rotate/scale compute the delta once from the shared pivot's screen position,
+  // then spin/scale each object in place - and, for the default (unconstrained) case, also
+  // revolve each object's position around the pivot, exactly like terrainPreviewGroupTransform
+  // does for points. Axis-locked rotate/scale only spins/scales objects in place (no orbit) -
+  // a deliberate scope cut, ground-plane group move/rotate/scale is the common case.
+  function applyGroupTransformPreview(pointer, triggerChange = true) {
+    if (!transformSession?.objects) return false;
+    const session = transformSession;
+    session.currentPointer = { x: pointer.x, y: pointer.y };
+    const mode = session.mode;
+    const axis = session.axis || null;
+    const pivot = session.pivot;
+    const dx = pointer.x - session.startPointer.x;
+    const dy = pointer.y - session.startPointer.y;
+    let changed = false;
+    if (mode === "move") {
+      const scale = worldUnitsPerPixel();
+      const basis = cameraGroundBasis();
+      const groundDelta = new THREE.Vector3();
+      groundDelta.addScaledVector(basis.right, dx * scale);
+      groundDelta.addScaledVector(basis.forward, -dy * scale);
+      const ground = screenToGround(pointer.x, pointer.y);
+      if (ground && pivot && Number.isFinite(ground.x) && Number.isFinite(ground.z)) {
+        groundDelta.set(ground.x - pivot.x, 0, ground.z - pivot.z);
+      }
+      // Recorded regardless of whether any live object actually moved (there may be
+      // none - forceGroup sessions can hold a selection with zero live meshes), so
+      // finishGroupTransform can still hand this ground-plane delta to the caller for
+      // value-only nodes (Walkable Surface, Location Anchor, ...) to apply on commit.
+      session.moveDelta = {
+        x: (!axis || axis === "x") ? groundDelta.x : 0,
+        z: (!axis || axis === "y") ? groundDelta.z : 0
+      };
+      for (const entry of session.objects) {
+        const next = entry.startPosition.clone();
+        if (!axis) {
+          next.x += groundDelta.x;
+          next.z += groundDelta.z;
+        } else if (axis === "x") {
+          next.x += groundDelta.x;
+        } else if (axis === "y") {
+          next.z += groundDelta.z;
+        } else if (axis === "z") {
+          next.y += -dy * scale;
+        }
+        if (snapState.mode === "grid" || (snapState.mode === "off" && modifierState.ctrlKey)) {
+          const gridSize = Math.max(0.0001, num(snapState.gridSize, 1));
+          if (!axis || axis === "x") next.x = Math.round(next.x / gridSize) * gridSize;
+          if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
+          if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
+        }
+        if (snapState.mode === "ground" && entry.object.userData.snapToGround !== false) {
+          next.y = num(world?.ground?.y, 0);
+        }
+        if (!entry.object.position.equals(next)) {
+          entry.object.position.copy(next);
+          changed = true;
+        }
+      }
+    } else if (mode === "rotate") {
+      const rotationAxis = constraintKeyToAxis(axis || "z") || "y";
+      const deltaAngle = radialRotationDelta(session, pointer);
+      if (Number.isFinite(deltaAngle)) {
+        const cos = Math.cos(deltaAngle);
+        const sin = Math.sin(deltaAngle);
+        for (const entry of session.objects) {
+          const nextRotation = entry.startRotation.clone();
+          nextRotation[rotationAxis] = entry.startRotation[rotationAxis] + deltaAngle;
+          if (!entry.object.rotation.equals(nextRotation)) {
+            entry.object.rotation.copy(nextRotation);
+            changed = true;
+          }
+          if (rotationAxis === "y" && pivot) {
+            // Matches THREE's own makeRotationY(deltaAngle) (x'=x*cos+z*sin, z'=-x*sin+z*cos)
+            // rather than the unrelated 2D-math convention used for path/scatter points
+            // elsewhere in this file - points have no orientation of their own to stay
+            // rigid with, but these objects do, so this must agree with entry.object's
+            // own rotation.y increment above or the group would spin one way and orbit
+            // the other.
+            const offsetX = entry.startPosition.x - pivot.x;
+            const offsetZ = entry.startPosition.z - pivot.z;
+            const nextPosition = new THREE.Vector3(
+              pivot.x + (offsetX * cos + offsetZ * sin),
+              entry.startPosition.y,
+              pivot.z + (-offsetX * sin + offsetZ * cos)
+            );
+            if (!entry.object.position.equals(nextPosition)) {
+              entry.object.position.copy(nextPosition);
+              changed = true;
+            }
+          }
+        }
+      }
+    } else if (mode === "scale") {
+      const factor = radialScaleFactor(session, pointer);
+      const revolvePosition = pivot && (!axis || axis === "x" || axis === "y");
+      for (const entry of session.objects) {
+        const nextScale = entry.startScale.clone();
+        if (!axis) {
+          const uniform = Math.max(0.001, entry.startScale.x * factor);
+          nextScale.set(uniform, uniform, uniform);
+        } else if (axis === "x") {
+          nextScale.x = Math.max(0.001, entry.startScale.x * factor);
+        } else if (axis === "y") {
+          nextScale.z = Math.max(0.001, entry.startScale.z * factor);
+        } else if (axis === "z") {
+          nextScale.y = Math.max(0.001, entry.startScale.y * factor);
+        }
+        if (!entry.object.scale.equals(nextScale)) {
+          entry.object.scale.copy(nextScale);
+          changed = true;
+        }
+        if (revolvePosition) {
+          const nextPosition = entry.startPosition.clone();
+          if (!axis || axis === "x") nextPosition.x = pivot.x + (entry.startPosition.x - pivot.x) * factor;
+          if (!axis || axis === "y") nextPosition.z = pivot.z + (entry.startPosition.z - pivot.z) * factor;
+          if (!entry.object.position.equals(nextPosition)) {
+            entry.object.position.copy(nextPosition);
+            changed = true;
+          }
+        }
+      }
+    }
+    const deltaChanged = Boolean(mode === "move" && session.moveDelta && (Math.abs(session.moveDelta.x) > 1e-6 || Math.abs(session.moveDelta.z) > 1e-6));
+    const previewChanged = changed || deltaChanged;
+    transformDebugState = {
+      active: true,
+      rootId: session.rootId,
+      mode: session.mode,
+      axis: session.axis,
+      dx: round(dx),
+      dy: round(dy),
+      changed: previewChanged,
+      previews: (transformDebugState.previews || 0) + 1,
+      lastInputAt: Date.now()
+    };
+    if (previewChanged) {
+      updateSelectionHelper();
+      if (triggerChange) onTransformChange(session.rootId, null);
+      requestRender();
+    }
+    return previewChanged;
+  }
+
   function previewTransformAt(clientX, clientY, triggerChange = true) {
-    if (!transformSession?.object) return false;
+    if (!transformSessionActive()) return false;
     const x = Number(clientX);
     const y = Number(clientY);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -10719,8 +12439,20 @@ function resolveChunkDebugCenter(policy) {
     return applyTransformPreview({ x: x, y: y }, triggerChange);
   }
 
-  function beginTransform(modeName) {
-    if (transformSession?.object) return false;
+  function armPendingTouchTransform(modeName) {
+    const mode = modeName === "translate" ? "move" : modeName;
+    if (!["move", "rotate", "scale"].includes(mode)) return false;
+    pendingTouchTransformMode = mode;
+    return true;
+  }
+
+  function clearPendingTouchTransform() {
+    pendingTouchTransformMode = null;
+  }
+
+  function beginTransform(modeName, options = {}) {
+    if (transformSessionActive()) return false;
+    if (selectedEntityIds.size > 1 || options.forceGroup) return beginGroupTransform(modeName, options);
     const root = rootForSelectedTransform();
     if (!root || root.userData.transformable === false) return false;
     viewportPanSession = null;
@@ -10768,6 +12500,91 @@ function resolveChunkDebugCenter(policy) {
     return true;
   }
 
+  function beginGroupTransform(modeName, options = {}) {
+    const entries = Array.from(selectedEntityIds)
+      .map(function (id) { return { id: id, root: rootForSelectableId(id) }; })
+      .filter(function (entry) { return entry.root && entry.root.userData.transformable !== false; });
+    if (!options.forceGroup && entries.length < 2) {
+      // Fewer than two actually-transformable roots (e.g. the rest were scatter areas) -
+      // fall back to the ordinary single-object session for whichever one remains.
+      if (entries.length === 1) {
+        selectEntity(entries[0].id);
+        return beginTransform(modeName);
+      }
+      return false;
+    }
+    // forceGroup means the editor's own selection has more nodes than this runtime found
+    // live meshes for (Location Anchor has none; Walkable Surface/Surface Layer aren't a
+    // single pickable root) - entries can legitimately be 0 or 1 here. Move still works via
+    // the pointer-only delta reported on commit; there's just nothing to live-preview.
+    viewportPanSession = null;
+    const mode = modeName === "translate" ? "move" : modeName === "rotate" || modeName === "scale" ? modeName : "move";
+    const rect = canvas.getBoundingClientRect();
+    const startPointer = lastEditorPointer
+      ? { x: lastEditorPointer.clientX, y: lastEditorPointer.clientY }
+      : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const pivotBox = new THREE.Box3();
+    for (const entry of entries) {
+      entry.root.updateWorldMatrix(true, true);
+      const worldPosition = new THREE.Vector3();
+      entry.root.getWorldPosition(worldPosition);
+      pivotBox.expandByPoint(worldPosition);
+    }
+    let pivot;
+    if (pivotBox.isEmpty()) {
+      const ground = screenToGround(startPointer.x, startPointer.y);
+      pivot = new THREE.Vector3(ground?.x || 0, 0, ground?.z || 0);
+    } else {
+      pivot = pivotBox.getCenter(new THREE.Vector3());
+    }
+    const radialCenter = mode === "rotate" || mode === "scale" ? worldToScreen(pivot) : null;
+    const objects = entries.map(function (entry) {
+      return {
+        object: entry.root,
+        rootId: entry.id,
+        start: captureTransformStart(entry.root),
+        startPosition: entry.root.position.clone(),
+        startRotation: entry.root.rotation.clone(),
+        startScale: entry.root.scale.clone()
+      };
+    });
+    transformState = {
+      active: true,
+      cancelled: false,
+      object: null,
+      objects: objects,
+      pivot: pivot,
+      rootId: objects.length ? objects[0].rootId : (selectedEntityId || null),
+      start: null,
+      mode: mode,
+      axis: transformAxisConstraint,
+      startPointer: startPointer,
+      currentPointer: { x: startPointer.x, y: startPointer.y },
+      radialCenter: radialCenter,
+      radialStartAngle: radialAngleForPointer(radialCenter, startPointer),
+      radialStartDistance: radialDistanceForPointer(radialCenter, startPointer)
+    };
+    transformSession = transformState;
+    transformDebugState = {
+      active: true,
+      rootId: transformState.rootId,
+      mode: transformState.mode,
+      axis: transformState.axis,
+      dx: 0,
+      dy: 0,
+      changed: false,
+      previews: 0,
+      lastInputAt: Date.now()
+    };
+    if (orbitControls) orbitControls.enabled = false;
+    canvas.style.cursor = mode === "rotate" ? "ew-resize" : mode === "scale" ? "nwse-resize" : "move";
+    applyGroupTransformPreview(startPointer, false);
+    updateSelectionHelper();
+    onTransformChange(transformState.rootId, null);
+    requestRender();
+    return true;
+  }
+
   function beginKeyboardTransform() {
     return beginTransform(transformState.mode || "move");
   }
@@ -10793,6 +12610,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function finishTransform(commit) {
+    if (transformSession?.objects) return finishGroupTransform(commit);
     if (!transformSession?.object) return false;
     const session = transformSession;
     const object = session.object;
@@ -10837,8 +12655,68 @@ function resolveChunkDebugCenter(policy) {
     return shouldCommit;
   }
 
+  // Group counterpart of finishTransform - commits every changed object in a single
+  // onTransformCommit(commits) call (an array) so the caller can fold the whole group
+  // move/rotate/scale into one undo step instead of one per object.
+  function finishGroupTransform(commit) {
+    const session = transformSession;
+    const commits = [];
+    let anyChanged = false;
+    for (const entry of session.objects) {
+      const current = objectToTransform(entry.object);
+      const changed = Boolean(entry.start && JSON.stringify(current) !== JSON.stringify(entry.start.values));
+      if (changed) anyChanged = true;
+      if (!commit) {
+        if (entry.start) restoreTransformStart(entry.start, entry.object);
+      } else if (changed) {
+        commits.push({ entityId: entry.rootId, transform: current });
+      }
+    }
+    // Move's ground-plane delta applies to every selected node, live-dragged or not -
+    // the caller uses it to patch whichever selected nodes had no live object above
+    // (Walkable Surface, Location Anchor, ...). Rotate/scale don't carry a delta: that
+    // combination isn't supported for value-only nodes yet.
+    const delta = session.mode === "move" ? session.moveDelta : null;
+    const deltaChanged = Boolean(delta && (Math.abs(delta.x) > 1e-6 || Math.abs(delta.z) > 1e-6));
+    if (deltaChanged) anyChanged = true;
+    transformSession = null;
+    transformState.active = false;
+    transformState.cancelled = !commit;
+    transformState.object = null;
+    transformState.objects = null;
+    transformState.pivot = null;
+    transformState.rootId = null;
+    transformState.start = null;
+    transformState.axis = null;
+    transformDebugState = Object.assign({}, transformDebugState, {
+      active: false,
+      rootId: session.rootId,
+      mode: session.mode,
+      axis: session.axis,
+      changed: anyChanged,
+      lastInputAt: Date.now()
+    });
+    if (orbitControls) orbitControls.enabled = true;
+    canvas.style.cursor = "";
+    transformAxisConstraint = null;
+    clearSelectedRuntimeEntity();
+    const shouldCommit = Boolean(commit && (commits.length || deltaChanged));
+    if (shouldCommit) onTransformCommit({ commits: commits, mode: session.mode, delta: deltaChanged ? delta : null });
+    onTransformEnd({
+      action: commit ? "confirm" : "cancel",
+      entityId: session.rootId,
+      mode: session.mode,
+      axis: session.axis,
+      transform: null,
+      changed: anyChanged
+    });
+    updateSelectionHelper();
+    requestRender();
+    return shouldCommit;
+  }
+
   function confirmTransform() {
-    if (transformSession?.object && lastEditorPointer) {
+    if (transformSessionActive() && lastEditorPointer) {
       previewTransformAt(lastEditorPointer.clientX, lastEditorPointer.clientY, true);
     }
     return finishTransform(true);
@@ -10848,9 +12726,36 @@ function resolveChunkDebugCenter(policy) {
     return finishTransform(false);
   }
 
+  function transformPointerEventTargetsCanvas(event) {
+    if (!event || !canvas) return false;
+    if (event.target === canvas) return true;
+    // A real interactive control sitting on top of the canvas (the Move/Rot/Scale
+    // buttons, transform matrix inputs, ...) is never what a genuine drag is targeting,
+    // even when it geometrically overlaps the canvas - see the matching comment in
+    // editor.js's runtimeTransformPointerEventTargetsViewport.
+    if (event.target && typeof event.target.closest === "function"
+      && event.target.closest("button, input, select, textarea, a")) return false;
+    // Same reasoning as editor.js's runtimeTransformPointerEventTargetsViewport: fall back
+    // to geometric bounds regardless of event.target, so a touch drag that passes under a
+    // floating UI panel mid-gesture still counts as targeting the canvas - otherwise the
+    // confirming pointerup can get rejected and the transform is stuck active forever.
+    const rect = canvas.getBoundingClientRect();
+    const x = Number(event.clientX);
+    const y = Number(event.clientY);
+    return Number.isFinite(x) && Number.isFinite(y)
+      && x >= rect.left && x <= rect.right
+      && y >= rect.top && y <= rect.bottom;
+  }
+
   function handleTransformPointerMove(event) {
-    rememberEditorPointer(event);
-    if (transformSession?.object) {
+    if (updateViewportTouchZoomSession(event)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (transformSessionActive()) {
+      if (!transformPointerEventTargetsCanvas(event)) return;
+      rememberEditorPointer(event);
       event.preventDefault();
       event.stopImmediatePropagation();
       previewTransformAt(event.clientX, event.clientY, true);
@@ -10860,12 +12765,28 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function handleTransformPointerUp(event) {
-    rememberEditorPointer(event);
-    if (transformSession?.object) {
+    removeViewportTouchZoomPointer(event?.pointerId);
+    editorTouchPointers.delete(event?.pointerId);
+    // See the matching comment in trackViewportTouchPointer - OrbitControls' own
+    // document-level pointerup listener (registered even later than this one) must not be
+    // relied on to see this event once we stop its propagation below.
+    if (event?.pointerId !== undefined && orbitControls && typeof orbitControls._removePointer === "function") {
+      orbitControls._removePointer(event);
+    }
+    if (transformSessionActive()) {
+      if (!transformPointerEventTargetsCanvas(event)) return;
+      rememberEditorPointer(event);
       event.preventDefault();
       event.stopImmediatePropagation();
       if (event.button === 2 || event.button === 1) {
         cancelTransform();
+        return;
+      }
+      if (event.type === "pointercancel") {
+        // A cancel carries no trustworthy final position (some browsers zero it
+        // or freeze it at pointerdown) - confirm using whatever was already
+        // genuinely previewed rather than sampling this event's coordinates.
+        confirmTransform();
         return;
       }
       if (event.button === 0 || event.button === undefined) {
@@ -10879,7 +12800,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function applyTransformSnapState() {
-    if (!transformSession?.object) return;
+    if (!transformSessionActive()) return;
     if (transformSession.currentPointer) {
       applyTransformPreview(transformSession.currentPointer, false);
     }
@@ -11019,7 +12940,214 @@ function resolveChunkDebugCenter(policy) {
     return true;
   }
 
-  function panOrbitByPixels(deltaX, deltaY) {
+  function viewportTouchDistance(a, b) {
+    const dx = a.clientX - b.clientX;
+    const dy = a.clientY - b.clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  function viewportTouchMidpoint(a, b) {
+    return {
+      clientX: (a.clientX + b.clientX) / 2,
+      clientY: (a.clientY + b.clientY) / 2
+    };
+  }
+
+  function activeViewportTouchPair() {
+    if (viewportTouchPointers.size !== 2) return null;
+    const entries = Array.from(viewportTouchPointers.entries());
+    return {
+      idA: entries[0][0],
+      idB: entries[1][0],
+      a: entries[0][1],
+      b: entries[1][1]
+    };
+  }
+
+  function viewportTouchPairChanged(session, pair) {
+    return !session || session.idA !== pair.idA || session.idB !== pair.idB;
+  }
+
+  function beginViewportTouchZoomSession(pair, distance, mid) {
+    viewportTouchZoomSession = {
+      idA: pair.idA,
+      idB: pair.idB,
+      startA: { clientX: pair.a.clientX, clientY: pair.a.clientY },
+      startB: { clientX: pair.b.clientX, clientY: pair.b.clientY },
+      startDistance: distance,
+      startMid: mid,
+      lastDistance: distance,
+      lastMid: mid,
+      mode: null,
+      zoomed: false
+    };
+    return viewportTouchZoomSession;
+  }
+
+  function classifyViewportTouchGesture(session, pair, distance, mid) {
+    if (!session || session.mode === "pinch") return;
+    const distanceDelta = Math.abs(distance - session.startDistance);
+    const midMove = viewportTouchDistance(mid, session.startMid);
+    const moveA = viewportTouchDistance(pair.a, session.startA);
+    const moveB = viewportTouchDistance(pair.b, session.startB);
+    const bothMoved = Math.min(moveA, moveB) >= 5;
+    const deltaA = {
+      clientX: pair.a.clientX - session.startA.clientX,
+      clientY: pair.a.clientY - session.startA.clientY
+    };
+    const deltaB = {
+      clientX: pair.b.clientX - session.startB.clientX,
+      clientY: pair.b.clientY - session.startB.clientY
+    };
+    const movementDot = deltaA.clientX * deltaB.clientX + deltaA.clientY * deltaB.clientY;
+    const movementMagnitude = Math.max(0.0001, moveA * moveB);
+    const sameDirection = bothMoved && movementDot / movementMagnitude > 0.55;
+    const clearPinch = distanceDelta >= viewportTouchZoomDeltaPx
+      && !sameDirection
+      && distanceDelta >= Math.max(10, midMove * 1.25)
+      && (bothMoved || distanceDelta >= 22);
+    const clearPan = midMove >= 10 && (sameDirection || distanceDelta < midMove * 1.1 || bothMoved);
+
+    if (session.mode === "pan") {
+      if (!sameDirection && distanceDelta >= 36 && distanceDelta >= Math.max(18, midMove * 1.35)) session.mode = "pinch";
+      return;
+    }
+    if (clearPinch) session.mode = "pinch";
+    else if (clearPan) session.mode = "pan";
+  }
+
+  function applyViewportTouchZoomRatio(ratio) {
+    if (!orbitControls || !Number.isFinite(ratio) || ratio <= 0) return false;
+    if (camera.isPerspectiveCamera) {
+      const offset = camera.position.clone().sub(orbitControls.target);
+      const distance = offset.length();
+      if (!Number.isFinite(distance) || distance <= 0) return false;
+      const minDistance = Number.isFinite(orbitControls.minDistance) ? Math.max(0.001, orbitControls.minDistance) : 0.001;
+      const maxDistance = Number.isFinite(orbitControls.maxDistance) && orbitControls.maxDistance > 0 ? orbitControls.maxDistance : Infinity;
+      const nextDistance = clamp(distance / ratio, minDistance, Math.max(minDistance, maxDistance));
+      if (Math.abs(nextDistance - distance) < 0.001) return false;
+      offset.setLength(nextDistance);
+      camera.position.copy(orbitControls.target).add(offset);
+    } else if (camera.isOrthographicCamera) {
+      const currentZoom = Number(camera.zoom) || 1;
+      const minZoom = Number.isFinite(orbitControls.minZoom) ? Math.max(0.001, orbitControls.minZoom) : 0.001;
+      const maxZoom = Number.isFinite(orbitControls.maxZoom) && orbitControls.maxZoom > 0 ? orbitControls.maxZoom : Infinity;
+      const nextZoom = clamp(currentZoom * ratio, minZoom, Math.max(minZoom, maxZoom));
+      if (Math.abs(nextZoom - currentZoom) < 0.001) return false;
+      camera.zoom = nextZoom;
+      camera.updateProjectionMatrix();
+    } else {
+      return false;
+    }
+    orbitControls.update();
+    scheduleEditorCameraSave();
+    requestRender("touch-pinch-zoom");
+    return true;
+  }
+
+  function updateViewportTouchZoomSession(event) {
+    if (!event || event.pointerType !== "touch" || event.pointerId === undefined) return false;
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+    if (event.type !== "pointerdown" && !viewportTouchPointers.has(event.pointerId)) return false;
+    viewportTouchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    if (viewportTouchPointers.size > 1) {
+      viewportTouchSuppressSingleOrbit = true;
+      for (const active of editorTouchPointers.values()) active.multiTouch = true;
+    }
+
+    const pair = activeViewportTouchPair();
+    if (!pair) {
+      viewportTouchZoomSession = null;
+      return viewportTouchSuppressSingleOrbit && viewportTouchPointers.has(event.pointerId);
+    }
+    const distance = viewportTouchDistance(pair.a, pair.b);
+    if (!Number.isFinite(distance) || distance < viewportTouchZoomMinDistancePx) return true;
+    const mid = viewportTouchMidpoint(pair.a, pair.b);
+    const session = viewportTouchPairChanged(viewportTouchZoomSession, pair)
+      ? beginViewportTouchZoomSession(pair, distance, mid)
+      : viewportTouchZoomSession;
+
+    classifyViewportTouchGesture(session, pair, distance, mid);
+    if (session.mode === "pan") {
+      const lastMid = session.lastMid || mid;
+      const deltaX = mid.clientX - lastMid.clientX;
+      const deltaY = mid.clientY - lastMid.clientY;
+      session.lastMid = mid;
+      session.lastDistance = distance;
+      if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) panOrbitByPixels(deltaX, deltaY);
+      return true;
+    }
+    if (session.mode !== "pinch") {
+      session.lastMid = mid;
+      session.lastDistance = distance;
+      return true;
+    }
+
+    const distanceStep = distance - session.lastDistance;
+    const ratio = distance / Math.max(1, session.lastDistance);
+    if (Math.abs(distanceStep) < viewportTouchZoomStepPx && Math.abs(ratio - 1) < 0.012) return true;
+    if (applyViewportTouchZoomRatio(ratio)) {
+      session.lastDistance = distance;
+      session.lastMid = mid;
+      session.zoomed = true;
+    }
+    return true;
+  }
+
+  function removeViewportTouchZoomPointer(pointerId) {
+    if (pointerId === undefined) return;
+    const shouldFlush = viewportTouchZoomSession?.zoomed === true;
+    viewportTouchPointers.delete(pointerId);
+    if (viewportTouchPointers.size < 2) viewportTouchZoomSession = null;
+    if (viewportTouchPointers.size === 0) viewportTouchSuppressSingleOrbit = false;
+    if (shouldFlush) flushEditorCameraSave();
+  }
+
+  function trackViewportTouchPointer(event) {
+    if (!event || event.pointerType !== "touch" || event.pointerId === undefined) return false;
+    if (event.type === "pointerup" || event.type === "pointercancel") {
+      removeViewportTouchZoomPointer(event.pointerId);
+      // A transform confirming via touch is handled by editor.js's handler, which fires
+      // before (and stops propagation before reaching) the dynamically-added onUp/onCancel
+      // closure inside editorPointerDownHandler that would normally delete this pointer's
+      // entry from editorTouchPointers. Left behind, its stale presence makes
+      // editorTouchPointers.size > 0 look true for every later touch, which is read as
+      // "multi-touch" and silently blocks selecting or moving anything else afterwards.
+      editorTouchPointers.delete(event.pointerId);
+      // OrbitControls (three.js) tracks its own touch pointers internally via its own
+      // document-level pointerup listener, added later than ours - our earlier
+      // stopImmediatePropagation() for the confirming pointerup means it never sees this
+      // release, so its internal pointer count gets stuck at 1 forever. Every later
+      // single-finger touch then looks like "2 pointers" to it and gets misread as a
+      // pan/pinch gesture instead of a plain orbit rotate. _removePointer is "private" by
+      // naming convention only (no other public API achieves this), and safely no-ops if
+      // this pointerId isn't tracked.
+      if (orbitControls && typeof orbitControls._removePointer === "function") {
+        orbitControls._removePointer(event);
+      }
+      return false;
+    }
+    return updateViewportTouchZoomSession(event);
+  }
+
+  // Lets editor.js tell us "this touch was already resolved by something of mine (e.g.
+  // the always-visible jump-to-node marker), don't also treat its release as a tap on
+  // empty space" - without this, editorPointerDownHandler's own closure for the same
+  // touch would see no entity under it and deselect right after editor.js just selected
+  // something else via that same touch.
+  function markEditorTouchHandled(pointerId) {
+    const active = editorTouchPointers.get(pointerId);
+    if (active) active.handled = true;
+  }
+
+  function viewportPanSpeedMultiplier(distance) {
+    if (camera.isOrthographicCamera) return Math.max(1, num(camera.zoom, 1));
+    if (!Number.isFinite(distance) || distance <= 0) return 1;
+    const referenceDistance = Math.max(distance, num(camMaxDistance, 48));
+    return Math.max(1, referenceDistance / distance);
+  }
+
+  function panOrbitByPixels(deltaX, deltaY, fastWhenZoomed = false) {
     if (!orbitControls) return;
     const element = canvas;
     const pan = new THREE.Vector3();
@@ -11028,14 +13156,15 @@ function resolveChunkDebugCenter(policy) {
       const distance = camera.position.distanceTo(orbitControls.target);
       if (!Number.isFinite(distance) || distance <= 0) return;
       const targetDistance = distance * Math.tan((camera.fov * DEG_TO_RAD) / 2);
-      const scale = 2 * targetDistance / Math.max(1, element.clientHeight || 1);
+      const scale = (2 * targetDistance / Math.max(1, element.clientHeight || 1)) * (fastWhenZoomed ? viewportPanSpeedMultiplier(distance) : 1);
       pan.setFromMatrixColumn(camera.matrix, 0).multiplyScalar(-deltaX * scale);
       pan.addScaledVector(new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1), deltaY * scale);
     } else if (camera.isOrthographicCamera) {
       const width = Math.max(1, element.clientWidth || 1);
       const height = Math.max(1, element.clientHeight || 1);
-      const scaleX = (camera.right - camera.left) / Math.max(1, camera.zoom * width);
-      const scaleY = (camera.top - camera.bottom) / Math.max(1, camera.zoom * height);
+      const speed = fastWhenZoomed ? viewportPanSpeedMultiplier(0) : 1;
+      const scaleX = ((camera.right - camera.left) / Math.max(1, camera.zoom * width)) * speed;
+      const scaleY = ((camera.top - camera.bottom) / Math.max(1, camera.zoom * height)) * speed;
       pan.setFromMatrixColumn(camera.matrix, 0).multiplyScalar(-deltaX * scaleX);
       pan.addScaledVector(new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1), deltaY * scaleY);
     } else {
@@ -11055,7 +13184,7 @@ function resolveChunkDebugCenter(policy) {
     const deltaY = event.clientY - viewportPanSession.lastClientY;
     viewportPanSession.lastClientX = event.clientX;
     viewportPanSession.lastClientY = event.clientY;
-    if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) panOrbitByPixels(deltaX, deltaY);
+    if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) panOrbitByPixels(deltaX, deltaY, true);
   }
 
   function handleViewportPanUp(event) {
@@ -11160,6 +13289,48 @@ function resolveChunkDebugCenter(policy) {
     camDistance = Math.min(camMaxDistance, Math.max(camMinDistance, value));
   }
 
+  // Inverse of updateCameraPosition(): reads the live orbitControls camera back into
+  // pitch/yaw/distance/target so it can be persisted onto the editor_camera node.
+  function captureEditorCameraFields() {
+    if (!orbitControls) return null;
+    const target = orbitControls.target;
+    const offset = camera.position.clone().sub(target);
+    const distance = offset.length();
+    if (!Number.isFinite(distance) || distance < 0.001) return null;
+    const pitch = Math.asin(Math.min(1, Math.max(-1, offset.y / distance))) / DEG_TO_RAD;
+    const yaw = Math.atan2(offset.x, offset.z) / DEG_TO_RAD;
+    return {
+      targetX: target.x,
+      targetY: target.y,
+      targetZ: target.z,
+      pitch: pitch,
+      yaw: yaw,
+      distance: distance
+    };
+  }
+
+  function scheduleEditorCameraSave() {
+    if (mode !== "editor" || typeof options.onEditorCameraChange !== "function") return;
+    if (editorCameraSaveTimer) clearTimeout(editorCameraSaveTimer);
+    editorCameraSaveTimer = setTimeout(function () {
+      editorCameraSaveTimer = null;
+      const fields = captureEditorCameraFields();
+      if (fields) options.onEditorCameraChange(fields);
+    }, 700);
+  }
+
+  function flushEditorCameraSave() {
+    if (mode !== "editor" || typeof options.onEditorCameraChange !== "function") return false;
+    if (editorCameraSaveTimer) {
+      clearTimeout(editorCameraSaveTimer);
+      editorCameraSaveTimer = null;
+    }
+    const fields = captureEditorCameraFields();
+    if (!fields) return false;
+    options.onEditorCameraChange(fields);
+    return true;
+  }
+
   function playerCameraTarget() {
     return playerCameraTargetCache.set(player.pos.x, player.pos.y + camTargetHeightOffset, player.pos.z);
   }
@@ -11167,8 +13338,212 @@ function resolveChunkDebugCenter(policy) {
   function addGround(worldData) {
     const ground = worldData?.ground;
     if (!ground?.width || !ground?.depth) return;
+    const mesh = addGroundPlaneMesh(worldData, ground, "published-ground");
+    if (mesh) fullGroundPlane = mesh;
+  }
+
+  function groundsReferToSameZone(left, right) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    const fields = ["id", "groundId", "zoneRef", "zoneId"];
+    return fields.some(function (field) {
+      const leftValue = String(left?.[field] || "").trim();
+      const rightValue = String(right?.[field] || "").trim();
+      return Boolean(leftValue && rightValue && leftValue === rightValue);
+    });
+  }
+
+  function groundRangesOverlap(minA, maxA, minB, maxB) {
+    return Math.min(maxA, maxB) - Math.max(minA, minB) > 0.001;
+  }
+
+  function groundBlendSideForGround(ground, fallbackColor, width = 0) {
+    const textureSize = groundTextureWorldSize(ground);
+    return {
+      color: colorFromHex(ground?.materialColor, fallbackColor || "#ffffff"),
+      textureAssetId: String(ground?.textureAssetId || "").trim(),
+      textureWorldSizeX: textureSize.x,
+      textureWorldSizeZ: textureSize.z,
+      width: Math.max(0, num(width, 0))
+    };
+  }
+
+  function groundBlendConfigForGround(worldData, ground, bounds) {
+    if (!ground || !bounds) return null;
+    const targetEntry = zoneEdgeBlendGroundEntries(worldData).find(function (entry) {
+      return groundsReferToSameZone(entry.ground, ground);
+    }) || { ground: ground, bounds: bounds };
+    const config = {
+      width: 0,
+      left: null,
+      right: null,
+      top: null,
+      bottom: null
+    };
+    const epsilon = 0.25;
+    for (const sourceEntry of zoneEdgeBlendGroundEntries(worldData)) {
+      if (!sourceEntry?.ground || groundsReferToSameZone(targetEntry.ground, sourceEntry.ground)) continue;
+      if (Math.abs(num(sourceEntry.ground.y, num(targetEntry.ground.y, 0)) - num(targetEntry.ground.y, 0)) > 1) continue;
+      if (compareZoneEdgeLayerPriority(sourceEntry, targetEntry) > 0) continue;
+      const sideName = zoneEdgeSideBetween(targetEntry, sourceEntry, epsilon);
+      if (!sideName || config[sideName]) continue;
+      const sideWidth = Math.max(0, num(targetEntry.ground.edgeFadeWidth, 0), num(sourceEntry.ground.edgeFadeWidth, 0));
+      if (sideWidth <= 0.001) continue;
+      const side = groundBlendSideForGround(sourceEntry.ground, ground.materialColor || "#ffffff", sideWidth);
+      config[sideName] = side;
+      config.width = Math.max(config.width, side.width);
+    }
+    return config.left || config.right || config.top || config.bottom ? config : null;
+  }
+
+  function groundBlendSideColor(side, fallbackColor) {
+    return side?.color instanceof THREE.Color ? side.color : colorFromHex(side?.color, fallbackColor || "#ffffff");
+  }
+
+  function groundBlendSideTextureSize(side) {
+    return new THREE.Vector2(
+      Math.max(0.01, num(side?.textureWorldSizeX, 10)),
+      Math.max(0.01, num(side?.textureWorldSizeZ, 10))
+    );
+  }
+
+  function groundBlendSideWidth(side, fallbackWidth) {
+    return Math.max(0, num(side?.width, fallbackWidth));
+  }
+
+  function createGroundPlaneMaterial(ground, bounds, blendConfig = null) {
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
+      roughness: 0.9,
+      metalness: 0,
+      flatShading: sharedWorldPerformance().smoothShading === false,
+      side: THREE.DoubleSide,
+      transparent: false,
+      depthWrite: true
+    });
+    if (blendConfig && bounds) {
+      const baseColor = colorFromHex(ground.materialColor, "#ffffff");
+      const uniforms = {
+        groundMinX: { value: num(bounds.minX, 0) },
+        groundMaxX: { value: num(bounds.maxX, 0) },
+        groundMinZ: { value: num(bounds.minZ, 0) },
+        groundMaxZ: { value: num(bounds.maxZ, 0) },
+        groundEdgeBlendWidth: { value: Math.max(0, num(blendConfig.width, 0)) },
+        groundBlendLeft: { value: blendConfig.left ? (blendConfig.left.textureAssetId ? 0 : 1) : 0 },
+        groundBlendRight: { value: blendConfig.right ? (blendConfig.right.textureAssetId ? 0 : 1) : 0 },
+        groundBlendTop: { value: blendConfig.top ? (blendConfig.top.textureAssetId ? 0 : 1) : 0 },
+        groundBlendBottom: { value: blendConfig.bottom ? (blendConfig.bottom.textureAssetId ? 0 : 1) : 0 },
+        groundLeftColor: { value: groundBlendSideColor(blendConfig.left, baseColor) },
+        groundRightColor: { value: groundBlendSideColor(blendConfig.right, baseColor) },
+        groundTopColor: { value: groundBlendSideColor(blendConfig.top, baseColor) },
+        groundBottomColor: { value: groundBlendSideColor(blendConfig.bottom, baseColor) },
+        groundLeftTex: { value: cloneSurfaceFallbackTexture() },
+        groundRightTex: { value: cloneSurfaceFallbackTexture() },
+        groundTopTex: { value: cloneSurfaceFallbackTexture() },
+        groundBottomTex: { value: cloneSurfaceFallbackTexture() },
+        groundLeftHasTex: { value: 0 },
+        groundRightHasTex: { value: 0 },
+        groundTopHasTex: { value: 0 },
+        groundBottomHasTex: { value: 0 },
+        groundLeftNeedsTex: { value: blendConfig.left?.textureAssetId ? 1 : 0 },
+        groundRightNeedsTex: { value: blendConfig.right?.textureAssetId ? 1 : 0 },
+        groundTopNeedsTex: { value: blendConfig.top?.textureAssetId ? 1 : 0 },
+        groundBottomNeedsTex: { value: blendConfig.bottom?.textureAssetId ? 1 : 0 },
+        groundLeftTexSize: { value: groundBlendSideTextureSize(blendConfig.left) },
+        groundRightTexSize: { value: groundBlendSideTextureSize(blendConfig.right) },
+        groundTopTexSize: { value: groundBlendSideTextureSize(blendConfig.top) },
+        groundBottomTexSize: { value: groundBlendSideTextureSize(blendConfig.bottom) },
+        groundLeftEdgeWidth: { value: groundBlendSideWidth(blendConfig.left, blendConfig.width) },
+        groundRightEdgeWidth: { value: groundBlendSideWidth(blendConfig.right, blendConfig.width) },
+        groundTopEdgeWidth: { value: groundBlendSideWidth(blendConfig.top, blendConfig.width) },
+        groundBottomEdgeWidth: { value: groundBlendSideWidth(blendConfig.bottom, blendConfig.width) }
+      };
+      material.customProgramCacheKey = function () {
+        return "ground-edge-texture-blend-v4";
+      };
+      material.onBeforeCompile = function (shader) {
+        shader.uniforms.groundMinX = uniforms.groundMinX;
+        shader.uniforms.groundMaxX = uniforms.groundMaxX;
+        shader.uniforms.groundMinZ = uniforms.groundMinZ;
+        shader.uniforms.groundMaxZ = uniforms.groundMaxZ;
+        shader.uniforms.groundEdgeBlendWidth = uniforms.groundEdgeBlendWidth;
+        shader.uniforms.groundBlendLeft = uniforms.groundBlendLeft;
+        shader.uniforms.groundBlendRight = uniforms.groundBlendRight;
+        shader.uniforms.groundBlendTop = uniforms.groundBlendTop;
+        shader.uniforms.groundBlendBottom = uniforms.groundBlendBottom;
+        shader.uniforms.groundLeftColor = uniforms.groundLeftColor;
+        shader.uniforms.groundRightColor = uniforms.groundRightColor;
+        shader.uniforms.groundTopColor = uniforms.groundTopColor;
+        shader.uniforms.groundBottomColor = uniforms.groundBottomColor;
+        shader.uniforms.groundLeftTex = uniforms.groundLeftTex;
+        shader.uniforms.groundRightTex = uniforms.groundRightTex;
+        shader.uniforms.groundTopTex = uniforms.groundTopTex;
+        shader.uniforms.groundBottomTex = uniforms.groundBottomTex;
+        shader.uniforms.groundLeftHasTex = uniforms.groundLeftHasTex;
+        shader.uniforms.groundRightHasTex = uniforms.groundRightHasTex;
+        shader.uniforms.groundTopHasTex = uniforms.groundTopHasTex;
+        shader.uniforms.groundBottomHasTex = uniforms.groundBottomHasTex;
+        shader.uniforms.groundLeftNeedsTex = uniforms.groundLeftNeedsTex;
+        shader.uniforms.groundRightNeedsTex = uniforms.groundRightNeedsTex;
+        shader.uniforms.groundTopNeedsTex = uniforms.groundTopNeedsTex;
+        shader.uniforms.groundBottomNeedsTex = uniforms.groundBottomNeedsTex;
+        shader.uniforms.groundLeftTexSize = uniforms.groundLeftTexSize;
+        shader.uniforms.groundRightTexSize = uniforms.groundRightTexSize;
+        shader.uniforms.groundTopTexSize = uniforms.groundTopTexSize;
+        shader.uniforms.groundBottomTexSize = uniforms.groundBottomTexSize;
+        shader.uniforms.groundLeftEdgeWidth = uniforms.groundLeftEdgeWidth;
+        shader.uniforms.groundRightEdgeWidth = uniforms.groundRightEdgeWidth;
+        shader.uniforms.groundTopEdgeWidth = uniforms.groundTopEdgeWidth;
+        shader.uniforms.groundBottomEdgeWidth = uniforms.groundBottomEdgeWidth;
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nvarying vec2 vGroundWorldXZ;")
+          .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGroundWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xz;");
+        shader.fragmentShader = shader.fragmentShader
+          .replace("#include <common>", "#include <common>\nvarying vec2 vGroundWorldXZ;\nuniform float groundMinX;\nuniform float groundMaxX;\nuniform float groundMinZ;\nuniform float groundMaxZ;\nuniform float groundBlendLeft;\nuniform float groundBlendRight;\nuniform float groundBlendTop;\nuniform float groundBlendBottom;\nuniform vec3 groundLeftColor;\nuniform vec3 groundRightColor;\nuniform vec3 groundTopColor;\nuniform vec3 groundBottomColor;\nuniform sampler2D groundLeftTex;\nuniform sampler2D groundRightTex;\nuniform sampler2D groundTopTex;\nuniform sampler2D groundBottomTex;\nuniform float groundLeftHasTex;\nuniform float groundRightHasTex;\nuniform float groundTopHasTex;\nuniform float groundBottomHasTex;\nuniform vec2 groundLeftTexSize;\nuniform vec2 groundRightTexSize;\nuniform vec2 groundTopTexSize;\nuniform vec2 groundBottomTexSize;\nuniform float groundLeftEdgeWidth;\nuniform float groundRightEdgeWidth;\nuniform float groundTopEdgeWidth;\nuniform float groundBottomEdgeWidth;\nvec3 groundBlendSample(sampler2D tex, float hasTex, vec2 texSize, vec3 fallbackColor, vec2 worldXZ) {\n  vec2 sampleUv = worldXZ / max(texSize, vec2(0.01));\n  vec3 sampleColor = sRGBTransferEOTF(texture2D(tex, sampleUv)).rgb;\n  return hasTex > 0.5 ? sampleColor : fallbackColor;\n}")
+          .replace("#include <map_fragment>", "#include <map_fragment>\nfloat groundBlendWeight = 0.0;\nvec3 groundBlendColor = vec3(0.0);\nfloat groundLeftWeight = groundBlendLeft * (1.0 - smoothstep(0.0, max(groundLeftEdgeWidth, 0.001), max(vGroundWorldXZ.x - groundMinX, 0.0)));\nfloat groundRightWeight = groundBlendRight * (1.0 - smoothstep(0.0, max(groundRightEdgeWidth, 0.001), max(groundMaxX - vGroundWorldXZ.x, 0.0)));\nfloat groundTopWeight = groundBlendTop * (1.0 - smoothstep(0.0, max(groundTopEdgeWidth, 0.001), max(vGroundWorldXZ.y - groundMinZ, 0.0)));\nfloat groundBottomWeight = groundBlendBottom * (1.0 - smoothstep(0.0, max(groundBottomEdgeWidth, 0.001), max(groundMaxZ - vGroundWorldXZ.y, 0.0)));\ngroundBlendColor += groundBlendSample(groundLeftTex, groundLeftHasTex, groundLeftTexSize, groundLeftColor, vGroundWorldXZ) * groundLeftWeight;\ngroundBlendColor += groundBlendSample(groundRightTex, groundRightHasTex, groundRightTexSize, groundRightColor, vGroundWorldXZ) * groundRightWeight;\ngroundBlendColor += groundBlendSample(groundTopTex, groundTopHasTex, groundTopTexSize, groundTopColor, vGroundWorldXZ) * groundTopWeight;\ngroundBlendColor += groundBlendSample(groundBottomTex, groundBottomHasTex, groundBottomTexSize, groundBottomColor, vGroundWorldXZ) * groundBottomWeight;\ngroundBlendWeight = groundLeftWeight + groundRightWeight + groundTopWeight + groundBottomWeight;\nif (groundBlendWeight > 0.001) {\n  vec3 groundAverageBlend = groundBlendColor / groundBlendWeight;\n  diffuseColor.rgb = mix(diffuseColor.rgb, groundAverageBlend, clamp(groundBlendWeight, 0.0, 1.0));\n}");
+      };
+      material.userData.groundEdgeBlendUniforms = uniforms;
+    }
+    return material;
+  }
+
+  function applyGroundBlendNeighborTexture(worldData, material, sideName, side) {
+    const assetId = String(side?.textureAssetId || "").trim();
+    const uniforms = material?.userData?.groundEdgeBlendUniforms || null;
+    if (!assetId || !uniforms) return;
+    const asset = assetById(worldData, assetId);
+    if (!asset?.sourcePath) return;
+    const texUniform = uniforms["ground" + sideName + "Tex"];
+    const hasTexUniform = uniforms["ground" + sideName + "HasTex"];
+    const blendUniform = uniforms["groundBlend" + sideName];
+    retainTerrainTexture(asset, function (texture) {
+      if (!texUniform || !hasTexUniform || !material?.userData?.groundEdgeBlendUniforms) return;
+      const clone = texture.clone();
+      clone.colorSpace = THREE.SRGBColorSpace;
+      clone.wrapS = THREE.RepeatWrapping;
+      clone.wrapT = THREE.RepeatWrapping;
+      clone.repeat.set(1, 1);
+      clone.needsUpdate = true;
+      replaceUniformTexture(texUniform, clone);
+      hasTexUniform.value = 1;
+      if (blendUniform) blendUniform.value = 1;
+      material.needsUpdate = true;
+      requestRender("ground-edge-blend-texture-loaded");
+    });
+  }
+
+  function applyGroundBlendNeighborTextures(worldData, material, blendConfig) {
+    if (!blendConfig || !material?.userData?.groundEdgeBlendUniforms) return;
+    applyGroundBlendNeighborTexture(worldData, material, "Left", blendConfig.left);
+    applyGroundBlendNeighborTexture(worldData, material, "Right", blendConfig.right);
+    applyGroundBlendNeighborTexture(worldData, material, "Top", blendConfig.top);
+    applyGroundBlendNeighborTexture(worldData, material, "Bottom", blendConfig.bottom);
+  }
+
+  function addGroundPlaneMesh(worldData, ground, name) {
+    if (!ground?.width || !ground?.depth) return null;
     const bounds = effectiveGroundBounds(ground);
-    if (!bounds) return;
+    if (!bounds) return null;
     const geometry = createWorldPlaneGeometry(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, num(ground.y, 0), {
       minX: 0,
       maxX: groundTextureWorldSize(ground).x,
@@ -11177,24 +13552,19 @@ function resolveChunkDebugCenter(policy) {
       repeatX: 1,
       repeatZ: 1
     });
-    if (!geometry) return;
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(colorOrDefault(ground.materialColor, "#ffffff")),
-      roughness: 0.9,
-      metalness: 0,
-      flatShading: sharedWorldPerformance().smoothShading === false
-    });
+    if (!geometry) return null;
+    const material = createGroundPlaneMaterial(ground, bounds, null);
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = "published-ground";
+    mesh.name = name || "published-ground";
     mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
     mesh.userData.terrainRuntime = true;
     mesh.userData.groundPlane = true;
     mesh.userData.terrainChunkDisposed = false;
     const textureAsset = assetById(worldData, ground.textureAssetId);
-    fullGroundPlaneTextureAssetId = textureAsset?.id || null;
+    if (name === "published-ground") fullGroundPlaneTextureAssetId = textureAsset?.id || null;
     if (textureAsset?.sourcePath) {
       retainTerrainTexture(textureAsset, function (texture) {
-        if (fullGroundPlane !== mesh || mesh.userData?.terrainChunkDisposed === true) {
+        if (mesh.userData?.terrainChunkDisposed === true) {
           return;
         }
         const clone = texture.clone();
@@ -11209,9 +13579,298 @@ function resolveChunkDebugCenter(policy) {
     }
     const group = ensureTerrainRuntimeGroup();
     group.add(mesh);
-    fullGroundPlane = mesh;
     runtimeStats.sceneObjects += 1;
     runtimeStats.meshes += 1;
+    return mesh;
+  }
+
+  function addZoneGrounds(worldData) {
+    if (shouldUseChunkedGround(worldData, mode)) return;
+    const grounds = Array.isArray(worldData?.zoneGrounds) ? worldData.zoneGrounds : [];
+    if (!grounds.length) return;
+    const activeGroundId = String(worldData?.ground?.id || "");
+    for (const ground of grounds) {
+      if (!ground || (activeGroundId && String(ground.id || "") === activeGroundId)) continue;
+      const mesh = addGroundPlaneMesh(worldData, ground, "zone-ground " + String(ground.zoneRef || ground.id || ""));
+      if (mesh) mesh.userData.zoneGroundRuntime = true;
+    }
+  }
+
+  function zoneEdgeBlendGroundEntries(worldData) {
+    const entries = [];
+    function addGroundEntry(ground) {
+      const bounds = effectiveGroundBounds(ground);
+      if (!ground || !bounds) return;
+      if (entries.some(function (entry) { return groundsReferToSameZone(entry.ground, ground); })) return;
+      entries.push({ ground: ground, bounds: bounds });
+    }
+    addGroundEntry(worldData?.ground || null);
+    for (const ground of Array.isArray(worldData?.zoneGrounds) ? worldData.zoneGrounds : []) addGroundEntry(ground);
+    return entries;
+  }
+
+  function zoneEdgeEntryCenter(entry) {
+    const bounds = entry?.bounds || {};
+    return {
+      x: (num(bounds.minX, 0) + num(bounds.maxX, 0)) / 2,
+      z: (num(bounds.minZ, 0) + num(bounds.maxZ, 0)) / 2
+    };
+  }
+
+  function zoneEdgeEntryKey(entry) {
+    const ground = entry?.ground || {};
+    return String(ground.zoneRef || ground.zoneId || ground.id || ground.groundId || "").trim();
+  }
+
+  function compareZoneEdgeLayerPriority(left, right) {
+    const leftCenter = zoneEdgeEntryCenter(left);
+    const rightCenter = zoneEdgeEntryCenter(right);
+    const leftDistance = Math.hypot(leftCenter.x, leftCenter.z);
+    const rightDistance = Math.hypot(rightCenter.x, rightCenter.z);
+    if (Math.abs(leftDistance - rightDistance) > 0.001) return leftDistance - rightDistance;
+    if (Math.abs(leftCenter.z - rightCenter.z) > 0.001) return leftCenter.z - rightCenter.z;
+    if (Math.abs(leftCenter.x - rightCenter.x) > 0.001) return leftCenter.x - rightCenter.x;
+    return zoneEdgeEntryKey(left).localeCompare(zoneEdgeEntryKey(right));
+  }
+
+  function zoneEdgeSideBetween(sourceEntry, targetEntry, epsilon) {
+    const sourceBounds = sourceEntry?.bounds;
+    const targetBounds = targetEntry?.bounds;
+    if (!sourceBounds || !targetBounds) return null;
+    if (Math.abs(targetBounds.minX - sourceBounds.maxX) <= epsilon && groundRangesOverlap(sourceBounds.minZ, sourceBounds.maxZ, targetBounds.minZ, targetBounds.maxZ)) return "right";
+    if (Math.abs(targetBounds.maxX - sourceBounds.minX) <= epsilon && groundRangesOverlap(sourceBounds.minZ, sourceBounds.maxZ, targetBounds.minZ, targetBounds.maxZ)) return "left";
+    if (Math.abs(targetBounds.minZ - sourceBounds.maxZ) <= epsilon && groundRangesOverlap(sourceBounds.minX, sourceBounds.maxX, targetBounds.minX, targetBounds.maxX)) return "bottom";
+    if (Math.abs(targetBounds.maxZ - sourceBounds.minZ) <= epsilon && groundRangesOverlap(sourceBounds.minX, sourceBounds.maxX, targetBounds.minX, targetBounds.maxX)) return "top";
+    return null;
+  }
+
+  function zoneEdgeOverlayBounds(sourceEntry, targetEntry, side, width) {
+    const sourceBounds = sourceEntry?.bounds;
+    const targetBounds = targetEntry?.bounds;
+    const safeWidth = Math.max(0.001, num(width, 0));
+    if (!sourceBounds || !targetBounds || !side) return null;
+    if (side === "right" || side === "left") {
+      const minZ = Math.max(sourceBounds.minZ, targetBounds.minZ);
+      const maxZ = Math.min(sourceBounds.maxZ, targetBounds.maxZ);
+      if (maxZ <= minZ) return null;
+      if (side === "right") {
+        return {
+          minX: targetBounds.minX,
+          maxX: Math.min(targetBounds.maxX, targetBounds.minX + safeWidth),
+          minZ: minZ,
+          maxZ: maxZ
+        };
+      }
+      return {
+        minX: Math.max(targetBounds.minX, targetBounds.maxX - safeWidth),
+        maxX: targetBounds.maxX,
+        minZ: minZ,
+        maxZ: maxZ
+      };
+    }
+    const minX = Math.max(sourceBounds.minX, targetBounds.minX);
+    const maxX = Math.min(sourceBounds.maxX, targetBounds.maxX);
+    if (maxX <= minX) return null;
+    if (side === "bottom") {
+      return {
+        minX: minX,
+        maxX: maxX,
+        minZ: targetBounds.minZ,
+        maxZ: Math.min(targetBounds.maxZ, targetBounds.minZ + safeWidth)
+      };
+    }
+    return {
+      minX: minX,
+      maxX: maxX,
+      minZ: Math.max(targetBounds.minZ, targetBounds.maxZ - safeWidth),
+      maxZ: targetBounds.maxZ
+    };
+  }
+
+  function createGroundEdgeOverlayMaterial(worldData, sourceGround, side, bounds, width, fadeBounds = bounds) {
+    const textureAsset = assetById(worldData, sourceGround?.textureAssetId);
+    const material = new THREE.MeshStandardMaterial({
+      color: groundBlendSideColor(groundBlendSideForGround(sourceGround, "#ffffff", width), "#ffffff"),
+      transparent: true,
+      opacity: 1,
+      alphaTest: 0.002,
+      side: THREE.DoubleSide,
+      depthTest: true,
+      depthWrite: false,
+      roughness: 0.9,
+      metalness: 0,
+      flatShading: sharedWorldPerformance().smoothShading === false,
+      toneMapped: true
+    });
+    if (textureAsset?.sourcePath) material.visible = false;
+    material.fog = true;
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -8;
+    material.polygonOffsetUnits = -8;
+    const sideIndex = side === "right" ? 0 : (side === "left" ? 1 : (side === "bottom" ? 2 : 3));
+    const actualWidth = side === "left" || side === "right"
+      ? Math.max(0.001, Math.abs(fadeBounds.maxX - fadeBounds.minX))
+      : Math.max(0.001, Math.abs(fadeBounds.maxZ - fadeBounds.minZ));
+    const uniforms = {
+      edgeMinX: { value: fadeBounds.minX },
+      edgeMaxX: { value: fadeBounds.maxX },
+      edgeMinZ: { value: fadeBounds.minZ },
+      edgeMaxZ: { value: fadeBounds.maxZ },
+      edgeWidth: { value: actualWidth },
+      edgeSide: { value: sideIndex }
+    };
+    material.customProgramCacheKey = function () {
+      return "ground-edge-overlay-fade-v2-" + String(sideIndex);
+    };
+    material.onBeforeCompile = function (shader) {
+      shader.uniforms.edgeMinX = uniforms.edgeMinX;
+      shader.uniforms.edgeMaxX = uniforms.edgeMaxX;
+      shader.uniforms.edgeMinZ = uniforms.edgeMinZ;
+      shader.uniforms.edgeMaxZ = uniforms.edgeMaxZ;
+      shader.uniforms.edgeWidth = uniforms.edgeWidth;
+      shader.uniforms.edgeSide = uniforms.edgeSide;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec2 vGroundEdgeOverlayWorldXZ;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvGroundEdgeOverlayWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xz;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying vec2 vGroundEdgeOverlayWorldXZ;\nuniform float edgeMinX;\nuniform float edgeMaxX;\nuniform float edgeMinZ;\nuniform float edgeMaxZ;\nuniform float edgeWidth;\nuniform float edgeSide;")
+        .replace("#include <map_fragment>", "#include <map_fragment>\nfloat edgeDistance = 0.0;\nif (edgeSide < 0.5) {\n  edgeDistance = max(vGroundEdgeOverlayWorldXZ.x - edgeMinX, 0.0);\n} else if (edgeSide < 1.5) {\n  edgeDistance = max(edgeMaxX - vGroundEdgeOverlayWorldXZ.x, 0.0);\n} else if (edgeSide < 2.5) {\n  edgeDistance = max(vGroundEdgeOverlayWorldXZ.y - edgeMinZ, 0.0);\n} else {\n  edgeDistance = max(edgeMaxZ - vGroundEdgeOverlayWorldXZ.y, 0.0);\n}\nfloat edgeAlpha = 1.0 - smoothstep(0.0, max(edgeWidth, 0.001), edgeDistance);\ndiffuseColor.a *= edgeAlpha;");
+    };
+    if (textureAsset?.sourcePath) {
+      retainTerrainTexture(textureAsset, function (texture) {
+        if (material.userData?.groundEdgeOverlayDisposed === true) return;
+        const clone = texture.clone();
+        clone.colorSpace = THREE.SRGBColorSpace;
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.repeat.set(1, 1);
+        clone.needsUpdate = true;
+        replaceMaterialMapTexture(material, clone);
+        material.visible = true;
+        material.needsUpdate = true;
+        requestRender("ground-edge-overlay-texture-loaded");
+      });
+    }
+    material.userData.groundEdgeOverlayUniforms = uniforms;
+    material.userData.groundEdgeOverlayDisposed = false;
+    return material;
+  }
+
+  function createGroundEdgeFadeOverlayObject(worldData, sourceEntry, targetEntry, side, bounds, width, fadeBounds = bounds) {
+    if (!bounds || bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) return false;
+    const sourceGround = sourceEntry?.ground || null;
+    const textureSize = groundTextureWorldSize(sourceGround);
+    const geometry = createWorldPlaneGeometry(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, num(targetEntry?.ground?.y, num(sourceGround?.y, 0)) + 0.045, {
+      minX: 0,
+      maxX: textureSize.x,
+      minZ: 0,
+      maxZ: textureSize.z,
+      repeatX: 1,
+      repeatZ: 1
+    });
+    if (!geometry) return null;
+    const material = createGroundEdgeOverlayMaterial(worldData, sourceGround, side, bounds, width, fadeBounds);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = "zone-edge-fader " + String(sourceGround?.zoneRef || sourceGround?.id || "ground") + " " + side;
+    mesh.renderOrder = 2825;
+    mesh.castShadow = false;
+    mesh.receiveShadow = Boolean(groundShadowOptions().receiveShadow);
+    mesh.frustumCulled = false;
+    mesh.userData.terrainRuntime = true;
+    mesh.userData.zoneEdgeFaderRuntime = true;
+    mesh.userData.runtimeAlive = true;
+    const textureAssetId = String(sourceGround?.textureAssetId || "").trim();
+    return {
+      object: mesh,
+      assetIds: textureAssetId ? [textureAssetId] : [],
+      cleanup: function () {
+        if (material?.userData) material.userData.groundEdgeOverlayDisposed = true;
+      }
+    };
+  }
+
+  function zoneEdgeFadeEntryId(sourceEntry, targetEntry, side, bounds, chunkKeyValue = "") {
+    const sourceGround = sourceEntry?.ground || {};
+    const targetGround = targetEntry?.ground || {};
+    return [
+      "zone-edge-fader",
+      String(sourceGround.zoneRef || sourceGround.id || sourceGround.groundId || "source"),
+      String(targetGround.zoneRef || targetGround.id || targetGround.groundId || "target"),
+      String(side || "side"),
+      String(chunkKeyValue || "full"),
+      round(bounds?.minX),
+      round(bounds?.maxX),
+      round(bounds?.minZ),
+      round(bounds?.maxZ)
+    ].join("::");
+  }
+
+  function addChunkedGroundEdgeFadeOverlay(worldData, sourceEntry, targetEntry, side, bounds, width, policy) {
+    const chunkKeys = chunkKeysForBounds(bounds, policy);
+    if (!chunkKeys.length) return false;
+    const sourceGround = sourceEntry?.ground || null;
+    const textureAssetId = String(sourceGround?.textureAssetId || "").trim();
+    let added = false;
+    for (const chunkKeyValue of chunkKeys) {
+      const chunkBounds = chunkBoundsForKey(chunkKeyValue, policy);
+      const pieceBounds = intersectBounds(bounds, chunkBounds);
+      if (!pieceBounds) continue;
+      const entryId = zoneEdgeFadeEntryId(sourceEntry, targetEntry, side, pieceBounds, chunkKeyValue);
+      const entry = registerStreamableTerrainRuntimeEntry({
+        id: entryId,
+        type: "terrainSurface",
+        terrainKind: "zoneEdgeFader",
+        layerId: "zone-edge-fader",
+        segmentId: chunkKeyValue,
+        chunkKey: chunkKeyValue,
+        chunkKeys: [chunkKeyValue],
+        assetIds: textureAssetId ? [textureAssetId] : []
+      }, function () {
+        return createGroundEdgeFadeOverlayObject(worldData, sourceEntry, targetEntry, side, pieceBounds, width, bounds);
+      });
+      if (entry) added = true;
+    }
+    return added;
+  }
+
+  function addGroundEdgeFadeOverlay(worldData, sourceEntry, targetEntry, side, bounds, width) {
+    if (!bounds || bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) return false;
+    const policy = resolveChunkPolicy(worldData, mode);
+    if (isChunkCullingRuntimeEnabled(policy)) {
+      return addChunkedGroundEdgeFadeOverlay(worldData, sourceEntry, targetEntry, side, bounds, width, policy);
+    }
+    const result = createGroundEdgeFadeOverlayObject(worldData, sourceEntry, targetEntry, side, bounds, width, bounds);
+    if (!result?.object) return false;
+    ensureTerrainRuntimeGroup().add(result.object);
+    const counts = countObjectTree(result.object);
+    runtimeStats.sceneObjects += counts.objects;
+    runtimeStats.meshes += counts.meshes;
+    runtimeStats.terrainVisuals += 1;
+    return true;
+  }
+
+  function addZoneEdgeFadeOverlays(worldData) {
+    const entries = zoneEdgeBlendGroundEntries(worldData);
+    if (entries.length < 2) return;
+    const epsilon = 0.25;
+    for (let leftIndex = 0; leftIndex < entries.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex += 1) {
+        const leftEntry = entries[leftIndex];
+        const rightEntry = entries[rightIndex];
+        if (groundsReferToSameZone(leftEntry.ground, rightEntry.ground)) continue;
+        const left = leftEntry.ground;
+        const right = rightEntry.ground;
+        if (Math.abs(num(right.y, num(left.y, 0)) - num(left.y, 0)) > 1) continue;
+        const width = Math.max(0, num(left.edgeFadeWidth, 0), num(right.edgeFadeWidth, 0));
+        if (width <= 0.001) continue;
+        if (!zoneEdgeSideBetween(leftEntry, rightEntry, epsilon)) continue;
+        const sourceEntry = compareZoneEdgeLayerPriority(leftEntry, rightEntry) <= 0 ? leftEntry : rightEntry;
+        const targetEntry = sourceEntry === leftEntry ? rightEntry : leftEntry;
+        const side = zoneEdgeSideBetween(sourceEntry, targetEntry, epsilon);
+        const bounds = zoneEdgeOverlayBounds(sourceEntry, targetEntry, side, width);
+        addGroundEdgeFadeOverlay(worldData, sourceEntry, targetEntry, side, bounds, width);
+      }
+    }
   }
 
   function addLights(worldData) {
@@ -11403,7 +14062,7 @@ function resolveChunkDebugCenter(policy) {
       mesh.name = template.name ? template.name + " [" + batchKind + "]" : batchKind + " [instances]";
       mesh.castShadow = options.castShadow !== false;
       mesh.receiveShadow = options.receiveShadow !== false;
-      mesh.frustumCulled = true;
+      mesh.frustumCulled = batchKind !== "scatter";
       mesh.matrixAutoUpdate = false;
       for (let index = 0; index < instanceTransforms.length; index += 1) {
         const transform = instanceTransforms[index];
@@ -11426,18 +14085,29 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function loadScatterInstancesInto(root, assetId, instances, worldData, options = {}) {
+    if (useEditorModelPlaceholders(worldData, options)) {
+      addScatterPlaceholderInstances(root, instances);
+      return;
+    }
     const asset = assetById(worldData, assetId);
     if (!asset?.sourcePath || !Array.isArray(instances) || !instances.length) return;
     const record = ensureModelRecord(asset, worldData);
     if (!record) return;
     const generation = worldBuildGeneration;
     const chunkPolicy = options.chunkPolicy || resolveChunkPolicy(worldData, mode);
+    const fallbackCloneCap = Number.isFinite(Number(options.fallbackCloneCap))
+      ? Math.max(0, Math.floor(Number(options.fallbackCloneCap)))
+      : Infinity;
+    const fallbackCloneSlice = function (list) {
+      return fallbackCloneCap === Infinity ? list : list.slice(0, fallbackCloneCap);
+    };
     const attach = function (gltf) {
       if (generation !== worldBuildGeneration) return;
       if (root?.userData?.runtimeAlive === false) return;
       const residentChunkKey = String(options.chunkKey || "").trim();
       if (options.residentStreaming === true && residentChunkKey && !residentContentState.residentChunkKeys.has(residentChunkKey)) return;
       const canBatch = options.allowBatch !== false;
+      const registerChildRuntimeEntries = options.registerChildRuntimeEntries !== false && options.residentStreaming !== true;
       const chunkGroups = canBatch
         ? groupEntriesByChunkKey(instances, chunkPolicy, function (entity) { return entity?.transform || null; })
         : { grouped: new Map(), unchunked: Array.isArray(instances) ? instances.slice() : [] };
@@ -11445,7 +14115,7 @@ function resolveChunkDebugCenter(policy) {
       for (const [chunkKeyValue, chunkInstances] of chunkGroups.grouped.entries()) {
         if (!Array.isArray(chunkInstances) || !chunkInstances.length) continue;
         if (!canBatch || chunkInstances.length < 2) {
-          for (const entity of chunkInstances) {
+          for (const entity of fallbackCloneSlice(chunkInstances)) {
             const instanceRoot = new THREE.Group();
             instanceRoot.userData.scatterInstance = true;
             instanceRoot.userData.chunkRuntimeType = "scatter";
@@ -11457,14 +14127,16 @@ function resolveChunkDebugCenter(policy) {
             transformObject(instanceRoot, entity.transform);
             root.add(instanceRoot);
             runtimeStats.sceneObjects += 1;
-            registerChunkRuntimeEntry({
-              id: entity.id || (entity.nodeId + "::instance"),
-              type: "scatter",
-              object: instanceRoot,
-              chunkKey: chunkKeyValue,
-              chunkKeys: [chunkKeyValue],
-              hasVisual: true
-            });
+            if (registerChildRuntimeEntries) {
+              registerChunkRuntimeEntry({
+                id: entity.id || (entity.nodeId + "::instance"),
+                type: "scatter",
+                object: instanceRoot,
+                chunkKey: chunkKeyValue,
+                chunkKeys: [chunkKeyValue],
+                hasVisual: true
+              });
+            }
             loadModelInto(instanceRoot, assetId, worldData, null, {
               castShadow: options.castShadow !== false,
               receiveShadow: options.receiveShadow !== false
@@ -11484,7 +14156,7 @@ function resolveChunkDebugCenter(policy) {
           chunkKeys: [chunkKeyValue]
         });
         if (!batch) {
-          for (const entity of chunkInstances) {
+          for (const entity of fallbackCloneSlice(chunkInstances)) {
             const instanceRoot = new THREE.Group();
             instanceRoot.userData.scatterInstance = true;
             instanceRoot.userData.chunkRuntimeType = "scatter";
@@ -11496,14 +14168,16 @@ function resolveChunkDebugCenter(policy) {
             transformObject(instanceRoot, entity.transform);
             root.add(instanceRoot);
             runtimeStats.sceneObjects += 1;
-            registerChunkRuntimeEntry({
-              id: entity.id || (entity.nodeId + "::instance"),
-              type: "scatter",
-              object: instanceRoot,
-              chunkKey: chunkKeyValue,
-              chunkKeys: [chunkKeyValue],
-              hasVisual: true
-            });
+            if (registerChildRuntimeEntries) {
+              registerChunkRuntimeEntry({
+                id: entity.id || (entity.nodeId + "::instance"),
+                type: "scatter",
+                object: instanceRoot,
+                chunkKey: chunkKeyValue,
+                chunkKeys: [chunkKeyValue],
+                hasVisual: true
+              });
+            }
             loadModelInto(instanceRoot, assetId, worldData, null, {
               castShadow: options.castShadow !== false,
               receiveShadow: options.receiveShadow !== false
@@ -11519,17 +14193,19 @@ function resolveChunkDebugCenter(policy) {
         const batchCounts = countObjectTree(batch);
         runtimeStats.sceneObjects += batchCounts.objects;
         runtimeStats.meshes += batchCounts.meshes;
-        registerChunkRuntimeEntry({
-          id: (asset.id || assetId) + "::" + chunkKeyValue + "::scatter-batch",
-          type: "scatter",
-          object: batch,
-          chunkKey: chunkKeyValue,
-          chunkKeys: [chunkKeyValue],
-          hasVisual: true
-        });
+        if (registerChildRuntimeEntries) {
+          registerChunkRuntimeEntry({
+            id: (asset.id || assetId) + "::" + chunkKeyValue + "::scatter-batch",
+            type: "scatter",
+            object: batch,
+            chunkKey: chunkKeyValue,
+            chunkKeys: [chunkKeyValue],
+            hasVisual: true
+          });
+        }
         handledAny = true;
       }
-      for (const entity of chunkGroups.unchunked) {
+      for (const entity of fallbackCloneSlice(chunkGroups.unchunked)) {
         const instanceRoot = new THREE.Group();
         instanceRoot.userData.scatterInstance = true;
         instanceRoot.userData.chunkRuntimeType = "scatter";
@@ -11539,12 +14215,14 @@ function resolveChunkDebugCenter(policy) {
         transformObject(instanceRoot, entity.transform);
         root.add(instanceRoot);
         runtimeStats.sceneObjects += 1;
-        registerChunkRuntimeEntry({
-          id: entity.id || (entity.nodeId + "::instance"),
-          type: "scatter",
-          object: instanceRoot,
-          hasVisual: true
-        });
+        if (registerChildRuntimeEntries) {
+          registerChunkRuntimeEntry({
+            id: entity.id || (entity.nodeId + "::instance"),
+            type: "scatter",
+            object: instanceRoot,
+            hasVisual: true
+          });
+        }
         loadModelInto(instanceRoot, assetId, worldData, null, {
           castShadow: options.castShadow !== false,
           receiveShadow: options.receiveShadow !== false
@@ -11569,14 +14247,55 @@ function resolveChunkDebugCenter(policy) {
     object.scale.set(num(scale.x, 1), num(scale.y, 1), num(scale.z, 1));
   }
 
+  function normalizedTransformInput(transform) {
+    if (transform && (transform.position || transform.rotation || transform.scale)) {
+      return {
+        position: transform.position || {},
+        rotation: transform.rotation || {},
+        scale: transform.scale || {}
+      };
+    }
+    const values = transform || {};
+    return {
+      position: { x: values.x, y: values.y, z: values.z },
+      rotation: { x: values.rotationX, y: values.rotationY, z: values.rotationZ },
+      scale: { x: values.scaleX, y: values.scaleY, z: values.scaleZ }
+    };
+  }
+
+  function setWorldEntityTransform(entityId, transform) {
+    if (!world || !Array.isArray(world.entities)) return;
+    const entity = world.entities.find(function (candidate) {
+      return candidate && (candidate.id === entityId || candidate.nodeId === entityId || candidate.entityId === entityId);
+    });
+    if (!entity) return;
+    entity.transform = normalizedTransformInput(transform);
+  }
+
+  function setEntityTransform(entityId, transform) {
+    const root = rootForSelectableId(entityId);
+    if (!root) return false;
+    const normalized = normalizedTransformInput(transform);
+    transformObject(root, normalized);
+    root.updateMatrixWorld(true);
+    setWorldEntityTransform(entityId, normalized);
+    if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) {
+      selectedRoot = root;
+      if (selectionHelper?.object === root && typeof selectionHelper.update === "function") selectionHelper.update();
+    }
+    if (transformGuide?.visible) updateTransformGuide();
+    requestRender("set-entity-transform");
+    return true;
+  }
+
   function objectToTransform(object) {
     return {
       x: round(object.position.x),
       y: round(object.position.y),
       z: round(object.position.z),
-      rotationX: round(object.rotation.x / DEG_TO_RAD),
-      rotationY: round(object.rotation.y / DEG_TO_RAD),
-      rotationZ: round(object.rotation.z / DEG_TO_RAD),
+      rotationX: normalizeDegrees(object.rotation.x / DEG_TO_RAD),
+      rotationY: normalizeDegrees(object.rotation.y / DEG_TO_RAD),
+      rotationZ: normalizeDegrees(object.rotation.z / DEG_TO_RAD),
       scaleX: round(object.scale.x),
       scaleY: round(object.scale.y),
       scaleZ: round(object.scale.z)
@@ -11760,6 +14479,11 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function useEditorModelPlaceholders(worldData, options = {}) {
+    if (options.forceRealModels === true) return false;
+    return mode === "editor" && options.residentStreaming !== true && countPublishedWorldItems(worldData) > 200;
+  }
+
   function addEntity(worldData, entity, options = {}) {
     const isScatter = entity?.type === "scatter" || entity?.kind === "scatter";
     const residentStreaming = options.residentStreaming === true;
@@ -11863,10 +14587,71 @@ function resolveChunkDebugCenter(policy) {
         chunkKeys: [chunkKeyValue]
       });
     }
-    loadModelInto(root, entity.modelAssetId, worldData, null, {
-      castShadow: options.castShadow !== undefined ? options.castShadow : true,
-      receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
+    if (!useEditorModelPlaceholders(worldData, options) && entity.modelAssetId && assetById(worldData, entity.modelAssetId)?.sourcePath) {
+      loadModelInto(root, entity.modelAssetId, worldData, null, {
+        castShadow: options.castShadow !== undefined ? options.castShadow : true,
+        receiveShadow: options.receiveShadow !== undefined ? options.receiveShadow : true
+      });
+    } else {
+      addEntityPlaceholder(root);
+    }
+  }
+
+  function addEntityPlaceholder(root) {
+    if (!root) return;
+    const geometry = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("#38bdf8"),
+      transparent: true,
+      opacity: 0.7,
+      roughness: 0.75,
+      metalness: 0
     });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = "model-entity-placeholder";
+    mesh.position.y = 0.6;
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.userData.runtimeAlive = true;
+    root.add(mesh);
+    runtimeStats.sceneObjects += 1;
+    runtimeStats.meshes += 1;
+  }
+
+  function addScatterPlaceholderInstances(root, instances) {
+    if (!root || !Array.isArray(instances) || !instances.length) return;
+    const count = Math.min(250, instances.length);
+    const geometry = new THREE.BoxGeometry(0.55, 1.1, 0.55);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color("#65a30d"),
+      transparent: true,
+      opacity: 0.55,
+      roughness: 0.8,
+      metalness: 0
+    });
+    const mesh = new THREE.InstancedMesh(geometry, material, count);
+    mesh.name = "scatter-placeholder [instances]";
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    const helper = new THREE.Object3D();
+    for (let index = 0; index < count; index += 1) {
+      const transform = instances[index]?.transform || {};
+      helper.position.set(num(transform?.position?.x, 0), num(transform?.position?.y, 0) + 0.55, num(transform?.position?.z, 0));
+      helper.rotation.set(
+        num(transform?.rotation?.x, 0) * DEG_TO_RAD,
+        num(transform?.rotation?.y, 0) * DEG_TO_RAD,
+        num(transform?.rotation?.z, 0) * DEG_TO_RAD
+      );
+      helper.scale.set(num(transform?.scale?.x, 1), num(transform?.scale?.y, 1), num(transform?.scale?.z, 1));
+      helper.updateMatrix();
+      mesh.setMatrixAt(index, helper.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.userData.runtimeAlive = true;
+    root.add(mesh);
+    runtimeStats.sceneObjects += 1;
+    runtimeStats.meshes += 1;
   }
 
   function addInteractable(worldData, inter, options = {}) {
@@ -12646,10 +15431,28 @@ function resolveChunkDebugCenter(policy) {
 
   function selectEntity(entityId) {
     selectedEntityId = entityId || null;
+    selectedEntityIds = new Set(entityId ? [entityId] : []);
     refreshSelectedRootReference();
     applyLocalView();
     if (selectionHelper) updateSelectionHelper();
     requestRender();
+  }
+
+  // Multi-select: selects a whole set at once (marquee, or a Shift/Ctrl click resolved by
+  // the caller into the next full set). The first id becomes "primary" for focus/frame/
+  // inspector purposes; the modal G/R/S transform activates its group path once size > 1.
+  function selectEntities(entityIds) {
+    const ids = Array.from(new Set((entityIds || []).filter(Boolean)));
+    selectedEntityIds = new Set(ids);
+    selectedEntityId = ids.length ? ids[0] : null;
+    refreshSelectedRootReference();
+    applyLocalView();
+    if (selectionHelper) updateSelectionHelper();
+    requestRender();
+  }
+
+  function getSelectedEntityIds() {
+    return Array.from(selectedEntityIds);
   }
 
   function pickEntity(event) {
@@ -12738,7 +15541,6 @@ function resolveChunkDebugCenter(policy) {
     collisionPerfState.checksLastFrame += 1;
     resolveMovementInto(target, player.pos, target, {
       radius: player.radius,
-      ground: world?.ground,
       solids: activeSolids
     });
     collisionPerfState.lastResolveMs = round(collisionPerfState.lastResolveMs + (performance.now() - startedAt));
@@ -12752,6 +15554,7 @@ function resolveChunkDebugCenter(policy) {
   function worldToScreen(position) {
     const vector = new THREE.Vector3(num(position?.x, 0), num(position?.y, 0), num(position?.z, 0));
     vector.project(camera);
+    if (!Number.isFinite(vector.x) || !Number.isFinite(vector.y) || !Number.isFinite(vector.z) || vector.z < -1 || vector.z > 1) return null;
     const rect = canvas.getBoundingClientRect();
     return {
       x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
@@ -12779,11 +15582,12 @@ function resolveChunkDebugCenter(policy) {
       y: num(desiredPosition?.y, start.y),
       z: num(desiredPosition?.z, start.z)
     };
-    const resolved = resolveMovement(start, desired, {
+    const movementOptions = {
       radius: radius,
-      ground: options.ground || world?.ground || null,
       solids: Array.isArray(options.solids) ? options.solids : activeSolids
-    });
+    };
+    if (options.ground) movementOptions.ground = options.ground;
+    const resolved = resolveMovement(start, desired, movementOptions);
     const blocked = Math.hypot(resolved.x - desired.x, resolved.z - desired.z) > 0.0005;
     const collided = blocked && Math.hypot(resolved.x - start.x, resolved.z - start.z) <= 0.0005
       && Math.hypot(desired.x - start.x, desired.z - start.z) > 0.0005;
@@ -12910,7 +15714,9 @@ function resolveChunkDebugCenter(policy) {
 
     if (moveVector.lengthSq() > 0.0001) {
       moveVector.normalize();
-      const wantsSprint = usingKeys && isActionPressed("sprint");
+      // Sprint applies to click-to-walk too, not just WASD - holding the sprint key
+      // should keep the player running no matter how movement is currently driven.
+      const wantsSprint = isActionPressed("sprint");
       const speed = player.speed * (wantsSprint ? player.sprint : 1);
       movementTarget.set(player.pos.x + moveVector.x * speed * delta, player.pos.y, player.pos.z + moveVector.z * speed * delta);
       resolveCollision(movementTarget);
@@ -13275,7 +16081,7 @@ function resolveChunkDebugCenter(policy) {
       scatterInstances: runtimeStats.scatterInstances,
       interactables: runtimeStats.interactables,
       remotePlayers: runtimeStats.remotePlayers || 0,
-      terrainVisuals: runtimeStats.terrainVisuals,
+      terrainVisuals: Math.max(0, terrainStreamingState.residentPieces + groundResidentVisuals),
       collisionShapes: runtimeStats.collisionShapes,
       worldSize: publishedWorldItemCount,
       worldBlueprintItems: contentBlueprintIndex.blueprintWorldItemCount || publishedWorldItemCount,
@@ -13798,7 +16604,7 @@ function resolveChunkDebugCenter(policy) {
       stats: {
         sceneObjects: runtimeStats.sceneObjects,
         meshes: runtimeStats.meshes,
-        terrainVisuals: runtimeStats.terrainVisuals,
+        terrainVisuals: performanceSnapshot.terrainVisuals,
         terrainLayers: runtimeStats.terrainLayers,
         terrainSurfaces: runtimeStats.terrainSurfaces,
         drawCalls: performanceSnapshot.drawCalls,
@@ -13882,7 +16688,8 @@ function resolveChunkDebugCenter(policy) {
         setPerformanceRowValue(entry.rows.textures, formatBudgetedCount(snapshot.textures, thresholds.texturesWarn), toneLowerIsBetter(snapshot.textures, thresholds.texturesWarn, thresholds.texturesDanger));
       }
     if (metrics.showSceneObjects !== false && entry.rows.sceneObjects) {
-      setPerformanceRowValue(entry.rows.sceneObjects, formatBudgetedCount(snapshot.sceneObjects, thresholds.meshesWarn), toneLowerIsBetter(snapshot.sceneObjects, thresholds.meshesWarn, thresholds.meshesDanger));
+      const residentObjects = Math.max(0, Number(snapshot.worldResidentItems) || 0);
+      setPerformanceRowValue(entry.rows.sceneObjects, formatBudgetedCount(residentObjects, thresholds.meshesWarn), toneLowerIsBetter(residentObjects, thresholds.meshesWarn, thresholds.meshesDanger));
     }
     if (metrics.showEntities !== false && entry.rows.entities) {
       setPerformanceRowValue(entry.rows.entities, formatBlueprintLiveCount(snapshot.blueprintEntities, snapshot.entities), toneLowerIsBetter(snapshot.entities, thresholds.meshesWarn, thresholds.meshesDanger));
@@ -13982,6 +16789,9 @@ function resolveChunkDebugCenter(policy) {
     collisionPerfState.lastResolveMs = 0;
     runtimeStats.collisionShapes = runtimeCollisionBaseCount;
     buildTerrainRuntimeStreamingVisuals(world);
+    addZoneGrounds(world);
+    addZoneEdgeFadeOverlays(world);
+    addZoneCanvasBounds(world);
     addLights(world);
     spawnPlayer(world);
     if (previousGamePlayerState && player.root) {
@@ -14094,14 +16904,23 @@ function resolveChunkDebugCenter(policy) {
     rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
+    viewportTouchPointers.clear();
+    viewportTouchZoomSession = null;
+    viewportTouchSuppressSingleOrbit = false;
     if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
     resizeRafId = null;
     if (resizeObserver) resizeObserver.disconnect();
     resizeObserver = null;
     if (windowResizeHandler) window.removeEventListener("resize", windowResizeHandler);
     windowResizeHandler = null;
+    if (editorCameraSaveTimer) {
+      clearTimeout(editorCameraSaveTimer);
+      editorCameraSaveTimer = null;
+    }
     if (orbitControls) {
       orbitControls.removeEventListener("change", requestRender);
+      orbitControls.removeEventListener("change", scheduleEditorCameraSave);
+      orbitControls.removeEventListener("end", flushEditorCameraSave);
       if (typeof orbitControls.dispose === "function") orbitControls.dispose();
     }
     if (selectionHelper) {
@@ -14110,6 +16929,12 @@ function resolveChunkDebugCenter(policy) {
       if (selectionHelper.material) selectionHelper.material.dispose();
       selectionHelper = null;
     }
+    for (const helper of multiSelectionHelpers) {
+      scene.remove(helper);
+      if (helper.geometry) helper.geometry.dispose();
+      if (helper.material) helper.material.dispose();
+    }
+    multiSelectionHelpers = [];
     clearTerrainRuntimeVisuals();
     clearWalkabilityIndex();
     if (transformGuide) {
@@ -14133,6 +16958,11 @@ function resolveChunkDebugCenter(policy) {
       chunkDebugOverlay = null;
     }
     if (editorPointerDownCaptureHandler) canvas.removeEventListener("pointerdown", editorPointerDownCaptureHandler, true);
+    if (editorTouchSuppressHandler) {
+      canvas.removeEventListener("touchstart", editorTouchSuppressHandler, { passive: false });
+      canvas.removeEventListener("touchmove", editorTouchSuppressHandler, { passive: false });
+      canvas.removeEventListener("touchend", editorTouchSuppressHandler, { passive: false });
+    }
     if (editorPointerUpCaptureHandler) {
       canvas.removeEventListener("pointerup", editorPointerUpCaptureHandler, true);
       canvas.removeEventListener("pointercancel", editorPointerUpCaptureHandler, true);
@@ -14157,9 +16987,14 @@ function resolveChunkDebugCenter(policy) {
     }
     if (editorContextMenuHandler) canvas.removeEventListener("contextmenu", editorContextMenuHandler);
     if (editorAuxClickHandler) canvas.removeEventListener("auxclick", editorAuxClickHandler);
+    if (editorClickHandler) canvas.removeEventListener("click", editorClickHandler);
     if (editorKeyDownHandler) window.removeEventListener("keydown", editorKeyDownHandler);
     if (editorKeyUpHandler) window.removeEventListener("keyup", editorKeyUpHandler);
     if (editorWindowBlurHandler) window.removeEventListener("blur", editorWindowBlurHandler);
+    editorTouchPointers.clear();
+    viewportTouchPointers.clear();
+    viewportTouchZoomSession = null;
+    viewportTouchSuppressSingleOrbit = false;
     flyCameraKeys.clear();
     if (editorPointerDownHandler) canvas.removeEventListener("pointerdown", editorPointerDownHandler);
     if (gamePointerDownHandler) canvas.removeEventListener("pointerdown", gamePointerDownHandler);
@@ -14227,7 +17062,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function isTransformActive() {
-    return Boolean(transformSession?.object);
+    return transformSessionActive();
   }
 
   function isTransformControlsAttached() {
@@ -14377,10 +17212,16 @@ function resolveChunkDebugCenter(policy) {
     pickScatterEditorHandle: pickScatterEditorHandle,
     pickEntityAt: pickEntityAt,
     selectEntity: selectEntity,
+    selectEntities: selectEntities,
+    setEntityTransform: setEntityTransform,
+    getSelectedEntityIds: getSelectedEntityIds,
     frameEntity: frameEntity,
     frameAll: frameAll,
     captureViewState: captureViewState,
     restoreViewState: restoreViewState,
+    flushEditorCameraSave: flushEditorCameraSave,
+    trackViewportTouchPointer: trackViewportTouchPointer,
+    markEditorTouchHandled: markEditorTouchHandled,
     configureCallbacks: configureCallbacks,
     beginTransform: beginTransform,
     previewTransformAt: previewTransformAt,
@@ -14403,9 +17244,12 @@ function resolveChunkDebugCenter(policy) {
     confirmTransform: confirmTransform,
     cancelTransformSession: cancelTransform,
     confirmTransformSession: confirmTransform,
+    armPendingTouchTransform: armPendingTouchTransform,
+    clearPendingTouchTransform: clearPendingTouchTransform,
     isTransformActive: isTransformActive,
     isTransformControlsAttached: isTransformControlsAttached,
     getTransformDebugState: getTransformDebugState,
+    getSelectedEntityTransform: getSelectedEntityTransform,
     profilePerformance: profilePerformance,
     debugFindGhostPlanes: function () {
       return auditSceneObjectsForGhostPlanes({
@@ -14501,6 +17345,7 @@ function resolveChunkDebugCenter(policy) {
     deselect: deselect,
     getLoadErrors: function () { return loadErrors.slice(); },
     bakeMinimapImage: bakeMinimapImage,
+    getMinimapBakeBounds: getMinimapBakeBounds,
     getMinimapMarkerSnapshot: getMinimapMarkerSnapshot
   };
 }

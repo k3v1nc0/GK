@@ -1,5 +1,5 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260714-mmo11-camera-target-height";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260714-mmo11-camera-target-height";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260820-rmb-pan-speed2";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260730-shadow-touch-fix1";
 import {
   normalizeCanonicalId,
   normalizeReferenceList,
@@ -8,6 +8,7 @@ import {
 } from "../shared/node-contract.js?v=20260717-node01-foundation";
 import { referenceKindFromId, referenceMatchesKinds } from "../shared/reference-utils.js?v=20260717-node01-foundation";
 import {
+  worldToMinimapPoint,
   resolveMinimapPoint,
   drawTriangleMarker,
   drawDotMarker,
@@ -19,9 +20,8 @@ import {
   createMinimapView,
   clampMinimapView,
   minimapViewBounds,
-  minimapImageSourceRect,
   attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260714-mmo11-camera-target-height";
+} from "../shared/minimap-utils.js?v=20260729-mobile-editor-fix3";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
@@ -30,7 +30,28 @@ const PAD = 8;
 const PORT_ROW = 24;
 const PORT_GAP = 4;
 const NODE_WIDTH = 260;
+const ZONE_CANVAS_SIZE = 500;
+const ZONE_CANVAS_HALF_SIZE = ZONE_CANVAS_SIZE / 2;
+const ZONE_CANVAS_PORT_ALIASES = new Set(["zonePackage", "zonepackage", "zonePkg", "zonepkg"]);
+const ZONE_CANVAS_ROOT_NODE_TYPES = new Set(["ambient_light", "directional_light"]);
+const ZONE_CANVAS_NODE_STEP_X = 340;
+const ZONE_CANVAS_NODE_STEP_Y = 230;
+const ZONE_CANVAS_DIRECTIONS = {
+  top: { label: "Boven", dx: 0, dz: -1, graphX: 0, graphY: -1 },
+  right: { label: "Rechts", dx: 1, dz: 0, graphX: 1, graphY: 0 },
+  bottom: { label: "Onder", dx: 0, dz: 1, graphX: 0, graphY: 1 },
+  left: { label: "Links", dx: -1, dz: 0, graphX: -1, graphY: 0 }
+};
 const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
+const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes";
+const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
+const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayoutTree";
+const ALL_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
+const ALL_PANE_LABELS = { tools: "Tools", graph: "Nodes", viewport: "3D", assets: "Assets" };
+const EDITOR_FLOATING_PANELS_STORAGE_KEY = "gk.editorFloatingPanels";
+const MOBILE_LAYOUT_QUERY = window.matchMedia ? window.matchMedia("(max-width: 980px)") : null;
+const COARSE_POINTER_QUERY = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
+const GRAPH_ZOOM_FACTOR = 1.21;
 const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "world_settings",
   "editor_world_settings",
@@ -51,10 +72,39 @@ const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "ui_hud_text",
   "surface_layer"
 ]);
+const MODEL_ENTITY_TRANSFORM_FIELDS = new Set([
+  "x",
+  "y",
+  "z",
+  "rotationX",
+  "rotationY",
+  "rotationZ",
+  "scaleX",
+  "scaleY",
+  "scaleZ"
+]);
+const EDITOR_CAMERA_FIELDS = new Set([
+  "targetX",
+  "targetY",
+  "targetZ",
+  "pitch",
+  "yaw",
+  "distance"
+]);
 const TERRAIN_TOOL_NODE_TYPES = new Set([
   "surface_layer",
   "blocker_area",
-  "walkable_surface"
+  "walkable_surface",
+  "area_definition",
+  "location_anchor"
+]);
+// surface_layer is an open path the user builds point-by-point; the rest are
+// closed shapes that behave like Walkable Surface and start from a 4-corner rectangle.
+const TERRAIN_CLOSED_SHAPE_NODE_TYPES = new Set([
+  "walkable_surface",
+  "blocker_area",
+  "area_definition",
+  "location_anchor"
 ]);
 
 const state = {
@@ -71,6 +121,9 @@ const state = {
   assetSort: "date",
   assetFilter: "all",
   assetCardSize: loadStoredAssetCardSize(),
+  mobilePanel: loadStoredMobilePanel(),
+  allLayoutTree: null,
+  mobileSelectedAssetId: null,
   assetImportOpen: false,
   assetUploadBusy: false,
   assetUploadMessage: "",
@@ -106,6 +159,7 @@ const state = {
     selectedPointIndex: null,
     selectedPointIndices: [],
     selectedHandleRole: null,
+    multiSelect: false,
     activeChannel: "main",
     axisConstraint: null,
     draggingPointIndex: null,
@@ -122,6 +176,10 @@ const state = {
     dragPointerId: null,
     dragStartGround: null,
     dragCurrentGround: null,
+    dragStartPivot: null,
+    dragStartAngle: null,
+    dragStartDistance: null,
+    dragTransformIndices: null,
     dragMoved: false
   },
   scatterTool: {
@@ -130,6 +188,7 @@ const state = {
     selectedPointIndex: null,
     selectedPointIndices: [],
     selectedHandleRole: null,
+    multiSelect: false,
     draggingPointIndex: null,
     draggingHandleRole: null,
     dragNodeId: null,
@@ -142,6 +201,7 @@ const state = {
     dragStartPivot: null,
     dragStartAngle: null,
     dragStartDistance: null,
+    dragTransformIndices: null,
     dragStartRotationY: null,
     dragExtrudeIndex: null,
     dragPreviewPoint: null,
@@ -160,22 +220,29 @@ const state = {
   selectedEdgeIds: [],
   clipboard: null,
   marquee: null,
+  pendingUnsavedVisualCount: 0,
+  lastTransformCommitError: "",
   minimapBakeBusy: false,
   minimapBakeMessage: "",
   minimapBakeTone: "",
   editorMinimapView: null,
   editorMinimapUserOverride: false,
   editorMinimapConfigKey: "",
-  editorMinimapInteractions: null
+  editorMinimapInteractions: null,
+  editorMinimapSuppressed: false
 };
 
 const el = {
+  layout: document.querySelector(".layout"),
+  tools: document.querySelector(".tools"),
   breadcrumb: document.querySelector("#breadcrumb"),
   unsavedBadge: document.querySelector("#unsavedBadge"),
+  mobilePanelTabs: document.querySelector("#mobilePanelTabs"),
   validationSection: document.querySelector("#validationSection"),
   nodeLibrarySection: document.querySelector("#nodeLibrarySection"),
   inspectorSection: document.querySelector("#inspectorSection"),
   nodeLibrary: document.querySelector("#nodeLibrary"),
+  nodeLibrarySearch: document.querySelector("#nodeLibrarySearch"),
   inspectorForm: document.querySelector("#inspectorForm"),
   validationPanel: document.querySelector("#validationPanel"),
   edgeList: document.querySelector("#edgeList"),
@@ -186,18 +253,11 @@ const el = {
   viewportWrap: document.querySelector(".viewportWrap"),
   viewportCanvas: document.querySelector("#viewportCanvas"),
   viewportStatus: document.querySelector("#viewportStatus"),
+  viewportZoomOutButton: document.querySelector("#viewportZoomOutButton"),
+  viewportZoomInButton: document.querySelector("#viewportZoomInButton"),
+  viewportFocusButton: document.querySelector("#viewportFocusButton"),
   viewportInfoButton: document.querySelector("#viewportInfoButton"),
   viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
-  terrainToolPanel: document.querySelector("#terrainToolPanel"),
-  terrainToolNodeLabel: document.querySelector("#terrainToolNodeLabel"),
-  terrainToolHint: document.querySelector("#terrainToolHint"),
-  terrainToolChannelMainButton: document.querySelector("[data-terrain-channel='main']"),
-  terrainToolChannelSecondaryButton: document.querySelector("[data-terrain-channel='secondary']"),
-  terrainToolChannelEdgeButton: document.querySelector("[data-terrain-channel='edge']"),
-  terrainToolMoveButton: document.querySelector("[data-terrain-action='move']"),
-  terrainToolExtrudeButton: document.querySelector("[data-terrain-action='extrude']"),
-  terrainToolScaleButton: document.querySelector("[data-terrain-action='scale']"),
-  terrainToolDeleteButton: document.querySelector("[data-terrain-action='delete']"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
   editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
@@ -206,6 +266,8 @@ const el = {
   assetColumn: document.querySelector(".assetColumn"),
   assetDropOverlay: document.querySelector("#assetDropOverlay"),
   assetSearch: document.querySelector("#assetSearch"),
+  assetControlsToggle: document.querySelector("#assetControlsToggle"),
+  assetControls: document.querySelector("#assetControls"),
   assetSort: document.querySelector("#assetSort"),
   assetFilter: document.querySelector("#assetFilter"),
   assetGrid: document.querySelector("#assetGrid"),
@@ -223,18 +285,58 @@ const el = {
   snapGridInput: document.querySelector("#snapGridInput"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
+  undoButton: document.querySelector("#undoButton"),
+  redoButton: document.querySelector("#redoButton"),
   logoutButton: document.querySelector("#logoutButton"),
-  zoomResetButton: document.querySelector("#zoomResetButton")
+  fullscreenButton: document.querySelector("#fullscreenButton"),
+  graphZoomOutButton: document.querySelector("#graphZoomOutButton"),
+  graphZoomInButton: document.querySelector("#graphZoomInButton"),
+  zoomResetButton: document.querySelector("#zoomResetButton"),
+  layoutResizers: Array.from(document.querySelectorAll(".layoutResizer")),
+  viewportSelectionBox: document.querySelector("#viewportSelectionBox"),
+  allLayoutRoot: document.querySelector("#allLayoutRoot"),
+  allLayoutOverflow: document.querySelector("#allLayoutOverflow")
 };
 
 let runtime = null;
 let viewportRefreshTimer = null;
 let validationRefreshTimer = null;
+let editorMinimapRedrawTimer = null;
+let viewportFloatingPanelResizeRaf = 0;
 let graphMutationQueue = Promise.resolve();
 let assetUploadProgressTimer = null;
 let assetThumbnailPollTimer = null;
 let assetColumnDropDepth = 0;
 let terrainLastPointer = null;
+let viewportAssetPointer = null;
+let pointLongPressSession = null;
+let suppressViewportRuntimeClickUntil = 0;
+const viewportTouchEditPointers = new Set();
+let viewportTouchEditSuppress = false;
+// Declared up here (not next to the "All" tab code further down) so that any early,
+// top-level call chain (e.g. syncAsideContext() below can indirectly reach
+// setMobilePanel() -> updateAllLayoutMode()) can never hit these before their `let`
+// initializer has run - that previously threw a TDZ ReferenceError that silently
+// aborted the whole script's startup.
+let allLayoutActive = false;
+let allLayoutLastUsedViews = new Set();
+const POINT_LONG_PRESS_MS = 520;
+const POINT_LONG_PRESS_MOVE_PX = 9;
+const floatingPanelLiveStates = new Map();
+const graphTouchGesture = {
+  pointers: new Map(),
+  listening: false,
+  mode: "",
+  startPanX: 0,
+  startPanY: 0,
+  startClientX: 0,
+  startClientY: 0,
+  startScale: 1,
+  startDistance: 1,
+  anchorGraphX: 0,
+  anchorGraphY: 0
+};
+let activeNodeDragCancel = null;
 const selectionBox = document.createElement("div");
 selectionBox.className = "selectionBox";
 selectionBox.hidden = true;
@@ -252,27 +354,6 @@ const edgePanel = el.edgeList && typeof el.edgeList.closest === "function" ? el.
 if (edgePanel) edgePanel.style.display = "none";
 syncAsideContext();
 applyAssetCardSize(state.assetCardSize, false);
-for (const button of [
-  el.terrainToolChannelMainButton,
-  el.terrainToolChannelSecondaryButton,
-  el.terrainToolChannelEdgeButton
-]) {
-  if (!button) continue;
-  button.addEventListener("click", function () {
-    setTerrainActiveChannel(String(button.dataset.terrainChannel || "main"));
-  });
-}
-for (const button of [
-  el.terrainToolMoveButton,
-  el.terrainToolExtrudeButton,
-  el.terrainToolScaleButton,
-  el.terrainToolDeleteButton
-]) {
-  if (!button) continue;
-  button.addEventListener("click", function () {
-    setTerrainToolMode(String(button.dataset.terrainAction || "select"));
-  });
-}
 const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR === "object"
   ? window.__GK_DEBUG_EDITOR
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
@@ -295,6 +376,25 @@ async function api(path, options) {
     throw error;
   }
   return data;
+}
+
+async function apiOk(path, options) {
+  const method = (options && options.method) || "GET";
+  const response = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, options || {}));
+  if (response.status === 401) {
+    window.location.href = "/login/?next=" + encodeURIComponent("/editor/");
+    throw new Error("Niet ingelogd.");
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(function () { return {}; });
+    const error = new Error(data.message || "Verzoek mislukt.");
+    error.status = response.status;
+    error.path = path;
+    error.method = method;
+    error.details = data;
+    throw error;
+  }
+  return { ok: true, status: response.status };
 }
 
 function timingMs(startedAt) {
@@ -352,6 +452,403 @@ function applyAssetCardSize(value, persist = true) {
   if (el.assetCardSize) el.assetCardSize.value = String(next);
   if (el.assetCardSizeValue) el.assetCardSizeValue.textContent = next + "px";
   if (persist) storeAssetCardSize(next);
+}
+
+function loadStoredMobilePanel() {
+  try {
+    const panel = String(window.localStorage.getItem(EDITOR_MOBILE_PANEL_STORAGE_KEY) || "all");
+    return ["all", "tools", "graph", "inspector", "viewport", "assets"].includes(panel) ? panel : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function isMobileLayout() {
+  return Boolean(MOBILE_LAYOUT_QUERY && MOBILE_LAYOUT_QUERY.matches);
+}
+
+function isCoarsePointer() {
+  return Boolean(COARSE_POINTER_QUERY && COARSE_POINTER_QUERY.matches);
+}
+
+function elementContainsPoint(element, clientX, clientY) {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+// Whether the 3D viewport is already visible somewhere on screen right now -
+// desktop always shows it, on mobile only the dedicated "3D" tab or an "All"
+// layout that currently includes a viewport pane do.
+function isViewportPaneVisible() {
+  if (!isMobileLayout()) return true;
+  if (state.mobilePanel === "viewport") return true;
+  if (state.mobilePanel === "all") return collectUsedAllViews(state.allLayoutTree).has("viewport");
+  return false;
+}
+
+function hasInspectorSelection() {
+  return Boolean(state.selectedNodeIds.length || state.selectedEdgeIds.length);
+}
+
+function setRootCssVar(name, value, persist = true) {
+  if (!name || !value) return;
+  document.documentElement.style.setProperty(name, value);
+  if (!persist) return;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
+    stored[name] = value;
+    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
+  } catch {}
+}
+
+function applyStoredEditorLayoutSizes() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
+    const allowed = new Set([
+      "--tools-width",
+      "--graph-width",
+      "--viewport-width",
+      "--assets-width",
+      "--mobile-tools-height",
+      "--mobile-graph-height",
+      "--mobile-viewport-height"
+    ]);
+    for (const [name, value] of Object.entries(stored || {})) {
+      if (!allowed.has(name)) continue;
+      if (typeof value !== "string" || !/^\d+(\.\d+)?px$/.test(value)) continue;
+      document.documentElement.style.setProperty(name, value);
+    }
+  } catch {}
+}
+
+function persistEditorLayoutSizes() {
+  try {
+    const names = [
+      "--tools-width",
+      "--graph-width",
+      "--viewport-width",
+      "--assets-width",
+      "--mobile-tools-height",
+      "--mobile-graph-height",
+      "--mobile-viewport-height"
+    ];
+    const stored = {};
+    for (const name of names) {
+      const value = document.documentElement.style.getPropertyValue(name).trim();
+      if (value) stored[name] = value;
+    }
+    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
+  } catch {}
+}
+
+function setMobilePanel(panel, persist = true) {
+  let next = ["all", "tools", "graph", "inspector", "viewport", "assets"].includes(panel) ? panel : "all";
+  if (next === "inspector" && !hasInspectorSelection()) next = "graph";
+  const previousPanel = state.mobilePanel;
+  state.mobilePanel = next;
+  document.body.dataset.mobilePanel = next;
+  // Freshly entering "All" (not just re-clicking it) should be treated like just having
+  // opened whichever panes it currently shows, so a graph pane in there re-focuses below.
+  if (next === "all" && previousPanel !== "all") allLayoutLastUsedViews = new Set();
+  if (el.mobilePanelTabs) {
+    for (const button of el.mobilePanelTabs.querySelectorAll("[data-mobile-panel]")) {
+      const active = button.dataset.mobilePanel === next;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  }
+  if (persist) {
+    try { window.localStorage.setItem(EDITOR_MOBILE_PANEL_STORAGE_KEY, next); } catch {}
+  }
+  updateAllLayoutMode();
+  if (runtime && typeof runtime.render === "function") requestAnimationFrame(function () { runtime.render("mobile-panel"); });
+  redrawEditorMinimap();
+  if (isMobileLayout() && next === "graph") {
+    const nodeId = state.selectedNodeId || state.selectedNodeIds[0] || null;
+    if (nodeId) requestAnimationFrame(function () { focusGraphNode(nodeId); });
+  }
+}
+
+function showMobileInspectorPanel() {
+  if (!isMobileLayout() || !hasInspectorSelection()) return;
+  // In the "All" layout the Tools pane already swaps Node library -> Inspector in
+  // place (see syncAsideContext) - stay on "All" instead of jumping to the dedicated
+  // Inspector tab, which would hide whichever other panes (Nodes, 3D, ...) were open.
+  if (state.mobilePanel !== "all") setMobilePanel("inspector", false);
+  requestAnimationFrame(function () {
+    if (el.tools && typeof el.tools.scrollTo === "function") el.tools.scrollTo({ top: 0, behavior: "auto" });
+  });
+}
+
+function floatingPanelDeviceKey() {
+  return isMobileLayout() ? "mobile" : "desktop";
+}
+
+function readFloatingPanelStore() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(EDITOR_FLOATING_PANELS_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function sanitizeFloatingPanelState(value) {
+  if (!value || typeof value !== "object") return null;
+  const wrapRect = el.viewportWrap?.getBoundingClientRect();
+  const hasPercent = ["xPct", "yPct", "widthPct", "heightPct"].every(function (key) {
+    return Number.isFinite(Number(value[key]));
+  });
+  const usePercent = hasPercent && wrapRect && wrapRect.width > 0 && wrapRect.height > 0;
+  const x = usePercent ? Number(value.xPct) * wrapRect.width / 100 : Number(value.x);
+  const y = usePercent ? Number(value.yPct) * wrapRect.height / 100 : Number(value.y);
+  const width = usePercent ? Number(value.widthPct) * wrapRect.width / 100 : Number(value.width);
+  const height = usePercent ? Number(value.heightPct) * wrapRect.height / 100 : Number(value.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return { x, y, width, height };
+}
+
+function storedFloatingPanelState(panelId, deviceKey = floatingPanelDeviceKey()) {
+  if (floatingPanelLiveStates.has(panelId)) return floatingPanelLiveStates.get(panelId);
+  const store = readFloatingPanelStore();
+  return sanitizeFloatingPanelState(store?.[deviceKey]?.[panelId]);
+}
+
+function storeFloatingPanelState(panelId, panelState, deviceKey = floatingPanelDeviceKey()) {
+  const nextState = sanitizeFloatingPanelState(panelState);
+  if (!nextState) return;
+  try {
+    const store = readFloatingPanelStore();
+    const wrapRect = el.viewportWrap?.getBoundingClientRect();
+    const percentState = wrapRect && wrapRect.width > 0 && wrapRect.height > 0
+      ? {
+        xPct: Math.round(nextState.x / wrapRect.width * 10000) / 100,
+        yPct: Math.round(nextState.y / wrapRect.height * 10000) / 100,
+        widthPct: Math.round(nextState.width / wrapRect.width * 10000) / 100,
+        heightPct: Math.round(nextState.height / wrapRect.height * 10000) / 100
+      }
+      : {};
+    if (!store[deviceKey] || typeof store[deviceKey] !== "object") store[deviceKey] = {};
+    store[deviceKey][panelId] = {
+      x: Math.round(nextState.x),
+      y: Math.round(nextState.y),
+      width: Math.round(nextState.width),
+      height: Math.round(nextState.height),
+      unit: "percent",
+      ...percentState
+    };
+    window.localStorage.setItem(EDITOR_FLOATING_PANELS_STORAGE_KEY, JSON.stringify(store));
+  } catch {}
+}
+
+function clampFloatingPanelState(panelState, options = {}) {
+  const minWidth = Math.max(1, Number(options.minWidth) || 72);
+  const minHeight = Math.max(1, Number(options.minHeight) || 56);
+  const wrapRect = el.viewportWrap?.getBoundingClientRect();
+  let width = Math.max(minWidth, Number(panelState.width) || minWidth);
+  let height = Math.max(minHeight, Number(panelState.height) || minHeight);
+  if (options.square) {
+    const maxSize = wrapRect && wrapRect.width > 0 && wrapRect.height > 0
+      ? Math.max(minWidth, Math.min(wrapRect.width, wrapRect.height))
+      : Infinity;
+    const size = Math.min(maxSize, Math.max(minWidth, minHeight, width, height));
+    width = size;
+    height = size;
+  } else if (wrapRect && wrapRect.width > 0 && wrapRect.height > 0) {
+    width = Math.min(width, Math.max(minWidth, wrapRect.width));
+    height = Math.min(height, Math.max(minHeight, wrapRect.height));
+  }
+  const maxX = wrapRect && wrapRect.width > 0 ? Math.max(0, wrapRect.width - width) : Number(panelState.x) || 0;
+  const maxY = wrapRect && wrapRect.height > 0 ? Math.max(0, wrapRect.height - height) : Number(panelState.y) || 0;
+  return {
+    x: clampNumber(Number(panelState.x) || 0, 0, maxX),
+    y: clampNumber(Number(panelState.y) || 0, 0, maxY),
+    width,
+    height
+  };
+}
+
+function applyFloatingPanelInline(panel, panelState) {
+  if (!panel || !panelState) return;
+  panel.style.left = Math.round(panelState.x) + "px";
+  panel.style.top = Math.round(panelState.y) + "px";
+  panel.style.right = "";
+  panel.style.bottom = "";
+  panel.style.width = Math.round(panelState.width) + "px";
+  panel.style.height = Math.round(panelState.height) + "px";
+}
+
+function currentFloatingPanelState(panel, options = {}) {
+  const wrapRect = el.viewportWrap?.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const fallbackWidth = panelRect.width || Number.parseFloat(panel.style.width) || Number(options.defaultWidth) || 100;
+  const fallbackHeight = panelRect.height || Number.parseFloat(panel.style.height) || Number(options.defaultHeight) || fallbackWidth;
+  return clampFloatingPanelState({
+    x: wrapRect ? panelRect.left - wrapRect.left : 0,
+    y: wrapRect ? panelRect.top - wrapRect.top : 0,
+    width: fallbackWidth,
+    height: fallbackHeight
+  }, options);
+}
+
+function applyStoredFloatingPanelState(panel, panelId, options = {}) {
+  if (!panel || panel.dataset.floatingPanelActive === "true") return false;
+  const stored = storedFloatingPanelState(options.storagePanelId || panelId);
+  if (!stored) return false;
+  applyFloatingPanelInline(panel, clampFloatingPanelState(stored, options));
+  return true;
+}
+
+function resizeFloatingPanelState(start, dx, dy, options = {}) {
+  const corner = options.resizeCorner || "bottom-left";
+  let next = Object.assign({}, start);
+  if (options.square) {
+    let desiredWidth = start.width + dx;
+    let desiredHeight = start.height + dy;
+    if (corner === "top-left") {
+      desiredWidth = start.width - dx;
+      desiredHeight = start.height - dy;
+    } else if (corner === "bottom-left") {
+      desiredWidth = start.width - dx;
+      desiredHeight = start.height + dy;
+    }
+    const widthDelta = desiredWidth - start.width;
+    const heightDelta = desiredHeight - start.height;
+    const sizeDelta = (widthDelta + heightDelta) / 2;
+    const wrapRect = el.viewportWrap?.getBoundingClientRect();
+    const minSize = Math.max(Number(options.minWidth) || 64, Number(options.minHeight) || 64);
+    const maxSize = wrapRect && wrapRect.width > 0 && wrapRect.height > 0
+      ? Math.max(minSize, Math.min(wrapRect.width, wrapRect.height))
+      : Math.max(minSize, start.width);
+    const size = clampNumber(Math.max(start.width, start.height) + sizeDelta, minSize, maxSize);
+    next.width = size;
+    next.height = size;
+    if (corner === "top-left") {
+      next.x = start.x + start.width - size;
+      next.y = start.y + start.height - size;
+    } else if (corner === "bottom-left") {
+      next.x = start.x + start.width - size;
+    }
+    return clampFloatingPanelState(next, options);
+  }
+  if (corner === "top-left") {
+    next.x = start.x + dx;
+    next.y = start.y + dy;
+    next.width = start.width - dx;
+    next.height = start.height - dy;
+  } else if (corner === "bottom-left") {
+    next.x = start.x + dx;
+    next.width = start.width - dx;
+    next.height = start.height + dy;
+  } else {
+    next.width = start.width + dx;
+    next.height = start.height + dy;
+  }
+  return clampFloatingPanelState(next, options);
+}
+
+function beginFloatingPanelGesture(event, panel, panelId, options, mode) {
+  if (!panel || !el.viewportWrap) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  const deviceKey = floatingPanelDeviceKey();
+  const storagePanelId = options.storagePanelId || panelId;
+  const start = currentFloatingPanelState(panel, options);
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const captureTarget = event.currentTarget;
+  panel.dataset.floatingPanelActive = "true";
+  try { captureTarget?.setPointerCapture?.(event.pointerId); } catch {}
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    moveEvent.preventDefault();
+    moveEvent.stopPropagation();
+    if (typeof moveEvent.stopImmediatePropagation === "function") moveEvent.stopImmediatePropagation();
+    const dx = moveEvent.clientX - startX;
+    const dy = moveEvent.clientY - startY;
+    const next = mode === "drag"
+      ? clampFloatingPanelState(Object.assign({}, start, { x: start.x + dx, y: start.y + dy }), options)
+      : resizeFloatingPanelState(start, dx, dy, options);
+    floatingPanelLiveStates.set(storagePanelId, next);
+    applyFloatingPanelInline(panel, next);
+    if (typeof options.onPreview === "function") options.onPreview(next);
+  }
+  function onUp(upEvent) {
+    if (upEvent.pointerId !== undefined && upEvent.pointerId !== event.pointerId) return;
+    upEvent.preventDefault();
+    upEvent.stopPropagation();
+    if (typeof upEvent.stopImmediatePropagation === "function") upEvent.stopImmediatePropagation();
+    delete panel.dataset.floatingPanelActive;
+    const next = currentFloatingPanelState(panel, options);
+    storeFloatingPanelState(storagePanelId, next, deviceKey);
+    floatingPanelLiveStates.delete(storagePanelId);
+    try { captureTarget?.releasePointerCapture?.(event.pointerId); } catch {}
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onUp, true);
+    if (typeof options.onEnd === "function") options.onEnd(next);
+  }
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onUp, true);
+}
+
+function bindFloatingPanelHandle(handle, panel, panelId, options, mode) {
+  if (!handle || handle.dataset.floatingPanelBound === panelId + ":" + mode) return;
+  handle.dataset.floatingPanelBound = panelId + ":" + mode;
+  handle.addEventListener("pointerdown", function (event) {
+    beginFloatingPanelGesture(event, panel, panelId, options, mode);
+  });
+}
+
+function ensureFloatingPanelControls(panel, panelId, options = {}) {
+  if (!panel) return;
+  applyStoredFloatingPanelState(panel, panelId, options);
+  const dragHandle = options.dragSelector ? panel.querySelector(options.dragSelector) : null;
+  if (dragHandle) {
+    dragHandle.classList.add("floatingPanelDragHandle");
+    dragHandle.title = "Verplaats paneel";
+    bindFloatingPanelHandle(dragHandle, panel, panelId, options, "drag");
+  } else if (options.dragClassName) {
+    let createdDragHandle = Array.from(panel.children).find(function (child) {
+      return child.classList.contains(options.dragClassName);
+    });
+    if (!createdDragHandle) {
+      createdDragHandle = document.createElement("div");
+      createdDragHandle.className = options.dragClassName + " floatingPanelDragHandle";
+      createdDragHandle.title = "Verplaats paneel";
+      panel.appendChild(createdDragHandle);
+    }
+    bindFloatingPanelHandle(createdDragHandle, panel, panelId, options, "drag");
+  } else if (options.dragSelf && panel.dataset.floatingPanelSelfDragBound !== panelId) {
+    panel.dataset.floatingPanelSelfDragBound = panelId;
+    panel.addEventListener("pointerdown", function (event) {
+      if (event.target !== panel) return;
+      beginFloatingPanelGesture(event, panel, panelId, options, "drag");
+    });
+  }
+  let resizeHandle = Array.from(panel.children).find(function (child) {
+    return child.classList.contains("floatingPanelResizeHandle");
+  });
+  if (!resizeHandle) {
+    resizeHandle = document.createElement("div");
+    resizeHandle.className = "floatingPanelResizeHandle " + (options.resizeCorner === "top-left" ? "topLeft" : "bottomLeft");
+    resizeHandle.title = "Resize paneel";
+    panel.appendChild(resizeHandle);
+  }
+  bindFloatingPanelHandle(resizeHandle, panel, panelId, options, "resize");
+  if (typeof options.onPreview === "function") options.onPreview(currentFloatingPanelState(panel, options));
+}
+
+function setMobileSelectedAsset(assetId) {
+  state.mobileSelectedAssetId = assetId || null;
+  if (!el.assetGrid) return;
+  for (const card of el.assetGrid.querySelectorAll(".assetCard[data-asset-id]")) {
+    card.classList.toggle("selected", Boolean(state.mobileSelectedAssetId && card.dataset.assetId === state.mobileSelectedAssetId));
+  }
 }
 
 function assetThumbnailStatus(asset) {
@@ -515,17 +1012,72 @@ function setStatus(message, kind) {
 }
 
 function bumpUnsaved() {
+  if (state.pendingUnsavedVisualCount > 0) {
+    state.pendingUnsavedVisualCount -= 1;
+    renderUnsaved();
+    return;
+  }
   state.unsaved += 1;
   renderUnsaved();
 }
 
+// Counterpart to bumpUnsaved() for undo specifically: going back in time should bring
+// the unsaved count back down, not add yet another "change" on top of it.
+function unbumpUnsaved() {
+  if (state.unsaved > 0) state.unsaved -= 1;
+  renderUnsaved();
+}
+
+function markUnsavedPending() {
+  if (state.pendingUnsavedVisualCount > 0) return false;
+  state.unsaved += 1;
+  state.pendingUnsavedVisualCount += 1;
+  renderUnsaved();
+  return true;
+}
+
+function discardPendingUnsavedVisual() {
+  if (state.pendingUnsavedVisualCount <= 0) return;
+  state.pendingUnsavedVisualCount -= 1;
+  if (state.unsaved > 0) state.unsaved -= 1;
+  renderUnsaved();
+}
+
+function clearUnsaved() {
+  state.unsaved = 0;
+  state.pendingUnsavedVisualCount = 0;
+  renderUnsaved();
+}
+
 function renderUnsaved() {
-  el.unsavedBadge.textContent = state.unsaved + (state.unsaved === 1 ? " action unsaved" : " actions unsaved");
+  el.unsavedBadge.textContent = isMobileLayout()
+    ? state.unsaved + " unsaved"
+    : state.unsaved + (state.unsaved === 1 ? " action unsaved" : " actions unsaved");
   el.unsavedBadge.className = state.unsaved === 0 ? "unsaved clean" : "unsaved";
+  if (el.undoButton) el.undoButton.disabled = !canUndo();
+  if (el.redoButton) el.redoButton.disabled = !canRedo();
+}
+
+function updateTopbarLabels() {
+  const mobile = isMobileLayout();
+  if (el.saveDraftButton) el.saveDraftButton.textContent = mobile ? "DRAFT" : "SAVE DRAFT";
+  if (el.publishButton) el.publishButton.textContent = mobile ? "GAME" : "SAVE TO GAME";
+  if (el.logoutButton) el.logoutButton.textContent = mobile ? "OUT" : "LOGOUT";
+  renderUnsaved();
+  updateEditorFullscreenButton();
 }
 
 function isBlankValue(value) {
   return value === null || value === undefined || (typeof value === "string" && value.trim() === "") || value === "";
+}
+
+function normalizeDegrees(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  let normalized = number % 360;
+  if (normalized > 180) normalized -= 360;
+  if (normalized < -180) normalized += 360;
+  return Math.round(normalized * 1000) / 1000;
 }
 
 function effectiveFieldValue(field, value) {
@@ -657,6 +1209,48 @@ function runtimeNodeId(node) {
   return null;
 }
 
+function isModelEntityTransformPatch(node, patch) {
+  const keys = Object.keys(patch || {});
+  return Boolean(node && node.type === "model_entity" && keys.length && keys.every(function (key) {
+    return MODEL_ENTITY_TRANSFORM_FIELDS.has(key);
+  }));
+}
+
+function isEditorCameraPatch(node, patch) {
+  const keys = Object.keys(patch || {});
+  return Boolean(node && node.type === "editor_camera" && keys.length && keys.every(function (key) {
+    return EDITOR_CAMERA_FIELDS.has(key);
+  }));
+}
+
+function normalizeModelEntityTransformPatch(node, patch) {
+  if (!isModelEntityTransformPatch(node, patch)) return patch;
+  const values = Object.assign({}, node.values || {}, patch || {});
+  const nextPatch = Object.assign({}, patch || {});
+  nextPatch.rotationX = normalizeDegrees(values.rotationX);
+  nextPatch.rotationY = normalizeDegrees(values.rotationY);
+  nextPatch.rotationZ = normalizeDegrees(values.rotationZ);
+  return nextPatch;
+}
+
+function graphWithPatchedNodeValues(graph, nodeId, patch) {
+  return Object.assign({}, graph || state.graph, {
+    nodes: ((graph || state.graph).nodes || []).map(function (node) {
+      if (node.id !== nodeId) return node;
+      return Object.assign({}, node, {
+        values: Object.assign({}, node.values || {}, patch || {})
+      });
+    })
+  });
+}
+
+function syncRuntimeModelEntityTransform(nodeId) {
+  if (!runtime || typeof runtime.setEntityTransform !== "function") return false;
+  const node = nodeById(nodeId);
+  if (!node || node.type !== "model_entity") return false;
+  return runtime.setEntityTransform(runtimeNodeId(node), node.values || {});
+}
+
 function runtimeSelectedEntityId() {
   if (!runtime || typeof runtime.getSelectedEntityId !== "function") return null;
   return runtime.getSelectedEntityId() || null;
@@ -686,6 +1280,11 @@ function runtimeModelEntityIdAtLastPointer() {
   const runtimeId = runtimeEntityIdAtLastPointer();
   const node = nodeByRuntimeId(runtimeId);
   return node && node.type === "model_entity" ? runtimeId : null;
+}
+
+function isPrimaryPointerAction(event) {
+  const pointerType = String(event?.pointerType || "");
+  return event?.button === 0 || pointerType === "touch" || pointerType === "pen";
 }
 
 function nodeByRuntimeId(runtimeId) {
@@ -763,12 +1362,15 @@ function focusAssetUsage(usage) {
   const node = nodeById(usage.nodeId);
   if (!node) return;
   selectNode(usage.nodeId, true, { clearPendingEdge: true });
-  focusGraphNode(usage.nodeId);
   if (!runtime) return;
   const runtimeId = runtimeNodeId(node);
   if (!runtimeId || typeof runtime.selectEntity !== "function") return;
   runtime.selectEntity(runtimeId);
-  if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+  const focused = typeof runtime.focusSelected === "function" ? runtime.focusSelected() : false;
+  if (!focused && selectedNode) {
+    const point = viewportSelectablePoint(selectedNode);
+    if (point && typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints([point]);
+  }
 }
 
 function compatibleReplacementAssets(assetId, usage) {
@@ -1278,8 +1880,8 @@ function selectedModelNode() {
 }
 
 function selectedTransformSnapshot() {
-  if (!runtime || typeof runtime.getSelectedEntitySnapshot !== "function") return null;
-  const snapshot = runtime.getSelectedEntitySnapshot();
+  if (!runtime || typeof runtime.getSelectedEntityTransform !== "function") return null;
+  const snapshot = runtime.getSelectedEntityTransform();
   const node = selectedModelNode();
   if (!snapshot || !node) return null;
   const runtimeId = runtimeNodeId(node);
@@ -1310,7 +1912,7 @@ function terrainNodeLabel(node) {
 
 const TERRAIN_HEIGHT_DRAG_STEP = 0.02;
 
-function walkableSurfaceFallbackPoints(node) {
+function terrainFallbackRectanglePoints(node) {
   const surface = terrainSurfaceSnapshot(node);
   const x = surface.x;
   const y = surface.y;
@@ -1354,8 +1956,8 @@ function terrainNodePoints(node) {
       normalized.push({ x: x, z: z });
     }
   }
-  if (node?.type === "walkable_surface" && normalized.length === 0) {
-    return walkableSurfaceFallbackPoints(node);
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(node?.type) && normalized.length === 0) {
+    return terrainFallbackRectanglePoints(node);
   }
   return normalized;
 }
@@ -1453,6 +2055,20 @@ function scatterPointCenter(points) {
   };
 }
 
+function terrainLastPointerGroundPoint() {
+  return terrainLastPointer
+    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
+    : null;
+}
+
+function pointTransformStartGroundFromPivot(pivot) {
+  const x = Number(pivot?.x);
+  const z = Number(pivot?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const offset = Math.max(1, Number(state.snapGridSize) || 1);
+  return { x: x + offset, z: z };
+}
+
 function scatterTranslatePoints(points, dx, dz) {
   return terrainClonePoints(points).map(function (point) {
     const nextPoint = { x: point.x + dx, z: point.z + dz };
@@ -1485,6 +2101,20 @@ function scatterScalePoints(points, pivot, factor) {
     const nextPoint = {
       x: origin.x + ((point.x - origin.x) * safeFactor),
       z: origin.z + ((point.z - origin.z) * safeFactor)
+    };
+    if (Number.isFinite(Number(point?.y))) nextPoint.y = Number(point.y);
+    return nextPoint;
+  });
+}
+
+function scatterScalePointsByAxis(points, pivot, factorX, factorZ) {
+  const origin = pivot || { x: 0, z: 0 };
+  const safeFactorX = Number.isFinite(factorX) ? factorX : 1;
+  const safeFactorZ = Number.isFinite(factorZ) ? factorZ : 1;
+  return terrainClonePoints(points).map(function (point) {
+    const nextPoint = {
+      x: origin.x + ((point.x - origin.x) * safeFactorX),
+      z: origin.z + ((point.z - origin.z) * safeFactorZ)
     };
     if (Number.isFinite(Number(point?.y))) nextPoint.y = Number(point.y);
     return nextPoint;
@@ -1692,36 +2322,31 @@ function terrainHasActiveSession() {
   return Boolean(state.terrainTool.dragNodeId && state.terrainTool.draggingHandleRole);
 }
 
-function terrainActiveSessionModeLabel() {
-  if (!terrainHasActiveSession()) return "Select";
-  if (state.terrainTool.draggingHandleRole === "extrude") return "Extrude";
-  if (state.terrainTool.draggingHandleRole === "scale") return "Scale " + terrainChannelLabel(state.terrainTool.dragScaleChannel || terrainActiveChannel());
-  return "Move";
-}
-
 function terrainShortcutSummaryText() {
-  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, F extrude, Z height, Del delete | Material: S scale, X/Y/Z axis";
+  return "Edit: 1 Main, 2 Secondary, 3 Edge | Point: G move, R rotate, T scale, F extrude, Z height, Del delete | X/Y/Z axis";
 }
 
 function terrainNodeCapabilities(node) {
   const nodeType = String(node?.type || "");
-  const shapeType = String(node?.values?.shapeType || "").trim().toLowerCase();
   const walkableSurface = nodeType === "walkable_surface";
-  const polygonEditable = nodeType === "surface_layer"
-    || walkableSurface
-    || (nodeType === "blocker_area" && shapeType === "polygon");
+  // All four terrain-tool node types edit identically to Walkable Surface: a
+  // point/line polygon with a center handle, regardless of any legacy shapeType
+  // field (box/circle become "polygon" the moment points are edited, see
+  // terrainPatchPoints). Only surface_layer stays an open path.
+  const polygonEditable = TERRAIN_TOOL_NODE_TYPES.has(nodeType);
   return {
     visible: Boolean(node && TERRAIN_TOOL_NODE_TYPES.has(nodeType)),
     nodeType: nodeType,
-    shapeType: shapeType,
     walkableSurface: walkableSurface,
     polygonEditable: polygonEditable,
     pointEditing: polygonEditable,
-    outlineOnly: nodeType === "blocker_area" && !polygonEditable,
-    centerEditable: walkableSurface,
+    closedLoop: TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(nodeType),
+    centerEditable: polygonEditable,
     allowSelect: true,
-    allowMove: polygonEditable || walkableSurface,
+    allowMove: polygonEditable,
     allowExtrude: polygonEditable,
+    allowRotate: polygonEditable,
+    allowGeoScale: polygonEditable,
     allowScale: nodeType === "surface_layer",
     allowDelete: polygonEditable
   };
@@ -1732,6 +2357,8 @@ function terrainModeAllowed(mode, capabilities) {
   if (mode === "select") return Boolean(capabilities.allowSelect);
   if (mode === "move") return Boolean(capabilities.allowMove);
   if (mode === "extrude") return Boolean(capabilities.allowExtrude);
+  if (mode === "rotate") return Boolean(capabilities.allowRotate);
+  if (mode === "geoscale") return Boolean(capabilities.allowGeoScale);
   if (mode === "scale") return Boolean(capabilities.allowScale);
   if (mode === "delete") return Boolean(capabilities.allowDelete);
   return false;
@@ -1740,31 +2367,22 @@ function terrainModeAllowed(mode, capabilities) {
 function terrainSelectionText(node, capabilities) {
   if (!node || !capabilities) return "";
   const title = terrainTypeLabel(node.type);
-  if (capabilities.outlineOnly) {
-    return title + " - Outline only: set shapeType to polygon to edit points";
-  }
   const channel = terrainChannelLabel(terrainActiveChannel());
   const channelSummary = "Edit: 1 Main, 2 Secondary, 3 Edge | Active: " + channel;
   const shortcutSummary = terrainShortcutSummaryText();
-  if (node.type === "walkable_surface") {
-    const base = title + " - Elevated polygon walk area | " + shortcutSummary;
-    if (state.terrainTool.mode === "move" && state.terrainTool.selectedHandleRole === "center") return title + " - Moving full surface | " + shortcutSummary;
-    if (state.terrainTool.mode === "move") return title + " - Moving points | " + shortcutSummary;
-    if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
-    if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
-    return base + " | Select center to move all points, use Z for height";
-  }
   const pointCount = terrainNodePoints(node).length;
   const base = title + " - " + channelSummary + " | " + shortcutSummary;
   if (pointCount < terrainMinPointCount(node.type)) {
     return base + " | Click ground to place the first points";
   }
-  if (pointCount < 2) return base + (node.type === "surface_layer" ? " | Needs at least 2 points" : "");
-  if (state.terrainTool.mode === "move") return title + " - Moving points | " + channelSummary + " | " + shortcutSummary;
-  if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + channelSummary + " | " + shortcutSummary;
+  if (state.terrainTool.mode === "move" && state.terrainTool.selectedHandleRole === "center") return title + " - Moving full shape | " + shortcutSummary;
+  if (state.terrainTool.mode === "move") return title + " - Moving points | " + shortcutSummary;
+  if (state.terrainTool.mode === "rotate") return title + " - Rotating | " + shortcutSummary;
+  if (state.terrainTool.mode === "geoscale") return title + " - Scaling | " + shortcutSummary;
+  if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
-  return base;
+  return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
 
 function terrainSelectedPointText() {
@@ -1775,6 +2393,7 @@ function terrainSelectedPointText() {
 }
 
 function terrainClearDragState() {
+  releaseViewportEditPointer(state.terrainTool.dragPointerId);
   state.terrainTool.draggingPointIndex = null;
   state.terrainTool.draggingHandleRole = null;
   state.terrainTool.dragNodeId = null;
@@ -1789,6 +2408,10 @@ function terrainClearDragState() {
   state.terrainTool.dragPointerId = null;
   state.terrainTool.dragStartGround = null;
   state.terrainTool.dragCurrentGround = null;
+  state.terrainTool.dragStartPivot = null;
+  state.terrainTool.dragStartAngle = null;
+  state.terrainTool.dragStartDistance = null;
+  state.terrainTool.dragTransformIndices = null;
   state.terrainTool.dragMoved = false;
 }
 
@@ -1798,20 +2421,30 @@ function terrainSetSelection(pointIndex, handleRole) {
   state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndex !== null ? [state.terrainTool.selectedPointIndex] : [];
 }
 
-function terrainTogglePointSelection(pointIndex) {
+// Shift always adds, Ctrl/Meta always removes - no toggling, so box-select and click-select
+// behave the same regardless of what was already selected.
+function terrainAddPointToSelection(pointIndex) {
   if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
   const existing = state.terrainTool.selectedPointIndices;
-  const pos = existing.indexOf(pointIndex);
-  if (pos === -1) {
-    state.terrainTool.selectedPointIndices = existing.concat(pointIndex);
-  } else {
-    state.terrainTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
-  }
+  if (!existing.includes(pointIndex)) state.terrainTool.selectedPointIndices = existing.concat(pointIndex);
+  state.terrainTool.selectedPointIndex = pointIndex;
+  state.terrainTool.selectedHandleRole = "point";
+}
+
+function terrainRemovePointFromSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndices.filter(function (i) { return i !== pointIndex; });
   const last = state.terrainTool.selectedPointIndices.length
     ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
     : null;
   state.terrainTool.selectedPointIndex = last;
   state.terrainTool.selectedHandleRole = last !== null ? "point" : null;
+}
+
+function terrainTogglePointSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  if (state.terrainTool.selectedPointIndices.includes(pointIndex)) terrainRemovePointFromSelection(pointIndex);
+  else terrainAddPointToSelection(pointIndex);
 }
 
 function terrainCancelActiveSession() {
@@ -1820,6 +2453,8 @@ function terrainCancelActiveSession() {
     || state.terrainTool.draggingHandleRole === "extrude"
     || state.terrainTool.draggingHandleRole === "point"
     || state.terrainTool.draggingHandleRole === "center"
+    || state.terrainTool.draggingHandleRole === "rotate"
+    || state.terrainTool.draggingHandleRole === "geoscale"
   );
   terrainClearDragState();
   state.terrainTool.mode = "select";
@@ -1837,6 +2472,7 @@ function terrainResetForNode(node, capabilities) {
   state.terrainTool.activeNodeId = nextNodeId;
   if (!node) {
     state.terrainTool.mode = "select";
+    state.terrainTool.multiSelect = false;
     terrainSetSelection(null, null);
     terrainClearDragState();
     state.terrainTool.axisConstraint = null;
@@ -1845,6 +2481,7 @@ function terrainResetForNode(node, capabilities) {
   }
   if (nodeChanged) {
     state.terrainTool.mode = "select";
+    state.terrainTool.multiSelect = false;
     terrainSetSelection(null, null);
     terrainClearDragState();
     state.terrainTool.axisConstraint = null;
@@ -1922,6 +2559,7 @@ function scatterSelectedPointText() {
 }
 
 function scatterClearDragState() {
+  releaseViewportEditPointer(state.scatterTool.dragPointerId);
   state.scatterTool.draggingPointIndex = null;
   state.scatterTool.draggingHandleRole = null;
   state.scatterTool.dragNodeId = null;
@@ -1934,6 +2572,7 @@ function scatterClearDragState() {
   state.scatterTool.dragStartPivot = null;
   state.scatterTool.dragStartAngle = null;
   state.scatterTool.dragStartDistance = null;
+  state.scatterTool.dragTransformIndices = null;
   state.scatterTool.dragStartRotationY = null;
   state.scatterTool.dragExtrudeIndex = null;
   state.scatterTool.dragPreviewPoint = null;
@@ -1948,20 +2587,29 @@ function scatterSetSelection(pointIndex, handleRole) {
   state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndex !== null ? [state.scatterTool.selectedPointIndex] : [];
 }
 
-function scatterTogglePointSelection(pointIndex) {
+// Shift always adds, Ctrl/Meta always removes - see terrainAddPointToSelection.
+function scatterAddPointToSelection(pointIndex) {
   if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
   const existing = state.scatterTool.selectedPointIndices;
-  const pos = existing.indexOf(pointIndex);
-  if (pos === -1) {
-    state.scatterTool.selectedPointIndices = existing.concat(pointIndex);
-  } else {
-    state.scatterTool.selectedPointIndices = existing.filter(function (i) { return i !== pointIndex; });
-  }
+  if (!existing.includes(pointIndex)) state.scatterTool.selectedPointIndices = existing.concat(pointIndex);
+  state.scatterTool.selectedPointIndex = pointIndex;
+  state.scatterTool.selectedHandleRole = "point";
+}
+
+function scatterRemovePointFromSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  state.scatterTool.selectedPointIndices = state.scatterTool.selectedPointIndices.filter(function (i) { return i !== pointIndex; });
   const last = state.scatterTool.selectedPointIndices.length
     ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
     : null;
   state.scatterTool.selectedPointIndex = last;
   state.scatterTool.selectedHandleRole = last !== null ? "point" : null;
+}
+
+function scatterTogglePointSelection(pointIndex) {
+  if (!Number.isInteger(pointIndex) || pointIndex < 0) return;
+  if (state.scatterTool.selectedPointIndices.includes(pointIndex)) scatterRemovePointFromSelection(pointIndex);
+  else scatterAddPointToSelection(pointIndex);
 }
 
 function scatterCancelActiveSession() {
@@ -1976,12 +2624,14 @@ function scatterResetForNode(node) {
   state.scatterTool.activeNodeId = nextNodeId;
   if (!node) {
     state.scatterTool.mode = "select";
+    state.scatterTool.multiSelect = false;
     scatterSetSelection(null, null);
     scatterClearDragState();
     return;
   }
   if (nodeChanged) {
     state.scatterTool.mode = "select";
+    state.scatterTool.multiSelect = false;
     scatterSetSelection(null, null);
     scatterClearDragState();
   }
@@ -2023,8 +2673,8 @@ function scatterOverlayState() {
   const summary = scatterSelectedNodeSummary();
   if (!summary) return null;
   const { node, points } = summary;
-  const selectedIndices = state.scatterTool.selectedPointIndices.slice();
-  const selectedIndex = Number.isInteger(state.scatterTool.selectedPointIndex) ? state.scatterTool.selectedPointIndex : null;
+  let selectedIndices = state.scatterTool.selectedPointIndices.slice();
+  let selectedIndex = Number.isInteger(state.scatterTool.selectedPointIndex) ? state.scatterTool.selectedPointIndex : null;
   const groundY = terrainGroundY();
   const dragGround = state.scatterTool.dragCurrentGround || state.scatterTool.dragStartGround || null;
   let previewPoints = scatterClonePoints(points);
@@ -2063,29 +2713,32 @@ function scatterOverlayState() {
     }
   } else if (state.scatterTool.draggingHandleRole === "rotate" && state.scatterTool.dragStartPoints) {
     const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
-    const pivot = state.scatterTool.dragStartPivot || scatterPointCenter(startPoints);
-    const startGround = state.scatterTool.dragStartGround;
-    if (dragGround && startGround) {
-      const startAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
-      const currentAngle = Math.atan2(dragGround.z - pivot.z, dragGround.x - pivot.x);
-      const deltaDegrees = (currentAngle - startAngle) * (180 / Math.PI);
-      previewPoints = scatterRotatePoints(startPoints, pivot, deltaDegrees);
-      rotationY = (Number(state.scatterTool.dragStartRotationY) || 0) + deltaDegrees;
+    if (dragGround) {
+      const preview = scatterPreviewGroupTransform(startPoints, dragGround, "rotate");
+      previewPoints = preview.points;
+      if (!preview.partial) rotationY = (Number(state.scatterTool.dragStartRotationY) || 0) + preview.deltaDegrees;
     } else {
       previewPoints = startPoints;
     }
   } else if (state.scatterTool.draggingHandleRole === "scale" && state.scatterTool.dragStartPoints) {
     const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
-    const pivot = state.scatterTool.dragStartPivot || scatterPointCenter(startPoints);
-    const startGround = state.scatterTool.dragStartGround;
-    if (dragGround && startGround) {
-      const startDistance = Math.max(0.0001, state.scatterTool.dragStartDistance || Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
-      const currentDistance = Math.hypot(dragGround.x - pivot.x, dragGround.z - pivot.z);
-      const factor = Math.max(0.05, currentDistance / startDistance);
-      previewPoints = scatterScalePoints(startPoints, pivot, factor);
+    if (dragGround) {
+      previewPoints = scatterPreviewGroupTransform(startPoints, dragGround, "scale").points;
     } else {
       previewPoints = startPoints;
     }
+  } else if (state.scatterTool.draggingHandleRole === "extrude" && state.scatterTool.dragStartPoints) {
+    const previewPoint = dragGround && Number.isFinite(dragGround.x) && Number.isFinite(dragGround.z)
+      ? { x: dragGround.x, z: dragGround.z }
+      : null;
+    const insertIndex = Number.isInteger(state.scatterTool.dragExtrudeIndex)
+      ? Math.max(0, Math.min(state.scatterTool.dragStartPoints.length, state.scatterTool.dragExtrudeIndex))
+      : Math.max(0, state.scatterTool.dragStartPoints.length - 1);
+    const startPoints = scatterClonePoints(state.scatterTool.dragStartPoints);
+    if (previewPoint) startPoints.splice(insertIndex, 0, previewPoint);
+    previewPoints = startPoints;
+    selectedIndex = previewPoint ? insertIndex : selectedIndex;
+    selectedIndices = previewPoint ? [insertIndex] : selectedIndices;
   }
 
   const bounds = scatterPointBounds(previewPoints);
@@ -2103,7 +2756,7 @@ function scatterOverlayState() {
     groundY: groundY,
     enabled: node.values?.enabled !== false,
     boundaryBlocksPlayer: node.values?.boundaryBlocksPlayer === true,
-    color: node.values?.enabled === false ? "#9c9c9c" : "#d59bff",
+    color: node.values?.enabled === false ? "#9c9c9c" : accentColorForNodeDef(state.nodeTypes[node.type]),
     points: previewPoints,
     selectedPointIndex: selectedIndex,
     selectedPointIndices: selectedIndices,
@@ -2128,9 +2781,10 @@ function scatterPatchGeometry(node, nextPoints, nextRotationY, historyLabel) {
   };
   return patchValues(node.id, patch, {
     historyLabel: historyLabel,
-    refreshViewport: true,
-    refreshValidation: true,
-    refreshEdgeList: false
+    refreshViewport: false,
+    refreshValidation: false,
+    refreshEdgeList: false,
+    afterApply: invalidateDraftWorld
   });
 }
 
@@ -2154,6 +2808,7 @@ function scatterBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
   state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.scatterTool.dragMoved = false;
   state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
   scatterRenderOverlayPreview();
@@ -2177,6 +2832,7 @@ function scatterBeginCenterDrag(node, groundPoint, pointerId) {
   state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.scatterTool.dragMoved = false;
   state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
   scatterRenderOverlayPreview();
@@ -2184,22 +2840,34 @@ function scatterBeginCenterDrag(node, groundPoint, pointerId) {
   return true;
 }
 
-function scatterBeginExtrudeSession(node, groundPoint, pointerId) {
+function scatterBeginExtrudeSession(node, groundPoint, pointerId, options = {}) {
   const points = scatterNodePoints(node);
-  const pointIndex = Number.isInteger(state.scatterTool.selectedPointIndex)
-    ? state.scatterTool.selectedPointIndex
-    : (state.scatterTool.selectedPointIndices.length
-      ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
-      : null);
+  const explicitPointIndex = Number.isInteger(options.pointIndex) ? options.pointIndex : null;
+  const explicitInsertIndex = Number.isInteger(options.insertIndex) ? options.insertIndex : null;
+  const hasSelection = Number.isInteger(state.scatterTool.selectedPointIndex) || state.scatterTool.selectedPointIndices.length > 0;
+  // Add can now start without a point selection; the actual segment click can still
+  // override both the anchor point and the insertion index before the drag begins.
+  let pointIndex = explicitPointIndex;
+  if (!Number.isInteger(pointIndex)) {
+    pointIndex = Number.isInteger(state.scatterTool.selectedPointIndex)
+      ? state.scatterTool.selectedPointIndex
+      : (state.scatterTool.selectedPointIndices.length
+        ? state.scatterTool.selectedPointIndices[state.scatterTool.selectedPointIndices.length - 1]
+        : (points.length ? points.length - 1 : null));
+  }
   if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) {
-    setStatus("Select a point first.", "error");
+    setStatus("Minimaal 1 punt nodig.", "error");
     return false;
   }
-  const insertIndex = pointIndex <= 0
-    ? 0
-    : pointIndex >= points.length - 1
-      ? points.length
-      : pointIndex + 1;
+  const insertIndex = Number.isInteger(explicitInsertIndex)
+    ? Math.max(0, Math.min(points.length, explicitInsertIndex))
+    : !hasSelection
+    ? points.length
+    : pointIndex <= 0
+      ? 0
+      : pointIndex >= points.length - 1
+        ? points.length
+        : pointIndex + 1;
   const startGround = groundPoint || (terrainLastPointer
     ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
     : null);
@@ -2217,6 +2885,7 @@ function scatterBeginExtrudeSession(node, groundPoint, pointerId) {
   state.scatterTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.scatterTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.scatterTool.dragMoved = false;
   state.scatterTool.dragStartRotationY = Number(node.values?.areaRotationY) || 0;
   scatterRenderOverlayPreview();
@@ -2226,26 +2895,30 @@ function scatterBeginExtrudeSession(node, groundPoint, pointerId) {
 
 function scatterBeginRotateSession(node, groundPoint, pointerId) {
   const points = scatterNodePoints(node);
-  const startGround = groundPoint || (terrainLastPointer
-    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
-    : null);
+  const targetIndices = scatterSelectedTransformIndices(points);
+  const pivot = scatterPointCenter(targetIndices.map(function (index) { return points[index]; }).filter(Boolean));
+  const startGround = groundPoint || terrainLastPointerGroundPoint() || pointTransformStartGroundFromPivot(pivot);
   if (!startGround) {
     setStatus("No ground hit.", "error");
     return false;
   }
-  const pivot = scatterPointCenter(points);
+  const selectedPointIndex = state.scatterTool.selectedPointIndex;
+  const selectedPointIndices = state.scatterTool.selectedPointIndices.slice();
+  const selectedHandleRole = state.scatterTool.selectedHandleRole;
   scatterClearDragState();
   state.scatterTool.mode = "rotate";
-  state.scatterTool.selectedHandleRole = "center";
-  state.scatterTool.selectedPointIndex = null;
-  state.scatterTool.selectedPointIndices = [];
+  state.scatterTool.selectedHandleRole = selectedPointIndices.length > 1 ? selectedHandleRole : "center";
+  state.scatterTool.selectedPointIndex = selectedPointIndices.length > 1 ? selectedPointIndex : null;
+  state.scatterTool.selectedPointIndices = selectedPointIndices.length > 1 ? selectedPointIndices : [];
   state.scatterTool.dragNodeId = node.id;
   state.scatterTool.draggingPointIndex = null;
   state.scatterTool.draggingHandleRole = "rotate";
+  state.scatterTool.dragTransformIndices = targetIndices;
   state.scatterTool.dragStartPoints = scatterClonePoints(points);
   state.scatterTool.dragStartGround = { x: startGround.x, z: startGround.z };
   state.scatterTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
   state.scatterTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.scatterTool.dragMoved = false;
   state.scatterTool.dragStartPivot = pivot;
   state.scatterTool.dragStartAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
@@ -2257,26 +2930,30 @@ function scatterBeginRotateSession(node, groundPoint, pointerId) {
 
 function scatterBeginScaleSession(node, groundPoint, pointerId) {
   const points = scatterNodePoints(node);
-  const startGround = groundPoint || (terrainLastPointer
-    ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
-    : null);
+  const targetIndices = scatterSelectedTransformIndices(points);
+  const pivot = scatterPointCenter(targetIndices.map(function (index) { return points[index]; }).filter(Boolean));
+  const startGround = groundPoint || terrainLastPointerGroundPoint() || pointTransformStartGroundFromPivot(pivot);
   if (!startGround) {
     setStatus("No ground hit.", "error");
     return false;
   }
-  const pivot = scatterPointCenter(points);
+  const selectedPointIndex = state.scatterTool.selectedPointIndex;
+  const selectedPointIndices = state.scatterTool.selectedPointIndices.slice();
+  const selectedHandleRole = state.scatterTool.selectedHandleRole;
   scatterClearDragState();
   state.scatterTool.mode = "scale";
-  state.scatterTool.selectedHandleRole = "center";
-  state.scatterTool.selectedPointIndex = null;
-  state.scatterTool.selectedPointIndices = [];
+  state.scatterTool.selectedHandleRole = selectedPointIndices.length > 1 ? selectedHandleRole : "center";
+  state.scatterTool.selectedPointIndex = selectedPointIndices.length > 1 ? selectedPointIndex : null;
+  state.scatterTool.selectedPointIndices = selectedPointIndices.length > 1 ? selectedPointIndices : [];
   state.scatterTool.dragNodeId = node.id;
   state.scatterTool.draggingPointIndex = null;
   state.scatterTool.draggingHandleRole = "scale";
+  state.scatterTool.dragTransformIndices = targetIndices;
   state.scatterTool.dragStartPoints = scatterClonePoints(points);
   state.scatterTool.dragStartGround = { x: startGround.x, z: startGround.z };
   state.scatterTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
   state.scatterTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.scatterTool.dragMoved = false;
   state.scatterTool.dragStartPivot = pivot;
   state.scatterTool.dragStartDistance = Math.max(0.0001, Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
@@ -2336,6 +3013,16 @@ async function scatterCommitPointDrag(node) {
   const draggedIndices = state.scatterTool.selectedPointIndices.length > 1
     ? state.scatterTool.selectedPointIndices
     : [pointIndex];
+  const selectedBefore = state.scatterTool.selectedPointIndices.slice();
+  if (state.scatterTool.dragPointerId !== null && !state.scatterTool.dragMoved) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    state.scatterTool.selectedPointIndices = selectedBefore;
+    state.scatterTool.selectedPointIndex = pointIndex;
+    state.scatterTool.selectedHandleRole = "point";
+    scatterFinishWithRender();
+    return true;
+  }
   if (draggedIndices.length > 1 && startGround) {
     const dx = groundPoint.x - startGround.x;
     const dz = groundPoint.z - startGround.z;
@@ -2350,7 +3037,6 @@ async function scatterCommitPointDrag(node) {
       z: groundPoint.z
     };
   }
-  const selectedBefore = state.scatterTool.selectedPointIndices.slice();
   const ok = await scatterPatchGeometry(node, startPoints, state.scatterTool.dragStartRotationY, "Scatter point moved");
   scatterClearDragState();
   state.scatterTool.mode = "select";
@@ -2374,6 +3060,13 @@ async function scatterCommitCenterDrag(node) {
     scatterFinishWithRender();
     setStatus("No ground hit.", "error");
     return false;
+  }
+  if (state.scatterTool.dragPointerId !== null && !state.scatterTool.dragMoved) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    scatterSetSelection(null, "center");
+    scatterFinishWithRender();
+    return true;
   }
   const startGround = state.scatterTool.dragStartGround || groundPoint;
   const dx = groundPoint.x - startGround.x;
@@ -2399,16 +3092,38 @@ async function scatterCommitRotate(node) {
     setStatus("No ground hit.", "error");
     return false;
   }
-  const currentAngle = Math.atan2(groundPoint.z - state.scatterTool.dragStartPivot.z, groundPoint.x - state.scatterTool.dragStartPivot.x);
-  const deltaDegrees = (currentAngle - state.scatterTool.dragStartAngle) * (180 / Math.PI);
-  const nextPoints = scatterRotatePoints(state.scatterTool.dragStartPoints, state.scatterTool.dragStartPivot, deltaDegrees);
-  const nextRotationY = (Number(state.scatterTool.dragStartRotationY) || 0) + deltaDegrees;
-  const ok = await scatterPatchGeometry(node, nextPoints, nextRotationY, "Scatter area rotated");
+  const selectedIndexBefore = state.scatterTool.selectedPointIndex;
+  const selectedIndicesBefore = state.scatterTool.selectedPointIndices.slice();
+  const selectedRoleBefore = state.scatterTool.selectedHandleRole;
+  if (state.scatterTool.dragPointerId !== null && !state.scatterTool.dragMoved) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    if (selectedIndicesBefore.length > 1) {
+      state.scatterTool.selectedPointIndex = selectedIndexBefore;
+      state.scatterTool.selectedPointIndices = selectedIndicesBefore;
+      state.scatterTool.selectedHandleRole = selectedRoleBefore;
+    } else {
+      scatterSetSelection(null, "center");
+    }
+    scatterFinishWithRender();
+    return true;
+  }
+  const preview = scatterPreviewGroupTransform(state.scatterTool.dragStartPoints, groundPoint, "rotate");
+  const nextRotationY = preview.partial
+    ? state.scatterTool.dragStartRotationY
+    : (Number(state.scatterTool.dragStartRotationY) || 0) + preview.deltaDegrees;
+  const ok = await scatterPatchGeometry(node, preview.points, nextRotationY, preview.partial ? "Scatter points rotated" : "Scatter area rotated");
   scatterClearDragState();
   state.scatterTool.mode = "select";
   if (ok) {
-    scatterSetSelection(null, "center");
-    setStatus("Area rotated.", "success");
+    if (selectedIndicesBefore.length > 1) {
+      state.scatterTool.selectedPointIndex = selectedIndexBefore;
+      state.scatterTool.selectedPointIndices = selectedIndicesBefore;
+      state.scatterTool.selectedHandleRole = selectedRoleBefore;
+    } else {
+      scatterSetSelection(null, "center");
+    }
+    setStatus(preview.partial ? selectedIndicesBefore.length + " points rotated." : "Area rotated.", "success");
   }
   scatterFinishWithRender();
   return ok;
@@ -2423,15 +3138,35 @@ async function scatterCommitScale(node) {
     setStatus("No ground hit.", "error");
     return false;
   }
-  const currentDistance = Math.hypot(groundPoint.x - state.scatterTool.dragStartPivot.x, groundPoint.z - state.scatterTool.dragStartPivot.z);
-  const factor = Math.max(0.05, currentDistance / Math.max(0.0001, state.scatterTool.dragStartDistance));
-  const nextPoints = scatterScalePoints(state.scatterTool.dragStartPoints, state.scatterTool.dragStartPivot, factor);
-  const ok = await scatterPatchGeometry(node, nextPoints, state.scatterTool.dragStartRotationY, "Scatter area scaled");
+  const selectedIndexBefore = state.scatterTool.selectedPointIndex;
+  const selectedIndicesBefore = state.scatterTool.selectedPointIndices.slice();
+  const selectedRoleBefore = state.scatterTool.selectedHandleRole;
+  if (state.scatterTool.dragPointerId !== null && !state.scatterTool.dragMoved) {
+    scatterClearDragState();
+    state.scatterTool.mode = "select";
+    if (selectedIndicesBefore.length > 1) {
+      state.scatterTool.selectedPointIndex = selectedIndexBefore;
+      state.scatterTool.selectedPointIndices = selectedIndicesBefore;
+      state.scatterTool.selectedHandleRole = selectedRoleBefore;
+    } else {
+      scatterSetSelection(null, "center");
+    }
+    scatterFinishWithRender();
+    return true;
+  }
+  const preview = scatterPreviewGroupTransform(state.scatterTool.dragStartPoints, groundPoint, "scale");
+  const ok = await scatterPatchGeometry(node, preview.points, state.scatterTool.dragStartRotationY, preview.partial ? "Scatter points scaled" : "Scatter area scaled");
   scatterClearDragState();
   state.scatterTool.mode = "select";
   if (ok) {
-    scatterSetSelection(null, "center");
-    setStatus("Area scaled.", "success");
+    if (selectedIndicesBefore.length > 1) {
+      state.scatterTool.selectedPointIndex = selectedIndexBefore;
+      state.scatterTool.selectedPointIndices = selectedIndicesBefore;
+      state.scatterTool.selectedHandleRole = selectedRoleBefore;
+    } else {
+      scatterSetSelection(null, "center");
+    }
+    setStatus(preview.partial ? selectedIndicesBefore.length + " points scaled." : "Area scaled.", "success");
   }
   scatterFinishWithRender();
   return ok;
@@ -2487,6 +3222,47 @@ function scatterSelectionPivot(points) {
   return scatterPointCenter(points);
 }
 
+function scatterSelectedTransformIndices(points) {
+  const selected = state.scatterTool.selectedPointIndices.filter(function (index) {
+    return Number.isInteger(index) && index >= 0 && index < points.length;
+  });
+  return selected.length > 1
+    ? selected
+    : points.map(function (_, index) { return index; });
+}
+
+function scatterPreviewGroupTransform(startPoints, groundPoint, kind) {
+  const nextPoints = scatterClonePoints(startPoints);
+  const indices = (state.scatterTool.dragTransformIndices || []).filter(function (index) {
+    return Number.isInteger(index) && index >= 0 && index < nextPoints.length;
+  });
+  const pivot = state.scatterTool.dragStartPivot;
+  if (!pivot || !groundPoint || !indices.length) {
+    return { points: nextPoints, deltaDegrees: 0, partial: false };
+  }
+  const subset = indices.map(function (index) { return nextPoints[index]; }).filter(Boolean);
+  let transformed = subset;
+  let deltaDegrees = 0;
+  if (kind === "rotate") {
+    const startAngle = state.scatterTool.dragStartAngle;
+    if (!Number.isFinite(startAngle)) return { points: nextPoints, deltaDegrees: 0, partial: indices.length < nextPoints.length };
+    const currentAngle = Math.atan2(groundPoint.z - pivot.z, groundPoint.x - pivot.x);
+    deltaDegrees = (currentAngle - startAngle) * (180 / Math.PI);
+    transformed = scatterRotatePoints(subset, pivot, deltaDegrees);
+  } else {
+    const currentDistance = Math.hypot(groundPoint.x - pivot.x, groundPoint.z - pivot.z);
+    const factor = Math.max(0.05, currentDistance / Math.max(0.0001, state.scatterTool.dragStartDistance || 1));
+    transformed = scatterScalePoints(subset, pivot, factor);
+  }
+  let cursor = 0;
+  for (const index of indices) {
+    if (!nextPoints[index]) continue;
+    nextPoints[index] = Object.assign({}, nextPoints[index], transformed[cursor]);
+    cursor += 1;
+  }
+  return { points: nextPoints, deltaDegrees: deltaDegrees, partial: indices.length < nextPoints.length };
+}
+
 function terrainSelectedNodeSummary() {
   const node = selectedTerrainNode();
   if (!node) return null;
@@ -2502,7 +3278,7 @@ function terrainSelectedNodeSummary() {
 function terrainOverlayState() {
   const summary = terrainSelectedNodeSummary();
   if (!summary) return null;
-  const { node, capabilities, points, surface } = summary;
+  const { node, points, surface } = summary;
   const groundY = terrainGroundY();
   const dragGround = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround || null;
   let previewPoints = terrainClonePoints(points);
@@ -2517,13 +3293,8 @@ function terrainOverlayState() {
     selectedHandleRole: state.terrainTool.selectedHandleRole,
     draggingHandleRole: state.terrainTool.draggingHandleRole,
     points: points,
-    shapeType: capabilities.shapeType,
     groundY: groundY,
-    color: node.type === "surface_layer"
-      ? "#8fbf6a"
-      : node.type === "walkable_surface"
-        ? "#8fe0a8"
-        : "#f0b35a"
+    color: accentColorForNodeDef(state.nodeTypes[node.type])
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -2533,10 +3304,12 @@ function terrainOverlayState() {
       dragGround,
       state.terrainTool.dragStartGround
     );
-  } else if (state.terrainTool.draggingHandleRole === "center" && node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
+  } else if (state.terrainTool.draggingHandleRole === "center" && state.terrainTool.dragStartPoints) {
     const startGround = state.terrainTool.dragStartGround
       || (state.terrainTool.dragStartSurface ? { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z } : null);
     previewPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, dragGround, startGround);
+  } else if ((state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") && state.terrainTool.dragStartPoints) {
+    previewPoints = terrainPreviewGroupTransform(state.terrainTool.dragStartPoints, dragGround, state.terrainTool.draggingHandleRole);
   } else if (state.terrainTool.draggingHandleRole === "extrude" && state.terrainTool.dragStartPoints) {
     const anchor = state.terrainTool.dragStartGround || dragGround;
     const previewPoint = dragGround && Number.isFinite(dragGround.x) && Number.isFinite(dragGround.z)
@@ -2548,7 +3321,6 @@ function terrainOverlayState() {
     overlay.previewInsertIndex = Number.isInteger(state.terrainTool.dragExtrudeIndex)
       ? state.terrainTool.dragExtrudeIndex
       : Math.max(0, state.terrainTool.dragStartPoints.length - 1);
-    overlay.previewPoint = previewPoint;
     previewPoints = terrainPreviewExtrudedPoints(
       node,
       state.terrainTool.dragStartPoints,
@@ -2557,23 +3329,68 @@ function terrainOverlayState() {
       overlay.previewInsertIndex,
       anchor
     ) || terrainClonePoints(state.terrainTool.dragStartPoints);
+    if (previewPoint) {
+      overlay.selectedPointIndex = Math.max(0, Math.min(previewPoints.length - 1, overlay.previewInsertIndex));
+      overlay.selectedPointIndices = [overlay.selectedPointIndex];
+    }
   } else if (state.terrainTool.draggingHandleRole === "scale" && state.terrainTool.dragStartScale) {
     overlay.previewScale = Object.assign({}, state.terrainTool.dragStartScale);
   }
   overlay.points = previewPoints;
-  if (node.type === "walkable_surface") {
-    Object.assign(overlay, terrainWalkableSurfaceGeometry(node, previewPoints));
-  }
+  Object.assign(overlay, terrainWalkableSurfaceGeometry(node, previewPoints));
   return overlay;
+}
+
+// Big center-handle markers for every points-based node except the currently
+// selected one (which already renders its own, richer, editable center handle).
+// Lets you spot and jump straight to any Walkable Surface / Blocker Area / Area
+// Definition / Surface Layer / Bounded Area Scatter node from the 3D viewport.
+function terrainAllNodeMarkers() {
+  const groundY = terrainGroundY();
+  const selectedId = state.selectedNodeId;
+  const markers = [];
+  for (const node of state.graph.nodes || []) {
+    if (node.id === selectedId) continue;
+    if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+      const points = terrainNodePoints(node);
+      const geometry = terrainWalkableSurfaceGeometry(node, points);
+      markers.push({
+        nodeId: node.id,
+        x: geometry.x,
+        y: node.type === "walkable_surface" ? geometry.y : groundY + 0.03,
+        z: geometry.z,
+        color: accentColorForNodeDef(state.nodeTypes[node.type])
+      });
+    } else if (node.type === "bounded_area_scatter") {
+      const center = scatterPointCenter(scatterNodePoints(node));
+      markers.push({
+        nodeId: node.id,
+        x: center.x,
+        y: groundY + 0.05,
+        z: center.z,
+        color: node.values?.enabled === false ? "#9c9c9c" : accentColorForNodeDef(state.nodeTypes[node.type])
+      });
+    }
+  }
+  return markers;
+}
+
+function pushTerrainOverlay(overlay) {
+  if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
+  const markers = terrainAllNodeMarkers();
+  if (overlay) {
+    runtime.setTerrainEditorOverlay(Object.assign({}, overlay, { markers: markers }));
+  } else if (markers.length) {
+    runtime.setTerrainEditorOverlay({ markers: markers });
+  } else if (typeof runtime.clearTerrainEditorOverlay === "function") {
+    runtime.clearTerrainEditorOverlay();
+  }
 }
 
 function syncTerrainToolPanel() {
   const summary = terrainSelectedNodeSummary();
   const node = summary?.node || null;
   const capabilities = summary?.capabilities || null;
-  const panel = el.terrainToolPanel;
-  const nodeLabel = el.terrainToolNodeLabel;
-  const hint = el.terrainToolHint;
 
   if (!node || !capabilities) {
     const hadActiveSession = terrainHasActiveSession();
@@ -2582,66 +3399,13 @@ function syncTerrainToolPanel() {
     terrainSetSelection(null, null);
     state.terrainTool.mode = "select";
     state.terrainTool.axisConstraint = null;
-    if (panel) panel.hidden = true;
-    if (nodeLabel) nodeLabel.textContent = "";
-    if (hint) hint.textContent = "";
     if (hadActiveSession && runtime && state.viewportWorld) applyViewportWorld(state.viewportWorld);
-    if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") runtime.clearTerrainEditorOverlay();
+    pushTerrainOverlay(null);
     return;
   }
 
   terrainResetForNode(node, capabilities);
-
-  if (panel) panel.hidden = false;
-  if (nodeLabel) {
-    const labelText = terrainNodeLabel(node);
-    nodeLabel.textContent = labelText ? labelText : terrainTypeLabel(node.type);
-  }
-  if (hint) {
-    const channel = terrainChannelLabel(terrainActiveChannel());
-    const modeText = terrainHasActiveSession()
-      ? terrainActiveSessionModeLabel()
-      : state.terrainTool.mode === "select"
-        ? "Select"
-        : terrainTypeLabel(state.terrainTool.mode);
-    hint.textContent = capabilities.outlineOnly
-      ? "Outline only"
-      : modeText + " | " + terrainShortcutSummaryText() + " | Active channel: " + channel + (state.terrainTool.axisConstraint ? " | Axis " + state.terrainTool.axisConstraint.toUpperCase() : "");
-  }
-
-  const overlay = terrainOverlayState();
-  if (runtime && typeof runtime.setTerrainEditorOverlay === "function" && overlay) {
-    runtime.setTerrainEditorOverlay(overlay);
-  } else if (runtime && typeof runtime.clearTerrainEditorOverlay === "function") {
-    runtime.clearTerrainEditorOverlay();
-  }
-
-  const sessionActive = terrainHasActiveSession();
-  for (const button of [
-    el.terrainToolChannelMainButton,
-    el.terrainToolChannelSecondaryButton,
-    el.terrainToolChannelEdgeButton
-  ]) {
-    if (!button) continue;
-    const channel = String(button.dataset.terrainChannel || "main");
-    button.disabled = sessionActive;
-    button.classList.toggle("active", channel === terrainActiveChannel());
-    button.setAttribute("aria-pressed", channel === terrainActiveChannel() ? "true" : "false");
-  }
-
-  for (const button of [
-    el.terrainToolMoveButton,
-    el.terrainToolExtrudeButton,
-    el.terrainToolScaleButton,
-    el.terrainToolDeleteButton
-  ]) {
-    if (!button) continue;
-    const action = String(button.dataset.terrainAction || "");
-    const allowed = terrainModeAllowed(action, capabilities);
-    button.disabled = !allowed || sessionActive;
-    button.classList.toggle("active", action === state.terrainTool.mode);
-    button.setAttribute("aria-pressed", action === state.terrainTool.mode ? "true" : "false");
-  }
+  pushTerrainOverlay(terrainOverlayState());
 }
 
 function renderStatusLine() {
@@ -2735,6 +3499,11 @@ function setViewportSnap(mode, gridSize) {
 
 function syncRuntimeModelSelectionForTransform() {
   if (!runtime || runtimeTransformActive()) return selectedModelNode();
+  // A multi-selection already active in the runtime must not get collapsed back down to
+  // one entity right before G/R/S starts - that was silently breaking group transforms.
+  if (typeof runtime.getSelectedEntityIds === "function" && runtime.getSelectedEntityIds().length > 1) {
+    return selectedModelNode();
+  }
   let node = selectedModelNode();
   let runtimeId = runtimeNodeId(node);
   if (!runtimeId) {
@@ -2746,17 +3515,48 @@ function syncRuntimeModelSelectionForTransform() {
   return node;
 }
 
-function beginRuntimeTransformFromShortcut(mode, statusText) {
+function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
   if (!runtime) return false;
   if (runtimeTransformActive()) {
     setStatus(statusText, "");
     return true;
   }
   syncRuntimeModelSelectionForTransform();
-  const started = typeof runtime.beginTransform === "function"
-    ? runtime.beginTransform(mode)
-    : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
   const selectedId = runtimeSelectedEntityId() || runtimeModelEntityIdAtLastPointer();
+  if (!selectedId && state.selectedNodeIds.length <= 1) {
+    setStatus("No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", "error");
+    return false;
+  }
+  // On touch there's no driving gesture yet at button-press time - starting the transform
+  // right here means its very first real input is a brand new touchdown a moment later,
+  // which is exactly the timing native long-press/context-menu gesture recognition also
+  // reacts to (see the matching comment next to pendingTouchTransformMode in
+  // world-runtime.js). Arming instead and only calling beginTransform() from that
+  // touchdown itself removes the gap between "transform exists" and "a touch is driving
+  // it", the same shape the working entity-hold-to-move gesture already has.
+  // isCoarsePointer() reflects the device's *primary* pointer, which on a touchscreen
+  // Chromebook/tablet-with-trackpad is often still reported as "fine" (mouse) even while
+  // this exact click came from the touchscreen - so prefer the actual triggering event's
+  // own pointerType (Chrome fires "click" as a PointerEvent) and only fall back to the
+  // device-wide guess when that isn't available.
+  const isTouch = triggerEvent && triggerEvent.pointerType
+    ? triggerEvent.pointerType === "touch"
+    : isCoarsePointer();
+  if (isTouch && typeof runtime.armPendingTouchTransform === "function") {
+    runtime.armPendingTouchTransform(mode);
+    setStatus(statusText, "");
+    return true;
+  }
+  // forceGroup: the editor's own selection (state.selectedNodeIds) can include node types
+  // the runtime has no live mesh for at all (Location Anchor) or no single draggable root
+  // for (Walkable Surface/Surface Layer, rendered as chunked strips) - so it can undercount
+  // vs. what the runtime tracks in selectedEntityIds. When the editor knows more than one
+  // node is actually selected, force a group session even if the runtime found 0 or 1 live
+  // objects to drag; commitGroupTransform() below applies the resulting move delta to
+  // whichever selected nodes don't have a live object of their own.
+  const started = typeof runtime.beginTransform === "function"
+    ? runtime.beginTransform(mode, { forceGroup: state.selectedNodeIds.length > 1 })
+    : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
   setStatus(started ? statusText : "No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", started ? "" : "error");
   return Boolean(started);
 }
@@ -2801,14 +3601,420 @@ function resetSelectedModelTransform(kind) {
   return true;
 }
 
+function transformActionButton(label, options = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.title = options.title || label;
+  if (options.className) button.className = options.className;
+  if (options.active) button.classList.add("active");
+  if (options.disabled) button.disabled = true;
+  button.addEventListener("pointerdown", function (event) {
+    event.stopPropagation();
+    if (button.disabled || typeof options.onPointerDown !== "function") return;
+    event.preventDefault();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    button.dataset.pointerActionHandled = "1";
+    options.onPointerDown(event);
+  });
+  button.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.dataset.pointerActionHandled === "1") {
+      delete button.dataset.pointerActionHandled;
+      return;
+    }
+    if (typeof options.onClick === "function") options.onClick(event);
+  });
+  return button;
+}
+
+function appendModelTransformActions(parent) {
+  const activeTransform = runtimeTransformActive();
+  parent.appendChild(transformActionButton("Move (G)", {
+    title: "Move selected model",
+    active: activeTransform && state.viewportMode === "translate",
+    onClick: function (event) {
+      setViewportMode("translate");
+      setViewportAxis(null);
+      beginRuntimeTransformFromShortcut("move", "Move.", event);
+    }
+  }));
+  parent.appendChild(transformActionButton("Rot (R)", {
+    title: "Rotate selected model",
+    active: activeTransform && state.viewportMode === "rotate",
+    onClick: function (event) {
+      setViewportMode("rotate");
+      setViewportAxis(null);
+      beginRuntimeTransformFromShortcut("rotate", "Rotate.", event);
+    }
+  }));
+  parent.appendChild(transformActionButton("Scale (T)", {
+    title: "Scale selected model",
+    active: activeTransform && state.viewportMode === "scale",
+    onClick: function (event) {
+      setViewportMode("scale");
+      setViewportAxis(null);
+      beginRuntimeTransformFromShortcut("scale", "Scale.", event);
+    }
+  }));
+  for (const axis of ["x", "y", "z"]) {
+    parent.appendChild(transformActionButton(axis.toUpperCase(), {
+      title: "Constrain " + axis.toUpperCase(),
+      active: activeTransform && state.viewportAxis === axis,
+      onClick: function () {
+        setViewportAxis(state.viewportAxis === axis ? null : axis);
+      }
+    }));
+  }
+  parent.appendChild(transformActionButton("OK (Enter)", {
+    title: "Confirm transform",
+    className: "ok",
+    disabled: !activeTransform,
+    onPointerDown: confirmRuntimeTransform,
+    onClick: confirmRuntimeTransform
+  }));
+  parent.appendChild(transformActionButton("Del (Del)", {
+    title: "Delete selected node",
+    className: "danger",
+    disabled: !state.selectedNodeIds.length && !state.selectedEdgeIds.length,
+    onClick: function () {
+      if (activeTransform) cancelRuntimeTransform();
+      deleteSelectedNodes();
+    }
+  }));
+  parent.appendChild(transformActionButton("Esc (Esc)", {
+    title: activeTransform ? "Cancel transform" : "Deselect",
+    className: "danger",
+    onClick: function () {
+      if (activeTransform) cancelRuntimeTransform();
+      else deselectViewportClick();
+    }
+  }));
+  parent.appendChild(transformActionButton("Focus (F)", {
+    title: "Focus selected",
+    onClick: focusTerrainOrSelected
+  }));
+}
+
+function selectedToolPointIndex(toolState) {
+  if (Number.isInteger(toolState.selectedPointIndex)) return toolState.selectedPointIndex;
+  return toolState.selectedPointIndices.length
+    ? toolState.selectedPointIndices[toolState.selectedPointIndices.length - 1]
+    : null;
+}
+
+function commitActiveScatterSession(node) {
+  if (!node || !scatterHasActiveSession()) return false;
+  if (state.scatterTool.draggingHandleRole === "center") return scatterCommitCenterDrag(node);
+  if (state.scatterTool.draggingHandleRole === "rotate") return scatterCommitRotate(node);
+  if (state.scatterTool.draggingHandleRole === "scale") return scatterCommitScale(node);
+  return scatterCommitPointDrag(node);
+}
+
+function appendScatterTransformActions(parent, node) {
+  const selectedIndex = selectedToolPointIndex(state.scatterTool);
+  const activeSession = scatterHasActiveSession();
+  const activeRole = state.scatterTool.draggingHandleRole;
+  parent.appendChild(transformActionButton("Select", {
+    onClick: function () {
+      scatterCancelActiveSession();
+      state.scatterTool.mode = "select";
+      scatterFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Multi", {
+    active: state.scatterTool.multiSelect,
+    onClick: function () {
+      scatterCancelActiveSession();
+      state.scatterTool.multiSelect = !state.scatterTool.multiSelect;
+      state.scatterTool.mode = "select";
+      setStatus(state.scatterTool.multiSelect ? "Multi-select aan." : "Multi-select uit.", "");
+      scatterFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Move (G)", {
+    active: activeSession && (activeRole === "point" || activeRole === "center"),
+    onClick: function () {
+      if (Number.isInteger(selectedIndex)) scatterBeginPointDrag(node, selectedIndex, null, null);
+      else scatterBeginCenterDrag(node, null, null);
+      setStatus("Move ready. Sleep in 3D en druk OK.", "");
+    }
+  }));
+  parent.appendChild(transformActionButton("Rot (R)", {
+    active: activeSession && activeRole === "rotate",
+    onClick: function () {
+      if (scatterBeginRotateSession(node, null, null)) setStatus("Rotate ready. Sleep in 3D en druk OK.", "");
+    }
+  }));
+  parent.appendChild(transformActionButton("Scale (T)", {
+    active: activeSession && activeRole === "scale",
+    onClick: function () {
+      if (scatterBeginScaleSession(node, null, null)) setStatus("Scale ready. Sleep in 3D en druk OK.", "");
+    }
+  }));
+  parent.appendChild(transformActionButton("Add (F)", {
+    active: state.scatterTool.mode === "extrude" || (activeSession && activeRole === "extrude"),
+    onClick: function () {
+      scatterCancelActiveSession();
+      state.scatterTool.mode = "extrude";
+      setStatus("Add ready. Druk tussen twee punten en sleep; loslaten bevestigt.", "");
+      scatterFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Del (Del)", {
+    className: "danger",
+    onClick: function () {
+      if (state.scatterTool.selectedPointIndices.length > 1) void scatterDeleteMultiPoint(node);
+      else if (Number.isInteger(state.scatterTool.selectedPointIndex)) void scatterDeletePoint(node, state.scatterTool.selectedPointIndex);
+      else setStatus("Select a point first.", "error");
+    }
+  }));
+  parent.appendChild(transformActionButton("OK (Enter)", {
+    className: "ok",
+    disabled: !activeSession,
+    onPointerDown: function () { commitActiveScatterSession(node); },
+    onClick: function () { commitActiveScatterSession(node); }
+  }));
+  parent.appendChild(transformActionButton("Esc (Esc)", {
+    className: "danger",
+    onClick: function () {
+      if (scatterHasActiveSession()) scatterCancelActiveSession();
+      else deselectViewportClick();
+    }
+  }));
+  parent.appendChild(transformActionButton("Focus (.)", { onClick: focusTerrainOrSelected }));
+}
+
+function commitActiveTerrainSession(node) {
+  if (!node || !terrainHasActiveSession()) return false;
+  let commitResult;
+  if (state.terrainTool.draggingHandleRole === "scale") commitResult = terrainCommitScale(node);
+  else if (state.terrainTool.draggingHandleRole === "center") commitResult = terrainCommitSurfaceDrag(node);
+  else if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+    commitResult = terrainCommitGroupTransform(node, state.terrainTool.draggingHandleRole);
+  } else {
+    commitResult = terrainCommitPointDrag(node);
+  }
+  state.terrainTool.axisConstraint = null;
+  return commitResult || true;
+}
+
+function appendTerrainTransformActions(parent, node) {
+  const capabilities = terrainNodeCapabilities(node);
+  const selectedIndex = selectedToolPointIndex(state.terrainTool);
+  const activeSession = terrainHasActiveSession();
+  const activeRole = state.terrainTool.draggingHandleRole;
+  parent.appendChild(transformActionButton("Select", {
+    onClick: function () {
+      terrainCancelActiveSession();
+      state.terrainTool.mode = "select";
+      state.terrainTool.axisConstraint = null;
+      terrainFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Multi", {
+    active: state.terrainTool.multiSelect,
+    onClick: function () {
+      terrainCancelActiveSession();
+      state.terrainTool.multiSelect = !state.terrainTool.multiSelect;
+      state.terrainTool.mode = "select";
+      state.terrainTool.axisConstraint = null;
+      setStatus(state.terrainTool.multiSelect ? "Multi-select aan." : "Multi-select uit.", "");
+      terrainFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Move (G)", {
+    active: activeSession && (activeRole === "point" || activeRole === "center"),
+    onClick: function () {
+      const started = Number.isInteger(selectedIndex)
+        ? terrainBeginPointDrag(node, selectedIndex, null, null)
+        : capabilities.centerEditable && terrainBeginSurfaceDrag(node, null, null);
+      setStatus(started ? "Move ready. Sleep in 3D en druk OK." : "Select a point first.", started ? "" : "error");
+    }
+  }));
+  parent.appendChild(transformActionButton("Rot (R)", {
+    active: activeSession && activeRole === "rotate",
+    onClick: function () {
+      if (terrainBeginGroupTransformSession(node, null, null, "rotate")) setStatus("Rotate ready. Sleep in 3D en druk OK.", "");
+    }
+  }));
+  parent.appendChild(transformActionButton("Scale (T)", {
+    active: activeSession && activeRole === "geoscale",
+    onClick: function () {
+      if (terrainBeginGroupTransformSession(node, null, null, "geoscale")) setStatus("Scale ready. Sleep in 3D en druk OK.", "");
+    }
+  }));
+  parent.appendChild(transformActionButton("Add (F)", {
+    active: state.terrainTool.mode === "extrude" || (activeSession && activeRole === "extrude"),
+    onClick: function () {
+      terrainCancelActiveSession();
+      state.terrainTool.mode = "extrude";
+      state.terrainTool.axisConstraint = null;
+      setStatus("Add ready. Druk tussen twee punten en sleep; loslaten bevestigt.", "");
+      terrainFinishWithRender();
+    }
+  }));
+  parent.appendChild(transformActionButton("Del (Del)", {
+    className: "danger",
+    onClick: function () {
+      if (state.terrainTool.selectedPointIndices.length > 1) void terrainDeleteMultiPoint(node);
+      else if (Number.isInteger(state.terrainTool.selectedPointIndex)) void terrainDeletePoint(node, state.terrainTool.selectedPointIndex);
+      else setStatus("Select a point first.", "error");
+    }
+  }));
+  for (const axis of ["x", "y", "z"]) {
+    parent.appendChild(transformActionButton(axis.toUpperCase(), {
+      active: activeSession && state.terrainTool.axisConstraint === axis,
+      onClick: function () {
+        state.terrainTool.axisConstraint = state.terrainTool.axisConstraint === axis ? null : axis;
+        if (terrainHasActiveSession()) {
+          const activeNode = nodeById(state.terrainTool.dragNodeId) || node;
+          if (state.terrainTool.draggingHandleRole === "scale") {
+            terrainUpdateScalePreview(activeNode, state.terrainTool.dragCurrentPointer || state.terrainTool.dragStartPointer);
+          } else if (
+            state.terrainTool.draggingHandleRole === "rotate"
+            || state.terrainTool.draggingHandleRole === "geoscale"
+            || state.terrainTool.draggingHandleRole === "point"
+            || state.terrainTool.draggingHandleRole === "center"
+            || state.terrainTool.draggingHandleRole === "extrude"
+          ) {
+            terrainRenderOverlayPreview();
+          }
+        }
+        terrainFinishWithRender();
+      }
+    }));
+  }
+  parent.appendChild(transformActionButton("OK (Enter)", {
+    className: "ok",
+    disabled: !activeSession,
+    onPointerDown: function () { commitActiveTerrainSession(node); },
+    onClick: function () { commitActiveTerrainSession(node); }
+  }));
+  parent.appendChild(transformActionButton("Esc (Esc)", {
+    className: "danger",
+    onClick: function () {
+      if (terrainHasActiveSession()) terrainCancelActiveSession();
+      else {
+        state.terrainTool.axisConstraint = null;
+        deselectViewportClick();
+      }
+    }
+  }));
+  parent.appendChild(transformActionButton("Focus (.)", { onClick: focusTerrainOrSelected }));
+}
+
+function setEditorMinimapSuppressed(suppressed) {
+  const next = Boolean(suppressed);
+  if (state.editorMinimapSuppressed === next) return;
+  state.editorMinimapSuppressed = next;
+  if (next) {
+    if (editorMinimapRedrawTimer) {
+      clearTimeout(editorMinimapRedrawTimer);
+      editorMinimapRedrawTimer = null;
+    }
+    if (el.editorMinimapRoot) el.editorMinimapRoot.hidden = true;
+  } else {
+    scheduleEditorMinimapRedraw(0);
+  }
+}
+
+function applyViewportFloatingSlotAnchor(panel, panelId, config, options = {}) {
+  if (!panel) return;
+  if (panel.dataset.floatingPanelActive === "true") return;
+  if (applyStoredFloatingPanelState(panel, panelId, options)) return;
+  panel.style.top = "";
+  panel.style.bottom = "";
+  panel.style.left = "";
+  panel.style.right = "";
+  const size = editorMinimapDisplaySize(config);
+  panel.style.width = size + "px";
+  panel.style.height = size + "px";
+  const anchor = config?.anchor || "bottom-right";
+  if (anchor === "top-left") { panel.style.top = "12px"; panel.style.left = "12px"; }
+  else if (anchor === "top-right") { panel.style.top = "12px"; panel.style.right = "12px"; }
+  else if (anchor === "bottom-left") { panel.style.bottom = "12px"; panel.style.left = "12px"; }
+  else { panel.style.bottom = "12px"; panel.style.right = "12px"; }
+}
+
+function viewportTransformInputFocused() {
+  const active = document.activeElement;
+  return Boolean(active && isEditableTarget(active) && el.viewportTransformPanel && el.viewportTransformPanel.contains(active));
+}
+
+function scheduleViewportFloatingPanelLayoutRefresh() {
+  if (viewportFloatingPanelResizeRaf) return;
+  viewportFloatingPanelResizeRaf = requestAnimationFrame(function () {
+    viewportFloatingPanelResizeRaf = 0;
+    if (!viewportTransformInputFocused()) renderTransformPanel();
+    redrawEditorMinimap();
+  });
+}
+
+function updateTransformPanelScale(panelState) {
+  const panel = el.viewportTransformPanel;
+  if (!panel) return;
+  const rect = panel.getBoundingClientRect();
+  const width = Number(panelState?.width) || rect.width || 184;
+  const height = Number(panelState?.height) || rect.height || 180;
+  const hasMatrix = Boolean(panel.querySelector(".transformMatrix"));
+  const actionCount = panel.querySelectorAll(".transformMobileActions button").length || 9;
+  const actionRows = Math.max(1, Math.ceil(actionCount / 3));
+  const baseActionsHeight = actionRows * 30 + Math.max(0, actionRows - 1) * 4;
+  const baseMatrixHeight = hasMatrix ? 86 : 0;
+  const baseHeight = 16 + baseActionsHeight + (hasMatrix ? 8 + baseMatrixHeight : 0);
+  const scale = clampNumber(Math.min(width / 184, height / baseHeight), 0.28, 1.35);
+  panel.style.setProperty("--transform-panel-scale", String(Math.round(scale * 1000) / 1000));
+}
+
+function transformPanelFloatingOptions(hasMatrix) {
+  const defaultSize = editorMinimapDisplaySize(state.viewportWorld?.minimap?.editor || null);
+  return {
+    dragSelf: true,
+    resizeCorner: "top-left",
+    square: true,
+    minWidth: hasMatrix ? 130 : 104,
+    minHeight: hasMatrix ? 130 : 104,
+    defaultWidth: defaultSize,
+    defaultHeight: defaultSize,
+    storagePanelId: "editorMinimap",
+    onPreview: updateTransformPanelScale,
+    onEnd: updateTransformPanelScale
+  };
+}
+
 function renderTransformPanel() {
   if (!el.viewportTransformPanel) return;
   const node = selectedModelNode();
-  if (!node) {
+  const terrainNode = node ? null : selectedTerrainNode();
+  const scatterNode = node || terrainNode ? null : selectedScatterNode();
+  if (!node && !terrainNode && !scatterNode) {
+    setEditorMinimapSuppressed(false);
     el.viewportTransformPanel.hidden = true;
+    el.viewportTransformPanel.classList.remove("minimapSlotPanel");
     el.viewportTransformPanel.innerHTML = "";
     return;
   }
+  setEditorMinimapSuppressed(true);
+  el.viewportTransformPanel.hidden = false;
+  el.viewportTransformPanel.classList.add("minimapSlotPanel");
+  el.viewportTransformPanel.innerHTML = "";
+
+  const actions = document.createElement("div");
+  actions.className = "transformMobileActions";
+  if (node) appendModelTransformActions(actions);
+  else if (terrainNode) appendTerrainTransformActions(actions, terrainNode);
+  else appendScatterTransformActions(actions, scatterNode);
+  el.viewportTransformPanel.appendChild(actions);
+
+  if (!node) {
+    const floatingOptions = transformPanelFloatingOptions(false);
+    applyViewportFloatingSlotAnchor(el.viewportTransformPanel, "viewportTransformPanel", state.viewportWorld?.minimap?.editor || null, floatingOptions);
+    ensureFloatingPanelControls(el.viewportTransformPanel, "viewportTransformPanel", floatingOptions);
+    return;
+  }
+
   const snapshot = selectedTransformSnapshot();
   const position = snapshot ? viewportVectorFromWorld(snapshot.position) : viewportVectorFromWorld({ x: node.values.x, y: node.values.y, z: node.values.z });
   const rotation = snapshot
@@ -2819,16 +4025,6 @@ function renderTransformPanel() {
       z: node.values.rotationZ
     });
   const scale = snapshot?.scale || { x: node.values.scaleX, y: node.values.scaleY, z: node.values.scaleZ };
-  el.viewportTransformPanel.hidden = false;
-  el.viewportTransformPanel.innerHTML = "";
-
-  const header = document.createElement("div");
-  header.className = "transformPanelHeader";
-  const title = document.createElement("div");
-  title.className = "transformPanelTitle";
-  title.textContent = "TRS";
-  header.appendChild(title);
-  el.viewportTransformPanel.appendChild(header);
 
   const matrix = document.createElement("div");
   matrix.className = "transformMatrix";
@@ -2850,12 +4046,12 @@ function renderTransformPanel() {
       const nodeAxis = viewportAxisToNodeAxis(axis);
       if (!nodeAxis) return;
       patch["rotation" + nodeAxis.toUpperCase()] = value;
-    } else if (kind === "t") {
+    } else if (kind === "T") {
       patch["scale" + axis.toUpperCase()] = value;
     }
     cancelRuntimeTransform();
     setViewportAxis(null);
-    patchValues(node.id, patch, {
+    void patchValues(node.id, patch, {
       historyLabel: "Transform " + kind,
       refreshViewport: true,
       refreshValidation: true,
@@ -2870,18 +4066,39 @@ function renderTransformPanel() {
     input.step = step;
     input.value = formatViewportNumber(value, digits);
     input.title = kind + " " + axis.toUpperCase();
-    input.addEventListener("change", function () {
+    let commitTimer = 0;
+    let lastCommittedValue = Number(value);
+    function commitFromInput() {
+      if (commitTimer) {
+        clearTimeout(commitTimer);
+        commitTimer = 0;
+      }
       const next = Number(input.value);
       if (!Number.isFinite(next)) {
         input.value = formatViewportNumber(value, digits);
         return;
       }
+      if (Math.abs(next - lastCommittedValue) < 0.0000001) return;
+      lastCommittedValue = next;
       commitTransformInput(kind, axis, next);
+    }
+    input.addEventListener("input", function (event) {
+      if (event.inputType && event.inputType !== "insertReplacementText") return;
+      if (commitTimer) clearTimeout(commitTimer);
+      commitTimer = setTimeout(commitFromInput, 180);
+    });
+    input.addEventListener("change", commitFromInput);
+    input.addEventListener("blur", commitFromInput);
+    input.addEventListener("pointerdown", function (event) {
+      event.stopPropagation();
     });
     input.addEventListener("keydown", function (event) {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      input.blur();
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitFromInput();
+        input.blur();
+      }
     });
     matrix.appendChild(input);
   }
@@ -2896,6 +4113,9 @@ function renderTransformPanel() {
     addMatrixInput("T", axis, scale[axis] ?? 1, "0.01", 3);
   }
   el.viewportTransformPanel.appendChild(matrix);
+  const floatingOptions = transformPanelFloatingOptions(true);
+  applyViewportFloatingSlotAnchor(el.viewportTransformPanel, "viewportTransformPanel", state.viewportWorld?.minimap?.editor || null, floatingOptions);
+  ensureFloatingPanelControls(el.viewportTransformPanel, "viewportTransformPanel", floatingOptions);
 }
 
 function cancelRuntimeTransform() {
@@ -2907,9 +4127,7 @@ function cancelRuntimeTransform() {
   const result = typeof cancelFn === "function" ? cancelFn.call(runtime) : false;
   if (wasActive) {
     setViewportAxis(null);
-    clearSelection({ clearPendingEdge: true });
     renderGraph();
-    setStatus("Transform cancelled.", "");
   }
   return result;
 }
@@ -2923,11 +4141,34 @@ function confirmRuntimeTransform() {
   const result = typeof confirmFn === "function" ? confirmFn.call(runtime) : false;
   if (wasActive) {
     setViewportAxis(null);
-    clearSelection({ clearPendingEdge: true });
     renderGraph();
-    if (result) setStatus("Transform confirmed.", "success");
   }
   return result;
+}
+
+function runtimeTransformPointerEventTargetsViewport(event) {
+  if (!event || !el.viewportCanvas) return false;
+  if (event.target === el.viewportCanvas) return true;
+  // A real interactive control (the Move/Rot/Scale buttons themselves, transform matrix
+  // inputs, ...) sitting on top of the viewport is never what a genuine drag is targeting,
+  // even when it geometrically overlaps the canvas - clicking Move a second time while a
+  // transform is active was being read as a pointer confirming that transform at the
+  // button's own screen position, snapping the mesh toward the toolbar.
+  if (event.target && typeof event.target.closest === "function"
+    && event.target.closest("button, input, select, textarea, a")) return false;
+  // While a transform is active, any pointer still within the viewport's bounds counts
+  // as targeting it - even if a floating panel (transform matrix, minimap, ...) happens
+  // to be the actual event.target at that pixel. Rejecting those outright broke touch
+  // drags that pass under UI chrome that can appear mid-gesture (e.g. right after
+  // selecting an entity shows its transform panel), so the one pointerup meant to
+  // confirm the drag never counted as "targeting the viewport" and the transform stayed
+  // stuck active forever.
+  const rect = el.viewportCanvas.getBoundingClientRect();
+  const x = Number(event.clientX);
+  const y = Number(event.clientY);
+  return Number.isFinite(x) && Number.isFinite(y)
+    && x >= rect.left && x <= rect.right
+    && y >= rect.top && y <= rect.bottom;
 }
 
 function consumeRuntimeTransformPointerEvent(event) {
@@ -2938,6 +4179,7 @@ function consumeRuntimeTransformPointerEvent(event) {
 
 function previewRuntimeTransformFromEvent(event) {
   if (!runtimeTransformActive()) return false;
+  if (!runtimeTransformPointerEventTargetsViewport(event)) return false;
   if (runtime && typeof runtime.previewTransformAt === "function") {
     runtime.previewTransformAt(event.clientX, event.clientY);
   }
@@ -2953,10 +4195,22 @@ function handleRuntimeTransformMoveEvent(event) {
 function handleRuntimeTransformEndEvent(event) {
   if (!previewRuntimeTransformFromEvent(event)) return;
   consumeRuntimeTransformPointerEvent(event);
-  if (event.type === "pointercancel" || event.button === 2 || event.button === 1) {
+  // This is registered before handleTerrainPointerUp and just stopped this event's
+  // propagation above, so that handler (which normally clears this touch out of
+  // viewportTouchEditPointers/the runtime's own 2-finger zoom tracking on release) will
+  // never run for it. Do that cleanup here instead - otherwise the touch that confirmed
+  // a G/R/S move via tap leaves a permanent ghost pointer behind, which pairs up with
+  // the very next single-finger touch and gets misread as a two-finger pinch-zoom.
+  updateViewportTouchEditState(event);
+  if (event.button === 2 || event.button === 1) {
     cancelRuntimeTransform();
     return;
   }
+  // A pointercancel (as opposed to a real pointerup) carries no intentional "I'm done"
+  // signal from the user - it's the browser yanking the touch away (native long-press
+  // gesture, an interrupting system UI, ...). Discarding all progress in that case is
+  // more disruptive than just locking in whatever was already genuinely dragged, so
+  // confirm here too rather than reverting to the start position.
   confirmRuntimeTransform();
 }
 
@@ -3109,9 +4363,13 @@ function selectNode(nodeId, scroll, options = {}) {
     setSelection([nodeId], [], { primaryNodeId: nodeId, clearPendingEdge: options.clearPendingEdge });
   }
   if (scroll) {
-    const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + nodeId + '"]');
-    if (card && typeof card.scrollIntoView === "function") card.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Never use the browser's native scrollIntoView here: .graphViewport is a fixed-size
+    // canvas panned/zoomed via CSS transform + state.view, not native scrolling. Nudging
+    // its real scroll offset desyncs state.view from the DOM, which then throws off every
+    // mouse-to-graph coordinate conversion (zoom direction, click position, ...).
+    focusGraphNode(nodeId);
   }
+  if (options.showMobileInspector) showMobileInspectorPanel();
 }
 
 function selectEdge(edgeId, options = {}) {
@@ -3150,10 +4408,16 @@ function syncSelectedEdgeCard() {
 
 function syncRuntimeSelection() {
   if (!runtime) return;
-  const node = nodeById(state.selectedNodeId);
-  const runtimeId = runtimeNodeId(node);
-  if (runtimeId) runtime.selectEntity(runtimeId);
-  else runtime.deselect();
+  const runtimeIds = state.selectedNodeIds
+    .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
+    .filter(Boolean);
+  if (typeof runtime.selectEntities === "function") {
+    runtime.selectEntities(runtimeIds);
+  } else if (runtimeIds.length) {
+    runtime.selectEntity(runtimeIds[0]);
+  } else {
+    runtime.deselect();
+  }
 }
 
 function breadcrumbForGroup(groupId) {
@@ -3235,7 +4499,7 @@ function applyGraphMutationResult(result, options = {}) {
   if (options.refreshEdgeList !== false) renderEdgeList();
   if (options.refreshInspector !== false) renderInspector();
   if (!options.refreshViewport) syncRuntimeSelection();
-  renderViewportControls();
+  if (options.refreshViewportControls !== false) renderViewportControls();
   if (options.refreshViewport) {
     invalidateDraftWorld();
     scheduleViewportRefresh(false);
@@ -3297,7 +4561,10 @@ async function restoreGraphSnapshot(snapshot) {
         refreshValidation: false,
         refreshGraph: true,
         refreshEdgeList: true,
-        refreshInspector: true
+        refreshInspector: true,
+        // undoGraphMutation/redoGraphMutation (the only callers) adjust the unsaved
+        // count themselves, in the right direction - undo should bring it down.
+        countUnsaved: false
       });
       return result;
     } catch (error) {
@@ -3325,6 +4592,7 @@ async function undoGraphMutation() {
     state.history.redo.pop();
     return;
   }
+  unbumpUnsaved();
   await refreshViewport({ force: true });
   await refreshValidation();
   setStatus("Ongedaan gemaakt: " + (snapshot.label || "laatste wijziging") + ".", "success");
@@ -3344,6 +4612,7 @@ async function redoGraphMutation() {
     state.history.undo.pop();
     return;
   }
+  bumpUnsaved();
   await refreshViewport({ force: true });
   await refreshValidation();
   setStatus("Opnieuw gedaan: " + (snapshot.label || "laatste wijziging") + ".", "success");
@@ -3363,38 +4632,96 @@ async function boot() {
     },
     onSelectEntity: function (entityId) {
       if (!entityId) {
-        clearSelection({ clearPendingEdge: true });
-        renderGraph();
-        setStatus("Deselected.", "");
-        redrawEditorMinimap();
+        deselectViewportClick();
         return;
       }
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
-      focusGraphNode(node.id);
       selectNode(node.id, false);
-      redrawEditorMinimap();
+      // Always follow into the clicked object's zone (not just on desktop), so the
+      // current zone context stays consistent across every tab/pane, incl. the mobile
+      // "All" layout - later asset placement / node creation uses this same group.
+      focusGraphNode(node.id);
+      scheduleEditorMinimapRedraw();
+    },
+    onSelectEntities: function (entityIds) {
+      const nodeIds = Array.from(new Set((entityIds || [])
+        .map(function (id) { return nodeByRuntimeId(id)?.id; })
+        .filter(Boolean)));
+      if (!nodeIds.length) {
+        deselectViewportClick();
+        return;
+      }
+      setSelection(nodeIds, [], { primaryNodeId: nodeIds[0], clearPendingEdge: true });
+      renderGraph();
+      focusGraphNode(nodeIds[0]);
+      scheduleEditorMinimapRedraw();
+    },
+    onMarqueeRect: function (rect) {
+      if (!rect) hideViewportSelectionBox();
+      else showViewportSelectionBox(rect.left, rect.top, rect.right, rect.bottom);
+    },
+    onMarqueeSelect: function (rect, additive, subtractive) {
+      const hitNodeIds = viewportMarqueeNodeIds(rect);
+      let nextIds;
+      if (subtractive) {
+        const remove = new Set(hitNodeIds);
+        nextIds = state.selectedNodeIds.filter(function (id) { return !remove.has(id); });
+      } else if (additive) {
+        nextIds = Array.from(new Set(state.selectedNodeIds.concat(hitNodeIds)));
+      } else {
+        nextIds = hitNodeIds;
+      }
+      if (!nextIds.length) {
+        deselectViewportClick();
+        return;
+      }
+      setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true });
+      renderGraph();
+      scheduleEditorMinimapRedraw();
     },
     onTransformChange: function () {
+      // Purely visual, live feedback while dragging - the unsaved count and undo entry
+      // are only created once on actual commit below (mouse release), not while the
+      // object is still being dragged around.
       renderViewportControls();
-      redrawEditorMinimap();
+      scheduleEditorMinimapRedraw();
     },
     onTransformEnd: function (info) {
       if (!info) return;
       setViewportAxis(null);
-      clearSelection({ clearPendingEdge: true });
+      if (info.action === "cancel") {
+        clearSelection({ clearPendingEdge: true });
+      }
       renderGraph();
-      redrawEditorMinimap();
+      scheduleEditorMinimapRedraw();
       if (info.action === "confirm") {
-        setStatus(info.changed ? "Transform confirmed." : "Transform unchanged: no mouse movement was received.", info.changed ? "success" : "error");
+        if (state.lastTransformCommitError) {
+          setStatus(state.lastTransformCommitError, "error");
+          state.lastTransformCommitError = "";
+        } else {
+          setStatus(info.changed ? "Transform confirmed." : "Transform unchanged: no mouse movement was received.", info.changed ? "success" : "error");
+        }
       } else if (info.action === "cancel") {
         setStatus("Transform cancelled.", "");
       }
     },
-    onTransformCommit: function (entityId, transform) {
-      const node = nodeByRuntimeId(entityId);
-      if (!node || node.type !== "model_entity") return;
-      patchValues(node.id, transform, {
+    onTransformCommit: function (entityIdOrPayload, transform) {
+      state.lastTransformCommitError = "";
+      if (entityIdOrPayload && typeof entityIdOrPayload === "object" && Array.isArray(entityIdOrPayload.commits)) {
+        void commitGroupTransform(entityIdOrPayload);
+        setViewportAxis(null);
+        return;
+      }
+      const node = nodeByRuntimeId(entityIdOrPayload);
+      if (!node || node.type !== "model_entity") {
+        state.lastTransformCommitError = "Transform niet opgeslagen: runtime entity niet gevonden (" + String(entityIdOrPayload || "unknown") + ").";
+        setStatus(state.lastTransformCommitError, "error");
+        return;
+      }
+      // This is the one point where a drop/release actually happened - bumping the
+      // unsaved count and pushing the undo entry belongs here, not mid-drag.
+      void patchValues(node.id, transform, {
         historyLabel: "Transform",
         refreshViewport: true,
         refreshEdgeList: false,
@@ -3402,33 +4729,123 @@ async function boot() {
       });
       setViewportAxis(null);
     },
-    onLoadErrors: renderViewportErrors
+    onLoadErrors: renderViewportErrors,
+    onEditorCameraChange: function (fields) {
+      const node = state.graph.nodes.find(function (n) { return n.type === "editor_camera"; });
+      if (!node) return;
+      patchValues(node.id, {
+        targetX: fields.targetX,
+        targetY: fields.targetY,
+        targetZ: fields.targetZ,
+        pitch: fields.pitch,
+        yaw: fields.yaw,
+        distance: fields.distance
+      }, {
+        historyLabel: "",
+        refreshViewport: false,
+        refreshValidation: false,
+        refreshGraph: false,
+        refreshEdgeList: false,
+        refreshInspector: false,
+        refreshAssetUsage: false,
+        countUnsaved: false
+      });
+      scheduleEditorMinimapRedraw();
+    }
   });
   window.__GK_EDITOR_RUNTIME = runtime;
   state.viewportHelpOpen = false;
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
-  setInterval(redrawEditorMinimap, 250);
   await reloadGraph();
   await reloadAssets();
   renderViewportControls();
   setViewportSnap(state.snapMode, state.snapGridSize);
   setViewportMode(state.viewportMode);
-  await refreshViewport({ force: true });
-  await refreshValidation();
   applyTransform();
   setStatus("Klaar.", "success");
   renderUnsaved();
+  void refreshViewport({ force: true }).then(function () {
+    return refreshValidation();
+  });
 }
 
 async function reloadGraph() {
   const graph = await api("/api/editor/graph");
   state.graph = graph;
   state.nodeTypes = graph.nodeTypes;
+  await repairLoadedZoneCanvasGraph();
   ensureCurrentGroupExists();
   renderNodeLibrary();
   renderGraph();
   renderEdgeList();
   renderInspector();
+}
+
+async function repairLoadedZoneCanvasGraph() {
+  try {
+    if (!zoneCanvasGraphNeedsLoadRepair(state.graph)) return false;
+    const parentIds = Array.from(new Set((state.graph.nodes || []).filter(function (node) {
+      return isZoneCanvasGroup(node, state.graph);
+    }).map(function (node) {
+      return node.parentId || null;
+    })));
+    const before = JSON.stringify(snapshotGraph(state.graph));
+    const nextGraph = cloneGraphForRestore(state.graph);
+    const legacyZoneTileIds = new Set((nextGraph.nodes || []).filter(function (node) {
+      return node.type === "zone_tile_layer";
+    }).map(function (node) {
+      return node.id;
+    }));
+    if (legacyZoneTileIds.size) {
+      nextGraph.nodes = (nextGraph.nodes || []).filter(function (node) {
+        return !legacyZoneTileIds.has(node.id);
+      });
+      nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
+        return !legacyZoneTileIds.has(edge.fromNodeId) && !legacyZoneTileIds.has(edge.toNodeId);
+      });
+    }
+    const removedZoneOutputLightEdges = removeZoneOutputLightEdges(nextGraph);
+    if (!parentIds.length && !legacyZoneTileIds.size && !removedZoneOutputLightEdges) return false;
+    for (const parentId of parentIds) normalizeZoneCanvasGroups(nextGraph, parentId);
+    const after = JSON.stringify(snapshotGraph(nextGraph));
+    if (before === after) return false;
+    const result = await api(RESTORE_GRAPH_ROUTE, {
+      method: "POST",
+      body: JSON.stringify({ graph: nextGraph })
+    });
+    state.graph = result.graph || result;
+    state.nodeTypes = state.graph.nodeTypes || state.nodeTypes;
+    return true;
+  } catch (error) {
+    setStatus("Zone Canvas auto-repair overgeslagen: " + (error?.message || String(error)), "error");
+    return false;
+  }
+}
+
+function zoneCanvasGraphNeedsLoadRepair(graph) {
+  const nodes = graph?.nodes || [];
+  const nodeById = new Map(nodes.map(function (node) { return [node.id, node]; }));
+  for (const node of nodes) {
+    if (node.type === "zone_tile_layer") return true;
+    if (!isZoneCanvasGroup(node, graph)) continue;
+    const gridX = Number(node.values?.zoneGridX);
+    const gridZ = Number(node.values?.zoneGridZ);
+    if (node.values?.zoneCanvas !== true || !Number.isFinite(gridX) || !Number.isFinite(gridZ)) return true;
+    if (!zoneDefinitionForGroup(node.id, graph) || !zoneOutputForGroup(node.id, graph)) return true;
+    if ((node.values?.groupInterface?.outputs || []).some(isZoneCanvasEntityGroupPort)) return true;
+  }
+  for (const edge of graph?.edges || []) {
+    if (edge.toPort === "lights" && nodeById.get(edge.toNodeId)?.type === "zone_output") return true;
+    const target = nodeById.get(edge.toNodeId);
+    if (target?.type === "group_output") {
+      const group = nodeById.get(target.parentId);
+      const source = nodeById.get(edge.fromNodeId);
+      if (isZoneCanvasGroup(group, graph) && source?.parentId === group.id && (edge.fromPort === "entity" || source?.type === "model_entity")) return true;
+    }
+    const sourceGroup = nodeById.get(edge.fromNodeId);
+    if (isZoneCanvasGroup(sourceGroup, graph) && ["entity", "entities"].includes(String(edge.fromPort || ""))) return true;
+  }
+  return false;
 }
 
 function ensureCurrentGroupExists() {
@@ -3438,9 +4855,11 @@ function ensureCurrentGroupExists() {
 // ---------- Node Library ----------
 function renderNodeLibrary() {
   el.nodeLibrary.innerHTML = "";
+  const query = (el.nodeLibrarySearch?.value || "").trim().toLowerCase();
   const groups = {};
   for (const [type, def] of Object.entries(state.nodeTypes)) {
     if (type === "game_output" || def.hidden || def.system) continue;
+    if (query && !def.label.toLowerCase().includes(query)) continue;
     const groupName = def.group || "Other";
     (groups[groupName] = groups[groupName] || []).push([type, def]);
   }
@@ -3457,7 +4876,7 @@ function renderNodeLibrary() {
       button.className = "libButton";
       const dot = document.createElement("span");
       dot.className = "libDot";
-      dot.style.background = def.accent || "#7bd4ff";
+      dot.style.background = accentColorForNodeDef(def);
       const label = document.createElement("span");
       label.textContent = def.label;
       const plus = document.createElement("span");
@@ -3469,18 +4888,25 @@ function renderNodeLibrary() {
     }
     el.nodeLibrary.appendChild(wrap);
   }
-  renderSpecialGroupLibrary();
+  renderSpecialGroupLibrary(query);
+  if (query && !el.nodeLibrary.children.length) {
+    const empty = document.createElement("div");
+    empty.className = "libEmpty";
+    empty.textContent = "Geen nodes gevonden voor \"" + (el.nodeLibrarySearch?.value || "").trim() + "\".";
+    el.nodeLibrary.appendChild(empty);
+  }
 }
 
-function renderSpecialGroupLibrary() {
+function renderSpecialGroupLibrary(query = "") {
   if (!state.nodeTypes.group) return;
   const presets = [
+    { kind: "zone_canvas", title: "Zone Canvas" },
     { kind: "catalog", title: "Catalog" },
-    { kind: "zone", title: "Zones" },
     { kind: "campaign", title: "Campaigns" },
     { kind: "player_rules", title: "Player Rules" },
     { kind: "ui", title: "UI" }
-  ];
+  ].filter(function (preset) { return !query || preset.title.toLowerCase().includes(query); });
+  if (!presets.length) return;
   const wrap = document.createElement("div");
   wrap.className = "libGroup";
   const title = document.createElement("div");
@@ -3493,14 +4919,17 @@ function renderSpecialGroupLibrary() {
     button.className = "libButton";
     const dot = document.createElement("span");
     dot.className = "libDot";
-    dot.style.background = dataTypeColor(preset.kind === "player_rules" ? "playerRules" : (preset.kind === "ui" ? "uiPackage" : preset.kind + "Package"));
+    dot.style.background = dataTypeColor(preset.kind === "zone_canvas" ? "zonePackage" : (preset.kind === "player_rules" ? "playerRules" : (preset.kind === "ui" ? "uiPackage" : preset.kind + "Package")));
     const label = document.createElement("span");
     label.textContent = preset.title;
     const plus = document.createElement("span");
     plus.className = "plus";
     plus.textContent = "+";
     button.append(dot, label, plus);
-    button.addEventListener("click", function () { addSpecialGroup(preset); });
+    button.addEventListener("click", function () {
+      if (preset.kind === "zone_canvas") addZoneCanvasFromLibrary();
+      else addSpecialGroup(preset);
+    });
     wrap.appendChild(button);
   }
   el.nodeLibrary.prepend(wrap);
@@ -3514,22 +4943,1202 @@ async function addSpecialGroup(preset) {
   });
 }
 
+function createZoneGraphId(prefix) {
+  return prefix + "_" + crypto.randomUUID().slice(0, 8);
+}
+
+function editorGroupSystemNodeId(groupId, kind) {
+  return "group_" + kind + "__" + groupId;
+}
+
+function emptyGroupInterface() {
+  return { inputs: [], outputs: [] };
+}
+
+function zoneCoordPart(value) {
+  const number = Math.trunc(Number(value) || 0);
+  return number < 0 ? "m" + Math.abs(number) : String(number);
+}
+
+function zoneCanvasBaseName(grid) {
+  return "x" + zoneCoordPart(grid.x) + "_z" + zoneCoordPart(grid.z);
+}
+
+function zoneCanvasCanonicalBase(grid) {
+  return "zone.canvas.x" + zoneCoordPart(grid.x) + ".z" + zoneCoordPart(grid.z);
+}
+
+function zoneCanvasTitle(grid) {
+  return grid.x === 0 && grid.z === 0 ? "Start Zone" : "Zone " + grid.x + ", " + grid.z;
+}
+
+function uniqueFieldValue(graph, type, fieldName, baseValue) {
+  const existing = new Set((graph.nodes || []).filter(function (node) {
+    return node.type === type;
+  }).map(function (node) {
+    return String(node.values?.[fieldName] || "").trim();
+  }).filter(Boolean));
+  const base = String(baseValue || "").trim();
+  if (!base || !existing.has(base)) return base;
+  let index = 2;
+  while (existing.has(base + "." + index) || existing.has(base + "_" + index)) index += 1;
+  return base.includes(".") ? base + "." + index : base + "_" + index;
+}
+
+function zoneDefinitionForGroup(groupId, graph = state.graph) {
+  return (graph.nodes || []).find(function (node) {
+    return node.parentId === groupId && node.type === "zone_definition";
+  }) || null;
+}
+
+function zoneOutputForGroup(groupId, graph = state.graph) {
+  return (graph.nodes || []).find(function (node) {
+    return node.parentId === groupId && node.type === "zone_output";
+  }) || null;
+}
+
+// Which zone-canvas group's declared world-space bounds contain this ground position -
+// used to place a newly dropped/placed model into the zone it visually landed in when
+// there's no zone open in the Nodes graph to fall back on otherwise (see placeModel).
+function zoneCanvasGroupContainingPoint(worldX, worldZ, graph = state.graph) {
+  if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) return null;
+  for (const node of graph.nodes || []) {
+    if (!isZoneCanvasGroup(node, graph)) continue;
+    const zone = zoneDefinitionForGroup(node.id, graph);
+    const values = zone?.values || {};
+    const originX = Number(values.originX);
+    const originZ = Number(values.originZ);
+    const width = Number(values.width);
+    const depth = Number(values.depth);
+    if (![originX, originZ, width, depth].every(Number.isFinite) || width <= 0 || depth <= 0) continue;
+    if (worldX >= originX && worldX <= originX + width && worldZ >= originZ && worldZ <= originZ + depth) return node;
+  }
+  return null;
+}
+
+function isZoneCanvasGroup(node, graph = state.graph) {
+  if (!node || node.type !== "group") return false;
+  if (node.values?.zoneCanvas === true) return true;
+  return String(node.values?.groupKind || "").trim().toLowerCase() === "zone" && Boolean(zoneDefinitionForGroup(node.id, graph));
+}
+
+function zoneCanvasGridForGroup(group, graph = state.graph) {
+  const explicitX = Number(group?.values?.zoneGridX);
+  const explicitZ = Number(group?.values?.zoneGridZ);
+  if (Number.isFinite(explicitX) && Number.isFinite(explicitZ) && group?.values?.zoneCanvas === true) {
+    return { x: Math.trunc(explicitX), z: Math.trunc(explicitZ) };
+  }
+  const zone = zoneDefinitionForGroup(group?.id, graph);
+  const originX = Number(zone?.values?.originX);
+  const originZ = Number(zone?.values?.originZ);
+  if (Number.isFinite(originX) && Number.isFinite(originZ)) {
+    return {
+      x: Math.round((originX + ZONE_CANVAS_HALF_SIZE) / ZONE_CANVAS_SIZE),
+      z: Math.round((originZ + ZONE_CANVAS_HALF_SIZE) / ZONE_CANVAS_SIZE)
+    };
+  }
+  return { x: 0, z: 0 };
+}
+
+function zoneCanvasGroupsForParent(parentId, graph = state.graph) {
+  const wantedParentId = parentId || null;
+  return (graph.nodes || []).filter(function (node) {
+    return (node.parentId || null) === wantedParentId && isZoneCanvasGroup(node, graph);
+  });
+}
+
+function zoneCanvasRootGroupForParent(parentId, graph = state.graph) {
+  const groups = zoneCanvasGroupsForParent(parentId, graph);
+  if (!groups.length) return null;
+  return groups.find(function (group) {
+    return group.values?.zoneCanvasRootId && group.values.zoneCanvasRootId === group.id;
+  }) || groups.find(function (group) {
+    const grid = zoneCanvasGridForGroup(group, graph);
+    return grid.x === 0 && grid.z === 0;
+  }) || groups[0];
+}
+
+function zoneCanvasRootGroupForGroup(group, graph = state.graph) {
+  if (!group) return null;
+  const explicitRootId = String(group.values?.zoneCanvasRootId || "").trim();
+  if (explicitRootId) {
+    const explicitRoot = (graph.nodes || []).find(function (node) {
+      return node.id === explicitRootId && node.type === "group";
+    }) || null;
+    if (explicitRoot) return explicitRoot;
+  }
+  return zoneCanvasRootGroupForParent(group.parentId || null, graph);
+}
+
+function isZoneCanvasRootGroup(group, graph = state.graph) {
+  if (!isZoneCanvasGroup(group, graph)) return false;
+  const root = zoneCanvasRootGroupForGroup(group, graph);
+  if (root) return root.id === group.id;
+  const grid = zoneCanvasGridForGroup(group, graph);
+  return grid.x === 0 && grid.z === 0;
+}
+
+function zoneGridKey(grid) {
+  return String(grid.x) + ":" + String(grid.z);
+}
+
+function findZoneCanvasAtGrid(parentId, grid, graph = state.graph) {
+  const key = zoneGridKey(grid);
+  return zoneCanvasGroupsForParent(parentId, graph).find(function (group) {
+    return zoneGridKey(zoneCanvasGridForGroup(group, graph)) === key;
+  }) || null;
+}
+
+function firstFreeZoneGrid(parentId, graph = state.graph) {
+  const used = new Set(zoneCanvasGroupsForParent(parentId, graph).map(function (group) {
+    return zoneGridKey(zoneCanvasGridForGroup(group, graph));
+  }));
+  if (!used.has("0:0")) return { x: 0, z: 0 };
+  for (let radius = 1; radius <= 100; radius += 1) {
+    const candidates = [
+      { x: radius, z: 0 },
+      { x: 0, z: radius },
+      { x: -radius, z: 0 },
+      { x: 0, z: -radius }
+    ];
+    for (const candidate of candidates) {
+      if (!used.has(zoneGridKey(candidate))) return candidate;
+    }
+  }
+  return { x: used.size + 1, z: 0 };
+}
+
+function zoneCanvasGraphPosition(parentId, grid, graph = state.graph) {
+  const originGroup = zoneCanvasRootGroupForParent(parentId, graph);
+  if (originGroup) {
+    return {
+      x: Math.round(Number(originGroup.x) + grid.x * ZONE_CANVAS_NODE_STEP_X),
+      y: Math.round(Number(originGroup.y) + grid.z * ZONE_CANVAS_NODE_STEP_Y)
+    };
+  }
+  const center = viewportCenterInGraph();
+  return {
+    x: Math.round(center.x - 120 + grid.x * ZONE_CANVAS_NODE_STEP_X),
+    y: Math.round(center.y - 80 + grid.z * ZONE_CANVAS_NODE_STEP_Y)
+  };
+}
+
+function pushEdgeIfMissing(graph, fromNodeId, fromPort, toNodeId, toPort) {
+  if ((graph.edges || []).some(function (edge) {
+    return edge.fromNodeId === fromNodeId && edge.fromPort === fromPort && edge.toNodeId === toNodeId && edge.toPort === toPort;
+  })) return null;
+  const edge = { id: createZoneGraphId("edge_zone_canvas"), fromNodeId, fromPort, toNodeId, toPort };
+  graph.edges.push(edge);
+  return edge;
+}
+
+function ensureZoneRegistryForParent(graph, parentId, position) {
+  const wantedParentId = parentId || null;
+  let registry = (graph.nodes || []).find(function (node) {
+    return node.type === "zone_registry" && (node.parentId || null) === wantedParentId;
+  }) || null;
+  if (!registry) {
+    registry = {
+      id: createZoneGraphId("node_zone_registry"),
+      type: "zone_registry",
+      title: "Zone Registry",
+      x: Math.round(Number(position?.x) || 0) + ZONE_CANVAS_SIZE + 120,
+      y: Math.round(Number(position?.y) || 0) + 180,
+      parentId: wantedParentId,
+      values: { registryId: uniqueFieldValue(graph, "zone_registry", "registryId", "zone_registry.main") }
+    };
+    graph.nodes.push(registry);
+  }
+  const assembly = (graph.nodes || []).find(function (node) {
+    return node.type === "world_assembly" && (node.parentId || null) === wantedParentId;
+  }) || null;
+  if (assembly && !(graph.edges || []).some(function (edge) { return edge.toNodeId === assembly.id && edge.toPort === "zones"; })) {
+    pushEdgeIfMissing(graph, registry.id, "zoneRegistry", assembly.id, "zones");
+  }
+  return registry;
+}
+
+function zoneCanvasChildPosition(x, y) {
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function zoneCanvasOriginForGrid(grid) {
+  return {
+    originX: grid.x * ZONE_CANVAS_SIZE - ZONE_CANVAS_HALF_SIZE,
+    originZ: grid.z * ZONE_CANVAS_SIZE - ZONE_CANVAS_HALF_SIZE
+  };
+}
+
+function ensureGroupSystemNodesInGraph(graph, groupId) {
+  const inputId = editorGroupSystemNodeId(groupId, "input");
+  const outputId = editorGroupSystemNodeId(groupId, "output");
+  if (!(graph.nodes || []).some(function (node) { return node.id === inputId; })) {
+    graph.nodes.push({ id: inputId, type: "group_input", title: "Group Input", x: 40, y: 80, parentId: groupId, values: {} });
+  }
+  if (!(graph.nodes || []).some(function (node) { return node.id === outputId; })) {
+    graph.nodes.push({ id: outputId, type: "group_output", title: "Group Output", x: 1080, y: 210, parentId: groupId, values: {} });
+  }
+  return { inputId, outputId };
+}
+
+function isZoneCanvasPortName(portName) {
+  return ZONE_CANVAS_PORT_ALIASES.has(String(portName || ""));
+}
+
+function isZoneCanvasChildPortName(portName) {
+  return ["childZonePkgs", "child_zonepkgs", "childzonepkgs"].includes(String(portName || ""));
+}
+
+function isZoneCanvasRootOnlyNodeType(type) {
+  return ZONE_CANVAS_ROOT_NODE_TYPES.has(String(type || ""));
+}
+
+function removeZoneCanvasGroupBoundaryEdges(graph, group) {
+  if (!group) return;
+  const systemOutputId = editorGroupSystemNodeId(group.id, "output");
+  const graphNodeById = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  const outputPorts = (group.values?.groupInterface?.outputs || []);
+  const outputPortByName = new Map(outputPorts.flatMap(function (port) {
+    const names = [port?.name, port?.id].map(function (name) { return String(name || ""); }).filter(Boolean);
+    return names.map(function (name) { return [name, port]; });
+  }));
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (edge.fromNodeId === group.id && isZoneCanvasPortName(edge.fromPort)) return false;
+    if (edge.fromNodeId === group.id && isZoneCanvasEntityGroupPort(outputPortByName.get(String(edge.fromPort || "")))) return false;
+    if (edge.fromNodeId === group.id && ["entity", "entities"].includes(String(edge.fromPort || ""))) return false;
+    if (edge.toNodeId === systemOutputId && isZoneCanvasPortName(edge.toPort)) return false;
+    if (edge.toNodeId === systemOutputId) {
+      const source = graphNodeById.get(edge.fromNodeId);
+      const sourceOutput = state.nodeTypes?.[source?.type]?.outputs?.[edge.fromPort] || null;
+      if (source && source.parentId === group.id && (edge.fromPort === "entity" || sourceOutput?.dataType === "entity")) return false;
+    }
+    if (edge.toNodeId === group.id && isZoneCanvasChildPortName(edge.toPort)) return false;
+    return true;
+  });
+}
+
+function isZoneCanvasPackageGroupPort(port) {
+  return String(port?.dataType || "") === "zonePackage" || isZoneCanvasPortName(port?.name) || isZoneCanvasPortName(port?.id);
+}
+
+function isZoneCanvasEntityGroupPort(port) {
+  return String(port?.dataType || "") === "entity"
+    || ["entity", "entities"].includes(String(port?.name || ""))
+    || ["entity", "entities"].includes(String(port?.id || ""));
+}
+
+function zoneCanvasGroupInterfaceForRole(isRoot, previousInterface = null) {
+  const current = previousInterface ? cloneGroupInterface(previousInterface) : emptyGroupInterface();
+  const inputs = (current.inputs || []).filter(function (port) {
+    return !isZoneCanvasPackageGroupPort(port) && !isZoneCanvasChildPortName(port?.name) && !isZoneCanvasChildPortName(port?.id);
+  });
+  const outputs = (current.outputs || []).filter(function (port) {
+    return !isZoneCanvasPackageGroupPort(port) && !isZoneCanvasEntityGroupPort(port);
+  });
+  return { inputs, outputs };
+}
+
+function rootLightTargetsForParent(graph, parentId) {
+  const wantedParentId = parentId || null;
+  const worldAssembly = (graph.nodes || []).find(function (node) {
+    return node.type === "world_assembly" && (node.parentId || null) === wantedParentId;
+  }) || null;
+  if (worldAssembly) return [worldAssembly];
+  const targets = [];
+  const gameOutput = (graph.nodes || []).find(function (node) {
+    return node.type === "game_output" && (node.parentId || null) === wantedParentId;
+  }) || null;
+  const legacyAdapter = (graph.nodes || []).find(function (node) {
+    return node.type === "legacy_world_adapter" && (node.parentId || null) === wantedParentId;
+  }) || null;
+  if (gameOutput) targets.push(gameOutput);
+  if (legacyAdapter) targets.push(legacyAdapter);
+  return targets;
+}
+
+function cleanupRootLightTargetEdges(graph, parentId, targets) {
+  const wantedParentId = parentId || null;
+  const targetIds = new Set((targets || []).map(function (node) { return node.id; }));
+  const graphNodeById = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  const rootLightIds = new Set((graph.nodes || []).filter(function (node) {
+    return (node.parentId || null) === wantedParentId && isZoneCanvasRootOnlyNodeType(node.type);
+  }).map(function (node) {
+    return node.id;
+  }));
+  let changed = false;
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (!rootLightIds.has(edge.fromNodeId) || edge.fromPort !== "light" || edge.toPort !== "lights") return true;
+    const target = graphNodeById.get(edge.toNodeId);
+    if (!target || (target.parentId || null) !== wantedParentId) return true;
+    if (!["world_assembly", "game_output", "legacy_world_adapter"].includes(target.type)) return true;
+    if (targetIds.has(target.id)) return true;
+    changed = true;
+    return false;
+  });
+  return changed;
+}
+
+function removeZoneOutputLightEdges(graph) {
+  const graphNodeById = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  let changed = false;
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (edge.toPort !== "lights") return true;
+    const target = graphNodeById.get(edge.toNodeId);
+    if (target?.type !== "zone_output") return true;
+    changed = true;
+    return false;
+  });
+  return changed;
+}
+
+function connectRootLightNodes(graph, parentId) {
+  const wantedParentId = parentId || null;
+  const targets = rootLightTargetsForParent(graph, wantedParentId);
+  const cleaned = cleanupRootLightTargetEdges(graph, wantedParentId, targets);
+  if (!targets.length) return false;
+  let changed = cleaned;
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== wantedParentId || !isZoneCanvasRootOnlyNodeType(node.type)) continue;
+    for (const target of targets) {
+      if (pushEdgeIfMissing(graph, node.id, "light", target.id, "lights")) changed = true;
+    }
+  }
+  return changed;
+}
+
+function relocateZoneCanvasLightsToRoot(graph, parentId, groups) {
+  const wantedParentId = parentId || null;
+  const keepRootLightByType = new Map();
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== wantedParentId || !isZoneCanvasRootOnlyNodeType(node.type)) continue;
+    if (!keepRootLightByType.has(node.type)) keepRootLightByType.set(node.type, node);
+  }
+  const groupById = new Map((groups || []).map(function (group) { return [group.id, group]; }));
+  const removeIds = new Set();
+  let movedIndex = 0;
+  for (const node of graph.nodes || []) {
+    if (!isZoneCanvasRootOnlyNodeType(node.type) || !groupById.has(node.parentId)) continue;
+    graph.edges = (graph.edges || []).filter(function (edge) {
+      return edge.fromNodeId !== node.id && edge.toNodeId !== node.id;
+    });
+    const existing = keepRootLightByType.get(node.type);
+    if (existing) {
+      removeIds.add(node.id);
+      continue;
+    }
+    const sourceGroup = groupById.get(node.parentId);
+    node.parentId = wantedParentId;
+    node.x = Math.round(Number(sourceGroup?.x) || 0) + 40 + movedIndex * 34;
+    node.y = Math.round(Number(sourceGroup?.y) || 0) - 105;
+    keepRootLightByType.set(node.type, node);
+    movedIndex += 1;
+  }
+  if (removeIds.size) {
+    graph.nodes = (graph.nodes || []).filter(function (node) {
+      return !removeIds.has(node.id);
+    });
+    graph.edges = (graph.edges || []).filter(function (edge) {
+      return !removeIds.has(edge.fromNodeId) && !removeIds.has(edge.toNodeId);
+    });
+  }
+  connectRootLightNodes(graph, wantedParentId);
+}
+
+function applyZoneCanvasGroupRole(graph, group, options = {}) {
+  if (!group) return false;
+  const root = options.root || zoneCanvasRootGroupForGroup(group, graph) || group;
+  const isRoot = options.isRoot !== undefined ? Boolean(options.isRoot) : root.id === group.id;
+  group.values = Object.assign({}, group.values || {}, {
+    groupKind: "zone",
+    zoneCanvas: true,
+    zoneCanvasRootId: isRoot ? group.id : root.id,
+    groupInterface: zoneCanvasGroupInterfaceForRole(isRoot, group.values?.groupInterface)
+  });
+  if (isRoot) {
+    group.values.zoneCanvasParentZoneId = "";
+    group.values.zoneCanvasParentSide = "";
+  } else {
+    group.values.zoneCanvasParentZoneId = String(group.values.zoneCanvasParentZoneId || root.id || "");
+  }
+  return isRoot;
+}
+
+function syncZoneCanvasBoundsToGrid(graph, group, grid) {
+  const origin = zoneCanvasOriginForGrid(grid);
+  const zone = zoneDefinitionForGroup(group.id, graph);
+  if (zone) {
+    zone.values = Object.assign({}, zone.values || {}, {
+      originX: origin.originX,
+      originY: 0,
+      originZ: origin.originZ,
+      width: ZONE_CANVAS_SIZE,
+      depth: ZONE_CANVAS_SIZE
+    });
+  }
+  const ground = (graph.nodes || []).find(function (node) {
+    return node.parentId === group.id && node.type === "ground_surface";
+  }) || null;
+  if (ground) {
+    const groundValues = Object.assign({}, ground.values || {}, {
+      width: ZONE_CANVAS_SIZE,
+      depth: ZONE_CANVAS_SIZE,
+      boundsMode: "explicitBounds",
+      minX: origin.originX,
+      maxX: origin.originX + ZONE_CANVAS_SIZE,
+      minZ: origin.originZ,
+      maxZ: origin.originZ + ZONE_CANVAS_SIZE
+    });
+    if (!Number.isFinite(Number(groundValues.edgeFadeWidth))) groundValues.edgeFadeWidth = 18;
+    ground.values = groundValues;
+  }
+  const zoneId = zone?.values?.zoneId || "";
+  const spawn = (graph.nodes || []).find(function (node) {
+    return node.parentId === group.id && node.type === "spawn_point";
+  }) || null;
+  if (spawn) {
+    spawn.values = Object.assign({}, spawn.values || {}, {
+      zoneRef: spawn.values?.zoneRef || zoneId,
+      x: Number.isFinite(Number(spawn.values?.x)) ? Number(spawn.values.x) : origin.originX + ZONE_CANVAS_HALF_SIZE,
+      y: Number.isFinite(Number(spawn.values?.y)) ? Number(spawn.values.y) : 0,
+      z: Number.isFinite(Number(spawn.values?.z)) ? Number(spawn.values.z) : origin.originZ + ZONE_CANVAS_HALF_SIZE
+    });
+  }
+}
+
+function zoneCanvasCenterForGroup(group, graph = state.graph) {
+  const grid = zoneCanvasGridForGroup(group, graph);
+  const origin = zoneCanvasOriginForGrid(grid);
+  return {
+    x: origin.originX + ZONE_CANVAS_HALF_SIZE,
+    y: 0,
+    z: origin.originZ + ZONE_CANVAS_HALF_SIZE
+  };
+}
+
+function applyZoneCanvasDefaultsToNode(graph, group, node) {
+  if (!group || !node) return;
+  const grid = zoneCanvasGridForGroup(group, graph);
+  const origin = zoneCanvasOriginForGrid(grid);
+  if (node.type === "ground_surface") {
+    const values = Object.assign({}, node.values || {}, {
+      width: ZONE_CANVAS_SIZE,
+      depth: ZONE_CANVAS_SIZE,
+      boundsMode: "explicitBounds",
+      minX: origin.originX,
+      maxX: origin.originX + ZONE_CANVAS_SIZE,
+      minZ: origin.originZ,
+      maxZ: origin.originZ + ZONE_CANVAS_SIZE
+    });
+    if (!Number.isFinite(Number(values.edgeFadeWidth))) values.edgeFadeWidth = 18;
+    node.values = values;
+  } else if (node.type === "model_entity") {
+    const center = zoneCanvasCenterForGroup(group, graph);
+    node.values = Object.assign({}, node.values || {}, {
+      x: Number.isFinite(Number(node.values?.x)) && Number(node.values.x) !== 0 ? node.values.x : center.x,
+      y: Number.isFinite(Number(node.values?.y)) ? node.values.y : center.y,
+      z: Number.isFinite(Number(node.values?.z)) && Number(node.values.z) !== 0 ? node.values.z : center.z
+    });
+  }
+}
+
+function zoneOutputInputForSourceNode(node) {
+  const outputDef = state.nodeTypes.zone_output || {};
+  const sourceOutputs = state.nodeTypes[node?.type]?.outputs || {};
+  const targetInputs = outputDef.inputs || {};
+  for (const [targetPortName, targetPort] of Object.entries(targetInputs)) {
+    if (targetPort.hidden || targetPort.internal || targetPort.deprecated) continue;
+    for (const [sourcePortName, sourcePort] of Object.entries(sourceOutputs)) {
+      if (sourcePort.dataType && sourcePort.dataType === targetPort.dataType) {
+        return { sourcePortName, targetPortName, targetPort };
+      }
+    }
+  }
+  return null;
+}
+
+function wireZoneCanvasNodeToOutput(graph, group, node) {
+  if (!group || !node || node.type === "zone_output" || node.parentId !== group.id) return false;
+  if (isZoneCanvasRootOnlyNodeType(node.type)) return false;
+  const output = zoneOutputForGroup(group.id, graph);
+  if (!output) return false;
+  const route = zoneOutputInputForSourceNode(node);
+  if (!route) return false;
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (edge.toNodeId !== output.id || edge.toPort !== route.targetPortName) return true;
+    if (route.targetPort?.multiple === true) return true;
+    return edge.fromNodeId === node.id && edge.fromPort === route.sourcePortName;
+  });
+  pushEdgeIfMissing(graph, node.id, route.sourcePortName, output.id, route.targetPortName);
+  return true;
+}
+
+function wireZoneCanvasChildrenToOutput(graph, group) {
+  let changed = false;
+  for (const node of graph.nodes || []) {
+    if (node.parentId !== group.id) continue;
+    applyZoneCanvasDefaultsToNode(graph, group, node);
+    if (wireZoneCanvasNodeToOutput(graph, group, node)) changed = true;
+  }
+  return changed;
+}
+
+function ensureZoneCanvasBasis(graph, group, options = {}) {
+  if (!group) return null;
+  const grid = options.grid || zoneCanvasGridForGroup(group, graph);
+  const root = options.root || zoneCanvasRootGroupForParent(group.parentId || null, graph) || group;
+  const isRoot = options.isRoot !== undefined ? Boolean(options.isRoot) : root.id === group.id;
+  applyZoneCanvasGroupRole(graph, group, { root, isRoot });
+  group.values.zoneGridX = grid.x;
+  group.values.zoneGridZ = grid.z;
+  if (!isRoot) {
+    group.values.zoneCanvasParentZoneId = String(options.parentZoneId || group.values.zoneCanvasParentZoneId || root.id || "");
+    group.values.zoneCanvasParentSide = String(options.parentSide || group.values.zoneCanvasParentSide || "");
+  }
+  const origin = options.origin || zoneCanvasOriginForGrid(grid);
+  const baseName = zoneCanvasBaseName(grid);
+  const canonicalBase = zoneCanvasCanonicalBase(grid);
+  const zoneId = uniqueFieldValue(graph, "zone_definition", "zoneId", canonicalBase);
+  const existingZone = zoneDefinitionForGroup(group.id, graph);
+  const effectiveZoneId = existingZone?.values?.zoneId || zoneId;
+  const spawnId = uniqueFieldValue(graph, "spawn_point", "spawnId", "spawn." + canonicalBase.replace(/^zone\./, ""));
+  const nodes = {};
+
+  function firstChild(type) {
+    return (graph.nodes || []).find(function (node) {
+      return node.parentId === group.id && node.type === type;
+    }) || null;
+  }
+
+  nodes.zone = firstChild("zone_definition");
+  if (!nodes.zone) {
+    nodes.zone = {
+      id: createZoneGraphId("node_zone_definition"),
+      type: "zone_definition",
+      title: "Zone Definition",
+      parentId: group.id,
+      x: 120,
+      y: 120,
+      values: {
+        zoneId: effectiveZoneId,
+        displayName: zoneCanvasTitle(grid),
+        zoneType: "outdoor_normal",
+        originX: origin.originX,
+        originY: 0,
+        originZ: origin.originZ,
+        width: ZONE_CANVAS_SIZE,
+        depth: ZONE_CANVAS_SIZE,
+        minY: -100,
+        maxY: 500,
+        recommendedLevelMin: 1,
+        recommendedLevelMax: 10,
+        biomeTags: [],
+        zoneTags: [],
+        allowFastTravel: true,
+        allowRespawn: true,
+        activeByDefault: true
+      }
+    };
+    graph.nodes.push(nodes.zone);
+  }
+
+  nodes.environment = firstChild("zone_environment_settings");
+  if (!nodes.environment) {
+    nodes.environment = {
+      id: createZoneGraphId("node_zone_environment"),
+      type: "zone_environment_settings",
+      title: "Zone Environment Settings",
+      parentId: group.id,
+      x: 120,
+      y: 300,
+      values: { environmentId: uniqueFieldValue(graph, "zone_environment_settings", "environmentId", "environment." + canonicalBase) }
+    };
+    graph.nodes.push(nodes.environment);
+  }
+
+  nodes.rules = firstChild("zone_gameplay_rules");
+  if (!nodes.rules) {
+    nodes.rules = {
+      id: createZoneGraphId("node_zone_rules"),
+      type: "zone_gameplay_rules",
+      title: "Zone Gameplay Rules",
+      parentId: group.id,
+      x: 120,
+      y: 480,
+      values: { rulesId: uniqueFieldValue(graph, "zone_gameplay_rules", "rulesId", "zone_rules." + canonicalBase.replace(/^zone\./, "")) }
+    };
+    graph.nodes.push(nodes.rules);
+  }
+
+  nodes.ground = firstChild("ground_surface");
+  if (!nodes.ground) {
+    nodes.ground = {
+      id: createZoneGraphId("node_zone_ground"),
+      type: "ground_surface",
+      title: "Ground Surface",
+      parentId: group.id,
+      x: 440,
+      y: 120,
+      values: {
+        groundId: uniqueFieldValue(graph, "ground_surface", "groundId", "ground_" + baseName),
+        width: ZONE_CANVAS_SIZE,
+        depth: ZONE_CANVAS_SIZE,
+        y: 0,
+        boundsMode: "explicitBounds",
+        minX: origin.originX,
+        maxX: origin.originX + ZONE_CANVAS_SIZE,
+        minZ: origin.originZ,
+        maxZ: origin.originZ + ZONE_CANVAS_SIZE,
+        materialColor: "#3f6b3f",
+        textureAssetId: null,
+        textureWorldSizeX: 10,
+        textureWorldSizeZ: 10,
+        edgeFadeWidth: 18,
+        textureRepeat: 8
+      }
+    };
+    graph.nodes.push(nodes.ground);
+  }
+
+  nodes.spawn = firstChild("spawn_point");
+  if (!nodes.spawn) {
+    nodes.spawn = {
+      id: createZoneGraphId("node_zone_spawn"),
+      type: "spawn_point",
+      title: "Spawn Point",
+      parentId: group.id,
+      x: 440,
+      y: 310,
+      values: {
+        spawnId,
+        role: "zone_default",
+        zoneRef: effectiveZoneId,
+        label: "Zone Default",
+        x: origin.originX + ZONE_CANVAS_HALF_SIZE,
+        y: 0,
+        z: origin.originZ + ZONE_CANVAS_HALF_SIZE,
+        facing: 0,
+        safeRadius: 1.25,
+        snapToGround: true,
+        validateCollision: true,
+        activationConditionRef: null,
+        priority: 0
+      }
+    };
+    graph.nodes.push(nodes.spawn);
+  } else if (!nodes.spawn.values?.zoneRef && effectiveZoneId) {
+    nodes.spawn.values = Object.assign({}, nodes.spawn.values, { zoneRef: effectiveZoneId });
+  }
+
+  nodes.output = firstChild("zone_output");
+  if (!nodes.output) {
+    nodes.output = {
+      id: createZoneGraphId("node_zone_output"),
+      type: "zone_output",
+      title: "Zone Output",
+      parentId: group.id,
+      x: 760,
+      y: 220,
+      values: {
+        packageId: uniqueFieldValue(graph, "zone_output", "packageId", effectiveZoneId + ".package"),
+        packageVersion: 1,
+        includeEditorOnlyData: false
+      }
+    };
+    graph.nodes.push(nodes.output);
+  }
+
+  ensureGroupSystemNodesInGraph(graph, group.id);
+  removeZoneCanvasGroupBoundaryEdges(graph, group);
+  syncZoneCanvasBoundsToGrid(graph, group, grid);
+  pushEdgeIfMissing(graph, nodes.zone.id, "zone", nodes.output.id, "zone");
+  pushEdgeIfMissing(graph, nodes.environment.id, "environment", nodes.output.id, "environment");
+  pushEdgeIfMissing(graph, nodes.rules.id, "rules", nodes.output.id, "rules");
+  pushEdgeIfMissing(graph, nodes.ground.id, "ground", nodes.output.id, "ground");
+  pushEdgeIfMissing(graph, nodes.spawn.id, "spawnPoint", nodes.output.id, "spawns");
+  return { nodes, zoneId: effectiveZoneId, spawnId: nodes.spawn.values?.spawnId || spawnId };
+}
+
+function wireExistingZoneCanvasBasis(graph, group) {
+  if (!group) return false;
+  const root = zoneCanvasRootGroupForGroup(group, graph) || group;
+  const isRoot = applyZoneCanvasGroupRole(graph, group, { root });
+  const grid = zoneCanvasGridForGroup(group, graph);
+  const children = (graph.nodes || []).filter(function (node) { return node.parentId === group.id; });
+  const first = function (type) {
+    return children.find(function (node) { return node.type === type; }) || null;
+  };
+  const zone = first("zone_definition");
+  const environment = first("zone_environment_settings");
+  const rules = first("zone_gameplay_rules");
+  const ground = first("ground_surface");
+  const spawn = first("spawn_point");
+  const output = first("zone_output");
+  if (!output) return false;
+  ensureGroupSystemNodesInGraph(graph, group.id);
+  removeZoneCanvasGroupBoundaryEdges(graph, group);
+  syncZoneCanvasBoundsToGrid(graph, group, grid);
+  if (zone) pushEdgeIfMissing(graph, zone.id, "zone", output.id, "zone");
+  if (environment) pushEdgeIfMissing(graph, environment.id, "environment", output.id, "environment");
+  if (rules) pushEdgeIfMissing(graph, rules.id, "rules", output.id, "rules");
+  if (ground) pushEdgeIfMissing(graph, ground.id, "ground", output.id, "ground");
+  if (spawn) pushEdgeIfMissing(graph, spawn.id, "spawnPoint", output.id, "spawns");
+  wireZoneCanvasChildrenToOutput(graph, group);
+  if (isRoot) {
+    ensureZoneRegistryForParent(graph, group.parentId || null, { x: group.x, y: group.y });
+  }
+  return true;
+}
+
+function normalizeZoneCanvasGroups(graph, parentId = null) {
+  const groups = zoneCanvasGroupsForParent(parentId, graph);
+  if (!groups.length) return null;
+  const root = zoneCanvasRootGroupForParent(parentId, graph) || groups[0];
+  removeZoneOutputLightEdges(graph);
+  relocateZoneCanvasLightsToRoot(graph, parentId, groups);
+  for (const group of groups) {
+    const isRoot = group.id === root.id;
+    const grid = isRoot ? { x: 0, z: 0 } : zoneCanvasGridForGroup(group, graph);
+    group.values = Object.assign({}, group.values || {}, {
+      zoneGridX: grid.x,
+      zoneGridZ: grid.z
+    });
+    applyZoneCanvasGroupRole(graph, group, { root, isRoot });
+    removeZoneCanvasGroupBoundaryEdges(graph, group);
+    syncZoneCanvasBoundsToGrid(graph, group, grid);
+    const output = zoneOutputForGroup(group.id, graph);
+    if (output) {
+      ensureGroupSystemNodesInGraph(graph, group.id);
+      wireZoneCanvasChildrenToOutput(graph, group);
+    }
+  }
+  ensureZoneRegistryForParent(graph, parentId, { x: root.x, y: root.y });
+  return root;
+}
+
+function zoneCanvasGraphPositionFromRoot(root, grid) {
+  return {
+    x: Math.round(Number(root?.x) + grid.x * ZONE_CANVAS_NODE_STEP_X),
+    y: Math.round(Number(root?.y) + grid.z * ZONE_CANVAS_NODE_STEP_Y)
+  };
+}
+
+function zoneCanvasGridFromGraphPosition(group, position, graph) {
+  const root = zoneCanvasRootGroupForGroup(group, graph) || group;
+  if (!root || root.id === group.id) return { x: 0, z: 0 };
+  return {
+    x: Math.round((Number(position.x) - Number(root.x)) / ZONE_CANVAS_NODE_STEP_X),
+    z: Math.round((Number(position.y) - Number(root.y)) / ZONE_CANVAS_NODE_STEP_Y)
+  };
+}
+
+function zoneCanvasAttachmentForGrid(graph, parentId, grid, selfId) {
+  const entries = Object.entries(ZONE_CANVAS_DIRECTIONS);
+  for (const [directionName, direction] of entries) {
+    const neighborGrid = { x: grid.x - direction.dx, z: grid.z - direction.dz };
+    const neighbor = findZoneCanvasAtGrid(parentId, neighborGrid, graph);
+    if (neighbor && neighbor.id !== selfId) {
+      return { parentZoneId: neighbor.id, parentSide: directionName };
+    }
+  }
+  return null;
+}
+
+function translateNumericValue(values, key, delta) {
+  if (!Number.isFinite(Number(values?.[key]))) return false;
+  values[key] = Number(values[key]) + delta;
+  return true;
+}
+
+function translateZoneCanvasPoints(points, deltaX, deltaZ) {
+  if (!Array.isArray(points)) return points;
+  let changed = false;
+  const nextPoints = points.map(function (point) {
+    if (!point || typeof point !== "object") return point;
+    const nextPoint = Object.assign({}, point);
+    if (Number.isFinite(Number(nextPoint.x))) {
+      nextPoint.x = Number(nextPoint.x) + deltaX;
+      changed = true;
+    }
+    if (Number.isFinite(Number(nextPoint.z))) {
+      nextPoint.z = Number(nextPoint.z) + deltaZ;
+      changed = true;
+    }
+    return nextPoint;
+  });
+  return changed ? nextPoints : points;
+}
+
+function translateZoneCanvasChildCoordinates(graph, group, deltaX, deltaZ) {
+  if (!group || (!deltaX && !deltaZ)) return;
+  for (const node of graph.nodes || []) {
+    if (node.parentId !== group.id || node.type === "group_input" || node.type === "group_output" || isZoneCanvasRootOnlyNodeType(node.type)) continue;
+    const values = Object.assign({}, node.values || {});
+    translateNumericValue(values, "x", deltaX);
+    translateNumericValue(values, "z", deltaZ);
+    translateNumericValue(values, "originX", deltaX);
+    translateNumericValue(values, "originZ", deltaZ);
+    translateNumericValue(values, "minX", deltaX);
+    translateNumericValue(values, "maxX", deltaX);
+    translateNumericValue(values, "minZ", deltaZ);
+    translateNumericValue(values, "maxZ", deltaZ);
+    translateNumericValue(values, "areaCenterX", deltaX);
+    translateNumericValue(values, "areaCenterZ", deltaZ);
+    if (Array.isArray(values.points)) values.points = translateZoneCanvasPoints(values.points, deltaX, deltaZ);
+    node.values = values;
+  }
+}
+
+function snapMovedZoneCanvasGroups(graph, movedNodeIds) {
+  const movedZoneGroups = (movedNodeIds || []).map(function (nodeId) {
+    return (graph.nodes || []).find(function (node) { return node.id === nodeId; }) || null;
+  }).filter(function (node) {
+    return isZoneCanvasGroup(node, graph);
+  });
+  if (!movedZoneGroups.length) return { moved: false, collisions: 0 };
+  const parentIds = Array.from(new Set(movedZoneGroups.map(function (group) { return group.parentId || null; })));
+  let collisions = 0;
+  for (const parentId of parentIds) normalizeZoneCanvasGroups(graph, parentId);
+  for (const group of movedZoneGroups) {
+    const root = zoneCanvasRootGroupForGroup(group, graph) || group;
+    const isRoot = root.id === group.id;
+    const previousGrid = zoneCanvasGridForGroup(group, graph);
+    let nextGrid = isRoot ? { x: 0, z: 0 } : zoneCanvasGridFromGraphPosition(group, { x: group.x, y: group.y }, graph);
+    const attachment = isRoot ? null : zoneCanvasAttachmentForGrid(graph, group.parentId || null, nextGrid, group.id);
+    const occupied = findZoneCanvasAtGrid(group.parentId || null, nextGrid, graph);
+    const detached = !isRoot && !attachment;
+    if ((occupied && occupied.id !== group.id) || detached) {
+      nextGrid = previousGrid;
+      collisions += 1;
+    }
+    const deltaX = (nextGrid.x - previousGrid.x) * ZONE_CANVAS_SIZE;
+    const deltaZ = (nextGrid.z - previousGrid.z) * ZONE_CANVAS_SIZE;
+    translateZoneCanvasChildCoordinates(graph, group, deltaX, deltaZ);
+    group.values = Object.assign({}, group.values || {}, {
+      zoneGridX: nextGrid.x,
+      zoneGridZ: nextGrid.z
+    });
+    if (!isRoot) {
+      const nextAttachment = zoneCanvasAttachmentForGrid(graph, group.parentId || null, nextGrid, group.id);
+      if (nextAttachment) {
+        group.values.zoneCanvasParentZoneId = nextAttachment.parentZoneId;
+        group.values.zoneCanvasParentSide = nextAttachment.parentSide;
+      }
+      const snappedPosition = zoneCanvasGraphPositionFromRoot(root, nextGrid);
+      group.x = snappedPosition.x;
+      group.y = snappedPosition.y;
+    }
+    applyZoneCanvasGroupRole(graph, group, { root, isRoot });
+    syncZoneCanvasBoundsToGrid(graph, group, nextGrid);
+  }
+  for (const parentId of parentIds) normalizeZoneCanvasGroups(graph, parentId);
+  return { moved: true, collisions };
+}
+
+function ensureProjectStartZone(graph, zoneId, spawnId, shouldSet) {
+  if (!shouldSet) return;
+  const project = (graph.nodes || []).find(function (node) { return node.type === "game_project_settings"; }) || null;
+  if (!project) return;
+  project.values = Object.assign({}, project.values || {});
+  if (!project.values.startZoneRef) project.values.startZoneRef = zoneId;
+  if (!project.values.startSpawnRef) project.values.startSpawnRef = spawnId;
+}
+
+function appendZoneCanvasGroup(graph, options) {
+  const parentId = options.parentId || null;
+  const grid = options.grid || { x: 0, z: 0 };
+  const position = options.position || zoneCanvasGraphPosition(parentId, grid, graph);
+  const baseName = zoneCanvasBaseName(grid);
+  const root = options.root || zoneCanvasRootGroupForParent(parentId, graph);
+  const isRoot = options.isRoot !== undefined ? Boolean(options.isRoot) : !root;
+  const group = {
+    id: createZoneGraphId("node_zone_canvas"),
+    type: "group",
+    title: zoneCanvasTitle(grid),
+    x: Math.round(position.x),
+    y: Math.round(position.y),
+    parentId,
+    values: {
+      groupId: uniqueFieldValue(graph, "group", "groupId", "zone_canvas_" + baseName),
+      title: zoneCanvasTitle(grid),
+      groupKind: "zone",
+      zoneCanvas: true,
+      zoneGridX: grid.x,
+      zoneGridZ: grid.z,
+      zoneCanvasRootId: isRoot ? "" : root.id,
+      zoneCanvasParentZoneId: isRoot ? "" : String(options.parentZoneId || root.id),
+      zoneCanvasParentSide: isRoot ? "" : String(options.parentSide || ""),
+      groupInterface: zoneCanvasGroupInterfaceForRole(isRoot)
+    }
+  };
+  if (isRoot) group.values.zoneCanvasRootId = group.id;
+  graph.nodes.push(group);
+  const basis = ensureZoneCanvasBasis(graph, group, {
+    grid,
+    root: isRoot ? group : root,
+    isRoot,
+    parentZoneId: options.parentZoneId,
+    parentSide: options.parentSide
+  });
+  const registry = isRoot ? ensureZoneRegistryForParent(graph, parentId, position) : null;
+  return { group, basis, registry };
+}
+
+async function addZoneCanvasFromLibrary() {
+  const parentId = state.currentGroupId || null;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  normalizeZoneCanvasGroups(nextGraph, parentId);
+  const firstZone = !(nextGraph.nodes || []).some(function (node) { return node.type === "zone_definition"; });
+  const grid = firstFreeZoneGrid(parentId, nextGraph);
+  const existing = findZoneCanvasAtGrid(parentId, grid, nextGraph);
+  if (existing) {
+    selectNode(existing.id, true, { clearPendingEdge: true });
+    setStatus("Zone bestaat al op deze canvaspositie.", "");
+    return;
+  }
+  const result = appendZoneCanvasGroup(nextGraph, {
+    parentId,
+    grid,
+    position: zoneCanvasGraphPosition(parentId, grid, nextGraph)
+  });
+  normalizeZoneCanvasGroups(nextGraph, parentId);
+  ensureProjectStartZone(nextGraph, result.basis.zoneId, result.basis.spawnId, firstZone);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone Canvas toegevoegd",
+    selectedNodeIds: [result.group.id],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      focusGraphNode(result.group.id);
+      setStatus("Zone Canvas toegevoegd.", "success");
+    }
+  });
+}
+
+async function expandZoneCanvas(groupId, directionName) {
+  const direction = ZONE_CANVAS_DIRECTIONS[directionName];
+  const source = nodeById(groupId);
+  if (!direction || !isZoneCanvasGroup(source)) return;
+  const parentId = source.parentId || null;
+  const sourceGrid = zoneCanvasGridForGroup(source);
+  const targetGrid = { x: sourceGrid.x + direction.dx, z: sourceGrid.z + direction.dz };
+  const existing = findZoneCanvasAtGrid(parentId, targetGrid);
+  if (existing) {
+    selectNode(existing.id, true, { clearPendingEdge: true });
+    setStatus("Zone " + direction.label.toLowerCase() + " bestaat al.", "");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  normalizeZoneCanvasGroups(nextGraph, parentId);
+  const nextSource = nextGraph.nodes.find(function (node) { return node.id === groupId; });
+  const sourceRoot = zoneCanvasRootGroupForGroup(nextSource, nextGraph) || nextSource;
+  ensureZoneCanvasBasis(nextGraph, nextSource, {
+    grid: sourceGrid,
+    root: sourceRoot,
+    isRoot: sourceRoot?.id === nextSource?.id
+  });
+  const position = {
+    x: Math.round(Number(nextSource?.x || source.x || 0) + direction.graphX * ZONE_CANVAS_NODE_STEP_X),
+    y: Math.round(Number(nextSource?.y || source.y || 0) + direction.graphY * ZONE_CANVAS_NODE_STEP_Y)
+  };
+  const result = appendZoneCanvasGroup(nextGraph, {
+    parentId,
+    grid: targetGrid,
+    position,
+    root: sourceRoot,
+    isRoot: false,
+    parentZoneId: nextSource?.id || groupId,
+    parentSide: directionName
+  });
+  normalizeZoneCanvasGroups(nextGraph, parentId);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone Canvas uitgebreid",
+    selectedNodeIds: [result.group.id],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      focusGraphNode(result.group.id);
+      setStatus("Zone " + direction.label.toLowerCase() + " toegevoegd.", "success");
+    }
+  });
+}
+
+async function repairZoneCanvasBasis(groupId) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const group = nextGraph.nodes.find(function (node) { return node.id === groupId; });
+  if (!group || group.type !== "group") return;
+  normalizeZoneCanvasGroups(nextGraph, group.parentId || null);
+  const root = zoneCanvasRootGroupForGroup(group, nextGraph) || group;
+  const basis = ensureZoneCanvasBasis(nextGraph, group, {
+    root,
+    isRoot: root.id === group.id
+  });
+  normalizeZoneCanvasGroups(nextGraph, group.parentId || null);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone Canvas basis bijgewerkt",
+    selectedNodeIds: [groupId],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus(basis ? "Zone Canvas basis bijgewerkt." : "Geen zonebasis gevonden.", basis ? "success" : "");
+    }
+  });
+}
+
+async function wireZoneCanvas(groupId) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const group = nextGraph.nodes.find(function (node) { return node.id === groupId; });
+  if (!group || group.type !== "group") return;
+  normalizeZoneCanvasGroups(nextGraph, group.parentId || null);
+  const ok = wireExistingZoneCanvasBasis(nextGraph, group);
+  normalizeZoneCanvasGroups(nextGraph, group.parentId || null);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone Canvas gekoppeld",
+    selectedNodeIds: [groupId],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus(ok ? "Zone Canvas gekoppeld." : "Zone Output ontbreekt; vul eerst de basis aan.", ok ? "success" : "error");
+    }
+  });
+}
+
+async function autoWireZoneCanvasNode(groupId, nodeId) {
+  const group = nodeById(groupId);
+  if (!isZoneCanvasGroup(group)) return false;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = nextGraph.nodes.find(function (node) { return node.id === groupId; });
+  const node = nextGraph.nodes.find(function (candidate) { return candidate.id === nodeId; });
+  if (!nextGroup || !node || node.parentId !== nextGroup.id) return false;
+  ensureZoneCanvasBasis(nextGraph, nextGroup);
+  const position = stackedEntityNodePosition(node.type, nextGroup.id, nextGraph, { x: node.x, y: node.y }, node.id);
+  node.x = Math.round(Number(position.x) || 0);
+  node.y = Math.round(Number(position.y) || 0);
+  applyZoneCanvasDefaultsToNode(nextGraph, nextGroup, node);
+  const wired = wireZoneCanvasNodeToOutput(nextGraph, nextGroup, node);
+  normalizeZoneCanvasGroups(nextGraph, nextGroup.parentId || null);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone-node gekoppeld",
+    selectedNodeIds: [nodeId],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus(wired ? "Zone-node toegevoegd en gekoppeld." : "Zone-node toegevoegd.", wired ? "success" : "");
+    }
+  });
+  return wired;
+}
+
+async function autoWireRootLightNode(nodeId, parentId) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  connectRootLightNodes(nextGraph, parentId || null);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Root light gekoppeld",
+    selectedNodeIds: [nodeId],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus("Light naar root verplaatst en gekoppeld.", "success");
+    }
+  });
+}
+
+
+function editorCameraGroundPoint() {
+  if (runtime && typeof runtime.getMinimapMarkerSnapshot === "function") {
+    const snapshot = runtime.getMinimapMarkerSnapshot({
+      includeLocalPlayer: false,
+      includeRemotePlayers: false,
+      includeEntities: false,
+      includeInteractables: false
+    });
+    const x = Number(snapshot?.cameraTarget?.x);
+    const z = Number(snapshot?.cameraTarget?.z);
+    if (Number.isFinite(x) && Number.isFinite(z)) return { x: x, y: terrainGroundY(), z: z };
+  }
+  if (!runtime || typeof runtime.screenToGround !== "function" || !el.viewportCanvas) return null;
+  const rect = el.viewportCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const ground = runtime.screenToGround(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  if (!ground || !Number.isFinite(ground.x) || !Number.isFinite(ground.z)) return null;
+  return { x: ground.x, y: Number.isFinite(Number(ground.y)) ? Number(ground.y) : terrainGroundY(), z: ground.z };
+}
+
+function cameraCenteredLinePoints(point, length = 8) {
+  const x = Number(point?.x);
+  const z = Number(point?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return [];
+  const half = Math.max(0.5, Number(length) || 8) / 2;
+  return [
+    { x: x - half, z: z },
+    { x: x + half, z: z }
+  ];
+}
+
+// Where a new node's world object should land: use the editor camera target first.
+// Falling back to the visible canvas center is only for runtimes without camera snapshots.
+function viewportCenterWorldValues(type) {
+  const fields = state.nodeTypes?.[type]?.fields;
+  if (!fields) return {};
+  const point = editorCameraGroundPoint();
+  if (!point) return {};
+  const values = {};
+  if (fields.x && fields.z) {
+    values.x = point.x;
+    values.z = point.z;
+  }
+  if (fields.areaCenterX && fields.areaCenterZ) {
+    values.areaCenterX = point.x;
+    values.areaCenterZ = point.z;
+  }
+  if (type === "surface_layer" && fields.points) {
+    values.points = cameraCenteredLinePoints(point);
+  }
+  return values;
+}
+
 async function addNode(type, values = {}) {
   const center = viewportCenterInGraph();
+  const spawnValues = Object.assign({}, viewportCenterWorldValues(type), values);
+  const requestedParentId = state.currentGroupId || null;
+  const requestedParent = nodeById(requestedParentId);
+  const zoneParentAdd = isZoneCanvasGroup(requestedParent);
+  const rootOnlyZoneNode = zoneParentAdd && isZoneCanvasRootOnlyNodeType(type);
+  const parentId = rootOnlyZoneNode ? (requestedParent.parentId || null) : requestedParentId;
+  const position = rootOnlyZoneNode
+    ? { x: Math.round(Number(requestedParent.x) || 0) + 48, y: Math.round(Number(requestedParent.y) || 0) - 105 }
+    : stackedEntityNodePosition(type, parentId, state.graph, center);
+  let createdNodeId = null;
   await applyGraphMutation(function () {
     return api("/api/editor/nodes", {
       method: "POST",
-      body: JSON.stringify({ type: type, position: center, values: values, parentId: state.currentGroupId })
+      body: JSON.stringify({ type: type, position: position, values: spawnValues, parentId: parentId })
     });
   }, {
     historyLabel: "Node toegevoegd",
-    refreshViewport: true,
+    refreshViewport: !zoneParentAdd || rootOnlyZoneNode,
     refreshValidation: true,
     afterApply: function (_, result) {
+      createdNodeId = result?.nodeId || null;
       if (result?.nodeId) selectNode(result.nodeId, true);
-      setStatus("Node toegevoegd.", "success");
+      // Als "All" al open is, staat de Nodes-pane daar al zichtbaar - blijf op "All"
+      // en laat selectNode() hierboven de nieuwe node daarin focussen, in plaats van
+      // hier weg te springen naar de losse "Nodes"-tab (zie showMobileInspectorPanel).
+      if (result?.nodeId && isMobileLayout() && state.mobilePanel !== "all") setMobilePanel("graph");
+      setStatus(rootOnlyZoneNode ? "Light toegevoegd op root." : "Node toegevoegd.", "success");
     }
   });
+  if (createdNodeId && zoneParentAdd && !rootOnlyZoneNode) {
+    await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
+  } else if (createdNodeId && rootOnlyZoneNode) {
+    await autoWireRootLightNode(createdNodeId, parentId);
+  }
+  return createdNodeId;
 }
 
 function viewportCenterInGraph() {
@@ -3537,6 +6146,37 @@ function viewportCenterInGraph() {
   return {
     x: (rect.width / 2 - state.view.panX) / state.view.scale,
     y: (rect.height / 2 - state.view.panY) / state.view.scale
+  };
+}
+
+function graphNodeHeightForStack(node) {
+  const card = node?.id ? el.nodeLayer.querySelector('.gnode[data-node-id="' + node.id + '"]') : null;
+  return Math.max(122, Math.round(card?.offsetHeight || 0));
+}
+
+function stackedEntityNodePosition(type, parentId, graph = state.graph, fallback = null, excludeNodeId = null) {
+  const base = fallback || viewportCenterInGraph();
+  if (type !== "model_entity") return base;
+  const wantedParentId = parentId || null;
+  const siblings = (graph.nodes || []).filter(function (node) {
+    return node.id !== excludeNodeId && node.type === "model_entity" && (node.parentId || null) === wantedParentId;
+  });
+  if (!siblings.length) {
+    const output = wantedParentId ? zoneOutputForGroup(wantedParentId, graph) : null;
+    if (output) {
+      return {
+        x: Math.round((Number(output.x) || 760) - 320),
+        y: Math.round((Number(output.y) || 220) + 150)
+      };
+    }
+    return { x: Math.round(Number(base.x) || 0), y: Math.round(Number(base.y) || 0) };
+  }
+  const lowest = siblings.slice().sort(function (a, b) {
+    return (Number(a.y) || 0) - (Number(b.y) || 0) || (Number(a.x) || 0) - (Number(b.x) || 0);
+  }).pop();
+  return {
+    x: Math.round(Number(lowest.x) || Number(base.x) || 0),
+    y: Math.round((Number(lowest.y) || 0) + graphNodeHeightForStack(lowest) + 24)
   };
 }
 
@@ -3598,7 +6238,8 @@ function isFiniteGraphPosition(position) {
 function visibleNodes() {
   return state.graph.nodes.filter(function (n) {
     const def = state.nodeTypes[n.type] || {};
-    return (n.parentId || null) === state.currentGroupId && !def.hidden && !def.internal;
+    const isGroupInterfaceNode = n.type === "group_input" || n.type === "group_output";
+    return (n.parentId || null) === state.currentGroupId && !def.internal && (!def.hidden || isGroupInterfaceNode);
   });
 }
 
@@ -3664,17 +6305,90 @@ function portIndexForNode(node, portName, direction) {
   return portEntriesForNode(node, direction).findIndex(function (entry) { return entry[0] === portName; });
 }
 
-function primaryOutputType(node) {
-  const outputs = portEntriesForNode(node, "output");
-  return outputs.length === 1 ? outputs[0][1].dataType : "";
+// Single source of truth for "the color that represents this node": when there is
+// exactly one output port, use its data type color so this always matches the
+// port dot / connection line color for that node. Falls back otherwise (0 or
+// multiple outputs) since there is no single data type to key off of.
+function accentColorFromOutputs(outputEntries, fallbackColor) {
+  if (outputEntries.length === 1 && outputEntries[0][1] && outputEntries[0][1].dataType) {
+    return dataTypeColor(outputEntries[0][1].dataType);
+  }
+  return fallbackColor;
 }
 
 function groupAccentForNode(node) {
   const outputs = portEntriesForNode(node, "output");
-  if (outputs.length === 1 && outputs[0][1] && outputs[0][1].dataType) {
-    return dataTypeColor(outputs[0][1].dataType);
+  return accentColorFromOutputs(outputs, (state.nodeTypes.group && state.nodeTypes.group.accent) || "#8a97a3");
+}
+
+function accentColorForNodeDef(def) {
+  const outputs = Object.entries(def?.outputs || {}).filter(function ([, port]) {
+    return port && !port.hidden && !port.internal;
+  });
+  return accentColorFromOutputs(outputs, def?.accent || "#7bd4ff");
+}
+
+function zoneCanvasChildSummary(group) {
+  const children = (state.graph.nodes || []).filter(function (node) {
+    return node.parentId === group.id && node.type !== "group_input" && node.type !== "group_output";
+  });
+  const has = function (type) { return children.some(function (node) { return node.type === type; }); };
+  return [
+    has("zone_definition") ? "definition" : "mist definition",
+    has("zone_environment_settings") ? "settings" : "mist settings",
+    has("ground_surface") ? "ground" : "mist ground",
+    has("spawn_point") ? "spawn" : "mist spawn",
+    has("zone_output") ? "output" : "mist output"
+  ];
+}
+
+function buildZoneCanvasSummary(group) {
+  const zone = zoneDefinitionForGroup(group.id);
+  const grid = zoneCanvasGridForGroup(group);
+  const values = zone?.values || {};
+  const fallbackOrigin = zoneCanvasOriginForGrid(grid);
+  const originX = Number.isFinite(Number(values.originX)) ? Number(values.originX) : fallbackOrigin.originX;
+  const originZ = Number.isFinite(Number(values.originZ)) ? Number(values.originZ) : fallbackOrigin.originZ;
+  const width = Number.isFinite(Number(values.width)) ? Number(values.width) : ZONE_CANVAS_SIZE;
+  const depth = Number.isFinite(Number(values.depth)) ? Number(values.depth) : ZONE_CANVAS_SIZE;
+  const centerX = originX + width / 2;
+  const centerZ = originZ + depth / 2;
+  const isRoot = isZoneCanvasRootGroup(group);
+  const wrap = document.createElement("div");
+  wrap.className = "zoneCanvasSummary";
+  const id = document.createElement("div");
+  id.className = "zoneCanvasId";
+  id.textContent = values.zoneId || group.values?.groupId || "zone.canvas";
+  const bounds = document.createElement("div");
+  bounds.className = "zoneCanvasBounds";
+  bounds.textContent = (isRoot ? "start" : "child") + " center " + centerX + "," + centerZ + " / " + width + "x" + depth;
+  const nodes = document.createElement("div");
+  nodes.className = "zoneCanvasNodes";
+  nodes.textContent = zoneCanvasChildSummary(group).join(" | ");
+  wrap.append(id, bounds, nodes);
+  return wrap;
+}
+
+function appendZoneCanvasPlusControls(card, group) {
+  const sourceGrid = zoneCanvasGridForGroup(group);
+  for (const [directionName, direction] of Object.entries(ZONE_CANVAS_DIRECTIONS)) {
+    const targetGrid = { x: sourceGrid.x + direction.dx, z: sourceGrid.z + direction.dz };
+    const linkedZone = findZoneCanvasAtGrid(group.parentId || null, targetGrid);
+    if (linkedZone) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "zoneCanvasPlus " + directionName;
+    button.textContent = "+";
+    button.title = "Nieuwe zone " + direction.label.toLowerCase() + " toevoegen";
+    button.addEventListener("pointerdown", function (event) {
+      event.stopPropagation();
+    });
+    button.addEventListener("click", function (event) {
+      event.stopPropagation();
+      expandZoneCanvas(group.id, directionName);
+    });
+    card.appendChild(button);
   }
-  return (state.nodeTypes.group && state.nodeTypes.group.accent) || "#8a97a3";
 }
 
 function inputAnchor(node, portName) {
@@ -3707,6 +6421,103 @@ function portDotAnchor(node, portName, direction) {
   return clientToGraphContentPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
 }
 
+function oppositeZoneCanvasDirection(directionName) {
+  if (directionName === "top") return "bottom";
+  if (directionName === "right") return "left";
+  if (directionName === "bottom") return "top";
+  if (directionName === "left") return "right";
+  return "";
+}
+
+function escapeSvgAttr(value) {
+  return String(value === null || value === undefined ? "" : value).replace(/[&<>"']/g, function (char) {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    if (char === ">") return "&gt;";
+    if (char === "\"") return "&quot;";
+    return "&#39;";
+  });
+}
+
+function zoneCanvasPlusAnchor(node, directionName) {
+  const selector = '.gnode[data-node-id="' + cssEscapeValue(node.id) + '"] .zoneCanvasPlus.' + directionName;
+  const plus = el.nodeLayer.querySelector(selector);
+  if (plus) {
+    const rect = plus.getBoundingClientRect();
+    if (rect.width && rect.height) return clientToGraphContentPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }
+  const pos = nodePositionForRender(node);
+  const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + cssEscapeValue(node.id) + '"]');
+  const width = nodeWidth(node);
+  const height = card ? card.offsetHeight : 150;
+  if (directionName === "top") return { x: pos.x + width / 2, y: pos.y };
+  if (directionName === "right") return { x: pos.x + width, y: pos.y + height / 2 };
+  if (directionName === "bottom") return { x: pos.x + width / 2, y: pos.y + height };
+  if (directionName === "left") return { x: pos.x, y: pos.y + height / 2 };
+  return { x: pos.x + width / 2, y: pos.y + height / 2 };
+}
+
+function zoneCanvasAdjacencyPath(a, b, directionName) {
+  if (directionName === "top" || directionName === "bottom") {
+    const dy = Math.max(32, Math.abs(b.y - a.y) * 0.5);
+    const sign = directionName === "top" ? -1 : 1;
+    return "M " + a.x + " " + a.y + " C " + a.x + " " + (a.y + dy * sign) + " " + b.x + " " + (b.y - dy * sign) + " " + b.x + " " + b.y;
+  }
+  const dx = Math.max(32, Math.abs(b.x - a.x) * 0.5);
+  const sign = directionName === "left" ? -1 : 1;
+  return "M " + a.x + " " + a.y + " C " + (a.x + dx * sign) + " " + a.y + " " + (b.x - dx * sign) + " " + b.y + " " + b.x + " " + b.y;
+}
+
+function renderZoneCanvasAdjacencyLinks(nodes) {
+  const zoneNodes = nodes.filter(function (node) {
+    return isZoneCanvasGroup(node);
+  });
+  if (!zoneNodes.length) return "";
+  const byGrid = new Map();
+  for (const node of zoneNodes) byGrid.set(zoneGridKey(zoneCanvasGridForGroup(node)), node);
+  let markup = "";
+  for (const node of zoneNodes) {
+    const grid = zoneCanvasGridForGroup(node);
+    for (const directionName of ["right", "bottom"]) {
+      const direction = ZONE_CANVAS_DIRECTIONS[directionName];
+      const target = byGrid.get(zoneGridKey({ x: grid.x + direction.dx, z: grid.z + direction.dz }));
+      if (!target) continue;
+      const targetDirectionName = oppositeZoneCanvasDirection(directionName);
+      const a = zoneCanvasPlusAnchor(node, directionName);
+      const b = zoneCanvasPlusAnchor(target, targetDirectionName);
+      const path = zoneCanvasAdjacencyPath(a, b, directionName);
+      const sourceId = escapeSvgAttr(node.id);
+      const targetId = escapeSvgAttr(target.id);
+      const title = escapeSvgAttr(nodeDisplayTitle(node) + " -> " + nodeDisplayTitle(target));
+      markup += "<path class=\"zoneCanvasAdjacencyHit\" data-zone-link-source=\"" + sourceId + "\" data-zone-link-target=\"" + targetId + "\" d=\"" + path + "\"><title>" + title + "</title></path>";
+      markup += "<path class=\"zoneCanvasAdjacency\" d=\"" + path + "\"></path>";
+      markup += "<circle class=\"zoneCanvasAdjacencyDot\" cx=\"" + a.x + "\" cy=\"" + a.y + "\" r=\"3.5\"></circle>";
+      markup += "<circle class=\"zoneCanvasAdjacencyDot\" cx=\"" + b.x + "\" cy=\"" + b.y + "\" r=\"3.5\"></circle>";
+    }
+  }
+  return markup;
+}
+
+function buildMinimapBakeNodePreview(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "minimapNodePreview";
+  const imageUrl = normalizeMinimapImageUrl(node.values?.bakedImageUrl);
+  if (imageUrl) {
+    const img = document.createElement("img");
+    img.src = imageUrl;
+    img.alt = node.values?.label || "Minimap preview";
+    img.addEventListener("error", function () {
+      wrap.classList.add("missing");
+      wrap.textContent = "Geen preview";
+    });
+    wrap.appendChild(img);
+  } else {
+    wrap.classList.add("missing");
+    wrap.textContent = "Nog geen bake";
+  }
+  return wrap;
+}
+
 function renderGraph() {
   el.nodeLayer.innerHTML = "";
   const nodes = visibleNodes();
@@ -3718,8 +6529,9 @@ function renderGraph() {
 function buildNodeElement(node) {
   const def = state.nodeTypes[node.type];
   const pos = nodePositionForRender(node);
+  const isZoneCanvas = isZoneCanvasGroup(node);
   const card = document.createElement("div");
-  card.className = "gnode" + (def.container ? " isGroup" : "") + (def.system ? " isSystem" : "") + (def.locked ? " isLocked" : "") + (state.selectedNodeIds.includes(node.id) ? " selected" : "");
+  card.className = "gnode" + (def.container ? " isGroup" : "") + (isZoneCanvas ? " isZoneCanvas" : "") + (def.system ? " isSystem" : "") + (def.locked ? " isLocked" : "") + (state.selectedNodeIds.includes(node.id) ? " selected" : "");
   card.style.width = nodeWidth(node) + "px";
   card.style.left = pos.x + "px";
   card.style.top = pos.y + "px";
@@ -3731,7 +6543,7 @@ function buildNodeElement(node) {
   accent.className = "gnodeAccent";
   const accentColor = def.container
     ? groupAccentForNode(node)
-    : def.accent || dataTypeColor(primaryOutputType(node)) || "#7bd4ff";
+    : accentColorFromOutputs(portEntriesForNode(node, "output"), def.accent || "#7bd4ff");
   accent.style.background = accentColor;
   const title = document.createElement("span");
   title.className = "gnodeTitle";
@@ -3762,6 +6574,15 @@ function buildNodeElement(node) {
   }
   body.append(inputs, outputs);
   card.appendChild(body);
+
+  if (node.type === "minimap_bake") {
+    card.appendChild(buildMinimapBakeNodePreview(node));
+  }
+
+  if (isZoneCanvas) {
+    card.appendChild(buildZoneCanvasSummary(node));
+    appendZoneCanvasPlusControls(card, node);
+  }
 
   if (def.container) {
     const enter = document.createElement("button");
@@ -3794,18 +6615,23 @@ function buildNodeElement(node) {
   head.addEventListener("dblclick", function () { if (def.container) enterGroup(node); });
   card.addEventListener("pointerdown", function (event) {
     if (event.button !== 0) return;
-    if (event.target.closest(".port, .enterGroup")) return;
+    if (event.target.closest(".port, .enterGroup, .zoneCanvasPlus, .zoneCanvasAction")) return;
+    commitActiveEditorControl();
     if (event.metaKey || event.ctrlKey) {
       event.preventDefault();
-      selectNode(node.id, false, { toggle: true, clearPendingEdge: true });
+      selectNode(node.id, false, { toggle: true, clearPendingEdge: true, showMobileInspector: true });
       return;
     }
     if (event.shiftKey) {
       event.preventDefault();
-      selectNode(node.id, false, { extend: true, clearPendingEdge: true });
+      selectNode(node.id, false, { extend: true, clearPendingEdge: true, showMobileInspector: true });
       return;
     }
-    selectNode(node.id, false, { clearPendingEdge: true });
+    selectNode(node.id, false, { clearPendingEdge: true, showMobileInspector: true });
+    // Frame whatever this node represents in 3D (model entities included - this used to
+    // be skipped for model_entity specifically, which is exactly the most common node
+    // type with a 3D representation, so the viewport never followed those clicks).
+    focusTerrainOrSelected();
   });
   return card;
 }
@@ -3835,7 +6661,7 @@ function buildPort(node, portName, port, direction) {
   label.textContent = portDisplayName(port.dataType);
   wrap.title = port.label + " - " + port.dataType + " - " + required + " " + cardinality + (port.help ? " - " + port.help : "");
   wrap.append(dot, label);
-  wrap.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
+  wrap.addEventListener("pointerdown", function (event) { if (event.button === 0) event.stopPropagation(); });
   wrap.addEventListener("click", function (event) {
     event.stopPropagation();
     onPortClick(node, portName, port, direction);
@@ -4003,6 +6829,7 @@ function renderEdges(nodes) {
     }
     markup += "<path class=\"typed" + selected + "\" data-edge-id=\"" + edge.id + "\" d=\"" + path + "\" stroke=\"" + edgeColor + "\"></path>";
   }
+  markup += renderZoneCanvasAdjacencyLinks(nodes);
   el.edgeLayer.innerHTML = markup;
   syncSelectedEdgeCard();
 }
@@ -4022,10 +6849,27 @@ function edgeDataType(node, portName) {
 }
 
 el.edgeLayer.addEventListener("pointerdown", function (event) {
+  if (event.button !== 0) return;
   const path = event.target.closest ? event.target.closest("[data-edge-id]") : null;
-  if (!path) return;
+  if (!path) {
+    const zoneLink = event.target.closest ? event.target.closest("[data-zone-link-target]") : null;
+    if (!zoneLink) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const source = nodeById(zoneLink.dataset.zoneLinkSource);
+    const target = nodeById(zoneLink.dataset.zoneLinkTarget);
+    const root = source ? zoneCanvasRootGroupForGroup(source) : null;
+    const selected = target && root && target.id === root.id && source ? source : target;
+    if (selected) {
+      commitActiveEditorControl();
+      selectNode(selected.id, true, { clearPendingEdge: true, showMobileInspector: true });
+      setStatus("Zone-koppeling geselecteerd. Sleep de geselecteerde zone naar een andere vrije kant of gebruik Delete om die zone te verwijderen.", "");
+    }
+    return;
+  }
   event.stopPropagation();
   event.preventDefault();
+  commitActiveEditorControl();
   const edgeId = path.dataset.edgeId;
   const additive = event.shiftKey || event.ctrlKey || event.metaKey;
   if (additive) {
@@ -4033,7 +6877,69 @@ el.edgeLayer.addEventListener("pointerdown", function (event) {
   } else {
     selectEdge(edgeId, { clearPendingEdge: true });
   }
+  showMobileInspectorPanel();
 });
+
+// Folds a group move/rotate/scale into a single restoreGraphObject call, same batching
+// pattern as deleteSelectedNodes/pasteSelection, so undo/redo treats the whole group
+// transform as one step. payload.commits is one {entityId, transform} per model_entity
+// that was live-dragged; payload.delta (move only) is the ground-plane distance the drag
+// covered, applied on top of that to whichever selected nodes have no live mesh of their
+// own (Walkable Surface, Surface Layer, Blocker Area, Area Definition, Location Anchor) by
+// translating their points wholesale, the same way the single-node "move via center
+// handle" already does (terrainPointsPatch/scatterTranslatePoints).
+async function commitGroupTransform(payload) {
+  const commits = payload?.commits || [];
+  const patchedNodeIds = new Set();
+  const patches = commits
+    .map(function (entry) {
+      const node = nodeByRuntimeId(entry.entityId);
+      if (!node || node.type !== "model_entity") return null;
+      patchedNodeIds.add(node.id);
+      return { nodeId: node.id, values: entry.transform };
+    })
+    .filter(Boolean);
+  const delta = payload?.mode === "move" ? payload.delta : null;
+  if (delta && (delta.x || delta.z)) {
+    for (const nodeId of state.selectedNodeIds) {
+      if (patchedNodeIds.has(nodeId)) continue;
+      const node = nodeById(nodeId);
+      if (!node) continue;
+      if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+        const explicitPoints = Array.isArray(node.values?.points) ? node.values.points : [];
+        if (explicitPoints.length > 0) {
+          // A genuinely edited polygon - shift every point, same as the single-node
+          // "move via center handle" (terrainCommitSurfaceDrag).
+          const nextPoints = scatterTranslatePoints(terrainNodePoints(node), delta.x, delta.z);
+          patches.push({ nodeId: node.id, values: terrainPointsPatch(node, nextPoints) });
+          continue;
+        }
+        // No explicit points yet (still the default rectangle/point derived from x/z) -
+        // just shift x/z directly below. Reusing terrainPointsPatch here would write a
+        // points array and force shapeType to "polygon", silently changing how the node
+        // edits, which a plain move shouldn't do.
+      }
+      // Generic locator fallback (Player Spawn, and anything else with a plain x/z
+      // world position but no points array) - same field check as nodeCoordinatePoint.
+      const fields = state.nodeTypes?.[node.type]?.fields;
+      if (!fields || !fields.x || !fields.z) continue;
+      const values = { x: Number(node.values?.x || 0) + delta.x, z: Number(node.values?.z || 0) + delta.z };
+      patches.push({ nodeId: node.id, values: values });
+    }
+  }
+  if (!patches.length) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  for (const patch of patches) {
+    const target = nextGraph.nodes.find(function (node) { return node.id === patch.nodeId; });
+    if (target) target.values = Object.assign({}, target.values, patch.values);
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Groep transform",
+    refreshViewport: true,
+    refreshEdgeList: false,
+    refreshValidation: false
+  });
+}
 
 function cloneGraphForRestore(graph) {
   return clonePlain(snapshotGraph(graph || state.graph));
@@ -4113,6 +7019,8 @@ function startNodeDrag(event, node, card) {
   }
   const historySnapshot = captureHistorySnapshot(movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst");
   const dragBounds = 100000;
+  let dragFinished = false;
+  let cancelThisDrag = null;
   card.classList.add("dragging");
   for (const [nodeId, position] of origins.entries()) {
     state.dragPreviewPositions[nodeId] = { x: position.x, y: position.y };
@@ -4141,10 +7049,17 @@ function startNodeDrag(event, node, card) {
     }
     if (state.dragSession && state.dragSession.sessionId === sessionId) state.dragSession = null;
     if (editorDebug.activeDragSession && editorDebug.activeDragSession.sessionId === sessionId) editorDebug.activeDragSession = null;
+    if (activeNodeDragCancel === cancelThisDrag) activeNodeDragCancel = null;
   }
+
+  cancelThisDrag = function () {
+    cleanup(true);
+  };
+  activeNodeDragCancel = cancelThisDrag;
 
   function onMove(moveEvent) {
     if (moveEvent.pointerId !== pointerId) return;
+    if (!state.dragSession || state.dragSession.sessionId !== sessionId) return;
     const graphPoint = clientToGraphPoint(moveEvent.clientX, moveEvent.clientY);
     editorDebug.lastClientPoint = { x: moveEvent.clientX, y: moveEvent.clientY };
     if (!isFiniteGraphPoint(graphPoint)) {
@@ -4188,6 +7103,8 @@ function startNodeDrag(event, node, card) {
   }
 
   async function finishDrag(commit) {
+    if (dragFinished) return;
+    dragFinished = true;
     const sessionState = state.dragSession;
     const committedPositions = sessionState && sessionState.nextPositions && sessionState.nextPositions.size
       ? Array.from(sessionState.nextPositions.entries())
@@ -4209,6 +7126,7 @@ function startNodeDrag(event, node, card) {
       graphNode.x = Math.round(Number(position.x));
       graphNode.y = Math.round(Number(position.y));
     }
+    const zoneSnap = snapMovedZoneCanvasGroups(nextGraph, movingNodeIds);
     const result = await restoreGraphObject(nextGraph, {
       historySnapshot: historySnapshot,
       historyLabel: movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst",
@@ -4216,12 +7134,13 @@ function startNodeDrag(event, node, card) {
       refreshGraph: true,
       refreshEdgeList: false,
       refreshInspector: true,
-      refreshViewport: false,
-      refreshValidation: false,
+      refreshViewport: zoneSnap.moved,
+      refreshValidation: zoneSnap.moved,
       afterApply: function () {
         for (const [nodeId, position] of committedPositions) delete state.dragPreviewPositions[nodeId];
         scheduleEdgeRender();
-        setStatus(movingNodeIds.length > 1 ? "Nodes verplaatst." : "Node verplaatst.", "success");
+        if (zoneSnap.collisions > 0) setStatus("Zone verplaatst en teruggesnapt: die canvaspositie is al bezet.", "");
+        else setStatus(movingNodeIds.length > 1 ? "Nodes verplaatst." : "Node verplaatst.", "success");
       }
     });
     if (!result) {
@@ -4241,6 +7160,7 @@ function startNodeDrag(event, node, card) {
     if (dragTarget) dragTarget.removeEventListener("lostpointercapture", onLostPointerCapture);
     const shouldCommit = Boolean(state.dragSession && state.dragSession.sessionId === sessionId && state.dragSession.didMove && state.dragSession.nextPositions);
     finishDrag(shouldCommit);
+    if (!shouldCommit) showMobileInspectorPanel();
   }
 
   function onCancel(cancelEvent) {
@@ -4254,7 +7174,8 @@ function startNodeDrag(event, node, card) {
 
   function onLostPointerCapture(lostEvent) {
     if (lostEvent.pointerId !== pointerId) return;
-    onCancel(lostEvent);
+    const shouldCommit = Boolean(state.dragSession && state.dragSession.sessionId === sessionId && state.dragSession.didMove && state.dragSession.nextPositions);
+    finishDrag(shouldCommit);
   }
 
   window.addEventListener("pointermove", onMove);
@@ -4285,6 +7206,786 @@ function hideSelectionBox() {
   selectionBox.style.top = "0px";
   selectionBox.style.width = "0px";
   selectionBox.style.height = "0px";
+}
+
+function clampGraphScale(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 1;
+  return Math.min(2.2, Math.max(0.25, number));
+}
+
+function graphPanSpeedMultiplier() {
+  const scale = Number(state.view.scale) || 1;
+  return Math.max(1, scale / 0.25);
+}
+
+function zoomGraphAt(clientX, clientY, factor) {
+  const rect = el.graphViewport.getBoundingClientRect();
+  const localX = clientX - rect.left;
+  const localY = clientY - rect.top;
+  const oldScale = state.view.scale || 1;
+  const newScale = clampGraphScale(oldScale * factor);
+  state.view.panX = localX - (localX - state.view.panX) * (newScale / oldScale);
+  state.view.panY = localY - (localY - state.view.panY) * (newScale / oldScale);
+  state.view.scale = newScale;
+  applyTransform();
+}
+
+function zoomGraphBy(factor) {
+  const rect = el.graphViewport.getBoundingClientRect();
+  zoomGraphAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor);
+}
+
+function fitGraphViewToNodes() {
+  const nodes = visibleNodes();
+  const rect = el.graphViewport.getBoundingClientRect();
+  if (!nodes.length || !rect.width || !rect.height) {
+    state.view = { panX: 40, panY: 40, scale: 1 };
+    applyTransform();
+    return;
+  }
+  const bounds = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+  for (const node of nodes) {
+    const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + node.id + '"]');
+    const x = Number(node.x) || 0;
+    const y = Number(node.y) || 0;
+    const width = Math.max(NODE_WIDTH, Math.round(card?.offsetWidth || 0));
+    const height = graphNodeHeightForStack(node);
+    bounds.left = Math.min(bounds.left, x);
+    bounds.top = Math.min(bounds.top, y);
+    bounds.right = Math.max(bounds.right, x + width);
+    bounds.bottom = Math.max(bounds.bottom, y + height);
+  }
+  if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)) {
+    state.view = { panX: 40, panY: 40, scale: 1 };
+    applyTransform();
+    return;
+  }
+  const padding = isMobileLayout() ? 26 : 56;
+  const width = Math.max(1, bounds.right - bounds.left);
+  const height = Math.max(1, bounds.bottom - bounds.top);
+  const fitScale = Math.min(
+    (rect.width - padding * 2) / width,
+    (rect.height - padding * 2) / height
+  );
+  const scale = Math.min(2.2, Math.max(0.06, Number.isFinite(fitScale) ? fitScale : 1));
+  const centerX = bounds.left + width / 2;
+  const centerY = bounds.top + height / 2;
+  state.view = {
+    panX: Math.round(rect.width / 2 - centerX * scale),
+    panY: Math.round(rect.height / 2 - centerY * scale),
+    scale: scale
+  };
+  applyTransform();
+}
+
+function graphTouchPoint(event, interactive = false) {
+  return {
+    clientX: Number(event.clientX) || 0,
+    clientY: Number(event.clientY) || 0,
+    interactive: Boolean(interactive)
+  };
+}
+
+function isGraphInteractiveTouchTarget(event) {
+  return Boolean(event.target.closest(".gnode, .port, .enterGroup, .zoneCanvasPlus, .zoneCanvasAction"));
+}
+
+function graphTouchMidpoint(points) {
+  return {
+    clientX: (points[0].clientX + points[1].clientX) / 2,
+    clientY: (points[0].clientY + points[1].clientY) / 2
+  };
+}
+
+function graphTouchDistance(points) {
+  return Math.max(1, Math.hypot(points[0].clientX - points[1].clientX, points[0].clientY - points[1].clientY));
+}
+
+function resetGraphTouchPanStart(point) {
+  graphTouchGesture.mode = "pan";
+  graphTouchGesture.startClientX = point.clientX;
+  graphTouchGesture.startClientY = point.clientY;
+  graphTouchGesture.startPanX = state.view.panX;
+  graphTouchGesture.startPanY = state.view.panY;
+}
+
+function resetGraphTouchPinchStart() {
+  const points = Array.from(graphTouchGesture.pointers.values()).slice(0, 2);
+  if (points.length < 2) return;
+  const midpoint = graphTouchMidpoint(points);
+  const rect = el.graphViewport.getBoundingClientRect();
+  const localX = midpoint.clientX - rect.left;
+  const localY = midpoint.clientY - rect.top;
+  graphTouchGesture.mode = "pinch";
+  graphTouchGesture.startScale = state.view.scale || 1;
+  graphTouchGesture.startDistance = graphTouchDistance(points);
+  graphTouchGesture.anchorGraphX = (localX - state.view.panX) / graphTouchGesture.startScale;
+  graphTouchGesture.anchorGraphY = (localY - state.view.panY) / graphTouchGesture.startScale;
+}
+
+function cleanupGraphTouchGesture() {
+  graphTouchGesture.pointers.clear();
+  graphTouchGesture.listening = false;
+  graphTouchGesture.mode = "";
+  el.graphViewport.classList.remove("panning");
+  window.removeEventListener("pointermove", handleGraphTouchPointerMove, true);
+  window.removeEventListener("pointerup", handleGraphTouchPointerEnd, true);
+  window.removeEventListener("pointercancel", handleGraphTouchPointerEnd, true);
+}
+
+function handleGraphTouchPointerDown(event) {
+  if (event.pointerType !== "touch") return false;
+  const interactive = isGraphInteractiveTouchTarget(event);
+  graphTouchGesture.pointers.set(event.pointerId, graphTouchPoint(event, interactive));
+  if (!graphTouchGesture.listening) {
+    graphTouchGesture.listening = true;
+    window.addEventListener("pointermove", handleGraphTouchPointerMove, true);
+    window.addEventListener("pointerup", handleGraphTouchPointerEnd, true);
+    window.addEventListener("pointercancel", handleGraphTouchPointerEnd, true);
+  }
+  if (graphTouchGesture.pointers.size >= 2) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    if (activeNodeDragCancel) activeNodeDragCancel();
+    try { el.graphViewport.setPointerCapture?.(event.pointerId); } catch {}
+    el.graphViewport.classList.add("panning");
+    resetGraphTouchPinchStart();
+    return true;
+  }
+  if (interactive) {
+    graphTouchGesture.mode = "track";
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  try { el.graphViewport.setPointerCapture?.(event.pointerId); } catch {}
+  el.graphViewport.classList.add("panning");
+  resetGraphTouchPanStart(graphTouchPoint(event));
+  return true;
+}
+
+function handleGraphTouchPointerMove(event) {
+  if (!graphTouchGesture.pointers.has(event.pointerId)) return;
+  const previous = graphTouchGesture.pointers.get(event.pointerId);
+  graphTouchGesture.pointers.set(event.pointerId, graphTouchPoint(event, previous?.interactive));
+  const points = Array.from(graphTouchGesture.pointers.values());
+  if (points.length >= 2) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    const activePoints = points.slice(0, 2);
+    if (graphTouchGesture.mode !== "pinch") resetGraphTouchPinchStart();
+    const midpoint = graphTouchMidpoint(activePoints);
+    const rect = el.graphViewport.getBoundingClientRect();
+    const localX = midpoint.clientX - rect.left;
+    const localY = midpoint.clientY - rect.top;
+    const distance = graphTouchDistance(activePoints);
+    const newScale = clampGraphScale(graphTouchGesture.startScale * (distance / graphTouchGesture.startDistance));
+    state.view.scale = newScale;
+    state.view.panX = localX - graphTouchGesture.anchorGraphX * newScale;
+    state.view.panY = localY - graphTouchGesture.anchorGraphY * newScale;
+    applyTransform();
+    return;
+  }
+  if (points.length === 1) {
+    if (points[0].interactive) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    const point = points[0];
+    if (graphTouchGesture.mode !== "pan") resetGraphTouchPanStart(point);
+    state.view.panX = graphTouchGesture.startPanX + (point.clientX - graphTouchGesture.startClientX);
+    state.view.panY = graphTouchGesture.startPanY + (point.clientY - graphTouchGesture.startClientY);
+    applyTransform();
+  }
+}
+
+function handleGraphTouchPointerEnd(event) {
+  if (!graphTouchGesture.pointers.has(event.pointerId)) return;
+  const wasPanning = graphTouchGesture.mode === "pan" || graphTouchGesture.mode === "pinch";
+  if (wasPanning) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  }
+  try { el.graphViewport.releasePointerCapture?.(event.pointerId); } catch {}
+  graphTouchGesture.pointers.delete(event.pointerId);
+  const points = Array.from(graphTouchGesture.pointers.values());
+  if (points.length >= 2) {
+    resetGraphTouchPinchStart();
+  } else if (points.length === 1) {
+    if (points[0].interactive) {
+      graphTouchGesture.mode = "track";
+      el.graphViewport.classList.remove("panning");
+    } else {
+      resetGraphTouchPanStart(points[0]);
+    }
+  } else {
+    cleanupGraphTouchGesture();
+  }
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, number));
+}
+
+function resizePair(startA, startB, delta, minA, minB) {
+  const total = Math.max(1, startA + startB);
+  const maxA = Math.max(minA, total - minB);
+  const a = clampNumber(startA + delta, minA, maxA);
+  return { a: a, b: Math.max(minB, total - a) };
+}
+
+function resizeRuntimeAfterLayout() {
+  requestAnimationFrame(function () {
+    if (runtime && typeof runtime.render === "function") runtime.render("layout-resize");
+    scheduleViewportFloatingPanelLayoutRefresh();
+  });
+}
+
+function applyEditorLayoutResize(drag, event) {
+  if (!drag) return;
+  if (drag.mobile) {
+    const deltaY = event.clientY - drag.startY;
+    if (drag.id === "tools") {
+      setRootCssVar("--mobile-tools-height", Math.round(clampNumber(drag.toolsHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+    } else if (drag.id === "graph") {
+      setRootCssVar("--mobile-graph-height", Math.round(clampNumber(drag.graphHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+    } else if (drag.id === "viewport") {
+      setRootCssVar("--mobile-viewport-height", Math.round(clampNumber(drag.viewportHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+    }
+    resizeRuntimeAfterLayout();
+    return;
+  }
+
+  const deltaX = event.clientX - drag.startX;
+  if (drag.id === "tools") {
+    const maxTools = Math.max(0, Math.min(460, drag.layoutWidth));
+    setRootCssVar("--tools-width", Math.round(clampNumber(drag.toolsWidth + deltaX, 0, maxTools)) + "px", false);
+  } else if (drag.id === "graph") {
+    const pair = resizePair(drag.graphWidth, drag.viewportWidth, deltaX, 0, 0);
+    setRootCssVar("--graph-width", Math.round(pair.a) + "px", false);
+    setRootCssVar("--viewport-width", Math.round(pair.b) + "px", false);
+  } else if (drag.id === "viewport") {
+    const pair = resizePair(drag.viewportWidth, drag.assetsWidth, deltaX, 0, 0);
+    setRootCssVar("--viewport-width", Math.round(pair.a) + "px", false);
+    setRootCssVar("--assets-width", Math.round(pair.b) + "px", false);
+  }
+  resizeRuntimeAfterLayout();
+}
+
+function beginEditorLayoutResize(event, resizer) {
+  if (!resizer || (event.button !== undefined && event.button !== 0)) return;
+  if (!el.layout) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const tools = document.querySelector(".tools");
+  const graph = document.querySelector(".graphColumn");
+  const viewport = document.querySelector(".viewportColumn");
+  const assets = document.querySelector(".assetColumn");
+  const layoutRect = el.layout.getBoundingClientRect();
+  const drag = {
+    id: resizer.dataset.resizer,
+    mobile: isMobileLayout(),
+    startX: event.clientX,
+    startY: event.clientY,
+    layoutWidth: layoutRect.width,
+    mobileMaxHeight: Math.max(180, layoutRect.height - 80),
+    toolsWidth: tools?.getBoundingClientRect().width || 250,
+    graphWidth: graph?.getBoundingClientRect().width || 320,
+    viewportWidth: viewport?.getBoundingClientRect().width || 320,
+    assetsWidth: assets?.getBoundingClientRect().width || 310,
+    toolsHeight: tools?.getBoundingClientRect().height || 220,
+    graphHeight: graph?.getBoundingClientRect().height || 340,
+    viewportHeight: viewport?.getBoundingClientRect().height || 360
+  };
+  resizer.classList.add("active");
+  try { resizer.setPointerCapture?.(event.pointerId); } catch {}
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    moveEvent.preventDefault();
+    applyEditorLayoutResize(drag, moveEvent);
+  }
+  function onUp(upEvent) {
+    if (upEvent.pointerId !== undefined && upEvent.pointerId !== event.pointerId) return;
+    resizer.classList.remove("active");
+    persistEditorLayoutSizes();
+    try { resizer.releasePointerCapture?.(event.pointerId); } catch {}
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onUp, true);
+  }
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onUp, true);
+}
+
+function initEditorLayoutResizers() {
+  for (const resizer of el.layoutResizers || []) {
+    resizer.addEventListener("pointerdown", function (event) {
+      beginEditorLayoutResize(event, resizer);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "All" tab: Blender-achtige vrije venster-indeling (split-boom van panes).
+// De 4 bestaande paneel-elementen (.tools/.graphColumn/.viewportColumn/.assetColumn)
+// worden hier NIET gekloond maar verplaatst (appendChild) naar hun plek in de boom,
+// zodat canvas/WebGL-state en event listeners intact blijven. Elk paneeltype kan
+// maar op 1 plek tegelijk zichtbaar zijn.
+// ---------------------------------------------------------------------------
+
+function defaultAllLayoutTree() {
+  return {
+    dir: "col",
+    children: [
+      { size: 1, node: { view: "tools" } },
+      { size: 1, node: { view: "graph" } },
+      { size: 1, node: { view: "viewport" } },
+      { size: 1, node: { view: "assets" } }
+    ]
+  };
+}
+
+function isValidAllLayoutNode(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.view) return ALL_PANE_VIEWS.includes(node.view);
+  if (node.dir === "row" || node.dir === "col") {
+    return Array.isArray(node.children) && node.children.length >= 1 &&
+      node.children.every(function (child) {
+        return child && typeof child.size === "number" && isValidAllLayoutNode(child.node);
+      });
+  }
+  return false;
+}
+
+function loadStoredAllLayoutTree() {
+  try {
+    const raw = window.localStorage.getItem(ALL_LAYOUT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (isValidAllLayoutNode(parsed)) return parsed;
+    }
+  } catch {}
+  return defaultAllLayoutTree();
+}
+
+function persistAllLayoutTree() {
+  if (!state.allLayoutTree) return;
+  try { window.localStorage.setItem(ALL_LAYOUT_STORAGE_KEY, JSON.stringify(state.allLayoutTree)); } catch {}
+}
+
+function allPaneContentElement(view) {
+  if (view === "tools") return document.querySelector(".tools");
+  if (view === "graph") return document.querySelector(".graphColumn");
+  if (view === "viewport") return document.querySelector(".viewportColumn");
+  if (view === "assets") return document.querySelector(".assetColumn");
+  return null;
+}
+
+function collectUsedAllViews(node, used) {
+  used = used || new Set();
+  if (!node) return used;
+  if (node.view) { used.add(node.view); return used; }
+  for (const child of node.children || []) collectUsedAllViews(child.node, used);
+  return used;
+}
+
+function getAllLayoutParentAndNode(path) {
+  let parent = null;
+  let node = state.allLayoutTree;
+  let indexInParent = -1;
+  for (const index of path) {
+    parent = node;
+    node = node.children[index].node;
+    indexInParent = index;
+  }
+  return { parent, node, indexInParent };
+}
+
+function getAllLayoutNodeAt(path) {
+  return getAllLayoutParentAndNode(path).node;
+}
+
+function setAllLayoutNodeAt(path, newNode) {
+  const { parent, indexInParent } = getAllLayoutParentAndNode(path);
+  if (!parent) { state.allLayoutTree = newNode; return; }
+  parent.children[indexInParent].node = newNode;
+}
+
+function renderAllLayout() {
+  if (!el.allLayoutRoot) return;
+  if (!state.allLayoutTree) state.allLayoutTree = loadStoredAllLayoutTree();
+  // Park the real panel elements in the (always-attached) overflow holder
+  // *before* wiping the tree below. They are currently nested inside
+  // el.allLayoutRoot from the previous render, so clearing its innerHTML
+  // first would detach them from the document entirely, and the
+  // querySelector calls in buildAllPane/allPaneContentElement would then
+  // never find them again (they'd be silently lost, leaving empty panes).
+  if (el.allLayoutOverflow) {
+    for (const view of ALL_PANE_VIEWS) {
+      const contentEl = allPaneContentElement(view);
+      if (contentEl) el.allLayoutOverflow.appendChild(contentEl);
+    }
+  }
+  el.allLayoutRoot.innerHTML = "";
+  el.allLayoutRoot.appendChild(buildAllLayoutNode(state.allLayoutTree, []));
+  // A "graph" pane that just became visible (wasn't in the tree before this render)
+  // counts as "opening Nodes" too, same as switching to the dedicated Nodes tab:
+  // jump to the last selected/added node instead of showing wherever it was last panned.
+  const usedViews = collectUsedAllViews(state.allLayoutTree);
+  if (usedViews.has("graph") && !allLayoutLastUsedViews.has("graph")) {
+    const nodeId = state.selectedNodeId || state.selectedNodeIds[0] || null;
+    if (nodeId) requestAnimationFrame(function () { focusGraphNode(nodeId); });
+  }
+  allLayoutLastUsedViews = usedViews;
+  resizeRuntimeAfterLayout();
+}
+
+function buildAllLayoutNode(node, path) {
+  return node.view ? buildAllPane(node, path) : buildAllSplit(node, path);
+}
+
+function buildAllSplit(node, path) {
+  const wrap = document.createElement("div");
+  wrap.className = "allSplit";
+  wrap.dataset.dir = node.dir;
+  node.children.forEach(function (child, index) {
+    if (index > 0) {
+      const resizer = document.createElement("div");
+      resizer.className = "allSplitResizer";
+      const indexA = index - 1;
+      const indexB = index;
+      resizer.addEventListener("pointerdown", function (event) {
+        beginAllSplitResize(event, resizer, node, indexA, indexB);
+      });
+      wrap.appendChild(resizer);
+    }
+    const childEl = buildAllLayoutNode(child.node, path.concat(index));
+    childEl.style.flex = String(Math.max(0.0001, child.size)) + " 1 0px";
+    wrap.appendChild(childEl);
+  });
+  return wrap;
+}
+
+function buildAllPane(node, path) {
+  const pane = document.createElement("div");
+  pane.className = "allPane";
+
+  const header = document.createElement("div");
+  header.className = "allPaneHeader";
+
+  const used = collectUsedAllViews(state.allLayoutTree);
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "Paneel-inhoud");
+  for (const view of ALL_PANE_VIEWS) {
+    if (view !== node.view && used.has(view)) continue;
+    const option = document.createElement("option");
+    option.value = view;
+    option.textContent = ALL_PANE_LABELS[view] || view;
+    if (view === node.view) option.selected = true;
+    select.appendChild(option);
+  }
+  select.addEventListener("change", function () { setAllPaneView(path, select.value); });
+  header.appendChild(select);
+
+  const canSplit = used.size < ALL_PANE_VIEWS.length;
+  const splitRowBtn = document.createElement("button");
+  splitRowBtn.type = "button";
+  splitRowBtn.textContent = "⬌";
+  splitRowBtn.title = "Splits naast elkaar";
+  splitRowBtn.disabled = !canSplit;
+  splitRowBtn.addEventListener("click", function () { splitAllPane(path, "row"); });
+  header.appendChild(splitRowBtn);
+
+  const splitColBtn = document.createElement("button");
+  splitColBtn.type = "button";
+  splitColBtn.textContent = "⬍";
+  splitColBtn.title = "Splits onder elkaar";
+  splitColBtn.disabled = !canSplit;
+  splitColBtn.addEventListener("click", function () { splitAllPane(path, "col"); });
+  header.appendChild(splitColBtn);
+
+  if (path.length > 0) {
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.textContent = "✕";
+    closeBtn.title = "Venster sluiten";
+    closeBtn.addEventListener("click", function () { closeAllPane(path); });
+    header.appendChild(closeBtn);
+  }
+
+  pane.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "allPaneBody";
+  const contentEl = allPaneContentElement(node.view);
+  if (contentEl) body.appendChild(contentEl);
+  pane.appendChild(body);
+
+  return pane;
+}
+
+function setAllPaneView(path, view) {
+  if (!ALL_PANE_VIEWS.includes(view)) return;
+  const node = getAllLayoutNodeAt(path);
+  if (!node || node.view === view) return;
+  const used = collectUsedAllViews(state.allLayoutTree);
+  if (used.has(view)) return;
+  node.view = view;
+  persistAllLayoutTree();
+  renderAllLayout();
+}
+
+function splitAllPane(path, dir) {
+  const used = collectUsedAllViews(state.allLayoutTree);
+  const freeView = ALL_PANE_VIEWS.find(function (view) { return !used.has(view); });
+  if (!freeView) return;
+  const target = getAllLayoutNodeAt(path);
+  if (!target || !target.view) return;
+  setAllLayoutNodeAt(path, {
+    dir: dir,
+    children: [
+      { size: 1, node: { view: target.view } },
+      { size: 1, node: { view: freeView } }
+    ]
+  });
+  persistAllLayoutTree();
+  renderAllLayout();
+}
+
+function closeAllPane(path) {
+  if (path.length === 0) return;
+  const { parent, indexInParent } = getAllLayoutParentAndNode(path);
+  if (!parent) return;
+  parent.children.splice(indexInParent, 1);
+  if (parent.children.length === 1) {
+    setAllLayoutNodeAt(path.slice(0, -1), parent.children[0].node);
+  }
+  persistAllLayoutTree();
+  renderAllLayout();
+}
+
+function beginAllSplitResize(event, resizerEl, splitNode, indexA, indexB) {
+  if (event.button !== undefined && event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const dir = splitNode.dir;
+  const childElA = resizerEl.previousElementSibling;
+  const childElB = resizerEl.nextElementSibling;
+  if (!childElA || !childElB) return;
+  const rectA = childElA.getBoundingClientRect();
+  const rectB = childElB.getBoundingClientRect();
+  const startSizeA = dir === "row" ? rectA.width : rectA.height;
+  const startSizeB = dir === "row" ? rectB.width : rectB.height;
+  const totalPx = Math.max(1, startSizeA + startSizeB);
+  const growA = splitNode.children[indexA].size;
+  const growB = splitNode.children[indexB].size;
+  const growPerPx = (growA + growB) / totalPx;
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const minPx = 20;
+  resizerEl.classList.add("active");
+  try { resizerEl.setPointerCapture?.(event.pointerId); } catch {}
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    moveEvent.preventDefault();
+    const delta = dir === "row" ? (moveEvent.clientX - startX) : (moveEvent.clientY - startY);
+    const deltaPx = clampNumber(delta, minPx - startSizeA, startSizeB - minPx);
+    const deltaGrow = deltaPx * growPerPx;
+    splitNode.children[indexA].size = Math.max(0.02, growA + deltaGrow);
+    splitNode.children[indexB].size = Math.max(0.02, growB - deltaGrow);
+    childElA.style.flex = String(splitNode.children[indexA].size) + " 1 0px";
+    childElB.style.flex = String(splitNode.children[indexB].size) + " 1 0px";
+    resizeRuntimeAfterLayout();
+  }
+  function onUp(upEvent) {
+    if (upEvent.pointerId !== undefined && upEvent.pointerId !== event.pointerId) return;
+    resizerEl.classList.remove("active");
+    try { resizerEl.releasePointerCapture?.(event.pointerId); } catch {}
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onUp, true);
+    persistAllLayoutTree();
+  }
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onUp, true);
+}
+
+function restoreFlatEditorLayoutOrder() {
+  if (!el.layout) return;
+  const toolsEl = document.querySelector(".tools");
+  const graphEl = document.querySelector(".graphColumn");
+  const viewportEl = document.querySelector(".viewportColumn");
+  const assetsEl = document.querySelector(".assetColumn");
+  const resizerTools = el.layout.querySelector('[data-resizer="tools"]');
+  const resizerGraph = el.layout.querySelector('[data-resizer="graph"]');
+  const resizerViewport = el.layout.querySelector('[data-resizer="viewport"]');
+  if (toolsEl && resizerTools) el.layout.insertBefore(toolsEl, resizerTools);
+  if (graphEl && resizerGraph) el.layout.insertBefore(graphEl, resizerGraph);
+  if (viewportEl && resizerViewport) el.layout.insertBefore(viewportEl, resizerViewport);
+  if (assetsEl) el.layout.appendChild(assetsEl);
+}
+
+function updateAllLayoutMode() {
+  const shouldBeActive = state.mobilePanel === "all" && isMobileLayout();
+  if (shouldBeActive && !allLayoutActive) {
+    allLayoutActive = true;
+    renderAllLayout();
+  } else if (!shouldBeActive && allLayoutActive) {
+    allLayoutActive = false;
+    restoreFlatEditorLayoutOrder();
+  }
+}
+
+function initAllLayoutControls() {
+  if (!state.allLayoutTree) state.allLayoutTree = loadStoredAllLayoutTree();
+}
+
+function updateEditorFullscreenButton() {
+  const active = document.fullscreenElement === document.documentElement || document.fullscreenElement === document.body;
+  document.body.classList.toggle("editorFullscreen", active);
+  if (!el.fullscreenButton) return;
+  el.fullscreenButton.textContent = isMobileLayout()
+    ? (active ? "EXIT" : "FULL")
+    : (active ? "FULLSCREEN OFF" : "FULLSCREEN");
+  el.fullscreenButton.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+async function toggleEditorFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen?.();
+    } else {
+      await (document.documentElement.requestFullscreen?.() || document.body.requestFullscreen?.());
+    }
+  } catch (error) {
+    setStatus(error?.message || "Fullscreen niet beschikbaar.", "error");
+  }
+  updateEditorFullscreenButton();
+}
+
+function zoomViewportBy(direction) {
+  if (!el.viewportCanvas) return;
+  const rect = el.viewportCanvas.getBoundingClientRect();
+  const wheel = new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+    deltaY: direction > 0 ? -220 : 220
+  });
+  el.viewportCanvas.dispatchEvent(wheel);
+}
+
+function focusViewportSelection() {
+  if (!runtime) return;
+  const focused = typeof runtime.focusSelected === "function" ? runtime.focusSelected() : false;
+  if (!focused && typeof runtime.frameAll === "function") runtime.frameAll();
+}
+
+function initMobileControls() {
+  applyStoredEditorLayoutSizes();
+  initAllLayoutControls();
+  setMobilePanel(state.mobilePanel, false);
+  updateTopbarLabels();
+  if (el.mobilePanelTabs) {
+    for (const button of el.mobilePanelTabs.querySelectorAll("[data-mobile-panel]")) {
+      button.addEventListener("click", function () {
+        setMobilePanel(button.dataset.mobilePanel || "all");
+      });
+    }
+  }
+  initEditorLayoutResizers();
+  if (el.fullscreenButton) el.fullscreenButton.addEventListener("click", toggleEditorFullscreen);
+  document.addEventListener("fullscreenchange", updateEditorFullscreenButton);
+  MOBILE_LAYOUT_QUERY?.addEventListener?.("change", updateTopbarLabels);
+  MOBILE_LAYOUT_QUERY?.addEventListener?.("change", updateAllLayoutMode);
+  MOBILE_LAYOUT_QUERY?.addEventListener?.("change", scheduleViewportFloatingPanelLayoutRefresh);
+  window.addEventListener("resize", scheduleViewportFloatingPanelLayoutRefresh);
+  window.visualViewport?.addEventListener?.("resize", scheduleViewportFloatingPanelLayoutRefresh);
+  updateEditorFullscreenButton();
+  if (el.viewportZoomOutButton) el.viewportZoomOutButton.addEventListener("click", function () { zoomViewportBy(-1); });
+  if (el.viewportZoomInButton) el.viewportZoomInButton.addEventListener("click", function () { zoomViewportBy(1); });
+  if (el.viewportFocusButton) el.viewportFocusButton.addEventListener("click", focusViewportSelection);
+}
+
+// Marquee box for the 3D viewport (object picking + point-edit mode). Unlike the graph
+// canvas, the viewport isn't panned/scaled in CSS space, so plain client coordinates
+// (minus the wrap's own offset) are enough - no clientToViewportPoint conversion needed.
+function showViewportSelectionBox(startX, startY, endX, endY) {
+  if (!el.viewportSelectionBox || !el.viewportWrap) return;
+  const wrapRect = el.viewportWrap.getBoundingClientRect();
+  const left = Math.min(startX, endX) - wrapRect.left;
+  const top = Math.min(startY, endY) - wrapRect.top;
+  const width = Math.max(0, Math.abs(endX - startX));
+  const height = Math.max(0, Math.abs(endY - startY));
+  el.viewportSelectionBox.hidden = false;
+  el.viewportSelectionBox.style.left = left + "px";
+  el.viewportSelectionBox.style.top = top + "px";
+  el.viewportSelectionBox.style.width = width + "px";
+  el.viewportSelectionBox.style.height = height + "px";
+}
+
+function hideViewportSelectionBox() {
+  if (!el.viewportSelectionBox) return;
+  el.viewportSelectionBox.hidden = true;
+  el.viewportSelectionBox.style.width = "0px";
+  el.viewportSelectionBox.style.height = "0px";
+}
+
+function rectFromClientPoints(x1, y1, x2, y2) {
+  return {
+    left: Math.min(x1, x2),
+    right: Math.max(x1, x2),
+    top: Math.min(y1, y2),
+    bottom: Math.max(y1, y2)
+  };
+}
+
+// A representative world point for whatever kind of node this is, so it can be marquee-
+// selected in the 3D viewport even when it has no single live mesh to raycast against
+// (Location Anchor has none at all; Walkable Surface/Surface Layer are chunked into many
+// mesh pieces, not one pickable root). Mirrors terrainAllNodeMarkers()'s per-type geometry
+// lookups (editor.js ~2553) - same node types, same "one point per node" idea.
+function viewportSelectablePoint(node) {
+  if (!node || !node.values) return null;
+  if (node.type === "model_entity") {
+    const x = Number(node.values.x);
+    const y = Number(node.values.y);
+    const z = Number(node.values.z);
+    return Number.isFinite(x) && Number.isFinite(z) ? { x: x, y: Number.isFinite(y) ? y : terrainGroundY(), z: z } : null;
+  }
+  if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
+    const points = terrainNodePoints(node);
+    const geometry = terrainWalkableSurfaceGeometry(node, points);
+    if (!Number.isFinite(geometry.x) || !Number.isFinite(geometry.z)) return null;
+    return { x: geometry.x, y: node.type === "walkable_surface" ? geometry.y : terrainGroundY(), z: geometry.z };
+  }
+  if (node.type === "bounded_area_scatter") {
+    const center = scatterPointCenter(scatterNodePoints(node));
+    return Number.isFinite(center.x) && Number.isFinite(center.z) ? { x: center.x, y: terrainGroundY(), z: center.z } : null;
+  }
+  return nodeCoordinatePoint(node);
+}
+
+function viewportMarqueeNodeIds(rect) {
+  if (!runtime || typeof runtime.worldToScreen !== "function") return [];
+  const ids = [];
+  for (const node of state.graph.nodes || []) {
+    const point = viewportSelectablePoint(node);
+    if (!point) continue;
+    const screen = runtime.worldToScreen(point);
+    if (screen && rectContainsPoint(rect, screen)) ids.push(node.id);
+  }
+  return ids;
 }
 
 function marqueeIntersectingNodeIds(rect) {
@@ -4328,6 +8029,8 @@ el.graphViewport.addEventListener("contextmenu", function (event) {
   event.preventDefault();
 });
 
+el.graphViewport.addEventListener("pointerdown", handleGraphTouchPointerDown, true);
+
 el.graphViewport.addEventListener("pointerdown", function (event) {
   if (event.button === 2) {
     event.preventDefault();
@@ -4338,8 +8041,9 @@ el.graphViewport.addEventListener("pointerdown", function (event) {
     const originPanY = state.view.panY;
     function onMove(moveEvent) {
       if (moveEvent.buttons === 0) return;
-      state.view.panX = originPanX + (moveEvent.clientX - startX);
-      state.view.panY = originPanY + (moveEvent.clientY - startY);
+      const panSpeed = graphPanSpeedMultiplier();
+      state.view.panX = originPanX + (moveEvent.clientX - startX) * panSpeed;
+      state.view.panY = originPanY + (moveEvent.clientY - startY) * panSpeed;
       applyTransform();
     }
     function onUp() {
@@ -4407,21 +8111,14 @@ el.graphViewport.addEventListener("pointerdown", function (event) {
 
 el.graphViewport.addEventListener("wheel", function (event) {
   event.preventDefault();
-  const rect = el.graphViewport.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
-  const oldScale = state.view.scale;
-const factor = event.deltaY < 0 ? 1.21 : 1 / 1.21;
-  const newScale = Math.min(2.2, Math.max(0.25, oldScale * factor));
-  state.view.panX = mouseX - (mouseX - state.view.panX) * (newScale / oldScale);
-  state.view.panY = mouseY - (mouseY - state.view.panY) * (newScale / oldScale);
-  state.view.scale = newScale;
-  applyTransform();
+  zoomGraphAt(event.clientX, event.clientY, event.deltaY < 0 ? GRAPH_ZOOM_FACTOR : 1 / GRAPH_ZOOM_FACTOR);
 }, { passive: false });
 
+if (el.graphZoomOutButton) el.graphZoomOutButton.addEventListener("click", function () { zoomGraphBy(1 / GRAPH_ZOOM_FACTOR); });
+if (el.graphZoomInButton) el.graphZoomInButton.addEventListener("click", function () { zoomGraphBy(GRAPH_ZOOM_FACTOR); });
+
 el.zoomResetButton.addEventListener("click", function () {
-  state.view = { panX: 40, panY: 40, scale: 1 };
-  applyTransform();
+  fitGraphViewToNodes();
 });
 
 if (el.viewportInfoButton) el.viewportInfoButton.addEventListener("click", toggleViewportHelp);
@@ -4431,6 +8128,50 @@ if (el.snapModeSelect) el.snapModeSelect.addEventListener("change", function () 
 if (el.snapGridInput) el.snapGridInput.addEventListener("change", function () {
   setViewportSnap(el.snapModeSelect ? el.snapModeSelect.value : state.snapMode, el.snapGridInput.value);
 });
+
+if (el.inspectorForm) {
+  el.inspectorForm.addEventListener("input", function (event) {
+    if (isEditableTarget(event.target)) markUnsavedPending();
+  }, true);
+  el.inspectorForm.addEventListener("change", function (event) {
+    if (isEditableTarget(event.target)) markUnsavedPending();
+  }, true);
+  el.inspectorForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    commitActiveEditorControl();
+  });
+}
+
+function activeEditorControl() {
+  const active = document.activeElement;
+  if (!active || typeof active.tagName !== "string") return null;
+  if (!isEditableTarget(active)) return null;
+  if (el.inspectorForm && el.inspectorForm.contains(active)) return active;
+  if (el.viewportTransformPanel && el.viewportTransformPanel.contains(active)) return active;
+  if (el.viewportHelpPanel && el.viewportHelpPanel.contains(active)) return active;
+  if (el.assetColumn && el.assetColumn.contains(active)) return active;
+  return null;
+}
+
+function commitActiveEditorControl() {
+  const active = activeEditorControl();
+  if (active && typeof active.blur === "function") active.blur();
+}
+
+async function flushPendingEditorWrites() {
+  if (runtimeTransformActive()) confirmRuntimeTransform();
+  commitActiveEditorControl();
+  if (scatterHasActiveSession()) {
+    const scatterNode = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
+    await commitActiveScatterSession(scatterNode);
+  }
+  if (terrainHasActiveSession()) {
+    const terrainNode = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+    await commitActiveTerrainSession(terrainNode);
+  }
+  if (runtime && typeof runtime.flushEditorCameraSave === "function") runtime.flushEditorCameraSave();
+  await graphMutationQueue;
+}
 
 // ---------- Groups + breadcrumb ----------
 function enterGroup(node) {
@@ -4620,6 +8361,10 @@ function renderInspector() {
     if (fieldEl) el.inspectorForm.appendChild(fieldEl);
   }
 
+  if (isZoneCanvasGroup(node)) {
+    el.inspectorForm.appendChild(buildZoneCanvasInspectorBlock(node));
+  }
+
   const actions = document.createElement("div");
   actions.className = "inspectorActions";
   if (node.type !== "game_output" && !def.system) {
@@ -4627,7 +8372,10 @@ function renderInspector() {
     dup.type = "button";
     dup.className = "mini";
     dup.textContent = "Dupliceer";
-    dup.addEventListener("click", function () { duplicateNode(node.id); });
+    dup.addEventListener("click", function () {
+      if (isZoneCanvasGroup(node)) expandZoneCanvas(node.id, "right");
+      else duplicateNode(node.id);
+    });
     const del = document.createElement("button");
     del.type = "button";
     del.className = "deleteNode";
@@ -4640,10 +8388,182 @@ function renderInspector() {
 }
 
 function syncAsideContext() {
-  const showInspector = state.selectedNodeIds.length > 0 || state.selectedEdgeIds.length > 0;
-  if (el.nodeLibrarySection) el.nodeLibrarySection.hidden = showInspector;
+  const showInspector = hasInspectorSelection();
+  if (isMobileLayout() && !showInspector && state.mobilePanel === "inspector") setMobilePanel("graph", false);
+  // In de Blender-achtige "All"-lay-out zijn Tools/Nodes/3D vaak tegelijk zichtbaar,
+  // dus daar wisselt het Tools-paneel tussen Node library en Inspector i.p.v. te stapelen.
+  // (Let op: niet de module-scope `allLayoutActive` gebruiken hier - syncAsideContext()
+  // wordt al bij regel ~341 top-level aangeroepen, vóór die `let` geïnitialiseerd is,
+  // wat anders een TDZ ReferenceError geeft die de hele scriptinit blokkeert.)
+  const swapInPlace = !isMobileLayout() || state.mobilePanel === "all";
+  if (el.nodeLibrarySection) el.nodeLibrarySection.hidden = swapInPlace && showInspector;
   if (el.inspectorSection) el.inspectorSection.hidden = !showInspector;
   if (el.validationSection) el.validationSection.hidden = false;
+}
+
+const ZONE_CANVAS_MANAGED_NODE_TYPES = [
+  "zone_definition",
+  "zone_environment_settings",
+  "zone_gameplay_rules",
+  "ground_surface",
+  "spawn_point",
+  "zone_output",
+  "area_definition",
+  "area_output",
+  "surface_layer",
+  "terrain_layer",
+  "blocker_area",
+  "walkable_surface",
+  "location_anchor",
+  "minimap_bake",
+  "model_entity",
+  "bounded_area_scatter",
+  "zone_link",
+  "map_marker_definition"
+];
+
+function zoneCanvasManagedChildren(group) {
+  return (state.graph.nodes || []).filter(function (node) {
+    return node.parentId === group.id && node.type !== "group_input" && node.type !== "group_output";
+  }).sort(function (left, right) {
+    return (Number(left.y) - Number(right.y)) || (Number(left.x) - Number(right.x)) || String(left.title || "").localeCompare(String(right.title || ""));
+  });
+}
+
+function buildZoneCanvasInspectorBlock(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "zoneCanvasInspector";
+
+  const title = document.createElement("div");
+  title.className = "inspectorSectionTitle";
+  title.textContent = "Zone Nodes";
+  wrap.appendChild(title);
+
+  const grid = zoneCanvasGridForGroup(group);
+  const root = zoneCanvasRootGroupForGroup(group);
+  const meta = document.createElement("div");
+  meta.className = "inspectorHint";
+  meta.textContent = (root?.id === group.id ? "Hoofd/startzone" : "Child-zone van " + nodeDisplayTitle(root)) + " - grid " + grid.x + "," + grid.z + " - 500x500";
+  wrap.appendChild(meta);
+
+  const ground = (state.graph.nodes || []).find(function (node) {
+    return node.parentId === group.id && node.type === "ground_surface";
+  }) || null;
+  const faderField = document.createElement("div");
+  faderField.className = "field";
+  const faderLabel = document.createElement("label");
+  faderLabel.textContent = "Zone edge fader";
+  const faderRow = document.createElement("div");
+  faderRow.className = "zoneCanvasFaderRow";
+  const fader = document.createElement("input");
+  fader.type = "range";
+  fader.min = "0";
+  fader.max = "120";
+  fader.step = "1";
+  fader.value = String(Math.max(0, Math.min(120, Number(ground?.values?.edgeFadeWidth) || 0)));
+  fader.disabled = !ground;
+  const faderNumber = document.createElement("input");
+  faderNumber.type = "number";
+  faderNumber.min = "0";
+  faderNumber.max = "120";
+  faderNumber.step = "1";
+  faderNumber.value = fader.value;
+  faderNumber.disabled = !ground;
+  const applyFader = function (rawValue) {
+    if (!ground) return;
+    const value = Math.max(0, Math.min(120, Math.round(Number(rawValue) || 0)));
+    fader.value = String(value);
+    faderNumber.value = String(value);
+    patchValues(ground.id, { edgeFadeWidth: value }, {
+      historyLabel: "Zone edge fader",
+      refreshViewport: true,
+      refreshValidation: true
+    });
+  };
+  fader.addEventListener("change", function () { applyFader(fader.value); });
+  faderNumber.addEventListener("change", function () { applyFader(faderNumber.value); });
+  faderRow.append(fader, faderNumber);
+  const faderHint = document.createElement("div");
+  faderHint.className = "inspectorHint";
+  faderHint.textContent = ground ? "Fade in world units rond de buitenrand van deze zone." : "Voeg eerst een Ground Surface toe.";
+  faderField.append(faderLabel, faderRow, faderHint);
+  wrap.appendChild(faderField);
+
+  const actions = document.createElement("div");
+  actions.className = "zoneCanvasInspectorActions";
+  const fill = document.createElement("button");
+  fill.type = "button";
+  fill.className = "mini";
+  fill.textContent = "Basis aanvullen";
+  fill.title = "Maakt ontbrekende Zone Definition, settings, ground, spawn en Zone Output aan.";
+  fill.addEventListener("click", function () { repairZoneCanvasBasis(group.id); });
+  const wire = document.createElement("button");
+  wire.type = "button";
+  wire.className = "mini";
+  wire.textContent = "Koppel basis";
+  wire.title = "Verbindt bestaande zonebasisnodes met de juiste Zone Output route.";
+  wire.addEventListener("click", function () { wireZoneCanvas(group.id); });
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "mini";
+  open.textContent = "Open zone";
+  open.addEventListener("click", function () { enterGroup(group); });
+  actions.append(fill, wire, open);
+  wrap.appendChild(actions);
+
+  const addRow = document.createElement("div");
+  addRow.className = "zoneCanvasAddRow";
+  const select = document.createElement("select");
+  for (const type of ZONE_CANVAS_MANAGED_NODE_TYPES) {
+    if (!state.nodeTypes[type] || state.nodeTypes[type].hidden || state.nodeTypes[type].system) continue;
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = state.nodeTypes[type].label || type;
+    select.appendChild(option);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "Toevoegen";
+  add.addEventListener("click", async function () {
+    const type = select.value;
+    if (!type) return;
+    state.currentGroupId = group.id;
+    syncBreadcrumb();
+    renderGraph();
+    await addNode(type);
+  });
+  addRow.append(select, add);
+  wrap.appendChild(addRow);
+
+  const list = document.createElement("div");
+  list.className = "zoneCanvasNodeList";
+  const children = zoneCanvasManagedChildren(group);
+  if (!children.length) {
+    const empty = document.createElement("div");
+    empty.className = "inspectorHint";
+    empty.textContent = "Nog geen zone-nodes. Gebruik Basis aanvullen.";
+    list.appendChild(empty);
+  }
+  for (const child of children) {
+    const row = document.createElement("div");
+    row.className = "zoneCanvasNodeRow";
+    const meta = document.createElement("button");
+    meta.type = "button";
+    meta.className = "zoneCanvasNodePick";
+    meta.textContent = (state.nodeTypes[child.type]?.label || child.type) + " - " + nodeDisplayTitle(child);
+    meta.addEventListener("click", function () { selectNode(child.id, true, { clearPendingEdge: true }); });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "deleteNode";
+    del.textContent = "x";
+    del.title = "Verwijder deze zone-node";
+    del.addEventListener("click", function () { deleteNode(child.id); });
+    row.append(meta, del);
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function fieldHelpText(field) {
@@ -4657,6 +8577,21 @@ function applyFieldHelp(elements, helpText) {
     if (!element) continue;
     element.title = help;
   }
+}
+
+function nodeFieldPatch(node, key, value) {
+  if (node?.type === "mmo_network_settings") {
+    return mmoNetworkFieldNodePatch(key, value, node.values || {});
+  }
+  return makePatch(key, value);
+}
+
+function patchInspectorField(node, key, field, value) {
+  patchValues(node.id, nodeFieldPatch(node, key, value), {
+    historyLabel: field.label,
+    refreshViewport: shouldRefreshViewportForNode(node.id),
+    refreshValidation: true
+  });
 }
 
 function buildField(node, key, field) {
@@ -4679,7 +8614,7 @@ function buildField(node, key, field) {
     input.type = "checkbox";
     input.checked = value === true;
     applyFieldHelp(input, help);
-    input.addEventListener("change", function () { patchValues(node.id, makePatch(key, input.checked), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true }); });
+    input.addEventListener("change", function () { patchInspectorField(node, key, field, input.checked); });
     wrap.appendChild(input);
     if (node.type === "bounded_area_scatter" && key === "boundaryBlocksPlayer") {
       const hint = document.createElement("div");
@@ -4737,7 +8672,7 @@ function buildField(node, key, field) {
         });
         return;
       }
-      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, select.value)), { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
+      patchInspectorField(node, key, field, normalizeFieldInputValue(field, select.value));
     });
     wrap.appendChild(select);
     if (field.dynamicOptions === "assetAnimations") {
@@ -4804,11 +8739,7 @@ function buildField(node, key, field) {
       : (field.pattern || "canonical.id");
     applyFieldHelp(input, help);
     input.addEventListener("change", function () {
-      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
-        historyLabel: field.label,
-        refreshViewport: shouldRefreshViewportForNode(node.id),
-        refreshValidation: true
-      });
+      patchInspectorField(node, key, field, normalizeFieldInputValue(field, input.value));
     });
     wrap.appendChild(input);
     if (field.type === "reference") {
@@ -5038,11 +8969,7 @@ function buildField(node, key, field) {
       updateOutput(input.value);
     });
     input.addEventListener("change", function () {
-      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
-        historyLabel: field.label,
-        refreshViewport: shouldRefreshViewportForNode(node.id),
-        refreshValidation: true
-      });
+      patchInspectorField(node, key, field, normalizeFieldInputValue(field, input.value));
     });
     row.append(input, output);
     wrap.appendChild(row);
@@ -5057,11 +8984,7 @@ function buildField(node, key, field) {
     }
     input.value = isBlankValue(value) ? "" : value;
     input.addEventListener("change", function () {
-      patchValues(node.id, makePatch(key, normalizeFieldInputValue(field, input.value)), {
-        historyLabel: field.label,
-        refreshViewport: shouldRefreshViewportForNode(node.id),
-        refreshValidation: true
-      });
+      patchInspectorField(node, key, field, normalizeFieldInputValue(field, input.value));
     });
     wrap.appendChild(input);
   }
@@ -5445,26 +9368,59 @@ function makePatch(key, value) {
 
 async function patchValues(nodeId, patch, options = {}) {
   const node = nodeById(nodeId);
-  if (node && Object.entries(patch || {}).every(function ([key, value]) { return node.values[key] === value; })) return state.graph;
-  return await applyGraphMutation(function () {
-    return api("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: patch }) });
-  }, Object.assign({
+  const cleanPatch = normalizeModelEntityTransformPatch(node, patch || {});
+  if (node && Object.entries(cleanPatch || {}).every(function ([key, value]) { return node.values[key] === value; })) return state.graph;
+  const runtimeTransformPatch = isModelEntityTransformPatch(node, cleanPatch);
+  const localValuePatch = runtimeTransformPatch || isEditorCameraPatch(node, cleanPatch);
+  const mutationOptions = Object.assign({
     historyLabel: options.historyLabel || "Waarde gewijzigd",
     refreshViewport: options.refreshViewport === true,
     refreshValidation: options.refreshValidation !== false,
     refreshGraph: options.refreshGraph !== false,
     refreshEdgeList: options.refreshEdgeList !== false,
     refreshInspector: options.refreshInspector !== false
-  }, options));
+  }, options);
+  if (runtimeTransformPatch) {
+    const afterApply = mutationOptions.afterApply;
+    // Do NOT null out historyLabel/historySnapshot here - callers (gizmo drag commit,
+    // matrix input commit) pass a real label expecting an undo step. Nulling it used to
+    // silently drop undo for every single-object move (group moves use a separate path
+    // and were unaffected, hence "sometimes yes, sometimes no").
+    mutationOptions.refreshViewport = false;
+    mutationOptions.refreshGraph = false;
+    mutationOptions.refreshInspector = false;
+    mutationOptions.refreshEdgeList = false;
+    mutationOptions.refreshViewportControls = false;
+    mutationOptions.refreshValidation = false;
+    mutationOptions.afterApply = function (nextGraph, result) {
+      syncRuntimeModelEntityTransform(nodeId);
+      if (typeof afterApply === "function") afterApply(nextGraph, result);
+    };
+  }
+  return await applyGraphMutation(async function () {
+    if (localValuePatch) {
+      await apiOk("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: cleanPatch }) });
+      return graphWithPatchedNodeValues(state.graph, nodeId, cleanPatch);
+    }
+    return api("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: cleanPatch }) });
+  }, mutationOptions);
 }
 
 function minimapBakeThumbnailPreview(node) {
   const wrap = document.createElement("div");
   wrap.className = "assetThumb minimapBakeThumb";
-  if (node.values.bakedImageUrl) {
+  const imageUrl = normalizeMinimapImageUrl(node.values.bakedImageUrl);
+  if (imageUrl) {
     const img = document.createElement("img");
-    img.src = node.values.bakedImageUrl;
+    img.src = imageUrl;
     img.alt = node.values.label || "Minimap preview";
+    img.addEventListener("error", function () {
+      wrap.innerHTML = "";
+      const icon = document.createElement("div");
+      icon.className = "assetThumbIcon";
+      icon.textContent = "MAP";
+      wrap.appendChild(icon);
+    });
     wrap.appendChild(img);
   } else {
     const icon = document.createElement("div");
@@ -5504,8 +9460,289 @@ function buildMinimapBakeInspectorBlock(node) {
   return wrap;
 }
 
-function resolveMinimapBakeBounds() {
-  return squareGroundBounds(state.viewportWorld?.ground || null);
+function squareBoundsFromExplicit(minX, maxX, minZ, maxZ) {
+  const left = Number(minX);
+  const right = Number(maxX);
+  const top = Number(minZ);
+  const bottom = Number(maxZ);
+  if (![left, right, top, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+  const centerX = (left + right) / 2;
+  const centerZ = (top + bottom) / 2;
+  const side = Math.max(right - left, bottom - top, 0.01);
+  return {
+    minX: centerX - side / 2,
+    maxX: centerX + side / 2,
+    minZ: centerZ - side / 2,
+    maxZ: centerZ + side / 2,
+    width: side,
+    depth: side
+  };
+}
+
+function minimapBakeBoundsFromGroundNode(ground) {
+  if (!ground) return null;
+  const values = ground.values || {};
+  const explicit = squareBoundsFromExplicit(values.minX, values.maxX, values.minZ, values.maxZ);
+  if (String(values.boundsMode || "") === "explicitBounds" && explicit) return explicit;
+  return squareGroundBounds({
+    width: Number(values.width) || 60,
+    depth: Number(values.depth) || 60
+  });
+}
+
+function minimapBakeBoundsFromZoneNode(zone) {
+  if (!zone) return null;
+  const values = zone.values || {};
+  const originX = Number(values.originX);
+  const originZ = Number(values.originZ);
+  const width = Number(values.width);
+  const depth = Number(values.depth);
+  if (![originX, originZ, width, depth].every(Number.isFinite) || width <= 0 || depth <= 0) return null;
+  return squareBoundsFromExplicit(originX, originX + width, originZ, originZ + depth);
+}
+
+function incomingNodeForPort(targetNode, portName) {
+  const edge = (state.graph.edges || []).find(function (candidate) {
+    return candidate.toNodeId === targetNode.id && candidate.toPort === portName;
+  });
+  return edge ? nodeById(edge.fromNodeId) : null;
+}
+
+function zoneRefFromZoneNode(zone) {
+  if (!zone) return "";
+  if (zone.type === "zone_definition") return String(zone.values?.zoneId || "").trim();
+  if (isZoneCanvasGroup(zone)) return zoneRefFromZoneNode(zoneDefinitionForGroup(zone.id));
+  return String(zone.values?.zoneRef || zone.values?.zoneId || "").trim();
+}
+
+function resolveMinimapBakeZoneRef(bakeNode = null) {
+  if (bakeNode?.type !== "minimap_bake") return "";
+  const directZoneRef = zoneRefFromZoneNode(incomingNodeForPort(bakeNode, "zone"));
+  if (directZoneRef) return directZoneRef;
+  const directGround = incomingNodeForPort(bakeNode, "ground");
+  const groundZoneRef = String(directGround?.values?.zoneRef || "").trim();
+  if (groundZoneRef) return groundZoneRef;
+  const parent = bakeNode.parentId ? nodeById(bakeNode.parentId) : null;
+  if (isZoneCanvasGroup(parent)) return zoneRefFromZoneNode(zoneDefinitionForGroup(parent.id));
+  return "";
+}
+
+function resolveMinimapBakeBounds(bakeNode = null) {
+  if (bakeNode?.type === "minimap_bake") {
+    const directGround = incomingNodeForPort(bakeNode, "ground");
+    const directZone = incomingNodeForPort(bakeNode, "zone");
+    const directGroundBounds = minimapBakeBoundsFromGroundNode(directGround);
+    if (directGroundBounds) return directGroundBounds;
+    const directZoneBounds = minimapBakeBoundsFromZoneNode(directZone);
+    if (directZoneBounds) return directZoneBounds;
+    const parent = bakeNode.parentId ? nodeById(bakeNode.parentId) : null;
+    if (isZoneCanvasGroup(parent)) {
+      const zoneGround = (state.graph.nodes || []).find(function (node) {
+        return node.parentId === parent.id && node.type === "ground_surface";
+      }) || null;
+      const zoneGroundBounds = minimapBakeBoundsFromGroundNode(zoneGround);
+      if (zoneGroundBounds) return zoneGroundBounds;
+      const zoneBounds = minimapBakeBoundsFromZoneNode(zoneDefinitionForGroup(parent.id));
+      if (zoneBounds) return zoneBounds;
+    }
+  }
+  const runtimeBounds = runtime && typeof runtime.getMinimapBakeBounds === "function"
+    ? runtime.getMinimapBakeBounds()
+    : null;
+  if (runtimeBounds) return runtimeBounds;
+  return squareGroundBounds(effectiveWorldGroundBounds(state.viewportWorld || null) || state.viewportWorld?.ground || null);
+}
+
+function resolveMinimapBakeDisplayBounds(bake = null) {
+  if (bake?.bounds || bake?.bakedBounds) return bake.bounds || bake.bakedBounds;
+  const node = bake?.nodeId ? nodeById(bake.nodeId) : null;
+  return resolveMinimapBakeBounds(node);
+}
+
+function isValidMinimapBounds(bounds) {
+  return bounds
+    && Number.isFinite(Number(bounds.minX))
+    && Number.isFinite(Number(bounds.maxX))
+    && Number.isFinite(Number(bounds.minZ))
+    && Number.isFinite(Number(bounds.maxZ))
+    && Number(bounds.maxX) > Number(bounds.minX)
+    && Number(bounds.maxZ) > Number(bounds.minZ);
+}
+
+function unionMinimapBounds(boundsList) {
+  const valid = (Array.isArray(boundsList) ? boundsList : []).filter(isValidMinimapBounds);
+  if (!valid.length) return null;
+  let minX = Number(valid[0].minX);
+  let maxX = Number(valid[0].maxX);
+  let minZ = Number(valid[0].minZ);
+  let maxZ = Number(valid[0].maxZ);
+  for (const bounds of valid.slice(1)) {
+    minX = Math.min(minX, Number(bounds.minX));
+    maxX = Math.max(maxX, Number(bounds.maxX));
+    minZ = Math.min(minZ, Number(bounds.minZ));
+    maxZ = Math.max(maxZ, Number(bounds.maxZ));
+  }
+  return { minX, maxX, minZ, maxZ, width: maxX - minX, depth: maxZ - minZ };
+}
+
+function resolveEditorMinimapCandidates(config) {
+  if (!config) return [];
+  const bakes = Array.isArray(state.viewportWorld?.minimap?.bakes) ? state.viewportWorld.minimap.bakes : [];
+  const graphBakes = Array.isArray(state.graph?.nodes)
+    ? state.graph.nodes.filter(function (node) {
+      return node?.type === "minimap_bake" && node.values;
+    }).map(function (node) {
+      return Object.assign({ id: node.id, nodeId: node.id }, node.values);
+    })
+    : [];
+  const candidates = graphBakes.concat(bakes.filter(function (candidate) {
+    return !graphBakes.some(function (bake) { return bake.nodeId === candidate.nodeId || bake.minimapId === candidate.minimapId; });
+  }));
+  const sourceId = String(config.sourceMinimapId || "").trim();
+  return candidates.filter(function (candidate) {
+    return candidate && candidate.enabled !== false && isValidMinimapBounds(resolveMinimapBakeDisplayBounds(candidate));
+  }).sort(function (left, right) {
+    const leftMatch = sourceId && String(left?.minimapId || "") === sourceId ? 0 : 1;
+    const rightMatch = sourceId && String(right?.minimapId || "") === sourceId ? 0 : 1;
+    return leftMatch - rightMatch;
+  });
+}
+
+function resolveEditorMinimapBake(config) {
+  return resolveEditorMinimapCandidates(config)[0] || null;
+}
+
+function zoneMinimapBoundsFromPackage(pkg) {
+  const bounds = pkg?.zone?.bounds || pkg?.bounds || null;
+  if (isValidMinimapBounds(bounds)) return bounds;
+  const ground = pkg?.ground || null;
+  if (ground) {
+    const groundBounds = squareGroundBounds(ground);
+    if (isValidMinimapBounds(groundBounds)) return groundBounds;
+  }
+  const zone = pkg?.zone || {};
+  const originX = Number(zone.originX);
+  const originZ = Number(zone.originZ);
+  const width = Number(zone.width);
+  const depth = Number(zone.depth);
+  if (![originX, originZ, width, depth].every(Number.isFinite) || width <= 0 || depth <= 0) return null;
+  return { minX: originX, maxX: originX + width, minZ: originZ, maxZ: originZ + depth, width: width, depth: depth };
+}
+
+function resolveEditorMinimapZoneRegions() {
+  const world = state.viewportWorld || {};
+  const regions = [];
+  const seen = new Set();
+  function addRegion(bounds, label, color) {
+    if (!isValidMinimapBounds(bounds)) return;
+    const key = [
+      Math.round(Number(bounds.minX) * 100) / 100,
+      Math.round(Number(bounds.maxX) * 100) / 100,
+      Math.round(Number(bounds.minZ) * 100) / 100,
+      Math.round(Number(bounds.maxZ) * 100) / 100
+    ].join(":");
+    if (seen.has(key)) return;
+    seen.add(key);
+    regions.push({
+      bounds: {
+        minX: Number(bounds.minX),
+        maxX: Number(bounds.maxX),
+        minZ: Number(bounds.minZ),
+        maxZ: Number(bounds.maxZ),
+        width: Number(bounds.maxX) - Number(bounds.minX),
+        depth: Number(bounds.maxZ) - Number(bounds.minZ)
+      },
+      label: label || "Zone",
+      color: color || "#2dd4bf"
+    });
+  }
+  const packages = Array.isArray(world.zones?.packages) ? world.zones.packages : [];
+  for (const pkg of packages) {
+    addRegion(zoneMinimapBoundsFromPackage(pkg), pkg?.zone?.displayName || pkg?.zoneId || pkg?.id || "Zone", "#2dd4bf");
+  }
+  if (world.zonePackage) {
+    addRegion(zoneMinimapBoundsFromPackage(world.zonePackage), world.zonePackage?.zone?.displayName || world.zonePackage?.zoneId || "Active zone", "#7bd4ff");
+  }
+  for (const ground of Array.isArray(world.zoneGrounds) ? world.zoneGrounds : []) {
+    addRegion(squareGroundBounds(ground), ground.zoneRef || ground.groundId || "Zone", "#2dd4bf");
+  }
+  const effective = effectiveWorldGroundBounds(world);
+  if (!regions.length && effective) addRegion(effective, "World", "#2dd4bf");
+  return regions;
+}
+
+function resolveEditorMinimapWorldBounds(config, bake = null) {
+  const boundsList = [];
+  for (const candidate of resolveEditorMinimapCandidates(config)) {
+    boundsList.push(resolveMinimapBakeDisplayBounds(candidate));
+  }
+  for (const region of resolveEditorMinimapZoneRegions()) boundsList.push(region.bounds);
+  const runtimeBounds = runtime && typeof runtime.getMinimapBakeBounds === "function"
+    ? runtime.getMinimapBakeBounds()
+    : null;
+  if (runtimeBounds) boundsList.push(runtimeBounds);
+  const effective = effectiveWorldGroundBounds(state.viewportWorld || null);
+  if (effective) boundsList.push(effective);
+  return unionMinimapBounds(boundsList) || resolveMinimapBakeDisplayBounds(bake) || resolveMinimapBakeBounds();
+}
+
+function intersectMinimapBounds(a, b) {
+  if (!isValidMinimapBounds(a) || !isValidMinimapBounds(b)) return null;
+  const minX = Math.max(Number(a.minX), Number(b.minX));
+  const maxX = Math.min(Number(a.maxX), Number(b.maxX));
+  const minZ = Math.max(Number(a.minZ), Number(b.minZ));
+  const maxZ = Math.min(Number(a.maxZ), Number(b.maxZ));
+  if (maxX <= minX || maxZ <= minZ) return null;
+  return { minX, maxX, minZ, maxZ };
+}
+
+function drawEditorMinimapRect(ctx, bounds, viewBounds, size, options = {}) {
+  const visible = intersectMinimapBounds(bounds, viewBounds);
+  if (!visible) return false;
+  const a = worldToMinimapPoint(visible.minX, visible.minZ, viewBounds, size, size);
+  const b = worldToMinimapPoint(visible.maxX, visible.maxZ, viewBounds, size, size);
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const w = Math.abs(b.x - a.x);
+  const h = Math.abs(b.y - a.y);
+  if (w <= 0 || h <= 0) return false;
+  ctx.save();
+  if (options.fill) {
+    ctx.globalAlpha = options.fillAlpha === undefined ? 1 : options.fillAlpha;
+    ctx.fillStyle = options.fill;
+    ctx.fillRect(x, y, w, h);
+  }
+  if (options.stroke) {
+    ctx.globalAlpha = options.strokeAlpha === undefined ? 1 : options.strokeAlpha;
+    ctx.strokeStyle = options.stroke;
+    ctx.lineWidth = options.lineWidth || 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+  }
+  ctx.restore();
+  return true;
+}
+
+function drawEditorMinimapBakeIntoView(ctx, image, bakeBounds, viewBounds, size) {
+  if (!ctx || !image || !isValidMinimapBounds(bakeBounds) || !isValidMinimapBounds(viewBounds) || !image.complete || !image.naturalWidth) return false;
+  const visible = intersectMinimapBounds(bakeBounds, viewBounds);
+  if (!visible) return false;
+  const imageWidth = image.naturalWidth || image.width || 1;
+  const imageHeight = image.naturalHeight || image.height || 1;
+  const sourceA = worldToMinimapPoint(visible.minX, visible.minZ, bakeBounds, imageWidth, imageHeight);
+  const sourceB = worldToMinimapPoint(visible.maxX, visible.maxZ, bakeBounds, imageWidth, imageHeight);
+  const destA = worldToMinimapPoint(visible.minX, visible.minZ, viewBounds, size, size);
+  const destB = worldToMinimapPoint(visible.maxX, visible.maxZ, viewBounds, size, size);
+  const sx = Math.min(sourceA.x, sourceB.x);
+  const sy = Math.min(sourceA.y, sourceB.y);
+  const sw = Math.abs(sourceB.x - sourceA.x);
+  const sh = Math.abs(sourceB.y - sourceA.y);
+  const dx = Math.min(destA.x, destB.x);
+  const dy = Math.min(destA.y, destB.y);
+  const dw = Math.abs(destB.x - destA.x);
+  const dh = Math.abs(destB.y - destA.y);
+  if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return false;
+  ctx.drawImage(image, sx, sy, sw, sh, dx, dy, dw, dh);
+  return true;
 }
 
 function computeMinimapWorldHash() {
@@ -5517,7 +9754,7 @@ function computeMinimapWorldHash() {
 async function bakeMinimapForNode(nodeId) {
   const node = nodeById(nodeId);
   if (!node || node.type !== "minimap_bake" || !runtime || state.minimapBakeBusy) return;
-  const bounds = resolveMinimapBakeBounds();
+  const bounds = resolveMinimapBakeBounds(node);
   if (!bounds) {
     state.minimapBakeMessage = "Kan geen minimap bakken: er is geen Ground Surface verbonden.";
     state.minimapBakeTone = "error";
@@ -5533,6 +9770,7 @@ async function bakeMinimapForNode(nodeId) {
       bounds: bounds,
       resolution: Number(node.values.resolution) || 1024,
       quality: Number(node.values.imageQuality) || 0.78,
+      zoneRef: resolveMinimapBakeZoneRef(node),
       hideEditorHelpers: node.values.hideEditorHelpers !== false,
       hideChunkDebugOverlay: node.values.hideEditorHelpers !== false,
       hideTransformControls: node.values.hideEditorHelpers !== false,
@@ -5572,31 +9810,60 @@ async function bakeMinimapForNode(nodeId) {
 
 const editorMinimapImageCache = { url: "", image: null };
 
+function normalizeMinimapImageUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return "";
+  if (/^(https?:)?\/\//i.test(value) || value.startsWith("/")) return value;
+  return "/" + value;
+}
+
 function loadedEditorMinimapImage(url) {
-  if (!url) return null;
-  if (editorMinimapImageCache.url === url && editorMinimapImageCache.image) return editorMinimapImageCache.image;
+  const normalizedUrl = normalizeMinimapImageUrl(url);
+  if (!normalizedUrl) return null;
+  if (editorMinimapImageCache.url === normalizedUrl && editorMinimapImageCache.image) return editorMinimapImageCache.image;
   const image = new Image();
-  image.addEventListener("load", function () { redrawEditorMinimap(); });
-  image.src = url;
-  editorMinimapImageCache.url = url;
+  image.addEventListener("load", function () { scheduleEditorMinimapRedraw(); });
+  image.src = normalizedUrl;
+  editorMinimapImageCache.url = normalizedUrl;
   editorMinimapImageCache.image = image;
   return image;
+}
+
+function editorMinimapDisplaySize(config) {
+  const stored = storedFloatingPanelState("editorMinimap");
+  if (stored) return Math.max(64, Math.round(Math.max(stored.width, stored.height)));
+  return Math.max(64, Number(config?.sizePx) || 180);
+}
+
+function editorMinimapUiScale(size) {
+  return clampNumber(Number(size) / 180, 0.24, 1.4);
+}
+
+function editorMinimapMarkerSize(size, baseSize) {
+  return Math.max(1.2, Number(baseSize) * editorMinimapUiScale(size));
+}
+
+function editorMinimapMarkerLineWidth(size) {
+  return Math.max(0.45, 1.35 * editorMinimapUiScale(size));
+}
+
+function editorMinimapLabelFontSize(size, baseSize) {
+  return Math.max(2.5, Number(baseSize) * editorMinimapUiScale(size));
+}
+
+function editorMinimapLabelMaxLength(size, baseLength) {
+  return Math.max(3, Math.round(Number(baseLength || 14) * clampNumber(Number(size) / 180, 0.25, 1)));
 }
 
 function applyEditorMinimapAnchor(config) {
   const root = el.editorMinimapRoot;
   if (!root) return;
-  root.style.top = "";
-  root.style.bottom = "";
-  root.style.left = "";
-  root.style.right = "";
-  const size = Math.max(64, Number(config.sizePx) || 180);
-  root.style.width = size + "px";
-  root.style.height = size + "px";
-  if (config.anchor === "top-left") { root.style.top = "12px"; root.style.left = "12px"; }
-  else if (config.anchor === "top-right") { root.style.top = "12px"; root.style.right = "12px"; }
-  else if (config.anchor === "bottom-left") { root.style.bottom = "12px"; root.style.left = "12px"; }
-  else { root.style.bottom = "12px"; root.style.right = "12px"; }
+  applyViewportFloatingSlotAnchor(root, "editorMinimap", config, {
+    resizeCorner: "top-left",
+    square: true,
+    minWidth: 64,
+    minHeight: 64
+  });
 }
 
 function ensureEditorMinimapView(config, groundBounds, cameraTarget) {
@@ -5626,17 +9893,26 @@ function ensureEditorMinimapInteractions() {
       state.editorMinimapUserOverride = true;
       redrawEditorMinimap();
     },
-    getGroundBounds: resolveMinimapBakeBounds,
-    getCanvasSize: function () { return Math.max(64, Number(state.viewportWorld?.minimap?.editor?.sizePx) || 180); },
+    getGroundBounds: function () {
+      const config = state.viewportWorld?.minimap?.editor || null;
+      return resolveEditorMinimapWorldBounds(config, resolveEditorMinimapBake(config));
+    },
+    getCanvasSize: function () { return editorMinimapDisplaySize(state.viewportWorld?.minimap?.editor || null); },
     getMinDistance: function () { return state.viewportWorld?.minimap?.editor?.minDistance || 20; },
-    getMaxDistance: function () { return state.viewportWorld?.minimap?.editor?.maxDistance || 1000; },
+    getMaxDistance: function () {
+      const config = state.viewportWorld?.minimap?.editor || null;
+      const configuredMax = state.viewportWorld?.minimap?.editor?.maxDistance || 1000;
+      const bounds = resolveEditorMinimapWorldBounds(config, resolveEditorMinimapBake(config));
+      const worldMax = bounds ? Math.max(Number(bounds.maxX) - Number(bounds.minX), Number(bounds.maxZ) - Number(bounds.minZ), 1) : 1;
+      return Math.max(configuredMax, worldMax);
+    },
     allowZoom: function () { return state.viewportWorld?.minimap?.editor?.allowZoom !== false; },
     allowPan: function () { return state.viewportWorld?.minimap?.editor?.allowPan !== false; },
     allowPinchZoom: function () { return state.viewportWorld?.minimap?.editor?.allowPinchZoom !== false; },
     onClick: function (worldX, worldZ) {
       const config = state.viewportWorld?.minimap?.editor;
       if (!config || config.clickToFocus === false || !runtime) return;
-      const bounds = resolveMinimapBakeBounds();
+      const bounds = resolveEditorMinimapWorldBounds(config, resolveEditorMinimapBake(config));
       const clampedX = bounds ? Math.max(bounds.minX, Math.min(bounds.maxX, worldX)) : worldX;
       const clampedZ = bounds ? Math.max(bounds.minZ, Math.min(bounds.maxZ, worldZ)) : worldZ;
       runtime.focusGroundPoint(clampedX, clampedZ);
@@ -5645,20 +9921,39 @@ function ensureEditorMinimapInteractions() {
   });
 }
 
+function scheduleEditorMinimapRedraw(delayMs = 80) {
+  if (editorMinimapRedrawTimer) return;
+  editorMinimapRedrawTimer = setTimeout(function () {
+    editorMinimapRedrawTimer = null;
+    redrawEditorMinimap();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
 function redrawEditorMinimap() {
   if (!el.editorMinimapRoot || !el.editorMinimapCanvas) return;
+  if (state.editorMinimapSuppressed) {
+    el.editorMinimapRoot.hidden = true;
+    return;
+  }
   const config = state.viewportWorld?.minimap?.editor || null;
   if (!config || config.enabled === false || !runtime) {
     el.editorMinimapRoot.hidden = true;
     return;
   }
   ensureEditorMinimapInteractions();
-  const bakes = Array.isArray(state.viewportWorld?.minimap?.bakes) ? state.viewportWorld.minimap.bakes : [];
-  const bake = bakes.find(function (candidate) { return candidate.minimapId === config.sourceMinimapId; }) || null;
+  const bake = resolveEditorMinimapBake(config);
   applyEditorMinimapAnchor(config);
   el.editorMinimapRoot.hidden = false;
+  ensureFloatingPanelControls(el.editorMinimapRoot, "editorMinimap", {
+    dragClassName: "editorMinimapDragHandle",
+    resizeCorner: "top-left",
+    square: true,
+    minWidth: 64,
+    minHeight: 64,
+    onEnd: function () { redrawEditorMinimap(); }
+  });
   const canvas = el.editorMinimapCanvas;
-  const size = Math.max(64, Number(config.sizePx) || 180);
+  const size = editorMinimapDisplaySize(config);
   // Backing store at devicePixelRatio, drawing math in logical px, for a sharp HiDPI minimap.
   const dpr = Math.max(1, Math.min(3, Number(window.devicePixelRatio) || 1));
   const backing = Math.round(size * dpr);
@@ -5671,12 +9966,14 @@ function redrawEditorMinimap() {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.clearRect(0, 0, size, size);
+  const uiScale = editorMinimapUiScale(size);
+  const markerLineWidth = editorMinimapMarkerLineWidth(size);
   ctx.fillStyle = "#0b131c";
   ctx.fillRect(0, 0, size, size);
-  const bounds = bake?.bounds || null;
+  const bounds = resolveEditorMinimapWorldBounds(config, bake);
   if (!bounds) {
     ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.font = "11px sans-serif";
+    ctx.font = Math.max(4, 11 * uiScale) + "px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("Geen Ground Surface", size / 2, size / 2);
     return;
@@ -5684,50 +9981,95 @@ function redrawEditorMinimap() {
   const snapshot = runtime.getMinimapMarkerSnapshot({
     includeLocalPlayer: false,
     includeRemotePlayers: false,
-    includeEntities: config.showModelEntities !== false,
+    includeEntities: config.showModelEntities !== false || config.showScatterInstances === true,
     includeInteractables: config.showInteractables !== false
   });
   const view = ensureEditorMinimapView(config, bounds, snapshot.cameraTarget);
-  if (bake?.bakedImageUrl) {
-    const image = loadedEditorMinimapImage(bake.bakedImageUrl);
-    if (image && image.complete && image.naturalWidth) {
-      const rect = minimapImageSourceRect(bounds, view, bake.bakedImageWidth || image.naturalWidth, bake.bakedImageHeight || image.naturalHeight);
-      if (rect) ctx.drawImage(image, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, size, size);
-    }
-  } else {
+  const viewBounds = minimapViewBounds(view);
+  let drewBakeImage = false;
+  const zoneRegions = resolveEditorMinimapZoneRegions();
+  for (const region of zoneRegions) {
+    drawEditorMinimapRect(ctx, region.bounds, viewBounds, size, {
+      fill: region.color,
+      fillAlpha: 0.14,
+      stroke: region.color,
+      strokeAlpha: 0.34,
+      lineWidth: Math.max(0.35, uiScale)
+    });
+  }
+  for (const candidate of resolveEditorMinimapCandidates(config)) {
+    if (!candidate?.bakedImageUrl) continue;
+    const candidateBounds = resolveMinimapBakeDisplayBounds(candidate);
+    const image = loadedEditorMinimapImage(candidate.bakedImageUrl);
+    if (drawEditorMinimapBakeIntoView(ctx, image, candidateBounds, viewBounds, size)) drewBakeImage = true;
+  }
+  if (!drewBakeImage) {
     ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.font = "11px sans-serif";
+    ctx.font = Math.max(4, 11 * uiScale) + "px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("Nog geen bake", size / 2, size / 2);
   }
-  const viewBounds = minimapViewBounds(view);
-  if (config.showModelEntities !== false) {
+  if (config.showModelEntities !== false || config.showScatterInstances === true) {
     for (const entity of snapshot.entities) {
+      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      if (isScatter && config.showScatterInstances === false) continue;
+      if (!isScatter && entity.kind !== "scatter" && config.showNpcEntities === false) continue;
       const point = resolveMinimapPoint(entity.x, entity.z, viewBounds, size, size, false);
       if (!point) continue;
-      drawDiamondMarker(ctx, point.x, point.y, 5, { fill: "#d59bff", stroke: "rgba(0,0,0,0.6)" });
-      if (config.showEntityNames !== false) drawMarkerLabel(ctx, entity.label, point.x, point.y, 9, 16);
+      drawDiamondMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 5), {
+        fill: isScatter ? "#7ccf6b" : "#d59bff",
+        stroke: "rgba(0,0,0,0.6)",
+        lineWidth: markerLineWidth
+      });
+      const showName = isScatter ? config.showScatterNames === true : config.showEntityNames !== false;
+      if (showName) {
+        drawMarkerLabel(
+          ctx,
+          entity.label,
+          point.x,
+          point.y,
+          editorMinimapLabelFontSize(size, 9),
+          editorMinimapLabelMaxLength(size, 16),
+          editorMinimapMarkerSize(size, 6),
+          2.5
+        );
+      }
     }
   }
   if (config.showInteractables !== false) {
     for (const item of snapshot.interactables) {
       const point = resolveMinimapPoint(item.x, item.z, viewBounds, size, size, false);
       if (!point) continue;
-      drawSquareMarker(ctx, point.x, point.y, 4, { fill: "#9be870", stroke: "rgba(0,0,0,0.6)" });
+      drawSquareMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 4), {
+        fill: "#9be870",
+        stroke: "rgba(0,0,0,0.6)",
+        lineWidth: markerLineWidth
+      });
     }
   }
   if (config.showPlayerSpawn !== false && state.viewportWorld?.spawn) {
     const spawn = state.viewportWorld.spawn;
     const point = resolveMinimapPoint(spawn.x, spawn.z, viewBounds, size, size, false);
-    if (point) drawCrossMarker(ctx, point.x, point.y, 6, { stroke: "#9be870" });
+    if (point) drawCrossMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 6), {
+      stroke: "#9be870",
+      lineWidth: markerLineWidth
+    });
   }
   if (config.showSelectedObject !== false && snapshot.selectedEntity) {
     const point = resolveMinimapPoint(snapshot.selectedEntity.x, snapshot.selectedEntity.z, viewBounds, size, size, false);
-    if (point) drawDiamondMarker(ctx, point.x, point.y, 7, { fill: "#ffe08a", stroke: "rgba(0,0,0,0.7)" });
+    if (point) drawDiamondMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 7), {
+      fill: "#ffe08a",
+      stroke: "rgba(0,0,0,0.7)",
+      lineWidth: markerLineWidth
+    });
   }
   if (config.showEditorCamera !== false) {
     const point = resolveMinimapPoint(snapshot.cameraTarget.x, snapshot.cameraTarget.z, viewBounds, size, size, false);
-    if (point) drawDotMarker(ctx, point.x, point.y, 6, { fill: "#7bd4ff", stroke: "rgba(0,0,0,0.6)" });
+    if (point) drawDotMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 6), {
+      fill: "#7bd4ff",
+      stroke: "rgba(0,0,0,0.6)",
+      lineWidth: markerLineWidth
+    });
   }
 }
 
@@ -5750,10 +10092,14 @@ async function deleteNode(nodeId) {
     return api("/api/editor/nodes/" + nodeId, { method: "DELETE" });
   }, {
     historyLabel: "Node verwijderd",
-    refreshViewport: true,
-    refreshValidation: true,
+    clearPendingEdge: true,
+    refreshViewport: false,
+    refreshValidation: false,
+    selectedNodeIds: [],
+    selectedEdgeIds: [],
     selectedNodeId: null,
     afterApply: function () {
+      invalidateDraftWorld();
       setStatus("Node verwijderd.", "success");
     }
   });
@@ -5783,7 +10129,11 @@ function renderEdgeList() {
     remove.type = "button";
     remove.textContent = "x";
     remove.title = "Verwijder verbinding";
-    remove.addEventListener("click", function () { deleteEdge(edge.id); });
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      void deleteEdge(edge.id);
+    });
     row.append(text, remove);
     el.edgeList.appendChild(row);
   }
@@ -5795,9 +10145,11 @@ async function deleteEdge(edgeId) {
   }, {
     historyLabel: "Verbinding verwijderd",
     clearPendingEdge: true,
-    refreshViewport: true,
-    refreshValidation: true,
+    refreshViewport: false,
+    refreshValidation: false,
+    selectedEdgeIds: [],
     afterApply: function () {
+      invalidateDraftWorld();
       setStatus("Verbinding verwijderd.", "success");
     }
   });
@@ -5916,9 +10268,10 @@ async function deleteSelectedNodes() {
     refreshGraph: true,
     refreshEdgeList: false,
     refreshInspector: true,
-    refreshValidation: true,
-    refreshViewport: true,
+    refreshValidation: false,
+    refreshViewport: false,
     afterApply: function () {
+      invalidateDraftWorld();
       clearSelection({ clearPendingEdge: true });
       setStatus("Selectie verwijderd.", "success");
     }
@@ -6185,18 +10538,103 @@ function renderAssets() {
 function buildAssetCard(asset) {
   const card = document.createElement("div");
   card.className = "assetCard";
+  card.dataset.assetId = asset.id;
+  if (state.mobileSelectedAssetId === asset.id) card.classList.add("selected");
   card.draggable = asset.assetType === "model";
   const animationNames = animationClipsForAsset(asset).map(function (entry) { return entry.name; });
   const titleParts = [asset.name, asset.assetType, asset.category];
   if (asset.assetType === "model" && animationNames.length) titleParts.push(animationNames.join(", "));
   card.title = titleParts.filter(Boolean).join(" · ");
-  card.addEventListener("click", function () {
-    if (asset.assetType !== "model") return;
-    placeModel(asset.id, { x: 0, y: 0, z: 0 });
-  });
+  function placeAtCameraCenter() {
+    // Place immediately at the camera's ground position and stay on whichever tab/pane
+    // you're already on (incl. "All") - only jump to the dedicated 3D tab if the
+    // viewport isn't visible anywhere yet, so you can actually see the result.
+    void placeModel(asset.id, editorCameraCenterModelPosition());
+    if (!isViewportPaneVisible()) setMobilePanel("viewport");
+  }
   card.addEventListener("dragstart", function (event) {
     event.dataTransfer.setData("text/gk-asset", asset.id);
   });
+  let dragHandle = null;
+  if (asset.assetType === "model") {
+    dragHandle = document.createElement("button");
+    dragHandle.type = "button";
+    dragHandle.className = "assetDragHandle";
+    dragHandle.draggable = false;
+    dragHandle.textContent = "✥";
+    dragHandle.title = "Sleep naar de 3D-viewport";
+    dragHandle.setAttribute("aria-label", "Sleep naar de 3D-viewport");
+    // A touchmove that starts directly on the scrollable card can lose the race to the
+    // browser's own native scroll of the asset grid - by the time our pointermove handler
+    // below decides "this is a drag, not a scroll", the browser may already have committed
+    // to scrolling and stopped listening. touch-action: none on this dedicated handle (not
+    // the whole card) means a touch starting *here* is never eligible for native scroll in
+    // the first place, so there's no race to lose - the rest of the card stays scrollable.
+    dragHandle.addEventListener("dragstart", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    // Mouse: a plain click on the handle (no native drag involved) places at the camera,
+    // same as touch's "pressed and released without dragging" case below.
+    dragHandle.addEventListener("click", function (event) {
+      event.stopPropagation();
+      placeAtCameraCenter();
+    });
+    dragHandle.addEventListener("pointerdown", function (event) {
+      if (event.pointerType !== "touch") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const pointerId = event.pointerId;
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const ghost = document.createElement("div");
+      ghost.className = "assetDragGhost";
+      if (asset.thumbnailPath) {
+        const img = document.createElement("img");
+        img.src = asset.thumbnailPath;
+        ghost.appendChild(img);
+      } else {
+        ghost.textContent = asset.name;
+      }
+      document.body.appendChild(ghost);
+      function positionGhost(clientX, clientY) {
+        ghost.style.left = clientX + "px";
+        ghost.style.top = clientY + "px";
+      }
+      function overViewport(clientX, clientY) {
+        if (!el.viewportCanvas || !isViewportPaneVisible()) return false;
+        return elementContainsPoint(el.viewportCanvas, clientX, clientY);
+      }
+      positionGhost(event.clientX, event.clientY);
+      function onMove(moveEvent) {
+        if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
+        positionGhost(moveEvent.clientX, moveEvent.clientY);
+        if (el.viewportCanvas) el.viewportCanvas.classList.toggle("dropHint", overViewport(moveEvent.clientX, moveEvent.clientY));
+      }
+      function finish(finalEvent, cancelled) {
+        window.removeEventListener("pointermove", onMove, true);
+        window.removeEventListener("pointerup", onUp, true);
+        window.removeEventListener("pointercancel", onCancel, true);
+        ghost.remove();
+        if (el.viewportCanvas) el.viewportCanvas.classList.remove("dropHint");
+        if (cancelled) return;
+        if (overViewport(finalEvent.clientX, finalEvent.clientY) && runtime && typeof runtime.screenToGround === "function") {
+          const ground = runtime.screenToGround(finalEvent.clientX, finalEvent.clientY) || editorCameraCenterModelPosition();
+          void placeModel(asset.id, ground);
+        } else if (Math.hypot(finalEvent.clientX - startX, finalEvent.clientY - startY) < 10) {
+          // Pressed and released the handle in place, without really dragging - same
+          // intent as a mouse click on it.
+          placeAtCameraCenter();
+        }
+      }
+      function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent, false); }
+      function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent, true); }
+      window.addEventListener("pointermove", onMove, true);
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onCancel, true);
+    });
+  }
   const thumb = document.createElement("div");
   thumb.className = "assetThumb";
   if (asset.thumbnailPath) {
@@ -6257,32 +10695,79 @@ function buildAssetCard(asset) {
     openAssetManageOverlay(asset.id);
   });
   card.appendChild(menu);
+  if (dragHandle) card.appendChild(dragHandle);
   return card;
+}
+
+function editorCameraCenterModelPosition() {
+  const point = editorCameraGroundPoint();
+  if (point) return point;
+  const fallback = viewportCenterWorldValues("model_entity");
+  const x = Number(fallback.x);
+  const z = Number(fallback.z);
+  return {
+    x: Number.isFinite(x) ? x : 0,
+    y: terrainGroundY(),
+    z: Number.isFinite(z) ? z : 0
+  };
 }
 
 async function placeModel(assetId, position) {
   const startedAt = performance.now();
+  // No zone open in the Nodes graph to place into - falling back straight to root put
+  // every drag-dropped asset there regardless of where in the world it visually landed.
+  // Prefer whichever zone's own bounds actually contain the drop position instead.
+  const fallbackZone = state.currentGroupId ? null : zoneCanvasGroupContainingPoint(position?.x, position?.z);
+  const requestedParentId = state.currentGroupId || fallbackZone?.id || null;
+  let createdNodeId = null;
   try {
     await applyGraphMutation(function () {
       return api("/api/editor/place-model-asset", {
         method: "POST",
-        body: JSON.stringify({ assetId: assetId, position: position, parentId: state.currentGroupId })
+        body: JSON.stringify({ assetId: assetId, position: position, parentId: requestedParentId })
       });
     }, {
       historyLabel: "Model geplaatst",
       refreshViewport: true,
       refreshValidation: true,
       afterApply: function (_, result) {
-        if (result?.nodeId) selectNode(result.nodeId, true);
+        createdNodeId = result?.nodeId || null;
+        if (createdNodeId) selectNode(createdNodeId, true);
         setStatus("Model geplaatst.", "success");
       }
     });
+    if (createdNodeId && isZoneCanvasGroup(nodeById(requestedParentId))) {
+      await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
+    }
   } finally {
     logTiming("placeModel", startedAt, "asset=" + assetId);
   }
 }
 
 el.assetSearch.addEventListener("input", function () { state.assetSearch = el.assetSearch.value; renderAssets(); });
+if (el.nodeLibrarySearch) el.nodeLibrarySearch.addEventListener("input", renderNodeLibrary);
+if (el.assetGrid) {
+  // Extra defense alongside the -webkit-touch-callout CSS on .assetCard - suppresses the
+  // native context menu even if a browser's touch-and-hold-to-right-click conversion
+  // (see buildAssetCard's touch pointerdown handling) still fires it.
+  el.assetGrid.addEventListener("contextmenu", function (event) { event.preventDefault(); });
+}
+if (el.assetControlsToggle && el.assetControls) {
+  el.assetControlsToggle.addEventListener("click", function (event) {
+    event.stopPropagation();
+    const nextOpen = el.assetControls.hidden;
+    el.assetControls.hidden = !nextOpen;
+    el.assetControlsToggle.classList.toggle("active", nextOpen);
+    el.assetControlsToggle.setAttribute("aria-expanded", String(nextOpen));
+  });
+  document.addEventListener("click", function (event) {
+    if (el.assetControls.hidden) return;
+    if (el.assetControls.contains(event.target) || el.assetControlsToggle.contains(event.target)) return;
+    el.assetControls.hidden = true;
+    el.assetControlsToggle.classList.remove("active");
+    el.assetControlsToggle.setAttribute("aria-expanded", "false");
+  });
+}
 el.assetSort.addEventListener("change", function () { state.assetSort = el.assetSort.value; renderAssets(); });
 el.assetFilter.addEventListener("change", function () { state.assetFilter = el.assetFilter.value; renderAssets(); });
 if (el.assetCardSize) {
@@ -6487,6 +10972,51 @@ async function uploadDroppedAssets(files) {
   }
 }
 
+function handleViewportAssetPlacementPointerDown(event) {
+  if (!state.mobileSelectedAssetId || !runtime || !terrainCanvasTarget(event)) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  if (event.pointerType === "touch" && viewportTouchEditSuppress) return;
+  if (runtimeTransformActive() || terrainHasActiveSession() || scatterHasActiveSession()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  viewportAssetPointer = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY
+  };
+  terrainRememberPointer(event);
+}
+
+function handleViewportAssetPlacementPointerEnd(event) {
+  if (!viewportAssetPointer || event.pointerId !== viewportAssetPointer.pointerId) return;
+  if (updateViewportTouchEditState(event)) {
+    cancelViewportTouchEditSessionsForPan();
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  const start = viewportAssetPointer;
+  viewportAssetPointer = null;
+  if (event.type === "pointercancel") return;
+  const moved = Math.hypot(event.clientX - start.startX, event.clientY - start.startY);
+  if (moved > 16) {
+    setStatus("Sleep geannuleerd; tik kort in 3D om het model te plaatsen.", "");
+    return;
+  }
+  const assetId = state.mobileSelectedAssetId;
+  const ground = runtime && typeof runtime.screenToGround === "function"
+    ? runtime.screenToGround(event.clientX, event.clientY)
+    : null;
+  if (!assetId || !ground || !Number.isFinite(ground.x) || !Number.isFinite(ground.z)) {
+    setStatus("Geen ground hit om model te plaatsen.", "error");
+    return;
+  }
+  setMobileSelectedAsset(null);
+  void placeModel(assetId, { x: ground.x, y: Number(ground.y) || 0, z: ground.z });
+}
+
 // Drag asset to viewport to place at clicked ground position.
 if (el.assetColumn) {
   el.assetColumn.addEventListener("dragenter", function (event) {
@@ -6509,6 +11039,12 @@ if (el.assetColumn) {
   el.assetColumn.addEventListener("drop", function (event) {
     event.preventDefault();
     hideAssetDropOverlay();
+    // Unlike dragenter/dragover above, this had no isFileDragEvent() guard - dropping
+    // anything else onto the asset browser (an asset card's own "text/gk-asset" drag, a
+    // stray native image drag, ...) fell through into uploadDroppedAssets regardless.
+    // uploadDroppedAssets no-ops on an empty file list, but there's no reason to rely on
+    // that alone when this is never meant to run for a non-file drop in the first place.
+    if (!isFileDragEvent(event)) return;
     uploadDroppedAssets(event.dataTransfer && event.dataTransfer.files);
   });
 }
@@ -6527,6 +11063,9 @@ el.viewportCanvas.addEventListener("drop", function (event) {
   const ground = runtime.screenToGround(event.clientX, event.clientY) || { x: 0, y: 0, z: 0 };
   placeModel(assetId, ground);
 });
+el.viewportCanvas.addEventListener("pointerdown", handleViewportAssetPlacementPointerDown, true);
+window.addEventListener("pointerup", handleViewportAssetPlacementPointerEnd, true);
+window.addEventListener("pointercancel", handleViewportAssetPlacementPointerEnd, true);
 
 // ---------- Viewport + validation ----------
 function applyViewportWorld(world) {
@@ -6601,18 +11140,24 @@ async function refreshValidation() {
 // ---------- Save / publish / logout ----------
 el.saveDraftButton.addEventListener("click", saveDraft);
 el.publishButton.addEventListener("click", publish);
+if (el.undoButton) el.undoButton.addEventListener("click", undoGraphMutation);
+if (el.redoButton) el.redoButton.addEventListener("click", redoGraphMutation);
 el.logoutButton.addEventListener("click", async function () {
   await api("/api/auth/logout", { method: "POST" }).catch(function () {});
   window.location.href = "/login/";
 });
+window.addEventListener("pagehide", function () {
+  commitActiveEditorControl();
+  if (runtime && typeof runtime.flushEditorCameraSave === "function") runtime.flushEditorCameraSave();
+});
 
 async function saveDraft() {
   try {
-    await graphMutationQueue;
-    const result = await api("/api/editor/save-draft", { method: "POST" });
-    state.unsaved = 0;
-    renderUnsaved();
-    if (result.world) applyViewportWorld(result.world);
+    await flushPendingEditorWrites();
+    await apiOk("/api/editor/save-draft", { method: "POST" });
+    clearUnsaved();
+    state.viewportDirty = false;
+    clearViewportRefreshTimer();
     setStatus("Draft opgeslagen.", "success");
   } catch (error) {
     setStatus(error.message, "error");
@@ -6621,11 +11166,11 @@ async function saveDraft() {
 
 async function publish() {
   try {
-    await graphMutationQueue;
-    const result = await api("/api/editor/publish", { method: "POST" });
-    state.unsaved = 0;
-    renderUnsaved();
-    if (result.world) applyViewportWorld(result.world);
+    await flushPendingEditorWrites();
+    await apiOk("/api/editor/publish", { method: "POST" });
+    clearUnsaved();
+    state.viewportDirty = false;
+    clearViewportRefreshTimer();
     setStatus("Gepubliceerd naar de game.", "success");
   } catch (error) {
     setStatus(error.message, "error");
@@ -6637,8 +11182,96 @@ function terrainCanvasTarget(event) {
   return Boolean(el.viewportCanvas) && event && event.target === el.viewportCanvas;
 }
 
+function captureViewportEditPointer(pointerId) {
+  if (!el.viewportCanvas || pointerId === null || pointerId === undefined) return;
+  try { el.viewportCanvas.setPointerCapture?.(pointerId); } catch {}
+}
+
+function releaseViewportEditPointer(pointerId) {
+  if (!el.viewportCanvas || pointerId === null || pointerId === undefined) return;
+  try {
+    if (!el.viewportCanvas.hasPointerCapture || el.viewportCanvas.hasPointerCapture(pointerId)) {
+      el.viewportCanvas.releasePointerCapture?.(pointerId);
+    }
+  } catch {}
+}
+
+function suppressNextViewportRuntimeClick() {
+  suppressViewportRuntimeClickUntil = Date.now() + 5000;
+}
+
+function consumeSuppressedViewportRuntimeClick(event) {
+  if (Date.now() > suppressViewportRuntimeClickUntil) return;
+  suppressViewportRuntimeClickUntil = 0;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+}
+
+el.viewportCanvas.addEventListener("click", consumeSuppressedViewportRuntimeClick, true);
+
+function terrainPointerWithinViewport(event) {
+  if (!event || !el.viewportCanvas) return false;
+  const rect = el.viewportCanvas.getBoundingClientRect();
+  const x = Number(event.clientX);
+  const y = Number(event.clientY);
+  return Number.isFinite(x) && Number.isFinite(y)
+    && x >= rect.left && x <= rect.right
+    && y >= rect.top && y <= rect.bottom;
+}
+
+function syncViewportTouchPointer(event) {
+  if (runtime && typeof runtime.trackViewportTouchPointer === "function") {
+    runtime.trackViewportTouchPointer(event);
+  }
+}
+
+function cancelViewportTouchEditSessionsForPan() {
+  clearPointLongPress();
+  clearTouchGrabConfirm();
+  clearTouchEmptyDeselectSession();
+  viewportAssetPointer = null;
+  // Same reasoning as editorContextMenuHandler/editorPointerDownCaptureHandler in the
+  // runtime: this fires whenever a second touch makes updateViewportTouchEditState think
+  // a pan/pinch is starting, which used to cancel a runtime transform unconditionally -
+  // including a toolbar-button-started Rotate/Scale whose first driving touch hasn't
+  // produced any real preview yet, long before a second finger is even involved.
+  const transformDebug = runtimeTransformDebugState();
+  if (runtimeTransformActive() && (transformDebug?.previews || 0) > 0) cancelRuntimeTransform();
+  if (scatterHasActiveSession() && state.scatterTool.dragPointerId !== null) scatterCancelActiveSession();
+  if (terrainHasActiveSession() && state.terrainTool.dragPointerId !== null) terrainCancelActiveSession();
+}
+
+function clearViewportTouchEditState() {
+  viewportTouchEditPointers.clear();
+  viewportTouchEditSuppress = false;
+  viewportAssetPointer = null;
+  clearTouchEmptyDeselectSession();
+}
+
+function updateViewportTouchEditState(event) {
+  if (!event || event.pointerType !== "touch" || event.pointerId === undefined) return false;
+  const pointerId = event.pointerId;
+  if (event.type === "pointerdown") {
+    if (!terrainCanvasTarget(event)) return viewportTouchEditSuppress;
+    viewportTouchEditPointers.add(pointerId);
+    syncViewportTouchPointer(event);
+    if (viewportTouchEditPointers.size > 1) viewportTouchEditSuppress = true;
+    return viewportTouchEditSuppress;
+  }
+  if (!viewportTouchEditPointers.has(pointerId)) return viewportTouchEditSuppress;
+  const wasSuppressed = viewportTouchEditSuppress;
+  syncViewportTouchPointer(event);
+  if (event.type === "pointerup" || event.type === "pointercancel") {
+    viewportTouchEditPointers.delete(pointerId);
+    if (viewportTouchEditPointers.size === 0) viewportTouchEditSuppress = false;
+  }
+  return wasSuppressed || viewportTouchEditSuppress;
+}
+
 function terrainRememberPointer(event) {
   if (!event) return;
+  if (!terrainPointerWithinViewport(event)) return;
   terrainLastPointer = {
     clientX: Number(event.clientX) || 0,
     clientY: Number(event.clientY) || 0,
@@ -6657,20 +11290,109 @@ function terrainGroundPointFromEvent(event) {
   return terrainGroundPointFromClient(event.clientX, event.clientY);
 }
 
+function pointLinePickRadius(event) {
+  if (event?.pointerType === "touch") return 42;
+  if (event?.pointerType === "pen") return 30;
+  return 18;
+}
+
+function distanceSqToScreenSegment(px, py, a, b) {
+  const ax = Number(a?.x);
+  const ay = Number(a?.y);
+  const bx = Number(b?.x);
+  const by = Number(b?.y);
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return Infinity;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = (dx * dx) + (dy * dy);
+  const t = lenSq > 0
+    ? Math.max(0, Math.min(1, (((px - ax) * dx) + ((py - ay) * dy)) / lenSq))
+    : 0;
+  const cx = ax + (dx * t);
+  const cy = ay + (dy * t);
+  const ox = px - cx;
+  const oy = py - cy;
+  return (ox * ox) + (oy * oy);
+}
+
+function pointLineInsertHitFromEvent(points, yForPoint, closed, event) {
+  if (!runtime || typeof runtime.worldToScreen !== "function") return null;
+  if (!Array.isArray(points) || points.length < 2 || !event) return null;
+  const clientX = Number(event.clientX);
+  const clientY = Number(event.clientY);
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+  const screens = points.map(function (point, index) {
+    const x = Number(point?.x);
+    const z = Number(point?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    const y = Number(yForPoint(point, index));
+    return runtime.worldToScreen({ x: x, y: Number.isFinite(y) ? y : 0, z: z });
+  });
+  const segmentCount = closed && points.length >= 3 ? points.length : points.length - 1;
+  const radius = pointLinePickRadius(event);
+  let best = null;
+  let bestDistanceSq = radius * radius;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    const a = screens[index];
+    const b = screens[nextIndex];
+    if (!a || !b) continue;
+    const distanceSq = distanceSqToScreenSegment(clientX, clientY, a, b);
+    if (distanceSq <= bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      best = {
+        pointIndex: index,
+        insertIndex: index + 1,
+        nextPointIndex: nextIndex,
+        distanceSq: distanceSq
+      };
+    }
+  }
+  return best;
+}
+
+function terrainLineInsertHitFromEvent(node, event) {
+  const points = terrainNodePoints(node);
+  return pointLineInsertHitFromEvent(
+    points,
+    function (point) {
+      return node?.type === "walkable_surface"
+        ? terrainPointHeight(point, terrainGroundY())
+        : terrainGroundY();
+    },
+    terrainNodeCapabilities(node).closedLoop,
+    event
+  );
+}
+
+function scatterLineInsertHitFromEvent(node, event) {
+  return pointLineInsertHitFromEvent(
+    scatterNodePoints(node),
+    function () { return terrainGroundY(); },
+    true,
+    event
+  );
+}
+
+function terrainHandlePickRadius(event) {
+  if (event?.pointerType === "touch") return 34;
+  if (event?.pointerType === "pen") return 24;
+  return 0;
+}
+
 function terrainHandleFromEvent(event) {
   if (!runtime || typeof runtime.pickTerrainEditorHandle !== "function") return null;
-  return runtime.pickTerrainEditorHandle(event.clientX, event.clientY);
+  return runtime.pickTerrainEditorHandle(event.clientX, event.clientY, terrainHandlePickRadius(event));
 }
 
 function scatterHandleFromEvent(event) {
   if (!runtime || typeof runtime.pickScatterEditorHandle !== "function") return null;
-  return runtime.pickScatterEditorHandle(event.clientX, event.clientY);
+  return runtime.pickScatterEditorHandle(event.clientX, event.clientY, terrainHandlePickRadius(event));
 }
 
 function terrainRenderOverlayPreview() {
-  if (!runtime || typeof runtime.setTerrainEditorOverlay !== "function") return;
   const overlay = terrainOverlayState();
-  if (overlay) runtime.setTerrainEditorOverlay(overlay);
+  if (overlay) pushTerrainOverlay(overlay);
 }
 
 function scatterRenderOverlayPreview() {
@@ -6682,6 +11404,19 @@ function scatterRenderOverlayPreview() {
 
 function terrainFinishWithRender() {
   renderViewportControls();
+}
+
+// Generic fallback for any node type that stores a plain world-space x/z (optionally
+// y) position but has no runtime mesh to select/frame - Location Anchor, Player Spawn,
+// and anything else with coordinate fields, present or future, without hardcoding types.
+function nodeCoordinatePoint(node) {
+  const fields = state.nodeTypes?.[node?.type]?.fields;
+  if (!fields || !fields.x || !fields.z) return null;
+  const x = Number(node.values?.x);
+  const z = Number(node.values?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const y = fields.y ? Number(node.values?.y) : NaN;
+  return { x: x, y: Number.isFinite(y) ? y : terrainGroundY(), z: z };
 }
 
 function focusTerrainOrSelected() {
@@ -6708,56 +11443,48 @@ function focusTerrainOrSelected() {
     return;
   }
   const node = selectedTerrainNode();
-  if (!node) {
-    if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-    return;
-  }
-  const capabilities = terrainNodeCapabilities(node);
-  const groundY = terrainGroundY();
-  if (capabilities.walkableSurface || capabilities.polygonEditable || capabilities.pointEditing) {
-    const points = terrainNodePoints(node);
-    if (!points.length) {
-      if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-      return;
-    }
-    const selectedIdx = state.terrainTool.selectedPointIndex;
-    if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
-      const p = points[selectedIdx];
-      if (typeof runtime.frameWorldPoints === "function") {
-        runtime.frameWorldPoints([{
-          x: p.x,
-          y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
-          z: p.z
-        }]);
+  if (node) {
+    const capabilities = terrainNodeCapabilities(node);
+    const groundY = terrainGroundY();
+    if (capabilities.walkableSurface || capabilities.polygonEditable || capabilities.pointEditing) {
+      const points = terrainNodePoints(node);
+      if (points.length) {
+        const selectedIdx = state.terrainTool.selectedPointIndex;
+        if (Number.isInteger(selectedIdx) && selectedIdx >= 0 && selectedIdx < points.length) {
+          const p = points[selectedIdx];
+          if (typeof runtime.frameWorldPoints === "function") {
+            runtime.frameWorldPoints([{
+              x: p.x,
+              y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+              z: p.z
+            }]);
+          }
+          return;
+        }
+        const positions = points.map(function (p) {
+          return {
+            x: p.x,
+            y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
+            z: p.z
+          };
+        });
+        if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
+        return;
       }
+    }
+  }
+  const selectedNode = node || nodeById(state.selectedNodeId);
+  if (selectedNode) {
+    const focused = typeof runtime.focusSelected === "function" ? runtime.focusSelected() : false;
+    if (focused) return;
+    const point = viewportSelectablePoint(selectedNode);
+    if (point && typeof runtime.frameWorldPoints === "function") {
+      runtime.frameWorldPoints([point]);
       return;
     }
-    const positions = points.map(function (p) {
-      return {
-        x: p.x,
-        y: node.type === "walkable_surface" ? terrainPointHeight(p, groundY) : groundY,
-        z: p.z
-      };
-    });
-    if (typeof runtime.frameWorldPoints === "function") runtime.frameWorldPoints(positions);
     return;
   }
   if (typeof runtime.focusSelected === "function") runtime.focusSelected();
-}
-
-function setTerrainToolMode(mode) {
-  const node = selectedTerrainNode();
-  if (!node) return;
-  const capabilities = terrainNodeCapabilities(node);
-  const nextMode = terrainModeAllowed(mode, capabilities) ? mode : "select";
-  state.terrainTool.mode = nextMode;
-  if (nextMode === "select") {
-    state.terrainTool.axisConstraint = null;
-    if (terrainHasActiveSession()) terrainClearDragState();
-  } else if (terrainHasActiveSession() && state.terrainTool.dragNodeId !== node.id) {
-    terrainClearDragState();
-  }
-  terrainFinishWithRender();
 }
 
 function setTerrainActiveChannel(channel) {
@@ -6765,15 +11492,20 @@ function setTerrainActiveChannel(channel) {
   terrainFinishWithRender();
 }
 
-function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
+function terrainBeginExtrudeSession(node, groundPoint, pointerId, options = {}) {
   const points = terrainNodePoints(node);
-  const pointIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
-    ? state.terrainTool.selectedPointIndex
-    : (state.terrainTool.selectedPointIndices.length
-      ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
-      : null);
+  const explicitPointIndex = Number.isInteger(options.pointIndex) ? options.pointIndex : null;
+  const explicitInsertIndex = Number.isInteger(options.insertIndex) ? options.insertIndex : null;
+  let pointIndex = explicitPointIndex;
+  if (!Number.isInteger(pointIndex)) {
+    pointIndex = Number.isInteger(state.terrainTool.selectedPointIndex)
+      ? state.terrainTool.selectedPointIndex
+      : (state.terrainTool.selectedPointIndices.length
+        ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
+        : (points.length ? points.length - 1 : null));
+  }
   if (!Number.isInteger(pointIndex) || pointIndex < 0 || pointIndex >= points.length) {
-    setStatus("Select a point first.", "error");
+    setStatus("Minimaal 1 punt nodig.", "error");
     return false;
   }
   const capabilities = terrainNodeCapabilities(node);
@@ -6781,14 +11513,17 @@ function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
     setStatus("Extrude is not available here.", "error");
     return false;
   }
-  const insertIndex = pointIndex <= 0
-    ? 0
-    : pointIndex >= points.length - 1
-      ? points.length
-      : pointIndex + 1;
+  const insertIndex = Number.isInteger(explicitInsertIndex)
+    ? Math.max(0, Math.min(points.length, explicitInsertIndex))
+    : pointIndex <= 0
+      ? 0
+      : pointIndex >= points.length - 1
+        ? points.length
+        : pointIndex + 1;
   const startGround = groundPoint || (terrainLastPointer
     ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
     : null);
+  const axisConstraint = state.terrainTool.axisConstraint;
   terrainClearDragState();
   state.terrainTool.mode = "extrude";
   state.terrainTool.selectedPointIndex = pointIndex;
@@ -6809,11 +11544,153 @@ function terrainBeginExtrudeSession(node, groundPoint, pointerId) {
     ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
     : null;
   state.terrainTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.terrainTool.dragMoved = false;
-  state.terrainTool.axisConstraint = null;
+  state.terrainTool.axisConstraint = axisConstraint;
   terrainRenderOverlayPreview();
   terrainFinishWithRender();
   return true;
+}
+
+// Rotate/scale the current selection as a group: shift-selected points rotate/scale
+// around their own centroid, a single selected point is a no-op pivot-of-one, and no
+// selection (the center handle) rotates/scales every point in the shape together.
+function terrainGroupTransformIndices(node, points) {
+  if (state.terrainTool.selectedPointIndices.length > 1) return state.terrainTool.selectedPointIndices.slice();
+  if (Number.isInteger(state.terrainTool.selectedPointIndex)) return [state.terrainTool.selectedPointIndex];
+  return points.map(function (_, index) { return index; });
+}
+
+function terrainBeginGroupTransformSession(node, groundPoint, pointerId, kind) {
+  const capabilities = terrainNodeCapabilities(node);
+  if (kind === "rotate" && !capabilities.allowRotate) {
+    setStatus("Rotate is not available here.", "error");
+    return false;
+  }
+  if (kind === "geoscale" && !capabilities.allowGeoScale) {
+    setStatus("Scale is not available here.", "error");
+    return false;
+  }
+  const points = terrainNodePoints(node);
+  const targetIndices = terrainGroupTransformIndices(node, points);
+  if (!targetIndices.length) {
+    setStatus("Nothing to transform.", "error");
+    return false;
+  }
+  const pivot = scatterPointCenter(targetIndices.map(function (index) { return points[index]; }).filter(Boolean));
+  const startGround = groundPoint || terrainLastPointerGroundPoint() || pointTransformStartGroundFromPivot(pivot);
+  if (!startGround) {
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const selectedPointIndex = state.terrainTool.selectedPointIndex;
+  const selectedPointIndices = state.terrainTool.selectedPointIndices.slice();
+  const selectedHandleRole = state.terrainTool.selectedHandleRole;
+  const axisConstraint = state.terrainTool.axisConstraint;
+  terrainClearDragState();
+  state.terrainTool.mode = kind;
+  state.terrainTool.selectedPointIndex = selectedPointIndex;
+  state.terrainTool.selectedPointIndices = selectedPointIndices;
+  state.terrainTool.selectedHandleRole = selectedHandleRole;
+  state.terrainTool.dragNodeId = node.id;
+  state.terrainTool.draggingPointIndex = selectedPointIndex;
+  state.terrainTool.draggingHandleRole = kind;
+  state.terrainTool.dragTransformIndices = targetIndices;
+  state.terrainTool.dragStartPoints = terrainClonePoints(points);
+  state.terrainTool.dragStartGround = { x: startGround.x, z: startGround.z };
+  state.terrainTool.dragCurrentGround = { x: startGround.x, z: startGround.z };
+  state.terrainTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
+  state.terrainTool.dragMoved = false;
+  state.terrainTool.dragStartPivot = pivot;
+  state.terrainTool.dragStartAngle = Math.atan2(startGround.z - pivot.z, startGround.x - pivot.x);
+  state.terrainTool.dragStartDistance = Math.max(0.0001, Math.hypot(startGround.x - pivot.x, startGround.z - pivot.z));
+  state.terrainTool.axisConstraint = axisConstraint;
+  terrainRenderOverlayPreview();
+  terrainFinishWithRender();
+  return true;
+}
+
+function terrainPreviewGroupTransform(startPoints, groundPoint, kind) {
+  const nextPoints = terrainClonePoints(startPoints);
+  const pivot = state.terrainTool.dragStartPivot;
+  const indices = state.terrainTool.dragTransformIndices || [];
+  if (!pivot || !groundPoint || !indices.length) return nextPoints;
+  const subset = indices.map(function (index) { return nextPoints[index]; }).filter(Boolean);
+  let transformed;
+  if (kind === "rotate") {
+    const startAngle = state.terrainTool.dragStartAngle;
+    if (!Number.isFinite(startAngle)) return nextPoints;
+    const currentAngle = Math.atan2(groundPoint.z - pivot.z, groundPoint.x - pivot.x);
+    const deltaDegrees = (currentAngle - startAngle) * (180 / Math.PI);
+    transformed = scatterRotatePoints(subset, pivot, deltaDegrees);
+  } else {
+    const startDistance = Math.max(0.0001, state.terrainTool.dragStartDistance || 1);
+    const currentDistance = Math.hypot(groundPoint.x - pivot.x, groundPoint.z - pivot.z);
+    let factor = Math.max(0.05, currentDistance / startDistance);
+    const axisConstraint = state.terrainTool.axisConstraint;
+    if (axisConstraint === "x" || axisConstraint === "y") {
+      const coord = axisConstraint === "x" ? "x" : "z";
+      const startGround = state.terrainTool.dragStartGround || groundPoint;
+      const startOffset = Number(startGround?.[coord]) - Number(pivot?.[coord]);
+      const currentOffset = Number(groundPoint?.[coord]) - Number(pivot?.[coord]);
+      if (Number.isFinite(startOffset) && Number.isFinite(currentOffset) && Math.abs(startOffset) > 0.0001) {
+        factor = Math.max(0.05, Math.abs(currentOffset / startOffset));
+      }
+      transformed = scatterScalePointsByAxis(
+        subset,
+        pivot,
+        axisConstraint === "x" ? factor : 1,
+        axisConstraint === "y" ? factor : 1
+      );
+    } else {
+      transformed = scatterScalePoints(subset, pivot, factor);
+    }
+  }
+  let cursor = 0;
+  for (const index of indices) {
+    if (!nextPoints[index]) continue;
+    nextPoints[index] = Object.assign({}, nextPoints[index], transformed[cursor]);
+    cursor += 1;
+  }
+  return nextPoints;
+}
+
+async function terrainCommitGroupTransform(node, kind) {
+  const startPoints = terrainClonePoints(state.terrainTool.dragStartPoints || terrainNodePoints(node));
+  const groundPoint = state.terrainTool.dragCurrentGround || state.terrainTool.dragStartGround;
+  if (!groundPoint || !state.terrainTool.dragStartPivot) {
+    terrainClearDragState();
+    state.terrainTool.mode = "select";
+    terrainFinishWithRender();
+    setStatus("No ground hit.", "error");
+    return false;
+  }
+  const selectedIndexBefore = state.terrainTool.selectedPointIndex;
+  const selectedIndicesBefore = state.terrainTool.selectedPointIndices.slice();
+  const selectedRoleBefore = state.terrainTool.selectedHandleRole;
+  if (state.terrainTool.dragPointerId !== null && !state.terrainTool.dragMoved) {
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    state.terrainTool.selectedPointIndex = selectedIndexBefore;
+    state.terrainTool.selectedPointIndices = selectedIndicesBefore;
+    state.terrainTool.selectedHandleRole = selectedRoleBefore;
+    terrainFinishWithRender();
+    return true;
+  }
+  const nextPoints = terrainPreviewGroupTransform(startPoints, groundPoint, kind);
+  const ok = await terrainPatchPoints(node, nextPoints, kind === "rotate" ? "Terrain shape rotated" : "Terrain shape scaled");
+  terrainClearDragState();
+  state.terrainTool.mode = "select";
+  if (ok) {
+    state.terrainTool.selectedPointIndex = selectedIndexBefore;
+    state.terrainTool.selectedPointIndices = selectedIndicesBefore;
+    state.terrainTool.selectedHandleRole = selectedRoleBefore;
+    setStatus(kind === "rotate" ? "Rotated." : "Scaled.", "success");
+  }
+  terrainFinishWithRender();
+  return ok;
 }
 
 function terrainBeginScaleSession(node, pointerEvent, pointerId) {
@@ -6824,6 +11701,7 @@ function terrainBeginScaleSession(node, pointerEvent, pointerId) {
   }
   const channel = terrainActiveChannel();
   const scaleSnapshot = terrainChannelScalePair(node, channel);
+  const axisConstraint = state.terrainTool.axisConstraint;
   terrainClearDragState();
   state.terrainTool.mode = "scale";
   state.terrainTool.dragNodeId = node.id;
@@ -6838,7 +11716,9 @@ function terrainBeginScaleSession(node, pointerEvent, pointerId) {
     ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
     : null;
   state.terrainTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.terrainTool.dragMoved = false;
+  state.terrainTool.axisConstraint = axisConstraint;
   terrainUpdateScalePreview(node, state.terrainTool.dragStartPointer);
   terrainFinishWithRender();
   return true;
@@ -6873,6 +11753,7 @@ function terrainBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
   const startGround = groundPoint || (terrainLastPointer
     ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
     : null);
+  const axisConstraint = state.terrainTool.axisConstraint;
   terrainClearDragState();
   state.terrainTool.mode = "move";
   state.terrainTool.selectedPointIndex = pointIndex;
@@ -6893,8 +11774,9 @@ function terrainBeginPointDrag(node, pointIndex, groundPoint, pointerId) {
     ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
     : null;
   state.terrainTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.terrainTool.dragMoved = false;
-  state.terrainTool.axisConstraint = null;
+  state.terrainTool.axisConstraint = axisConstraint;
   terrainRenderOverlayPreview();
   terrainFinishWithRender();
   return true;
@@ -6904,6 +11786,7 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
   const startGround = groundPoint || (terrainLastPointer
     ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY)
     : null);
+  const axisConstraint = state.terrainTool.axisConstraint;
   terrainClearDragState();
   state.terrainTool.mode = "move";
   state.terrainTool.selectedPointIndex = null;
@@ -6911,9 +11794,7 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
   state.terrainTool.dragNodeId = node.id;
   state.terrainTool.draggingPointIndex = null;
   state.terrainTool.draggingHandleRole = "center";
-  state.terrainTool.dragStartPoints = node.type === "walkable_surface"
-    ? terrainClonePoints(terrainNodePoints(node))
-    : null;
+  state.terrainTool.dragStartPoints = terrainClonePoints(terrainNodePoints(node));
   state.terrainTool.dragStartSurface = terrainSurfaceSnapshot(node);
   state.terrainTool.dragStartGround = startGround ? { x: startGround.x, z: startGround.z } : null;
   state.terrainTool.dragCurrentGround = startGround ? { x: startGround.x, z: startGround.z } : null;
@@ -6924,28 +11805,45 @@ function terrainBeginSurfaceDrag(node, groundPoint, pointerId) {
     ? { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y }
     : null;
   state.terrainTool.dragPointerId = pointerId;
+  captureViewportEditPointer(pointerId);
   state.terrainTool.dragMoved = false;
-  state.terrainTool.axisConstraint = null;
+  state.terrainTool.axisConstraint = axisConstraint;
   terrainRenderOverlayPreview();
   terrainFinishWithRender();
   return true;
 }
 
-async function terrainPatchPoints(node, nextPoints, historyLabel) {
+// Pure: builds the values patch for a points update, without sending it anywhere -
+// shared by the single-node terrain tool (which patches immediately) and the cross-type
+// group move (which folds several nodes' patches into one batched commit).
+function terrainPointsPatch(node, nextPoints) {
   const normalizedPoints = terrainClonePoints(nextPoints);
   const patch = { points: normalizedPoints };
-  if (node.type === "walkable_surface") {
+  const fields = state.nodeTypes?.[node.type]?.fields || {};
+  // Only the closed shapes (walkable_surface/blocker_area/area_definition) use
+  // x/z/width/depth as a bounding box to keep resynced. Surface Layer also has a
+  // "width" field, but that's the path's stroke width, not a bounding box - patching
+  // it from point bounds would clobber it with an unrelated number.
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(node.type) && (fields.x || fields.z || fields.width || fields.depth || fields.y)) {
     const geometry = terrainWalkableSurfaceGeometry(node, normalizedPoints);
-    patch.x = geometry.x;
-    patch.z = geometry.z;
-    patch.width = geometry.width;
-    patch.depth = geometry.depth;
+    if (fields.x) patch.x = geometry.x;
+    if (fields.z) patch.z = geometry.z;
+    if (fields.width) patch.width = geometry.width;
+    if (fields.depth) patch.depth = geometry.depth;
+    if (fields.y && node.type === "walkable_surface") patch.y = geometry.y;
   }
+  if (fields.shapeType && node.values?.shapeType !== "polygon") patch.shapeType = "polygon";
+  return patch;
+}
+
+async function terrainPatchPoints(node, nextPoints, historyLabel) {
+  const patch = terrainPointsPatch(node, nextPoints);
   const result = await patchValues(node.id, patch, {
     historyLabel: historyLabel,
-    refreshViewport: true,
-    refreshValidation: true,
-    refreshEdgeList: false
+    refreshViewport: false,
+    refreshValidation: false,
+    refreshEdgeList: false,
+    afterApply: invalidateDraftWorld
   });
   if (!result) {
     terrainFinishWithRender();
@@ -6957,9 +11855,10 @@ async function terrainPatchPoints(node, nextPoints, historyLabel) {
 async function terrainPatchSurface(node, patch, historyLabel) {
   const result = await patchValues(node.id, patch, {
     historyLabel: historyLabel,
-    refreshViewport: true,
-    refreshValidation: true,
-    refreshEdgeList: false
+    refreshViewport: false,
+    refreshValidation: false,
+    refreshEdgeList: false,
+    afterApply: invalidateDraftWorld
   });
   if (!result) {
     terrainFinishWithRender();
@@ -6968,21 +11867,52 @@ async function terrainPatchSurface(node, patch, historyLabel) {
   return true;
 }
 
+// Walkable Surface points form a "ladder": point i on one rail always pairs with point
+// (n-1-i) on the return rail at the same rung across the surface (see
+// triangulateWalkableSurfaceLadder in world-runtime.js, which triangulates rung-to-rung
+// instead of guessing diagonals from the flattened outline). Extruding only one point at
+// a time leaves its twin behind wherever it happened to be, which desyncs the ladder and
+// is exactly what made the collision mesh look twisted around a freshly-extruded point.
+// So for Walkable Surface, extrude always adds a full rung: the new point plus a twin
+// mirrored across the rung being extruded from, offset by that rung's own left/right
+// vector so the new pair opens up the strip by the same width as its neighbors.
+function terrainWalkableRungInsert(currentPoints, effectiveSelectedIndex, newPoint) {
+  const n = currentPoints.length;
+  const anchor = currentPoints[effectiveSelectedIndex];
+  const mirrorSource = currentPoints[n - 1 - effectiveSelectedIndex];
+  const offset = mirrorSource && anchor
+    ? {
+      x: mirrorSource.x - anchor.x,
+      y: terrainPointHeight(mirrorSource, newPoint.y) - terrainPointHeight(anchor, newPoint.y),
+      z: mirrorSource.z - anchor.z
+    }
+    : { x: 0, y: 0, z: 0 };
+  const mirrorPoint = { x: newPoint.x + offset.x, y: newPoint.y + offset.y, z: newPoint.z + offset.z };
+
+  const insertIndex = effectiveSelectedIndex <= 0
+    ? 0
+    : effectiveSelectedIndex >= n - 1
+      ? n
+      : effectiveSelectedIndex + 1;
+  const mirrorInsertIndex = n - insertIndex;
+
+  const nextPoints = currentPoints.slice();
+  if (insertIndex >= mirrorInsertIndex) {
+    nextPoints.splice(insertIndex, 0, newPoint);
+    nextPoints.splice(mirrorInsertIndex, 0, mirrorPoint);
+  } else {
+    nextPoints.splice(mirrorInsertIndex, 0, mirrorPoint);
+    nextPoints.splice(insertIndex, 0, newPoint);
+  }
+  return { points: nextPoints, insertIndex: insertIndex };
+}
+
 async function terrainAddPoint(node, groundPoint) {
   if (!groundPoint) {
     setStatus("No ground hit.", "error");
     return false;
   }
   const capabilities = terrainNodeCapabilities(node);
-  if (capabilities.centerEditable && !capabilities.pointEditing) {
-    const ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
-    if (ok) {
-      terrainSetSelection(null, "center");
-      setStatus("Surface centered.", "success");
-      terrainFinishWithRender();
-    }
-    return ok;
-  }
   if (!capabilities.allowExtrude) return false;
   const currentPoints = terrainNodePoints(node);
   const surface = terrainSurfaceSnapshot(node);
@@ -6996,6 +11926,19 @@ async function terrainAddPoint(node, groundPoint) {
     : (state.terrainTool.selectedPointIndices.length
       ? state.terrainTool.selectedPointIndices[state.terrainTool.selectedPointIndices.length - 1]
       : null);
+
+  if (node.type === "walkable_surface" && currentPoints.length >= 2 && currentPoints.length % 2 === 0) {
+    const effectiveSelectedIndex = hasSelection ? selectedIndex : currentPoints.length - 1;
+    const rung = terrainWalkableRungInsert(currentPoints, effectiveSelectedIndex, newPoint);
+    const ok = await terrainPatchPoints(node, rung.points, "Terrain rung added");
+    if (ok) {
+      terrainSetSelection(rung.insertIndex, "point");
+      setStatus("Rung extruded.", "success");
+      terrainFinishWithRender();
+    }
+    return ok;
+  }
+
   const insertIndex = !hasSelection
     ? currentPoints.length
     : selectedIndex <= 0
@@ -7038,8 +11981,7 @@ async function terrainDeletePoint(node, pointIndex) {
 
 function terrainMinPointCount(nodeType) {
   if (nodeType === "surface_layer") return 2;
-  if (nodeType === "blocker_area") return 3;
-  if (nodeType === "walkable_surface") return 3;
+  if (TERRAIN_CLOSED_SHAPE_NODE_TYPES.has(nodeType)) return 3;
   return 1;
 }
 
@@ -7124,8 +12066,18 @@ async function terrainCommitPointDrag(node) {
     return false;
   }
   const draggedIndices = terrainDraggedPointIndices(pointIndex);
-  const nextPoints = terrainPreviewMovedPoints(node, startPoints, pointIndex, groundPoint, startGround);
   const selectedBefore = state.terrainTool.selectedPointIndices.slice();
+  if (state.terrainTool.dragPointerId !== null && !state.terrainTool.dragMoved) {
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    state.terrainTool.selectedPointIndices = selectedBefore;
+    state.terrainTool.selectedPointIndex = pointIndex;
+    state.terrainTool.selectedHandleRole = "point";
+    terrainFinishWithRender();
+    return true;
+  }
+  const nextPoints = terrainPreviewMovedPoints(node, startPoints, pointIndex, groundPoint, startGround);
   const ok = await terrainPatchPoints(node, nextPoints, "Terrain point moved");
   terrainClearDragState();
   state.terrainTool.axisConstraint = null;
@@ -7152,21 +12104,39 @@ async function terrainCommitSurfaceDrag(node) {
     if (!terrainVerticalHeightSession(node)) setStatus("No ground hit.", "error");
     return false;
   }
+  if (state.terrainTool.dragPointerId !== null && !state.terrainTool.dragMoved) {
+    terrainClearDragState();
+    state.terrainTool.axisConstraint = null;
+    state.terrainTool.mode = "select";
+    terrainSetSelection(null, "center");
+    terrainFinishWithRender();
+    return true;
+  }
   let ok = false;
-  if (node.type === "walkable_surface" && state.terrainTool.dragStartPoints) {
-    const startGround = state.terrainTool.dragStartGround
-      || { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z };
+  const startGround = state.terrainTool.dragStartGround
+    || { x: state.terrainTool.dragStartSurface.x, z: state.terrainTool.dragStartSurface.z };
+  const dx = groundPoint ? groundPoint.x - startGround.x : 0;
+  const dz = groundPoint ? groundPoint.z - startGround.z : 0;
+  const hasExplicitPoints = Array.isArray(node.values?.points) && node.values.points.length > 0;
+  if (state.terrainTool.dragStartPoints && hasExplicitPoints) {
     const nextPoints = terrainPreviewSurfacePoints(node, state.terrainTool.dragStartPoints, groundPoint, startGround);
-    ok = await terrainPatchPoints(node, nextPoints, "Terrain surface moved");
+    ok = await terrainPatchPoints(node, nextPoints, "Terrain shape moved");
   } else {
-    ok = await terrainPatchSurface(node, { x: groundPoint.x, z: groundPoint.z }, "Terrain surface moved");
+    const surfacePatch = {
+      x: state.terrainTool.dragStartSurface.x + dx,
+      z: state.terrainTool.dragStartSurface.z + dz
+    };
+    if (terrainVerticalHeightSession(node)) {
+      surfacePatch.y = state.terrainTool.dragStartSurface.y + terrainHeightDragDelta();
+    }
+    ok = await terrainPatchSurface(node, surfacePatch, "Terrain shape moved");
   }
   terrainClearDragState();
   state.terrainTool.axisConstraint = null;
   state.terrainTool.mode = "select";
   if (ok) {
     terrainSetSelection(null, "center");
-    setStatus("Surface moved.", "success");
+    setStatus("Shape moved.", "success");
   }
   terrainFinishWithRender();
   return ok;
@@ -7199,15 +12169,350 @@ async function terrainCommitScale(node) {
   return ok;
 }
 
+// ---------- Point-edit marquee (box) selection ----------
+// Shared by the terrain tool (Surface Layer/Walkable Surface/Blocker Area/Area Definition)
+// and the scatter tool - both already have working group move/rotate/scale for whatever is
+// in selectedPointIndices, so this only needs to fill that array from a screen-space rect.
+function pointIndicesInRect(points, yForPoint, rect) {
+  if (!runtime || typeof runtime.worldToScreen !== "function") return [];
+  const indices = [];
+  points.forEach(function (point, index) {
+    const screen = runtime.worldToScreen({ x: point.x, y: yForPoint(point, index), z: point.z });
+    if (screen && rectContainsPoint(rect, screen)) indices.push(index);
+  });
+  return indices;
+}
+
+function applyMarqueeSelection(toolState, hitIndices, additive, subtractive) {
+  if (subtractive) {
+    if (!hitIndices.length) return;
+    const remove = new Set(hitIndices);
+    toolState.selectedPointIndices = toolState.selectedPointIndices.filter(function (i) { return !remove.has(i); });
+  } else if (additive) {
+    const combined = new Set(toolState.selectedPointIndices);
+    for (const i of hitIndices) combined.add(i);
+    toolState.selectedPointIndices = Array.from(combined);
+  } else {
+    toolState.selectedPointIndices = hitIndices.slice();
+  }
+  const last = toolState.selectedPointIndices.length
+    ? toolState.selectedPointIndices[toolState.selectedPointIndices.length - 1]
+    : null;
+  toolState.selectedPointIndex = last;
+  toolState.selectedHandleRole = last !== null ? "point" : null;
+}
+
+function pointLongPressAllowed(event) {
+  return event?.pointerType === "touch" || event?.pointerType === "pen";
+}
+
+function clearPointLongPress() {
+  if (pointLongPressSession?.timer) clearTimeout(pointLongPressSession.timer);
+  pointLongPressSession = null;
+}
+
+// Touch-only grab confirmation: a plain touchdown on a point/center handle used to start
+// dragging it immediately, so a finger that happened to land near one while starting a
+// two-finger pan gesture would drag it along with the pan. Requiring a brief, deliberate
+// hold (cancelled the moment the finger travels beyond the tolerance) before the drag
+// actually begins means a quick pan start never lingers long enough to grab anything.
+// Mouse/pen clicks stay instant - they're already a deliberate, single action.
+const TOUCH_GRAB_CONFIRM_MS = 500;
+const TOUCH_GRAB_CONFIRM_MOVE_PX = 10;
+let touchGrabConfirmSession = null;
+let touchEmptyDeselectSession = null;
+
+function clearTouchGrabConfirm() {
+  if (touchGrabConfirmSession?.timer) clearTimeout(touchGrabConfirmSession.timer);
+  touchGrabConfirmSession = null;
+}
+
+function beginTouchGrabConfirm(event, startDrag) {
+  if (event.pointerType !== "touch") {
+    startDrag();
+    return;
+  }
+  clearTouchGrabConfirm();
+  const session = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    timer: null
+  };
+  session.timer = setTimeout(function () {
+    if (touchGrabConfirmSession !== session) return;
+    touchGrabConfirmSession = null;
+    startDrag();
+  }, TOUCH_GRAB_CONFIRM_MS);
+  touchGrabConfirmSession = session;
+}
+
+function cancelTouchGrabConfirmForMove(event) {
+  const session = touchGrabConfirmSession;
+  if (!session || event.pointerId !== session.pointerId) return;
+  const dx = Number(event.clientX) - session.startX;
+  const dy = Number(event.clientY) - session.startY;
+  if (Math.hypot(dx, dy) > TOUCH_GRAB_CONFIRM_MOVE_PX) clearTouchGrabConfirm();
+}
+
+function cancelTouchGrabConfirmForEnd(event) {
+  const session = touchGrabConfirmSession;
+  if (session && event.pointerId === session.pointerId) clearTouchGrabConfirm();
+}
+
+function clearTouchEmptyDeselectSession() {
+  const session = touchEmptyDeselectSession;
+  if (!session) return;
+  window.removeEventListener("pointermove", session.onMove, true);
+  window.removeEventListener("pointerup", session.onUp, true);
+  window.removeEventListener("pointercancel", session.onCancel, true);
+  touchEmptyDeselectSession = null;
+}
+
+function beginTouchEmptyDeselectSession(event, onDeselect) {
+  if (event.pointerType !== "touch" || typeof onDeselect !== "function") return false;
+  clearTouchEmptyDeselectSession();
+  const session = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    onMove: null,
+    onUp: null,
+    onCancel: null
+  };
+  session.onMove = function (moveEvent) {
+    if (moveEvent.pointerId !== session.pointerId) return;
+    const dx = Number(moveEvent.clientX) - session.startX;
+    const dy = Number(moveEvent.clientY) - session.startY;
+    if (Math.hypot(dx, dy) > TOUCH_GRAB_CONFIRM_MOVE_PX) session.moved = true;
+  };
+  session.onUp = function (upEvent) {
+    if (upEvent.pointerId !== session.pointerId) return;
+    const shouldDeselect = !session.moved && !viewportTouchEditSuppress;
+    clearTouchEmptyDeselectSession();
+    if (shouldDeselect) onDeselect();
+  };
+  session.onCancel = function (cancelEvent) {
+    if (cancelEvent.pointerId === session.pointerId) clearTouchEmptyDeselectSession();
+  };
+  touchEmptyDeselectSession = session;
+  window.addEventListener("pointermove", session.onMove, true);
+  window.addEventListener("pointerup", session.onUp, true);
+  window.addEventListener("pointercancel", session.onCancel, true);
+  return true;
+}
+
+function beginPointLongPress(event, options) {
+  if (!pointLongPressAllowed(event) || !Number.isInteger(options?.pointIndex) || !options.toolState) return;
+  clearPointLongPress();
+  const selectedBefore = Array.isArray(options.toolState.selectedPointIndices)
+    ? options.toolState.selectedPointIndices.slice()
+    : [];
+  const session = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    pointIndex: options.pointIndex,
+    selectedBefore,
+    toolState: options.toolState,
+    cancelActiveSession: options.cancelActiveSession,
+    onApplied: options.onApplied,
+    timer: null
+  };
+  session.timer = setTimeout(function () {
+    if (pointLongPressSession !== session) return;
+    const selected = session.selectedBefore.includes(session.pointIndex);
+    if (typeof session.cancelActiveSession === "function") session.cancelActiveSession();
+    session.toolState.selectedPointIndices = selected
+      ? session.selectedBefore.filter(function (index) { return index !== session.pointIndex; })
+      : session.selectedBefore.concat(session.pointIndex);
+    const last = session.toolState.selectedPointIndices.length
+      ? session.toolState.selectedPointIndices[session.toolState.selectedPointIndices.length - 1]
+      : null;
+    session.toolState.selectedPointIndex = last;
+    session.toolState.selectedHandleRole = last !== null ? "point" : null;
+    setStatus(selected ? "Point uit multi-selectie." : "Point toegevoegd aan multi-selectie.", "");
+    if (typeof session.onApplied === "function") session.onApplied();
+    pointLongPressSession = null;
+  }, POINT_LONG_PRESS_MS);
+  pointLongPressSession = session;
+}
+
+function cancelPointLongPressForMove(event) {
+  const session = pointLongPressSession;
+  if (!session || event.pointerId !== session.pointerId) return;
+  const dx = Number(event.clientX) - session.startX;
+  const dy = Number(event.clientY) - session.startY;
+  if (Math.hypot(dx, dy) > POINT_LONG_PRESS_MOVE_PX) clearPointLongPress();
+}
+
+function finishPointLongPress(event) {
+  if (pointLongPressSession && event.pointerId === pointLongPressSession.pointerId) {
+    clearPointLongPress();
+  }
+}
+
+// Starts tracking a potential drag from an empty-space pointerdown. If the pointer never
+// moves it's a plain click (falls back to options.onEmptyClick, e.g. the existing "click
+// empty space to deselect" behavior); if it does move, it's a marquee box-select.
+function beginPointMarqueeSession(event, options) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const pointerId = event.pointerId;
+  const additive = event.shiftKey;
+  const subtractive = event.ctrlKey || event.metaKey;
+  let moved = false;
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== pointerId) return;
+    if (Math.abs(moveEvent.clientX - startX) > 3 || Math.abs(moveEvent.clientY - startY) > 3) moved = true;
+    if (moved) showViewportSelectionBox(startX, startY, moveEvent.clientX, moveEvent.clientY);
+  }
+  function finish(finalEvent) {
+    window.removeEventListener("pointermove", onMove, true);
+    window.removeEventListener("pointerup", onUp, true);
+    window.removeEventListener("pointercancel", onCancel, true);
+    hideViewportSelectionBox();
+    if (!moved) {
+      if (!additive && !subtractive) options.onEmptyClick();
+      return;
+    }
+    const rect = rectFromClientPoints(startX, startY, finalEvent.clientX, finalEvent.clientY);
+    const hitIndices = pointIndicesInRect(options.getPoints(), options.yForPoint, rect);
+    applyMarqueeSelection(options.toolState, hitIndices, additive, subtractive);
+    options.onApplied();
+  }
+  function onUp(upEvent) { if (upEvent.pointerId === pointerId) finish(upEvent); }
+  function onCancel(cancelEvent) { if (cancelEvent.pointerId === pointerId) finish(cancelEvent); }
+  window.addEventListener("pointermove", onMove, true);
+  window.addEventListener("pointerup", onUp, true);
+  window.addEventListener("pointercancel", onCancel, true);
+}
+
+function deselectViewportClick() {
+  clearPointLongPress();
+  clearSelection({ clearPendingEdge: true });
+  renderGraph();
+  setStatus("Deselected.", "");
+  redrawEditorMinimap();
+}
+
+function rebaseScatterActiveTouchSession(event, node) {
+  if (state.scatterTool.dragPointerId !== null) return false;
+  const ground = terrainGroundPointFromEvent(event);
+  let insertHit = null;
+  if (state.scatterTool.draggingHandleRole === "extrude") {
+    if (!ground) {
+      setStatus("No ground hit.", "error");
+      return true;
+    }
+    insertHit = scatterLineInsertHitFromEvent(node, event);
+    if (!insertHit) {
+      setStatus("Druk tussen twee punten.", "error");
+      return true;
+    }
+  }
+  state.scatterTool.dragPointerId = event.pointerId;
+  captureViewportEditPointer(event.pointerId);
+  state.scatterTool.dragMoved = false;
+  if (ground) {
+    state.scatterTool.dragStartGround = { x: ground.x, z: ground.z };
+    state.scatterTool.dragCurrentGround = { x: ground.x, z: ground.z };
+    if (state.scatterTool.draggingHandleRole === "extrude") {
+      state.scatterTool.draggingPointIndex = insertHit.pointIndex;
+      state.scatterTool.dragExtrudeIndex = insertHit.insertIndex;
+      state.scatterTool.selectedPointIndex = insertHit.pointIndex;
+      state.scatterTool.selectedPointIndices = [insertHit.pointIndex];
+      state.scatterTool.selectedHandleRole = "point";
+      state.scatterTool.dragPreviewPoint = { x: ground.x, z: ground.z };
+    }
+    if (state.scatterTool.dragStartPivot && (state.scatterTool.draggingHandleRole === "rotate" || state.scatterTool.draggingHandleRole === "scale")) {
+      const pivot = state.scatterTool.dragStartPivot;
+      state.scatterTool.dragStartAngle = Math.atan2(ground.z - pivot.z, ground.x - pivot.x);
+      state.scatterTool.dragStartDistance = Math.max(0.0001, Math.hypot(ground.x - pivot.x, ground.z - pivot.z));
+    }
+    scatterRenderOverlayPreview();
+  }
+  return true;
+}
+
+function rebaseTerrainActiveTouchSession(event, node) {
+  if (state.terrainTool.dragPointerId !== null) return false;
+  if (state.terrainTool.draggingHandleRole === "scale") {
+    state.terrainTool.dragPointerId = event.pointerId;
+    captureViewportEditPointer(event.pointerId);
+    state.terrainTool.dragMoved = false;
+    state.terrainTool.dragStartPointer = { x: Number(event.clientX) || 0, y: Number(event.clientY) || 0 };
+    state.terrainTool.dragCurrentPointer = { x: state.terrainTool.dragStartPointer.x, y: state.terrainTool.dragStartPointer.y };
+    terrainUpdateScalePreview(node, state.terrainTool.dragStartPointer);
+    return true;
+  }
+  const ground = terrainGroundPointFromEvent(event);
+  let insertHit = null;
+  if (state.terrainTool.draggingHandleRole === "extrude") {
+    if (!ground) {
+      setStatus("No ground hit.", "error");
+      return true;
+    }
+    insertHit = terrainLineInsertHitFromEvent(node, event);
+    if (!insertHit) {
+      setStatus("Druk tussen twee punten.", "error");
+      return true;
+    }
+  }
+  state.terrainTool.dragPointerId = event.pointerId;
+  captureViewportEditPointer(event.pointerId);
+  state.terrainTool.dragMoved = false;
+  if (ground) {
+    state.terrainTool.dragStartGround = { x: ground.x, z: ground.z };
+    state.terrainTool.dragCurrentGround = { x: ground.x, z: ground.z };
+    if (state.terrainTool.draggingHandleRole === "extrude") {
+      state.terrainTool.draggingPointIndex = insertHit.pointIndex;
+      state.terrainTool.dragExtrudeIndex = insertHit.insertIndex;
+      state.terrainTool.selectedPointIndex = insertHit.pointIndex;
+      state.terrainTool.selectedPointIndices = [insertHit.pointIndex];
+      state.terrainTool.selectedHandleRole = "point";
+      state.terrainTool.dragPreviewPoint = { x: ground.x, z: ground.z };
+    }
+    if (state.terrainTool.dragStartPivot && (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale")) {
+      const pivot = state.terrainTool.dragStartPivot;
+      state.terrainTool.dragStartAngle = Math.atan2(ground.z - pivot.z, ground.x - pivot.x);
+      state.terrainTool.dragStartDistance = Math.max(0.0001, Math.hypot(ground.x - pivot.x, ground.z - pivot.z));
+    }
+    terrainRenderOverlayPreview();
+  }
+  return true;
+}
+
 function handleTerrainPointerDown(event) {
+  if (updateViewportTouchEditState(event)) {
+    cancelViewportTouchEditSessionsForPan();
+    return;
+  }
   if (runtimeTransformActive()) return;
   terrainRememberPointer(event);
   if (handleScatterPointerDown(event)) return;
-  if (terrainHasActiveSession() && event.button === 0 && terrainCanvasTarget(event)) {
+  if (terrainHasActiveSession() && isPrimaryPointerAction(event) && terrainCanvasTarget(event)) {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    suppressNextViewportRuntimeClick();
     const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+    const shouldStartPointerDrag = state.terrainTool.dragPointerId === null
+      && (state.terrainTool.draggingHandleRole === "extrude" || event.pointerType === "touch" || !state.terrainTool.dragMoved);
+    if (shouldStartPointerDrag) {
+      if (node && rebaseTerrainActiveTouchSession(event, node)) {
+        if (event.pointerType === "touch" && runtime && typeof runtime.markEditorTouchHandled === "function") {
+          runtime.markEditorTouchHandled(event.pointerId);
+        }
+      } else {
+        terrainCancelActiveSession();
+      }
+      return;
+    }
     if (!node) {
       terrainCancelActiveSession();
       return;
@@ -7220,82 +12525,170 @@ function handleTerrainPointerDown(event) {
       void terrainCommitSurfaceDrag(node);
       return;
     }
+    if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+      void terrainCommitGroupTransform(node, state.terrainTool.draggingHandleRole);
+      return;
+    }
     void terrainCommitPointDrag(node);
     return;
   }
-  if (!terrainCanvasTarget(event) || event.button !== 0) return;
+  if (!terrainCanvasTarget(event) || !isPrimaryPointerAction(event)) return;
   const node = selectedTerrainNode();
+  const hit = terrainHandleFromEvent(event);
+  // A hit for a node other than the currently selected one can only be one of the
+  // always-visible "go to this node" markers - jump to it instead of editing.
+  if (hit && hit.nodeId && hit.nodeId !== node?.id) {
+    const markerNode = nodeById(hit.nodeId);
+    if (markerNode) {
+      // This is the always-visible "jump to this (not yet active) node" marker - the
+      // one big handle per not-yet-selected zone/terrain/scatter object. Same reasoning
+      // as the point/center handles below: defer for touch so a pan gesture's first
+      // finger can't jump/select just by landing near it. Unlike those, don't stop
+      // propagation yet for touch either - these markers are scattered all over the
+      // scene (one per other zone/scatter node) with a generous hit radius, so a tap
+      // meant as "deselect on empty space" can easily land near one. Leaving propagation
+      // alone lets the runtime's own tap handling for this same touch still run; if the
+      // hold below does end up confirming, markEditorTouchHandled() tells it to stand
+      // down instead of also deselecting right after.
+      if (event.pointerType === "touch") {
+        event.preventDefault();
+      } else {
+        suppressNextViewportRuntimeClick();
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      }
+      beginTouchGrabConfirm(event, function () {
+        if (runtime && typeof runtime.markEditorTouchHandled === "function") {
+          runtime.markEditorTouchHandled(event.pointerId);
+        }
+        selectNode(markerNode.id, true, { clearPendingEdge: true });
+      });
+      return;
+    }
+  }
   if (!node) return;
   const capabilities = terrainNodeCapabilities(node);
-  const hit = terrainHandleFromEvent(event);
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.terrainTool.mode;
   const meshEntityId = runtimeEntityIdFromPointer(event);
+  const terrainInsertHit = mode === "extrude" && capabilities.allowExtrude
+    ? terrainLineInsertHitFromEvent(node, event)
+    : null;
   const shouldPlaceFirstPoints = mode === "select"
     && capabilities.pointEditing
     && ground
     && terrainNodePoints(node).length < terrainMinPointCount(node.type);
   const shouldConsumeTerrainClick = Boolean(hit && hit.nodeId === node.id)
+    || Boolean(terrainInsertHit)
     || shouldPlaceFirstPoints
     || mode === "extrude"
     || mode === "scale";
-  if (meshEntityId && !(hit && hit.nodeId === node.id)) return;
-  if (!shouldConsumeTerrainClick) return;
+  if (meshEntityId && !(hit && hit.nodeId === node.id) && mode !== "extrude") return;
+  if (!shouldConsumeTerrainClick) {
+    if (event.pointerType === "touch") {
+      if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
+        beginTouchEmptyDeselectSession(event, deselectViewportClick);
+      }
+      return;
+    }
+    if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
+      beginPointMarqueeSession(event, {
+        getPoints: function () { return terrainNodePoints(node); },
+        yForPoint: function (point) {
+          return node.type === "walkable_surface" ? terrainPointHeight(point, terrainGroundY()) : terrainGroundY();
+        },
+        toolState: state.terrainTool,
+        onApplied: terrainFinishWithRender,
+        onEmptyClick: deselectViewportClick
+      });
+    }
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  suppressNextViewportRuntimeClick();
 
   if (hit && hit.nodeId === node.id) {
-    if (node.type === "walkable_surface" && hit.handleRole === "center") {
+    if (capabilities.centerEditable && hit.handleRole === "center") {
       if (state.terrainTool.mode === "delete") {
         setStatus("Select a point to delete.", "error");
         terrainFinishWithRender();
         return;
       }
-      terrainSetSelection(null, "center");
-      if (state.terrainTool.mode === "move") {
+      if (state.terrainTool.mode === "extrude") {
+        if (!ground) {
+          setStatus("No ground hit.", "error");
+        } else if (!terrainInsertHit) {
+          setStatus("Druk tussen twee punten.", "error");
+        } else {
+          terrainBeginExtrudeSession(node, ground, event.pointerId, terrainInsertHit);
+        }
+      } else if (state.terrainTool.mode === "select" || state.terrainTool.mode === "move") {
+        beginTouchGrabConfirm(event, function () {
+          terrainSetSelection(null, "center");
+          terrainBeginSurfaceDrag(node, ground, event.pointerId);
+        });
+      } else if (state.terrainTool.mode === "rotate") {
+        terrainSetSelection(null, "center");
         if (!ground) {
           setStatus("No ground hit.", "error");
         } else {
-          terrainBeginSurfaceDrag(node, ground, event.pointerId);
+          terrainBeginGroupTransformSession(node, ground, event.pointerId, "rotate");
         }
+      } else if (state.terrainTool.mode === "geoscale") {
+        terrainSetSelection(null, "center");
+        if (!ground) {
+          setStatus("No ground hit.", "error");
+        } else {
+          terrainBeginGroupTransformSession(node, ground, event.pointerId, "geoscale");
+        }
+      } else if (state.terrainTool.mode === "scale" && capabilities.allowScale) {
+        terrainSetSelection(null, "center");
+        terrainBeginScaleSession(node, event, event.pointerId);
       } else {
+        terrainSetSelection(null, "center");
         terrainFinishWithRender();
       }
       return;
     }
     if (capabilities.pointEditing && Number.isInteger(hit.pointIndex)) {
-      if (event.shiftKey && (state.terrainTool.mode === "select" || state.terrainTool.mode === "move")) {
-        terrainTogglePointSelection(hit.pointIndex);
+      const alreadyInMultiSelect = state.terrainTool.selectedPointIndices.length > 1
+        && state.terrainTool.selectedPointIndices.includes(hit.pointIndex);
+      if ((event.shiftKey || event.ctrlKey || event.metaKey || state.terrainTool.multiSelect) && (state.terrainTool.mode === "select" || state.terrainTool.mode === "move")) {
+        if (event.ctrlKey || event.metaKey) terrainRemovePointFromSelection(hit.pointIndex);
+        else if (state.terrainTool.multiSelect && !event.shiftKey) terrainTogglePointSelection(hit.pointIndex);
+        else terrainAddPointToSelection(hit.pointIndex);
         terrainFinishWithRender();
         return;
       }
-      const alreadyInMultiSelect = state.terrainTool.selectedPointIndices.length > 1
-        && state.terrainTool.selectedPointIndices.includes(hit.pointIndex);
-      if (!alreadyInMultiSelect) {
-        terrainSetSelection(hit.pointIndex, "point");
-      } else {
-        state.terrainTool.selectedPointIndex = hit.pointIndex;
-        state.terrainTool.selectedHandleRole = "point";
-      }
-      if (state.terrainTool.mode === "move") {
-        if (!ground) {
-          setStatus("No ground hit.", "error");
+      function applyTerrainPointSelection() {
+        if (!alreadyInMultiSelect) {
+          terrainSetSelection(hit.pointIndex, "point");
         } else {
-          terrainBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+          state.terrainTool.selectedPointIndex = hit.pointIndex;
+          state.terrainTool.selectedHandleRole = "point";
         }
-      } else if (state.terrainTool.mode === "extrude") {
+      }
+      if (state.terrainTool.mode === "select" || state.terrainTool.mode === "move") {
+        beginTouchGrabConfirm(event, function () {
+          applyTerrainPointSelection();
+          terrainBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+        });
+        return;
+      }
+      applyTerrainPointSelection();
+      if (state.terrainTool.mode === "extrude") {
         if (!ground) {
           setStatus("No ground hit.", "error");
+        } else if (!terrainInsertHit) {
+          setStatus("Druk tussen twee punten.", "error");
         } else {
-          terrainBeginExtrudeSession(node, ground, event.pointerId);
+          terrainBeginExtrudeSession(node, ground, event.pointerId, terrainInsertHit);
         }
       } else if (state.terrainTool.mode === "scale") {
-        if (!ground) {
-          terrainBeginScaleSession(node, event, event.pointerId);
-        } else {
-          terrainBeginScaleSession(node, event, event.pointerId);
-        }
+        terrainBeginScaleSession(node, event, event.pointerId);
       } else if (state.terrainTool.mode === "delete") {
         void terrainDeleteMultiPoint(node);
       } else {
@@ -7310,7 +12703,11 @@ function handleTerrainPointerDown(event) {
       setStatus("No ground hit.", "error");
       return;
     }
-    terrainBeginExtrudeSession(node, ground, event.pointerId);
+    if (!terrainInsertHit) {
+      setStatus("Druk tussen twee punten.", "error");
+      return;
+    }
+    terrainBeginExtrudeSession(node, ground, event.pointerId, terrainInsertHit);
     return;
   }
 
@@ -7337,10 +12734,23 @@ function handleTerrainPointerDown(event) {
 function handleScatterPointerDown(event) {
   const node = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
   if (!node) return false;
-  if (scatterHasActiveSession() && event.button === 0 && terrainCanvasTarget(event)) {
+  if (scatterHasActiveSession() && isPrimaryPointerAction(event) && terrainCanvasTarget(event)) {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    suppressNextViewportRuntimeClick();
+    const shouldStartPointerDrag = state.scatterTool.dragPointerId === null
+      && (state.scatterTool.draggingHandleRole === "extrude" || event.pointerType === "touch" || !state.scatterTool.dragMoved);
+    if (shouldStartPointerDrag) {
+      if (rebaseScatterActiveTouchSession(event, node)) {
+        if (event.pointerType === "touch" && runtime && typeof runtime.markEditorTouchHandled === "function") {
+          runtime.markEditorTouchHandled(event.pointerId);
+        }
+      } else {
+        scatterCancelActiveSession();
+      }
+      return true;
+    }
     if (state.scatterTool.draggingHandleRole === "center") {
       void scatterCommitCenterDrag(node);
     } else if (state.scatterTool.draggingHandleRole === "rotate") {
@@ -7352,40 +12762,88 @@ function handleScatterPointerDown(event) {
     }
     return true;
   }
-  if (!terrainCanvasTarget(event) || event.button !== 0) return false;
+  if (!terrainCanvasTarget(event) || !isPrimaryPointerAction(event)) return false;
   const hit = scatterHandleFromEvent(event);
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.scatterTool.mode;
-  if (!hit || hit.nodeId !== node.id) return false;
+  const scatterInsertHit = mode === "extrude"
+    ? scatterLineInsertHitFromEvent(node, event)
+    : null;
+  if (!hit || hit.nodeId !== node.id) {
+    const meshEntityId = runtimeEntityIdFromPointer(event);
+    // "Add" moet een punt neerzetten op de plek waar je tikt (vinger/muis), niet alleen
+    // wanneer je toevallig exact een bestaand punt-handle raakt - anders lijkt de knop
+    // niets te doen op touch, waar precies een klein handle raken lastig is.
+    if (mode === "extrude") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      suppressNextViewportRuntimeClick();
+      if (!ground) {
+        setStatus("No ground hit.", "error");
+      } else if (!scatterInsertHit) {
+        setStatus("Druk tussen twee punten.", "error");
+      } else {
+        scatterBeginExtrudeSession(node, ground, event.pointerId, scatterInsertHit);
+      }
+      return true;
+    }
+    if (event.pointerType === "touch") {
+      if (!meshEntityId && (mode === "select" || mode === "move")) {
+        return beginTouchEmptyDeselectSession(event, deselectViewportClick);
+      }
+      return false;
+    }
+    if (!hit && !meshEntityId && (mode === "select" || mode === "move")) {
+      beginPointMarqueeSession(event, {
+        getPoints: function () { return scatterNodePoints(node); },
+        yForPoint: function () { return terrainGroundY(); },
+        toolState: state.scatterTool,
+        onApplied: scatterFinishWithRender,
+        onEmptyClick: deselectViewportClick
+      });
+      return true;
+    }
+    return false;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  suppressNextViewportRuntimeClick();
 
   if (Number.isInteger(hit.pointIndex)) {
-    if (event.shiftKey && (mode === "select" || mode === "move")) {
-      scatterTogglePointSelection(hit.pointIndex);
+    const alreadyInMultiSelect = state.scatterTool.selectedPointIndices.length > 1
+      && state.scatterTool.selectedPointIndices.includes(hit.pointIndex);
+    if ((event.shiftKey || event.ctrlKey || event.metaKey || state.scatterTool.multiSelect) && (mode === "select" || mode === "move")) {
+      if (event.ctrlKey || event.metaKey) scatterRemovePointFromSelection(hit.pointIndex);
+      else if (state.scatterTool.multiSelect && !event.shiftKey) scatterTogglePointSelection(hit.pointIndex);
+      else scatterAddPointToSelection(hit.pointIndex);
       scatterFinishWithRender();
       return true;
     }
-    const alreadyInMultiSelect = state.scatterTool.selectedPointIndices.length > 1
-      && state.scatterTool.selectedPointIndices.includes(hit.pointIndex);
-    if (!alreadyInMultiSelect) {
-      scatterSetSelection(hit.pointIndex, "point");
-    } else {
-      state.scatterTool.selectedPointIndex = hit.pointIndex;
-      state.scatterTool.selectedHandleRole = "point";
-    }
-    if (mode === "move") {
-      if (!ground) {
-        setStatus("No ground hit.", "error");
+    function applyScatterPointSelection() {
+      if (!alreadyInMultiSelect) {
+        scatterSetSelection(hit.pointIndex, "point");
       } else {
-        scatterBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+        state.scatterTool.selectedPointIndex = hit.pointIndex;
+        state.scatterTool.selectedHandleRole = "point";
       }
-    } else if (mode === "extrude") {
+    }
+    if (mode === "select" || mode === "move") {
+      beginTouchGrabConfirm(event, function () {
+        applyScatterPointSelection();
+        scatterBeginPointDrag(node, hit.pointIndex, ground, event.pointerId);
+      });
+      return true;
+    }
+    applyScatterPointSelection();
+    if (mode === "extrude") {
       if (!ground) {
         setStatus("No ground hit.", "error");
+      } else if (!scatterInsertHit) {
+        setStatus("Druk tussen twee punten.", "error");
       } else {
-        scatterBeginExtrudeSession(node, ground, event.pointerId);
+        scatterBeginExtrudeSession(node, ground, event.pointerId, scatterInsertHit);
       }
     } else if (mode === "rotate") {
       if (!ground) {
@@ -7408,26 +12866,35 @@ function handleScatterPointerDown(event) {
   }
 
   if (hit.handleRole === "center") {
-    scatterSetSelection(null, "center");
-    if (mode === "move") {
+    if (mode === "extrude") {
       if (!ground) {
         setStatus("No ground hit.", "error");
+      } else if (!scatterInsertHit) {
+        setStatus("Druk tussen twee punten.", "error");
       } else {
-        scatterBeginCenterDrag(node, ground, event.pointerId);
+        scatterBeginExtrudeSession(node, ground, event.pointerId, scatterInsertHit);
       }
+    } else if (mode === "select" || mode === "move") {
+      beginTouchGrabConfirm(event, function () {
+        scatterSetSelection(null, "center");
+        scatterBeginCenterDrag(node, ground, event.pointerId);
+      });
     } else if (mode === "rotate") {
+      scatterSetSelection(null, "center");
       if (!ground) {
         setStatus("No ground hit.", "error");
       } else {
         scatterBeginRotateSession(node, ground, event.pointerId);
       }
     } else if (mode === "scale") {
+      scatterSetSelection(null, "center");
       if (!ground) {
         setStatus("No ground hit.", "error");
       } else {
         scatterBeginScaleSession(node, ground, event.pointerId);
       }
     } else {
+      scatterSetSelection(null, "center");
       scatterFinishWithRender();
     }
     return true;
@@ -7438,6 +12905,7 @@ function handleScatterPointerDown(event) {
 
 function handleScatterPointerMove(event) {
   terrainRememberPointer(event);
+  cancelPointLongPressForMove(event);
   if (runtimeTransformActive()) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return false;
@@ -7464,6 +12932,7 @@ function handleScatterPointerMove(event) {
 
 function handleScatterPointerUp(event) {
   terrainRememberPointer(event);
+  finishPointLongPress(event);
   if (runtimeTransformActive()) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return false;
@@ -7472,6 +12941,7 @@ function handleScatterPointerUp(event) {
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  suppressNextViewportRuntimeClick();
   if (event.type === "pointercancel") {
     scatterCancelActiveSession();
     return true;
@@ -7503,6 +12973,12 @@ function handleScatterPointerUp(event) {
 
 function handleTerrainPointerMove(event) {
   terrainRememberPointer(event);
+  if (updateViewportTouchEditState(event)) {
+    cancelViewportTouchEditSessionsForPan();
+    return;
+  }
+  cancelPointLongPressForMove(event);
+  cancelTouchGrabConfirmForMove(event);
   if (runtimeTransformActive()) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
@@ -7511,7 +12987,14 @@ function handleTerrainPointerMove(event) {
   const isKeyboardSession = terrainHasActiveSession() && state.terrainTool.dragPointerId === null;
   const isPointerSession = state.terrainTool.dragPointerId !== null && event.pointerId === state.terrainTool.dragPointerId;
   if (!isKeyboardSession && !isPointerSession) return;
-  if (!isKeyboardSession && state.terrainTool.draggingPointIndex === null && state.terrainTool.draggingHandleRole !== "center" && state.terrainTool.draggingHandleRole !== "scale") return;
+  if (
+    !isKeyboardSession
+    && state.terrainTool.draggingPointIndex === null
+    && state.terrainTool.draggingHandleRole !== "center"
+    && state.terrainTool.draggingHandleRole !== "scale"
+    && state.terrainTool.draggingHandleRole !== "rotate"
+    && state.terrainTool.draggingHandleRole !== "geoscale"
+  ) return;
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
@@ -7543,6 +13026,12 @@ function handleTerrainPointerMove(event) {
 
 function handleTerrainPointerUp(event) {
   terrainRememberPointer(event);
+  if (updateViewportTouchEditState(event)) {
+    cancelViewportTouchEditSessionsForPan();
+    return;
+  }
+  finishPointLongPress(event);
+  cancelTouchGrabConfirmForEnd(event);
   if (runtimeTransformActive()) {
     if (runtime && typeof runtime.previewTransformAt === "function") runtime.previewTransformAt(event.clientX, event.clientY);
     return;
@@ -7552,6 +13041,7 @@ function handleTerrainPointerUp(event) {
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  suppressNextViewportRuntimeClick();
   if (event.type === "pointercancel") {
     terrainCancelActiveSession();
     return;
@@ -7569,11 +13059,36 @@ function handleTerrainPointerUp(event) {
     void terrainCommitScale(node);
     return;
   }
+  if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+    void terrainCommitGroupTransform(node, state.terrainTool.draggingHandleRole);
+    return;
+  }
   if (Number.isInteger(state.terrainTool.draggingPointIndex)) {
     void terrainCommitPointDrag(node);
     return;
   }
   terrainCancelActiveSession();
+}
+
+function handleTerrainMouseUpFallback(event) {
+  if (event.button !== 0 || runtimeTransformActive()) return;
+  if (state.scatterTool.dragPointerId !== null) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    const node = nodeById(state.scatterTool.dragNodeId) || selectedScatterNode();
+    if (node) void commitActiveScatterSession(node);
+    else scatterCancelActiveSession();
+    return;
+  }
+  if (state.terrainTool.dragPointerId !== null) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    const node = nodeById(state.terrainTool.dragNodeId) || selectedTerrainNode();
+    if (node) void commitActiveTerrainSession(node);
+    else terrainCancelActiveSession();
+  }
 }
 
 // ---------- Keyboard shortcuts ----------
@@ -7684,14 +13199,10 @@ function handleEditorKeyDown(event) {
     }
     if (!event.altKey && !meta && keyMatches(event, "f")) {
       consumeShortcutEvent(event);
-      if (!Number.isInteger(selectedIndex)) {
-        setStatus("Select a point first.", "error");
-        return;
-      }
-      if (!scatterBeginExtrudeSession(scatterNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
-        return;
-      }
-      setStatus("Add point ready. Click or Enter to confirm.", "");
+      scatterCancelActiveSession();
+      state.scatterTool.mode = "extrude";
+      setStatus("Add ready. Druk tussen twee punten en sleep; loslaten bevestigt.", "");
+      scatterFinishWithRender();
       return;
     }
     if (event.key === "Escape") {
@@ -7700,8 +13211,7 @@ function handleEditorKeyDown(event) {
         scatterCancelActiveSession();
         return;
       }
-      state.scatterTool.mode = "select";
-      scatterFinishWithRender();
+      deselectViewportClick();
       return;
     }
     if (event.key === "Enter") {
@@ -7721,16 +13231,18 @@ function handleEditorKeyDown(event) {
       }
     }
     if (event.key === "Delete" || event.key === "Backspace") {
-      consumeShortcutEvent(event);
       if (state.scatterTool.selectedPointIndices.length > 1) {
+        consumeShortcutEvent(event);
         void scatterDeleteMultiPoint(scatterNode);
         return;
       }
       if (Number.isInteger(state.scatterTool.selectedPointIndex)) {
+        consumeShortcutEvent(event);
         void scatterDeletePoint(scatterNode, state.scatterTool.selectedPointIndex);
         return;
       }
-      return;
+      // No point selected - fall through to the generic "delete selected node" handler
+      // below instead of swallowing the key with nothing to delete.
     }
     if (event.code === "NumpadDecimal" || event.key === ".") {
       consumeShortcutEvent(event);
@@ -7777,20 +13289,31 @@ function handleEditorKeyDown(event) {
     }
     if (!event.altKey && !meta && keyMatches(event, "f")) {
       consumeShortcutEvent(event);
-      if (!Number.isInteger(selectedIndex)) {
-        setStatus("Select a point first.", "error");
+      if (!terrainNodeCapabilities(terrainNode).allowExtrude) {
+        setStatus("Extrude is not available here.", "error");
         return;
       }
-      if (!terrainBeginExtrudeSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null)) {
-        return;
-      }
-      setStatus("Add point ready. Click or Enter to confirm.", "");
+      terrainCancelActiveSession();
+      state.terrainTool.mode = "extrude";
+      state.terrainTool.axisConstraint = null;
+      setStatus("Add ready. Druk tussen twee punten en sleep; loslaten bevestigt.", "");
+      terrainFinishWithRender();
       return;
     }
     if (!event.altKey && !meta && keyMatches(event, "t")) {
       consumeShortcutEvent(event);
-      if (!terrainBeginScaleSession(terrainNode, terrainLastPointer, null)) return;
+      if (!terrainBeginGroupTransformSession(terrainNode, terrainLastPointerGroundPoint(), null, "geoscale")) {
+        return;
+      }
       setStatus("Scale ready. Click or Enter to confirm.", "");
+      return;
+    }
+    if (!event.altKey && !meta && keyMatches(event, "r")) {
+      consumeShortcutEvent(event);
+      if (!terrainBeginGroupTransformSession(terrainNode, terrainLastPointer ? terrainGroundPointFromClient(terrainLastPointer.clientX, terrainLastPointer.clientY) : null, null, "rotate")) {
+        return;
+      }
+      setStatus("Rotate ready. Click or Enter to confirm.", "");
       return;
     }
     if (!event.altKey && !meta && (keyMatches(event, "x") || keyMatches(event, "y") || keyMatches(event, "z"))) {
@@ -7818,6 +13341,8 @@ function handleEditorKeyDown(event) {
           terrainUpdateScalePreview(activeNode, state.terrainTool.dragCurrentPointer || state.terrainTool.dragStartPointer);
         } else if (state.terrainTool.draggingHandleRole === "extrude" && (state.terrainTool.dragCurrentGround || state.terrainTool.axisConstraint === "z")) {
           terrainRenderOverlayPreview();
+        } else if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+          terrainRenderOverlayPreview();
         } else if (state.terrainTool.draggingHandleRole === "point" || state.terrainTool.draggingHandleRole === "center") {
           terrainRenderOverlayPreview();
         }
@@ -7837,9 +13362,8 @@ function handleEditorKeyDown(event) {
         terrainFinishWithRender();
         return;
       }
-      state.terrainTool.mode = "select";
       state.terrainTool.axisConstraint = null;
-      terrainFinishWithRender();
+      deselectViewportClick();
       return;
     }
     if (event.key === "Enter") {
@@ -7850,6 +13374,8 @@ function handleEditorKeyDown(event) {
           void terrainCommitScale(activeNode);
         } else if (state.terrainTool.draggingHandleRole === "center") {
           void terrainCommitSurfaceDrag(activeNode);
+        } else if (state.terrainTool.draggingHandleRole === "rotate" || state.terrainTool.draggingHandleRole === "geoscale") {
+          void terrainCommitGroupTransform(activeNode, state.terrainTool.draggingHandleRole);
         } else {
           void terrainCommitPointDrag(activeNode);
         }
@@ -7862,16 +13388,18 @@ function handleEditorKeyDown(event) {
       }
     }
     if (event.key === "Delete" || event.key === "Backspace") {
-      consumeShortcutEvent(event);
       if (state.terrainTool.selectedPointIndices.length > 1) {
+        consumeShortcutEvent(event);
         void terrainDeleteMultiPoint(terrainNode);
         return;
       }
       if (Number.isInteger(state.terrainTool.selectedPointIndex)) {
+        consumeShortcutEvent(event);
         void terrainDeletePoint(terrainNode, state.terrainTool.selectedPointIndex);
         return;
       }
-      return;
+      // No point selected - fall through to the generic "delete selected node" handler
+      // below instead of swallowing the key with nothing to delete.
     }
     if (event.key === ".") {
       consumeShortcutEvent(event);
@@ -7916,14 +13444,22 @@ function handleEditorKeyDown(event) {
     return;
   }
   if (event.key === "Escape") {
+    // A touch Move/Rot/Scale button press only arms the mode (see
+    // beginRuntimeTransformFromShortcut) - the transform itself doesn't exist yet until
+    // the driving touchdown, so isTransformActive() below is still false in that window.
+    // Clearing the arm here too means Escape backs out of that "waiting for a touch"
+    // state instead of silently falling through to deselecting the node.
+    if (runtime && typeof runtime.clearPendingTouchTransform === "function") runtime.clearPendingTouchTransform();
     if (runtime && typeof runtime.isTransformActive === "function" && runtime.isTransformActive()) {
       consumeShortcutEvent(event);
       cancelRuntimeTransform();
       return;
     }
-    clearSelection({ clearPendingEdge: true });
-    renderGraph();
-    setStatus("Deselected.", "");
+    if (selectedModelNode() || runtimeSelectedEntityId() || state.selectedNodeIds.length || state.selectedEdgeIds.length || state.pendingEdge) {
+      consumeShortcutEvent(event);
+      deselectViewportClick();
+      return;
+    }
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
@@ -8005,5 +13541,8 @@ window.addEventListener("pointerdown", handleTerrainPointerDown, true);
 window.addEventListener("pointermove", handleTerrainPointerMove, true);
 window.addEventListener("pointerup", handleTerrainPointerUp, true);
 window.addEventListener("pointercancel", handleTerrainPointerUp, true);
+window.addEventListener("mouseup", handleTerrainMouseUpFallback, true);
+window.addEventListener("blur", clearViewportTouchEditState, true);
 
+initMobileControls();
 boot();

@@ -33,9 +33,33 @@ export const DATA_TYPE_COLORS = {
   entity: "#b000ff",
   interactable: "#ec4899",
   chunkLoading: "#06b6d4",
+  mmoNetwork: "#22c55e",
   keybind: "#f43f5e",
   ui: "#f8fafc",
   minimap: "#00ff66",
+  zoneDef: "#1d4ed8",
+  environment: "#2dd4bf",
+  zoneRules: "#ea580c",
+  area: "#a855f7",
+  areaPackage: "#7e22ce",
+  environmentOverride: "#0f766e",
+  anchor: "#94a3b8",
+  spawnPoint: "#bef264",
+  checkpoint: "#4d7c0f",
+  zoneLink: "#0e7490",
+  discoveryDef: "#22d3ee",
+  areaRule: "#fdba74",
+  markerDef: "#e879f9",
+  markerRule: "#be123c",
+  audioAssignment: "#c084fc",
+  path: "#fde047",
+  encounterArea: "#dc2626",
+  cameraOverride: "#818cf8",
+  entityBase: "#c026d3",
+  entityComponent: "#f472b6",
+  questTarget: "#10b981",
+  action: "#fb7185",
+  zonePackageRef: "#075985",
   group: "#64748b"
 };
 
@@ -141,6 +165,19 @@ export const WORLD_SHADOW_PRESET_OPTIONS = [
   { value: "extreem_schaduw", label: "Extreem schaduw" }
 ];
 
+export const MMO_NETWORK_PRESET_NAMES = ["custom", "extreme_low_bandwidth", "low_bandwidth", "stable", "balanced", "responsive", "fast", "lan_debug", "smooth_mmo"];
+export const MMO_NETWORK_PRESET_OPTIONS = [
+  { value: "custom", label: "Custom" },
+  { value: "extreme_low_bandwidth", label: "0 Extreme low bandwidth" },
+  { value: "low_bandwidth", label: "1 Low bandwidth" },
+  { value: "stable", label: "2 Stable" },
+  { value: "balanced", label: "3 Balanced 30/20/30" },
+  { value: "responsive", label: "4 Responsive" },
+  { value: "fast", label: "5 Fast" },
+  { value: "lan_debug", label: "6 LAN debug" },
+  { value: "smooth_mmo", label: "7 Smooth MMO no rubberband" }
+];
+
 const WORLD_SHADOW_PRESET_ALIASES = {
   off: "geen_schaduw",
   potato: "geen_schaduw",
@@ -162,6 +199,314 @@ export function normalizeWorldSettingsPreset(value, fallback = "middel_schaduw")
   if (WORLD_SHADOW_PRESET_ALIASES[normalizedFallback]) return WORLD_SHADOW_PRESET_ALIASES[normalizedFallback];
   if (WORLD_SHADOW_PRESET_NAMES.includes(normalizedFallback)) return normalizedFallback;
   return "middel_schaduw";
+}
+
+const MMO_NETWORK_PRESET_ALIASES = {
+  "0": "extreme_low_bandwidth",
+  extreme: "extreme_low_bandwidth",
+  extreem: "extreme_low_bandwidth",
+  extream: "extreme_low_bandwidth",
+  extreme_low: "extreme_low_bandwidth",
+  low: "low_bandwidth",
+  "1": "low_bandwidth",
+  bandwidth: "low_bandwidth",
+  "2": "stable",
+  safe: "stable",
+  "3": "balanced",
+  medium: "balanced",
+  default: "balanced",
+  recommended: "balanced",
+  "4": "responsive",
+  high: "responsive",
+  "5": "fast",
+  ultra: "fast",
+  "6": "lan_debug",
+  lan: "lan_debug",
+  debug: "lan_debug",
+  "7": "smooth_mmo",
+  smooth: "smooth_mmo",
+  no_rubberband: "smooth_mmo",
+  norubberband: "smooth_mmo",
+  mmo_smooth: "smooth_mmo"
+};
+
+function clampPlainNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function roundTo(value, step = 1) {
+  const safeStep = Number(step) > 0 ? Number(step) : 1;
+  return Math.round(Number(value) / safeStep) * safeStep;
+}
+
+export function normalizeMmoNetworkPreset(value, fallback = "custom") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (MMO_NETWORK_PRESET_ALIASES[normalized]) return MMO_NETWORK_PRESET_ALIASES[normalized];
+  if (MMO_NETWORK_PRESET_NAMES.includes(normalized)) return normalized;
+  const normalizedFallback = String(fallback || "custom").trim().toLowerCase();
+  if (MMO_NETWORK_PRESET_ALIASES[normalizedFallback]) return MMO_NETWORK_PRESET_ALIASES[normalizedFallback];
+  if (MMO_NETWORK_PRESET_NAMES.includes(normalizedFallback)) return normalizedFallback;
+  return "custom";
+}
+
+export function mmoNetworkIntervalMsForRate(inputSendRateHz) {
+  const rate = clampPlainNumber(inputSendRateHz, 10, 60, 30);
+  return Math.max(16, Math.min(120, Math.round(1000 / rate)));
+}
+
+export function mmoNetworkCorrectionBlendRateForMs(correctionBlendMs) {
+  const durationMs = clampPlainNumber(correctionBlendMs, 50, 1000, 300);
+  return Math.round((1 - Math.pow(0.05, 50 / durationMs)) * 1000) / 1000;
+}
+
+function mmoNetworkInterpolationWindow(baseDelayMs) {
+  const base = clampPlainNumber(baseDelayMs, 0, 300, 200);
+  return {
+    remoteInterpolationMinDelayMs: Math.max(0, Math.round(base * 0.8)),
+    remoteInterpolationMaxDelayMs: Math.min(500, Math.round(base * 1.4))
+  };
+}
+
+function buildMmoNetworkPreset(values) {
+  const baseDelay = clampPlainNumber(values.remoteInterpolationBaseDelayMs, 0, 300, 200);
+  const correctionBlendMs = clampPlainNumber(values.ownCorrectionBlendMs, 50, 1000, 300);
+  const inputSendRateHz = clampPlainNumber(values.inputSendRateHz, 10, 60, 30);
+  return Object.assign({
+    enabled: true,
+    serverTickRateHz: clampPlainNumber(values.serverTickRateHz, 10, 60, 30),
+    snapshotRateHz: clampPlainNumber(values.snapshotRateHz, 5, 30, 20),
+    inputSendRateHz: inputSendRateHz,
+    moveSendIntervalMs: mmoNetworkIntervalMsForRate(inputSendRateHz),
+    remoteInterpolationBaseDelayMs: baseDelay,
+    remoteMaxExtrapolationMs: clampPlainNumber(values.remoteMaxExtrapolationMs, 0, 250, 80),
+    predictionEnabled: values.predictionEnabled !== false,
+    reconciliationEnabled: values.reconciliationEnabled !== false,
+    ownPredictionDeadzone: clampPlainNumber(values.ownPredictionDeadzone, 0, 2, 0.35),
+    ownSmallCorrectionThreshold: clampPlainNumber(values.ownSmallCorrectionThreshold, 0, 5, 1),
+    ownHardCorrectionThreshold: clampPlainNumber(values.ownHardCorrectionThreshold, 0.5, 20, 3),
+    ownCorrectionBlendMs: correctionBlendMs,
+    ownCorrectionBlendRate: mmoNetworkCorrectionBlendRateForMs(correctionBlendMs),
+    ownKeepPredictionDuringInput: values.ownKeepPredictionDuringInput !== false,
+    ownActiveCorrectionMaxUnits: clampPlainNumber(values.ownActiveCorrectionMaxUnits, 0, 2, 0.08),
+    ownCorrectionMergeFactor: clampPlainNumber(values.ownCorrectionMergeFactor, 0, 1, 0.35),
+    ownPostInputHoldMs: clampPlainNumber(values.ownPostInputHoldMs, 0, 2000, 650),
+    ownStopResyncMaxUnits: clampPlainNumber(values.ownStopResyncMaxUnits, 0, 200, 40),
+    readyTimeoutMs: 12000,
+    wsStatusHysteresisMs: 250,
+    clientPingIntervalMs: 2000
+  }, mmoNetworkInterpolationWindow(baseDelay));
+}
+
+const MMO_NETWORK_PRESETS = {
+  extreme_low_bandwidth: buildMmoNetworkPreset({
+    serverTickRateHz: 15,
+    snapshotRateHz: 5,
+    inputSendRateHz: 15,
+    remoteInterpolationBaseDelayMs: 300,
+    remoteMaxExtrapolationMs: 160,
+    ownPredictionDeadzone: 0.8,
+    ownSmallCorrectionThreshold: 1.8,
+    ownHardCorrectionThreshold: 5,
+    ownCorrectionBlendMs: 700,
+    ownActiveCorrectionMaxUnits: 0.02,
+    ownCorrectionMergeFactor: 0.2,
+    ownPostInputHoldMs: 1200,
+    ownStopResyncMaxUnits: 100
+  }),
+  low_bandwidth: buildMmoNetworkPreset({
+    serverTickRateHz: 20,
+    snapshotRateHz: 10,
+    inputSendRateHz: 20,
+    remoteInterpolationBaseDelayMs: 260,
+    remoteMaxExtrapolationMs: 120,
+    ownPredictionDeadzone: 0.65,
+    ownSmallCorrectionThreshold: 1.6,
+    ownHardCorrectionThreshold: 4.5,
+    ownCorrectionBlendMs: 600,
+    ownActiveCorrectionMaxUnits: 0.03,
+    ownCorrectionMergeFactor: 0.25,
+    ownPostInputHoldMs: 1000,
+    ownStopResyncMaxUnits: 80
+  }),
+  stable: buildMmoNetworkPreset({
+    serverTickRateHz: 30,
+    snapshotRateHz: 15,
+    inputSendRateHz: 30,
+    remoteInterpolationBaseDelayMs: 230,
+    remoteMaxExtrapolationMs: 100,
+    ownPredictionDeadzone: 0.55,
+    ownSmallCorrectionThreshold: 1.4,
+    ownHardCorrectionThreshold: 4,
+    ownCorrectionBlendMs: 500,
+    ownActiveCorrectionMaxUnits: 0.04,
+    ownCorrectionMergeFactor: 0.3,
+    ownPostInputHoldMs: 850,
+    ownStopResyncMaxUnits: 70
+  }),
+  balanced: buildMmoNetworkPreset({
+    serverTickRateHz: 30,
+    snapshotRateHz: 20,
+    inputSendRateHz: 30,
+    remoteInterpolationBaseDelayMs: 200,
+    remoteMaxExtrapolationMs: 80,
+    ownPredictionDeadzone: 0.5,
+    ownSmallCorrectionThreshold: 1.3,
+    ownHardCorrectionThreshold: 4,
+    ownCorrectionBlendMs: 450,
+    ownActiveCorrectionMaxUnits: 0.05,
+    ownCorrectionMergeFactor: 0.35,
+    ownPostInputHoldMs: 700,
+    ownStopResyncMaxUnits: 60
+  }),
+  responsive: buildMmoNetworkPreset({
+    serverTickRateHz: 40,
+    snapshotRateHz: 20,
+    inputSendRateHz: 40,
+    remoteInterpolationBaseDelayMs: 160,
+    remoteMaxExtrapolationMs: 70,
+    ownPredictionDeadzone: 0.4,
+    ownSmallCorrectionThreshold: 1.1,
+    ownHardCorrectionThreshold: 3.5,
+    ownCorrectionBlendMs: 375,
+    ownActiveCorrectionMaxUnits: 0.07,
+    ownCorrectionMergeFactor: 0.45,
+    ownPostInputHoldMs: 550,
+    ownStopResyncMaxUnits: 45
+  }),
+  fast: buildMmoNetworkPreset({
+    serverTickRateHz: 50,
+    snapshotRateHz: 25,
+    inputSendRateHz: 50,
+    remoteInterpolationBaseDelayMs: 130,
+    remoteMaxExtrapolationMs: 60,
+    ownPredictionDeadzone: 0.35,
+    ownSmallCorrectionThreshold: 1,
+    ownHardCorrectionThreshold: 3.25,
+    ownCorrectionBlendMs: 325,
+    ownActiveCorrectionMaxUnits: 0.1,
+    ownCorrectionMergeFactor: 0.6,
+    ownPostInputHoldMs: 450,
+    ownStopResyncMaxUnits: 35
+  }),
+  lan_debug: buildMmoNetworkPreset({
+    serverTickRateHz: 60,
+    snapshotRateHz: 30,
+    inputSendRateHz: 60,
+    remoteInterpolationBaseDelayMs: 90,
+    remoteMaxExtrapolationMs: 40,
+    ownPredictionDeadzone: 0.25,
+    ownSmallCorrectionThreshold: 0.85,
+    ownHardCorrectionThreshold: 3,
+    ownCorrectionBlendMs: 250,
+    ownActiveCorrectionMaxUnits: 0.14,
+    ownCorrectionMergeFactor: 0.75,
+    ownPostInputHoldMs: 300,
+    ownStopResyncMaxUnits: 25
+  }),
+  smooth_mmo: buildMmoNetworkPreset({
+    serverTickRateHz: 30,
+    snapshotRateHz: 20,
+    inputSendRateHz: 30,
+    remoteInterpolationBaseDelayMs: 220,
+    remoteMaxExtrapolationMs: 80,
+    ownPredictionDeadzone: 0.7,
+    ownSmallCorrectionThreshold: 1.7,
+    ownHardCorrectionThreshold: 5,
+    ownCorrectionBlendMs: 650,
+    ownActiveCorrectionMaxUnits: 0.02,
+    ownCorrectionMergeFactor: 0.2,
+    ownPostInputHoldMs: 1200,
+    ownStopResyncMaxUnits: 100
+  })
+};
+
+export function mmoNetworkPresetValues(preset) {
+  const normalized = normalizeMmoNetworkPreset(preset, "");
+  if (!normalized || normalized === "custom") return null;
+  return MMO_NETWORK_PRESETS[normalized] ? clonePresetValues(MMO_NETWORK_PRESETS[normalized]) : null;
+}
+
+export function mmoNetworkPresetNodePatch(preset) {
+  const normalized = normalizeMmoNetworkPreset(preset, "custom");
+  const values = mmoNetworkPresetValues(normalized);
+  return values ? Object.assign({ networkPreset: normalized }, values) : { networkPreset: "custom" };
+}
+
+export function mmoNetworkFieldNodePatch(key, value, currentValues = {}) {
+  const patch = { [key]: cloneDefaultValue(value) };
+  const linkedFields = new Set([
+    "serverTickRateHz",
+    "snapshotRateHz",
+    "inputSendRateHz",
+    "remoteInterpolationBaseDelayMs",
+    "remoteInterpolationMinDelayMs",
+    "remoteInterpolationMaxDelayMs",
+    "ownHardCorrectionThreshold",
+    "ownCorrectionBlendMs",
+    "ownActiveCorrectionMaxUnits",
+    "ownCorrectionMergeFactor",
+    "ownKeepPredictionDuringInput",
+    "ownPostInputHoldMs",
+    "ownStopResyncMaxUnits",
+    "predictionEnabled",
+    "reconciliationEnabled"
+  ]);
+  if (key === "networkPreset") return mmoNetworkPresetNodePatch(value);
+  if (!linkedFields.has(key)) return patch;
+
+  patch.networkPreset = "custom";
+  if (key === "serverTickRateHz") {
+    const serverRate = clampPlainNumber(value, 10, 60, 30);
+    const snapshotRate = clampPlainNumber(currentValues.snapshotRateHz, 5, 30, 20);
+    const inputRate = clampPlainNumber(currentValues.inputSendRateHz, 10, 60, 30);
+    patch.serverTickRateHz = serverRate;
+    if (snapshotRate > serverRate) patch.snapshotRateHz = serverRate;
+    if (inputRate > serverRate) {
+      patch.inputSendRateHz = serverRate;
+      patch.moveSendIntervalMs = mmoNetworkIntervalMsForRate(serverRate);
+    }
+  } else if (key === "snapshotRateHz") {
+    const snapshotRate = clampPlainNumber(value, 5, 30, 20);
+    const serverRate = clampPlainNumber(currentValues.serverTickRateHz, 10, 60, 30);
+    patch.snapshotRateHz = snapshotRate;
+    if (serverRate < snapshotRate) patch.serverTickRateHz = snapshotRate;
+    const baseDelay = snapshotRate <= 10 ? 260 : (snapshotRate <= 15 ? 230 : (snapshotRate <= 20 ? 200 : (snapshotRate <= 25 ? 160 : 130)));
+    patch.remoteInterpolationBaseDelayMs = baseDelay;
+    Object.assign(patch, mmoNetworkInterpolationWindow(baseDelay));
+  } else if (key === "inputSendRateHz") {
+    const inputRate = clampPlainNumber(value, 10, 60, 30);
+    const serverRate = clampPlainNumber(currentValues.serverTickRateHz, 10, 60, 30);
+    patch.inputSendRateHz = inputRate;
+    patch.moveSendIntervalMs = mmoNetworkIntervalMsForRate(inputRate);
+    if (serverRate < inputRate) patch.serverTickRateHz = inputRate;
+  } else if (key === "remoteInterpolationBaseDelayMs") {
+    Object.assign(patch, mmoNetworkInterpolationWindow(value));
+  } else if (key === "remoteInterpolationMinDelayMs") {
+    const minDelay = clampPlainNumber(value, 0, 300, 0);
+    const baseDelay = clampPlainNumber(currentValues.remoteInterpolationBaseDelayMs, 0, 300, 200);
+    const maxDelay = clampPlainNumber(currentValues.remoteInterpolationMaxDelayMs, 0, 500, 280);
+    if (baseDelay < minDelay) patch.remoteInterpolationBaseDelayMs = minDelay;
+    if (maxDelay < minDelay) patch.remoteInterpolationMaxDelayMs = minDelay;
+  } else if (key === "remoteInterpolationMaxDelayMs") {
+    const maxDelay = clampPlainNumber(value, 0, 500, 280);
+    const minDelay = clampPlainNumber(currentValues.remoteInterpolationMinDelayMs, 0, 300, 160);
+    const baseDelay = clampPlainNumber(currentValues.remoteInterpolationBaseDelayMs, 0, 300, 200);
+    if (baseDelay > maxDelay) patch.remoteInterpolationBaseDelayMs = maxDelay;
+    if (minDelay > maxDelay) patch.remoteInterpolationMinDelayMs = maxDelay;
+  } else if (key === "ownHardCorrectionThreshold") {
+    const snapDistance = clampPlainNumber(value, 0.5, 20, 3);
+    patch.ownSmallCorrectionThreshold = Math.min(5, Math.max(0, roundTo(snapDistance * 0.35, 0.05)));
+  } else if (key === "ownCorrectionBlendMs") {
+    patch.ownCorrectionBlendRate = mmoNetworkCorrectionBlendRateForMs(value);
+  } else if (key === "predictionEnabled") {
+    if (value === false) patch.reconciliationEnabled = false;
+    if (value === true && currentValues.reconciliationEnabled === false) patch.reconciliationEnabled = true;
+  } else if (key === "reconciliationEnabled") {
+    if (value === true) patch.predictionEnabled = true;
+  }
+  return patch;
 }
 
 function clonePresetValues(values) {
@@ -261,7 +606,7 @@ export const EDITOR_WORLD_SETTINGS_PRESETS = {
     normalBias: 0.04,
     staticPropsCast: true,
     staticPropsReceive: true,
-    scatterCast: false,
+    scatterCast: true,
     scatterReceive: true,
     groundReceives: true,
     terrainReceives: true,
@@ -333,13 +678,13 @@ export const GAME_WORLD_SETTINGS_PRESETS = {
   lichte_schaduw: buildShadowPreset("game", "lichte_schaduw", {
     enabled: true,
     mapSize: 512,
-    cameraSize: 75,
-    cameraFar: 350,
+    cameraSize: 70,
+    cameraFar: 300,
     bias: -0.0003,
     normalBias: 0.04,
-    staticPropsCast: true,
+    staticPropsCast: false,
     staticPropsReceive: true,
-    scatterCast: false,
+    scatterCast: true,
     scatterReceive: true,
     groundReceives: true,
     terrainReceives: true,
@@ -347,18 +692,18 @@ export const GAME_WORLD_SETTINGS_PRESETS = {
   }),
   middel_schaduw: buildShadowPreset("game", "middel_schaduw", {
     enabled: true,
-    mapSize: 1024,
-    cameraSize: 85,
-    cameraFar: 450,
+    mapSize: 512,
+    cameraSize: 70,
+    cameraFar: 300,
     bias: -0.0003,
     normalBias: 0.04,
-    staticPropsCast: true,
+    staticPropsCast: false,
     staticPropsReceive: true,
     scatterCast: true,
     scatterReceive: true,
     groundReceives: true,
     terrainReceives: true,
-    shadowResidentMarginChunks: 1
+    shadowResidentMarginChunks: 0
   }),
   hoog_schaduw: buildShadowPreset("game", "hoog_schaduw", {
     enabled: true,
@@ -399,6 +744,24 @@ function modeFieldName(mode, key) {
 
 function presetTableForMode(mode) {
   return mode === "editor" ? EDITOR_WORLD_SETTINGS_PRESETS : GAME_WORLD_SETTINGS_PRESETS;
+}
+
+function shadowFocusModeOptions(mode) {
+  if (mode === "game") {
+    return [
+      { value: "", label: "Preset/default" },
+      { value: "player_or_spawn", label: "Player/spawn" },
+      { value: "camera_target", label: "Game camera target" },
+      { value: "world_center", label: "World/content center" }
+    ];
+  }
+  return [
+    { value: "", label: "Preset/default" },
+    { value: "editor_world_center_or_selected", label: "Selected/world center" },
+    { value: "editor_camera_target", label: "Editor camera target" },
+    { value: "editor_world_center", label: "World/content center" },
+    { value: "spawn", label: "Spawn" }
+  ];
 }
 
 export function worldSettingsPresetValues(mode, preset) {
@@ -547,6 +910,81 @@ function buildWorldSettingsModeFields(mode, defaults = {}, hidden = false) {
       default: defaults.streamingDebugVisible,
       required: true,
       help: worldSettingsModeHelpText(modeLabel, "Streaming debug visible")
+    }),
+    [prefix + "ShadowMapSize"]: field("Shadow map size", {
+      section: "Shadow camera",
+      label: "Shadow map size",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 4096,
+      step: 1,
+      required: false,
+      help: "0 gebruikt de preset. Positieve overrides worden minimaal 256; hoger is scherper maar zwaarder."
+    }),
+    [prefix + "ShadowCameraSize"]: field("Shadow camera size", {
+      section: "Shadow camera",
+      label: "Shadow camera size",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 1000,
+      step: 1,
+      required: false,
+      help: "Orthographic half-size van de shadow-camera. 0 gebruikt de preset. Groter dekt meer editor/game wereld af, maar maakt schaduw grover."
+    }),
+    [prefix + "ShadowCameraNear"]: field("Shadow camera near", {
+      section: "Shadow camera",
+      label: "Shadow camera near",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 1000,
+      step: 0.1,
+      required: false,
+      help: "0 gebruikt de preset. Alleen aanpassen als shadows dichtbij de zoncamera clippen."
+    }),
+    [prefix + "ShadowCameraFar"]: field("Shadow camera far", {
+      section: "Shadow camera",
+      label: "Shadow camera far",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 5000,
+      step: 1,
+      required: false,
+      help: "0 gebruikt de preset. Verhoog dit als lange/hoog geplaatste directional lights clippen."
+    }),
+    [prefix + "ShadowSnapWorldUnits"]: field("Shadow refresh distance", {
+      section: "Shadow camera",
+      label: "Shadow refresh distance",
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 100,
+      step: 1,
+      required: false,
+      help: "0 gebruikt de preset. 1 vernieuwt het vaakst en geeft de kleinste stappen; hoger is lichter maar kan kale stukken geven tijdens pan/chunkverplaatsing."
+    }),
+    [prefix + "ShadowFocusMode"]: field("Shadow focus mode", {
+      section: "Shadow camera",
+      label: "Shadow focus mode",
+      type: "select",
+      options: shadowFocusModeOptions(mode),
+      default: "",
+      required: false,
+      help: "Leeg gebruikt de preset. Editor camera target laat de shadow-box meebewegen met hetzelfde focusconcept als de game-camera target."
+    }),
+    [prefix + "ShadowResidentMarginChunks"]: field("Shadow chunk margin", {
+      section: "Shadow camera",
+      label: "Shadow chunk margin",
+      type: "number",
+      default: -1,
+      min: -1,
+      max: 20,
+      step: 1,
+      required: false,
+      help: "-1 gebruikt de preset. 0 is lichter; hoger houdt extra chunk-marge voor stabielere shadows."
     })
   };
   return fields;
@@ -569,7 +1007,7 @@ const WORLD_SETTINGS_EDITOR_FIELDS = buildWorldSettingsModeFields("editor", {
 const WORLD_SETTINGS_GAME_FIELDS = buildWorldSettingsModeFields("game", {
   preset: "middel_schaduw",
   pixelRatioCap: 1,
-  antialias: true,
+  antialias: false,
   fogEnabled: true,
   maxFps: 60,
   debugHelpersVisible: false,
@@ -844,9 +1282,20 @@ export function normalizeGroupInterface(value) {
   if (shouldUseDefault) return groupInterfaceDefault();
   const inputs = Array.isArray(raw.inputs) ? raw.inputs : [];
   const outputs = Array.isArray(raw.outputs) ? raw.outputs : [];
+  function normalizePorts(ports, direction) {
+    const seen = new Set();
+    const normalized = [];
+    for (const [index, port] of ports.entries()) {
+      const clean = coerceGroupPort(port, direction + "_" + (index + 1));
+      if (!clean || seen.has(clean.name)) continue;
+      seen.add(clean.name);
+      normalized.push(clean);
+    }
+    return normalized;
+  }
   return {
-    inputs: inputs.map(function (port, index) { return coerceGroupPort(port, "input_" + (index + 1)); }).filter(Boolean),
-    outputs: outputs.map(function (port, index) { return coerceGroupPort(port, "output_" + (index + 1)); }).filter(Boolean)
+    inputs: normalizePorts(inputs, "input"),
+    outputs: normalizePorts(outputs, "output")
   };
 }
 
@@ -976,6 +1425,7 @@ export const NODE_TYPES = {
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       interactables: { label: "Interactables", dataType: "interactable", required: false, multiple: true },
       chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
+      mmoNetwork: { label: "MMO Network", dataType: "mmoNetwork", required: false, multiple: false },
       keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       ui: { label: "UI", dataType: "ui", required: false, multiple: true },
       minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
@@ -1023,7 +1473,7 @@ export const NODE_TYPES = {
     group: "World",
     accent: "#67d8c4",
     description: "Editor loading policy for showing more world chunks around the editor camera while authoring.",
-    inputs: {},
+    inputs: { chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: false, multiple: false } },
     outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
     fields: EDITOR_CHUNK_LOADING_FIELDS
   },
@@ -1033,7 +1483,7 @@ export const NODE_TYPES = {
     group: "World",
     accent: "#67d8c4",
     description: "Game loading policy for keeping runtime chunks just outside the game camera. Tune the active chunk square to stay inside the frustum without clipping maxLoadedChunks.",
-    inputs: {},
+    inputs: { chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: false, multiple: false } },
     outputs: { chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading" } },
     fields: GAME_CHUNK_LOADING_FIELDS
   },
@@ -1066,6 +1516,7 @@ export const NODE_TYPES = {
       textureAssetId: { label: "Texture asset", type: "asset", assetTypes: ["texture", "image"], default: null, required: false },
       textureWorldSizeX: { label: "Texture world size X", type: "number", default: 10, min: 0.01, max: 10000, step: 0.01, required: false },
       textureWorldSizeZ: { label: "Texture world size Z", type: "number", default: 10, min: 0.01, max: 10000, step: 0.01, required: false },
+      edgeFadeWidth: { section: "Zone Blend", label: "Zone edge fader", type: "number", default: 0, min: 0, max: 120, step: 1, required: false, editorControl: "range" },
       textureRepeat: { label: "Texture repeat", type: "number", default: 8, min: 1, max: 512, step: 1, required: false }
     }
   },
@@ -1577,9 +2028,49 @@ export const NODE_TYPES = {
       showRemoteBufferSizes: { label: "Show remote buffer sizes", type: "boolean", default: true, required: true },
       showRemoteHardSnapCount: { label: "Show remote hard snaps", type: "boolean", default: true, required: true },
       showRemoteSmoothFrameCount: { label: "Show remote smooth frames", type: "boolean", default: true, required: true },
-      showLastRemoteEventType: { label: "Show last remote event", type: "boolean", default: true, required: true }
+      showLastRemoteEventType: { label: "Show last remote event", type: "boolean", default: true, required: true },
+      showMmoSettings: { label: "Show MMO settings", type: "boolean", default: true, required: true },
+      showMmoHealth: { label: "Show MMO health", type: "boolean", default: true, required: true },
+      showMinimapFog: { label: "Show minimap fog", type: "boolean", default: true, required: true }
     }
   },
+
+	  mmo_network_settings: {
+	    label: "MMO Network Settings",
+	    group: "Project",
+	    accent: "#22c55e",
+	    description: "Client-side MMO smoothing and connection tuning for testing movement jitter without code changes.",
+	    inputs: {},
+	    outputs: { mmoNetwork: { label: "MMO Network", dataType: "mmoNetwork" } },
+	    fields: {
+	      settingsId: { section: "Identity", label: "Settings id (settingsId)", type: "text", default: "mmo_network", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
+	      enabled: { section: "Identity", label: "Enabled (enabled)", type: "boolean", default: true, required: true },
+	      networkPreset: { section: "Preset", label: "Netcode preset (networkPreset)", type: "select", options: MMO_NETWORK_PRESET_OPTIONS, default: "custom", required: true, help: "Custom bewaart jouw eigen waarden. Presets 0-7 zetten de gekoppelde hardcode velden tegelijk. 0 is meeste smoothing/laagste bandwidth; 7 is de rustigste no-rubberband MMO preset." },
+	      serverTickRateHz: { section: "Rates", label: "Fixed timestep Hz (serverTickRateHz)", type: "number", default: 30, min: 10, max: 60, step: 1, required: true, help: "Gangbare game-dev naam: fixed timestep of simulation tick. Houd state replication en client input rate niet hoger dan deze waarde. 30 Hz is de normale MMO-keuze." },
+	      snapshotRateHz: { section: "Rates", label: "State replication Hz (snapshotRateHz)", type: "number", default: 20, min: 5, max: 30, step: 1, required: true, help: "Gangbare game-dev naam: snapshot rate, replication rate of state sync rate. Best practice: 15-20 Hz voor MMO movement. Bij aanpassen volgt de interpolation buffer mee." },
+	      inputSendRateHz: { section: "Rates", label: "Client input rate Hz (inputSendRateHz)", type: "number", default: 30, min: 10, max: 60, step: 1, required: true, help: "Gangbare game-dev naam: input command rate of client input rate. Meestal gelijk aan fixed timestep. Dit schrijft ook de oude hardcode fallback moveSendIntervalMs mee." },
+	      moveSendIntervalMs: { section: "Rates", label: "Move send interval ms (moveSendIntervalMs)", type: "number", default: 33, min: 16, max: 120, step: 1, required: true, hidden: true, help: "Legacy hardcode waarde. Wordt automatisch berekend uit inputSendRateHz." },
+	      remoteInterpolationBaseDelayMs: { section: "Remote interpolation", label: "Interpolation buffer ms (remoteInterpolationBaseDelayMs)", type: "number", default: 200, min: 0, max: 300, step: 1, required: true, help: "Gangbare game-dev naam: interpolation buffer delay. Best practice: rond 200 ms bij 20 Hz snapshots. Bij aanpassen volgen min/max mee zodat remote spelers minder jitteren." },
+	      remoteInterpolationMinDelayMs: { section: "Remote interpolation", label: "Interpolation buffer min ms (remoteInterpolationMinDelayMs)", type: "number", default: 160, min: 0, max: 300, step: 1, required: true, help: "Ondergrens voor dynamic interpolation buffer. Hoort onder remoteInterpolationBaseDelayMs te blijven." },
+	      remoteInterpolationMaxDelayMs: { section: "Remote interpolation", label: "Interpolation buffer max ms (remoteInterpolationMaxDelayMs)", type: "number", default: 280, min: 0, max: 500, step: 1, required: true, help: "Bovengrens voor jitter buffer. Hoort boven remoteInterpolationBaseDelayMs te blijven." },
+	      remoteMaxExtrapolationMs: { section: "Remote interpolation", label: "Extrapolation limit ms (remoteMaxExtrapolationMs)", type: "number", default: 80, min: 0, max: 250, step: 1, required: true, help: "Gangbare game-dev naam: extrapolation limit. Hoe lang remote spelers mogen doorlopen als een snapshot te laat is." },
+	      predictionEnabled: { section: "Prediction and reconciliation", label: "Client-side prediction (predictionEnabled)", type: "boolean", default: true, required: true, help: "Best practice: aan. De client beweegt direct lokaal en wacht niet op de server." },
+	      reconciliationEnabled: { section: "Prediction and reconciliation", label: "Server reconciliation (reconciliationEnabled)", type: "boolean", default: true, required: true, help: "Best practice: aan samen met client-side prediction. Servercorrecties worden verwerkt zonder zichtbare terugtrek." },
+	      ownHardCorrectionThreshold: { section: "Prediction and reconciliation", label: "Snap threshold units (ownHardCorrectionThreshold)", type: "number", default: 3, min: 0.5, max: 20, step: 0.1, required: true, help: "Gangbare game-dev naam: snap threshold of teleport threshold. Afstand waarna de eigen speler hard naar de serverpositie snapt. Best practice: 2.5 tot 4." },
+	      ownCorrectionBlendMs: { section: "Prediction and reconciliation", label: "Correction smoothing ms (ownCorrectionBlendMs)", type: "number", default: 300, min: 50, max: 1000, step: 10, required: true, help: "Gangbare game-dev naam: correction smoothing of reconciliation smoothing. Best practice: 250-350 ms. Schrijft ownCorrectionBlendRate automatisch mee." },
+	      ownCorrectionBlendRate: { section: "Prediction and reconciliation", label: "Own correction blend rate (ownCorrectionBlendRate)", type: "number", default: 0.393, min: 0, max: 1, step: 0.001, required: true, hidden: true, help: "Legacy hardcode waarde. Wordt automatisch berekend uit ownCorrectionBlendMs." },
+	      ownPredictionDeadzone: { section: "Prediction and reconciliation", label: "Prediction error tolerance (ownPredictionDeadzone)", type: "number", default: 0.35, min: 0, max: 2, step: 0.01, required: true, help: "Gangbare game-dev naam: prediction error tolerance of deadzone. Serverafwijkingen hieronder worden genegeerd tijdens bewegen." },
+	      ownSmallCorrectionThreshold: { section: "Prediction and reconciliation", label: "Soft correction threshold (ownSmallCorrectionThreshold)", type: "number", default: 1.0, min: 0, max: 5, step: 0.05, required: true, help: "Grens tussen kleine directe correctie en smooth reconcile bij stilstand. Wordt mee gezet bij snap threshold." },
+	      ownKeepPredictionDuringInput: { section: "Prediction and reconciliation", label: "Hold prediction while moving (ownKeepPredictionDuringInput)", type: "boolean", default: true, required: true, help: "Laat server snapshots tijdens actieve input alleen ack/debug bijwerken. Dit voorkomt de zichtbare tik/rubberband door late servercoordinaten." },
+	      ownActiveCorrectionMaxUnits: { section: "Prediction and reconciliation", label: "Active correction cap units (ownActiveCorrectionMaxUnits)", type: "number", default: 0.08, min: 0, max: 2, step: 0.01, required: true, help: "Maximale correctie die per server-ack tijdens actieve input mag worden opgebouwd als hold prediction uit staat. 0 schakelt actieve correctie uit." },
+	      ownCorrectionMergeFactor: { section: "Prediction and reconciliation", label: "Correction merge factor (ownCorrectionMergeFactor)", type: "number", default: 0.35, min: 0, max: 1, step: 0.01, required: true, help: "Hoe sterk een nieuwe servercorrectie de vorige openstaande correctie vervangt. Lager is rustiger, hoger volgt sneller." },
+	      ownPostInputHoldMs: { section: "Prediction and reconciliation", label: "Post-input hold ms (ownPostInputHoldMs)", type: "number", default: 650, min: 0, max: 2000, step: 10, required: true, help: "Na loslaten blijft de client prediction kort vasthouden zodat de server zijn vertraagde beweging kan inhalen voordat een stop-snapshot mag corrigeren." },
+	      ownStopResyncMaxUnits: { section: "Prediction and reconciliation", label: "Stop resync max units (ownStopResyncMaxUnits)", type: "number", default: 40, min: 0, max: 200, step: 1, required: true, help: "Maximale afstand waarbij de server bij loslaten de laatste client-prediction mag overnemen. Dit voorkomt meters terugvallen na lang lopen." },
+	      readyTimeoutMs: { section: "Connection", label: "Ready timeout ms (readyTimeoutMs)", type: "number", default: 12000, min: 1000, max: 30000, step: 100, required: true },
+	      wsStatusHysteresisMs: { section: "Connection", label: "WS status delay ms (wsStatusHysteresisMs)", type: "number", default: 250, min: 0, max: 2000, step: 10, required: true },
+	      clientPingIntervalMs: { section: "Connection", label: "Client ping interval ms (clientPingIntervalMs)", type: "number", default: 2000, min: 500, max: 10000, step: 100, required: true }
+	    }
+	  },
 
   minimap_bake: {
     label: "Minimap Bake",
@@ -1623,6 +2114,18 @@ export const NODE_TYPES = {
       borderRadiusPx: { label: "Border radius (px)", type: "number", default: 14, min: 0, max: 64, step: 1, required: true },
       backgroundOpacity: { label: "Background opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
       markerUpdateMs: { label: "Marker update (ms)", type: "number", default: 100, min: 33, max: 1000, step: 1, required: true, help: "Begrenst hoe vaak de canvas markers herrekend worden." },
+      fogOfWarEnabled: { section: "Minimap Fog of War", label: "Enabled", type: "boolean", default: true, required: true },
+      fogColor: { section: "Minimap Fog of War", label: "Fog color", type: "color", default: "#05070a", required: false },
+      fogOpacity: { section: "Minimap Fog of War", label: "Fog opacity", type: "number", default: 0.72, min: 0, max: 1, step: 0.01, required: true },
+      fogChunkSize: { section: "Minimap Fog of War", label: "Cell size", type: "number", default: 24, min: 1, max: 1000, step: 1, required: true },
+      revealRadius: { section: "Minimap Fog of War", label: "Reveal radius", type: "number", default: 3, min: 0, max: 64, step: 1, required: true },
+      saveIntervalMs: { section: "Minimap Fog of War", label: "Save interval ms", type: "number", default: 1500, min: 250, max: 60000, step: 50, required: true },
+      movementThreshold: { section: "Minimap Fog of War", label: "Movement threshold cells", type: "number", default: 1, min: 1, max: 64, step: 1, required: true },
+      smoothFog: { section: "Minimap Fog of War", label: "Smooth fog", type: "boolean", default: true, required: true },
+      fogFeatherRadius: { section: "Minimap Fog of War", label: "Fog feather radius cells", type: "number", default: 1.5, min: 0, max: 8, step: 0.25, required: true },
+      revealShape: { section: "Minimap Fog of War", label: "Reveal shape", type: "select", options: ["circle", "roundedCells", "hardCells"], default: "circle", required: true },
+      debugOverlay: { section: "Minimap Fog of War", label: "Debug overlay", type: "boolean", default: false, required: true },
+      revealHeight: { section: "Minimap Fog of War", label: "Reveal height metadata", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: false, help: "Metadata voor latere hoogte/occlusion-regels; NODE-02.5 gebruikt dit nog niet voor 3D visibility." },
       debugMode: { label: "Debug mode", type: "boolean", default: false, required: true, help: "Aan: extra markers, labels en viewport cone tekenen. Uit: alleen de snelle minimap en je eigen speler." },
       liteMode: { label: "Legacy lite mode", type: "boolean", default: true, required: true, hidden: true },
       rotationMode: {
@@ -1647,6 +2150,9 @@ export const NODE_TYPES = {
       showPlayerName: { label: "Show local player name", type: "boolean", default: true, required: true },
       showSpawn: { label: "Show spawn", type: "boolean", default: false, required: true },
       showNpcEntities: { label: "Show NPC/model entities", type: "boolean", default: true, required: true },
+      showNpcEntityNames: { label: "Show NPC/model names", type: "boolean", default: true, required: true },
+      showScatterInstances: { label: "Show scatter instances", type: "boolean", default: false, required: true },
+      showScatterNames: { label: "Show scatter names", type: "boolean", default: false, required: true },
       showInteractables: { label: "Show interactables", type: "boolean", default: false, required: true },
       showQuestMarkers: { label: "Show quest markers", type: "boolean", default: false, required: true },
       showEnemies: { label: "Show enemies", type: "boolean", default: false, required: true },
@@ -1684,6 +2190,8 @@ export const NODE_TYPES = {
       showPlayerSpawn: { label: "Show player spawn", type: "boolean", default: true, required: true },
       showModelEntities: { label: "Show model entities", type: "boolean", default: true, required: true },
       showEntityNames: { label: "Show entity names", type: "boolean", default: true, required: true },
+      showScatterInstances: { label: "Show scatter instances", type: "boolean", default: false, required: true },
+      showScatterNames: { label: "Show scatter names", type: "boolean", default: false, required: true },
       showInteractables: { label: "Show interactables", type: "boolean", default: true, required: true },
       showChunkGrid: { label: "Show chunk grid", type: "boolean", default: false, required: true },
       showBakeBounds: { label: "Show bake bounds", type: "boolean", default: true, required: true },
@@ -1711,6 +2219,13 @@ export const NODE_TYPES = {
     fields: {
       groupId: { label: "Group id", type: "text", default: "group", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
       title: { label: "Title", type: "text", default: "New Group", required: true, maxLength: 96 },
+      groupKind: { label: "Group kind", type: "select", options: ["generic", "catalog", "zone", "area", "campaign", "quest", "dialogue", "player_rules", "ui"], default: "generic", required: true },
+      zoneCanvas: { label: "Zone canvas", type: "boolean", default: false, required: false, hidden: true },
+      zoneGridX: { label: "Zone grid X", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: false, hidden: true },
+      zoneGridZ: { label: "Zone grid Z", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: false, hidden: true },
+      zoneCanvasRootId: { label: "Zone canvas root id", type: "text", default: "", required: false, maxLength: 120, hidden: true },
+      zoneCanvasParentZoneId: { label: "Zone canvas parent zone id", type: "text", default: "", required: false, maxLength: 120, hidden: true },
+      zoneCanvasParentSide: { label: "Zone canvas parent side", type: "text", default: "", required: false, maxLength: 24, hidden: true },
       groupInterface: { label: "Group interface", type: "json", default: groupInterfaceDefault(), required: true }
     }
   },
@@ -1816,7 +2331,10 @@ export function groupInterfacePresetForKind(groupKind) {
     return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
   }
   if (kind === "zone") {
-    return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "zonepkg", name: "zonepkg", label: "zonePkg", dataType: "zonePackage", multiple: false }] };
+  }
+  if (kind === "area") {
+    return { inputs: [], outputs: [{ id: "area_package", name: "areaPackage", label: "Area Package", dataType: "areaPackage", multiple: false }] };
   }
   if (kind === "campaign") {
     return { inputs: [], outputs: [{ id: "campaign_package", name: "campaignPackage", label: "Campaign Package", dataType: "campaignPackage", multiple: false }] };
@@ -2093,6 +2611,7 @@ const FOUNDATION_NODE_DEFS = {
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       interactables: { label: "Interactables", dataType: "interactable", required: false, multiple: true },
       chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
+      mmoNetwork: { label: "MMO Network", dataType: "mmoNetwork", required: false, multiple: false },
       keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       ui: { label: "UI", dataType: "ui", required: false, multiple: true },
       minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
@@ -2114,12 +2633,17 @@ const FOUNDATION_NODE_DEFS = {
       chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: true, multiple: false },
       editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
       gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
+      camera: { label: "Camera", dataType: "camera", required: false, multiple: true },
+      lights: { label: "Lights", dataType: "light", required: false, multiple: true },
       chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
+      chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
+      mmoNetwork: { label: "MMO Network", dataType: "mmoNetwork", required: false, multiple: false },
       catalogs: { label: "Catalogs", dataType: "catalogRegistry", required: false, multiple: false },
       zones: { label: "Zones", dataType: "zoneRegistry", required: false, multiple: false },
       campaigns: { label: "Campaigns", dataType: "campaignRegistry", required: false, multiple: false },
       playerRules: { label: "Player Rules", dataType: "playerRules", required: false, multiple: false },
       ui: { label: "UI", dataType: "uiPackage", required: false, multiple: false },
+      keybinds: { label: "Keybinds", dataType: "keybind", required: false, multiple: true },
       legacyWorld: {
         label: "Legacy World",
         dataType: "legacyWorldPackage",
@@ -2141,7 +2665,454 @@ const FOUNDATION_NODE_DEFS = {
   }
 };
 
-Object.assign(NODE_TYPES, FOUNDATION_NODE_DEFS);
+const CANONICAL_FIELD_PATTERN = "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$";
+const ZONE_NODE_DEFS = {
+  zone_definition: {
+    label: "Zone Definition",
+    group: "Zones",
+    accent: "#0ea5e9",
+    description: "Defines one playable zone and its fixed physical bounds.",
+    inputs: {},
+    outputs: { zone: { label: "Zone", dataType: "zoneDef" } },
+    fields: {
+      zoneId: { label: "Zone id", type: "identity", default: "zone.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      displayName: { label: "Display name", type: "text", default: "New Zone", required: true, maxLength: 120 },
+      zoneType: { label: "Zone type", type: "select", options: ["outdoor_normal", "interior", "dungeon", "instance", "hub", "custom"], default: "outdoor_normal", required: true },
+      originX: { label: "Origin X", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      originY: { label: "Origin Y", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      originZ: { label: "Origin Z", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      width: { label: "Width", type: "number", default: 500, min: 1, max: 5000, step: 1, required: true },
+      depth: { label: "Depth", type: "number", default: 500, min: 1, max: 5000, step: 1, required: true },
+      minY: { label: "Min Y", type: "number", default: -100, min: -10000, max: 10000, step: 1, required: true },
+      maxY: { label: "Max Y", type: "number", default: 500, min: -10000, max: 10000, step: 1, required: true },
+      recommendedLevelMin: { label: "Recommended min level", type: "number", default: 1, min: 1, max: 999, step: 1, required: true },
+      recommendedLevelMax: { label: "Recommended max level", type: "number", default: 10, min: 1, max: 999, step: 1, required: true },
+      biomeTags: { label: "Biome tags", type: "tagList", default: [], required: false },
+      zoneTags: { label: "Zone tags", type: "tagList", default: [], required: false },
+      allowFastTravel: { label: "Allow fast travel", type: "boolean", default: true, required: true },
+      allowRespawn: { label: "Allow respawn", type: "boolean", default: true, required: true },
+      activeByDefault: { label: "Active by default", type: "boolean", default: true, required: true }
+    }
+  },
+  zone_environment_settings: {
+    label: "Zone Environment Settings",
+    group: "Zones",
+    accent: "#14b8a6",
+    description: "Per-zone render, audio and atmosphere settings.",
+    inputs: {},
+    outputs: { environment: { label: "Environment", dataType: "environment" } },
+    fields: {
+      environmentId: { label: "Environment id", type: "identity", default: "environment.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      backgroundColor: { label: "Background color", type: "color", default: "#101a26", required: false },
+      fogColor: { label: "Fog color", type: "color", default: "#101a26", required: false },
+      fogDensity: { label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+      smoothShading: { label: "Smooth shading", type: "boolean", default: true, required: true },
+      timeOfDayOffset: { label: "Time of day offset", type: "number", default: 0, min: -24, max: 24, step: 0.25, required: true },
+      weatherProfileRef: { label: "Weather profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      musicPlaylistRef: { label: "Music playlist", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      ambienceRef: { label: "Ambience", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      cameraOverrideRef: { label: "Camera override", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      shadowPresetOverride: { label: "Shadow preset override", type: "select", options: ["inherit", "geen", "licht", "middel", "hoog", "extreem"], default: "inherit", required: true }
+    }
+  },
+  zone_gameplay_rules: {
+    label: "Zone Gameplay Rules",
+    group: "Zones",
+    accent: "#f59e0b",
+    description: "Zone-local gameplay multipliers and permissions.",
+    inputs: {},
+    outputs: { rules: { label: "Rules", dataType: "zoneRules" } },
+    fields: {
+      rulesId: { label: "Rules id", type: "identity", default: "zone_rules.new_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      pveEnabled: { label: "PvE enabled", type: "boolean", default: true, required: true },
+      pvpMode: { label: "PvP mode", type: "select", options: ["disabled", "duel_only", "open", "faction"], default: "disabled", required: true },
+      levelScalingMode: { label: "Level scaling", type: "select", options: ["fixed_range", "clamp_to_range", "party_average", "custom"], default: "fixed_range", required: true },
+      resourceYieldMultiplier: { label: "Resource yield x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      enemyHealthMultiplier: { label: "Enemy health x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      enemyDamageMultiplier: { label: "Enemy damage x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      lootMultiplier: { label: "Loot x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      xpMultiplier: { label: "XP x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true },
+      respawnPolicyRef: { label: "Respawn policy", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      networkInterestProfileRef: { label: "Network interest profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      allowTrade: { label: "Allow trade", type: "boolean", default: true, required: true },
+      allowMarketAccess: { label: "Allow market access", type: "boolean", default: false, required: true },
+      allowUnstuck: { label: "Allow unstuck", type: "boolean", default: true, required: true }
+    }
+  },
+  area_definition: {
+    label: "Area Definition",
+    group: "Zones",
+    accent: "#a855f7",
+    description: "Defines a named area inside its owning zone.",
+    inputs: {},
+    outputs: { area: { label: "Area", dataType: "area" } },
+    fields: {
+      areaId: { label: "Area id", type: "identity", default: "area.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      zoneRef: { label: "Owning zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      label: { label: "Label", type: "text", default: "New Area", required: true, maxLength: 120 },
+      shapeType: { label: "Shape", type: "select", options: ["polygon", "box", "circle"], default: "box", required: true },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      width: { label: "Width", type: "number", default: 50, min: 0, max: 5000, step: 0.1, required: true },
+      depth: { label: "Depth", type: "number", default: 50, min: 0, max: 5000, step: 0.1, required: true },
+      radius: { label: "Radius", type: "number", default: 25, min: 0, max: 5000, step: 0.1, required: true },
+      points: { label: "Points", type: "json", default: [], required: false },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      recommendedLevelMin: { label: "Recommended min level", type: "number", default: 1, min: 1, max: 999, step: 1, required: true },
+      recommendedLevelMax: { label: "Recommended max level", type: "number", default: 10, min: 1, max: 999, step: 1, required: true },
+      areaTags: { label: "Area tags", type: "tagList", default: [], required: false },
+      mapRevealMode: { label: "Map reveal", type: "select", options: ["hidden", "outline", "full"], default: "outline", required: true },
+      revealFogOnEnter: { section: "Fog of War", label: "Reveal fog when player enters area", type: "boolean", default: false, required: true },
+      fogRevealPaddingCells: { section: "Fog of War", label: "Fog reveal padding cells", type: "number", default: 0, min: 0, max: 256, step: 1, required: true }
+    }
+  },
+  area_environment_override: {
+    label: "Area Environment Override",
+    group: "Zones",
+    accent: "#0f766e",
+    description: "Optional area-level environment overrides.",
+    inputs: { area: { label: "Area", dataType: "area", required: true, multiple: false }, conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true } },
+    outputs: { environmentOverride: { label: "Environment Override", dataType: "environmentOverride" } },
+    fields: {
+      overrideId: { label: "Override id", type: "identity", default: "environment_override.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      fogMode: { label: "Fog mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      fogColor: { label: "Fog color", type: "color", default: "#101a26", required: false },
+      fogDensity: { label: "Fog density", type: "number", default: 0, min: 0, max: 1, step: 0.001, required: false },
+      backgroundMode: { label: "Background mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      backgroundColor: { label: "Background color", type: "color", default: "#101a26", required: false },
+      musicMode: { label: "Music mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      musicPlaylistRef: { label: "Music playlist", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      ambienceMode: { label: "Ambience mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      ambienceRef: { label: "Ambience", type: "reference", referenceKinds: ["audio"], allowNull: true, default: null, required: false },
+      weatherMode: { label: "Weather mode", type: "select", options: ["inherit", "set", "clear"], default: "inherit", required: true },
+      weatherProfileRef: { label: "Weather profile", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      lightIntensityMultiplier: { label: "Light intensity x", type: "number", default: 1, min: 0, max: 100, step: 0.01, required: true }
+    }
+  },
+  area_output: {
+    label: "Area Output",
+    group: "Zones",
+    accent: "#7e22ce",
+    description: "Bundles area content into one area package.",
+    inputs: {
+      area: { label: "Area", dataType: "area", required: true, multiple: false },
+      environmentOverrides: { label: "Environment Overrides", dataType: "environmentOverride", required: false, multiple: true },
+      areaRules: { label: "Area Rules", dataType: "areaRule", required: false, multiple: true },
+      terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
+      lights: { label: "Lights", dataType: "light", required: false, multiple: true },
+      entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
+      spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },
+      questTargets: { label: "Quest Targets", dataType: "questTarget", required: false, multiple: true },
+      markers: { label: "Markers", dataType: "markerDef", required: false, multiple: true },
+      audioAssignments: { label: "Audio Assignments", dataType: "audioAssignment", required: false, multiple: true },
+      paths: { label: "Paths", dataType: "path", required: false, multiple: true },
+      encounterAreas: { label: "Encounter Areas", dataType: "encounterArea", required: false, multiple: true }
+    },
+    outputs: { areaPackage: { label: "Area Package", dataType: "areaPackage" } },
+    fields: {
+      packageId: { label: "Package id", type: "identity", default: "area.new_area.package", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      packageVersion: { label: "Package version", type: "number", default: 1, min: 1, max: 1000000, step: 1, required: true }
+    }
+  },
+  location_anchor: {
+    label: "Location Anchor",
+    group: "Zones",
+    accent: "#64748b",
+    description: "Meshless selectable location helper.",
+    inputs: {},
+    outputs: {
+      anchor: { label: "Anchor", dataType: "anchor" },
+      entityBase: { label: "Entity Base", dataType: "entityBase" }
+    },
+    fields: {
+      anchorId: { label: "Anchor id", type: "identity", default: "anchor.new_anchor", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Anchor", required: true, maxLength: 120 },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
+      shapeType: { label: "Shape", type: "select", options: ["point", "polygon", "circle", "box"], default: "point", required: true },
+      radius: { label: "Radius", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      width: { label: "Width", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      depth: { label: "Depth", type: "number", default: 1, min: 0, max: 5000, step: 0.1, required: true },
+      points: { label: "Points", type: "json", default: [], required: false },
+      visibleInEditor: { label: "Visible in editor", type: "boolean", default: true, required: true },
+      visibleInGame: { label: "Visible in game", type: "boolean", default: false, required: true },
+      editorIcon: { label: "Editor icon", type: "select", options: ["anchor", "spawn", "target", "portal", "custom"], default: "anchor", required: true },
+      anchorTags: { label: "Anchor tags", type: "tagList", default: [], required: false }
+    }
+  },
+  spawn_point: {
+    label: "Spawn Point",
+    group: "Zones",
+    accent: "#a3e635",
+    description: "A zone-local player spawn, checkpoint target or travel arrival.",
+    inputs: { anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false } },
+    outputs: { spawnPoint: { label: "Spawn Point", dataType: "spawnPoint" } },
+    fields: {
+      spawnId: { label: "Spawn id", type: "identity", default: "spawn.zone_default", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      role: { label: "Role", type: "select", options: ["zone_default", "entry", "checkpoint", "respawn", "bind", "instance", "fast_travel_arrival"], default: "zone_default", required: true },
+      zoneRef: { label: "Zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      label: { label: "Label", type: "text", default: "Zone Default", required: true, maxLength: 120 },
+      x: { label: "X", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      y: { label: "Y", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      z: { label: "Z", type: "number", default: 0, min: -100000, max: 100000, step: 0.01, required: true },
+      facing: { label: "Facing", type: "number", default: 0, min: -360, max: 360, step: 1, required: true },
+      safeRadius: { label: "Safe radius", type: "number", default: 1.25, min: 0.1, max: 100, step: 0.05, required: true },
+      snapToGround: { label: "Snap to ground", type: "boolean", default: true, required: true },
+      validateCollision: { label: "Validate collision", type: "boolean", default: true, required: true },
+      activationConditionRef: { label: "Activation condition", type: "reference", referenceKinds: ["policy"], allowNull: true, default: null, required: false },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true }
+    }
+  },
+  checkpoint: {
+    label: "Checkpoint",
+    group: "Zones",
+    accent: "#84cc16",
+    description: "Activatable checkpoint backed by a spawn point.",
+    inputs: {
+      spawnPoint: { label: "Spawn Point", dataType: "spawnPoint", required: true, multiple: false },
+      activationConditions: { label: "Activation Conditions", dataType: "policy", required: false, multiple: true },
+      onActivateActions: { label: "On Activate Actions", dataType: "action", required: false, multiple: true },
+      marker: { label: "Marker", dataType: "markerDef", required: false, multiple: false }
+    },
+    outputs: { checkpoint: { label: "Checkpoint", dataType: "checkpoint" } },
+    fields: {
+      checkpointId: { label: "Checkpoint id", type: "identity", default: "checkpoint.new_checkpoint", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Checkpoint", required: true, maxLength: 120 },
+      activationMode: { label: "Activation mode", type: "select", options: ["proximity", "interact", "quest_action", "automatic_entry"], default: "proximity", required: true },
+      saveScope: { label: "Save scope", type: "select", options: ["character", "party", "instance"], default: "character", required: true },
+      respawnEligible: { label: "Respawn eligible", type: "boolean", default: true, required: true },
+      fastTravelEligible: { label: "Fast travel eligible", type: "boolean", default: false, required: true },
+      healPolicy: { label: "Heal policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      healAmount: { label: "Heal amount", type: "number", default: 0, min: 0, max: 1000000, step: 1, required: true },
+      manaPolicy: { label: "Mana policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      staminaPolicy: { label: "Stamina policy", type: "select", options: ["none", "full", "percent", "fixed"], default: "none", required: true },
+      activationRadius: { label: "Activation radius", type: "number", default: 2.5, min: 0.1, max: 100, step: 0.1, required: true },
+      oneTimeMessage: { label: "One-time message", type: "tokenText", default: "", required: false, maxLength: 500 }
+    }
+  },
+  zone_link: {
+    label: "Zone Link",
+    group: "Zones",
+    accent: "#06b6d4",
+    description: "Server-authoritative travel from one zone to another.",
+    inputs: {
+      fromAnchor: { label: "From Anchor", dataType: "anchor", required: false, multiple: false },
+      fromSpawn: { label: "From Spawn", dataType: "spawnPoint", required: false, multiple: false },
+      conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true }
+    },
+    outputs: { zoneLink: { label: "Zone Link", dataType: "zoneLink" } },
+    fields: {
+      linkId: { label: "Link id", type: "identity", default: "zone_link.new_link", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      fromZoneRef: { label: "From zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
+      fromTargetRef: { label: "From target", type: "reference", referenceKinds: ["spawn", "target"], allowNull: true, default: null, required: false },
+      toZoneRef: { label: "To zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: true },
+      toSpawnRef: { label: "To spawn", type: "reference", referenceKinds: ["spawn"], allowNull: true, default: null, required: true },
+      mode: { label: "Mode", type: "select", options: ["door", "portal", "teleport", "fast_travel", "seamless_boundary", "scripted_transport"], default: "portal", required: true },
+      bidirectional: { label: "Bidirectional", type: "boolean", default: false, required: true },
+      reverseLinkRef: { label: "Reverse link", type: "reference", referenceKinds: ["zone_link"], allowNull: true, default: null, required: false },
+      transitionVisual: { label: "Transition visual", type: "select", options: ["none", "fade", "loading_screen"], default: "fade", required: true },
+      loadingText: { label: "Loading text", type: "tokenText", default: "Reizen naar @{zone.name}", required: false, maxLength: 240 },
+      preloadDistance: { label: "Preload distance", type: "number", default: 30, min: 0, max: 500, step: 1, required: true },
+      interactionRequired: { label: "Interaction required", type: "boolean", default: true, required: true },
+      prompt: { label: "Prompt", type: "tokenText", default: "Gebruik doorgang", required: false, maxLength: 240 },
+      oneWayReason: { label: "One-way reason", type: "tokenText", default: "", required: false, maxLength: 240 }
+    }
+  },
+  discovery_area: {
+    label: "Discovery Area",
+    group: "Zones",
+    accent: "#22d3ee",
+    description: "Unlocks minimap/world-map discovery state.",
+    inputs: {
+      area: { label: "Area", dataType: "area", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false }
+    },
+    outputs: { discovery: { label: "Discovery", dataType: "discoveryDef" } },
+    fields: {
+      discoveryId: { label: "Discovery id", type: "identity", default: "discovery.new_area", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Discovery", required: true, maxLength: 120 },
+      revealZoneMap: { label: "Reveal zone map", type: "boolean", default: true, required: true },
+      revealAreaMap: { label: "Reveal area map", type: "boolean", default: true, required: true },
+      unlockFastTravelRef: { label: "Unlock fast travel", type: "reference", referenceKinds: ["zone_link"], allowNull: true, default: null, required: false },
+      xpRewardFormula: { label: "XP reward", type: "formula", default: { operator: "add", operands: [] }, required: false },
+      notificationTemplate: { label: "Notification", type: "tokenText", default: "", required: false, maxLength: 500 },
+      oneTimePerCharacter: { label: "One time per character", type: "boolean", default: true, required: true }
+    }
+  },
+  safe_rule_area: {
+    label: "Safe Rule Area",
+    group: "Zones",
+    accent: "#f97316",
+    description: "Area-level safe/combat/trade permissions.",
+    inputs: { area: { label: "Area", dataType: "area", required: true, multiple: false } },
+    outputs: { areaRule: { label: "Area Rule", dataType: "areaRule" } },
+    fields: {
+      ruleId: { label: "Rule id", type: "identity", default: "area_rule.safe_zone", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      safeZone: { label: "Safe zone", type: "boolean", default: true, required: true },
+      combatAllowed: { label: "Combat allowed", type: "boolean", default: false, required: true },
+      pvpAllowed: { label: "PvP allowed", type: "boolean", default: false, required: true },
+      tradeAllowed: { label: "Trade allowed", type: "boolean", default: true, required: true },
+      marketAllowed: { label: "Market allowed", type: "boolean", default: false, required: true },
+      unstuckAllowed: { label: "Unstuck allowed", type: "boolean", default: true, required: true },
+      mountAllowed: { label: "Mount allowed", type: "boolean", default: false, required: true },
+      respawnAllowed: { label: "Respawn allowed", type: "boolean", default: true, required: true },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true }
+    }
+  },
+  map_marker_definition: {
+    label: "Map Marker Definition",
+    group: "Zones",
+    accent: "#f43f5e",
+    description: "Marker for minimap, world map and compass.",
+    inputs: {
+      entity: { label: "Entity", dataType: "entity", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false },
+      area: { label: "Area", dataType: "area", required: false, multiple: false },
+      questTarget: { label: "Quest Target", dataType: "questTarget", required: false, multiple: false },
+      spawnPoint: { label: "Spawn Point", dataType: "spawnPoint", required: false, multiple: false },
+      checkpoint: { label: "Checkpoint", dataType: "checkpoint", required: false, multiple: false },
+      zoneLink: { label: "Zone Link", dataType: "zoneLink", required: false, multiple: false }
+    },
+    outputs: { marker: { label: "Marker", dataType: "markerDef" } },
+    fields: {
+      markerId: { label: "Marker id", type: "identity", default: "marker.new_marker", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "tokenText", default: "Marker", required: true, maxLength: 240 },
+      iconAssetId: { label: "Icon asset", type: "asset", assetTypes: ["image"], default: null, required: false },
+      markerType: { label: "Marker type", type: "select", options: ["npc", "enemy", "quest", "resource", "portal", "checkpoint", "vendor", "market", "crafting", "custom"], default: "custom", required: true },
+      showOnMinimap: { label: "Show on minimap", type: "boolean", default: true, required: true },
+      showOnWorldMap: { label: "Show on world map", type: "boolean", default: true, required: true },
+      showOnCompass: { label: "Show on compass", type: "boolean", default: false, required: true },
+      priority: { label: "Priority", type: "number", default: 0, min: -100000, max: 100000, step: 1, required: true },
+      clampOutside: { label: "Clamp outside", type: "boolean", default: true, required: true },
+      minDistance: { label: "Min distance", type: "number", default: 0, min: 0, max: 100000, step: 1, required: true },
+      maxDistance: { label: "Max distance", type: "number", default: 100000, min: 0, max: 100000, step: 1, required: true },
+      iconSizePx: { label: "Icon size", type: "number", default: 18, min: 4, max: 128, step: 1, required: true },
+      labelVisibility: { label: "Label visibility", type: "select", options: ["never", "hover", "always", "near"], default: "hover", required: true }
+    }
+  },
+  marker_visibility_rule: {
+    label: "Marker Visibility Rule",
+    group: "Zones",
+    accent: "#e11d48",
+    description: "Visibility rule for map markers.",
+    inputs: { conditions: { label: "Conditions", dataType: "policy", required: false, multiple: true } },
+    outputs: { markerRule: { label: "Marker Rule", dataType: "markerRule" } },
+    fields: {
+      ruleId: { label: "Rule id", type: "identity", default: "marker_rule.always", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      visibilityMode: { label: "Visibility mode", type: "select", options: ["always", "discovered", "not_discovered"], default: "always", required: true },
+      defaultVisible: { label: "Default visible", type: "boolean", default: true, required: true },
+      hideWhenTargetUnloaded: { label: "Hide when target unloaded", type: "boolean", default: false, required: true },
+      fallbackToZoneEntry: { label: "Fallback to zone entry", type: "boolean", default: true, required: true }
+    }
+  },
+  entity_assembly: {
+    label: "Entity Assembly",
+    group: "Entities",
+    accent: "#b000ff",
+    description: "Composes one entity from a mesh/base and behavior components.",
+    inputs: {
+      base: { label: "Base", dataType: "entityBase", required: false, multiple: false },
+      model: { label: "Model Entity", dataType: "entity", required: false, multiple: false },
+      components: { label: "Components", dataType: "entityComponent", required: false, multiple: true },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false }
+    },
+    outputs: { entity: { label: "Entity", dataType: "entity" } },
+    fields: {
+      entityId: { label: "Entity id", type: "identity", default: "entity.new_entity", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Entity", required: true, maxLength: 120 },
+      entityTags: { label: "Entity tags", type: "tagList", default: [], required: false }
+    }
+  },
+  interaction_component: {
+    label: "Interaction Component",
+    group: "Entities",
+    accent: "#db2777",
+    description: "Behavior component that replaces standalone interactable ownership.",
+    inputs: {},
+    outputs: { component: { label: "Entity Component", dataType: "entityComponent" } },
+    fields: {
+      componentId: { label: "Component id", type: "identity", default: "component.interaction", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      interactionType: { label: "Interaction type", type: "select", options: ["inspect", "talk", "loot", "open", "craft", "custom"], default: "inspect", required: true },
+      prompt: { label: "Prompt", type: "tokenText", default: "Gebruik", required: false, maxLength: 240 },
+      radius: { label: "Radius", type: "number", default: 2, min: 0.1, max: 100, step: 0.1, required: true },
+      enabled: { label: "Enabled", type: "boolean", default: true, required: true }
+    }
+  },
+  quest_target_binding: {
+    label: "Quest Target Binding",
+    group: "Zones",
+    accent: "#10b981",
+    description: "Stable target binding id for future quest phases.",
+    inputs: {
+      entity: { label: "Entity", dataType: "entity", required: false, multiple: false },
+      anchor: { label: "Anchor", dataType: "anchor", required: false, multiple: false },
+      area: { label: "Area", dataType: "area", required: false, multiple: false }
+    },
+    outputs: { questTarget: { label: "Quest Target", dataType: "questTarget" } },
+    fields: {
+      targetId: { label: "Target id", type: "identity", default: "target.new_target", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      label: { label: "Label", type: "text", default: "Quest Target", required: true, maxLength: 120 },
+      targetTags: { label: "Target tags", type: "tagList", default: [], required: false }
+    }
+  },
+  zone_output: {
+    label: "Zone Output",
+    group: "Zones",
+    accent: "#0284c7",
+    description: "Bundles zone content into one Zone Package.",
+    inputs: {
+      zone: { label: "Zone", dataType: "zoneDef", required: true, multiple: false },
+      environment: { label: "Environment", dataType: "environment", required: true, multiple: false },
+      rules: { label: "Rules", dataType: "zoneRules", required: false, multiple: false },
+      ground: { label: "Ground", dataType: "ground", required: false, multiple: false },
+      terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
+      collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
+      camera: { label: "Camera", dataType: "camera", required: false, multiple: false },
+      player: { label: "Player", dataType: "player", required: false, multiple: false },
+      cameraOverrides: { label: "Camera Overrides", dataType: "cameraOverride", required: false, multiple: true },
+      areas: { label: "Areas", dataType: "areaPackage", required: false, multiple: true },
+      entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
+      spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },
+      checkpoints: { label: "Checkpoints", dataType: "checkpoint", required: false, multiple: true },
+      links: { label: "Links", dataType: "zoneLink", required: false, multiple: true },
+      discoveries: { label: "Discoveries", dataType: "discoveryDef", required: false, multiple: true },
+      questTargets: { label: "Quest Targets", dataType: "questTarget", required: false, multiple: true },
+      markers: { label: "Markers", dataType: "markerDef", required: false, multiple: true },
+      minimap: { label: "Minimap", dataType: "minimap", required: false, multiple: true },
+      audioAssignments: { label: "Audio Assignments", dataType: "audioAssignment", required: false, multiple: true },
+      paths: { label: "Paths", dataType: "path", required: false, multiple: true },
+      encounterAreas: { label: "Encounter Areas", dataType: "encounterArea", required: false, multiple: true }
+    },
+    outputs: { zonePackage: { label: "Zone Package", dataType: "zonePackage" } },
+    fields: {
+      packageId: { label: "Package id", type: "identity", default: "zone.new_zone.package", required: false, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      packageVersion: { label: "Package version", type: "number", default: 1, min: 1, max: 1000000, step: 1, required: true },
+      includeEditorOnlyData: { label: "Include editor-only data", type: "boolean", default: false, required: true }
+    }
+  }
+};
+
+Object.assign(NODE_TYPES, FOUNDATION_NODE_DEFS, ZONE_NODE_DEFS);
+NODE_TYPES.minimap_bake.inputs = Object.assign({}, NODE_TYPES.minimap_bake.inputs || {}, {
+  zone: { label: "Zone", dataType: "zoneDef", required: false, multiple: false },
+  ground: { label: "Ground", dataType: "ground", required: false, multiple: false }
+});
+NODE_TYPES.minimap_bake.fields = Object.assign({}, NODE_TYPES.minimap_bake.fields, {
+  zoneRef: { label: "Zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false, maxLength: 160 },
+  sourceMode: { label: "Bake source mode", type: "select", options: ["zone_bounds", "legacy_ground"], default: "zone_bounds", required: true }
+});
+NODE_TYPES.game_minimap_hud.fields = Object.assign({}, NODE_TYPES.game_minimap_hud.fields, {
+  sourceMode: { label: "Source mode", type: "select", options: ["active_zone_registry", "fixed_legacy"], default: "active_zone_registry", required: true },
+  fallbackMinimapRef: { label: "Fallback minimap", type: "reference", referenceKinds: ["minimap"], allowNull: true, default: null, required: false },
+  transitionMode: { label: "Transition mode", type: "select", options: ["instant", "fade"], default: "instant", required: true }
+});
+NODE_TYPES.model_entity.outputs = Object.assign({}, NODE_TYPES.model_entity.outputs || {}, {
+  entityBase: { label: "Entity Base", dataType: "entityBase" }
+});
 NODE_TYPES.game_output = Object.assign({}, GAME_OUTPUT_BASE, {
   inputs: Object.assign({}, Object.fromEntries(Object.entries(GAME_OUTPUT_BASE?.inputs || {}).map(function ([portName, port]) {
     return [portName, Object.assign({}, port, {

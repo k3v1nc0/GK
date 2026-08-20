@@ -595,6 +595,8 @@ export class GraphRepository {
     if (row.parent_id) {
       const parent = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?").get(row.parent_id);
       if (!parent || parent.type !== "group") return false;
+      const parentValues = parseJson(parent.values_json, defaultValuesForType("group"));
+      if (parentValues.zoneCanvas === true) return false;
       const ensured = ensureGroupEntityOutputPortInRow(parent);
       if (ensured.changed) {
         this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
@@ -989,6 +991,14 @@ export class GraphRepository {
       contentHash: row.content_hash || null,
       publishedAt: row.published_at
     });
+  }
+
+  // Cheap check for the world-tick loop (runs 50x/sec by default): reads only the
+  // published_at column instead of the full world_json blob, so callers can skip
+  // the expensive read+JSON.parse of getPublishedWorld() when nothing changed.
+  getPublishedWorldPublishedAt() {
+    const row = this.db.prepare("SELECT published_at FROM published_world_state WHERE id = 1").get();
+    return row ? row.published_at : null;
   }
 
   publishHistory(limit = 20) {

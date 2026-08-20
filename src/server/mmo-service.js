@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { buildWalkabilityIndex, resolveMovement } from "../../apps/web/public/shared/world-runtime.js";
+import { mmoNetworkPresetValues } from "../shared/node-types.js";
 
 const HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_WS_HEARTBEAT_INTERVAL_MS || 15000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(5000, Number(process.env.GAME_WS_HEARTBEAT_TIMEOUT_MS || 30000));
@@ -11,6 +12,7 @@ const PERSIST_MAX_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_POSITION_
 const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_PER_SECOND || 120));
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
+const WORLD_SNAPSHOT_HZ = Math.max(1, Number(process.env.GAME_WORLD_SNAPSHOT_HZ || 20));
 // FIX: input blijft geldig zolang de verbinding van de speler leeft.
 // 0 = geen time-out (aanbevolen; closeConnection stopt beweging al bij disconnect).
 // > 0 = extra vangnet: stop toch na zoveel ms zonder nieuw input-bericht.
@@ -60,12 +62,50 @@ function normalizePointerTarget(value) {
   };
 }
 
+function normalizeClientPredictedPosition(value) {
+  if (!value || typeof value !== "object") return null;
+  const x = Number(value.x);
+  const z = Number(value.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const y = Number(value.y);
+  const rotationY = Number(value.rotationY ?? value.rotation_y);
+  return {
+    x: num(x, 0),
+    y: Number.isFinite(y) ? num(y, 0) : null,
+    z: num(z, 0),
+    rotationY: Number.isFinite(rotationY) ? num(rotationY, 0) : null
+  };
+}
+
 function round(value) {
   return Math.round(Number(value) * 1000) / 1000;
 }
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function intervalMsForRateHz(value, minHz, maxHz, fallbackHz) {
+  const fallback = clamp(Number(fallbackHz) || minHz, minHz, maxHz);
+  const rate = clamp(Number(value) || fallback, minHz, maxHz);
+  return Math.max(10, Math.round(1000 / rate));
+}
+
+function mmoNetworkSettingsForWorldContext(worldContext) {
+  const network = worldContext?.world?.mmo?.network;
+  if (!network || network.enabled === false) return {};
+  const presetValues = network.networkPreset ? mmoNetworkPresetValues(network.networkPreset) : null;
+  return presetValues ? Object.assign({}, presetValues, network) : network;
+}
+
+function serverTickMsForWorldContext(worldContext) {
+  const network = mmoNetworkSettingsForWorldContext(worldContext);
+  return intervalMsForRateHz(network.serverTickRateHz, 10, 60, WORLD_TICK_HZ);
+}
+
+function snapshotMsForWorldContext(worldContext) {
+  const network = mmoNetworkSettingsForWorldContext(worldContext);
+  return intervalMsForRateHz(network.snapshotRateHz, 5, 30, WORLD_SNAPSHOT_HZ);
 }
 
 function safeJsonParse(text) {
@@ -113,6 +153,8 @@ function spawnFromWorld(world) {
   const hasSpawn = world && world.spawn && Number.isFinite(Number(world.spawn.x)) && Number.isFinite(Number(world.spawn.z));
   const groundY = worldGroundY(world);
   return {
+    spawnId: hasSpawn ? world.spawn.spawnId || world.spawn.id || null : null,
+    zoneId: hasSpawn ? world.spawn.zoneRef || world.activeZoneId || world.gameProject?.runtime?.activeZoneId || null : world.activeZoneId || world.gameProject?.runtime?.activeZoneId || null,
     x: hasSpawn ? num(world.spawn.x, 0) : 0,
     y: groundY,
     z: hasSpawn ? num(world.spawn.z, 0) : 0,
@@ -121,8 +163,216 @@ function spawnFromWorld(world) {
   };
 }
 
+const DEFAULT_FOG_CONFIG = {
+  enabled: false,
+  fogColor: "#05070a",
+  fogOpacity: 0.72,
+  cellSize: 24,
+  fogChunkSize: 24,
+  revealRadius: 3,
+  saveIntervalMs: 1500,
+  movementThreshold: 1,
+  smoothFog: true,
+  fogFeatherRadius: 1.5,
+  revealShape: "circle",
+  debugOverlay: false,
+  mapLayer: "overworld",
+  heightThreshold: 0
+};
+const FOG_CELL_KEY_PATTERN = /^-?\d+:-?\d+$/;
+
+function normalizeFogConfig(world) {
+  const raw = world?.minimap?.game?.fogOfWar || null;
+  const hasGameMinimapHud = world?.minimap?.game && world.minimap.game.enabled !== false;
+  if (!raw || typeof raw !== "object") {
+    return Object.assign({}, DEFAULT_FOG_CONFIG, {
+      enabled: hasGameMinimapHud === true,
+      mapLayer: fogMapLayerForMinimap(DEFAULT_FOG_CONFIG.mapLayer, world?.minimap?.game?.sourceMinimapId, DEFAULT_FOG_CONFIG.cellSize)
+    });
+  }
+  const cellSize = clamp(Math.round(num(raw.cellSize ?? raw.fogChunkSize, DEFAULT_FOG_CONFIG.cellSize)), 1, 1000);
+  return {
+    enabled: raw.enabled !== false,
+    fogColor: typeof raw.fogColor === "string" && raw.fogColor.trim() ? raw.fogColor.trim() : DEFAULT_FOG_CONFIG.fogColor,
+    fogOpacity: clamp(num(raw.fogOpacity, DEFAULT_FOG_CONFIG.fogOpacity), 0, 1),
+    cellSize: cellSize,
+    fogChunkSize: cellSize,
+    revealRadius: clamp(Math.floor(num(raw.revealRadius, DEFAULT_FOG_CONFIG.revealRadius)), 0, 64),
+    saveIntervalMs: clamp(Math.floor(num(raw.saveIntervalMs, DEFAULT_FOG_CONFIG.saveIntervalMs)), 250, 60000),
+    movementThreshold: clamp(Math.floor(num(raw.movementThreshold, DEFAULT_FOG_CONFIG.movementThreshold)), 1, 64),
+    smoothFog: raw.smoothFog !== false,
+    fogFeatherRadius: clamp(num(raw.fogFeatherRadius, DEFAULT_FOG_CONFIG.fogFeatherRadius), 0, 8),
+    revealShape: ["circle", "roundedCells", "hardCells"].includes(raw.revealShape) ? raw.revealShape : DEFAULT_FOG_CONFIG.revealShape,
+    debugOverlay: raw.debugOverlay === true,
+    mapLayer: fogMapLayerForMinimap(raw.mapLayer, world?.minimap?.game?.sourceMinimapId, cellSize),
+    heightThreshold: num(raw.heightThreshold ?? raw.revealHeight, DEFAULT_FOG_CONFIG.heightThreshold)
+  };
+}
+
+function fogMapLayerForMinimap(rawLayer, sourceMinimapId, cellSize) {
+  const base = String(rawLayer || DEFAULT_FOG_CONFIG.mapLayer).trim() || DEFAULT_FOG_CONFIG.mapLayer;
+  if (base.includes(":minimap:")) return base;
+  const source = String(sourceMinimapId || "main_minimap").trim() || "main_minimap";
+  const safeSource = source.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 64) || "main_minimap";
+  const safeCellSize = clamp(Math.round(num(cellSize, DEFAULT_FOG_CONFIG.cellSize)), 1, 1000);
+  return base + ":minimap:" + safeSource + ":cell:" + safeCellSize;
+}
+
+function fogCellForPosition(position, config) {
+  const size = Math.max(1, num(config?.cellSize ?? config?.fogChunkSize, DEFAULT_FOG_CONFIG.cellSize));
+  return {
+    x: Math.floor(num(position?.x, 0) / size),
+    z: Math.floor(num(position?.z, 0) / size)
+  };
+}
+
+function fogCellKey(cellX, cellZ) {
+  return String(Math.floor(Number(cellX) || 0)) + ":" + String(Math.floor(Number(cellZ) || 0));
+}
+
+function parseFogCellKey(cellKey) {
+  const value = String(cellKey || "").trim();
+  if (!FOG_CELL_KEY_PATTERN.test(value)) return null;
+  const parts = value.split(":");
+  return { x: Math.floor(Number(parts[0]) || 0), z: Math.floor(Number(parts[1]) || 0), key: value };
+}
+
+function movementRevealCellsForPosition(position, config) {
+  const center = fogCellForPosition(position, config);
+  const radius = Math.max(0, Math.floor(num(config?.revealRadius, DEFAULT_FOG_CONFIG.revealRadius)));
+  const keys = [];
+  const radiusSq = radius * radius;
+  for (let dz = -radius; dz <= radius; dz += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      if (radius > 0 && (dx * dx) + (dz * dz) > radiusSq) continue;
+      keys.push(fogCellKey(center.x + dx, center.z + dz));
+    }
+  }
+  return { center, keys };
+}
+
+function normalizeAreaPoint(point) {
+  const x = Number(point?.x);
+  const z = Number(point?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x, z };
+}
+
+function normalizeAreaPoints(points) {
+  return (Array.isArray(points) ? points : []).map(normalizeAreaPoint).filter(Boolean);
+}
+
+function pointInPolygon2D(px, pz, points) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const a = points[i];
+    const b = points[j];
+    const intersects = ((a.z > pz) !== (b.z > pz)) && (px < (b.x - a.x) * (pz - a.z) / ((b.z - a.z) || 1e-9) + a.x);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function areaBounds(area) {
+  const shapeType = String(area?.shapeType || "box").trim().toLowerCase();
+  if (shapeType === "polygon") {
+    const points = normalizeAreaPoints(area?.points);
+    if (points.length >= 3) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (const point of points) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minZ = Math.min(minZ, point.z);
+        maxZ = Math.max(maxZ, point.z);
+      }
+      return { minX, maxX, minZ, maxZ };
+    }
+  }
+  const x = num(area?.x, 0);
+  const z = num(area?.z, 0);
+  if (shapeType === "circle") {
+    const radius = Math.max(0, num(area?.radius, 0));
+    return { minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius };
+  }
+  const halfWidth = Math.max(0, num(area?.width, 0)) / 2;
+  const halfDepth = Math.max(0, num(area?.depth, 0)) / 2;
+  return { minX: x - halfWidth, maxX: x + halfWidth, minZ: z - halfDepth, maxZ: z + halfDepth };
+}
+
+function pointInArea(area, x, z, paddingWorld = 0) {
+  const shapeType = String(area?.shapeType || "box").trim().toLowerCase();
+  const px = num(x, 0);
+  const pz = num(z, 0);
+  const padding = Math.max(0, num(paddingWorld, 0));
+  if (shapeType === "circle") {
+    const radius = Math.max(0, num(area?.radius, 0)) + padding;
+    return Math.hypot(px - num(area?.x, 0), pz - num(area?.z, 0)) <= radius;
+  }
+  if (shapeType === "polygon") {
+    const points = normalizeAreaPoints(area?.points);
+    if (points.length >= 3 && padding <= 0) return pointInPolygon2D(px, pz, points);
+    const bounds = areaBounds(area);
+    return px >= bounds.minX - padding && px <= bounds.maxX + padding && pz >= bounds.minZ - padding && pz <= bounds.maxZ + padding;
+  }
+  const halfWidth = Math.max(0, num(area?.width, 0)) / 2 + padding;
+  const halfDepth = Math.max(0, num(area?.depth, 0)) / 2 + padding;
+  return Math.abs(px - num(area?.x, 0)) <= halfWidth && Math.abs(pz - num(area?.z, 0)) <= halfDepth;
+}
+
+function revealEnabledAreaRecords(world) {
+  const packages = [];
+  if (world?.zonePackage) packages.push(world.zonePackage);
+  const zonePackages = Array.isArray(world?.zones?.packages)
+    ? world.zones.packages
+    : (Array.isArray(world?.gameProject?.zones?.packages) ? world.gameProject.zones.packages : []);
+  packages.push.apply(packages, zonePackages);
+  const byAreaId = new Map();
+  for (const zonePackage of packages) {
+    for (const areaPackage of Array.isArray(zonePackage?.areas) ? zonePackage.areas : []) {
+      const area = areaPackage?.area || null;
+      const areaId = String(area?.areaId || area?.id || areaPackage?.id || "").trim();
+      if (!area || !areaId || area.revealFogOnEnter !== true || byAreaId.has(areaId)) continue;
+      byAreaId.set(areaId, Object.assign({}, area, {
+        areaId: areaId,
+        zoneRef: area.zoneRef || zonePackage?.zoneId || null
+      }));
+    }
+  }
+  return Array.from(byAreaId.values());
+}
+
+function areaRevealCellKeys(area, config) {
+  const cellSize = Math.max(1, num(config?.cellSize ?? config?.fogChunkSize, DEFAULT_FOG_CONFIG.cellSize));
+  const paddingCells = clamp(Math.floor(num(area?.fogRevealPaddingCells, 0)), 0, 256);
+  const paddingWorld = paddingCells * cellSize;
+  const bounds = areaBounds(area);
+  const minCellX = Math.floor((bounds.minX - paddingWorld) / cellSize);
+  const maxCellX = Math.floor((bounds.maxX + paddingWorld) / cellSize);
+  const minCellZ = Math.floor((bounds.minZ - paddingWorld) / cellSize);
+  const maxCellZ = Math.floor((bounds.maxZ + paddingWorld) / cellSize);
+  const totalCells = (maxCellX - minCellX + 1) * (maxCellZ - minCellZ + 1);
+  if (!Number.isFinite(totalCells) || totalCells <= 0 || totalCells > 25000) return [];
+  const keys = [];
+  for (let z = minCellZ; z <= maxCellZ; z += 1) {
+    for (let x = minCellX; x <= maxCellX; x += 1) {
+      const centerX = (x + 0.5) * cellSize;
+      const centerZ = (z + 0.5) * cellSize;
+      if (pointInArea(area, centerX, centerZ, paddingWorld)) keys.push(fogCellKey(x, z));
+    }
+  }
+  return keys;
+}
+
 function positionKey(playerId, worldId) {
   return playerId + "::" + worldId;
+}
+
+function activeZoneIdForWorld(world) {
+  return String(world?.activeZoneId || world?.gameProject?.runtime?.activeZoneId || world?.spawn?.zoneRef || "").trim() || null;
 }
 
 function publicSession(session) {
@@ -169,6 +419,7 @@ function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, wo
     connectedSessionCount: Number(connectedSessionCount) || 0,
     isSelfAccount: false,
     worldId: worldId || position.world_id || null,
+    zoneId: position.current_zone_id || null,
     serverReceivedAt: position.server_received_at || position.serverReceivedAt || null,
     serverSentAtMs: position.server_sent_at_ms || position.serverSentAtMs || null,
     serverTimeMs: position.server_time_ms || position.serverTimeMs || null,
@@ -204,6 +455,9 @@ function publicPosition(position, session, worldId) {
   return {
     playerId: position.player_id,
     worldId: position.world_id || worldId,
+    zoneId: position.current_zone_id || null,
+    spawnId: position.current_spawn_id || null,
+    activeCheckpointId: position.active_checkpoint_id || null,
     x: round(position.x),
     y: round(position.y),
     z: round(position.z),
@@ -230,6 +484,7 @@ function publicRemoteStateChange(position, session, worldId, sourceDeviceOverrid
     playerId: position.player_id,
     userId: session?.user_id || null,
     worldId: position.world_id || worldId,
+    zoneId: position.current_zone_id || null,
     position: {
       x: round(position.x),
       y: round(position.y),
@@ -276,6 +531,13 @@ function extractInputState(payload) {
   const pointerTarget = normalizePointerTarget(inputRaw.pointerTarget ?? inputRaw.pointer_target ?? null);
   const sprint = inputRaw.sprint === true || inputRaw.run === true;
   const stop = inputRaw.stop === true;
+  const clientPredictedPosition = normalizeClientPredictedPosition(
+    raw.clientPredictedPosition
+      ?? raw.client_predicted_position
+      ?? raw.clientPosition
+      ?? raw.client_position
+      ?? null
+  );
   return {
     input: {
       moveX: moveX,
@@ -289,7 +551,8 @@ function extractInputState(payload) {
     clientSessionId: clientSessionId,
     inputSeq: inputSeq,
     clientSentAt: clientSentAt,
-    controllerEpoch: controllerEpoch
+    controllerEpoch: controllerEpoch,
+    clientPredictedPosition: clientPredictedPosition
   };
 }
 
@@ -321,10 +584,12 @@ export class MmoService {
     this.lastPersistAtMsByKey = new Map();
     this.latestInputByPlayerId = new Map();
     this.dirtyPlayerIdsByWorldId = new Map();
+    this.lastWorldSnapshotAtMsByWorldId = new Map();
     this.lastInputSeqByClientSessionId = new Map();
     this.lastControllerEpochByClientSessionId = new Map();
     this.lastControllerByUserId = new Map();
     this.lastWorldBuildAt = 0;
+    this.fogDiscoveryRuntimeByPlayerWorld = new Map();
     this.connectionSeq = 0;
     this.pendingRemoteBroadcastByPlayerId = new Map();
     this.remoteBroadcastTimer = null;
@@ -355,6 +620,7 @@ export class MmoService {
     this.pendingRemoteBroadcastByPlayerId.clear();
     this.latestInputByPlayerId.clear();
     this.dirtyPlayerIdsByWorldId.clear();
+    this.lastWorldSnapshotAtMsByWorldId.clear();
     this.lastPersistAtMsByKey.clear();
     for (const connection of this.connectionsById.values()) {
       closeSocket(connection.ws, 1001, "Server shutdown");
@@ -367,12 +633,14 @@ export class MmoService {
     this.connectedSessionIdsByUserId.clear();
     this.playerIdsByWorldId.clear();
     this.primaryPresenceByPlayerId.clear();
+    this.fogDiscoveryRuntimeByPlayerWorld.clear();
   }
 
   startWorldTickLoop() {
     if (this.worldTickTimer) return;
-    this.worldTickNextAtMs = nowMs() + WORLD_TICK_MS;
-    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), WORLD_TICK_MS);
+    const tickMs = this.currentWorldTickMs();
+    this.worldTickNextAtMs = nowMs() + tickMs;
+    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), tickMs);
     if (typeof this.worldTickTimer.unref === "function") this.worldTickTimer.unref();
   }
 
@@ -382,26 +650,48 @@ export class MmoService {
     this.worldTickTimer = null;
   }
 
+  currentWorldTickMs() {
+    try {
+      return serverTickMsForWorldContext(this.getPublishedWorldContext());
+    } catch {
+      return WORLD_TICK_MS;
+    }
+  }
+
+  shouldBroadcastWorldSnapshot(worldId, nowMsValue, snapshotIntervalMs) {
+    const key = String(worldId || "").trim();
+    if (!key) return false;
+    const lastSnapshotAt = Number(this.lastWorldSnapshotAtMsByWorldId.get(key) || 0) || 0;
+    return lastSnapshotAt <= 0 || nowMsValue - lastSnapshotAt >= snapshotIntervalMs;
+  }
+
+  markWorldSnapshotBroadcast(worldId, nowMsValue) {
+    const key = String(worldId || "").trim();
+    if (!key) return;
+    this.lastWorldSnapshotAtMsByWorldId.set(key, nowMsValue);
+  }
+
   runWorldTickLoop() {
     this.stopWorldTickLoop();
     const currentAt = nowMs();
+    const tickMs = this.currentWorldTickMs();
     if (!Number.isFinite(this.worldTickNextAtMs) || this.worldTickNextAtMs <= 0) {
-      this.worldTickNextAtMs = currentAt + WORLD_TICK_MS;
+      this.worldTickNextAtMs = currentAt + tickMs;
     }
     let processedTicks = 0;
-    const maxCatchUpTicks = Math.max(1, Math.ceil(1000 / WORLD_TICK_MS));
+    const maxCatchUpTicks = Math.max(1, Math.ceil(1000 / tickMs));
     while (this.worldTickNextAtMs <= currentAt && processedTicks < maxCatchUpTicks) {
-      this.tickWorld(this.worldTickNextAtMs);
-      this.worldTickNextAtMs += WORLD_TICK_MS;
+      this.tickWorld(this.worldTickNextAtMs, tickMs);
+      this.worldTickNextAtMs += tickMs;
       processedTicks += 1;
     }
     if (processedTicks === 0) {
-      this.worldTickNextAtMs = currentAt + WORLD_TICK_MS;
+      this.worldTickNextAtMs = currentAt + tickMs;
     } else if (this.worldTickNextAtMs <= nowMs() - 1000) {
       // FIX: als de server meer dan 1s achterloopt (event loop was geblokkeerd),
       // niet eindeloos inhalen maar de klok resetten. Anders verschuift de
       // simulatie t.o.v. de echte tijd en lopen remote spelers steeds verder achter.
-      this.worldTickNextAtMs = nowMs() + WORLD_TICK_MS;
+      this.worldTickNextAtMs = nowMs() + tickMs;
     }
     const delayMs = Math.max(0, this.worldTickNextAtMs - nowMs());
     this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), delayMs);
@@ -409,14 +699,24 @@ export class MmoService {
   }
 
   getPublishedWorldContext() {
+    // This runs on every world tick (50x/sec by default), including when nobody is
+    // connected. Check the cheap published_at column first so the common case (no
+    // new publish since last tick) never touches the full world_json blob - reading
+    // and JSON.parse-ing that on every tick was pegging the server at ~50% CPU
+    // continuously once the published world grew to ~1MB.
+    const publishedAt = this.repository.getPublishedWorldPublishedAt() || "";
+    if (!publishedAt) {
+      const error = new Error("Nog geen gepubliceerde wereld.");
+      error.status = 404;
+      throw error;
+    }
+    if (this.worldCache && this.worldCache.publishedAt === publishedAt) return this.worldCache;
     const world = this.repository.getPublishedWorld();
     if (!world) {
       const error = new Error("Nog geen gepubliceerde wereld.");
       error.status = 404;
       throw error;
     }
-    const publishedAt = world.publishedAt || "";
-    if (this.worldCache && this.worldCache.publishedAt === publishedAt) return this.worldCache;
     const worldId = worldIdFor(world);
     const walkabilityIndex = buildWalkabilityIndex(world);
     this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, walkabilityIndex: walkabilityIndex };
@@ -426,6 +726,236 @@ export class MmoService {
 
   buildGameWorldResponse() {
     return this.getPublishedWorldContext().world;
+  }
+
+  fogConfigForWorld(world) {
+    return normalizeFogConfig(world);
+  }
+
+  fogRuntimeKey(playerId, worldId, mapLayer = "overworld") {
+    return String(playerId || "") + "::" + String(worldId || "") + "::" + String(mapLayer || "overworld");
+  }
+
+  normalizeFogRuntimeState(playerId, worldId, mapLayer) {
+    const key = this.fogRuntimeKey(playerId, worldId, mapLayer);
+    let state = this.fogDiscoveryRuntimeByPlayerWorld.get(key);
+    if (!state) {
+      state = {
+        lastCellKey: null,
+        lastCellX: null,
+        lastCellZ: null,
+        lastMovementSaveAtMs: 0,
+        revealedAreaIds: new Set()
+      };
+      this.fogDiscoveryRuntimeByPlayerWorld.set(key, state);
+    }
+    return state;
+  }
+
+  insertFogDiscoveryCells(playerId, worldId, mapLayer, cellKeys, discoveryType = "movement", sourceAreaId = null) {
+    const keys = Array.from(new Set((Array.isArray(cellKeys) ? cellKeys : []).map(function (cellKey) {
+      const parsed = parseFogCellKey(cellKey);
+      return parsed ? parsed.key : null;
+    }).filter(Boolean)));
+    if (!playerId || !worldId || !keys.length) return [];
+    const discoveredAt = now();
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO player_fog_discovery_cells " +
+      "(player_id, world_id, map_layer, cell_key, discovery_type, source_area_id, discovered_at, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    const inserted = [];
+    this.db.exec("BEGIN");
+    try {
+      for (const cellKey of keys) {
+        const result = insert.run(playerId, worldId, mapLayer, cellKey, discoveryType, sourceAreaId || null, discoveredAt, discoveredAt);
+        if (result.changes > 0) inserted.push(cellKey);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return inserted;
+  }
+
+  listFogDiscoveryCells(playerId, worldId, mapLayer = "overworld") {
+    if (!playerId || !worldId) return [];
+    return this.db.prepare(
+      "SELECT cell_key FROM player_fog_discovery_cells WHERE player_id = ? AND world_id = ? AND map_layer = ? ORDER BY cell_key"
+    ).all(playerId, worldId, mapLayer).map(function (row) {
+      return row.cell_key;
+    });
+  }
+
+  countFogDiscoveryCells(playerId, worldId, mapLayer = "overworld") {
+    if (!playerId || !worldId) return 0;
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS total FROM player_fog_discovery_cells WHERE player_id = ? AND world_id = ? AND map_layer = ?"
+    ).get(playerId, worldId, mapLayer);
+    return Number(row?.total || 0) || 0;
+  }
+
+  clearFogDiscoveryCells(playerId, worldId, mapLayer = "overworld") {
+    if (!playerId || !worldId) return 0;
+    const result = this.db.prepare(
+      "DELETE FROM player_fog_discovery_cells WHERE player_id = ? AND world_id = ? AND map_layer = ?"
+    ).run(playerId, worldId, mapLayer);
+    const runtimeKey = this.fogRuntimeKey(playerId, worldId, mapLayer);
+    this.fogDiscoveryRuntimeByPlayerWorld.delete(runtimeKey);
+    return Number(result?.changes || 0) || 0;
+  }
+
+  processFogForPosition(profile, worldContext, position, options = {}) {
+    const config = this.fogConfigForWorld(worldContext?.world);
+    if (!config.enabled || !profile?.id || !worldContext?.worldId || !position) {
+      return { ok: true, enabled: false, newlyDiscoveredCellKeys: [], areaReveals: [], config };
+    }
+    const mapLayer = config.mapLayer || "overworld";
+    const runtime = this.normalizeFogRuntimeState(profile.id, worldContext.worldId, mapLayer);
+    const movement = movementRevealCellsForPosition(position, config);
+    const centerKey = fogCellKey(movement.center.x, movement.center.z);
+    const force = options.force === true;
+    const currentMs = nowMs();
+    const previousCell = runtime.lastCellKey ? parseFogCellKey(runtime.lastCellKey) : null;
+    const movedCells = previousCell
+      ? Math.max(Math.abs(movement.center.x - previousCell.x), Math.abs(movement.center.z - previousCell.z))
+      : Infinity;
+    const movementDue = force
+      || !runtime.lastCellKey
+      || (
+        movedCells >= config.movementThreshold
+        && currentMs - Number(runtime.lastMovementSaveAtMs || 0) >= config.saveIntervalMs
+      );
+    const newlyDiscovered = [];
+    const areaReveals = [];
+    if (movementDue) {
+      const inserted = this.insertFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer, movement.keys, "movement", null);
+      newlyDiscovered.push.apply(newlyDiscovered, inserted);
+      runtime.lastCellKey = centerKey;
+      runtime.lastCellX = movement.center.x;
+      runtime.lastCellZ = movement.center.z;
+      runtime.lastMovementSaveAtMs = currentMs;
+    }
+    for (const area of revealEnabledAreaRecords(worldContext.world)) {
+      const areaId = String(area.areaId || area.id || "").trim();
+      if (!areaId || !pointInArea(area, position.x, position.z, 0)) continue;
+      if (!force && runtime.revealedAreaIds.has(areaId)) continue;
+      const keys = areaRevealCellKeys(area, config);
+      if (!keys.length) {
+        runtime.revealedAreaIds.add(areaId);
+        continue;
+      }
+      const areaDiscoveryType = options.reason === "spawn" || options.reason === "login" || options.reason === "teleport"
+        ? "area_spawn"
+        : "area_enter";
+      const inserted = this.insertFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer, keys, areaDiscoveryType, areaId);
+      newlyDiscovered.push.apply(newlyDiscovered, inserted);
+      runtime.revealedAreaIds.add(areaId);
+      areaReveals.push({
+        areaId: areaId,
+        label: area.label || areaId,
+        discoveryType: areaDiscoveryType,
+        revealedCellCount: keys.length,
+        newlyDiscoveredCellCount: inserted.length
+      });
+    }
+    const uniqueNew = Array.from(new Set(newlyDiscovered));
+    if (uniqueNew.length && options.broadcast !== false && profile.user_id) {
+      const payload = {
+        ok: true,
+        type: "fog:discovery",
+        worldId: worldContext.worldId,
+        playerId: profile.id,
+        mapLayer: mapLayer,
+        newlyDiscoveredCellKeys: uniqueNew,
+        discoveredCount: this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer),
+        movementCellKey: centerKey,
+        areaReveals: areaReveals,
+        config: config
+      };
+      this.broadcastToUser(profile.user_id, eventMessage("fog:discovery", payload, this.stampServerPayload(worldContext.worldId, payload)));
+    }
+    return {
+      ok: true,
+      enabled: true,
+      worldId: worldContext.worldId,
+      playerId: profile.id,
+      mapLayer: mapLayer,
+      newlyDiscoveredCellKeys: uniqueNew,
+      discoveredCount: this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer),
+      movementCellKey: centerKey,
+      areaReveals: areaReveals,
+      config: config
+    };
+  }
+
+  getFogDiscoverySnapshot(req) {
+    const sessionContext = this.getSessionContextFromRequest(req);
+    this.authService.touchSession(sessionContext.session.id, false);
+    const worldContext = this.getPublishedWorldContext();
+    const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
+    const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
+    const config = this.fogConfigForWorld(worldContext.world);
+    if (config.enabled) {
+      this.processFogForPosition(profile, worldContext, position, {
+        force: true,
+        reason: "login",
+        broadcast: false
+      });
+    }
+    const mapLayer = config.mapLayer || "overworld";
+    const cells = config.enabled ? this.listFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer) : [];
+    return {
+      ok: true,
+      enabled: config.enabled === true,
+      playerId: profile.id,
+      worldId: worldContext.worldId,
+      mapLayer: mapLayer,
+      config: config,
+      discoveredCellKeys: cells,
+      discoveredCount: cells.length,
+      stateSemantics: {
+        discovered: "persisted cells in discoveredCellKeys",
+        currentlyVisible: "not implemented in NODE-02.5",
+        unknown: "implicit cells absent from discoveredCellKeys"
+      }
+    };
+  }
+
+  updateFogDiscoveryForCurrentPlayer(req, payload = {}) {
+    const sessionContext = this.getSessionContextFromRequest(req);
+    this.authService.touchSession(sessionContext.session.id, false);
+    const worldContext = this.getPublishedWorldContext();
+    const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
+    const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
+    const config = this.fogConfigForWorld(worldContext.world);
+    const mapLayer = config.mapLayer || "overworld";
+    if (payload?.reset === true) {
+      const deletedCount = this.clearFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer);
+      return {
+        ok: true,
+        reset: true,
+        enabled: config.enabled === true,
+        worldId: worldContext.worldId,
+        playerId: profile.id,
+        mapLayer: mapLayer,
+        deletedCount: deletedCount,
+        discoveredCellKeys: [],
+        discoveredCount: 0,
+        config: config
+      };
+    }
+    const result = this.processFogForPosition(profile, worldContext, position, {
+      force: payload?.force === true,
+      reason: payload?.reason || "movement",
+      broadcast: false
+    });
+    return Object.assign({}, result, {
+      discoveredCellKeys: payload?.includeAll === true && result.enabled
+        ? this.listFogDiscoveryCells(profile.id, worldContext.worldId, result.mapLayer || "overworld")
+        : undefined
+    });
   }
 
   getSessionContextFromRequest(req) {
@@ -441,20 +971,21 @@ export class MmoService {
   ensurePlayerProfile(user, worldContext) {
     const existing = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? LIMIT 1").get(user.id);
     const currentWorldId = worldContext.worldId;
+    const currentZoneId = activeZoneIdForWorld(worldContext.world);
     const displayName = String(existing?.display_name || user.username || "player").trim() || "player";
     const selectedCharacterId = existing?.selected_character_id || null;
     const nowIso = now();
     if (existing) {
-      if (existing.current_world_id !== currentWorldId || existing.display_name !== displayName) {
-        this.db.prepare("UPDATE player_profiles SET display_name = ?, selected_character_id = ?, current_world_id = ?, updated_at = ? WHERE id = ?")
-          .run(displayName, selectedCharacterId, currentWorldId, nowIso, existing.id);
+      if (existing.current_world_id !== currentWorldId || existing.current_zone_id !== currentZoneId || existing.display_name !== displayName) {
+        this.db.prepare("UPDATE player_profiles SET display_name = ?, selected_character_id = ?, current_world_id = ?, current_zone_id = ?, updated_at = ? WHERE id = ?")
+          .run(displayName, selectedCharacterId, currentWorldId, currentZoneId, nowIso, existing.id);
         return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(existing.id);
       }
       return existing;
     }
     const profileId = "player_" + crypto.randomUUID();
-    this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(profileId, user.id, displayName, null, currentWorldId, nowIso, nowIso);
+    this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, current_zone_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(profileId, user.id, displayName, null, currentWorldId, currentZoneId, nowIso, nowIso);
     return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(profileId);
   }
 
@@ -482,10 +1013,14 @@ export class MmoService {
       return normalized;
     }
     const spawn = spawnFromWorld(worldContext.world);
+    const currentZoneId = spawn.zoneId || activeZoneIdForWorld(worldContext.world);
     const createdAt = now();
     const record = {
       player_id: profile.id,
       world_id: worldId,
+      current_zone_id: currentZoneId,
+      current_spawn_id: spawn.spawnId || null,
+      active_checkpoint_id: null,
       x: spawn.x,
       y: spawn.y,
       z: spawn.z,
@@ -506,10 +1041,15 @@ export class MmoService {
       last_input_received_at_ms: 0,
       teleport: false
     };
-    this.db.prepare("INSERT INTO player_positions (player_id, world_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(record.player_id, record.world_id, record.x, record.y, record.z, record.rotation_y, record.revision, record.last_update_source_session_id, record.updated_at);
+    this.db.prepare("INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(record.player_id, record.world_id, record.current_zone_id, record.current_spawn_id, record.active_checkpoint_id, record.x, record.y, record.z, record.rotation_y, record.revision, record.last_update_source_session_id, record.updated_at);
     const normalized = this.normalizePositionRecord(record, sessionContext, worldId);
     this.playerStateCache.set(cacheKey, normalized);
+    this.processFogForPosition(profile, worldContext, normalized, {
+      force: true,
+      reason: "spawn",
+      broadcast: false
+    });
     this.recordEvent("player_position_created", sessionContext?.user?.id || profile.user_id, profile.id, sessionContext?.session?.id || null);
     return normalized;
   }
@@ -521,6 +1061,9 @@ export class MmoService {
     return {
       player_id: record.player_id,
       world_id: record.world_id || worldId,
+      current_zone_id: record.current_zone_id || null,
+      current_spawn_id: record.current_spawn_id || null,
+      active_checkpoint_id: record.active_checkpoint_id || null,
       x: num(record.x, 0),
       y: num(record.y, 0),
       z: num(record.z, 0),
@@ -577,6 +1120,9 @@ export class MmoService {
     return {
       playerId: position.player_id,
       worldId: position.world_id || worldId,
+      zoneId: position.current_zone_id || null,
+      spawnId: position.current_spawn_id || null,
+      activeCheckpointId: position.active_checkpoint_id || null,
       x: round(position.x),
       y: round(position.y),
       z: round(position.z),
@@ -609,6 +1155,7 @@ export class MmoService {
     return {
       playerId: position.player_id,
       worldId: position.world_id || worldId,
+      zoneId: position.current_zone_id || null,
       position: {
         x: round(position.x),
         y: round(position.y),
@@ -757,10 +1304,12 @@ export class MmoService {
 
   scheduleRemoteBroadcastFlush() {
     if (this.remoteBroadcastTimer) return;
+    const flushMs = this.currentWorldTickMs();
+    this.remoteBroadcastFlushMs = flushMs;
     this.remoteBroadcastTimer = setTimeout(() => {
       this.remoteBroadcastTimer = null;
       this.flushRemoteBroadcasts();
-    }, this.remoteBroadcastFlushMs);
+    }, flushMs);
     if (typeof this.remoteBroadcastTimer.unref === "function") this.remoteBroadcastTimer.unref();
   }
 
@@ -939,6 +1488,7 @@ export class MmoService {
       clientSentAt: intent.clientSentAt || null,
       sourceDevice: intent.sourceDevice || connection.sourceDevice || connection.session?.device_label || null,
       teleport: intent.teleport === true,
+      clientPredictedPosition: intent.clientPredictedPosition || null,
       input: {
         moveX: clamp(num(rawInput.moveX, 0), -1, 1),
         moveZ: clamp(num(rawInput.moveZ, 0), -1, 1),
@@ -979,6 +1529,12 @@ export class MmoService {
     this.playerStateCache.set(this.getPlayerStateCacheKey(state.player_id, state.world_id), state);
     this.updatePrimaryPresenceFromState(state, connection);
     this.markPlayerDirty(state.world_id, state.player_id);
+    if (connection?.player && tickInfo?.worldContext) {
+      this.processFogForPosition(connection.player, tickInfo.worldContext, state, {
+        force: false,
+        reason: "movement"
+      });
+    }
     if (nextState.persist !== false) {
       this.schedulePersist(state, connection);
     }
@@ -1041,9 +1597,13 @@ export class MmoService {
     const current = this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection);
     const raw = payload && typeof payload === "object" ? payload : {};
     const position = raw.position && typeof raw.position === "object" ? raw.position : raw;
+    const targetZoneId = String(raw.zoneId || raw.currentZoneId || raw.current_zone_id || current.current_zone_id || activeZoneIdForWorld(worldContext.world) || "").trim() || null;
     const nextState = Object.assign({}, current, {
       player_id: profile.id,
       world_id: worldId,
+      current_zone_id: targetZoneId,
+      current_spawn_id: raw.spawnId || raw.currentSpawnId || raw.current_spawn_id || current.current_spawn_id || null,
+      active_checkpoint_id: raw.checkpointId || raw.activeCheckpointId || raw.active_checkpoint_id || current.active_checkpoint_id || null,
       x: num(position.x, current.x),
       y: Number.isFinite(Number(position.y)) ? num(position.y, current.y) : current.y,
       z: num(position.z, current.z),
@@ -1071,6 +1631,10 @@ export class MmoService {
     this.updatePrimaryPresenceFromState(nextState, connection);
     this.markPlayerDirty(worldId, profile.id);
     this.schedulePersist(nextState, connection);
+    this.processFogForPosition(profile, worldContext, nextState, {
+      force: true,
+      reason: options.reason || "teleport"
+    });
     this.latestInputByPlayerId.set(profile.id, {
       playerId: profile.id,
       worldId: worldId,
@@ -1096,6 +1660,74 @@ export class MmoService {
     }
     this.broadcastRemotePlayerState(connection, nextState, connection.sourceDevice || null);
     return nextState;
+  }
+
+  findZoneLink(world, linkId) {
+    const targetId = String(linkId || "").trim();
+    if (!targetId) return null;
+    const packages = Array.isArray(world?.gameProject?.zones?.packages) ? world.gameProject.zones.packages : [];
+    for (const zonePackage of packages) {
+      for (const link of Array.isArray(zonePackage.links) ? zonePackage.links : []) {
+        if (link && link.linkId === targetId) return { link, fromZone: zonePackage };
+      }
+    }
+    return null;
+  }
+
+  findZoneSpawn(world, zoneId, spawnId) {
+    const zonePackage = world?.gameProject?.zones?.byId?.[zoneId] || null;
+    if (!zonePackage) return null;
+    const spawn = (Array.isArray(zonePackage.spawns) ? zonePackage.spawns : []).find(function (candidate) {
+      return candidate && candidate.spawnId === spawnId;
+    }) || null;
+    return spawn ? { zonePackage, spawn } : null;
+  }
+
+  travelByZoneLink(req, payload = {}) {
+    const sessionContext = this.getSessionContextFromRequest(req);
+    this.authService.touchSession(sessionContext.session.id, false);
+    const worldContext = this.getPublishedWorldContext();
+    const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
+    const linkResult = this.findZoneLink(worldContext.world, payload.linkId || payload.zoneLinkId || payload.link_id);
+    if (!linkResult) {
+      const error = new Error("Zone Link niet gevonden.");
+      error.status = 404;
+      throw error;
+    }
+    const link = linkResult.link;
+    const target = this.findZoneSpawn(worldContext.world, link.toZoneRef, link.toSpawnRef);
+    if (!target) {
+      const error = new Error("Target zone/spawn voor Zone Link ontbreekt.");
+      error.status = 400;
+      throw error;
+    }
+    const connection = { user: sessionContext.user, session: sessionContext.session, player: profile, worldId: worldContext.worldId };
+    const nextState = this.applyTeleportState(connection, {
+      zoneId: link.toZoneRef,
+      spawnId: link.toSpawnRef,
+      position: {
+        x: target.spawn.x,
+        y: target.spawn.y,
+        z: target.spawn.z,
+        rotationY: target.spawn.facing || 0
+      },
+      animationState: "idle"
+    }, { transport: "http-zone-link" });
+    this.db.prepare("UPDATE player_profiles SET current_zone_id = ?, current_world_id = ?, updated_at = ? WHERE id = ?")
+      .run(link.toZoneRef, worldContext.worldId, now(), profile.id);
+    this.schedulePersist(nextState, connection, true);
+    return {
+      ok: true,
+      linkId: link.linkId,
+      fromZoneId: link.fromZoneRef || linkResult.fromZone?.zoneId || null,
+      zoneId: link.toZoneRef,
+      spawnId: link.toSpawnRef,
+      position: this.publicPositionForPlayer(nextState, sessionContext.session, worldContext.worldId),
+      gameWorld: Object.assign({}, worldContext.world, {
+        activeZoneId: link.toZoneRef,
+        zonePackage: target.zonePackage
+      })
+    };
   }
 
   simulatePlayerTick(state, inputState, worldContext, tickDeltaMs, tickInfo = {}) {
@@ -1138,7 +1770,6 @@ export class MmoService {
     const resolved = moving
       ? resolveMovement(currentPosition, desired, {
         radius: radius,
-        ground: worldContext.world?.ground || null,
         index: worldContext.walkabilityIndex
       })
       : currentPosition;
@@ -1171,7 +1802,9 @@ export class MmoService {
       server_received_at: tickInfo.serverReceivedAt || state.server_received_at || null,
       last_input_received_at_ms: state.last_input_received_at_ms || 0
     });
-    return this.updatePlayerStateFromTick(state, nextState, tickInfo.connection || null, inputState || input, tickInfo);
+    return this.updatePlayerStateFromTick(state, nextState, tickInfo.connection || null, inputState || input, Object.assign({}, tickInfo, {
+      worldContext: worldContext
+    }));
   }
 
   applyInputState(connection, payload, transport = "ws") {
@@ -1260,6 +1893,29 @@ export class MmoService {
       transport: transport
     });
 
+    const stopPredicted = input.stop === true ? inputState.clientPredictedPosition : null;
+    const stopResyncAllowedForController = Boolean(isCurrentController || !currentControllerSessionId || currentControllerSessionId === connection.session.id);
+    if (!inputState.teleport && stopPredicted && stopResyncAllowedForController) {
+      const network = mmoNetworkSettingsForWorldContext(worldContext);
+      const fallbackStopResyncMaxUnits = Math.max(0, num(network.ownHardCorrectionThreshold, 10) * 4 || 40);
+      const stopResyncMaxUnits = clamp(num(network.ownStopResyncMaxUnits, fallbackStopResyncMaxUnits), 0, 200);
+      const drift = Math.hypot(stopPredicted.x - num(current.x, 0), stopPredicted.z - num(current.z, 0));
+      if (stopResyncMaxUnits > 0 && Number.isFinite(drift) && drift <= stopResyncMaxUnits) {
+        nextState.x = round(stopPredicted.x);
+        nextState.y = stopPredicted.y !== null ? round(stopPredicted.y) : nextState.y;
+        nextState.z = round(stopPredicted.z);
+        if (stopPredicted.rotationY !== null) nextState.rotation_y = round(stopPredicted.rotationY);
+        nextState.velocity_x = 0;
+        nextState.velocity_z = 0;
+        nextState.moving = false;
+        nextState.animation_state = "idle";
+        nextState.revision = (Number(current.revision) || 0) + 1;
+        nextState.updated_at = now();
+        nextState.updated_at_ms = receivedAtMs;
+        nextState.stop_resynced = true;
+      }
+    }
+
     if (inputState.teleport === true) {
       const teleported = this.applyTeleportState(connection, payload, { transport: transport });
       teleported.server_received_at = receivedAtMs;
@@ -1307,6 +1963,9 @@ export class MmoService {
 
     this.playerStateCache.set(cacheKey, nextState);
     this.updatePrimaryPresenceFromState(nextState, connection);
+    if (nextState.stop_resynced === true) {
+      this.schedulePersist(nextState, connection);
+    }
     this.latestInputByPlayerId.set(profile.id, {
       playerId: profile.id,
       worldId: worldId,
@@ -1344,9 +2003,9 @@ export class MmoService {
     };
   }
 
-  tickWorld(tickStartedAtMs = nowMs()) {
+  tickWorld(tickStartedAtMs = nowMs(), tickDeltaMsOverride = WORLD_TICK_MS) {
     this.serverTick += 1;
-    const tickDeltaMs = WORLD_TICK_MS;
+    const tickDeltaMs = Math.max(10, Math.floor(Number(tickDeltaMsOverride) || WORLD_TICK_MS));
     const worldIds = Array.from(new Set(Array.from(this.playerStateCache.values()).map((state) => state && state.world_id).filter(Boolean)));
     if (!worldIds.length) return;
     const nowMsValue = Number.isFinite(Number(tickStartedAtMs))
@@ -1355,6 +2014,8 @@ export class MmoService {
     for (const worldId of worldIds) {
       const worldContext = this.getPublishedWorldContext();
       if (!worldContext || worldContext.worldId !== worldId) continue;
+      const snapshotIntervalMs = snapshotMsForWorldContext(worldContext);
+      const shouldSendSnapshot = this.shouldBroadcastWorldSnapshot(worldId, nowMsValue, snapshotIntervalMs);
       const dirtyIds = new Set(Array.from(this.dirtyPlayerIdsByWorldId.get(worldId) || []));
       const knownStates = this.getWorldPlayerStates(worldId);
       const snapshotPlayers = [];
@@ -1399,19 +2060,22 @@ export class MmoService {
           serverReceivedAt: nowMsValue,
           connection: liveConnection
         });
-        if (changed || dirtyIds.has(playerId)) {
+        if (shouldSendSnapshot && (changed || dirtyIds.has(playerId))) {
           const updatedState = this.playerStateCache.get(cacheKey) || state;
           snapshotPlayers.push(updatedState);
         }
       }
-      if (snapshotPlayers.length) {
+      if (shouldSendSnapshot && snapshotPlayers.length) {
         this.broadcastWorldSnapshot(worldId, snapshotPlayers, {
           serverTick: this.serverTick,
           serverTimeMs: nowMsValue,
           serverSentAtMs: nowMsValue
         });
       }
-      this.clearWorldDirtyPlayers(worldId);
+      if (shouldSendSnapshot) {
+        this.markWorldSnapshotBroadcast(worldId, nowMsValue);
+        this.clearWorldDirtyPlayers(worldId);
+      }
     }
   }
 
@@ -1790,10 +2454,10 @@ export class MmoService {
       this.lastPersistAtMsByKey.set(key, nowMs());
       const current = this.playerStateCache.get(key) || positionRow;
       this.db.prepare(
-        "INSERT INTO player_positions (player_id, world_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(player_id, world_id) DO UPDATE SET x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
-      ).run(current.player_id, current.world_id, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
+        "INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(player_id, world_id) DO UPDATE SET current_zone_id = excluded.current_zone_id, current_spawn_id = excluded.current_spawn_id, active_checkpoint_id = excluded.active_checkpoint_id, x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
+      ).run(current.player_id, current.world_id, current.current_zone_id || null, current.current_spawn_id || null, current.active_checkpoint_id || null, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
     };
     // FIX: tijdens continu bewegen werd de debounce-timer elke tick gereset
     // waardoor de positie pas na het stoppen werd opgeslagen. Nu schrijven we

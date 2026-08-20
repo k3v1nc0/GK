@@ -1,0 +1,281 @@
+{
+  "generatedAt": "2026-07-19T18:19:22.655Z",
+  "base": "http://localhost:3199",
+  "assets": [
+    {
+      "id": "asset_d84789ca-ce2d-47ff-b442-c165ee26652f",
+      "name": "node02_wizard_player",
+      "assetType": "model",
+      "sourcePath": "/assets/uploads/asset_d84789ca-ce2d-47ff-b442-c165ee26652f.glb"
+    },
+    {
+      "id": "asset_55dea892-bf86-4edd-9365-7e18e019b301",
+      "name": "node02_tree_entity",
+      "assetType": "model",
+      "sourcePath": "/assets/uploads/asset_55dea892-bf86-4edd-9365-7e18e019b301.glb"
+    },
+    {
+      "id": "asset_6b87168b-662d-4235-a4cd-dff32d24e27f",
+      "name": "node02_forge_entity",
+      "assetType": "model",
+      "sourcePath": "/assets/uploads/asset_6b87168b-662d-4235-a4cd-dff32d24e27f.glb"
+    }
+  ],
+  "groupPorts": {
+    "zoneGroupId": "node_group_640874ba",
+    "zoneGroupOutputId": "group_output__node_group_640874ba",
+    "areaGroupId": "node_group_1f58b22e",
+    "areaGroupOutputId": "group_output__node_group_1f58b22e",
+    "zoneOutputToGroupOutput": {
+      "fromNodeId": "node_zone_output_db1082d9",
+      "fromPort": "zonePackage",
+      "toNodeId": "group_output__node_group_640874ba",
+      "toPort": "zonepackage"
+    },
+    "groupToZoneRegistry": {
+      "fromNodeId": "node_group_640874ba",
+      "fromPort": "zonepackage",
+      "toNodeId": "foundation.zone_registry",
+      "toPort": "zonePackage"
+    }
+  },
+  "dragProof": {
+    "before": {
+      "id": "node_group_640874ba",
+      "x": 120,
+      "y": 260
+    },
+    "after": {
+      "id": "node_group_640874ba",
+      "x": 210,
+      "y": 330
+    },
+    "moved": true
+  },
+  "validate": {
+    "ok": true,
+    "errors": [],
+    "warnings": [
+      "Geen bewegings-keybinds. De speler kan alleen via klik-naar-lopen bewegen.",
+      "Geen interact-keybind. Interactie werkt alleen via klikken op het object."
+    ]
+  },
+  "preview": {
+    "status": 200,
+    "validation": {
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    },
+    "runtime": {
+      "activeZoneId": "zone.node02.demo",
+      "startSpawnId": "spawn.node02.default"
+    },
+    "zones": {
+      "packageCount": 1,
+      "byIdKeys": [
+        "zone.node02.demo"
+      ]
+    }
+  },
+  "publish": {
+    "status": 200,
+    "ok": true,
+    "validation": {
+      "ok": true,
+      "errors": [],
+      "warnings": [
+        "Geen bewegings-keybinds. De speler kan alleen via klik-naar-lopen bewegen.",
+        "Geen interact-keybind. Interactie werkt alleen via klikken op het object."
+      ]
+    },
+    "runtime": {
+      "activeZoneId": "zone.node02.demo",
+      "startSpawnId": "spawn.node02.default"
+    },
+    "activeZoneId": "zone.node02.demo",
+    "spawn": {
+      "spawnId": "spawn.node02.default",
+      "role": "zone_default",
+      "zoneRef": "zone.node02.demo",
+      "x": 25,
+      "y": 0,
+      "z": 30,
+      "facing": 90
+    },
+    "ground": {
+      "groundId": "ground_node02_demo",
+      "width": 500,
+      "depth": 500,
+      "y": 0,
+      "boundsMode": "explicitBounds",
+      "minX": 0,
+      "maxX": 500,
+      "minZ": 0,
+      "maxZ": 500
+    },
+    "camera": {
+      "id": "node02_camera",
+      "mode": "top-down",
+      "cameraId": "node02_camera",
+      "pitch": 58,
+      "yaw": 35,
+      "startDistance": 46,
+      "distance": 38,
+      "minDistance": 10,
+      "maxDistance": 80,
+      "fov": 55,
+      "follow": true,
+      "rotateSpeed": 90
+    },
+    "player": {
+      "id": "node02_player",
+      "modelAssetId": "asset_d84789ca-ce2d-47ff-b442-c165ee26652f",
+      "animationClip": "Idle",
+      "idleAnimation": "Idle",
+      "walkAnimation": "Walk",
+      "runAnimation": "Run",
+      "moveSpeed": 6,
+      "sprintMultiplier": 1.6,
+      "turnSpeed": 540,
+      "collisionRadius": 0.5,
+      "scale": 1,
+      "showNameplate": true
+    },
+    "lights": [
+      {
+        "id": "node02_ambient",
+        "type": "ambient"
+      },
+      {
+        "id": "node02_sun",
+        "type": "directional"
+      }
+    ],
+    "entities": [
+      {
+        "id": "node_model_entity_bdb9267b",
+        "entityId": "entity_node02_tree",
+        "modelAssetId": "asset_55dea892-bf86-4edd-9365-7e18e019b301"
+      },
+      {
+        "id": "node_model_entity_50cdbbbb",
+        "entityId": "entity_node02_forge",
+        "modelAssetId": "asset_6b87168b-662d-4235-a4cd-dff32d24e27f"
+      }
+    ]
+  },
+  "worldSummary": {
+    "status": 200,
+    "schemaVersion": "gk-game-project-v3",
+    "gameProjectZonesPackages": 1,
+    "zonesByIdKeys": [
+      "zone.node02.demo"
+    ],
+    "runtime": {
+      "activeZoneId": "zone.node02.demo",
+      "startSpawnId": "spawn.node02.default"
+    },
+    "activeZoneId": "zone.node02.demo",
+    "spawn": {
+      "spawnId": "spawn.node02.default",
+      "role": "zone_default",
+      "zoneRef": "zone.node02.demo",
+      "x": 25,
+      "y": 0,
+      "z": 30,
+      "facing": 90
+    },
+    "ground": {
+      "groundId": "ground_node02_demo",
+      "width": 500,
+      "depth": 500,
+      "y": 0,
+      "boundsMode": "explicitBounds",
+      "minX": 0,
+      "maxX": 500,
+      "minZ": 0,
+      "maxZ": 500
+    },
+    "camera": {
+      "id": "node02_camera",
+      "mode": "top-down",
+      "cameraId": "node02_camera",
+      "pitch": 58,
+      "yaw": 35,
+      "startDistance": 46,
+      "distance": 38,
+      "minDistance": 10,
+      "maxDistance": 80,
+      "fov": 55,
+      "follow": true,
+      "rotateSpeed": 90
+    },
+    "player": {
+      "id": "node02_player",
+      "modelAssetId": "asset_d84789ca-ce2d-47ff-b442-c165ee26652f",
+      "animationClip": "Idle",
+      "idleAnimation": "Idle",
+      "walkAnimation": "Walk",
+      "runAnimation": "Run",
+      "moveSpeed": 6,
+      "sprintMultiplier": 1.6,
+      "turnSpeed": 540,
+      "collisionRadius": 0.5,
+      "scale": 1,
+      "showNameplate": true
+    },
+    "lights": [
+      {
+        "id": "node02_ambient",
+        "type": "ambient",
+        "intensity": 0.9
+      },
+      {
+        "id": "node02_sun",
+        "type": "directional",
+        "intensity": 2.2
+      }
+    ],
+    "entities": [
+      {
+        "id": "node_model_entity_bdb9267b",
+        "entityId": "entity_node02_tree",
+        "label": "Zone Tree",
+        "modelAssetId": "asset_55dea892-bf86-4edd-9365-7e18e019b301",
+        "position": {
+          "x": 110,
+          "y": 0,
+          "z": 120
+        }
+      },
+      {
+        "id": "node_model_entity_50cdbbbb",
+        "entityId": "entity_node02_forge",
+        "label": "Zone Forge",
+        "modelAssetId": "asset_6b87168b-662d-4235-a4cd-dff32d24e27f",
+        "position": {
+          "x": 260,
+          "y": 0,
+          "z": 240
+        }
+      }
+    ],
+    "minimap": {
+      "enabled": true,
+      "sourceMode": "active_zone_registry",
+      "sourceMinimapId": "minimap_node02_demo"
+    },
+    "zoneAreaCount": 1,
+    "zoneNodeCounts": {
+      "spawns": 1,
+      "links": 1,
+      "markers": 2,
+      "discoveries": 1,
+      "questTargets": 1,
+      "terrain": 1,
+      "collision": 2,
+      "entities": 3
+    }
+  }
+}

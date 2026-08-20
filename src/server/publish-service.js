@@ -2,6 +2,9 @@ import {
   NODE_TYPES,
   GAME_ACTIONS,
   defaultValuesForType,
+  mmoNetworkCorrectionBlendRateForMs,
+  mmoNetworkIntervalMsForRate,
+  normalizeMmoNetworkPreset,
   normalizeWorldSettingsPreset,
   worldSettingsPresetValues,
   resolveNodePort,
@@ -237,6 +240,16 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
+function uniqueById(records) {
+  const map = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record) continue;
+    const key = record.id || record.assetId || record.nodeId || JSON.stringify(record);
+    map.set(key, record);
+  }
+  return Array.from(map.values());
+}
+
 function normalizeAnimationName(value) {
   return String(value === null || value === undefined ? "" : value).trim();
 }
@@ -322,16 +335,20 @@ const SHADOW_LEGACY_FIELD_KEYS = [
   "shadowQuality",
   "shadowMapSize",
   "shadowCameraSize",
+  "shadowCameraNear",
   "shadowCameraFar",
   "shadowBias",
   "shadowNormalBias",
   "shadowType",
+  "shadowSnapWorldUnits",
+  "shadowFocusMode",
   "staticPropCastShadows",
   "staticPropReceiveShadows",
   "scatterCastShadows",
   "scatterReceiveShadows",
   "groundReceiveShadows",
-  "terrainReceiveShadows"
+  "terrainReceiveShadows",
+  "shadowResidentMarginChunks"
 ];
 
 function hasOwnValue(source, key) {
@@ -405,6 +422,13 @@ const SHADOW_QUALITY_CAMERA_SIZE_FALLBACK = {
 
 function shadowMapSizeForQuality(quality) {
   return SHADOW_QUALITY_MAP_SIZES[normalizeShadowQuality(quality)] || SHADOW_QUALITY_MAP_SIZES.medium;
+}
+
+function clampShadowMapSize(value, fallback = 0) {
+  const fallbackSize = Math.max(0, Math.floor(numberOrFallback(fallback, 0)));
+  const requested = Math.floor(numberOrFallback(value, fallbackSize));
+  if (requested <= 0) return fallbackSize;
+  return Math.min(4096, Math.max(256, requested));
 }
 
 function shadowCameraSizeForQuality(quality) {
@@ -1664,8 +1688,67 @@ function buildMmoDebugHudReadModel(node) {
       remoteBufferSizes: node.values.showRemoteBufferSizes !== false,
       remoteHardSnapCount: node.values.showRemoteHardSnapCount !== false,
       remoteSmoothFrameCount: node.values.showRemoteSmoothFrameCount !== false,
-      lastRemoteEventType: node.values.showLastRemoteEventType !== false
+      lastRemoteEventType: node.values.showLastRemoteEventType !== false,
+      mmoSettings: node.values.showMmoSettings !== false,
+      mmoHealth: node.values.showMmoHealth !== false,
+      minimapFog: node.values.showMinimapFog !== false
     }
+  };
+}
+
+function buildMmoNetworkReadModel(node) {
+  const defaults = defaultValuesForType("mmo_network_settings");
+  const values = Object.assign({}, defaults, node?.values || {});
+  const hasInputRate = Object.prototype.hasOwnProperty.call(node?.values || {}, "inputSendRateHz");
+  const hasCorrectionBlendMs = Object.prototype.hasOwnProperty.call(node?.values || {}, "ownCorrectionBlendMs");
+  const legacyInputRateHz = numberOrNull(values.moveSendIntervalMs) ? (1000 / numberOrNull(values.moveSendIntervalMs)) : defaults.inputSendRateHz;
+  const legacyBlendRate = clampNumber(numberOrNull(values.ownCorrectionBlendRate), 0, 0.999, defaults.ownCorrectionBlendRate);
+  const legacyBlendMs = legacyBlendRate > 0 && legacyBlendRate < 1
+    ? clampNumber(50 * Math.log(0.05) / Math.log(1 - legacyBlendRate), 50, 1000, defaults.ownCorrectionBlendMs)
+    : defaults.ownCorrectionBlendMs;
+  const serverTickRateHz = clampNumber(numberOrNull(values.serverTickRateHz), 10, 60, defaults.serverTickRateHz);
+  const snapshotRateHz = clampNumber(numberOrNull(values.snapshotRateHz), 5, Math.min(30, serverTickRateHz), Math.min(defaults.snapshotRateHz, serverTickRateHz));
+  const inputSendRateHz = clampNumber(numberOrNull(hasInputRate ? values.inputSendRateHz : legacyInputRateHz), 10, serverTickRateHz, Math.min(defaults.inputSendRateHz, serverTickRateHz));
+  const correctionBlendMs = clampNumber(numberOrNull(hasCorrectionBlendMs ? values.ownCorrectionBlendMs : legacyBlendMs), 50, 1000, defaults.ownCorrectionBlendMs);
+  const remoteInterpolationMinDelayMs = clampNumber(numberOrNull(values.remoteInterpolationMinDelayMs), 0, 300, defaults.remoteInterpolationMinDelayMs);
+  const remoteInterpolationMaxDelayMs = Math.max(
+    remoteInterpolationMinDelayMs,
+    clampNumber(numberOrNull(values.remoteInterpolationMaxDelayMs), 0, 500, defaults.remoteInterpolationMaxDelayMs)
+  );
+  const remoteInterpolationBaseDelayMs = clampNumber(
+    numberOrNull(values.remoteInterpolationBaseDelayMs),
+    remoteInterpolationMinDelayMs,
+    remoteInterpolationMaxDelayMs,
+    defaults.remoteInterpolationBaseDelayMs
+  );
+  return {
+    id: values.settingsId || node?.id || "mmo_network",
+    nodeId: node?.id || null,
+    enabled: values.enabled !== false,
+    networkPreset: normalizeMmoNetworkPreset(values.networkPreset, "custom"),
+    serverTickRateHz: serverTickRateHz,
+    snapshotRateHz: snapshotRateHz,
+    inputSendRateHz: inputSendRateHz,
+    moveSendIntervalMs: mmoNetworkIntervalMsForRate(inputSendRateHz),
+    predictionEnabled: values.predictionEnabled !== false,
+    reconciliationEnabled: values.reconciliationEnabled !== false,
+    ownPredictionDeadzone: clampNumber(numberOrNull(values.ownPredictionDeadzone), 0, 2, defaults.ownPredictionDeadzone),
+    ownCorrectionBlendMs: correctionBlendMs,
+    ownCorrectionBlendRate: mmoNetworkCorrectionBlendRateForMs(correctionBlendMs),
+    ownSmallCorrectionThreshold: clampNumber(numberOrNull(values.ownSmallCorrectionThreshold), 0, 5, defaults.ownSmallCorrectionThreshold),
+    ownHardCorrectionThreshold: clampNumber(numberOrNull(values.ownHardCorrectionThreshold), 0.5, 20, defaults.ownHardCorrectionThreshold),
+    ownKeepPredictionDuringInput: values.ownKeepPredictionDuringInput !== false,
+    ownActiveCorrectionMaxUnits: clampNumber(numberOrNull(values.ownActiveCorrectionMaxUnits), 0, 2, defaults.ownActiveCorrectionMaxUnits),
+    ownCorrectionMergeFactor: clampNumber(numberOrNull(values.ownCorrectionMergeFactor), 0, 1, defaults.ownCorrectionMergeFactor),
+    ownPostInputHoldMs: clampNumber(numberOrNull(values.ownPostInputHoldMs), 0, 2000, defaults.ownPostInputHoldMs),
+    ownStopResyncMaxUnits: clampNumber(numberOrNull(values.ownStopResyncMaxUnits), 0, 200, defaults.ownStopResyncMaxUnits),
+    remoteInterpolationBaseDelayMs: remoteInterpolationBaseDelayMs,
+    remoteInterpolationMinDelayMs: remoteInterpolationMinDelayMs,
+    remoteInterpolationMaxDelayMs: remoteInterpolationMaxDelayMs,
+    remoteMaxExtrapolationMs: clampNumber(numberOrNull(values.remoteMaxExtrapolationMs), 0, 250, defaults.remoteMaxExtrapolationMs),
+    readyTimeoutMs: clampNumber(numberOrNull(values.readyTimeoutMs), 1000, 30000, defaults.readyTimeoutMs),
+    wsStatusHysteresisMs: clampNumber(numberOrNull(values.wsStatusHysteresisMs), 0, 2000, defaults.wsStatusHysteresisMs),
+    clientPingIntervalMs: clampNumber(numberOrNull(values.clientPingIntervalMs), 500, 10000, defaults.clientPingIntervalMs)
   };
 }
 
@@ -1702,31 +1785,63 @@ function buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode = nul
         ? normalizeWorldSettingsPreset(fallbackPreset, "middel_schaduw")
         : (hasLegacyFields ? inferShadowPresetFromLegacyFields(source, prefix, fallbackPreset) : normalizeWorldSettingsPreset(fallbackPreset, "middel_schaduw")));
     const presetValues = worldSettingsPresetValues(mode, resolvedPreset) || worldSettingsPresetValues(mode, fallbackPreset) || {};
+    const readFlatShadowValue = function (key, legacyKey) {
+      const legacyValue = shadowLegacyField(source, prefix, legacyKey);
+      if (legacyValue !== undefined && legacyValue !== null && String(legacyValue).trim() !== "") return legacyValue;
+      if (!shadowSource && source[key] !== undefined && source[key] !== null && String(source[key]).trim() !== "") return source[key];
+      return undefined;
+    };
     const readShadow = function (key, legacyKey, fallback) {
+      const flatValue = readFlatShadowValue(key, legacyKey);
+      if (flatValue !== undefined) return flatValue;
       if (shadowSource && shadowSource[key] !== undefined) return shadowSource[key];
       if (presetValues[key] !== undefined) return presetValues[key];
       return fallback;
     };
+    const positiveShadowNumber = function (key, legacyKey, fallback) {
+      const presetFallback = numberOrFallback(fallback, 0);
+      const value = numberOrFallback(readShadow(key, legacyKey, presetFallback), presetFallback);
+      return value > 0 ? value : presetFallback;
+    };
+    const inheritedShadowInteger = function (key, legacyKey, fallback) {
+      const presetFallback = Math.max(0, Math.floor(numberOrFallback(fallback, 0)));
+      const value = Math.floor(numberOrFallback(readShadow(key, legacyKey, presetFallback), presetFallback));
+      return value >= 0 ? value : presetFallback;
+    };
+    const inheritedPositiveShadowInteger = function (key, legacyKey, fallback) {
+      return Math.max(0, Math.floor(positiveShadowNumber(key, legacyKey, fallback)));
+    };
+    const inheritedShadowMapSize = function (key, legacyKey, fallback) {
+      return clampShadowMapSize(readShadow(key, legacyKey, fallback), fallback);
+    };
+    const cameraFar = Math.max(1, positiveShadowNumber("cameraFar", "shadowCameraFar", presetValues.cameraFar || 0));
+    const requestedCameraNear = Math.max(0.1, positiveShadowNumber("cameraNear", "shadowCameraNear", presetValues.cameraNear || 1));
+    const fallbackCameraNear = Math.max(0.1, numberOrFallback(presetValues.cameraNear, 1));
+    const cameraNear = requestedCameraNear < cameraFar
+      ? requestedCameraNear
+      : Math.min(fallbackCameraNear, Math.max(0.1, cameraFar - 0.1));
+    const presetFocusMode = presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn");
+    const explicitFocusMode = String(readShadow("focusMode", "shadowFocusMode", presetFocusMode) || "").trim();
     const shadow = {
       preset: resolvedPreset,
       enabled: resolvedPreset !== "geen_schaduw",
-      mapSize: Math.max(0, Math.floor(numberOrFallback(readShadow("mapSize", "shadowMapSize", 0), 0))),
-      cameraSize: Math.max(0, numberOrFallback(readShadow("cameraSize", "shadowCameraSize", 0), 0)),
-      cameraNear: Math.max(0, numberOrFallback(readShadow("cameraNear", "shadowCameraNear", 1), 1) || 1),
-      cameraFar: Math.max(0, numberOrFallback(readShadow("cameraFar", "shadowCameraFar", 0), 0)),
+      mapSize: inheritedShadowMapSize("mapSize", "shadowMapSize", presetValues.mapSize || 0),
+      cameraSize: Math.max(0, positiveShadowNumber("cameraSize", "shadowCameraSize", presetValues.cameraSize || 0)),
+      cameraNear: cameraNear,
+      cameraFar: cameraFar,
       bias: numberOrFallback(readShadow("bias", "shadowBias", -0.0003), -0.0003),
       normalBias: numberOrFallback(readShadow("normalBias", "shadowNormalBias", 0.04), 0.04),
       type: normalizeShadowMapTypeName(readShadow("type", "shadowType", presetValues.type || "pcf_soft"), presetValues.type || "pcf_soft"),
       updateMode: String(readShadow("updateMode", "shadowUpdateMode", presetValues.updateMode || "stable_snapped") || "stable_snapped").trim() || "stable_snapped",
-      snapWorldUnits: Math.max(1, Math.floor(numberOrFallback(readShadow("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10), presetValues.snapWorldUnits || 10))),
-      focusMode: String(readShadow("focusMode", "shadowFocusMode", presetValues.focusMode || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")) || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn")).trim() || (mode === "editor" ? "editor_world_center_or_selected" : "player_or_spawn"),
+      snapWorldUnits: Math.max(1, inheritedPositiveShadowInteger("snapWorldUnits", "shadowSnapWorldUnits", presetValues.snapWorldUnits || 10)),
+      focusMode: explicitFocusMode || presetFocusMode,
       staticPropsCast: readShadow("staticPropsCast", "staticPropCastShadows", presetValues.staticPropsCast === true) === true,
       staticPropsReceive: readShadow("staticPropsReceive", "staticPropReceiveShadows", presetValues.staticPropsReceive !== false) !== false,
       scatterCast: readShadow("scatterCast", "scatterCastShadows", presetValues.scatterCast === true) === true,
       scatterReceive: readShadow("scatterReceive", "scatterReceiveShadows", presetValues.scatterReceive !== false) !== false,
       groundReceives: readShadow("groundReceives", "groundReceiveShadows", presetValues.groundReceives !== false) !== false,
       terrainReceives: readShadow("terrainReceives", "terrainReceiveShadows", presetValues.terrainReceives !== false) !== false,
-      shadowResidentMarginChunks: Math.max(0, Math.floor(numberOrFallback(readShadow("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0), presetValues.shadowResidentMarginChunks || 0)))
+      shadowResidentMarginChunks: inheritedShadowInteger("shadowResidentMarginChunks", "shadowResidentMarginChunks", presetValues.shadowResidentMarginChunks || 0)
     };
     return {
       shadow: shadow,
@@ -1820,6 +1935,7 @@ function buildGroundReadModel(node) {
     textureRepeat: numberOrNull(values.textureRepeat),
     textureWorldSizeX: textureWorldSizeX,
     textureWorldSizeZ: textureWorldSizeZ,
+    edgeFadeWidth: Math.max(0, numberOrNull(values.edgeFadeWidth) ?? 0),
     textureRepeatMode: "world",
     boundsMode: boundsMode,
     minX: minX,
@@ -1834,20 +1950,42 @@ function pushUniqueWarning(warnings, message) {
   if (!warnings.includes(message)) warnings.push(message);
 }
 
-function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
+function chunkGridValuesForNode(graph, node, nodeMap) {
+  if (!graph || !node || !nodeMap) return null;
+  const connected = firstIncomingNode(graph, node, "chunkGrid", nodeMap);
+  const fallback = graph.nodes.find(function (candidate) {
+    return candidate.type === "chunk_grid_definition" && (candidate.parentId || null) === (node.parentId || null);
+  }) || graph.nodes.find(function (candidate) {
+    return candidate.type === "chunk_grid_definition";
+  }) || null;
+  const gridNode = connected || fallback;
+  if (!gridNode) return null;
+  return Object.assign({}, defaultValuesForType("chunk_grid_definition"), gridNode.values || {});
+}
+
+function buildChunkLoadingBaseReadModel(node, nodeType, readModelType, graph, nodeMap) {
   const defaults = defaultValuesForType(nodeType);
   const values = Object.assign({}, defaults, node?.values || {});
+  const gridValues = chunkGridValuesForNode(graph, node, nodeMap);
+  const readNodeOrGridNumber = function (fieldName, fallback) {
+    const nodeValue = numberOrNull(values[fieldName]);
+    if (nodeValue !== null) return nodeValue;
+    const gridValue = gridValues ? numberOrNull(gridValues[fieldName]) : null;
+    if (gridValue !== null) return gridValue;
+    return numberOrFallback(fallback, defaults[fieldName]);
+  };
   return {
     id: node.id,
     type: readModelType,
     chunkProfileId: stringOrFallback(values.chunkProfileId, defaults.chunkProfileId),
     enabled: values.enabled !== false,
-    chunkWidth: numberOrFallback(values.chunkWidth, defaults.chunkWidth),
-    chunkDepth: numberOrFallback(values.chunkDepth, defaults.chunkDepth),
-    tileSize: numberOrFallback(values.tileSize, defaults.tileSize),
+    chunkGridId: gridValues ? stringOrFallback(gridValues.gridId, "chunk_grid.main") : null,
+    chunkWidth: readNodeOrGridNumber("chunkWidth", defaults.chunkWidth),
+    chunkDepth: readNodeOrGridNumber("chunkDepth", defaults.chunkDepth),
+    tileSize: readNodeOrGridNumber("tileSize", defaults.tileSize),
     preloadMarginChunks: numberOrFallback(values.preloadMarginChunks, defaults.preloadMarginChunks),
     unloadMarginChunks: numberOrFallback(values.unloadMarginChunks, defaults.unloadMarginChunks),
-    maxLoadedChunks: numberOrFallback(values.maxLoadedChunks, defaults.maxLoadedChunks),
+    maxLoadedChunks: readNodeOrGridNumber("maxLoadedChunks", defaults.maxLoadedChunks),
     debugOverlay: values.debugOverlay === true,
     residentEntityBudget: numberOrFallback(values.residentEntityBudget, defaults.residentEntityBudget),
     residentObjectBudget: numberOrFallback(values.residentObjectBudget, defaults.residentObjectBudget),
@@ -1859,8 +1997,8 @@ function buildChunkLoadingBaseReadModel(node, nodeType, readModelType) {
   };
 }
 
-function buildEditorChunkLoadingReadModel(node) {
-  const base = buildChunkLoadingBaseReadModel(node, "editor_chunk_loading", "editor");
+function buildEditorChunkLoadingReadModel(node, graph, nodeMap) {
+  const base = buildChunkLoadingBaseReadModel(node, "editor_chunk_loading", "editor", graph, nodeMap);
   const values = Object.assign({}, defaultValuesForType("editor_chunk_loading"), node?.values || {});
   return Object.assign(base, {
     editorViewRadiusChunks: numberOrFallback(values.editorViewRadiusChunks, defaultValuesForType("editor_chunk_loading").editorViewRadiusChunks),
@@ -1870,21 +2008,23 @@ function buildEditorChunkLoadingReadModel(node) {
   });
 }
 
-function buildGameChunkLoadingReadModel(node) {
+function buildGameChunkLoadingReadModel(node, graph, nodeMap) {
   const defaults = defaultValuesForType("game_chunk_loading");
-  const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game");
+  const base = buildChunkLoadingBaseReadModel(node, "game_chunk_loading", "game", graph, nodeMap);
   const values = Object.assign({}, defaults, node?.values || {});
+  const loadBudgetPerFrame = numberOrFallback(values.loadBudgetPerFrame, defaults.loadBudgetPerFrame);
   return Object.assign(base, {
     cameraOnly: values.cameraOnly !== false,
     gameViewRadiusChunks: numberOrFallback(values.gameViewRadiusChunks, defaults.gameViewRadiusChunks),
     cameraOffsetZChunks: numberOrFallback(values.cameraOffsetZChunks, defaults.cameraOffsetZChunks),
     fixedCameraPaddingTiles: numberOrFallback(values.fixedCameraPaddingTiles, defaults.fixedCameraPaddingTiles),
     strictUnloadOutsideCamera: values.strictUnloadOutsideCamera !== false,
-    loadBudgetPerFrame: numberOrFallback(values.loadBudgetPerFrame, defaults.loadBudgetPerFrame)
+    loadBudgetPerFrame: loadBudgetPerFrame,
+    residentChunkBuildBudgetPerFrame: loadBudgetPerFrame
   });
 }
 
-function collectChunkLoadingReadModel(nodes, warnings = []) {
+function collectChunkLoadingReadModel(nodes, warnings = [], graph = null, nodeMap = null) {
   const editorNodes = [];
   const gameNodes = [];
   for (const node of nodes || []) {
@@ -1898,8 +2038,8 @@ function collectChunkLoadingReadModel(nodes, warnings = []) {
     pushUniqueWarning(warnings, "Er zijn meerdere Game Chunk Loading nodes verbonden. De eerste wordt gebruikt.");
   }
   return {
-    editor: editorNodes[0] ? buildEditorChunkLoadingReadModel(editorNodes[0]) : null,
-    game: gameNodes[0] ? buildGameChunkLoadingReadModel(gameNodes[0]) : null
+    editor: editorNodes[0] ? buildEditorChunkLoadingReadModel(editorNodes[0], graph, nodeMap) : null,
+    game: gameNodes[0] ? buildGameChunkLoadingReadModel(gameNodes[0], graph, nodeMap) : null
   };
 }
 
@@ -1996,7 +2136,7 @@ export function squareGroundBounds(ground) {
 function buildMinimapBakeReadModel(node, groundNode) {
   const defaults = defaultValuesForType("minimap_bake");
   const values = Object.assign({}, defaults, node?.values || {});
-  const bounds = groundNode ? squareGroundBounds(buildGroundReadModel(groundNode)) : null;
+  const bounds = values.bakedBounds || (groundNode ? squareGroundBounds(buildGroundReadModel(groundNode)) : null);
   return {
     id: node.id,
     nodeId: node.id,
@@ -2026,6 +2166,11 @@ function buildGameMinimapHudReadModel(node) {
   const hasDebugMode = Object.prototype.hasOwnProperty.call(rawValues, "debugMode");
   const debugMode = hasDebugMode ? rawValues.debugMode === true : rawValues.liteMode === false;
   const rotationMode = values.rotationMode === "player_facing" || values.rotationMode === "camera_yaw" ? values.rotationMode : "north_up";
+  const fogChunkSize = clampNumber(numberOrNull(values.fogChunkSize), 1, 1000, defaults.fogChunkSize);
+  const revealRadius = Math.max(0, Math.min(64, Math.floor(numberOrFallback(values.revealRadius, defaults.revealRadius))));
+  const saveIntervalMs = clampNumber(numberOrNull(values.saveIntervalMs), 250, 60000, defaults.saveIntervalMs);
+  const movementThreshold = Math.max(1, Math.min(64, Math.floor(numberOrFallback(values.movementThreshold, defaults.movementThreshold))));
+  const revealShape = ["circle", "roundedCells", "hardCells"].includes(values.revealShape) ? values.revealShape : defaults.revealShape;
   return {
     id: node.id,
     nodeId: node.id,
@@ -2038,6 +2183,22 @@ function buildGameMinimapHudReadModel(node) {
     borderRadiusPx: numberOrFallback(values.borderRadiusPx, defaults.borderRadiusPx),
     backgroundOpacity: numberOrFallback(values.backgroundOpacity, defaults.backgroundOpacity),
     markerUpdateMs: numberOrFallback(values.markerUpdateMs, defaults.markerUpdateMs),
+    fogOfWar: {
+      enabled: values.fogOfWarEnabled !== false,
+      fogColor: values.fogColor || defaults.fogColor || "#05070a",
+      fogOpacity: clampNumber(numberOrNull(values.fogOpacity), 0, 1, defaults.fogOpacity),
+      cellSize: fogChunkSize,
+      fogChunkSize: fogChunkSize,
+      revealRadius: revealRadius,
+      saveIntervalMs: saveIntervalMs,
+      movementThreshold: movementThreshold,
+      smoothFog: values.smoothFog !== false,
+      fogFeatherRadius: clampNumber(numberOrNull(values.fogFeatherRadius), 0, 8, defaults.fogFeatherRadius),
+      revealShape: revealShape,
+      debugOverlay: values.debugOverlay === true,
+      mapLayer: minimapFogMapLayer("overworld", values.sourceMinimapId, fogChunkSize),
+      heightThreshold: numberOrNull(values.revealHeight) ?? 0
+    },
     debugMode: debugMode,
     liteMode: !debugMode,
     rotationMode: rotationMode,
@@ -2055,6 +2216,9 @@ function buildGameMinimapHudReadModel(node) {
     showPlayerName: values.showPlayerName !== false,
     showSpawn: values.showSpawn === true,
     showNpcEntities: values.showNpcEntities !== false,
+    showNpcEntityNames: values.showNpcEntityNames === true,
+    showScatterInstances: values.showScatterInstances === true,
+    showScatterNames: values.showScatterNames === true,
     showInteractables: values.showInteractables === true,
     showQuestMarkers: values.showQuestMarkers === true,
     showEnemies: values.showEnemies === true,
@@ -2065,6 +2229,15 @@ function buildGameMinimapHudReadModel(node) {
     nameMaxLength: numberOrFallback(values.nameMaxLength, defaults.nameMaxLength),
     zIndex: numberOrFallback(values.zIndex, defaults.zIndex)
   };
+}
+
+function minimapFogMapLayer(rawLayer, sourceMinimapId, cellSize) {
+  const base = String(rawLayer || "overworld").trim() || "overworld";
+  if (base.includes(":minimap:")) return base;
+  const source = String(sourceMinimapId || "main_minimap").trim() || "main_minimap";
+  const safeSource = source.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 64) || "main_minimap";
+  const safeCellSize = clampNumber(numberOrNull(cellSize), 1, 1000, 24);
+  return base + ":minimap:" + safeSource + ":cell:" + safeCellSize;
 }
 
 function buildEditorMinimapHudReadModel(node) {
@@ -2090,6 +2263,8 @@ function buildEditorMinimapHudReadModel(node) {
     showPlayerSpawn: values.showPlayerSpawn !== false,
     showModelEntities: values.showModelEntities !== false,
     showEntityNames: values.showEntityNames !== false,
+    showScatterInstances: values.showScatterInstances === true,
+    showScatterNames: values.showScatterNames === true,
     showInteractables: values.showInteractables !== false,
     showChunkGrid: values.showChunkGrid === true,
     showBakeBounds: values.showBakeBounds !== false,
@@ -2117,6 +2292,13 @@ function collectMinimapReadModel(nodes, groundNode, includeEditor, warnings = []
   };
   if (includeEditor) minimap.editor = editorNodes[0] ? buildEditorMinimapHudReadModel(editorNodes[0]) : null;
   return minimap;
+}
+
+function firstGameMinimapHudReadModelFromGraph(graph) {
+  const node = Array.isArray(graph?.nodes)
+    ? graph.nodes.find(function (candidate) { return candidate.type === "game_minimap_hud"; }) || null
+    : null;
+  return node ? buildGameMinimapHudReadModel(node) : null;
 }
 
 function collectTerrainReadModel(nodes) {
@@ -2193,9 +2375,12 @@ export function validateGraphForPublish(graph, services = {}) {
       if (outputNodes.length === 1) {
         const groupPorts = resolveNodePorts(node, nodeMap).outputs;
         for (const [portName, port] of Object.entries(groupPorts)) {
-          const internalSources = directIncomingEdges(graph, outputNodes[0], portName);
+          const internalSources = zoneCanvasPortName(portName)
+            ? zoneCanvasIncomingEdges(graph, outputNodes[0])
+            : directIncomingEdges(graph, outputNodes[0], portName);
           if (!internalSources.length) {
             if (contentNodes.length === 0) continue;
+            if (isZoneCanvasChildGroup(node)) continue;
             errors.push("Group output '" + (port.label || portName) + "' is not connected inside the group.");
             continue;
           }
@@ -2280,8 +2465,20 @@ export function validateGraphForPublish(graph, services = {}) {
       }
     }
 
+    // Keybinds authored through World Assembly.keybinds never reach Game Output as a
+    // direct edge (that only happens via the synthetic bridge in
+    // graphWithLegacyAdapterAsOutput, applied later when building the actual world) -
+    // so without this, wiring keybinds the supported new-architecture way still
+    // triggered "no keybinds" warnings here.
+    const assemblyNode = graph.nodes.find(function (node) {
+      return node.type === "world_assembly" && directIncomingEdges(graph, output, "gameProject").some(function (edge) {
+        return edge.fromNodeId === node.id;
+      });
+    }) || null;
     const keybinds = collectResolutionError(errors, function () {
-      return incomingNodes(graph, output, "keybinds", nodeMap);
+      const direct = incomingNodes(graph, output, "keybinds", nodeMap);
+      const viaAssembly = assemblyNode ? incomingNodes(graph, assemblyNode, "keybinds", nodeMap) : [];
+      return uniqueNodes(direct.concat(viaAssembly));
     }) || [];
     const boundActions = new Set(keybinds.map(function (node) { return node.values.action; }));
     const movementActions = ["move_forward", "move_back", "move_left", "move_right"];
@@ -2345,7 +2542,7 @@ export function validateGraphForPublish(graph, services = {}) {
     const chunkLoadingNodes = collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "chunkLoading", nodeMap);
     }) || [];
-    const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings);
+    const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings, graph, nodeMap);
     validateChunkLoadingReadModel(chunkLoading, warnings);
 
     const minimapNodes = collectResolutionError(errors, function () {
@@ -2404,6 +2601,25 @@ export function validateGraphForPublish(graph, services = {}) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+function isZoneCanvasChildGroup(node) {
+  if (node?.type !== "group" || node.values?.zoneCanvas !== true) return false;
+  const explicitRootId = String(node.values?.zoneCanvasRootId || "").trim();
+  if (explicitRootId && explicitRootId !== node.id) return true;
+  const gridX = Number(node.values?.zoneGridX);
+  const gridZ = Number(node.values?.zoneGridZ);
+  return Number.isFinite(gridX) && Number.isFinite(gridZ) && (Math.trunc(gridX) !== 0 || Math.trunc(gridZ) !== 0);
+}
+
+function zoneCanvasPortName(portName) {
+  return ["zonePackage", "zonepackage", "zonePkg", "zonepkg"].includes(String(portName || ""));
+}
+
+function zoneCanvasIncomingEdges(graph, outputNode) {
+  return (Array.isArray(graph?.edges) ? graph.edges : []).filter(function (edge) {
+    return edge.toNodeId === outputNode.id && zoneCanvasPortName(edge.toPort);
+  });
+}
+
 export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const includeEditorCamera = options.includeEditorCamera !== false;
   const outputNode = graph.nodes.find(function (node) { return node.type === "game_output"; });
@@ -2419,25 +2635,43 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     keybinds: [],
     ui: [],
     minimap: { bakes: [], game: null },
+    mmo: { network: null },
+    zoneGrounds: [],
     terrain: emptyTerrainReadModel(),
     collision: emptyCollisionReadModel()
   };
   if (!outputNode) return empty;
   const nodeMap = nodeMapForGraph(graph);
+  const worldAssemblyNode = firstIncomingNode(graph, outputNode, "gameProject", nodeMap);
+  const assemblyWorldSettingsSource = worldAssemblyNode?.type === "world_assembly" ? worldAssemblyNode : null;
   const worldNode = firstIncomingNode(graph, outputNode, "world", nodeMap);
-  const editorWorldSettingsNode = firstIncomingNode(graph, outputNode, "editorWorldSettings", nodeMap);
-  const gameWorldSettingsNode = firstIncomingNode(graph, outputNode, "gameWorldSettings", nodeMap);
+  const editorWorldSettingsNode = firstIncomingNode(graph, outputNode, "editorWorldSettings", nodeMap)
+    || (assemblyWorldSettingsSource ? firstIncomingNode(graph, assemblyWorldSettingsSource, "editorWorldSettings", nodeMap) : null);
+  const gameWorldSettingsNode = firstIncomingNode(graph, outputNode, "gameWorldSettings", nodeMap)
+    || (assemblyWorldSettingsSource ? firstIncomingNode(graph, assemblyWorldSettingsSource, "gameWorldSettings", nodeMap) : null);
   const groundNode = firstIncomingNode(graph, outputNode, "ground", nodeMap);
   const cameraNode = firstIncomingNode(graph, outputNode, "camera", nodeMap);
   const playerNode = firstIncomingNode(graph, outputNode, "player", nodeMap);
   const spawnNode = firstIncomingNode(graph, outputNode, "spawn", nodeMap);
-  const lightNodes = incomingNodes(graph, outputNode, "lights", nodeMap);
+  const assemblyLightNodes = assemblyWorldSettingsSource ? incomingNodes(graph, assemblyWorldSettingsSource, "lights", nodeMap) : [];
+  const directLightNodes = incomingNodes(graph, outputNode, "lights", nodeMap);
+  const lightNodes = assemblyLightNodes.length ? assemblyLightNodes : directLightNodes;
   const entityNodes = incomingNodes(graph, outputNode, "entities", nodeMap);
   const interactableNodes = incomingNodes(graph, outputNode, "interactables", nodeMap);
   const chunkLoadingNodes = incomingNodes(graph, outputNode, "chunkLoading", nodeMap);
+  const mmoNetworkNode = firstIncomingNode(graph, outputNode, "mmoNetwork", nodeMap)
+    || (assemblyWorldSettingsSource ? firstIncomingNode(graph, assemblyWorldSettingsSource, "mmoNetwork", nodeMap) : null);
   const keybindNodes = incomingNodes(graph, outputNode, "keybinds", nodeMap);
   const uiNodes = incomingNodes(graph, outputNode, "ui", nodeMap);
   const minimapNodes = incomingNodes(graph, outputNode, "minimap", nodeMap);
+  const minimapNodeIds = new Set(minimapNodes.map(function (node) { return node.id; }));
+  for (const node of graph.nodes || []) {
+    if (node?.type !== "minimap_bake") continue;
+    if (!node.values?.bakedImageUrl) continue;
+    if (minimapNodeIds.has(node.id)) continue;
+    minimapNodes.push(node);
+    minimapNodeIds.add(node.id);
+  }
   const terrainNodes = incomingNodes(graph, outputNode, "terrain", nodeMap);
   const collisionNodes = incomingNodes(graph, outputNode, "collision", nodeMap);
   const modelEntityNodes = entityNodes.filter(function (node) {
@@ -2488,20 +2722,24 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const editorCamera = includeEditorCamera && editorCameraNode ? buildEditorCameraReadModel(editorCameraNode) : null;
   const collision = collectCollisionReadModel(collisionNodes);
   collision.blockers.push.apply(collision.blockers, scatterCollisionBlockers);
-  const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes);
+  const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, [], graph, nodeMap);
+
+  const worldPerformance = buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode, gameWorldSettingsNode);
+  const hasWorldRoot = Boolean(worldNode || editorWorldSettingsNode || gameWorldSettingsNode);
+  const worldRoot = hasWorldRoot ? {
+    id: worldNode?.values?.worldId ?? worldPerformance.shared.worldId,
+    displayName: worldNode?.values?.displayName ?? worldPerformance.shared.displayName,
+    backgroundColor: worldNode?.values?.backgroundColor ?? worldPerformance.shared.backgroundColor,
+    fogColor: worldNode?.values?.fogColor ?? worldPerformance.shared.fogColor,
+    fogDensity: worldNode ? numberOrNull(worldNode.values.fogDensity) : worldPerformance.shared.fogDensity,
+    performance: worldPerformance
+  } : null;
 
   const world = {
     schemaVersion: graph.schemaVersion,
     source: "editor-node-graph",
     outputNodeId: outputNode.id,
-    world: worldNode ? {
-      id: worldNode.values.worldId,
-      displayName: worldNode.values.displayName,
-      backgroundColor: worldNode.values.backgroundColor,
-      fogColor: worldNode.values.fogColor,
-      fogDensity: numberOrNull(worldNode.values.fogDensity),
-      performance: buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode, gameWorldSettingsNode)
-    } : null,
+    world: worldRoot,
     ground: groundNode ? {
       ...buildGroundReadModel(groundNode)
     } : null,
@@ -2584,6 +2822,9 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     }),
     ui: uiNodes.map(buildUiReadModel),
     minimap: collectMinimapReadModel(minimapNodes, groundNode, includeEditorCamera),
+    mmo: {
+      network: mmoNetworkNode ? buildMmoNetworkReadModel(mmoNetworkNode) : null
+    },
     terrain: collectTerrainReadModel(terrainNodes),
     collision: collision,
     scatterAreas: scatterAreas,
@@ -2592,6 +2833,72 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   };
   if (editorCamera) world.editorCamera = editorCamera;
   return world;
+}
+
+function buildZoneCameraReadModel(camera) {
+  if (!camera) return null;
+  return {
+    id: camera.cameraId || camera.id || camera.nodeId || "zone_camera",
+    mode: "top-down",
+    cameraId: camera.cameraId || camera.id || camera.nodeId || "zone_camera",
+    pitch: numberOrNull(camera.pitch),
+    yaw: numberOrNull(camera.yaw),
+    startDistance: numberOrNull(camera.startDistance) ?? numberOrNull(camera.distance),
+    distance: numberOrNull(camera.distance),
+    minDistance: numberOrNull(camera.minDistance),
+    maxDistance: numberOrNull(camera.maxDistance),
+    fov: numberOrNull(camera.fov),
+    follow: camera.follow !== false,
+    rotateSpeed: numberOrNull(camera.rotateSpeed)
+  };
+}
+
+function buildZonePlayerReadModel(player, assetLookup) {
+  if (!player) return null;
+  return {
+    id: player.playerId || player.id || player.nodeId || "zone_player",
+    modelAssetId: player.modelAssetId || null,
+    ...resolveCanonicalAnimationConfig(assetLookup.get(player.modelAssetId), player),
+    moveSpeed: clampNumber(numberOrNull(player.moveSpeed), 0.1, 100, 6),
+    sprintMultiplier: clampNumber(numberOrNull(player.sprintMultiplier), 1, 2.5, 1.6),
+    turnSpeed: clampNumber(numberOrNull(player.turnSpeed), 1, 4000, 540),
+    collisionRadius: clampNumber(numberOrNull(player.collisionRadius), 0.05, 50, 0.5),
+    scale: clampNumber(numberOrNull(player.scale), 0.001, 1000, 1),
+    showNameplate: player.showNameplate !== false
+  };
+}
+
+function buildZoneEntityReadModel(entity, assetLookup) {
+  if (!entity || entity.nodeType !== "model_entity") return null;
+  return {
+    id: entity.nodeId || entity.entityId,
+    nodeId: entity.nodeId || null,
+    entityId: entity.entityId || entity.nodeId,
+    label: entity.label,
+    type: "model",
+    modelAssetId: entity.modelAssetId || null,
+    ...resolveCanonicalAnimationConfig(assetLookup.get(entity.modelAssetId), entity),
+    solid: entity.solid === true,
+    walkable: entity.walkable === true,
+    collisionRadius: clampNumber(numberOrNull(entity.collisionRadius), 0.05, 100, 1),
+    transform: {
+      position: {
+        x: numberOrNull(entity.x),
+        y: numberOrNull(entity.y),
+        z: numberOrNull(entity.z)
+      },
+      rotation: {
+        x: numberOrNull(entity.rotationX) ?? 0,
+        y: numberOrNull(entity.rotationY) ?? 0,
+        z: numberOrNull(entity.rotationZ) ?? 0
+      },
+      scale: {
+        x: numberOrNull(entity.scaleX),
+        y: numberOrNull(entity.scaleY),
+        z: numberOrNull(entity.scaleZ)
+      }
+    }
+  };
 }
 
 function graphWithLegacyAdapterAsOutput(graph) {
@@ -2623,6 +2930,27 @@ function graphWithLegacyAdapterAsOutput(graph) {
           toPort: "minimap"
         }));
       }
+    }
+    for (const edge of directIncomingEdges(graph, assemblyNode, "keybinds")) {
+      syntheticEdges.push(Object.assign({}, edge, {
+        id: "synthetic_world_assembly_keybinds_" + edge.id,
+        toNodeId: outputNode.id,
+        toPort: "keybinds"
+      }));
+    }
+    for (const edge of directIncomingEdges(graph, assemblyNode, "chunkLoading")) {
+      syntheticEdges.push(Object.assign({}, edge, {
+        id: "synthetic_world_assembly_chunk_loading_" + edge.id,
+        toNodeId: outputNode.id,
+        toPort: "chunkLoading"
+      }));
+    }
+    for (const edge of directIncomingEdges(graph, assemblyNode, "mmoNetwork")) {
+      syntheticEdges.push(Object.assign({}, edge, {
+        id: "synthetic_world_assembly_mmo_network_" + edge.id,
+        toNodeId: outputNode.id,
+        toPort: "mmoNetwork"
+      }));
     }
   }
   if (!adapterNode) {
@@ -2673,13 +3001,179 @@ export class PublishService {
     }));
   }
 
-  mergeWorldWithGameProject(world, compilation, publishedAt = null) {
+  mergeWorldWithGameProject(world, compilation, publishedAt = null, graph = null) {
     if (!compilation || !compilation.connected || !compilation.manifest) return world;
+    const manifest = compilation.manifest;
+    const services = this.services;
+    const nodeMap = graph ? nodeMapForGraph(graph) : new Map();
+    const activeZoneId = manifest.runtime?.activeZoneId || null;
+    const activeZone = activeZoneId ? manifest.zones?.byId?.[activeZoneId] || null : null;
+    const startSpawnId = manifest.runtime?.startSpawnId || null;
+    const startSpawn = activeZone && Array.isArray(activeZone.spawns)
+      ? activeZone.spawns.find(function (spawn) { return spawn.spawnId === startSpawnId; }) || activeZone.spawns.find(function (spawn) { return spawn.role === "zone_default"; }) || null
+      : null;
+    const activeMinimap = activeZone && Array.isArray(activeZone.minimaps)
+      ? activeZone.minimaps.find(function (minimap) { return minimap.enabled !== false; }) || null
+      : null;
+    const zonePackages = Array.isArray(manifest.zones?.packages)
+      ? manifest.zones.packages.filter(Boolean)
+      : (activeZone ? [activeZone] : []);
+    const zoneContentPackages = zonePackages.length ? zonePackages : (activeZone ? [activeZone] : []);
+    // Terrain (surface_layer/terrain_layer) and collision (blocker_area/walkable_surface)
+    // nodes wired only to a Zone Output's "terrain"/"collision" ports never reach the
+    // legacy world.terrain/world.collision at all - they're only visible through
+    // activeZone.terrain/activeZone.collision (raw node-value records from
+    // recordsFromSources). Re-wrap them into {type, values} and run them through the
+    // same read-model builders the legacy path uses, then merge below.
+    const zoneTerrainRecords = [];
+    const zoneCollisionRecords = [];
+    const allZoneEntityRecords = [];
+    const zoneGrounds = [];
+    for (const pkg of zoneContentPackages) {
+      if (pkg?.ground) {
+        const ground = buildGroundReadModel({ values: pkg.ground });
+        zoneGrounds.push(Object.assign({}, ground, { zoneRef: pkg.zoneId || pkg.ground.zoneRef || null }));
+      }
+      zoneTerrainRecords.push.apply(zoneTerrainRecords, Array.isArray(pkg?.terrain) ? pkg.terrain : []);
+      zoneCollisionRecords.push.apply(zoneCollisionRecords, Array.isArray(pkg?.collision) ? pkg.collision : []);
+      allZoneEntityRecords.push.apply(allZoneEntityRecords, Array.isArray(pkg?.entities) ? pkg.entities : []);
+    }
+    const zoneTerrainNodes = zoneTerrainRecords.map(function (record) {
+      return { type: record.nodeType, values: record };
+    });
+    const zoneCollisionNodes = zoneCollisionRecords.map(function (record) {
+      return { type: record.nodeType, values: record };
+    });
+    const zoneTerrain = collectTerrainReadModel(zoneTerrainNodes);
+    const zoneCollision = collectCollisionReadModel(zoneCollisionNodes);
+    const zoneAssetIds = new Set();
+    for (const ground of zoneGrounds) {
+      if (ground?.textureAssetId) zoneAssetIds.add(ground.textureAssetId);
+    }
+    if (activeZone?.player?.modelAssetId) zoneAssetIds.add(activeZone.player.modelAssetId);
+    for (const entity of allZoneEntityRecords) {
+      if (entity?.modelAssetId) zoneAssetIds.add(entity.modelAssetId);
+    }
+    // Bounded Area Scatter nodes wired to a Zone Output's "entities" port arrive here as
+    // a single raw node-value record (via recordsFromSources), not the expanded
+    // per-instance placements the legacy path produces - and buildZoneEntityReadModel
+    // only accepts nodeType "model_entity", so the record was silently dropped and
+    // nothing ever got placed no matter what the node's fields were set to. Resolve
+    // sources now (asset ids are needed below before the asset manifest is built) and
+    // place the actual instances further down, once groundY is known.
+    const zoneScatterSources = [];
+    const zoneScatterCollisionBlockers = [];
+    for (const record of allZoneEntityRecords) {
+      if (record?.nodeType !== "bounded_area_scatter") continue;
+      const node = { id: record.nodeId, type: "bounded_area_scatter", values: record };
+      const label = "Scatter '" + (record.scatterId || record.nodeId) + "'";
+      const resolved = resolveScatterSources(node, nodeMap, services, [], label);
+      for (const assetId of resolved.sourceAssetIds) zoneAssetIds.add(assetId);
+      zoneScatterSources.push({ node, resolved });
+      // Same silent-drop as the entities above: "Boundary blocks player" was only ever
+      // wired up in the legacy Output "entities" path (see buildWorldFromGraph), so a
+      // scatter node routed through World Assembly placed its instances fine but the
+      // toggle did nothing - no blocker polygon was ever built for this path.
+      const settings = normalizeScatterSettings(node);
+      if (settings.boundaryBlocksPlayer) {
+        zoneScatterCollisionBlockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
+      }
+    }
+    for (const layer of zoneTerrain.layers) {
+      if (layer?.textureAssetId) zoneAssetIds.add(layer.textureAssetId);
+    }
+    for (const surface of zoneTerrain.surfaces) {
+      if (surface?.textureAssetId) zoneAssetIds.add(surface.textureAssetId);
+      if (surface?.secondaryTextureAssetId) zoneAssetIds.add(surface.secondaryTextureAssetId);
+      if (surface?.edgeFadeNoiseAssetId) zoneAssetIds.add(surface.edgeFadeNoiseAssetId);
+    }
+    const zoneAssets = services.assetService && zoneAssetIds.size
+      ? services.assetService.manifestForIds(Array.from(zoneAssetIds))
+      : [];
+    const mergedAssets = uniqueById((world.assets || []).concat(zoneAssets));
+    const assetLookup = new Map(mergedAssets.map(function (asset) {
+      return [asset.id, asset];
+    }));
+    // activeZone.ground is a raw clone of whatever ground_surface node is wired to the
+    // zone output's "ground" port (via valuePayload) - i.e. the SAME node that produced
+    // world.ground. Run it through the same read-model builder the legacy path uses
+    // instead of re-deriving bounds from the Zone Definition node's own width/depth/
+    // origin, which describe the zone's overall extent, not the ground mesh's size -
+    // using those clobbered any explicitly configured ground bounds with the zone's.
+    const zoneGround = activeZone?.ground ? buildGroundReadModel({ values: activeZone.ground }) : null;
+    const zoneScatterGroundY = numberOrNull(zoneGround?.y) ?? numberOrNull(world.ground?.y) ?? 0;
+    const zoneScatterEntities = [];
+    for (const { node, resolved } of zoneScatterSources) {
+      zoneScatterEntities.push.apply(zoneScatterEntities, buildScatterInstances(node, resolved.sourceAssets, zoneScatterGroundY));
+    }
+    let resolvedActiveMinimap = activeMinimap;
+    if (activeMinimap) {
+      const worldBakes = Array.isArray(world.minimap?.bakes) ? world.minimap.bakes : [];
+      const matchingWorldBake = worldBakes.find(function (bake) {
+        return bake.minimapId && bake.minimapId === activeMinimap.minimapId;
+      }) || worldBakes.find(function (bake) {
+        return bake.enabled !== false && bake.bakedImageUrl;
+      }) || null;
+      resolvedActiveMinimap = Object.assign({}, matchingWorldBake || {}, activeMinimap);
+      if (!resolvedActiveMinimap.bakedImageUrl && matchingWorldBake?.bakedImageUrl) {
+        resolvedActiveMinimap.bakedImageUrl = matchingWorldBake.bakedImageUrl;
+        resolvedActiveMinimap.bakedImageWidth = matchingWorldBake.bakedImageWidth;
+        resolvedActiveMinimap.bakedImageHeight = matchingWorldBake.bakedImageHeight;
+        resolvedActiveMinimap.bakedAt = matchingWorldBake.bakedAt;
+        resolvedActiveMinimap.bakedWorldHash = matchingWorldBake.bakedWorldHash;
+        resolvedActiveMinimap.bakedBounds = matchingWorldBake.bakedBounds;
+      }
+      if (!resolvedActiveMinimap.bounds && matchingWorldBake?.bounds) resolvedActiveMinimap.bounds = matchingWorldBake.bounds;
+    }
+    const graphGameMinimapHud = graph ? firstGameMinimapHudReadModelFromGraph(graph) : null;
+    const baseGameMinimapHud = world.minimap?.game || graphGameMinimapHud || {};
+    const zoneMinimap = resolvedActiveMinimap ? {
+      bakes: uniqueById([resolvedActiveMinimap].concat(Array.isArray(world.minimap?.bakes) ? world.minimap.bakes : [])),
+      game: Object.assign({}, graphGameMinimapHud || {}, world.minimap?.game || {}, {
+        enabled: baseGameMinimapHud.enabled !== false,
+        sourceMode: "active_zone_registry",
+        sourceMinimapId: resolvedActiveMinimap.minimapId || resolvedActiveMinimap.id || "zone_minimap"
+      }),
+      editor: world.minimap?.editor || null
+    } : null;
+    const zoneEntities = allZoneEntityRecords.map(function (entity) {
+      return buildZoneEntityReadModel(entity, assetLookup);
+    }).filter(Boolean).concat(zoneScatterEntities);
+    const zoneCamera = buildZoneCameraReadModel(activeZone?.camera);
+    const zonePlayer = buildZonePlayerReadModel(activeZone?.player, assetLookup);
     return Object.assign({}, world, {
-      schemaVersion: compilation.manifest.schemaVersion || world.schemaVersion,
+      schemaVersion: manifest.schemaVersion || world.schemaVersion,
       buildId: compilation.buildId || world.buildId || null,
       contentHash: compilation.contentHash || world.contentHash || null,
-      gameProject: compilation.manifest,
+      gameProject: manifest,
+      activeZoneId: activeZoneId || world.activeZoneId || null,
+      zonePackage: activeZone || world.zonePackage || null,
+      zones: manifest.zones || world.zones || {},
+      spawn: startSpawn ? Object.assign({}, world.spawn || {}, {
+        spawnId: startSpawn.spawnId,
+        role: startSpawn.role,
+        zoneRef: startSpawn.zoneRef || activeZoneId,
+        x: Number(startSpawn.x) || 0,
+        y: Number(startSpawn.y) || Number(world.ground?.y) || 0,
+        z: Number(startSpawn.z) || 0,
+        facing: Number(startSpawn.facing) || 0
+      }) : world.spawn,
+      ground: zoneGround ? Object.assign({}, world.ground, zoneGround) : world.ground,
+      camera: zoneCamera || world.camera,
+      player: zonePlayer || world.player,
+      lights: world.lights,
+      entities: zoneEntities.length ? uniqueById((world.entities || []).concat(zoneEntities)) : world.entities,
+      zoneGrounds: zoneGrounds,
+      terrain: {
+        layers: uniqueById((world.terrain?.layers || []).concat(zoneTerrain.layers)),
+        surfaces: uniqueById((world.terrain?.surfaces || []).concat(zoneTerrain.surfaces))
+      },
+      collision: {
+        blockers: uniqueById((world.collision?.blockers || []).concat(zoneCollision.blockers, zoneScatterCollisionBlockers)),
+        walkableSurfaces: uniqueById((world.collision?.walkableSurfaces || []).concat(zoneCollision.walkableSurfaces))
+      },
+      minimap: zoneMinimap || world.minimap,
+      assets: mergedAssets,
       publishedAt: publishedAt || world.publishedAt || undefined
     });
   }
@@ -2704,7 +3198,7 @@ export class PublishService {
     const graph = this.repository.getGraph();
     const compilation = this.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: false } });
     const draftWorld = this.buildLegacyWorld(graph, true);
-    const world = this.mergeWorldWithGameProject(draftWorld, compilation);
+    const world = this.mergeWorldWithGameProject(draftWorld, compilation, null, graph);
     this.repository.saveDraftWorld(world, {
       buildId: world.buildId || null,
       schemaVersion: world.schemaVersion || null,
@@ -2729,8 +3223,8 @@ export class PublishService {
     }
     const draftWorld = this.buildLegacyWorld(graph, true);
     const publishedWorld = this.buildLegacyWorld(graph, false);
-    const mergedDraftWorld = this.mergeWorldWithGameProject(draftWorld, compilation);
-    const mergedPublishedWorld = this.mergeWorldWithGameProject(publishedWorld, compilation, new Date().toISOString());
+    const mergedDraftWorld = this.mergeWorldWithGameProject(draftWorld, compilation, null, graph);
+    const mergedPublishedWorld = this.mergeWorldWithGameProject(publishedWorld, compilation, new Date().toISOString(), graph);
     this.repository.saveDraftWorld(mergedDraftWorld, {
       buildId: mergedDraftWorld.buildId || null,
       schemaVersion: mergedDraftWorld.schemaVersion || null,

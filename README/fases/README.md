@@ -2,9 +2,11 @@
 
 Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm, maar een werkafspraak voor Codex-runs: wat mag wel, wat mag niet, wat moet Kevin zelf controleren, en wanneer GK Code Regisseur de fase moet afkeuren.
 
-## Actieve fasecontracten
+## Beschikbare fasecontracten / backlog
 
-- [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - next NODE phase after accepted NODE-01 cutover.
+Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn niet automatisch actief.
+
+- [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - implemented on 2026-07-19; Kevin acceptance depends on explicit follow-up/microfase. Evidence: [NODE-02 zones composition](./evidence/NODE-02-zones-composition/README.md).
 - [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
 - [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)
 - [Fase MMO-03 - Node-Driven Minimap: Bake Image + 2D Live Canvas Markers + Editor Minimap](./MMO-03-Node-Driven-Minimap-Bake-Canvas-Overlay.md)
@@ -32,12 +34,43 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 ## Regie-regels voor elke fase
 
-1. Werk alleen de afgesproken fase of microfase uit.
+1. Werk alleen de fase of microfase uit die Kevin expliciet in het opdrachtblok noemt.
 2. Houd editor nodes en Game Output/publish leidend.
 3. Voeg geen demo-content of hardcoded wereld toe.
 4. Houd visuals en gameplay-regels gescheiden.
 5. Laat `/game/` alleen published world data lezen.
 6. Voeg geen zware runtime systemen toe zonder fase-opdracht.
-7. Draai `npm run check` en `npm run smoke` als code of publish/dataflow is aangepast.
-8. Lever altijd iets op dat Kevin zelf kan inspecteren, testen of bewust afkeuren.
+7. Draai geen tests of checks, tenzij Kevin dat in de concrete taak expliciet vraagt. Kevin test en accepteert zelf.
+8. Lever altijd een duidelijke Kevin-testlijst op: wat Kevin moet openen, wijzigen, publiceren en controleren.
 9. Voor NODE-01 en later geldt: geen legacy-plus-new authoring workflow. Legacycompatibiliteit mag alleen intern, hidden en migration-only bestaan.
+
+## Opdrachtblok vereist
+
+Elke Codex-run die code moet aanpassen, moet starten vanuit dit blok:
+
+```text
+## Concrete taak
+
+Maak:
+...
+
+## Bedoelde fase
+
+...
+
+## Wat ik zelf wil kunnen zien/testen
+
+1. ...
+2. ...
+3. ...
+
+## Wat expliciet niet onder scope valt
+
+- ...
+
+## Extra context
+
+...
+```
+
+Zonder ingevuld opdrachtblok mag Codex geen implementatie starten.
