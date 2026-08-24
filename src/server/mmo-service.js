@@ -375,6 +375,76 @@ function activeZoneIdForWorld(world) {
   return String(world?.activeZoneId || world?.gameProject?.runtime?.activeZoneId || world?.spawn?.zoneRef || "").trim() || null;
 }
 
+function zonePackageForWorld(world, zoneId) {
+  const targetZoneId = String(zoneId || "").trim();
+  if (!targetZoneId) return world?.zonePackage || null;
+  return world?.gameProject?.zones?.byId?.[targetZoneId] || world?.zones?.byId?.[targetZoneId] || null;
+}
+
+function defaultSpawnForZone(zonePackage) {
+  const spawns = Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : [];
+  return spawns.find(function (spawn) { return spawn && spawn.role === "zone_default"; }) || spawns[0] || null;
+}
+
+function spawnForZone(zonePackage, spawnId) {
+  const targetSpawnId = String(spawnId || "").trim();
+  const spawns = Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : [];
+  return spawns.find(function (spawn) { return spawn && spawn.spawnId === targetSpawnId; }) || defaultSpawnForZone(zonePackage);
+}
+
+function minimapForZone(world, zonePackage) {
+  const activeMinimap = (Array.isArray(zonePackage?.minimaps) ? zonePackage.minimaps : []).find(function (minimap) {
+    return minimap && minimap.enabled !== false;
+  }) || null;
+  if (!activeMinimap) return world?.minimap || null;
+  const worldBakes = Array.isArray(world?.minimap?.bakes) ? world.minimap.bakes : [];
+  const matchingBake = worldBakes.find(function (bake) {
+    return bake && bake.minimapId && bake.minimapId === activeMinimap.minimapId;
+  }) || worldBakes.find(function (bake) {
+    return bake && bake.enabled !== false && bake.zoneRef === zonePackage?.zoneId;
+  }) || null;
+  const resolved = Object.assign({}, matchingBake || {}, activeMinimap);
+  if (!resolved.bakedImageUrl && matchingBake?.bakedImageUrl) {
+    resolved.bakedImageUrl = matchingBake.bakedImageUrl;
+    resolved.bakedImageWidth = matchingBake.bakedImageWidth;
+    resolved.bakedImageHeight = matchingBake.bakedImageHeight;
+    resolved.bakedAt = matchingBake.bakedAt;
+    resolved.bakedWorldHash = matchingBake.bakedWorldHash;
+    resolved.bakedBounds = matchingBake.bakedBounds;
+  }
+  const game = Object.assign({}, world?.minimap?.game || {}, {
+    enabled: world?.minimap?.game?.enabled !== false,
+    sourceMode: "active_zone_registry",
+    sourceMinimapId: resolved.minimapId || resolved.id || "zone_minimap"
+  });
+  return Object.assign({}, world?.minimap || {}, {
+    bakes: [resolved].concat(worldBakes.filter(function (bake) {
+      return bake && bake.minimapId !== resolved.minimapId;
+    })),
+    game
+  });
+}
+
+function worldForZone(world, zoneId, spawnId = null) {
+  const zonePackage = zonePackageForWorld(world, zoneId) || world?.zonePackage || null;
+  if (!zonePackage?.zoneId) return world;
+  const spawn = spawnForZone(zonePackage, spawnId) || world?.spawn || null;
+  return Object.assign({}, world, {
+    activeZoneId: zonePackage.zoneId,
+    zonePackage: zonePackage,
+    minimap: minimapForZone(world, zonePackage),
+    spawn: spawn ? Object.assign({}, world?.spawn || {}, {
+      spawnId: spawn.spawnId || null,
+      role: spawn.role || null,
+      zoneRef: spawn.zoneRef || zonePackage.zoneId,
+      x: num(spawn.x, 0),
+      y: Number.isFinite(Number(spawn.y)) ? num(spawn.y, 0) : num(world?.ground?.y, 0),
+      z: num(spawn.z, 0),
+      facing: num(spawn.facing, 0)
+    }) : world?.spawn
+  });
+}
+
 function publicSession(session) {
   if (!session) return null;
   return {
@@ -1097,6 +1167,7 @@ export class MmoService {
     const worldContext = this.getPublishedWorldContext();
     const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
     const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
+    const gameWorld = worldForZone(worldContext.world, position.current_zone_id || activeZoneIdForWorld(worldContext.world), position.current_spawn_id);
     const activeSessionCount = this.authService.countActiveSessions(sessionContext.user.id);
     const connectedSessionCount = this.countConnectedSessions(sessionContext.user.id);
     return {
@@ -1107,8 +1178,8 @@ export class MmoService {
       connectedSessionCount: connectedSessionCount,
       player: publicPlayer(profile),
       position: this.publicPositionForPlayer(position, sessionContext.session, worldContext.worldId),
-      spawn: spawnFromWorld(worldContext.world),
-      gameWorld: worldContext.world,
+      spawn: spawnFromWorld(gameWorld),
+      gameWorld: gameWorld,
       worldId: worldContext.worldId,
       worldPublishedAt: worldContext.publishedAt,
       createdProfile: Boolean(options.createdProfile)
@@ -1723,10 +1794,7 @@ export class MmoService {
       zoneId: link.toZoneRef,
       spawnId: link.toSpawnRef,
       position: this.publicPositionForPlayer(nextState, sessionContext.session, worldContext.worldId),
-      gameWorld: Object.assign({}, worldContext.world, {
-        activeZoneId: link.toZoneRef,
-        zonePackage: target.zonePackage
-      })
+      gameWorld: worldForZone(worldContext.world, link.toZoneRef, link.toSpawnRef)
     };
   }
 

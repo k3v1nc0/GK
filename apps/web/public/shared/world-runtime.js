@@ -5492,6 +5492,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
     pendingState: null
   };
   const remotePlayers = new Map();
+  const runtimeTargetRoots = new Map();
   let camYaw = 0;
   let camPitch = 60;
   let camDistance = 24;
@@ -9263,6 +9264,7 @@ function resolveChunkDebugCenter(policy) {
     player.reconcileElapsedMs = 0;
     player.pendingState = null;
     clearRemotePlayers();
+    runtimeTargetRoots.clear();
     loadErrors.length = 0;
     perfHudNextUpdateAt = 0;
     perfHudFrameMs = 0;
@@ -15421,6 +15423,265 @@ function resolveChunkDebugCenter(policy) {
     runtimeStats.remotePlayers = 0;
   }
 
+  function runtimeTargetColor(target) {
+    if (target?.available === false) return "#6b7280";
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    if (kind === "enemy") return "#ef4444";
+    if (kind === "resource") return "#f59e0b";
+    if (kind === "pickup") return target?.pickupKind === "currency" ? "#facc15" : "#22c55e";
+    if (kind === "zone_link") return "#22d3ee";
+    if (kind === "quest") return "#facc15";
+    return "#93c5fd";
+  }
+
+  function runtimeTargetLabel(target) {
+    const name = String(target?.displayName || target?.instanceId || "Target").trim().slice(0, 34) || "Target";
+    const kind = String(target?.entityKind || target?.targetKind || "target").toLowerCase();
+    const distance = Number.isFinite(Number(target?.distance)) ? String(Math.round(Number(target.distance))) + "m" : "";
+    const rangeText = target?.inRange === false ? "out of range" : "in range";
+    const status = String(target?.status || kind || "").trim();
+    return {
+      name,
+      sub: [status, distance, rangeText].filter(Boolean).join(" · ")
+    };
+  }
+
+  function createRuntimeTargetNameplate(target) {
+    const label = runtimeTargetLabel(target);
+    const color = runtimeTargetColor(target);
+    const canvas = document.createElement("canvas");
+    canvas.width = 384;
+    canvas.height = 112;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(4, 8, 12, 0.82)";
+    ctx.strokeStyle = target?.selected ? "#ffffff" : "rgba(220, 232, 244, 0.45)";
+    ctx.lineWidth = target?.selected ? 4 : 2;
+    if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(14, 8, canvas.width - 28, canvas.height - 18, 12);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(14, 8, canvas.width - 28, canvas.height - 18);
+      ctx.strokeRect(14, 8, canvas.width - 28, canvas.height - 18);
+    }
+    ctx.font = "700 24px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillText(label.name, canvas.width / 2, 36);
+    ctx.font = "600 16px sans-serif";
+    ctx.fillStyle = "#b8c7d4";
+    ctx.fillText(label.sub, canvas.width / 2, 64);
+    if (Number.isFinite(Number(target?.healthMax)) && Number(target.healthMax) > 0) {
+      const width = 260;
+      const x = (canvas.width - width) / 2;
+      const y = 82;
+      const percent = clamp(Number(target.healthCurrent || 0) / Math.max(1, Number(target.healthMax || 1)), 0, 1);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+      ctx.fillRect(x, y, width, 10);
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, Math.max(2, width * percent), 10);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.name = "node03-runtime-target-nameplate";
+    sprite.position.set(0, 2.65, 0);
+    sprite.scale.set(4.2, 1.22, 1);
+    sprite.renderOrder = 4100;
+    sprite.userData.runtimeAlive = true;
+    sprite.userData.runtimeTarget = true;
+    sprite.userData.runtimeTargetId = target?.instanceId || null;
+    sprite.userData.runtimeTargetPayload = Object.assign({}, target);
+    return sprite;
+  }
+
+  function markRuntimeTargetTree(root, target) {
+    const payload = Object.assign({}, target);
+    root.traverse(function (child) {
+      child.userData = child.userData || {};
+      child.userData.runtimeAlive = true;
+      child.userData.runtimeTarget = true;
+      child.userData.runtimeTargetId = target?.instanceId || null;
+      child.userData.runtimeTargetPayload = payload;
+    });
+  }
+
+  function createRuntimeTargetBody(target) {
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    const color = new THREE.Color(runtimeTargetColor(target));
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.72,
+      metalness: 0.04,
+      transparent: target?.available === false,
+      opacity: target?.available === false ? 0.48 : 1
+    });
+    let mesh = null;
+    if (kind === "enemy") {
+      mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.15, 4, 10), material);
+      mesh.position.y = 0.95;
+    } else if (kind === "resource") {
+      mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.78, 0), material);
+      mesh.position.y = 0.95;
+      mesh.rotation.y = Math.PI / 4;
+    } else if (kind === "zone_link") {
+      mesh = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.08, 8, 28), material);
+      mesh.position.y = 1.0;
+      mesh.rotation.x = Math.PI / 2;
+    } else if (kind === "quest") {
+      mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.68, 0), material);
+      mesh.position.y = 1.05;
+    } else {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.45, 0.75), material);
+      mesh.position.y = 0.32;
+    }
+    mesh.name = "node03-runtime-target-body";
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  function createRuntimeTargetRangeRing(target) {
+    const color = new THREE.Color(target?.selected ? "#ffffff" : runtimeTargetColor(target));
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: target?.selected ? 0.72 : 0.42,
+      depthWrite: false
+    });
+    const mesh = new THREE.Mesh(new THREE.TorusGeometry(1.15, target?.selected ? 0.045 : 0.035, 6, 44), material);
+    mesh.name = "node03-runtime-target-ring";
+    mesh.position.y = 0.055;
+    mesh.rotation.x = Math.PI / 2;
+    mesh.renderOrder = 80;
+    mesh.raycast = function () {};
+    return mesh;
+  }
+
+  function createRuntimeTargetRoot(target) {
+    const root = new THREE.Group();
+    root.name = "node03-runtime-target:" + String(target?.instanceId || "target");
+    root.userData.transformable = false;
+    root.userData.snapToGround = false;
+    root.userData.runtimeAlive = true;
+    root.userData.runtimeTarget = true;
+    root.userData.runtimeTargetId = target?.instanceId || null;
+    root.userData.runtimeTargetPayload = Object.assign({}, target);
+    root.add(createRuntimeTargetRangeRing(target));
+    root.add(createRuntimeTargetBody(target));
+    const nameplate = createRuntimeTargetNameplate(target);
+    if (nameplate) root.add(nameplate);
+    markRuntimeTargetTree(root, target);
+    return root;
+  }
+
+  function updateRuntimeTargetRoot(root, target) {
+    if (!root || !target) return;
+    root.position.set(num(target.x, 0), num(target.y, 0), num(target.z, 0));
+    root.visible = target?.available !== false || target?.entityKind === "enemy";
+    root.userData.runtimeTargetPayload = Object.assign({}, target);
+    const signature = JSON.stringify({
+      kind: target.entityKind || target.targetKind || "",
+      name: target.displayName || "",
+      status: target.status || "",
+      available: target.available !== false,
+      inRange: target.inRange === true,
+      selected: target.selected === true,
+      hp: target.healthCurrent ?? null,
+      hpMax: target.healthMax ?? null,
+      distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
+    });
+    if (root.userData.runtimeTargetSignature !== signature) {
+      for (const child of Array.from(root.children)) {
+        root.remove(child);
+        disposeObject(child);
+      }
+      root.add(createRuntimeTargetRangeRing(target));
+      root.add(createRuntimeTargetBody(target));
+      const nameplate = createRuntimeTargetNameplate(target);
+      if (nameplate) root.add(nameplate);
+      root.userData.runtimeTargetSignature = signature;
+    }
+    markRuntimeTargetTree(root, target);
+  }
+
+  function removeRuntimeTargetRoot(instanceId) {
+    const id = String(instanceId || "").trim();
+    const root = runtimeTargetRoots.get(id);
+    if (!root) return false;
+    const counts = countObjectTree(root);
+    if (root.parent) root.parent.remove(root);
+    disposeObject(root);
+    runtimeTargetRoots.delete(id);
+    runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - (counts.objects || 0));
+    runtimeStats.meshes = Math.max(0, runtimeStats.meshes - (counts.meshes || 0));
+    return true;
+  }
+
+  function clearRuntimeTargets() {
+    for (const id of Array.from(runtimeTargetRoots.keys())) removeRuntimeTargetRoot(id);
+    runtimeTargetRoots.clear();
+  }
+
+  function setRuntimeTargets(targets) {
+    if (mode !== "game" || !content) return false;
+    const list = Array.isArray(targets) ? targets : [];
+    const desiredIds = new Set();
+    for (const target of list) {
+      const id = String(target?.instanceId || "").trim();
+      if (!id || !Number.isFinite(Number(target?.x)) || !Number.isFinite(Number(target?.z))) continue;
+      desiredIds.add(id);
+      let root = runtimeTargetRoots.get(id);
+      if (!root) {
+        root = createRuntimeTargetRoot(target);
+        runtimeTargetRoots.set(id, root);
+        content.add(root);
+        const counts = countObjectTree(root);
+        runtimeStats.sceneObjects += counts.objects || 0;
+        runtimeStats.meshes += counts.meshes || 0;
+      }
+      updateRuntimeTargetRoot(root, target);
+    }
+    for (const id of Array.from(runtimeTargetRoots.keys())) {
+      if (!desiredIds.has(id)) removeRuntimeTargetRoot(id);
+    }
+    requestRender("runtime-targets");
+    return true;
+  }
+
+  function pickRuntimeTargetAt(clientX, clientY) {
+    if (mode !== "game" || !runtimeTargetRoots.size) return null;
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(Array.from(runtimeTargetRoots.values()), true);
+    for (const hit of hits) {
+      let object = hit.object;
+      while (object && object !== content) {
+        if (object.visible === false) break;
+        if (object.userData?.runtimeTargetId) {
+          return Object.assign({}, object.userData.runtimeTargetPayload || {}, {
+            instanceId: object.userData.runtimeTargetId
+          });
+        }
+        object = object.parent || null;
+      }
+    }
+    return null;
+  }
+
   function getRemotePlayerDebugState() {
     return {
       count: remotePlayers.size,
@@ -17002,6 +17263,7 @@ function resolveChunkDebugCenter(policy) {
     if (gameKeyUpHandler) window.removeEventListener("keyup", gameKeyUpHandler);
     if (gameWheelHandler) canvas.removeEventListener("wheel", gameWheelHandler);
     clearRemotePlayers();
+    clearRuntimeTargets();
     clearHudModules();
     restoreConsoleWarnGate();
     DEBUG_RUNTIME.activeResizeHandlers = 0;
@@ -17198,6 +17460,9 @@ function resolveChunkDebugCenter(policy) {
     setRemotePlayerState: setRemotePlayerState,
     clearRemotePlayers: clearRemotePlayers,
     getRemotePlayerDebugState: getRemotePlayerDebugState,
+    setRuntimeTargets: setRuntimeTargets,
+    clearRuntimeTargets: clearRuntimeTargets,
+    pickRuntimeTargetAt: pickRuntimeTargetAt,
     debugState: debugState,
     debugCollisionAt: debugCollisionAt,
     debugTeleportPlayer: debugTeleportPlayer,

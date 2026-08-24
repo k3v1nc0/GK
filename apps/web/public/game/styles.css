@@ -35,13 +35,20 @@ body {
   inset: 0;
   z-index: 2;
   pointer-events: none;
+  --hud-scale: 1;
+  --hud-edge: max(12px, env(safe-area-inset-top));
+  --hud-gap: 8px;
 }
 
-.anchor-top-left { top: 16px; left: 16px; }
-.anchor-top-right { top: 16px; right: 16px; }
-.anchor-bottom-left { bottom: 16px; left: 16px; }
-.anchor-bottom-right { bottom: 16px; right: 16px; }
-.anchor-center { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.anchor-top-left { top: 16px; left: 16px; transform: scale(var(--hud-scale)); transform-origin: top left; }
+.anchor-top-center { top: 16px; left: 50%; transform: translateX(-50%) scale(var(--hud-scale)); transform-origin: top center; }
+.anchor-top-right { top: 16px; right: 16px; transform: scale(var(--hud-scale)); transform-origin: top right; }
+.anchor-center-left { top: 50%; left: 16px; transform: translateY(-50%) scale(var(--hud-scale)); transform-origin: center left; }
+.anchor-center { top: 50%; left: 50%; transform: translate(-50%, -50%) scale(var(--hud-scale)); transform-origin: center; }
+.anchor-center-right { top: 50%; right: 16px; transform: translateY(-50%) scale(var(--hud-scale)); transform-origin: center right; }
+.anchor-bottom-left { bottom: 16px; left: 16px; transform: scale(var(--hud-scale)); transform-origin: bottom left; }
+.anchor-bottom-center { bottom: 16px; left: 50%; transform: translateX(-50%) scale(var(--hud-scale)); transform-origin: bottom center; }
+.anchor-bottom-right { bottom: 16px; right: 16px; transform: scale(var(--hud-scale)); transform-origin: bottom right; }
 
 .gameMinimapRoot {
   position: absolute;
@@ -110,6 +117,15 @@ body {
   max-height: calc(100dvh - 24px);
   padding: 9px;
   border-radius: 10px;
+}
+
+.status-panel--hud {
+  position: relative;
+  width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  border-radius: 8px;
+  pointer-events: auto;
 }
 
 .status-head {
@@ -257,6 +273,1099 @@ body {
   color: #9bacb9;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.gameHudRuntimeRoot {
+  /* position stays static on purpose: #hud (the parent) is already the positioned
+     ancestor everything here resolves against, with an identical inset:0 box. */
+  margin: 0px !important;
+  padding: 0px !important;
+  inset: 0;
+  z-index: 6;
+  --hud-col-left: 22%;
+  --hud-col-right: 22%;
+  --hud-top-height: auto;
+  --hud-bottom-height: auto;
+  --hud-top-inset-left: 0%;
+  --hud-top-inset-right: 0%;
+  --hud-bottom-inset-left: 0%;
+  --hud-bottom-inset-right: 0%;
+  pointer-events: none;
+}
+
+/* 5-zone HUD layout. left/right are full-height side columns (own width, flex-basis
+   in %). Between them sits the center band (fills whatever width is left); inside it,
+   top/bottom float with content-fit height by default and center fills the remainder.
+   Flexbox (unlike the old CSS-grid) safely accounts for `gap`/margins when shrinking
+   flexible tracks, so none of this can push the HUD wider/taller than the canvas. */
+.gameHudDockGrid {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: row;
+  pointer-events: none;
+}
+
+.gameHudCenterBand {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hud-gap);
+  padding: 0 calc(var(--hud-gap) / 2);
+  pointer-events: none;
+}
+
+.gameHudRuntimeRoot > .gameHudDockGrid > .gameHudDock,
+.node03HudAnchor,
+.node04HudAnchor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hud-gap);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  scrollbar-width: thin;
+  pointer-events: none;
+}
+
+.gameHudDock--left,
+.gameHudDock--right { flex: 0 0 auto; height: 100%; justify-content: center; }
+.gameHudDock--left { width: var(--hud-col-left); padding-right: calc(var(--hud-gap) / 2); }
+.gameHudDock--right { width: var(--hud-col-right); padding-left: calc(var(--hud-gap) / 2); }
+
+.gameHudDock--top,
+.gameHudDock--bottom {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+  min-height: 0;
+}
+.gameHudDock--top {
+  flex-basis: var(--hud-top-height, auto);
+  justify-content: flex-start;
+  margin-left: var(--hud-top-inset-left, 0%);
+  margin-right: var(--hud-top-inset-right, 0%);
+}
+.gameHudDock--bottom {
+  flex-basis: var(--hud-bottom-height, auto);
+  justify-content: flex-end;
+  margin-left: var(--hud-bottom-inset-left, 0%);
+  margin-right: var(--hud-bottom-inset-right, 0%);
+}
+
+.gameHudDock--center {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  justify-content: center;
+}
+
+.gameHudRuntimeRoot--editing .gameHudDock {
+  outline: 1px dashed rgba(137, 222, 254, 0.2);
+  outline-offset: -2px;
+  background: rgba(7, 10, 14, 0.08);
+}
+
+.gameHudToolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 50;
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.gameHudGapControl {
+  display: none;
+  grid-template-columns: auto 82px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid rgba(158, 178, 195, 0.26);
+  border-radius: 6px;
+  background: rgba(8, 13, 18, 0.86);
+  color: #dce9f3;
+  font-size: 10px;
+  font-weight: 800;
+  pointer-events: auto;
+}
+
+.gameHudRuntimeRoot--editing .gameHudGapControl {
+  display: grid;
+}
+
+.gameHudGapControl input {
+  width: 100%;
+}
+
+.gameHudGridSplitter {
+  position: absolute;
+  z-index: 49;
+  display: block;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(137, 222, 254, 0.2);
+  pointer-events: auto;
+}
+
+.gameHudGridSplitter[hidden] {
+  display: none;
+}
+
+.gameHudGridSplitter--column {
+  width: 10px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+
+.gameHudGridSplitter--row {
+  height: 10px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+
+.gameHudGridSplitter::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: rgba(137, 222, 254, 0.72);
+}
+
+.gameHudToolbar button,
+.gameHudPanelChrome button,
+.gameHudDockSelect,
+.gameHudDockTools button,
+.gameHudDockTab {
+  min-height: 24px;
+  border: 1px solid rgba(158, 178, 195, 0.32);
+  border-radius: 6px;
+  background: rgba(8, 13, 18, 0.86);
+  color: #edf5fb;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 5px 7px;
+  pointer-events: auto;
+}
+
+.gameHudDockTools {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 20;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100% - 8px);
+  padding: 3px;
+  border-radius: 7px;
+  background: rgba(7, 10, 14, 0.86);
+  pointer-events: auto;
+}
+
+.gameHudRuntimeRoot--editing .gameHudDockTools {
+  display: flex;
+}
+
+.gameHudDockTools strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dff4ff;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.gameHudToolbar--editing button:first-child {
+  border-color: rgba(250, 204, 21, 0.62);
+  color: #fef3c7;
+}
+
+.gameHudPanelFrame {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-height: 100%;
+  pointer-events: auto;
+  zoom: var(--hud-panel-scale, 1);
+  transform: none;
+  transform-origin: top left;
+  flex: 0 1 auto;
+}
+
+.gameHudDock--stackSized > .gameHudPanelFrame {
+  flex: 0 1 var(--hud-panel-basis, auto);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* top/bottom docks are themselves content-fit (auto height, not a fixed 100%). A
+   percentage --hud-panel-basis inside an auto-height parent is ambiguous per spec and
+   falls back to content sizing anyway - but inconsistently across renders, so a panel
+   would visibly jump position (e.g. a quest tracker sharing "top" with notifications
+   that come and go) every time a sibling panel appeared/disappeared. Left/right/center
+   have a definite 100% height where the percentage split works fine and stays put. */
+.gameHudDock--top.gameHudDock--stackSized > .gameHudPanelFrame,
+.gameHudDock--bottom.gameHudDock--stackSized > .gameHudPanelFrame {
+  flex: 0 1 auto;
+}
+
+.gameHudPanelFrame--floating {
+  position: absolute;
+  z-index: 42;
+  width: auto;
+  zoom: 1;
+  transform: scale(var(--hud-panel-scale, 1));
+}
+
+.gameHudPanelBody {
+  width: 100%;
+  min-width: 0;
+  max-height: 100%;
+  pointer-events: auto;
+}
+
+.gameHudPanelChrome {
+  display: none;
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 7;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid rgba(250, 204, 21, 0.32);
+  border-radius: 6px;
+  background: rgba(7, 10, 14, 0.92);
+  color: #fef3c7;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.gameHudPanelChrome button {
+  min-height: 16px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+.gameHudRuntimeRoot--editing .gameHudPanelChrome {
+  display: flex;
+}
+
+.gameHudRuntimeRoot--editing .gameHudPanelFrame {
+  outline: 1px dashed rgba(250, 204, 21, 0.42);
+  outline-offset: 3px;
+}
+
+.gameHudPanelFrame--tabHidden {
+  display: none !important;
+}
+
+.gameHudPanelFrame--floating .gameHudPanelBody {
+  height: 100%;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.gameHudRuntimeRoot--editing .gameHudPanelFrame--floating .gameHudPanelBody {
+  height: 100%;
+}
+
+.gameHudDock > .gameHudPanelFrame .gameHudPanelBody {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.gameHudDock > .gameHudPanelFrame .node03Module,
+.gameHudDock > .gameHudPanelFrame .node04Module,
+.gameHudDock > .gameHudPanelFrame .node05Module {
+  width: 100%;
+  min-width: 0;
+  max-height: 100%;
+}
+
+.gameHudPanelFrame--floating .node03Module,
+.gameHudPanelFrame--floating .node04Module,
+.gameHudPanelFrame--floating .node05Module {
+  width: 100%;
+  max-width: 100%;
+}
+
+.gameHudPanelFrame .gameMinimapRoot {
+  position: relative;
+  inset: auto;
+  margin: 0 !important;
+  transform: none;
+  width: 100% !important;
+  height: auto !important;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
+  z-index: 0 !important;
+}
+
+.gameHudPanelFrame--floating .gameMinimapRoot {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.gameHudResizeHandle {
+  display: none;
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(250, 204, 21, 0.66);
+  border-radius: 5px;
+  background: rgba(8, 13, 18, 0.94);
+  cursor: nwse-resize;
+  pointer-events: auto;
+}
+
+.gameHudResizeHandle::before {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #fef3c7;
+  border-bottom: 2px solid #fef3c7;
+}
+
+.gameHudRuntimeRoot--editing .gameHudPanelFrame--floating .gameHudResizeHandle {
+  display: block;
+}
+
+.gameHudStackSlider {
+  display: block;
+  flex: 0 0 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(137, 222, 254, 0.16);
+  cursor: row-resize;
+  pointer-events: auto;
+}
+
+.gameHudStackSlider::before {
+  content: "";
+  display: block;
+  height: 2px;
+  margin: 3px 10%;
+  border-radius: 999px;
+  background: rgba(137, 222, 254, 0.72);
+}
+
+.gameHudDockTabBar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 6px;
+  margin-bottom: -1px;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.gameHudDockTab {
+  min-height: 24px;
+  padding: 5px 9px;
+  border-bottom-color: rgba(8, 13, 18, 0.9);
+  border-radius: 7px 7px 0 0;
+  background: rgba(8, 13, 18, 0.68);
+  color: #c8d5df;
+}
+
+.gameHudDockTab--active {
+  border-color: rgba(158, 178, 195, 0.34);
+  border-bottom-color: rgba(8, 13, 18, 0.92);
+  color: #ecfdf5;
+  background: rgba(8, 13, 18, 0.92);
+}
+
+.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node03Module,
+.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node04Module,
+.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node05Module,
+.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .status-panel {
+  border-top-left-radius: 0;
+}
+
+.node03Module,
+.node04Module,
+.node05Module {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 100%;
+  overflow: auto;
+  padding: 9px;
+  border: 1px solid rgba(158, 178, 195, 0.26);
+  border-radius: 8px;
+  background: rgba(8, 13, 18, 0.82);
+  color: #edf5fb;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.node03Module--bar,
+.node03Module--xp,
+.node03Module--tracked {
+  min-width: 0;
+}
+
+.node03BarLabel,
+.node03XpRow,
+.node03Line,
+.node03TitleRow,
+.node03Target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.node03BarLabel,
+.node03XpRow,
+.node03Line {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.node03Line--adjustable {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.node03BarLabel span,
+.node03XpRow span,
+.node03Line span,
+.node03TargetBody span {
+  color: #aab8c5;
+}
+
+.node03BarLabel strong,
+.node03XpRow strong,
+.node03Line strong {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.node03BarTrack {
+  overflow: hidden;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.node03BarFill {
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.node03BarFill--mana { background: linear-gradient(90deg, #2563eb, #22d3ee); }
+.node03BarTrack--xp { width: 220px; height: 8px; }
+.node03BarFill--xp { background: linear-gradient(90deg, #eab308, #84cc16); }
+
+.node03Title {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #dce9f3;
+}
+
+.node03InventoryGrid {
+  display: grid;
+  grid-template-columns: repeat(var(--node03-columns, 6), minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.node03TrackedList {
+  display: grid;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.node03TrackedItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  padding: 4px 6px;
+  border: 1px solid rgba(158, 178, 195, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 11px;
+}
+
+.node03TrackedItem[data-tracked-kind="currency"] {
+  border-color: rgba(250, 204, 21, 0.26);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.node03TrackedItem span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8d5df;
+}
+
+.node03TrackedItem strong {
+  color: #f9d976;
+  font-variant-numeric: tabular-nums;
+}
+
+.node03InventoryQuickAdd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  margin-top: 7px;
+}
+
+.node03InventoryQuickAdd select {
+  min-width: 0;
+  height: 26px;
+  border: 1px solid rgba(158, 178, 195, 0.24);
+  border-radius: 6px;
+  background: rgba(7, 10, 14, 0.78);
+  color: #edf5fb;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.node03InventoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.node03Item {
+  min-width: 0;
+  min-height: 38px;
+  display: grid;
+  align-content: space-between;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid rgba(158, 178, 195, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+}
+
+.node03Item--currency {
+  border-color: rgba(250, 204, 21, 0.28);
+  background: rgba(250, 204, 21, 0.09);
+}
+
+.node03Item--emptySlot {
+  opacity: 0.72;
+}
+
+.node03Item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node03Item strong {
+  justify-self: end;
+  font-size: 10px;
+  color: #f9d976;
+}
+
+.node03AdjustActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.node03AdjustButton {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(158, 178, 195, 0.28);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #edf5fb;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0;
+}
+
+.node03AdjustButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.node03Module--hotbar {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+.node03HotbarButton {
+  position: relative;
+  width: clamp(36px, 6vw, 44px);
+  height: clamp(36px, 6vw, 44px);
+  border: 1px solid rgba(158, 178, 195, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #eef5fb;
+  cursor: pointer;
+}
+
+.node03HotbarButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.node03HotbarButton--outOfRange {
+  border-color: rgba(250, 204, 21, 0.46);
+  background: rgba(250, 204, 21, 0.12);
+}
+
+.node03HotbarButton--selected {
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28) inset;
+}
+
+.node03HotbarButton strong {
+  font-size: 13px;
+}
+
+.node03HotbarKey {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  color: #aab8c5;
+  font-size: 9px;
+}
+
+.node03Module--interactions {
+  width: 100%;
+  max-height: min(48dvh, 460px);
+  overflow: auto;
+}
+
+.node03Target {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(158, 178, 195, 0.16);
+}
+
+.node03Target--selected {
+  margin-inline: -5px;
+  padding-inline: 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.node03Target--outOfRange .node03ActionButton {
+  border-color: rgba(250, 204, 21, 0.36);
+  background: rgba(250, 204, 21, 0.13);
+}
+
+.node03TargetBody {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.node03TargetBody strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.node03TargetBody span,
+.node03Empty,
+.node03Status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.node03ActionButton,
+.node03MiniButton {
+  appearance: none;
+  border: 1px solid rgba(137, 222, 254, 0.35);
+  border-radius: 7px;
+  background: rgba(137, 222, 254, 0.16);
+  color: #eaf8ff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.node03MiniButton {
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.node03ActionButton:disabled,
+.node03MiniButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.node03Empty {
+  margin-top: 7px;
+  color: #aab8c5;
+}
+
+.node03Status {
+  margin-top: 8px;
+  color: #9ee6b8;
+}
+
+.node03Status--error {
+  color: #ffb2b2;
+}
+
+.node03Module--death {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.node04HudRoot {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.node04Module {
+  min-width: 0;
+  width: 100%;
+  padding: 10px;
+}
+
+.node04Module--tracker {
+  width: 100%;
+  max-height: min(48dvh, 420px);
+  overflow: auto;
+}
+
+.node04Module--dialogue {
+  max-width: 100%;
+  padding: 14px;
+}
+
+.node04Title {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fde68a;
+}
+
+.node04QuestName {
+  display: block;
+  margin-top: 7px;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.node04Instruction,
+.node04Empty,
+.node04Status,
+.node04Condition,
+.node04DialogueText,
+.node04Notification {
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #c8d5df;
+}
+
+.node04Objective {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(158, 178, 195, 0.16);
+  font-size: 12px;
+}
+
+.node04Objective span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #aab8c5;
+}
+
+.node04Objective strong {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.node04Objective--done,
+.node04Condition--done,
+.node04Status {
+  color: #9ee6b8;
+}
+
+.node04Status--error {
+  color: #ffb2b2;
+}
+
+.node04Actions,
+.node04Choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.node04ActionButton,
+.node04CloseButton {
+  appearance: none;
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  border-radius: 7px;
+  background: rgba(250, 204, 21, 0.14);
+  color: #fff7d6;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 9px;
+}
+
+.node04ActionButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.node04DialogueHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.node04CloseButton {
+  margin-left: auto;
+  border-color: rgba(158, 178, 195, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: #edf5fb;
+}
+
+.node04Module--notifications {
+  min-width: 0;
+  border-color: rgba(56, 189, 248, 0.28);
+}
+
+.node04Notification {
+  margin-top: 0;
+  color: #dff4ff;
+}
+
+.node05Module {
+  width: 100%;
+  min-width: 0;
+  max-height: min(52dvh, 460px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.node05Module--trade {
+  width: 100%;
+}
+
+.node05Title,
+.node05SubTitle {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.node05Title {
+  color: #bbf7d0;
+}
+
+.node05SubTitle {
+  margin-top: 10px;
+  color: #fde68a;
+}
+
+.node05Meta,
+.node05Empty,
+.node05Status {
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #c8d5df;
+}
+
+.node05Status {
+  color: #9ee6b8;
+}
+
+.node05Status--error {
+  color: #ffb2b2;
+}
+
+.node05List {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.node05Row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(158, 178, 195, 0.16);
+  font-size: 12px;
+}
+
+.node05Row--stack {
+  align-items: flex-start;
+}
+
+.node05RowBody {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.node05RowBody strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.node05RowBody span {
+  color: #aab8c5;
+  line-height: 1.25;
+}
+
+.node05Actions,
+.node05InlineActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.node05Actions {
+  margin-top: 10px;
+}
+
+.node05InlineActions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.node05ActionButton {
+  appearance: none;
+  border: 1px solid rgba(74, 222, 128, 0.38);
+  border-radius: 7px;
+  background: rgba(74, 222, 128, 0.14);
+  color: #ecfdf5;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.node05ActionButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.gameHudDock > .gameHudPanelFrame .node03Module,
+.gameHudDock > .gameHudPanelFrame .node04Module,
+.gameHudDock > .gameHudPanelFrame .node05Module,
+.gameHudDock > .gameHudPanelFrame .status-panel {
+  max-height: 100%;
+}
+
+@media (max-width: 720px) {
+  .hud {
+    --hud-scale: 0.86;
+    --hud-gap: 6px;
+  }
+
+  .anchor-top-left { top: 10px; left: 10px; }
+  .anchor-top-center { top: 10px; }
+  .anchor-top-right { top: 10px; right: 10px; }
+  .anchor-center-left { left: 10px; }
+  .anchor-center-right { right: 10px; }
+  .anchor-bottom-left { bottom: 10px; left: 10px; }
+  .anchor-bottom-center { bottom: 10px; }
+  .anchor-bottom-right { right: 10px; bottom: 10px; }
+
+  .node03Module { padding: 7px; }
+  .node03Module--interactions { width: 100%; }
+  .node03InventoryGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .node04Module,
+  .node05Module { padding: 8px; }
+  .node04Module--tracker,
+  .node05Module { width: 100%; min-width: 0; }
+  .gameHudToolbar { top: 0; left: 0; }
+  .gameHudGapControl { grid-template-columns: auto 70px; }
+}
+
+@media (max-width: 420px) {
+  .hud {
+    --hud-scale: 0.78;
+  }
 }
 
 .hud-prompt {

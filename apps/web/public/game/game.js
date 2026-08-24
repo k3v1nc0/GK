@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260729-zones-save-fix15";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260822-node04-minimap";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
@@ -92,6 +92,78 @@ const POINTER_HOLD_RELEASE_THRESHOLD_MS = 180;
 const POINTER_DRAG_THRESHOLD_PX = 6;
 const CLIENT_NET_STORAGE_KEY = "gk:mmo01:movement-net";
 const ANIMATION_STATES = new Set(["idle", "walk", "run"]);
+const NODE03_HUD_TYPES = new Set([
+  "hud_bar",
+  "hotbar_hud",
+  "xp_hud",
+  "inventory_hud",
+  "equipment_hud",
+  "wallet_hud",
+  "death_respawn_hud",
+  "interaction_hud"
+]);
+const NODE04_HUD_TYPES = new Set([
+  "quest_tracker_hud",
+  "dialogue_hud",
+  "notification_hud"
+]);
+const NODE05_HUD_TYPES = new Set([
+  "party_hud",
+  "vendor_hud",
+  "crafting_hud",
+  "trade_hud",
+  "market_hud",
+  "mail_hud"
+]);
+// 5-zone HUD layout: "left" and "right" are full-height side columns; "top" and
+// "bottom" float in the band between them (auto-height, own width insets); "center"
+// fills whatever space is left. Replaces the old 9-cell (3x3) grid model.
+const GAME_HUD_ANCHORS = ["left", "top", "center", "bottom", "right"];
+const GAME_HUD_ANCHOR_SET = new Set(GAME_HUD_ANCHORS);
+const NODE03_DEFAULT_HUD_ANCHORS = {
+  hud_bar: "top",
+  hotbar_hud: "bottom",
+  xp_hud: "bottom",
+  inventory_hud: "right",
+  equipment_hud: "right",
+  wallet_hud: "right",
+  interaction_hud: "right",
+  death_respawn_hud: "center"
+};
+const NODE04_DEFAULT_HUD_ANCHORS = {
+  quest_tracker_hud: "right",
+  dialogue_hud: "center",
+  notification_hud: "top"
+};
+const NODE05_DEFAULT_HUD_ANCHORS = {
+  party_hud: "left",
+  vendor_hud: "right",
+  crafting_hud: "right",
+  trade_hud: "center",
+  market_hud: "left",
+  mail_hud: "left"
+};
+const GAME_HUD_STORAGE_VERSION = 2;
+const GAME_HUD_MIN_PANEL_WIDTH_PCT = 6;
+const GAME_HUD_MIN_PANEL_HEIGHT_PCT = 4;
+const GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT = 22;
+const GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT = 12;
+const GAME_HUD_PANEL_SCALE_STEP = 0.1;
+const GAME_HUD_COL_MIN_PCT = 10;
+const GAME_HUD_CENTER_MIN_PCT = 16;
+const GAME_HUD_EDGE_MIN_HEIGHT_PX = 40;
+const GAME_HUD_EDGE_MAX_INSET_PCT = 45;
+const GAME_HUD_DOCK_STACK_MIN_PCT = 1;
+const GAME_HUD_DEFAULT_GRID = Object.freeze({
+  columns: { left: 22, right: 22 },
+  edges: {
+    top: { heightPx: null, insetLeft: 0, insetRight: 0 },
+    bottom: { heightPx: null, insetLeft: 0, insetRight: 0 }
+  },
+  gap: 8,
+  dockModes: { left: "tabs", right: "tabs" },
+  dockTabs: {}
+});
 
 function createClientSessionId() {
   try {
@@ -370,6 +442,54 @@ const state = {
     suppressDiscoveryUntil: 0,
     maskCanvas: null,
     maskCtx: null
+  },
+  node03: {
+    snapshot: null,
+    elements: null,
+    signature: "",
+    loadInFlight: false,
+    actionInFlight: false,
+    pollTimerId: 0,
+    lastLoadedAt: 0,
+    lastActionMessage: "",
+    lastError: "",
+    selectedTargetId: "",
+    lastRangeRenderAt: 0
+  },
+  node04: {
+    snapshot: null,
+    dialogue: null,
+    elements: null,
+    signature: "",
+    loadInFlight: false,
+    actionInFlight: false,
+    pollTimerId: 0,
+    lastLoadedAt: 0,
+    lastActionMessage: "",
+    lastError: "",
+    lastRangeRenderAt: 0
+  },
+  node05: {
+    snapshot: null,
+    elements: null,
+    signature: "",
+    loadInFlight: false,
+    actionInFlight: false,
+    pollTimerId: 0,
+    lastLoadedAt: 0,
+    lastActionMessage: "",
+    lastError: "",
+    lastRangeRenderAt: 0
+  },
+  hudLayout: {
+    elements: null,
+    editMode: false,
+    overrides: null,
+    drag: null,
+    resize: null,
+    gridResize: null,
+    stackResize: null,
+    refreshQueued: false
   },
   gameLoopTimings: {
     remoteSyncMs: 0,
@@ -664,6 +784,1171 @@ function deviceLabel() {
 function isEditableTarget(target) {
   const tag = String(target?.tagName || "").toUpperCase();
   return Boolean(target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT");
+}
+
+function normalizeGameHudAnchor(anchor, fallback = "left") {
+  const value = String(anchor || "").trim();
+  if (GAME_HUD_ANCHOR_SET.has(value)) return value;
+  return GAME_HUD_ANCHOR_SET.has(fallback) ? fallback : "left";
+}
+
+function gameHudLayoutStorageKey() {
+  const projectId = String(state.gameProject?.project?.id || state.gameProject?.id || "project").trim() || "project";
+  const userId = String(state.user?.id || state.user?.username || state.player?.id || "anonymous").trim() || "anonymous";
+  return "gk:game:hud-layout:" + projectId + ":" + userId;
+}
+
+function readGameHudLayoutOverrides() {
+  if (state.hudLayout.overrides) {
+    ensureGameHudGridOverrides(state.hudLayout.overrides);
+    return state.hudLayout.overrides;
+  }
+  try {
+    const raw = window.localStorage.getItem(gameHudLayoutStorageKey());
+    const parsed = raw ? JSON.parse(raw) : null;
+    // Older layout schemas (9-cell grid) can't be meaningfully converted to the
+    // 5-zone model - a version mismatch just starts fresh instead of migrating.
+    const usable = parsed && typeof parsed === "object" && parsed.version === GAME_HUD_STORAGE_VERSION ? parsed : {};
+    state.hudLayout.overrides = usable;
+    if (!state.hudLayout.overrides.modules || typeof state.hudLayout.overrides.modules !== "object") {
+      state.hudLayout.overrides.modules = {};
+    }
+    ensureGameHudGridOverrides(state.hudLayout.overrides);
+    return state.hudLayout.overrides;
+  } catch {
+    state.hudLayout.overrides = { version: GAME_HUD_STORAGE_VERSION, modules: {}, grid: cloneGameHudGridDefaults() };
+    return state.hudLayout.overrides;
+  }
+}
+
+function writeGameHudLayoutOverrides(overrides) {
+  const next = overrides && typeof overrides === "object" ? overrides : {};
+  next.version = GAME_HUD_STORAGE_VERSION;
+  if (!next.modules || typeof next.modules !== "object") next.modules = {};
+  ensureGameHudGridOverrides(next);
+  state.hudLayout.overrides = next;
+  try {
+    window.localStorage.setItem(gameHudLayoutStorageKey(), JSON.stringify(next));
+  } catch {}
+}
+
+function cloneGameHudGridDefaults() {
+  return {
+    columns: Object.assign({}, GAME_HUD_DEFAULT_GRID.columns),
+    edges: {
+      top: Object.assign({}, GAME_HUD_DEFAULT_GRID.edges.top),
+      bottom: Object.assign({}, GAME_HUD_DEFAULT_GRID.edges.bottom)
+    },
+    gap: GAME_HUD_DEFAULT_GRID.gap,
+    dockModes: Object.assign({}, GAME_HUD_DEFAULT_GRID.dockModes),
+    dockTabs: {}
+  };
+}
+
+// Left/right column widths are independent (not siblings in a 100%-summing triple
+// like the old grid) - the center band simply absorbs whatever space is left.
+function normalizeHudColumns(values, fallback) {
+  const maxSide = 100 - GAME_HUD_COL_MIN_PCT - GAME_HUD_CENTER_MIN_PCT;
+  const left = clamp(num(values?.left, fallback.left), GAME_HUD_COL_MIN_PCT, maxSide);
+  const right = clamp(num(values?.right, fallback.right), GAME_HUD_COL_MIN_PCT, 100 - left - GAME_HUD_CENTER_MIN_PCT);
+  return { left: Math.round(left * 100) / 100, right: Math.round(right * 100) / 100 };
+}
+
+// heightPx null = auto/content-fit (default, until the user drags the height splitter).
+// insetLeft/insetRight shrink the dock in from the center band's edges independently.
+function normalizeHudEdge(value, fallback) {
+  const rawHeight = value?.heightPx;
+  const heightPx = rawHeight === null || rawHeight === undefined
+    ? null
+    : Math.max(GAME_HUD_EDGE_MIN_HEIGHT_PX, num(rawHeight, GAME_HUD_EDGE_MIN_HEIGHT_PX));
+  const insetLeft = clamp(num(value?.insetLeft, fallback.insetLeft), 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  const insetRight = clamp(num(value?.insetRight, fallback.insetRight), 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  return {
+    heightPx,
+    insetLeft: Math.round(insetLeft * 100) / 100,
+    insetRight: Math.round(insetRight * 100) / 100
+  };
+}
+
+function ensureGameHudGridOverrides(overrides) {
+  if (!overrides.grid || typeof overrides.grid !== "object") overrides.grid = cloneGameHudGridDefaults();
+  const grid = overrides.grid;
+  grid.columns = normalizeHudColumns(grid.columns, GAME_HUD_DEFAULT_GRID.columns);
+  if (!grid.edges || typeof grid.edges !== "object") grid.edges = {};
+  grid.edges.top = normalizeHudEdge(grid.edges.top, GAME_HUD_DEFAULT_GRID.edges.top);
+  grid.edges.bottom = normalizeHudEdge(grid.edges.bottom, GAME_HUD_DEFAULT_GRID.edges.bottom);
+  grid.gap = clamp(num(grid.gap, GAME_HUD_DEFAULT_GRID.gap), 0, 24);
+  if (!grid.dockModes || typeof grid.dockModes !== "object") grid.dockModes = {};
+  if (!Object.keys(grid.dockModes).length) {
+    grid.dockModes = Object.assign({}, GAME_HUD_DEFAULT_GRID.dockModes);
+  }
+  if (!grid.dockTabs || typeof grid.dockTabs !== "object") grid.dockTabs = {};
+  return grid;
+}
+
+function gameHudGridOverrides() {
+  return ensureGameHudGridOverrides(readGameHudLayoutOverrides());
+}
+
+function gameHudDockMode(anchor) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const mode = gameHudGridOverrides().dockModes[key];
+  return mode === "tabs" ? "tabs" : "stack";
+}
+
+function setGameHudDockMode(anchor, mode) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const overrides = readGameHudLayoutOverrides();
+  ensureGameHudGridOverrides(overrides);
+  overrides.grid.dockModes[key] = mode === "tabs" ? "tabs" : "stack";
+  writeGameHudLayoutOverrides(overrides);
+  refreshGameHudDockStacks();
+  notifyGameHudPanelSizesChanged();
+}
+
+function gameHudDockActiveTab(anchor) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  return String(gameHudGridOverrides().dockTabs[key] || "").trim();
+}
+
+function setGameHudDockActiveTab(anchor, moduleId) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const overrides = readGameHudLayoutOverrides();
+  ensureGameHudGridOverrides(overrides);
+  overrides.grid.dockTabs[key] = String(moduleId || "").trim();
+  writeGameHudLayoutOverrides(overrides);
+  refreshGameHudDockStacks();
+  notifyGameHudPanelSizesChanged();
+}
+
+// Applies one splitter drag to the stored grid state. `kind` identifies which single
+// value moves - unlike the old grid, tracks are no longer paired/swapped in twos.
+function setGameHudGridEdge(kind, value) {
+  const overrides = readGameHudLayoutOverrides();
+  const grid = ensureGameHudGridOverrides(overrides);
+  if (kind === "col-left") {
+    grid.columns.left = clamp(value, GAME_HUD_COL_MIN_PCT, 100 - grid.columns.right - GAME_HUD_CENTER_MIN_PCT);
+  } else if (kind === "col-right") {
+    grid.columns.right = clamp(value, GAME_HUD_COL_MIN_PCT, 100 - grid.columns.left - GAME_HUD_CENTER_MIN_PCT);
+  } else if (kind === "top-height") {
+    grid.edges.top.heightPx = Math.max(GAME_HUD_EDGE_MIN_HEIGHT_PX, value);
+  } else if (kind === "bottom-height") {
+    grid.edges.bottom.heightPx = Math.max(GAME_HUD_EDGE_MIN_HEIGHT_PX, value);
+  } else if (kind === "top-inset-left") {
+    grid.edges.top.insetLeft = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  } else if (kind === "top-inset-right") {
+    grid.edges.top.insetRight = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  } else if (kind === "bottom-inset-left") {
+    grid.edges.bottom.insetLeft = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  } else if (kind === "bottom-inset-right") {
+    grid.edges.bottom.insetRight = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  } else {
+    return;
+  }
+  writeGameHudLayoutOverrides(overrides);
+  applyGameHudGridSettings();
+  notifyGameHudPanelSizesChanged();
+}
+
+function setGameHudGridGap(value) {
+  const overrides = readGameHudLayoutOverrides();
+  const grid = ensureGameHudGridOverrides(overrides);
+  grid.gap = clamp(num(value, grid.gap), 0, 24);
+  writeGameHudLayoutOverrides(overrides);
+  applyGameHudGridSettings();
+  refreshGameHudDockStacks();
+  notifyGameHudPanelSizesChanged();
+}
+
+function notifyGameHudPanelSizesChanged() {
+  if (!state.minimapHud.elements) return;
+  state.minimapHud.dirty = true;
+  window.requestAnimationFrame(function () {
+    drawGameMinimapIfDue(performance.now());
+  });
+}
+
+function gameHudModuleOverride(moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return null;
+  const overrides = readGameHudLayoutOverrides();
+  return overrides.modules && typeof overrides.modules === "object" ? overrides.modules[id] || null : null;
+}
+
+function setGameHudModuleOverride(moduleId, patch) {
+  const id = String(moduleId || "").trim();
+  if (!id) return null;
+  const overrides = readGameHudLayoutOverrides();
+  const previous = overrides.modules[id] && typeof overrides.modules[id] === "object" ? overrides.modules[id] : {};
+  const next = Object.assign({}, previous, patch || {});
+  overrides.modules[id] = next;
+  writeGameHudLayoutOverrides(overrides);
+  return next;
+}
+
+function clearGameHudModuleOverride(moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return;
+  const overrides = readGameHudLayoutOverrides();
+  if (overrides.modules && Object.prototype.hasOwnProperty.call(overrides.modules, id)) {
+    delete overrides.modules[id];
+    writeGameHudLayoutOverrides(overrides);
+  }
+}
+
+function resetGameHudLayoutOverrides() {
+  writeGameHudLayoutOverrides({ version: GAME_HUD_STORAGE_VERSION, modules: {}, grid: cloneGameHudGridDefaults() });
+}
+
+function hudModuleIdentity(module) {
+  return String(module?.moduleId || module?.nodeId || module?.hudId || module?.nodeType || "").trim();
+}
+
+function hudModuleAnchor(module, fallback) {
+  const moduleId = hudModuleIdentity(module);
+  const moduleOverride = gameHudModuleOverride(moduleId);
+  return normalizeGameHudAnchor(moduleOverride?.anchor || module?.anchor, fallback);
+}
+
+function applyHudDockClass(node, family, anchor) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  node.className = family + "HudAnchor gameHudDock gameHudDock--" + key + " " + family + "HudAnchor--" + key;
+  node.dataset.hudDock = key;
+}
+
+function gameHudViewportSize() {
+  return {
+    width: Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1),
+    height: Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1)
+  };
+}
+
+function gameHudAnchorFromPoint(x, y) {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.anchors) return null;
+  for (const [anchor, dock] of Object.entries(elements.anchors)) {
+    const rect = dock.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return anchor;
+  }
+  return null;
+}
+
+function gameHudCssEscape(value) {
+  const text = String(value || "");
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(text);
+  return text.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function gameHudPanelTitle(module) {
+  if (module?.nodeType === "wallet_hud") return String(module?.title || "Tracked");
+  if (module?.nodeType === "debug_mmo_hud") return "Performance";
+  const raw = module?.label || module?.title || module?.moduleId || module?.hudId || module?.nodeType || "HUD";
+  return String(raw).replace(/^hud\./, "").replace(/[_:.]+/g, " ").trim() || "HUD";
+}
+
+// Every nodeType that can share a dock gets a UNIQUE order value. With the old 9-cell
+// grid, ties (several types returning the same number) didn't matter because those
+// types rarely landed in the same dock. Now that far fewer docks exist, panels from
+// different node families (node03/04/05, minimap) constantly share one dock and get
+// destroyed+recreated independently on their own poll cycles - a tie there falls back
+// to DOM insertion order for sorting, which flips with every independent rebuild and
+// looks like panels "swapping" places. Unique values make the order deterministic.
+const GAME_HUD_PANEL_ORDER = {
+  hud_bar: 10,
+  xp_hud: 20,
+  wallet_hud: 30,
+  game_minimap: 40,
+  hotbar_hud: 50,
+  notification_hud: 60,
+  quest_tracker_hud: 70,
+  interaction_hud: 80,
+  inventory_hud: 90,
+  equipment_hud: 100,
+  dialogue_hud: 110,
+  party_hud: 120,
+  vendor_hud: 130,
+  crafting_hud: 140,
+  trade_hud: 150,
+  market_hud: 160,
+  mail_hud: 170,
+  death_respawn_hud: 180,
+  debug_mmo_hud: 900
+};
+
+function gameHudPanelOrder(module) {
+  const type = module?.nodeType || "";
+  return Object.prototype.hasOwnProperty.call(GAME_HUD_PANEL_ORDER, type) ? GAME_HUD_PANEL_ORDER[type] : 500;
+}
+
+function resolveGameHudModuleLayout(module, fallbackAnchor) {
+  const moduleId = hudModuleIdentity(module);
+  const override = gameHudModuleOverride(moduleId);
+  const anchor = normalizeGameHudAnchor(override?.anchor || module?.anchor, fallbackAnchor);
+  // "center" is a hard float-only zone: panels routed there never stack/tab like the
+  // other 4 docks - they always float (drag to move, handle to resize, chrome +/-
+  // to scale), positioned in percentages. Default position centers the panel.
+  //
+  // notification_hud floats by DEFAULT only (not hard-locked like "center"): its
+  // render function returns null while there's nothing to show, so left docked
+  // alongside a persistent panel (e.g. a quest tracker sharing "top"), that sibling
+  // visibly jumps every time a notification appears or clears - even while standing
+  // still, since notifications aren't tied to movement. Floating by default avoids
+  // that out of the box, but an explicit dock override (drag it onto a dock zone) is
+  // still respected - it's the user's call to accept the jump-risk in exchange for
+  // having it docked.
+  const isNotification = module?.nodeType === "notification_hud";
+  const mode = anchor === "center"
+    ? "float"
+    : (override?.mode === "dock" ? "dock" : (override?.mode === "float" || isNotification ? "float" : "dock"));
+  const defaultWidthPct = GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT;
+  const defaultHeightPct = GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT;
+  const defaultXPct = (anchor === "center" || isNotification) ? 50 - defaultWidthPct / 2 : 50;
+  const defaultYPct = anchor === "center" ? 50 - defaultHeightPct / 2 : (isNotification ? 4 : 50);
+  return {
+    mode: mode,
+    anchor: anchor,
+    xPct: clamp(num(override?.xPct, defaultXPct), 0, 96),
+    yPct: clamp(num(override?.yPct, defaultYPct), 0, 96),
+    widthPct: clamp(num(override?.widthPct, defaultWidthPct), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
+    heightPct: clamp(num(override?.heightPct, defaultHeightPct), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92),
+    scale: clamp(num(override?.scale, 1), 0.55, 1.8)
+  };
+}
+
+function createGameHudDockTools(anchor) {
+  const tools = document.createElement("div");
+  tools.className = "gameHudDockTools";
+  tools.dataset.gameHudDockTools = anchor;
+  const label = document.createElement("strong");
+  label.textContent = anchor.replace("-", " ");
+  const tabs = document.createElement("button");
+  tabs.type = "button";
+  tabs.dataset.gameHudDockControl = "toggle-tabs";
+  tabs.dataset.gameHudDockAnchor = anchor;
+  tabs.textContent = gameHudDockMode(anchor) === "tabs" ? "Rows" : "Tabs";
+  tools.append(label, tabs);
+  return tools;
+}
+
+// kind: "col-left" | "col-right" | "top-height" | "bottom-height" |
+// "top-inset-left" | "top-inset-right" | "bottom-inset-left" | "bottom-inset-right"
+function createGameHudGridSplitter(kind) {
+  const splitter = document.createElement("button");
+  splitter.type = "button";
+  const vertical = kind === "col-left" || kind === "col-right" || kind.indexOf("inset") !== -1;
+  splitter.className = "gameHudGridSplitter gameHudGridSplitter--" + (vertical ? "column" : "row");
+  splitter.dataset.gameHudGridSplitter = "1";
+  splitter.dataset.gameHudGridKind = kind;
+  splitter.setAttribute("aria-label", "HUD layout aanpassen (" + kind + ")");
+  return splitter;
+}
+
+// Splitters are positioned from the live rendered rects of the left/top/center/
+// bottom/right docks, not from precomputed percentages - top/bottom are content-fit
+// by default so their true edges can only be known after layout.
+function positionGameHudGridSplitters() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root || !elements.anchors) return;
+  const splitters = elements.gridSplitters || [];
+  if (!splitters.length) return;
+  const left = elements.anchors.left, right = elements.anchors.right;
+  const top = elements.anchors.top, bottom = elements.anchors.bottom;
+  if (!left || !right || !top || !bottom) return;
+  const rootRect = elements.root.getBoundingClientRect();
+  const leftRect = left.getBoundingClientRect();
+  const rightRect = right.getBoundingClientRect();
+  const topRect = top.getBoundingClientRect();
+  const bottomRect = bottom.getBoundingClientRect();
+  const gridRect = elements.dockGrid.getBoundingClientRect();
+  const rx = rootRect.left, ry = rootRect.top;
+  for (const splitter of splitters) {
+    const kind = splitter.dataset.gameHudGridKind;
+    if (kind === "col-left") {
+      splitter.style.left = (leftRect.right - rx) + "px";
+      splitter.style.top = (gridRect.top - ry) + "px";
+      splitter.style.height = gridRect.height + "px";
+      splitter.style.width = "";
+    } else if (kind === "col-right") {
+      splitter.style.left = (rightRect.left - rx) + "px";
+      splitter.style.top = (gridRect.top - ry) + "px";
+      splitter.style.height = gridRect.height + "px";
+      splitter.style.width = "";
+    } else if (kind === "top-height") {
+      splitter.style.left = (topRect.left - rx) + "px";
+      splitter.style.top = (topRect.bottom - ry) + "px";
+      splitter.style.width = topRect.width + "px";
+      splitter.style.height = "";
+    } else if (kind === "bottom-height") {
+      splitter.style.left = (bottomRect.left - rx) + "px";
+      splitter.style.top = (bottomRect.top - ry) + "px";
+      splitter.style.width = bottomRect.width + "px";
+      splitter.style.height = "";
+    } else if (kind === "top-inset-left") {
+      splitter.style.left = (topRect.left - rx) + "px";
+      splitter.style.top = (topRect.top - ry) + "px";
+      splitter.style.height = topRect.height + "px";
+      splitter.style.width = "";
+    } else if (kind === "top-inset-right") {
+      splitter.style.left = (topRect.right - rx) + "px";
+      splitter.style.top = (topRect.top - ry) + "px";
+      splitter.style.height = topRect.height + "px";
+      splitter.style.width = "";
+    } else if (kind === "bottom-inset-left") {
+      splitter.style.left = (bottomRect.left - rx) + "px";
+      splitter.style.top = (bottomRect.top - ry) + "px";
+      splitter.style.height = bottomRect.height + "px";
+      splitter.style.width = "";
+    } else if (kind === "bottom-inset-right") {
+      splitter.style.left = (bottomRect.right - rx) + "px";
+      splitter.style.top = (bottomRect.top - ry) + "px";
+      splitter.style.height = bottomRect.height + "px";
+      splitter.style.width = "";
+    }
+  }
+}
+
+function applyGameHudGridSettings() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  const grid = gameHudGridOverrides();
+  elements.root.style.setProperty("--hud-col-left", grid.columns.left + "%");
+  elements.root.style.setProperty("--hud-col-right", grid.columns.right + "%");
+  elements.root.style.setProperty("--hud-top-height", grid.edges.top.heightPx != null ? grid.edges.top.heightPx + "px" : "auto");
+  elements.root.style.setProperty("--hud-bottom-height", grid.edges.bottom.heightPx != null ? grid.edges.bottom.heightPx + "px" : "auto");
+  elements.root.style.setProperty("--hud-top-inset-left", grid.edges.top.insetLeft + "%");
+  elements.root.style.setProperty("--hud-top-inset-right", grid.edges.top.insetRight + "%");
+  elements.root.style.setProperty("--hud-bottom-inset-left", grid.edges.bottom.insetLeft + "%");
+  elements.root.style.setProperty("--hud-bottom-inset-right", grid.edges.bottom.insetRight + "%");
+  elements.root.style.setProperty("--hud-gap", grid.gap + "px");
+  if (elements.gapInput) elements.gapInput.value = String(Math.round(grid.gap));
+  positionGameHudGridSplitters();
+  window.requestAnimationFrame(positionGameHudGridSplitters);
+}
+
+function createGameHudGapControl(value) {
+  const label = document.createElement("label");
+  label.className = "gameHudGapControl";
+  const text = document.createElement("span");
+  text.textContent = "Gap";
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = "0";
+  input.max = "24";
+  input.step = "1";
+  input.value = String(Math.round(value));
+  input.dataset.gameHudGap = "1";
+  label.append(text, input);
+  return { label, input };
+}
+
+function createGameHudGridSplitters() {
+  return [
+    createGameHudGridSplitter("col-left"),
+    createGameHudGridSplitter("col-right"),
+    createGameHudGridSplitter("top-height"),
+    createGameHudGridSplitter("bottom-height"),
+    createGameHudGridSplitter("top-inset-left"),
+    createGameHudGridSplitter("top-inset-right"),
+    createGameHudGridSplitter("bottom-inset-left"),
+    createGameHudGridSplitter("bottom-inset-right")
+  ];
+}
+
+function refreshGameHudGridSplitters() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  for (const splitter of elements.gridSplitters || []) {
+    splitter.hidden = state.hudLayout.editMode !== true;
+  }
+  positionGameHudGridSplitters();
+}
+
+function ensureGameHudRuntimeRoot() {
+  if (state.hudLayout.elements && state.hudLayout.elements.root) return state.hudLayout.elements;
+  const root = document.createElement("section");
+  root.className = "gameHudRuntimeRoot";
+  root.dataset.hudId = "game_hud_runtime";
+  const dockGrid = document.createElement("div");
+  dockGrid.className = "gameHudDockGrid";
+  root.appendChild(dockGrid);
+  const anchors = {};
+  function makeDock(anchor) {
+    const node = document.createElement("div");
+    node.className = "gameHudDock gameHudDock--" + anchor;
+    node.dataset.hudDock = anchor;
+    node.appendChild(createGameHudDockTools(anchor));
+    anchors[anchor] = node;
+    return node;
+  }
+  // left/right are full-height side columns; top/center/bottom stack inside the
+  // center band that fills whatever width is left between them.
+  const leftDock = makeDock("left");
+  const centerBand = document.createElement("div");
+  centerBand.className = "gameHudCenterBand";
+  centerBand.append(makeDock("top"), makeDock("center"), makeDock("bottom"));
+  const rightDock = makeDock("right");
+  dockGrid.append(leftDock, centerBand, rightDock);
+  const toolbar = document.createElement("div");
+  toolbar.className = "gameHudToolbar";
+  toolbar.innerHTML = '<button type="button" data-game-hud-control="toggle">HUD</button><button type="button" data-game-hud-control="reset-all">Reset</button>';
+  const grid = gameHudGridOverrides();
+  const gapControl = createGameHudGapControl(grid.gap);
+  toolbar.appendChild(gapControl.label);
+  const gridSplitters = createGameHudGridSplitters();
+  for (const splitter of gridSplitters) root.appendChild(splitter);
+  root.appendChild(toolbar);
+  root.addEventListener("click", handleGameHudRuntimeClick);
+  root.addEventListener("change", handleGameHudRuntimeChange);
+  root.addEventListener("input", handleGameHudRuntimeChange);
+  root.addEventListener("pointerdown", handleGameHudPointerDown);
+  window.addEventListener("pointermove", handleGameHudPointerMove);
+  window.addEventListener("pointerup", finishGameHudPointerEdit);
+  window.addEventListener("pointercancel", finishGameHudPointerEdit);
+  window.addEventListener("resize", positionGameHudGridSplitters);
+  hud.appendChild(root);
+  state.hudLayout.elements = { root: root, dockGrid: dockGrid, centerBand: centerBand, anchors: anchors, toolbar: toolbar, gapInput: gapControl.input, gridSplitters: gridSplitters };
+  applyGameHudGridSettings();
+  refreshGameHudEditState();
+  return state.hudLayout.elements;
+}
+
+function refreshGameHudEditState() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  elements.root.classList.toggle("gameHudRuntimeRoot--editing", state.hudLayout.editMode === true);
+  applyGameHudGridSettings();
+  if (elements.toolbar) {
+    elements.toolbar.classList.toggle("gameHudToolbar--editing", state.hudLayout.editMode === true);
+    const toggle = elements.toolbar.querySelector('[data-game-hud-control="toggle"]');
+    if (toggle) toggle.textContent = state.hudLayout.editMode ? "Klaar" : "HUD";
+  }
+  refreshGameHudGridSplitters();
+  for (const dock of Object.values(elements.anchors || {})) {
+    const button = dock.querySelector("[data-game-hud-dock-control='toggle-tabs']");
+    if (button) button.textContent = gameHudDockMode(dock.dataset.hudDock) === "tabs" ? "Rows" : "Tabs";
+  }
+}
+
+function setGameHudEditMode(enabled) {
+  state.hudLayout.editMode = enabled === true;
+  state.hudLayout.drag = null;
+  state.hudLayout.resize = null;
+  state.hudLayout.gridResize = null;
+  state.hudLayout.stackResize = null;
+  refreshGameHudEditState();
+  refreshGameHudDockStacks();
+}
+
+function rerenderGameHudPanels() {
+  renderNode03Hud();
+  renderNode04Hud();
+  renderNode05Hud();
+  if (state.minimapHud.elements) state.minimapHud.signature = null;
+  refreshGameMinimapHud();
+  refreshGameHudDockStacks();
+}
+
+function scheduleGameHudDockRefresh() {
+  if (state.hudLayout.refreshQueued) return;
+  state.hudLayout.refreshQueued = true;
+  window.requestAnimationFrame(function () {
+    state.hudLayout.refreshQueued = false;
+    refreshGameHudDockStacks();
+  });
+}
+
+function gameHudDockFrames(dock) {
+  return Array.from(dock.querySelectorAll(":scope > .gameHudPanelFrame")).filter(function (frame) {
+    return frame.dataset.layoutMode !== "float";
+  }).sort(function (left, right) {
+    return num(left.style.order, 0) - num(right.style.order, 0);
+  });
+}
+
+function normalizeDockFrameSizes(frames) {
+  if (!frames.length) return [];
+  const raw = frames.map(function (frame) {
+    const override = gameHudModuleOverride(frame.dataset.moduleId || "") || {};
+    return Math.max(0, num(override.sizePct, 0));
+  });
+  const hasCustom = raw.some(function (value) { return value > 0; });
+  if (!hasCustom) return frames.map(function () { return 100 / frames.length; });
+  const total = raw.reduce(function (sum, value) { return sum + value; }, 0);
+  if (total <= 0) return frames.map(function () { return 100 / frames.length; });
+  return raw.map(function (value) {
+    return Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, value / total * 100);
+  });
+}
+
+function applyDockFrameSize(frame, sizePct) {
+  const pct = clamp(sizePct, GAME_HUD_DOCK_STACK_MIN_PCT, 100);
+  frame.style.setProperty("--hud-panel-basis", pct + "%");
+}
+
+function persistDockFrameSize(moduleId, sizePct) {
+  if (!moduleId) return;
+  setGameHudModuleOverride(moduleId, { sizePct: Math.round(clamp(sizePct, GAME_HUD_DOCK_STACK_MIN_PCT, 100) * 100) / 100 });
+}
+
+function createGameHudStackSlider(anchor, before, after) {
+  const slider = document.createElement("button");
+  slider.type = "button";
+  slider.className = "gameHudStackSlider";
+  slider.dataset.gameHudStackSlider = "1";
+  slider.dataset.gameHudDockAnchor = anchor;
+  slider.dataset.beforeModuleId = before.dataset.moduleId || "";
+  slider.dataset.afterModuleId = after.dataset.moduleId || "";
+  slider.style.order = String((num(before.style.order, 0) + num(after.style.order, 0)) / 2);
+  slider.setAttribute("aria-label", "Resize dock panels");
+  return slider;
+}
+
+function createGameHudTabBar(anchor, frames) {
+  const bar = document.createElement("div");
+  bar.className = "gameHudDockTabBar";
+  bar.style.order = "0";
+  const activeId = gameHudDockActiveTab(anchor);
+  const activeFrame = frames.find(function (frame) { return frame.dataset.moduleId === activeId; }) || frames[0];
+  const activeModuleId = activeFrame?.dataset.moduleId || "";
+  for (const frame of frames) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.gameHudTabAnchor = anchor;
+    button.dataset.gameHudTabModuleId = frame.dataset.moduleId || "";
+    button.className = frame.dataset.moduleId === activeModuleId ? "gameHudDockTab gameHudDockTab--active" : "gameHudDockTab";
+    button.textContent = frame.dataset.panelTitle || gameHudPanelTitle({ moduleId: frame.dataset.moduleId, nodeType: frame.dataset.nodeType });
+    bar.appendChild(button);
+    frame.classList.toggle("gameHudPanelFrame--tabHidden", frame.dataset.moduleId !== activeModuleId);
+    applyDockFrameSize(frame, 100);
+  }
+  if (activeModuleId && activeModuleId !== activeId) {
+    const overrides = readGameHudLayoutOverrides();
+    ensureGameHudGridOverrides(overrides);
+    overrides.grid.dockTabs[anchor] = activeModuleId;
+    writeGameHudLayoutOverrides(overrides);
+  }
+  return bar;
+}
+
+function refreshGameHudDockStacks() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  applyGameHudGridSettings();
+  for (const old of Array.from(elements.root.querySelectorAll(".gameHudStackSlider, .gameHudDockTabBar"))) old.remove();
+  for (const dock of Object.values(elements.anchors || {})) {
+    const anchor = normalizeGameHudAnchor(dock.dataset.hudDock, "left");
+    const frames = gameHudDockFrames(dock);
+    dock.classList.toggle("gameHudDock--empty", frames.length === 0);
+    dock.classList.toggle("gameHudDock--tabs", gameHudDockMode(anchor) === "tabs" && frames.length > 1);
+    dock.classList.toggle("gameHudDock--stackSized", gameHudDockMode(anchor) !== "tabs" && frames.length > 1);
+    const modeButton = dock.querySelector("[data-game-hud-dock-control='toggle-tabs']");
+    if (modeButton) modeButton.textContent = gameHudDockMode(anchor) === "tabs" ? "Rows" : "Tabs";
+    for (const frame of frames) frame.classList.remove("gameHudPanelFrame--tabHidden");
+    if (gameHudDockMode(anchor) === "tabs" && frames.length > 1) {
+      const tools = dock.querySelector(".gameHudDockTools");
+      const bar = createGameHudTabBar(anchor, frames);
+      if (tools && tools.nextSibling) dock.insertBefore(bar, tools.nextSibling);
+      else dock.insertBefore(bar, frames[0] || null);
+      continue;
+    }
+    const sizes = normalizeDockFrameSizes(frames);
+    // top/bottom are content-fit docks (CSS ignores --hud-panel-basis there, see
+    // styles.css), so a slider to redistribute % height between two stacked panels
+    // would just be dead UI - only offer it where the dock has a definite height.
+    const stackSliderAllowed = anchor !== "top" && anchor !== "bottom";
+    frames.forEach(function (frame, index) {
+      applyDockFrameSize(frame, sizes[index] || (100 / frames.length));
+      if (stackSliderAllowed && state.hudLayout.editMode === true && index < frames.length - 1) {
+        const slider = createGameHudStackSlider(anchor, frame, frames[index + 1]);
+        dock.insertBefore(slider, frames[index + 1]);
+      }
+    });
+  }
+}
+
+function clearGameHudFamily(family) {
+  const elements = ensureGameHudRuntimeRoot();
+  const selector = '.gameHudPanelFrame[data-runtime-family="' + String(family || "").replace(/"/g, "") + '"]';
+  for (const node of Array.from(elements.root.querySelectorAll(selector))) node.remove();
+  scheduleGameHudDockRefresh();
+}
+
+function gameHudPanelFromEventTarget(target) {
+  return target && typeof target.closest === "function" ? target.closest(".gameHudPanelFrame") : null;
+}
+
+function createGameHudPanelChrome(module, layout) {
+  const chrome = document.createElement("div");
+  chrome.className = "gameHudPanelChrome";
+  chrome.dataset.gameHudDrag = "1";
+  const smaller = document.createElement("button");
+  smaller.type = "button";
+  smaller.dataset.gameHudControl = "scale-panel";
+  smaller.dataset.gameHudScale = "-1";
+  smaller.textContent = "-";
+  const larger = document.createElement("button");
+  larger.type = "button";
+  larger.dataset.gameHudControl = "scale-panel";
+  larger.dataset.gameHudScale = "1";
+  larger.textContent = "+";
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.dataset.gameHudControl = "reset-panel";
+  reset.textContent = "Reset";
+  chrome.append(smaller, larger, reset);
+  return chrome;
+}
+
+function applyGameHudPanelLayout(frame, layout) {
+  const elements = ensureGameHudRuntimeRoot();
+  const anchor = normalizeGameHudAnchor(layout.anchor, "left");
+  frame.dataset.hudDock = anchor;
+  frame.dataset.layoutMode = layout.mode;
+  frame.style.setProperty("--hud-panel-scale", String(layout.scale || 1));
+  if (layout.mode === "float") {
+    frame.classList.add("gameHudPanelFrame--floating");
+    frame.style.left = clamp(num(layout.xPct, 40), 0, 96) + "%";
+    frame.style.top = clamp(num(layout.yPct, 40), 0, 96) + "%";
+    frame.style.width = clamp(num(layout.widthPct, GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96) + "%";
+    frame.style.height = clamp(num(layout.heightPct, GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92) + "%";
+    elements.root.appendChild(frame);
+    return;
+  }
+  frame.classList.remove("gameHudPanelFrame--floating");
+  frame.style.left = "";
+  frame.style.top = "";
+  frame.style.width = "";
+  frame.style.height = "";
+  const dock = elements.anchors[anchor] || elements.anchors["left"];
+  dock.appendChild(frame);
+  scheduleGameHudDockRefresh();
+  notifyGameHudPanelSizesChanged();
+}
+
+function appendGameHudPanel(family, module, contentNode, fallbackAnchor) {
+  if (!contentNode) return null;
+  const elements = ensureGameHudRuntimeRoot();
+  const moduleId = hudModuleIdentity(module) || family + ":" + Math.random().toString(36).slice(2);
+  const layout = resolveGameHudModuleLayout(module, fallbackAnchor);
+  const frame = document.createElement("section");
+  frame.className = "gameHudPanelFrame";
+  frame.dataset.runtimeFamily = family;
+  frame.dataset.moduleId = moduleId;
+  frame.dataset.nodeType = module?.nodeType || "";
+  frame.dataset.panelTitle = gameHudPanelTitle(module);
+  frame.dataset.defaultAnchor = normalizeGameHudAnchor(module?.anchor || fallbackAnchor, fallbackAnchor);
+  frame.style.order = String(gameHudPanelOrder(module));
+  const chrome = createGameHudPanelChrome(module, layout);
+  const body = document.createElement("div");
+  body.className = "gameHudPanelBody";
+  body.appendChild(contentNode);
+  const resize = document.createElement("button");
+  resize.type = "button";
+  resize.className = "gameHudResizeHandle";
+  resize.dataset.gameHudResize = "1";
+  resize.setAttribute("aria-label", "Resize HUD panel");
+  frame.append(chrome, body, resize);
+  elements.root.appendChild(frame);
+  applyGameHudPanelLayout(frame, layout);
+  scheduleGameHudDockRefresh();
+  return frame;
+}
+
+function floatingLayoutFromPanelRect(panel, base = {}) {
+  const viewport = gameHudViewportSize();
+  const rect = panel.getBoundingClientRect();
+  return Object.assign({}, base, {
+    mode: "float",
+    xPct: clamp(rect.left / viewport.width * 100, 0, 96),
+    yPct: clamp(rect.top / viewport.height * 100, 0, 96),
+    widthPct: clamp(rect.width / viewport.width * 100, GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
+    heightPct: clamp(rect.height / viewport.height * 100, GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92)
+  });
+}
+
+function undockGameHudPanel(panel) {
+  if (!panel) return null;
+  const moduleId = panel.dataset.moduleId || "";
+  const current = gameHudModuleOverride(moduleId) || {};
+  const layout = floatingLayoutFromPanelRect(panel, {
+    anchor: panel.dataset.hudDock || panel.dataset.defaultAnchor || "left",
+    scale: clamp(num(current.scale, 1), 0.55, 1.8)
+  });
+  setGameHudModuleOverride(moduleId, layout);
+  applyGameHudPanelLayout(panel, layout);
+  const select = panel.querySelector("[data-game-hud-anchor-select]");
+  if (select) select.value = layout.anchor;
+  const button = panel.querySelector('[data-game-hud-control="float-panel"], [data-game-hud-control="dock-panel"]');
+  if (button) {
+    button.dataset.gameHudControl = "dock-panel";
+    button.textContent = "Dock";
+  }
+  return layout;
+}
+
+function dockGameHudPanel(panel, anchor = null) {
+  if (!panel) return;
+  const moduleId = panel.dataset.moduleId || "";
+  const nextAnchor = normalizeGameHudAnchor(anchor || panel.dataset.hudDock || panel.dataset.defaultAnchor, "left");
+  setGameHudModuleOverride(moduleId, { mode: "dock", anchor: nextAnchor });
+  rerenderGameHudPanels();
+}
+
+function handleGameHudRuntimeClick(event) {
+  const dockControl = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-dock-control]")
+    : null;
+  if (dockControl) {
+    event.preventDefault();
+    event.stopPropagation();
+    const anchor = normalizeGameHudAnchor(dockControl.dataset.gameHudDockAnchor, "left");
+    setGameHudDockMode(anchor, gameHudDockMode(anchor) === "tabs" ? "stack" : "tabs");
+    return;
+  }
+  const tabButton = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-tab-module-id]")
+    : null;
+  if (tabButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    setGameHudDockActiveTab(tabButton.dataset.gameHudTabAnchor, tabButton.dataset.gameHudTabModuleId);
+    return;
+  }
+  const control = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-control]")
+    : null;
+  if (control) {
+    event.preventDefault();
+    event.stopPropagation();
+    const command = control.dataset.gameHudControl;
+    const panel = gameHudPanelFromEventTarget(control);
+    if (command === "toggle") {
+      setGameHudEditMode(!state.hudLayout.editMode);
+      return;
+    }
+    if (command === "reset-all") {
+      resetGameHudLayoutOverrides();
+      rerenderGameHudPanels();
+      return;
+    }
+    if (!panel) return;
+    const moduleId = panel.dataset.moduleId || "";
+    if (command === "reset-panel") {
+      clearGameHudModuleOverride(moduleId);
+      rerenderGameHudPanels();
+      return;
+    }
+    if (command === "float-panel") {
+      undockGameHudPanel(panel);
+      return;
+    }
+    if (command === "dock-panel") {
+      dockGameHudPanel(panel);
+      return;
+    }
+    if (command === "scale-panel") {
+      const current = gameHudModuleOverride(moduleId) || {};
+      const delta = Number(control.dataset.gameHudScale) > 0 ? GAME_HUD_PANEL_SCALE_STEP : -GAME_HUD_PANEL_SCALE_STEP;
+      const nextScale = clamp(num(current.scale, 1) + delta, 0.55, 1.8);
+      setGameHudModuleOverride(moduleId, { scale: nextScale });
+      panel.style.setProperty("--hud-panel-scale", String(nextScale));
+      return;
+    }
+  }
+  const node03Button = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-node03-action]")
+    : null;
+  if (node03Button && !node03Button.disabled) {
+    const node03Panel = node03Button.closest(".node03Module");
+    const selectedItemId = node03Button.dataset.node03UseSelectedItem === "1"
+      ? node03Panel?.querySelector("[data-node03-debug-item-select]")?.value || null
+      : null;
+    runNode03Action(node03Button.dataset.node03Action, node03Button.dataset.node03TargetId || null, {
+      itemId: node03Button.dataset.node03ItemId || selectedItemId || null,
+      currencyId: node03Button.dataset.node03CurrencyId || null,
+      amount: node03Button.dataset.node03Amount || null
+    });
+    return;
+  }
+  const close = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-node04-close]")
+    : null;
+  if (close) {
+    state.node04.dialogue = null;
+    renderNode04Hud();
+    return;
+  }
+  const node04Button = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-node04-action]")
+    : null;
+  if (node04Button && !node04Button.disabled) {
+    runNode04Action(node04Button.dataset.node04Action, node04Button.dataset.node04TargetId || null, {
+      questId: node04Button.dataset.node04QuestId || null,
+      dialogueId: node04Button.dataset.node04DialogueId || null,
+      entryId: node04Button.dataset.node04EntryId || null,
+      choiceId: node04Button.dataset.node04ChoiceId || null
+    });
+    return;
+  }
+  const node05Button = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-node05-action]")
+    : null;
+  if (node05Button && !node05Button.disabled) {
+    runNode05Action(node05Button.dataset.node05Action, {
+      targetId: node05Button.dataset.node05TargetId || null,
+      stationId: node05Button.dataset.node05StationId || null,
+      recipeId: node05Button.dataset.node05RecipeId || null,
+      jobId: node05Button.dataset.node05JobId || null,
+      vendorId: node05Button.dataset.node05VendorId || null,
+      offerId: node05Button.dataset.node05OfferId || null,
+      orderId: node05Button.dataset.node05OrderId || null,
+      mailId: node05Button.dataset.node05MailId || null,
+      inviteId: node05Button.dataset.node05InviteId || null,
+      targetPlayerId: node05Button.dataset.node05TargetPlayerId || null,
+      itemId: node05Button.dataset.node05ItemId || null,
+      currencyId: node05Button.dataset.node05CurrencyId || null,
+      quantity: node05Button.dataset.node05Quantity || null,
+      unitPriceMinor: node05Button.dataset.node05UnitPriceMinor || null
+    });
+  }
+}
+
+function handleGameHudRuntimeChange(event) {
+  const gapInput = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-gap]")
+    : null;
+  if (gapInput) {
+    event.preventDefault();
+    event.stopPropagation();
+    setGameHudGridGap(gapInput.value);
+    return;
+  }
+  const select = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-anchor-select]")
+    : null;
+  if (!select) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const panel = gameHudPanelFromEventTarget(select);
+  if (!panel) return;
+  dockGameHudPanel(panel, select.value);
+}
+
+function handleGameHudPointerDown(event) {
+  if (state.hudLayout.editMode !== true) return;
+  const gridSplitter = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-grid-splitter]")
+    : null;
+  if (gridSplitter) {
+    event.preventDefault();
+    event.stopPropagation();
+    const kind = gridSplitter.dataset.gameHudGridKind;
+    const elements = ensureGameHudRuntimeRoot();
+    const grid = gameHudGridOverrides();
+    const gridRect = elements.dockGrid.getBoundingClientRect();
+    const bandRect = elements.centerBand.getBoundingClientRect();
+    let startValue = 0;
+    if (kind === "col-left") startValue = grid.columns.left;
+    else if (kind === "col-right") startValue = grid.columns.right;
+    else if (kind === "top-height") startValue = elements.anchors.top.getBoundingClientRect().height;
+    else if (kind === "bottom-height") startValue = elements.anchors.bottom.getBoundingClientRect().height;
+    else if (kind === "top-inset-left") startValue = grid.edges.top.insetLeft;
+    else if (kind === "top-inset-right") startValue = grid.edges.top.insetRight;
+    else if (kind === "bottom-inset-left") startValue = grid.edges.bottom.insetLeft;
+    else if (kind === "bottom-inset-right") startValue = grid.edges.bottom.insetRight;
+    state.hudLayout.gridResize = {
+      pointerId: event.pointerId,
+      kind,
+      startX: event.clientX,
+      startY: event.clientY,
+      startValue,
+      gridWidth: Math.max(1, gridRect.width),
+      bandWidth: Math.max(1, bandRect.width)
+    };
+    return;
+  }
+  const stackSlider = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-stack-slider]")
+    : null;
+  if (stackSlider) {
+    event.preventDefault();
+    event.stopPropagation();
+    const anchor = normalizeGameHudAnchor(stackSlider.dataset.gameHudDockAnchor, "left");
+    const elements = ensureGameHudRuntimeRoot();
+    const dock = elements.anchors[anchor];
+    const before = dock?.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(stackSlider.dataset.beforeModuleId || "") + '"]') || null;
+    const after = dock?.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(stackSlider.dataset.afterModuleId || "") + '"]') || null;
+    if (!dock || !before || !after) return;
+    const dockRect = dock.getBoundingClientRect();
+    state.hudLayout.stackResize = {
+      pointerId: event.pointerId,
+      anchor,
+      before,
+      after,
+      beforeId: before.dataset.moduleId || "",
+      afterId: after.dataset.moduleId || "",
+      startY: event.clientY,
+      dockHeight: Math.max(1, dockRect.height),
+      beforeSize: num((before.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50),
+      afterSize: num((after.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50)
+    };
+    return;
+  }
+  const panel = gameHudPanelFromEventTarget(event.target);
+  if (!panel) return;
+  const resize = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-resize]")
+    : null;
+  const controlTarget = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-control], [data-game-hud-anchor-select], button, select, input")
+    : null;
+  const drag = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-drag]")
+    : null;
+  if (!resize && controlTarget) return;
+  if (!resize && !drag) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof panel.setPointerCapture === "function") {
+    try { panel.setPointerCapture(event.pointerId); } catch {}
+  }
+  const layout = panel.dataset.layoutMode === "float"
+    ? resolveGameHudModuleLayout({ moduleId: panel.dataset.moduleId, anchor: panel.dataset.hudDock }, panel.dataset.defaultAnchor)
+    : undockGameHudPanel(panel);
+  const viewport = gameHudViewportSize();
+  const start = {
+    panel: panel,
+    moduleId: panel.dataset.moduleId || "",
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    viewportWidth: viewport.width,
+    viewportHeight: viewport.height,
+    xPct: num(layout?.xPct, 0),
+    yPct: num(layout?.yPct, 0),
+    widthPct: num(layout?.widthPct, GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT),
+    heightPct: num(layout?.heightPct, GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT),
+    anchor: layout?.anchor || panel.dataset.hudDock || panel.dataset.defaultAnchor || "left",
+    scale: num(layout?.scale, 1)
+  };
+  if (resize) state.hudLayout.resize = start;
+  else state.hudLayout.drag = start;
+}
+
+function handleGameHudPointerMove(event) {
+  const gridResize = state.hudLayout.gridResize;
+  if (gridResize && gridResize.pointerId === event.pointerId) {
+    event.preventDefault();
+    const kind = gridResize.kind;
+    if (kind === "col-left") {
+      setGameHudGridEdge("col-left", gridResize.startValue + (event.clientX - gridResize.startX) / gridResize.gridWidth * 100);
+    } else if (kind === "col-right") {
+      setGameHudGridEdge("col-right", gridResize.startValue + (gridResize.startX - event.clientX) / gridResize.gridWidth * 100);
+    } else if (kind === "top-height") {
+      setGameHudGridEdge("top-height", gridResize.startValue + (event.clientY - gridResize.startY));
+    } else if (kind === "bottom-height") {
+      setGameHudGridEdge("bottom-height", gridResize.startValue + (gridResize.startY - event.clientY));
+    } else if (kind === "top-inset-left") {
+      setGameHudGridEdge("top-inset-left", gridResize.startValue + (event.clientX - gridResize.startX) / gridResize.bandWidth * 100);
+    } else if (kind === "top-inset-right") {
+      setGameHudGridEdge("top-inset-right", gridResize.startValue + (gridResize.startX - event.clientX) / gridResize.bandWidth * 100);
+    } else if (kind === "bottom-inset-left") {
+      setGameHudGridEdge("bottom-inset-left", gridResize.startValue + (event.clientX - gridResize.startX) / gridResize.bandWidth * 100);
+    } else if (kind === "bottom-inset-right") {
+      setGameHudGridEdge("bottom-inset-right", gridResize.startValue + (gridResize.startX - event.clientX) / gridResize.bandWidth * 100);
+    }
+    return;
+  }
+  const stackResize = state.hudLayout.stackResize;
+  if (stackResize && stackResize.pointerId === event.pointerId) {
+    event.preventDefault();
+    const total = stackResize.beforeSize + stackResize.afterSize;
+    const delta = (event.clientY - stackResize.startY) / stackResize.dockHeight * 100;
+    const before = clamp(stackResize.beforeSize + delta, GAME_HUD_DOCK_STACK_MIN_PCT, Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, total - GAME_HUD_DOCK_STACK_MIN_PCT));
+    const after = Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, total - before);
+    applyDockFrameSize(stackResize.before, before);
+    applyDockFrameSize(stackResize.after, after);
+    stackResize.nextBeforeSize = before;
+    stackResize.nextAfterSize = after;
+    return;
+  }
+  const active = state.hudLayout.drag || state.hudLayout.resize;
+  if (!active || active.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const dxPct = (event.clientX - active.startX) / active.viewportWidth * 100;
+  const dyPct = (event.clientY - active.startY) / active.viewportHeight * 100;
+  const patch = state.hudLayout.resize ? {
+    mode: "float",
+    anchor: active.anchor,
+    scale: active.scale,
+    xPct: active.xPct,
+    yPct: active.yPct,
+    widthPct: clamp(active.widthPct + dxPct, GAME_HUD_MIN_PANEL_WIDTH_PCT, Math.max(GAME_HUD_MIN_PANEL_WIDTH_PCT, 96 - active.xPct)),
+    heightPct: clamp(active.heightPct + dyPct, GAME_HUD_MIN_PANEL_HEIGHT_PCT, Math.max(GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92 - active.yPct))
+  } : {
+    mode: "float",
+    anchor: active.anchor,
+    scale: active.scale,
+    xPct: clamp(active.xPct + dxPct, 0, 96),
+    yPct: clamp(active.yPct + dyPct, 0, 96),
+    widthPct: active.widthPct,
+    heightPct: active.heightPct
+  };
+  applyGameHudPanelLayout(active.panel, patch);
+}
+
+function finishGameHudPointerEdit(event) {
+  const gridResize = state.hudLayout.gridResize;
+  if (gridResize && event.pointerId === gridResize.pointerId) {
+    state.hudLayout.gridResize = null;
+    applyGameHudGridSettings();
+    refreshGameHudDockStacks();
+    return;
+  }
+  const stackResize = state.hudLayout.stackResize;
+  if (stackResize && event.pointerId === stackResize.pointerId) {
+    persistDockFrameSize(stackResize.beforeId, stackResize.nextBeforeSize || stackResize.beforeSize);
+    persistDockFrameSize(stackResize.afterId, stackResize.nextAfterSize || stackResize.afterSize);
+    state.hudLayout.stackResize = null;
+    refreshGameHudDockStacks();
+    notifyGameHudPanelSizesChanged();
+    return;
+  }
+  const active = state.hudLayout.drag || state.hudLayout.resize;
+  if (!active || event.pointerId !== active.pointerId) return;
+  const panel = active.panel;
+  if (state.hudLayout.drag) {
+    const dockAnchor = gameHudAnchorFromPoint(event.clientX, event.clientY);
+    if (dockAnchor && dockAnchor !== "center") {
+      setGameHudModuleOverride(active.moduleId, {
+        mode: "dock",
+        anchor: dockAnchor,
+        scale: active.scale
+      });
+      state.hudLayout.drag = null;
+      state.hudLayout.resize = null;
+      rerenderGameHudPanels();
+      notifyGameHudPanelSizesChanged();
+      return;
+    }
+    // "center" is float-only - fall through to the floating-position persist below,
+    // just tagged with anchor "center" instead of wherever it was dragged from.
+    if (dockAnchor === "center") active.anchor = "center";
+  }
+  const viewport = gameHudViewportSize();
+  const rect = panel.getBoundingClientRect();
+  setGameHudModuleOverride(active.moduleId, {
+    mode: "float",
+    anchor: active.anchor,
+    scale: active.scale,
+    xPct: clamp(rect.left / viewport.width * 100, 0, 96),
+    yPct: clamp(rect.top / viewport.height * 100, 0, 96),
+    widthPct: clamp(rect.width / viewport.width * 100, GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
+    heightPct: clamp(rect.height / viewport.height * 100, GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92)
+  });
+  state.hudLayout.drag = null;
+  state.hudLayout.resize = null;
+  notifyGameHudPanelSizesChanged();
 }
 
 function clonePosition(position) {
@@ -2610,7 +3895,7 @@ function defaultMmoDebugConfig() {
   return {
     id: "mmo_debug_hud",
     enabled: true,
-    anchor: "top-left",
+    anchor: "left",
     compact: true,
     startCollapsed: true,
     show: {
@@ -2679,9 +3964,11 @@ function setMmoDebugExpanded(expanded) {
 
 function buildMmoDebugHudDom(config) {
   const show = config.show || {};
+  const anchor = normalizeGameHudAnchor(config.anchor, "left");
   const root = document.createElement("section");
-  root.className = "status-panel anchor-" + (config.anchor || "top-left") + (config.compact === false ? "" : " status-panel--compact");
+  root.className = "status-panel status-panel--hud" + (config.compact === false ? "" : " status-panel--compact");
   root.dataset.hudId = config.id || "mmo_debug_hud";
+  root.dataset.defaultAnchor = anchor;
 
   const elements = { root: root };
 
@@ -2830,7 +4117,9 @@ function buildMmoDebugHudDom(config) {
 }
 
 function removeMmoDebugHud() {
-  if (state.debugHud.elements && state.debugHud.elements.root) {
+  if (state.debugHud.elements && state.debugHud.elements.frame) {
+    state.debugHud.elements.frame.remove();
+  } else if (state.debugHud.elements && state.debugHud.elements.root) {
     state.debugHud.elements.root.remove();
   }
   state.debugHud.elements = null;
@@ -2851,13 +4140,2067 @@ function refreshMmoDebugHud() {
   const wasExpanded = state.debugHud.elements && state.debugHud.elements.body ? !state.debugHud.elements.body.hidden : null;
   removeMmoDebugHud();
   const elements = buildMmoDebugHudDom(config);
-  gameRoot.appendChild(elements.root);
+  elements.frame = appendGameHudPanel("debug", {
+    moduleId: config.id || "mmo_debug_hud",
+    nodeType: "debug_mmo_hud",
+    label: "Performance",
+    anchor: normalizeGameHudAnchor(config.anchor, "right")
+  }, elements.root, normalizeGameHudAnchor(config.anchor, "right"));
   state.debugHud.elements = elements;
   state.debugHud.signature = signature;
   const expanded = wasExpanded !== null ? wasExpanded : (isMmoDebugForced() || config.startCollapsed === false);
   setMmoDebugExpanded(expanded);
   commitWsVisibleStatus(state.wsStateVisible || state.wsState || "disconnected", state.wsStateVisibleText || state.wsStateVisible || state.wsState || "disconnected");
   updateHud();
+}
+
+// ---- NODE-03 runtime HUD: rendered from published hud_* / interaction_hud nodes ----
+
+function node03Modules() {
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const modules = Array.isArray(project?.ui?.modules) ? project.ui.modules : [];
+  return modules.filter(function (module) {
+    return module && NODE03_HUD_TYPES.has(module.nodeType);
+  });
+}
+
+function node03ModuleSignature(modules) {
+  return JSON.stringify(modules.map(function (module) {
+    return {
+      nodeType: module.nodeType,
+      moduleId: module.moduleId,
+      anchor: module.anchor,
+      resolvedAnchor: hudModuleAnchor(module, defaultNode03Anchor(module.nodeType)),
+      layout: module.layout,
+      columns: module.columns,
+      title: module.title,
+      currencyRefs: module.currencyRefs,
+      itemRefs: module.itemRefs,
+      trackedRefs: module.trackedRefs,
+      maxEntries: module.maxEntries,
+      sourceStatRef: module.sourceStatRef,
+      maxStatRef: module.maxStatRef,
+      targetKinds: module.targetKinds,
+      maxTargets: module.maxTargets,
+      rangeMode: module.rangeMode,
+      allowDemoReset: module.allowDemoReset
+    };
+  }));
+}
+
+function removeNode03Hud() {
+  clearGameHudFamily("node03");
+  state.node03.elements = null;
+  state.node03.signature = "";
+}
+
+function defaultNode03Anchor(nodeType) {
+  return NODE03_DEFAULT_HUD_ANCHORS[nodeType] || "top";
+}
+
+function createNode03Root(modules) {
+  const root = document.createElement("section");
+  root.className = "node03HudRoot";
+  root.dataset.hudId = "node03_runtime";
+  const anchors = {};
+  function ensureAnchor(anchor) {
+    const key = normalizeGameHudAnchor(anchor, "top");
+    if (anchors[key]) return anchors[key];
+    const node = document.createElement("div");
+    applyHudDockClass(node, "node03", key);
+    root.appendChild(node);
+    anchors[key] = node;
+    return node;
+  }
+  for (const module of modules) ensureAnchor(hudModuleAnchor(module, defaultNode03Anchor(module.nodeType)));
+  root.addEventListener("click", function (event) {
+    const button = event.target && typeof event.target.closest === "function"
+      ? event.target.closest("[data-node03-action]")
+      : null;
+    if (!button || button.disabled) return;
+    runNode03Action(button.dataset.node03Action, button.dataset.node03TargetId || null);
+  });
+  return { root: root, anchors: anchors };
+}
+
+function node03AnchorFor(elements, module) {
+  const fallback = defaultNode03Anchor(module.nodeType);
+  const anchor = hudModuleAnchor(module, fallback);
+  return elements.anchors[anchor] || elements.anchors[fallback] || elements.root;
+}
+
+function clearNode03Anchors(elements) {
+  for (const anchor of Object.values(elements.anchors || {})) anchor.replaceChildren();
+}
+
+function node03StatByRef(snapshot, statRef) {
+  const byId = snapshot?.stats?.byId || {};
+  const row = byId[statRef] || null;
+  if (!row) return { current: 0, max: 0, percent: 0 };
+  const max = num(row.baseValue, 0) + num(row.earnedValue, 0);
+  const current = row.currentValue === null || row.currentValue === undefined ? max : num(row.currentValue, max);
+  return { current: current, max: max, percent: max > 0 ? Math.max(0, Math.min(1, current / max)) : 0 };
+}
+
+function node03FormatNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(Math.round(number)) : "-";
+}
+
+function node03ModuleCard(module, className) {
+  const node = document.createElement("div");
+  node.className = "node03Module " + className;
+  node.dataset.moduleId = module.moduleId || module.nodeType || "";
+  return node;
+}
+
+function renderNode03Bar(module, snapshot) {
+  const stat = node03StatByRef(snapshot, module.sourceStatRef);
+  const card = node03ModuleCard(module, "node03Module--bar");
+  const label = document.createElement("div");
+  label.className = "node03BarLabel";
+  const name = document.createElement("span");
+  name.textContent = module.label || module.sourceStatRef || "Stat";
+  const value = document.createElement("strong");
+  value.textContent = module.showNumbers === false
+    ? (module.showPercent ? Math.round(stat.percent * 100) + "%" : "")
+    : node03FormatNumber(stat.current) + " / " + node03FormatNumber(stat.max);
+  label.append(name, value);
+  const track = document.createElement("div");
+  track.className = "node03BarTrack";
+  track.style.width = Math.max(80, Math.min(420, num(module.widthPx, 220))) + "px";
+  track.style.height = Math.max(8, Math.min(40, num(module.heightPx, 18))) + "px";
+  const fill = document.createElement("div");
+  fill.className = module.sourceStatRef === "stat.mana" ? "node03BarFill node03BarFill--mana" : "node03BarFill";
+  fill.style.width = Math.round(stat.percent * 100) + "%";
+  track.appendChild(fill);
+  card.append(label, track);
+  return card;
+}
+
+function renderNode03Xp(module, snapshot) {
+  const progress = snapshot?.progression || {};
+  const card = node03ModuleCard(module, "node03Module--xp" + (module.compact === false ? "" : " node03Module--compact"));
+  const row = document.createElement("div");
+  row.className = "node03XpRow";
+  const label = document.createElement("span");
+  label.textContent = module.showLevel === false ? "XP" : (module.levelLabel || "Level") + " " + (progress.level || 1);
+  const value = document.createElement("strong");
+  value.textContent = module.showCurrentXp === false
+    ? ""
+    : node03FormatNumber(progress.xp || 0) + (module.showRequiredXp === false ? "" : " / " + node03FormatNumber(progress.requiredXp || 0));
+  row.append(label, value);
+  const track = document.createElement("div");
+  track.className = "node03BarTrack node03BarTrack--xp";
+  const fill = document.createElement("div");
+  fill.className = "node03BarFill node03BarFill--xp";
+  fill.style.width = Math.round(num(progress.progressPercent, 0) * 100) + "%";
+  track.appendChild(fill);
+  card.append(row, track);
+  return card;
+}
+
+function appendNode03DebugButton(parent, label, action, payload = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "node03AdjustButton";
+  button.dataset.node03Action = action;
+  if (payload.itemId) button.dataset.node03ItemId = payload.itemId;
+  if (payload.currencyId) button.dataset.node03CurrencyId = payload.currencyId;
+  button.dataset.node03Amount = String(Math.max(1, num(payload.amount, 1)));
+  button.textContent = label;
+  button.disabled = state.node03.actionInFlight;
+  parent.appendChild(button);
+  return button;
+}
+
+function node03CurrencyEntries(snapshot) {
+  const owned = new Map((Array.isArray(snapshot?.currencies) ? snapshot.currencies : []).map(function (currency) {
+    return [currency.currencyId, currency];
+  }));
+  const catalog = Array.isArray(snapshot?.catalog?.currencies) ? snapshot.catalog.currencies : [];
+  const ids = new Set(catalog.map(function (currency) { return currency.currencyId; }).concat(Array.from(owned.keys())));
+  if (!ids.size) ids.add("currency.gold");
+  return Array.from(ids).map(function (currencyId) {
+    const currency = owned.get(currencyId) || catalog.find(function (entry) { return entry.currencyId === currencyId; }) || {};
+    return {
+      kind: "currency",
+      currencyId,
+      displayName: currency.displayName || (currencyId === "currency.gold" ? "Gold" : currencyId),
+      quantity: num(currency.amountMinor, 0),
+      sortOrder: num(currency.sortOrder, currencyId === "currency.gold" ? 1 : 999)
+    };
+  }).sort(function (left, right) {
+    return left.sortOrder - right.sortOrder || String(left.displayName).localeCompare(String(right.displayName));
+  });
+}
+
+function node03OwnedItemEntries(snapshot) {
+  const ownedItems = Array.isArray(snapshot?.inventory?.items) ? snapshot.inventory.items : [];
+  const byItemId = new Map();
+  for (const item of ownedItems) {
+    const id = item.itemId || item.instanceId || item.stackId;
+    if (!id) continue;
+    const existing = byItemId.get(item.itemId);
+    if (existing) {
+      existing.quantity += num(item.quantity, 1);
+      continue;
+    }
+    byItemId.set(item.itemId, Object.assign({}, item, { quantity: num(item.quantity, 1) }));
+  }
+  return Array.from(byItemId.values()).sort(function (left, right) {
+    const leftOwned = num(left.quantity, 0) > 0 ? 0 : 1;
+    const rightOwned = num(right.quantity, 0) > 0 ? 0 : 1;
+    return leftOwned - rightOwned || String(left.displayName || left.itemId).localeCompare(String(right.displayName || right.itemId));
+  });
+}
+
+function node03InventoryEntries(snapshot, limit) {
+  return node03OwnedItemEntries(snapshot).slice(0, Math.max(1, limit || 16));
+}
+
+function node03TrackedRefs(module, snapshot) {
+  const refs = [];
+  if (Array.isArray(module.trackedRefs)) {
+    for (const ref of module.trackedRefs) {
+      const id = String(ref?.ref || ref || "").trim();
+      if (id) refs.push(id);
+    }
+  }
+  for (const currencyId of Array.isArray(module.currencyRefs) ? module.currencyRefs : []) {
+    if (currencyId && !refs.includes(currencyId)) refs.push(currencyId);
+  }
+  for (const itemId of Array.isArray(module.itemRefs) ? module.itemRefs : []) {
+    if (itemId && !refs.includes(itemId)) refs.push(itemId);
+  }
+  if (refs.length) return refs;
+  refs.push("currency.gold");
+  const owned = node03OwnedItemEntries(snapshot);
+  if (!refs.includes("item.wood")) refs.push("item.wood");
+  for (const item of owned) {
+    if (refs.length >= Math.max(2, num(module.maxEntries, 5))) break;
+    if (item.itemId && !refs.includes(item.itemId)) refs.push(item.itemId);
+  }
+  return refs;
+}
+
+function node03TrackedEntries(module, snapshot) {
+  const currencies = new Map(node03CurrencyEntries(snapshot).map(function (currency) {
+    return [currency.currencyId, currency];
+  }));
+  const catalogCurrencies = new Map((Array.isArray(snapshot?.catalog?.currencies) ? snapshot.catalog.currencies : []).map(function (currency) {
+    return [currency.currencyId, currency];
+  }));
+  const ownedItems = new Map(node03OwnedItemEntries(snapshot).map(function (item) {
+    return [item.itemId, item];
+  }));
+  const catalogItems = new Map((Array.isArray(snapshot?.catalog?.items) ? snapshot.catalog.items : []).map(function (item) {
+    return [item.itemId, item];
+  }));
+  return node03TrackedRefs(module, snapshot).map(function (ref) {
+    if (String(ref).startsWith("currency.")) {
+      const currency = currencies.get(ref) || catalogCurrencies.get(ref) || {};
+      return {
+        kind: "currency",
+        id: ref,
+        displayName: currency.displayName || (ref === "currency.gold" ? "Gold" : ref),
+        quantity: num(currency.quantity || currency.amountMinor, 0)
+      };
+    }
+    const item = ownedItems.get(ref) || catalogItems.get(ref) || {};
+    return {
+      kind: "item",
+      id: ref,
+      displayName: item.displayName || ref,
+      quantity: num(item.quantity, 0)
+    };
+  }).slice(0, Math.max(1, num(module.maxEntries, 5)));
+}
+
+function renderNode03Wallet(module, snapshot) {
+  const card = node03ModuleCard(module, "node03Module--tracked");
+  const title = document.createElement("div");
+  title.className = "node03Title";
+  title.textContent = module.title || "Tracked";
+  card.appendChild(title);
+  const list = document.createElement("div");
+  list.className = "node03TrackedList";
+  const entries = node03TrackedEntries(module, snapshot);
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "node03TrackedItem";
+    row.dataset.trackedKind = entry.kind;
+    const label = document.createElement("span");
+    label.textContent = entry.displayName || entry.id;
+    const value = document.createElement("strong");
+    value.textContent = node03FormatNumber(entry.quantity || 0);
+    row.append(label, value);
+    list.appendChild(row);
+  }
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "node03Empty";
+    empty.textContent = "No tracked items";
+    card.appendChild(empty);
+    return card;
+  }
+  card.appendChild(list);
+  return card;
+}
+
+function renderNode03Inventory(module, snapshot) {
+  const card = node03ModuleCard(module, "node03Module--inventory");
+  const title = document.createElement("div");
+  title.className = "node03Title";
+  title.textContent = "Inventory";
+  card.appendChild(title);
+  const items = node03InventoryEntries(snapshot, num(module.maxItems, 18));
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "node03Empty";
+    empty.textContent = "Empty";
+    card.appendChild(empty);
+    return card;
+  }
+  const list = document.createElement("div");
+  list.className = module.layout === "list" ? "node03InventoryList" : "node03InventoryGrid";
+  list.style.setProperty("--node03-columns", String(Math.max(1, Math.min(12, num(module.columns, 6)))));
+  for (const item of items) {
+    const cell = document.createElement("div");
+    cell.className = "node03Item";
+    cell.title = item.displayName || item.itemId;
+    const name = document.createElement("span");
+    name.textContent = item.displayName || item.itemId;
+    const qty = document.createElement("strong");
+    qty.textContent = item.quantity > 0 ? "x" + item.quantity : "0";
+    cell.append(name, qty);
+    list.appendChild(cell);
+  }
+  card.appendChild(list);
+  return card;
+}
+
+function renderNode03Equipment(module, snapshot) {
+  const card = node03ModuleCard(module, "node03Module--equipment");
+  const title = document.createElement("div");
+  title.className = "node03Title";
+  title.textContent = "Equipment";
+  card.appendChild(title);
+  const rows = Array.isArray(snapshot?.equipment) ? snapshot.equipment : [];
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "node03Empty";
+    empty.textContent = "No equipment";
+    card.appendChild(empty);
+    return card;
+  }
+  for (const item of rows) {
+    const row = document.createElement("div");
+    row.className = "node03Line";
+    const slot = document.createElement("span");
+    slot.textContent = item.slotName || item.slotId;
+    const value = document.createElement("strong");
+    value.textContent = item.displayName || item.itemId;
+    row.append(slot, value);
+    card.appendChild(row);
+  }
+  return card;
+}
+
+function node03TargetById(targetId) {
+  const id = String(targetId || "").trim();
+  if (!id) return null;
+  const targets = Array.isArray(state.node03.snapshot?.interactionTargets) ? state.node03.snapshot.interactionTargets : [];
+  return targets.find(function (target) { return String(target?.instanceId || "") === id; })
+    || node03RuntimeTargetsForScene().find(function (target) { return String(target?.instanceId || "") === id; })
+    || null;
+}
+
+function node03ClientDistance(target) {
+  if (!target || !state.position) return null;
+  if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return null;
+  return Math.hypot(num(state.position.x, 0) - num(target.x, 0), num(state.position.z, 0) - num(target.z, 0));
+}
+
+function node03TargetWithClientRange(target) {
+  if (!target) return null;
+  const distance = node03ClientDistance(target);
+  if (distance === null) return target;
+  const range = Math.max(0, num(target.range, 0));
+  const radius = Math.max(0, num(target.radius, 0));
+  return Object.assign({}, target, {
+    distance: round(distance),
+    inRange: distance <= range + radius
+  });
+}
+
+function node03DecoratedInteractionTargets() {
+  const targets = Array.isArray(state.node03.snapshot?.interactionTargets) ? state.node03.snapshot.interactionTargets : [];
+  return targets.map(function (target) {
+    const decorated = node03TargetWithClientRange(target);
+    return Object.assign({}, decorated, {
+      selected: String(decorated?.instanceId || "") === String(state.node03.selectedTargetId || "")
+    });
+  });
+}
+
+function node03RuntimeTargetsForScene() {
+  const snapshot = state.node03.snapshot || {};
+  const entities = Array.isArray(snapshot.entities?.all) ? snapshot.entities.all : [];
+  const interactionTargets = Array.isArray(snapshot.interactionTargets) ? snapshot.interactionTargets : [];
+  const byId = new Map();
+  for (const entity of entities) {
+    if (!entity || !entity.instanceId) continue;
+    const action = entity?.interaction?.action || (entity.entityKind === "enemy" ? "attack" : entity.entityKind === "resource" ? "gather" : "pickup");
+    byId.set(entity.instanceId, Object.assign({}, entity, {
+      action,
+      prompt: entity?.interaction?.prompt || action,
+      range: num(entity?.interaction?.range, 3),
+      available: entity.entityKind === "enemy"
+        ? entity.alive !== false && entity.status !== "dead"
+        : entity.available !== false && !["depleted", "claimed"].includes(entity.status)
+    }));
+  }
+  for (const target of interactionTargets) {
+    if (!target || !target.instanceId) continue;
+    byId.set(target.instanceId, Object.assign({}, byId.get(target.instanceId) || {}, target));
+  }
+  return Array.from(byId.values()).map(function (target) {
+    const decorated = node03TargetWithClientRange(target);
+    return Object.assign({}, decorated, {
+      selected: String(decorated?.instanceId || "") === String(state.node03.selectedTargetId || "")
+    });
+  });
+}
+
+function syncNode03RuntimeTargets() {
+  syncRuntimeTargets();
+}
+
+function refreshNode03ClientRanges(now = performance.now()) {
+  if (!state.node03.snapshot || !node03Modules().length) return;
+  if (now - num(state.node03.lastRangeRenderAt, 0) < 200) return;
+  state.node03.lastRangeRenderAt = now;
+  syncNode03RuntimeTargets();
+  updateNode03RangeDom();
+}
+
+function node03TargetMetaText(target, module = {}) {
+  const parts = [target.status || target.entityKind];
+  if (module.showDistance !== false && target.distance !== null) parts.push(node03FormatNumber(target.distance) + "m");
+  if (module.showHealth !== false && target.healthMax) parts.push(node03FormatNumber(target.healthCurrent) + "/" + node03FormatNumber(target.healthMax));
+  if (!target.inRange) parts.push("out of range");
+  return parts.join(" · ");
+}
+
+function updateNode03RangeDom() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !state.node03.snapshot) return;
+  const targets = node03DecoratedInteractionTargets();
+  const byId = new Map(targets.map(function (target) { return [String(target.instanceId || ""), target]; }));
+  for (const row of Array.from(elements.root.querySelectorAll("[data-node03-target-row]"))) {
+    const target = byId.get(String(row.dataset.node03TargetRow || ""));
+    if (!target) continue;
+    row.classList.toggle("node03Target--selected", target.selected === true);
+    row.classList.toggle("node03Target--outOfRange", target.inRange === false);
+    const meta = row.querySelector("[data-node03-target-meta]");
+    if (meta) meta.textContent = node03TargetMetaText(target, { showDistance: row.dataset.node03ShowDistance !== "0", showHealth: row.dataset.node03ShowHealth !== "0" });
+    const button = row.querySelector("[data-node03-action]");
+    if (button) {
+      button.dataset.node03Action = target.action;
+      button.dataset.node03TargetId = target.instanceId;
+      button.textContent = target.inRange === false ? "Move" : (target.prompt || target.action);
+      button.disabled = state.node03.actionInFlight || !target.available;
+    }
+  }
+  for (const button of Array.from(elements.root.querySelectorAll("[data-node03-hotbar-slot]"))) {
+    const abilityId = button.dataset.node03AbilityId || "";
+    const target = nearestNode03TargetForAbility(abilityId);
+    button.classList.toggle("node03HotbarButton--outOfRange", target?.inRange === false);
+    button.classList.toggle("node03HotbarButton--selected", target?.selected === true);
+    if (target) {
+      button.dataset.node03Action = target.action;
+      button.dataset.node03TargetId = target.instanceId;
+      button.disabled = state.node03.actionInFlight || !target.available;
+      button.title = (button.dataset.node03AbilityLabel || target.prompt || target.action) + " - " + (target.displayName || target.instanceId) + (target.inRange === false ? " (move closer)" : "");
+    } else {
+      delete button.dataset.node03Action;
+      delete button.dataset.node03TargetId;
+      button.disabled = true;
+    }
+  }
+}
+
+function selectNode03Target(targetId) {
+  state.node03.selectedTargetId = String(targetId || "").trim();
+  syncNode03RuntimeTargets();
+}
+
+function node03TargetMatchesAbility(target, abilityId) {
+  if (!target || target.available === false) return false;
+  if (abilityId === "ability.basic_attack" || abilityId === "ability.attack_1") return target.action === "attack";
+  if (abilityId === "ability.gather_sun_crystal") return target.action === "gather";
+  return false;
+}
+
+function nearestNode03TargetForAbility(abilityId) {
+  const targets = node03DecoratedInteractionTargets()
+    .filter(function (target) { return node03TargetMatchesAbility(target, abilityId); })
+    .sort(function (left, right) {
+      if (left.inRange !== right.inRange) return left.inRange ? -1 : 1;
+      return num(left.distance, 999999) - num(right.distance, 999999);
+    });
+  const selected = targets.find(function (target) {
+    return String(target?.instanceId || "") === String(state.node03.selectedTargetId || "");
+  });
+  return selected || targets[0] || null;
+}
+
+function renderNode03Hotbar(module, snapshot) {
+  const card = node03ModuleCard(module, "node03Module--hotbar");
+  const slots = Array.isArray(snapshot?.abilities?.loadout) ? snapshot.abilities.loadout : [];
+  const slotCount = Math.max(1, Math.min(12, num(module.slotCount, 6)));
+  for (let index = 0; index < slotCount; index += 1) {
+    const slot = slots.find(function (candidate) { return candidate.slotIndex === index; }) || null;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "node03HotbarButton";
+    button.title = slot?.displayName || "Empty";
+    if (module.showKeybinds !== false) {
+      const key = document.createElement("span");
+      key.className = "node03HotbarKey";
+      key.textContent = String(index + 1);
+      button.appendChild(key);
+    }
+    const name = document.createElement("strong");
+    name.textContent = slot?.displayName ? slot.displayName.slice(0, 2).toUpperCase() : "-";
+    button.appendChild(name);
+    button.dataset.node03HotbarSlot = String(index);
+    if (slot?.abilityId) button.dataset.node03AbilityId = slot.abilityId;
+    if (slot?.displayName) button.dataset.node03AbilityLabel = slot.displayName;
+    const target = nearestNode03TargetForAbility(slot?.abilityId);
+    if (target) {
+      button.dataset.node03Action = target.action;
+      button.dataset.node03TargetId = target.instanceId;
+      if (target.inRange === false) button.classList.add("node03HotbarButton--outOfRange");
+      if (target.selected === true) button.classList.add("node03HotbarButton--selected");
+      button.title = (slot?.displayName || target.prompt || target.action) + " - " + (target.displayName || target.instanceId) + (target.inRange === false ? " (move closer)" : "");
+      button.disabled = state.node03.actionInFlight || !target.available;
+    } else {
+      button.disabled = true;
+    }
+    card.appendChild(button);
+  }
+  return card;
+}
+
+function node03HotbarSlotIndexForKey(code) {
+  const text = String(code || "");
+  const digit = /^Digit([1-9])$/.exec(text) || /^Numpad([1-9])$/.exec(text);
+  if (!digit) return -1;
+  return Number(digit[1]) - 1;
+}
+
+function triggerNode03HotbarSlot(slotIndex) {
+  if (state.node03.actionInFlight || !state.node03.snapshot) return false;
+  const slots = Array.isArray(state.node03.snapshot?.abilities?.loadout) ? state.node03.snapshot.abilities.loadout : [];
+  const slot = slots.find(function (candidate) { return candidate.slotIndex === slotIndex; }) || null;
+  if (!slot?.abilityId) return false;
+  const target = nearestNode03TargetForAbility(slot.abilityId);
+  if (!target) return false;
+  runNode03Action(target.action, target.instanceId);
+  return true;
+}
+
+function renderNode03Interactions(module, snapshot) {
+  const card = node03ModuleCard(module, "node03Module--interactions");
+  const head = document.createElement("div");
+  head.className = "node03TitleRow";
+  const title = document.createElement("div");
+  title.className = "node03Title";
+  title.textContent = module.title || "Targets";
+  head.appendChild(title);
+  if (module.allowDemoReset === true) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "node03MiniButton";
+    reset.dataset.node03Action = "reset_demo";
+    reset.textContent = "Reset";
+    reset.disabled = state.node03.actionInFlight;
+    head.appendChild(reset);
+  }
+  card.appendChild(head);
+  const targets = node03DecoratedInteractionTargets();
+  if (!targets.length) {
+    const empty = document.createElement("p");
+    empty.className = "node03Empty";
+    empty.textContent = "No targets";
+    card.appendChild(empty);
+  }
+  for (const target of targets) {
+    const row = document.createElement("div");
+    row.className = "node03Target";
+    row.dataset.node03TargetRow = target.instanceId || "";
+    row.dataset.node03ShowDistance = module.showDistance === false ? "0" : "1";
+    row.dataset.node03ShowHealth = module.showHealth === false ? "0" : "1";
+    if (target.selected === true) row.classList.add("node03Target--selected");
+    if (target.inRange === false) row.classList.add("node03Target--outOfRange");
+    const body = document.createElement("div");
+    body.className = "node03TargetBody";
+    const name = document.createElement("strong");
+    name.textContent = target.displayName || target.instanceId;
+    const meta = document.createElement("span");
+    meta.dataset.node03TargetMeta = "1";
+    meta.textContent = node03TargetMetaText(target, module);
+    body.append(name, meta);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "node03ActionButton";
+    button.dataset.node03Action = target.action;
+    button.dataset.node03TargetId = target.instanceId;
+    button.textContent = target.inRange === false ? "Move" : (target.prompt || target.action);
+    button.disabled = state.node03.actionInFlight || !target.available;
+    row.append(body, button);
+    card.appendChild(row);
+  }
+  if (state.node03.lastActionMessage || state.node03.lastError) {
+    const status = document.createElement("p");
+    status.className = state.node03.lastError ? "node03Status node03Status--error" : "node03Status";
+    status.textContent = state.node03.lastError || state.node03.lastActionMessage;
+    card.appendChild(status);
+  }
+  return card;
+}
+
+function renderNode03Death(module, snapshot) {
+  const health = snapshot?.stats?.health || {};
+  if (num(health.current, 1) > 0) return null;
+  const card = node03ModuleCard(module, "node03Module--death");
+  const title = document.createElement("strong");
+  title.textContent = "Defeated";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "node03ActionButton";
+  button.dataset.node03Action = "reset_demo";
+  button.textContent = "Respawn";
+  button.disabled = state.node03.actionInFlight;
+  card.append(title, button);
+  return card;
+}
+
+function renderNode03Module(module, snapshot) {
+  if (module.nodeType === "hud_bar") return renderNode03Bar(module, snapshot);
+  if (module.nodeType === "xp_hud") return renderNode03Xp(module, snapshot);
+  if (module.nodeType === "wallet_hud") return renderNode03Wallet(module, snapshot);
+  if (module.nodeType === "inventory_hud") return renderNode03Inventory(module, snapshot);
+  if (module.nodeType === "equipment_hud") return renderNode03Equipment(module, snapshot);
+  if (module.nodeType === "hotbar_hud") return renderNode03Hotbar(module, snapshot);
+  if (module.nodeType === "interaction_hud") return renderNode03Interactions(module, snapshot);
+  if (module.nodeType === "death_respawn_hud") return renderNode03Death(module, snapshot);
+  return null;
+}
+
+function renderNode03Hud() {
+  const modules = node03Modules();
+  const snapshot = state.node03.snapshot;
+  if (!modules.length || !snapshot) {
+    removeNode03Hud();
+    return;
+  }
+  // Signature includes the live snapshot, not just the static module config, so a
+  // poll that returns unchanged data is a true no-op. Without this, every poll
+  // destroyed and recreated every panel regardless of whether anything changed -
+  // shared docks (several node types stacked together) would visibly flash/reflow
+  // on that cadence even when nothing to show actually differed.
+  const signature = node03ModuleSignature(modules) + "|" + JSON.stringify(snapshot) + "|" + JSON.stringify({
+    actionInFlight: state.node03.actionInFlight,
+    selectedTargetId: state.node03.selectedTargetId,
+    lastError: state.node03.lastError,
+    lastActionMessage: state.node03.lastActionMessage
+  });
+  if (state.node03.elements && state.node03.signature === signature) return;
+  state.node03.elements = ensureGameHudRuntimeRoot();
+  state.node03.signature = signature;
+  clearGameHudFamily("node03");
+  for (const module of modules) {
+    const node = renderNode03Module(module, snapshot);
+    if (!node) continue;
+    appendGameHudPanel("node03", module, node, defaultNode03Anchor(module.nodeType));
+  }
+}
+
+function scheduleNode03Poll() {
+  if (state.node03.pollTimerId) return;
+  state.node03.pollTimerId = window.setTimeout(async function () {
+    state.node03.pollTimerId = 0;
+    await loadNode03State({ silent: true });
+    if (node03Modules().length) scheduleNode03Poll();
+  }, 2500);
+}
+
+async function loadNode03State(options = {}) {
+  if (!node03Modules().length) {
+    removeNode03Hud();
+    syncNode03RuntimeTargets();
+    return false;
+  }
+  if (state.node03.loadInFlight) return false;
+  state.node03.loadInFlight = true;
+  try {
+    const response = await fetch("/api/game/node03/state", { headers: { Accept: "application/json" } });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return false;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node03.lastError = data?.message || "NODE-03 state niet beschikbaar.";
+      if (!options.silent) showHudError(state.node03.lastError);
+      renderNode03Hud();
+      return false;
+    }
+    state.node03.snapshot = data;
+    state.node03.lastLoadedAt = performance.now();
+    state.node03.lastError = "";
+    syncNode03RuntimeTargets();
+    renderNode03Hud();
+    scheduleNode03Poll();
+    return true;
+  } catch (error) {
+    state.node03.lastError = String(error?.message || error || "NODE-03 state mislukt.");
+    if (!options.silent) showHudError(state.node03.lastError);
+    renderNode03Hud();
+    return false;
+  } finally {
+    state.node03.loadInFlight = false;
+  }
+}
+
+async function runNode03Action(action, targetId, extra = {}) {
+  if (String(action || "").startsWith("node04:")) {
+    await runNode04Action(action, targetId);
+    return;
+  }
+  if (!action || state.node03.actionInFlight) return;
+  const currentTarget = node03TargetWithClientRange(node03TargetById(targetId));
+  if (currentTarget?.instanceId) {
+    selectNode03Target(currentTarget.instanceId);
+    if (currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node03-target");
+      state.node03.lastActionMessage = started
+        ? "Loop naar " + (currentTarget.displayName || "target") + "."
+        : (currentTarget.displayName || "Target") + " is buiten range.";
+      renderNode03Hud();
+      return;
+    }
+  }
+  state.node03.actionInFlight = true;
+  state.node03.lastError = "";
+  renderNode03Hud();
+  try {
+    const isTravel = action === "travel";
+    const response = await fetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(isTravel ? {
+        linkId: targetId || null
+      } : {
+        action: action,
+        targetId: targetId || null,
+        itemId: extra.itemId || null,
+        currencyId: extra.currencyId || null,
+        amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
+        operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
+      })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node03.lastError = data?.message || "NODE-03 actie mislukt.";
+      showHudError(state.node03.lastError);
+      return;
+    }
+    state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
+    if (isTravel) {
+      applyInstantTravelResponse(data);
+      await loadSessionState({
+        forceWorld: true,
+        showLoading: false,
+        keepPrediction: false,
+        silent: true,
+        reason: "zone-link"
+      });
+      return;
+    }
+    if (data.position) applyFallbackPosition({ ok: true, position: data.position });
+    if (data.snapshot) {
+      state.node03.snapshot = data.snapshot;
+      syncNode03RuntimeTargets();
+    }
+    renderNode03Hud();
+  } catch (error) {
+    state.node03.lastError = String(error?.message || error || "NODE-03 actie mislukt.");
+    showHudError(state.node03.lastError);
+  } finally {
+    state.node03.actionInFlight = false;
+    await loadNode03State({ silent: true });
+  }
+}
+
+// ---- NODE-04 quest/dialogue HUD: rendered from published quest_tracker/dialogue/notification nodes ----
+
+function node04Modules() {
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const modules = Array.isArray(project?.ui?.modules) ? project.ui.modules : [];
+  return modules.filter(function (module) {
+    return module && NODE04_HUD_TYPES.has(module.nodeType);
+  });
+}
+
+function node04ModuleSignature(modules) {
+  return JSON.stringify(modules.map(function (module) {
+    return {
+      nodeType: module.nodeType,
+      moduleId: module.moduleId,
+      anchor: module.anchor,
+      resolvedAnchor: hudModuleAnchor(module, defaultNode04Anchor(module.nodeType)),
+      maxQuests: module.maxQuests,
+      maxVisible: module.maxVisible,
+      widthPx: module.widthPx
+    };
+  }));
+}
+
+function removeNode04Hud() {
+  clearGameHudFamily("node04");
+  state.node04.elements = null;
+  state.node04.signature = "";
+}
+
+function defaultNode04Anchor(nodeType) {
+  return NODE04_DEFAULT_HUD_ANCHORS[nodeType] || "right";
+}
+
+function createNode04Root(modules) {
+  const root = document.createElement("section");
+  root.className = "node04HudRoot";
+  root.dataset.hudId = "node04_runtime";
+  const anchors = {};
+  function ensureAnchor(anchor) {
+    const key = normalizeGameHudAnchor(anchor, "right");
+    if (anchors[key]) return anchors[key];
+    const node = document.createElement("div");
+    applyHudDockClass(node, "node04", key);
+    root.appendChild(node);
+    anchors[key] = node;
+    return node;
+  }
+  for (const module of modules) ensureAnchor(hudModuleAnchor(module, defaultNode04Anchor(module.nodeType)));
+  root.addEventListener("click", function (event) {
+    const close = event.target && typeof event.target.closest === "function"
+      ? event.target.closest("[data-node04-close]")
+      : null;
+    if (close) {
+      state.node04.dialogue = null;
+      renderNode04Hud();
+      return;
+    }
+    const button = event.target && typeof event.target.closest === "function"
+      ? event.target.closest("[data-node04-action]")
+      : null;
+    if (!button || button.disabled) return;
+    runNode04Action(button.dataset.node04Action, button.dataset.node04TargetId || null, {
+      questId: button.dataset.node04QuestId || null,
+      dialogueId: button.dataset.node04DialogueId || null,
+      entryId: button.dataset.node04EntryId || null,
+      choiceId: button.dataset.node04ChoiceId || null
+    });
+  });
+  return { root: root, anchors: anchors };
+}
+
+function node04AnchorFor(elements, module) {
+  const fallback = defaultNode04Anchor(module.nodeType);
+  const anchor = hudModuleAnchor(module, fallback);
+  return elements.anchors[anchor] || elements.anchors[fallback] || elements.root;
+}
+
+function clearNode04Anchors(elements) {
+  for (const anchor of Object.values(elements.anchors || {})) anchor.replaceChildren();
+}
+
+function node04ModuleCard(module, className) {
+  const node = document.createElement("div");
+  node.className = "node04Module " + className;
+  node.dataset.moduleId = module.moduleId || module.nodeType || "";
+  return node;
+}
+
+function node04TargetById(targetId) {
+  const id = String(targetId || "").trim();
+  if (!id) return null;
+  return node04RuntimeTargetsForScene().find(function (target) {
+    return String(target?.instanceId || "") === id || String(target?.targetId || "") === id;
+  }) || null;
+}
+
+function node04ClientDistance(target) {
+  if (!target || !state.position) return null;
+  if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return null;
+  return Math.hypot(num(state.position.x, 0) - num(target.x, 0), num(state.position.z, 0) - num(target.z, 0));
+}
+
+function node04TargetWithClientRange(target) {
+  if (!target) return null;
+  const distance = node04ClientDistance(target);
+  if (distance === null) return target;
+  const range = Math.max(0, num(target.range, 0));
+  const radius = Math.max(0, num(target.radius, 0));
+  return Object.assign({}, target, {
+    distance: round(distance),
+    inRange: distance <= range + radius
+  });
+}
+
+function node04RuntimeTargetsForScene() {
+  const snapshot = state.node04.snapshot || {};
+  const byId = new Map();
+  const add = function (target) {
+    if (!target || !target.instanceId) return;
+    const decorated = node04TargetWithClientRange(Object.assign({
+      entityKind: "quest",
+      targetKind: "quest",
+      available: true,
+      action: "node04:move_marker",
+      prompt: "Move"
+    }, target));
+    byId.set(decorated.instanceId, decorated);
+  };
+  for (const target of Array.isArray(snapshot.questTargets) ? snapshot.questTargets : []) add(target);
+  for (const target of Array.isArray(snapshot.dialogueTargets) ? snapshot.dialogueTargets : []) add(target);
+  return Array.from(byId.values());
+}
+
+function syncRuntimeTargets() {
+  if (!state.runtime || typeof state.runtime.setRuntimeTargets !== "function") return;
+  const targets = [];
+  if (state.node03.snapshot && node03Modules().length) targets.push.apply(targets, node03RuntimeTargetsForScene());
+  if (state.node04.snapshot && node04Modules().length) targets.push.apply(targets, node04RuntimeTargetsForScene());
+  if (state.node05.snapshot && node05Modules().length) targets.push.apply(targets, node05RuntimeTargetsForScene());
+  if (!targets.length) {
+    if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
+    return;
+  }
+  const byId = new Map();
+  for (const target of targets) byId.set(target.instanceId, target);
+  state.runtime.setRuntimeTargets(Array.from(byId.values()));
+}
+
+function refreshNode04ClientRanges(now = performance.now()) {
+  if (!state.node04.snapshot || !node04Modules().length) return;
+  if (now - num(state.node04.lastRangeRenderAt, 0) < 250) return;
+  state.node04.lastRangeRenderAt = now;
+  syncRuntimeTargets();
+}
+
+function node04PrimaryTarget() {
+  const targets = node04RuntimeTargetsForScene();
+  return targets.sort(function (left, right) {
+    if (left.inRange !== right.inRange) return left.inRange ? -1 : 1;
+    return num(left.distance, 999999) - num(right.distance, 999999);
+  })[0] || null;
+}
+
+function appendNode04ActionButton(parent, label, action, target, questId, extra = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "node04ActionButton";
+  button.dataset.node04Action = action;
+  if (target?.instanceId) button.dataset.node04TargetId = target.instanceId;
+  if (questId) button.dataset.node04QuestId = questId;
+  if (extra.dialogueId) button.dataset.node04DialogueId = extra.dialogueId;
+  if (extra.entryId) button.dataset.node04EntryId = extra.entryId;
+  if (extra.choiceId) button.dataset.node04ChoiceId = extra.choiceId;
+  button.textContent = label;
+  button.disabled = state.node04.actionInFlight;
+  parent.appendChild(button);
+  return button;
+}
+
+function renderNode04QuestTracker(module, snapshot) {
+  const card = node04ModuleCard(module, "node04Module--tracker");
+  const title = document.createElement("div");
+  title.className = "node04Title";
+  title.textContent = "Quest";
+  card.appendChild(title);
+  const quest = snapshot?.trackedQuest || null;
+  if (!quest) {
+    const empty = document.createElement("p");
+    empty.className = "node04Empty";
+    empty.textContent = "Geen quest";
+    card.appendChild(empty);
+    return card;
+  }
+  const name = document.createElement("strong");
+  name.className = "node04QuestName";
+  name.textContent = quest.displayName || quest.questId;
+  card.appendChild(name);
+  const step = quest.activeStep || null;
+  if (step) {
+    const instruction = document.createElement("p");
+    instruction.className = "node04Instruction";
+    instruction.textContent = step.instruction || step.displayName || "";
+    card.appendChild(instruction);
+    for (const objective of Array.isArray(step.objectives) ? step.objectives : []) {
+      const row = document.createElement("div");
+      row.className = objective.complete ? "node04Objective node04Objective--done" : "node04Objective";
+      const label = document.createElement("span");
+      label.textContent = objective.instruction || objective.displayName || objective.objectiveType || "Objective";
+      const value = document.createElement("strong");
+      value.textContent = node03FormatNumber(objective.currentValue || 0) + " / " + node03FormatNumber(objective.requiredValue || 1);
+      row.append(label, value);
+      card.appendChild(row);
+    }
+    for (const condition of Array.isArray(step.conditions) ? step.conditions : []) {
+      const row = document.createElement("div");
+      row.className = condition.met ? "node04Condition node04Condition--done" : "node04Condition";
+      row.textContent = condition.met ? "Level OK" : (condition.message || step.blockedReason || "Condition nodig");
+      card.appendChild(row);
+    }
+  } else if (quest.status === "available") {
+    const available = document.createElement("p");
+    available.className = "node04Instruction";
+    available.textContent = quest.summary || "Praat met het quest target.";
+    card.appendChild(available);
+  }
+  const target = node04PrimaryTarget();
+  const actions = document.createElement("div");
+  actions.className = "node04Actions";
+  if (target) {
+    const action = target.action || "node04:move_marker";
+    const label = target.inRange === false ? "Move" : (target.prompt || (action === "travel" ? "Travel" : "Use"));
+    appendNode04ActionButton(actions, label, action, target, target.questId || quest.questId, { dialogueId: target.dialogueId || null });
+  }
+  if (quest.status === "active" && step?.canTurnIn) {
+    appendNode04ActionButton(actions, "Turn in", "node04:turn_in", null, quest.questId);
+  }
+  if (quest.status === "active" && step?.canReach) {
+    appendNode04ActionButton(actions, "Complete", "node04:reach", null, quest.questId);
+  }
+  if (actions.children.length) card.appendChild(actions);
+  if (state.node04.lastActionMessage || state.node04.lastError) {
+    const status = document.createElement("p");
+    status.className = state.node04.lastError ? "node04Status node04Status--error" : "node04Status";
+    status.textContent = state.node04.lastError || state.node04.lastActionMessage;
+    card.appendChild(status);
+  }
+  return card;
+}
+
+function renderNode04Dialogue(module) {
+  const dialogue = state.node04.dialogue;
+  if (!dialogue) return null;
+  const card = node04ModuleCard(module, "node04Module--dialogue");
+  card.style.width = Math.max(280, Math.min(900, num(module.widthPx, 520))) + "px";
+  const head = document.createElement("div");
+  head.className = "node04DialogueHead";
+  if (module.showSpeaker !== false) {
+    const speaker = document.createElement("strong");
+    speaker.textContent = dialogue.speakerName || dialogue.displayName || "Dialogue";
+    head.appendChild(speaker);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "node04CloseButton";
+  close.dataset.node04Close = "1";
+  close.textContent = "Close";
+  head.appendChild(close);
+  const text = document.createElement("p");
+  text.className = "node04DialogueText";
+  text.textContent = dialogue.text || "";
+  const choices = document.createElement("div");
+  choices.className = "node04Choices";
+  for (const choice of Array.isArray(dialogue.choices) ? dialogue.choices : []) {
+    appendNode04ActionButton(choices, choice.label || "Continue", "node04:choose_dialogue", null, choice.questRef || null, {
+      dialogueId: dialogue.dialogueId,
+      entryId: dialogue.entryId,
+      choiceId: choice.choiceId
+    });
+  }
+  card.append(head, text, choices);
+  return card;
+}
+
+function renderNode04Notifications(module, snapshot) {
+  const notifications = Array.isArray(snapshot?.notifications) ? snapshot.notifications.slice(0, Math.max(1, Math.min(12, num(module.maxVisible, 3)))) : [];
+  if (!notifications.length && !state.node04.lastActionMessage) return null;
+  const card = node04ModuleCard(module, "node04Module--notifications");
+  const list = notifications.length ? notifications : [{ text: state.node04.lastActionMessage }];
+  for (const item of list) {
+    const row = document.createElement("div");
+    row.className = "node04Notification";
+    row.textContent = item.text || "";
+    card.appendChild(row);
+  }
+  return card;
+}
+
+function renderNode04Module(module, snapshot) {
+  if (module.nodeType === "quest_tracker_hud") return renderNode04QuestTracker(module, snapshot);
+  if (module.nodeType === "dialogue_hud") return renderNode04Dialogue(module, snapshot);
+  if (module.nodeType === "notification_hud") return renderNode04Notifications(module, snapshot);
+  return null;
+}
+
+function renderNode04Hud() {
+  const modules = node04Modules();
+  const snapshot = state.node04.snapshot;
+  if (!modules.length || !snapshot) {
+    removeNode04Hud();
+    syncRuntimeTargets();
+    return;
+  }
+  // Signature includes the live snapshot (+ the bits of state.node04 the renderer
+  // reads), not just the static module config, so a poll/action that returns
+  // unchanged data is a true no-op. Without this, every call destroyed and
+  // recreated every panel regardless of whether anything changed - with several
+  // node types now sharing one dock, that made a persistent panel (e.g. the quest
+  // tracker) visibly jump every poll as siblings got torn down and rebuilt around it.
+  const signature = node04ModuleSignature(modules) + "|" + JSON.stringify(snapshot) + "|" + JSON.stringify({
+    actionInFlight: state.node04.actionInFlight,
+    lastError: state.node04.lastError,
+    lastActionMessage: state.node04.lastActionMessage,
+    dialogue: state.node04.dialogue
+  });
+  if (state.node04.elements && state.node04.signature === signature) return;
+  state.node04.elements = ensureGameHudRuntimeRoot();
+  state.node04.signature = signature;
+  clearGameHudFamily("node04");
+  for (const module of modules) {
+    const node = renderNode04Module(module, snapshot);
+    if (!node) continue;
+    appendGameHudPanel("node04", module, node, defaultNode04Anchor(module.nodeType));
+  }
+}
+
+function scheduleNode04Poll() {
+  if (state.node04.pollTimerId) return;
+  state.node04.pollTimerId = window.setTimeout(async function () {
+    state.node04.pollTimerId = 0;
+    await loadNode04State({ silent: true });
+    if (node04Modules().length) scheduleNode04Poll();
+  }, 2500);
+}
+
+async function loadNode04State(options = {}) {
+  if (!node04Modules().length) {
+    removeNode04Hud();
+    syncRuntimeTargets();
+    return false;
+  }
+  if (state.node04.loadInFlight) return false;
+  state.node04.loadInFlight = true;
+  try {
+    const response = await fetch("/api/game/node04/state", { headers: { Accept: "application/json" } });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return false;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node04.lastError = data?.message || "NODE-04 state niet beschikbaar.";
+      if (!options.silent) showHudError(state.node04.lastError);
+      renderNode04Hud();
+      return false;
+    }
+    state.node04.snapshot = data;
+    if (data.node03) state.node03.snapshot = data.node03;
+    state.node04.lastLoadedAt = performance.now();
+    state.node04.lastError = "";
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+    syncRuntimeTargets();
+    renderNode03Hud();
+    renderNode04Hud();
+    scheduleNode04Poll();
+    return true;
+  } catch (error) {
+    state.node04.lastError = String(error?.message || error || "NODE-04 state mislukt.");
+    if (!options.silent) showHudError(state.node04.lastError);
+    renderNode04Hud();
+    return false;
+  } finally {
+    state.node04.loadInFlight = false;
+  }
+}
+
+async function runNode04Action(action, targetId, extra = {}) {
+  const normalized = String(action || "").replace(/^node04:/, "");
+  if (!normalized || state.node04.actionInFlight) return;
+  if (normalized === "close_dialogue") {
+    state.node04.dialogue = null;
+    renderNode04Hud();
+    return;
+  }
+  if (action === "travel" || normalized === "travel") {
+    await runNode03Action("travel", targetId);
+    await loadNode04State({ silent: true });
+    return;
+  }
+  const currentTarget = node04TargetWithClientRange(node04TargetById(targetId));
+  if (currentTarget?.instanceId && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node04-target");
+    state.node04.lastActionMessage = started
+      ? "Loop naar " + (currentTarget.displayName || "quest target") + "."
+      : (currentTarget.displayName || "Quest target") + " is buiten range.";
+    renderNode04Hud();
+    return;
+  }
+  if (normalized === "move_marker") {
+    if (currentTarget && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+      startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node04-marker");
+    }
+    return;
+  }
+  state.node04.actionInFlight = true;
+  state.node04.lastError = "";
+  renderNode04Hud();
+  try {
+    const response = await fetch("/api/game/node04/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        action: normalized,
+        targetId: currentTarget?.targetId || targetId || null,
+        questId: extra.questId || currentTarget?.questId || state.node04.snapshot?.trackedQuest?.questId || null,
+        dialogueId: extra.dialogueId || currentTarget?.dialogueId || null,
+        entryId: extra.entryId || null,
+        choiceId: extra.choiceId || null,
+        operationId: "node04:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
+      })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node04.lastError = data?.message || "NODE-04 actie mislukt.";
+      showHudError(state.node04.lastError);
+      return;
+    }
+    state.node04.lastActionMessage = data.message || "";
+    if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
+    if (data.snapshot) {
+      state.node04.snapshot = data.snapshot;
+      if (data.snapshot.node03) state.node03.snapshot = data.snapshot.node03;
+      if (state.minimapHud.elements) state.minimapHud.dirty = true;
+      syncRuntimeTargets();
+    }
+    renderNode03Hud();
+    renderNode04Hud();
+  } catch (error) {
+    state.node04.lastError = String(error?.message || error || "NODE-04 actie mislukt.");
+    showHudError(state.node04.lastError);
+  } finally {
+    state.node04.actionInFlight = false;
+    await loadNode04State({ silent: true });
+    await loadNode03State({ silent: true });
+  }
+}
+
+// ---- NODE-05 runtime HUD: economy, crafting, party, market and mail ----
+
+function node05Modules() {
+  const snapshotModules = Array.isArray(state.node05.snapshot?.ui?.modules) ? state.node05.snapshot.ui.modules : null;
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const projectModules = Array.isArray(project?.ui?.modules) ? project.ui.modules : [];
+  const modules = snapshotModules || projectModules;
+  return modules.filter(function (module) {
+    return module && NODE05_HUD_TYPES.has(module.nodeType);
+  });
+}
+
+function node05ModuleSignature(modules) {
+  return JSON.stringify(modules.map(function (module) {
+    return {
+      nodeType: module.nodeType,
+      moduleId: module.moduleId,
+      anchor: module.anchor,
+      maxOffers: module.maxOffers,
+      maxRecipes: module.maxRecipes,
+      pageSize: module.pageSize,
+      maxMessages: module.maxMessages,
+      showInvite: module.showInvite,
+      showJobs: module.showJobs,
+      showMyOrders: module.showMyOrders,
+      showClaimAll: module.showClaimAll
+    };
+  }));
+}
+
+function defaultNode05Anchor(nodeType) {
+  return NODE05_DEFAULT_HUD_ANCHORS[nodeType] || "center";
+}
+
+function removeNode05Hud() {
+  clearGameHudFamily("node05");
+  state.node05.elements = null;
+  state.node05.signature = "";
+}
+
+function node05ModuleCard(module, className) {
+  const node = document.createElement("div");
+  node.className = "node05Module " + className;
+  node.dataset.moduleId = module.moduleId || module.nodeType || "";
+  return node;
+}
+
+function appendNode05Title(card, title) {
+  const node = document.createElement("div");
+  node.className = "node05Title";
+  node.textContent = title;
+  card.appendChild(node);
+  return node;
+}
+
+function appendNode05Empty(card, text) {
+  const node = document.createElement("p");
+  node.className = "node05Empty";
+  node.textContent = text;
+  card.appendChild(node);
+  return node;
+}
+
+function appendNode05Status(card) {
+  if (!state.node05.lastActionMessage && !state.node05.lastError) return;
+  const status = document.createElement("p");
+  status.className = state.node05.lastError ? "node05Status node05Status--error" : "node05Status";
+  status.textContent = state.node05.lastError || state.node05.lastActionMessage;
+  card.appendChild(status);
+}
+
+function node05CurrencyLabel(amount, currencyName) {
+  return node03FormatNumber(amount || 0) + (currencyName ? " " + currencyName : "");
+}
+
+function node05DistanceLabel(target) {
+  if (!target) return "";
+  const parts = [];
+  if (target.distance !== null && target.distance !== undefined) parts.push(node03FormatNumber(target.distance) + "m");
+  parts.push(target.inRange === false ? "out of range" : "in range");
+  return parts.join(" - ");
+}
+
+function node05ServiceInstanceId(target) {
+  if (!target) return "";
+  return "node05:" + String(target.kind || target.targetKind || "service") + ":" + String(target.id || target.targetId || "");
+}
+
+function node05ClientDistance(target) {
+  if (!target || !state.position) return null;
+  if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return null;
+  return Math.hypot(num(state.position.x, 0) - num(target.x, 0), num(state.position.z, 0) - num(target.z, 0));
+}
+
+function node05TargetWithClientRange(target) {
+  if (!target) return null;
+  const distance = node05ClientDistance(target);
+  if (distance === null) return target;
+  const range = Math.max(0, num(target.range, 0));
+  const radius = Math.max(0, num(target.radius, 0));
+  return Object.assign({}, target, {
+    distance: round(distance),
+    inRange: distance <= range + radius
+  });
+}
+
+function node05CraftingStations() {
+  const stations = Array.isArray(state.node05.snapshot?.crafting?.stations) ? state.node05.snapshot.crafting.stations : [];
+  return stations.map(function (station) {
+    return node05TargetWithClientRange(Object.assign({
+      kind: "crafting",
+      targetKind: "crafting",
+      id: station.stationId,
+      targetId: station.stationId,
+      label: station.linkedEntity?.label || station.displayName || station.stationId,
+      prompt: station.interactionPrompt || "Craft"
+    }, station));
+  }).filter(Boolean);
+}
+
+function node05Vendors() {
+  const vendors = Array.isArray(state.node05.snapshot?.vendors?.vendors) ? state.node05.snapshot.vendors.vendors : [];
+  return vendors.map(function (vendor) {
+    return node05TargetWithClientRange(Object.assign({
+      kind: "vendor",
+      targetKind: "vendor",
+      id: vendor.vendorId,
+      targetId: vendor.vendorId,
+      label: vendor.displayName || vendor.linkedEntity?.label || vendor.vendorId,
+      prompt: vendor.interactionPrompt || "Trade"
+    }, vendor));
+  }).filter(Boolean);
+}
+
+function node05MarketAccesses() {
+  const accesses = Array.isArray(state.node05.snapshot?.market?.accesses) ? state.node05.snapshot.market.accesses : [];
+  return accesses.map(function (access) {
+    return node05TargetWithClientRange(Object.assign({
+      kind: "market",
+      targetKind: "market",
+      id: access.marketAccessId,
+      targetId: access.marketAccessId,
+      label: access.linkedEntity?.label || access.marketAccessId,
+      prompt: access.interactionPrompt || "Market"
+    }, access));
+  }).filter(Boolean);
+}
+
+function node05Nearest(entries) {
+  return entries.slice().sort(function (left, right) {
+    if (left.inRange !== right.inRange) return left.inRange ? -1 : 1;
+    return num(left.distance, 999999) - num(right.distance, 999999);
+  })[0] || null;
+}
+
+function node05RuntimeTargetsForScene() {
+  const targets = node05CraftingStations().concat(node05Vendors(), node05MarketAccesses());
+  return targets.map(function (target) {
+    return Object.assign({}, target, {
+      instanceId: node05ServiceInstanceId(target),
+      entityKind: "service",
+      available: true,
+      action: "node05:focus_service",
+      displayName: target.label || target.id,
+      prompt: target.inRange === false ? "Move" : (target.prompt || "Use"),
+      radius: 0
+    });
+  });
+}
+
+function node05TargetById(targetId) {
+  const id = String(targetId || "").trim();
+  if (!id) return null;
+  return node05RuntimeTargetsForScene().find(function (target) {
+    return String(target.instanceId || "") === id || String(target.targetId || "") === id || String(target.id || "") === id;
+  }) || null;
+}
+
+function appendNode05ActionButton(parent, label, action, payload = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "node05ActionButton";
+  button.dataset.node05Action = action;
+  const datasetMap = {
+    targetId: "node05TargetId",
+    stationId: "node05StationId",
+    recipeId: "node05RecipeId",
+    jobId: "node05JobId",
+    vendorId: "node05VendorId",
+    offerId: "node05OfferId",
+    orderId: "node05OrderId",
+    mailId: "node05MailId",
+    inviteId: "node05InviteId",
+    targetPlayerId: "node05TargetPlayerId",
+    itemId: "node05ItemId",
+    currencyId: "node05CurrencyId",
+    quantity: "node05Quantity",
+    unitPriceMinor: "node05UnitPriceMinor"
+  };
+  for (const [key, dataKey] of Object.entries(datasetMap)) {
+    if (payload[key] !== null && payload[key] !== undefined && payload[key] !== "") button.dataset[dataKey] = String(payload[key]);
+  }
+  button.textContent = label;
+  button.disabled = state.node05.actionInFlight || payload.disabled === true;
+  parent.appendChild(button);
+  return button;
+}
+
+function appendNode05MoveButton(parent, target, label = "Move") {
+  if (!target) return null;
+  return appendNode05ActionButton(parent, label, "node05:move_target", { targetId: node05ServiceInstanceId(target) });
+}
+
+function renderNode05Party(module, snapshot) {
+  const card = node05ModuleCard(module, "node05Module--party");
+  appendNode05Title(card, "Party");
+  const partySnapshot = snapshot.party || {};
+  const party = partySnapshot.party || null;
+  const invites = Array.isArray(partySnapshot.invites) ? partySnapshot.invites : [];
+  const onlinePlayers = Array.isArray(partySnapshot.onlinePlayers) ? partySnapshot.onlinePlayers : [];
+
+  const actions = document.createElement("div");
+  actions.className = "node05Actions";
+  if (!party) {
+    appendNode05Empty(card, "Geen party");
+    appendNode05ActionButton(actions, "Create", "party_create");
+  } else {
+    const list = document.createElement("div");
+    list.className = "node05List";
+    for (const member of Array.isArray(party.members) ? party.members : []) {
+      const row = document.createElement("div");
+      row.className = "node05Row";
+      const body = document.createElement("div");
+      body.className = "node05RowBody";
+      const name = document.createElement("strong");
+      name.textContent = member.displayName || member.playerId;
+      const meta = document.createElement("span");
+      meta.textContent = (member.role || "member") + " - " + (member.online ? "online" : "offline");
+      body.append(name, meta);
+      row.appendChild(body);
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+    appendNode05ActionButton(actions, "Leave", "party_leave");
+  }
+  if (actions.children.length) card.appendChild(actions);
+
+  if (invites.length) {
+    const title = document.createElement("div");
+    title.className = "node05SubTitle";
+    title.textContent = "Invites";
+    card.appendChild(title);
+    for (const invite of invites) {
+      const row = document.createElement("div");
+      row.className = "node05Row";
+      const body = document.createElement("div");
+      body.className = "node05RowBody";
+      const name = document.createElement("strong");
+      name.textContent = invite.inviterName || invite.inviterPlayerId;
+      const meta = document.createElement("span");
+      meta.textContent = "party invite";
+      body.append(name, meta);
+      const rowActions = document.createElement("div");
+      rowActions.className = "node05InlineActions";
+      appendNode05ActionButton(rowActions, "Accept", "party_accept", { mailId: null, targetId: null, orderId: null, jobId: null, inviteId: invite.inviteId });
+      const button = rowActions.querySelector("[data-node05-action]");
+      if (button) button.dataset.node05InviteId = invite.inviteId;
+      row.append(body, rowActions);
+      card.appendChild(row);
+    }
+  }
+
+  if (module.showInvite !== false) {
+    const title = document.createElement("div");
+    title.className = "node05SubTitle";
+    title.textContent = "Online";
+    card.appendChild(title);
+    if (!onlinePlayers.length) {
+      appendNode05Empty(card, "Geen andere online spelers");
+    }
+    for (const player of onlinePlayers.slice(0, 5)) {
+      const row = document.createElement("div");
+      row.className = "node05Row";
+      const body = document.createElement("div");
+      body.className = "node05RowBody";
+      const name = document.createElement("strong");
+      name.textContent = player.displayName || player.playerId;
+      const meta = document.createElement("span");
+      meta.textContent = player.zoneId || "online";
+      body.append(name, meta);
+      const rowActions = document.createElement("div");
+      rowActions.className = "node05InlineActions";
+      appendNode05ActionButton(rowActions, "Invite", "party_invite", { targetPlayerId: player.playerId });
+      row.append(body, rowActions);
+      card.appendChild(row);
+    }
+  }
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Crafting(module, snapshot) {
+  const card = node05ModuleCard(module, "node05Module--crafting");
+  appendNode05Title(card, "Crafting");
+  const station = node05Nearest(node05CraftingStations());
+  if (!station) {
+    appendNode05Empty(card, "Geen crafting station in deze zone");
+    appendNode05Status(card);
+    return card;
+  }
+  const stationLine = document.createElement("p");
+  stationLine.className = "node05Meta";
+  stationLine.textContent = (station.label || station.stationId) + " - " + node05DistanceLabel(station);
+  card.appendChild(stationLine);
+  if (station.inRange === false) {
+    const actions = document.createElement("div");
+    actions.className = "node05Actions";
+    appendNode05MoveButton(actions, station);
+    card.appendChild(actions);
+  }
+  const recipes = Array.isArray(station.recipes) ? station.recipes.slice(0, Math.max(1, Math.min(20, num(module.maxRecipes, 8)))) : [];
+  if (!recipes.length) appendNode05Empty(card, "Geen recipes");
+  for (const recipe of recipes) {
+    const row = document.createElement("div");
+    row.className = "node05Row node05Row--stack";
+    const body = document.createElement("div");
+    body.className = "node05RowBody";
+    const name = document.createElement("strong");
+    name.textContent = recipe.displayName || recipe.recipeId;
+    const ingredients = document.createElement("span");
+    ingredients.textContent = (Array.isArray(recipe.ingredients) ? recipe.ingredients : []).map(function (ingredient) {
+      return (ingredient.displayName || ingredient.itemRef || ingredient.currencyRef || "Ingredient") + " " + node03FormatNumber(ingredient.owned || 0) + "/" + node03FormatNumber(ingredient.required || 1);
+    }).join(", ") || "no inputs";
+    const outputs = document.createElement("span");
+    outputs.textContent = "-> " + ((Array.isArray(recipe.outputs) ? recipe.outputs : []).map(function (output) {
+      return node03FormatNumber(output.amount || output.amountMinor || 0) + " " + (output.displayName || output.itemId || output.currencyId);
+    }).join(", ") || "output");
+    body.append(name, ingredients, outputs);
+    const rowActions = document.createElement("div");
+    rowActions.className = "node05InlineActions";
+    if (station.inRange === false) {
+      appendNode05MoveButton(rowActions, station);
+    } else {
+      appendNode05ActionButton(rowActions, "Craft", "craft", {
+        stationId: station.stationId,
+        recipeId: recipe.recipeId,
+        disabled: !recipe.canCraft
+      });
+    }
+    row.append(body, rowActions);
+    card.appendChild(row);
+  }
+  if (module.showJobs !== false) {
+    const jobs = Array.isArray(snapshot.crafting?.jobs) ? snapshot.crafting.jobs : [];
+    if (jobs.length) {
+      const title = document.createElement("div");
+      title.className = "node05SubTitle";
+      title.textContent = "Jobs";
+      card.appendChild(title);
+      for (const job of jobs.slice(0, 4)) {
+        const row = document.createElement("div");
+        row.className = "node05Row";
+        const body = document.createElement("div");
+        body.className = "node05RowBody";
+        const name = document.createElement("strong");
+        name.textContent = job.recipeId;
+        const meta = document.createElement("span");
+        meta.textContent = job.state + (job.canClaim ? " - ready" : "");
+        body.append(name, meta);
+        const rowActions = document.createElement("div");
+        rowActions.className = "node05InlineActions";
+        appendNode05ActionButton(rowActions, "Claim", "crafting:claim", { jobId: job.jobId, disabled: !job.canClaim });
+        row.append(body, rowActions);
+        card.appendChild(row);
+      }
+    }
+  }
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Vendor(module) {
+  const card = node05ModuleCard(module, "node05Module--vendor");
+  appendNode05Title(card, "Vendor");
+  const vendor = node05Nearest(node05Vendors());
+  if (!vendor) {
+    appendNode05Empty(card, "Geen vendor in deze zone");
+    appendNode05Status(card);
+    return card;
+  }
+  const meta = document.createElement("p");
+  meta.className = "node05Meta";
+  meta.textContent = (vendor.label || vendor.displayName || vendor.vendorId) + " - " + node05DistanceLabel(vendor);
+  card.appendChild(meta);
+  if (vendor.inRange === false) {
+    const actions = document.createElement("div");
+    actions.className = "node05Actions";
+    appendNode05MoveButton(actions, vendor);
+    card.appendChild(actions);
+  }
+  const offers = Array.isArray(vendor.offers) ? vendor.offers.slice(0, Math.max(1, Math.min(30, num(module.maxOffers, 8)))) : [];
+  if (!offers.length) appendNode05Empty(card, "Geen offers");
+  for (const offer of offers) {
+    const row = document.createElement("div");
+    row.className = "node05Row";
+    const body = document.createElement("div");
+    body.className = "node05RowBody";
+    const name = document.createElement("strong");
+    name.textContent = offer.displayName || offer.itemRef;
+    const parts = [];
+    if (["sell_to_player", "both"].includes(offer.mode)) parts.push("buy " + node05CurrencyLabel(offer.sellPriceMinor, offer.sellCurrencyRef));
+    if (["buy_from_player", "both"].includes(offer.mode)) parts.push("sell " + node05CurrencyLabel(offer.buyPriceMinor, offer.buyCurrencyRef));
+    if (offer.owned) parts.push("own " + node03FormatNumber(offer.owned));
+    if (offer.stock !== null && offer.stock !== undefined) parts.push("stock " + node03FormatNumber(offer.stock));
+    const detail = document.createElement("span");
+    detail.textContent = parts.join(" - ") || offer.mode;
+    body.append(name, detail);
+    const rowActions = document.createElement("div");
+    rowActions.className = "node05InlineActions";
+    if (vendor.inRange === false) {
+      appendNode05MoveButton(rowActions, vendor);
+    } else {
+      if (["sell_to_player", "both"].includes(offer.mode)) {
+        appendNode05ActionButton(rowActions, "Buy", "vendor_buy", {
+          vendorId: vendor.vendorId,
+          offerId: offer.offerId,
+          quantity: 1,
+          disabled: !offer.canBuy
+        });
+      }
+      if (module.showSellTab !== false && ["buy_from_player", "both"].includes(offer.mode)) {
+        appendNode05ActionButton(rowActions, "Sell", "vendor_sell", {
+          vendorId: vendor.vendorId,
+          offerId: offer.offerId,
+          quantity: 1,
+          disabled: !offer.canSell
+        });
+      }
+    }
+    row.append(body, rowActions);
+    card.appendChild(row);
+  }
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Market(module, snapshot) {
+  const card = node05ModuleCard(module, "node05Module--market");
+  appendNode05Title(card, "Market");
+  const access = node05Nearest(node05MarketAccesses());
+  const hasRemoteAccess = access?.remoteAccessAllowed === true;
+  const canAccess = !access || hasRemoteAccess || access.inRange !== false;
+  if (access) {
+    const meta = document.createElement("p");
+    meta.className = "node05Meta";
+    meta.textContent = (access.label || access.marketAccessId) + " - " + (hasRemoteAccess ? "remote" : node05DistanceLabel(access));
+    card.appendChild(meta);
+    if (!canAccess) {
+      const actions = document.createElement("div");
+      actions.className = "node05Actions";
+      appendNode05MoveButton(actions, access);
+      card.appendChild(actions);
+    }
+  } else {
+    appendNode05Empty(card, "Geen market board in deze zone");
+  }
+
+  const sellable = Array.isArray(snapshot.market?.sellableItems) ? snapshot.market.sellableItems.slice(0, 4) : [];
+  if (sellable.length) {
+    const title = document.createElement("div");
+    title.className = "node05SubTitle";
+    title.textContent = "Sell";
+    card.appendChild(title);
+    for (const item of sellable) {
+      const row = document.createElement("div");
+      row.className = "node05Row";
+      const body = document.createElement("div");
+      body.className = "node05RowBody";
+      const name = document.createElement("strong");
+      name.textContent = item.displayName || item.itemId;
+      const detail = document.createElement("span");
+      detail.textContent = "own " + node03FormatNumber(item.quantity) + " - price " + node03FormatNumber(item.suggestedPriceMinor || 1);
+      body.append(name, detail);
+      const rowActions = document.createElement("div");
+      rowActions.className = "node05InlineActions";
+      appendNode05ActionButton(rowActions, "List", "market_list", {
+        itemId: item.itemId,
+        quantity: 1,
+        unitPriceMinor: item.suggestedPriceMinor || 1,
+        disabled: !canAccess
+      });
+      row.append(body, rowActions);
+      card.appendChild(row);
+    }
+  }
+
+  const orders = Array.isArray(snapshot.market?.orders) ? snapshot.market.orders.slice(0, Math.max(1, Math.min(30, num(module.pageSize, 8)))) : [];
+  const visibleOrders = orders.filter(function (order) { return !order.mine; });
+  if (visibleOrders.length) {
+    const title = document.createElement("div");
+    title.className = "node05SubTitle";
+    title.textContent = "Buy";
+    card.appendChild(title);
+    for (const order of visibleOrders) {
+      const row = document.createElement("div");
+      row.className = "node05Row";
+      const body = document.createElement("div");
+      body.className = "node05RowBody";
+      const name = document.createElement("strong");
+      name.textContent = order.displayName || order.itemId;
+      const detail = document.createElement("span");
+      detail.textContent = node03FormatNumber(order.quantityRemaining) + "x - " + node05CurrencyLabel(order.unitPriceMinor, order.currencyName);
+      body.append(name, detail);
+      const rowActions = document.createElement("div");
+      rowActions.className = "node05InlineActions";
+      appendNode05ActionButton(rowActions, "Buy", "market_buy", {
+        orderId: order.orderId,
+        quantity: 1,
+        disabled: !canAccess
+      });
+      row.append(body, rowActions);
+      card.appendChild(row);
+    }
+  }
+
+  if (module.showMyOrders !== false) {
+    const mine = Array.isArray(snapshot.market?.myOrders) ? snapshot.market.myOrders : [];
+    if (mine.length) {
+      const title = document.createElement("div");
+      title.className = "node05SubTitle";
+      title.textContent = "My Orders";
+      card.appendChild(title);
+      for (const order of mine.slice(0, 4)) {
+        const row = document.createElement("div");
+        row.className = "node05Row";
+        const body = document.createElement("div");
+        body.className = "node05RowBody";
+        const name = document.createElement("strong");
+        name.textContent = order.displayName || order.itemId;
+        const detail = document.createElement("span");
+        detail.textContent = node03FormatNumber(order.quantityRemaining) + "x listed";
+        body.append(name, detail);
+        const rowActions = document.createElement("div");
+        rowActions.className = "node05InlineActions";
+        appendNode05ActionButton(rowActions, "Cancel", "market_cancel", { orderId: order.orderId });
+        row.append(body, rowActions);
+        card.appendChild(row);
+      }
+    }
+  }
+  if (!sellable.length && !visibleOrders.length) appendNode05Empty(card, "Geen market items");
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Mail(module, snapshot) {
+  const card = node05ModuleCard(module, "node05Module--mail");
+  appendNode05Title(card, "Mail");
+  const messages = Array.isArray(snapshot.mail?.messages) ? snapshot.mail.messages.slice(0, Math.max(1, Math.min(30, num(module.maxMessages, 5)))) : [];
+  const claimable = messages.some(function (message) { return message.canClaim; });
+  if (module.showClaimAll !== false && claimable) {
+    const actions = document.createElement("div");
+    actions.className = "node05Actions";
+    appendNode05ActionButton(actions, "Claim all", "mail_claim_all");
+    card.appendChild(actions);
+  }
+  if (!messages.length) {
+    appendNode05Empty(card, "Geen mail");
+    appendNode05Status(card);
+    return card;
+  }
+  for (const message of messages) {
+    const row = document.createElement("div");
+    row.className = "node05Row node05Row--stack";
+    const body = document.createElement("div");
+    body.className = "node05RowBody";
+    const subject = document.createElement("strong");
+    subject.textContent = message.subject || message.mailType || "Mail";
+    const attachments = document.createElement("span");
+    attachments.textContent = (Array.isArray(message.attachments) ? message.attachments : []).filter(function (attachment) {
+      return attachment.state === "available";
+    }).map(function (attachment) {
+      return node03FormatNumber(attachment.quantityMinor || 0) + " " + (attachment.displayName || attachment.assetId);
+    }).join(", ") || message.state;
+    body.append(subject, attachments);
+    const rowActions = document.createElement("div");
+    rowActions.className = "node05InlineActions";
+    appendNode05ActionButton(rowActions, "Claim", "mail_claim", { mailId: message.mailId, disabled: !message.canClaim });
+    row.append(body, rowActions);
+    card.appendChild(row);
+  }
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Trade(module, snapshot) {
+  const card = node05ModuleCard(module, "node05Module--trade");
+  appendNode05Title(card, "Trade");
+  const sessions = Array.isArray(snapshot.trade?.sessions) ? snapshot.trade.sessions : [];
+  if (!sessions.length) {
+    appendNode05Empty(card, snapshot.trade?.message || "Geen actieve trade");
+    appendNode05Status(card);
+    return card;
+  }
+  for (const session of sessions) {
+    const row = document.createElement("div");
+    row.className = "node05Row";
+    const body = document.createElement("div");
+    body.className = "node05RowBody";
+    const name = document.createElement("strong");
+    name.textContent = session.tradeId;
+    const meta = document.createElement("span");
+    meta.textContent = session.state;
+    body.append(name, meta);
+    row.appendChild(body);
+    card.appendChild(row);
+  }
+  appendNode05Status(card);
+  return card;
+}
+
+function renderNode05Module(module, snapshot) {
+  if (module.nodeType === "party_hud") return renderNode05Party(module, snapshot);
+  if (module.nodeType === "crafting_hud") return renderNode05Crafting(module, snapshot);
+  if (module.nodeType === "vendor_hud") return renderNode05Vendor(module, snapshot);
+  if (module.nodeType === "market_hud") return renderNode05Market(module, snapshot);
+  if (module.nodeType === "mail_hud") return renderNode05Mail(module, snapshot);
+  if (module.nodeType === "trade_hud") return renderNode05Trade(module, snapshot);
+  return null;
+}
+
+function renderNode05Hud() {
+  const modules = node05Modules();
+  const snapshot = state.node05.snapshot;
+  if (!modules.length || !snapshot) {
+    removeNode05Hud();
+    syncRuntimeTargets();
+    return;
+  }
+  // See renderNode03Hud/renderNode04Hud: signature includes the live snapshot (+
+  // the state.node05 bits the renderer reads), so an unchanged poll/action skips
+  // the destroy+rebuild instead of always tearing down every panel.
+  const signature = node05ModuleSignature(modules) + "|" + JSON.stringify(snapshot) + "|" + JSON.stringify({
+    actionInFlight: state.node05.actionInFlight,
+    lastError: state.node05.lastError,
+    lastActionMessage: state.node05.lastActionMessage
+  });
+  if (!state.node05.elements || state.node05.signature !== signature) {
+    state.node05.elements = ensureGameHudRuntimeRoot();
+    state.node05.signature = signature;
+    clearGameHudFamily("node05");
+    for (const module of modules) {
+      const node = renderNode05Module(module, snapshot);
+      if (!node) continue;
+      appendGameHudPanel("node05", module, node, defaultNode05Anchor(module.nodeType));
+    }
+  }
+  syncRuntimeTargets();
+}
+
+function scheduleNode05Poll() {
+  if (state.node05.pollTimerId) return;
+  state.node05.pollTimerId = window.setTimeout(async function () {
+    state.node05.pollTimerId = 0;
+    await loadNode05State({ silent: true });
+    if (node05Modules().length) scheduleNode05Poll();
+  }, 3500);
+}
+
+async function loadNode05State(options = {}) {
+  if (state.node05.loadInFlight) return false;
+  state.node05.loadInFlight = true;
+  try {
+    const response = await fetch("/api/game/node05/state", { headers: { Accept: "application/json" } });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return false;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node05.lastError = data?.message || "NODE-05 state niet beschikbaar.";
+      if (!options.silent) showHudError(state.node05.lastError);
+      renderNode05Hud();
+      return false;
+    }
+    state.node05.snapshot = data;
+    if (data.node03) state.node03.snapshot = data.node03;
+    state.node05.lastLoadedAt = performance.now();
+    state.node05.lastError = "";
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
+    syncRuntimeTargets();
+    renderNode03Hud();
+    renderNode05Hud();
+    if (node05Modules().length) scheduleNode05Poll();
+    return true;
+  } catch (error) {
+    state.node05.lastError = String(error?.message || error || "NODE-05 state mislukt.");
+    if (!options.silent) showHudError(state.node05.lastError);
+    renderNode05Hud();
+    return false;
+  } finally {
+    state.node05.loadInFlight = false;
+  }
+}
+
+function refreshNode05ClientRanges(now = performance.now()) {
+  if (!state.node05.snapshot || !node05Modules().length) return;
+  if (now - num(state.node05.lastRangeRenderAt, 0) < 350) return;
+  state.node05.lastRangeRenderAt = now;
+  syncRuntimeTargets();
+}
+
+async function runNode05Action(action, payload = {}) {
+  const normalized = String(action || "").replace(/^node05:/, "").toLowerCase();
+  if (!normalized || state.node05.actionInFlight) return;
+  const currentTarget = node05TargetWithClientRange(node05TargetById(payload.targetId));
+  if (normalized === "focus_service" || normalized === "move_target") {
+    if (currentTarget && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target");
+      state.node05.lastActionMessage = started
+        ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
+        : (currentTarget.displayName || currentTarget.label || "Service") + " is al dichtbij.";
+      renderNode05Hud();
+    }
+    return;
+  }
+  if (currentTarget?.instanceId && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target");
+    state.node05.lastActionMessage = started
+      ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
+      : (currentTarget.displayName || currentTarget.label || "Service") + " is buiten range.";
+    renderNode05Hud();
+    return;
+  }
+
+  state.node05.actionInFlight = true;
+  state.node05.lastError = "";
+  renderNode05Hud();
+  try {
+    const response = await fetch("/api/game/node05/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        action: normalized,
+        stationId: payload.stationId || null,
+        recipeId: payload.recipeId || null,
+        jobId: payload.jobId || null,
+        vendorId: payload.vendorId || null,
+        offerId: payload.offerId || null,
+        orderId: payload.orderId || null,
+        mailId: payload.mailId || null,
+        inviteId: payload.inviteId || null,
+        targetPlayerId: payload.targetPlayerId || null,
+        itemId: payload.itemId || null,
+        currencyId: payload.currencyId || null,
+        quantity: payload.quantity === null || payload.quantity === undefined ? null : Number(payload.quantity),
+        unitPriceMinor: payload.unitPriceMinor === null || payload.unitPriceMinor === undefined ? null : Number(payload.unitPriceMinor),
+        operationId: "node05:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
+      })
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) {
+      state.node05.lastError = data?.message || "NODE-05 actie mislukt.";
+      showHudError(state.node05.lastError);
+      return;
+    }
+    state.node05.lastActionMessage = data.message || "";
+    if (data.snapshot) {
+      state.node05.snapshot = data.snapshot;
+      if (data.snapshot.node03) state.node03.snapshot = data.snapshot.node03;
+      if (state.minimapHud.elements) state.minimapHud.dirty = true;
+      syncRuntimeTargets();
+    }
+    renderNode03Hud();
+    renderNode05Hud();
+  } catch (error) {
+    state.node05.lastError = String(error?.message || error || "NODE-05 actie mislukt.");
+    showHudError(state.node05.lastError);
+  } finally {
+    state.node05.actionInFlight = false;
+    await loadNode05State({ silent: true });
+    await loadNode03State({ silent: true });
+  }
 }
 
 function resetMmoDebugRuntimeState() {
@@ -3419,9 +6762,13 @@ function removeGameMinimapHud() {
     state.minimapHud.interactions.destroy();
     state.minimapHud.interactions = null;
   }
+  if (state.minimapHud.elements && state.minimapHud.elements.frame) {
+    state.minimapHud.elements.frame.remove();
+  }
   if (state.minimapHud.elements && state.minimapHud.elements.root) {
     state.minimapHud.elements.root.remove();
   }
+  clearGameHudFamily("minimap");
   state.minimapHud.elements = null;
   state.minimapHud.signature = null;
   state.minimapHud.image = null;
@@ -3496,6 +6843,7 @@ function noteGameMinimapPerformance(drawDurationMs, now = performance.now()) {
 
 function buildGameMinimapDrawKey(bake, view, performanceMode) {
   const localPosition = currentLocalPlayerPosition();
+  const config = resolveGameMinimapConfig();
   const liteMode = performanceMode !== "full";
   const positionQuantum = performanceMode === "ultra" ? 1.5 : liteMode ? 0.5 : 0.05;
   const viewQuantum = performanceMode === "ultra" ? 1.5 : liteMode ? 0.5 : 0.05;
@@ -3524,7 +6872,7 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
         .sort()
         .join(";")
     : "noremote";
-  const bakesKey = resolveGameMinimapBakes(resolveGameMinimapConfig()).map(function (item) {
+  const bakesKey = resolveGameMinimapBakes(config).map(function (item) {
     const bounds = minimapBakeBounds(item) || {};
     return [
       item?.minimapId || item?.id || "",
@@ -3535,6 +6883,9 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
       Math.round(Number(bounds.maxZ) || 0)
     ].join(",");
   }).join(";");
+  const questMarkerKey = config?.showQuestMarkers === true
+    ? node04MinimapTargetSignature(positionQuantum)
+    : "noquestmarkers";
   return [
     liteMode ? "lite" : "debug",
     bake?.bakedImageUrl || "",
@@ -3543,8 +6894,58 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
     viewKey,
     localKey,
     remoteKey,
-    bakesKey
+    bakesKey,
+    questMarkerKey
   ].join("|");
+}
+
+function node04MinimapTargets() {
+  if (!state.node04.snapshot || !node04Modules().length) return [];
+  return node04RuntimeTargetsForScene().filter(function (target) {
+    return target && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.z));
+  });
+}
+
+function node04MinimapTargetSignature(quantum = 0.5) {
+  const q = Math.max(0.05, Number(quantum) || 0.5);
+  return node04MinimapTargets().map(function (target) {
+    return [
+      target.instanceId || target.targetId || "",
+      target.action || "",
+      target.displayName || "",
+      Math.round((Number(target.x) || 0) / q),
+      Math.round((Number(target.z) || 0) / q),
+      target.available === false ? "0" : "1"
+    ].join(",");
+  }).sort().join(";");
+}
+
+function drawNode04MinimapMarkers(ctx, config, viewBounds, size, clampOutside, performanceMode) {
+  if (config.showQuestMarkers !== true) return;
+  const targets = node04MinimapTargets();
+  if (!targets.length) return;
+  const iconSize = Math.max(5, Number(config.iconSizePx) || 9);
+  const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
+  const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
+  const showLabels = performanceMode !== "ultra";
+  for (const target of targets) {
+    const point = resolveMinimapPoint(target.x, target.z, viewBounds, size, size, clampOutside);
+    if (!point) continue;
+    const action = String(target.action || "");
+    const fill = action.includes("start_dialogue")
+      ? "#facc15"
+      : action.includes("travel")
+        ? "#22d3ee"
+        : "#84cc16";
+    if (action.includes("travel")) {
+      drawDiamondMarker(ctx, point.x, point.y, iconSize + 2, { fill, stroke: "rgba(0,0,0,0.7)" });
+    } else {
+      drawDotMarker(ctx, point.x, point.y, iconSize + 2, { fill, stroke: "rgba(0,0,0,0.75)" });
+    }
+    if (showLabels) {
+      drawMarkerLabel(ctx, target.displayName || target.prompt || "Quest", point.x, point.y, fontSize, nameMaxLength, iconSize + 5);
+    }
+  }
 }
 
 // Follows the local player until the user pans/zooms (userOverride), and resets whenever the
@@ -3597,13 +6998,12 @@ function recenterGameMinimap() {
 function buildGameMinimapDom(config, bake) {
   const size = Math.max(64, Number(config.sizePx) || 180);
   const root = document.createElement("section");
-  root.className = "gameMinimapRoot anchor-" + (config.anchor || "top-right");
+  root.className = "gameMinimapRoot";
   root.dataset.hudId = config.hudId || "game_minimap";
   root.style.width = size + "px";
   root.style.height = size + "px";
   root.style.margin = Math.max(0, Number(config.marginPx) || 12) + "px";
   root.style.borderRadius = Math.max(0, Number(config.borderRadiusPx) || 14) + "px";
-  root.style.zIndex = String(Math.max(0, Number(config.zIndex) || 20));
   const canvas = document.createElement("canvas");
   canvas.className = "gameMinimapCanvas";
   root.appendChild(canvas);
@@ -3636,7 +7036,9 @@ function buildGameMinimapDom(config, bake) {
       const liveConfig = resolveGameMinimapConfig();
       return liveConfig ? resolveGameMinimapBakeBounds(resolveGameMinimapBake(liveConfig)) : null;
     },
-    getCanvasSize: function () { return Math.max(64, Number(resolveGameMinimapConfig()?.sizePx) || 180); },
+    getCanvasSize: function () {
+      return Math.max(64, Math.round(state.minimapHud.elements?.root?.clientWidth || Number(resolveGameMinimapConfig()?.sizePx) || 180));
+    },
     getMinDistance: function () { return resolveGameMinimapConfig()?.minDistance || 20; },
     getMaxDistance: function () {
       const liveConfig = resolveGameMinimapConfig();
@@ -3672,7 +7074,13 @@ function refreshGameMinimapHud() {
   if (state.minimapHud.elements && state.minimapHud.signature === signature) return;
   removeGameMinimapHud();
   const elements = buildGameMinimapDom(config, bake);
-  hud.appendChild(elements.root);
+  const minimapModule = {
+    moduleId: config.hudId || "game_minimap",
+    nodeType: "game_minimap",
+    label: "Minimap",
+    anchor: config.anchor || "right"
+  };
+  elements.frame = appendGameHudPanel("minimap", minimapModule, elements.root, minimapModule.anchor);
   state.minimapHud.elements = elements;
   state.minimapHud.signature = signature;
   state.minimapHud.dirty = true;
@@ -3925,7 +7333,7 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   if (!elements) return;
   const liteMode = performanceMode !== "full";
   const ultraLiteMode = performanceMode === "ultra";
-  const size = Math.max(64, Number(config.sizePx) || 180);
+  const size = Math.max(64, Math.round(elements.root?.clientWidth || Number(config.sizePx) || 180));
   const canvas = elements.canvas;
   // Backing store at devicePixelRatio, all drawing math in logical px: without this the canvas is
   // blurry on HiDPI screens no matter how high the bake resolution is.
@@ -4011,6 +7419,7 @@ function drawGameMinimap(config, bake, view, performanceMode) {
       }
     }
   }
+  drawNode04MinimapMarkers(ctx, config, viewBounds, size, clampOutside, performanceMode);
   if (liteMode) return;
 
   if ((config.showNpcEntities !== false || config.showScatterInstances === true) && Array.isArray(state.gameWorld?.entities)) {
@@ -4964,6 +8373,9 @@ async function loadSessionState(options = {}) {
     state.ws.send(JSON.stringify({ type: "player:request_state" }));
   }
   applySnapshotToRuntime(snapshot, { forceWorld: worldChanged, keepPrediction: Boolean(options.keepPrediction) });
+  loadNode03State({ silent: true });
+  loadNode04State({ silent: true });
+  loadNode05State({ silent: true });
   maybeMarkMmoOnlineReady("http_snapshot");
   return true;
 }
@@ -4997,6 +8409,58 @@ function applyFallbackPosition(response) {
     return;
   }
   updateHud();
+}
+
+function clearLocalMovementForTeleport() {
+  state.ownCorrection = null;
+  state.net.pendingInputs = [];
+  state.net.postInputPredictionHoldUntil = 0;
+  state.input.move_forward = false;
+  state.input.move_back = false;
+  state.input.move_left = false;
+  state.input.move_right = false;
+  state.input.sprint = false;
+  state.net.localControllerActive = false;
+  state.control.isLocalController = false;
+  state.control.passiveSince = 0;
+  clearPointerTarget(false);
+  setMovementAnimationState("idle");
+  persistNetState();
+  syncNetDebugState();
+}
+
+function applyInstantTravelResponse(response) {
+  if (!response || !response.position) return false;
+  const nextPosition = normalizeIncomingServerPosition({
+    position: Object.assign({}, response.position, {
+      teleport: true,
+      moving: false,
+      animationState: "idle",
+      velocityX: 0,
+      velocityZ: 0
+    })
+  }, "http-zone-link");
+  if (!nextPosition) return false;
+  clearLocalMovementForTeleport();
+  if (response.gameWorld) {
+    applySnapshotToRuntime({
+      gameWorld: response.gameWorld,
+      gameProject: response.gameWorld.gameProject || state.gameProject,
+      position: nextPosition,
+      worldPublishedAt: response.gameWorld.publishedAt || state.lastPublishedAt || state.publishedAt,
+      publishedAt: response.gameWorld.publishedAt || state.publishedAt
+    }, { forceWorld: true, keepPrediction: false });
+  } else {
+    applyAuthoritativeUpdate(nextPosition, { transport: "http-zone-link", keepPrediction: false });
+  }
+  state.position = clonePosition(nextPosition);
+  state.predictedPosition = clonePosition(nextPosition);
+  state.authoritativePosition = clonePosition(nextPosition);
+  applyRuntimePosition(nextPosition, { immediate: true, animationState: "idle" });
+  refreshGameMinimapHud();
+  if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  updateHud();
+  return true;
 }
 
 async function sendInputStateViaHttp(inputStatePayload) {
@@ -5289,6 +8753,9 @@ function stepMovement(now) {
     state.minimapHud.dirty = true;
     drawGameMinimapIfDue(now);
   }
+  refreshNode03ClientRanges(now);
+  refreshNode04ClientRanges(now);
+  refreshNode05ClientRanges(now);
   if (now - state.lastSendAt >= netSettings.moveSendIntervalMs) {
     sendInputState({ force: true });
   }
@@ -5305,6 +8772,11 @@ function setInput(action, pressed) {
 function bindKeyboardControls() {
   window.addEventListener("keydown", function (event) {
     if (isEditableTarget(event.target)) return;
+    const hotbarSlot = node03HotbarSlotIndexForKey(event.code);
+    if (hotbarSlot >= 0 && triggerNode03HotbarSlot(hotbarSlot)) {
+      event.preventDefault();
+      return;
+    }
     if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
       event.preventDefault();
       if (!isMmoGameplayReady()) return;
@@ -5389,6 +8861,25 @@ function bindPointerControls() {
         try { canvas.setPointerCapture(event.pointerId); } catch {}
       }
       if (hasMovementInput()) sendInputState({ force: true });
+      return;
+    }
+    const pickedNode03Target = state.runtime && typeof state.runtime.pickRuntimeTargetAt === "function"
+      ? state.runtime.pickRuntimeTargetAt(event.clientX, event.clientY)
+      : null;
+    if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
+      if (String(pickedNode03Target.action).startsWith("node04:")) {
+        runNode04Action(pickedNode03Target.action, pickedNode03Target.instanceId, {
+          questId: pickedNode03Target.questId || null,
+          dialogueId: pickedNode03Target.dialogueId || null
+        });
+      } else if (String(pickedNode03Target.action).startsWith("node05:")) {
+        runNode05Action(pickedNode03Target.action, {
+          targetId: pickedNode03Target.instanceId
+        });
+      } else {
+        selectNode03Target(pickedNode03Target.instanceId);
+        runNode03Action(pickedNode03Target.action, pickedNode03Target.instanceId);
+      }
       return;
     }
     state.input.move_forward = false;
@@ -5527,6 +9018,18 @@ function handlePageShow() {
 
 async function logout() {
   state.wantReconnect = false;
+  if (state.node03.pollTimerId) {
+    clearTimeout(state.node03.pollTimerId);
+    state.node03.pollTimerId = 0;
+  }
+  if (state.node04.pollTimerId) {
+    clearTimeout(state.node04.pollTimerId);
+    state.node04.pollTimerId = 0;
+  }
+  if (state.node05.pollTimerId) {
+    clearTimeout(state.node05.pollTimerId);
+    state.node05.pollTimerId = 0;
+  }
   stopMovementFrameLoop();
   stopRemoteFrameLoop();
   clearMovementInput("logout", { resetSprint: true });

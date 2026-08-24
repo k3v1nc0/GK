@@ -11,6 +11,8 @@ import { NODE_TYPES, defaultValuesForType, isContainer, resolveNodePort, resolve
 import { validateFormulaExpression } from "../shared/token-contract.js";
 import { buildSymbolIndex, serializeSymbolIndex, validateReferencesAgainstIndex } from "./symbol-index-service.js";
 import { TokenResolver } from "./token-resolver.js";
+import { compileCatalogRegistry } from "./catalog-compiler.js";
+import { compileCampaignRegistry } from "./campaign-compiler.js";
 
 function safeString(value) {
   return String(value === null || value === undefined ? "" : value);
@@ -251,8 +253,75 @@ function valuePayload(node, idField) {
 
 function recordsFromSources(graph, outputNode, portName, nodeMap) {
   return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
-    const values = clone(node.values || {});
-    return Object.assign({ nodeId: node.id, nodeType: node.type }, values);
+    return recordFromNode(node);
+  });
+}
+
+function recordFromNode(node) {
+  const values = clone(node?.values || {});
+  return Object.assign({ nodeId: node?.id || null, nodeType: node?.type || null }, values);
+}
+
+function buildEntityPayload(graph, node, nodeMap) {
+  const payload = recordFromNode(node);
+  if (node?.type !== "entity_assembly") return payload;
+  const base = firstIncomingNode(graph, node, "base", nodeMap);
+  const model = firstIncomingNode(graph, node, "model", nodeMap);
+  const anchor = firstIncomingNode(graph, node, "anchor", nodeMap);
+  payload.base = base ? recordFromNode(base) : null;
+  payload.model = model ? recordFromNode(model) : null;
+  payload.anchor = anchor ? recordFromNode(anchor) : null;
+  payload.components = resolveInputSources(graph, node, "components", nodeMap).map(recordFromNode);
+  return payload;
+}
+
+function entityRecordsFromSources(graph, outputNode, portName, nodeMap) {
+  return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
+    return buildEntityPayload(graph, node, nodeMap);
+  });
+}
+
+function buildSpawnSetPayload(graph, node, nodeMap) {
+  const payload = recordFromNode(node);
+  if (node?.type !== "spawn_set") return payload;
+  const path = firstIncomingNode(graph, node, "path", nodeMap);
+  const area = firstIncomingNode(graph, node, "area", nodeMap);
+  payload.path = path ? recordFromNode(path) : null;
+  payload.area = area ? recordFromNode(area) : null;
+  payload.spawns = resolveInputSources(graph, node, "spawns", nodeMap).map(recordFromNode);
+  return payload;
+}
+
+function buildSpawnControllerPayload(graph, node, nodeMap) {
+  const payload = recordFromNode(node);
+  if (node?.type !== "spawn_controller") return payload;
+  payload.spawnSets = resolveInputSources(graph, node, "spawnSets", nodeMap).map(function (spawnSetNode) {
+    return buildSpawnSetPayload(graph, spawnSetNode, nodeMap);
+  });
+  return payload;
+}
+
+function spawnControllerRecordsFromSources(graph, outputNode, portName, nodeMap) {
+  return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
+    return buildSpawnControllerPayload(graph, node, nodeMap);
+  });
+}
+
+function buildEncounterPayload(graph, node, nodeMap) {
+  const payload = recordFromNode(node);
+  if (node?.type !== "encounter_controller") return payload;
+  const encounterArea = firstIncomingNode(graph, node, "encounterArea", nodeMap);
+  payload.encounterArea = encounterArea ? recordFromNode(encounterArea) : null;
+  payload.spawnControllers = resolveInputSources(graph, node, "spawnControllers", nodeMap).map(function (controllerNode) {
+    return buildSpawnControllerPayload(graph, controllerNode, nodeMap);
+  });
+  payload.completionConditions = resolveInputSources(graph, node, "completionConditions", nodeMap).map(recordFromNode);
+  return payload;
+}
+
+function encounterRecordsFromSources(graph, outputNode, portName, nodeMap) {
+  return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
+    return buildEncounterPayload(graph, node, nodeMap);
   });
 }
 
@@ -268,7 +337,7 @@ function buildAreaPackage(graph, areaOutputNode, nodeMap) {
     terrain: recordsFromSources(graph, areaOutputNode, "terrain", nodeMap),
     collision: recordsFromSources(graph, areaOutputNode, "collision", nodeMap),
     lights: recordsFromSources(graph, areaOutputNode, "lights", nodeMap),
-    entities: recordsFromSources(graph, areaOutputNode, "entities", nodeMap),
+    entities: entityRecordsFromSources(graph, areaOutputNode, "entities", nodeMap),
     spawns: recordsFromSources(graph, areaOutputNode, "spawns", nodeMap),
     questTargets: recordsFromSources(graph, areaOutputNode, "questTargets", nodeMap),
     markers: recordsFromSources(graph, areaOutputNode, "markers", nodeMap),
@@ -309,7 +378,8 @@ function buildZonePackage(graph, zoneOutputNode, nodeMap) {
     player: valuePayload(firstIncomingNode(graph, zoneOutputNode, "player", nodeMap), "playerId"),
     cameraOverrides: recordsFromSources(graph, zoneOutputNode, "cameraOverrides", nodeMap),
     areas: areaOutputs.map(function (areaOutput) { return buildAreaPackage(graph, areaOutput, nodeMap); }),
-    entities: recordsFromSources(graph, zoneOutputNode, "entities", nodeMap),
+    entities: entityRecordsFromSources(graph, zoneOutputNode, "entities", nodeMap),
+    entityComponents: recordsFromSources(graph, zoneOutputNode, "entityComponents", nodeMap),
     spawns: recordsFromSources(graph, zoneOutputNode, "spawns", nodeMap).map(function (spawn) {
       return Object.assign({}, spawn, { zoneRef: spawn.zoneRef || zoneId });
     }),
@@ -323,7 +393,9 @@ function buildZonePackage(graph, zoneOutputNode, nodeMap) {
     minimaps,
     audioAssignments: recordsFromSources(graph, zoneOutputNode, "audioAssignments", nodeMap),
     paths: recordsFromSources(graph, zoneOutputNode, "paths", nodeMap),
-    encounterAreas: recordsFromSources(graph, zoneOutputNode, "encounterAreas", nodeMap)
+    encounterAreas: recordsFromSources(graph, zoneOutputNode, "encounterAreas", nodeMap),
+    spawnControllers: spawnControllerRecordsFromSources(graph, zoneOutputNode, "spawnControllers", nodeMap),
+    encounters: encounterRecordsFromSources(graph, zoneOutputNode, "encounters", nodeMap)
   };
 }
 
@@ -436,6 +508,18 @@ function buildZonePackagesFromGraph(graph, worldAssemblyNode, nodeMap) {
   return buildZoneRegistryPayload(graph, zoneRegistryNode, nodeMap);
 }
 
+function buildCatalogsFromGraph(graph, worldAssemblyNode, nodeMap) {
+  const catalogRegistryNode = worldAssemblyNode ? firstIncomingNode(graph, worldAssemblyNode, "catalogs", nodeMap) : firstGraphNodeOfType(graph, "catalog_registry");
+  if (!catalogRegistryNode) return null;
+  return compileCatalogRegistry(graph, catalogRegistryNode, { nodeMap });
+}
+
+function buildCampaignsFromGraph(graph, worldAssemblyNode, nodeMap) {
+  const campaignRegistryNode = worldAssemblyNode ? firstIncomingNode(graph, worldAssemblyNode, "campaigns", nodeMap) : firstGraphNodeOfType(graph, "campaign_registry");
+  if (!campaignRegistryNode) return null;
+  return compileCampaignRegistry(graph, campaignRegistryNode, { nodeMap });
+}
+
 function firstZoneDefaultSpawn(zonePackage) {
   return (Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : []).find(function (spawn) {
     return spawn.role === "zone_default";
@@ -529,7 +613,7 @@ function buildValidationContext(graph, symbolIndex, tokenResolver) {
         }
       } else if (field.type === "tokenText") {
         const preview = tokenResolver.preview(graph, value || "", {
-          staticContextOnly: true,
+          staticContextOnly: field.allowRuntimeTokens !== true,
           symbolIndex
         });
         for (const issue of preview.errors || []) {
@@ -701,6 +785,39 @@ function buildSymbolSections(index) {
   };
 }
 
+function buildPlayerRulesPackage(graph, worldAssemblyNode, nodeMap) {
+  const outputNode = worldAssemblyNode ? firstIncomingNode(graph, worldAssemblyNode, "playerRules", nodeMap) : firstGraphNodeOfType(graph, "player_rules_output");
+  if (!outputNode) return {};
+  const policies = recordsFromSources(graph, outputNode, "policy", nodeMap);
+  const byType = {};
+  for (const policy of policies) {
+    const type = policy.nodeType || "policy";
+    if (!byType[type]) byType[type] = [];
+    byType[type].push(policy);
+  }
+  return {
+    id: outputNode.values?.rulesId || "player_rules.main",
+    policies,
+    byType
+  };
+}
+
+function buildUiPackage(graph, worldAssemblyNode, nodeMap) {
+  const outputNode = worldAssemblyNode ? firstIncomingNode(graph, worldAssemblyNode, "ui", nodeMap) : firstGraphNodeOfType(graph, "ui_output");
+  if (!outputNode) return {};
+  const ui = recordsFromSources(graph, outputNode, "ui", nodeMap);
+  const modules = recordsFromSources(graph, outputNode, "uiModules", nodeMap);
+  const minimap = recordsFromSources(graph, outputNode, "minimap", nodeMap);
+  const layouts = recordsFromSources(graph, outputNode, "uiLayout", nodeMap);
+  return {
+    id: outputNode.values?.uiId || "ui.main",
+    ui,
+    modules,
+    minimap,
+    layouts
+  };
+}
+
 function buildSectionObject(index, kinds) {
   return sectionFromKinds(index, kinds);
 }
@@ -779,16 +896,35 @@ export class GameProjectCompiler {
     const projectPayload = buildProjectPayload(projectNode);
     const chunkGridPayload = buildChunkGridPayload(chunkGridNode);
     const zoneRegistry = buildZonePackagesFromGraph(graph, worldAssemblyNode, nodeMap);
+    const typedCatalogs = buildCatalogsFromGraph(graph, worldAssemblyNode, nodeMap);
+    const typedCampaigns = buildCampaignsFromGraph(graph, worldAssemblyNode, nodeMap);
+    if (typedCatalogs) {
+      validation.errors.push.apply(validation.errors, typedCatalogs.errors || []);
+      validation.warnings.push.apply(validation.warnings, typedCatalogs.warnings || []);
+    }
+    if (typedCampaigns) {
+      validation.errors.push.apply(validation.errors, typedCampaigns.errors || []);
+      validation.warnings.push.apply(validation.warnings, typedCampaigns.warnings || []);
+    }
     const runtimeZones = buildRuntimeZoneProjection(projectPayload, zoneRegistry);
+    const symbolCatalogs = buildSymbolSections(symbolIndex);
     const manifestCore = {
       schemaVersion: GAME_PROJECT_SCHEMA_VERSION,
       project: projectPayload,
       chunkGrid: chunkGridPayload,
-      catalogs: buildSymbolSections(symbolIndex),
+      catalogs: Object.assign({}, symbolCatalogs, typedCatalogs?.catalog || {}, {
+        registry: typedCatalogs ? {
+          schemaVersion: typedCatalogs.schemaVersion,
+          registryId: typedCatalogs.registryId,
+          packages: typedCatalogs.packages,
+          packageCount: typedCatalogs.packageCount,
+          definitionCount: typedCatalogs.definitionCount
+        } : null
+      }),
       zones: zoneRegistry,
-      campaigns: buildSectionObject(symbolIndex, ["campaignRegistry"]),
-      playerRules: buildSectionObject(symbolIndex, ["playerRules"]),
-      ui: buildSectionObject(symbolIndex, ["uiPackage"]),
+      campaigns: typedCampaigns || buildSectionObject(symbolIndex, ["campaignRegistry"]),
+      playerRules: Object.assign(buildSectionObject(symbolIndex, ["playerRules"]), buildPlayerRulesPackage(graph, worldAssemblyNode, nodeMap)),
+      ui: Object.assign(buildSectionObject(symbolIndex, ["uiPackage"]), buildUiPackage(graph, worldAssemblyNode, nodeMap)),
       runtime: {
         activeZoneId: runtimeZones.activeZoneId,
         startSpawnId: runtimeZones.startSpawnId

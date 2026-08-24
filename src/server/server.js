@@ -11,6 +11,9 @@ import { AssetService } from "./asset-service.js";
 import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
+import { Node03RuntimeService } from "./node03-runtime-service.js";
+import { Node04QuestRuntimeService } from "./node04-quest-runtime-service.js";
+import { Node05EconomyRuntimeService } from "./node05-economy-runtime-service.js";
 import { PublishService } from "./publish-service.js";
 import { SymbolIndexService } from "./symbol-index-service.js";
 import { TokenResolver } from "./token-resolver.js";
@@ -40,6 +43,9 @@ const gameProjectCompiler = new GameProjectCompiler({ symbolIndexService, tokenR
 const publishService = new PublishService(repository, { assetService, symbolIndexService, tokenResolver, gameProjectCompiler });
 const graphMigrationService = new GraphMigrationService(repository, { symbolIndexService });
 const mmoService = new MmoService(db, authService, repository);
+const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
+const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
+const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
 const wss = new WebSocketServer({ noServer: true });
 mmoService.bindWebSocketServer(wss);
 const host = process.env.HOST || "127.0.0.1";
@@ -248,6 +254,129 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/game/player") {
       const snapshot = mmoService.getPlayerSnapshot(req);
       return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/node03/state") {
+      const snapshot = node03RuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/node03/action") {
+      const body = await readJson(req);
+      const result = node03RuntimeService.actionForRequest(req, body);
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/node04/state") {
+      const snapshot = node04QuestRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/node04/action") {
+      const body = await readJson(req);
+      const result = node04QuestRuntimeService.actionForRequest(req, body);
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/node05/state") {
+      const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/node05/action") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, body);
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/party") {
+      const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, { ok: true, party: snapshot.party });
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/party/invite") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "party_invite" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/party/invites/") && url.pathname.endsWith("/accept")) {
+      const inviteId = decodeURIComponent(url.pathname.slice("/api/game/party/invites/".length, -"/accept".length));
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "party_accept", inviteId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/party/leave") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "party_leave" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/crafting/jobs") {
+      const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, { ok: true, crafting: snapshot.crafting });
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/crafting/start") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "craft" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/market/orders") {
+      const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, { ok: true, market: snapshot.market });
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/market/orders") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "market_list" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/market/orders/") && url.pathname.endsWith("/buy")) {
+      const orderId = decodeURIComponent(url.pathname.slice("/api/game/market/orders/".length, -"/buy".length));
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "market_buy", orderId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/market/orders/") && url.pathname.endsWith("/cancel")) {
+      const orderId = decodeURIComponent(url.pathname.slice("/api/game/market/orders/".length, -"/cancel".length));
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "market_cancel", orderId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/mail") {
+      const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
+      return sendJson(res, 200, { ok: true, mail: snapshot.mail });
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/mail/claim-all") {
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "mail_claim_all" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/mail/") && url.pathname.endsWith("/claim")) {
+      const mailId = decodeURIComponent(url.pathname.slice("/api/game/mail/".length, -"/claim".length));
+      const body = await readJson(req);
+      const result = node05EconomyRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "mail_claim", mailId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/quests") {
+      const result = node04QuestRuntimeService.listQuestsForRequest(req);
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/game/quests/")) {
+      const questId = decodeURIComponent(url.pathname.slice("/api/game/quests/".length));
+      const result = node04QuestRuntimeService.questForRequest(req, questId);
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/quests/") && url.pathname.endsWith("/accept")) {
+      const questId = decodeURIComponent(url.pathname.slice("/api/game/quests/".length, -"/accept".length));
+      const body = await readJson(req);
+      const result = node04QuestRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "accept_quest", questId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/game/quests/") && url.pathname.endsWith("/turn-in")) {
+      const questId = decodeURIComponent(url.pathname.slice("/api/game/quests/".length, -"/turn-in".length));
+      const body = await readJson(req);
+      const result = node04QuestRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "turn_in", questId }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/dialogue/start") {
+      const body = await readJson(req);
+      const result = node04QuestRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "start_dialogue" }));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/dialogue/choose") {
+      const body = await readJson(req);
+      const result = node04QuestRuntimeService.actionForRequest(req, Object.assign({}, body, { action: "choose_dialogue" }));
+      return sendJson(res, 200, result);
     }
     if (req.method === "GET" && url.pathname === "/api/game/fog/discovery") {
       const snapshot = mmoService.getFogDiscoverySnapshot(req);
