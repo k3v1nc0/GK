@@ -1,5 +1,5 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260820-rmb-pan-speed2";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260730-shadow-touch-fix1";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260823-tracked-hud";
 import {
   normalizeCanonicalId,
   normalizeReferenceList,
@@ -1194,6 +1194,70 @@ function validationIssueText(issue) {
   if (typeof issue === "string") return issue;
   if (issue && typeof issue === "object") return String(issue.message || issue.code || JSON.stringify(issue));
   return String(issue || "");
+}
+
+function validationIssueNodeId(issue) {
+  if (issue && typeof issue === "object" && issue.nodeId && nodeById(issue.nodeId)) return issue.nodeId;
+  const text = validationIssueText(issue);
+  const nodeMatch = /^Node\s+([a-zA-Z0-9_.:-]+)/.exec(text);
+  if (nodeMatch && nodeById(nodeMatch[1])) return nodeMatch[1];
+  const groupOutputMatch = /^Group output '([^']+)' is not connected inside(?: group '([^']+)')?/.exec(text);
+  if (groupOutputMatch) {
+    const portLabel = groupOutputMatch[1];
+    const groupLabel = groupOutputMatch[2] || "";
+    for (const group of state.graph.nodes || []) {
+      if (group.type !== "group") continue;
+      const labelMatches = !groupLabel
+        || group.id === groupLabel
+        || group.title === groupLabel
+        || group.values?.title === groupLabel;
+      if (!labelMatches) continue;
+      const outputs = Array.isArray(group.values?.groupInterface?.outputs) ? group.values.groupInterface.outputs : [];
+      const port = outputs.find(function (candidate) {
+        return candidate && (candidate.label === portLabel || candidate.name === portLabel || candidate.id === portLabel);
+      });
+      if (!port?.name) continue;
+      const outputNode = (state.graph.nodes || []).find(function (node) {
+        return node.parentId === group.id && node.type === "group_output";
+      });
+      if (!outputNode) return group.id;
+      const connected = (state.graph.edges || []).some(function (edge) {
+        return edge.toNodeId === outputNode.id && edge.toPort === port.name;
+      });
+      if (!connected) return group.id;
+    }
+  }
+  return null;
+}
+
+function validationIssueEdgeId(issue) {
+  if (issue && typeof issue === "object" && issue.edgeId) return issue.edgeId;
+  const text = validationIssueText(issue);
+  const edgeMatch = /^Edge\s+([a-zA-Z0-9_.:-]+)/.exec(text);
+  return edgeMatch ? edgeMatch[1] : null;
+}
+
+function renderValidationIssue(kind, issue) {
+  const text = validationIssueText(issue);
+  const nodeId = validationIssueNodeId(issue);
+  const edgeId = validationIssueEdgeId(issue);
+  const targetExists = nodeId || (edgeId && (state.graph.edges || []).some(function (edge) { return edge.id === edgeId; }));
+  const item = document.createElement(targetExists ? "button" : "div");
+  item.className = kind === "warning" ? "vWarn" : "vErr";
+  if (targetExists) {
+    item.type = "button";
+    item.classList.add("validationJump");
+    item.title = "Klik om naar het probleem te gaan";
+    item.addEventListener("click", function () {
+      if (nodeId) {
+        selectNode(nodeId, true, { clearPendingEdge: true, showMobileInspector: true });
+      } else if (edgeId) {
+        selectEdge(edgeId, { clearPendingEdge: true });
+      }
+    });
+  }
+  item.textContent = (kind === "warning" ? "! " : "- ") + text;
+  return item;
 }
 
 function assetById(assetId) {
@@ -11119,16 +11183,10 @@ async function refreshValidation() {
       el.validationPanel.appendChild(ok);
     }
     for (const message of result.errors || []) {
-      const div = document.createElement("div");
-      div.className = "vErr";
-      div.textContent = "- " + validationIssueText(message);
-      el.validationPanel.appendChild(div);
+      el.validationPanel.appendChild(renderValidationIssue("error", message));
     }
     for (const message of result.warnings || []) {
-      const div = document.createElement("div");
-      div.className = "vWarn";
-      div.textContent = "! " + validationIssueText(message);
-      el.validationPanel.appendChild(div);
+      el.validationPanel.appendChild(renderValidationIssue("warning", message));
     }
     el.publishButton.disabled = !result.ok;
     el.publishButton.style.opacity = result.ok ? "1" : "0.5";

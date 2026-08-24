@@ -71,6 +71,184 @@ function specForNodeType(type) {
       return { kind: "localizedText", identityField: "localizationId", labelField: "language" };
     case "value_formula":
       return { kind: "valueFormula", identityField: "formulaId", labelField: "formulaId" };
+    case "playable_character_definition":
+      return { kind: "player", identityField: "characterId", labelField: "displayName" };
+    case "item_definition":
+      return { kind: "item", identityField: "itemId", labelField: "displayName" };
+    case "item_modifier_definition":
+      return { kind: "item_modifier", identityField: "modifierId", labelField: "displayName" };
+    case "resource_definition":
+      return { kind: "resource", identityField: "resourceId", labelField: "displayName" };
+    case "recipe_definition":
+      return { kind: "recipe", identityField: "recipeId", labelField: "displayName" };
+    case "recipe_ingredient":
+      return { kind: "recipe_ingredient", identityField: "ingredientId", labelField: "ingredientId" };
+    case "vendor_catalog":
+      return { kind: "vendor_catalog", identityField: "vendorCatalogId", labelField: "displayName" };
+    case "vendor_offer":
+      return { kind: "vendor_offer", identityField: "offerId", labelField: "offerId" };
+    case "currency_definition":
+      return { kind: "currency", identityField: "currencyId", labelField: "displayName" };
+    case "equipment_slot_definition":
+      return { kind: "equipment_slot", identityField: "slotId", labelField: "displayName" };
+    case "stat_definition":
+      return { kind: "stat", identityField: "statId", labelField: "displayName" };
+    case "stat_block":
+      return { kind: "stat_block", identityField: "statBlockId", labelField: "displayName" };
+    case "stat_curve":
+      return { kind: "stat_curve", identityField: "curveId", labelField: "displayName" };
+    case "damage_type_definition":
+      return { kind: "damage_type", identityField: "damageTypeId", labelField: "displayName" };
+    case "status_effect_definition":
+      return { kind: "status_effect", identityField: "statusEffectId", labelField: "displayName" };
+    case "ability_definition":
+      return { kind: "ability", identityField: "abilityId", labelField: "displayName" };
+    case "ability_rank":
+      return { kind: "ability_rank", identityField: "abilityRankId", labelField: "displayName" };
+    case "combat_profile":
+      return { kind: "combat_profile", identityField: "combatProfileId", labelField: "displayName" };
+    case "enemy_archetype":
+      return { kind: "enemy", identityField: "enemyId", labelField: "displayName" };
+    case "npc_archetype":
+      return { kind: "npc", identityField: "npcId", labelField: "displayName" };
+    case "entity_variant":
+      return { kind: "variant", identityField: "variantId", labelField: "displayName" };
+    case "ai_behavior_profile":
+      return { kind: "ai_profile", identityField: "aiProfileId", labelField: "displayName" };
+    case "path_behavior_profile":
+      return { kind: "path_behavior", identityField: "pathBehaviorId", labelField: "displayName" };
+    case "animation_set":
+      return { kind: "animation_set", identityField: "animationSetId", labelField: "displayName" };
+    case "faction_definition":
+      return { kind: "faction", identityField: "factionId", labelField: "displayName" };
+    case "difficulty_profile":
+      return { kind: "difficulty", identityField: "difficultyId", labelField: "displayName" };
+    case "respawn_policy_definition":
+      return { kind: "respawn_policy", identityField: "respawnPolicyId", labelField: "displayName" };
+    case "reputation_track":
+      return { kind: "reputation", identityField: "reputationId", labelField: "displayName" };
+    case "music_track":
+      return { kind: "music_track", identityField: "musicTrackId", labelField: "displayName" };
+    case "music_playlist":
+      return { kind: "music_playlist", identityField: "musicPlaylistId", labelField: "displayName" };
+    case "audio_event":
+      return { kind: "audio", identityField: "audioEventId", labelField: "displayName" };
+    case "vfx_definition":
+      return { kind: "vfx", identityField: "vfxId", labelField: "displayName" };
+    case "loot_table":
+      return { kind: "loot_table", identityField: "lootTableId", labelField: "displayName" };
+    case "loot_item_entry":
+    case "loot_currency_entry":
+    case "loot_table_entry":
+      return { kind: "loot_entry", identityField: "entryId", labelField: "entryId" };
+    case "enemy_spawn_point":
+    case "enemy_spawn_area":
+    case "resource_spawn":
+    case "pickup_spawn":
+      return { kind: "spawn", identityField: "spawnEntryId", labelField: "spawnEntryId" };
+    case "spawn_set":
+      return { kind: "spawn", identityField: "spawnSetId", labelField: "spawnSetId" };
+    case "spawn_controller":
+      return { kind: "spawn", identityField: "spawnControllerId", labelField: "spawnControllerId" };
+    case "encounter_controller":
+      return { kind: "encounter", identityField: "encounterId", labelField: "encounterId" };
+    case "resource_component":
+    case "lootable_component":
+    case "destructible_component":
+    case "enemy_component":
+    case "npc_component":
+    case "combatant_component":
+    case "faction_component":
+    case "schedule_component":
+    case "nameplate_component":
+    case "crafting_station_component":
+    case "vendor_component":
+    case "marketplace_access_component":
+      return { kind: "entity_component", identityField: "componentId", labelField: "componentId" };
+    case "xp_source_rule":
+      return { kind: "policy", identityField: "xpRuleId", labelField: "xpRuleId" };
+    case "player_progression_rules":
+    case "inventory_rules":
+    case "equipment_rules":
+    case "ability_loadout_rules":
+    case "death_respawn_rules":
+    case "unstuck_rules":
+      return { kind: "policy", identityField: "rulesId", labelField: "rulesId" };
+    case "crafting_policy":
+    case "vendor_policy":
+    case "party_loot_policy":
+    case "party_rules":
+    case "trade_policy":
+    case "market_policy":
+    case "economy_tax_rule":
+    case "mail_policy":
+      return { kind: "policy", identityField: "policyId", labelField: "policyId" };
+    case "hud_bar":
+    case "hotbar_hud":
+    case "xp_hud":
+    case "inventory_hud":
+    case "equipment_hud":
+    case "wallet_hud":
+    case "death_respawn_hud":
+    case "interaction_hud":
+    case "quest_tracker_hud":
+    case "dialogue_hud":
+    case "notification_hud":
+    case "party_hud":
+    case "vendor_hud":
+    case "crafting_hud":
+    case "trade_hud":
+    case "market_hud":
+    case "mail_hud":
+      return { kind: "ui", identityField: "moduleId", labelField: "moduleId" };
+    case "hud_layout":
+      return { kind: "uiPackage", identityField: "layoutId", labelField: "layoutId" };
+    case "menu_layout":
+      return { kind: "uiPackage", identityField: "layoutId", labelField: "layoutId" };
+    case "campaign_definition":
+      return { kind: "campaign", identityField: "campaignId", labelField: "displayName" };
+    case "chapter_definition":
+      return { kind: "chapter", identityField: "chapterId", labelField: "displayName" };
+    case "quest_definition":
+      return { kind: "quest", identityField: "questId", labelField: "displayName" };
+    case "quest_step":
+      return { kind: "quest_step", identityField: "stepId", labelField: "displayName" };
+    case "objective_talk":
+    case "objective_collect":
+    case "objective_deliver":
+    case "objective_reach":
+      return { kind: "objective", identityField: "objectiveId", labelField: "instruction" };
+    case "condition_player_level":
+    case "condition_has_item":
+    case "condition_group":
+      return { kind: "condition", identityField: "conditionId", labelField: "conditionId" };
+    case "action_give_currency":
+    case "action_give_xp":
+    case "action_unlock_ability":
+    case "action_remove_item":
+    case "action_start_quest":
+    case "action_sequence":
+      return { kind: "action", identityField: "actionId", labelField: "actionId" };
+    case "reward_bundle":
+      return { kind: "reward", identityField: "rewardBundleId", labelField: "displayName" };
+    case "quest_complete":
+      return { kind: "quest_terminal", identityField: "terminalId", labelField: "terminalId" };
+    case "event_trigger":
+      return { kind: "event_trigger", identityField: "eventTriggerId", labelField: "eventType" };
+    case "quest_marker_rule":
+      return { kind: "marker_rule", identityField: "markerRuleId", labelField: "label" };
+    case "dialogue_definition":
+      return { kind: "dialogue", identityField: "dialogueId", labelField: "displayName" };
+    case "dialogue_entry":
+      return { kind: "dialogue_entry", identityField: "entryId", labelField: "speakerName" };
+    case "dialogue_choice":
+      return { kind: "dialogue_choice", identityField: "choiceId", labelField: "label" };
+    case "dialogue_action":
+      return { kind: "dialogue_action", identityField: "dialogueActionId", labelField: "dialogueActionId" };
+    case "dialogue_terminal":
+      return { kind: "dialogue_entry", identityField: "terminalId", labelField: "terminalId" };
+    case "dialogue_router":
+      return { kind: "dialogue_router", identityField: "routerId", labelField: "routerId" };
     case "catalog_output":
       return { kind: "catalogPackage", identityField: "catalogId", labelField: "catalogId" };
     case "catalog_registry":
@@ -106,6 +284,8 @@ function specForNodeType(type) {
       return { kind: "zonePackage", identityField: "packageId", labelField: "packageId" };
     case "campaign_registry":
       return { kind: "campaignRegistry", identityField: "registryId", labelField: "registryId" };
+    case "campaign_output":
+      return { kind: "campaignPackage", identityField: "packageId", labelField: "packageId" };
     case "player_rules_output":
       return { kind: "playerRules", identityField: "rulesId", labelField: "rulesId" };
     case "ui_output":
@@ -163,6 +343,7 @@ function buildTags(node) {
 function nodeLabel(node) {
   return safeString(
     node?.values?.label
+    || node?.values?.displayName
     || node?.values?.gameName
     || node?.values?.title
     || node?.title
