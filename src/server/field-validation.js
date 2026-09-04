@@ -153,6 +153,21 @@ export function coerceAndValidateField(field, value, label) {
     } else {
       try { clean = JSON.parse(String(value)); } catch { errors.push(label + " moet geldige JSON zijn."); }
     }
+  } else if (field.type === "minimapMarkerCategories") {
+    if (isEmpty(value)) {
+      clean = fieldDefault(field);
+    } else if (Array.isArray(value)) {
+      clean = JSON.parse(JSON.stringify(value));
+    } else if (typeof value === "string") {
+      try { clean = JSON.parse(value); } catch { errors.push(label + " moet geldige JSON zijn."); }
+    } else {
+      errors.push(label + " moet een lijst zijn.");
+      clean = fieldDefault(field);
+    }
+    if (!Array.isArray(clean)) {
+      errors.push(label + " moet een lijst zijn.");
+      clean = fieldDefault(field);
+    }
   } else {
     clean = isEmpty(value) ? fieldDefault(field) : String(value).trim();
     if (clean && field.maxLength && clean.length > field.maxLength) errors.push(label + " is langer dan " + field.maxLength + " tekens.");

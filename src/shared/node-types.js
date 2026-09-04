@@ -1407,6 +1407,25 @@ export function resolveNodePort(node, portName, direction, nodeMap) {
   };
 }
 
+const GAME_MINIMAP_MARKER_CATEGORY_DEFAULTS = [
+  { id: "users", label: "Users", source: "users", enabled: true, color: "#ffe08a", shape: "triangle", iconAssetId: null, showLabel: true, clampOutside: true, showThroughFog: true, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "enemy", label: "Enemy", source: "enemy", enabled: false, color: "#ef4444", shape: "square", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "boss", label: "Boss", source: "boss", enabled: false, color: "#f97316", shape: "star", iconAssetId: null, showLabel: true, clampOutside: true, showThroughFog: true, iconSizePx: 12, fontSizePx: 10, nameMaxLength: 14, animation: "glow" },
+  { id: "wildlife", label: "Wild life", source: "wildlife", enabled: false, color: "#22c55e", shape: "dot", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 8, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "npc", label: "NPC", source: "npc", enabled: true, color: "#c084fc", shape: "diamond", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "quest", label: "Quest", source: "quest", enabled: true, color: "#facc15", shape: "dot", iconAssetId: null, showLabel: true, clampOutside: true, showThroughFog: true, iconSizePx: 11, fontSizePx: 10, nameMaxLength: 14, animation: "glow" },
+  { id: "spawn", label: "Spawn", source: "spawn", enabled: false, color: "#9be870", shape: "cross", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "teleport", label: "Teleport", source: "teleport", enabled: true, color: "#22d3ee", shape: "diamond", iconAssetId: null, showLabel: true, clampOutside: true, showThroughFog: true, iconSizePx: 10, fontSizePx: 10, nameMaxLength: 14, animation: "pulse" },
+  { id: "settlement", label: "Dorp namen", source: "settlement", enabled: false, color: "#60a5fa", shape: "label", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 8, fontSizePx: 11, nameMaxLength: 24, animation: "none" },
+  { id: "crafting", label: "Crafting", source: "crafting", enabled: true, color: "#fb923c", shape: "square", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "cooking", label: "Cooking", source: "cooking", enabled: false, color: "#f59e0b", shape: "square", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "vendor", label: "Vendor", source: "vendor", enabled: true, color: "#a78bfa", shape: "diamond", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "market", label: "Market", source: "market", enabled: true, color: "#38bdf8", shape: "diamond", iconAssetId: null, showLabel: true, clampOutside: false, showThroughFog: false, iconSizePx: 9, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "resource", label: "Resource", source: "resource", enabled: false, color: "#84cc16", shape: "dot", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 8, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "item", label: "Items", source: "item", enabled: false, color: "#fbbf24", shape: "square", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 8, fontSizePx: 10, nameMaxLength: 14, animation: "none" },
+  { id: "object", label: "Objects", source: "object", enabled: false, color: "#94a3b8", shape: "dot", iconAssetId: null, showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: 7, fontSizePx: 10, nameMaxLength: 14, animation: "none" }
+];
+
 export const NODE_TYPES = {
   game_output: {
     label: "Game Output",
@@ -1733,6 +1752,7 @@ export const NODE_TYPES = {
       entityId: { label: "Entity id", type: "text", default: "entity", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
       label: { label: "Label", type: "text", default: "Entity", required: false, maxLength: 96 },
       modelAssetId: { label: "Model asset", type: "asset", assetTypes: ["model"], default: null, required: true },
+      minimapCategoryRef: { label: "Minimap category", type: "select", dynamicOptions: "minimapCategories", default: "", required: false },
       animationClip: { label: "Animation clip", type: "select", options: [], dynamicOptions: "assetAnimations", default: null, required: false },
       idleAnimation: { label: "Idle animation", type: "select", options: [], dynamicOptions: "assetAnimations", default: null, required: false },
       walkAnimation: { label: "Walk animation", type: "select", options: [], dynamicOptions: "assetAnimations", default: null, required: false },
@@ -1893,6 +1913,7 @@ export const NODE_TYPES = {
       z: { label: "Z", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: true },
       radius: { label: "Trigger radius", type: "number", default: 2, min: 0.1, max: 100, step: 0.1, required: true },
       modelAssetId: { label: "Model asset", type: "asset", assetTypes: ["model"], default: null, required: false },
+      minimapCategoryRef: { label: "Minimap category", type: "select", dynamicOptions: "minimapCategories", default: "", required: false },
       actionType: { label: "Action", type: "select", options: ["message", "teleport"], default: "message", required: true },
       message: { label: "Message", type: "text", default: "You found something!", required: false, maxLength: 240 },
       teleportX: { label: "Teleport X", type: "number", default: 0, min: -10000, max: 10000, step: 0.01, required: false },
@@ -2114,6 +2135,15 @@ export const NODE_TYPES = {
       borderRadiusPx: { label: "Border radius (px)", type: "number", default: 14, min: 0, max: 64, step: 1, required: true },
       backgroundOpacity: { label: "Background opacity", type: "number", default: 1, min: 0, max: 1, step: 0.01, required: true },
       markerUpdateMs: { label: "Marker update (ms)", type: "number", default: 100, min: 33, max: 1000, step: 1, required: true, help: "Begrenst hoe vaak de canvas markers herrekend worden." },
+      markerCategories: { label: "Marker categories", type: "minimapMarkerCategories", default: GAME_MINIMAP_MARKER_CATEGORY_DEFAULTS, required: false },
+      runtimeTargetScope: {
+        label: "Runtime target scope",
+        type: "select",
+        options: ["current_zone", "all_published_zones"],
+        default: "current_zone",
+        required: true,
+        help: "current_zone gebruikt alleen live NODE-03 targets uit de zone waar de speler volgens de server nu in zit. all_published_zones laadt resource/item/enemy runtime targets uit alle gepubliceerde zones voor de gamewereld en de minimap, zodat Wood, Iron Ore, pickups en andere targets zichtbaar kunnen blijven zonder eerst te teleporteren. Fog of war en Marker categories bepalen daarna welke markers je op de minimap ziet."
+      },
       fogOfWarEnabled: { section: "Minimap Fog of War", label: "Enabled", type: "boolean", default: true, required: true },
       fogColor: { section: "Minimap Fog of War", label: "Fog color", type: "color", default: "#05070a", required: false },
       fogOpacity: { section: "Minimap Fog of War", label: "Fog opacity", type: "number", default: 0.72, min: 0, max: 1, step: 0.01, required: true },
@@ -2144,23 +2174,23 @@ export const NODE_TYPES = {
       allowZoom: { label: "Allow zoom", type: "boolean", default: true, required: true },
       allowPan: { label: "Allow pan", type: "boolean", default: true, required: true },
       allowPinchZoom: { label: "Allow pinch zoom", type: "boolean", default: true, required: true },
-      showLocalPlayer: { label: "Show local player", type: "boolean", default: true, required: true },
-      showRemotePlayers: { label: "Show remote players", type: "boolean", default: true, required: true },
-      showRemotePlayerNames: { label: "Show remote player names", type: "boolean", default: true, required: true },
-      showPlayerName: { label: "Show local player name", type: "boolean", default: true, required: true },
-      showSpawn: { label: "Show spawn", type: "boolean", default: false, required: true },
-      showNpcEntities: { label: "Show NPC/model entities", type: "boolean", default: true, required: true },
-      showNpcEntityNames: { label: "Show NPC/model names", type: "boolean", default: true, required: true },
-      showScatterInstances: { label: "Show scatter instances", type: "boolean", default: false, required: true },
-      showScatterNames: { label: "Show scatter names", type: "boolean", default: false, required: true },
-      showInteractables: { label: "Show interactables", type: "boolean", default: false, required: true },
-      showQuestMarkers: { label: "Show quest markers", type: "boolean", default: true, required: true },
-      showEnemies: { label: "Show enemies", type: "boolean", default: false, required: true },
-      showViewportCone: { label: "Show viewport cone", type: "boolean", default: true, required: true },
-      clampOutsideMarkers: { label: "Clamp outside markers", type: "boolean", default: true, required: true },
-      iconSizePx: { label: "Icon size (px)", type: "number", default: 9, min: 3, max: 48, step: 1, required: true },
-      fontSizePx: { label: "Font size (px)", type: "number", default: 10, min: 6, max: 24, step: 1, required: true },
-      nameMaxLength: { label: "Name max length", type: "number", default: 14, min: 3, max: 48, step: 1, required: true },
+      showLocalPlayer: { label: "Show local player", type: "boolean", default: true, required: true, hidden: true },
+      showRemotePlayers: { label: "Show remote players", type: "boolean", default: true, required: true, hidden: true },
+      showRemotePlayerNames: { label: "Show remote player names", type: "boolean", default: true, required: true, hidden: true },
+      showPlayerName: { label: "Show local player name", type: "boolean", default: true, required: true, hidden: true },
+      showSpawn: { label: "Show spawn", type: "boolean", default: false, required: true, hidden: true },
+      showNpcEntities: { label: "Show NPC/model entities", type: "boolean", default: true, required: true, hidden: true },
+      showNpcEntityNames: { label: "Show NPC/model names", type: "boolean", default: true, required: true, hidden: true },
+      showScatterInstances: { label: "Show scatter instances", type: "boolean", default: false, required: true, hidden: true },
+      showScatterNames: { label: "Show scatter names", type: "boolean", default: false, required: true, hidden: true },
+      showInteractables: { label: "Show interactables", type: "boolean", default: false, required: true, hidden: true },
+      showQuestMarkers: { label: "Show quest markers", type: "boolean", default: true, required: true, hidden: true },
+      showEnemies: { label: "Show enemies", type: "boolean", default: false, required: true, hidden: true },
+      showViewportCone: { label: "Show viewport cone", type: "boolean", default: true, required: true, hidden: true },
+      clampOutsideMarkers: { label: "Clamp outside markers", type: "boolean", default: true, required: true, hidden: true },
+      iconSizePx: { label: "Icon size (px)", type: "number", default: 9, min: 3, max: 48, step: 1, required: true, hidden: true },
+      fontSizePx: { label: "Font size (px)", type: "number", default: 10, min: 6, max: 24, step: 1, required: true, hidden: true },
+      nameMaxLength: { label: "Name max length", type: "number", default: 14, min: 3, max: 48, step: 1, required: true, hidden: true },
       zIndex: { label: "Z-index", type: "number", default: 20, min: 0, max: 999, step: 1, required: true }
     }
   },
@@ -2227,6 +2257,23 @@ export const NODE_TYPES = {
       zoneCanvasParentZoneId: { label: "Zone canvas parent zone id", type: "text", default: "", required: false, maxLength: 120, hidden: true },
       zoneCanvasParentSide: { label: "Zone canvas parent side", type: "text", default: "", required: false, maxLength: 24, hidden: true },
       groupInterface: { label: "Group interface", type: "json", default: groupInterfaceDefault(), required: true }
+    }
+  },
+
+  graph_frame: {
+    label: "Frame",
+    group: "Organize",
+    accent: "#5b8fb9",
+    description: "Editor-only visual frame for grouping nodes and keeping long notes near the graph without affecting the game build.",
+    inputs: {},
+    outputs: {},
+    fields: {
+      title: { label: "Title", type: "text", default: "New Frame", required: true, maxLength: 96 },
+      note: { label: "Info", type: "tokenText", default: "", required: false, maxLength: 4000 },
+      frameWidth: { label: "Frame width", type: "number", default: 760, min: 320, max: 12000, step: 10, required: true },
+      frameHeight: { label: "Frame height", type: "number", default: 420, min: 180, max: 12000, step: 10, required: true },
+      color: { label: "Frame color", type: "color", default: "#2f6f8f", required: true },
+      infoOpen: { label: "Info panel open", type: "boolean", default: false, required: true }
     }
   },
 
@@ -3071,6 +3118,7 @@ const ZONE_NODE_DEFS = {
       label: { label: "Label", type: "tokenText", default: "Marker", required: true, maxLength: 240 },
       iconAssetId: { label: "Icon asset", type: "asset", assetTypes: ["image"], default: null, required: false },
       markerType: { label: "Marker type", type: "select", options: ["npc", "enemy", "quest", "resource", "portal", "checkpoint", "vendor", "market", "crafting", "custom"], default: "custom", required: true },
+      minimapCategoryRef: { label: "Minimap category", type: "select", dynamicOptions: "minimapCategories", default: "", required: false },
       showOnMinimap: { label: "Show on minimap", type: "boolean", default: true, required: true },
       showOnWorldMap: { label: "Show on world map", type: "boolean", default: true, required: true },
       showOnCompass: { label: "Show on compass", type: "boolean", default: false, required: true },
@@ -3457,6 +3505,7 @@ const NODE03_CATALOG_NODE_DEFS = {
     },
     fields: definitionFields("abilityId", "ability.basic_attack", "Basic Attack", {
       iconAssetId: { label: "Icon asset", type: "asset", assetTypes: ["image"], default: null, required: false },
+      minimapCategoryRef: { label: "Minimap category", type: "select", dynamicOptions: "minimapCategories", default: "", required: false },
       abilityType: { label: "Ability type", type: "select", options: ["basic_attack", "melee", "ranged", "spell", "heal", "buff", "debuff", "movement", "passive", "gather"], default: "basic_attack", required: true },
       resourceCostStatRef: refField("Cost stat", ["stat"]),
       resourceCostFormula: { label: "Cost formula", type: "formula", default: null, required: false },
@@ -5082,6 +5131,7 @@ const NODE04_CAMPAIGN_NODE_DEFS = {
       autoTrack: { label: "Auto track", type: "boolean", default: true, required: true },
       abandonable: { label: "Abandonable", type: "boolean", default: false, required: true },
       repeatMode: { label: "Repeat mode", type: "select", options: QUEST_REPEAT_OPTIONS, default: "once_per_character", required: true },
+      resetOnContentChange: { label: "Reset on content change", type: "boolean", default: false, required: true, help: "Development helper: when enabled, this player's saved quest progress is reset to available after the published quest content hash changes." },
       minimumLevel: numberField("Minimum level", 1, 1, 1000, 1),
       tags: { label: "Tags", type: "tagList", default: [], required: false }
     }
@@ -5447,7 +5497,8 @@ const NODE04_CAMPAIGN_NODE_DEFS = {
       anchor: { label: "Anchor", type: "select", options: ["top-left", "top-center", "top-right", "center-left", "center", "center-right", "bottom-left", "bottom-center", "bottom-right"], default: "center-right", required: true },
       maxQuests: numberField("Max quests", 3, 1, 12, 1),
       showCompleted: { label: "Show completed", type: "boolean", default: true, required: true },
-      showMarkers: { label: "Show markers", type: "boolean", default: true, required: true }
+      showMarkers: { label: "Show markers", type: "boolean", default: true, required: true },
+      allowQuestReset: { label: "Allow quest reset", type: "boolean", default: false, required: true }
     }
   },
   dialogue_hud: {

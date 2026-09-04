@@ -1,5 +1,5 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260820-rmb-pan-speed2";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260823-tracked-hud";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260904-graph-frames1";
 import {
   normalizeCanonicalId,
   normalizeReferenceList,
@@ -30,6 +30,8 @@ const PAD = 8;
 const PORT_ROW = 24;
 const PORT_GAP = 4;
 const NODE_WIDTH = 260;
+const GRAPH_FRAME_MIN_WIDTH = 320;
+const GRAPH_FRAME_MIN_HEIGHT = 180;
 const ZONE_CANVAS_SIZE = 500;
 const ZONE_CANVAS_HALF_SIZE = ZONE_CANVAS_SIZE / 2;
 const ZONE_CANVAS_PORT_ALIASES = new Set(["zonePackage", "zonepackage", "zonePkg", "zonepkg"]);
@@ -1147,6 +1149,9 @@ function normalizeFieldInputValue(field, value) {
     }
     if (typeof value === "object") return clonePlain(value);
     return JSON.parse(String(value));
+  }
+  if (field.type === "minimapMarkerCategories") {
+    return normalizeMinimapMarkerCategories(value, field.default || []);
   }
   if (isBlankValue(value)) {
     const fallback = field.default;
@@ -4946,7 +4951,9 @@ function renderNodeLibrary() {
       const plus = document.createElement("span");
       plus.className = "plus";
       plus.textContent = "+";
+      const info = createHelpIcon(buildNodeDefinitionHelpText(type, def), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
       button.append(dot, label, plus);
+      if (info) button.appendChild(info);
       button.addEventListener("click", function () { addNode(type); });
       wrap.appendChild(button);
     }
@@ -4989,7 +4996,9 @@ function renderSpecialGroupLibrary(query = "") {
     const plus = document.createElement("span");
     plus.className = "plus";
     plus.textContent = "+";
+    const info = createHelpIcon(buildSpecialGroupHelpText(preset), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
     button.append(dot, label, plus);
+    if (info) button.appendChild(info);
     button.addEventListener("click", function () {
       if (preset.kind === "zone_canvas") addZoneCanvasFromLibrary();
       else addSpecialGroup(preset);
@@ -6169,10 +6178,11 @@ function viewportCenterWorldValues(type) {
 async function addNode(type, values = {}) {
   const center = viewportCenterInGraph();
   const spawnValues = Object.assign({}, viewportCenterWorldValues(type), values);
+  const editorOnlyGraphFrame = type === "graph_frame";
   const requestedParentId = state.currentGroupId || null;
   const requestedParent = nodeById(requestedParentId);
   const zoneParentAdd = isZoneCanvasGroup(requestedParent);
-  const rootOnlyZoneNode = zoneParentAdd && isZoneCanvasRootOnlyNodeType(type);
+  const rootOnlyZoneNode = zoneParentAdd && !editorOnlyGraphFrame && isZoneCanvasRootOnlyNodeType(type);
   const parentId = rootOnlyZoneNode ? (requestedParent.parentId || null) : requestedParentId;
   const position = rootOnlyZoneNode
     ? { x: Math.round(Number(requestedParent.x) || 0) + 48, y: Math.round(Number(requestedParent.y) || 0) - 105 }
@@ -6185,8 +6195,8 @@ async function addNode(type, values = {}) {
     });
   }, {
     historyLabel: "Node toegevoegd",
-    refreshViewport: !zoneParentAdd || rootOnlyZoneNode,
-    refreshValidation: true,
+    refreshViewport: !editorOnlyGraphFrame && (!zoneParentAdd || rootOnlyZoneNode),
+    refreshValidation: !editorOnlyGraphFrame,
     afterApply: function (_, result) {
       createdNodeId = result?.nodeId || null;
       if (result?.nodeId) selectNode(result.nodeId, true);
@@ -6194,10 +6204,10 @@ async function addNode(type, values = {}) {
       // en laat selectNode() hierboven de nieuwe node daarin focussen, in plaats van
       // hier weg te springen naar de losse "Nodes"-tab (zie showMobileInspectorPanel).
       if (result?.nodeId && isMobileLayout() && state.mobilePanel !== "all") setMobilePanel("graph");
-      setStatus(rootOnlyZoneNode ? "Light toegevoegd op root." : "Node toegevoegd.", "success");
+      setStatus(editorOnlyGraphFrame ? "Frame toegevoegd." : (rootOnlyZoneNode ? "Light toegevoegd op root." : "Node toegevoegd."), "success");
     }
   });
-  if (createdNodeId && zoneParentAdd && !rootOnlyZoneNode) {
+  if (createdNodeId && zoneParentAdd && !rootOnlyZoneNode && !editorOnlyGraphFrame) {
     await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
   } else if (createdNodeId && rootOnlyZoneNode) {
     await autoWireRootLightNode(createdNodeId, parentId);
@@ -6328,6 +6338,7 @@ function resolvedPorts(node) {
 
 function nodeWidth(node) {
   const def = state.nodeTypes[node.type] || {};
+  if (node.type === "graph_frame") return graphFrameSize(node).width;
   return def.container ? 240 : NODE_WIDTH;
 }
 
@@ -6356,6 +6367,39 @@ function readNodeCardPosition(node, card) {
     x: Number.isFinite(Number(node.x)) ? Number(node.x) : 0,
     y: Number.isFinite(Number(node.y)) ? Number(node.y) : 0
   };
+}
+
+function nodeCardBounds(node, card) {
+  const position = readNodeCardPosition(node, card);
+  const size = node.type === "graph_frame"
+    ? graphFrameSize(node)
+    : {
+        width: card?.offsetWidth || nodeWidth(node),
+        height: card?.offsetHeight || 90
+      };
+  return {
+    left: position.x,
+    top: position.y,
+    right: position.x + size.width,
+    bottom: position.y + size.height
+  };
+}
+
+function graphFrameContainedNodeIds(frameNode, frameCard) {
+  if (!frameNode || frameNode.type !== "graph_frame") return [];
+  const frameBounds = nodeCardBounds(frameNode, frameCard);
+  return visibleNodes().filter(function (candidate) {
+    if (candidate.id === frameNode.id || candidate.type === "graph_frame") return false;
+    if ((candidate.parentId || null) !== (frameNode.parentId || null)) return false;
+    const candidateCard = el.nodeLayer.querySelector('.gnode[data-node-id="' + candidate.id + '"]');
+    const bounds = nodeCardBounds(candidate, candidateCard);
+    return bounds.left >= frameBounds.left
+      && bounds.top >= frameBounds.top
+      && bounds.right <= frameBounds.right
+      && bounds.bottom <= frameBounds.bottom;
+  }).map(function (candidate) {
+    return candidate.id;
+  });
 }
 
 function portEntriesForNode(node, direction) {
@@ -6585,12 +6629,16 @@ function buildMinimapBakeNodePreview(node) {
 function renderGraph() {
   el.nodeLayer.innerHTML = "";
   const nodes = visibleNodes();
-  for (const node of nodes) el.nodeLayer.appendChild(buildNodeElement(node));
+  const frameNodes = nodes.filter(function (node) { return node.type === "graph_frame"; });
+  const normalNodes = nodes.filter(function (node) { return node.type !== "graph_frame"; });
+  for (const node of frameNodes) el.nodeLayer.appendChild(buildNodeElement(node));
+  for (const node of normalNodes) el.nodeLayer.appendChild(buildNodeElement(node));
   renderEdges(nodes);
   syncSelectedNodeCard();
 }
 
 function buildNodeElement(node) {
+  if (node.type === "graph_frame") return buildGraphFrameElement(node);
   const def = state.nodeTypes[node.type];
   const pos = nodePositionForRender(node);
   const isZoneCanvas = isZoneCanvasGroup(node);
@@ -6615,7 +6663,9 @@ function buildNodeElement(node) {
   const typeTag = document.createElement("span");
   typeTag.className = "gnodeType";
   typeTag.textContent = def.label;
+  const info = createHelpIcon(buildNodeHelpText(node, def), { className: "helpInfoIcon helpInfoIcon--node", side: "top" });
   head.append(accent, title, typeTag);
+  if (info) head.appendChild(info);
   if (def.system) {
     const badge = document.createElement("span");
     badge.className = "nodeBadge system";
@@ -6695,9 +6745,160 @@ function buildNodeElement(node) {
     // Frame whatever this node represents in 3D (model entities included - this used to
     // be skipped for model_entity specifically, which is exactly the most common node
     // type with a 3D representation, so the viewport never followed those clicks).
-    focusTerrainOrSelected();
+    if (node.type !== "graph_frame") focusTerrainOrSelected();
   });
   return card;
+}
+
+function graphFrameSize(node) {
+  const width = Math.max(GRAPH_FRAME_MIN_WIDTH, Math.min(12000, Number(node?.values?.frameWidth) || 760));
+  const height = Math.max(GRAPH_FRAME_MIN_HEIGHT, Math.min(12000, Number(node?.values?.frameHeight) || 420));
+  return { width: Math.round(width), height: Math.round(height) };
+}
+
+function graphFrameColor(node) {
+  const color = String(node?.values?.color || "#2f6f8f").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : "#2f6f8f";
+}
+
+function buildGraphFrameElement(node) {
+  const pos = nodePositionForRender(node);
+  const size = graphFrameSize(node);
+  const color = graphFrameColor(node);
+  const card = document.createElement("div");
+  card.className = "gnode graphFrame" + (state.selectedNodeIds.includes(node.id) ? " selected" : "");
+  card.style.left = pos.x + "px";
+  card.style.top = pos.y + "px";
+  card.style.width = size.width + "px";
+  card.style.height = size.height + "px";
+  card.style.setProperty("--frame-color", color);
+  card.dataset.nodeId = node.id;
+
+  const head = document.createElement("div");
+  head.className = "gnodeHead graphFrameHead";
+  const accent = document.createElement("span");
+  accent.className = "gnodeAccent";
+  accent.style.background = color;
+  const title = document.createElement("span");
+  title.className = "gnodeTitle";
+  title.textContent = nodeDisplayTitle(node);
+  const typeTag = document.createElement("span");
+  typeTag.className = "gnodeType";
+  typeTag.textContent = "Frame";
+  const infoToggle = document.createElement("button");
+  infoToggle.type = "button";
+  infoToggle.className = "graphFrameInfoToggle";
+  infoToggle.textContent = "i";
+  infoToggle.title = "Info openen/sluiten";
+  infoToggle.setAttribute("aria-label", "Frame info openen/sluiten");
+  infoToggle.setAttribute("aria-pressed", node.values?.infoOpen === true ? "true" : "false");
+  infoToggle.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    patchValues(node.id, { infoOpen: node.values?.infoOpen !== true }, {
+      historyLabel: "Frame info",
+      refreshViewport: false,
+      refreshValidation: false
+    });
+  });
+  head.append(accent, title, typeTag, infoToggle);
+  card.appendChild(head);
+
+  if (node.values?.infoOpen === true) {
+    const panel = document.createElement("aside");
+    panel.className = "graphFrameInfoPanel";
+    panel.textContent = String(node.values?.note || "").trim() || "Geen info ingevuld.";
+    panel.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
+    panel.addEventListener("click", function (event) { event.stopPropagation(); });
+    card.appendChild(panel);
+  }
+
+  const resize = document.createElement("div");
+  resize.className = "graphFrameResize";
+  resize.title = "Frame vergroten/verkleinen";
+  resize.addEventListener("pointerdown", function (event) { startGraphFrameResize(event, node, card); });
+  card.appendChild(resize);
+
+  head.addEventListener("pointerdown", function (event) { startNodeDrag(event, node, card); });
+  card.addEventListener("pointerdown", function (event) {
+    if (event.button !== 0) return;
+    if (event.target.closest(".graphFrameInfoToggle, .graphFrameResize")) return;
+    commitActiveEditorControl();
+    if (event.metaKey || event.ctrlKey) {
+      event.preventDefault();
+      selectNode(node.id, false, { toggle: true, clearPendingEdge: true, showMobileInspector: true });
+      return;
+    }
+    if (event.shiftKey) {
+      event.preventDefault();
+      selectNode(node.id, false, { extend: true, clearPendingEdge: true, showMobileInspector: true });
+      return;
+    }
+    selectNode(node.id, false, { clearPendingEdge: true, showMobileInspector: true });
+  });
+  return card;
+}
+
+function startGraphFrameResize(event, node, card) {
+  if (event.button !== 0 || event.isPrimary === false) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const pointerId = event.pointerId;
+  const startPoint = clientToGraphPoint(event.clientX, event.clientY);
+  if (!isFiniteGraphPoint(startPoint)) return;
+  const startSize = graphFrameSize(node);
+  let nextSize = startSize;
+  let didResize = false;
+  const resizeTarget = event.currentTarget;
+  card.classList.add("resizing");
+  if (resizeTarget && typeof resizeTarget.setPointerCapture === "function") {
+    try { resizeTarget.setPointerCapture(pointerId); } catch {}
+  }
+
+  function cleanup() {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onCancel);
+    card.classList.remove("resizing");
+    if (resizeTarget && typeof resizeTarget.releasePointerCapture === "function") {
+      try { resizeTarget.releasePointerCapture(pointerId); } catch {}
+    }
+  }
+
+  function onMove(moveEvent) {
+    if (moveEvent.pointerId !== pointerId) return;
+    const graphPoint = clientToGraphPoint(moveEvent.clientX, moveEvent.clientY);
+    if (!isFiniteGraphPoint(graphPoint)) return;
+    nextSize = {
+      width: Math.round(Math.max(GRAPH_FRAME_MIN_WIDTH, Math.min(12000, startSize.width + graphPoint.x - startPoint.x))),
+      height: Math.round(Math.max(GRAPH_FRAME_MIN_HEIGHT, Math.min(12000, startSize.height + graphPoint.y - startPoint.y)))
+    };
+    didResize = didResize || Math.abs(nextSize.width - startSize.width) > 1 || Math.abs(nextSize.height - startSize.height) > 1;
+    card.style.width = nextSize.width + "px";
+    card.style.height = nextSize.height + "px";
+  }
+
+  function onUp(upEvent) {
+    if (upEvent.pointerId !== pointerId) return;
+    cleanup();
+    if (!didResize) return;
+    patchValues(node.id, { frameWidth: nextSize.width, frameHeight: nextSize.height }, {
+      historyLabel: "Frame formaat",
+      refreshViewport: false,
+      refreshValidation: false
+    });
+  }
+
+  function onCancel(cancelEvent) {
+    if (cancelEvent.pointerId !== pointerId) return;
+    cleanup();
+    card.style.width = startSize.width + "px";
+    card.style.height = startSize.height + "px";
+  }
+
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onCancel);
 }
 
 function identityValue(node) {
@@ -6720,11 +6921,10 @@ function buildPort(node, portName, port, direction) {
   if (state.pendingEdge && state.pendingEdge.fromNodeId === node.id && state.pendingEdge.fromPort === portName) wrap.classList.add("armed");
   const label = document.createElement("span");
   label.className = "portLabel";
-  const cardinality = port.multiple ? "multiple" : "single";
-  const required = port.required ? "required" : "optional";
   label.textContent = portDisplayName(port.dataType);
-  wrap.title = port.label + " - " + port.dataType + " - " + required + " " + cardinality + (port.help ? " - " + port.help : "");
+  const info = createHelpIcon(buildPortHelpText(node, portName, port, direction), { className: "helpInfoIcon helpInfoIcon--port" });
   wrap.append(dot, label);
+  if (info) wrap.appendChild(info);
   wrap.addEventListener("pointerdown", function (event) { if (event.button === 0) event.stopPropagation(); });
   wrap.addEventListener("click", function (event) {
     event.stopPropagation();
@@ -7028,12 +7228,20 @@ async function restoreGraphObject(nextGraph, options = {}) {
 // ---------- Node drag + pan + zoom ----------
 function startNodeDrag(event, node, card) {
   if (event.button !== 0 || event.isPrimary === false) return;
-  if (event.target.closest(".port, .enterGroup")) return;
+  if (event.target.closest(".port, .enterGroup, .graphFrameInfoToggle, .graphFrameResize")) return;
   event.preventDefault();
   event.stopPropagation();
-  const movingNodeIds = state.selectedNodeIds.includes(node.id) && state.selectedNodeIds.length ? state.selectedNodeIds.slice() : [node.id];
-  if (!state.selectedNodeIds.includes(node.id) || state.selectedNodeIds.length !== movingNodeIds.length) {
-    setSelection([node.id], [], { primaryNodeId: node.id, clearPendingEdge: true });
+  const dragStartedFromSelection = state.selectedNodeIds.includes(node.id) && state.selectedNodeIds.length;
+  let movingNodeIds = dragStartedFromSelection ? state.selectedNodeIds.slice() : [node.id];
+  const frameDragWithContents = node.type === "graph_frame" && movingNodeIds.length === 1;
+  if (frameDragWithContents) {
+    movingNodeIds = Array.from(new Set(movingNodeIds.concat(graphFrameContainedNodeIds(node, card))));
+  }
+  const selectionAfterDrag = frameDragWithContents ? [node.id] : movingNodeIds.slice();
+  const selectionAlreadyMatches = selectionAfterDrag.length === state.selectedNodeIds.length
+    && selectionAfterDrag.every(function (nodeId) { return state.selectedNodeIds.includes(nodeId); });
+  if (!selectionAlreadyMatches) {
+    setSelection(selectionAfterDrag, [], { primaryNodeId: node.id, clearPendingEdge: true });
   }
   const dragTarget = event.currentTarget;
   const pointerId = event.pointerId;
@@ -7081,7 +7289,8 @@ function startNodeDrag(event, node, card) {
   if (dragTarget && typeof dragTarget.setPointerCapture === "function") {
     try { dragTarget.setPointerCapture(pointerId); } catch {}
   }
-  const historySnapshot = captureHistorySnapshot(movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst");
+  const historyLabel = frameDragWithContents ? "Frame verplaatst" : (movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst");
+  const historySnapshot = captureHistorySnapshot(historyLabel);
   const dragBounds = 100000;
   let dragFinished = false;
   let cancelThisDrag = null;
@@ -7193,8 +7402,8 @@ function startNodeDrag(event, node, card) {
     const zoneSnap = snapMovedZoneCanvasGroups(nextGraph, movingNodeIds);
     const result = await restoreGraphObject(nextGraph, {
       historySnapshot: historySnapshot,
-      historyLabel: movingNodeIds.length > 1 ? "Nodes verplaatst" : "Node verplaatst",
-      selectedNodeIds: movingNodeIds.slice(),
+      historyLabel: historyLabel,
+      selectedNodeIds: selectionAfterDrag.slice(),
       refreshGraph: true,
       refreshEdgeList: false,
       refreshInspector: true,
@@ -7204,7 +7413,7 @@ function startNodeDrag(event, node, card) {
         for (const [nodeId, position] of committedPositions) delete state.dragPreviewPositions[nodeId];
         scheduleEdgeRender();
         if (zoneSnap.collisions > 0) setStatus("Zone verplaatst en teruggesnapt: die canvaspositie is al bezet.", "");
-        else setStatus(movingNodeIds.length > 1 ? "Nodes verplaatst." : "Node verplaatst.", "success");
+        else setStatus(frameDragWithContents ? "Frame verplaatst." : (movingNodeIds.length > 1 ? "Nodes verplaatst." : "Node verplaatst."), "success");
       }
     });
     if (!result) {
@@ -8354,8 +8563,12 @@ function renderInspector() {
   }
   const def = state.nodeTypes[node.type];
   const heading = document.createElement("div");
-  heading.className = "libGroupTitle";
-  heading.textContent = def.label + " - " + nodeDisplayTitle(node);
+  heading.className = "libGroupTitle inspectorTitleWithHelp";
+  const headingText = document.createElement("span");
+  headingText.textContent = def.label + " - " + nodeDisplayTitle(node);
+  const headingInfo = createHelpIcon(buildNodeHelpText(node, def), { className: "helpInfoIcon helpInfoIcon--heading", side: "right" });
+  heading.appendChild(headingText);
+  if (headingInfo) heading.appendChild(headingInfo);
   el.inspectorForm.appendChild(heading);
   if (node.type === "group") {
     const hint = document.createElement("div");
@@ -8630,17 +8843,729 @@ function buildZoneCanvasInspectorBlock(group) {
   return wrap;
 }
 
-function fieldHelpText(field) {
-  return String(field?.help || field?.description || "").trim();
+const FIELD_TYPE_LABELS = Object.freeze({
+  asset: "asset picker",
+  boolean: "checkbox aan/uit",
+  color: "kleurwaarde",
+  formula: "veilige formule JSON",
+  identity: "stabiele canonical ID",
+  json: "JSON data",
+  keycode: "keyboard code",
+  localizedText: "localization key met fallback",
+  minimapMarkerCategories: "minimap marker categorieen",
+  number: "nummer",
+  reference: "typed reference naar andere node-output",
+  referenceList: "lijst met typed references",
+  select: "keuzelijst",
+  tagList: "taglijst",
+  tagQuery: "tag query",
+  text: "tekst",
+  tokenText: "tekst met @{...} tokens"
+});
+
+const FIELD_TYPE_HELP = Object.freeze({
+  asset: "Kiest een asset uit de asset library. De node bewaart alleen het asset id; de runtime laadt het echte bestand via de gepublishte asset manifest.",
+  boolean: "Checkbox. Aan betekent dat deze optie actief is in compiler of runtime. Uit betekent dat de node dit gedrag niet meeneemt.",
+  color: "Kleur in hexvorm, bijvoorbeeld #ffffff. De editor gebruikt dit voor preview/UI; de runtime gebruikt dezelfde waarde wanneer de node gepubliceerd wordt.",
+  formula: "Declaratieve formule als JSON. Dit blijft data en wordt veilig gevalideerd; er wordt geen JavaScript uitgevoerd.",
+  identity: "Stabiele technische ID. Andere nodes verwijzen naar deze waarde, dus verander dit bewust zodra content al gebruikt of gepublished is.",
+  json: "Vrije gestructureerde data. Gebruik geldige JSON zodat de compiler het exact kan lezen.",
+  keycode: "KeyboardEvent.code waarde, bijvoorbeeld KeyW of Space. Dit is layout-stabieler dan losse letters.",
+  localizedText: "Verwijst naar een localization entry en heeft een fallbacktekst. Handig wanneer dezelfde node meerdere talen moet ondersteunen.",
+  minimapMarkerCategories: "Bepaalt welke markerbronnen op de minimap verschijnen, hoe ze heten, welke vorm/kleur ze gebruiken en of ze door fog of aan de rand zichtbaar blijven.",
+  number: "Numerieke instelling. Min, max en step komen uit het node-schema en voorkomen waarden die de editor of runtime onstabiel maken.",
+  reference: "Typed reference. Vul hier de canonical ID in van een andere definition/target/spawn/etc. De validator controleert of de soort reference klopt.",
+  referenceList: "Meerdere typed references. Een waarde per regel of komma-gescheiden. De compiler gebruikt de lijst om meerdere dependencies of unlocks te volgen.",
+  select: "Keuzelijst. Alleen de opties uit het schema zijn geldig, zodat compiler en runtime dezelfde betekenis blijven gebruiken.",
+  tagList: "Tags groeperen content semantisch. Ze zijn bedoeld voor filtering, ownership, queries en latere automation.",
+  tagQuery: "Filter met all/any/none tags. Hiermee selecteer je content declaratief zonder code te schrijven.",
+  text: "Gewone tekst voor labels, namen of kleine technische waarden.",
+  tokenText: "Tekst die @{...} tokens mag bevatten. De preview probeert static tokens te tonen; runtime tokens worden later door de game-server opgelost."
+});
+
+const NODE_WORKFLOW_HELP = Object.freeze({
+  game_output: "Eindpunt van de publish-flow. In de moderne route verbind je World Assembly.gameProject met Game Output.gameProject. Zodra die verbinding bestaat, worden oudere directe Game Output inputs genegeerd.",
+  world_assembly: "Bouwt de definitieve game project manifest. Verbind hier Project Settings, Chunk Grid, Catalog Registry, Zone Registry, Campaign Registry, Player Rules en UI Output. Daarna gaat World Assembly.gameProject naar Game Output.",
+  campaign_registry: "Verzamelt een of meer Campaign Output packages. Verbind Campaign Output.campaignPackage of de campaign group output naar Campaign Registry.campaignPackage, daarna Campaign Registry.campaignRegistry naar World Assembly.campaigns.",
+  campaign_output: "Bundelt campaign, chapter, quest, dialogue, marker rules en rewards tot een publishbaar campaign package. Alles wat niet via deze inputs binnenkomt, komt niet in gameProject.campaigns.",
+  campaign_definition: "Topniveau voor een verhaallijn. Koppel Chapter Definition nodes aan de chapters input en stuur Campaign Definition naar Campaign Output.campaigns.",
+  chapter_definition: "Ordent quests binnen een campaign. Koppel Quest Definition nodes aan quests en verbind de chapter met Campaign Definition.chapters.",
+  quest_definition: "Server-authoritative quest definition. Koppel steps, start dialogue, conditions, rewards en unlocks. De server bewaart per speler alleen voortgang; deze node beschrijft de regels.",
+  quest_step: "Een stap binnen een quest. Koppel objectives, conditions, rewards en eventueel een marker rule. Sequence bepaalt de standaardvolgorde; nextStepRef kan expliciet doorverwijzen.",
+  objective_talk: "Objective die klaar is wanneer de speler met het juiste target praat of de dialogue-flow gebruikt.",
+  objective_collect: "Objective die kijkt of de speler genoeg van een item in NODE-03 inventory heeft.",
+  objective_deliver: "Objective die itembezit controleert en bij turn-in door de server kan laten consumeren.",
+  objective_reach: "Objective die de spelerpositie tegenover een quest target/zone controleert.",
+  condition_player_level: "Condition die de actuele player level uit NODE-03 progression vergelijkt.",
+  condition_has_item: "Condition die itemhoeveelheid uit NODE-03 inventory controleert.",
+  condition_group: "Combineert conditions met all of any, zodat je AND/OR logica bouwt zonder code.",
+  action_give_currency: "Reward/action die currency via NODE-03 wallet toekent in een servertransactie.",
+  action_give_xp: "Reward/action die XP toekent en level opnieuw berekent via player progression rules.",
+  action_unlock_ability: "Reward/action die een ability vrijspeelt en eventueel in een loadout-slot zet.",
+  action_remove_item: "Action die items uit inventory consumeert. Gebruik dit voor delivery/turn-in kosten.",
+  action_start_quest: "Action die een volgende quest activeert, beschikbaar maakt of alleen trackt.",
+  action_sequence: "Voert meerdere actions in volgorde uit. Handig voor een rewardpakket met currency, XP en ability.",
+  reward_bundle: "Named bundel voor meerdere reward entries. Koppel currency/XP/ability/actions aan rewards en verbind de bundel met een quest of step.",
+  dialogue_definition: "Dialogue root voor een NPC/target. Koppel Dialogue Entry nodes aan entries en verwijs targetRef naar een quest target uit een zone.",
+  dialogue_entry: "Een NPC-regel met optionele choices. Koppel Dialogue Choice nodes aan choices.",
+  dialogue_choice: "Player keuze. Kies accept_quest, turn_in_quest, close of none en vul questRef wanneer de keuze een questactie uitvoert.",
+  dialogue_terminal: "Eindpunt van een dialogue branch.",
+  quest_tracker_hud: "HUD module die server-state uit NODE-04 toont: beschikbare/actieve/voltooide quest, objective progress, target action en optionele resetknop.",
+  dialogue_hud: "HUD module die actieve dialogue vanuit NODE-04 toont.",
+  notification_hud: "HUD module die recente queststatus-wijzigingen toont.",
+  catalog_registry: "Verzamelt Catalog Output packages. Verbind daarna naar World Assembly.catalogs.",
+  catalog_output: "Bundelt NODE-03 definitions zoals items, currencies, abilities, enemies, resources en loot tot het catalog package waar quests naar verwijzen.",
+  zone_registry: "Verzamelt Zone Output packages. Verbind daarna naar World Assembly.zones.",
+  zone_output: "Bundelt zone definition, spawns, links, quest targets, terrain, collision en runtime content voor een zone.",
+  ui_output: "Bundelt HUD/UI modules. Verbind naar World Assembly.ui zodat de game de modules kan renderen.",
+  player_rules_output: "Bundelt player rules zoals progression, death, inventory en ability policies. Verbind naar World Assembly.playerRules.",
+  graph_frame: "Editor-only frame. Gebruik dit om nodes visueel bij elkaar te zetten en uitleg op te slaan. Het heeft geen poorten en verandert niets aan de game-runtime."
+});
+
+function cleanTooltipText(value) {
+  return String(value === null || value === undefined ? "" : value).replace(/\s+/g, " ").trim();
 }
 
-function applyFieldHelp(elements, helpText) {
+function tooltipValue(value) {
+  if (value === undefined) return "geen vaste schema-default";
+  if (value === null) return "null";
+  if (value === "") return "leeg";
+  if (typeof value === "boolean") return value ? "aan / true" : "uit / false";
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+  }
+  return String(value);
+}
+
+function fieldTypeLabel(field) {
+  return FIELD_TYPE_LABELS[field?.type] || cleanTooltipText(field?.type || "waarde");
+}
+
+function fieldHelpText(field) {
+  return cleanTooltipText(field?.help || field?.description || "");
+}
+
+function defaultReasonText(field) {
+  if (!field || field.default === undefined) {
+    return "Dit veld heeft geen vaste schema-default. Leeg betekent meestal: de compiler of runtime gebruikt een contextuele fallback, of de waarde is alleen nodig wanneer je deze feature actief gebruikt.";
+  }
+  if (field.type === "boolean") {
+    return field.default === true
+      ? "De standaard is aan omdat nieuwe content dan direct zichtbaar of bruikbaar is zonder extra wiring. Zet hem uit wanneer je dit gedrag bewust wilt uitschakelen."
+      : "De standaard is uit omdat dit meestal optioneel, debug, test of extra gedrag is. Zo blijft een nieuwe node rustig totdat jij die functie bewust activeert.";
+  }
+  if (field.type === "number") {
+    return "De standaard is een veilige startwaarde uit het node-schema. Min, max en step begrenzen de waarde zodat publish en runtime voorspelbaar blijven.";
+  }
+  if (field.type === "select") {
+    return "De standaard kiest de meest neutrale of meest gebruikte route uit de toegestane opties. Andere keuzes veranderen expliciet hoe compiler of runtime deze node interpreteert.";
+  }
+  if (field.type === "identity") {
+    return "De standaard is een voorbeeld-ID. Maak hem uniek en stabiel voordat andere nodes ernaar verwijzen.";
+  }
+  if (field.type === "reference" || field.type === "referenceList") {
+    return "De standaard is leeg omdat references pas kloppen zodra de bedoelde target, item, quest, zone of andere definition echt bestaat.";
+  }
+  return "De standaard komt uit het shared node-schema. Hij is bedoeld als geldige beginwaarde zodat een nieuwe node begrijpelijk start en pas verandert wanneer jij ontwerpkeuzes invult.";
+}
+
+function fieldConstraintLines(field) {
+  const lines = [];
+  if (!field) return lines;
+  if (field.required) lines.push("Verplicht: ja. De validator verwacht een bruikbare waarde of een geldige default.");
+  else lines.push("Verplicht: nee. Leeg laten betekent dat de compiler/runtime de feature overslaat of een fallback gebruikt.");
+  if (field.min !== undefined || field.max !== undefined || field.step !== undefined) {
+    lines.push("Bereik: min " + tooltipValue(field.min) + ", max " + tooltipValue(field.max) + ", stap " + tooltipValue(field.step) + ".");
+  }
+  if (Array.isArray(field.options) && field.options.length) {
+    lines.push("Keuzes: " + field.options.map(function (option) {
+      if (option && typeof option === "object") return cleanTooltipText(option.label || option.value || "");
+      return cleanTooltipText(option);
+    }).filter(Boolean).join(", ") + ".");
+  }
+  if (Array.isArray(field.referenceKinds) && field.referenceKinds.length) {
+    lines.push("Verwachte reference kinds: " + field.referenceKinds.join(", ") + ".");
+  }
+  if (Array.isArray(field.assetTypes) && field.assetTypes.length) {
+    lines.push("Toegestane asset types: " + field.assetTypes.join(", ") + ".");
+  }
+  if (field.dynamicOptions) {
+    lines.push("Opties worden dynamisch gevuld uit: " + field.dynamicOptions + ".");
+  }
+  if (field.pattern) {
+    lines.push("Pattern: " + field.pattern + ".");
+  }
+  return lines;
+}
+
+function nodePortsForHelp(node, def) {
+  if (node) return resolvedPorts(node);
+  return { inputs: def?.inputs || {}, outputs: def?.outputs || {} };
+}
+
+function visiblePortHelpEntries(ports) {
+  return Object.entries(ports || {}).filter(function ([name, port]) {
+    return name !== "__aliases" && port && !port.hidden && !port.internal;
+  });
+}
+
+function portSummaryLine(portName, port) {
+  return "- " + (port.label || portName) + " (" + (port.dataType || "unknown") + ", " + (port.required ? "verplicht" : "optioneel") + ", " + (port.multiple ? "meerdere" : "een") + ")";
+}
+
+function nodeWorkflowText(node, type, def) {
+  if (type === "group") {
+    const kind = String(node?.values?.groupKind || "generic").trim();
+    if (kind === "campaign") return "Campaign Group: open de group, bouw Campaign Output binnenin, verbind Campaign Output.campaignPackage naar Group Output.campaignPackage en buiten de group naar Campaign Registry.";
+    if (kind === "catalog") return "Catalog Group: plaats NODE-03 definitions binnenin, verbind ze naar Catalog Output, daarna Catalog Output.catalogPackage naar Group Output en buiten de group naar Catalog Registry.";
+    if (kind === "zone" || kind === "zone_canvas") return "Zone Group: plaats Zone Definition, Spawn, terrain/collision/targets en Zone Output binnenin. Zone Output.zonePackage gaat naar Group Output en buiten de group naar Zone Registry.";
+    if (kind === "ui") return "UI Group: plaats HUD modules binnenin, verbind ze naar UI Output en daarna naar World Assembly.ui.";
+    if (kind === "player_rules") return "Player Rules Group: plaats policies binnenin, verbind ze naar Player Rules Output en daarna naar World Assembly.playerRules.";
+    return "Generic Group: gebruik de Group Interface om typed inputs/outputs te maken. Binnenin verbinden Group Input en Group Output die interface met de interne nodes.";
+  }
+  return NODE_WORKFLOW_HELP[type] || "Gebruik deze node door verplichte inputs te verbinden, de settings in de inspector in te vullen en een relevante output naar de volgende node in de publish-keten te verbinden.";
+}
+
+function buildNodeDefinitionHelpText(type, def, node = null) {
+  const ports = nodePortsForHelp(node, def);
+  const inputEntries = visiblePortHelpEntries(ports.inputs);
+  const outputEntries = visiblePortHelpEntries(ports.outputs);
+  const fieldEntries = Object.entries(def?.fields || {}).filter(function ([, field]) { return !field.hidden; });
+  const lines = [
+    "Node: " + (def?.label || type),
+    "Type: " + type,
+    "Groep: " + (def?.group || "Other")
+  ];
+  if (node) lines.push("Titel in graph: " + nodeDisplayTitle(node));
+  if (def?.description) lines.push("", "Wat doet deze node:", cleanTooltipText(def.description));
+  lines.push("", "Waarvoor dient hij:", nodeWorkflowText(node, type, def));
+  lines.push("", "Inputs:");
+  if (inputEntries.length) inputEntries.forEach(function ([name, port]) { lines.push(portSummaryLine(name, port)); });
+  else lines.push("- Geen inputs. Deze node start vanuit eigen settings of fungeert als output/eindpunt.");
+  lines.push("", "Outputs:");
+  if (outputEntries.length) outputEntries.forEach(function ([name, port]) { lines.push(portSummaryLine(name, port)); });
+  else lines.push("- Geen outputs. Deze node is meestal een eindpunt of runtime-only configuratie.");
+  if (fieldEntries.length) {
+    lines.push("", "Settings op deze node:");
+    fieldEntries.forEach(function ([key, field]) {
+      lines.push("- " + (field.label || key) + " [" + key + "]: default " + tooltipValue(field.default) + ".");
+    });
+  }
+  lines.push("", "Werkwijze:", "1. Vul eerst stabiele IDs en verplichte velden in.", "2. Verbind inputs met outputs van hetzelfde datatype.", "3. Verbind de output door naar de registry/output/assembly die bij deze node hoort.", "4. Publish pas nadat validation geen blokkerende errors meer toont.");
+  return lines.filter(function (line) { return line !== null && line !== undefined; }).join("\n");
+}
+
+function buildNodeHelpText(node, def) {
+  return buildNodeDefinitionHelpText(node?.type || "unknown", def || {}, node || null);
+}
+
+function buildPortHelpText(node, portName, port, direction) {
+  const def = state.nodeTypes[node?.type] || {};
+  const lines = [
+    (direction === "input" ? "Input port: " : "Output port: ") + (port.label || portName),
+    "Node: " + (def.label || node?.type || "unknown") + " (" + nodeDisplayTitle(node) + ")",
+    "Technische portnaam: " + portName,
+    "Datatype: " + (port.dataType || "unknown"),
+    "Cardinality: " + (port.multiple ? "meerdere verbindingen toegestaan" : "een verbinding"),
+    "Verplicht: " + (port.required ? "ja" : "nee")
+  ];
+  if (port.help) lines.push("", "Schema-uitleg:", cleanTooltipText(port.help));
+  lines.push("", "Wat doet deze port:");
+  if (direction === "input") {
+    lines.push("Deze input ontvangt data uit een upstream node. De compiler volgt deze verbinding om definitions, packages, settings of runtimecontent in deze node te verzamelen.");
+    lines.push("Verbind alleen een output met hetzelfde datatype. Als deze input verplicht is en leeg blijft, krijg je meestal een validation error of ontbreekt runtimecontent.");
+  } else {
+    lines.push("Deze output publiceert de data die deze node maakt. Downstream nodes gebruiken dit datatype om te weten wat ze mogen accepteren.");
+    lines.push("Verbind deze output naar de volgende stap in de keten, bijvoorbeeld een Output, Registry, World Assembly of Game Output.");
+  }
+  lines.push("", "Node-context:", nodeWorkflowText(node, node?.type || "", def));
+  return lines.join("\n");
+}
+
+function buildFieldHelpText(node, key, field, value) {
+  const def = state.nodeTypes[node?.type] || {};
+  const lines = [
+    "Setting: " + (field.label || key),
+    "Node: " + (def.label || node?.type || "unknown") + " (" + nodeDisplayTitle(node) + ")",
+    "Technische key: " + key,
+    "Type: " + fieldTypeLabel(field),
+    "Huidige waarde: " + tooltipValue(value),
+    "Standaard: " + tooltipValue(field.default),
+    "Waarom deze standaard: " + defaultReasonText(field)
+  ];
+  const schemaHelp = fieldHelpText(field);
+  if (schemaHelp) lines.push("", "Schema-uitleg:", schemaHelp);
+  lines.push("", "Wat doet deze setting:", FIELD_TYPE_HELP[field?.type] || "Deze waarde wordt opgeslagen in de node en door validation, compiler of runtime gelezen wanneer de node gepubliceerd wordt.");
+  lines.push.apply(lines, fieldConstraintLines(field));
+  lines.push("", "Hoe gebruik je hem:", "Pas deze waarde aan wanneer dit gedrag voor deze node anders moet zijn dan de standaard. Laat hem op default staan als je nog aan het bouwen bent en eerst de nodeketen werkend wilt krijgen.");
+  lines.push("", "Node-context:", nodeWorkflowText(node, node?.type || "", def));
+  return lines.join("\n");
+}
+
+function buildSpecialGroupHelpText(preset) {
+  const type = "group";
+  const def = state.nodeTypes.group || {};
+  const node = { type: "group", title: preset.title, values: { groupKind: preset.kind } };
+  return buildNodeDefinitionHelpText(type, def, node);
+}
+
+function buildGroupInterfaceHelpText(node, directionFilter) {
+  const direction = directionFilter === "input" ? "inputs" : directionFilter === "output" ? "outputs" : "inputs en outputs";
+  return [
+    "Group Interface",
+    "Node: " + (nodeDisplayTitle(node) || "Group"),
+    "Wat doet dit:",
+    "Hier bepaal je welke typed ports de Group Node aan de buitenkant heeft en welke ports Group Input/Group Output binnenin tonen.",
+    "Je bewerkt nu: " + direction + ".",
+    "",
+    "Waarom belangrijk:",
+    "Een group is alleen bruikbaar in de publish-keten als de juiste output naar buiten komt. Voor een Campaign Group is dat meestal campaignPackage. Voor Zone is dat zonePackage. Voor Catalog is dat catalogPackage.",
+    "",
+    "Gebruik:",
+    "1. Geef de port een duidelijke label.",
+    "2. Kies het juiste datatype.",
+    "3. Zet multiple aan wanneer meerdere verbindingen logisch zijn.",
+    "4. Verbind binnenin Group Input of Group Output met de echte contentnodes."
+  ].join("\n");
+}
+
+let helpTooltipElement = null;
+let helpTooltipTarget = null;
+
+function ensureHelpTooltipElement() {
+  if (helpTooltipElement) return helpTooltipElement;
+  helpTooltipElement = document.createElement("div");
+  helpTooltipElement.className = "editorHelpTooltip";
+  helpTooltipElement.hidden = true;
+  helpTooltipElement.addEventListener("wheel", function (event) { event.stopPropagation(); }, { passive: true });
+  helpTooltipElement.addEventListener("touchmove", function (event) { event.stopPropagation(); }, { passive: true });
+  helpTooltipElement.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
+  helpTooltipElement.addEventListener("click", function (event) { event.stopPropagation(); });
+  document.body.appendChild(helpTooltipElement);
+  return helpTooltipElement;
+}
+
+function positionHelpTooltip(target, event = null) {
+  const tooltip = ensureHelpTooltipElement();
+  const rect = target.getBoundingClientRect();
+  const width = tooltip.offsetWidth || 420;
+  const height = tooltip.offsetHeight || 140;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+  const side = target.dataset.helpTooltipSide || "";
+  let left;
+  let top;
+  if (side === "top") {
+    left = rect.left + rect.width / 2 - width / 2;
+    top = rect.top - height - 10;
+    if (top < 8) top = rect.bottom + 10;
+  } else {
+    left = event && Number.isFinite(event.clientX) ? event.clientX + 14 : rect.right + 10;
+    top = event && Number.isFinite(event.clientY) ? event.clientY + 14 : rect.top;
+  }
+  left = Math.max(8, Math.min(left, viewportWidth - width - 8));
+  top = Math.max(8, Math.min(top, viewportHeight - height - 8));
+  tooltip.style.left = left + "px";
+  tooltip.style.top = top + "px";
+}
+
+function showHelpTooltip(target, event = null) {
+  const text = cleanTooltipText(target?.dataset?.helpTooltip || "");
+  if (!text) return;
+  const previousTarget = helpTooltipTarget;
+  helpTooltipTarget = target;
+  const tooltip = ensureHelpTooltipElement();
+  tooltip.textContent = target.dataset.helpTooltip;
+  tooltip.hidden = false;
+  tooltip.classList.add("visible");
+  if (previousTarget !== target) tooltip.scrollTop = 0;
+  positionHelpTooltip(target, event);
+  requestAnimationFrame(function () {
+    if (helpTooltipTarget === target && !tooltip.hidden) positionHelpTooltip(target, event);
+  });
+}
+
+function hideHelpTooltip() {
+  helpTooltipTarget = null;
+  if (!helpTooltipElement) return;
+  helpTooltipElement.classList.remove("visible");
+  helpTooltipElement.hidden = true;
+}
+
+function eventTooltipTarget(event) {
+  const target = event?.target;
+  if (!target || typeof target.closest !== "function") return null;
+  const tooltip = helpTooltipElement;
+  if (tooltip && tooltip.contains(target)) return null;
+  return target.closest("[data-help-trigger]");
+}
+
+function installHelpTooltipListeners() {
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      hideHelpTooltip();
+      return;
+    }
+    const target = eventTooltipTarget(event);
+    if (!target || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleHelpTooltip(target, null);
+  }, true);
+  window.addEventListener("blur", hideHelpTooltip, true);
+  window.addEventListener("resize", hideHelpTooltip, true);
+  window.addEventListener("pointerdown", function (event) {
+    if (helpTooltipElement && event.target && helpTooltipElement.contains(event.target)) return;
+    if (eventTooltipTarget(event)) return;
+    hideHelpTooltip();
+  }, true);
+}
+
+function toggleHelpTooltip(target, event = null) {
+  if (helpTooltipTarget === target && helpTooltipElement && !helpTooltipElement.hidden) {
+    hideHelpTooltip();
+    return;
+  }
+  showHelpTooltip(target, event);
+}
+
+function applyHelpTooltip(elements, helpText, options = {}) {
   const help = String(helpText || "").trim();
   if (!help) return;
   for (const element of Array.isArray(elements) ? elements : [elements]) {
     if (!element) continue;
-    element.title = help;
+    element.dataset.helpTooltip = help;
+    if (options.side) element.dataset.helpTooltipSide = options.side;
+    element.setAttribute("aria-label", help.split("\n")[0]);
+    element.removeAttribute("title");
   }
+}
+
+function applyFieldHelp(elements, helpText, options = {}) {
+  applyHelpTooltip(elements, helpText, options);
+}
+
+function createHelpIcon(helpText, options = {}) {
+  const help = String(helpText || "").trim();
+  if (!help) return null;
+  const icon = document.createElement("span");
+  icon.className = options.className || "helpInfoIcon";
+  icon.textContent = "ⓘ";
+  icon.tabIndex = 0;
+  icon.setAttribute("role", "button");
+  applyHelpTooltip(icon, help, options);
+  icon.dataset.helpTrigger = "1";
+  icon.setAttribute("aria-label", options.ariaLabel || ("Toon uitleg: " + help.split("\n")[0]));
+  icon.addEventListener("pointerdown", function (event) {
+    event.stopPropagation();
+  });
+  icon.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleHelpTooltip(icon, event);
+  });
+  icon.addEventListener("keydown", function (event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleHelpTooltip(icon, null);
+  });
+  return icon;
+}
+
+installHelpTooltipListeners();
+
+const MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS = [
+  { value: "users", label: "Users" },
+  { value: "enemy", label: "Enemy" },
+  { value: "boss", label: "Boss" },
+  { value: "wildlife", label: "Wild life" },
+  { value: "npc", label: "NPC" },
+  { value: "quest", label: "Quest" },
+  { value: "spawn", label: "Spawn" },
+  { value: "teleport", label: "Teleport" },
+  { value: "settlement", label: "Dorp namen" },
+  { value: "crafting", label: "Crafting" },
+  { value: "cooking", label: "Cooking" },
+  { value: "vendor", label: "Vendor" },
+  { value: "market", label: "Market" },
+  { value: "resource", label: "Resource" },
+  { value: "item", label: "Items" },
+  { value: "object", label: "Objects" },
+  { value: "custom", label: "Custom" }
+];
+const MINIMAP_MARKER_SHAPE_OPTIONS = ["dot", "square", "diamond", "triangle", "cross", "star", "label"];
+const MINIMAP_MARKER_ANIMATION_OPTIONS = ["none", "pulse", "blink", "glow"];
+
+function normalizeMinimapCategoryId(value, fallback) {
+  return normalizeCanonicalId(value, fallback || "custom").replace(/[.:]+/g, "_") || fallback || "custom";
+}
+
+function normalizeMinimapMarkerCategory(raw, index = 0) {
+  const sourceValues = new Set(MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS.map(function (option) { return option.value; }));
+  const source = sourceValues.has(String(raw?.source || "")) ? String(raw.source) : "custom";
+  const id = normalizeMinimapCategoryId(raw?.id || raw?.categoryId || raw?.source || source, "category_" + (index + 1));
+  const shape = MINIMAP_MARKER_SHAPE_OPTIONS.includes(String(raw?.shape || "")) ? String(raw.shape) : "dot";
+  const animation = MINIMAP_MARKER_ANIMATION_OPTIONS.includes(String(raw?.animation || "")) ? String(raw.animation) : "none";
+  const color = /^#[0-9a-fA-F]{6}$/.test(String(raw?.color || "")) ? String(raw.color) : "#ffffff";
+  return {
+    id,
+    label: String(raw?.label || id).trim() || id,
+    source,
+    enabled: raw?.enabled !== false,
+    color,
+    shape,
+    iconAssetId: String(raw?.iconAssetId || "").trim() || null,
+    showLabel: raw?.showLabel === true,
+    clampOutside: raw?.clampOutside === true,
+    showThroughFog: raw?.showThroughFog === true,
+    iconSizePx: Math.max(3, Math.min(64, Number(raw?.iconSizePx) || 9)),
+    fontSizePx: Math.max(6, Math.min(32, Number(raw?.fontSizePx) || 10)),
+    nameMaxLength: Math.max(3, Math.min(64, Number(raw?.nameMaxLength) || 14)),
+    animation
+  };
+}
+
+function normalizeMinimapMarkerCategories(value, fallback = []) {
+  const source = Array.isArray(value) && value.length ? value : fallback;
+  const seen = new Set();
+  return (Array.isArray(source) ? source : []).map(normalizeMinimapMarkerCategory).filter(function (category) {
+    if (!category.id || seen.has(category.id)) return false;
+    seen.add(category.id);
+    return true;
+  });
+}
+
+function minimapCategorySelectOptions() {
+  const field = state.nodeTypes?.game_minimap_hud?.fields?.markerCategories || {};
+  const defaults = normalizeMinimapMarkerCategories(field.default || []);
+  const collected = [];
+  for (const node of state.graph.nodes || []) {
+    if (node?.type !== "game_minimap_hud") continue;
+    collected.push.apply(collected, normalizeMinimapMarkerCategories(node.values?.markerCategories, defaults));
+  }
+  if (!collected.length) collected.push.apply(collected, defaults);
+  const seen = new Set();
+  return collected.filter(function (category) {
+    if (!category.id || seen.has(category.id)) return false;
+    seen.add(category.id);
+    return true;
+  }).map(function (category) {
+    return { value: category.id, label: category.label || category.id };
+  });
+}
+
+function uniqueMinimapCategoryId(categories, seed) {
+  const base = normalizeMinimapCategoryId(seed || "custom", "custom");
+  const used = new Set(categories.map(function (category) { return String(category.id || ""); }));
+  if (!used.has(base)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = base + "_" + index;
+    if (!used.has(candidate)) return candidate;
+  }
+  return base + "_" + Date.now().toString(36);
+}
+
+function buildImageAssetSelect(value, onChange) {
+  const select = document.createElement("select");
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "(kleur/vorm)";
+  select.appendChild(blank);
+  for (const asset of state.assets.filter(function (a) { return ["image", "texture"].includes(a.assetType); })) {
+    const opt = document.createElement("option");
+    opt.value = asset.id;
+    opt.textContent = asset.name + " (" + asset.assetType + ")";
+    if (asset.id === value) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.value = value || "";
+  select.addEventListener("change", function () { onChange(select.value || null); });
+  return select;
+}
+
+function buildMinimapMarkerCategoriesField(node, key, value, field) {
+  const categories = normalizeMinimapMarkerCategories(value, field.default || []);
+  const root = document.createElement("div");
+  root.className = "minimapCategoryEditor";
+  const commit = function (nextCategories) {
+    patchInspectorField(node, key, field, normalizeMinimapMarkerCategories(nextCategories, field.default || []));
+  };
+  const updateAt = function (index, patch) {
+    const next = categories.map(function (category, categoryIndex) {
+      return categoryIndex === index ? Object.assign({}, category, patch) : category;
+    });
+    commit(next);
+  };
+
+  for (const [index, category] of categories.entries()) {
+    const item = document.createElement("details");
+    item.className = "minimapCategoryItem";
+    item.open = index < 6 || category.enabled === true;
+    const summary = document.createElement("summary");
+    summary.className = "minimapCategorySummary";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = category.enabled !== false;
+    enabled.addEventListener("click", function (event) { event.stopPropagation(); });
+    enabled.addEventListener("change", function () { updateAt(index, { enabled: enabled.checked }); });
+    const swatch = document.createElement("span");
+    swatch.className = "minimapCategorySwatch";
+    swatch.style.background = category.color || "#ffffff";
+    const title = document.createElement("span");
+    title.className = "minimapCategoryTitle";
+    title.textContent = (category.label || category.id) + " · " + category.source;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "mini danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      commit(categories.filter(function (_, categoryIndex) { return categoryIndex !== index; }));
+    });
+    summary.append(enabled, swatch, title, remove);
+    item.appendChild(summary);
+
+    const grid = document.createElement("div");
+    grid.className = "minimapCategoryGrid";
+    const addInput = function (labelText, input) {
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      label.appendChild(input);
+      grid.appendChild(label);
+      return input;
+    };
+    const idInput = document.createElement("input");
+    idInput.type = "text";
+    idInput.value = category.id;
+    idInput.addEventListener("change", function () {
+      updateAt(index, { id: uniqueMinimapCategoryId(categories.filter(function (_, categoryIndex) { return categoryIndex !== index; }), idInput.value) });
+    });
+    addInput("Id", idInput);
+
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.value = category.label;
+    labelInput.addEventListener("change", function () { updateAt(index, { label: labelInput.value.trim() || category.id }); });
+    addInput("Naam", labelInput);
+
+    const sourceSelect = document.createElement("select");
+    for (const option of MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (option.value === category.source) opt.selected = true;
+      sourceSelect.appendChild(opt);
+    }
+    sourceSelect.addEventListener("change", function () { updateAt(index, { source: sourceSelect.value }); });
+    addInput("Bron", sourceSelect);
+
+    const shapeSelect = document.createElement("select");
+    for (const shape of MINIMAP_MARKER_SHAPE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = shape;
+      opt.textContent = shape;
+      if (shape === category.shape) opt.selected = true;
+      shapeSelect.appendChild(opt);
+    }
+    shapeSelect.addEventListener("change", function () { updateAt(index, { shape: shapeSelect.value }); });
+    addInput("Vorm", shapeSelect);
+
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = /^#[0-9a-fA-F]{6}$/.test(category.color) ? category.color : "#ffffff";
+    colorInput.addEventListener("change", function () { updateAt(index, { color: colorInput.value }); });
+    addInput("Kleur", colorInput);
+
+    addInput("Asset", buildImageAssetSelect(category.iconAssetId, function (assetId) { updateAt(index, { iconAssetId: assetId }); }));
+
+    const sizeInput = document.createElement("input");
+    sizeInput.type = "number";
+    sizeInput.min = "3";
+    sizeInput.max = "64";
+    sizeInput.step = "1";
+    sizeInput.value = String(category.iconSizePx);
+    sizeInput.addEventListener("change", function () { updateAt(index, { iconSizePx: Number(sizeInput.value) }); });
+    addInput("Icon map px", sizeInput);
+
+    const fontInput = document.createElement("input");
+    fontInput.type = "number";
+    fontInput.min = "6";
+    fontInput.max = "32";
+    fontInput.step = "1";
+    fontInput.value = String(category.fontSizePx);
+    fontInput.addEventListener("change", function () { updateAt(index, { fontSizePx: Number(fontInput.value) }); });
+    addInput("Tekst map px", fontInput);
+
+    const maxNameInput = document.createElement("input");
+    maxNameInput.type = "number";
+    maxNameInput.min = "3";
+    maxNameInput.max = "64";
+    maxNameInput.step = "1";
+    maxNameInput.value = String(category.nameMaxLength);
+    maxNameInput.addEventListener("change", function () { updateAt(index, { nameMaxLength: Number(maxNameInput.value) }); });
+    addInput("Naam lengte", maxNameInput);
+
+    const animationSelect = document.createElement("select");
+    for (const animation of MINIMAP_MARKER_ANIMATION_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = animation;
+      opt.textContent = animation;
+      if (animation === category.animation) opt.selected = true;
+      animationSelect.appendChild(opt);
+    }
+    animationSelect.addEventListener("change", function () { updateAt(index, { animation: animationSelect.value }); });
+    addInput("Animatie", animationSelect);
+
+    const toggles = document.createElement("div");
+    toggles.className = "minimapCategoryToggles";
+    const addToggle = function (labelText, patchKey) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = category[patchKey] === true;
+      input.addEventListener("change", function () { updateAt(index, { [patchKey]: input.checked }); });
+      label.append(input, document.createTextNode(labelText));
+      toggles.appendChild(label);
+    };
+    addToggle("Naam tonen", "showLabel");
+    addToggle("Aan rand hangen", "clampOutside");
+    addToggle("Zichtbaar op fog", "showThroughFog");
+    item.append(grid, toggles);
+    root.appendChild(item);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "minimapCategoryActions";
+  const source = document.createElement("select");
+  for (const option of MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS) {
+    const opt = document.createElement("option");
+    opt.value = option.value;
+    opt.textContent = option.label;
+    source.appendChild(opt);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "Categorie toevoegen";
+  add.addEventListener("click", function () {
+    const sourceValue = source.value || "custom";
+    const option = MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS.find(function (entry) { return entry.value === sourceValue; });
+    const id = uniqueMinimapCategoryId(categories, sourceValue);
+    commit(categories.concat([normalizeMinimapMarkerCategory({
+      id,
+      label: option?.label || id,
+      source: sourceValue,
+      enabled: true,
+      color: "#ffffff",
+      shape: "dot",
+      showLabel: true
+    }, categories.length)]));
+  });
+  actions.append(source, add);
+  root.appendChild(actions);
+  return root;
 }
 
 function nodeFieldPatch(node, key, value) {
@@ -8663,14 +9588,23 @@ function buildField(node, key, field) {
   const wrap = document.createElement("div");
   wrap.className = "field";
   const label = document.createElement("label");
-  label.textContent = field.label;
-  const help = fieldHelpText(field);
+  label.className = "fieldLabel";
+  const value = effectiveFieldValue(field, node.values[key]);
+  const help = buildFieldHelpText(node, key, field, value);
+  const labelText = document.createElement("span");
+  labelText.textContent = field.label;
+  const labelInfo = createHelpIcon(help, { className: "helpInfoIcon helpInfoIcon--field", side: "right" });
+  label.appendChild(labelText);
+  if (labelInfo) label.appendChild(labelInfo);
   applyFieldHelp([wrap, label], help);
   wrap.appendChild(label);
-  const value = effectiveFieldValue(field, node.values[key]);
 
   if (node.type === "bounded_area_scatter" && key === "sourceAssetIds") {
     wrap.appendChild(buildScatterSourcePicker(node, key, value));
+    return wrap;
+  }
+  if (field.type === "minimapMarkerCategories") {
+    wrap.appendChild(buildMinimapMarkerCategoriesField(node, key, value, field));
     return wrap;
   }
   if (field.type === "boolean") {
@@ -8691,11 +9625,17 @@ function buildField(node, key, field) {
     applyFieldHelp(select, help);
     const blank = document.createElement("option");
     blank.value = "";
-    blank.textContent = field.dynamicOptions === "assetAnimations" ? animationBlankLabel(key) : "(kies)";
+    blank.textContent = field.dynamicOptions === "assetAnimations"
+      ? animationBlankLabel(key)
+      : field.dynamicOptions === "minimapCategories"
+        ? "(geen categorie)"
+        : "(kies)";
     select.appendChild(blank);
     const options = field.dynamicOptions === "assetAnimations"
       ? animationClipsForAsset(assetById(node.values.modelAssetId))
-      : (field.options || []).map(function (option, index) {
+      : field.dynamicOptions === "minimapCategories"
+        ? minimapCategorySelectOptions()
+        : (field.options || []).map(function (option, index) {
         if (option && typeof option === "object") {
           return {
             value: option.value === undefined || option.value === null ? "" : String(option.value),
@@ -9116,6 +10056,7 @@ function buildGroupInterfaceEditor(node, key, value, options = {}) {
   const interfaceState = cloneGroupInterface(value);
   const targetNodeId = options.targetNodeId || node.id;
   const directionFilter = options.direction === "input" || options.direction === "output" ? options.direction : null;
+  const interfaceHelp = buildGroupInterfaceHelpText(node, directionFilter);
 
   function commit() {
     patchValues(targetNodeId, makePatch(key, cloneGroupInterface(interfaceState)), {
@@ -9230,9 +10171,13 @@ function buildGroupInterfaceEditor(node, key, value, options = {}) {
 
   const intro = document.createElement("div");
   intro.className = "groupInterfaceHint";
-  intro.textContent = directionFilter
+  const introText = document.createElement("span");
+  introText.textContent = directionFilter
     ? "Pas hier de ports aan die aan deze Group Input/Output gekoppeld zijn."
     : "Dit is de echte groep-interface. Vul alleen het label in; de technische naam wordt automatisch gesluggifyt en blijft stabiel zodra je een port gebruikt.";
+  const introInfo = createHelpIcon(interfaceHelp, { className: "helpInfoIcon helpInfoIcon--inline", side: "right" });
+  intro.appendChild(introText);
+  if (introInfo) intro.appendChild(introInfo);
   editor.appendChild(intro);
   if (!directionFilter || directionFilter === "input") editor.appendChild(buildSection("input", "Inputs"));
   if (!directionFilter || directionFilter === "output") editor.appendChild(buildSection("output", "Outputs"));

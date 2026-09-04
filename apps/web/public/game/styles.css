@@ -30,6 +30,20 @@ body {
   -webkit-touch-callout: none;
 }
 
+.defeatOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(110, 8, 8, 0.12), rgba(12, 0, 0, 0.48) 62%, rgba(0, 0, 0, 0.62)),
+    linear-gradient(180deg, rgba(127, 29, 29, 0.28), rgba(0, 0, 0, 0.44));
+}
+
+.defeatOverlay[hidden] {
+  display: none;
+}
+
 .hud {
   position: absolute;
   inset: 0;
@@ -54,7 +68,7 @@ body {
   position: absolute;
   overflow: hidden;
   border: 1px solid rgba(136, 156, 176, 0.28);
-  background: #0b131c;
+  background: rgba(11, 19, 28, var(--hud-minimap-bg-alpha, 1));
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
   pointer-events: auto;
 }
@@ -104,11 +118,11 @@ body {
   width: min(380px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   padding: 14px;
-  background: rgba(8, 13, 19, 0.82);
+  background: rgba(8, 13, 19, var(--hud-status-bg-alpha, 0.82));
   border: 1px solid rgba(136, 156, 176, 0.22);
   border-radius: 18px;
-  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(12px);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, var(--hud-status-shadow-alpha, 0.34));
+  backdrop-filter: blur(var(--hud-status-blur, 12px));
   pointer-events: auto;
 }
 
@@ -290,7 +304,70 @@ body {
   --hud-top-inset-right: 0%;
   --hud-bottom-inset-left: 0%;
   --hud-bottom-inset-right: 0%;
+  --hud-outer-gap: 12px;
+  --hud-panel-opacity: 1;
+  --hud-module-bg-alpha: 0.82;
+  --hud-status-bg-alpha: 0.82;
+  --hud-perf-bg-alpha: 0.8;
+  --hud-minimap-bg-alpha: 1;
+  --hud-tab-bg-alpha: 0.68;
+  --hud-tab-active-bg-alpha: 0.92;
+  --hud-module-shadow-alpha: 0.3;
+  --hud-status-shadow-alpha: 0.34;
+  --hud-perf-shadow-alpha: 0.28;
+  --hud-module-blur: 10px;
+  --hud-status-blur: 12px;
   pointer-events: none;
+}
+
+/* Hidden-by-default scrollbars for every scrollable spot inside
+   the HUD (panel bodies, long lists inside a panel, a vertical tab strip,
+   ...) - the thumb only turns visible while that specific element is being
+   scrolled (see handleGameHudScroll in game.js, which toggles this class on
+   scroll and removes it again after a short idle timeout). The whole native
+   scrollbar is 0px while inactive, so browser-drawn borders/tracks cannot
+   flash during programmatic scroll restores. */
+.gameHudRuntimeRoot,
+.gameHudRuntimeRoot * {
+  -ms-overflow-style: none;
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+}
+.gameHudRuntimeRoot::-webkit-scrollbar,
+.gameHudRuntimeRoot *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.gameHudRuntimeRoot::-webkit-scrollbar-track,
+.gameHudRuntimeRoot::-webkit-scrollbar-track-piece,
+.gameHudRuntimeRoot::-webkit-scrollbar-corner,
+.gameHudRuntimeRoot::-webkit-scrollbar-button,
+.gameHudRuntimeRoot *::-webkit-scrollbar-track,
+.gameHudRuntimeRoot *::-webkit-scrollbar-track-piece,
+.gameHudRuntimeRoot *::-webkit-scrollbar-corner,
+.gameHudRuntimeRoot *::-webkit-scrollbar-button {
+  background: transparent !important;
+  border: 0 !important;
+}
+.gameHudRuntimeRoot::-webkit-scrollbar-thumb,
+.gameHudRuntimeRoot *::-webkit-scrollbar-thumb {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 999px;
+}
+.gameHudRuntimeRoot .gameHudScrollbar--active {
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+}
+.gameHudRuntimeRoot .gameHudScrollbar--active::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.gameHudRuntimeRoot .gameHudScrollbar--active::-webkit-scrollbar-thumb {
+  background: transparent !important;
+  border: 0 !important;
 }
 
 /* 5-zone HUD layout. left/right are full-height side columns (own width, flex-basis
@@ -300,7 +377,7 @@ body {
    flexible tracks, so none of this can push the HUD wider/taller than the canvas. */
 .gameHudDockGrid {
   position: absolute;
-  inset: 0;
+  inset: var(--hud-outer-gap, 0px);
   display: flex;
   flex-direction: row;
   pointer-events: none;
@@ -357,6 +434,11 @@ body {
   margin-right: var(--hud-bottom-inset-right, 0%);
 }
 
+.gameHudDock--bottom > .gameHudDockTools + .gameHudPanelFrame,
+.gameHudDock--bottom > .gameHudDockTools + .gameHudTabGroup {
+  margin-top: auto;
+}
+
 .gameHudDock--center {
   flex: 1 1 0;
   min-height: 0;
@@ -372,12 +454,26 @@ body {
 
 .gameHudToolbar {
   position: absolute;
-  top: 0;
-  left: 0;
+  top: auto;
+  bottom: var(--hud-outer-gap, 0px);
+  left: var(--hud-outer-gap, 0px);
   z-index: 50;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  max-width: calc(100% - (var(--hud-outer-gap, 0px) * 2));
   pointer-events: auto;
+}
+
+/* Reset only makes sense once you're editing - hidden the rest of the time,
+   same treatment as the Gap control below. */
+.gameHudToolbarReset {
+  display: none;
+}
+
+.gameHudRuntimeRoot--editing .gameHudToolbarReset {
+  display: inline-flex;
 }
 
 .gameHudGapControl {
@@ -401,6 +497,24 @@ body {
 
 .gameHudGapControl input {
   width: 100%;
+}
+
+.gameHudProfileControl {
+  grid-template-columns: auto 104px;
+}
+
+.gameHudProfileControl select {
+  width: 100%;
+  min-height: 24px;
+  border: 1px solid rgba(158, 178, 195, 0.32);
+  border-radius: 6px;
+  background: rgba(8, 13, 18, 0.92);
+  color: #edf5fb;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 6px;
 }
 
 .gameHudGridSplitter {
@@ -501,7 +615,8 @@ body {
   flex: 0 1 auto;
 }
 
-.gameHudDock--stackSized > .gameHudPanelFrame {
+.gameHudDock > .gameHudPanelFrame,
+.gameHudDock > .gameHudTabGroup {
   flex: 0 1 var(--hud-panel-basis, auto);
   min-height: 0;
   overflow: hidden;
@@ -513,9 +628,52 @@ body {
    would visibly jump position (e.g. a quest tracker sharing "top" with notifications
    that come and go) every time a sibling panel appeared/disappeared. Left/right/center
    have a definite 100% height where the percentage split works fine and stays put. */
-.gameHudDock--top.gameHudDock--stackSized > .gameHudPanelFrame,
-.gameHudDock--bottom.gameHudDock--stackSized > .gameHudPanelFrame {
+.gameHudDock--top > .gameHudPanelFrame,
+.gameHudDock--top > .gameHudTabGroup,
+.gameHudDock--bottom > .gameHudPanelFrame,
+.gameHudDock--bottom > .gameHudTabGroup {
   flex: 0 1 auto;
+}
+
+/* One dock slot: either a lone panel frame, or (see JS refreshGameHudDockStacks/
+   createGameHudTabGroup) a tab group wrapping 2+ frames behind one tab strip.
+   The bar is always the wrapper's first DOM child; flex-direction below places
+   it per anchor - inner edge for left/right docks, above the content otherwise. */
+.gameHudTabGroup {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.gameHudTabGroup--top,
+.gameHudTabGroup--bottom,
+.gameHudTabGroup--center {
+  flex-direction: column;
+}
+.gameHudTabGroup--left { flex-direction: row-reverse; } /* bar lands on the right (inner) edge */
+.gameHudTabGroup--right { flex-direction: row; } /* bar lands on the left (inner) edge */
+
+.gameHudTabGroup--floating {
+  position: absolute;
+  z-index: 42;
+  width: auto;
+  max-height: 100%;
+  pointer-events: auto;
+  zoom: 1;
+  transform: scale(var(--hud-panel-scale, 1));
+  transform-origin: top left;
+}
+
+.gameHudTabGroup--floating > .gameHudPanelFrame {
+  position: relative;
+  left: auto !important;
+  top: auto !important;
+  width: 100% !important;
+  height: auto !important;
+  max-height: none;
+  z-index: auto;
+  zoom: 1;
+  transform: none !important;
 }
 
 .gameHudPanelFrame--floating {
@@ -533,6 +691,31 @@ body {
   pointer-events: auto;
 }
 
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .gameHudPanelFrame,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .gameHudTabGroup,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .gameHudPanelBody,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .node03Module,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .node04Module,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .node05Module,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .status-panel,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .status-body,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .perf-hud {
+  pointer-events: none;
+}
+
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) button:not(:disabled),
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) a[href],
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) input:not(:disabled),
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) select:not(:disabled),
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) textarea:not(:disabled),
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) label,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) [role="button"],
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) [tabindex]:not([tabindex="-1"]),
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .gameHudInteractiveScrollArea,
+.gameHudRuntimeRoot:not(.gameHudRuntimeRoot--editing) .gameMinimapRoot {
+  pointer-events: auto;
+}
+
 .gameHudPanelChrome {
   display: none;
   position: absolute;
@@ -547,7 +730,6 @@ body {
   border-radius: 6px;
   background: rgba(7, 10, 14, 0.92);
   color: #fef3c7;
-  cursor: grab;
   pointer-events: auto;
 }
 
@@ -555,6 +737,33 @@ body {
   min-height: 16px;
   padding: 1px 6px;
   font-size: 10px;
+}
+
+/* Dedicated drag box (see createGameHudPanelChrome) - the -/+/Reset buttons
+   themselves are click-only, this dot-grid handle is the grab target. */
+.gameHudDragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.gameHudDragHandle::before {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: #fef3c7;
+  box-shadow:
+    0 -5px 0 0 #fef3c7,
+    0 5px 0 0 #fef3c7,
+    5px -5px 0 0 #fef3c7,
+    5px 0 0 0 #fef3c7,
+    5px 5px 0 0 #fef3c7;
 }
 
 .gameHudRuntimeRoot--editing .gameHudPanelChrome {
@@ -568,6 +777,39 @@ body {
 
 .gameHudPanelFrame--tabHidden {
   display: none !important;
+}
+
+/* While a panel/tab is being dragged: dim it and stop it from swallowing
+   pointer/hover interaction with whatever it's currently floating over. */
+.gameHudPanelFrame--dragging {
+  pointer-events: none;
+  opacity: 0.82;
+}
+
+.gameHudDropTarget {
+  outline: 3px dashed #7dd3fc !important;
+  outline-offset: 2px;
+  background: rgba(125, 211, 252, 0.18);
+}
+
+/* Cursor-following label (see updateGameHudDropHighlight) spelling out what
+   letting go right now would do - "+ Tab toevoegen", "Losse rij", etc. */
+.gameHudDropHint {
+  position: absolute;
+  z-index: 60;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #7dd3fc;
+  color: #07242f;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.gameHudDropHint[hidden] {
+  display: none;
 }
 
 .gameHudPanelFrame--floating .gameHudPanelBody {
@@ -593,7 +835,8 @@ body {
 .gameHudDock > .gameHudPanelFrame .node05Module {
   width: 100%;
   min-width: 0;
-  max-height: 100%;
+  max-height: none;
+  overflow: visible;
 }
 
 .gameHudPanelFrame--floating .node03Module,
@@ -601,6 +844,8 @@ body {
 .gameHudPanelFrame--floating .node05Module {
   width: 100%;
   max-width: 100%;
+  max-height: none;
+  overflow: visible;
 }
 
 .gameHudPanelFrame .gameMinimapRoot {
@@ -608,14 +853,39 @@ body {
   inset: auto;
   margin: 0 !important;
   transform: none;
-  width: 100% !important;
-  height: auto !important;
-  max-height: 100%;
+  width: min(100%, var(--game-minimap-fit-size, 180px)) !important;
+  height: min(100%, var(--game-minimap-fit-size, 180px)) !important;
   aspect-ratio: 1 / 1;
+  flex: 0 0 auto;
+  max-width: 100%;
+  max-height: 100%;
   z-index: 0 !important;
 }
 
-.gameHudPanelFrame--floating .gameMinimapRoot {
+.gameHudPanelFrame--minimap .gameHudPanelBody {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100% !important;
+  max-height: 100%;
+  overflow: hidden !important;
+}
+
+.gameHudPanelFrame .gameMinimapCanvas,
+.gameHudPanelFrame .gameMinimapFogCanvas {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+}
+
+.gameHudPanelFrame .gameMinimapRecenter {
+  right: 6px;
+  bottom: 6px;
+  z-index: 4;
+}
+
+.gameHudPanelFrame--floating.gameHudPanelFrame--minimap .gameMinimapRoot {
   width: 100% !important;
   height: 100% !important;
 }
@@ -658,6 +928,7 @@ body {
   background: rgba(137, 222, 254, 0.16);
   cursor: row-resize;
   pointer-events: auto;
+  touch-action: none;
 }
 
 .gameHudStackSlider::before {
@@ -681,32 +952,64 @@ body {
   pointer-events: auto;
 }
 
+/* Left/right docks: bar runs down the group's inner edge instead of across its
+   top - stack the pills in a column and drop the horizontal-strip spacing. */
+.gameHudTabGroup--left .gameHudDockTabBar,
+.gameHudTabGroup--right .gameHudDockTabBar {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  padding: 6px 2px;
+  margin: 0;
+  overflow-y: auto;
+}
+
 .gameHudDockTab {
   min-height: 24px;
   padding: 5px 9px;
   border-bottom-color: rgba(8, 13, 18, 0.9);
   border-radius: 7px 7px 0 0;
-  background: rgba(8, 13, 18, 0.68);
+  background: rgba(8, 13, 18, var(--hud-tab-bg-alpha, 0.68));
   color: #c8d5df;
+  cursor: grab;
+  white-space: nowrap;
+}
+
+.gameHudTabGroup--left .gameHudDockTab,
+.gameHudTabGroup--right .gameHudDockTab {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  border-radius: 7px;
+  text-align: center;
+  padding: 9px 5px;
+  min-height: 0;
 }
 
 .gameHudDockTab--active {
   border-color: rgba(158, 178, 195, 0.34);
   border-bottom-color: rgba(8, 13, 18, 0.92);
   color: #ecfdf5;
-  background: rgba(8, 13, 18, 0.92);
+  background: rgba(8, 13, 18, var(--hud-tab-active-bg-alpha, 0.92));
 }
 
-.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) {
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
 
-.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node03Module,
-.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node04Module,
-.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node05Module,
-.gameHudDock--tabs > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .status-panel {
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .gameHudPanelBody {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node03Module,
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node04Module,
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .node05Module,
+.gameHudTabGroup > .gameHudPanelFrame:not(.gameHudPanelFrame--tabHidden) .status-panel {
+  min-height: 100%;
   border-top-left-radius: 0;
 }
 
@@ -721,10 +1024,10 @@ body {
   padding: 9px;
   border: 1px solid rgba(158, 178, 195, 0.26);
   border-radius: 8px;
-  background: rgba(8, 13, 18, 0.82);
+  background: rgba(8, 13, 18, var(--hud-module-bg-alpha, 0.82));
   color: #edf5fb;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, var(--hud-module-shadow-alpha, 0.3));
+  backdrop-filter: blur(var(--hud-module-blur, 10px));
   pointer-events: auto;
 }
 
@@ -732,6 +1035,17 @@ body {
 .node03Module--xp,
 .node03Module--tracked {
   min-width: 0;
+}
+
+.node03Module--bar,
+.node03Module--xp {
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: hidden;
 }
 
 .node03BarLabel,
@@ -772,10 +1086,17 @@ body {
 }
 
 .node03BarTrack {
+  position: relative;
   overflow: hidden;
+  width: 100%;
   margin-top: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
+}
+
+.node03Module--bar .node03BarTrack,
+.node03Module--xp .node03BarTrack {
+  margin-top: 0;
 }
 
 .node03BarFill {
@@ -785,8 +1106,38 @@ body {
   background: linear-gradient(90deg, #ef4444, #f97316);
 }
 
+.node03BarOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 9px;
+  color: #fff7ed;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.node03BarOverlay span,
+.node03BarOverlay strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node03BarOverlay strong {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .node03BarFill--mana { background: linear-gradient(90deg, #2563eb, #22d3ee); }
-.node03BarTrack--xp { width: 220px; height: 8px; }
+.node03BarTrack--xp { width: 100%; height: 18px; }
 .node03BarFill--xp { background: linear-gradient(90deg, #eab308, #84cc16); }
 
 .node03Title {
@@ -837,6 +1188,64 @@ body {
 }
 
 .node03TrackedItem strong {
+  color: #f9d976;
+  font-variant-numeric: tabular-nums;
+}
+
+.node03TrackedEditor {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(158, 178, 195, 0.16);
+}
+
+.node03TrackedEditorHead {
+  color: #dce9f3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.node03TrackedEditorList {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.node03TrackedOption {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 4px 6px;
+  border: 1px solid rgba(158, 178, 195, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #c8d5df;
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.node03TrackedOption input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #facc15;
+}
+
+.node03TrackedOption span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node03TrackedOption strong {
   color: #f9d976;
   font-variant-numeric: tabular-nums;
 }
@@ -939,6 +1348,12 @@ body {
   flex-wrap: wrap;
   min-width: 0;
   max-width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
 }
 
 .node03HotbarButton {
@@ -1025,7 +1440,8 @@ body {
 }
 
 .node03ActionButton,
-.node03MiniButton {
+.node03MiniButton,
+.node04MiniButton {
   appearance: none;
   border: 1px solid rgba(137, 222, 254, 0.35);
   border-radius: 7px;
@@ -1039,13 +1455,15 @@ body {
   white-space: nowrap;
 }
 
-.node03MiniButton {
+.node03MiniButton,
+.node04MiniButton {
   padding: 4px 7px;
   font-size: 11px;
 }
 
 .node03ActionButton:disabled,
-.node03MiniButton:disabled {
+.node03MiniButton:disabled,
+.node04MiniButton:disabled {
   cursor: default;
   opacity: 0.45;
 }
@@ -1095,6 +1513,18 @@ body {
   padding: 14px;
 }
 
+.node04Module--dialoguePreview {
+  min-height: 78px;
+}
+
+.node04Module--dialogueError {
+  border-color: rgba(248, 113, 113, 0.42);
+}
+
+.node04Module--dialogueWarning {
+  border-color: rgba(250, 204, 21, 0.42);
+}
+
 .node04Title {
   font-size: 11px;
   font-weight: 800;
@@ -1102,6 +1532,13 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #fde68a;
+}
+
+.node04TitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .node04QuestName {
@@ -1116,6 +1553,7 @@ body {
 .node04Status,
 .node04Condition,
 .node04DialogueText,
+.node04DialogueNotice,
 .node04Notification {
   margin: 7px 0 0;
   font-size: 12px;
@@ -1191,6 +1629,19 @@ body {
   gap: 12px;
 }
 
+.node04DialogueNotice {
+  padding-top: 8px;
+  border-top: 1px solid rgba(158, 178, 195, 0.16);
+}
+
+.node04DialogueNotice--error {
+  color: #ffb2b2;
+}
+
+.node04DialogueNotice--warning {
+  color: #fde68a;
+}
+
 .node04CloseButton {
   margin-left: auto;
   border-color: rgba(158, 178, 195, 0.28);
@@ -1218,6 +1669,59 @@ body {
 
 .node05Module--trade {
   width: 100%;
+}
+
+.node05Module--performance {
+  max-height: 100%;
+}
+
+.gameHudRuntimeRoot--editing .node05Module--performance {
+  cursor: grab;
+}
+
+.gameHudRuntimeRoot--editing .node05Module--performance button {
+  cursor: pointer;
+}
+
+.node05Module--performance .status-head {
+  align-items: center;
+}
+
+.node05Module--performance .status-summary {
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.node05Module--performance .status-body {
+  max-height: none;
+  overflow: visible;
+}
+
+.node05Module--performance .status-grid {
+  gap: 7px 9px;
+  margin-top: 10px;
+}
+
+.node05Module--performance .status-grid span {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.node05Module--performance .status-grid strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.node05Module--performance .status-actions {
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.node05Module--performance .secondary-button {
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 9px;
 }
 
 .node05Title,
@@ -1333,7 +1837,7 @@ body {
 .gameHudDock > .gameHudPanelFrame .node04Module,
 .gameHudDock > .gameHudPanelFrame .node05Module,
 .gameHudDock > .gameHudPanelFrame .status-panel {
-  max-height: 100%;
+  max-height: none;
 }
 
 @media (max-width: 720px) {
@@ -1358,7 +1862,11 @@ body {
   .node05Module { padding: 8px; }
   .node04Module--tracker,
   .node05Module { width: 100%; min-width: 0; }
-  .gameHudToolbar { top: 0; left: 0; }
+  .gameHudToolbar {
+    top: auto;
+    bottom: var(--hud-outer-gap, 0px);
+    left: var(--hud-outer-gap, 0px);
+  }
   .gameHudGapControl { grid-template-columns: auto 70px; }
 }
 
@@ -1390,9 +1898,9 @@ body {
   min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(8, 12, 16, 0.8);
+  background: rgba(8, 12, 16, var(--hud-perf-bg-alpha, 0.8));
   border: 1px solid rgba(120, 145, 165, 0.28);
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, var(--hud-perf-shadow-alpha, 0.28));
   color: #d7e3ed;
   font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
   font-size: 12px;
@@ -1400,6 +1908,28 @@ body {
   letter-spacing: 0.01em;
   pointer-events: none;
 }
+
+.gameHudPanelFrame .perf-hud {
+  position: relative;
+  z-index: auto;
+  inset: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  transform-origin: top left;
+  width: 100%;
+  max-width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  pointer-events: auto;
+}
+
+.gameHudDock > .gameHudPanelFrame .perf-hud {
+  max-height: 100%;
+}
+
 .perf-hud--compact { padding: 8px 10px; }
 .perf-hud-title {
   margin: 0 0 6px;

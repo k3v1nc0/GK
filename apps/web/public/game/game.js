@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260822-node04-minimap";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260824-performance-hud-panel2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
@@ -9,6 +9,7 @@ import {
   drawDiamondMarker,
   drawSquareMarker,
   drawCrossMarker,
+  drawStarMarker,
   drawMarkerLabel,
   drawViewportCone,
   worldHeadingToMinimapRotation,
@@ -21,6 +22,7 @@ import {
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
 const gameRoot = document.querySelector("#gameRoot");
+const defeatOverlay = document.querySelector("#defeatOverlay");
 const overlay = document.querySelector("#gameOverlay");
 const overlayText = document.querySelector("#overlayText");
 
@@ -88,6 +90,8 @@ const CLICK_MOVE_ARRIVAL_RADIUS = 0.06;
 const CLICK_MOVE_SELF_RADIUS_MULTIPLIER = 1.35;
 const CLICK_MOVE_BLOCKED_RADIUS = 0.015;
 const CLICK_MOVE_BLOCKED_TIMEOUT_MS = 420;
+const NODE03_PENDING_TARGET_ACTION_TTL_MS = 15000;
+const NODE03_PENDING_TARGET_ACTION_DELAY_MS = 140;
 const POINTER_HOLD_RELEASE_THRESHOLD_MS = 180;
 const POINTER_DRAG_THRESHOLD_PX = 6;
 const CLIENT_NET_STORAGE_KEY = "gk:mmo01:movement-net";
@@ -131,7 +135,7 @@ const NODE03_DEFAULT_HUD_ANCHORS = {
   death_respawn_hud: "center"
 };
 const NODE04_DEFAULT_HUD_ANCHORS = {
-  quest_tracker_hud: "right",
+  quest_tracker_hud: "left",
   dialogue_hud: "center",
   notification_hud: "top"
 };
@@ -143,7 +147,7 @@ const NODE05_DEFAULT_HUD_ANCHORS = {
   market_hud: "left",
   mail_hud: "left"
 };
-const GAME_HUD_STORAGE_VERSION = 2;
+const GAME_HUD_STORAGE_VERSION = 3;
 const GAME_HUD_MIN_PANEL_WIDTH_PCT = 6;
 const GAME_HUD_MIN_PANEL_HEIGHT_PCT = 4;
 const GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT = 22;
@@ -154,16 +158,64 @@ const GAME_HUD_CENTER_MIN_PCT = 16;
 const GAME_HUD_EDGE_MIN_HEIGHT_PX = 40;
 const GAME_HUD_EDGE_MAX_INSET_PCT = 45;
 const GAME_HUD_DOCK_STACK_MIN_PCT = 1;
-const GAME_HUD_DEFAULT_GRID = Object.freeze({
-  columns: { left: 22, right: 22 },
-  edges: {
-    top: { heightPx: null, insetLeft: 0, insetRight: 0 },
-    bottom: { heightPx: null, insetLeft: 0, insetRight: 0 }
-  },
-  gap: 8,
-  dockModes: { left: "tabs", right: "tabs" },
-  dockTabs: {}
+const GAME_HUD_OUTER_GAP_MAX_PX = 64;
+const GAME_HUD_SCROLL_RENDER_HOLD_MS = 1200;
+const GAME_HUD_PANEL_ORDER_SCALE = 100;
+const GAME_HUD_PROFILE_IDS = ["default_desktop", "default_mob", "desktop", "mob"];
+const GAME_HUD_DEFAULT_PROFILE_IDS = new Set(["default_desktop", "default_mob"]);
+const GAME_HUD_PROFILE_LABELS = Object.freeze({
+  default_desktop: "Default Desktop",
+  default_mob: "Default Mobiel",
+  desktop: "Desktop",
+  mob: "Mobiel"
 });
+// Pointer must move this far from a tab-pill pointerdown before it counts as a
+// drag (reorder/move/detach) instead of a plain click (switch active tab).
+const GAME_HUD_TAB_DRAG_THRESHOLD_PX = 5;
+const GAME_HUD_DEFAULT_GRID = Object.freeze({
+  columns: { left: 14.5, right: 15 },
+  edges: {
+    top: { heightPx: null, insetLeft: 36, insetRight: 36 },
+    bottom: { heightPx: null, insetLeft: 32, insetRight: 32 }
+  },
+  gap: 14,
+  outerGap: 12,
+  panelOpacity: 0.66,
+  // groups: dragging one panel onto another tabs the two together (see
+  // gameHudGroupsMap/createGameHudGroup); no dock-wide mode toggle anymore.
+  groups: {}
+});
+const GAME_HUD_PROFILE_GRID_DEFAULTS = Object.freeze({
+  default: GAME_HUD_DEFAULT_GRID,
+  default_desktop: GAME_HUD_DEFAULT_GRID,
+  desktop: GAME_HUD_DEFAULT_GRID,
+  default_mob: Object.freeze({
+    columns: { left: 28, right: 28 },
+    edges: {
+      top: { heightPx: null, insetLeft: 8, insetRight: 8 },
+      bottom: { heightPx: null, insetLeft: 8, insetRight: 8 }
+    },
+    gap: 8,
+    outerGap: 8,
+    panelOpacity: 0.72,
+    groups: {}
+  }),
+  mob: Object.freeze({
+    columns: { left: 28, right: 28 },
+    edges: {
+      top: { heightPx: null, insetLeft: 8, insetRight: 8 },
+      bottom: { heightPx: null, insetLeft: 8, insetRight: 8 }
+    },
+    gap: 8,
+    outerGap: 8,
+    panelOpacity: 0.72,
+    groups: {}
+  })
+});
+const GAME_HUD_DEFAULT_TAB_GROUPS = Object.freeze([
+  Object.freeze({ anchor: "left", nodeTypes: ["market_hud", "party_hud", "mail_hud"], activeNodeType: "market_hud" }),
+  Object.freeze({ anchor: "right", nodeTypes: ["inventory_hud", "equipment_hud", "vendor_hud", "crafting_hud"], activeNodeType: "crafting_hud" })
+]);
 
 function createClientSessionId() {
   try {
@@ -300,7 +352,9 @@ const state = {
   },
   sync: {
     inFlight: false,
-    lastSilentSyncAt: 0
+    lastSilentSyncAt: 0,
+    zoneRefreshInFlight: false,
+    pendingZoneId: null
   },
   mmoReady: {
     httpSnapshotLoaded: false,
@@ -366,6 +420,7 @@ const state = {
     dragged: false,
     sprintPointerId: null
   },
+  playerDefeated: false,
   lastAnimationState: "idle",
   debug: {
     lastSentType: null,
@@ -417,16 +472,19 @@ const state = {
     performanceMode: null,
     performanceModeUntil: 0,
     refreshTimerId: 0,
+    fitSize: 0,
     view: null,
     userOverride: false,
     configKey: "",
-    interactions: null
+    interactions: null,
+    resizeObserver: null
   },
   minimapFog: {
     worldId: null,
     mapLayer: "overworld",
     configKey: "",
     discoveredCells: new Set(),
+    pendingDiscoveredCells: new Set(),
     loaded: false,
     loadInFlight: false,
     saveInFlight: false,
@@ -440,6 +498,7 @@ const state = {
     pendingSaveTimerId: 0,
     lastDiscoveredCount: 0,
     suppressDiscoveryUntil: 0,
+    resetGeneration: 0,
     maskCanvas: null,
     maskCtx: null
   },
@@ -454,11 +513,14 @@ const state = {
     lastActionMessage: "",
     lastError: "",
     selectedTargetId: "",
-    lastRangeRenderAt: 0
+    lastRangeRenderAt: 0,
+    pendingTargetAction: null,
+    reloadQueued: false
   },
   node04: {
     snapshot: null,
     dialogue: null,
+    dialogueNotice: null,
     elements: null,
     signature: "",
     loadInFlight: false,
@@ -489,6 +551,20 @@ const state = {
     resize: null,
     gridResize: null,
     stackResize: null,
+    profileId: null,
+    defaultProfiles: {},
+    defaultProfilesLoaded: false,
+    defaultProfilesLoading: false,
+    defaultProfilesProjectId: "",
+    canEditDefaultProfiles: false,
+    pendingDefaultProfileSaves: {},
+    defaultProfileSaveTimerId: 0,
+    defaultProfileSaveInFlight: false,
+    pendingTabDrag: null,
+    deferredPanelRender: false,
+    scrollHoldUntil: 0,
+    scrollHoldTimerId: 0,
+    deferredDockRefresh: false,
     refreshQueued: false
   },
   gameLoopTimings: {
@@ -792,10 +868,123 @@ function normalizeGameHudAnchor(anchor, fallback = "left") {
   return GAME_HUD_ANCHOR_SET.has(fallback) ? fallback : "left";
 }
 
-function gameHudLayoutStorageKey() {
-  const projectId = String(state.gameProject?.project?.id || state.gameProject?.id || "project").trim() || "project";
+function normalizeGameHudProfileId(profileId, fallback = "default") {
+  const value = String(profileId || "").trim();
+  if (value === "default") return "default_desktop";
+  if (value === "default_mobile" || value === "default_mobiel" || value === "mobile") return "default_mob";
+  if (GAME_HUD_PROFILE_IDS.includes(value)) return value;
+  const normalizedFallback = String(fallback || "").trim() === "default" ? "default_desktop" : String(fallback || "").trim();
+  return GAME_HUD_PROFILE_IDS.includes(normalizedFallback) ? normalizedFallback : "default_desktop";
+}
+
+function clonePlainJson(value) {
+  if (!value || typeof value !== "object") return null;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function isGameHudDefaultProfile(profileId = gameHudActiveProfileId()) {
+  return GAME_HUD_DEFAULT_PROFILE_IDS.has(normalizeGameHudProfileId(profileId));
+}
+
+function gameHudProjectId() {
+  return String(
+    state.gameProject?.project?.id
+    || state.gameProject?.id
+    || state.gameProject?.projectId
+    || state.gameWorld?.gameProject?.project?.id
+    || state.gameWorld?.gameProject?.id
+    || state.worldId
+    || "project"
+  ).trim() || "project";
+}
+
+function gameHudDeviceProfileBucket() {
+  try {
+    if (window.matchMedia && window.matchMedia("(max-width: 720px)").matches) return "mobile";
+  } catch {}
+  return "desktop";
+}
+
+function gameHudDefaultProfileForDevice(bucket = gameHudDeviceProfileBucket()) {
+  return bucket === "mobile" ? "default_mob" : "default_desktop";
+}
+
+function gameHudLayoutBaseStorageKey() {
+  const projectId = gameHudProjectId();
   const userId = String(state.user?.id || state.user?.username || state.player?.id || "anonymous").trim() || "anonymous";
   return "gk:game:hud-layout:" + projectId + ":" + userId;
+}
+
+function gameHudSelectedProfileStorageKey(bucket = gameHudDeviceProfileBucket()) {
+  return gameHudLayoutBaseStorageKey() + ":selected:" + bucket;
+}
+
+function gameHudProfileStorageKey(profileId = gameHudActiveProfileId()) {
+  return gameHudLayoutBaseStorageKey() + ":profile:" + normalizeGameHudProfileId(profileId);
+}
+
+function gameHudLegacyProfileStorageKey(profileId) {
+  return gameHudLayoutBaseStorageKey() + ":profile:" + String(profileId || "").trim();
+}
+
+function gameHudLayoutStorageKey() {
+  return gameHudProfileStorageKey(gameHudActiveProfileId());
+}
+
+function readStoredGameHudLayout(key) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" && parsed.version === GAME_HUD_STORAGE_VERSION ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function gameHudActiveProfileId() {
+  if (state.hudLayout.profileId) return normalizeGameHudProfileId(state.hudLayout.profileId);
+  const bucket = gameHudDeviceProfileBucket();
+  let selected = "";
+  try { selected = window.localStorage.getItem(gameHudSelectedProfileStorageKey(bucket)) || ""; } catch {}
+  state.hudLayout.profileId = normalizeGameHudProfileId(selected, gameHudDefaultProfileForDevice(bucket));
+  return state.hudLayout.profileId;
+}
+
+function gameHudDefaultProfileLayout(profileId) {
+  const id = normalizeGameHudProfileId(profileId);
+  if (!isGameHudDefaultProfile(id)) return null;
+  if (state.hudLayout.defaultProfilesProjectId && state.hudLayout.defaultProfilesProjectId !== gameHudProjectId()) return null;
+  const entry = state.hudLayout.defaultProfiles[id] || null;
+  const layout = entry && typeof entry.layout === "object" ? clonePlainJson(entry.layout) : null;
+  if (!layout) return null;
+  layout.profileId = id;
+  return layout;
+}
+
+function gameHudAdminLegacyDefaultLayout(profileId) {
+  if (state.hudLayout.canEditDefaultProfiles !== true) return null;
+  const id = normalizeGameHudProfileId(profileId);
+  if (id === "default_desktop") {
+    return readStoredGameHudLayout(gameHudLegacyProfileStorageKey("default"))
+      || readStoredGameHudLayout(gameHudLayoutBaseStorageKey());
+  }
+  if (id === "default_mob") return readStoredGameHudLayout(gameHudLegacyProfileStorageKey("mob"));
+  return null;
+}
+
+function gameHudLegacyLayoutForProfile(profileId) {
+  const id = normalizeGameHudProfileId(profileId);
+  if (id === "desktop") {
+    return readStoredGameHudLayout(gameHudProfileStorageKey("desktop"))
+      || readStoredGameHudLayout(gameHudLegacyProfileStorageKey("default"))
+      || readStoredGameHudLayout(gameHudLayoutBaseStorageKey());
+  }
+  if (id === "mob") return readStoredGameHudLayout(gameHudProfileStorageKey("mob"));
+  return null;
 }
 
 function readGameHudLayoutOverrides() {
@@ -803,45 +992,215 @@ function readGameHudLayoutOverrides() {
     ensureGameHudGridOverrides(state.hudLayout.overrides);
     return state.hudLayout.overrides;
   }
-  try {
-    const raw = window.localStorage.getItem(gameHudLayoutStorageKey());
-    const parsed = raw ? JSON.parse(raw) : null;
-    // Older layout schemas (9-cell grid) can't be meaningfully converted to the
-    // 5-zone model - a version mismatch just starts fresh instead of migrating.
-    const usable = parsed && typeof parsed === "object" && parsed.version === GAME_HUD_STORAGE_VERSION ? parsed : {};
-    state.hudLayout.overrides = usable;
-    if (!state.hudLayout.overrides.modules || typeof state.hudLayout.overrides.modules !== "object") {
-      state.hudLayout.overrides.modules = {};
-    }
-    ensureGameHudGridOverrides(state.hudLayout.overrides);
-    return state.hudLayout.overrides;
-  } catch {
-    state.hudLayout.overrides = { version: GAME_HUD_STORAGE_VERSION, modules: {}, grid: cloneGameHudGridDefaults() };
-    return state.hudLayout.overrides;
+  const profileId = gameHudActiveProfileId();
+  const defaultLayout = gameHudDefaultProfileLayout(profileId);
+  const adminLegacyDefault = isGameHudDefaultProfile(profileId) ? gameHudAdminLegacyDefaultLayout(profileId) : null;
+  const stored = isGameHudDefaultProfile(profileId) ? null : readStoredGameHudLayout(gameHudProfileStorageKey(profileId));
+  const legacy = isGameHudDefaultProfile(profileId) ? null : gameHudLegacyLayoutForProfile(profileId);
+  const usable = defaultLayout || adminLegacyDefault || stored || legacy || cloneGameHudLayoutDefaults(profileId);
+  usable.profileId = profileId;
+  state.hudLayout.overrides = usable;
+  if (!state.hudLayout.overrides.modules || typeof state.hudLayout.overrides.modules !== "object") {
+    state.hudLayout.overrides.modules = {};
   }
+  ensureGameHudGridOverrides(state.hudLayout.overrides);
+  return state.hudLayout.overrides;
 }
 
 function writeGameHudLayoutOverrides(overrides) {
   const next = overrides && typeof overrides === "object" ? overrides : {};
+  const profileId = gameHudActiveProfileId();
   next.version = GAME_HUD_STORAGE_VERSION;
+  next.profileId = profileId;
   if (!next.modules || typeof next.modules !== "object") next.modules = {};
   ensureGameHudGridOverrides(next);
   state.hudLayout.overrides = next;
+  if (isGameHudDefaultProfile(profileId)) {
+    state.hudLayout.defaultProfiles[profileId] = Object.assign({}, state.hudLayout.defaultProfiles[profileId] || {}, {
+      layout: clonePlainJson(next) || next
+    });
+    queueGameHudDefaultProfileSave(profileId, next);
+    return;
+  }
   try {
     window.localStorage.setItem(gameHudLayoutStorageKey(), JSON.stringify(next));
   } catch {}
 }
 
-function cloneGameHudGridDefaults() {
+function setGameHudActiveProfile(profileId) {
+  const nextProfile = normalizeGameHudProfileId(profileId, gameHudActiveProfileId());
+  if (nextProfile === gameHudActiveProfileId()) return;
+  state.hudLayout.profileId = nextProfile;
+  state.hudLayout.overrides = null;
+  try {
+    window.localStorage.setItem(gameHudSelectedProfileStorageKey(gameHudDeviceProfileBucket()), nextProfile);
+  } catch {}
+  if (isGameHudDefaultProfile(nextProfile) && !state.hudLayout.defaultProfilesLoaded) {
+    loadGameHudDefaultProfiles({ silent: true, rerender: true });
+  }
+  const elements = state.hudLayout.elements;
+  if (elements?.profileSelect) elements.profileSelect.value = nextProfile;
+  applyGameHudGridSettings();
+  rerenderGameHudPanels();
+}
+
+function applyGameHudDefaultProfilesPayload(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return false;
+  if (payload.projectId && String(payload.projectId) !== gameHudProjectId()) return false;
+  const layouts = payload.layouts && typeof payload.layouts === "object" ? payload.layouts : {};
+  let changed = false;
+  for (const [rawProfileId, rawRecord] of Object.entries(layouts)) {
+    const profileId = normalizeGameHudProfileId(rawProfileId);
+    if (!isGameHudDefaultProfile(profileId)) continue;
+    const rawLayout = rawRecord?.layout || rawRecord;
+    const layout = rawLayout && typeof rawLayout === "object" ? clonePlainJson(rawLayout) : null;
+    if (!layout) continue;
+    layout.version = GAME_HUD_STORAGE_VERSION;
+    layout.profileId = profileId;
+    const previous = state.hudLayout.defaultProfiles[profileId]?.layout || null;
+    const previousText = previous ? JSON.stringify(previous) : "";
+    const nextText = JSON.stringify(layout);
+    state.hudLayout.defaultProfiles[profileId] = {
+      layout,
+      updatedAt: rawRecord?.updatedAt || payload.updatedAt || null,
+      updatedByUserId: rawRecord?.updatedByUserId || payload.updatedByUserId || null
+    };
+    if (previousText !== nextText) changed = true;
+  }
+  state.hudLayout.defaultProfilesLoaded = true;
+  state.hudLayout.defaultProfilesProjectId = payload.projectId || gameHudProjectId();
+  state.hudLayout.canEditDefaultProfiles = payload.canEditDefaults === true;
+  if (state.hudLayout.canEditDefaultProfiles) {
+    for (const profileId of GAME_HUD_DEFAULT_PROFILE_IDS) {
+      if (state.hudLayout.defaultProfiles[profileId]?.layout) continue;
+      const legacyLayout = gameHudAdminLegacyDefaultLayout(profileId);
+      if (!legacyLayout) continue;
+      legacyLayout.version = GAME_HUD_STORAGE_VERSION;
+      legacyLayout.profileId = profileId;
+      state.hudLayout.defaultProfiles[profileId] = { layout: clonePlainJson(legacyLayout) || legacyLayout, updatedAt: null, updatedByUserId: null };
+      queueGameHudDefaultProfileSave(profileId, legacyLayout);
+      changed = true;
+    }
+  }
+  if (changed && isGameHudDefaultProfile() && options.rerender !== false) {
+    state.hudLayout.overrides = null;
+    applyGameHudGridSettings();
+    rerenderGameHudPanels();
+  }
+  return changed;
+}
+
+async function loadGameHudDefaultProfiles(options = {}) {
+  if (state.hudLayout.defaultProfilesLoading && options.force !== true) return false;
+  const projectId = gameHudProjectId();
+  if (
+    options.force !== true
+    && state.hudLayout.defaultProfilesLoaded
+    && state.hudLayout.defaultProfilesProjectId === projectId
+  ) {
+    return false;
+  }
+  state.hudLayout.defaultProfilesLoading = true;
+  try {
+    const response = await fetch("/api/game/hud-layout/defaults?projectId=" + encodeURIComponent(projectId), {
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) return false;
+    const payload = await response.json().catch(function () { return null; });
+    return applyGameHudDefaultProfilesPayload(payload, { rerender: options.rerender !== false });
+  } catch {
+    return false;
+  } finally {
+    state.hudLayout.defaultProfilesLoading = false;
+  }
+}
+
+function queueGameHudDefaultProfileSave(profileId, layout) {
+  const id = normalizeGameHudProfileId(profileId);
+  if (!isGameHudDefaultProfile(id) || state.hudLayout.canEditDefaultProfiles !== true) return;
+  const copy = clonePlainJson(layout);
+  if (!copy) return;
+  copy.version = GAME_HUD_STORAGE_VERSION;
+  copy.profileId = id;
+  state.hudLayout.pendingDefaultProfileSaves[id] = copy;
+  if (state.hudLayout.defaultProfileSaveTimerId) {
+    window.clearTimeout(state.hudLayout.defaultProfileSaveTimerId);
+  }
+  state.hudLayout.defaultProfileSaveTimerId = window.setTimeout(flushGameHudDefaultProfileSaves, 350);
+}
+
+async function flushGameHudDefaultProfileSaves() {
+  state.hudLayout.defaultProfileSaveTimerId = 0;
+  if (state.hudLayout.defaultProfileSaveInFlight) return;
+  const pending = state.hudLayout.pendingDefaultProfileSaves || {};
+  const entries = Object.entries(pending);
+  if (!entries.length) return;
+  state.hudLayout.pendingDefaultProfileSaves = {};
+  state.hudLayout.defaultProfileSaveInFlight = true;
+  try {
+    for (const [profileId, layout] of entries) {
+      const response = await fetch("/api/game/hud-layout/defaults", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          projectId: gameHudProjectId(),
+          profileId,
+          layout
+        })
+      });
+      if (!response.ok) continue;
+      const payload = await response.json().catch(function () { return null; });
+      if (payload?.layout) {
+        applyGameHudDefaultProfilesPayload({
+          projectId: payload.projectId,
+          canEditDefaults: payload.canEditDefaults,
+          layouts: {
+            [payload.profileId || profileId]: {
+              layout: payload.layout,
+              updatedAt: payload.updatedAt,
+              updatedByUserId: payload.updatedByUserId
+            }
+          }
+        }, { rerender: false });
+      }
+    }
+  } finally {
+    state.hudLayout.defaultProfileSaveInFlight = false;
+    if (Object.keys(state.hudLayout.pendingDefaultProfileSaves || {}).length) {
+      state.hudLayout.defaultProfileSaveTimerId = window.setTimeout(flushGameHudDefaultProfileSaves, 350);
+    }
+  }
+}
+
+// Starting height for the top/bottom docks: 60% of the current viewport
+// height, computed fresh (not a frozen constant) so it still makes sense
+// whatever screen this loads on. Applies on first load and on Reset.
+// Starting width for the top/bottom docks: 60%, centered (20% inset shaved
+// off each side) instead of the full center-band width. Applies on first
+// load and on Reset.
+function cloneGameHudGridDefaults(profileId = gameHudActiveProfileId()) {
+  const profileDefaults = GAME_HUD_PROFILE_GRID_DEFAULTS[normalizeGameHudProfileId(profileId)] || GAME_HUD_DEFAULT_GRID;
   return {
-    columns: Object.assign({}, GAME_HUD_DEFAULT_GRID.columns),
+    columns: Object.assign({}, profileDefaults.columns),
     edges: {
-      top: Object.assign({}, GAME_HUD_DEFAULT_GRID.edges.top),
-      bottom: Object.assign({}, GAME_HUD_DEFAULT_GRID.edges.bottom)
+      top: Object.assign({}, profileDefaults.edges.top),
+      bottom: Object.assign({}, profileDefaults.edges.bottom)
     },
-    gap: GAME_HUD_DEFAULT_GRID.gap,
-    dockModes: Object.assign({}, GAME_HUD_DEFAULT_GRID.dockModes),
-    dockTabs: {}
+    gap: profileDefaults.gap,
+    outerGap: profileDefaults.outerGap,
+    panelOpacity: profileDefaults.panelOpacity,
+    defaultGroupsApplied: false,
+    groups: {}
+  };
+}
+
+function cloneGameHudLayoutDefaults(profileId = gameHudActiveProfileId()) {
+  return {
+    version: GAME_HUD_STORAGE_VERSION,
+    profileId: normalizeGameHudProfileId(profileId),
+    modules: {},
+    grid: cloneGameHudGridDefaults(profileId)
   };
 }
 
@@ -855,18 +1214,21 @@ function normalizeHudColumns(values, fallback) {
 }
 
 // heightPx null = auto/content-fit (default, until the user drags the height splitter).
-// insetLeft/insetRight shrink the dock in from the center band's edges independently.
+// Top/bottom width uses a centered inset: older unequal left/right values are averaged.
 function normalizeHudEdge(value, fallback) {
   const rawHeight = value?.heightPx;
   const heightPx = rawHeight === null || rawHeight === undefined
     ? null
     : Math.max(GAME_HUD_EDGE_MIN_HEIGHT_PX, num(rawHeight, GAME_HUD_EDGE_MIN_HEIGHT_PX));
-  const insetLeft = clamp(num(value?.insetLeft, fallback.insetLeft), 0, GAME_HUD_EDGE_MAX_INSET_PCT);
-  const insetRight = clamp(num(value?.insetRight, fallback.insetRight), 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+  const fallbackInset = (num(fallback.insetLeft, 0) + num(fallback.insetRight, 0)) / 2;
+  const rawInset = value && (value.insetLeft !== undefined || value.insetRight !== undefined)
+    ? (num(value.insetLeft, fallbackInset) + num(value.insetRight, fallbackInset)) / 2
+    : fallbackInset;
+  const inset = Math.round(clamp(rawInset, 0, GAME_HUD_EDGE_MAX_INSET_PCT) * 100) / 100;
   return {
     heightPx,
-    insetLeft: Math.round(insetLeft * 100) / 100,
-    insetRight: Math.round(insetRight * 100) / 100
+    insetLeft: inset,
+    insetRight: inset
   };
 }
 
@@ -878,11 +1240,26 @@ function ensureGameHudGridOverrides(overrides) {
   grid.edges.top = normalizeHudEdge(grid.edges.top, GAME_HUD_DEFAULT_GRID.edges.top);
   grid.edges.bottom = normalizeHudEdge(grid.edges.bottom, GAME_HUD_DEFAULT_GRID.edges.bottom);
   grid.gap = clamp(num(grid.gap, GAME_HUD_DEFAULT_GRID.gap), 0, 24);
-  if (!grid.dockModes || typeof grid.dockModes !== "object") grid.dockModes = {};
-  if (!Object.keys(grid.dockModes).length) {
-    grid.dockModes = Object.assign({}, GAME_HUD_DEFAULT_GRID.dockModes);
+  grid.outerGap = clamp(num(grid.outerGap, GAME_HUD_DEFAULT_GRID.outerGap), 0, GAME_HUD_OUTER_GAP_MAX_PX);
+  grid.panelOpacity = clamp(num(grid.panelOpacity, GAME_HUD_DEFAULT_GRID.panelOpacity), 0, 1);
+  if (!grid.groups || typeof grid.groups !== "object") grid.groups = {};
+  for (const [groupId, group] of Object.entries(grid.groups)) {
+    if (!group || typeof group !== "object" || !Array.isArray(group.memberIds) || group.memberIds.length < 2) {
+      delete grid.groups[groupId];
+      continue;
+    }
+    group.anchor = normalizeGameHudAnchor(group.anchor, "left");
+    group.memberIds = group.memberIds.map(function (id) { return String(id || "").trim(); }).filter(Boolean);
+    if (!group.memberIds.includes(group.activeModuleId)) group.activeModuleId = group.memberIds[0] || "";
+    group.sizePct = Math.max(0, num(group.sizePct, 0));
+    if (group.anchor === "center") {
+      group.xPct = clamp(num(group.xPct, 50 - GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT / 2), 0, 96);
+      group.yPct = clamp(num(group.yPct, 50 - GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT / 2), 0, 96);
+      group.widthPct = clamp(num(group.widthPct, GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96);
+      group.heightPct = clamp(num(group.heightPct, GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92);
+      group.scale = clamp(num(group.scale, 1), 0.55, 1.8);
+    }
   }
-  if (!grid.dockTabs || typeof grid.dockTabs !== "object") grid.dockTabs = {};
   return grid;
 }
 
@@ -890,33 +1267,166 @@ function gameHudGridOverrides() {
   return ensureGameHudGridOverrides(readGameHudLayoutOverrides());
 }
 
-function gameHudDockMode(anchor) {
-  const key = normalizeGameHudAnchor(anchor, "left");
-  const mode = gameHudGridOverrides().dockModes[key];
-  return mode === "tabs" ? "tabs" : "stack";
+function gameHudGroupsMap() {
+  return gameHudGridOverrides().groups;
 }
 
-function setGameHudDockMode(anchor, mode) {
-  const key = normalizeGameHudAnchor(anchor, "left");
+function gameHudModuleGroupId(moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return null;
+  return String(gameHudModuleOverride(id)?.groupId || "").trim() || null;
+}
+
+function gameHudGroup(groupId) {
+  if (!groupId) return null;
+  return gameHudGroupsMap()[groupId] || null;
+}
+
+function gameHudFloatPatchFromLayout(layout = {}) {
+  return {
+    xPct: clamp(num(layout.xPct, 50 - GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT / 2), 0, 96),
+    yPct: clamp(num(layout.yPct, 50 - GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT / 2), 0, 96),
+    widthPct: clamp(num(layout.widthPct, GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
+    heightPct: clamp(num(layout.heightPct, GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92),
+    scale: clamp(num(layout.scale, 1), 0.55, 1.8)
+  };
+}
+
+function gameHudFloatLayoutFromInteraction(active, event, resizing) {
+  const dxPct = (event.clientX - active.startX) / active.viewportWidth * 100;
+  const dyPct = (event.clientY - active.startY) / active.viewportHeight * 100;
+  return Object.assign({
+    mode: "float",
+    anchor: normalizeGameHudAnchor(active.anchor, "center")
+  }, gameHudFloatPatchFromLayout({
+    xPct: resizing ? active.xPct : active.xPct + dxPct,
+    yPct: resizing ? active.yPct : active.yPct + dyPct,
+    widthPct: resizing ? active.widthPct + dxPct : active.widthPct,
+    heightPct: resizing ? active.heightPct + dyPct : active.heightPct,
+    scale: active.scale
+  }));
+}
+
+function writeGameHudGroups(mutator) {
   const overrides = readGameHudLayoutOverrides();
-  ensureGameHudGridOverrides(overrides);
-  overrides.grid.dockModes[key] = mode === "tabs" ? "tabs" : "stack";
+  const grid = ensureGameHudGridOverrides(overrides);
+  mutator(grid.groups);
   writeGameHudLayoutOverrides(overrides);
-  refreshGameHudDockStacks();
-  notifyGameHudPanelSizesChanged();
 }
 
-function gameHudDockActiveTab(anchor) {
-  const key = normalizeGameHudAnchor(anchor, "left");
-  return String(gameHudGridOverrides().dockTabs[key] || "").trim();
+function setGameHudFloatingGroupLayout(groupId, layout) {
+  const patch = gameHudFloatPatchFromLayout(layout);
+  let memberIds = [];
+  writeGameHudGroups(function (groups) {
+    const group = groups[groupId];
+    if (!group) return;
+    group.anchor = "center";
+    Object.assign(group, patch);
+    memberIds = Array.isArray(group.memberIds) ? group.memberIds.slice() : [];
+  });
+  for (const memberId of memberIds) {
+    setGameHudModuleOverride(memberId, Object.assign({ mode: "float", anchor: "center" }, patch));
+  }
 }
 
-function setGameHudDockActiveTab(anchor, moduleId) {
+// Any members still left in `group.memberIds` drop back to plain tab-less rows
+// too, so a group is never left standing with just one pointless tab.
+function dissolveGameHudGroup(groupId, groups) {
+  const group = groups[groupId];
+  if (!group) return;
+  const inheritedSize = Math.max(0, num(group.sizePct, 0));
+  for (const memberId of group.memberIds) {
+    const patch = { groupId: null };
+    if (inheritedSize > 0) patch.sizePct = inheritedSize;
+    setGameHudModuleOverride(memberId, patch);
+  }
+  delete groups[groupId];
+}
+
+// Detaches moduleId from whatever tab group it currently belongs to (no-op if
+// none). If that leaves the group with fewer than 2 members, the group itself
+// dissolves and the last member becomes a normal row again.
+function removeGameHudModuleFromGroup(moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return;
+  const currentGroupId = gameHudModuleGroupId(id);
+  if (!currentGroupId) return;
+  const currentGroup = gameHudGroup(currentGroupId);
+  const inheritedSize = Math.max(0, num(currentGroup?.sizePct, 0));
+  writeGameHudGroups(function (groups) {
+    const group = groups[currentGroupId];
+    if (!group) return;
+    group.memberIds = group.memberIds.filter(function (memberId) { return memberId !== id; });
+    if (group.activeModuleId === id) group.activeModuleId = group.memberIds[0] || "";
+    if (group.memberIds.length < 2) dissolveGameHudGroup(currentGroupId, groups);
+  });
+  const patch = { groupId: null };
+  if (inheritedSize > 0) patch.sizePct = inheritedSize;
+  setGameHudModuleOverride(id, patch);
+}
+
+// Always called with 2+ memberIds - ensureGameHudGridOverrides drops any group
+// under 2 members on the very next write, so a transient 1-member group would
+// just delete itself immediately.
+function createGameHudGroup(anchor, memberIds, options = {}) {
   const key = normalizeGameHudAnchor(anchor, "left");
-  const overrides = readGameHudLayoutOverrides();
-  ensureGameHudGridOverrides(overrides);
-  overrides.grid.dockTabs[key] = String(moduleId || "").trim();
-  writeGameHudLayoutOverrides(overrides);
+  const ids = memberIds.map(function (id) { return String(id || "").trim(); }).filter(Boolean);
+  const floatingPatch = key === "center" ? gameHudFloatPatchFromLayout(options) : null;
+  // Detach each incoming member from any group it's currently in first, so a
+  // stale reference never lingers in its old group's memberIds.
+  for (const id of ids) removeGameHudModuleFromGroup(id);
+  const groupId = "grp_" + Math.random().toString(36).slice(2, 10);
+  writeGameHudGroups(function (groups) {
+    groups[groupId] = Object.assign({
+      anchor: key,
+      memberIds: ids.slice(),
+      activeModuleId: options.activeModuleId || ids[0] || "",
+      sizePct: Math.max(0, num(options.sizePct, 0))
+    }, floatingPatch || {});
+  });
+  for (const id of ids) {
+    setGameHudModuleOverride(id, Object.assign({
+      groupId: groupId,
+      mode: key === "center" ? "float" : "dock",
+      anchor: key
+    }, floatingPatch || {}));
+  }
+  return groupId;
+}
+
+// Moves moduleId into groupId's tab order (pulling it out of any other group
+// first), inserting before beforeModuleId or appending at the end. Also used
+// to reorder/re-home a tab already in this same group - dragging a tab within
+// its own group is just this with beforeModuleId pointing at its new spot.
+function addGameHudModuleToGroup(groupId, moduleId, beforeModuleId) {
+  const id = String(moduleId || "").trim();
+  const group = gameHudGroup(groupId);
+  if (!group || !id) return;
+  const preservedSize = Math.max(0, num(group.sizePct, 0));
+  if (gameHudModuleGroupId(id) !== groupId) removeGameHudModuleFromGroup(id);
+  writeGameHudGroups(function (groups) {
+    const g = groups[groupId];
+    if (!g) return;
+    g.memberIds = g.memberIds.filter(function (memberId) { return memberId !== id; });
+    const before = String(beforeModuleId || "").trim();
+    const insertAt = before ? g.memberIds.indexOf(before) : -1;
+    if (insertAt >= 0) g.memberIds.splice(insertAt, 0, id);
+    else g.memberIds.push(id);
+    g.activeModuleId = id;
+    if (preservedSize > 0 && !num(g.sizePct, 0)) g.sizePct = preservedSize;
+  });
+  setGameHudModuleOverride(id, Object.assign({
+    groupId: groupId,
+    mode: group.anchor === "center" ? "float" : "dock",
+    anchor: group.anchor
+  }, group.anchor === "center" ? gameHudFloatPatchFromLayout(group) : {}));
+}
+
+function setGameHudGroupActiveTab(groupId, moduleId) {
+  writeGameHudGroups(function (groups) {
+    const group = groups[groupId];
+    if (group && group.memberIds.includes(moduleId)) group.activeModuleId = moduleId;
+  });
   refreshGameHudDockStacks();
   notifyGameHudPanelSizesChanged();
 }
@@ -935,13 +1445,21 @@ function setGameHudGridEdge(kind, value) {
   } else if (kind === "bottom-height") {
     grid.edges.bottom.heightPx = Math.max(GAME_HUD_EDGE_MIN_HEIGHT_PX, value);
   } else if (kind === "top-inset-left") {
-    grid.edges.top.insetLeft = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    const inset = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    grid.edges.top.insetLeft = inset;
+    grid.edges.top.insetRight = inset;
   } else if (kind === "top-inset-right") {
-    grid.edges.top.insetRight = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    const inset = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    grid.edges.top.insetLeft = inset;
+    grid.edges.top.insetRight = inset;
   } else if (kind === "bottom-inset-left") {
-    grid.edges.bottom.insetLeft = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    const inset = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    grid.edges.bottom.insetLeft = inset;
+    grid.edges.bottom.insetRight = inset;
   } else if (kind === "bottom-inset-right") {
-    grid.edges.bottom.insetRight = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    const inset = clamp(value, 0, GAME_HUD_EDGE_MAX_INSET_PCT);
+    grid.edges.bottom.insetLeft = inset;
+    grid.edges.bottom.insetRight = inset;
   } else {
     return;
   }
@@ -958,6 +1476,24 @@ function setGameHudGridGap(value) {
   applyGameHudGridSettings();
   refreshGameHudDockStacks();
   notifyGameHudPanelSizesChanged();
+}
+
+function setGameHudGridOuterGap(value) {
+  const overrides = readGameHudLayoutOverrides();
+  const grid = ensureGameHudGridOverrides(overrides);
+  grid.outerGap = clamp(num(value, grid.outerGap), 0, GAME_HUD_OUTER_GAP_MAX_PX);
+  writeGameHudLayoutOverrides(overrides);
+  applyGameHudGridSettings();
+  refreshGameHudDockStacks();
+  notifyGameHudPanelSizesChanged();
+}
+
+function setGameHudPanelOpacity(value) {
+  const overrides = readGameHudLayoutOverrides();
+  const grid = ensureGameHudGridOverrides(overrides);
+  grid.panelOpacity = clamp(num(value, grid.panelOpacity * 100) / 100, 0, 1);
+  writeGameHudLayoutOverrides(overrides);
+  applyGameHudGridSettings();
 }
 
 function notifyGameHudPanelSizesChanged() {
@@ -989,6 +1525,7 @@ function setGameHudModuleOverride(moduleId, patch) {
 function clearGameHudModuleOverride(moduleId) {
   const id = String(moduleId || "").trim();
   if (!id) return;
+  removeGameHudModuleFromGroup(id);
   const overrides = readGameHudLayoutOverrides();
   if (overrides.modules && Object.prototype.hasOwnProperty.call(overrides.modules, id)) {
     delete overrides.modules[id];
@@ -997,7 +1534,7 @@ function clearGameHudModuleOverride(moduleId) {
 }
 
 function resetGameHudLayoutOverrides() {
-  writeGameHudLayoutOverrides({ version: GAME_HUD_STORAGE_VERSION, modules: {}, grid: cloneGameHudGridDefaults() });
+  writeGameHudLayoutOverrides(cloneGameHudLayoutDefaults(gameHudActiveProfileId()));
 }
 
 function hudModuleIdentity(module) {
@@ -1039,10 +1576,47 @@ function gameHudCssEscape(value) {
   return text.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
+// Resolves a dock slot's DOM node from a stack slider's "kind"/"key" dataset -
+// a plain panel frame (key = moduleId) or a tab-group wrapper (key = groupId).
+function gameHudDockSlotNode(dock, kind, key) {
+  if (!dock || !key) return null;
+  if (kind === "group") return dock.querySelector(':scope > .gameHudTabGroup[data-game-hud-group-id="' + gameHudCssEscape(key) + '"]');
+  return dock.querySelector(':scope > .gameHudPanelFrame[data-module-id="' + gameHudCssEscape(key) + '"]');
+}
+
+// Short, human-facing name per node type - shown on tabs/chrome instead of the
+// raw nodeType (e.g. "quest_tracker_hud" -> "Quest" rather than "quest tracker
+// hud"). A module's own label/title (set per-instance, e.g. a hud_bar reused
+// for both Health and Mana) always wins over this when present.
+const GAME_HUD_PANEL_NAMES = {
+  hud_bar: "Status",
+  xp_hud: "XP",
+  wallet_hud: "Tracked",
+  game_minimap: "Minimap",
+  hotbar_hud: "Hotbar",
+  notification_hud: "Notifications",
+  quest_tracker_hud: "Quest",
+  interaction_hud: "Interact",
+  inventory_hud: "Inventory",
+  equipment_hud: "Equipment",
+  dialogue_hud: "Dialogue",
+  party_hud: "Party",
+  vendor_hud: "Vendor",
+  crafting_hud: "Crafting",
+  trade_hud: "Trade",
+  market_hud: "Market",
+  mail_hud: "Mail",
+  death_respawn_hud: "Respawn",
+  debug_mmo_hud: "Performance",
+  debug_performance_hud: "Performance"
+};
+
 function gameHudPanelTitle(module) {
-  if (module?.nodeType === "wallet_hud") return String(module?.title || "Tracked");
-  if (module?.nodeType === "debug_mmo_hud") return "Performance";
-  const raw = module?.label || module?.title || module?.moduleId || module?.hudId || module?.nodeType || "HUD";
+  const custom = String(module?.label || module?.title || "").trim();
+  if (custom) return custom;
+  const nodeType = module?.nodeType || "";
+  if (Object.prototype.hasOwnProperty.call(GAME_HUD_PANEL_NAMES, nodeType)) return GAME_HUD_PANEL_NAMES[nodeType];
+  const raw = module?.moduleId || module?.hudId || nodeType || "HUD";
   return String(raw).replace(/^hud\./, "").replace(/[_:.]+/g, " ").trim() || "HUD";
 }
 
@@ -1072,21 +1646,70 @@ const GAME_HUD_PANEL_ORDER = {
   market_hud: 160,
   mail_hud: 170,
   death_respawn_hud: 180,
-  debug_mmo_hud: 900
+  debug_mmo_hud: 900,
+  debug_performance_hud: 910
 };
+const GAME_HUD_PANEL_ORDER_STEP = 1000;
+const GAME_HUD_ROW_INSERT_EDGE_RATIO = 0.28;
 
-function gameHudPanelOrder(module) {
+function gameHudStableHash(value) {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function gameHudStableOrderIdentity(module, moduleId = null) {
+  const direct = String(moduleId || hudModuleIdentity(module) || "").trim();
+  if (direct) return direct;
+  try {
+    return JSON.stringify({
+      nodeType: module?.nodeType || "",
+      label: module?.label || "",
+      title: module?.title || "",
+      sourceStatRef: module?.sourceStatRef || "",
+      maxStatRef: module?.maxStatRef || "",
+      currencyRefs: module?.currencyRefs || null,
+      itemRefs: module?.itemRefs || null
+    });
+  } catch {
+    return String(module?.nodeType || "hud");
+  }
+}
+
+function gameHudDefaultPanelOrder(module, moduleId = null) {
   const type = module?.nodeType || "";
-  return Object.prototype.hasOwnProperty.call(GAME_HUD_PANEL_ORDER, type) ? GAME_HUD_PANEL_ORDER[type] : 500;
+  const base = Object.prototype.hasOwnProperty.call(GAME_HUD_PANEL_ORDER, type) ? GAME_HUD_PANEL_ORDER[type] : 500;
+  const offset = gameHudStableHash(gameHudStableOrderIdentity(module, moduleId)) % GAME_HUD_PANEL_ORDER_SCALE;
+  return base * GAME_HUD_PANEL_ORDER_SCALE + offset;
+}
+
+function gameHudStoredPanelOrder(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const order = Number(value);
+  return Number.isFinite(order) ? Math.round(order) : fallback;
+}
+
+function gameHudPanelOrder(module, moduleId = null) {
+  const fallback = gameHudDefaultPanelOrder(module, moduleId);
+  const id = String(moduleId || hudModuleIdentity(module) || "").trim();
+  const override = id ? gameHudModuleOverride(id) : null;
+  return gameHudStoredPanelOrder(override?.order, fallback);
 }
 
 function resolveGameHudModuleLayout(module, fallbackAnchor) {
   const moduleId = hudModuleIdentity(module);
   const override = gameHudModuleOverride(moduleId);
   const anchor = normalizeGameHudAnchor(override?.anchor || module?.anchor, fallbackAnchor);
-  // "center" is a hard float-only zone: panels routed there never stack/tab like the
-  // other 4 docks - they always float (drag to move, handle to resize, chrome +/-
-  // to scale), positioned in percentages. Default position centers the panel.
+  const groupId = String(override?.groupId || "").trim();
+  const group = groupId ? gameHudGroup(groupId) : null;
+  const isCenterFloatingGroup = anchor === "center" && group?.anchor === "center";
+  const floatSource = isCenterFloatingGroup ? group : override;
+  // "center" is a floating layer. Center tab groups keep their own floating
+  // rect instead of becoming dock slots that stretch across the center area.
   //
   // notification_hud floats by DEFAULT only (not hard-locked like "center"): its
   // render function returns null while there's nothing to show, so left docked
@@ -1107,11 +1730,11 @@ function resolveGameHudModuleLayout(module, fallbackAnchor) {
   return {
     mode: mode,
     anchor: anchor,
-    xPct: clamp(num(override?.xPct, defaultXPct), 0, 96),
-    yPct: clamp(num(override?.yPct, defaultYPct), 0, 96),
-    widthPct: clamp(num(override?.widthPct, defaultWidthPct), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
-    heightPct: clamp(num(override?.heightPct, defaultHeightPct), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92),
-    scale: clamp(num(override?.scale, 1), 0.55, 1.8)
+    xPct: clamp(num(floatSource?.xPct, defaultXPct), 0, 96),
+    yPct: clamp(num(floatSource?.yPct, defaultYPct), 0, 96),
+    widthPct: clamp(num(floatSource?.widthPct, defaultWidthPct), GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
+    heightPct: clamp(num(floatSource?.heightPct, defaultHeightPct), GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92),
+    scale: clamp(num(floatSource?.scale, 1), 0.55, 1.8)
   };
 }
 
@@ -1121,12 +1744,7 @@ function createGameHudDockTools(anchor) {
   tools.dataset.gameHudDockTools = anchor;
   const label = document.createElement("strong");
   label.textContent = anchor.replace("-", " ");
-  const tabs = document.createElement("button");
-  tabs.type = "button";
-  tabs.dataset.gameHudDockControl = "toggle-tabs";
-  tabs.dataset.gameHudDockAnchor = anchor;
-  tabs.textContent = gameHudDockMode(anchor) === "tabs" ? "Rows" : "Tabs";
-  tools.append(label, tabs);
+  tools.appendChild(label);
   return tools;
 }
 
@@ -1211,6 +1829,9 @@ function applyGameHudGridSettings() {
   const elements = state.hudLayout.elements;
   if (!elements || !elements.root) return;
   const grid = gameHudGridOverrides();
+  const panelOpacity = clamp(num(grid.panelOpacity, 1), 0, 1);
+  const panelAlpha = Math.round(panelOpacity * 1000) / 1000;
+  const alpha = function (base) { return String(Math.round(base * panelOpacity * 1000) / 1000); };
   elements.root.style.setProperty("--hud-col-left", grid.columns.left + "%");
   elements.root.style.setProperty("--hud-col-right", grid.columns.right + "%");
   elements.root.style.setProperty("--hud-top-height", grid.edges.top.heightPx != null ? grid.edges.top.heightPx + "px" : "auto");
@@ -1220,25 +1841,74 @@ function applyGameHudGridSettings() {
   elements.root.style.setProperty("--hud-bottom-inset-left", grid.edges.bottom.insetLeft + "%");
   elements.root.style.setProperty("--hud-bottom-inset-right", grid.edges.bottom.insetRight + "%");
   elements.root.style.setProperty("--hud-gap", grid.gap + "px");
+  elements.root.style.setProperty("--hud-outer-gap", grid.outerGap + "px");
+  elements.root.style.setProperty("--hud-panel-opacity", String(panelAlpha));
+  elements.root.style.setProperty("--hud-module-bg-alpha", alpha(0.82));
+  elements.root.style.setProperty("--hud-status-bg-alpha", alpha(0.82));
+  elements.root.style.setProperty("--hud-perf-bg-alpha", alpha(0.8));
+  elements.root.style.setProperty("--hud-minimap-bg-alpha", alpha(1));
+  elements.root.style.setProperty("--hud-tab-bg-alpha", alpha(0.68));
+  elements.root.style.setProperty("--hud-tab-active-bg-alpha", alpha(0.92));
+  elements.root.style.setProperty("--hud-module-shadow-alpha", alpha(0.3));
+  elements.root.style.setProperty("--hud-status-shadow-alpha", alpha(0.34));
+  elements.root.style.setProperty("--hud-perf-shadow-alpha", alpha(0.28));
+  elements.root.style.setProperty("--hud-module-blur", (Math.round(10 * panelOpacity * 100) / 100) + "px");
+  elements.root.style.setProperty("--hud-status-blur", (Math.round(12 * panelOpacity * 100) / 100) + "px");
+  if (elements.profileSelect) elements.profileSelect.value = gameHudActiveProfileId();
   if (elements.gapInput) elements.gapInput.value = String(Math.round(grid.gap));
+  if (elements.outerGapInput) elements.outerGapInput.value = String(Math.round(grid.outerGap));
+  if (elements.panelOpacityInput) elements.panelOpacityInput.value = String(Math.round(panelOpacity * 100));
   positionGameHudGridSplitters();
   window.requestAnimationFrame(positionGameHudGridSplitters);
 }
 
-function createGameHudGapControl(value) {
+function createGameHudRangeControl(labelText, value, options = {}) {
   const label = document.createElement("label");
   label.className = "gameHudGapControl";
   const text = document.createElement("span");
-  text.textContent = "Gap";
+  text.textContent = labelText;
   const input = document.createElement("input");
   input.type = "range";
-  input.min = "0";
-  input.max = "24";
-  input.step = "1";
+  input.min = String(options.min ?? 0);
+  input.max = String(options.max ?? 24);
+  input.step = String(options.step ?? 1);
   input.value = String(Math.round(value));
-  input.dataset.gameHudGap = "1";
+  if (options.datasetKey) input.dataset[options.datasetKey] = "1";
   label.append(text, input);
   return { label, input };
+}
+
+function createGameHudGapControl(value) {
+  return createGameHudRangeControl("Gap", value, { max: 24, datasetKey: "gameHudGap" });
+}
+
+function createGameHudOuterGapControl(value) {
+  return createGameHudRangeControl("Rand", value, { max: GAME_HUD_OUTER_GAP_MAX_PX, datasetKey: "gameHudOuterGap" });
+}
+
+function createGameHudPanelOpacityControl(value) {
+  return createGameHudRangeControl("Panel BG", clamp(num(value, 1), 0, 1) * 100, {
+    max: 100,
+    datasetKey: "gameHudPanelOpacity"
+  });
+}
+
+function createGameHudProfileControl(value) {
+  const label = document.createElement("label");
+  label.className = "gameHudGapControl gameHudProfileControl";
+  const text = document.createElement("span");
+  text.textContent = "Profiel";
+  const select = document.createElement("select");
+  select.dataset.gameHudProfileSelect = "1";
+  for (const profileId of GAME_HUD_PROFILE_IDS) {
+    const option = document.createElement("option");
+    option.value = profileId;
+    option.textContent = GAME_HUD_PROFILE_LABELS[profileId] || profileId;
+    select.appendChild(option);
+  }
+  select.value = normalizeGameHudProfileId(value);
+  label.append(text, select);
+  return { label, select };
 }
 
 function createGameHudGridSplitters() {
@@ -1264,7 +1934,10 @@ function refreshGameHudGridSplitters() {
 }
 
 function ensureGameHudRuntimeRoot() {
-  if (state.hudLayout.elements && state.hudLayout.elements.root) return state.hudLayout.elements;
+  if (state.hudLayout.elements && state.hudLayout.elements.root) {
+    if (state.hudLayout.elements.root.isConnected) return state.hudLayout.elements;
+    state.hudLayout.elements = null;
+  }
   const root = document.createElement("section");
   root.className = "gameHudRuntimeRoot";
   root.dataset.hudId = "game_hud_runtime";
@@ -1290,10 +1963,16 @@ function ensureGameHudRuntimeRoot() {
   dockGrid.append(leftDock, centerBand, rightDock);
   const toolbar = document.createElement("div");
   toolbar.className = "gameHudToolbar";
-  toolbar.innerHTML = '<button type="button" data-game-hud-control="toggle">HUD</button><button type="button" data-game-hud-control="reset-all">Reset</button>';
+  toolbar.innerHTML = '<button type="button" data-game-hud-control="toggle">HUD Editor</button><button type="button" class="gameHudToolbarReset" data-game-hud-control="reset-all">Reset</button>';
   const grid = gameHudGridOverrides();
+  const profileControl = createGameHudProfileControl(gameHudActiveProfileId());
   const gapControl = createGameHudGapControl(grid.gap);
+  const outerGapControl = createGameHudOuterGapControl(grid.outerGap);
+  const panelOpacityControl = createGameHudPanelOpacityControl(grid.panelOpacity);
+  toolbar.appendChild(profileControl.label);
   toolbar.appendChild(gapControl.label);
+  toolbar.appendChild(outerGapControl.label);
+  toolbar.appendChild(panelOpacityControl.label);
   const gridSplitters = createGameHudGridSplitters();
   for (const splitter of gridSplitters) root.appendChild(splitter);
   root.appendChild(toolbar);
@@ -1301,12 +1980,27 @@ function ensureGameHudRuntimeRoot() {
   root.addEventListener("change", handleGameHudRuntimeChange);
   root.addEventListener("input", handleGameHudRuntimeChange);
   root.addEventListener("pointerdown", handleGameHudPointerDown);
+  // "scroll" doesn't bubble, so this has to listen in the capture phase to
+  // catch it from any scrollable descendant (panel body, a long list inside
+  // one, a vertical tab strip, ...) - see handleGameHudScroll/styles.css.
+  root.addEventListener("scroll", handleGameHudScroll, true);
   window.addEventListener("pointermove", handleGameHudPointerMove);
   window.addEventListener("pointerup", finishGameHudPointerEdit);
   window.addEventListener("pointercancel", finishGameHudPointerEdit);
   window.addEventListener("resize", positionGameHudGridSplitters);
   hud.appendChild(root);
-  state.hudLayout.elements = { root: root, dockGrid: dockGrid, centerBand: centerBand, anchors: anchors, toolbar: toolbar, gapInput: gapControl.input, gridSplitters: gridSplitters };
+  state.hudLayout.elements = {
+    root: root,
+    dockGrid: dockGrid,
+    centerBand: centerBand,
+    anchors: anchors,
+    toolbar: toolbar,
+    profileSelect: profileControl.select,
+    gapInput: gapControl.input,
+    outerGapInput: outerGapControl.input,
+    panelOpacityInput: panelOpacityControl.input,
+    gridSplitters: gridSplitters
+  };
   applyGameHudGridSettings();
   refreshGameHudEditState();
   return state.hudLayout.elements;
@@ -1320,32 +2014,80 @@ function refreshGameHudEditState() {
   if (elements.toolbar) {
     elements.toolbar.classList.toggle("gameHudToolbar--editing", state.hudLayout.editMode === true);
     const toggle = elements.toolbar.querySelector('[data-game-hud-control="toggle"]');
-    if (toggle) toggle.textContent = state.hudLayout.editMode ? "Klaar" : "HUD";
+    if (toggle) toggle.textContent = state.hudLayout.editMode ? "Klaar" : "HUD Editor";
   }
   refreshGameHudGridSplitters();
-  for (const dock of Object.values(elements.anchors || {})) {
-    const button = dock.querySelector("[data-game-hud-dock-control='toggle-tabs']");
-    if (button) button.textContent = gameHudDockMode(dock.dataset.hudDock) === "tabs" ? "Rows" : "Tabs";
-  }
 }
 
 function setGameHudEditMode(enabled) {
+  const wasEditMode = state.hudLayout.editMode === true;
   state.hudLayout.editMode = enabled === true;
   state.hudLayout.drag = null;
   state.hudLayout.resize = null;
   state.hudLayout.gridResize = null;
   state.hudLayout.stackResize = null;
+  state.hudLayout.deferredDockRefresh = false;
   refreshGameHudEditState();
-  refreshGameHudDockStacks();
+  if (wasEditMode !== state.hudLayout.editMode) rerenderGameHudPanels();
+  else refreshGameHudDockStacks();
 }
 
-function rerenderGameHudPanels() {
+function rerenderGameHudPanels(options = {}) {
   renderNode03Hud();
   renderNode04Hud();
   renderNode05Hud();
-  if (state.minimapHud.elements) state.minimapHud.signature = null;
+  if (options.forceMinimap === true && state.minimapHud.elements) state.minimapHud.signature = null;
   refreshGameMinimapHud();
   refreshGameHudDockStacks();
+}
+
+function isGameHudScrollRenderHoldActive() {
+  return num(state.hudLayout.scrollHoldUntil, 0) > performance.now();
+}
+
+function holdGameHudRenderForScroll() {
+  state.hudLayout.scrollHoldUntil = performance.now() + GAME_HUD_SCROLL_RENDER_HOLD_MS;
+  if (state.hudLayout.scrollHoldTimerId) window.clearTimeout(state.hudLayout.scrollHoldTimerId);
+  state.hudLayout.scrollHoldTimerId = window.setTimeout(function () {
+    state.hudLayout.scrollHoldTimerId = 0;
+    flushDeferredGameHudPanelRender();
+  }, GAME_HUD_SCROLL_RENDER_HOLD_MS + 40);
+}
+
+function isGameHudLayoutInteractionActive() {
+  return Boolean(
+    state.hudLayout.drag
+    || state.hudLayout.resize
+    || state.hudLayout.gridResize
+    || state.hudLayout.stackResize
+    || state.hudLayout.pendingTabDrag
+    || isGameHudScrollRenderHoldActive()
+  );
+}
+
+function deferGameHudPanelRender() {
+  state.hudLayout.deferredPanelRender = true;
+}
+
+function deferGameHudDockRefresh() {
+  state.hudLayout.deferredDockRefresh = true;
+}
+
+function flushDeferredGameHudDockRefresh() {
+  if (!state.hudLayout.deferredDockRefresh || isGameHudLayoutInteractionActive()) return;
+  state.hudLayout.deferredDockRefresh = false;
+  refreshGameHudDockStacks();
+}
+
+function flushDeferredGameHudPanelRender() {
+  if (isGameHudLayoutInteractionActive()) return;
+  if (!state.hudLayout.deferredPanelRender) {
+    flushDeferredGameHudDockRefresh();
+    return;
+  }
+  state.hudLayout.deferredPanelRender = false;
+  state.hudLayout.deferredDockRefresh = false;
+  rerenderGameHudPanels();
 }
 
 function scheduleGameHudDockRefresh() {
@@ -1353,67 +2095,415 @@ function scheduleGameHudDockRefresh() {
   state.hudLayout.refreshQueued = true;
   window.requestAnimationFrame(function () {
     state.hudLayout.refreshQueued = false;
+    if (isGameHudLayoutInteractionActive()) {
+      deferGameHudDockRefresh();
+      return;
+    }
     refreshGameHudDockStacks();
   });
 }
 
 function gameHudDockFrames(dock) {
-  return Array.from(dock.querySelectorAll(":scope > .gameHudPanelFrame")).filter(function (frame) {
+  return Array.from(dock.querySelectorAll(":scope > .gameHudPanelFrame, :scope > .gameHudTabGroup > .gameHudPanelFrame")).filter(function (frame) {
     return frame.dataset.layoutMode !== "float";
   }).sort(function (left, right) {
-    return num(left.style.order, 0) - num(right.style.order, 0);
+    const diff = num(left.style.order, 0) - num(right.style.order, 0);
+    if (diff) return diff;
+    return String(left.dataset.moduleId || "").localeCompare(String(right.dataset.moduleId || ""));
   });
 }
 
-function normalizeDockFrameSizes(frames) {
-  if (!frames.length) return [];
-  const raw = frames.map(function (frame) {
-    const override = gameHudModuleOverride(frame.dataset.moduleId || "") || {};
-    return Math.max(0, num(override.sizePct, 0));
+// Un-nests any tab-group wrappers built by the previous refresh, putting their
+// member frames back as direct children of the dock. refreshGameHudDockStacks
+// rebuilds groups from the persisted grid.groups data on every call, so no
+// wrapper needs to survive between refreshes.
+function unwrapGameHudTabGroups(root) {
+  for (const wrapper of Array.from(root.querySelectorAll(".gameHudTabGroup"))) {
+    const dock = wrapper.parentElement;
+    if (dock) {
+      for (const frame of Array.from(wrapper.querySelectorAll(":scope > .gameHudPanelFrame"))) {
+        dock.insertBefore(frame, wrapper);
+      }
+    }
+    wrapper.remove();
+  }
+}
+
+// Drops missing group members for personal profiles. Global defaults keep their
+// saved members across partial HUD renders so tab stacks are not dissolved while
+// panels are still loading.
+function pruneGameHudGroups() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  const groups = gameHudGroupsMap();
+  const keepMissingMembers = isGameHudDefaultProfile();
+  const presentIds = new Set(Array.from(elements.root.querySelectorAll(".gameHudPanelFrame")).map(function (frame) {
+    return frame.dataset.moduleId || "";
+  }));
+  let changed = false;
+  for (const [groupId, group] of Object.entries(groups)) {
+    if (!keepMissingMembers) {
+      const kept = group.memberIds.filter(function (id) { return presentIds.has(id); });
+      if (kept.length !== group.memberIds.length) {
+        group.memberIds = kept;
+        changed = true;
+      }
+    }
+    if (group.memberIds.length < 2) {
+      const inheritedSize = Math.max(0, num(group.sizePct, 0));
+      for (const id of group.memberIds) {
+        const patch = { groupId: null };
+        if (inheritedSize > 0) patch.sizePct = inheritedSize;
+        setGameHudModuleOverride(id, patch);
+      }
+      delete groups[groupId];
+      changed = true;
+      continue;
+    }
+    if (!group.memberIds.includes(group.activeModuleId)) {
+      group.activeModuleId = group.memberIds[0];
+      changed = true;
+    }
+  }
+  if (changed) writeGameHudLayoutOverrides(readGameHudLayoutOverrides());
+}
+
+function ensureGameHudDefaultTabGroups() {
+  const overrides = readGameHudLayoutOverrides();
+  const grid = ensureGameHudGridOverrides(overrides);
+  if (grid.defaultGroupsApplied === true || Object.keys(grid.groups || {}).length > 0) return false;
+  const root = state.hudLayout.elements?.root || null;
+  if (!root) return false;
+  const frames = Array.from(root.querySelectorAll(".gameHudPanelFrame")).filter(function (frame) {
+    return frame.dataset.layoutMode !== "float" && !gameHudModuleGroupId(frame.dataset.moduleId || "");
   });
+  let created = false;
+  for (const preset of GAME_HUD_DEFAULT_TAB_GROUPS) {
+    const anchor = normalizeGameHudAnchor(preset.anchor, "left");
+    const members = preset.nodeTypes
+      .map(function (nodeType) {
+        return frames.find(function (frame) {
+          return frame.dataset.nodeType === nodeType && normalizeGameHudAnchor(frame.dataset.hudDock, anchor) === anchor;
+        }) || null;
+      })
+      .filter(Boolean);
+    if (members.length < 2) continue;
+    const active = members.find(function (frame) { return frame.dataset.nodeType === preset.activeNodeType; }) || members[0];
+    createGameHudGroup(anchor, members.map(function (frame) { return frame.dataset.moduleId || ""; }), {
+      activeModuleId: active.dataset.moduleId || ""
+    });
+    created = true;
+  }
+  if (created) {
+    const next = readGameHudLayoutOverrides();
+    ensureGameHudGridOverrides(next).defaultGroupsApplied = true;
+    writeGameHudLayoutOverrides(next);
+  }
+  return created;
+}
+
+// A "slot" is one row position inside a dock: either a single panel frame, or
+// a tab group of 2+ frames sharing one spot. A grouped module whose sibling(s)
+// aren't currently present in this dock (e.g. mid-drag, floating) just renders
+// as a plain panel slot instead - grouping only ever reflects what's actually
+// on screen right now. Slot order follows the (content-type-unique) style
+// order of its earliest member, so grouping two panels never reshuffles where
+// the pair sits among its dock siblings.
+function gameHudDockSlots(dock, anchor) {
+  const frames = gameHudDockFrames(dock);
+  const slots = [];
+  const consumed = new Set();
+  for (const frame of frames) {
+    const moduleId = frame.dataset.moduleId || "";
+    if (consumed.has(moduleId)) continue;
+    const groupId = gameHudModuleGroupId(moduleId);
+    const group = groupId ? gameHudGroup(groupId) : null;
+    const memberFrames = group && group.anchor === anchor
+      ? group.memberIds.map(function (id) { return frames.find(function (f) { return f.dataset.moduleId === id; }); }).filter(Boolean)
+      : [];
+    if (memberFrames.length >= 2) {
+      for (const memberFrame of memberFrames) consumed.add(memberFrame.dataset.moduleId || "");
+      slots.push({
+        type: "group",
+        groupId: groupId,
+        frames: memberFrames,
+        order: Math.min.apply(null, memberFrames.map(function (f) { return num(f.style.order, 0); }))
+      });
+    } else {
+      slots.push({ type: "panel", frame: frame, order: num(frame.style.order, 0) });
+    }
+  }
+  slots.sort(function (a, b) { return a.order - b.order; });
+  return slots;
+}
+
+// Panel slots come in two shapes: a live { frame } from gameHudDockSlots
+// (synchronous, always fresh), or a stale-safe { moduleId } key kept across
+// an interaction that spans multiple event turns (e.g. a stack-slider drag -
+// see handleGameHudPointerDown/Move) where the frame node might get replaced
+// mid-drag by an unrelated HUD data rebuild.
+function gameHudSlotModuleId(slot) {
+  return slot.moduleId || (slot.frame ? slot.frame.dataset.moduleId : "") || "";
+}
+
+function gameHudSlotSizePct(slot) {
+  if (slot.type === "group") {
+    const group = gameHudGroup(slot.groupId);
+    return Math.max(0, num(group?.sizePct, 0));
+  }
+  const override = gameHudModuleOverride(gameHudSlotModuleId(slot)) || {};
+  return Math.max(0, num(override.sizePct, 0));
+}
+
+function normalizeGameHudPercentValues(values, minPct = GAME_HUD_DOCK_STACK_MIN_PCT) {
+  const count = values.length;
+  if (!count) return [];
+  const min = Math.max(0, Math.min(100 / count, num(minPct, 0)));
+  const raw = values.map(function (value) { return Math.max(0, num(value, 0)); });
+  const locked = new Set();
+  let result = new Array(count).fill(0);
+  for (let guard = 0; guard < count + 2; guard += 1) {
+    const open = raw.map(function (_value, index) { return index; }).filter(function (index) { return !locked.has(index); });
+    const remainingPct = Math.max(0, 100 - locked.size * min);
+    const openTotal = open.reduce(function (sum, index) { return sum + raw[index]; }, 0);
+    let changed = false;
+    for (const index of open) {
+      const pct = openTotal > 0 ? raw[index] / openTotal * remainingPct : remainingPct / Math.max(1, open.length);
+      if (pct < min && open.length > 1) {
+        locked.add(index);
+        result[index] = min;
+        changed = true;
+      } else {
+        result[index] = pct;
+      }
+    }
+    if (!changed) break;
+  }
+  for (const index of locked) result[index] = min;
+  let total = result.reduce(function (sum, value) { return sum + value; }, 0);
+  if (total <= 0) result = result.map(function () { return 100 / count; });
+  else result = result.map(function (value) { return value / total * 100; });
+  let roundedTotal = 0;
+  const rounded = result.map(function (value, index) {
+    const next = index === count - 1 ? 100 - roundedTotal : Math.round(value * 100) / 100;
+    roundedTotal += next;
+    return next;
+  });
+  return rounded;
+}
+
+function normalizeSlotSizes(slots) {
+  if (!slots.length) return [];
+  const raw = slots.map(gameHudSlotSizePct);
   const hasCustom = raw.some(function (value) { return value > 0; });
-  if (!hasCustom) return frames.map(function () { return 100 / frames.length; });
-  const total = raw.reduce(function (sum, value) { return sum + value; }, 0);
-  if (total <= 0) return frames.map(function () { return 100 / frames.length; });
-  return raw.map(function (value) {
-    return Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, value / total * 100);
+  if (!hasCustom) return slots.map(function () { return 100 / slots.length; });
+  const customTotal = raw.reduce(function (sum, value) { return sum + (value > 0 ? value : 0); }, 0);
+  const missing = raw.filter(function (value) { return value <= 0; }).length;
+  const filled = raw.map(function (value) {
+    if (value > 0) return value;
+    if (!missing) return value;
+    return customTotal < 100 ? (100 - customTotal) / missing : 100 / slots.length;
   });
+  return normalizeGameHudPercentValues(filled);
 }
 
-function applyDockFrameSize(frame, sizePct) {
+function gameHudStableSlotRef(slot) {
+  if (slot.type === "group") return { type: "group", groupId: slot.groupId };
+  return { type: "panel", moduleId: gameHudSlotModuleId(slot) };
+}
+
+function gameHudSlotRefEquals(left, right) {
+  if (!left || !right || left.type !== right.type) return false;
+  if (left.type === "group") return String(left.groupId || "") === String(right.groupId || "");
+  return String(left.moduleId || "") === String(right.moduleId || "");
+}
+
+function gameHudSlotRefForFrame(frame) {
+  const moduleId = frame?.dataset?.moduleId || "";
+  const anchor = normalizeGameHudAnchor(frame?.dataset?.hudDock || frame?.dataset?.defaultAnchor, "left");
+  const groupId = gameHudModuleGroupId(moduleId);
+  const group = groupId ? gameHudGroup(groupId) : null;
+  if (group && group.anchor === anchor) return { type: "group", groupId: groupId };
+  return { type: "panel", moduleId: moduleId };
+}
+
+function gameHudDockSlotNodeFromRef(anchor, slotRef) {
+  const dock = state.hudLayout.elements?.anchors?.[normalizeGameHudAnchor(anchor, "left")] || null;
+  if (!dock || !slotRef) return null;
+  if (slotRef.type === "group") return gameHudDockSlotNode(dock, "group", slotRef.groupId);
+  return gameHudDockSlotNode(dock, "panel", slotRef.moduleId);
+}
+
+function setGameHudSlotOrder(slot, order) {
+  const rounded = Math.round(num(order, 0));
+  if (slot.type === "group") {
+    const group = gameHudGroup(slot.groupId);
+    for (const memberId of Array.isArray(group?.memberIds) ? group.memberIds : []) {
+      setGameHudModuleOverride(memberId, { order: rounded });
+    }
+    for (const frame of slot.frames || []) frame.style.order = String(rounded);
+    return;
+  }
+  const moduleId = gameHudSlotModuleId(slot);
+  if (moduleId) setGameHudModuleOverride(moduleId, { order: rounded });
+  if (slot.frame) slot.frame.style.order = String(rounded);
+}
+
+function normalizeGameHudDockOrders(anchor) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const dock = state.hudLayout.elements?.anchors?.[key] || null;
+  if (!dock) return [];
+  const slots = gameHudDockSlots(dock, key);
+  slots.forEach(function (slot, index) {
+    setGameHudSlotOrder(slot, (index + 1) * GAME_HUD_PANEL_ORDER_STEP);
+  });
+  return gameHudDockSlots(dock, key);
+}
+
+function gameHudSlotOrderByRef(anchor, slotRef, fallback = GAME_HUD_PANEL_ORDER_STEP) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const dock = state.hudLayout.elements?.anchors?.[key] || null;
+  if (!dock || !slotRef) return fallback;
+  const slot = gameHudDockSlots(dock, key).find(function (candidate) {
+    return gameHudSlotRefEquals(gameHudStableSlotRef(candidate), slotRef);
+  });
+  return slot ? num(slot.order, fallback) : fallback;
+}
+
+function gameHudInsertOrder(anchor, targetSlot, placement) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const dock = state.hudLayout.elements?.anchors?.[key] || null;
+  const slots = dock ? gameHudDockSlots(dock, key) : [];
+  if (!slots.length) return GAME_HUD_PANEL_ORDER_STEP;
+  const targetIndex = targetSlot ? slots.findIndex(function (slot) {
+    return gameHudSlotRefEquals(gameHudStableSlotRef(slot), targetSlot);
+  }) : -1;
+  if (targetIndex < 0) {
+    return num(slots[slots.length - 1]?.order, 0) + GAME_HUD_PANEL_ORDER_STEP;
+  }
+  const beforeSlot = placement === "before" ? slots[targetIndex - 1] : slots[targetIndex];
+  const afterSlot = placement === "before" ? slots[targetIndex] : slots[targetIndex + 1];
+  const beforeOrder = beforeSlot ? num(beforeSlot.order, null) : null;
+  const afterOrder = afterSlot ? num(afterSlot.order, null) : null;
+  if (beforeOrder !== null && afterOrder !== null && afterOrder > beforeOrder) {
+    return Math.round((beforeOrder + afterOrder) / 2);
+  }
+  if (beforeOrder !== null) return Math.round(beforeOrder + GAME_HUD_PANEL_ORDER_STEP);
+  if (afterOrder !== null) return Math.round(afterOrder - GAME_HUD_PANEL_ORDER_STEP);
+  return GAME_HUD_PANEL_ORDER_STEP;
+}
+
+function gameHudInsertionTargetAtPoint(dock, anchor, clientX, clientY) {
+  const slots = gameHudDockSlots(dock, anchor);
+  if (!slots.length) return { kind: "row", anchor: anchor };
+  const coordinate = clientY;
+  for (const slot of slots) {
+    const node = slot.type === "group" ? gameHudDockSlotNode(dock, "group", slot.groupId) : slot.frame;
+    if (!node) continue;
+    const rect = node.getBoundingClientRect();
+    if (coordinate < rect.top + rect.height / 2) {
+      return { kind: "row", anchor: anchor, targetSlot: gameHudStableSlotRef(slot), placement: "before" };
+    }
+  }
+  return { kind: "row", anchor: anchor, targetSlot: gameHudStableSlotRef(slots[slots.length - 1]), placement: "after" };
+}
+
+function gameHudSlotHasModule(slot, moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return false;
+  if (slot.type === "group") {
+    const group = gameHudGroup(slot.groupId);
+    return Array.isArray(group?.memberIds) && group.memberIds.includes(id);
+  }
+  return gameHudSlotModuleId(slot) === id;
+}
+
+function freezeGameHudDockSlotSizes(anchor) {
+  const key = normalizeGameHudAnchor(anchor, "left");
+  const dock = state.hudLayout.elements?.anchors?.[key] || null;
+  if (!dock) return { slots: [], sizes: [], sizeByModuleId: new Map(), sizeByGroupId: new Map() };
+  const slots = gameHudDockSlots(dock, key);
+  const sizes = normalizeSlotSizes(slots);
+  const snapshot = { slots, sizes, sizeByModuleId: new Map(), sizeByGroupId: new Map() };
+  slots.forEach(function (slot, index) {
+    const size = sizes[index] || (100 / Math.max(1, slots.length));
+    persistSlotSizePct(gameHudStableSlotRef(slot), size);
+    if (slot.type === "group") {
+      snapshot.sizeByGroupId.set(slot.groupId, size);
+      const group = gameHudGroup(slot.groupId);
+      for (const memberId of Array.isArray(group?.memberIds) ? group.memberIds : []) {
+        snapshot.sizeByModuleId.set(memberId, size);
+      }
+    } else {
+      snapshot.sizeByModuleId.set(gameHudSlotModuleId(slot), size);
+    }
+  });
+  return snapshot;
+}
+
+function applyDockFrameSize(node, sizePct) {
   const pct = clamp(sizePct, GAME_HUD_DOCK_STACK_MIN_PCT, 100);
-  frame.style.setProperty("--hud-panel-basis", pct + "%");
+  node.style.setProperty("--hud-panel-basis", pct + "%");
 }
 
-function persistDockFrameSize(moduleId, sizePct) {
-  if (!moduleId) return;
-  setGameHudModuleOverride(moduleId, { sizePct: Math.round(clamp(sizePct, GAME_HUD_DOCK_STACK_MIN_PCT, 100) * 100) / 100 });
+function persistSlotSizePct(slot, sizePct) {
+  const rounded = Math.round(clamp(sizePct, GAME_HUD_DOCK_STACK_MIN_PCT, 100) * 100) / 100;
+  if (slot.type === "group") {
+    writeGameHudGroups(function (groups) {
+      const group = groups[slot.groupId];
+      if (group) group.sizePct = rounded;
+    });
+    return;
+  }
+  setGameHudModuleOverride(gameHudSlotModuleId(slot), { sizePct: rounded });
 }
 
-function createGameHudStackSlider(anchor, before, after) {
+function createGameHudStackSlider(anchor, beforeSlot, afterSlot) {
   const slider = document.createElement("button");
   slider.type = "button";
   slider.className = "gameHudStackSlider";
   slider.dataset.gameHudStackSlider = "1";
   slider.dataset.gameHudDockAnchor = anchor;
-  slider.dataset.beforeModuleId = before.dataset.moduleId || "";
-  slider.dataset.afterModuleId = after.dataset.moduleId || "";
-  slider.style.order = String((num(before.style.order, 0) + num(after.style.order, 0)) / 2);
+  slider.dataset.beforeSlotKind = beforeSlot.type;
+  slider.dataset.beforeSlotKey = beforeSlot.type === "group" ? beforeSlot.groupId : (beforeSlot.frame.dataset.moduleId || "");
+  slider.dataset.afterSlotKind = afterSlot.type;
+  slider.dataset.afterSlotKey = afterSlot.type === "group" ? afterSlot.groupId : (afterSlot.frame.dataset.moduleId || "");
+  slider.style.order = String(Math.round((beforeSlot.order + afterSlot.order) / 2));
   slider.setAttribute("aria-label", "Resize dock panels");
   return slider;
 }
 
-function createGameHudTabBar(anchor, frames) {
-  const bar = document.createElement("div");
-  bar.className = "gameHudDockTabBar";
-  bar.style.order = "0";
-  const activeId = gameHudDockActiveTab(anchor);
+// Wraps a group's member frames plus a tab bar into one dock slot. The bar is
+// always the wrapper's first DOM child; CSS picks the flex-direction per
+// anchor (see styles.css) so it lands on the inner edge for left/right docks
+// and above the content for top/bottom/center ones.
+function applyGameHudFloatingTabGroupLayout(wrapper, layout) {
+  const patch = gameHudFloatPatchFromLayout(layout);
+  wrapper.dataset.hudDock = "center";
+  wrapper.dataset.layoutMode = "float";
+  wrapper.style.setProperty("--hud-panel-scale", String(patch.scale || 1));
+  wrapper.style.left = patch.xPct + "%";
+  wrapper.style.top = patch.yPct + "%";
+  wrapper.style.width = patch.widthPct + "%";
+  wrapper.style.height = patch.heightPct + "%";
+}
+
+function createGameHudTabGroup(anchor, groupId, frames, options = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "gameHudTabGroup gameHudTabGroup--" + anchor;
+  if (options.floating === true) wrapper.classList.add("gameHudTabGroup--floating");
+  wrapper.dataset.gameHudGroupId = groupId;
+  wrapper.dataset.hudDock = anchor;
+  const group = gameHudGroup(groupId);
+  const activeId = group?.activeModuleId || "";
   const activeFrame = frames.find(function (frame) { return frame.dataset.moduleId === activeId; }) || frames[0];
   const activeModuleId = activeFrame?.dataset.moduleId || "";
+  const bar = document.createElement("div");
+  bar.className = "gameHudDockTabBar";
   for (const frame of frames) {
     const button = document.createElement("button");
     button.type = "button";
-    button.dataset.gameHudTabAnchor = anchor;
+    button.dataset.gameHudTabGroupId = groupId;
     button.dataset.gameHudTabModuleId = frame.dataset.moduleId || "";
     button.className = frame.dataset.moduleId === activeModuleId ? "gameHudDockTab gameHudDockTab--active" : "gameHudDockTab";
     button.textContent = frame.dataset.panelTitle || gameHudPanelTitle({ moduleId: frame.dataset.moduleId, nodeType: frame.dataset.nodeType });
@@ -1421,56 +2511,226 @@ function createGameHudTabBar(anchor, frames) {
     frame.classList.toggle("gameHudPanelFrame--tabHidden", frame.dataset.moduleId !== activeModuleId);
     applyDockFrameSize(frame, 100);
   }
+  wrapper.appendChild(bar);
+  for (const frame of frames) wrapper.appendChild(frame);
   if (activeModuleId && activeModuleId !== activeId) {
-    const overrides = readGameHudLayoutOverrides();
-    ensureGameHudGridOverrides(overrides);
-    overrides.grid.dockTabs[anchor] = activeModuleId;
-    writeGameHudLayoutOverrides(overrides);
+    writeGameHudGroups(function (groups) {
+      const g = groups[groupId];
+      if (g) g.activeModuleId = activeModuleId;
+    });
   }
-  return bar;
+  return wrapper;
+}
+
+function refreshGameHudFloatingTabGroups(root) {
+  const frames = Array.from(root.querySelectorAll(":scope > .gameHudPanelFrame")).filter(function (frame) {
+    return frame.dataset.layoutMode === "float" && normalizeGameHudAnchor(frame.dataset.hudDock, "center") === "center";
+  });
+  const consumed = new Set();
+  for (const frame of frames) {
+    const moduleId = frame.dataset.moduleId || "";
+    if (!moduleId || consumed.has(moduleId)) continue;
+    const groupId = gameHudModuleGroupId(moduleId);
+    const group = groupId ? gameHudGroup(groupId) : null;
+    if (!group || group.anchor !== "center") continue;
+    const memberFrames = group.memberIds
+      .map(function (id) { return frames.find(function (candidate) { return candidate.dataset.moduleId === id; }); })
+      .filter(Boolean);
+    if (memberFrames.length < 2) continue;
+    for (const memberFrame of memberFrames) consumed.add(memberFrame.dataset.moduleId || "");
+    const wrapper = createGameHudTabGroup("center", groupId, memberFrames, { floating: true });
+    applyGameHudFloatingTabGroupLayout(wrapper, group);
+    root.appendChild(wrapper);
+    for (const memberFrame of memberFrames) restoreGameHudFrameScroll(memberFrame);
+  }
 }
 
 function refreshGameHudDockStacks() {
   const elements = state.hudLayout.elements;
   if (!elements || !elements.root) return;
+  state.hudLayout.deferredDockRefresh = false;
   applyGameHudGridSettings();
-  for (const old of Array.from(elements.root.querySelectorAll(".gameHudStackSlider, .gameHudDockTabBar"))) old.remove();
+  unwrapGameHudTabGroups(elements.root);
+  for (const old of Array.from(elements.root.querySelectorAll(".gameHudStackSlider"))) old.remove();
+  pruneGameHudGroups();
+  ensureGameHudDefaultTabGroups();
   for (const dock of Object.values(elements.anchors || {})) {
     const anchor = normalizeGameHudAnchor(dock.dataset.hudDock, "left");
-    const frames = gameHudDockFrames(dock);
-    dock.classList.toggle("gameHudDock--empty", frames.length === 0);
-    dock.classList.toggle("gameHudDock--tabs", gameHudDockMode(anchor) === "tabs" && frames.length > 1);
-    dock.classList.toggle("gameHudDock--stackSized", gameHudDockMode(anchor) !== "tabs" && frames.length > 1);
-    const modeButton = dock.querySelector("[data-game-hud-dock-control='toggle-tabs']");
-    if (modeButton) modeButton.textContent = gameHudDockMode(anchor) === "tabs" ? "Rows" : "Tabs";
-    for (const frame of frames) frame.classList.remove("gameHudPanelFrame--tabHidden");
-    if (gameHudDockMode(anchor) === "tabs" && frames.length > 1) {
-      const tools = dock.querySelector(".gameHudDockTools");
-      const bar = createGameHudTabBar(anchor, frames);
-      if (tools && tools.nextSibling) dock.insertBefore(bar, tools.nextSibling);
-      else dock.insertBefore(bar, frames[0] || null);
-      continue;
-    }
-    const sizes = normalizeDockFrameSizes(frames);
+    const slots = gameHudDockSlots(dock, anchor);
+    dock.classList.toggle("gameHudDock--empty", slots.length === 0);
+    const tools = dock.querySelector(".gameHudDockTools");
+    let cursor = tools || null;
+    const nodes = slots.map(function (slot) {
+      let node;
+      if (slot.type === "group") {
+        node = createGameHudTabGroup(anchor, slot.groupId, slot.frames);
+        node.style.order = String(slot.order);
+      } else {
+        node = slot.frame;
+        node.classList.remove("gameHudPanelFrame--tabHidden");
+      }
+      if (cursor) cursor.after(node);
+      else dock.insertBefore(node, dock.firstChild);
+      cursor = node;
+      return node;
+    });
+    const sizes = normalizeSlotSizes(slots);
     // top/bottom are content-fit docks (CSS ignores --hud-panel-basis there, see
     // styles.css), so a slider to redistribute % height between two stacked panels
     // would just be dead UI - only offer it where the dock has a definite height.
     const stackSliderAllowed = anchor !== "top" && anchor !== "bottom";
-    frames.forEach(function (frame, index) {
-      applyDockFrameSize(frame, sizes[index] || (100 / frames.length));
-      if (stackSliderAllowed && state.hudLayout.editMode === true && index < frames.length - 1) {
-        const slider = createGameHudStackSlider(anchor, frame, frames[index + 1]);
-        dock.insertBefore(slider, frames[index + 1]);
+    slots.forEach(function (slot, index) {
+      applyDockFrameSize(nodes[index], sizes[index] || (100 / slots.length));
+      for (const frame of slot.type === "group" ? slot.frames || [] : [slot.frame]) {
+        if (frame) restoreGameHudFrameScroll(frame);
+      }
+      if (stackSliderAllowed && state.hudLayout.editMode === true && index < slots.length - 1) {
+        const slider = createGameHudStackSlider(anchor, slot, slots[index + 1]);
+        dock.insertBefore(slider, nodes[index + 1]);
       }
     });
   }
+  refreshGameHudFloatingTabGroups(elements.root);
+  scheduleGameHudPassthroughRefresh();
+}
+
+// Poll-driven panels (node03/04/05) get fully torn down and rebuilt from
+// scratch whenever their data signature changes - several times a minute
+// during normal play - which would otherwise snap any scrolled list (quest
+// tracker, inventory, mail, ...) back to the top mid-read. Keyed by moduleId
+// (stable across a rebuild) + each scrolled element's className (stable
+// across renders of the same module, since it's built by the same template
+// code every time) so a fresh scroll position survives the swap.
+const gameHudScrollMemory = new Map();
+const gameHudProgrammaticScrollUntil = new WeakMap();
+const GAME_HUD_PROGRAMMATIC_SCROLL_SUPPRESS_MS = 180;
+
+const GAME_HUD_SCROLL_AREA_SELECTOR = [
+  ".gameHudPanelBody",
+  ".node03Module",
+  ".node04Module",
+  ".node05Module",
+  ".status-panel",
+  ".status-body",
+  ".node03TrackedEditorList",
+  ".node03Module--interactions",
+  ".node04Module--tracker",
+  ".gameHudDockTabBar"
+].join(",");
+
+function markGameHudProgrammaticScroll(el) {
+  if (!el) return;
+  gameHudProgrammaticScrollUntil.set(el, performance.now() + GAME_HUD_PROGRAMMATIC_SCROLL_SUPPRESS_MS);
+}
+
+function isGameHudProgrammaticScroll(el) {
+  return num(gameHudProgrammaticScrollUntil.get(el), 0) > performance.now();
+}
+
+function gameHudScrollElementKey(el, indexByBase) {
+  if (!el) return "";
+  let base = "";
+  if (el.classList && el.classList.contains("gameHudPanelBody")) {
+    base = "panel-body";
+  } else if (el.dataset?.gameHudScrollKey) {
+    base = "data:" + el.dataset.gameHudScrollKey;
+  } else if (el.classList && el.classList.length) {
+    base = Array.from(el.classList)
+      .filter(function (className) { return className !== "gameHudScrollbar--active"; })
+      .sort()
+      .join(".");
+  }
+  if (!base) base = String(el.tagName || "node").toLowerCase();
+  const index = indexByBase.get(base) || 0;
+  indexByBase.set(base, index + 1);
+  return base + "#" + index;
+}
+
+function gameHudFrameScrollCandidates(frame) {
+  return [frame].concat(Array.from(frame.querySelectorAll("*")));
+}
+
+function captureGameHudFrameScroll(frame, options = {}) {
+  const moduleId = frame.dataset.moduleId || "";
+  if (!moduleId) return;
+  const positions = new Map();
+  const indexByBase = new Map();
+  for (const el of gameHudFrameScrollCandidates(frame)) {
+    const key = gameHudScrollElementKey(el, indexByBase);
+    if (el.scrollTop > 0 || el.scrollLeft > 0) {
+      positions.set(key, { top: el.scrollTop, left: el.scrollLeft });
+    }
+  }
+  if (positions.size) gameHudScrollMemory.set(moduleId, positions);
+  else if (options.clearEmpty !== false) gameHudScrollMemory.delete(moduleId);
+}
+
+function restoreGameHudFrameScroll(frame) {
+  const moduleId = frame.dataset.moduleId || "";
+  const positions = moduleId ? gameHudScrollMemory.get(moduleId) : null;
+  if (!positions || !positions.size) return;
+  const apply = function () {
+    if (!frame.isConnected) return;
+    const indexByBase = new Map();
+    for (const el of gameHudFrameScrollCandidates(frame)) {
+      const pos = positions.get(gameHudScrollElementKey(el, indexByBase));
+      if (pos) {
+        if (el.scrollTop !== pos.top || el.scrollLeft !== pos.left) markGameHudProgrammaticScroll(el);
+        el.scrollTop = pos.top;
+        el.scrollLeft = pos.left;
+      }
+    }
+  };
+  apply();
+  window.requestAnimationFrame(function () {
+    apply();
+    window.requestAnimationFrame(apply);
+  });
+  window.setTimeout(apply, 80);
 }
 
 function clearGameHudFamily(family) {
   const elements = ensureGameHudRuntimeRoot();
   const selector = '.gameHudPanelFrame[data-runtime-family="' + String(family || "").replace(/"/g, "") + '"]';
-  for (const node of Array.from(elements.root.querySelectorAll(selector))) node.remove();
+  for (const node of Array.from(elements.root.querySelectorAll(selector))) {
+    captureGameHudFrameScroll(node, { clearEmpty: false });
+    node.remove();
+  }
   scheduleGameHudDockRefresh();
+}
+
+function gameHudFamilyFrameSelector(family) {
+  return '.gameHudPanelFrame[data-runtime-family="' + String(family || "").replace(/"/g, "") + '"]';
+}
+
+function beginGameHudFamilyRender(family) {
+  const elements = ensureGameHudRuntimeRoot();
+  for (const frame of Array.from(elements.root.querySelectorAll(gameHudFamilyFrameSelector(family)))) {
+    captureGameHudFrameScroll(frame, { clearEmpty: false });
+    frame.dataset.gameHudRenderStale = "1";
+  }
+}
+
+function endGameHudFamilyRender(family) {
+  const elements = ensureGameHudRuntimeRoot();
+  const selector = gameHudFamilyFrameSelector(family) + '[data-game-hud-render-stale="1"]';
+  for (const frame of Array.from(elements.root.querySelectorAll(selector))) {
+    captureGameHudFrameScroll(frame, { clearEmpty: false });
+    frame.remove();
+  }
+  scheduleGameHudDockRefresh();
+}
+
+function reusableGameHudPanelFrame(family, moduleId) {
+  const elements = ensureGameHudRuntimeRoot();
+  const selector = gameHudFamilyFrameSelector(family) + '[data-module-id="' + gameHudCssEscape(moduleId) + '"]';
+  return elements.root.querySelector(selector);
+}
+
+function gameHudPanelBody(frame) {
+  return Array.from(frame.children).find(function (child) {
+    return child.classList && child.classList.contains("gameHudPanelBody");
+  }) || null;
 }
 
 function gameHudPanelFromEventTarget(target) {
@@ -1480,7 +2740,11 @@ function gameHudPanelFromEventTarget(target) {
 function createGameHudPanelChrome(module, layout) {
   const chrome = document.createElement("div");
   chrome.className = "gameHudPanelChrome";
-  chrome.dataset.gameHudDrag = "1";
+  const handle = document.createElement("span");
+  handle.className = "gameHudDragHandle";
+  handle.dataset.gameHudDrag = "1";
+  handle.setAttribute("aria-hidden", "true");
+  handle.title = "Sleep om te verplaatsen";
   const smaller = document.createElement("button");
   smaller.type = "button";
   smaller.dataset.gameHudControl = "scale-panel";
@@ -1495,7 +2759,7 @@ function createGameHudPanelChrome(module, layout) {
   reset.type = "button";
   reset.dataset.gameHudControl = "reset-panel";
   reset.textContent = "Reset";
-  chrome.append(smaller, larger, reset);
+  chrome.append(handle, smaller, larger, reset);
   return chrome;
 }
 
@@ -1530,26 +2794,49 @@ function appendGameHudPanel(family, module, contentNode, fallbackAnchor) {
   const elements = ensureGameHudRuntimeRoot();
   const moduleId = hudModuleIdentity(module) || family + ":" + Math.random().toString(36).slice(2);
   const layout = resolveGameHudModuleLayout(module, fallbackAnchor);
-  const frame = document.createElement("section");
-  frame.className = "gameHudPanelFrame";
+  let frame = reusableGameHudPanelFrame(family, moduleId);
+  const reused = Boolean(frame);
+  if (reused) {
+    captureGameHudFrameScroll(frame, { clearEmpty: false });
+    delete frame.dataset.gameHudRenderStale;
+  } else {
+    frame = document.createElement("section");
+    frame.className = "gameHudPanelFrame";
+  }
   frame.dataset.runtimeFamily = family;
   frame.dataset.moduleId = moduleId;
   frame.dataset.nodeType = module?.nodeType || "";
   frame.dataset.panelTitle = gameHudPanelTitle(module);
   frame.dataset.defaultAnchor = normalizeGameHudAnchor(module?.anchor || fallbackAnchor, fallbackAnchor);
-  frame.style.order = String(gameHudPanelOrder(module));
-  const chrome = createGameHudPanelChrome(module, layout);
-  const body = document.createElement("div");
+  frame.style.order = String(gameHudPanelOrder(module, moduleId));
+  const isMinimapPanel = contentNode.classList && contentNode.classList.contains("gameMinimapRoot");
+  frame.classList.remove("gameHudPanelFrame--minimap", "gameHudPanelFrame--tabHidden");
+  if (isMinimapPanel) frame.classList.add("gameHudPanelFrame--minimap");
+  if (contentNode.dataset && !contentNode.dataset.gameHudScrollKey) contentNode.dataset.gameHudScrollKey = "content";
+  let body = reused ? gameHudPanelBody(frame) : null;
+  const bodyWasMissing = !body;
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "gameHudPanelBody";
+  }
   body.className = "gameHudPanelBody";
-  body.appendChild(contentNode);
-  const resize = document.createElement("button");
-  resize.type = "button";
-  resize.className = "gameHudResizeHandle";
-  resize.dataset.gameHudResize = "1";
-  resize.setAttribute("aria-label", "Resize HUD panel");
-  frame.append(chrome, body, resize);
-  elements.root.appendChild(frame);
+  if (isMinimapPanel) body.classList.add("gameHudPanelBody--minimap");
+  body.replaceChildren(contentNode);
+  if (!reused) {
+    const chrome = createGameHudPanelChrome(module, layout);
+    const resize = document.createElement("button");
+    resize.type = "button";
+    resize.className = "gameHudResizeHandle";
+    resize.dataset.gameHudResize = "1";
+    resize.setAttribute("aria-label", "Resize HUD panel");
+    frame.append(chrome, body, resize);
+  } else if (bodyWasMissing) {
+    const resize = frame.querySelector(":scope > .gameHudResizeHandle");
+    if (resize) frame.insertBefore(body, resize);
+    else frame.appendChild(body);
+  }
   applyGameHudPanelLayout(frame, layout);
+  restoreGameHudFrameScroll(frame);
   scheduleGameHudDockRefresh();
   return frame;
 }
@@ -1569,6 +2856,7 @@ function floatingLayoutFromPanelRect(panel, base = {}) {
 function undockGameHudPanel(panel) {
   if (!panel) return null;
   const moduleId = panel.dataset.moduleId || "";
+  removeGameHudModuleFromGroup(moduleId);
   const current = gameHudModuleOverride(moduleId) || {};
   const layout = floatingLayoutFromPanelRect(panel, {
     anchor: panel.dataset.hudDock || panel.dataset.defaultAnchor || "left",
@@ -1589,29 +2877,62 @@ function undockGameHudPanel(panel) {
 function dockGameHudPanel(panel, anchor = null) {
   if (!panel) return;
   const moduleId = panel.dataset.moduleId || "";
+  removeGameHudModuleFromGroup(moduleId);
   const nextAnchor = normalizeGameHudAnchor(anchor || panel.dataset.hudDock || panel.dataset.defaultAnchor, "left");
   setGameHudModuleOverride(moduleId, { mode: "dock", anchor: nextAnchor });
+  syncGameHudLivePanelLayout(panel, nextAnchor);
   rerenderGameHudPanels();
 }
 
-function handleGameHudRuntimeClick(event) {
-  const dockControl = event.target && typeof event.target.closest === "function"
-    ? event.target.closest("[data-game-hud-dock-control]")
-    : null;
-  if (dockControl) {
-    event.preventDefault();
-    event.stopPropagation();
-    const anchor = normalizeGameHudAnchor(dockControl.dataset.gameHudDockAnchor, "left");
-    setGameHudDockMode(anchor, gameHudDockMode(anchor) === "tabs" ? "stack" : "tabs");
-    return;
+function syncGameHudLivePanelLayout(panel, anchor = null) {
+  if (!panel || !panel.isConnected) return null;
+  const module = {
+    moduleId: panel.dataset.moduleId || "",
+    nodeType: panel.dataset.nodeType || "",
+    anchor: normalizeGameHudAnchor(anchor || panel.dataset.hudDock || panel.dataset.defaultAnchor, "left")
+  };
+  const layout = resolveGameHudModuleLayout(module, module.anchor);
+  applyGameHudPanelLayout(panel, layout);
+  return layout;
+}
+
+function syncGameHudDroppedPanel(active, anchor) {
+  if (!active || !active.panel) return;
+  syncGameHudLivePanelLayout(active.panel, anchor || active.anchor);
+}
+
+function syncGameHudRuntimeFamilyPanelsToDefaults(family = "runtime") {
+  const root = state.hudLayout.elements?.root || null;
+  if (!root) return;
+  const selector = '.gameHudPanelFrame[data-runtime-family="' + gameHudCssEscape(family) + '"]';
+  for (const frame of Array.from(root.querySelectorAll(selector))) {
+    syncGameHudLivePanelLayout(frame, frame.dataset.defaultAnchor);
   }
+}
+
+function mmoDebugHudModule(config) {
+  return {
+    moduleId: config?.id || "mmo_debug_hud",
+    nodeType: "debug_mmo_hud",
+    label: "Performance",
+    anchor: normalizeGameHudAnchor(config?.anchor, "right")
+  };
+}
+
+function syncMmoDebugHudLayout(config) {
+  const frame = state.debugHud.elements?.frame || null;
+  if (!frame || isGameHudLayoutInteractionActive()) return;
+  syncGameHudLivePanelLayout(frame, mmoDebugHudModule(config).anchor);
+}
+
+function handleGameHudRuntimeClick(event) {
   const tabButton = event.target && typeof event.target.closest === "function"
     ? event.target.closest("[data-game-hud-tab-module-id]")
     : null;
   if (tabButton) {
     event.preventDefault();
     event.stopPropagation();
-    setGameHudDockActiveTab(tabButton.dataset.gameHudTabAnchor, tabButton.dataset.gameHudTabModuleId);
+    setGameHudGroupActiveTab(tabButton.dataset.gameHudTabGroupId, tabButton.dataset.gameHudTabModuleId);
     return;
   }
   const control = event.target && typeof event.target.closest === "function"
@@ -1628,6 +2949,11 @@ function handleGameHudRuntimeClick(event) {
     }
     if (command === "reset-all") {
       resetGameHudLayoutOverrides();
+      const debugFrame = state.debugHud.elements?.frame || null;
+      const minimapFrame = state.minimapHud.elements?.frame || null;
+      syncGameHudLivePanelLayout(debugFrame, debugFrame?.dataset.defaultAnchor);
+      syncGameHudLivePanelLayout(minimapFrame, minimapFrame?.dataset.defaultAnchor);
+      syncGameHudRuntimeFamilyPanelsToDefaults("runtime");
       rerenderGameHudPanels();
       return;
     }
@@ -1635,6 +2961,7 @@ function handleGameHudRuntimeClick(event) {
     const moduleId = panel.dataset.moduleId || "";
     if (command === "reset-panel") {
       clearGameHudModuleOverride(moduleId);
+      syncGameHudLivePanelLayout(panel, panel.dataset.defaultAnchor);
       rerenderGameHudPanels();
       return;
     }
@@ -1647,9 +2974,17 @@ function handleGameHudRuntimeClick(event) {
       return;
     }
     if (command === "scale-panel") {
-      const current = gameHudModuleOverride(moduleId) || {};
+      const groupId = gameHudModuleGroupId(moduleId);
+      const group = groupId ? gameHudGroup(groupId) : null;
+      const current = group?.anchor === "center" ? group : (gameHudModuleOverride(moduleId) || {});
       const delta = Number(control.dataset.gameHudScale) > 0 ? GAME_HUD_PANEL_SCALE_STEP : -GAME_HUD_PANEL_SCALE_STEP;
       const nextScale = clamp(num(current.scale, 1) + delta, 0.55, 1.8);
+      if (group && group.anchor === "center") {
+        setGameHudFloatingGroupLayout(groupId, Object.assign({}, group, { scale: nextScale }));
+        const wrapper = panel.closest(".gameHudTabGroup--floating");
+        if (wrapper) wrapper.style.setProperty("--hud-panel-scale", String(nextScale));
+        return;
+      }
       setGameHudModuleOverride(moduleId, { scale: nextScale });
       panel.style.setProperty("--hud-panel-scale", String(nextScale));
       return;
@@ -1674,8 +3009,7 @@ function handleGameHudRuntimeClick(event) {
     ? event.target.closest("[data-node04-close]")
     : null;
   if (close) {
-    state.node04.dialogue = null;
-    renderNode04Hud();
+    closeNode04DialoguePanel();
     return;
   }
   const node04Button = event.target && typeof event.target.closest === "function"
@@ -1714,6 +3048,19 @@ function handleGameHudRuntimeClick(event) {
 }
 
 function handleGameHudRuntimeChange(event) {
+  const trackedToggle = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-node03-tracked-toggle]")
+    : null;
+  if (trackedToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    setNode03TrackedRefSelection(
+      trackedToggle.dataset.node03TrackedModuleId,
+      trackedToggle.dataset.node03TrackedRef,
+      trackedToggle.checked === true
+    );
+    return;
+  }
   const gapInput = event.target && typeof event.target.closest === "function"
     ? event.target.closest("[data-game-hud-gap]")
     : null;
@@ -1721,6 +3068,33 @@ function handleGameHudRuntimeChange(event) {
     event.preventDefault();
     event.stopPropagation();
     setGameHudGridGap(gapInput.value);
+    return;
+  }
+  const outerGapInput = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-outer-gap]")
+    : null;
+  if (outerGapInput) {
+    event.preventDefault();
+    event.stopPropagation();
+    setGameHudGridOuterGap(outerGapInput.value);
+    return;
+  }
+  const panelOpacityInput = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-panel-opacity]")
+    : null;
+  if (panelOpacityInput) {
+    event.preventDefault();
+    event.stopPropagation();
+    setGameHudPanelOpacity(panelOpacityInput.value);
+    return;
+  }
+  const profileSelect = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-profile-select]")
+    : null;
+  if (profileSelect) {
+    event.preventDefault();
+    event.stopPropagation();
+    setGameHudActiveProfile(profileSelect.value);
     return;
   }
   const select = event.target && typeof event.target.closest === "function"
@@ -1732,6 +3106,344 @@ function handleGameHudRuntimeChange(event) {
   const panel = gameHudPanelFromEventTarget(select);
   if (!panel) return;
   dockGameHudPanel(panel, select.value);
+}
+
+// How long a scrolled element's thumb stays visible after the last scroll
+// event before fading back out - see handleGameHudScroll/styles.css.
+const GAME_HUD_SCROLLBAR_HIDE_MS = 800;
+const gameHudScrollHideTimers = new WeakMap();
+
+// Toggles a class on whichever specific element the scroll happened on -
+// styles.css keys the (transparent-by-default) scrollbar thumb color off it,
+// so it's only actually visible while that element is being scrolled.
+function handleGameHudScroll(event) {
+  const target = event.target;
+  if (!target || typeof target.classList?.add !== "function") return;
+  if (isGameHudProgrammaticScroll(target)) return;
+  const panel = gameHudPanelFromEventTarget(target);
+  if (panel) {
+    captureGameHudFrameScroll(panel);
+    holdGameHudRenderForScroll();
+  }
+  target.classList.add("gameHudScrollbar--active");
+  const existingTimer = gameHudScrollHideTimers.get(target);
+  if (existingTimer) window.clearTimeout(existingTimer);
+  gameHudScrollHideTimers.set(target, window.setTimeout(function () {
+    target.classList.remove("gameHudScrollbar--active");
+    gameHudScrollHideTimers.delete(target);
+  }, GAME_HUD_SCROLLBAR_HIDE_MS));
+}
+
+function isGameHudScrollableElement(element) {
+  if (!element || !element.isConnected) return false;
+  const style = window.getComputedStyle(element);
+  const scrollableY = /auto|scroll|overlay/.test(style.overflowY || "") && element.scrollHeight > element.clientHeight + 1;
+  const scrollableX = /auto|scroll|overlay/.test(style.overflowX || "") && element.scrollWidth > element.clientWidth + 1;
+  return scrollableY || scrollableX;
+}
+
+function refreshGameHudPassthroughState() {
+  const root = state.hudLayout.elements?.root || null;
+  if (!root) return;
+  for (const element of root.querySelectorAll(".gameHudInteractiveScrollArea")) {
+    element.classList.remove("gameHudInteractiveScrollArea");
+  }
+  if (state.hudLayout.editMode === true) return;
+  for (const element of root.querySelectorAll(GAME_HUD_SCROLL_AREA_SELECTOR)) {
+    if (isGameHudScrollableElement(element)) element.classList.add("gameHudInteractiveScrollArea");
+  }
+}
+
+function scheduleGameHudPassthroughRefresh() {
+  window.requestAnimationFrame(function () {
+    refreshGameHudPassthroughState();
+    window.requestAnimationFrame(refreshGameHudPassthroughState);
+  });
+}
+
+// Inflates a target's hit area by this many px on every side, so landing on
+// a small or thin panel/tab (e.g. the minimap, or a cramped dock) doesn't
+// take pixel-perfect precision. Kept modest - the live gameHudDropHint label
+// is what actually removes the guesswork, this just takes the edge off.
+const GAME_HUD_DROP_HIT_PAD_PX = 6;
+
+function gameHudRectContainsPoint(rect, clientX, clientY, padPx) {
+  const pad = padPx || 0;
+  return clientX >= rect.left - pad && clientX <= rect.right + pad
+    && clientY >= rect.top - pad && clientY <= rect.bottom + pad;
+}
+
+// Which currently-visible panel frame (if any) the pointer is over, within
+// one dock. Geometry-based (not elementFromPoint) so it isn't thrown off by
+// stacking/pointer-events/zoom quirks on whatever's directly under the
+// cursor - only real screen position matters, with a generous hit margin.
+function gameHudFrameAtPoint(dock, clientX, clientY, excludeModuleId = "") {
+  const excludeId = String(excludeModuleId || "").trim();
+  const frames = dock.querySelectorAll(".gameHudPanelFrame");
+  for (const frame of frames) {
+    if (excludeId && frame.dataset.moduleId === excludeId) continue;
+    if (frame.dataset.layoutMode === "float" || frame.classList.contains("gameHudPanelFrame--tabHidden")) continue;
+    if (gameHudRectContainsPoint(frame.getBoundingClientRect(), clientX, clientY, GAME_HUD_DROP_HIT_PAD_PX)) return frame;
+  }
+  return null;
+}
+
+function gameHudFloatingFrameAtPoint(clientX, clientY, excludeModuleId = "") {
+  const root = state.hudLayout.elements?.root || null;
+  if (!root) return null;
+  const excludeId = String(excludeModuleId || "").trim();
+  const frames = Array.from(root.querySelectorAll(".gameHudPanelFrame")).reverse();
+  for (const frame of frames) {
+    if (excludeId && frame.dataset.moduleId === excludeId) continue;
+    if (frame.dataset.layoutMode !== "float" || frame.classList.contains("gameHudPanelFrame--tabHidden")) continue;
+    if (gameHudRectContainsPoint(frame.getBoundingClientRect(), clientX, clientY, GAME_HUD_DROP_HIT_PAD_PX)) return frame;
+  }
+  return null;
+}
+
+function gameHudTabAtPoint(dock, clientX, clientY) {
+  const tabs = dock.querySelectorAll(".gameHudDockTab");
+  for (const tab of tabs) {
+    if (gameHudRectContainsPoint(tab.getBoundingClientRect(), clientX, clientY, GAME_HUD_DROP_HIT_PAD_PX)) return tab;
+  }
+  return null;
+}
+
+function gameHudFloatingTabAtPoint(clientX, clientY) {
+  const root = state.hudLayout.elements?.root || null;
+  if (!root) return null;
+  const tabs = Array.from(root.querySelectorAll(":scope > .gameHudTabGroup--floating .gameHudDockTab")).reverse();
+  for (const tab of tabs) {
+    if (gameHudRectContainsPoint(tab.getBoundingClientRect(), clientX, clientY, GAME_HUD_DROP_HIT_PAD_PX)) return tab;
+  }
+  return null;
+}
+
+function gameHudDropTargetForTab(tab, anchor, clientX, clientY) {
+  if (!tab) return null;
+  const group = tab.closest(".gameHudTabGroup");
+  const bar = tab.parentElement;
+  const pills = bar ? Array.from(bar.children) : [tab];
+  const rect = tab.getBoundingClientRect();
+  const vertical = anchor === "left" || anchor === "right";
+  const after = vertical ? (clientY - rect.top) > rect.height / 2 : (clientX - rect.left) > rect.width / 2;
+  const index = pills.indexOf(tab);
+  const beforePill = after ? pills[index + 1] : tab;
+  return {
+    kind: "tab",
+    anchor: anchor,
+    groupId: group?.dataset.gameHudGroupId || "",
+    beforeModuleId: beforePill ? beforePill.dataset.gameHudTabModuleId || "" : ""
+  };
+}
+
+// Finer-grained drop target under the pointer, used only while dragging a
+// panel/tab so dropping it ON another panel (or its tab strip) tabs the two
+// together instead of just landing as a new row in the same dock. Returns
+// null when the pointer isn't over any dock at all (gameHudAnchorFromPoint
+// already gates off-grid before this is called).
+function resolveGameHudDropTarget(clientX, clientY, activeModuleId = "") {
+  const elements = state.hudLayout.elements;
+  const dockAnchor = gameHudAnchorFromPoint(clientX, clientY);
+  if (!elements || !elements.anchors || !dockAnchor) return null;
+  const dock = elements.anchors[dockAnchor];
+  if (!dock) return null;
+  if (dockAnchor === "center") {
+    const floatingTab = gameHudFloatingTabAtPoint(clientX, clientY);
+    if (floatingTab) return gameHudDropTargetForTab(floatingTab, "center", clientX, clientY);
+    const floatingFrame = gameHudFloatingFrameAtPoint(clientX, clientY, activeModuleId);
+    const targetModuleId = floatingFrame?.dataset.moduleId || "";
+    if (!targetModuleId) return null;
+    return {
+      kind: "panel",
+      anchor: "center",
+      targetModuleId: targetModuleId,
+      targetSlot: { type: "panel", moduleId: targetModuleId },
+      existingGroupId: gameHudModuleGroupId(targetModuleId)
+    };
+  }
+  const tab = gameHudTabAtPoint(dock, clientX, clientY);
+  if (tab) {
+    return gameHudDropTargetForTab(tab, dockAnchor, clientX, clientY);
+  }
+  const frame = gameHudFrameAtPoint(dock, clientX, clientY, activeModuleId);
+  if (frame) {
+    const targetModuleId = frame.dataset.moduleId || "";
+    const rect = frame.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5;
+    if (dockAnchor !== "center" && (ratio <= GAME_HUD_ROW_INSERT_EDGE_RATIO || ratio >= 1 - GAME_HUD_ROW_INSERT_EDGE_RATIO)) {
+      return {
+        kind: "row",
+        anchor: dockAnchor,
+        targetSlot: gameHudSlotRefForFrame(frame),
+        placement: ratio <= GAME_HUD_ROW_INSERT_EDGE_RATIO ? "before" : "after"
+      };
+    }
+    return {
+      kind: "panel",
+      anchor: dockAnchor,
+      targetModuleId: targetModuleId,
+      targetSlot: gameHudSlotRefForFrame(frame),
+      existingGroupId: gameHudModuleGroupId(targetModuleId)
+    };
+  }
+  return gameHudInsertionTargetAtPoint(dock, dockAnchor, clientX, clientY);
+}
+
+function gameHudFloatingLayoutForDropTarget(dropTarget) {
+  if (!dropTarget) return gameHudFloatPatchFromLayout();
+  const group = dropTarget.existingGroupId ? gameHudGroup(dropTarget.existingGroupId) : null;
+  if (group && group.anchor === "center") return gameHudFloatPatchFromLayout(group);
+  const moduleId = dropTarget.targetModuleId || "";
+  if (moduleId) {
+    return gameHudFloatPatchFromLayout(resolveGameHudModuleLayout({ moduleId: moduleId, anchor: "center" }, "center"));
+  }
+  if (dropTarget.groupId) {
+    const tabGroup = gameHudGroup(dropTarget.groupId);
+    if (tabGroup && tabGroup.anchor === "center") return gameHudFloatPatchFromLayout(tabGroup);
+  }
+  return gameHudFloatPatchFromLayout();
+}
+
+function applyGameHudCenterDropTarget(active, dropTarget) {
+  const moduleId = active.moduleId;
+  const layout = gameHudFloatingLayoutForDropTarget(dropTarget);
+  if (dropTarget.kind === "tab" && dropTarget.groupId) {
+    setGameHudFloatingGroupLayout(dropTarget.groupId, layout);
+    addGameHudModuleToGroup(dropTarget.groupId, moduleId, dropTarget.beforeModuleId);
+    rerenderGameHudPanels();
+    return true;
+  }
+  if (dropTarget.kind !== "panel" || !dropTarget.targetModuleId || dropTarget.targetModuleId === moduleId) return false;
+  if (dropTarget.existingGroupId) {
+    setGameHudFloatingGroupLayout(dropTarget.existingGroupId, layout);
+    addGameHudModuleToGroup(dropTarget.existingGroupId, moduleId);
+  } else {
+    createGameHudGroup("center", [dropTarget.targetModuleId, moduleId], Object.assign({
+      activeModuleId: moduleId
+    }, layout));
+  }
+  rerenderGameHudPanels();
+  return true;
+}
+
+// Applies a resolved drop target: merges into/reorders within a tab group, or
+// docks as a plain row. Returns false when dropTarget doesn't call for either
+// (caller then falls back to its own default dock-as-row handling).
+function applyGameHudDropTarget(active, dropTarget) {
+  const moduleId = active.moduleId;
+  if (!dropTarget) return false;
+  if (dropTarget.anchor === "center" && (dropTarget.kind === "panel" || dropTarget.kind === "tab")) {
+    return applyGameHudCenterDropTarget(active, dropTarget);
+  }
+  if (dropTarget.kind === "tab" && dropTarget.groupId) {
+    freezeGameHudDockSlotSizes(dropTarget.anchor);
+    normalizeGameHudDockOrders(dropTarget.anchor);
+    setGameHudModuleOverride(moduleId, {
+      order: gameHudSlotOrderByRef(dropTarget.anchor, { type: "group", groupId: dropTarget.groupId })
+    });
+    addGameHudModuleToGroup(dropTarget.groupId, moduleId, dropTarget.beforeModuleId);
+    syncGameHudDroppedPanel(active, dropTarget.anchor);
+    rerenderGameHudPanels();
+    return true;
+  }
+  if (dropTarget.kind === "panel" && dropTarget.targetModuleId && dropTarget.targetModuleId !== moduleId) {
+    const frozen = freezeGameHudDockSlotSizes(dropTarget.anchor);
+    normalizeGameHudDockOrders(dropTarget.anchor);
+    setGameHudModuleOverride(moduleId, {
+      order: gameHudSlotOrderByRef(
+        dropTarget.anchor,
+        dropTarget.targetSlot || { type: dropTarget.existingGroupId ? "group" : "panel", groupId: dropTarget.existingGroupId, moduleId: dropTarget.targetModuleId }
+      )
+    });
+    if (dropTarget.existingGroupId) {
+      addGameHudModuleToGroup(dropTarget.existingGroupId, moduleId);
+    } else {
+      createGameHudGroup(dropTarget.anchor, [dropTarget.targetModuleId, moduleId], {
+        activeModuleId: moduleId,
+        sizePct: frozen.sizeByModuleId.get(dropTarget.targetModuleId) || 0
+      });
+    }
+    syncGameHudDroppedPanel(active, dropTarget.anchor);
+    rerenderGameHudPanels();
+    return true;
+  }
+  if (dropTarget.kind === "row" && dropTarget.anchor) {
+    freezeGameHudDockSlotSizes(dropTarget.anchor);
+    normalizeGameHudDockOrders(dropTarget.anchor);
+    const order = gameHudInsertOrder(dropTarget.anchor, dropTarget.targetSlot || null, dropTarget.placement || "after");
+    removeGameHudModuleFromGroup(moduleId);
+    setGameHudModuleOverride(moduleId, { mode: "dock", anchor: dropTarget.anchor, scale: active.scale, order: order });
+    syncGameHudDroppedPanel(active, dropTarget.anchor);
+    rerenderGameHudPanels();
+    return true;
+  }
+  return false;
+}
+
+// Cursor-following label created lazily and reused for the life of the HUD
+// root - shows in plain language what letting go right now would do, so
+// dragging a panel over another one doesn't require guessing/hovering it out.
+function ensureGameHudDropHint() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return null;
+  if (elements.dropHint) return elements.dropHint;
+  const hint = document.createElement("div");
+  hint.className = "gameHudDropHint";
+  hint.hidden = true;
+  elements.root.appendChild(hint);
+  elements.dropHint = hint;
+  return hint;
+}
+
+function showGameHudDropHint(text, clientX, clientY) {
+  const elements = state.hudLayout.elements;
+  const hint = ensureGameHudDropHint();
+  if (!hint || !elements || !elements.root) return;
+  hint.textContent = text;
+  hint.hidden = false;
+  const rootRect = elements.root.getBoundingClientRect();
+  hint.style.left = (clientX - rootRect.left + 16) + "px";
+  hint.style.top = (clientY - rootRect.top + 16) + "px";
+}
+
+function clearGameHudDropHighlight() {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  for (const node of elements.root.querySelectorAll(".gameHudDropTarget")) node.classList.remove("gameHudDropTarget");
+  if (elements.dropHint) elements.dropHint.hidden = true;
+}
+
+function updateGameHudDropHighlight(clientX, clientY) {
+  clearGameHudDropHighlight();
+  const dockAnchor = gameHudAnchorFromPoint(clientX, clientY);
+  if (!dockAnchor) return;
+  const activeModuleId = state.hudLayout.drag?.moduleId || state.hudLayout.resize?.moduleId || "";
+  const dropTarget = resolveGameHudDropTarget(clientX, clientY, activeModuleId);
+  if (dockAnchor === "center" && !dropTarget) {
+    showGameHudDropHint("Los plaatsen", clientX, clientY);
+    return;
+  }
+  const elements = state.hudLayout.elements;
+  if (!dropTarget || !elements || !elements.root) return;
+  if (dropTarget.kind === "tab" && dropTarget.groupId) {
+    const group = elements.root.querySelector('.gameHudTabGroup[data-game-hud-group-id="' + gameHudCssEscape(dropTarget.groupId) + '"]');
+    if (group) group.classList.add("gameHudDropTarget");
+    showGameHudDropHint("+ Tab toevoegen", clientX, clientY);
+  } else if (dropTarget.kind === "panel" && dropTarget.targetModuleId) {
+    const frame = elements.root.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(dropTarget.targetModuleId) + '"]');
+    if (frame) frame.classList.add("gameHudDropTarget");
+    showGameHudDropHint("+ Samenvoegen tot tabs", clientX, clientY);
+  } else if (dropTarget.kind === "row") {
+    const node = gameHudDockSlotNodeFromRef(dropTarget.anchor, dropTarget.targetSlot);
+    if (node) node.classList.add("gameHudDropTarget");
+    const label = dropTarget.placement === "before"
+      ? "Hierboven plaatsen"
+      : dropTarget.placement === "after"
+        ? "Hieronder plaatsen"
+        : "Losse rij";
+    showGameHudDropHint(label, clientX, clientY);
+  }
 }
 
 function handleGameHudPointerDown(event) {
@@ -1773,24 +3485,88 @@ function handleGameHudPointerDown(event) {
   if (stackSlider) {
     event.preventDefault();
     event.stopPropagation();
+    if (typeof stackSlider.setPointerCapture === "function") {
+      try { stackSlider.setPointerCapture(event.pointerId); } catch {}
+    }
     const anchor = normalizeGameHudAnchor(stackSlider.dataset.gameHudDockAnchor, "left");
     const elements = ensureGameHudRuntimeRoot();
     const dock = elements.anchors[anchor];
-    const before = dock?.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(stackSlider.dataset.beforeModuleId || "") + '"]') || null;
-    const after = dock?.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(stackSlider.dataset.afterModuleId || "") + '"]') || null;
+    const before = gameHudDockSlotNode(dock, stackSlider.dataset.beforeSlotKind, stackSlider.dataset.beforeSlotKey);
+    const after = gameHudDockSlotNode(dock, stackSlider.dataset.afterSlotKind, stackSlider.dataset.afterSlotKey);
     if (!dock || !before || !after) return;
     const dockRect = dock.getBoundingClientRect();
+    // normalizeSlotSizes divides by the sum of every slot's *stored* sizePct
+    // in this dock - so persisting only the dragged pair (leaving untouched
+    // slots at their old, often-unset sizePct of 0) would blow up that sum
+    // and collapse every other slot toward the 1% minimum on the next
+    // refresh. Snapshotting each other slot's current on-screen share here,
+    // and re-persisting it unchanged at drop time, keeps the pool complete.
+    const frozen = freezeGameHudDockSlotSizes(anchor);
+    const allSlots = frozen.slots;
+    const baselineSizes = frozen.sizes;
+    const beforeSlotRef = stackSlider.dataset.beforeSlotKind === "group"
+      ? { type: "group", groupId: stackSlider.dataset.beforeSlotKey }
+      : { type: "panel", moduleId: stackSlider.dataset.beforeSlotKey };
+    const afterSlotRef = stackSlider.dataset.afterSlotKind === "group"
+      ? { type: "group", groupId: stackSlider.dataset.afterSlotKey }
+      : { type: "panel", moduleId: stackSlider.dataset.afterSlotKey };
+    const otherSlots = [];
+    let beforeSize = num((before.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50);
+    let afterSize = num((after.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50);
+    allSlots.forEach(function (slot, index) {
+      const slotRef = gameHudStableSlotRef(slot);
+      if (gameHudSlotRefEquals(slotRef, beforeSlotRef)) {
+        beforeSize = baselineSizes[index] || beforeSize;
+        return;
+      }
+      if (gameHudSlotRefEquals(slotRef, afterSlotRef)) {
+        afterSize = baselineSizes[index] || afterSize;
+        return;
+      }
+      otherSlots.push({
+        sizeSlot: slotRef,
+        pct: baselineSizes[index]
+      });
+    });
+    // Keyed by kind+key (not the live nodes above) - a HUD data poll landing
+    // mid-drag can rebuild the dock (see refreshGameHudDockStacks), which
+    // would detach `before`/`after` and silently strand every live resize
+    // update on nodes no longer on screen. Re-resolving fresh from these keys
+    // on every pointermove instead keeps the slider tracking the cursor
+    // through a rebuild rather than only catching up once you let go.
     state.hudLayout.stackResize = {
       pointerId: event.pointerId,
       anchor,
-      before,
-      after,
-      beforeId: before.dataset.moduleId || "",
-      afterId: after.dataset.moduleId || "",
+      beforeKind: stackSlider.dataset.beforeSlotKind,
+      beforeKey: stackSlider.dataset.beforeSlotKey,
+      afterKind: stackSlider.dataset.afterSlotKind,
+      afterKey: stackSlider.dataset.afterSlotKey,
+      beforeSlot: beforeSlotRef,
+      afterSlot: afterSlotRef,
+      otherSlots: otherSlots,
       startY: event.clientY,
       dockHeight: Math.max(1, dockRect.height),
-      beforeSize: num((before.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50),
-      afterSize: num((after.style.getPropertyValue("--hud-panel-basis") || "").replace("%", ""), 50)
+      beforeSize,
+      afterSize
+    };
+    return;
+  }
+  // Tab pills are both a click target (switch active tab) and a drag source
+  // (reorder / move to another group / detach into a row) - pointerdown alone
+  // can't tell which, so nothing commits here. A real drag only starts once
+  // the pointer moves past GAME_HUD_TAB_DRAG_THRESHOLD_PX (see
+  // handleGameHudPointerMove); otherwise the browser's own click event fires
+  // and handleGameHudRuntimeClick switches the tab as normal.
+  const tabPill = event.target && typeof event.target.closest === "function"
+    ? event.target.closest("[data-game-hud-tab-module-id]")
+    : null;
+  if (tabPill) {
+    state.hudLayout.pendingTabDrag = {
+      pointerId: event.pointerId,
+      moduleId: tabPill.dataset.gameHudTabModuleId || "",
+      groupId: tabPill.dataset.gameHudTabGroupId || "",
+      startX: event.clientX,
+      startY: event.clientY
     };
     return;
   }
@@ -1809,9 +3585,23 @@ function handleGameHudPointerDown(event) {
   if (!resize && !drag) return;
   event.preventDefault();
   event.stopPropagation();
+  beginGameHudPanelDrag(panel, event, resize ? "resize" : "drag");
+}
+
+// Shared by a normal chrome/handle drag and a promoted tab-pill drag: grabs
+// pointer capture, undocks the panel to floating (or re-reads its float
+// layout if it already was), and seeds state.hudLayout.drag/.resize so the
+// existing pointermove/pointerup handling drives both the same way.
+function beginGameHudPanelDrag(panel, event, mode, options = {}) {
   if (typeof panel.setPointerCapture === "function") {
     try { panel.setPointerCapture(event.pointerId); } catch {}
   }
+  panel.classList.add("gameHudPanelFrame--dragging");
+  if (panel.dataset.layoutMode !== "float") {
+    freezeGameHudDockSlotSizes(panel.dataset.hudDock || panel.dataset.defaultAnchor);
+  }
+  const groupId = gameHudModuleGroupId(panel.dataset.moduleId || "");
+  const group = groupId ? gameHudGroup(groupId) : null;
   const layout = panel.dataset.layoutMode === "float"
     ? resolveGameHudModuleLayout({ moduleId: panel.dataset.moduleId, anchor: panel.dataset.hudDock }, panel.dataset.defaultAnchor)
     : undockGameHudPanel(panel);
@@ -1829,13 +3619,35 @@ function handleGameHudPointerDown(event) {
     widthPct: num(layout?.widthPct, GAME_HUD_DEFAULT_FLOAT_WIDTH_PCT),
     heightPct: num(layout?.heightPct, GAME_HUD_DEFAULT_FLOAT_HEIGHT_PCT),
     anchor: layout?.anchor || panel.dataset.hudDock || panel.dataset.defaultAnchor || "left",
-    scale: num(layout?.scale, 1)
+    scale: num(layout?.scale, 1),
+    groupId: groupId,
+    groupAnchor: group?.anchor || "",
+    fromTab: options.fromTab === true
   };
-  if (resize) state.hudLayout.resize = start;
+  if (mode === "resize") state.hudLayout.resize = start;
   else state.hudLayout.drag = start;
 }
 
+function beginGameHudTabDrag(pending, event) {
+  const elements = state.hudLayout.elements;
+  if (!elements || !elements.root) return;
+  const panel = elements.root.querySelector('.gameHudPanelFrame[data-module-id="' + gameHudCssEscape(pending.moduleId) + '"]');
+  if (!panel) return;
+  setGameHudGroupActiveTab(pending.groupId, pending.moduleId);
+  event.preventDefault();
+  beginGameHudPanelDrag(panel, event, "drag", { fromTab: true });
+}
+
 function handleGameHudPointerMove(event) {
+  const pendingTabDrag = state.hudLayout.pendingTabDrag;
+  if (pendingTabDrag && pendingTabDrag.pointerId === event.pointerId) {
+    const dx = event.clientX - pendingTabDrag.startX;
+    const dy = event.clientY - pendingTabDrag.startY;
+    if (Math.hypot(dx, dy) < GAME_HUD_TAB_DRAG_THRESHOLD_PX) return;
+    state.hudLayout.pendingTabDrag = null;
+    beginGameHudTabDrag(pendingTabDrag, event);
+    // fall through - this same pointermove also applies the drag's first step
+  }
   const gridResize = state.hudLayout.gridResize;
   if (gridResize && gridResize.pointerId === event.pointerId) {
     event.preventDefault();
@@ -1866,8 +3678,15 @@ function handleGameHudPointerMove(event) {
     const delta = (event.clientY - stackResize.startY) / stackResize.dockHeight * 100;
     const before = clamp(stackResize.beforeSize + delta, GAME_HUD_DOCK_STACK_MIN_PCT, Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, total - GAME_HUD_DOCK_STACK_MIN_PCT));
     const after = Math.max(GAME_HUD_DOCK_STACK_MIN_PCT, total - before);
-    applyDockFrameSize(stackResize.before, before);
-    applyDockFrameSize(stackResize.after, after);
+    // Re-resolved fresh every move (not cached at drag-start) so a dock
+    // rebuild mid-drag (a HUD data poll landing while you're dragging) can't
+    // strand the live update on a detached node - see the comment where
+    // stackResize is built in handleGameHudPointerDown.
+    const dock = state.hudLayout.elements?.anchors?.[stackResize.anchor];
+    const beforeNode = dock ? gameHudDockSlotNode(dock, stackResize.beforeKind, stackResize.beforeKey) : null;
+    const afterNode = dock ? gameHudDockSlotNode(dock, stackResize.afterKind, stackResize.afterKey) : null;
+    if (beforeNode) applyDockFrameSize(beforeNode, before);
+    if (afterNode) applyDockFrameSize(afterNode, after);
     stackResize.nextBeforeSize = before;
     stackResize.nextAfterSize = after;
     return;
@@ -1895,66 +3714,102 @@ function handleGameHudPointerMove(event) {
     heightPct: active.heightPct
   };
   applyGameHudPanelLayout(active.panel, patch);
+  if (state.hudLayout.drag === active) updateGameHudDropHighlight(event.clientX, event.clientY);
 }
 
 function finishGameHudPointerEdit(event) {
+  if (state.hudLayout.pendingTabDrag && state.hudLayout.pendingTabDrag.pointerId === event.pointerId) {
+    // Never crossed the drag threshold - leave it to the browser's own click
+    // event (handleGameHudRuntimeClick) to switch the active tab.
+    state.hudLayout.pendingTabDrag = null;
+  }
   const gridResize = state.hudLayout.gridResize;
   if (gridResize && event.pointerId === gridResize.pointerId) {
     state.hudLayout.gridResize = null;
     applyGameHudGridSettings();
     refreshGameHudDockStacks();
+    flushDeferredGameHudPanelRender();
     return;
   }
   const stackResize = state.hudLayout.stackResize;
   if (stackResize && event.pointerId === stackResize.pointerId) {
-    persistDockFrameSize(stackResize.beforeId, stackResize.nextBeforeSize || stackResize.beforeSize);
-    persistDockFrameSize(stackResize.afterId, stackResize.nextAfterSize || stackResize.afterSize);
+    persistSlotSizePct(stackResize.beforeSlot, stackResize.nextBeforeSize || stackResize.beforeSize);
+    persistSlotSizePct(stackResize.afterSlot, stackResize.nextAfterSize || stackResize.afterSize);
+    for (const other of stackResize.otherSlots || []) persistSlotSizePct(other.sizeSlot, other.pct);
     state.hudLayout.stackResize = null;
     refreshGameHudDockStacks();
     notifyGameHudPanelSizesChanged();
+    flushDeferredGameHudPanelRender();
     return;
   }
   const active = state.hudLayout.drag || state.hudLayout.resize;
-  if (!active || event.pointerId !== active.pointerId) return;
+  if (!active || event.pointerId !== active.pointerId) {
+    flushDeferredGameHudPanelRender();
+    return;
+  }
   const panel = active.panel;
+  panel.classList.remove("gameHudPanelFrame--dragging");
+  clearGameHudDropHighlight();
   if (state.hudLayout.drag) {
     const dockAnchor = gameHudAnchorFromPoint(event.clientX, event.clientY);
+    let dropTarget = resolveGameHudDropTarget(event.clientX, event.clientY, active.moduleId);
+    if (dropTarget && dropTarget.kind === "panel" && dropTarget.targetModuleId === active.moduleId) {
+      dropTarget = dockAnchor !== "center" ? { kind: "row", anchor: dropTarget.anchor } : null;
+    }
     if (dockAnchor && dockAnchor !== "center") {
-      setGameHudModuleOverride(active.moduleId, {
-        mode: "dock",
-        anchor: dockAnchor,
-        scale: active.scale
-      });
       state.hudLayout.drag = null;
       state.hudLayout.resize = null;
-      rerenderGameHudPanels();
+      if (!applyGameHudDropTarget(active, dropTarget)) {
+        freezeGameHudDockSlotSizes(dockAnchor);
+        normalizeGameHudDockOrders(dockAnchor);
+        const order = gameHudInsertOrder(dockAnchor, null, "after");
+        removeGameHudModuleFromGroup(active.moduleId);
+        setGameHudModuleOverride(active.moduleId, { mode: "dock", anchor: dockAnchor, scale: active.scale, order: order });
+        syncGameHudDroppedPanel(active, dockAnchor);
+        rerenderGameHudPanels();
+      }
       notifyGameHudPanelSizesChanged();
+      flushDeferredGameHudPanelRender();
       return;
     }
-    // "center" is float-only - fall through to the floating-position persist below,
-    // just tagged with anchor "center" instead of wherever it was dragged from.
-    if (dockAnchor === "center") active.anchor = "center";
+    if (dockAnchor === "center") {
+      if (dropTarget && (dropTarget.kind === "panel" || dropTarget.kind === "tab")) {
+        state.hudLayout.drag = null;
+        state.hudLayout.resize = null;
+        applyGameHudDropTarget(active, dropTarget);
+        notifyGameHudPanelSizesChanged();
+        flushDeferredGameHudPanelRender();
+        return;
+      }
+      // Empty center remains float-placement.
+      active.anchor = "center";
+    }
   }
-  const viewport = gameHudViewportSize();
-  const rect = panel.getBoundingClientRect();
-  setGameHudModuleOverride(active.moduleId, {
-    mode: "float",
-    anchor: active.anchor,
-    scale: active.scale,
-    xPct: clamp(rect.left / viewport.width * 100, 0, 96),
-    yPct: clamp(rect.top / viewport.height * 100, 0, 96),
-    widthPct: clamp(rect.width / viewport.width * 100, GAME_HUD_MIN_PANEL_WIDTH_PCT, 96),
-    heightPct: clamp(rect.height / viewport.height * 100, GAME_HUD_MIN_PANEL_HEIGHT_PCT, 92)
-  });
+  const finalFloatLayout = gameHudFloatLayoutFromInteraction(active, event, state.hudLayout.resize === active);
+  if (active.groupId && active.groupAnchor === "center" && active.fromTab !== true) {
+    setGameHudFloatingGroupLayout(active.groupId, Object.assign({}, finalFloatLayout, { anchor: "center" }));
+    state.hudLayout.drag = null;
+    state.hudLayout.resize = null;
+    rerenderGameHudPanels();
+    notifyGameHudPanelSizesChanged();
+    flushDeferredGameHudPanelRender();
+    return;
+  }
+  removeGameHudModuleFromGroup(active.moduleId);
+  setGameHudModuleOverride(active.moduleId, finalFloatLayout);
   state.hudLayout.drag = null;
   state.hudLayout.resize = null;
   notifyGameHudPanelSizesChanged();
+  flushDeferredGameHudPanelRender();
 }
 
 function clonePosition(position) {
   if (!position) return null;
   return {
     playerId: position.playerId || position.player_id || null,
+    worldId: position.worldId || position.world_id || null,
+    zoneId: position.zoneId || position.currentZoneId || position.current_zone_id || null,
+    spawnId: position.spawnId || position.currentSpawnId || position.current_spawn_id || null,
     x: num(position.x, 0),
     y: num(position.y, 0),
     z: num(position.z, 0),
@@ -3610,6 +5465,7 @@ function startPostInputPredictionHold(reason = null) {
 
 function noteLocalControlStart(forceEpoch = false, source = null) {
   if (!isMmoGameplayReady()) return false;
+  if (isNode03Defeated()) return false;
   const now = Date.now();
   const sourceChanged = Boolean(source && state.control.lastControlSource && state.control.lastControlSource !== source);
   if (forceEpoch || sourceChanged || !state.net.localControllerActive || !state.control.isLocalController) {
@@ -3659,6 +5515,9 @@ function normalizeIncomingServerPosition(payload, transport = null) {
   const nested = raw.position && typeof raw.position === "object" ? raw.position : raw;
   return clonePosition({
     playerId: raw.playerId ?? raw.player_id ?? nested.playerId ?? nested.player_id ?? null,
+    worldId: raw.worldId ?? raw.world_id ?? nested.worldId ?? nested.world_id ?? null,
+    zoneId: raw.zoneId ?? raw.currentZoneId ?? raw.current_zone_id ?? nested.zoneId ?? nested.currentZoneId ?? nested.current_zone_id ?? null,
+    spawnId: raw.spawnId ?? raw.currentSpawnId ?? raw.current_spawn_id ?? nested.spawnId ?? nested.currentSpawnId ?? nested.current_spawn_id ?? null,
     x: nested.x,
     y: nested.y,
     z: nested.z,
@@ -3786,6 +5645,7 @@ function applyAuthoritativeUpdate(update, options = {}) {
     } else {
       state.position = clonePosition(nextPosition);
     }
+    maybeRefreshWorldForPositionZone(nextPosition);
     state.net.lastAckedInputSeq = isLocalControllerSnapshot
       ? Math.max(state.net.lastAckedInputSeq || 0, clientInputSeq || 0)
       : state.net.lastAckedInputSeq || 0;
@@ -3965,10 +5825,12 @@ function setMmoDebugExpanded(expanded) {
 function buildMmoDebugHudDom(config) {
   const show = config.show || {};
   const anchor = normalizeGameHudAnchor(config.anchor, "left");
-  const root = document.createElement("section");
-  root.className = "status-panel status-panel--hud" + (config.compact === false ? "" : " status-panel--compact");
+  const root = document.createElement("div");
+  root.className = "node05Module node05Module--performance" + (config.compact === false ? "" : " node05Module--performanceCompact");
   root.dataset.hudId = config.id || "mmo_debug_hud";
   root.dataset.defaultAnchor = anchor;
+  root.dataset.gameHudDrag = "1";
+  root.title = "Sleep in HUD Editor om Performance te verplaatsen";
 
   const elements = { root: root };
 
@@ -3976,8 +5838,8 @@ function buildMmoDebugHudDom(config) {
   head.className = "status-head";
   const titleWrap = document.createElement("div");
   const eyebrow = document.createElement("p");
-  eyebrow.className = "status-eyebrow";
-  eyebrow.textContent = "MMO debug";
+  eyebrow.className = "node05Title";
+  eyebrow.textContent = "Performance";
   titleWrap.appendChild(eyebrow);
   head.appendChild(titleWrap);
   if (show.wsStatus !== false) {
@@ -4099,13 +5961,35 @@ function buildMmoDebugHudDom(config) {
   refreshButton.className = "secondary-button";
   refreshButton.textContent = "Refresh state";
   refreshButton.addEventListener("click", function () { refreshState(); });
+  const resetFogButton = document.createElement("button");
+  resetFogButton.id = "resetFogButton";
+  resetFogButton.type = "button";
+  resetFogButton.className = "secondary-button";
+  resetFogButton.textContent = "Reset fog";
+  resetFogButton.addEventListener("click", function () { resetMinimapFogForTesting(); });
+  const cleanInventoryButton = document.createElement("button");
+  cleanInventoryButton.id = "cleanInventoryButton";
+  cleanInventoryButton.type = "button";
+  cleanInventoryButton.className = "secondary-button";
+  cleanInventoryButton.textContent = "Clean inv + gold";
+  cleanInventoryButton.addEventListener("click", function () {
+    runNode03Action("debug_inventory_cleanup", null);
+  });
+  const resetLevelButton = document.createElement("button");
+  resetLevelButton.id = "resetLevelButton";
+  resetLevelButton.type = "button";
+  resetLevelButton.className = "secondary-button";
+  resetLevelButton.textContent = "Reset level";
+  resetLevelButton.addEventListener("click", function () {
+    runNode03Action("debug_level_reset", null);
+  });
   const logoutButton = document.createElement("button");
   logoutButton.id = "logoutButton";
   logoutButton.type = "button";
   logoutButton.className = "secondary-button";
   logoutButton.textContent = "Logout";
   logoutButton.addEventListener("click", function () { logout(); });
-  actions.append(refreshButton, logoutButton);
+  actions.append(refreshButton, resetFogButton, cleanInventoryButton, resetLevelButton, logoutButton);
   body.appendChild(actions);
 
   root.appendChild(body);
@@ -4134,18 +6018,15 @@ function refreshMmoDebugHud() {
   }
   const signature = computeMmoDebugSignature(config);
   if (state.debugHud.elements && state.debugHud.signature === signature) {
+    syncMmoDebugHudLayout(config);
     updateHud();
     return;
   }
   const wasExpanded = state.debugHud.elements && state.debugHud.elements.body ? !state.debugHud.elements.body.hidden : null;
   removeMmoDebugHud();
   const elements = buildMmoDebugHudDom(config);
-  elements.frame = appendGameHudPanel("debug", {
-    moduleId: config.id || "mmo_debug_hud",
-    nodeType: "debug_mmo_hud",
-    label: "Performance",
-    anchor: normalizeGameHudAnchor(config.anchor, "right")
-  }, elements.root, normalizeGameHudAnchor(config.anchor, "right"));
+  const module = mmoDebugHudModule(config);
+  elements.frame = appendGameHudPanel("debug", module, elements.root, module.anchor);
   state.debugHud.elements = elements;
   state.debugHud.signature = signature;
   const expanded = wasExpanded !== null ? wasExpanded : (isMmoDebugForced() || config.startCollapsed === false);
@@ -4162,6 +6043,14 @@ function node03Modules() {
   return modules.filter(function (module) {
     return module && NODE03_HUD_TYPES.has(module.nodeType);
   });
+}
+
+function gameMinimapNeedsNode03Runtime(config = resolveGameMinimapConfig()) {
+  return gameMinimapHasEnabledMarkerSource(config, ["enemy", "boss", "wildlife", "resource", "item"]);
+}
+
+function shouldLoadNode03State() {
+  return node03Modules().length > 0 || gameMinimapNeedsNode03Runtime();
 }
 
 function node03ModuleSignature(modules) {
@@ -4257,46 +6146,53 @@ function node03ModuleCard(module, className) {
 function renderNode03Bar(module, snapshot) {
   const stat = node03StatByRef(snapshot, module.sourceStatRef);
   const card = node03ModuleCard(module, "node03Module--bar");
-  const label = document.createElement("div");
-  label.className = "node03BarLabel";
-  const name = document.createElement("span");
-  name.textContent = module.label || module.sourceStatRef || "Stat";
-  const value = document.createElement("strong");
-  value.textContent = module.showNumbers === false
-    ? (module.showPercent ? Math.round(stat.percent * 100) + "%" : "")
-    : node03FormatNumber(stat.current) + " / " + node03FormatNumber(stat.max);
-  label.append(name, value);
   const track = document.createElement("div");
   track.className = "node03BarTrack";
-  track.style.width = Math.max(80, Math.min(420, num(module.widthPx, 220))) + "px";
   track.style.height = Math.max(8, Math.min(40, num(module.heightPx, 18))) + "px";
   const fill = document.createElement("div");
   fill.className = module.sourceStatRef === "stat.mana" ? "node03BarFill node03BarFill--mana" : "node03BarFill";
   fill.style.width = Math.round(stat.percent * 100) + "%";
-  track.appendChild(fill);
-  card.append(label, track);
+  const overlay = document.createElement("div");
+  overlay.className = "node03BarOverlay";
+  const name = document.createElement("span");
+  name.textContent = module.label || module.sourceStatRef || "Stat";
+  overlay.appendChild(name);
+  const valueText = module.showNumbers === false
+    ? (module.showPercent ? Math.round(stat.percent * 100) + "%" : "")
+    : node03FormatNumber(stat.current) + " / " + node03FormatNumber(stat.max);
+  if (valueText) {
+    const value = document.createElement("strong");
+    value.textContent = valueText;
+    overlay.appendChild(value);
+  }
+  track.append(fill, overlay);
+  card.appendChild(track);
   return card;
 }
 
 function renderNode03Xp(module, snapshot) {
   const progress = snapshot?.progression || {};
   const card = node03ModuleCard(module, "node03Module--xp" + (module.compact === false ? "" : " node03Module--compact"));
-  const row = document.createElement("div");
-  row.className = "node03XpRow";
-  const label = document.createElement("span");
-  label.textContent = module.showLevel === false ? "XP" : (module.levelLabel || "Level") + " " + (progress.level || 1);
-  const value = document.createElement("strong");
-  value.textContent = module.showCurrentXp === false
-    ? ""
-    : node03FormatNumber(progress.xp || 0) + (module.showRequiredXp === false ? "" : " / " + node03FormatNumber(progress.requiredXp || 0));
-  row.append(label, value);
   const track = document.createElement("div");
   track.className = "node03BarTrack node03BarTrack--xp";
   const fill = document.createElement("div");
   fill.className = "node03BarFill node03BarFill--xp";
   fill.style.width = Math.round(num(progress.progressPercent, 0) * 100) + "%";
-  track.appendChild(fill);
-  card.append(row, track);
+  const overlay = document.createElement("div");
+  overlay.className = "node03BarOverlay node03BarOverlay--xp";
+  const label = document.createElement("span");
+  label.textContent = module.showLevel === false ? "XP" : (module.levelLabel || "Level") + " " + (progress.level || 1);
+  overlay.appendChild(label);
+  const valueText = module.showCurrentXp === false
+    ? (module.showPercent ? Math.round(num(progress.progressPercent, 0) * 100) + "%" : "")
+    : node03FormatNumber(progress.xp || 0) + (module.showRequiredXp === false ? "" : " / " + node03FormatNumber(progress.requiredXp || 0));
+  if (valueText) {
+    const value = document.createElement("strong");
+    value.textContent = valueText;
+    overlay.appendChild(value);
+  }
+  track.append(fill, overlay);
+  card.appendChild(track);
   return card;
 }
 
@@ -4359,7 +6255,27 @@ function node03InventoryEntries(snapshot, limit) {
   return node03OwnedItemEntries(snapshot).slice(0, Math.max(1, limit || 16));
 }
 
+function node03ModuleOverride(module) {
+  return gameHudModuleOverride(hudModuleIdentity(module)) || {};
+}
+
+function node03SanitizeTrackedRefs(refs) {
+  const seen = new Set();
+  const next = [];
+  for (const ref of Array.isArray(refs) ? refs : []) {
+    const id = String(ref?.ref || ref || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
+}
+
 function node03TrackedRefs(module, snapshot) {
+  const override = node03ModuleOverride(module);
+  if (Object.prototype.hasOwnProperty.call(override, "trackedRefs")) {
+    return node03SanitizeTrackedRefs(override.trackedRefs);
+  }
   const refs = [];
   if (Array.isArray(module.trackedRefs)) {
     for (const ref of module.trackedRefs) {
@@ -4384,7 +6300,67 @@ function node03TrackedRefs(module, snapshot) {
   return refs;
 }
 
+function node03TrackableEntries(module, snapshot) {
+  const currentRefs = node03TrackedRefs(module, snapshot);
+  const currentSet = new Set(currentRefs);
+  const entries = [];
+  const byId = new Map();
+  function add(entry) {
+    const id = String(entry?.id || "").trim();
+    if (!id || byId.has(id)) return;
+    const normalized = Object.assign({}, entry, { id });
+    byId.set(id, normalized);
+    entries.push(normalized);
+  }
+  for (const currency of node03CurrencyEntries(snapshot)) {
+    if (num(currency.quantity, 0) > 0 || currentSet.has(currency.currencyId)) {
+      add({
+        kind: "currency",
+        id: currency.currencyId,
+        displayName: currency.displayName || currency.currencyId,
+        quantity: num(currency.quantity, 0),
+        checked: currentSet.has(currency.currencyId)
+      });
+    }
+  }
+  for (const item of node03OwnedItemEntries(snapshot)) {
+    add({
+      kind: "item",
+      id: item.itemId,
+      displayName: item.displayName || item.itemId,
+      quantity: num(item.quantity, 0),
+      checked: currentSet.has(item.itemId)
+    });
+  }
+  const catalogCurrencies = new Map((Array.isArray(snapshot?.catalog?.currencies) ? snapshot.catalog.currencies : []).map(function (currency) {
+    return [currency.currencyId, currency];
+  }));
+  const catalogItems = new Map((Array.isArray(snapshot?.catalog?.items) ? snapshot.catalog.items : []).map(function (item) {
+    return [item.itemId, item];
+  }));
+  for (const ref of currentRefs) {
+    if (byId.has(ref)) continue;
+    if (String(ref).startsWith("currency.")) {
+      const currency = catalogCurrencies.get(ref) || {};
+      add({ kind: "currency", id: ref, displayName: currency.displayName || ref, quantity: 0, checked: true });
+    } else {
+      const item = catalogItems.get(ref) || {};
+      add({ kind: "item", id: ref, displayName: item.displayName || ref, quantity: 0, checked: true });
+    }
+  }
+  return entries.sort(function (left, right) {
+    if (left.checked !== right.checked) return left.checked ? -1 : 1;
+    if (left.kind !== right.kind) return left.kind === "currency" ? -1 : 1;
+    return String(left.displayName || left.id).localeCompare(String(right.displayName || right.id));
+  });
+}
+
 function node03TrackedEntries(module, snapshot) {
+  const refs = node03TrackedRefs(module, snapshot);
+  const override = node03ModuleOverride(module);
+  const limit = Object.prototype.hasOwnProperty.call(override, "trackedRefs")
+    ? Math.max(0, refs.length)
+    : Math.max(1, num(module.maxEntries, 5));
   const currencies = new Map(node03CurrencyEntries(snapshot).map(function (currency) {
     return [currency.currencyId, currency];
   }));
@@ -4397,7 +6373,7 @@ function node03TrackedEntries(module, snapshot) {
   const catalogItems = new Map((Array.isArray(snapshot?.catalog?.items) ? snapshot.catalog.items : []).map(function (item) {
     return [item.itemId, item];
   }));
-  return node03TrackedRefs(module, snapshot).map(function (ref) {
+  return refs.map(function (ref) {
     if (String(ref).startsWith("currency.")) {
       const currency = currencies.get(ref) || catalogCurrencies.get(ref) || {};
       return {
@@ -4414,7 +6390,7 @@ function node03TrackedEntries(module, snapshot) {
       displayName: item.displayName || ref,
       quantity: num(item.quantity, 0)
     };
-  }).slice(0, Math.max(1, num(module.maxEntries, 5)));
+  }).slice(0, limit);
 }
 
 function renderNode03Wallet(module, snapshot) {
@@ -4442,10 +6418,71 @@ function renderNode03Wallet(module, snapshot) {
     empty.className = "node03Empty";
     empty.textContent = "No tracked items";
     card.appendChild(empty);
-    return card;
+  } else {
+    card.appendChild(list);
   }
-  card.appendChild(list);
+  if (state.hudLayout.editMode === true) {
+    card.appendChild(renderNode03TrackedEditor(module, snapshot));
+  }
   return card;
+}
+
+function renderNode03TrackedEditor(module, snapshot) {
+  const editor = document.createElement("div");
+  editor.className = "node03TrackedEditor";
+  const head = document.createElement("div");
+  head.className = "node03TrackedEditorHead";
+  head.textContent = "Track list";
+  editor.appendChild(head);
+  const entries = node03TrackableEntries(module, snapshot);
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "node03Empty";
+    empty.textContent = "Inventory is empty";
+    editor.appendChild(empty);
+    return editor;
+  }
+  const list = document.createElement("div");
+  list.className = "node03TrackedEditorList";
+  for (const entry of entries) {
+    const label = document.createElement("label");
+    label.className = "node03TrackedOption";
+    label.dataset.trackedKind = entry.kind;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = entry.checked === true;
+    input.dataset.node03TrackedToggle = "1";
+    input.dataset.node03TrackedModuleId = hudModuleIdentity(module);
+    input.dataset.node03TrackedRef = entry.id;
+    const name = document.createElement("span");
+    name.textContent = entry.displayName || entry.id;
+    const qty = document.createElement("strong");
+    qty.textContent = node03FormatNumber(entry.quantity || 0);
+    label.append(input, name, qty);
+    list.appendChild(label);
+  }
+  editor.appendChild(list);
+  return editor;
+}
+
+function node03ModuleByModuleId(moduleId) {
+  const id = String(moduleId || "").trim();
+  if (!id) return null;
+  return node03Modules().find(function (module) {
+    return hudModuleIdentity(module) === id;
+  }) || null;
+}
+
+function setNode03TrackedRefSelection(moduleId, ref, checked) {
+  const id = String(moduleId || "").trim();
+  const trackedRef = String(ref || "").trim();
+  if (!id || !trackedRef) return;
+  const module = node03ModuleByModuleId(id) || { moduleId: id, nodeType: "wallet_hud" };
+  const current = new Set(node03TrackedRefs(module, state.node03.snapshot || {}));
+  if (checked === true) current.add(trackedRef);
+  else current.delete(trackedRef);
+  setGameHudModuleOverride(id, { trackedRefs: Array.from(current) });
+  renderNode03Hud();
 }
 
 function renderNode03Inventory(module, snapshot) {
@@ -4517,9 +6554,10 @@ function node03TargetById(targetId) {
 }
 
 function node03ClientDistance(target) {
-  if (!target || !state.position) return null;
+  const position = currentLocalPlayerPosition();
+  if (!target || !position) return null;
   if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return null;
-  return Math.hypot(num(state.position.x, 0) - num(target.x, 0), num(state.position.z, 0) - num(target.z, 0));
+  return Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0));
 }
 
 function node03TargetWithClientRange(target) {
@@ -4583,6 +6621,7 @@ function refreshNode03ClientRanges(now = performance.now()) {
   state.node03.lastRangeRenderAt = now;
   syncNode03RuntimeTargets();
   updateNode03RangeDom();
+  maybeRunPendingNode03TargetAction("range");
 }
 
 function node03TargetMetaText(target, module = {}) {
@@ -4634,6 +6673,58 @@ function updateNode03RangeDom() {
 function selectNode03Target(targetId) {
   state.node03.selectedTargetId = String(targetId || "").trim();
   syncNode03RuntimeTargets();
+}
+
+function setNode03PendingTargetAction(action, target, attemptsOverride = null) {
+  const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
+  const targetId = String(target?.instanceId || target?.targetId || target || "").trim();
+  if (!normalizedAction || !targetId || normalizedAction === "travel" || normalizedAction.startsWith("debug_")) return;
+  const current = state.node03.pendingTargetAction || null;
+  const attempts = attemptsOverride !== null && attemptsOverride !== undefined
+    ? Math.max(0, Number(attemptsOverride || 0) || 0)
+    : current && current.action === normalizedAction && current.targetId === targetId
+    ? Math.max(0, Number(current.attempts || 0) || 0)
+    : 0;
+  state.node03.pendingTargetAction = {
+    action: normalizedAction,
+    targetId: targetId,
+    createdAt: performance.now(),
+    attempts
+  };
+}
+
+function clearNode03PendingTargetAction(targetId = null) {
+  if (!state.node03.pendingTargetAction) return;
+  const id = String(targetId || "").trim();
+  if (id && id !== String(state.node03.pendingTargetAction.targetId || "")) return;
+  state.node03.pendingTargetAction = null;
+}
+
+function maybeRunPendingNode03TargetAction(reason = "range") {
+  const pending = state.node03.pendingTargetAction;
+  if (!pending || state.node03.actionInFlight || isNode03Defeated()) return false;
+  const age = performance.now() - Number(pending.createdAt || 0);
+  if (age > NODE03_PENDING_TARGET_ACTION_TTL_MS) {
+    clearNode03PendingTargetAction();
+    return false;
+  }
+  const target = node03TargetWithClientRange(node03TargetById(pending.targetId));
+  if (!target || target.available === false) {
+    clearNode03PendingTargetAction(pending.targetId);
+    return false;
+  }
+  if (target.inRange === false) return false;
+  const attempt = Math.max(0, Number(pending.attempts || 0) || 0) + 1;
+  clearNode03PendingTargetAction(pending.targetId);
+  if (hasMovementInput()) clearMovementInput("node03-target-action");
+  window.setTimeout(function () {
+    runNode03Action(pending.action, pending.targetId, {
+      skipMoveToTarget: true,
+      pendingTargetAction: true,
+      pendingAttempt: attempt
+    });
+  }, NODE03_PENDING_TARGET_ACTION_DELAY_MS);
+  return true;
 }
 
 function node03TargetMatchesAbility(target, abilityId) {
@@ -4763,29 +6854,12 @@ function renderNode03Interactions(module, snapshot) {
     row.append(body, button);
     card.appendChild(row);
   }
-  if (state.node03.lastActionMessage || state.node03.lastError) {
-    const status = document.createElement("p");
-    status.className = state.node03.lastError ? "node03Status node03Status--error" : "node03Status";
-    status.textContent = state.node03.lastError || state.node03.lastActionMessage;
-    card.appendChild(status);
-  }
   return card;
 }
 
 function renderNode03Death(module, snapshot) {
-  const health = snapshot?.stats?.health || {};
-  if (num(health.current, 1) > 0) return null;
-  const card = node03ModuleCard(module, "node03Module--death");
-  const title = document.createElement("strong");
-  title.textContent = "Defeated";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "node03ActionButton";
-  button.dataset.node03Action = "reset_demo";
-  button.textContent = "Respawn";
-  button.disabled = state.node03.actionInFlight;
-  card.append(title, button);
-  return card;
+  // Death/respawn UI is routed through dialogue_hud so it uses the same HUD placement.
+  return null;
 }
 
 function renderNode03Module(module, snapshot) {
@@ -4803,6 +6877,7 @@ function renderNode03Module(module, snapshot) {
 function renderNode03Hud() {
   const modules = node03Modules();
   const snapshot = state.node03.snapshot;
+  refreshGameDefeatState();
   if (!modules.length || !snapshot) {
     removeNode03Hud();
     return;
@@ -4819,14 +6894,19 @@ function renderNode03Hud() {
     lastActionMessage: state.node03.lastActionMessage
   });
   if (state.node03.elements && state.node03.signature === signature) return;
+  if (state.node03.elements && isGameHudLayoutInteractionActive()) {
+    deferGameHudPanelRender();
+    return;
+  }
   state.node03.elements = ensureGameHudRuntimeRoot();
   state.node03.signature = signature;
-  clearGameHudFamily("node03");
+  beginGameHudFamilyRender("node03");
   for (const module of modules) {
     const node = renderNode03Module(module, snapshot);
     if (!node) continue;
     appendGameHudPanel("node03", module, node, defaultNode03Anchor(module.nodeType));
   }
+  endGameHudFamilyRender("node03");
 }
 
 function scheduleNode03Poll() {
@@ -4834,17 +6914,20 @@ function scheduleNode03Poll() {
   state.node03.pollTimerId = window.setTimeout(async function () {
     state.node03.pollTimerId = 0;
     await loadNode03State({ silent: true });
-    if (node03Modules().length) scheduleNode03Poll();
+    if (shouldLoadNode03State()) scheduleNode03Poll();
   }, 2500);
 }
 
 async function loadNode03State(options = {}) {
-  if (!node03Modules().length) {
+  if (!shouldLoadNode03State()) {
     removeNode03Hud();
     syncNode03RuntimeTargets();
     return false;
   }
-  if (state.node03.loadInFlight) return false;
+  if (state.node03.loadInFlight) {
+    if (options.force === true) state.node03.reloadQueued = true;
+    return false;
+  }
   state.node03.loadInFlight = true;
   try {
     const response = await fetch("/api/game/node03/state", { headers: { Accept: "application/json" } });
@@ -4859,11 +6942,19 @@ async function loadNode03State(options = {}) {
       renderNode03Hud();
       return false;
     }
+    const expectedZoneId = String(state.position?.zoneId || activeGameWorldZoneId() || "").trim();
+    const snapshotZoneId = String(data.zoneId || "").trim();
+    if (expectedZoneId && snapshotZoneId && snapshotZoneId !== expectedZoneId) {
+      if (options.force !== true) state.node03.reloadQueued = true;
+      return false;
+    }
     state.node03.snapshot = data;
     state.node03.lastLoadedAt = performance.now();
     state.node03.lastError = "";
+    if (state.minimapHud.elements) state.minimapHud.dirty = true;
     syncNode03RuntimeTargets();
     renderNode03Hud();
+    renderNode04Hud();
     scheduleNode03Poll();
     return true;
   } catch (error) {
@@ -4873,10 +6964,24 @@ async function loadNode03State(options = {}) {
     return false;
   } finally {
     state.node03.loadInFlight = false;
+    if (state.node03.reloadQueued) {
+      state.node03.reloadQueued = false;
+      window.setTimeout(function () {
+        loadNode03State({ silent: true, force: true });
+      }, 0);
+    }
   }
 }
 
 async function runNode03Action(action, targetId, extra = {}) {
+  const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
+  const isRespawn = normalizedAction === "reset_demo" || normalizedAction === "reset";
+  const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
+  if (isNode03Defeated() && !bypassDefeatState) {
+    clearLocalMovementForDefeat({ force: true, sendStop: true });
+    renderNode04Hud();
+    return;
+  }
   if (String(action || "").startsWith("node04:")) {
     await runNode04Action(action, targetId);
     return;
@@ -4884,12 +6989,15 @@ async function runNode03Action(action, targetId, extra = {}) {
   if (!action || state.node03.actionInFlight) return;
   const currentTarget = node03TargetWithClientRange(node03TargetById(targetId));
   if (currentTarget?.instanceId) {
+    const wasSelectedTarget = String(currentTarget.instanceId || "") === String(state.node03.selectedTargetId || "");
     selectNode03Target(currentTarget.instanceId);
-    if (currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+    if (extra.skipMoveToTarget !== true && !wasSelectedTarget && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+      setNode03PendingTargetAction(normalizedAction || action, currentTarget);
       const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node03-target");
       state.node03.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || "target") + "."
         : (currentTarget.displayName || "Target") + " is buiten range.";
+      showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Message" });
       renderNode03Hud();
       return;
     }
@@ -4898,7 +7006,7 @@ async function runNode03Action(action, targetId, extra = {}) {
   state.node03.lastError = "";
   renderNode03Hud();
   try {
-    const isTravel = action === "travel";
+    const isTravel = normalizedAction === "travel";
     const response = await fetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
       method: "POST",
       credentials: "same-origin",
@@ -4906,7 +7014,7 @@ async function runNode03Action(action, targetId, extra = {}) {
       body: JSON.stringify(isTravel ? {
         linkId: targetId || null
       } : {
-        action: action,
+        action: normalizedAction || action,
         targetId: targetId || null,
         itemId: extra.itemId || null,
         currencyId: extra.currencyId || null,
@@ -4920,11 +7028,28 @@ async function runNode03Action(action, targetId, extra = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node03.lastError = data?.message || "NODE-03 actie mislukt.";
+      const serverMessage = data?.message || "NODE-03 actie mislukt.";
+      const pendingAttempt = Math.max(0, Number(extra.pendingAttempt || 0) || 0);
+      if (
+        extra.pendingTargetAction === true &&
+        pendingAttempt < 3 &&
+        currentTarget?.instanceId &&
+        currentTarget.available !== false &&
+        String(serverMessage).toLowerCase().includes("te ver weg")
+      ) {
+        setNode03PendingTargetAction(normalizedAction || action, currentTarget, pendingAttempt);
+        window.setTimeout(function () {
+          maybeRunPendingNode03TargetAction("retry");
+        }, NODE03_PENDING_TARGET_ACTION_DELAY_MS);
+        return;
+      }
+      state.node03.lastError = serverMessage;
       showHudError(state.node03.lastError);
       return;
     }
+    if (currentTarget?.instanceId) clearNode03PendingTargetAction(currentTarget.instanceId);
     state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
+    if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Message" });
     if (isTravel) {
       applyInstantTravelResponse(data);
       await loadSessionState({
@@ -4936,12 +7061,14 @@ async function runNode03Action(action, targetId, extra = {}) {
       });
       return;
     }
-    if (data.position) applyFallbackPosition({ ok: true, position: data.position });
     if (data.snapshot) {
       state.node03.snapshot = data.snapshot;
       syncNode03RuntimeTargets();
     }
+    if (isRespawn && data.position) applyInstantRespawnResponse(data);
+    else if (data.position) applyFallbackPosition({ ok: true, position: data.position });
     renderNode03Hud();
+    renderNode04Hud();
   } catch (error) {
     state.node03.lastError = String(error?.message || error || "NODE-03 actie mislukt.");
     showHudError(state.node03.lastError);
@@ -4953,12 +7080,145 @@ async function runNode03Action(action, targetId, extra = {}) {
 
 // ---- NODE-04 quest/dialogue HUD: rendered from published quest_tracker/dialogue/notification nodes ----
 
+function isNode03Defeated(snapshot = state.node03.snapshot) {
+  const health = snapshot?.stats?.health || {};
+  return Boolean(snapshot && num(health.current, 1) <= 0);
+}
+
+function hasRawGameplayMovementState() {
+  return Boolean(
+    state.input.move_forward ||
+    state.input.move_back ||
+    state.input.move_left ||
+    state.input.move_right ||
+    state.input.sprint ||
+    state.pointer.active ||
+    state.pointer.target ||
+    state.pointer.lastHoldVector ||
+    state.net.pendingInputs.length ||
+    state.net.localControllerActive ||
+    state.control.isLocalController ||
+    state.ownCorrection ||
+    state.lastAnimationState !== "idle"
+  );
+}
+
+function clearLocalMovementForDefeat(options = {}) {
+  if (!hasRawGameplayMovementState() && options.force !== true) return false;
+  clearLocalMovementForTeleport();
+  state.lastFrameAt = 0;
+  if (options.sendStop !== false && state.session && isMmoGameplayReady()) {
+    sendInputState({ force: true, stop: true, defeatedStop: true });
+  }
+  return true;
+}
+
+function refreshGameDefeatState(options = {}) {
+  const defeated = isNode03Defeated();
+  const changed = state.playerDefeated !== defeated;
+  state.playerDefeated = defeated;
+  if (gameRoot) gameRoot.classList.toggle("gameRoot--defeated", defeated);
+  if (hud) hud.classList.toggle("hud--defeated", defeated);
+  if (defeatOverlay) defeatOverlay.hidden = !defeated;
+  if (defeated && (changed || options.forceStop === true)) {
+    clearLocalMovementForDefeat({ force: true, sendStop: options.sendStop !== false });
+  }
+  return defeated;
+}
+
+function gameHudDialogueNoticeSignature(notice) {
+  if (!notice) return null;
+  return {
+    title: notice.title || "",
+    text: notice.text || "",
+    tone: notice.tone || "info",
+    action: notice.action || "",
+    actionLabel: notice.actionLabel || ""
+  };
+}
+
+function currentGameHudDialogueNotice() {
+  if (isNode03Defeated()) {
+    return {
+      title: "Respawn",
+      text: "Je bent verslagen.",
+      tone: "warning",
+      action: "node03:reset_demo",
+      actionLabel: "Respawn",
+      dismissible: false
+    };
+  }
+  if (state.node04.dialogueNotice?.text) return state.node04.dialogueNotice;
+  const error = state.node04.lastError || state.node03.lastError || state.node05.lastError;
+  if (error) return { title: "Error", text: error, tone: "error", dismissible: true };
+  const message = state.node04.lastActionMessage || state.node03.lastActionMessage || state.node05.lastActionMessage;
+  if (message) return { title: "Message", text: message, tone: "info", dismissible: true };
+  return null;
+}
+
+function hasGameHudDialoguePanelContent() {
+  return Boolean(state.node04.dialogue || currentGameHudDialogueNotice() || state.hudLayout.editMode === true);
+}
+
+function showGameHudDialogueNotice(message, options = {}) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  state.node04.dialogueNotice = {
+    title: options.title || "Message",
+    text: text,
+    tone: options.tone || "info",
+    action: options.action || "",
+    actionLabel: options.actionLabel || "",
+    dismissible: options.dismissible !== false,
+    createdAt: performance.now()
+  };
+  renderNode04Hud();
+}
+
+function clearGameHudDialogueNotice() {
+  state.node04.dialogueNotice = null;
+  state.node03.lastActionMessage = "";
+  state.node03.lastError = "";
+  state.node04.lastActionMessage = "";
+  state.node04.lastError = "";
+  state.node05.lastActionMessage = "";
+  state.node05.lastError = "";
+}
+
+function closeNode04DialoguePanel() {
+  if (state.node04.dialogue) state.node04.dialogue = null;
+  else clearGameHudDialogueNotice();
+  renderNode04Hud();
+}
+
 function node04Modules() {
   const project = state.gameProject || state.gameWorld?.gameProject || null;
   const modules = Array.isArray(project?.ui?.modules) ? project.ui.modules : [];
-  return modules.filter(function (module) {
+  const hudModules = modules.filter(function (module) {
     return module && NODE04_HUD_TYPES.has(module.nodeType);
   });
+  const hasDialogueHud = hudModules.some(function (module) {
+    return module.nodeType === "dialogue_hud";
+  });
+  if (!hasDialogueHud && hasGameHudDialoguePanelContent()) {
+    hudModules.push({
+      moduleId: "hud.node04.dialogue",
+      nodeType: "dialogue_hud",
+      label: "Dialogue",
+      anchor: "center",
+      widthPx: 520,
+      showSpeaker: true
+    });
+  }
+  return hudModules;
+}
+
+function gameMinimapNeedsNode04Runtime(config = resolveGameMinimapConfig()) {
+  return gameMinimapHasEnabledMarkerSource(config, ["npc", "quest", "teleport"]);
+}
+
+function shouldLoadNode04State() {
+  return node04Modules().length > 0 || gameMinimapNeedsNode04Runtime();
 }
 
 function node04ModuleSignature(modules) {
@@ -4969,6 +7229,9 @@ function node04ModuleSignature(modules) {
       anchor: module.anchor,
       resolvedAnchor: hudModuleAnchor(module, defaultNode04Anchor(module.nodeType)),
       maxQuests: module.maxQuests,
+      showCompleted: module.showCompleted,
+      showMarkers: module.showMarkers,
+      allowQuestReset: module.allowQuestReset,
       maxVisible: module.maxVisible,
       widthPx: module.widthPx
     };
@@ -5005,8 +7268,7 @@ function createNode04Root(modules) {
       ? event.target.closest("[data-node04-close]")
       : null;
     if (close) {
-      state.node04.dialogue = null;
-      renderNode04Hud();
+      closeNode04DialoguePanel();
       return;
     }
     const button = event.target && typeof event.target.closest === "function"
@@ -5133,11 +7395,28 @@ function appendNode04ActionButton(parent, label, action, target, questId, extra 
 
 function renderNode04QuestTracker(module, snapshot) {
   const card = node04ModuleCard(module, "node04Module--tracker");
+  const completedFallback = module.showCompleted !== false
+    ? (Array.isArray(snapshot?.quests?.completed) ? snapshot.quests.completed[0] : null)
+    : null;
+  const quest = snapshot?.trackedQuest || completedFallback || null;
+  const allowQuestReset = module.allowQuestReset === true && Boolean(quest?.questId);
+  const head = document.createElement("div");
+  head.className = "node04TitleRow";
   const title = document.createElement("div");
   title.className = "node04Title";
   title.textContent = "Quest";
-  card.appendChild(title);
-  const quest = snapshot?.trackedQuest || null;
+  head.appendChild(title);
+  if (allowQuestReset) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "node04MiniButton";
+    reset.dataset.node04Action = "reset_quest";
+    reset.dataset.node04QuestId = quest.questId;
+    reset.textContent = "Reset";
+    reset.disabled = state.node04.actionInFlight;
+    head.appendChild(reset);
+  }
+  card.appendChild(head);
   if (!quest) {
     const empty = document.createElement("p");
     empty.className = "node04Empty";
@@ -5176,6 +7455,11 @@ function renderNode04QuestTracker(module, snapshot) {
     available.className = "node04Instruction";
     available.textContent = quest.summary || "Praat met het quest target.";
     card.appendChild(available);
+  } else if (quest.status === "completed") {
+    const completed = document.createElement("p");
+    completed.className = "node04Status";
+    completed.textContent = "Voltooid";
+    card.appendChild(completed);
   }
   const target = node04PrimaryTarget();
   const actions = document.createElement("div");
@@ -5192,61 +7476,89 @@ function renderNode04QuestTracker(module, snapshot) {
     appendNode04ActionButton(actions, "Complete", "node04:reach", null, quest.questId);
   }
   if (actions.children.length) card.appendChild(actions);
-  if (state.node04.lastActionMessage || state.node04.lastError) {
-    const status = document.createElement("p");
-    status.className = state.node04.lastError ? "node04Status node04Status--error" : "node04Status";
-    status.textContent = state.node04.lastError || state.node04.lastActionMessage;
-    card.appendChild(status);
-  }
   return card;
 }
 
 function renderNode04Dialogue(module) {
   const dialogue = state.node04.dialogue;
-  if (!dialogue) return null;
-  const card = node04ModuleCard(module, "node04Module--dialogue");
+  const notice = isNode03Defeated()
+    ? currentGameHudDialogueNotice()
+    : (dialogue ? state.node04.dialogueNotice : currentGameHudDialogueNotice());
+  const hasNotice = Boolean(notice?.text);
+  const isEditorPreview = !dialogue && !hasNotice && state.hudLayout.editMode === true;
+  if (!dialogue && !hasNotice && !isEditorPreview) return null;
+  const classes = ["node04Module--dialogue"];
+  if (isEditorPreview) classes.push("node04Module--dialoguePreview");
+  if (hasNotice && notice.tone === "error") classes.push("node04Module--dialogueError");
+  if (hasNotice && notice.tone === "warning") classes.push("node04Module--dialogueWarning");
+  const card = node04ModuleCard(module, classes.join(" "));
   card.style.width = Math.max(280, Math.min(900, num(module.widthPx, 520))) + "px";
   const head = document.createElement("div");
   head.className = "node04DialogueHead";
-  if (module.showSpeaker !== false) {
+  if (module.showSpeaker !== false || hasNotice) {
     const speaker = document.createElement("strong");
-    speaker.textContent = dialogue.speakerName || dialogue.displayName || "Dialogue";
+    speaker.textContent = dialogue
+      ? (dialogue.speakerName || dialogue.displayName || "Dialogue")
+      : (isEditorPreview ? "Dialogue" : (notice.title || "Message"));
     head.appendChild(speaker);
   }
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "node04CloseButton";
-  close.dataset.node04Close = "1";
-  close.textContent = "Close";
-  head.appendChild(close);
+  if (!isEditorPreview && (dialogue || notice?.dismissible !== false)) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "node04CloseButton";
+    close.dataset.node04Close = "1";
+    close.textContent = "Close";
+    head.appendChild(close);
+  }
   const text = document.createElement("p");
   text.className = "node04DialogueText";
-  text.textContent = dialogue.text || "";
+  text.textContent = dialogue
+    ? (dialogue.text || "")
+    : (isEditorPreview ? "Geen actieve dialoog" : (notice.text || ""));
   const choices = document.createElement("div");
   choices.className = "node04Choices";
-  for (const choice of Array.isArray(dialogue.choices) ? dialogue.choices : []) {
-    appendNode04ActionButton(choices, choice.label || "Continue", "node04:choose_dialogue", null, choice.questRef || null, {
-      dialogueId: dialogue.dialogueId,
-      entryId: dialogue.entryId,
-      choiceId: choice.choiceId
-    });
+  if (dialogue) {
+    for (const choice of Array.isArray(dialogue.choices) ? dialogue.choices : []) {
+      appendNode04ActionButton(choices, choice.label || "Continue", "node04:choose_dialogue", null, choice.questRef || null, {
+        dialogueId: dialogue.dialogueId,
+        entryId: dialogue.entryId,
+        choiceId: choice.choiceId
+      });
+    }
   }
-  card.append(head, text, choices);
+  card.append(head, text);
+  if (choices.children.length) card.appendChild(choices);
+  if (hasNotice && dialogue) {
+    const noticeText = document.createElement("p");
+    noticeText.className = notice.tone === "error"
+      ? "node04DialogueNotice node04DialogueNotice--error"
+      : (notice.tone === "warning" ? "node04DialogueNotice node04DialogueNotice--warning" : "node04DialogueNotice");
+    noticeText.textContent = notice.text || "";
+    card.appendChild(noticeText);
+  }
+  if (hasNotice && notice.action) {
+    const actions = document.createElement("div");
+    actions.className = "node04Actions";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "node04ActionButton";
+    button.textContent = notice.actionLabel || "OK";
+    if (String(notice.action).startsWith("node03:")) {
+      button.dataset.node03Action = String(notice.action).replace(/^node03:/, "");
+      button.disabled = state.node03.actionInFlight;
+    } else if (String(notice.action).startsWith("node04:")) {
+      button.dataset.node04Action = notice.action;
+      button.disabled = state.node04.actionInFlight;
+    }
+    actions.appendChild(button);
+    card.appendChild(actions);
+  }
   return card;
 }
 
 function renderNode04Notifications(module, snapshot) {
-  const notifications = Array.isArray(snapshot?.notifications) ? snapshot.notifications.slice(0, Math.max(1, Math.min(12, num(module.maxVisible, 3)))) : [];
-  if (!notifications.length && !state.node04.lastActionMessage) return null;
-  const card = node04ModuleCard(module, "node04Module--notifications");
-  const list = notifications.length ? notifications : [{ text: state.node04.lastActionMessage }];
-  for (const item of list) {
-    const row = document.createElement("div");
-    row.className = "node04Notification";
-    row.textContent = item.text || "";
-    card.appendChild(row);
-  }
-  return card;
+  // Notifications/messages are routed through dialogue_hud instead of a separate panel.
+  return null;
 }
 
 function renderNode04Module(module, snapshot) {
@@ -5259,7 +7571,9 @@ function renderNode04Module(module, snapshot) {
 function renderNode04Hud() {
   const modules = node04Modules();
   const snapshot = state.node04.snapshot;
-  if (!modules.length || !snapshot) {
+  const dialogueNotice = currentGameHudDialogueNotice();
+  const hasDialogueContent = Boolean(state.node04.dialogue || dialogueNotice || state.hudLayout.editMode === true);
+  if (!modules.length || (!snapshot && !hasDialogueContent)) {
     removeNode04Hud();
     syncRuntimeTargets();
     return;
@@ -5274,17 +7588,25 @@ function renderNode04Hud() {
     actionInFlight: state.node04.actionInFlight,
     lastError: state.node04.lastError,
     lastActionMessage: state.node04.lastActionMessage,
-    dialogue: state.node04.dialogue
+    dialogueNotice: gameHudDialogueNoticeSignature(dialogueNotice),
+    dialogue: state.node04.dialogue,
+    editMode: state.hudLayout.editMode === true
   });
   if (state.node04.elements && state.node04.signature === signature) return;
+  if (state.node04.elements && isGameHudLayoutInteractionActive()) {
+    deferGameHudPanelRender();
+    return;
+  }
   state.node04.elements = ensureGameHudRuntimeRoot();
   state.node04.signature = signature;
-  clearGameHudFamily("node04");
+  beginGameHudFamilyRender("node04");
   for (const module of modules) {
-    const node = renderNode04Module(module, snapshot);
+    if (!snapshot && module.nodeType !== "dialogue_hud") continue;
+    const node = renderNode04Module(module, snapshot || {});
     if (!node) continue;
     appendGameHudPanel("node04", module, node, defaultNode04Anchor(module.nodeType));
   }
+  endGameHudFamilyRender("node04");
 }
 
 function scheduleNode04Poll() {
@@ -5292,12 +7614,12 @@ function scheduleNode04Poll() {
   state.node04.pollTimerId = window.setTimeout(async function () {
     state.node04.pollTimerId = 0;
     await loadNode04State({ silent: true });
-    if (node04Modules().length) scheduleNode04Poll();
+    if (shouldLoadNode04State()) scheduleNode04Poll();
   }, 2500);
 }
 
 async function loadNode04State(options = {}) {
-  if (!node04Modules().length) {
+  if (!shouldLoadNode04State()) {
     removeNode04Hud();
     syncRuntimeTargets();
     return false;
@@ -5340,9 +7662,13 @@ async function loadNode04State(options = {}) {
 async function runNode04Action(action, targetId, extra = {}) {
   const normalized = String(action || "").replace(/^node04:/, "");
   if (!normalized || state.node04.actionInFlight) return;
-  if (normalized === "close_dialogue") {
-    state.node04.dialogue = null;
+  if (isNode03Defeated()) {
+    clearLocalMovementForDefeat({ force: true, sendStop: true });
     renderNode04Hud();
+    return;
+  }
+  if (normalized === "close_dialogue") {
+    closeNode04DialoguePanel();
     return;
   }
   if (action === "travel" || normalized === "travel") {
@@ -5356,6 +7682,7 @@ async function runNode04Action(action, targetId, extra = {}) {
     state.node04.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || "quest target") + "."
       : (currentTarget.displayName || "Quest target") + " is buiten range.";
+    showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Message" });
     renderNode04Hud();
     return;
   }
@@ -5394,6 +7721,7 @@ async function runNode04Action(action, targetId, extra = {}) {
       return;
     }
     state.node04.lastActionMessage = data.message || "";
+    if (state.node04.lastActionMessage) showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Message" });
     if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
     if (data.snapshot) {
       state.node04.snapshot = data.snapshot;
@@ -5423,6 +7751,14 @@ function node05Modules() {
   return modules.filter(function (module) {
     return module && NODE05_HUD_TYPES.has(module.nodeType);
   });
+}
+
+function gameMinimapNeedsNode05Runtime(config = resolveGameMinimapConfig()) {
+  return gameMinimapHasEnabledMarkerSource(config, ["crafting", "cooking", "vendor", "market"]);
+}
+
+function shouldLoadNode05State() {
+  return node05Modules().length > 0 || gameMinimapNeedsNode05Runtime();
 }
 
 function node05ModuleSignature(modules) {
@@ -5477,11 +7813,7 @@ function appendNode05Empty(card, text) {
 }
 
 function appendNode05Status(card) {
-  if (!state.node05.lastActionMessage && !state.node05.lastError) return;
-  const status = document.createElement("p");
-  status.className = state.node05.lastError ? "node05Status node05Status--error" : "node05Status";
-  status.textContent = state.node05.lastError || state.node05.lastActionMessage;
-  card.appendChild(status);
+  // Node05 status/errors are routed through dialogue_hud instead of each Node05 panel.
 }
 
 function node05CurrencyLabel(amount, currencyName) {
@@ -6061,14 +8393,20 @@ function renderNode05Hud() {
     lastActionMessage: state.node05.lastActionMessage
   });
   if (!state.node05.elements || state.node05.signature !== signature) {
+    if (state.node05.elements && isGameHudLayoutInteractionActive()) {
+      deferGameHudPanelRender();
+      syncRuntimeTargets();
+      return;
+    }
     state.node05.elements = ensureGameHudRuntimeRoot();
     state.node05.signature = signature;
-    clearGameHudFamily("node05");
+    beginGameHudFamilyRender("node05");
     for (const module of modules) {
       const node = renderNode05Module(module, snapshot);
       if (!node) continue;
       appendGameHudPanel("node05", module, node, defaultNode05Anchor(module.nodeType));
     }
+    endGameHudFamilyRender("node05");
   }
   syncRuntimeTargets();
 }
@@ -6078,7 +8416,7 @@ function scheduleNode05Poll() {
   state.node05.pollTimerId = window.setTimeout(async function () {
     state.node05.pollTimerId = 0;
     await loadNode05State({ silent: true });
-    if (node05Modules().length) scheduleNode05Poll();
+    if (shouldLoadNode05State()) scheduleNode05Poll();
   }, 3500);
 }
 
@@ -6105,8 +8443,9 @@ async function loadNode05State(options = {}) {
     if (state.minimapHud.elements) state.minimapHud.dirty = true;
     syncRuntimeTargets();
     renderNode03Hud();
+    renderNode04Hud();
     renderNode05Hud();
-    if (node05Modules().length) scheduleNode05Poll();
+    if (shouldLoadNode05State()) scheduleNode05Poll();
     return true;
   } catch (error) {
     state.node05.lastError = String(error?.message || error || "NODE-05 state mislukt.");
@@ -6128,6 +8467,11 @@ function refreshNode05ClientRanges(now = performance.now()) {
 async function runNode05Action(action, payload = {}) {
   const normalized = String(action || "").replace(/^node05:/, "").toLowerCase();
   if (!normalized || state.node05.actionInFlight) return;
+  if (isNode03Defeated()) {
+    clearLocalMovementForDefeat({ force: true, sendStop: true });
+    renderNode04Hud();
+    return;
+  }
   const currentTarget = node05TargetWithClientRange(node05TargetById(payload.targetId));
   if (normalized === "focus_service" || normalized === "move_target") {
     if (currentTarget && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
@@ -6135,6 +8479,7 @@ async function runNode05Action(action, payload = {}) {
       state.node05.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
         : (currentTarget.displayName || currentTarget.label || "Service") + " is al dichtbij.";
+      showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
       renderNode05Hud();
     }
     return;
@@ -6144,6 +8489,7 @@ async function runNode05Action(action, payload = {}) {
     state.node05.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
       : (currentTarget.displayName || currentTarget.label || "Service") + " is buiten range.";
+    showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
     renderNode05Hud();
     return;
   }
@@ -6185,6 +8531,7 @@ async function runNode05Action(action, payload = {}) {
       return;
     }
     state.node05.lastActionMessage = data.message || "";
+    if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
     if (data.snapshot) {
       state.node05.snapshot = data.snapshot;
       if (data.snapshot.node03) state.node03.snapshot = data.snapshot.node03;
@@ -6192,6 +8539,7 @@ async function runNode05Action(action, payload = {}) {
       syncRuntimeTargets();
     }
     renderNode03Hud();
+    renderNode04Hud();
     renderNode05Hud();
   } catch (error) {
     state.node05.lastError = String(error?.message || error || "NODE-05 actie mislukt.");
@@ -6270,9 +8618,6 @@ function resetMmoDebugRuntimeState() {
   state.remote.lastSnapshotPlayerIds = [];
   state.remote.remotePlayerIds = [];
   state.remote.lastPacketAgeMs = 0;
-  resetMinimapFogState({ keepCells: false });
-  state.minimapFog.suppressDiscoveryUntil = performance.now() + 1500;
-  if (state.minimapHud.elements) state.minimapHud.dirty = true;
   updateHud();
 }
 
@@ -6294,6 +8639,19 @@ async function resetPersistedMinimapFogDiscovery() {
     updateHud();
     return false;
   }
+}
+
+async function resetMinimapFogForTesting() {
+  const ok = await resetPersistedMinimapFogDiscovery();
+  if (!ok) return;
+  resetMinimapFogState({ keepCells: false });
+  state.minimapFog.suppressDiscoveryUntil = 0;
+  const fog = syncMinimapFogWorld(resolveGameMinimapConfig());
+  revealLocalMinimapFogCells(currentLocalPlayerPosition(), fog);
+  scheduleMinimapFogDiscovery("reset", { force: true });
+  if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  drawGameMinimapIfDue(performance.now());
+  updateHud();
 }
 
 function resolveMinimapFogConfig(config = resolveGameMinimapConfig()) {
@@ -6406,6 +8764,7 @@ function revealLocalMinimapFogCells(position, fogConfig) {
       const key = (center.x + dx) + ":" + (center.z + dz);
       if (state.minimapFog.discoveredCells.has(key)) continue;
       state.minimapFog.discoveredCells.add(key);
+      state.minimapFog.pendingDiscoveredCells.add(key);
       changed = true;
     }
   }
@@ -6422,7 +8781,11 @@ function resetMinimapFogState(options = {}) {
     window.clearTimeout(state.minimapFog.pendingSaveTimerId);
     state.minimapFog.pendingSaveTimerId = 0;
   }
-  if (options.keepCells !== true) state.minimapFog.discoveredCells = new Set();
+  if (options.keepCells !== true) {
+    state.minimapFog.discoveredCells = new Set();
+    state.minimapFog.pendingDiscoveredCells = new Set();
+    state.minimapFog.resetGeneration = (Number(state.minimapFog.resetGeneration || 0) || 0) + 1;
+  }
   state.minimapFog.loaded = false;
   state.minimapFog.loadInFlight = false;
   state.minimapFog.saveInFlight = false;
@@ -6471,6 +8834,7 @@ function applyMinimapFogDiscoveryPayload(payload, options = {}) {
   const incoming = replace
     ? (Array.isArray(payload.discoveredCellKeys) ? payload.discoveredCellKeys : [])
     : (Array.isArray(payload.newlyDiscoveredCellKeys) ? payload.newlyDiscoveredCellKeys : []);
+  const localCells = replace ? Array.from(state.minimapFog.discoveredCells) : [];
   if (replace) state.minimapFog.discoveredCells = new Set();
   let changed = replace;
   for (const key of incoming) {
@@ -6480,6 +8844,13 @@ function applyMinimapFogDiscoveryPayload(payload, options = {}) {
       state.minimapFog.discoveredCells.add(parsed.key);
       changed = true;
     }
+    state.minimapFog.pendingDiscoveredCells.delete(parsed.key);
+  }
+  for (const key of localCells) {
+    const parsed = parseMinimapFogCellKey(key);
+    if (!parsed || state.minimapFog.discoveredCells.has(parsed.key)) continue;
+    state.minimapFog.discoveredCells.add(parsed.key);
+    changed = true;
   }
   state.minimapFog.worldId = worldId || state.minimapFog.worldId || null;
   state.minimapFog.mapLayer = mapLayer || state.minimapFog.mapLayer || "overworld";
@@ -6501,6 +8872,7 @@ async function loadMinimapFogDiscovery(config = resolveGameMinimapConfig()) {
   if (state.minimapFog.lastLoadAttemptAt && now - state.minimapFog.lastLoadAttemptAt < 5000) return;
   state.minimapFog.lastLoadAttemptAt = now;
   state.minimapFog.loadInFlight = true;
+  const loadGeneration = Number(state.minimapFog.resetGeneration || 0) || 0;
   try {
     const response = await fetch("/api/game/fog/discovery", { headers: { Accept: "application/json" } });
     if (response.status === 401) {
@@ -6509,6 +8881,7 @@ async function loadMinimapFogDiscovery(config = resolveGameMinimapConfig()) {
     }
     const payload = await response.json().catch(function () { return null; });
     if (response.ok && payload && payload.ok === true) {
+      if (loadGeneration !== (Number(state.minimapFog.resetGeneration || 0) || 0)) return;
       applyMinimapFogDiscoveryPayload(payload, { replace: true });
     }
   } catch {
@@ -6523,6 +8896,8 @@ async function flushMinimapFogDiscovery(reason = "movement", options = {}) {
   const config = resolveGameMinimapConfig();
   const fog = syncMinimapFogWorld(config);
   if (!fog.enabled || state.minimapFog.saveInFlight || !state.worldId || !state.player) return;
+  const pendingCellKeys = Array.from(state.minimapFog.pendingDiscoveredCells);
+  const saveGeneration = Number(state.minimapFog.resetGeneration || 0) || 0;
   state.minimapFog.saveInFlight = true;
   state.minimapFog.lastSaveAt = performance.now();
   try {
@@ -6532,7 +8907,9 @@ async function flushMinimapFogDiscovery(reason = "movement", options = {}) {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         reason: reason,
-        force: options.force === true
+        force: options.force === true,
+        mapLayer: fog.mapLayer || "overworld",
+        discoveredCellKeys: pendingCellKeys
       })
     });
     if (response.status === 401) {
@@ -6541,6 +8918,8 @@ async function flushMinimapFogDiscovery(reason = "movement", options = {}) {
     }
     const payload = await response.json().catch(function () { return null; });
     if (response.ok && payload && payload.ok === true) {
+      if (saveGeneration !== (Number(state.minimapFog.resetGeneration || 0) || 0)) return;
+      for (const key of pendingCellKeys) state.minimapFog.pendingDiscoveredCells.delete(key);
       applyMinimapFogDiscoveryPayload(payload, { replace: false });
     }
   } catch {
@@ -6655,6 +9034,88 @@ function unionMinimapBounds(boundsList) {
   return { minX, maxX, minZ, maxZ, width: maxX - minX, depth: maxZ - minZ };
 }
 
+const GAME_MINIMAP_MARKER_SOURCE_SET = new Set([
+  "users", "enemy", "boss", "wildlife", "npc", "quest", "spawn", "teleport",
+  "settlement", "crafting", "cooking", "vendor", "market", "resource", "item",
+  "object", "custom"
+]);
+const GAME_MINIMAP_MARKER_SHAPE_SET = new Set(["dot", "square", "diamond", "triangle", "cross", "star", "label"]);
+const GAME_MINIMAP_MARKER_ANIMATION_SET = new Set(["none", "pulse", "blink", "glow"]);
+
+function gameMinimapCategoryId(value, fallback = "custom") {
+  if ((value === null || value === undefined || String(value).trim() === "") && fallback === "") return "";
+  const raw = String(value || fallback || "custom").trim().toLowerCase();
+  const id = raw
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9_:-]+/g, "_")
+    .replace(/[.:]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return id || fallback || "custom";
+}
+
+function normalizeGameMinimapMarkerCategory(raw, index = 0) {
+  const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(String(raw?.source || "")) ? String(raw.source) : "custom";
+  const id = gameMinimapCategoryId(raw?.id || raw?.categoryId || raw?.source || source, "category_" + (index + 1));
+  const shape = GAME_MINIMAP_MARKER_SHAPE_SET.has(String(raw?.shape || "")) ? String(raw.shape) : "dot";
+  const animation = GAME_MINIMAP_MARKER_ANIMATION_SET.has(String(raw?.animation || "")) ? String(raw.animation) : "none";
+  const color = /^#[0-9a-fA-F]{6}$/.test(String(raw?.color || "")) ? String(raw.color) : "#ffffff";
+  return {
+    id,
+    label: String(raw?.label || id).trim() || id,
+    source,
+    enabled: raw?.enabled !== false,
+    color,
+    shape,
+    iconAssetId: String(raw?.iconAssetId || "").trim() || null,
+    showLabel: raw?.showLabel === true,
+    clampOutside: raw?.clampOutside === true,
+    showThroughFog: raw?.showThroughFog === true,
+    iconSizePx: Math.max(3, Math.min(64, num(raw?.iconSizePx, 9))),
+    fontSizePx: Math.max(6, Math.min(32, num(raw?.fontSizePx, 10))),
+    nameMaxLength: Math.max(3, Math.min(64, num(raw?.nameMaxLength, 14))),
+    animation
+  };
+}
+
+function legacyGameMinimapMarkerCategories(config) {
+  return [
+    { id: "users", label: "Users", source: "users", enabled: config?.showLocalPlayer !== false || config?.showRemotePlayers !== false, color: "#ffe08a", shape: "triangle", showLabel: config?.showPlayerName !== false, clampOutside: true, showThroughFog: true, iconSizePx: num(config?.iconSizePx, 9), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "none" },
+    { id: "enemy", label: "Enemy", source: "enemy", enabled: config?.showEnemies === true, color: "#ef4444", shape: "square", showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: num(config?.iconSizePx, 9), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "none" },
+    { id: "npc", label: "NPC", source: "npc", enabled: config?.showNpcEntities !== false, color: "#c084fc", shape: "diamond", showLabel: config?.showNpcEntityNames === true, clampOutside: false, showThroughFog: false, iconSizePx: num(config?.iconSizePx, 9), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "none" },
+    { id: "quest", label: "Quest", source: "quest", enabled: config?.showQuestMarkers === true, color: "#facc15", shape: "dot", showLabel: true, clampOutside: true, showThroughFog: true, iconSizePx: Math.max(5, num(config?.iconSizePx, 9) + 2), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "glow" },
+    { id: "spawn", label: "Spawn", source: "spawn", enabled: config?.showSpawn === true, color: "#9be870", shape: "cross", showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: num(config?.iconSizePx, 9), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "none" },
+    { id: "object", label: "Objects", source: "object", enabled: config?.showInteractables === true, color: "#94a3b8", shape: "dot", showLabel: false, clampOutside: false, showThroughFog: false, iconSizePx: num(config?.iconSizePx, 9), fontSizePx: num(config?.fontSizePx, 10), nameMaxLength: num(config?.nameMaxLength, 14), animation: "none" }
+  ];
+}
+
+function gameMinimapMarkerCategories(config = resolveGameMinimapConfig()) {
+  const raw = Array.isArray(config?.markerCategories) && config.markerCategories.length
+    ? config.markerCategories
+    : legacyGameMinimapMarkerCategories(config || {});
+  const seen = new Set();
+  return raw.map(normalizeGameMinimapMarkerCategory).filter(function (category) {
+    if (!category.id || seen.has(category.id)) return false;
+    seen.add(category.id);
+    return true;
+  });
+}
+
+function gameMinimapHasEnabledMarkerSource(config, sources) {
+  if (!config) return false;
+  const set = new Set((Array.isArray(sources) ? sources : [sources]).map(String));
+  return gameMinimapMarkerCategories(config).some(function (category) {
+    return category.enabled !== false && set.has(category.source);
+  });
+}
+
+function gameMinimapHasThroughFogMarkers(config) {
+  return gameMinimapMarkerCategories(config).some(function (category) {
+    return category.enabled !== false && category.showThroughFog === true;
+  });
+}
+
 function computeGameMinimapSignature(config, bake) {
   const bakes = resolveGameMinimapBakes(config).map(function (item) {
     return {
@@ -6672,6 +9133,30 @@ function computeGameMinimapSignature(config, bake) {
     backgroundOpacity: config.backgroundOpacity,
     zIndex: config.zIndex,
     fogOfWar: config.fogOfWar || null,
+    markerSettings: {
+      debugMode: config.debugMode,
+      liteMode: config.liteMode,
+      markerUpdateMs: config.markerUpdateMs,
+      runtimeTargetScope: config.runtimeTargetScope,
+      markerCategories: gameMinimapMarkerCategories(config),
+      showLocalPlayer: config.showLocalPlayer,
+      showRemotePlayers: config.showRemotePlayers,
+      showRemotePlayerNames: config.showRemotePlayerNames,
+      showPlayerName: config.showPlayerName,
+      showSpawn: config.showSpawn,
+      showNpcEntities: config.showNpcEntities,
+      showNpcEntityNames: config.showNpcEntityNames,
+      showScatterInstances: config.showScatterInstances,
+      showScatterNames: config.showScatterNames,
+      showInteractables: config.showInteractables,
+      showQuestMarkers: config.showQuestMarkers,
+      showEnemies: config.showEnemies,
+      showViewportCone: config.showViewportCone,
+      clampOutsideMarkers: config.clampOutsideMarkers,
+      iconSizePx: config.iconSizePx,
+      fontSizePx: config.fontSizePx,
+      nameMaxLength: config.nameMaxLength
+    },
     bakedImageUrl: bake ? bake.bakedImageUrl : null,
     bounds: resolveGameMinimapBakeBounds(bake),
     bakes: bakes
@@ -6708,6 +9193,36 @@ function minimapImageForBake(bake) {
   });
   image.src = url;
   state.minimapHud.images.set(url, image);
+  return image;
+}
+
+function gameMinimapAssetById(assetId) {
+  const id = String(assetId || "").trim();
+  if (!id) return null;
+  return (Array.isArray(state.gameWorld?.assets) ? state.gameWorld.assets : []).find(function (asset) {
+    return asset && String(asset.id || "") === id;
+  }) || null;
+}
+
+function gameMinimapIconImage(assetId) {
+  const asset = gameMinimapAssetById(assetId);
+  const url = normalizeMinimapImageUrl(asset?.sourcePath || asset?.thumbnailPath || asset?.url || "");
+  if (!url) return null;
+  if (!state.minimapHud.images) state.minimapHud.images = new Map();
+  const key = "icon:" + url;
+  let image = state.minimapHud.images.get(key) || null;
+  if (image) return image;
+  image = new Image();
+  image.addEventListener("load", function () {
+    state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(performance.now());
+  });
+  image.addEventListener("error", function () {
+    state.minimapHud.dirty = true;
+    drawGameMinimapIfDue(performance.now());
+  });
+  image.src = url;
+  state.minimapHud.images.set(key, image);
   return image;
 }
 
@@ -6762,6 +9277,10 @@ function removeGameMinimapHud() {
     state.minimapHud.interactions.destroy();
     state.minimapHud.interactions = null;
   }
+  if (state.minimapHud.resizeObserver) {
+    state.minimapHud.resizeObserver.disconnect();
+    state.minimapHud.resizeObserver = null;
+  }
   if (state.minimapHud.elements && state.minimapHud.elements.frame) {
     state.minimapHud.elements.frame.remove();
   }
@@ -6779,6 +9298,7 @@ function removeGameMinimapHud() {
   state.minimapHud.drawDurationEmaMs = 0;
   state.minimapHud.performanceMode = null;
   state.minimapHud.performanceModeUntil = 0;
+  state.minimapHud.fitSize = 0;
   state.minimapFog.dirty = true;
   state.minimapFog.lastDrawKey = "";
 }
@@ -6883,9 +9403,7 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
       Math.round(Number(bounds.maxZ) || 0)
     ].join(",");
   }).join(";");
-  const questMarkerKey = config?.showQuestMarkers === true
-    ? node04MinimapTargetSignature(positionQuantum)
-    : "noquestmarkers";
+  const markerKey = gameMinimapCategorizedMarkerSignature(config, positionQuantum);
   return [
     liteMode ? "lite" : "debug",
     bake?.bakedImageUrl || "",
@@ -6895,13 +9413,163 @@ function buildGameMinimapDrawKey(bake, view, performanceMode) {
     localKey,
     remoteKey,
     bakesKey,
-    questMarkerKey
+    markerKey
   ].join("|");
 }
 
-function node04MinimapTargets() {
-  if (!state.node04.snapshot || !node04Modules().length) return [];
+function minimapMarkerPosition(source) {
+  const position = source?.transform?.position || source?.position || source;
+  const x = Number(position?.x);
+  const z = Number(position?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x, z };
+}
+
+function minimapMarkerSignature(markers, quantum = 0.5) {
+  const q = Math.max(0.05, Number(quantum) || 0.5);
+  return markers.map(function (marker) {
+    const position = minimapMarkerPosition(marker);
+    if (!position) return null;
+    return [
+      marker.instanceId || marker.entityId || marker.targetId || marker.id || "",
+      marker.entityKind || marker.targetKind || marker.kind || marker.type || "",
+      marker.action || "",
+      marker.displayName || marker.label || marker.prompt || "",
+      marker.alive === false || marker.status === "dead" || marker.available === false ? "0" : "1",
+      Math.round(position.x / q),
+      Math.round(position.z / q)
+    ].join(",");
+  }).filter(Boolean).sort().join(";");
+}
+
+function gameMinimapEntityCategoryId(entity) {
+  return gameMinimapCategoryId(
+    entity?.minimapCategoryRef || entity?.markerCategoryRef || entity?.markerCategory || entity?.categoryId || "",
+    ""
+  );
+}
+
+function gameMinimapMarkerSourceForEnemy(enemy) {
+  const role = String(enemy?.role || enemy?.enemyRole || enemy?.networkProfile || enemy?.bestiaryCategory || "").toLowerCase();
+  if (role.includes("boss")) return "boss";
+  if (role.includes("ambient") || role.includes("wild")) return "wildlife";
+  return "enemy";
+}
+
+function node03MinimapEntities(kind) {
+  if (!state.node03.snapshot) return [];
+  const snapshot = state.node03.snapshot || {};
+  const bucket = Array.isArray(snapshot.entities?.[kind + "s"]) ? snapshot.entities[kind + "s"] : [];
+  const all = bucket.length
+    ? bucket
+    : (Array.isArray(snapshot.entities?.all) ? snapshot.entities.all.filter(function (entity) {
+        return entity && entity.entityKind === kind;
+      }) : []);
+  return all.filter(function (entity) {
+    if (!entity || entity.available === false) return false;
+    if (entity.alive === false || entity.status === "dead") return false;
+    if (["depleted", "claimed"].includes(entity.status)) return false;
+    return Boolean(minimapMarkerPosition(entity));
+  });
+}
+
+function node03MinimapEnemies() {
+  return node03MinimapEntities("enemy");
+}
+
+function gameMinimapProject() {
+  return state.gameProject || state.gameWorld?.gameProject || null;
+}
+
+function gameMinimapZonePackages() {
+  const project = gameMinimapProject();
+  const zones = project?.zones || {};
+  const list = Array.isArray(zones.packages) ? zones.packages.slice() : [];
+  if (zones.byId && typeof zones.byId === "object") list.push.apply(list, Object.values(zones.byId));
+  const seen = new Set();
+  return list.filter(function (zone) {
+    const zoneId = String(zone?.zoneId || zone?.id || "").trim();
+    if (!zoneId || seen.has(zoneId)) return false;
+    seen.add(zoneId);
+    return true;
+  });
+}
+
+function gameMinimapCurrentZoneId() {
+  return String(
+    state.position?.zoneId
+    || state.gameWorld?.activeZoneId
+    || state.gameWorld?.zonePackage?.zoneId
+    || gameMinimapProject()?.runtime?.activeZoneId
+    || ""
+  ).trim();
+}
+
+function gameMinimapCatalogDisplayName(sectionName, id, fallback) {
+  const key = String(id || "").trim();
+  if (!key) return fallback || "";
+  const catalog = gameMinimapProject()?.catalogs || {};
+  const entry = catalog?.[sectionName]?.[key] || null;
+  return String(entry?.displayName || entry?.label || entry?.name || fallback || key);
+}
+
+function gameMinimapPublishedSpawnMarkers(config) {
+  if (config?.runtimeTargetScope !== "all_published_zones") return [];
+  if (!gameMinimapHasEnabledMarkerSource(config, ["resource", "item"])) return [];
+  const markers = [];
+  for (const zone of gameMinimapZonePackages()) {
+    const zoneId = String(zone?.zoneId || zone?.id || "").trim();
+    if (!zoneId) continue;
+    for (const controller of Array.isArray(zone?.spawnControllers) ? zone.spawnControllers : []) {
+      for (const spawnSet of Array.isArray(controller?.spawnSets) ? controller.spawnSets : []) {
+        for (const spawn of Array.isArray(spawnSet?.spawns) ? spawnSet.spawns : []) {
+          if (!spawn || (spawn.nodeType !== "resource_spawn" && spawn.nodeType !== "pickup_spawn")) continue;
+          const x = Number(spawn.x);
+          const z = Number(spawn.z);
+          if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+          const isResource = spawn.nodeType === "resource_spawn";
+          const source = isResource ? "resource" : "item";
+          const ref = isResource
+            ? spawn.resourceRef
+            : (spawn.pickupKind === "currency" ? spawn.currencyRef : spawn.itemRef);
+          const label = isResource
+            ? gameMinimapCatalogDisplayName("resources", ref, "Resource")
+            : spawn.pickupKind === "currency"
+              ? gameMinimapCatalogDisplayName("currencies", ref, "Currency")
+              : gameMinimapCatalogDisplayName("items", ref, "Item");
+          const spawnId = String(spawn.spawnEntryId || spawn.nodeId || ref || source).trim();
+          markers.push({
+            source,
+            id: "published_spawn:" + zoneId + ":" + spawnId,
+            label,
+            x,
+            y: Number(spawn.y) || 0,
+            z,
+            zoneId,
+            spawnEntryId: spawnId,
+            categoryId: source,
+            markerKind: isResource ? "published_resource_spawn" : "published_pickup_spawn"
+          });
+        }
+      }
+    }
+  }
+  return markers;
+}
+
+function node03MinimapEnemySignature(quantum = 0.5) {
+  return minimapMarkerSignature(node03MinimapEnemies(), quantum);
+}
+
+function node04MinimapTargets(targetGroup = "all") {
+  if (!state.node04.snapshot) return [];
+  const includeAll = targetGroup === "all";
   return node04RuntimeTargetsForScene().filter(function (target) {
+    if (!includeAll) {
+      const isDialogue = String(target.action || "").includes("start_dialogue") || Boolean(target.dialogueId);
+      if (targetGroup === "dialogue" && !isDialogue) return false;
+      if (targetGroup === "quest" && isDialogue) return false;
+    }
     return target && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.z));
   });
 }
@@ -6946,6 +9614,355 @@ function drawNode04MinimapMarkers(ctx, config, viewBounds, size, clampOutside, p
       drawMarkerLabel(ctx, target.displayName || target.prompt || "Quest", point.x, point.y, fontSize, nameMaxLength, iconSize + 5);
     }
   }
+}
+
+function gameMinimapNpcMarkerSources(config) {
+  if (!config) return [];
+  const markers = [];
+  if (Array.isArray(state.gameWorld?.entities)) {
+    for (const entity of state.gameWorld.entities) {
+      if (!entity) continue;
+      const position = minimapMarkerPosition(entity);
+      if (!position) continue;
+      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      if (isScatter && config.showScatterInstances !== true) continue;
+      if (!isScatter && config.showNpcEntities === false) continue;
+      markers.push({
+        id: entity.entityId || entity.id || entity.instanceId || "",
+        kind: isScatter ? "scatter" : "npc",
+        x: position.x,
+        z: position.z,
+        label: entity.label || entity.displayName || entity.entityId || entity.id || "",
+        showName: isScatter ? config.showScatterNames === true : config.showNpcEntityNames === true
+      });
+    }
+  }
+  if (config.showNpcEntities !== false && config.showQuestMarkers !== true) {
+    for (const target of node04MinimapTargets("dialogue")) {
+      markers.push({
+        id: target.instanceId || target.targetId || target.dialogueId || "",
+        kind: "dialogue",
+        x: num(target.x, 0),
+        z: num(target.z, 0),
+        label: target.displayName || target.prompt || "NPC",
+        showName: config.showNpcEntityNames === true
+      });
+    }
+  }
+  return markers;
+}
+
+function gameMinimapNpcMarkerSignature(quantum = 0.5, config = resolveGameMinimapConfig()) {
+  return minimapMarkerSignature(gameMinimapNpcMarkerSources(config), quantum);
+}
+
+function drawGameMinimapNpcMarkers(ctx, config, viewBounds, size, clampOutside, performanceMode) {
+  const markers = gameMinimapNpcMarkerSources(config);
+  if (!markers.length) return;
+  const iconSize = Math.max(3, Number(config.iconSizePx) || 9);
+  const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
+  const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
+  const showLabels = performanceMode !== "ultra";
+  for (const marker of markers) {
+    const point = resolveMinimapPoint(marker.x, marker.z, viewBounds, size, size, clampOutside);
+    if (!point) continue;
+    const fill = marker.kind === "scatter" ? "#7ccf6b" : marker.kind === "dialogue" ? "#d59bff" : "#c084fc";
+    drawDiamondMarker(ctx, point.x, point.y, iconSize, { fill, stroke: "rgba(0,0,0,0.6)" });
+    if (showLabels && marker.showName) {
+      drawMarkerLabel(ctx, marker.label, point.x, point.y, fontSize, nameMaxLength, iconSize + 3);
+    }
+  }
+}
+
+function drawNode03MinimapEnemyMarkers(ctx, config, viewBounds, size, clampOutside) {
+  if (config.showEnemies !== true) return;
+  const enemies = node03MinimapEnemies();
+  if (!enemies.length) return;
+  const iconSize = Math.max(4, Number(config.iconSizePx) || 9);
+  for (const enemy of enemies) {
+    const position = minimapMarkerPosition(enemy);
+    if (!position) continue;
+    const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
+    if (!point) continue;
+    drawSquareMarker(ctx, point.x, point.y, iconSize, { fill: "#ef4444", stroke: "rgba(0,0,0,0.72)" });
+  }
+}
+
+function addGameMinimapMarker(markers, source, id, label, position, extra = {}) {
+  const resolved = minimapMarkerPosition(position);
+  if (!resolved) return;
+  markers.push(Object.assign({
+    source,
+    id: String(id || source || "marker"),
+    label: String(label || id || source || "Marker"),
+    x: resolved.x,
+    z: resolved.z
+  }, extra));
+}
+
+function gameMinimapSourceFromMarkerType(type) {
+  const value = String(type || "").trim().toLowerCase();
+  if (["portal", "zone_link", "teleport", "travel"].includes(value)) return "teleport";
+  if (["checkpoint", "spawn"].includes(value)) return "spawn";
+  if (["vendor", "market", "crafting", "cooking", "enemy", "npc", "quest", "resource", "item", "object", "boss", "wildlife", "settlement"].includes(value)) return value;
+  return "custom";
+}
+
+function gameMinimapCategorizedMarkers(config = resolveGameMinimapConfig()) {
+  const markers = [];
+  const markerIds = new Set();
+  const addMarker = function (source, id, label, position, extra = {}) {
+    const resolved = minimapMarkerPosition(position);
+    if (!resolved) return;
+    const markerId = String(id || source || "marker");
+    const dedupeKey = String(extra.markerKind || source || "marker") + ":" + markerId;
+    if (markerIds.has(dedupeKey)) return;
+    markerIds.add(dedupeKey);
+    markers.push(Object.assign({
+      source,
+      id: markerId,
+      label: String(label || id || source || "Marker"),
+      x: resolved.x,
+      z: resolved.z
+    }, extra));
+  };
+  const localPosition = currentLocalPlayerPosition();
+  if (localPosition) {
+    addMarker("users", state.player?.id || "local_player", state.player?.displayName || state.player?.id || "Player", localPosition, {
+      markerKind: "local_player",
+      rotationY: num(localPosition.rotationY, 0)
+    });
+  }
+  for (const entry of state.remote.players.values()) {
+    const position = entry.renderState?.position || entry.position;
+    addMarker("users", entry.playerId, entry.displayName || entry.playerId, position, { markerKind: "remote_player" });
+  }
+  for (const enemy of node03MinimapEnemies()) {
+    const source = gameMinimapMarkerSourceForEnemy(enemy);
+    addMarker(source, enemy.instanceId, enemy.displayName || enemy.instanceId, enemy, {
+      categoryId: gameMinimapEntityCategoryId(enemy),
+      markerKind: "enemy"
+    });
+  }
+  for (const resource of node03MinimapEntities("resource")) {
+    addMarker("resource", resource.instanceId, resource.displayName || resource.instanceId, resource, {
+      categoryId: gameMinimapEntityCategoryId(resource),
+      markerKind: "resource"
+    });
+  }
+  for (const pickup of node03MinimapEntities("pickup")) {
+    addMarker("item", pickup.instanceId, pickup.displayName || pickup.instanceId, pickup, {
+      categoryId: gameMinimapEntityCategoryId(pickup),
+      markerKind: "item"
+    });
+  }
+  for (const marker of gameMinimapPublishedSpawnMarkers(config)) {
+    addMarker(marker.source, marker.id, marker.label, marker, marker);
+  }
+  for (const target of node04MinimapTargets()) {
+    const action = String(target.action || "");
+    const isTravel = action.includes("travel") || target.entityKind === "zone_link" || target.targetKind === "zone_link";
+    const isDialogue = action.includes("start_dialogue") || Boolean(target.dialogueId);
+    const source = isTravel ? "teleport" : target.questId ? "quest" : isDialogue ? "npc" : "quest";
+    addMarker(source, target.instanceId || target.targetId, target.displayName || target.prompt || source, target, {
+      categoryId: gameMinimapEntityCategoryId(target),
+      markerKind: source
+    });
+  }
+  if (state.node05.snapshot) {
+    for (const target of node05RuntimeTargetsForScene()) {
+      const label = target.displayName || target.label || target.id;
+      const text = String(label || target.kind || "").toLowerCase();
+      const source = target.kind === "crafting" && text.includes("cook") ? "cooking" : String(target.kind || target.targetKind || "object");
+      addMarker(GAME_MINIMAP_MARKER_SOURCE_SET.has(source) ? source : "object", target.instanceId || target.id, label, target, {
+        categoryId: gameMinimapEntityCategoryId(target),
+        markerKind: source
+      });
+    }
+  }
+  if (Array.isArray(state.gameWorld?.entities)) {
+    for (const entity of state.gameWorld.entities) {
+      const explicitCategory = gameMinimapEntityCategoryId(entity);
+      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
+        ? explicitCategory
+        : isScatter ? "object" : "npc";
+      addMarker(source, entity.entityId || entity.id || entity.instanceId, entity.label || entity.displayName || entity.entityId || entity.id, entity, {
+        categoryId: explicitCategory,
+        markerKind: isScatter ? "scatter" : "entity"
+      });
+    }
+  }
+  if (Array.isArray(state.gameWorld?.interactables)) {
+    for (const item of state.gameWorld.interactables) {
+      addMarker("object", item.interactableId || item.id, item.label || item.displayName || item.id, item.position || item, {
+        categoryId: gameMinimapEntityCategoryId(item),
+        markerKind: "interactable"
+      });
+    }
+  }
+  const zonePackage = state.gameWorld?.zonePackage || null;
+  const markerLists = [state.gameWorld?.markers, zonePackage?.markers].filter(Array.isArray);
+  for (const list of markerLists) {
+    for (const marker of list) {
+      const explicitCategory = gameMinimapEntityCategoryId(marker);
+      const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
+        ? explicitCategory
+        : gameMinimapSourceFromMarkerType(marker.markerType || marker.type || marker.source);
+      addGameMinimapMarker(markers, source, marker.markerId || marker.id || marker.nodeId, marker.label || marker.displayName || marker.markerId || marker.id, marker, {
+        categoryId: explicitCategory,
+        markerKind: "map_marker"
+      });
+    }
+  }
+  if (state.gameWorld?.spawn) {
+    addGameMinimapMarker(markers, "spawn", state.gameWorld.spawn.spawnId || "spawn", "Spawn", state.gameWorld.spawn, { markerKind: "spawn" });
+  }
+  return markers;
+}
+
+function gameMinimapCategoryForMarker(config, marker) {
+  const categories = gameMinimapMarkerCategories(config).filter(function (category) {
+    return category.enabled !== false;
+  });
+  const categoryId = gameMinimapCategoryId(marker?.categoryId || "", "");
+  if (categoryId) {
+    const explicit = categories.find(function (category) { return category.id === categoryId; });
+    if (explicit) return explicit;
+  }
+  return categories.find(function (category) {
+    return category.source === marker.source;
+  }) || null;
+}
+
+function gameMinimapCategorizedMarkerSignature(config, quantum = 0.5) {
+  const q = Math.max(0.05, Number(quantum) || 0.5);
+  return gameMinimapCategorizedMarkers(config).map(function (marker) {
+    const category = gameMinimapCategoryForMarker(config, marker);
+    if (!category) return null;
+    return [
+      marker.id || "",
+      marker.source || "",
+      category.id || "",
+      category.enabled === false ? "0" : "1",
+      marker.label || "",
+      Math.round((Number(marker.x) || 0) / q),
+      Math.round((Number(marker.z) || 0) / q)
+    ].join(",");
+  }).filter(Boolean).sort().join(";");
+}
+
+function gameMinimapAnimatedMarkerStyle(ctx, category, x, y, iconSize, now) {
+  const animation = String(category.animation || "none");
+  if (animation === "none") return { alpha: 1, scale: 1 };
+  const phase = (Number(now) || performance.now()) / 1000;
+  if (animation === "blink") return { alpha: Math.sin(phase * Math.PI * 2) > 0 ? 1 : 0.35, scale: 1 };
+  const pulse = (Math.sin(phase * Math.PI * 2) + 1) / 2;
+  const glowAlpha = animation === "glow" ? 0.28 + pulse * 0.16 : 0.16 + pulse * 0.18;
+  const glowRadius = iconSize * (animation === "glow" ? 1.8 + pulse * 0.45 : 1.35 + pulse * 0.45);
+  ctx.save();
+  ctx.globalAlpha = glowAlpha;
+  ctx.fillStyle = category.color || "#ffffff";
+  ctx.beginPath();
+  ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  return { alpha: 1, scale: animation === "pulse" ? 0.92 + pulse * 0.18 : 1 };
+}
+
+function drawGameMinimapCategoryShape(ctx, category, marker, x, y, iconSize, scale) {
+  const size = iconSize * scale;
+  const lineWidth = clamp(size * 0.18, 0.5, 1.5);
+  const style = { fill: category.color || "#ffffff", stroke: "rgba(0,0,0,0.68)", lineWidth };
+  if (category.shape === "square") drawSquareMarker(ctx, x, y, size, style);
+  else if (category.shape === "diamond") drawDiamondMarker(ctx, x, y, size, style);
+  else if (category.shape === "triangle") drawTriangleMarker(ctx, x, y, size, worldHeadingToMinimapRotation(num(marker.rotationY, 0)), style);
+  else if (category.shape === "cross") drawCrossMarker(ctx, x, y, size, { stroke: category.color || "#ffffff", lineWidth: clamp(size * 0.22, 0.5, 2) });
+  else if (category.shape === "star") drawStarMarker(ctx, x, y, size, style);
+  else if (category.shape !== "label") drawDotMarker(ctx, x, y, size, style);
+}
+
+function gameMinimapMapPixelsPerWorldUnit(config) {
+  let best = 0;
+  for (const item of resolveGameMinimapBakes(config)) {
+    const bounds = minimapBakeBounds(item);
+    if (!bounds) continue;
+    const width = Number(item?.bakedImageWidth) || Number(item?.resolution) || 0;
+    const height = Number(item?.bakedImageHeight) || Number(item?.resolution) || 0;
+    const spanX = Math.max(0.01, Number(bounds.maxX) - Number(bounds.minX));
+    const spanZ = Math.max(0.01, Number(bounds.maxZ) - Number(bounds.minZ));
+    if (width > 0) best = Math.max(best, width / spanX);
+    if (height > 0) best = Math.max(best, height / spanZ);
+  }
+  return best;
+}
+
+function gameMinimapMarkerPixelScale(config, viewBounds, canvasSize) {
+  const viewWidth = Number(viewBounds?.maxX) - Number(viewBounds?.minX);
+  const viewDepth = Number(viewBounds?.maxZ) - Number(viewBounds?.minZ);
+  const viewWorldDistance = Math.max(
+    1,
+    Number.isFinite(viewWidth) ? viewWidth : 0,
+    Number.isFinite(viewDepth) ? viewDepth : 0
+  );
+  const mapPixelsPerWorldUnit = gameMinimapMapPixelsPerWorldUnit(config);
+  if (mapPixelsPerWorldUnit > 0) {
+    const visibleMapPixels = viewWorldDistance * mapPixelsPerWorldUnit;
+    const scale = Number(canvasSize) / Math.max(1, visibleMapPixels);
+    if (Number.isFinite(scale)) return clamp(scale, 0.18, 2.4);
+  }
+  const referenceDistance = Math.max(1, num(config?.startDistance, viewWorldDistance));
+  return clamp(referenceDistance / viewWorldDistance, 0.18, 2.4);
+}
+
+function drawGameMinimapCategoryMarker(ctx, category, marker, viewBounds, size, performanceMode, now, markerScale) {
+  const point = resolveMinimapPoint(marker.x, marker.z, viewBounds, size, size, category.clampOutside === true);
+  if (!point) return;
+  const iconWidth = clamp(num(category.iconSizePx, 9) * markerScale, 1.5, 64);
+  const iconSize = iconWidth / 2;
+  const fontSize = clamp(num(category.fontSizePx, 10) * markerScale, 2, 32);
+  const nameMaxLength = Math.max(3, num(category.nameMaxLength, 14));
+  const animationStyle = gameMinimapAnimatedMarkerStyle(ctx, category, point.x, point.y, iconSize, now);
+  ctx.save();
+  ctx.globalAlpha *= animationStyle.alpha;
+  const image = category.iconAssetId ? gameMinimapIconImage(category.iconAssetId) : null;
+  if (image && image.complete && image.naturalWidth) {
+    const imageSize = iconWidth * animationStyle.scale;
+    ctx.drawImage(image, point.x - imageSize / 2, point.y - imageSize / 2, imageSize, imageSize);
+  } else {
+    drawGameMinimapCategoryShape(ctx, category, marker, point.x, point.y, iconSize, animationStyle.scale);
+  }
+  ctx.restore();
+  if ((category.showLabel === true || category.shape === "label") && performanceMode !== "ultra" && fontSize >= 4) {
+    drawMarkerLabel(ctx, marker.label || category.label || marker.id, point.x, point.y, fontSize, nameMaxLength, iconSize + Math.max(2, 3 * markerScale), 2);
+  }
+}
+
+function drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, throughFog, performanceMode, now) {
+  const markers = gameMinimapCategorizedMarkers(config);
+  if (!markers.length) return;
+  const markerScale = gameMinimapMarkerPixelScale(config, viewBounds, size);
+  for (const marker of markers) {
+    const category = gameMinimapCategoryForMarker(config, marker);
+    if (!category || category.enabled === false) continue;
+    if ((category.showThroughFog === true) !== throughFog) continue;
+    drawGameMinimapCategoryMarker(ctx, category, marker, viewBounds, size, performanceMode, now, markerScale);
+  }
+}
+
+function drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, now) {
+  const elements = state.minimapHud.elements;
+  if (!elements?.fogCanvas || !elements?.fogCtx || !activeView) return;
+  const ctx = elements.fogCtx;
+  const backing = Math.round(size * dpr);
+  if (elements.fogCanvas.width !== backing || elements.fogCanvas.height !== backing) {
+    elements.fogCanvas.width = backing;
+    elements.fogCanvas.height = backing;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  drawGameMinimapCategorizedMarkers(ctx, config, minimapViewBounds(activeView), size, true, performanceMode, now);
 }
 
 // Follows the local player until the user pans/zooms (userOverride), and resets whenever the
@@ -7002,6 +10019,7 @@ function buildGameMinimapDom(config, bake) {
   root.dataset.hudId = config.hudId || "game_minimap";
   root.style.width = size + "px";
   root.style.height = size + "px";
+  root.style.setProperty("--game-minimap-fit-size", size + "px");
   root.style.margin = Math.max(0, Number(config.marginPx) || 12) + "px";
   root.style.borderRadius = Math.max(0, Number(config.borderRadiusPx) || 14) + "px";
   const canvas = document.createElement("canvas");
@@ -7037,7 +10055,7 @@ function buildGameMinimapDom(config, bake) {
       return liveConfig ? resolveGameMinimapBakeBounds(resolveGameMinimapBake(liveConfig)) : null;
     },
     getCanvasSize: function () {
-      return Math.max(64, Math.round(state.minimapHud.elements?.root?.clientWidth || Number(resolveGameMinimapConfig()?.sizePx) || 180));
+      return gameMinimapDisplaySize(resolveGameMinimapConfig());
     },
     getMinDistance: function () { return resolveGameMinimapConfig()?.minDistance || 20; },
     getMaxDistance: function () {
@@ -7063,6 +10081,90 @@ function buildGameMinimapDom(config, bake) {
   return elements;
 }
 
+function gameMinimapDockSlotSize(frame, config = null) {
+  if (!frame || frame.dataset.layoutMode === "float") return null;
+  const anchor = normalizeGameHudAnchor(frame.dataset.hudDock || frame.dataset.defaultAnchor, "left");
+  const dock = state.hudLayout.elements?.anchors?.[anchor] || null;
+  if (!dock || typeof dock.getBoundingClientRect !== "function") return null;
+  const slotNode = frame.parentElement?.classList?.contains("gameHudTabGroup") ? frame.parentElement : frame;
+  const dockRect = dock.getBoundingClientRect();
+  const slotRect = slotNode.getBoundingClientRect();
+  const frameRect = frame.getBoundingClientRect();
+  const body = frame.querySelector(".gameHudPanelBody--minimap");
+  const bodyRect = body && typeof body.getBoundingClientRect === "function" ? body.getBoundingClientRect() : null;
+  const width = Math.max(0, bodyRect?.width || frameRect.width || slotRect.width || dockRect.width);
+  const slots = gameHudDockSlots(dock, anchor);
+  const slotCount = Math.max(1, slots.length);
+  const basisRaw = String(slotNode.style.getPropertyValue("--hud-panel-basis") || "").replace("%", "");
+  const basisPct = clamp(num(basisRaw, 100 / slotCount), GAME_HUD_DOCK_STACK_MIN_PCT, 100);
+  let gapPx = 0;
+  try {
+    const style = window.getComputedStyle(dock);
+    gapPx = Math.max(0, num(style.rowGap || style.gap, 0));
+  } catch {}
+  const mainSize = Math.max(0, dockRect.height - Math.max(0, slotCount - 1) * gapPx);
+  const height = mainSize > 0 ? mainSize * (basisPct / 100) : Math.max(0, bodyRect?.height || frameRect.height || slotRect.height);
+  const square = Math.min(width || Number(config?.sizePx) || 180, height || Number(config?.sizePx) || 180);
+  return Number.isFinite(square) && square > 0 ? Math.round(square) : null;
+}
+
+function gameMinimapDisplaySize(config = null) {
+  const root = state.minimapHud.elements?.root || null;
+  const configuredSize = Math.max(64, Math.round(Number(config?.sizePx) || Number(resolveGameMinimapConfig()?.sizePx) || 180));
+  const frame = state.minimapHud.elements?.frame || null;
+  const slotSize = gameMinimapDockSlotSize(frame, config);
+  if (slotSize !== null) return Math.max(64, slotSize);
+  const fitBox = frame?.querySelector(".gameHudPanelBody--minimap") || frame || root?.parentElement || root;
+  const rect = fitBox && typeof fitBox.getBoundingClientRect === "function" ? fitBox.getBoundingClientRect() : null;
+  const rectWidth = rect && Number.isFinite(rect.width) ? rect.width : 0;
+  const rectHeight = rect && Number.isFinite(rect.height) ? rect.height : 0;
+  const clientWidth = Number(fitBox?.clientWidth) || Number(root?.clientWidth) || 0;
+  const clientHeight = Number(fitBox?.clientHeight) || Number(root?.clientHeight) || 0;
+  const boxWidth = rectWidth || clientWidth;
+  const boxHeight = rectHeight || clientHeight;
+  const square = boxWidth > 0 && boxHeight > 0 ? Math.min(boxWidth, boxHeight) : Math.max(boxWidth, boxHeight);
+  if (square >= 16) return Math.max(64, Math.round(square));
+  const rootRect = root && typeof root.getBoundingClientRect === "function" ? root.getBoundingClientRect() : null;
+  const rootSize = rootRect && rootRect.width > 0 && rootRect.height > 0 ? Math.min(rootRect.width, rootRect.height) : 0;
+  if (rootSize >= 16) return Math.max(64, Math.round(rootSize));
+  return Math.max(64, Number(state.minimapHud.fitSize) || configuredSize);
+}
+
+function syncGameMinimapFitSize(config = null) {
+  const size = gameMinimapDisplaySize(config);
+  const root = state.minimapHud.elements?.root || null;
+  if (root) root.style.setProperty("--game-minimap-fit-size", size + "px");
+  state.minimapHud.fitSize = size;
+  return size;
+}
+
+function observeGameMinimapHudSize(elements) {
+  if (state.minimapHud.resizeObserver) {
+    state.minimapHud.resizeObserver.disconnect();
+    state.minimapHud.resizeObserver = null;
+  }
+  syncGameMinimapFitSize(resolveGameMinimapConfig());
+  if (!elements?.frame || typeof ResizeObserver === "undefined") return;
+  let queued = false;
+  const observer = new ResizeObserver(function () {
+    if (queued) return;
+    queued = true;
+    window.requestAnimationFrame(function () {
+      queued = false;
+      if (!state.minimapHud.elements) return;
+      const previousSize = Number(state.minimapHud.fitSize) || 0;
+      syncGameMinimapFitSize(resolveGameMinimapConfig());
+      if (previousSize === state.minimapHud.fitSize) return;
+      state.minimapHud.dirty = true;
+      drawGameMinimapIfDue(performance.now());
+    });
+  });
+  observer.observe(elements.frame);
+  const body = elements.frame.querySelector(".gameHudPanelBody--minimap");
+  if (body) observer.observe(body);
+  state.minimapHud.resizeObserver = observer;
+}
+
 function refreshGameMinimapHud() {
   const config = resolveGameMinimapConfig();
   if (!config) {
@@ -7078,10 +10180,11 @@ function refreshGameMinimapHud() {
     moduleId: config.hudId || "game_minimap",
     nodeType: "game_minimap",
     label: "Minimap",
-    anchor: config.anchor || "right"
+    anchor: config.anchor || "left"
   };
   elements.frame = appendGameHudPanel("minimap", minimapModule, elements.root, minimapModule.anchor);
   state.minimapHud.elements = elements;
+  observeGameMinimapHudSize(elements);
   state.minimapHud.signature = signature;
   state.minimapHud.dirty = true;
   state.minimapHud.lastDrawAt = 0;
@@ -7273,7 +10376,7 @@ function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size) {
   }
 }
 
-function drawGameMinimapFogOverlay(config, activeView, size, dpr) {
+function drawGameMinimapFogOverlay(config, activeView, size, dpr, forceRedraw = false) {
   const elements = state.minimapHud.elements;
   if (!elements?.fogCanvas || !elements?.fogCtx) return;
   const fogConfig = syncMinimapFogWorld(config);
@@ -7310,7 +10413,7 @@ function drawGameMinimapFogOverlay(config, activeView, size, dpr) {
     size,
     dpr
   ].join("|");
-  if (!state.minimapFog.dirty && state.minimapFog.lastDrawKey === drawKey) return;
+  if (!forceRedraw && !state.minimapFog.dirty && state.minimapFog.lastDrawKey === drawKey) return;
   state.minimapFog.lastDrawKey = drawKey;
   state.minimapFog.dirty = false;
 
@@ -7333,7 +10436,7 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   if (!elements) return;
   const liteMode = performanceMode !== "full";
   const ultraLiteMode = performanceMode === "ultra";
-  const size = Math.max(64, Math.round(elements.root?.clientWidth || Number(config.sizePx) || 180));
+  const size = syncGameMinimapFitSize(config);
   const canvas = elements.canvas;
   // Backing store at devicePixelRatio, all drawing math in logical px: without this the canvas is
   // blurry on HiDPI screens no matter how high the bake resolution is.
@@ -7374,86 +10477,9 @@ function drawGameMinimap(config, bake, view, performanceMode) {
     ctx.fillText("Minimap laden", size / 2, size / 2);
   }
   ctx.globalAlpha = 1;
-  drawGameMinimapFogOverlay(config, activeView, size, dpr);
-  const clampOutside = config.clampOutsideMarkers !== false;
-  const iconSize = Math.max(3, Number(config.iconSizePx) || 9);
-
-  if (config.showLocalPlayer !== false) {
-    const localPosition = currentLocalPlayerPosition();
-    if (localPosition) {
-      const point = resolveMinimapPoint(localPosition.x, localPosition.z, viewBounds, size, size, clampOutside);
-      if (point) {
-        const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
-        const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
-        if (liteMode) {
-          drawDotMarker(ctx, point.x, point.y, Math.max(4, Math.min(8, iconSize)), { fill: "#ffe08a", stroke: "rgba(0,0,0,0.7)" });
-        } else {
-          const markerRotation = worldHeadingToMinimapRotation(num(localPosition.rotationY, 0));
-          drawTriangleMarker(ctx, point.x, point.y, iconSize, markerRotation, { fill: "#ffe08a", stroke: "rgba(0,0,0,0.7)" });
-          if (config.showViewportCone !== false) {
-            drawViewportCone(ctx, point.x, point.y, markerRotation, Math.max(16, size * 0.22), 50, { fill: "#ffffff", alpha: 0.16 });
-          }
-        }
-        // Local labels stay available in lite mode, but are dropped in ultra-lite fallback because
-        // repeated text rendering is one of the first things that starts to bite frame time.
-        if (config.showPlayerName !== false && !ultraLiteMode) {
-          const name = state.player?.displayName || state.player?.id || "";
-          drawMarkerLabel(ctx, name, point.x, point.y, fontSize, nameMaxLength);
-        }
-      }
-    }
-  }
-  // Fellow players remain visible in every mode. Lite mode keeps the dots, but skips the more
-  // expensive name labels so the HUD can stay responsive when the frame budget is tight.
-  if (config.showRemotePlayers !== false) {
-    for (const entry of state.remote.players.values()) {
-      const position = entry.renderState?.position || entry.position;
-      if (!position) continue;
-      const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
-      if (!point) continue;
-      drawDotMarker(ctx, point.x, point.y, iconSize, { fill: "#7bd4ff", stroke: "rgba(0,0,0,0.6)" });
-      if (shouldShowRemotePlayerNames(config, performanceMode)) {
-        const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
-        const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
-        drawMarkerLabel(ctx, entry.displayName || entry.playerId, point.x, point.y, fontSize, nameMaxLength, iconSize + 3);
-      }
-    }
-  }
-  drawNode04MinimapMarkers(ctx, config, viewBounds, size, clampOutside, performanceMode);
-  if (liteMode) return;
-
-  if ((config.showNpcEntities !== false || config.showScatterInstances === true) && Array.isArray(state.gameWorld?.entities)) {
-    for (const entity of state.gameWorld.entities) {
-      const position = entity?.transform?.position;
-      if (!position) continue;
-      const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
-      if (isScatter && config.showScatterInstances !== true) continue;
-      if (!isScatter && config.showNpcEntities === false) continue;
-      const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
-      if (!point) continue;
-      drawDiamondMarker(ctx, point.x, point.y, iconSize, { fill: isScatter ? "#7ccf6b" : "#d59bff", stroke: "rgba(0,0,0,0.6)" });
-      const showName = isScatter ? config.showScatterNames === true : config.showNpcEntityNames === true;
-      if (showName) {
-        const fontSize = Math.max(6, Number(config.fontSizePx) || 10);
-        const nameMaxLength = Math.max(3, Number(config.nameMaxLength) || 14);
-        drawMarkerLabel(ctx, entity.label || entity.entityId || entity.id, point.x, point.y, fontSize, nameMaxLength);
-      }
-    }
-  }
-  if (config.showInteractables === true && Array.isArray(state.gameWorld?.interactables)) {
-    for (const item of state.gameWorld.interactables) {
-      const position = item?.position;
-      if (!position) continue;
-      const point = resolveMinimapPoint(position.x, position.z, viewBounds, size, size, clampOutside);
-      if (!point) continue;
-      drawSquareMarker(ctx, point.x, point.y, iconSize, { fill: "#9be870", stroke: "rgba(0,0,0,0.6)" });
-    }
-  }
-  if (config.showSpawn === true && state.gameWorld?.spawn) {
-    const spawn = state.gameWorld.spawn;
-    const point = resolveMinimapPoint(spawn.x, spawn.z, viewBounds, size, size, clampOutside);
-    if (point) drawCrossMarker(ctx, point.x, point.y, iconSize, { stroke: "#9be870" });
-  }
+  drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, false, performanceMode, performance.now());
+  drawGameMinimapFogOverlay(config, activeView, size, dpr, gameMinimapHasThroughFogMarkers(config));
+  drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now());
 }
 
 function drawGameMinimapIfDue(now) {
@@ -7624,10 +10650,11 @@ function ensureRuntime(world) {
       mode: "game",
       antialias: desiredAntialias,
       hud: hud,
+      hudPanelAdapter: createRuntimeHudPanelAdapter(),
       externalPlayerAuthority: true,
       localPlayerDisplayName: state.player?.displayName || state.player?.id || "",
       onLoadErrors: function (errors) {
-        if (errors.length) showHudError(errors[0]);
+        if (errors.length) showHudError("Asset kon niet laden: " + errors[0]);
       }
     });
     state.runtimeAntialias = desiredAntialias;
@@ -7645,15 +10672,50 @@ function syncLocalPlayerNameplate() {
   state.runtime.setLocalPlayerDisplayName(currentLocalPlayerDisplayName());
 }
 
+function gameHudAnchorFromRuntimeAnchor(anchor, fallback = "right") {
+  const value = String(anchor || "").trim();
+  if (GAME_HUD_ANCHOR_SET.has(value)) return value;
+  if (value.includes("left")) return "left";
+  if (value.includes("right")) return "right";
+  if (value.includes("top")) return "top";
+  if (value.includes("bottom")) return "bottom";
+  if (value.includes("center")) return "center";
+  return normalizeGameHudAnchor(fallback, "right");
+}
+
+function createRuntimeHudPanelAdapter() {
+  return {
+    appendPanel: function (module, contentNode) {
+      const anchor = gameHudAnchorFromRuntimeAnchor(module?.anchor, "right");
+      const normalizedModule = {
+        moduleId: hudModuleIdentity(module) || module?.hudId || module?.id || "runtime_hud_panel",
+        nodeType: module?.nodeType || module?.type || "runtime_hud_panel",
+        label: module?.label || module?.title || "",
+        anchor: anchor
+      };
+      const frame = appendGameHudPanel("runtime", normalizedModule, contentNode, anchor);
+      return {
+        frame: frame,
+        dispose: function () {
+          if (frame && frame.isConnected) {
+            captureGameHudFrameScroll(frame);
+            frame.remove();
+            scheduleGameHudDockRefresh();
+          }
+        }
+      };
+    }
+  };
+}
+
 function showHudError(message) {
   const node = hud.querySelector(".hud-prompt");
-  if (!node) return;
-  node.textContent = "Asset kon niet laden: " + message;
-  node.style.display = "block";
   window.clearTimeout(state.hudErrorTimer);
-  state.hudErrorTimer = window.setTimeout(function () {
+  if (node) {
+    node.textContent = "";
     node.style.display = "none";
-  }, 2500);
+  }
+  showGameHudDialogueNotice(message, { title: "Error", tone: "error" });
 }
 
 function hasKeyboardMovementInput() {
@@ -7674,6 +10736,7 @@ function clickMoveArrivalRadius() {
 }
 
 function hasMovementInput() {
+  if (isNode03Defeated()) return false;
   if (hasKeyboardMovementInput()) return true;
   return state.pointer.active && state.pointer.moved && (state.pointer.target || state.pointer.lastHoldVector);
 }
@@ -7719,6 +10782,11 @@ function shouldSendPointerTargetToServer() {
 
 function startClickToMoveTarget(worldX, worldZ, source = null) {
   if (!isMmoGameplayReady()) return false;
+  if (isNode03Defeated()) {
+    clearLocalMovementForDefeat({ force: true, sendStop: true });
+    renderNode04Hud();
+    return false;
+  }
   clearPointerTarget(false);
   state.pointer.active = true;
   state.pointer.pointerId = null;
@@ -7772,6 +10840,7 @@ function currentMoveVector() {
           return { x: state.pointer.lastHoldVector.x, z: state.pointer.lastHoldVector.z };
         }
         clearMovementInput("click-target-arrived");
+        maybeRunPendingNode03TargetAction("arrived");
         return { x: 0, z: 0 };
       }
       if (length > 0.0001) {
@@ -7809,7 +10878,7 @@ function currentCollisionRadius() {
 
 function snapshotWorldKey(snapshot) {
   const world = snapshot?.gameWorld || null;
-  return String(
+  const baseKey = String(
     snapshot?.worldPublishedAt
     || snapshot?.publishedAt
     || world?.publishedAt
@@ -7820,6 +10889,46 @@ function snapshotWorldKey(snapshot) {
     || snapshot?.worldId
     || ""
   );
+  const zoneKey = String(
+    world?.activeZoneId
+    || world?.zonePackage?.zoneId
+    || snapshot?.position?.zoneId
+    || ""
+  );
+  return baseKey + "|zone:" + zoneKey;
+}
+
+function activeGameWorldZoneId() {
+  return String(
+    state.gameWorld?.activeZoneId
+    || state.gameWorld?.zonePackage?.zoneId
+    || state.gameProject?.runtime?.activeZoneId
+    || ""
+  ).trim();
+}
+
+function maybeRefreshWorldForPositionZone(position) {
+  const nextZoneId = String(position?.zoneId || "").trim();
+  if (!nextZoneId) return;
+  const currentZoneId = activeGameWorldZoneId();
+  const node03ZoneId = String(state.node03.snapshot?.zoneId || "").trim();
+  if ((!currentZoneId || currentZoneId === nextZoneId) && (!node03ZoneId || node03ZoneId === nextZoneId)) return;
+  if (state.sync.zoneRefreshInFlight && state.sync.pendingZoneId === nextZoneId) return;
+  state.sync.zoneRefreshInFlight = true;
+  state.sync.pendingZoneId = nextZoneId;
+  window.setTimeout(async function () {
+    try {
+      await loadSessionState({
+        forceWorld: true,
+        showLoading: false,
+        keepPrediction: true,
+        reason: "zone-change"
+      });
+    } finally {
+      if (state.sync.pendingZoneId === nextZoneId) state.sync.pendingZoneId = null;
+      state.sync.zoneRefreshInFlight = false;
+    }
+  }, 0);
 }
 
 function applyRuntimePosition(position, options = {}) {
@@ -8244,6 +11353,11 @@ function handleSocketMessage(raw) {
     markWsConnected();
     return;
   }
+  if (message.type === "hud_layout:defaults_updated") {
+    loadGameHudDefaultProfiles({ force: true, rerender: true });
+    markWsConnected();
+    return;
+  }
   if (message.type === "mmo:snapshot") {
     if (!remoteWorldMatches(message.worldId)) {
       state.remote.droppedStaleUpdates += 1;
@@ -8363,9 +11477,10 @@ async function loadSessionState(options = {}) {
   }
   const snapshot = await response.json();
   const nextWorldKey = snapshotWorldKey(snapshot);
-  const worldChanged = !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
+  const worldChanged = options.forceWorld === true || !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
   state.lastPublishedAt = snapshot.worldPublishedAt || snapshot.publishedAt || snapshot.gameWorld?.publishedAt || state.lastPublishedAt;
   primeHttpSnapshotState(snapshot);
+  await loadGameHudDefaultProfiles({ silent: true, force: worldChanged, rerender: false });
   primeConnectedSocketReadiness();
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
     openWebSocket();
@@ -8373,7 +11488,7 @@ async function loadSessionState(options = {}) {
     state.ws.send(JSON.stringify({ type: "player:request_state" }));
   }
   applySnapshotToRuntime(snapshot, { forceWorld: worldChanged, keepPrediction: Boolean(options.keepPrediction) });
-  loadNode03State({ silent: true });
+  loadNode03State({ silent: true, force: options.forceWorld === true });
   loadNode04State({ silent: true });
   loadNode05State({ silent: true });
   maybeMarkMmoOnlineReady("http_snapshot");
@@ -8383,7 +11498,6 @@ async function loadSessionState(options = {}) {
 async function refreshState() {
   try {
     resetMmoDebugRuntimeState();
-    await resetPersistedMinimapFogDiscovery();
     await loadSessionState({ forceWorld: false, showLoading: true });
   } catch {
     clearMmoReadyTimeout();
@@ -8463,6 +11577,32 @@ function applyInstantTravelResponse(response) {
   return true;
 }
 
+function applyInstantRespawnResponse(response) {
+  if (!response || !response.position) return false;
+  const nextPosition = normalizeIncomingServerPosition({
+    position: Object.assign({}, response.position, {
+      teleport: true,
+      moving: false,
+      animationState: "idle",
+      velocityX: 0,
+      velocityZ: 0
+    })
+  }, "http-respawn");
+  if (!nextPosition) return false;
+  clearLocalMovementForTeleport();
+  applyAuthoritativeUpdate(nextPosition, { transport: "http-respawn", keepPrediction: false });
+  state.position = clonePosition(nextPosition);
+  state.predictedPosition = clonePosition(nextPosition);
+  state.authoritativePosition = clonePosition(nextPosition);
+  applyRuntimePosition(nextPosition, { immediate: true, animationState: "idle" });
+  refreshGameDefeatState({ sendStop: false });
+  refreshGameMinimapHud();
+  if (state.minimapHud.elements) state.minimapHud.dirty = true;
+  updateHud();
+  if (state.session && isMmoGameplayReady()) sendInputState({ force: true, stop: true, respawnStop: true });
+  return true;
+}
+
 async function sendInputStateViaHttp(inputStatePayload) {
   if (state.httpFallbackInFlight) return;
   state.httpFallbackInFlight = true;
@@ -8496,6 +11636,15 @@ async function sendInputStateViaHttp(inputStatePayload) {
 }
 
 function buildCurrentInputState(options = {}) {
+  if (isNode03Defeated()) {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      sprint: false,
+      pointerTarget: null,
+      stop: true
+    };
+  }
   const override = options.inputOverride && typeof options.inputOverride === "object" ? options.inputOverride : null;
   const stop = options.stop === true || override?.stop === true;
   const currentVector = override && Number.isFinite(Number(override.moveX)) && Number.isFinite(Number(override.moveZ))
@@ -8667,7 +11816,16 @@ function stepMovement(now) {
   state.lastFrameAt = now;
   const netSettings = mmoNetworkSettings();
 
+  if (isNode03Defeated()) {
+    const changed = state.playerDefeated !== true;
+    refreshGameDefeatState({ sendStop: false });
+    clearLocalMovementForDefeat({ sendStop: false });
+    if (changed) renderNode04Hud();
+    return;
+  }
+
   if (!hasMovementInput()) {
+    if (maybeRunPendingNode03TargetAction("idle")) return;
     if (state.lastAnimationState !== "idle") {
       clearMovementInput("movement-settled");
     }
@@ -8737,6 +11895,7 @@ function stepMovement(now) {
     }
     state.pointer.lastDistanceToTarget = remainingDistance;
     if (state.pointer.blockedSince && now - state.pointer.blockedSince >= CLICK_MOVE_BLOCKED_TIMEOUT_MS) {
+      if (maybeRunPendingNode03TargetAction("blocked")) return;
       clearMovementInput("click-target-blocked");
       return;
     }
@@ -8773,21 +11932,28 @@ function bindKeyboardControls() {
   window.addEventListener("keydown", function (event) {
     if (isEditableTarget(event.target)) return;
     const hotbarSlot = node03HotbarSlotIndexForKey(event.code);
+    const sprintKey = event.code === "ShiftLeft" || event.code === "ShiftRight";
+    const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
+      || event.code === "KeyS" || event.code === "ArrowDown"
+      || event.code === "KeyA" || event.code === "ArrowLeft"
+      || event.code === "KeyD" || event.code === "ArrowRight";
+    if (isNode03Defeated() && (hotbarSlot >= 0 || sprintKey || movementKey)) {
+      event.preventDefault();
+      clearLocalMovementForDefeat({ force: true, sendStop: true });
+      renderNode04Hud();
+      return;
+    }
     if (hotbarSlot >= 0 && triggerNode03HotbarSlot(hotbarSlot)) {
       event.preventDefault();
       return;
     }
-    if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
+    if (sprintKey) {
       event.preventDefault();
       if (!isMmoGameplayReady()) return;
       state.input.sprint = true;
       if (hasMovementInput()) sendInputState({ force: true });
       return;
     }
-    const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
-      || event.code === "KeyS" || event.code === "ArrowDown"
-      || event.code === "KeyA" || event.code === "ArrowLeft"
-      || event.code === "KeyD" || event.code === "ArrowRight";
     if (!movementKey) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
@@ -8803,6 +11969,17 @@ function bindKeyboardControls() {
     }
   });
   window.addEventListener("keyup", function (event) {
+    const sprintKey = event.code === "ShiftLeft" || event.code === "ShiftRight";
+    const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
+      || event.code === "KeyS" || event.code === "ArrowDown"
+      || event.code === "KeyA" || event.code === "ArrowLeft"
+      || event.code === "KeyD" || event.code === "ArrowRight";
+    if (isNode03Defeated() && (sprintKey || movementKey)) {
+      event.preventDefault();
+      clearLocalMovementForDefeat({ force: true, sendStop: true });
+      renderNode04Hud();
+      return;
+    }
     if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
       state.input.sprint = false;
       if (hasMovementInput()) sendInputState({ force: true });
@@ -8851,6 +12028,11 @@ function bindPointerControls() {
     if (event.pointerType !== "touch" && event.button !== 0) return;
     event.preventDefault();
     if (!isMmoGameplayReady()) return;
+    if (isNode03Defeated()) {
+      clearLocalMovementForDefeat({ force: true, sendStop: true });
+      renderNode04Hud();
+      return;
+    }
     // Second finger while the first is already driving movement: hold-to-sprint, the
     // touch equivalent of holding Shift. Mirrors the keyboard sprint handler below rather
     // than restarting click-to-move tracking with this finger's position.
@@ -8877,11 +12059,11 @@ function bindPointerControls() {
           targetId: pickedNode03Target.instanceId
         });
       } else {
-        selectNode03Target(pickedNode03Target.instanceId);
         runNode03Action(pickedNode03Target.action, pickedNode03Target.instanceId);
       }
       return;
     }
+    clearNode03PendingTargetAction();
     state.input.move_forward = false;
     state.input.move_back = false;
     state.input.move_left = false;
@@ -8912,6 +12094,11 @@ function bindPointerControls() {
   canvas.addEventListener("pointermove", function (event) {
     if (!state.pointer.active || event.pointerId !== state.pointer.pointerId) return;
     event.preventDefault();
+    if (isNode03Defeated()) {
+      clearLocalMovementForDefeat({ force: true, sendStop: true });
+      renderNode04Hud();
+      return;
+    }
     state.pointer.screenX = event.clientX;
     state.pointer.screenY = event.clientY;
     const deltaX = Math.abs(event.clientX - state.pointer.downX);
@@ -8924,6 +12111,12 @@ function bindPointerControls() {
     updatePointerTargetFromEvent(event);
   });
   const releasePointer = function (event) {
+    if (isNode03Defeated()) {
+      if (event) event.preventDefault();
+      clearLocalMovementForDefeat({ force: true, sendStop: true });
+      renderNode04Hud();
+      return;
+    }
     if (event && event.pointerId !== undefined && state.pointer.sprintPointerId !== null && event.pointerId === state.pointer.sprintPointerId) {
       event.preventDefault();
       state.pointer.sprintPointerId = null;

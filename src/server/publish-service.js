@@ -2159,6 +2159,88 @@ function buildMinimapBakeReadModel(node, groundNode) {
   };
 }
 
+const GAME_MINIMAP_MARKER_SOURCE_SET = new Set([
+  "users", "enemy", "boss", "wildlife", "npc", "quest", "spawn", "teleport",
+  "settlement", "crafting", "cooking", "vendor", "market", "resource", "item",
+  "object", "custom"
+]);
+const GAME_MINIMAP_MARKER_SHAPE_SET = new Set(["dot", "square", "diamond", "triangle", "cross", "star", "label"]);
+const GAME_MINIMAP_MARKER_ANIMATION_SET = new Set(["none", "pulse", "blink", "glow"]);
+
+function normalizeGameMinimapCategoryId(value, fallback) {
+  const raw = String(value || fallback || "custom").trim().toLowerCase();
+  const normalized = raw
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9_:-]+/g, "_")
+    .replace(/[.:]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback || "custom";
+}
+
+function normalizeGameMinimapMarkerCategory(raw, fallback = {}, index = 0) {
+  const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(String(raw?.source || fallback.source || ""))
+    ? String(raw?.source || fallback.source)
+    : "custom";
+  const id = normalizeGameMinimapCategoryId(raw?.id || raw?.categoryId || fallback.id || source, "category_" + (index + 1));
+  const shape = GAME_MINIMAP_MARKER_SHAPE_SET.has(String(raw?.shape || fallback.shape || ""))
+    ? String(raw?.shape || fallback.shape)
+    : "dot";
+  const animation = GAME_MINIMAP_MARKER_ANIMATION_SET.has(String(raw?.animation || fallback.animation || ""))
+    ? String(raw?.animation || fallback.animation)
+    : "none";
+  const color = /^#[0-9a-fA-F]{6}$/.test(String(raw?.color || fallback.color || ""))
+    ? String(raw?.color || fallback.color)
+    : "#ffffff";
+  return {
+    id,
+    label: stringOrFallback(raw?.label || fallback.label || id, id),
+    source,
+    enabled: raw?.enabled !== undefined ? raw.enabled !== false : fallback.enabled !== false,
+    color,
+    shape,
+    iconAssetId: stringOrFallback(raw?.iconAssetId || fallback.iconAssetId || "", "") || null,
+    showLabel: raw?.showLabel !== undefined ? raw.showLabel === true : fallback.showLabel === true,
+    clampOutside: raw?.clampOutside !== undefined ? raw.clampOutside === true : fallback.clampOutside === true,
+    showThroughFog: raw?.showThroughFog !== undefined ? raw.showThroughFog === true : fallback.showThroughFog === true,
+    iconSizePx: clampNumber(numberOrNull(raw?.iconSizePx ?? fallback.iconSizePx), 3, 64, 9),
+    fontSizePx: clampNumber(numberOrNull(raw?.fontSizePx ?? fallback.fontSizePx), 6, 32, 10),
+    nameMaxLength: clampNumber(numberOrNull(raw?.nameMaxLength ?? fallback.nameMaxLength), 3, 64, 14),
+    animation
+  };
+}
+
+function normalizeGameMinimapMarkerCategories(values, defaults, rawValues = {}) {
+  const defaultCategories = Array.isArray(defaults.markerCategories) ? defaults.markerCategories : [];
+  const rawCategories = Array.isArray(values.markerCategories) && values.markerCategories.length
+    ? values.markerCategories
+    : defaultCategories;
+  const legacyMode = !Array.isArray(rawValues.markerCategories);
+  const seen = new Set();
+  return rawCategories.map(function (category, index) {
+    const fallback = defaultCategories[index] || {};
+    const normalized = normalizeGameMinimapMarkerCategory(category, fallback, index);
+    if (legacyMode) {
+      if (normalized.source === "users") normalized.enabled = values.showLocalPlayer !== false || values.showRemotePlayers !== false;
+      if (normalized.source === "enemy") normalized.enabled = values.showEnemies === true;
+      if (normalized.source === "npc") normalized.enabled = values.showNpcEntities !== false;
+      if (normalized.source === "quest") normalized.enabled = values.showQuestMarkers === true;
+      if (normalized.source === "spawn") normalized.enabled = values.showSpawn === true;
+      if (normalized.source === "object") normalized.enabled = values.showInteractables === true;
+    }
+    if (!normalized.id || seen.has(normalized.id)) return null;
+    seen.add(normalized.id);
+    return normalized;
+  }).filter(Boolean);
+}
+
+function gameMinimapCategoryEnabled(categories, source) {
+  return categories.some(function (category) {
+    return category && category.source === source && category.enabled !== false;
+  });
+}
+
 function buildGameMinimapHudReadModel(node) {
   const defaults = defaultValuesForType("game_minimap_hud");
   const rawValues = node?.values || {};
@@ -2171,6 +2253,8 @@ function buildGameMinimapHudReadModel(node) {
   const saveIntervalMs = clampNumber(numberOrNull(values.saveIntervalMs), 250, 60000, defaults.saveIntervalMs);
   const movementThreshold = Math.max(1, Math.min(64, Math.floor(numberOrFallback(values.movementThreshold, defaults.movementThreshold))));
   const revealShape = ["circle", "roundedCells", "hardCells"].includes(values.revealShape) ? values.revealShape : defaults.revealShape;
+  const markerCategories = normalizeGameMinimapMarkerCategories(values, defaults, rawValues);
+  const runtimeTargetScope = values.runtimeTargetScope === "all_published_zones" ? "all_published_zones" : "current_zone";
   return {
     id: node.id,
     nodeId: node.id,
@@ -2183,6 +2267,8 @@ function buildGameMinimapHudReadModel(node) {
     borderRadiusPx: numberOrFallback(values.borderRadiusPx, defaults.borderRadiusPx),
     backgroundOpacity: numberOrFallback(values.backgroundOpacity, defaults.backgroundOpacity),
     markerUpdateMs: numberOrFallback(values.markerUpdateMs, defaults.markerUpdateMs),
+    markerCategories,
+    runtimeTargetScope,
     fogOfWar: {
       enabled: values.fogOfWarEnabled !== false,
       fogColor: values.fogColor || defaults.fogColor || "#05070a",
@@ -2210,18 +2296,18 @@ function buildGameMinimapHudReadModel(node) {
     allowZoom: values.allowZoom !== false,
     allowPan: values.allowPan !== false,
     allowPinchZoom: values.allowPinchZoom !== false,
-    showLocalPlayer: values.showLocalPlayer !== false,
-    showRemotePlayers: values.showRemotePlayers !== false,
+    showLocalPlayer: gameMinimapCategoryEnabled(markerCategories, "users"),
+    showRemotePlayers: gameMinimapCategoryEnabled(markerCategories, "users"),
     showRemotePlayerNames: values.showRemotePlayerNames !== false,
     showPlayerName: values.showPlayerName !== false,
-    showSpawn: values.showSpawn === true,
-    showNpcEntities: values.showNpcEntities !== false,
+    showSpawn: gameMinimapCategoryEnabled(markerCategories, "spawn"),
+    showNpcEntities: gameMinimapCategoryEnabled(markerCategories, "npc"),
     showNpcEntityNames: values.showNpcEntityNames === true,
     showScatterInstances: values.showScatterInstances === true,
     showScatterNames: values.showScatterNames === true,
-    showInteractables: values.showInteractables === true,
-    showQuestMarkers: values.showQuestMarkers === true,
-    showEnemies: values.showEnemies === true,
+    showInteractables: gameMinimapCategoryEnabled(markerCategories, "object"),
+    showQuestMarkers: gameMinimapCategoryEnabled(markerCategories, "quest"),
+    showEnemies: gameMinimapCategoryEnabled(markerCategories, "enemy") || gameMinimapCategoryEnabled(markerCategories, "boss") || gameMinimapCategoryEnabled(markerCategories, "wildlife"),
     showViewportCone: values.showViewportCone !== false,
     clampOutsideMarkers: values.clampOutsideMarkers !== false,
     iconSizePx: numberOrFallback(values.iconSizePx, defaults.iconSizePx),
@@ -2696,6 +2782,13 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   if (playerNode?.values.modelAssetId) assetIds.add(playerNode.values.modelAssetId);
   for (const node of modelEntityNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
   for (const node of interactableNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
+  for (const node of uiNodes) {
+    if (node?.type !== "game_minimap_hud") continue;
+    const markerCategories = Array.isArray(node.values?.markerCategories) ? node.values.markerCategories : [];
+    for (const category of markerCategories) {
+      if (category?.iconAssetId) assetIds.add(category.iconAssetId);
+    }
+  }
   const scatterAreas = [];
   const scatterEntities = [];
   const scatterCollisionBlockers = [];
@@ -2786,6 +2879,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
         label: node.values.label,
         type: "model",
         modelAssetId: node.values.modelAssetId,
+        minimapCategoryRef: stringOrFallback(node.values.minimapCategoryRef, ""),
         ...resolveCanonicalAnimationConfig(assetLookup.get(node.values.modelAssetId), node.values),
         solid: node.values.solid === true,
         walkable: node.values.walkable === true,
@@ -2808,9 +2902,10 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
         position: { x: numberOrNull(node.values.x), z: numberOrNull(node.values.z) },
         radius: numberOrNull(node.values.radius),
         modelAssetId: node.values.modelAssetId || null,
+        minimapCategoryRef: stringOrFallback(node.values.minimapCategoryRef, ""),
         action: {
-          type: node.values.actionType,
-          message: node.values.message || null,
+	          type: node.values.actionType,
+	          message: node.values.message || null,
           teleport: { x: numberOrNull(node.values.teleportX), z: numberOrNull(node.values.teleportZ) }
         }
       };
@@ -2877,6 +2972,7 @@ function buildZoneEntityReadModel(entity, assetLookup) {
     label: entity.label,
     type: "model",
     modelAssetId: entity.modelAssetId || null,
+    minimapCategoryRef: stringOrFallback(entity.minimapCategoryRef, ""),
     ...resolveCanonicalAnimationConfig(assetLookup.get(entity.modelAssetId), entity),
     solid: entity.solid === true,
     walkable: entity.walkable === true,

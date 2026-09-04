@@ -156,6 +156,28 @@ function defaultStepForAccept(quest) {
   return nextStepFor(quest, start) || start;
 }
 
+function questRepeatMode(quest) {
+  const mode = safeString(quest?.repeatMode || "once_per_character");
+  return ["repeatable", "daily", "weekly"].includes(mode) ? mode : "once_per_character";
+}
+
+function questCanRepeatNow(row, quest) {
+  const mode = questRepeatMode(quest);
+  if (mode === "repeatable") return true;
+  if (mode === "once_per_character") return false;
+  const completedAtMs = Date.parse(row?.completed_at || row?.completedAt || "");
+  if (!Number.isFinite(completedAtMs)) return true;
+  const delayMs = mode === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  return Date.now() - completedAtMs >= delayMs;
+}
+
+function questRepeatBlockedMessage(quest) {
+  const mode = questRepeatMode(quest);
+  if (mode === "daily") return "Quest is vandaag al voltooid.";
+  if (mode === "weekly") return "Quest is deze week al voltooid.";
+  return "Quest is al voltooid.";
+}
+
 function compareNumbers(left, comparison, right) {
   if (comparison === ">") return left > right;
   if (comparison === "==") return left === right;
@@ -229,6 +251,7 @@ export class Node04QuestRuntimeService {
       else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
       else if (action === "track") result = this.trackQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
       else if (action === "abandon") result = this.abandonQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+      else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
       else if (action === "reset_node04") result = this.resetNode04(ctx);
       else {
         const error = new Error("Onbekende NODE-04 actie.");
@@ -253,10 +276,23 @@ export class Node04QuestRuntimeService {
     const existingRows = this.loadQuestStateRows(ctx);
     const existing = new Map(existingRows.map(function (row) { return [row.quest_id, row]; }));
     for (const quest of allQuests(ctx.project)) {
+      if (!quest?.id) continue;
+      const row = existing.get(quest.id);
+      if (!row) continue;
+      if (this.shouldResetQuestForContentChange(row, quest)) {
+        this.resetQuestState(ctx, quest, null, "content_changed", { forceAvailable: false });
+        const refreshed = this.loadQuestState(ctx.profile.id, quest.id);
+        if (refreshed) existing.set(quest.id, refreshed);
+        else existing.delete(quest.id);
+      } else {
+        this.syncQuestContentHash(ctx, row, quest);
+      }
+    }
+    for (const quest of allQuests(ctx.project)) {
       if (!quest?.id || existing.has(quest.id)) continue;
       if (!this.questPrerequisitesMet(ctx, quest)) continue;
       this.insertQuestState(ctx, quest.id, QUEST_STATUS.AVAILABLE, null, quest.autoTrack === true ? 1 : 0, "available");
-      existing.set(quest.id, { quest_id: quest.id, status: QUEST_STATUS.AVAILABLE });
+      existing.set(quest.id, { quest_id: quest.id, status: QUEST_STATUS.AVAILABLE, state_json: this.questStateJson(ctx, quest) });
     }
   }
 
@@ -274,7 +310,7 @@ export class Node04QuestRuntimeService {
     const stamp = now();
     this.db.prepare(`
       INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, completed_at, claimed_at, revision, state_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, '{}', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       ON CONFLICT(player_id, quest_id) DO NOTHING
     `).run(
       ctx.profile.id,
@@ -284,9 +320,39 @@ export class Node04QuestRuntimeService {
       tracked ? 1 : 0,
       status === QUEST_STATUS.ACTIVE ? stamp : null,
       status === QUEST_STATUS.COMPLETED ? stamp : null,
+      this.questStateJson(ctx, questId),
       stamp
     );
     this.audit(ctx, questId, null, status, null, stepId || null, null, reason, {});
+  }
+
+  questStateJson(ctx, questId, extra = {}) {
+    const quest = typeof questId === "object" ? questId : questById(ctx.project, questId);
+    const payload = Object.assign({}, extra || {});
+    if (quest?.contentHash) payload.contentHash = quest.contentHash;
+    return stableJson(payload);
+  }
+
+  questStateContentHash(row) {
+    const state = safeJsonParse(row?.state_json || "{}", {});
+    return safeString(state?.contentHash || "");
+  }
+
+  shouldResetQuestForContentChange(row, quest) {
+    return quest?.resetOnContentChange === true
+      && Boolean(quest.contentHash)
+      && this.questStateContentHash(row) !== quest.contentHash;
+  }
+
+  syncQuestContentHash(ctx, row, quest) {
+    if (!row || !quest?.contentHash || this.questStateContentHash(row) === quest.contentHash) return;
+    const current = safeJsonParse(row.state_json || "{}", {});
+    const next = Object.assign({}, current && typeof current === "object" ? current : {}, { contentHash: quest.contentHash });
+    this.db.prepare(`
+      UPDATE player_quest_states
+      SET state_json = ?, updated_at = ?
+      WHERE player_id = ? AND quest_id = ?
+    `).run(stableJson(next), now(), ctx.profile.id, quest.id);
   }
 
   loadQuestStateRows(ctx) {
@@ -380,7 +446,12 @@ export class Node04QuestRuntimeService {
     }
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     if (row?.status === QUEST_STATUS.COMPLETED) {
-      return { message: "Quest is al voltooid.", events: [] };
+      if (!questCanRepeatNow(row, quest)) {
+        return { message: questRepeatBlockedMessage(quest), events: [] };
+      }
+      this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+      this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+      this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
     }
     if (row?.status === QUEST_STATUS.ACTIVE) {
       return { message: "Quest is al actief.", events: [] };
@@ -389,15 +460,18 @@ export class Node04QuestRuntimeService {
     const stamp = now();
     this.db.prepare(`
       INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, revision, state_json, updated_at)
-      VALUES (?, ?, 'active', ?, ?, ?, 1, '{}', ?)
+      VALUES (?, ?, 'active', ?, ?, ?, 1, ?, ?)
       ON CONFLICT(player_id, quest_id) DO UPDATE SET
         status = 'active',
         active_step_id = excluded.active_step_id,
         tracked = excluded.tracked,
         accepted_at = COALESCE(player_quest_states.accepted_at, excluded.accepted_at),
+        completed_at = NULL,
+        claimed_at = NULL,
         revision = player_quest_states.revision + 1,
+        state_json = excluded.state_json,
         updated_at = excluded.updated_at
-    `).run(ctx.profile.id, quest.id, step?.id || null, quest.autoTrack !== false ? 1 : 0, stamp, stamp);
+    `).run(ctx.profile.id, quest.id, step?.id || null, quest.autoTrack !== false ? 1 : 0, stamp, this.questStateJson(ctx, quest), stamp);
     this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.ACTIVE, row?.active_step_id || null, step?.id || null, operationId, reason, {});
     this.node03RuntimeService.recordGameplayEvent(ctx, "quest_accepted", "player", quest.id, { stepId: step?.id || null });
     return { message: "Quest accepted: " + (quest.displayName || quest.id), events: [{ type: "quest_accepted", questId: quest.id }] };
@@ -777,19 +851,26 @@ export class Node04QuestRuntimeService {
       const met = condition.mode === "any"
         ? results.some(function (result) { return result.met; })
         : results.every(function (result) { return result.met; });
-      return { met, message: met ? "" : (condition.failureText || "Condition group failed."), results };
+      return { conditionType: "group", met, message: met ? "" : (condition.failureText || "Condition group failed."), results };
     }
     if (condition.conditionType === "player_level") {
       const level = this.loadProgression(ctx).level;
       const met = compareNumbers(level, condition.comparison, safeInteger(condition.level, 1));
-      return { met, message: met ? "" : (condition.failureText || "Level " + condition.level + " nodig."), current: level, required: safeInteger(condition.level, 1) };
+      return {
+        conditionType: "player_level",
+        comparison: condition.comparison || ">=",
+        met,
+        message: met ? "" : (condition.failureText || "Level " + condition.level + " nodig."),
+        current: level,
+        required: safeInteger(condition.level, 1)
+      };
     }
     if (condition.conditionType === "has_item") {
       const amount = this.node03RuntimeService.ownedItemCount(ctx.profile.id, condition.itemRef);
       const required = Math.max(1, safeInteger(condition.amount, 1));
-      return { met: amount >= required, message: amount >= required ? "" : (condition.failureText || "Item nodig."), current: amount, required };
+      return { conditionType: "has_item", itemRef: condition.itemRef || null, met: amount >= required, message: amount >= required ? "" : (condition.failureText || "Item nodig."), current: amount, required };
     }
-    return { met: true, message: "" };
+    return { conditionType: condition.conditionType || "", met: true, message: "" };
   }
 
   evaluateStepProgress(ctx, quest, step) {
@@ -932,7 +1013,9 @@ export class Node04QuestRuntimeService {
 
   buildQuestSummary(ctx, quest, row) {
     if (!quest?.id || !row) return null;
-    const isActive = row.status === QUEST_STATUS.ACTIVE || row.status === QUEST_STATUS.READY_TO_TURN_IN;
+    const canRepeat = row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest);
+    const status = canRepeat ? QUEST_STATUS.AVAILABLE : row.status;
+    const isActive = status === QUEST_STATUS.ACTIVE || status === QUEST_STATUS.READY_TO_TURN_IN;
     const step = isActive ? (stepById(quest, row.active_step_id) || defaultStepForAccept(quest)) : null;
     const progress = isActive && step ? this.evaluateStepProgress(ctx, quest, step) : null;
     return {
@@ -940,7 +1023,9 @@ export class Node04QuestRuntimeService {
       displayName: quest.displayName || quest.id,
       summary: this.resolveTokenText(ctx, quest.summary || ""),
       description: this.resolveTokenText(ctx, quest.description || ""),
-      status: row.status,
+      status,
+      repeatMode: questRepeatMode(quest),
+      canRepeat,
       tracked: row.tracked === 1,
       activeStepId: step?.id || null,
       activeStep: step ? {
@@ -992,6 +1077,14 @@ export class Node04QuestRuntimeService {
   targetForActiveStep(ctx, trackedQuest) {
     const step = trackedQuest.activeStep;
     if (!step) return null;
+    const objectivesReady = (Array.isArray(step.objectives) ? step.objectives : []).every(function (objective) {
+      return objective?.complete !== false;
+    });
+    const levelGate = objectivesReady && step.conditionsMet === false ? this.failedPlayerLevelCondition(step.conditions) : null;
+    if (levelGate) {
+      const levelTarget = this.targetForLevelGate(ctx, trackedQuest, step, levelGate);
+      if (levelTarget) return levelTarget;
+    }
     const quest = questById(ctx.project, trackedQuest.questId);
     const compiledStep = stepById(quest, step.stepId);
     const objectiveTargetRef = step.objectives.find(function (objective) { return objective.targetRef; })?.targetRef || null;
@@ -1023,6 +1116,68 @@ export class Node04QuestRuntimeService {
       prompt,
       status: step.displayName || "quest target"
     });
+  }
+
+  failedPlayerLevelCondition(results) {
+    for (const result of Array.isArray(results) ? results : []) {
+      if (!result || typeof result !== "object") continue;
+      if (result.conditionType === "player_level" && result.met === false) return result;
+      const nested = this.failedPlayerLevelCondition(result.results);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  targetForLevelGate(ctx, trackedQuest, step, condition) {
+    const entities = this.node03RuntimeService.loadEntities(ctx);
+    const allEnemies = (Array.isArray(entities?.enemies) ? entities.enemies : []).filter(Boolean);
+    if (!allEnemies.length) return null;
+    const aliveEnemies = allEnemies.filter(function (enemy) {
+      return enemy.alive !== false && enemy.status !== "dead";
+    });
+    const enemies = aliveEnemies.length ? aliveEnemies : allEnemies;
+    const currentZoneId = safeString(ctx.zoneId, "");
+    const nearest = function (list) {
+      return list.slice().sort(function (left, right) {
+        return safeNumber(left.distance, Number.MAX_SAFE_INTEGER) - safeNumber(right.distance, Number.MAX_SAFE_INTEGER);
+      })[0] || null;
+    };
+    const enemy = nearest(enemies.filter(function (candidate) {
+      return safeString(candidate.zoneId, currentZoneId) === currentZoneId;
+    }));
+    if (enemy) return this.runtimeTargetFromLevelEnemy(ctx, trackedQuest, step, condition, enemy);
+    const otherZoneEnemy = nearest(enemies);
+    if (otherZoneEnemy && safeString(otherZoneEnemy.zoneId, "") && safeString(otherZoneEnemy.zoneId, "") !== currentZoneId) {
+      return this.travelTargetTowardZone(ctx, otherZoneEnemy.zoneId);
+    }
+    return null;
+  }
+
+  runtimeTargetFromLevelEnemy(ctx, trackedQuest, step, condition, enemy) {
+    const distance = positionDistance(ctx.position, enemy);
+    const required = Math.max(1, safeInteger(condition?.required, 1));
+    const range = Math.max(1, safeNumber(enemy?.interaction?.range, 2.8));
+    const radius = Math.max(0, safeNumber(enemy?.radius, 0.8));
+    return {
+      instanceId: "node04:" + trackedQuest.questId + ":" + step.stepId + ":level_enemy:" + safeString(enemy.instanceId, "enemy"),
+      entityKind: "quest",
+      targetKind: "quest",
+      action: "node04:move_marker",
+      questId: trackedQuest.questId,
+      displayName: "Level " + required + " halen",
+      prompt: "Zoek enemies",
+      status: enemy.alive === false || enemy.status === "dead" ? "Wacht op enemy respawn" : "Versla enemies voor level " + required,
+      available: true,
+      distance: distance === null ? null : round(distance),
+      range,
+      radius,
+      inRange: distance === null || distance <= range + radius,
+      x: safeNumber(enemy.x, 0),
+      y: safeNumber(enemy.y, 0),
+      z: safeNumber(enemy.z, 0),
+      targetId: enemy.instanceId,
+      zoneRef: enemy.zoneId || ctx.zoneId
+    };
   }
 
   travelTargetTowardZone(ctx, targetZoneId) {
@@ -1125,10 +1280,54 @@ export class Node04QuestRuntimeService {
   notificationText(ctx, row) {
     const quest = questById(ctx.project, row.quest_id);
     const name = quest?.displayName || row.quest_id;
+    if (row.reason === "manual_reset" || row.reason === "content_changed") return "Quest opnieuw beschikbaar: " + name;
     if (row.reason === "turn_in" || row.to_status === QUEST_STATUS.COMPLETED) return "Quest voltooid: " + name;
     if (row.to_status === QUEST_STATUS.ACTIVE) return "Quest actief: " + name;
     if (row.to_status === QUEST_STATUS.AVAILABLE) return "Quest beschikbaar: " + name;
     return name;
+  }
+
+  resetQuest(ctx, questId, operationId) {
+    const quest = questById(ctx.project, questId);
+    if (!quest) {
+      const error = new Error("Quest niet gevonden.");
+      error.status = 404;
+      throw error;
+    }
+    this.resetQuestState(ctx, quest, operationId, "manual_reset", { forceAvailable: true });
+    return {
+      message: "Quest opnieuw beschikbaar: " + (quest.displayName || quest.id),
+      events: [{ type: "quest_reset", questId: quest.id }]
+    };
+  }
+
+  resetQuestState(ctx, quest, operationId, reason, options = {}) {
+    const row = this.loadQuestState(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    if (options.forceAvailable !== true && !this.questPrerequisitesMet(ctx, quest)) {
+      this.db.prepare("DELETE FROM player_quest_states WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+      return;
+    }
+    const stamp = now();
+    this.db.prepare(`
+      INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, completed_at, claimed_at, revision, state_json, updated_at)
+      VALUES (?, ?, 'available', NULL, ?, NULL, NULL, NULL, 1, ?, ?)
+      ON CONFLICT(player_id, quest_id) DO UPDATE SET
+        status = 'available',
+        active_step_id = NULL,
+        tracked = excluded.tracked,
+        accepted_at = NULL,
+        completed_at = NULL,
+        claimed_at = NULL,
+        revision = player_quest_states.revision + 1,
+        state_json = excluded.state_json,
+        updated_at = excluded.updated_at
+    `).run(ctx.profile.id, quest.id, quest.autoTrack === true ? 1 : 0, this.questStateJson(ctx, quest), stamp);
+    this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.AVAILABLE, row?.active_step_id || null, null, operationId || null, reason, {
+      contentHash: quest.contentHash || null
+    });
   }
 
   resetNode04(ctx) {
