@@ -5,6 +5,7 @@ const HEALTH_STAT_ID = "stat.health";
 const MANA_STAT_ID = "stat.mana";
 const ARMOR_STAT_ID = "stat.armor";
 const ATTACK_POWER_STAT_ID = "stat.attack_power";
+const GOLD_CURRENCY_ID = "currency.gold";
 const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
 
@@ -92,6 +93,63 @@ function interactionHudConfig(project) {
   return uiModules(project).find(function (module) {
     return module && module.nodeType === "interaction_hud" && module.moduleId;
   }) || null;
+}
+
+function gameMinimapHudConfigs(project) {
+  const configs = uiModules(project).filter(function (module) {
+    return module && module.nodeType === "game_minimap_hud" && module.moduleId;
+  });
+  const ui = project?.ui || {};
+  if (Array.isArray(ui.minimap)) {
+    configs.push.apply(configs, ui.minimap.filter(Boolean));
+  } else if (ui.minimap && typeof ui.minimap === "object") {
+    configs.push(ui.minimap);
+  }
+  if (project?.legacyWorld?.minimap?.game) configs.push(project.legacyWorld.minimap.game);
+  return configs;
+}
+
+function runtimeTargetScope(project) {
+  const interactionHud = interactionHudConfig(project) || {};
+  const scopes = [interactionHud.runtimeTargetScope].concat(gameMinimapHudConfigs(project).map(function (config) {
+    return config?.runtimeTargetScope;
+  }));
+  if (scopes.some(function (scope) { return safeString(scope, "") === "all_published_zones"; })) return "all_published_zones";
+  return safeString(scopes.find(function (scope) { return safeString(scope, ""); }), "current_zone");
+}
+
+function usesAllPublishedZoneTargets(project) {
+  return runtimeTargetScope(project) === "all_published_zones";
+}
+
+function projectZonePackages(project) {
+  const zones = project?.zones || {};
+  const list = [];
+  if (Array.isArray(zones.packages)) list.push.apply(list, zones.packages);
+  if (zones.byId && typeof zones.byId === "object") list.push.apply(list, Object.values(zones.byId));
+  const seen = new Set();
+  return list.filter(function (zonePackage) {
+    const zoneId = safeString(zonePackage?.zoneId || zonePackage?.id, "");
+    if (!zoneId || seen.has(zoneId)) return false;
+    seen.add(zoneId);
+    return true;
+  });
+}
+
+function projectZonePackageById(project, zoneId) {
+  const id = safeString(zoneId, "");
+  if (!id) return null;
+  return project?.zones?.byId?.[id] || projectZonePackages(project).find(function (zonePackage) {
+    return safeString(zonePackage?.zoneId || zonePackage?.id, "") === id;
+  }) || null;
+}
+
+function node03InstanceZoneId(instanceId) {
+  const id = safeString(instanceId, "");
+  if (!id.startsWith(NODE03_INSTANCE_PREFIX)) return "";
+  const rest = id.slice(NODE03_INSTANCE_PREFIX.length);
+  const separatorIndex = rest.indexOf(":");
+  return separatorIndex > 0 ? rest.slice(0, separatorIndex) : "";
 }
 
 function formulaValue(formula, fallback = 0) {
@@ -282,10 +340,45 @@ export class Node03RuntimeService {
     return packages[0] || null;
   }
 
+  contextForZone(ctx, zonePackage) {
+    return Object.assign({}, ctx, {
+      zonePackage,
+      zoneId: safeString(zonePackage?.zoneId || zonePackage?.id, ctx.zoneId)
+    });
+  }
+
+  snapshotZoneContexts(ctx) {
+    if (!usesAllPublishedZoneTargets(ctx.project)) return [ctx];
+    const packages = projectZonePackages(ctx.project);
+    const currentZoneId = safeString(ctx.zoneId, "");
+    const hasCurrent = packages.some(function (zonePackage) {
+      return safeString(zonePackage?.zoneId || zonePackage?.id, "") === currentZoneId;
+    });
+    if (!hasCurrent && ctx.zonePackage?.zoneId) packages.push(ctx.zonePackage);
+    return packages.map((zonePackage) => this.contextForZone(ctx, zonePackage));
+  }
+
+  entityContextForInstance(ctx, instanceId) {
+    if (!usesAllPublishedZoneTargets(ctx.project)) return ctx;
+    const zoneId = node03InstanceZoneId(instanceId);
+    if (!zoneId || zoneId === ctx.zoneId) return ctx;
+    const zonePackage = projectZonePackageById(ctx.project, zoneId);
+    return zonePackage?.zoneId ? this.contextForZone(ctx, zonePackage) : ctx;
+  }
+
+  ensureSnapshotEntityState(ctx) {
+    for (const zoneCtx of this.snapshotZoneContexts(ctx)) this.ensureZoneEntityState(zoneCtx);
+  }
+
+  ensureActionEntityState(ctx, targetId) {
+    const entityCtx = this.entityContextForInstance(ctx, targetId);
+    this.ensureZoneEntityState(entityCtx);
+  }
+
   snapshotForRequest(req) {
     const ctx = this.getRequestContext(req);
     this.ensurePlayerRuntime(ctx);
-    this.ensureZoneEntityState(ctx);
+    this.ensureSnapshotEntityState(ctx);
     return this.buildSnapshot(ctx);
   }
 
@@ -312,8 +405,9 @@ export class Node03RuntimeService {
         VALUES (?, ?, ?, ?, 'started', ?)
       `).run(operationId, ctx.profile.id, action || "unknown", hash, stamp);
       this.ensurePlayerRuntime(ctx);
-      this.ensureZoneEntityState(ctx);
+      this.ensureActionEntityState(ctx, payload.targetId);
       const result = this.performAction(ctx, action, payload, operationId);
+      this.ensureSnapshotEntityState(ctx);
       const response = Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) });
       this.db.prepare(`
         UPDATE operation_idempotency
@@ -418,9 +512,22 @@ export class Node03RuntimeService {
     for (const grant of Array.isArray(character?.startingItemGrants) ? character.startingItemGrants : []) {
       const itemId = safeString(grant?.itemRef, "");
       const amount = Math.max(1, safeInteger(grant?.amount, 1));
-      if (!itemId || this.ownedItemCount(ctx.profile.id, itemId) > 0) continue;
+      if (!itemId || this.ownedItemCount(ctx.profile.id, itemId) > 0 || this.startingItemWasGranted(ctx.profile.id, itemId)) continue;
       this.grantItem(ctx, itemId, amount, "starting_character", "character");
     }
+  }
+
+  startingItemWasGranted(playerId, itemId) {
+    if (!playerId || !itemId) return false;
+    const row = this.db.prepare(`
+      SELECT id FROM economy_ledger
+      WHERE player_id = ?
+        AND asset_id = ?
+        AND reason = 'starting_character'
+        AND asset_kind IN ('item_stack', 'item_instance')
+      LIMIT 1
+    `).get(playerId, itemId);
+    return Boolean(row);
   }
 
   ensureAbilityLoadout(ctx, character) {
@@ -548,6 +655,7 @@ export class Node03RuntimeService {
       result.push({
         version: 1,
         instanceId,
+        zoneId: ctx.zoneId,
         entityKind: "enemy",
         targetKind: "enemy",
         nodeType: spawn.nodeType,
@@ -587,6 +695,7 @@ export class Node03RuntimeService {
       result.push({
         version: 1,
         instanceId,
+        zoneId: ctx.zoneId,
         entityKind: "resource",
         targetKind: "resource",
         nodeType: spawn.nodeType,
@@ -618,6 +727,7 @@ export class Node03RuntimeService {
     return {
       version: 1,
       instanceId,
+      zoneId: ctx.zoneId,
       entityKind: "pickup",
       targetKind: "pickup",
       nodeType: spawn.nodeType,
@@ -681,6 +791,8 @@ export class Node03RuntimeService {
     if (action === "reset_demo" || action === "reset") return this.resetDemo(ctx, operationId);
     if (action === "debug_inventory_add" || action === "inventory_add") return this.debugAdjustInventory(ctx, payload, operationId, 1);
     if (action === "debug_inventory_remove" || action === "inventory_remove") return this.debugAdjustInventory(ctx, payload, operationId, -1);
+    if (action === "debug_inventory_cleanup" || action === "inventory_cleanup") return this.debugCleanupInventory(ctx, operationId);
+    if (action === "debug_level_reset" || action === "level_reset") return this.debugResetLevel(ctx, operationId);
     if (action === "debug_currency_add" || action === "currency_add") return this.debugAdjustCurrency(ctx, payload, operationId, 1);
     if (action === "debug_currency_remove" || action === "currency_remove") return this.debugAdjustCurrency(ctx, payload, operationId, -1);
     if (this.isPlayerDead(ctx)) {
@@ -713,6 +825,94 @@ export class Node03RuntimeService {
     return { action: "debug_inventory_remove", removed, message: "-" + removed + " " + displayForItem(ctx.catalogs, itemId) };
   }
 
+  debugCleanupInventory(ctx, operationId) {
+    const stamp = now();
+    const stacks = this.db.prepare(`
+      SELECT * FROM player_inventory_stacks
+      WHERE player_id = ? AND quantity > 0
+      ORDER BY updated_at ASC
+    `).all(ctx.profile.id);
+    let removedStackCount = 0;
+    let removedStackQuantity = 0;
+    for (const stack of stacks) {
+      const before = safeInteger(stack.quantity, 0);
+      if (before <= 0) continue;
+      this.db.prepare(`
+        UPDATE player_inventory_stacks
+        SET quantity = 0, revision = revision + 1, updated_at = ?
+        WHERE stack_id = ?
+      `).run(stamp, stack.stack_id);
+      this.recordLedger(operationId, ctx.profile.id, "item_stack", stack.item_id, -before, before, 0, "hud_debug_inventory_cleanup", "debug_hud");
+      removedStackCount += 1;
+      removedStackQuantity += before;
+    }
+
+    const instances = this.db.prepare(`
+      SELECT * FROM player_item_instances
+      WHERE player_id = ? AND location_type = 'inventory'
+      ORDER BY updated_at ASC
+    `).all(ctx.profile.id);
+    for (const instance of instances) {
+      this.db.prepare(`
+        UPDATE player_item_instances
+        SET location_type = 'deleted', location_ref = NULL, locked_by_operation_id = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ?
+      `).run(operationId, stamp, instance.id);
+      this.recordLedger(operationId, ctx.profile.id, "item_instance", instance.item_id, -1, 1, 0, "hud_debug_inventory_cleanup", "debug_hud");
+    }
+
+    const gold = this.db.prepare("SELECT amount_minor FROM player_currencies WHERE player_id = ? AND currency_id = ? LIMIT 1")
+      .get(ctx.profile.id, GOLD_CURRENCY_ID);
+    const removedGold = Math.max(0, safeInteger(gold?.amount_minor, 0));
+    if (removedGold > 0) {
+      this.db.prepare(`
+        UPDATE player_currencies
+        SET amount_minor = 0, revision = revision + 1, updated_at = ?
+        WHERE player_id = ? AND currency_id = ?
+      `).run(stamp, ctx.profile.id, GOLD_CURRENCY_ID);
+      this.recordLedger(operationId, ctx.profile.id, "currency", GOLD_CURRENCY_ID, -removedGold, removedGold, 0, "hud_debug_inventory_cleanup", "debug_hud");
+    }
+
+    const removedItemCount = removedStackQuantity + instances.length;
+    return {
+      action: "debug_inventory_cleanup",
+      removedStackCount,
+      removedInstanceCount: instances.length,
+      removedItemCount,
+      removedGold,
+      message: removedItemCount > 0 || removedGold > 0
+        ? "Inventory leeggemaakt: " + removedItemCount + " item(s), " + removedGold + " gold."
+        : "Inventory en gold waren al leeg."
+    };
+  }
+
+  debugResetLevel(ctx, operationId) {
+    const row = this.db.prepare("SELECT * FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id) || {};
+    const beforeLevel = Math.max(1, safeInteger(row.level, 1));
+    const beforeXp = Math.max(0, safeInteger(row.xp, 0));
+    const beforeSkillPoints = Math.max(0, safeInteger(row.skill_points, 0));
+    this.db.prepare(`
+      UPDATE player_progression
+      SET level = 1, xp = 0, skill_points = 0, revision = revision + 1, updated_at = ?
+      WHERE player_id = ?
+    `).run(now(), ctx.profile.id);
+    if (beforeXp > 0) {
+      this.recordLedger(operationId, ctx.profile.id, "xp", "xp", -beforeXp, beforeXp, 0, "hud_debug_level_reset", "debug_hud");
+    }
+    return {
+      action: "debug_level_reset",
+      beforeLevel,
+      beforeXp,
+      beforeSkillPoints,
+      level: 1,
+      xp: 0,
+      skillPoints: 0,
+      message: beforeLevel > 1 || beforeXp > 0 || beforeSkillPoints > 0
+        ? "Level gereset naar 1."
+        : "Level stond al op 1."
+    };
+  }
+
   debugAdjustCurrency(ctx, payload, operationId, direction) {
     const currencyId = safeString(payload.currencyId || payload.currency_id, "");
     const amount = Math.max(1, safeInteger(payload.amount || payload.amountMinor || payload.quantity, 1));
@@ -737,21 +937,24 @@ export class Node03RuntimeService {
   }
 
   getEntityState(ctx, instanceId) {
+    const entityCtx = this.entityContextForInstance(ctx, instanceId);
     const row = this.db.prepare(`
       SELECT * FROM world_entity_state
       WHERE world_id = ? AND zone_id = ? AND instance_id = ?
       LIMIT 1
-    `).get(ctx.worldId, ctx.zoneId, instanceId);
+    `).get(entityCtx.worldId, entityCtx.zoneId, instanceId);
     if (!row) return null;
-    return { row, state: safeJsonParse(row.state_json, {}) || {} };
+    const state = safeJsonParse(row.state_json, {}) || {};
+    return { row, zoneId: entityCtx.zoneId, state: Object.assign({ zoneId: entityCtx.zoneId }, state) };
   }
 
   saveEntityState(ctx, entity) {
+    const zoneId = safeString(entity?.zoneId || node03InstanceZoneId(entity?.instanceId), ctx.zoneId);
     this.db.prepare(`
       UPDATE world_entity_state
       SET state_json = ?, revision = revision + 1, updated_at = ?
       WHERE world_id = ? AND zone_id = ? AND instance_id = ?
-    `).run(stableJson(entity), now(), ctx.worldId, ctx.zoneId, entity.instanceId);
+    `).run(stableJson(entity), now(), ctx.worldId, zoneId, entity.instanceId);
   }
 
   assertInRange(ctx, entity, action) {
@@ -842,7 +1045,21 @@ export class Node03RuntimeService {
       WHERE player_id = ? AND stat_id = ?
     `).run(after, now(), ctx.profile.id, HEALTH_STAT_ID);
     this.recordLedger(operationId, ctx.profile.id, "stat", HEALTH_STAT_ID, -damage, before, after, "enemy_retaliation", enemy.instanceId);
-    if (after <= 0) this.recordGameplayEvent(ctx, "player_defeated", enemy.instanceId, "player", { damage });
+    if (after <= 0) {
+      this.recordGameplayEvent(ctx, "player_defeated", enemy.instanceId, "player", { damage });
+      if (this.mmoService && typeof this.mmoService.setPlayerDefeatedForMovement === "function") {
+        this.mmoService.setPlayerDefeatedForMovement(ctx.profile.id, true);
+      }
+      if (this.mmoService && typeof this.mmoService.stopPlayerMovementState === "function") {
+        const stopped = this.mmoService.stopPlayerMovementState({
+          user: ctx.sessionContext.user,
+          session: ctx.sessionContext.session,
+          player: ctx.profile,
+          worldId: ctx.worldId
+        }, ctx.profile, ctx.worldId, ctx.position, {}, { forceRevision: true });
+        if (stopped) ctx.position = stopped;
+      }
+    }
     return { type: "retaliation", amount: damage, sourceId: enemy.instanceId, remainingHealth: after };
   }
 
@@ -960,13 +1177,16 @@ export class Node03RuntimeService {
     }
     const row = this.db.prepare("SELECT * FROM player_positions WHERE player_id = ? AND world_id = ? LIMIT 1").get(ctx.profile.id, ctx.worldId);
     const normalized = this.mmoService.normalizePositionRecord(row, ctx.sessionContext, ctx.worldId);
-    ctx.position = normalized;
+    const stopped = this.mmoService && typeof this.mmoService.resetPlayerMovementAfterRespawn === "function"
+      ? this.mmoService.resetPlayerMovementAfterRespawn(ctx.profile.id, ctx.worldId, ctx.sessionContext, normalized)
+      : null;
+    ctx.position = stopped || normalized;
     this.ensureZoneEntityState(ctx);
     this.recordGameplayEvent(ctx, "node03_demo_reset", "player", null, { zoneId: ctx.zoneId });
     return {
       action: "reset_demo",
       message: "NODE-03 demo reset.",
-      position: this.mmoService.publicPositionForPlayer(normalized, ctx.sessionContext.session, ctx.worldId),
+      position: this.mmoService.publicPositionForPlayer(ctx.position, ctx.sessionContext.session, ctx.worldId),
       events: [{ type: "reset", zoneId: ctx.zoneId }],
       grants: []
     };
@@ -1344,19 +1564,25 @@ export class Node03RuntimeService {
   }
 
   loadEntities(ctx) {
-    const rows = this.db.prepare(`
+    const all = [];
+    const statement = this.db.prepare(`
       SELECT * FROM world_entity_state
       WHERE world_id = ? AND zone_id = ? AND instance_id LIKE ?
       ORDER BY instance_id ASC
-    `).all(ctx.worldId, ctx.zoneId, NODE03_INSTANCE_PREFIX + "%");
-    const all = rows.map((row) => {
-      const entity = safeJsonParse(row.state_json, {}) || {};
-      const distance = positionDistance(ctx.position, entity);
-      return Object.assign({}, entity, {
-        revision: safeInteger(row.revision, 1),
-        distance: distance === null ? null : round(distance)
-      });
-    });
+    `);
+    for (const zoneCtx of this.snapshotZoneContexts(ctx)) {
+      const rows = statement.all(zoneCtx.worldId, zoneCtx.zoneId, NODE03_INSTANCE_PREFIX + "%");
+      for (const row of rows) {
+        const entity = safeJsonParse(row.state_json, {}) || {};
+        const distance = positionDistance(ctx.position, entity);
+        all.push(Object.assign({}, entity, {
+          zoneId: zoneCtx.zoneId,
+          zoneName: zoneCtx.zonePackage?.zone?.displayName || zoneCtx.zoneId,
+          revision: safeInteger(row.revision, 1),
+          distance: distance === null ? null : round(distance)
+        }));
+      }
+    }
     return {
       all,
       enemies: all.filter(function (entity) { return entity.entityKind === "enemy"; }),

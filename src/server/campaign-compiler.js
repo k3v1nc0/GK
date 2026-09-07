@@ -30,6 +30,16 @@ function contentHashFor(value) {
   return "sha256:" + crypto.createHash("sha256").update(canonicalJsonStringify(value)).digest("hex");
 }
 
+function refreshContentHash(record) {
+  if (!record) return record;
+  record.contentHash = contentHashFor(Object.assign({}, record, {
+    nodeId: undefined,
+    nodeType: undefined,
+    contentHash: undefined
+  }));
+  return record;
+}
+
 function nodeMapForGraph(graph) {
   return new Map((Array.isArray(graph?.nodes) ? graph.nodes : []).map(function (node) {
     return [node.id, node];
@@ -142,12 +152,7 @@ function baseRecord(node, idField) {
     displayName: safeString(raw.displayName || raw.label || raw[idField] || id),
     tags: normalizeTagList(raw.tags)
   });
-  record.contentHash = contentHashFor(Object.assign({}, record, {
-    nodeId: undefined,
-    nodeType: undefined,
-    contentHash: undefined
-  }));
-  return record;
+  return refreshContentHash(record);
 }
 
 function typeFromObjectiveNode(type) {
@@ -263,6 +268,7 @@ function buildQuest(graph, node, nodeMap) {
     return normalizeCanonicalId(questNode?.values?.questId, "");
   }).filter(Boolean);
   const dialogueNode = firstIncomingNode(graph, node, "startDialogue", nodeMap);
+  const dialogue = dialogueNode ? buildDialogue(graph, dialogueNode, nodeMap) : null;
   record.steps = steps;
   record.stepsById = Object.fromEntries(steps.map(function (step) { return [step.id, step]; }));
   record.startStepRef = normalizeCanonicalId(record.startStepRef, "") || steps[0]?.id || null;
@@ -273,10 +279,11 @@ function buildQuest(graph, node, nodeMap) {
     return buildCondition(graph, conditionNode, nodeMap);
   }).filter(Boolean);
   record.startDialogueRef = normalizeCanonicalId(dialogueNode?.values?.dialogueId, "") || record.startDialogueRef || null;
+  record.startDialogueContentHash = dialogue?.contentHash || null;
   record.prerequisiteQuestRefs = normalizeReferenceList(record.prerequisiteQuestRefs);
   record.nextQuestRefs = Array.from(new Set(normalizeReferenceList(record.nextQuestRefs).concat(unlockRefs)));
   record.autoTrack = record.autoTrack !== false;
-  return record;
+  return refreshContentHash(record);
 }
 
 function buildChapter(graph, node, nodeMap) {
@@ -346,7 +353,7 @@ function buildDialogue(graph, node, nodeMap) {
   record.entries = entries;
   record.entriesById = Object.fromEntries(entries.map(function (entry) { return [entry.id, entry]; }));
   record.startEntryRef = normalizeCanonicalId(record.startEntryRef, "") || entries[0]?.id || null;
-  return record;
+  return refreshContentHash(record);
 }
 
 function campaignOutputNodesForRegistry(graph, registryNode, nodeMap) {

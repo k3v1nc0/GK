@@ -13,6 +13,8 @@ const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
 const WORLD_SNAPSHOT_HZ = Math.max(1, Number(process.env.GAME_WORLD_SNAPSHOT_HZ || 20));
+const HEALTH_STAT_ID = "stat.health";
+const DEFEATED_INPUT_CACHE_MS = 500;
 // FIX: input blijft geldig zolang de verbinding van de speler leeft.
 // 0 = geen time-out (aanbevolen; closeConnection stopt beweging al bij disconnect).
 // > 0 = extra vangnet: stop toch na zoveel ms zonder nieuw input-bericht.
@@ -180,6 +182,7 @@ const DEFAULT_FOG_CONFIG = {
   heightThreshold: 0
 };
 const FOG_CELL_KEY_PATTERN = /^-?\d+:-?\d+$/;
+const FOG_CLIENT_DISCOVERY_MAX_KEYS = 50000;
 
 function normalizeFogConfig(world) {
   const raw = world?.minimap?.game?.fogOfWar || null;
@@ -237,14 +240,31 @@ function parseFogCellKey(cellKey) {
   return { x: Math.floor(Number(parts[0]) || 0), z: Math.floor(Number(parts[1]) || 0), key: value };
 }
 
+function normalizeFogCellKeys(cellKeys, maxKeys = FOG_CLIENT_DISCOVERY_MAX_KEYS) {
+  const source = Array.isArray(cellKeys) ? cellKeys : [];
+  const limit = clamp(Math.floor(num(maxKeys, FOG_CLIENT_DISCOVERY_MAX_KEYS)), 0, FOG_CLIENT_DISCOVERY_MAX_KEYS);
+  const keys = [];
+  const seen = new Set();
+  for (const cellKey of source) {
+    if (keys.length >= limit) break;
+    const parsed = parseFogCellKey(cellKey);
+    if (!parsed || seen.has(parsed.key)) continue;
+    seen.add(parsed.key);
+    keys.push(parsed.key);
+  }
+  return keys;
+}
+
 function movementRevealCellsForPosition(position, config) {
   const center = fogCellForPosition(position, config);
   const radius = Math.max(0, Math.floor(num(config?.revealRadius, DEFAULT_FOG_CONFIG.revealRadius)));
+  const shape = config?.revealShape || DEFAULT_FOG_CONFIG.revealShape;
   const keys = [];
-  const radiusSq = radius * radius;
+  const radiusWithFeather = radius + 0.35;
+  const radiusSq = radiusWithFeather * radiusWithFeather;
   for (let dz = -radius; dz <= radius; dz += 1) {
     for (let dx = -radius; dx <= radius; dx += 1) {
-      if (radius > 0 && (dx * dx) + (dz * dz) > radiusSq) continue;
+      if (shape === "circle" && (dx * dx) + (dz * dz) > radiusSq) continue;
       keys.push(fogCellKey(center.x + dx, center.z + dz));
     }
   }
@@ -379,6 +399,60 @@ function zonePackageForWorld(world, zoneId) {
   const targetZoneId = String(zoneId || "").trim();
   if (!targetZoneId) return world?.zonePackage || null;
   return world?.gameProject?.zones?.byId?.[targetZoneId] || world?.zones?.byId?.[targetZoneId] || null;
+}
+
+function zoneBoundsForPackage(zonePackage) {
+  const bounds = zonePackage?.zone?.bounds || zonePackage?.bounds || zonePackage?.ground?.bounds || null;
+  if (!bounds) return null;
+  const minX = Number(bounds.minX);
+  const maxX = Number(bounds.maxX);
+  const minZ = Number(bounds.minZ);
+  const maxZ = Number(bounds.maxZ);
+  if (![minX, maxX, minZ, maxZ].every(Number.isFinite)) return null;
+  return {
+    minX: Math.min(minX, maxX),
+    maxX: Math.max(minX, maxX),
+    minZ: Math.min(minZ, maxZ),
+    maxZ: Math.max(minZ, maxZ)
+  };
+}
+
+function pointInZonePackage(zonePackage, x, z, padding = 0) {
+  const bounds = zoneBoundsForPackage(zonePackage);
+  if (!bounds) return false;
+  const px = Number(x);
+  const pz = Number(z);
+  const pad = Math.max(0, Number(padding) || 0);
+  return Number.isFinite(px) && Number.isFinite(pz)
+    && px >= bounds.minX - pad && px <= bounds.maxX + pad
+    && pz >= bounds.minZ - pad && pz <= bounds.maxZ + pad;
+}
+
+function zonePackageForPosition(world, position, currentZoneId = null) {
+  const x = Number(position?.x);
+  const z = Number(position?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const current = zonePackageForWorld(world, currentZoneId);
+  if (current && pointInZonePackage(current, x, z, 0.001)) return current;
+  const packages = Array.isArray(world?.gameProject?.zones?.packages)
+    ? world.gameProject.zones.packages
+    : (Array.isArray(world?.zones?.packages) ? world.zones.packages : []);
+  return packages.find(function (zonePackage) {
+    return zonePackage?.zoneId && String(zonePackage.zoneId) !== String(currentZoneId || "") && pointInZonePackage(zonePackage, x, z, 0);
+  }) || null;
+}
+
+function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
+  const index = worldContext?.walkabilityIndex || null;
+  if (!index || !pointerTarget) return index;
+  const currentZoneId = state?.current_zone_id || activeZoneIdForWorld(worldContext.world);
+  const targetZonePackage = zonePackageForPosition(worldContext.world, pointerTarget, currentZoneId);
+  if (!targetZonePackage?.zoneId || String(targetZonePackage.zoneId) === String(currentZoneId || "")) return index;
+  if (!Array.isArray(index.surfaceBlockers) || index.surfaceBlockers.length === 0) return index;
+  if (!worldContext.crossZoneWalkabilityIndex) {
+    worldContext.crossZoneWalkabilityIndex = Object.assign({}, index, { surfaceBlockers: [] });
+  }
+  return worldContext.crossZoneWalkabilityIndex;
 }
 
 function defaultSpawnForZone(zonePackage) {
@@ -653,6 +727,7 @@ export class MmoService {
     this.persistTimers = new Map();
     this.lastPersistAtMsByKey = new Map();
     this.latestInputByPlayerId = new Map();
+    this.playerDefeatStateByPlayerId = new Map();
     this.dirtyPlayerIdsByWorldId = new Map();
     this.lastWorldSnapshotAtMsByWorldId = new Map();
     this.lastInputSeqByClientSessionId = new Map();
@@ -823,10 +898,7 @@ export class MmoService {
   }
 
   insertFogDiscoveryCells(playerId, worldId, mapLayer, cellKeys, discoveryType = "movement", sourceAreaId = null) {
-    const keys = Array.from(new Set((Array.isArray(cellKeys) ? cellKeys : []).map(function (cellKey) {
-      const parsed = parseFogCellKey(cellKey);
-      return parsed ? parsed.key : null;
-    }).filter(Boolean)));
+    const keys = normalizeFogCellKeys(cellKeys);
     if (!playerId || !worldId || !keys.length) return [];
     const discoveredAt = now();
     const insert = this.db.prepare(
@@ -1021,9 +1093,37 @@ export class MmoService {
       reason: payload?.reason || "movement",
       broadcast: false
     });
+    const payloadMapLayer = String(payload?.mapLayer || payload?.map_layer || mapLayer || "overworld");
+    const clientCellKeys = payloadMapLayer === mapLayer
+      ? normalizeFogCellKeys(payload?.discoveredCellKeys || payload?.discovered_cell_keys || payload?.clientDiscoveredCellKeys || [])
+      : [];
+    const clientInserted = result.enabled === true
+      ? this.insertFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer, clientCellKeys, "client", null)
+      : [];
+    const newlyDiscoveredCellKeys = Array.from(new Set([].concat(result.newlyDiscoveredCellKeys || [], clientInserted)));
+    const discoveredCount = result.enabled === true
+      ? this.countFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer)
+      : 0;
+    if (clientInserted.length && profile.user_id) {
+      const eventPayload = {
+        ok: true,
+        type: "fog:discovery",
+        worldId: worldContext.worldId,
+        playerId: profile.id,
+        mapLayer: mapLayer,
+        newlyDiscoveredCellKeys: clientInserted,
+        discoveredCount: discoveredCount,
+        movementCellKey: result.movementCellKey || null,
+        areaReveals: result.areaReveals || [],
+        config: config
+      };
+      this.broadcastToUser(profile.user_id, eventMessage("fog:discovery", eventPayload, this.stampServerPayload(worldContext.worldId, eventPayload)));
+    }
     return Object.assign({}, result, {
+      newlyDiscoveredCellKeys: newlyDiscoveredCellKeys,
+      discoveredCount: discoveredCount,
       discoveredCellKeys: payload?.includeAll === true && result.enabled
-        ? this.listFogDiscoveryCells(profile.id, worldContext.worldId, result.mapLayer || "overworld")
+        ? this.listFogDiscoveryCells(profile.id, worldContext.worldId, mapLayer)
         : undefined
     });
   }
@@ -1041,11 +1141,14 @@ export class MmoService {
   ensurePlayerProfile(user, worldContext) {
     const existing = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? LIMIT 1").get(user.id);
     const currentWorldId = worldContext.worldId;
-    const currentZoneId = activeZoneIdForWorld(worldContext.world);
+    const defaultZoneId = activeZoneIdForWorld(worldContext.world);
     const displayName = String(existing?.display_name || user.username || "player").trim() || "player";
     const selectedCharacterId = existing?.selected_character_id || null;
     const nowIso = now();
     if (existing) {
+      const currentZoneId = existing.current_world_id === currentWorldId
+        ? (existing.current_zone_id || defaultZoneId)
+        : defaultZoneId;
       if (existing.current_world_id !== currentWorldId || existing.current_zone_id !== currentZoneId || existing.display_name !== displayName) {
         this.db.prepare("UPDATE player_profiles SET display_name = ?, selected_character_id = ?, current_world_id = ?, current_zone_id = ?, updated_at = ? WHERE id = ?")
           .run(displayName, selectedCharacterId, currentWorldId, currentZoneId, nowIso, existing.id);
@@ -1055,7 +1158,7 @@ export class MmoService {
     }
     const profileId = "player_" + crypto.randomUUID();
     this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, current_zone_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(profileId, user.id, displayName, null, currentWorldId, currentZoneId, nowIso, nowIso);
+      .run(profileId, user.id, displayName, null, currentWorldId, defaultZoneId, nowIso, nowIso);
     return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(profileId);
   }
 
@@ -1070,17 +1173,47 @@ export class MmoService {
     return profile;
   }
 
+  syncPlayerProfileZone(profile, worldId, zoneId) {
+    if (!profile || !worldId || !zoneId) return;
+    if (profile.current_world_id === worldId && profile.current_zone_id === zoneId) return;
+    profile.current_world_id = worldId;
+    profile.current_zone_id = zoneId;
+    profile.updated_at = now();
+    this.db.prepare("UPDATE player_profiles SET current_world_id = ?, current_zone_id = ?, updated_at = ? WHERE id = ?")
+      .run(worldId, zoneId, profile.updated_at, profile.id);
+  }
+
+  alignPositionZoneWithBounds(profile, worldContext, position, sessionContext = null, options = {}) {
+    if (!position || !worldContext?.world) return position;
+    const currentZoneId = position.current_zone_id || activeZoneIdForWorld(worldContext.world);
+    const zonePackage = zonePackageForPosition(worldContext.world, position, currentZoneId);
+    if (!zonePackage?.zoneId || zonePackage.zoneId === position.current_zone_id) return position;
+    const session = sessionContext?.session || sessionContext || null;
+    position.current_zone_id = zonePackage.zoneId;
+    position.current_spawn_id = null;
+    position.revision = (Number(position.revision) || 0) + 1;
+    position.updated_at = now();
+    position.updated_at_ms = nowMs();
+    position.last_update_source_session_id = session?.id || position.last_update_source_session_id || null;
+    position.teleport = false;
+    this.playerStateCache.set(this.getPlayerStateCacheKey(position.player_id, position.world_id), position);
+    this.syncPlayerProfileZone(profile, worldContext.worldId, zonePackage.zoneId);
+    if (options.markDirty !== false) this.markPlayerDirty(position.world_id, position.player_id);
+    if (options.persist !== false) this.schedulePersist(position, null, options.immediate === true);
+    return position;
+  }
+
   ensurePlayerPosition(profile, worldContext, sessionContext) {
     const worldId = worldContext.worldId;
     const cacheKey = positionKey(profile.id, worldId);
     const cached = this.playerStateCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) return this.alignPositionZoneWithBounds(profile, worldContext, cached, sessionContext);
     const existing = this.db.prepare("SELECT * FROM player_positions WHERE player_id = ? AND world_id = ? LIMIT 1")
       .get(profile.id, worldId);
     if (existing) {
       const normalized = this.normalizePositionRecord(existing, sessionContext, worldId);
       this.playerStateCache.set(cacheKey, normalized);
-      return normalized;
+      return this.alignPositionZoneWithBounds(profile, worldContext, normalized, sessionContext, { immediate: true });
     }
     const spawn = spawnFromWorld(worldContext.world);
     const currentZoneId = spawn.zoneId || activeZoneIdForWorld(worldContext.world);
@@ -1480,6 +1613,9 @@ export class MmoService {
     if (!state) return null;
     return {
       playerId: state.player_id,
+      worldId: state.world_id || null,
+      zoneId: state.current_zone_id || null,
+      spawnId: state.current_spawn_id || null,
       x: round(state.x),
       y: round(state.y),
       z: round(state.z),
@@ -1574,6 +1710,138 @@ export class MmoService {
     return positionKey(playerId, worldId);
   }
 
+  setPlayerDefeatedForMovement(playerId, defeated) {
+    const id = String(playerId || "").trim();
+    if (!id) return;
+    this.playerDefeatStateByPlayerId.set(id, {
+      defeated: defeated === true,
+      checkedAtMs: nowMs()
+    });
+  }
+
+  isPlayerDefeatedForMovement(playerId) {
+    const id = String(playerId || "").trim();
+    if (!id) return false;
+    const cached = this.playerDefeatStateByPlayerId.get(id) || null;
+    const currentTime = nowMs();
+    if (cached && currentTime - Number(cached.checkedAtMs || 0) < DEFEATED_INPUT_CACHE_MS) {
+      return cached.defeated === true;
+    }
+    const row = this.db.prepare("SELECT current_value FROM player_stats WHERE player_id = ? AND stat_id = ? LIMIT 1")
+      .get(id, HEALTH_STAT_ID);
+    const defeated = Boolean(row && num(row.current_value, 1) <= 0);
+    this.playerDefeatStateByPlayerId.set(id, { defeated, checkedAtMs: currentTime });
+    return defeated;
+  }
+
+  writeStoppedLatestInput(playerId, worldId, inputState = {}, options = {}) {
+    if (!playerId || !worldId) return;
+    this.latestInputByPlayerId.set(playerId, {
+      playerId: playerId,
+      worldId: worldId,
+      clientSessionId: inputState.clientSessionId || options.sessionId || null,
+      inputSeq: normalizeInputSeq(inputState.inputSeq),
+      controllerEpoch: normalizeControllerEpoch(inputState.controllerEpoch),
+      input: {
+        moveX: 0,
+        moveZ: 0,
+        sprint: false,
+        pointerTarget: null,
+        stop: true
+      },
+      clientSentAt: inputState.clientSentAt || null,
+      sourceDevice: inputState.sourceDevice || null,
+      receivedAtMs: options.receivedAtMs || nowMs(),
+      activeControllerSessionId: null,
+      teleport: options.teleport === true
+    });
+  }
+
+  stopPlayerMovementState(connection, profile, worldId, current, inputState = {}, options = {}) {
+    if (!profile || !worldId || !current) return null;
+    const receivedAtMs = options.receivedAtMs || nowMs();
+    const inputSeq = normalizeInputSeq(inputState.inputSeq);
+    const changed = Boolean(
+      current.moving === true ||
+      current.animation_state !== "idle" ||
+      current.velocity_x ||
+      current.velocity_z ||
+      current.active_controller_session_id
+    );
+    const stopped = Object.assign({}, current, {
+      moving: false,
+      animation_state: "idle",
+      velocity_x: 0,
+      velocity_z: 0,
+      active_controller_session_id: null,
+      last_update_source_session_id: connection?.session?.id || current.last_update_source_session_id || null,
+      client_session_id: inputState.clientSessionId || connection?.session?.id || current.client_session_id || null,
+      client_input_seq: inputSeq || Number(current.client_input_seq || 0) || 0,
+      client_sent_at: inputState.clientSentAt || current.client_sent_at || null,
+      server_received_at: receivedAtMs,
+      last_input_received_at_ms: receivedAtMs,
+      last_processed_input_seq: Math.max(Number(current.last_processed_input_seq || 0) || 0, inputSeq || 0),
+      updated_at: now(),
+      updated_at_ms: receivedAtMs,
+      revision: (Number(current.revision) || 0) + (changed || options.forceRevision === true ? 1 : 0),
+      teleport: options.teleport === true
+    });
+    this.playerStateCache.set(this.getPlayerStateCacheKey(profile.id, worldId), stopped);
+    this.updatePrimaryPresenceFromState(stopped, connection);
+    this.markPlayerDirty(worldId, profile.id);
+    this.writeStoppedLatestInput(profile.id, worldId, inputState, {
+      sessionId: connection?.session?.id || null,
+      receivedAtMs,
+      teleport: options.teleport === true
+    });
+    this.schedulePersist(stopped, connection);
+    return stopped;
+  }
+
+  stopDefeatedPlayerInput(connection, profile, worldId, current, inputState, transport, receivedAtMs) {
+    const stopped = this.stopPlayerMovementState(connection, profile, worldId, current, inputState, {
+      receivedAtMs,
+      forceRevision: true
+    }) || current;
+    return Object.assign({}, stopped, {
+      ignored: true,
+      ignoreReason: "player_defeated",
+      client_session_id: inputState.clientSessionId || connection?.session?.id || null,
+      client_input_seq: normalizeInputSeq(inputState.inputSeq),
+      controller_epoch: normalizeControllerEpoch(inputState.controllerEpoch),
+      active_controller_session_id: null,
+      transport: transport
+    });
+  }
+
+  resetPlayerMovementAfterRespawn(playerId, worldId, sessionContext, position) {
+    const id = String(playerId || "").trim();
+    const world = String(worldId || "").trim();
+    if (!id || !world || !position) return null;
+    this.setPlayerDefeatedForMovement(id, false);
+    const session = sessionContext?.session || sessionContext || null;
+    const stopped = Object.assign({}, position, {
+      moving: false,
+      animation_state: "idle",
+      velocity_x: 0,
+      velocity_z: 0,
+      active_controller_session_id: null,
+      last_update_source_session_id: session?.id || position.last_update_source_session_id || null,
+      updated_at: position.updated_at || now(),
+      updated_at_ms: nowMs(),
+      teleport: true
+    });
+    this.playerStateCache.set(this.getPlayerStateCacheKey(id, world), stopped);
+    this.updatePrimaryPresenceFromState(stopped, null);
+    this.markPlayerDirty(world, id);
+    this.writeStoppedLatestInput(id, world, {}, {
+      sessionId: session?.id || null,
+      receivedAtMs: nowMs(),
+      teleport: true
+    });
+    return stopped;
+  }
+
   updatePlayerStateFromTick(state, nextState, connection, input, tickInfo = {}) {
     const previous = Object.assign({}, state);
     const changed = Boolean(
@@ -1581,6 +1849,8 @@ export class MmoService {
       previous.y !== nextState.y ||
       previous.z !== nextState.z ||
       previous.rotation_y !== nextState.rotation_y ||
+      previous.current_zone_id !== nextState.current_zone_id ||
+      previous.current_spawn_id !== nextState.current_spawn_id ||
       previous.moving !== nextState.moving ||
       previous.animation_state !== nextState.animation_state ||
       Number(previous.last_processed_input_seq || 0) !== Number(nextState.last_processed_input_seq || 0) ||
@@ -1598,6 +1868,9 @@ export class MmoService {
     state.teleport = nextState.teleport === true;
     state.last_processed_input_at_ms = Number(nextState.last_processed_input_at_ms || state.last_processed_input_at_ms || 0) || 0;
     this.playerStateCache.set(this.getPlayerStateCacheKey(state.player_id, state.world_id), state);
+    if (previous.current_zone_id !== state.current_zone_id && connection?.player) {
+      this.syncPlayerProfileZone(connection.player, state.world_id, state.current_zone_id);
+    }
     this.updatePrimaryPresenceFromState(state, connection);
     this.markPlayerDirty(state.world_id, state.player_id);
     if (connection?.player && tickInfo?.worldContext) {
@@ -1665,7 +1938,12 @@ export class MmoService {
     const profile = this.resolveConnectionProfile(connection, worldContext);
     const worldId = worldContext.worldId;
     const cacheKey = this.getPlayerStateCacheKey(profile.id, worldId);
-    const current = this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection);
+    const current = this.alignPositionZoneWithBounds(
+      profile,
+      worldContext,
+      this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection),
+      connection
+    );
     const raw = payload && typeof payload === "object" ? payload : {};
     const position = raw.position && typeof raw.position === "object" ? raw.position : raw;
     const targetZoneId = String(raw.zoneId || raw.currentZoneId || raw.current_zone_id || current.current_zone_id || activeZoneIdForWorld(worldContext.world) || "").trim() || null;
@@ -1835,10 +2113,11 @@ export class MmoService {
       y: currentPosition.y,
       z: currentPosition.z + (directionZ * speed * dtSeconds)
     };
+    const movementIndex = movementIndexForPlayerInput(worldContext, state, pointerTarget);
     const resolved = moving
       ? resolveMovement(currentPosition, desired, {
         radius: radius,
-        index: worldContext.walkabilityIndex
+        index: movementIndex
       })
       : currentPosition;
     const deltaX = resolved.x - currentPosition.x;
@@ -1870,6 +2149,11 @@ export class MmoService {
       server_received_at: tickInfo.serverReceivedAt || state.server_received_at || null,
       last_input_received_at_ms: state.last_input_received_at_ms || 0
     });
+    const nextZonePackage = zonePackageForPosition(worldContext.world, nextState, state.current_zone_id || activeZoneIdForWorld(worldContext.world));
+    if (nextZonePackage?.zoneId && nextZonePackage.zoneId !== state.current_zone_id) {
+      nextState.current_zone_id = nextZonePackage.zoneId;
+      nextState.current_spawn_id = null;
+    }
     return this.updatePlayerStateFromTick(state, nextState, tickInfo.connection || null, inputState || input, Object.assign({}, tickInfo, {
       worldContext: worldContext
     }));
@@ -1882,10 +2166,18 @@ export class MmoService {
     const profile = this.resolveConnectionProfile(connection, worldContext);
     const worldId = worldContext.worldId;
     const cacheKey = this.getPlayerStateCacheKey(profile.id, worldId);
-    const current = this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection);
+    const current = this.alignPositionZoneWithBounds(
+      profile,
+      worldContext,
+      this.playerStateCache.get(cacheKey) || this.ensurePlayerPosition(profile, worldContext, connection),
+      connection
+    );
     const inputState = this.normalizeInputStateForPlayer(connection, payload);
     const receivedAtMs = nowMs();
     const input = inputState.input || {};
+    if (this.isPlayerDefeatedForMovement(profile.id)) {
+      return this.stopDefeatedPlayerInput(connection, profile, worldId, current, inputState, transport, receivedAtMs);
+    }
     const inputSeq = normalizeInputSeq(inputState.inputSeq);
     const currentControllerEpoch = normalizeControllerEpoch(current.controller_epoch || 0);
     const currentControllerSessionId = current.active_controller_session_id || null;

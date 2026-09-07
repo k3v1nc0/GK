@@ -6,6 +6,7 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn niet automatisch actief.
 
+- [AUTHORING-01 - Duidelijk beginpunt en contextuele authoringroutes](./AUTHORING-01-Intent-Entry.md) - active AUTHORING-01B correction; implemented, awaiting Kevin re-acceptance.
 - [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - implemented on 2026-07-19; Kevin acceptance depends on explicit follow-up/microfase. Evidence: [NODE-02 zones composition](./evidence/NODE-02-zones-composition/README.md).
 - [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
 - [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)

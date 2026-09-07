@@ -218,6 +218,159 @@ function serveStatic(req, res, url) {
   return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache);
 }
 
+const GAME_HUD_DEFAULT_PROFILE_IDS = new Set(["default_desktop", "default_mob"]);
+const GAME_HUD_LAYOUT_MAX_BYTES = 256 * 1024;
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeGameHudDefaultProfileId(profileId) {
+  const value = String(profileId || "").trim();
+  if (value === "default") return "default_desktop";
+  if (value === "default_mobile" || value === "default_mobiel" || value === "mobile") return "default_mob";
+  return GAME_HUD_DEFAULT_PROFILE_IDS.has(value) ? value : "";
+}
+
+function normalizeGameHudProjectId(value) {
+  const direct = String(value || "").trim();
+  if (direct) return direct.slice(0, 160);
+  try {
+    const world = repository.getPublishedWorld();
+    return String(
+      world?.gameProject?.project?.id
+      || world?.gameProject?.id
+      || world?.gameProject?.projectId
+      || world?.project?.id
+      || world?.world?.id
+      || "project"
+    ).trim().slice(0, 160) || "project";
+  } catch {
+    return "project";
+  }
+}
+
+function isGameHudDefaultsAdmin(user) {
+  const adminUsername = String(process.env.ADMIN_USERNAME || "kevin").trim().toLowerCase();
+  return user?.role === "admin" && String(user.username || "").trim().toLowerCase() === adminUsername;
+}
+
+function parseJsonObject(text, fallback = null) {
+  try {
+    const value = JSON.parse(String(text || ""));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function publicGameHudLayoutDefault(row) {
+  if (!row) return null;
+  return {
+    profileId: row.profile_id,
+    layout: parseJsonObject(row.layout_json, {}),
+    updatedAt: row.updated_at,
+    updatedByUserId: row.updated_by_user_id || null
+  };
+}
+
+function getGameHudLayoutDefaults(req, projectIdInput) {
+  const current = authService.currentSession(req);
+  if (!current) {
+    const error = new Error("Niet ingelogd.");
+    error.status = 401;
+    throw error;
+  }
+  const projectId = normalizeGameHudProjectId(projectIdInput);
+  const rows = db.prepare(`
+    SELECT project_id, profile_id, layout_json, updated_by_user_id, updated_at
+    FROM game_hud_layout_defaults
+    WHERE project_id = ?
+    ORDER BY profile_id ASC
+  `).all(projectId);
+  const layouts = {};
+  for (const row of rows) {
+    const profileId = normalizeGameHudDefaultProfileId(row.profile_id);
+    if (profileId) layouts[profileId] = publicGameHudLayoutDefault(row);
+  }
+  return {
+    ok: true,
+    projectId,
+    layouts,
+    canEditDefaults: isGameHudDefaultsAdmin(current.user)
+  };
+}
+
+function saveGameHudLayoutDefault(req, body = {}) {
+  const current = authService.currentSession(req);
+  if (!current) {
+    const error = new Error("Niet ingelogd.");
+    error.status = 401;
+    throw error;
+  }
+  if (!isGameHudDefaultsAdmin(current.user)) {
+    const error = new Error("Alleen admin/kevin mag HUD defaults wijzigen.");
+    error.status = 403;
+    throw error;
+  }
+  const profileId = normalizeGameHudDefaultProfileId(body.profileId);
+  if (!profileId) {
+    const error = new Error("Ongeldig HUD default profiel.");
+    error.status = 400;
+    throw error;
+  }
+  const layout = body.layout && typeof body.layout === "object" && !Array.isArray(body.layout) ? body.layout : null;
+  if (!layout) {
+    const error = new Error("HUD layout ontbreekt.");
+    error.status = 400;
+    throw error;
+  }
+  layout.version = Number(layout.version) || 3;
+  layout.profileId = profileId;
+  const layoutJson = JSON.stringify(layout);
+  if (Buffer.byteLength(layoutJson, "utf8") > GAME_HUD_LAYOUT_MAX_BYTES) {
+    const error = new Error("HUD layout is te groot.");
+    error.status = 413;
+    throw error;
+  }
+  const projectId = normalizeGameHudProjectId(body.projectId);
+  const updatedAt = nowIso();
+  db.prepare(`
+    INSERT INTO game_hud_layout_defaults (project_id, profile_id, layout_json, updated_by_user_id, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, profile_id) DO UPDATE SET
+      layout_json = excluded.layout_json,
+      updated_by_user_id = excluded.updated_by_user_id,
+      updated_at = excluded.updated_at
+  `).run(projectId, profileId, layoutJson, current.user.id, updatedAt);
+  const row = db.prepare(`
+    SELECT project_id, profile_id, layout_json, updated_by_user_id, updated_at
+    FROM game_hud_layout_defaults
+    WHERE project_id = ? AND profile_id = ?
+    LIMIT 1
+  `).get(projectId, profileId);
+  try {
+    const worldId = mmoService.getPublishedWorldContext().worldId;
+    const payload = {
+      type: "hud_layout:defaults_updated",
+      ok: true,
+      projectId,
+      profileId,
+      updatedAt,
+      updatedByUserId: current.user.id
+    };
+    mmoService.broadcastToWorld(worldId, mmoService.stampServerPayload(worldId, payload));
+  } catch {
+    // Layout save is still valid if no world websocket is currently available.
+  }
+  const result = publicGameHudLayoutDefault(row);
+  return Object.assign({
+    ok: true,
+    projectId,
+    canEditDefaults: true
+  }, result);
+}
+
 async function handleApi(req, res, url) {
   const importResponseStartedAt = req.method === "POST" && url.pathname === "/api/assets/import" ? performance.now() : null;
   try {
@@ -387,11 +540,22 @@ async function handleApi(req, res, url) {
       const result = mmoService.updateFogDiscoveryForCurrentPlayer(req, body);
       return sendJson(res, 200, result);
     }
+    if (req.method === "GET" && url.pathname === "/api/game/hud-layout/defaults") {
+      const result = getGameHudLayoutDefaults(req, url.searchParams.get("projectId"));
+      return sendJson(res, 200, result);
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/hud-layout/defaults") {
+      const body = await readJson(req);
+      const result = saveGameHudLayoutDefault(req, body);
+      return sendJson(res, 200, result);
+    }
     if ((req.method === "POST" || req.method === "PATCH") && url.pathname === "/api/game/player/position") {
       const current = authService.currentSession(req);
       if (!current) return sendJson(res, 401, { ok: false, message: "Niet ingelogd." });
       const body = await readJson(req);
-      const connection = { user: current.user, session: current.session, player: null, worldId: null };
+      const worldContext = mmoService.getPublishedWorldContext();
+      const profile = mmoService.ensurePlayerProfile(current.user, worldContext);
+      const connection = { user: current.user, session: current.session, player: profile, worldId: worldContext.worldId };
       const useInputState = body && (
         body.input ||
         body.inputSeq !== undefined ||
@@ -404,10 +568,9 @@ async function handleApi(req, res, url) {
       const updated = useInputState
         ? mmoService.applyInputState(connection, body, "http")
         : mmoService.applyPositionIntent(connection, body, "http");
-      const worldContext = mmoService.getPublishedWorldContext();
       const stateRecord = updated && updated.state ? updated.state : updated;
       const positionPayload = stateRecord ? mmoService.publicPositionForPlayer(stateRecord, current.session, worldContext.worldId) : null;
-      if (updated.ignored === true) {
+      if (updated?.ignored === true) {
         return sendJson(res, 200, {
           ok: true,
           ignored: true,
