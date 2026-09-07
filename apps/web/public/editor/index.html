@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20260820-zone-adjacency-line1">
+    <link rel="stylesheet" href="./styles.css?v=20260907-authoring-01b">
     <script type="importmap">
       {
         "imports": {
@@ -40,16 +40,31 @@
 
     <main class="layout">
       <aside class="tools">
+        <div id="authoringSection" class="panel authoringSection">
+          <div class="authoringHeader">
+            <button id="authoringButton" type="button" class="primary authoringButton">+ Maken</button>
+            <div id="authoringRouteChip" class="authoringRouteChip" hidden></div>
+            <div id="authoringSelectionChip" class="authoringRouteChip authoringSelectionChip" hidden></div>
+            <button id="authoringBackButton" type="button" class="ghost authoringBackButton" hidden>Terug naar + Maken</button>
+          </div>
+          <div id="authoringMenu" class="authoringMenu" hidden></div>
+          <div id="authoringPanel" class="authoringPanelBody" hidden></div>
+        </div>
         <div id="validationSection" class="panel panelSticky">
           <h2>Validation</h2>
           <div id="validationPanel"></div>
         </div>
-        <div id="nodeLibrarySection" class="panel">
-          <h2>Node Library</h2>
-          <div class="libSearchRow">
-            <input id="nodeLibrarySearch" placeholder="Zoek nodes...">
+        <div id="nodeLibrarySection" class="panel nodeLibrarySection">
+          <button id="nodeLibraryToggle" type="button" class="nodeLibraryToggle" aria-expanded="false">
+            <span id="nodeLibraryToggleTitle" class="nodeLibraryToggleTitle">Meer nodes</span>
+            <span id="nodeLibraryToggleState" class="nodeLibraryToggleState">Ingeklapt</span>
+          </button>
+          <div id="nodeLibraryBody" class="nodeLibraryBody" hidden>
+            <div class="libSearchRow">
+              <input id="nodeLibrarySearch" placeholder="Zoek nodes...">
+            </div>
+            <div id="nodeLibrary"></div>
           </div>
-          <div id="nodeLibrary"></div>
         </div>
         <div id="inspectorSection" class="panel" hidden>
           <h2>Inspector</h2>
@@ -249,6 +264,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20260822-validation-jump"></script>
+    <script type="module" src="./editor.js?v=20260907-authoring-01b2"></script>
   </body>
 </html>

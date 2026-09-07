@@ -5224,6 +5224,7 @@ function buildHudTokenContext(world) {
 export function createGkWorldRuntime(canvas, options = {}) {
   const mode = options.mode || "editor";
   const hudElement = options.hud || null;
+  const hudPanelAdapter = options.hudPanelAdapter && typeof options.hudPanelAdapter === "object" ? options.hudPanelAdapter : null;
   const rendererAntialias = options.antialias !== false;
   const externalPlayerAuthority = options.externalPlayerAuthority === true || options.disableGameInput === true;
 
@@ -16174,7 +16175,10 @@ function resolveChunkDebugCenter(policy) {
   function clearHudModules() {
     for (const node of hudNodes.anchored.values()) node.remove();
     hudNodes.anchored.clear();
-    for (const entry of hudNodes.performance.values()) entry.root.remove();
+    for (const entry of hudNodes.performance.values()) {
+      if (typeof entry.dispose === "function") entry.dispose();
+      else entry.root.remove();
+    }
     hudNodes.performance.clear();
     perfHudNextUpdateAt = 0;
   }
@@ -16203,8 +16207,9 @@ function resolveChunkDebugCenter(policy) {
     const thresholds = mod.thresholds || {};
     const updateIntervalMs = Math.max(250, num(mod.updateIntervalMs, 500));
     const root = document.createElement("div");
-    root.className = "perf-hud anchor-" + (mod.anchor || "top-right") + (mod.compact === false ? "" : " perf-hud--compact");
+    root.className = "perf-hud" + (hudPanelAdapter ? "" : " anchor-" + (mod.anchor || "top-right")) + (mod.compact === false ? "" : " perf-hud--compact");
     root.dataset.hudId = mod.id || "perf_hud";
+    root.dataset.gameHudDrag = "1";
     const title = document.createElement("div");
     title.className = "perf-hud-title";
     title.textContent = mod.label || "Performance HUD";
@@ -16242,9 +16247,29 @@ function resolveChunkDebugCenter(policy) {
     if (metrics.showChunkCulling === true) addRow("terrainHidden", "Terrain H");
     if (metrics.showChunkCulling === true) addRow("terrainResident", "Terrain R");
     if (metrics.showChunkCulling === true) addRow("terrainChunks", "T Chunks");
-    hudElement.appendChild(root);
+    let frame = null;
+    let dispose = null;
+    if (hudPanelAdapter && typeof hudPanelAdapter.appendPanel === "function") {
+      const moduleId = mod.id || "perf_hud";
+      const result = hudPanelAdapter.appendPanel({
+        moduleId: moduleId,
+        nodeType: "debug_performance_hud",
+        label: mod.label || "Performance HUD",
+        anchor: mod.anchor || "right"
+      }, root);
+      frame = result?.frame || result || null;
+      dispose = typeof result?.dispose === "function"
+        ? result.dispose
+        : function () {
+            if (frame && frame.isConnected) frame.remove();
+          };
+    } else {
+      hudElement.appendChild(root);
+    }
     hudNodes.performance.set(mod.id || "perf_hud", {
       root: root,
+      frame: frame,
+      dispose: dispose,
       rows: rowStates,
       metrics: metrics,
       thresholds: thresholds,
