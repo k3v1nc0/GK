@@ -26,12 +26,18 @@ import {
 } from "../shared/minimap-utils.js?v=20260729-mobile-editor-fix3";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
+const EDITOR_API_TIMEOUT_MS = 20000;
 
 const HEAD = 34;
 const PAD = 8;
 const PORT_ROW = 24;
 const PORT_GAP = 4;
 const NODE_WIDTH = 260;
+const OBJECT_RECIPE_COLUMN_GAP = 120;
+const OBJECT_RECIPE_COLUMN_STEP = NODE_WIDTH + OBJECT_RECIPE_COLUMN_GAP;
+const OBJECT_RECIPE_COMPONENT_Y_OFFSET = 150;
+const OBJECT_RECIPE_COMPONENT_Y_STEP = 150;
+const OBJECT_RECIPE_STACK_GAP = 34;
 const GRAPH_FRAME_MIN_WIDTH = 320;
 const GRAPH_FRAME_MIN_HEIGHT = 180;
 const ZONE_CANVAS_SIZE = 500;
@@ -135,6 +141,7 @@ const state = {
   storedAuthoringRouteId: loadStoredAuthoringRoute(),
   authoringMenuOpen: false,
   nodeLibraryOpen: false,
+  objectFunctionDraft: null,
   mobileSelectedAssetId: null,
   assetImportOpen: false,
   assetUploadBusy: false,
@@ -382,9 +389,57 @@ const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR 
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
 window.__GK_DEBUG_EDITOR = editorDebug;
 
+function editorApiTimeoutError(path, method, timeoutMs) {
+  const error = new Error("Verzoek naar " + path + " duurde langer dan " + Math.round(timeoutMs / 1000) + "s.");
+  error.status = 0;
+  error.path = path;
+  error.method = method;
+  error.code = "EDITOR_API_TIMEOUT";
+  return error;
+}
+
+async function fetchEditorApi(path, options, method) {
+  const requestOptions = Object.assign({}, options || {});
+  const timeoutMs = Number.isFinite(Number(requestOptions.timeoutMs)) ? Number(requestOptions.timeoutMs) : EDITOR_API_TIMEOUT_MS;
+  delete requestOptions.timeoutMs;
+  requestOptions.headers = Object.assign({ "Content-Type": "application/json" }, requestOptions.headers || {});
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== "function") {
+    return await fetch(path, requestOptions);
+  }
+  const externalSignal = requestOptions.signal || null;
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeout = null;
+  let externalAbort = null;
+  requestOptions.signal = controller.signal;
+  if (externalSignal) {
+    externalAbort = function () {
+      controller.abort(externalSignal.reason);
+    };
+    if (externalSignal.aborted) {
+      externalAbort();
+    } else {
+      externalSignal.addEventListener("abort", externalAbort, { once: true });
+    }
+  }
+  timeout = setTimeout(function () {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(path, requestOptions);
+  } catch (error) {
+    if (timedOut) throw editorApiTimeoutError(path, method, timeoutMs);
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (externalSignal && externalAbort) externalSignal.removeEventListener("abort", externalAbort);
+  }
+}
+
 async function api(path, options) {
   const method = (options && options.method) || "GET";
-  const response = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, options || {}));
+  const response = await fetchEditorApi(path, options, method);
   if (response.status === 401) {
     window.location.href = "/login/?next=" + encodeURIComponent("/editor/");
     throw new Error("Niet ingelogd.");
@@ -403,7 +458,7 @@ async function api(path, options) {
 
 async function apiOk(path, options) {
   const method = (options && options.method) || "GET";
-  const response = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, options || {}));
+  const response = await fetchEditorApi(path, options, method);
   if (response.status === 401) {
     window.location.href = "/login/?next=" + encodeURIComponent("/editor/");
     throw new Error("Niet ingelogd.");
@@ -5075,6 +5130,1319 @@ function selectedViewportAuthoringNode() {
   return null;
 }
 
+function selectedSingleModelNode() {
+  const node = selectedViewportAuthoringNode();
+  if (!node || node.type !== "model_entity") return null;
+  if (!Array.isArray(state.selectedNodeIds) || state.selectedNodeIds.length !== 1) return null;
+  if (state.selectedNodeIds[0] !== node.id) return null;
+  return node;
+}
+
+function zoneCanvasAncestorForNode(node, graph = state.graph) {
+  let parentId = node?.parentId || null;
+  while (parentId) {
+    const candidate = (graph.nodes || []).find(function (entry) {
+      return entry.id === parentId && entry.type === "group";
+    }) || null;
+    if (!candidate) break;
+    if (isZoneCanvasGroup(candidate, graph)) return candidate;
+    parentId = candidate.parentId || null;
+  }
+  return null;
+}
+
+function firstZoneCanvasGroup(graph = state.graph) {
+  return (graph.nodes || []).find(function (node) {
+    return isZoneCanvasGroup(node, graph);
+  }) || null;
+}
+
+function objectFunctionModelStem(model) {
+  const canonicalEntityId = normalizeCanonicalId(model?.values?.entityId || "", "");
+  const stripped = canonicalEntityId.replace(/^entity[._:-]+/, "");
+  const fallback = normalizeCanonicalId(model?.values?.label || model?.title || model?.id || "", "");
+  return normalizeCanonicalId(stripped || fallback || model?.id || "", "") || "object";
+}
+
+function graphUsedCanonicalIds(graph = state.graph) {
+  const used = new Set();
+  for (const node of Array.isArray(graph?.nodes) ? graph.nodes : []) {
+    const fields = state.nodeTypes?.[node.type]?.fields || {};
+    for (const [fieldName, field] of Object.entries(fields)) {
+      if (!field || field.type !== "identity") continue;
+      const value = normalizeCanonicalId(node?.values?.[fieldName], "");
+      if (value) used.add(value);
+    }
+  }
+  for (const aliasRow of Array.isArray(graph?.contentAliases) ? graph.contentAliases : []) {
+    const oldId = normalizeCanonicalId(aliasRow?.old_id, "");
+    const newId = normalizeCanonicalId(aliasRow?.new_id, "");
+    if (oldId) used.add(oldId);
+    if (newId) used.add(newId);
+  }
+  return used;
+}
+
+function uniqueCanonicalGraphValue(graph, baseValue) {
+  const used = graphUsedCanonicalIds(graph);
+  const base = normalizeCanonicalId(baseValue, "");
+  if (!base) return "";
+  if (!used.has(base)) return base;
+  let index = 2;
+  while (used.has(base + "." + index)) index += 1;
+  return base + "." + index;
+}
+
+function objectFunctionAssemblyEntityId(model, graph = state.graph) {
+  const stem = objectFunctionModelStem(model);
+  const assembly = objectFunctionAssemblyForModel(model, graph);
+  const existing = normalizeCanonicalId(assembly?.values?.entityId || "", "");
+  if (existing) return existing;
+  return uniqueCanonicalGraphValue(graph, "entity." + stem + ".assembly");
+}
+
+function objectFunctionAssemblyForModel(model, graph = state.graph) {
+  if (!model) return null;
+  const assemblyEdges = (graph.edges || []).filter(function (edge) {
+    return edge.fromNodeId === model.id && edge.fromPort === "entity" && edge.toPort === "model";
+  });
+  const assemblyIds = Array.from(new Set(assemblyEdges.map(function (edge) {
+    return edge.toNodeId;
+  })));
+  return assemblyIds.map(function (assemblyId) {
+    return (graph.nodes || []).find(function (node) {
+      return node.id === assemblyId && node.type === "entity_assembly";
+    }) || null;
+  }).filter(function (node) {
+    return node && (node.parentId || null) === (model.parentId || null);
+  })[0] || null;
+}
+
+function objectFunctionConnectedNodesForAssembly(graph, assembly, type) {
+  if (!assembly) return [];
+  return (graph.nodes || []).filter(function (node) {
+    if (node.type !== type) return false;
+    return (graph.edges || []).some(function (edge) {
+      if (type === "quest_target_binding") {
+        return edge.fromNodeId === assembly.id && edge.fromPort === "entity" && edge.toNodeId === node.id && edge.toPort === "entity";
+      }
+      return edge.fromNodeId === node.id && edge.fromPort === "component" && edge.toNodeId === assembly.id && edge.toPort === "components";
+    });
+  });
+}
+
+function objectFunctionQuestBindingForAssembly(graph, assembly) {
+  const questBindings = objectFunctionQuestBindingsForAssembly(graph, assembly);
+  return questBindings[0] || null;
+}
+
+function objectFunctionDerivedZoneGroup(model, graph = state.graph) {
+  const parent = model?.parentId ? (graph.nodes || []).find(function (node) {
+    return node.id === model.parentId && node.type === "group";
+  }) || null : null;
+  return parent && isZoneCanvasGroup(parent, graph) ? parent : null;
+}
+
+function objectFunctionNavigationZoneGroup(model, graph = state.graph) {
+  return zoneCanvasAncestorForNode(model, graph) || firstZoneCanvasGroup(graph);
+}
+
+function objectFunctionContextForModel(model, graph = state.graph) {
+  const parentGroup = model?.parentId ? (graph.nodes || []).find(function (node) {
+    return node.id === model.parentId && node.type === "group";
+  }) || null : null;
+  const zoneGroup = objectFunctionDerivedZoneGroup(model, graph);
+  const navigationZoneGroup = objectFunctionNavigationZoneGroup(model, graph);
+  const zoneDefinition = zoneGroup ? zoneDefinitionForGroup(zoneGroup.id, graph) : null;
+  const zoneOutput = zoneGroup ? zoneOutputForGroup(zoneGroup.id, graph) : null;
+  const assemblyNodes = objectFunctionAssemblyNodesForModel(model, graph);
+  const assembly = assemblyNodes[0] || null;
+  const assemblyEdgeCount = (graph.edges || []).filter(function (edge) {
+    return edge.fromNodeId === model?.id && edge.fromPort === "entity" && edge.toPort === "model";
+  }).length;
+  const interactionNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "interaction_component");
+  const npcNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "npc_component");
+  const enemyNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "enemy_component");
+  const questNodes = objectFunctionQuestBindingsForAssembly(graph, assembly);
+  const interactionComponent = interactionNodes[0] || null;
+  const npcComponent = npcNodes[0] || null;
+  const enemyComponent = enemyNodes[0] || null;
+  const questBinding = questNodes[0] || null;
+  const interactionEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "interaction_component");
+  const npcEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "npc_component");
+  const enemyEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "enemy_component");
+  const questEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "quest_target_binding");
+  const duplicateInteractionCount = Math.max(interactionNodes.length, interactionEdgeCount);
+  const duplicateNpcCount = Math.max(npcNodes.length, npcEdgeCount);
+  const duplicateEnemyCount = Math.max(enemyNodes.length, enemyEdgeCount);
+  const duplicateQuestCount = Math.max(questNodes.length, questEdgeCount);
+  const issues = [];
+  if (!model) {
+    issues.push({ kind: "selection", message: "Selecteer precies één model in de 3D-viewport." });
+  } else if (!parentGroup) {
+    issues.push({ kind: "parent", message: "Dit model staat niet in een group." });
+  } else if (!zoneGroup) {
+    issues.push({ kind: "zone", message: "Dit model staat niet direct in een Zone Canvas." });
+  }
+  if (zoneGroup && !zoneOutput) {
+    issues.push({ kind: "output", message: "Deze Zone Canvas mist een Zone Output." });
+  }
+  if (assemblyNodes.length !== assemblyEdgeCount || assemblyNodes.length > 1 || assemblyEdgeCount > 1) {
+    issues.push({ kind: "assembly", message: "De Entity Assembly-koppeling is ongeldig of dubbel." });
+  }
+  if (duplicateInteractionCount > 1) {
+    issues.push({ kind: "interaction", message: "Meerdere Interaction Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateNpcCount > 1) {
+    issues.push({ kind: "npc", message: "Meerdere NPC Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateEnemyCount > 1) {
+    issues.push({ kind: "enemy", message: "Meerdere Enemy Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateQuestCount > 1) {
+    issues.push({ kind: "quest", message: "Meerdere Quest Target bindings zijn aan deze assembly gekoppeld." });
+  }
+  if (npcComponent && enemyComponent) {
+    issues.push({ kind: "conflict", message: "NPC en Enemy kunnen niet tegelijk actief zijn." });
+  }
+  return {
+    model: model || null,
+    parentGroup: parentGroup || null,
+    zoneGroup: zoneGroup || null,
+    navigationZoneGroup: navigationZoneGroup || null,
+    zoneDefinition: zoneDefinition || null,
+    zoneOutput: zoneOutput || null,
+    assembly: assembly || null,
+    interactionComponent: interactionComponent || null,
+    npcComponent: npcComponent || null,
+    enemyComponent: enemyComponent || null,
+    questBinding: questBinding || null,
+    modelStem: model ? objectFunctionModelStem(model) : "",
+    assemblyEntityId: objectFunctionAssemblyEntityId(model, graph),
+    issues: issues,
+    canCreate: Boolean(model && zoneGroup && zoneOutput && issues.every(function (issue) {
+      return !["selection", "parent", "zone", "output", "assembly", "interaction", "npc", "enemy", "quest", "conflict"].includes(issue.kind);
+    }))
+  };
+}
+
+function objectFunctionExistingNodeForKind(context, kind) {
+  if (!context) return null;
+  if (kind === "interaction") return context.interactionComponent;
+  if (kind === "npc") return context.npcComponent;
+  if (kind === "enemy") return context.enemyComponent;
+  if (kind === "quest") return context.questBinding;
+  return null;
+}
+
+function objectFunctionCanCreateKind(context, kind) {
+  if (!context || !context.model || !context.zoneGroup || !context.zoneOutput || !context.canCreate) return false;
+  if (kind === "npc" && context.enemyComponent && !context.npcComponent) return false;
+  if (kind === "enemy" && context.npcComponent && !context.enemyComponent) return false;
+  return true;
+}
+
+function objectFunctionKindLabel(kind) {
+  if (kind === "interaction") return "Interactable";
+  if (kind === "npc") return "NPC";
+  if (kind === "enemy") return "Enemy";
+  if (kind === "quest") return "Quest Target";
+  return kind;
+}
+
+function objectFunctionNodeTypeForKind(kind) {
+  if (kind === "interaction") return "interaction_component";
+  if (kind === "npc") return "npc_component";
+  if (kind === "enemy") return "enemy_component";
+  if (kind === "quest") return "quest_target_binding";
+  return "";
+}
+
+function objectFunctionBadgeAccent(kind) {
+  const type = objectFunctionNodeTypeForKind(kind);
+  return state.nodeTypes?.[type]?.accent || "#7bd4ff";
+}
+
+function objectFunctionDraftDefaults(kind, context) {
+  const modelLabel = nodeDisplayTitle(context.model) || "Object";
+  const defaults = {
+    interaction: {
+      interactionType: "inspect",
+      prompt: "Gebruik",
+      radius: 2,
+      enabled: true
+    },
+    npc: {
+      npcRef: "",
+      level: 1,
+      persistenceScope: "disposable"
+    },
+    enemy: {
+      enemyRef: "",
+      variantRef: "",
+      difficultyRef: "",
+      levelMode: "fixed",
+      fixedLevel: 1
+    },
+    quest: {
+      label: modelLabel,
+      targetKind: context.npcComponent ? "npc" : (context.enemyComponent ? "custom" : "marker"),
+      radius: 2.5,
+      visibleInGame: true,
+      action: "",
+      prompt: ""
+    }
+  };
+  return clonePlain(defaults[kind] || {});
+}
+
+function objectFunctionTitleForKind(kind, context) {
+  if (kind === "interaction") return objectFunctionExistingNodeForKind(context, kind) ? "Interactable beheren" : "Interactable maken";
+  if (kind === "npc") return objectFunctionExistingNodeForKind(context, kind) ? "NPC beheren" : "NPC maken";
+  if (kind === "enemy") return objectFunctionExistingNodeForKind(context, kind) ? "Enemy beheren" : "Enemy maken";
+  if (kind === "quest") return objectFunctionExistingNodeForKind(context, kind) ? "Quest Target beheren" : "Quest Target maken";
+  return objectFunctionKindLabel(kind);
+}
+
+function objectFunctionFocusNodeIdForKind(context, kind) {
+  if (kind === "interaction") return context.interactionComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "npc") return context.npcComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "enemy") return context.enemyComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "quest") return context.questBinding?.id || context.assembly?.id || context.model?.id || null;
+  return context.model?.id || null;
+}
+
+function objectFunctionBeginDraft(kind, context) {
+  if (!context?.model) return;
+  const existing = objectFunctionExistingNodeForKind(context, kind);
+  const currentDraft = state.objectFunctionDraft;
+  if (currentDraft && currentDraft.kind === kind && currentDraft.modelId === context.model.id) {
+    renderAuthoringHub();
+    return;
+  }
+  state.objectFunctionDraft = {
+    kind: kind,
+    modelId: context.model.id,
+    existingNodeId: existing?.id || null,
+    values: Object.assign(
+      {},
+      objectFunctionDraftDefaults(kind, context),
+      existing ? clonePlain(existing.values || {}) : {}
+    )
+  };
+  if (kind === "quest") {
+    state.objectFunctionDraft.values.zoneRef = context.zoneDefinition?.values?.zoneId || "";
+    state.objectFunctionDraft.values.entityRef = context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph);
+  }
+  renderAuthoringHub();
+}
+
+function objectFunctionClearDraft() {
+  if (!state.objectFunctionDraft) return;
+  state.objectFunctionDraft = null;
+  renderAuthoringHub();
+}
+
+function objectFunctionOpenCatalog() {
+  selectAuthoringRoute("item_ability_stat");
+  const workspaces = authoringWorkspacesForRoute("item_ability_stat", state.graph);
+  const workspace = workspaces.length ? workspaces[0].nodes[0] : null;
+  if (workspace) {
+    selectNode(workspace.id, true, { clearPendingEdge: true, showMobileInspector: true });
+  }
+}
+
+function objectFunctionNavigateToZone(context) {
+  const target = context?.navigationZoneGroup || context?.zoneGroup || firstZoneCanvasGroup(state.graph);
+  if (!target) return false;
+  selectNode(target.id, true, { clearPendingEdge: true, showMobileInspector: true });
+  return true;
+}
+
+function objectFunctionSetDraftValue(key, value) {
+  if (!state.objectFunctionDraft) return;
+  state.objectFunctionDraft.values = Object.assign({}, state.objectFunctionDraft.values || {}, { [key]: value });
+}
+
+function objectFunctionAssemblyNodesForModel(model, graph = state.graph) {
+  if (!model) return [];
+  const assemblyEdges = (graph.edges || []).filter(function (edge) {
+    return edge.fromNodeId === model.id && edge.fromPort === "entity" && edge.toPort === "model";
+  });
+  const assemblyIds = Array.from(new Set(assemblyEdges.map(function (edge) {
+    return edge.toNodeId;
+  })));
+  return assemblyIds.map(function (assemblyId) {
+    return (graph.nodes || []).find(function (node) {
+      return node.id === assemblyId && node.type === "entity_assembly";
+    }) || null;
+  }).filter(function (node) {
+    return node && (node.parentId || null) === (model.parentId || null);
+  });
+}
+
+function objectFunctionQuestBindingsForAssembly(graph, assembly) {
+  return objectFunctionConnectedNodesForAssembly(graph, assembly, "quest_target_binding");
+}
+
+function objectFunctionConnectedEdgeCountForAssembly(graph, assembly, type) {
+  if (!assembly) return 0;
+  return (graph.edges || []).filter(function (edge) {
+    if (type === "quest_target_binding") {
+      return edge.fromNodeId === assembly.id && edge.fromPort === "entity" && edge.toPort === "entity";
+    }
+    return edge.fromPort === "component" && edge.toNodeId === assembly.id && edge.toPort === "components";
+  }).filter(function (edge) {
+    const node = (graph.nodes || []).find(function (candidate) {
+      return candidate.id === edge.fromNodeId;
+    }) || null;
+    return node && node.type === type;
+  }).length;
+}
+
+function objectFunctionDefaultValuesForNodeType(type) {
+  const defaults = {};
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field) continue;
+    const normalized = normalizeFieldInputValue(field, field.default);
+    if (normalized !== undefined) defaults[key] = clonePlain(normalized);
+  }
+  return defaults;
+}
+
+function objectFunctionDraftForContext(context) {
+  const draft = state.objectFunctionDraft;
+  if (!draft || !context?.model) return null;
+  if (draft.modelId !== context.model.id) return null;
+  return draft;
+}
+
+function objectFunctionModelTitle(context) {
+  return nodeDisplayTitle(context?.model) || "Object";
+}
+
+function objectFunctionGraphTitleForKind(kind, context) {
+  const modelTitle = objectFunctionModelTitle(context);
+  if (kind === "interaction") return modelTitle + " Interactable";
+  if (kind === "npc") return modelTitle + " NPC";
+  if (kind === "enemy") return modelTitle + " Enemy";
+  if (kind === "quest") return modelTitle + " Quest Target";
+  return modelTitle + " " + objectFunctionKindLabel(kind);
+}
+
+function objectFunctionAssemblyTitle(context) {
+  return objectFunctionModelTitle(context) + " Assembly";
+}
+
+function objectFunctionRecipeColumns(context, graph = state.graph) {
+  const zoneOutput = context?.zoneOutput
+    ? ((graph.nodes || []).find(function (node) { return node.id === context.zoneOutput.id; }) || context.zoneOutput)
+    : null;
+  const model = context?.model
+    ? ((graph.nodes || []).find(function (node) { return node.id === context.model.id; }) || context.model)
+    : null;
+  const outputX = Number(zoneOutput?.x);
+  const fallbackOutputX = Number.isFinite(Number(model?.x))
+    ? Number(model.x) + OBJECT_RECIPE_COLUMN_STEP * 3
+    : 760;
+  const zoneOutputX = Math.round(Number.isFinite(outputX) ? outputX : fallbackOutputX);
+  const questX = zoneOutputX - OBJECT_RECIPE_COLUMN_STEP;
+  const assemblyX = questX - OBJECT_RECIPE_COLUMN_STEP;
+  const sourceX = assemblyX - OBJECT_RECIPE_COLUMN_STEP;
+  return { sourceX: sourceX, assemblyX: assemblyX, questX: questX, zoneOutputX: zoneOutputX };
+}
+
+function objectFunctionRecipeBaseY(context, graph = state.graph) {
+  const model = context?.model
+    ? ((graph.nodes || []).find(function (node) { return node.id === context.model.id; }) || context.model)
+    : null;
+  const modelY = Number(model?.y);
+  if (Number.isFinite(modelY)) return Math.round(modelY);
+  const outputY = Number(context?.zoneOutput?.y);
+  return Math.round(Number.isFinite(outputY) ? outputY + OBJECT_RECIPE_COMPONENT_Y_OFFSET : 200);
+}
+
+function objectFunctionSetNodeGraphPosition(node, position) {
+  if (!node || !isFiniteGraphPosition(position)) return false;
+  const x = Math.round(Number(position.x));
+  const y = Math.round(Number(position.y));
+  let changed = false;
+  if (Math.round(Number(node.x) || 0) !== x) {
+    node.x = x;
+    changed = true;
+  }
+  if (Math.round(Number(node.y) || 0) !== y) {
+    node.y = y;
+    changed = true;
+  }
+  return changed;
+}
+
+function objectFunctionConnectedComponentNodesForAssembly(graph, assembly) {
+  if (!assembly) return [];
+  const nodes = [];
+  const seen = new Set();
+  for (const type of ["interaction_component", "npc_component", "enemy_component"]) {
+    for (const node of objectFunctionConnectedNodesForAssembly(graph, assembly, type)) {
+      if (!node || seen.has(node.id)) continue;
+      seen.add(node.id);
+      nodes.push(node);
+    }
+  }
+  return nodes;
+}
+
+function objectFunctionApplyRecipeLayout(graph, context) {
+  const model = context?.model
+    ? ((graph.nodes || []).find(function (node) { return node.id === context.model.id; }) || null)
+    : null;
+  const zoneOutput = context?.zoneOutput
+    ? ((graph.nodes || []).find(function (node) { return node.id === context.zoneOutput.id; }) || null)
+    : null;
+  const assembly = objectFunctionAssemblyForModel(model, graph);
+  if (!model || !zoneOutput || !assembly) return false;
+  const columns = objectFunctionRecipeColumns({ model: model, zoneOutput: zoneOutput }, graph);
+  const baseY = objectFunctionRecipeBaseY({ model: model, zoneOutput: zoneOutput }, graph);
+  const components = objectFunctionConnectedComponentNodesForAssembly(graph, assembly);
+  const assemblyY = baseY + (components.length ? Math.round((components.length * OBJECT_RECIPE_COMPONENT_Y_STEP) / 2) : 0);
+  let changed = false;
+  changed = objectFunctionSetNodeGraphPosition(model, { x: columns.sourceX, y: baseY }) || changed;
+  changed = objectFunctionSetNodeGraphPosition(assembly, { x: columns.assemblyX, y: assemblyY }) || changed;
+  components.forEach(function (component, index) {
+    changed = objectFunctionSetNodeGraphPosition(component, {
+      x: columns.sourceX,
+      y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + index * OBJECT_RECIPE_COMPONENT_Y_STEP
+    }) || changed;
+  });
+  objectFunctionQuestBindingsForAssembly(graph, assembly).forEach(function (quest, index) {
+    changed = objectFunctionSetNodeGraphPosition(quest, {
+      x: columns.questX,
+      y: assemblyY + index * OBJECT_RECIPE_COMPONENT_Y_STEP
+    }) || changed;
+  });
+  return changed;
+}
+
+function objectFunctionEstimatedNodeHeight(node) {
+  if (!node) return 122;
+  if (node.id && el.nodeLayer) {
+    const card = el.nodeLayer.querySelector('.gnode[data-node-id="' + cssEscapeValue(node.id) + '"]');
+    if (card && card.offsetHeight) return Math.max(122, Math.round(card.offsetHeight));
+  }
+  if (node.type === "zone_output") return 620;
+  if (node.type === "graph_frame") return graphFrameSize(node).height;
+  return 132;
+}
+
+function objectFunctionSuggestedModelPositionInZone(parentId, graph = state.graph, fallback = null, excludeNodeId = null) {
+  const wantedParentId = parentId || null;
+  const group = wantedParentId ? (graph.nodes || []).find(function (node) {
+    return node.id === wantedParentId && node.type === "group";
+  }) || null : null;
+  if (!group || !isZoneCanvasGroup(group, graph)) return null;
+  const zoneOutput = zoneOutputForGroup(wantedParentId, graph);
+  if (!zoneOutput) return null;
+  const columns = objectFunctionRecipeColumns({ zoneOutput: zoneOutput }, graph);
+  const fallbackY = Number.isFinite(Number(fallback?.y))
+    ? Number(fallback.y)
+    : Number(zoneOutput.y) + OBJECT_RECIPE_COMPONENT_Y_OFFSET;
+  const objectTypes = new Set([
+    "model_entity",
+    "entity_assembly",
+    "interaction_component",
+    "npc_component",
+    "enemy_component",
+    "quest_target_binding"
+  ]);
+  const siblings = (graph.nodes || []).filter(function (node) {
+    return node.id !== excludeNodeId
+      && (node.parentId || null) === wantedParentId
+      && objectTypes.has(node.type);
+  });
+  if (!siblings.length) {
+    return { x: columns.sourceX, y: Math.round(fallbackY) };
+  }
+  const bottom = siblings.reduce(function (max, node) {
+    const y = Number(node.y);
+    if (!Number.isFinite(y)) return max;
+    return Math.max(max, y + objectFunctionEstimatedNodeHeight(node));
+  }, Number.NEGATIVE_INFINITY);
+  return {
+    x: columns.sourceX,
+    y: Math.round(Number.isFinite(bottom) ? bottom + OBJECT_RECIPE_STACK_GAP : fallbackY)
+  };
+}
+
+function objectFunctionSuggestedAssemblyPosition(context, graph = state.graph) {
+  const columns = objectFunctionRecipeColumns(context, graph);
+  const baseY = objectFunctionRecipeBaseY(context, graph);
+  return {
+    x: columns.assemblyX,
+    y: baseY
+  };
+}
+
+function objectFunctionSuggestedNodePosition(kind, context, graph = state.graph) {
+  const columns = objectFunctionRecipeColumns(context, graph);
+  const baseY = objectFunctionRecipeBaseY(context, graph);
+  if (kind === "interaction") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET };
+  }
+  if (kind === "npc") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP };
+  }
+  if (kind === "enemy") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 2 };
+  }
+  if (kind === "quest") {
+    return {
+      x: columns.questX,
+      y: baseY
+    };
+  }
+  return { x: columns.assemblyX, y: baseY };
+}
+
+function objectFunctionRemoveEdges(graph, predicate) {
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  const before = edges.length;
+  graph.edges = edges.filter(function (edge) {
+    return !predicate(edge);
+  });
+  return graph.edges.length !== before;
+}
+
+function objectFunctionRemoveNodeAndEdges(graph, nodeId) {
+  if (!nodeId) return false;
+  let changed = false;
+  const beforeNodes = graph.nodes.length;
+  graph.nodes = graph.nodes.filter(function (node) {
+    return node.id !== nodeId;
+  });
+  if (graph.nodes.length !== beforeNodes) changed = true;
+  const beforeEdges = graph.edges.length;
+  graph.edges = graph.edges.filter(function (edge) {
+    return edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId;
+  });
+  if (graph.edges.length !== beforeEdges) changed = true;
+  return changed;
+}
+
+function objectFunctionEnsureAssemblyNode(graph, context) {
+  const model = context?.model;
+  if (!model) return null;
+  const modelTitle = objectFunctionModelTitle(context);
+  const assemblyNodes = objectFunctionAssemblyNodesForModel(model, graph);
+  let assembly = assemblyNodes[0] || null;
+  if (!assembly) {
+    assembly = {
+      id: createZoneGraphId("node_entity_assembly"),
+      type: "entity_assembly",
+      title: objectFunctionAssemblyTitle(context),
+      x: objectFunctionSuggestedAssemblyPosition(context, graph).x,
+      y: objectFunctionSuggestedAssemblyPosition(context, graph).y,
+      parentId: model.parentId || null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("entity_assembly"), {
+        entityId: uniqueCanonicalGraphValue(graph, "entity." + objectFunctionModelStem(model) + ".assembly"),
+        label: modelTitle,
+        entityTags: []
+      })
+    };
+    graph.nodes.push(assembly);
+    return assembly;
+  }
+  assembly.parentId = model.parentId || null;
+  assembly.title = objectFunctionAssemblyTitle(context);
+  assembly.x = Number.isFinite(Number(assembly.x)) ? assembly.x : objectFunctionSuggestedAssemblyPosition(context, graph).x;
+  assembly.y = Number.isFinite(Number(assembly.y)) ? assembly.y : objectFunctionSuggestedAssemblyPosition(context, graph).y;
+  assembly.values = Object.assign({}, assembly.values || {}, {
+    entityId: normalizeCanonicalId(assembly.values?.entityId || "", "") || uniqueCanonicalGraphValue(graph, "entity." + objectFunctionModelStem(model) + ".assembly"),
+    label: modelTitle,
+    entityTags: Array.isArray(assembly.values?.entityTags) ? assembly.values.entityTags : []
+  });
+  return assembly;
+}
+
+function objectFunctionEnsureAssemblyRouting(graph, context, assembly, zoneOutput) {
+  if (!assembly || !context?.model || !zoneOutput) return false;
+  let changed = false;
+  const nodeTypeById = new Map((graph.nodes || []).map(function (node) {
+    return [node.id, node.type];
+  }));
+  let keptAssemblyOutputEdgeId = null;
+  changed = objectFunctionRemoveEdges(graph, function (edge) {
+    return edge.fromNodeId === context.model.id
+      && edge.fromPort === "entity"
+      && edge.toPort === "model"
+      && edge.toNodeId !== assembly.id;
+  }) || changed;
+  changed = objectFunctionRemoveEdges(graph, function (edge) {
+    return edge.fromNodeId === context.model.id
+      && edge.fromPort === "entity"
+      && edge.toPort === "entities"
+      && nodeTypeById.get(edge.toNodeId) === "zone_output";
+  }) || changed;
+  changed = objectFunctionRemoveEdges(graph, function (edge) {
+    if (edge.fromNodeId !== assembly.id || edge.fromPort !== "entity" || edge.toPort !== "entities") return false;
+    if (edge.toNodeId === zoneOutput.id && !keptAssemblyOutputEdgeId) {
+      keptAssemblyOutputEdgeId = edge.id;
+      return false;
+    }
+    return nodeTypeById.get(edge.toNodeId) === "zone_output";
+  }) || changed;
+  if (pushEdgeIfMissing(graph, context.model.id, "entity", assembly.id, "model")) changed = true;
+  if (pushEdgeIfMissing(graph, assembly.id, "entity", zoneOutput.id, "entities")) changed = true;
+  return changed;
+}
+
+function objectFunctionBuildNodeValuesForKind(kind, context, draft, existingNode, graph = state.graph) {
+  const type = objectFunctionNodeTypeForKind(kind);
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const draftValues = draft?.values || {};
+  const next = existingNode ? clonePlain(existingNode.values || {}) : objectFunctionDefaultValuesForNodeType(type);
+  for (const [key, field] of Object.entries(fields)) {
+    if (!Object.prototype.hasOwnProperty.call(draftValues, key)) continue;
+    next[key] = normalizeFieldInputValue(field, draftValues[key]);
+  }
+  if (kind === "interaction") {
+    next.componentId = existingNode
+      ? (normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.interaction." + objectFunctionModelStem(context.model)))
+      : uniqueCanonicalGraphValue(graph, "component.interaction." + objectFunctionModelStem(context.model));
+    next.interactionType = String(next.interactionType || "inspect").trim() || "inspect";
+    next.prompt = String(Object.prototype.hasOwnProperty.call(draftValues, "prompt") ? draftValues.prompt : next.prompt || "Gebruik").trim() || "Gebruik";
+    next.radius = Number.isFinite(Number(next.radius)) ? Number(next.radius) : 2;
+    next.enabled = next.enabled !== false;
+  } else if (kind === "npc") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.npc." + objectFunctionModelStem(context.model));
+    next.level = Number.isFinite(Number(next.level)) ? Number(next.level) : 1;
+    next.persistenceScope = String(next.persistenceScope || "disposable").trim() || "disposable";
+    next.npcRef = normalizeCanonicalId(next.npcRef || "", "");
+    next.variantRef = normalizeCanonicalId(next.variantRef || "", "") || null;
+  } else if (kind === "enemy") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.enemy." + objectFunctionModelStem(context.model));
+    next.levelMode = String(next.levelMode || "fixed").trim() || "fixed";
+    next.fixedLevel = Number.isFinite(Number(next.fixedLevel)) ? Number(next.fixedLevel) : 1;
+    next.minimumLevelOverride = Number.isFinite(Number(next.minimumLevelOverride)) ? Number(next.minimumLevelOverride) : 0;
+    next.maximumLevelOverride = Number.isFinite(Number(next.maximumLevelOverride)) ? Number(next.maximumLevelOverride) : 0;
+    next.enemyRef = normalizeCanonicalId(next.enemyRef || "", "");
+    next.variantRef = normalizeCanonicalId(next.variantRef || "", "") || null;
+    next.difficultyRef = normalizeCanonicalId(next.difficultyRef || "", "") || null;
+  } else if (kind === "quest") {
+    const modelTitle = objectFunctionModelTitle(context);
+    next.targetId = normalizeCanonicalId(next.targetId || "", "") || uniqueCanonicalGraphValue(graph, "target." + objectFunctionModelStem(context.model) + ".quest");
+    next.label = String(Object.prototype.hasOwnProperty.call(draftValues, "label") ? draftValues.label : next.label || modelTitle).trim() || modelTitle;
+    next.targetKind = String(next.targetKind || (context.npcComponent ? "npc" : (context.enemyComponent ? "custom" : "marker"))).trim() || "marker";
+    next.zoneRef = normalizeCanonicalId(context.zoneDefinition?.values?.zoneId || "", "") || null;
+    next.entityRef = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.action = String(Object.prototype.hasOwnProperty.call(draftValues, "action") ? draftValues.action : existingNode?.values?.action || "").trim();
+    next.prompt = String(Object.prototype.hasOwnProperty.call(draftValues, "prompt") ? draftValues.prompt : existingNode?.values?.prompt || "").trim();
+    next.radius = Number.isFinite(Number(next.radius)) ? Number(next.radius) : 2.5;
+    next.visibleInGame = next.visibleInGame !== false;
+    next.targetTags = Array.isArray(next.targetTags) ? next.targetTags : [];
+    next.x = Number.isFinite(Number(context.model?.values?.x)) ? Number(context.model.values.x) : (Number.isFinite(Number(next.x)) ? Number(next.x) : 0);
+    next.y = Number.isFinite(Number(context.model?.values?.y)) ? Number(context.model.values.y) : (Number.isFinite(Number(next.y)) ? Number(next.y) : 0);
+    next.z = Number.isFinite(Number(context.model?.values?.z)) ? Number(context.model.values.z) : (Number.isFinite(Number(next.z)) ? next.z : 0);
+  }
+  return next;
+}
+
+function objectFunctionNextGraphMutation(context, draft) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextContextModel = nextGraph.nodes.find(function (node) {
+    return node.id === context.model.id;
+  }) || null;
+  const nextZoneOutput = context.zoneOutput ? (nextGraph.nodes.find(function (node) {
+    return node.id === context.zoneOutput.id;
+  }) || null) : null;
+  if (!nextContextModel || !nextZoneOutput) {
+    return { nextGraph: null, focusNodeId: null, historyLabel: "" };
+  }
+  const nextContext = objectFunctionContextForModel(nextContextModel, nextGraph);
+  const existingAssembly = objectFunctionAssemblyForModel(nextContextModel, nextGraph);
+  const assembly = objectFunctionEnsureAssemblyNode(nextGraph, nextContext);
+  objectFunctionEnsureAssemblyRouting(nextGraph, nextContext, assembly, nextZoneOutput);
+  const kind = draft.kind;
+  const type = objectFunctionNodeTypeForKind(kind);
+  const existingNode = objectFunctionExistingNodeForKind(nextContext, kind) && nextGraph.nodes.find(function (node) {
+    return node.id === objectFunctionExistingNodeForKind(nextContext, kind).id;
+  }) || null;
+  let node = existingNode || null;
+  const title = objectFunctionGraphTitleForKind(kind, nextContext);
+
+  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "quest") {
+    if (!node) {
+      node = {
+        id: createZoneGraphId("node_" + type),
+        type: type,
+        title: title,
+        x: objectFunctionSuggestedNodePosition(kind, nextContext, nextGraph).x,
+        y: objectFunctionSuggestedNodePosition(kind, nextContext, nextGraph).y,
+        parentId: nextContextModel.parentId || null,
+        values: objectFunctionBuildNodeValuesForKind(kind, nextContext, draft, null, nextGraph)
+      };
+      nextGraph.nodes.push(node);
+    } else {
+      node.title = title;
+      node.parentId = nextContextModel.parentId || null;
+      node.values = objectFunctionBuildNodeValuesForKind(kind, nextContext, draft, node, nextGraph);
+    }
+  }
+
+  if (kind === "interaction" || kind === "npc" || kind === "enemy") {
+    if (node) {
+      let keptComponentEdgeId = null;
+      objectFunctionRemoveEdges(nextGraph, function (edge) {
+        if (edge.fromNodeId !== node.id || edge.fromPort !== "component" || edge.toNodeId !== assembly.id || edge.toPort !== "components") return false;
+        if (!keptComponentEdgeId) {
+          keptComponentEdgeId = edge.id;
+          return false;
+        }
+        return true;
+      });
+      pushEdgeIfMissing(nextGraph, node.id, "component", assembly.id, "components");
+    }
+  } else if (kind === "quest") {
+    if (node) {
+      nextGraph.edges = nextGraph.edges.filter(function (edge) {
+        return !(edge.fromNodeId === assembly.id && edge.fromPort === "entity" && edge.toNodeId === node.id && edge.toPort === "entity");
+      });
+      nextGraph.edges = nextGraph.edges.filter(function (edge) {
+        return !(edge.fromNodeId === node.id && edge.fromPort === "questTarget" && edge.toNodeId === nextZoneOutput.id && edge.toPort === "questTargets");
+      });
+      pushEdgeIfMissing(nextGraph, assembly.id, "entity", node.id, "entity");
+      pushEdgeIfMissing(nextGraph, node.id, "questTarget", nextZoneOutput.id, "questTargets");
+    }
+  }
+
+  objectFunctionApplyRecipeLayout(nextGraph, { model: nextContextModel, zoneOutput: nextZoneOutput });
+
+  const focusNodeId = node ? node.id : assembly.id;
+  return {
+    nextGraph: nextGraph,
+    focusNodeId: focusNodeId,
+    historyLabel: objectFunctionTitleForKind(kind, nextContext)
+  };
+}
+
+function objectFunctionCanConfirmDraft(context, draft) {
+  if (!context?.model || !context.zoneGroup || !context.zoneOutput || !context.canCreate) return false;
+  if (context.issues.some(function (issue) {
+    return ["selection", "parent", "zone", "output", "assembly", "conflict"].includes(issue.kind);
+  })) return false;
+  if (!draft) return false;
+  if (draft.kind === "npc") {
+    const field = state.nodeTypes?.npc_component?.fields?.npcRef || {};
+    return referencePickerChoiceState(draft.values?.npcRef, field).state === "ok";
+  }
+  if (draft.kind === "enemy") {
+    const field = state.nodeTypes?.enemy_component?.fields?.enemyRef || {};
+    return referencePickerChoiceState(draft.values?.enemyRef, field).state === "ok";
+  }
+  return true;
+}
+
+async function objectFunctionCommitDraft(context) {
+  const draft = objectFunctionDraftForContext(context);
+  if (!draft) return;
+  if (!objectFunctionCanConfirmDraft(context, draft)) {
+    if (draft.kind === "npc") {
+      setStatus("Kies eerst een NPC Definition in de Catalog.", "error");
+    } else if (draft.kind === "enemy") {
+      setStatus("Kies eerst een Enemy Definition in de Catalog.", "error");
+    } else {
+      setStatus("Deze functie kan nu nog niet worden opgeslagen.", "error");
+    }
+    return;
+  }
+  const next = objectFunctionNextGraphMutation(context, draft);
+  if (!next.nextGraph) {
+    setStatus("Deze functie kan niet worden opgeslagen in de huidige Zone Canvas.", "error");
+    return;
+  }
+  if (draft.kind === "interaction" && JSON.stringify(snapshotGraph(state.graph)) === JSON.stringify(snapshotGraph(next.nextGraph))) {
+    objectFunctionClearDraft();
+    if (next.focusNodeId) focusGraphNode(next.focusNodeId);
+    setStatus("Interactable ongewijzigd.", "success");
+    return;
+  }
+  try {
+    await restoreGraphObject(next.nextGraph, {
+      historyLabel: next.historyLabel || "Objectfunctie opgeslagen",
+      selectedNodeIds: [context.model.id],
+      selectedEdgeIds: [],
+      refreshViewport: true,
+      refreshValidation: true,
+      afterApply: function () {
+        objectFunctionClearDraft();
+        if (next.focusNodeId) focusGraphNode(next.focusNodeId);
+        setStatus(next.historyLabel + ".", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+function objectFunctionAssemblyShouldRemain(graph, context, assembly) {
+  if (!assembly || !context?.model || !context.zoneOutput) return false;
+  return (graph.edges || []).some(function (edge) {
+    if (edge.fromNodeId !== assembly.id && edge.toNodeId !== assembly.id) return false;
+    if (edge.fromNodeId === context.model.id && edge.fromPort === "entity" && edge.toNodeId === assembly.id && edge.toPort === "model") {
+      return false;
+    }
+    if (edge.fromNodeId === assembly.id && edge.fromPort === "entity" && edge.toNodeId === context.zoneOutput.id && edge.toPort === "entities") {
+      return false;
+    }
+    return true;
+  });
+}
+
+async function objectFunctionDeleteKind(kind, context) {
+  const node = objectFunctionExistingNodeForKind(context, kind);
+  if (!node) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextContextModel = nextGraph.nodes.find(function (candidate) {
+    return candidate.id === context.model.id;
+  }) || null;
+  const nextZoneOutput = context.zoneOutput ? (nextGraph.nodes.find(function (candidate) {
+    return candidate.id === context.zoneOutput.id;
+  }) || null) : null;
+  const assembly = objectFunctionAssemblyForModel(nextContextModel || context.model, nextGraph);
+  const nextNode = nextGraph.nodes.find(function (candidate) {
+    return candidate.id === node.id;
+  }) || null;
+  if (!nextContextModel || !nextZoneOutput || !assembly || !nextNode) return;
+  objectFunctionRemoveNodeAndEdges(nextGraph, nextNode.id);
+  if (objectFunctionAssemblyShouldRemain(nextGraph, context, assembly)) {
+    objectFunctionEnsureAssemblyRouting(nextGraph, context, assembly, nextZoneOutput);
+    objectFunctionApplyRecipeLayout(nextGraph, { model: nextContextModel, zoneOutput: nextZoneOutput });
+  } else {
+    objectFunctionRemoveNodeAndEdges(nextGraph, assembly.id);
+    nextGraph.edges = nextGraph.edges.filter(function (edge) {
+      return !(edge.fromNodeId === nextContextModel.id && edge.fromPort === "entity" && edge.toPort === "model");
+    });
+    nextGraph.edges = nextGraph.edges.filter(function (edge) {
+      return !(edge.fromNodeId === nextContextModel.id && edge.fromPort === "entity" && edge.toNodeId === nextZoneOutput.id && edge.toPort === "entities");
+    });
+    pushEdgeIfMissing(nextGraph, nextContextModel.id, "entity", nextZoneOutput.id, "entities");
+    const columns = objectFunctionRecipeColumns({ model: nextContextModel, zoneOutput: nextZoneOutput }, nextGraph);
+    objectFunctionSetNodeGraphPosition(nextContextModel, { x: columns.sourceX, y: objectFunctionRecipeBaseY({ model: nextContextModel, zoneOutput: nextZoneOutput }, nextGraph) });
+  }
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: objectFunctionTitleForKind(kind, context) + " verwijderd",
+      selectedNodeIds: [context.model.id],
+      selectedEdgeIds: [],
+      refreshViewport: true,
+      refreshValidation: true,
+      afterApply: function () {
+        objectFunctionClearDraft();
+        const focusNodeId = objectFunctionAssemblyForModel(context.model, state.graph)?.id || context.model.id;
+        focusGraphNode(focusNodeId);
+        setStatus(objectFunctionKindLabel(kind) + " verwijderd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+function objectFunctionDraftFieldRow(labelText, control, hintText = "") {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionDraftField";
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  label.appendChild(control);
+  wrap.appendChild(label);
+  if (hintText) {
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = hintText;
+    wrap.appendChild(hint);
+  }
+  return wrap;
+}
+
+function objectFunctionDraftTextInput(draft, key, options = {}) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.autocapitalize = "none";
+  input.value = String(draft.values?.[key] || "");
+  input.placeholder = options.placeholder || "";
+  input.addEventListener("change", function () {
+    objectFunctionSetDraftValue(key, input.value);
+    if (typeof options.onChange === "function") options.onChange(input.value);
+    renderAuthoringHub();
+  });
+  return input;
+}
+
+function objectFunctionDraftNumberInput(draft, key, options = {}) {
+  const input = document.createElement("input");
+  input.type = "number";
+  if (options.step !== undefined) input.step = String(options.step);
+  if (options.min !== undefined) input.min = String(options.min);
+  if (options.max !== undefined) input.max = String(options.max);
+  input.value = String(draft.values?.[key] ?? "");
+  input.addEventListener("change", function () {
+    objectFunctionSetDraftValue(key, input.value === "" ? null : Number(input.value));
+    if (typeof options.onChange === "function") options.onChange(input.value);
+    renderAuthoringHub();
+  });
+  return input;
+}
+
+function objectFunctionDraftSelectInput(draft, key, options = {}) {
+  const select = document.createElement("select");
+  for (const option of Array.isArray(options.options) ? options.options : []) {
+    const item = document.createElement("option");
+    if (option && typeof option === "object") {
+      item.value = String(option.value);
+      item.textContent = String(option.label || option.value || "");
+    } else {
+      item.value = String(option);
+      item.textContent = String(option);
+    }
+    select.appendChild(item);
+  }
+  select.value = String(draft.values?.[key] || options.fallback || "");
+  select.addEventListener("change", function () {
+    objectFunctionSetDraftValue(key, select.value);
+    if (typeof options.onChange === "function") options.onChange(select.value);
+    renderAuthoringHub();
+  });
+  return select;
+}
+
+function objectFunctionDraftCheckboxInput(draft, key, options = {}) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = draft.values?.[key] === true;
+  input.addEventListener("change", function () {
+    objectFunctionSetDraftValue(key, input.checked);
+    if (typeof options.onChange === "function") options.onChange(input.checked);
+    renderAuthoringHub();
+  });
+  return input;
+}
+
+function objectFunctionDraftReferenceInput(kind, fieldName, draft, onChange, options = {}) {
+  const type = objectFunctionNodeTypeForKind(kind);
+  const field = state.nodeTypes?.[type]?.fields?.[fieldName] || {};
+  const fakeNode = { id: "object-function-" + kind + "-" + fieldName, type: type, values: {} };
+  return buildReferencePickerField(fakeNode, fieldName, field, draft.values?.[fieldName] || null, {
+    onChange: function (nextValue) {
+      objectFunctionSetDraftValue(fieldName, nextValue);
+      if (typeof onChange === "function") onChange(nextValue);
+    },
+    onFocusNode: options.onFocusNode,
+    openCatalogAction: options.openCatalogAction,
+    hideAdvanced: true
+  });
+}
+
+function renderObjectFunctionSection(context) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection";
+
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = "Geef dit object een functie";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = context?.model
+    ? "Kies een functie. Bestaande nodes worden hergebruikt; de editor maakt nooit een tweede eigenaar van hetzelfde model."
+    : "Selecteer precies één model in de 3D-viewport.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+
+  if (!context?.model || !context.zoneGroup || !context.zoneOutput) {
+    const issueBox = document.createElement("div");
+    issueBox.className = "objectFunctionIssues";
+    const issueTitle = document.createElement("div");
+    issueTitle.className = "objectFunctionIssueTitle";
+    issueTitle.textContent = "Waarom dit nu niet kan:";
+    issueBox.appendChild(issueTitle);
+    for (const issue of context?.issues || [{ message: "Selecteer precies één model." }]) {
+      const row = document.createElement("div");
+      row.className = "objectFunctionIssue";
+      row.textContent = issue.message;
+      issueBox.appendChild(row);
+    }
+    const navRow = document.createElement("div");
+    navRow.className = "objectFunctionNavRow";
+    const nav = document.createElement("button");
+    nav.type = "button";
+    nav.className = "mini";
+    nav.textContent = "Open Zone Canvas";
+    const navTarget = context?.navigationZoneGroup || context?.zoneGroup || firstZoneCanvasGroup(state.graph);
+    nav.disabled = !Boolean(navTarget);
+    nav.addEventListener("click", function () {
+      objectFunctionNavigateToZone(context);
+    });
+    navRow.appendChild(nav);
+    issueBox.appendChild(navRow);
+    wrap.appendChild(issueBox);
+    return wrap;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "objectFunctionMeta";
+  meta.textContent = "Zone Canvas: " + nodeDisplayTitle(context.zoneGroup) + " · Zone Output: aanwezig";
+  wrap.appendChild(meta);
+
+  const flow = document.createElement("div");
+  flow.className = "objectFunctionFlow";
+  const makeChip = function (text, tone) {
+    const chip = document.createElement("span");
+    chip.className = "objectFunctionFlowChip" + (tone ? " objectFunctionFlowChip--" + tone : "");
+    chip.textContent = text;
+    return chip;
+  };
+  flow.appendChild(makeChip("model_entity", "model"));
+  flow.appendChild(makeChip("entity_assembly", context.assembly ? "assembly" : "pending"));
+  flow.appendChild(makeChip("Zone Output", "output"));
+  if (context.questBinding) {
+    flow.appendChild(makeChip("quest_target_binding", "quest"));
+  }
+  wrap.appendChild(flow);
+
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionActions";
+  const availableKinds = ["interaction", "npc", "enemy", "quest"].filter(function (kind) {
+    if (kind === "npc" && context.enemyComponent && !context.npcComponent) return false;
+    if (kind === "enemy" && context.npcComponent && !context.enemyComponent) return false;
+    return true;
+  });
+  for (const kind of availableKinds) {
+    const existing = objectFunctionExistingNodeForKind(context, kind);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "objectFunctionActionButton" + (existing ? " objectFunctionActionButton--manage" : "");
+    button.disabled = !objectFunctionCanCreateKind(context, kind);
+    button.textContent = existing ? objectFunctionTitleForKind(kind, context) : ("Maak " + objectFunctionKindLabel(kind));
+    button.title = existing ? "Bewerk en focus de bestaande node." : ("Maak een " + objectFunctionKindLabel(kind).toLowerCase() + " voor dit object.");
+    button.addEventListener("click", function () {
+      objectFunctionBeginDraft(kind, context);
+      const focusNodeId = objectFunctionFocusNodeIdForKind(context, kind);
+      if (focusNodeId) focusGraphNode(focusNodeId);
+    });
+    actions.appendChild(button);
+  }
+  if (actions.childNodes.length) wrap.appendChild(actions);
+
+  const badges = document.createElement("div");
+  badges.className = "objectFunctionBadgeRow";
+  const kinds = [
+    ["interaction", context.interactionComponent],
+    ["npc", context.npcComponent],
+    ["enemy", context.enemyComponent],
+    ["quest", context.questBinding]
+  ];
+  for (const [kind, node] of kinds) {
+    if (!node) continue;
+    const isActive = Boolean(state.objectFunctionDraft && state.objectFunctionDraft.modelId === context.model.id && state.objectFunctionDraft.kind === kind);
+    const badge = document.createElement("div");
+    badge.className = "objectFunctionBadge" + (isActive ? " objectFunctionBadge--active" : "");
+    badge.tabIndex = 0;
+    badge.addEventListener("click", function () {
+      focusGraphNode(node.id);
+    });
+    badge.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      focusGraphNode(node.id);
+    });
+    const accent = document.createElement("span");
+    accent.className = "objectFunctionBadgeAccent";
+    accent.style.background = objectFunctionBadgeAccent(kind);
+    const body = document.createElement("div");
+    body.className = "objectFunctionBadgeBody";
+    const label = document.createElement("div");
+    label.className = "objectFunctionBadgeLabel";
+    label.textContent = objectFunctionKindLabel(kind);
+    const metaText = document.createElement("div");
+    metaText.className = "objectFunctionBadgeMeta";
+    metaText.textContent = nodeDisplayTitle(node);
+    body.append(label, metaText);
+    const buttons = document.createElement("div");
+    buttons.className = "objectFunctionBadgeButtons";
+    const manage = document.createElement("button");
+    manage.type = "button";
+    manage.className = "mini";
+    manage.textContent = "Beheren";
+    manage.disabled = !objectFunctionCanCreateKind(context, kind);
+    manage.title = manage.disabled
+      ? "Los eerst de ontbrekende context op."
+      : "Open de minimale editor voor deze functie.";
+    manage.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      objectFunctionBeginDraft(kind, context);
+      focusGraphNode(node.id);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijderen";
+    remove.title = "Verwijder alleen deze functie.";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      void objectFunctionDeleteKind(kind, context);
+    });
+    buttons.append(manage, remove);
+    badge.append(accent, body, buttons);
+    badges.appendChild(badge);
+  }
+  if (badges.childNodes.length) wrap.appendChild(badges);
+
+  const draft = objectFunctionDraftForContext(context);
+  if (draft) {
+    const draftWrap = document.createElement("div");
+    draftWrap.className = "objectFunctionDraftCard";
+    const draftTitle = document.createElement("div");
+    draftTitle.className = "objectFunctionDraftTitle";
+    draftTitle.textContent = objectFunctionTitleForKind(draft.kind, context);
+    draftWrap.appendChild(draftTitle);
+
+    const draftHint = document.createElement("div");
+    draftHint.className = "objectFunctionDraftHint";
+    draftHint.textContent = draft.kind === "quest"
+      ? "De zone- en entitykoppeling worden automatisch afgeleid uit de huidige selectie."
+      : "Kies alleen de minimale velden. De editor maakt en verbindt de rest atomaire.";
+    draftWrap.appendChild(draftHint);
+
+    const fields = document.createElement("div");
+    fields.className = "objectFunctionDraftFields";
+    if (draft.kind === "interaction") {
+      fields.append(
+        objectFunctionDraftFieldRow("Type", objectFunctionDraftSelectInput(draft, "interactionType", {
+          options: [
+            { value: "inspect", label: "inspect" },
+            { value: "talk", label: "talk" },
+            { value: "loot", label: "loot" },
+            { value: "open", label: "open" },
+            { value: "craft", label: "craft" },
+            { value: "custom", label: "custom" }
+          ]
+        })),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "prompt", { placeholder: "Gebruik" })),
+        objectFunctionDraftFieldRow("Radius", objectFunctionDraftNumberInput(draft, "radius", { min: 0.1, max: 100, step: 0.1 })),
+        objectFunctionDraftFieldRow("Enabled", objectFunctionDraftCheckboxInput(draft, "enabled"))
+      );
+    } else if (draft.kind === "npc") {
+      const npcField = objectFunctionDraftReferenceInput("npc", "npcRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenCatalog();
+        }
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("NPC Definition", npcField, "Kies een bestaande NPC Definition uit de Catalog."),
+        objectFunctionDraftFieldRow("Level", objectFunctionDraftNumberInput(draft, "level", { min: 1, max: 1000, step: 1 })),
+        objectFunctionDraftFieldRow("Persistence", objectFunctionDraftSelectInput(draft, "persistenceScope", {
+          options: [
+            { value: "disposable", label: "disposable" },
+            { value: "zone", label: "zone" },
+            { value: "world", label: "world" }
+          ]
+        }))
+      );
+    } else if (draft.kind === "enemy") {
+      const enemyField = objectFunctionDraftReferenceInput("enemy", "enemyRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenCatalog();
+        }
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Enemy Definition", enemyField, "Kies een bestaande Enemy Definition uit de Catalog."),
+        objectFunctionDraftFieldRow("Level mode", objectFunctionDraftSelectInput(draft, "levelMode", {
+          options: [
+            { value: "fixed", label: "fixed" },
+            { value: "zone_range", label: "zone_range" },
+            { value: "area_range", label: "area_range" },
+            { value: "player_clamped", label: "player_clamped" },
+            { value: "party_clamped", label: "party_clamped" }
+          ]
+        }))
+      );
+      if (String(draft.values?.levelMode || "fixed") === "fixed") {
+        fields.append(
+          objectFunctionDraftFieldRow("Fixed level", objectFunctionDraftNumberInput(draft, "fixedLevel", { min: 1, max: 1000, step: 1 }))
+        );
+      }
+      fields.append(
+        objectFunctionDraftFieldRow("Variant", objectFunctionDraftReferenceInput("enemy", "variantRef", draft, null), "Optioneel."),
+        objectFunctionDraftFieldRow("Difficulty", objectFunctionDraftReferenceInput("enemy", "difficultyRef", draft, null), "Optioneel.")
+      );
+    } else if (draft.kind === "quest") {
+      const zoneState = referencePickerChoiceState(context.zoneDefinition?.values?.zoneId || "", state.nodeTypes?.quest_target_binding?.fields?.zoneRef || {});
+      const entityState = referencePickerChoiceState(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph), state.nodeTypes?.quest_target_binding?.fields?.entityRef || {});
+      const summary = document.createElement("div");
+      summary.className = "objectFunctionDraftMeta";
+      summary.textContent = "Afgeleid: Zone " + (zoneState.displayLabel || "onbekend") + " · Entity " + (entityState.displayLabel || "onbekend");
+      fields.appendChild(summary);
+      fields.append(
+        objectFunctionDraftFieldRow("Naam", objectFunctionDraftTextInput(draft, "label", { placeholder: objectFunctionModelTitle(context) })),
+        objectFunctionDraftFieldRow("Target kind", objectFunctionDraftSelectInput(draft, "targetKind", {
+          options: [
+            { value: "npc", label: "npc" },
+            { value: "area", label: "area" },
+            { value: "resource", label: "resource" },
+            { value: "zone_link", label: "zone_link" },
+            { value: "marker", label: "marker" },
+            { value: "custom", label: "custom" }
+          ]
+        })),
+        objectFunctionDraftFieldRow("Radius", objectFunctionDraftNumberInput(draft, "radius", { min: 0.1, max: 1000, step: 0.1 })),
+        objectFunctionDraftFieldRow("Visible in game", objectFunctionDraftCheckboxInput(draft, "visibleInGame"))
+      );
+      const hasAction = String(draft.values?.action || draft.values?.prompt || "").trim().length > 0;
+      if (hasAction || draft.values?.targetKind === "custom") {
+        fields.append(
+          objectFunctionDraftFieldRow("Action", objectFunctionDraftTextInput(draft, "action", { placeholder: "" })),
+          objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "prompt", { placeholder: "Gebruik" }))
+        );
+      }
+    }
+    draftWrap.appendChild(fields);
+
+    const draftActions = document.createElement("div");
+    draftActions.className = "objectFunctionDraftActions";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary";
+    save.textContent = draft.existingNodeId ? "Wijzigingen opslaan" : "Maken";
+    save.disabled = !objectFunctionCanConfirmDraft(context, draft);
+    save.addEventListener("click", function () {
+      void objectFunctionCommitDraft(context);
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Annuleren";
+    cancel.addEventListener("click", function () {
+      objectFunctionClearDraft();
+    });
+    draftActions.append(save, cancel);
+    draftWrap.appendChild(draftActions);
+    if (!save.disabled) {
+      const hint = document.createElement("div");
+      hint.className = "objectFunctionDraftHint";
+      hint.textContent = "De graph wordt in één stap opgeslagen. 3D-selectie blijft behouden.";
+      draftWrap.appendChild(hint);
+    }
+    wrap.appendChild(draftWrap);
+  }
+
+  return wrap;
+}
+
 function focusAssetBrowser() {
   if (isMobileLayout()) {
     if (state.mobilePanel === "all") ensureMobileAllLayout();
@@ -5126,7 +6494,7 @@ function selectAuthoringRoute(routeId) {
   storeAuthoringRoute(route.id);
   renderAuthoringHub();
   if (route.id === "object_character") {
-    if (selectedViewportAuthoringNode()) focusSelectedViewportAuthoringNode();
+    if (selectedSingleModelNode()) focusSelectedViewportAuthoringNode();
     else focusAssetBrowser();
   }
 }
@@ -5249,6 +6617,7 @@ function renderAuthoringSection(route) {
     el.authoringPanel.hidden = !route;
     el.authoringPanel.innerHTML = "";
     if (route) {
+      const objectContext = route.id === "object_character" ? objectFunctionContextForModel(selectedSingleModelNode(), state.graph) : null;
       const note = document.createElement("div");
       note.className = "authoringRouteAction";
       const title = document.createElement("div");
@@ -5264,15 +6633,18 @@ function renderAuthoringSection(route) {
         const action = document.createElement("button");
         action.type = "button";
         action.className = "primary";
-        action.textContent = selectedViewportNode ? "Focus selectie in 3D" : "Open Assets voor plaatsing";
+        action.textContent = selectedSingleModelNode() ? "Focus selectie in 3D" : "Open Assets voor plaatsing";
         action.addEventListener("click", function () {
-          if (selectedViewportNode) focusSelectedViewportAuthoringNode();
+          if (selectedSingleModelNode()) focusSelectedViewportAuthoringNode();
           else focusAssetBrowser();
         });
         buttons.appendChild(action);
         note.appendChild(buttons);
       }
       el.authoringPanel.appendChild(note);
+      if (route.id === "object_character") {
+        el.authoringPanel.appendChild(renderObjectFunctionSection(objectContext));
+      }
       const workspaces = authoringWorkspacesForRoute(route.id, state.graph);
       if (route.id === "world_zone" && !hasAnyZoneCanvas) {
         const action = document.createElement("div");
@@ -6525,6 +7897,7 @@ async function autoWireZoneCanvasNode(groupId, nodeId) {
     refreshViewport: true,
     refreshValidation: true,
     afterApply: function () {
+      focusGraphNode(nodeId);
       setStatus(wired ? "Zone-node toegevoegd en gekoppeld." : "Zone-node toegevoegd.", wired ? "success" : "");
     }
   });
@@ -6657,6 +8030,8 @@ function stackedEntityNodePosition(type, parentId, graph = state.graph, fallback
   const base = fallback || viewportCenterInGraph();
   if (type !== "model_entity") return base;
   const wantedParentId = parentId || null;
+  const zoneModelPosition = objectFunctionSuggestedModelPositionInZone(wantedParentId, graph, base, excludeNodeId);
+  if (zoneModelPosition) return zoneModelPosition;
   const siblings = (graph.nodes || []).filter(function (node) {
     return node.id !== excludeNodeId && node.type === "model_entity" && (node.parentId || null) === wantedParentId;
   });
@@ -10225,9 +11600,24 @@ async function fetchReferencePickerSymbols(query, expectedKinds, options = {}) {
   return symbols.slice(0, limit);
 }
 
-function buildReferencePickerField(node, key, field, value) {
+function buildReferencePickerField(node, key, field, value, options = {}) {
   const allowedKinds = referenceKindsForField(field);
   const current = referencePickerChoiceState(value, field);
+  const commitReferenceValue = typeof options.onChange === "function"
+    ? function (nextValue) {
+      options.onChange(nextValue);
+      if (options.rerender !== false) renderAuthoringHub();
+    }
+    : function (nextValue) {
+      patchInspectorField(node, key, field, nextValue);
+    };
+  const focusReferenceNode = typeof options.onFocusNode === "function"
+    ? options.onFocusNode
+    : function (currentNode) {
+      if (!currentNode) return;
+      selectNode(currentNode.id, true, { clearPendingEdge: true });
+    };
+  const openCatalogAction = typeof options.openCatalogAction === "function" ? options.openCatalogAction : null;
   const root = document.createElement("div");
   root.className = "referencePicker";
 
@@ -10274,7 +11664,7 @@ function buildReferencePickerField(node, key, field, value) {
     currentChip.appendChild(aliasNote);
   }
 
-  if (current.rawId) {
+  if (current.rawId && !options.hideAdvanced) {
     const advanced = document.createElement("div");
     advanced.className = "referencePickerAdvanced";
     advanced.textContent = "Advanced: " + current.rawId;
@@ -10301,7 +11691,7 @@ function buildReferencePickerField(node, key, field, value) {
   sourceButton.disabled = !current.node;
   sourceButton.addEventListener("click", function () {
     if (!current.node) return;
-    selectNode(current.node.id, true, { clearPendingEdge: true });
+    focusReferenceNode(current.node);
   });
   actions.appendChild(sourceButton);
 
@@ -10312,9 +11702,21 @@ function buildReferencePickerField(node, key, field, value) {
     clearButton.textContent = "Wissen";
     clearButton.title = "Verwijder de huidige reference.";
     clearButton.addEventListener("click", function () {
-      patchInspectorField(node, key, field, null);
+      commitReferenceValue(null);
     });
     actions.appendChild(clearButton);
+  }
+
+  if (openCatalogAction && current.state !== "ok") {
+    const catalogButton = document.createElement("button");
+    catalogButton.type = "button";
+    catalogButton.className = "mini";
+    catalogButton.textContent = "Open Catalog";
+    catalogButton.title = "Navigeer naar de catalogus om een geldige reference te kiezen.";
+    catalogButton.addEventListener("click", function () {
+      openCatalogAction();
+    });
+    actions.appendChild(catalogButton);
   }
 
   currentBlock.appendChild(actions);
@@ -10418,7 +11820,7 @@ function buildReferencePickerField(node, key, field, value) {
         renderResults();
       });
       item.addEventListener("click", function () {
-        patchInspectorField(node, key, field, normalizeCanonicalId(symbol.id, ""));
+        commitReferenceValue(normalizeCanonicalId(symbol.id, ""));
       });
       results.appendChild(item);
     });
@@ -10498,7 +11900,7 @@ function buildReferencePickerField(node, key, field, value) {
   function selectActiveResult() {
     const symbol = currentResults[activeIndex] || currentResults[0] || null;
     if (!symbol) return;
-    patchInspectorField(node, key, field, normalizeCanonicalId(symbol.id, ""));
+    commitReferenceValue(normalizeCanonicalId(symbol.id, ""));
   }
 
   searchButton.addEventListener("click", function () {

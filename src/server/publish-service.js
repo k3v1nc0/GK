@@ -14,6 +14,16 @@ import {
 import { validateNodeValues } from "./field-validation.js";
 import { GameProjectCompiler } from "./game-project-compiler.js";
 
+const INTERACTABLE_ASSEMBLY_READ_MODEL_VERSION = 1;
+
+function clone(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof structuredClone === "function") {
+    try { return structuredClone(value); } catch {}
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
 function graphError(message) {
   const error = new Error(message);
   error.status = 400;
@@ -24,6 +34,19 @@ function validationIssueMessage(issue) {
   if (typeof issue === "string") return issue;
   if (issue && typeof issue === "object") return String(issue.message || issue.code || JSON.stringify(issue));
   return String(issue || "");
+}
+
+function withInteractableAssemblyReadModelVersion(world) {
+  if (!world || typeof world !== "object") return world;
+  return Object.assign({}, world, {
+    readModelVersion: Object.assign({}, world.readModelVersion || {}, {
+      interactableAssembly: INTERACTABLE_ASSEMBLY_READ_MODEL_VERSION
+    })
+  });
+}
+
+function hasCurrentInteractableAssemblyReadModel(world) {
+  return Number(world?.readModelVersion?.interactableAssembly || 0) >= INTERACTABLE_ASSEMBLY_READ_MODEL_VERSION;
 }
 
 function directIncomingEdges(graph, outputNode, portName) {
@@ -2560,7 +2583,23 @@ export function validateGraphForPublish(graph, services = {}) {
       return incomingNodes(graph, output, "entities", nodeMap);
     }) || [];
     for (const entity of entityNodes) {
-      if (entity.type === "model_entity") requireAsset(services.assetService, entity.values.modelAssetId, "model", "Model Entity " + entity.id, errors);
+      if (entity.type === "model_entity") {
+        requireAsset(services.assetService, entity.values.modelAssetId, "model", "Model Entity " + entity.id, errors);
+        continue;
+      }
+      if (entity.type !== "entity_assembly") continue;
+      const components = collectResolutionError(errors, function () {
+        return incomingNodes(graph, entity, "components", nodeMap);
+      }) || [];
+      if (!components.some(function (component) { return component.type === "interaction_component"; })) continue;
+      const model = collectResolutionError(errors, function () {
+        return firstIncomingNode(graph, entity, "model", nodeMap);
+      });
+      if (!model) {
+        errors.push("Interactable " + entity.id + " mist een model-verbinding.");
+        continue;
+      }
+      requireAsset(services.assetService, model.values.modelAssetId, "model", "Interactable " + entity.id, errors);
     }
     for (const inter of collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "interactables", nodeMap);
@@ -2986,8 +3025,37 @@ function buildZonePlayerReadModel(player, assetLookup) {
   };
 }
 
+function zoneEntityHasInteractionComponent(entity) {
+  return Array.isArray(entity?.components) && entity.components.some(function (component) {
+    return component?.nodeType === "interaction_component";
+  });
+}
+
+function zoneEntityRenderableAssetId(entity) {
+  if (!entity) return null;
+  if (entity.nodeType === "entity_assembly") {
+    if (!zoneEntityHasInteractionComponent(entity)) return null;
+    return zoneEntityRenderableAssetId(entity.model);
+  }
+  if (entity.nodeType !== "model_entity") return null;
+  return entity.modelAssetId || null;
+}
+
 function buildZoneEntityReadModel(entity, assetLookup) {
-  if (!entity || entity.nodeType !== "model_entity") return null;
+  if (!entity) return null;
+  if (entity.nodeType === "entity_assembly") {
+    if (!zoneEntityHasInteractionComponent(entity)) return null;
+    const model = buildZoneEntityReadModel(entity.model, assetLookup);
+    if (!model) return null;
+    return Object.assign({}, model, {
+      assemblyNodeId: entity.nodeId || null,
+      assemblyEntityId: entity.entityId || null,
+      assemblyLabel: entity.label || null,
+      assemblyEntityTags: Array.isArray(entity.entityTags) ? entity.entityTags.slice() : [],
+      assemblyComponents: Array.isArray(entity.components) ? clone(entity.components) : []
+    });
+  }
+  if (entity.nodeType !== "model_entity") return null;
   return {
     id: entity.nodeId || entity.entityId,
     nodeId: entity.nodeId || null,
@@ -3018,6 +3086,42 @@ function buildZoneEntityReadModel(entity, assetLookup) {
       }
     }
   };
+}
+
+function buildZoneAssemblyInteractableReadModels(entity) {
+  if (!entity || entity.nodeType !== "entity_assembly") return [];
+  const model = entity.model || null;
+  if (!model || model.nodeType !== "model_entity") return [];
+  return (Array.isArray(entity.components) ? entity.components : []).filter(function (component) {
+    return component?.nodeType === "interaction_component" && component.enabled !== false;
+  }).map(function (component) {
+    const prompt = stringOrFallback(component.prompt, "Gebruik");
+    const interactionType = stringOrFallback(component.interactionType, "inspect");
+    return {
+      id: component.nodeId || component.componentId || ((entity.nodeId || model.nodeId || "entity") + "::interaction"),
+      nodeId: component.nodeId || null,
+      componentId: component.componentId || null,
+      entityId: model.entityId || model.nodeId || null,
+      entityNodeId: model.nodeId || null,
+      assemblyNodeId: entity.nodeId || null,
+      label: stringOrFallback(entity.label || model.label, prompt),
+      prompt: prompt,
+      interactionType: interactionType,
+      position: {
+        x: numberOrNull(model.x),
+        z: numberOrNull(model.z)
+      },
+      radius: clampNumber(component.radius, 0.1, 100, 2),
+      // The assembly's model_entity already renders the mesh; this record is only the trigger.
+      modelAssetId: null,
+      minimapCategoryRef: stringOrFallback(model.minimapCategoryRef, ""),
+      action: {
+        type: "message",
+        message: prompt,
+        teleport: { x: null, z: null }
+      }
+    };
+  });
 }
 
 function graphWithLegacyAdapterAsOutput(graph) {
@@ -3121,7 +3225,7 @@ export class PublishService {
   }
 
   mergeWorldWithGameProject(world, compilation, publishedAt = null, graph = null) {
-    if (!compilation || !compilation.connected || !compilation.manifest) return world;
+    if (!compilation || !compilation.connected || !compilation.manifest) return withInteractableAssemblyReadModelVersion(world);
     const manifest = compilation.manifest;
     const services = this.services;
     const nodeMap = graph ? nodeMapForGraph(graph) : new Map();
@@ -3171,15 +3275,16 @@ export class PublishService {
     }
     if (activeZone?.player?.modelAssetId) zoneAssetIds.add(activeZone.player.modelAssetId);
     for (const entity of allZoneEntityRecords) {
-      if (entity?.modelAssetId) zoneAssetIds.add(entity.modelAssetId);
+      const assetId = zoneEntityRenderableAssetId(entity);
+      if (assetId) zoneAssetIds.add(assetId);
     }
     // Bounded Area Scatter nodes wired to a Zone Output's "entities" port arrive here as
     // a single raw node-value record (via recordsFromSources), not the expanded
-    // per-instance placements the legacy path produces - and buildZoneEntityReadModel
-    // only accepts nodeType "model_entity", so the record was silently dropped and
-    // nothing ever got placed no matter what the node's fields were set to. Resolve
-    // sources now (asset ids are needed below before the asset manifest is built) and
-    // place the actual instances further down, once groundY is known.
+    // per-instance placements the legacy path produces. Interactable entity assemblies
+    // need to keep their connected model entity alive here so the runtime can still load
+    // the visible mesh; resolve sources now (asset ids are needed below before the asset
+    // manifest is built) and place the actual instances further down, once groundY is
+    // known.
     const zoneScatterSources = [];
     const zoneScatterCollisionBlockers = [];
     for (const record of allZoneEntityRecords) {
@@ -3258,9 +3363,10 @@ export class PublishService {
     const zoneEntities = allZoneEntityRecords.map(function (entity) {
       return buildZoneEntityReadModel(entity, assetLookup);
     }).filter(Boolean).concat(zoneScatterEntities);
+    const zoneInteractables = allZoneEntityRecords.flatMap(buildZoneAssemblyInteractableReadModels);
     const zoneCamera = buildZoneCameraReadModel(activeZone?.camera);
     const zonePlayer = buildZonePlayerReadModel(activeZone?.player, assetLookup);
-    return Object.assign({}, world, {
+    return withInteractableAssemblyReadModelVersion(Object.assign({}, world, {
       schemaVersion: manifest.schemaVersion || world.schemaVersion,
       buildId: compilation.buildId || world.buildId || null,
       contentHash: compilation.contentHash || world.contentHash || null,
@@ -3282,6 +3388,7 @@ export class PublishService {
       player: zonePlayer || world.player,
       lights: world.lights,
       entities: zoneEntities.length ? uniqueById((world.entities || []).concat(zoneEntities)) : world.entities,
+      interactables: zoneInteractables.length ? uniqueById((world.interactables || []).concat(zoneInteractables)) : world.interactables,
       zoneGrounds: zoneGrounds,
       terrain: {
         layers: uniqueById((world.terrain?.layers || []).concat(zoneTerrain.layers)),
@@ -3294,7 +3401,11 @@ export class PublishService {
       minimap: zoneMinimap || world.minimap,
       assets: mergedAssets,
       publishedAt: publishedAt || world.publishedAt || undefined
-    });
+    }));
+  }
+
+  isDraftWorldCacheCurrent(world) {
+    return hasCurrentInteractableAssemblyReadModel(world);
   }
 
   buildValidation(graph) {

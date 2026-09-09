@@ -322,6 +322,255 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   gap: 8px;
 }
 
+.objectFunctionSection {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(16, 24, 33, 0.98), rgba(11, 18, 25, 0.98));
+  border: 1px solid #273444;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.objectFunctionHeader {
+  display: grid;
+  gap: 4px;
+}
+.objectFunctionTitle {
+  font-size: 16px;
+  font-weight: 900;
+  color: #f4f7fb;
+  letter-spacing: 0.2px;
+}
+.objectFunctionIntro {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #9fb0bc;
+}
+.objectFunctionIssues {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: #241715;
+  border: 1px solid #5e3a2e;
+}
+.objectFunctionIssueTitle {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: #ffcf8b;
+}
+.objectFunctionIssue {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ffd4c6;
+}
+.objectFunctionNavRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.objectFunctionMeta {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #8ca0ad;
+}
+.objectFunctionFlow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.objectFunctionFlowChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #2c3845;
+  background: #111922;
+  color: #cdd6dd;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.objectFunctionFlowChip--model {
+  border-color: #8b5cf6;
+  background: #1b1527;
+  color: #eadcff;
+}
+.objectFunctionFlowChip--assembly {
+  border-color: #7bd4ff;
+  background: #10202a;
+  color: #d8f5ff;
+}
+.objectFunctionFlowChip--output {
+  border-color: #0284c7;
+  background: #102131;
+  color: #d7eeff;
+}
+.objectFunctionFlowChip--quest {
+  border-color: #10b981;
+  background: #10251f;
+  color: #d8fff1;
+}
+.objectFunctionFlowChip--pending {
+  border-style: dashed;
+  color: #8ea0ad;
+  background: #101822;
+}
+.objectFunctionActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.objectFunctionActionButton {
+  width: 100%;
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #31404e;
+  background: #131d27;
+  color: #e8edf1;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+.objectFunctionActionButton:hover:not(:disabled) {
+  border-color: #4a6176;
+  background: #18232f;
+}
+.objectFunctionActionButton:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.objectFunctionActionButton--manage {
+  border-color: #5a4a22;
+  background: #221b10;
+  color: #ffe9b8;
+}
+.objectFunctionActionButton--manage:hover:not(:disabled) {
+  border-color: #8f6f28;
+  background: #2a2113;
+}
+.objectFunctionBadgeRow {
+  display: grid;
+  gap: 8px;
+}
+.objectFunctionBadge {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 11px;
+  border-radius: 12px;
+  background: #101822;
+  border: 1px solid #243140;
+  cursor: pointer;
+}
+.objectFunctionBadge:hover {
+  border-color: #3a4b5c;
+  background: #13202b;
+}
+.objectFunctionBadge--active {
+  border-color: #7bd4ff;
+  background: #14202a;
+  box-shadow: 0 0 0 1px rgba(123, 212, 255, 0.18);
+}
+.objectFunctionBadgeAccent {
+  width: 10px;
+  height: 100%;
+  min-height: 38px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+.objectFunctionBadgeBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.objectFunctionBadgeLabel {
+  font-size: 13px;
+  font-weight: 900;
+  color: #eef7fb;
+}
+.objectFunctionBadgeMeta {
+  font-size: 12px;
+  color: #93a2ae;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.objectFunctionBadgeButtons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.objectFunctionBadgeButtons .mini {
+  min-height: 30px;
+  padding: 5px 10px;
+}
+.objectFunctionDraftCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid #32404f;
+  background: linear-gradient(180deg, #101821, #0c1218);
+}
+.objectFunctionDraftTitle {
+  font-size: 14px;
+  font-weight: 900;
+  color: #f7fbfe;
+}
+.objectFunctionDraftMeta {
+  font-size: 12px;
+  font-weight: 800;
+  color: #7bd4ff;
+}
+.objectFunctionDraftFields {
+  display: grid;
+  gap: 10px;
+}
+.objectFunctionDraftField {
+  display: grid;
+  gap: 4px;
+}
+.objectFunctionDraftField label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: #8ea0ad;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.objectFunctionDraftField label > *:last-child {
+  width: 100%;
+  min-width: 0;
+}
+.objectFunctionDraftHint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #7f8d99;
+}
+.objectFunctionDraftActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.objectFunctionDraftActions .primary,
+.objectFunctionDraftActions .ghost {
+  flex: 1 1 140px;
+}
+
 .libSearchRow { padding: 0 0 10px; }
 .libSearchRow input {
   width: 100%;
@@ -2224,6 +2473,7 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   .mobilePanelTabs button,
   .libButton,
   .nodeLibraryToggle,
+  .objectFunctionActionButton,
   .enterGroup,
   .deleteNode,
   .edgeRow button,
@@ -2244,8 +2494,12 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   .field input,
   .field select,
   .field textarea,
+  .objectFunctionDraftField input,
+  .objectFunctionDraftField select,
+  .objectFunctionDraftField textarea,
   .assetSearchRow input,
   .libSearchRow input,
+  .objectFunctionDraftField .referencePickerSearch input,
   .assetControls select,
   .assetForm input,
   .assetForm select,
