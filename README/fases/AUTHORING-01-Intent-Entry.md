@@ -63,4 +63,4 @@ Belangrijk:
 
 ## Status
 
-implemented, awaiting Kevin re-acceptance
+accepted/closed on 2026-09-09

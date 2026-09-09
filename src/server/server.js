@@ -799,7 +799,8 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "GET" && url.pathname === "/api/editor/draft-world") {
       authService.requireEditor(req);
-      return sendJson(res, 200, repository.getDraftWorld() || publishService.saveDraft());
+      const draftWorld = repository.getDraftWorld();
+      return sendJson(res, 200, publishService.isDraftWorldCacheCurrent(draftWorld) ? draftWorld : publishService.saveDraft());
     }
     if (req.method === "POST" && url.pathname === "/api/editor/publish") {
       const user = authService.requireEditor(req);
