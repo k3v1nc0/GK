@@ -33,6 +33,7 @@ Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn nie
 - [AUTHORING-01 - Duidelijk beginpunt en contextuele authoringroutes](./AUTHORING-01-Intent-Entry.md) - accepted/closed on 2026-09-09.
 - [AUTHORING-02 - 3D Object Workflow - geef geselecteerde modellen betekenis](./AUTHORING-02-3D-Object-Workflow.md) - accepted/closed on 2026-09-09.
 - [AUTHORING-02B - Object Recipe Layout](./AUTHORING-02B-Object-Recipe-Layout.md) - accepted/closed on 2026-09-09.
+- [AUTHORING-03 - Visuele Quest- en Dialoogtimeline](./AUTHORING-03-Quest-Dialogue-Timeline.md) - accepted/closed on 2026-09-10. Bouwblok 3 (branches/parallel/join) blijft buiten scope zolang de vereiste node-types/ports niet bestaan.
 - [NODE-01 - Fundering: Referenties, Tokens, Registries, World Assembly](./NODE-01-Fundering-Referenties-Tokens-Registries-World-Assembly.md) - accepted/closed on 2026-07-18. Normal publish route is `World Assembly.gameProject -> Game Output.gameProject`; legacy authoring remains hidden/internal/migration-only.
 
 ## Regie-regels voor elke fase

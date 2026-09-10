@@ -56,6 +56,40 @@ body {
 .breadcrumb .sep { color: #45525d; }
 
 .topbarRight { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.connectionButton {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid #2c3845;
+  border-radius: 7px;
+  background: #111922;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.connectionButton:hover { border-color: #4a5a6a; background: #18212c; }
+.connectionButton:disabled { opacity: 0.6; cursor: wait; }
+.connectionLight {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16), 0 0 12px rgba(245, 158, 11, 0.65);
+}
+.connectionButton--connected .connectionLight {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16), 0 0 12px rgba(34, 197, 94, 0.65);
+}
+.connectionButton--standby .connectionLight {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16), 0 0 12px rgba(245, 158, 11, 0.65);
+}
+.connectionButton--disconnected .connectionLight {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16), 0 0 12px rgba(239, 68, 68, 0.7);
+}
 .unsaved {
   font-size: 12px; color: #ffcf8b; background: #2a2113; border: 1px solid #54421f;
   padding: 5px 10px; border-radius: 20px;
@@ -569,6 +603,200 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .objectFunctionDraftActions .primary,
 .objectFunctionDraftActions .ghost {
   flex: 1 1 140px;
+}
+
+.questTimelineTabs {
+  display: flex;
+  gap: 6px;
+}
+.questTimelineTab {
+  flex: 1 1 auto;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid #2c3845;
+  background: #111922;
+  color: #9fb0bc;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.questTimelineTab--active {
+  border-color: #7bd4ff;
+  background: #14202a;
+  color: #eaf7ff;
+}
+.questTimelinePane {
+  display: grid;
+  gap: 10px;
+}
+.questTimelineList {
+  display: grid;
+  gap: 8px;
+}
+.questTimelineQuestHeader {
+  display: grid;
+  gap: 4px;
+}
+.questTimelineChildSection {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #202b36;
+}
+.questTimelineBundleContents {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 4px 16px;
+  padding: 8px 10px;
+  border-left: 2px solid #3a4b5c;
+  border-radius: 0 8px 8px 0;
+  background: #0d141b;
+}
+.questTimelineDialogueActions {
+  margin-top: 4px;
+}
+.questTimelineFlow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.questTimelineFlow--dialogue {
+  align-items: flex-start;
+}
+.questTimelineArrow {
+  color: #4a6176;
+  font-weight: 900;
+  padding: 0 2px;
+}
+.questTimelinePlusHolder {
+  position: relative;
+  display: inline-flex;
+}
+.questTimelinePlusButton {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px dashed #3a4b5c;
+  background: #0f161e;
+  color: #8ea0ad;
+  font: inherit;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+.questTimelinePlusButton:hover {
+  border-color: #7bd4ff;
+  color: #eaf7ff;
+}
+.questTimelinePlusButton--active {
+  border-style: solid;
+  border-color: #7bd4ff;
+  color: #eaf7ff;
+  background: #14202a;
+}
+.questTimelinePlusPopover {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  width: 220px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #32404f;
+  background: linear-gradient(180deg, #101821, #0c1218);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.questTimelineStepChip {
+  display: grid;
+  gap: 2px;
+  min-width: 150px;
+  max-width: 220px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #2c3845;
+  background: #111922;
+  color: #e8edf1;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.questTimelineStepChip:hover {
+  border-color: #4a6176;
+}
+.questTimelineStepChip--active {
+  border-color: #7bd4ff;
+  background: #14202a;
+  box-shadow: 0 0 0 1px rgba(123, 212, 255, 0.18);
+}
+.questTimelineStepChipTitle {
+  font-size: 13px;
+  font-weight: 800;
+  color: #f4f7fb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.questTimelineStepChipMeta {
+  font-size: 11px;
+  color: #8ea0ad;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.questTimelineTerminalChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #31503d;
+  background: #122018;
+  color: #b7f7c8;
+  font-size: 12px;
+  font-weight: 900;
+}
+.questTimelineTerminalChip--warning {
+  border-color: #62472d;
+  background: #22180f;
+  color: #ffd2a0;
+}
+.questTimelineStepDetail {
+  display: grid;
+  gap: 12px;
+}
+.questTimelineIssueList {
+  display: grid;
+  gap: 6px;
+}
+.questTimelineIssue {
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid #2c3845;
+  background: #101821;
+  color: #c9d6df;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.questTimelineIssue--error {
+  border-color: #7f1d1d;
+  background: #241111;
+  color: #fecaca;
+}
+.questTimelineIssue--warning {
+  border-color: #62472d;
+  background: #22180f;
+  color: #ffd2a0;
+}
+.questTimelineChildBadge {
+  cursor: pointer;
+}
+.questTimelineChoiceCard {
+  margin-bottom: 4px;
 }
 
 .libSearchRow { padding: 0 0 10px; }

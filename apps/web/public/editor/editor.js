@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260820-rmb-pan-speed2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260904-graph-frames1";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute } from "./authoring-contract.js?v=20260907-authoring-01b";
 import {
@@ -27,6 +27,10 @@ import {
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 const EDITOR_API_TIMEOUT_MS = 20000;
+const EDITOR_HEALTHCHECK_STALE_MS = 45000;
+const EDITOR_HEALTHCHECK_INTERVAL_MS = 15000;
+const EDITOR_AUTOSAVE_DELAY_MS = 45000;
+const EDITOR_AUTOSAVE_RETRY_MS = 15000;
 
 const HEAD = 34;
 const PAD = 8;
@@ -142,6 +146,17 @@ const state = {
   authoringMenuOpen: false,
   nodeLibraryOpen: false,
   objectFunctionDraft: null,
+  questTimelineView: "quest",
+  questTimelineSelectedQuestId: null,
+  questTimelineSelectedStepId: null,
+  questTimelineSelectedDialogueId: null,
+  questTimelineSelectedEntryId: null,
+  questTimelineDraft: null,
+  questTimelineDialogueDraft: null,
+  questTimelineInsertDraft: null,
+  questTimelineDialogueInsertDraft: null,
+  questTimelineChildDraft: null,
+  questTimelinePendingTargetRef: null,
   mobileSelectedAssetId: null,
   assetImportOpen: false,
   assetUploadBusy: false,
@@ -228,6 +243,14 @@ const state = {
   },
   statusMessage: "",
   statusKind: "",
+  connection: {
+    status: navigator.onLine === false ? "disconnected" : "standby",
+    pending: 0,
+    lastOkAt: 0,
+    lastError: "",
+    reconnecting: false
+  },
+  autoSaveDraftBusy: false,
   viewportDebugKey: "",
   history: { undo: [], redo: [] },
   viewportDirty: false,
@@ -315,6 +338,7 @@ const el = {
   snapGridInput: document.querySelector("#snapGridInput"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
+  connectionButton: document.querySelector("#connectionButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
   logoutButton: document.querySelector("#logoutButton"),
@@ -332,6 +356,9 @@ let runtime = null;
 let viewportRefreshTimer = null;
 let validationRefreshTimer = null;
 let editorMinimapRedrawTimer = null;
+let connectionRecoveryTimer = null;
+let connectionHeartbeatTimer = null;
+let autoSaveDraftTimer = null;
 let viewportFloatingPanelResizeRaf = 0;
 let graphMutationQueue = Promise.resolve();
 let assetUploadProgressTimer = null;
@@ -388,6 +415,7 @@ const editorDebug = window.__GK_DEBUG_EDITOR && typeof window.__GK_DEBUG_EDITOR 
   ? window.__GK_DEBUG_EDITOR
   : { enabled: false, activeDragSession: null, lastInvalidDrag: null, dragSessions: 0, lastClientPoint: null, lastGraphPoint: null, lastCommit: null };
 window.__GK_DEBUG_EDITOR = editorDebug;
+renderConnectionStatus();
 
 function editorApiTimeoutError(path, method, timeoutMs) {
   const error = new Error("Verzoek naar " + path + " duurde langer dan " + Math.round(timeoutMs / 1000) + "s.");
@@ -398,13 +426,139 @@ function editorApiTimeoutError(path, method, timeoutMs) {
   return error;
 }
 
+function connectionStatusLabel(status) {
+  if (status === "connected") return "verbonden";
+  if (status === "disconnected") return "niet verbonden";
+  return "wacht op server";
+}
+
+function renderConnectionStatus() {
+  if (!el.connectionButton) return;
+  const pending = Math.max(0, Number(state.connection.pending || 0) || 0);
+  const status = pending > 0 ? "standby" : (state.connection.status || "standby");
+  el.connectionButton.className = "connectionButton connectionButton--" + status;
+  el.connectionButton.disabled = state.connection.reconnecting === true;
+  const parts = ["Serverstatus: " + connectionStatusLabel(status)];
+  if (pending > 0) parts.push(pending + " request" + (pending === 1 ? "" : "s") + " bezig");
+  if (state.connection.lastError && status === "disconnected") parts.push(state.connection.lastError);
+  if (state.connection.lastOkAt && status === "connected") {
+    parts.push("laatste antwoord " + new Date(state.connection.lastOkAt).toLocaleTimeString());
+  }
+  parts.push(state.connection.reconnecting ? "Reconnect loopt." : "Klik om opnieuw te verbinden.");
+  const label = parts.join(". ");
+  el.connectionButton.title = label;
+  el.connectionButton.setAttribute("aria-label", label);
+}
+
+function clearConnectionRecoveryTimer() {
+  if (connectionRecoveryTimer) clearTimeout(connectionRecoveryTimer);
+  connectionRecoveryTimer = null;
+}
+
+function scheduleConnectionRecovery(delayMs = 3500) {
+  if (connectionRecoveryTimer || state.connection.reconnecting || navigator.onLine === false) return;
+  connectionRecoveryTimer = setTimeout(function () {
+    connectionRecoveryTimer = null;
+    void checkEditorConnectionHealth();
+  }, Math.max(1000, Number(delayMs) || 3500));
+}
+
+async function pingEditorServer(timeoutMs = 4000) {
+  const response = await fetchEditorApi("/api/editor/ping", { method: "HEAD", timeoutMs }, "HEAD");
+  if (response.status === 401) {
+    window.location.href = "/login/?next=" + encodeURIComponent("/editor/");
+    throw new Error("Niet ingelogd.");
+  }
+  if (!response.ok) {
+    const error = new Error("Ping mislukt: HTTP " + response.status + ".");
+    error.status = response.status;
+    throw error;
+  }
+  return true;
+}
+
+async function checkEditorConnectionHealth() {
+  if (state.connection.reconnecting || navigator.onLine === false) return false;
+  try {
+    await pingEditorServer(4000);
+    return true;
+  } catch {
+    scheduleConnectionRecovery(6000);
+    return false;
+  }
+}
+
+function startConnectionHeartbeat() {
+  if (connectionHeartbeatTimer) return;
+  connectionHeartbeatTimer = setInterval(function () {
+    if (state.connection.pending > 0 || state.connection.reconnecting || navigator.onLine === false) return;
+    if (state.connection.lastError) return;
+    const lastOkAt = Number(state.connection.lastOkAt || 0);
+    if (!lastOkAt || Date.now() - lastOkAt >= EDITOR_HEALTHCHECK_STALE_MS) {
+      void checkEditorConnectionHealth();
+    }
+  }, EDITOR_HEALTHCHECK_INTERVAL_MS);
+}
+
+function updateConnectionStatusFromState() {
+  if (state.connection.pending > 0) {
+    state.connection.status = "standby";
+  } else if (state.connection.lastError) {
+    state.connection.status = "disconnected";
+  } else if (state.connection.lastOkAt) {
+    state.connection.status = "connected";
+  } else if (navigator.onLine === false) {
+    state.connection.status = "disconnected";
+  } else {
+    state.connection.status = "standby";
+  }
+  renderConnectionStatus();
+}
+
+function editorConnectionRequestStarted() {
+  state.connection.pending += 1;
+  state.connection.status = "standby";
+  renderConnectionStatus();
+}
+
+function editorConnectionRequestSucceeded() {
+  clearConnectionRecoveryTimer();
+  state.connection.lastOkAt = Date.now();
+  state.connection.lastError = "";
+}
+
+function editorConnectionRequestFailed(error) {
+  state.connection.lastError = error?.code === "EDITOR_API_TIMEOUT"
+    ? "timeout"
+    : (navigator.onLine === false ? "browser offline" : (error?.message || "request mislukt"));
+  scheduleConnectionRecovery();
+}
+
+function editorConnectionRequestFinished() {
+  state.connection.pending = Math.max(0, state.connection.pending - 1);
+  updateConnectionStatusFromState();
+}
+
 async function fetchEditorApi(path, options, method) {
   const requestOptions = Object.assign({}, options || {});
   const timeoutMs = Number.isFinite(Number(requestOptions.timeoutMs)) ? Number(requestOptions.timeoutMs) : EDITOR_API_TIMEOUT_MS;
   delete requestOptions.timeoutMs;
-  requestOptions.headers = Object.assign({ "Content-Type": "application/json" }, requestOptions.headers || {});
+  const formBody = typeof FormData !== "undefined" && requestOptions.body instanceof FormData;
+  requestOptions.headers = formBody
+    ? Object.assign({}, requestOptions.headers || {})
+    : Object.assign({ "Content-Type": "application/json" }, requestOptions.headers || {});
+  editorConnectionRequestStarted();
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== "function") {
-    return await fetch(path, requestOptions);
+    try {
+      const response = await fetch(path, requestOptions);
+      editorConnectionRequestSucceeded();
+      return response;
+    } catch (error) {
+      editorConnectionRequestFailed(error);
+      throw error;
+    } finally {
+      editorConnectionRequestFinished();
+    }
   }
   const externalSignal = requestOptions.signal || null;
   const controller = new AbortController();
@@ -427,13 +581,23 @@ async function fetchEditorApi(path, options, method) {
     controller.abort();
   }, timeoutMs);
   try {
-    return await fetch(path, requestOptions);
+    const response = await fetch(path, requestOptions);
+    editorConnectionRequestSucceeded();
+    return response;
   } catch (error) {
-    if (timedOut) throw editorApiTimeoutError(path, method, timeoutMs);
+    if (timedOut) {
+      const timeoutError = editorApiTimeoutError(path, method, timeoutMs);
+      editorConnectionRequestFailed(timeoutError);
+      throw timeoutError;
+    }
+    if (!(error?.name === "AbortError" && externalSignal?.aborted)) {
+      editorConnectionRequestFailed(error);
+    }
     throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
     if (externalSignal && externalAbort) externalSignal.removeEventListener("abort", externalAbort);
+    editorConnectionRequestFinished();
   }
 }
 
@@ -1123,14 +1287,61 @@ function setStatus(message, kind) {
   renderStatusLine();
 }
 
+function clearAutoSaveDraftTimer() {
+  if (autoSaveDraftTimer) clearTimeout(autoSaveDraftTimer);
+  autoSaveDraftTimer = null;
+}
+
+function scheduleAutoSaveDraft(delayMs = EDITOR_AUTOSAVE_DELAY_MS) {
+  if (state.unsaved <= 0) {
+    clearAutoSaveDraftTimer();
+    return;
+  }
+  clearAutoSaveDraftTimer();
+  autoSaveDraftTimer = setTimeout(function () {
+    autoSaveDraftTimer = null;
+    void autoSaveDraft();
+  }, Math.max(5000, Number(delayMs) || EDITOR_AUTOSAVE_DELAY_MS));
+}
+
+async function autoSaveDraft() {
+  if (state.autoSaveDraftBusy || state.unsaved <= 0) return;
+  if (navigator.onLine === false || state.connection.lastError) {
+    scheduleConnectionRecovery(1000);
+    scheduleAutoSaveDraft(EDITOR_AUTOSAVE_RETRY_MS);
+    return;
+  }
+  if (state.connection.pending > 0 || state.pendingUnsavedVisualCount > 0) {
+    scheduleAutoSaveDraft(EDITOR_AUTOSAVE_RETRY_MS);
+    return;
+  }
+  state.autoSaveDraftBusy = true;
+  try {
+    await flushPendingEditorWrites();
+    if (state.unsaved <= 0) return;
+    await apiOk("/api/editor/save-draft", { method: "POST", timeoutMs: 30000 });
+    clearUnsaved();
+    state.viewportDirty = false;
+    clearViewportRefreshTimer();
+    setStatus("Auto-save draft opgeslagen.", "success");
+  } catch (error) {
+    setStatus("Auto-save mislukt: " + (error?.message || String(error)), "error");
+    scheduleAutoSaveDraft(EDITOR_AUTOSAVE_RETRY_MS);
+  } finally {
+    state.autoSaveDraftBusy = false;
+  }
+}
+
 function bumpUnsaved() {
   if (state.pendingUnsavedVisualCount > 0) {
     state.pendingUnsavedVisualCount -= 1;
     renderUnsaved();
+    scheduleAutoSaveDraft();
     return;
   }
   state.unsaved += 1;
   renderUnsaved();
+  scheduleAutoSaveDraft();
 }
 
 // Counterpart to bumpUnsaved() for undo specifically: going back in time should bring
@@ -1145,6 +1356,7 @@ function markUnsavedPending() {
   state.unsaved += 1;
   state.pendingUnsavedVisualCount += 1;
   renderUnsaved();
+  scheduleAutoSaveDraft();
   return true;
 }
 
@@ -1153,11 +1365,13 @@ function discardPendingUnsavedVisual() {
   state.pendingUnsavedVisualCount -= 1;
   if (state.unsaved > 0) state.unsaved -= 1;
   renderUnsaved();
+  if (state.unsaved <= 0) clearAutoSaveDraftTimer();
 }
 
 function clearUnsaved() {
   state.unsaved = 0;
   state.pendingUnsavedVisualCount = 0;
+  clearAutoSaveDraftTimer();
   renderUnsaved();
 }
 
@@ -1175,6 +1389,7 @@ function updateTopbarLabels() {
   if (el.saveDraftButton) el.saveDraftButton.textContent = mobile ? "DRAFT" : "SAVE DRAFT";
   if (el.publishButton) el.publishButton.textContent = mobile ? "GAME" : "SAVE TO GAME";
   if (el.logoutButton) el.logoutButton.textContent = mobile ? "OUT" : "LOGOUT";
+  renderConnectionStatus();
   renderUnsaved();
   updateEditorFullscreenButton();
 }
@@ -1418,6 +1633,22 @@ function graphWithPatchedNodeValues(graph, nodeId, patch) {
       if (node.id !== nodeId) return node;
       return Object.assign({}, node, {
         values: Object.assign({}, node.values || {}, patch || {})
+      });
+    })
+  });
+}
+
+function graphWithPatchedNodeValuesBulk(graph, patches) {
+  const patchMap = new Map((Array.isArray(patches) ? patches : []).map(function (patch) {
+    return [patch.nodeId, patch.values || {}];
+  }));
+  if (!patchMap.size) return graph || state.graph;
+  return Object.assign({}, graph || state.graph, {
+    nodes: ((graph || state.graph).nodes || []).map(function (node) {
+      const patch = patchMap.get(node.id);
+      if (!patch) return node;
+      return Object.assign({}, node, {
+        values: Object.assign({}, node.values || {}, patch)
       });
     })
   });
@@ -4953,8 +5184,9 @@ async function boot() {
   });
 }
 
-async function reloadGraph() {
-  const graph = await api("/api/editor/graph");
+async function reloadGraph(options = {}) {
+  const requestOptions = Number.isFinite(Number(options.timeoutMs)) ? { timeoutMs: Number(options.timeoutMs) } : undefined;
+  const graph = await api("/api/editor/graph", requestOptions);
   state.graph = graph;
   state.nodeTypes = graph.nodeTypes || state.nodeTypes || {};
   state.graphLoaded = true;
@@ -6212,6 +6444,34 @@ function renderObjectFunctionSection(context) {
   }
   wrap.appendChild(flow);
 
+  if (context.questBinding) {
+    const shortcuts = document.createElement("div");
+    shortcuts.className = "objectFunctionActions";
+    const questShortcut = document.createElement("button");
+    questShortcut.type = "button";
+    questShortcut.className = "objectFunctionActionButton";
+    questShortcut.textContent = "Nieuwe Quest voor " + objectFunctionModelTitle(context);
+    questShortcut.title = "Kies eerst een bestaande Campaign; de Quest Target wordt automatisch ingevuld.";
+    questShortcut.addEventListener("click", function () {
+      questTimelineStartFromObjectFunction("quest", context);
+    });
+    const dialogueShortcut = document.createElement("button");
+    dialogueShortcut.type = "button";
+    dialogueShortcut.className = "objectFunctionActionButton";
+    dialogueShortcut.textContent = "Nieuwe Dialoog voor " + objectFunctionModelTitle(context);
+    dialogueShortcut.title = "Kies eerst een bestaande Campaign; de spreker wordt automatisch ingevuld.";
+    dialogueShortcut.addEventListener("click", function () {
+      questTimelineStartFromObjectFunction("dialogue", context);
+    });
+    shortcuts.append(questShortcut, dialogueShortcut);
+    wrap.appendChild(shortcuts);
+  } else if (context.model && context.zoneGroup && context.zoneOutput) {
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Maak dit object eerst een Quest Target om er direct een quest of dialoog voor te starten.";
+    wrap.appendChild(hint);
+  }
+
   const actions = document.createElement("div");
   actions.className = "objectFunctionActions";
   const availableKinds = ["interaction", "npc", "enemy", "quest"].filter(function (kind) {
@@ -6443,6 +6703,2130 @@ function renderObjectFunctionSection(context) {
   return wrap;
 }
 
+// ---------- Quest / Dialogue Timeline (AUTHORING-03) ----------
+// Mirrors the objectFunction* recipe pattern (AUTHORING-02): every create/edit/delete
+// builds one cloned graph, does at most one restoreGraphObject() call, and never nests
+// applyGraphMutation/restoreGraphObject calls.
+
+const QUEST_TIMELINE_STEP_SEQUENCE_SPACING = 10;
+const QUEST_TIMELINE_STEP_COLUMN_STEP = NODE_WIDTH + OBJECT_RECIPE_COLUMN_GAP;
+const QUEST_TIMELINE_ROW_HEIGHT = 260;
+const QUEST_TIMELINE_CHILD_ROW_STEP = 120;
+const QUEST_TIMELINE_QUEST_BASE_X = 40;
+const QUEST_TIMELINE_QUEST_BASE_Y = 60;
+const QUEST_TIMELINE_OUTPUT_Y = -220;
+const QUEST_TIMELINE_DIALOGUE_BASE_X = QUEST_TIMELINE_QUEST_BASE_X + 20 * QUEST_TIMELINE_STEP_COLUMN_STEP;
+const QUEST_TIMELINE_MAX_DIALOGUE_RENDER_DEPTH = 24;
+const QUEST_TIMELINE_CAMPAIGN_PACKAGE_PORT = Object.freeze({
+  id: "campaign_package",
+  name: "campaignPackage",
+  label: "Campaign Package",
+  dataType: "campaignPackage",
+  multiple: false
+});
+
+const QUEST_TIMELINE_CHILD_TYPE_OPTIONS = {
+  objectives: [
+    { type: "objective_talk", label: "Praat met target" },
+    { type: "objective_collect", label: "Verzamel item" },
+    { type: "objective_deliver", label: "Lever item in" },
+    { type: "objective_reach", label: "Bereik locatie" }
+  ],
+  conditions: [
+    { type: "condition_player_level", label: "Player level" },
+    { type: "condition_has_item", label: "Heeft item" }
+  ],
+  actions: [
+    { type: "action_give_currency", label: "Geef currency" },
+    { type: "action_give_xp", label: "Geef XP" },
+    { type: "action_unlock_ability", label: "Ontgrendel ability" },
+    { type: "action_remove_item", label: "Verwijder item" },
+    { type: "action_start_quest", label: "Start quest" }
+  ],
+  rewardBundle: [{ type: "reward_bundle", label: "Reward Bundle" }],
+  rewardBundleChild: [
+    { type: "action_give_currency", label: "Geef currency" },
+    { type: "action_give_xp", label: "Geef XP" },
+    { type: "action_unlock_ability", label: "Ontgrendel ability" },
+    { type: "action_remove_item", label: "Verwijder item" },
+    { type: "action_start_quest", label: "Start quest" }
+  ],
+  choices: [{ type: "dialogue_choice", label: "Keuze" }]
+};
+
+const QUEST_TIMELINE_SUPPORTED_CHILD_TYPES = new Set([
+  "objective_talk",
+  "objective_collect",
+  "objective_deliver",
+  "objective_reach",
+  "condition_player_level",
+  "condition_has_item",
+  "action_give_currency",
+  "action_give_xp",
+  "action_unlock_ability",
+  "action_remove_item",
+  "action_start_quest",
+  "reward_bundle",
+  "dialogue_choice"
+]);
+
+// ---- Read helpers (graph structure -> UI data). No mutation. ----
+
+function isCampaignGroupNode(node) {
+  return Boolean(node) && node.type === "group" && normalizeEditorKey(node.values?.groupKind) === "campaign";
+}
+
+function currentCampaignGroupNode(graph = state.graph) {
+  if (!state.currentGroupId) return null;
+  const node = (graph.nodes || []).find(function (candidate) { return candidate.id === state.currentGroupId; });
+  return isCampaignGroupNode(node) ? node : null;
+}
+
+function questTimelineQuestsInGroup(group, graph = state.graph) {
+  if (!group) return [];
+  return (graph.nodes || []).filter(function (node) {
+    return node.type === "quest_definition" && (node.parentId || null) === group.id;
+  }).sort(function (a, b) {
+    return nodeDisplayTitle(a).localeCompare(nodeDisplayTitle(b), "nl", { sensitivity: "base" });
+  });
+}
+
+function questTimelineDialoguesInGroup(group, graph = state.graph) {
+  if (!group) return [];
+  return (graph.nodes || []).filter(function (node) {
+    return node.type === "dialogue_definition" && (node.parentId || null) === group.id;
+  }).sort(function (a, b) {
+    return nodeDisplayTitle(a).localeCompare(nodeDisplayTitle(b), "nl", { sensitivity: "base" });
+  });
+}
+
+function questTimelineDirectSources(graph, targetNode, portName, expectedType) {
+  if (!targetNode) return [];
+  const edges = (graph.edges || []).filter(function (edge) {
+    return edge.toNodeId === targetNode.id && edge.toPort === portName;
+  });
+  const nodes = edges.map(function (edge) {
+    return (graph.nodes || []).find(function (node) { return node.id === edge.fromNodeId; }) || null;
+  }).filter(function (node) {
+    return node && (!expectedType || node.type === expectedType);
+  });
+  return Array.from(new Map(nodes.map(function (node) { return [node.id, node]; })).values());
+}
+
+function questTimelineEdgeMatches(edge, fromNodeId, fromPort, toNodeId, toPort) {
+  return edge.fromNodeId === fromNodeId
+    && edge.fromPort === fromPort
+    && edge.toNodeId === toNodeId
+    && edge.toPort === toPort;
+}
+
+function questTimelineEnsureSingleEdge(graph, fromNodeId, fromPort, toNodeId, toPort) {
+  let keptEdge = null;
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (!questTimelineEdgeMatches(edge, fromNodeId, fromPort, toNodeId, toPort)) return true;
+    if (!keptEdge) {
+      keptEdge = edge;
+      return true;
+    }
+    return false;
+  });
+  if (keptEdge) return keptEdge;
+  const edge = { id: createZoneGraphId("edge_quest_timeline"), fromNodeId, fromPort, toNodeId, toPort };
+  graph.edges.push(edge);
+  return edge;
+}
+
+function questTimelineStepsForQuest(quest, graph = state.graph) {
+  const steps = questTimelineDirectSources(graph, quest, "steps", "quest_step");
+  return steps.sort(function (a, b) {
+    const ai = Number.isFinite(Number(a.values?.sequenceIndex)) ? Number(a.values.sequenceIndex) : 0;
+    const bi = Number.isFinite(Number(b.values?.sequenceIndex)) ? Number(b.values.sequenceIndex) : 0;
+    if (ai !== bi) return ai - bi;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function questTimelineObjectivesForStep(step, graph = state.graph) {
+  return questTimelineDirectSources(graph, step, "objectives");
+}
+function questTimelineConditionsForStep(step, graph = state.graph) {
+  return questTimelineDirectSources(graph, step, "conditions");
+}
+function questTimelineRewardsForStep(step, graph = state.graph) {
+  return questTimelineDirectSources(graph, step, "rewards");
+}
+function questTimelineEntriesForDialogue(dialogue, graph = state.graph) {
+  return questTimelineDirectSources(graph, dialogue, "entries");
+}
+function questTimelineChoicesForEntry(entry, graph = state.graph) {
+  const choices = questTimelineDirectSources(graph, entry, "choices", "dialogue_choice");
+  return choices.sort(function (a, b) {
+    const ao = Number.isFinite(Number(a.values?.order)) ? Number(a.values.order) : 0;
+    const bo = Number.isFinite(Number(b.values?.order)) ? Number(b.values.order) : 0;
+    if (ao !== bo) return ao - bo;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function questTimelineEntryNodeByLocalId(dialogue, localId, graph = state.graph) {
+  const canonical = normalizeCanonicalId(localId, "");
+  if (!canonical) return null;
+  const entries = questTimelineEntriesForDialogue(dialogue, graph);
+  return entries.find(function (entry) {
+    const idField = entry.type === "dialogue_terminal" ? "terminalId" : "entryId";
+    return normalizeCanonicalId(entry.values?.[idField], "") === canonical;
+  }) || null;
+}
+
+// ---- Layout helpers (fixed formulas, applied only at creation time - no continuous auto-layout) ----
+
+function questTimelineSuggestedQuestPosition(graph, group) {
+  const existingQuests = questTimelineQuestsInGroup(group, graph);
+  if (!existingQuests.length) return { x: QUEST_TIMELINE_QUEST_BASE_X, y: QUEST_TIMELINE_QUEST_BASE_Y };
+  const maxY = existingQuests.reduce(function (max, q) {
+    const y = Number(q.y);
+    return Number.isFinite(y) ? Math.max(max, y) : max;
+  }, QUEST_TIMELINE_QUEST_BASE_Y - QUEST_TIMELINE_ROW_HEIGHT);
+  return { x: QUEST_TIMELINE_QUEST_BASE_X, y: Math.round(maxY + QUEST_TIMELINE_ROW_HEIGHT) };
+}
+
+function questTimelineSuggestedDialoguePosition(graph, group) {
+  const existing = questTimelineDialoguesInGroup(group, graph);
+  if (!existing.length) return { x: QUEST_TIMELINE_DIALOGUE_BASE_X, y: QUEST_TIMELINE_QUEST_BASE_Y };
+  const maxY = existing.reduce(function (max, d) {
+    const y = Number(d.y);
+    return Number.isFinite(y) ? Math.max(max, y) : max;
+  }, QUEST_TIMELINE_QUEST_BASE_Y - QUEST_TIMELINE_ROW_HEIGHT);
+  return { x: QUEST_TIMELINE_DIALOGUE_BASE_X, y: Math.round(maxY + QUEST_TIMELINE_ROW_HEIGHT) };
+}
+
+function questTimelineChildPortForCategory(category) {
+  if (category === "objectives") return "objectives";
+  if (category === "conditions") return "conditions";
+  if (category === "actions") return "rewards";
+  if (category === "rewardBundle") return "rewards";
+  if (category === "rewardBundleChild") return "rewards";
+  if (category === "choices") return "choices";
+  return null;
+}
+
+function questTimelineChildOutputPort(type) {
+  if (type.indexOf("objective_") === 0) return "objective";
+  if (type.indexOf("condition_") === 0) return "condition";
+  if (type === "reward_bundle") return "rewardEntry";
+  if (type.indexOf("action_") === 0) return "rewardEntry";
+  if (type === "dialogue_choice") return "dialogueChoice";
+  return "";
+}
+
+function questTimelinePortDataType(nodeType, direction, portName) {
+  const ports = state.nodeTypes?.[nodeType]?.[direction === "input" ? "inputs" : "outputs"] || {};
+  return String(ports?.[portName]?.dataType || "").trim();
+}
+
+function questTimelineChildPortsCompatible(anchorNode, category, childType) {
+  const toPort = questTimelineChildPortForCategory(category);
+  const fromPort = questTimelineChildOutputPort(childType);
+  if (!anchorNode || !toPort || !fromPort) return false;
+  const inputType = questTimelinePortDataType(anchorNode.type, "input", toPort);
+  const outputType = questTimelinePortDataType(childType, "output", fromPort);
+  return Boolean(inputType && outputType && inputType === outputType);
+}
+
+function questTimelineStepTypeForObjective(objectiveType) {
+  if (objectiveType === "objective_talk") return "talk";
+  if (objectiveType === "objective_collect") return "collect";
+  if (objectiveType === "objective_deliver") return "deliver";
+  if (objectiveType === "objective_reach") return "reach";
+  return "";
+}
+
+function questTimelineStepIdForNode(step) {
+  return normalizeCanonicalId(step?.values?.stepId, "");
+}
+
+function questTimelineSuggestedChildPosition(graph, anchor, category) {
+  const anchorX = Number(anchor.x) || 0;
+  const anchorY = Number(anchor.y) || 0;
+  const port = questTimelineChildPortForCategory(category);
+  const existingCount = (graph.edges || []).filter(function (edge) {
+    return edge.toNodeId === anchor.id && edge.toPort === port;
+  }).length;
+  if (category === "conditions") {
+    return { x: anchorX, y: anchorY - QUEST_TIMELINE_CHILD_ROW_STEP * (existingCount + 1) };
+  }
+  if (category === "rewardBundleChild") {
+    return { x: anchorX + QUEST_TIMELINE_STEP_COLUMN_STEP, y: anchorY + QUEST_TIMELINE_CHILD_ROW_STEP * existingCount };
+  }
+  if (category === "choices") {
+    return { x: anchorX, y: anchorY + QUEST_TIMELINE_CHILD_ROW_STEP * (existingCount + 1) };
+  }
+  if (category === "objectives") {
+    return { x: anchorX, y: anchorY + QUEST_TIMELINE_CHILD_ROW_STEP * (existingCount + 1) };
+  }
+  // actions / rewardBundle share the step's "rewards" port -> continue the same stack below objectives
+  const objectivesCount = (graph.edges || []).filter(function (edge) {
+    return edge.toNodeId === anchor.id && edge.toPort === "objectives";
+  }).length;
+  return { x: anchorX, y: anchorY + QUEST_TIMELINE_CHILD_ROW_STEP * (objectivesCount + existingCount + 1) };
+}
+
+// ---- Ensure helpers (find-or-create infra, idempotent - same pattern as objectFunctionEnsureAssemblyNode) ----
+
+function questTimelineEnsureCampaignGroupOutput(graph, group) {
+  if (!group) return null;
+  group.values = Object.assign({}, group.values || {});
+  const currentInterface = group.values.groupInterface && typeof group.values.groupInterface === "object"
+    ? clonePlain(group.values.groupInterface)
+    : { inputs: [], outputs: [] };
+  currentInterface.inputs = Array.isArray(currentInterface.inputs) ? currentInterface.inputs : [];
+  currentInterface.outputs = Array.isArray(currentInterface.outputs) ? currentInterface.outputs : [];
+  let port = currentInterface.outputs.find(function (candidate) {
+    return candidate && (candidate.name === "campaignPackage" || candidate.dataType === "campaignPackage");
+  }) || null;
+  if (!port) {
+    port = clonePlain(QUEST_TIMELINE_CAMPAIGN_PACKAGE_PORT);
+    currentInterface.outputs.push(port);
+  }
+  group.values.groupInterface = currentInterface;
+  ensureGroupSystemNodesInGraph(graph, group.id);
+  const groupOutput = (graph.nodes || []).find(function (node) {
+    return node.parentId === group.id && node.type === "group_output";
+  }) || null;
+  return groupOutput && port?.name ? { node: groupOutput, portName: port.name } : null;
+}
+
+function questTimelineEnsureCampaignOutput(graph, group) {
+  if (!group) return null;
+  const groupOutput = questTimelineEnsureCampaignGroupOutput(graph, group);
+  let output = (graph.nodes || []).find(function (node) {
+    return node.type === "campaign_output" && (node.parentId || null) === group.id;
+  }) || null;
+  if (!output) {
+    output = {
+      id: createZoneGraphId("node_campaign_output"),
+      type: "campaign_output",
+      title: "Campaign Output",
+      x: QUEST_TIMELINE_QUEST_BASE_X,
+      y: QUEST_TIMELINE_OUTPUT_Y,
+      parentId: group.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("campaign_output"), {
+        packageId: uniqueCanonicalGraphValue(graph, "package.campaign." + (slugifyGroupPortName(group.values?.title || group.title || "main") || "main"))
+      })
+    };
+    graph.nodes.push(output);
+  }
+  if (groupOutput) {
+    questTimelineEnsureSingleEdge(graph, output.id, "campaignPackage", groupOutput.node.id, groupOutput.portName);
+  }
+  return output;
+}
+
+// ---- Quest create / step insert / step delete ----
+
+function questTimelineBeginQuestDraft(group) {
+  const pending = state.questTimelinePendingTargetRef;
+  const usePending = Boolean(pending && pending.intent === "quest");
+  state.questTimelineDraft = {
+    groupId: group.id,
+    values: {
+      displayName: "",
+      summary: "",
+      turnInTargetRef: usePending ? pending.targetId : "",
+      minimumLevel: 1
+    }
+  };
+  if (usePending) state.questTimelinePendingTargetRef = null;
+  renderAuthoringHub();
+}
+
+function questTimelinePendingTargetLabel(intent) {
+  const pending = state.questTimelinePendingTargetRef;
+  if (!pending || pending.intent !== intent) return "";
+  const field = { type: "reference", referenceKinds: ["target"], required: false };
+  const refState = referencePickerChoiceState(pending.targetId, field);
+  return refState.displayLabel || pending.targetId || "";
+}
+
+async function questTimelineCommitCreateQuest(group, draft) {
+  const qFields = state.nodeTypes?.quest_definition?.fields || {};
+  const displayName = normalizeFieldInputValue(qFields.displayName || { type: "text" }, draft.values?.displayName);
+  if (isBlankValue(displayName)) { setStatus("Vul een questnaam in.", "error"); return; }
+  const summary = normalizeFieldInputValue(qFields.summary || { type: "tokenText" }, draft.values?.summary);
+  if (isBlankValue(summary)) { setStatus("Vul een korte omschrijving in.", "error"); return; }
+  const turnInTargetRef = qFields.turnInTargetRef ? normalizeFieldInputValue(qFields.turnInTargetRef, draft.values?.turnInTargetRef) : null;
+  const minimumLevel = qFields.minimumLevel ? normalizeFieldInputValue(qFields.minimumLevel, draft.values?.minimumLevel) : 1;
+
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = nextGraph.nodes.find(function (node) { return node.id === group.id; }) || null;
+  if (!nextGroup) { setStatus("Deze Campaign Group bestaat niet meer.", "error"); return; }
+  const output = questTimelineEnsureCampaignOutput(nextGraph, nextGroup);
+  const stem = slugifyGroupPortName(displayName) || "quest";
+  const questId = uniqueCanonicalGraphValue(nextGraph, "quest." + stem);
+  const questPosition = questTimelineSuggestedQuestPosition(nextGraph, nextGroup);
+  const quest = {
+    id: createZoneGraphId("node_quest_definition"),
+    type: "quest_definition",
+    title: displayName,
+    x: questPosition.x,
+    y: questPosition.y,
+    parentId: nextGroup.id,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("quest_definition"), {
+      questId: questId,
+      displayName: displayName,
+      summary: summary,
+      turnInTargetRef: turnInTargetRef || null,
+      minimumLevel: Number.isFinite(Number(minimumLevel)) ? Math.max(1, Math.floor(Number(minimumLevel))) : 1
+    })
+  };
+  nextGraph.nodes.push(quest);
+  const stepId = uniqueCanonicalGraphValue(nextGraph, "quest_step." + stem + ".step_1");
+  const step = {
+    id: createZoneGraphId("node_quest_step"),
+    type: "quest_step",
+    title: "Stap 1",
+    x: questPosition.x + QUEST_TIMELINE_STEP_COLUMN_STEP,
+    y: questPosition.y,
+    parentId: nextGroup.id,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("quest_step"), {
+      stepId: stepId,
+      displayName: "Stap 1",
+      stepType: "custom",
+      sequenceIndex: QUEST_TIMELINE_STEP_SEQUENCE_SPACING
+    })
+  };
+  nextGraph.nodes.push(step);
+  quest.values.startStepRef = stepId;
+  questTimelineEnsureSingleEdge(nextGraph, step.id, "questStep", quest.id, "steps");
+  if (output) questTimelineEnsureSingleEdge(nextGraph, quest.id, "questDef", output.id, "quests");
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Nieuwe quest: " + displayName,
+      selectedNodeIds: [quest.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        state.questTimelineDraft = null;
+        state.questTimelineSelectedQuestId = quest.id;
+        state.questTimelineSelectedStepId = step.id;
+        focusGraphNode(quest.id);
+        setStatus("Quest \"" + displayName + "\" aangemaakt.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+function questTimelineNextStepSequenceIndex(steps, insertIndex) {
+  if (!steps.length) return QUEST_TIMELINE_STEP_SEQUENCE_SPACING;
+  if (insertIndex <= 0) {
+    const first = Number(steps[0].values?.sequenceIndex) || QUEST_TIMELINE_STEP_SEQUENCE_SPACING;
+    return first > 1 ? Math.floor(first / 2) : null;
+  }
+  if (insertIndex >= steps.length) {
+    const last = Number(steps[steps.length - 1].values?.sequenceIndex) || 0;
+    return last + QUEST_TIMELINE_STEP_SEQUENCE_SPACING;
+  }
+  const before = Number(steps[insertIndex - 1].values?.sequenceIndex) || 0;
+  const after = Number(steps[insertIndex].values?.sequenceIndex) || (before + QUEST_TIMELINE_STEP_SEQUENCE_SPACING);
+  const mid = Math.floor((before + after) / 2);
+  return mid > before ? mid : null;
+}
+
+function questTimelineRenumberSteps(steps) {
+  steps.forEach(function (step, index) {
+    step.values = Object.assign({}, step.values || {}, { sequenceIndex: (index + 1) * QUEST_TIMELINE_STEP_SEQUENCE_SPACING });
+  });
+}
+
+async function questTimelineInsertStep(quest, insertIndex, displayNameInput) {
+  const stepFields = state.nodeTypes?.quest_step?.fields || {};
+  const name = normalizeFieldInputValue(stepFields.displayName || { type: "text" }, displayNameInput);
+  if (isBlankValue(name)) { setStatus("Vul een stapnaam in.", "error"); return; }
+
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextQuest = nextGraph.nodes.find(function (n) { return n.id === quest.id; }) || null;
+  if (!nextQuest) { setStatus("Deze quest bestaat niet meer.", "error"); return; }
+  let steps = questTimelineStepsForQuest(nextQuest, nextGraph);
+  let seq = questTimelineNextStepSequenceIndex(steps, insertIndex);
+  if (seq === null) {
+    questTimelineRenumberSteps(steps);
+    steps = questTimelineStepsForQuest(nextQuest, nextGraph);
+    seq = questTimelineNextStepSequenceIndex(steps, insertIndex);
+  }
+  const stem = slugifyGroupPortName(nextQuest.values?.questId || nextQuest.values?.displayName || "quest");
+  const stepId = uniqueCanonicalGraphValue(nextGraph, "quest_step." + stem + ".step_" + (steps.length + 1));
+  const prev = insertIndex > 0 ? steps[insertIndex - 1] : null;
+  const next = insertIndex < steps.length ? steps[insertIndex] : null;
+  const baseY = (prev && Number.isFinite(Number(prev.y))) ? Number(prev.y)
+    : (next && Number.isFinite(Number(next.y))) ? Number(next.y)
+    : Number(nextQuest.y) || 0;
+  const x = prev && next ? Math.round((Number(prev.x) + Number(next.x)) / 2)
+    : prev ? Number(prev.x) + QUEST_TIMELINE_STEP_COLUMN_STEP
+    : next ? Number(next.x) - QUEST_TIMELINE_STEP_COLUMN_STEP
+    : Number(nextQuest.x) + QUEST_TIMELINE_STEP_COLUMN_STEP;
+  const step = {
+    id: createZoneGraphId("node_quest_step"),
+    type: "quest_step",
+    title: name,
+    x: x,
+    y: baseY,
+    parentId: nextQuest.parentId || null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("quest_step"), {
+      stepId: stepId,
+      displayName: name,
+      stepType: "custom",
+      sequenceIndex: seq
+    })
+  };
+  const nextStepId = questTimelineStepIdForNode(next);
+  if (nextStepId) step.values.nextStepRef = nextStepId;
+  if (!prev) {
+    nextQuest.values = Object.assign({}, nextQuest.values || {}, { startStepRef: stepId });
+  } else {
+    const prevNextStepRef = normalizeCanonicalId(prev.values?.nextStepRef, "");
+    if (!prevNextStepRef || prevNextStepRef === nextStepId) {
+      prev.values = Object.assign({}, prev.values || {}, { nextStepRef: stepId });
+    }
+  }
+  nextGraph.nodes.push(step);
+  questTimelineEnsureSingleEdge(nextGraph, step.id, "questStep", nextQuest.id, "steps");
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Stap toegevoegd: " + name,
+      selectedNodeIds: [step.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        state.questTimelineInsertDraft = null;
+        state.questTimelineSelectedStepId = step.id;
+        focusGraphNode(step.id);
+        setStatus("Stap \"" + name + "\" toegevoegd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+async function questTimelineDeleteStep(quest, step) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextQuest = nextGraph.nodes.find(function (n) { return n.id === quest.id; }) || null;
+  const nextStep = nextGraph.nodes.find(function (n) { return n.id === step.id; }) || null;
+  if (!nextQuest || !nextStep) return;
+  const removedStepRef = questTimelineStepIdForNode(nextStep);
+  objectFunctionRemoveNodeAndEdges(nextGraph, nextStep.id);
+  const remainingSteps = questTimelineStepsForQuest(nextQuest, nextGraph);
+  if (normalizeCanonicalId(nextQuest.values?.startStepRef, "") === removedStepRef) {
+    nextQuest.values = Object.assign({}, nextQuest.values || {}, {
+      startStepRef: questTimelineStepIdForNode(remainingSteps[0]) || null
+    });
+  }
+  for (const remainingStep of remainingSteps) {
+    if (normalizeCanonicalId(remainingStep.values?.nextStepRef, "") === removedStepRef) {
+      remainingStep.values = Object.assign({}, remainingStep.values || {}, { nextStepRef: null });
+    }
+  }
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Stap verwijderd: " + nodeDisplayTitle(step),
+      selectedNodeIds: [quest.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        if (state.questTimelineSelectedStepId === step.id) state.questTimelineSelectedStepId = null;
+        focusGraphNode(quest.id);
+        setStatus("Stap verwijderd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+// ---- Generic child draft (objectives / conditions / actions / reward bundle / bundle contents / dialogue choices) ----
+// One mechanism reused everywhere a small typed node hangs off a "collection" port: create picks a type then
+// fills its real fields; edit (Beheren) reopens the same form seeded from the existing node's values.
+
+function questTimelineAvailableChildTypes(category, anchorNode) {
+  return (QUEST_TIMELINE_CHILD_TYPE_OPTIONS[category] || []).filter(function (entry) {
+    return Boolean(state.nodeTypes?.[entry.type])
+      && QUEST_TIMELINE_SUPPORTED_CHILD_TYPES.has(entry.type)
+      && (!anchorNode || questTimelineChildPortsCompatible(anchorNode, category, entry.type));
+  });
+}
+
+function questTimelineOpenChildChooser(anchorId, category) {
+  const anchor = (state.graph.nodes || []).find(function (node) { return node.id === anchorId; }) || null;
+  const options = questTimelineAvailableChildTypes(category, anchor);
+  if (!options.length) {
+    setStatus("Geen ondersteunde keuze voor deze plek in de bestaande compiler/runtime.", "error");
+    return;
+  }
+  state.questTimelineChildDraft = { anchorId: anchorId, category: category, type: null, values: {} };
+  if (options.length === 1) {
+    questTimelineChooseChildType(options[0].type);
+    return;
+  }
+  renderAuthoringHub();
+}
+
+function questTimelineChooseChildType(type) {
+  const draft = state.questTimelineChildDraft;
+  if (!draft) return;
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const values = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    values[key] = field.default !== undefined ? clonePlain(field.default) : null;
+  }
+  draft.type = type;
+  draft.values = values;
+  renderAuthoringHub();
+}
+
+function questTimelineBeginChildEdit(anchorId, category, existingNode) {
+  const fields = state.nodeTypes?.[existingNode.type]?.fields || {};
+  const values = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    values[key] = existingNode.values?.[key] !== undefined ? clonePlain(existingNode.values[key]) : (field.default !== undefined ? clonePlain(field.default) : null);
+  }
+  state.questTimelineChildDraft = { anchorId: anchorId, category: category, type: existingNode.type, values: values, existingNodeId: existingNode.id };
+  renderAuthoringHub();
+}
+
+function questTimelineComparableChildValues(type, values) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const comparable = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    const rawValue = values?.[key];
+    if (field.type === "reference") {
+      comparable[key] = normalizeCanonicalId(rawValue, "");
+    } else if (field.type === "referenceList") {
+      comparable[key] = normalizeReferenceList(Array.isArray(rawValue) ? rawValue : splitDelimitedValues(rawValue));
+    } else if (field.type === "tagList") {
+      comparable[key] = normalizeTagList(rawValue);
+    } else if (field.type === "boolean") {
+      comparable[key] = rawValue === true;
+    } else if (field.type === "number") {
+      const number = Number(rawValue);
+      comparable[key] = Number.isFinite(number) ? number : Number(field.default || 0);
+    } else {
+      comparable[key] = rawValue === null || rawValue === undefined ? "" : String(rawValue);
+    }
+  }
+  return JSON.stringify(comparable);
+}
+
+function questTimelineFindEquivalentChild(graph, anchor, category, type, values) {
+  const port = questTimelineChildPortForCategory(category);
+  if (!anchor || !port) return null;
+  const wanted = questTimelineComparableChildValues(type, values);
+  return questTimelineDirectSources(graph, anchor, port, type).find(function (candidate) {
+    return questTimelineComparableChildValues(type, candidate.values || {}) === wanted;
+  }) || null;
+}
+
+function questTimelineSyncStepFieldsForObjective(graph, anchor, child, category) {
+  if (!graph || !anchor || !child || category !== "objectives" || anchor.type !== "quest_step") return;
+  const nextStepType = questTimelineStepTypeForObjective(child.type);
+  if (!nextStepType) return;
+  const siblings = questTimelineDirectSources(graph, anchor, "objectives").filter(function (candidate) {
+    return candidate.id !== child.id;
+  });
+  const siblingStepTypes = Array.from(new Set(siblings.map(function (candidate) {
+    return questTimelineStepTypeForObjective(candidate.type);
+  }).filter(Boolean)));
+  const currentStepType = String(anchor.values?.stepType || "").trim();
+  const knownRuntimeTypes = new Set(["talk", "collect", "deliver", "reach"]);
+  const canSyncType = !siblings.length
+    || !knownRuntimeTypes.has(currentStepType)
+    || (siblingStepTypes.length === 1 && siblingStepTypes[0] === nextStepType);
+  if (!canSyncType) return;
+  const patch = { stepType: nextStepType };
+  const targetRef = normalizeCanonicalId(child.values?.targetRef, "");
+  const zoneRef = normalizeCanonicalId(child.values?.zoneRef, "");
+  if (targetRef && (!siblings.length || !normalizeCanonicalId(anchor.values?.targetRef, ""))) patch.targetRef = targetRef;
+  if (zoneRef && (!siblings.length || !normalizeCanonicalId(anchor.values?.zoneRef, ""))) patch.zoneRef = zoneRef;
+  anchor.values = Object.assign({}, anchor.values || {}, patch);
+}
+
+function questTimelineChildDraftCanConfirm(draft) {
+  if (!draft || !draft.type) return false;
+  const anchor = (state.graph.nodes || []).find(function (node) { return node.id === draft.anchorId; }) || null;
+  if (!anchor || !questTimelineChildPortsCompatible(anchor, draft.category, draft.type)) return false;
+  const fields = state.nodeTypes?.[draft.type]?.fields || {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity" || !field.required) continue;
+    const value = draft.values?.[key];
+    if (field.type === "reference") {
+      if (referencePickerChoiceState(value, field).state !== "ok") return false;
+    } else if (isBlankValue(value)) {
+      return false;
+    }
+  }
+  if (draft.type === "dialogue_choice" && ["accept_quest", "turn_in_quest"].includes(String(draft.values?.action || ""))) {
+    const questField = fields.questRef || { type: "reference", referenceKinds: ["quest"], required: true };
+    return referencePickerChoiceState(draft.values?.questRef, questField).state === "ok";
+  }
+  return true;
+}
+
+function questTimelineSetChildDraftValue(key, value) {
+  if (!state.questTimelineChildDraft) return;
+  state.questTimelineChildDraft.values = Object.assign({}, state.questTimelineChildDraft.values || {}, { [key]: value });
+}
+
+function questTimelineClearChildDraft() {
+  state.questTimelineChildDraft = null;
+  renderAuthoringHub();
+}
+
+async function questTimelineCommitChildDraft() {
+  const draft = state.questTimelineChildDraft;
+  if (!draft || !draft.type) return;
+  const type = draft.type;
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const anchorNode = (state.graph.nodes || []).find(function (node) { return node.id === draft.anchorId; }) || null;
+  if (!anchorNode || !questTimelineChildPortsCompatible(anchorNode, draft.category, type)) {
+    setStatus("Deze node past niet op deze plek in het bestaande schema.", "error");
+    return;
+  }
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity" || !field.required) continue;
+    const value = draft.values?.[key];
+    if (field.type === "reference") {
+      if (referencePickerChoiceState(value, field).state !== "ok") {
+        setStatus("Kies eerst een geldige " + (field.label || key) + ".", "error");
+        return;
+      }
+    } else if (isBlankValue(value)) {
+      setStatus("Vul " + (field.label || key) + " in.", "error");
+      return;
+    }
+  }
+  if (type === "dialogue_choice" && ["accept_quest", "turn_in_quest"].includes(String(draft.values?.action || ""))) {
+    const questField = fields.questRef || { type: "reference", referenceKinds: ["quest"], required: true };
+    if (referencePickerChoiceState(draft.values?.questRef, questField).state !== "ok") {
+      setStatus("Kies eerst een bestaande quest voor deze dialoogkeuze.", "error");
+      return;
+    }
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const anchor = nextGraph.nodes.find(function (n) { return n.id === draft.anchorId; }) || null;
+  if (!anchor) { setStatus("De bijbehorende node bestaat niet meer.", "error"); return; }
+  let child = draft.existingNodeId ? (nextGraph.nodes.find(function (n) { return n.id === draft.existingNodeId; }) || null) : null;
+  const isNew = !child;
+  const label = state.nodeTypes[type]?.label || type;
+  const normalizedValues = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    if (!Object.prototype.hasOwnProperty.call(draft.values || {}, key)) continue;
+    normalizedValues[key] = normalizeFieldInputValue(field, draft.values[key]);
+  }
+  if (type === "dialogue_choice" && ["accept_quest", "close"].includes(String(normalizedValues.action || ""))) {
+    normalizedValues.closeAfterSelect = true;
+  }
+  if (isNew) {
+    const idFieldEntry = Object.entries(fields).find(function ([, f]) { return f?.type === "identity"; });
+    const idField = idFieldEntry ? idFieldEntry[0] : null;
+    const values = Object.assign({}, objectFunctionDefaultValuesForNodeType(type), normalizedValues);
+    if (type === "dialogue_choice") {
+      const existingChoiceCount = questTimelineDirectSources(nextGraph, anchor, "choices", "dialogue_choice").length;
+      const defaultOrder = Number(fields.order?.default);
+      if (!Number.isFinite(Number(values.order)) || Number(values.order) === defaultOrder) {
+        values.order = existingChoiceCount + 1;
+      }
+    }
+    const equivalent = questTimelineFindEquivalentChild(nextGraph, anchor, draft.category, type, values);
+    if (equivalent) {
+      state.questTimelineChildDraft = null;
+      focusGraphNode(equivalent.id);
+      setStatus("Dit onderdeel bestaat al bij deze stap/keuze; bestaand onderdeel geopend.", "");
+      renderAuthoringHub();
+      return;
+    }
+    if (idField) values[idField] = uniqueCanonicalGraphValue(nextGraph, String(fields[idField]?.default || type));
+    const position = questTimelineSuggestedChildPosition(nextGraph, anchor, draft.category);
+    child = { id: createZoneGraphId("node_" + type), type: type, title: label, x: position.x, y: position.y, parentId: anchor.parentId || null, values: values };
+    nextGraph.nodes.push(child);
+    questTimelineEnsureSingleEdge(nextGraph, child.id, questTimelineChildOutputPort(type), anchor.id, questTimelineChildPortForCategory(draft.category));
+  } else {
+    child.title = label;
+    child.values = Object.assign({}, child.values || {}, normalizedValues);
+  }
+  questTimelineSyncStepFieldsForObjective(nextGraph, anchor, child, draft.category);
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: label + (isNew ? " toegevoegd" : " gewijzigd"),
+      selectedNodeIds: [child.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        state.questTimelineChildDraft = null;
+        focusGraphNode(child.id);
+        setStatus(label + (isNew ? " toegevoegd." : " gewijzigd."), "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+async function questTimelineDeleteChildNode(anchorId, childNode) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextChild = nextGraph.nodes.find(function (n) { return n.id === childNode.id; }) || null;
+  if (!nextChild) return;
+  const label = state.nodeTypes?.[childNode.type]?.label || childNode.type;
+  objectFunctionRemoveNodeAndEdges(nextGraph, nextChild.id);
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: label + " verwijderd",
+      selectedNodeIds: anchorId ? [anchorId] : [],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        if (state.questTimelineChildDraft?.existingNodeId === childNode.id) state.questTimelineChildDraft = null;
+        if (anchorId) focusGraphNode(anchorId);
+        setStatus(label + " verwijderd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+// ---- Dialogue create / continue / choice / terminal ----
+
+function questTimelineBeginDialogueDraft(group) {
+  const pending = state.questTimelinePendingTargetRef;
+  const usePending = Boolean(pending && pending.intent === "dialogue");
+  state.questTimelineDialogueDraft = {
+    groupId: group.id,
+    values: {
+      displayName: "",
+      targetRef: usePending ? pending.targetId : "",
+      firstText: ""
+    }
+  };
+  if (usePending) state.questTimelinePendingTargetRef = null;
+  renderAuthoringHub();
+}
+
+async function questTimelineCommitCreateDialogue(group, draft) {
+  const dFields = state.nodeTypes?.dialogue_definition?.fields || {};
+  const displayName = normalizeFieldInputValue(dFields.displayName || { type: "text" }, draft.values?.displayName);
+  if (isBlankValue(displayName)) { setStatus("Vul een naam in.", "error"); return; }
+  const targetField = dFields.targetRef || { type: "reference", referenceKinds: ["target"], required: true };
+  const targetCheck = referencePickerChoiceState(draft.values?.targetRef, targetField);
+  if (targetCheck.state !== "ok") { setStatus("Kies eerst een spreker (Quest Target).", "error"); return; }
+  const entryFields = state.nodeTypes?.dialogue_entry?.fields || {};
+  const firstText = normalizeFieldInputValue(entryFields.text || { type: "tokenText" }, draft.values?.firstText);
+  if (isBlankValue(firstText)) { setStatus("Vul de eerste tekstregel in.", "error"); return; }
+
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = nextGraph.nodes.find(function (n) { return n.id === group.id; }) || null;
+  if (!nextGroup) { setStatus("Deze Campaign Group bestaat niet meer.", "error"); return; }
+  const output = questTimelineEnsureCampaignOutput(nextGraph, nextGroup);
+  const stem = slugifyGroupPortName(displayName) || "dialogue";
+  const dialogueId = uniqueCanonicalGraphValue(nextGraph, "dialogue." + stem);
+  const entryId = uniqueCanonicalGraphValue(nextGraph, "dialogue_entry." + stem + ".line_1");
+  const position = questTimelineSuggestedDialoguePosition(nextGraph, nextGroup);
+  const targetRef = normalizeCanonicalId(draft.values?.targetRef, "");
+  const dialogue = {
+    id: createZoneGraphId("node_dialogue_definition"),
+    type: "dialogue_definition",
+    title: displayName,
+    x: position.x,
+    y: position.y,
+    parentId: nextGroup.id,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_definition"), {
+      dialogueId: dialogueId,
+      displayName: displayName,
+      targetRef: targetRef
+    })
+  };
+  nextGraph.nodes.push(dialogue);
+  const entry = {
+    id: createZoneGraphId("node_dialogue_entry"),
+    type: "dialogue_entry",
+    title: "Regel 1",
+    x: position.x + QUEST_TIMELINE_STEP_COLUMN_STEP,
+    y: position.y,
+    parentId: nextGroup.id,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_entry"), {
+      entryId: entryId,
+      speakerName: targetCheck.displayLabel || "",
+      text: firstText
+    })
+  };
+  nextGraph.nodes.push(entry);
+  dialogue.values.startEntryRef = entryId;
+  questTimelineEnsureSingleEdge(nextGraph, entry.id, "dialogueEntry", dialogue.id, "entries");
+  if (output) questTimelineEnsureSingleEdge(nextGraph, dialogue.id, "dialogueDef", output.id, "dialogues");
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Nieuwe dialoog: " + displayName,
+      selectedNodeIds: [dialogue.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        state.questTimelineDialogueDraft = null;
+        state.questTimelineSelectedDialogueId = dialogue.id;
+        state.questTimelineSelectedEntryId = entry.id;
+        focusGraphNode(dialogue.id);
+        setStatus("Dialoog \"" + displayName + "\" aangemaakt.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+async function questTimelineAddDialogueEntry(dialogue, sourceNode, textInput) {
+  const entryFields = state.nodeTypes?.dialogue_entry?.fields || {};
+  const text = normalizeFieldInputValue(entryFields.text || { type: "tokenText" }, textInput);
+  if (isBlankValue(text)) { setStatus("Vul een tekstregel in.", "error"); return; }
+
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextDialogue = nextGraph.nodes.find(function (n) { return n.id === dialogue.id; }) || null;
+  const nextSource = nextGraph.nodes.find(function (n) { return n.id === sourceNode.id; }) || null;
+  if (!nextDialogue || !nextSource) { setStatus("Deze dialoog bestaat niet meer.", "error"); return; }
+  const stem = slugifyGroupPortName(nextDialogue.values?.dialogueId || nextDialogue.values?.displayName || "dialogue");
+  const existingEntries = questTimelineEntriesForDialogue(nextDialogue, nextGraph);
+  const entryId = uniqueCanonicalGraphValue(nextGraph, "dialogue_entry." + stem + ".line_" + (existingEntries.length + 1));
+  const entry = {
+    id: createZoneGraphId("node_dialogue_entry"),
+    type: "dialogue_entry",
+    title: "Regel " + (existingEntries.length + 1),
+    x: (Number(nextSource.x) || 0) + QUEST_TIMELINE_STEP_COLUMN_STEP,
+    y: Number(nextSource.y) || 0,
+    parentId: nextDialogue.parentId || null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_entry"), { entryId: entryId, text: text })
+  };
+  nextGraph.nodes.push(entry);
+  questTimelineEnsureSingleEdge(nextGraph, entry.id, "dialogueEntry", nextDialogue.id, "entries");
+  if (nextSource.type === "dialogue_choice") {
+    nextSource.values = Object.assign({}, nextSource.values || {}, { nextEntryRef: entryId });
+  } else {
+    const choiceFields = state.nodeTypes?.dialogue_choice?.fields || {};
+    const choiceId = uniqueCanonicalGraphValue(nextGraph, "dialogue_choice." + stem + ".continue_" + existingEntries.length);
+    const existingChoices = questTimelineChoicesForEntry(nextSource, nextGraph);
+    const choice = {
+      id: createZoneGraphId("node_dialogue_choice"),
+      type: "dialogue_choice",
+      title: "Verder",
+      x: Number(nextSource.x) || 0,
+      y: (Number(nextSource.y) || 0) + QUEST_TIMELINE_CHILD_ROW_STEP,
+      parentId: nextDialogue.parentId || null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_choice"), {
+        choiceId: choiceId,
+        label: "Verder",
+        action: "none",
+        nextEntryRef: entryId,
+        closeAfterSelect: false,
+        order: existingChoices.length + 1
+      })
+    };
+    if (!choiceFields.nextEntryRef) delete choice.values.nextEntryRef;
+    nextGraph.nodes.push(choice);
+    questTimelineEnsureSingleEdge(nextGraph, choice.id, "dialogueChoice", nextSource.id, "choices");
+    nextSource.values = Object.assign({}, nextSource.values || {}, { nextEntryRef: entryId });
+  }
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Tekstregel toegevoegd",
+      selectedNodeIds: [entry.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        state.questTimelineDialogueInsertDraft = null;
+        state.questTimelineSelectedEntryId = entry.id;
+        focusGraphNode(entry.id);
+        setStatus("Tekstregel toegevoegd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+async function questTimelineEndDialogueFrom(dialogue, sourceNode) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextDialogue = nextGraph.nodes.find(function (n) { return n.id === dialogue.id; }) || null;
+  const nextSource = nextGraph.nodes.find(function (n) { return n.id === sourceNode.id; }) || null;
+  if (!nextDialogue || !nextSource) { setStatus("Deze dialoog bestaat niet meer.", "error"); return; }
+  const stem = slugifyGroupPortName(nextDialogue.values?.dialogueId || "dialogue");
+  const terminalId = uniqueCanonicalGraphValue(nextGraph, "dialogue_terminal." + stem + ".end");
+  const terminal = {
+    id: createZoneGraphId("node_dialogue_terminal"),
+    type: "dialogue_terminal",
+    title: "Einde",
+    x: (Number(nextSource.x) || 0) + QUEST_TIMELINE_STEP_COLUMN_STEP,
+    y: Number(nextSource.y) || 0,
+    parentId: nextDialogue.parentId || null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_terminal"), { terminalId: terminalId })
+  };
+  nextGraph.nodes.push(terminal);
+  questTimelineEnsureSingleEdge(nextGraph, terminal.id, "dialogueEntry", nextDialogue.id, "entries");
+  if (nextSource.type === "dialogue_choice") {
+    nextSource.values = Object.assign({}, nextSource.values || {}, {
+      action: "close",
+      nextEntryRef: terminalId,
+      closeAfterSelect: true
+    });
+  } else {
+    const choiceId = uniqueCanonicalGraphValue(nextGraph, "dialogue_choice." + stem + ".close");
+    const existingChoices = questTimelineChoicesForEntry(nextSource, nextGraph);
+    const choice = {
+      id: createZoneGraphId("node_dialogue_choice"),
+      type: "dialogue_choice",
+      title: "Sluiten",
+      x: Number(nextSource.x) || 0,
+      y: (Number(nextSource.y) || 0) + QUEST_TIMELINE_CHILD_ROW_STEP * (existingChoices.length + 1),
+      parentId: nextDialogue.parentId || null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("dialogue_choice"), {
+        choiceId: choiceId,
+        label: "Sluiten",
+        action: "close",
+        nextEntryRef: terminalId,
+        closeAfterSelect: true,
+        order: existingChoices.length + 1
+      })
+    };
+    nextGraph.nodes.push(choice);
+    questTimelineEnsureSingleEdge(nextGraph, choice.id, "dialogueChoice", nextSource.id, "choices");
+    nextSource.values = Object.assign({}, nextSource.values || {}, { nextEntryRef: terminalId });
+  }
+
+  try {
+    await restoreGraphObject(nextGraph, {
+      historyLabel: "Dialoog beëindigd",
+      selectedNodeIds: [terminal.id],
+      selectedEdgeIds: [],
+      refreshViewport: false,
+      refreshValidation: true,
+      afterApply: function () {
+        focusGraphNode(terminal.id);
+        setStatus("Dialoogeinde toegevoegd.", "success");
+      }
+    });
+  } finally {
+    renderAuthoringHub();
+  }
+}
+
+// ---- Fase 2 selection integration (object_character -> quest_dialogue handoff) ----
+
+function questTimelineStartFromObjectFunction(intent, context) {
+  const targetId = normalizeCanonicalId(context?.questBinding?.values?.targetId, "");
+  if (!targetId) return;
+  state.questTimelinePendingTargetRef = { intent: intent, targetId: targetId };
+  state.questTimelineSelectedQuestId = null;
+  state.questTimelineSelectedDialogueId = null;
+  state.questTimelineView = intent === "dialogue" ? "dialogue" : "quest";
+  selectAuthoringRoute("quest_dialogue");
+}
+
+// ---- Small generic field-control builders (draft-agnostic - unlike objectFunctionDraft*Input,
+// these take an explicit value + onChange so they can be reused across quest/dialogue/child drafts) ----
+
+function questTimelineReferenceNavigationAction(field) {
+  const kinds = referenceKindsForField(field);
+  if (kinds.some(function (kind) { return ["item", "currency", "ability", "enemy", "npc"].includes(kind); })) {
+    return {
+      label: "Open Catalog",
+      title: "Navigeer naar de Catalog-route om een bestaande definitie te kiezen.",
+      action: function () { selectAuthoringRoute("item_ability_stat"); }
+    };
+  }
+  if (kinds.includes("zone")) {
+    return {
+      label: "Open Zone",
+      title: "Navigeer naar de Zone-route om een bestaande zone te kiezen.",
+      action: function () { selectAuthoringRoute("world_zone"); }
+    };
+  }
+  if (kinds.includes("target")) {
+    return {
+      label: "Open Object",
+      title: "Navigeer naar Object of personage om een object als Quest Target in te stellen.",
+      action: function () { selectAuthoringRoute("object_character"); }
+    };
+  }
+  if (kinds.some(function (kind) { return ["campaign", "chapter", "quest", "dialogue"].includes(kind); })) {
+    return {
+      label: "Open Campaign",
+      title: "Navigeer naar de Quest / Dialoog-route om bestaande story-definities te kiezen.",
+      action: function () { selectAuthoringRoute("quest_dialogue"); }
+    };
+  }
+  return null;
+}
+
+function questTimelineTextInput(value, onChange, options = {}) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.autocapitalize = "none";
+  input.value = value === null || value === undefined ? "" : String(value);
+  if (options.placeholder) input.placeholder = options.placeholder;
+  input.addEventListener("change", function () { onChange(input.value); });
+  return input;
+}
+
+function questTimelineNumberInput(value, onChange, options = {}) {
+  const input = document.createElement("input");
+  input.type = "number";
+  if (options.min !== undefined) input.min = String(options.min);
+  if (options.max !== undefined) input.max = String(options.max);
+  if (options.step !== undefined) input.step = String(options.step);
+  input.value = value === null || value === undefined || value === "" ? "" : String(value);
+  input.addEventListener("change", function () { onChange(input.value === "" ? null : Number(input.value)); });
+  return input;
+}
+
+function questTimelineSelectInput(value, options, onChange) {
+  const select = document.createElement("select");
+  for (const opt of options || []) {
+    const item = document.createElement("option");
+    item.value = String(opt);
+    item.textContent = String(opt);
+    select.appendChild(item);
+  }
+  select.value = value === null || value === undefined ? "" : String(value);
+  select.addEventListener("change", function () { onChange(select.value); });
+  return select;
+}
+
+function questTimelineCheckboxInput(value, onChange) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = value === true;
+  input.addEventListener("change", function () { onChange(input.checked); });
+  return input;
+}
+
+function questTimelineChildFieldControl(fieldName, field, value, setValue, idScope) {
+  if (field.type === "reference") {
+    const fakeNode = { id: "qt-child-" + idScope + "-" + fieldName, type: "quest_step", values: {} };
+    const navigation = questTimelineReferenceNavigationAction(field);
+    return buildReferencePickerField(fakeNode, fieldName, field, value, {
+      onChange: function (nextValue) { setValue(fieldName, nextValue); renderAuthoringHub(); },
+      openCatalogAction: navigation?.action,
+      openReferenceActionLabel: navigation?.label,
+      openReferenceActionTitle: navigation?.title,
+      hideAdvanced: true
+    });
+  }
+  if (field.type === "select") {
+    return questTimelineSelectInput(value ?? field.default, field.options || [], function (v) { setValue(fieldName, v); renderAuthoringHub(); });
+  }
+  if (field.type === "boolean") {
+    return questTimelineCheckboxInput(value === true, function (v) { setValue(fieldName, v); });
+  }
+  if (field.type === "number") {
+    return questTimelineNumberInput(value ?? field.default, function (v) { setValue(fieldName, v); }, { min: field.min, max: field.max, step: field.step });
+  }
+  return questTimelineTextInput(value ?? field.default ?? "", function (v) { setValue(fieldName, v); }, { placeholder: String(field.default || "") });
+}
+
+function questTimelineRenderChildForm(nodeType, draftValues, setValue) {
+  const fields = state.nodeTypes?.[nodeType]?.fields || {};
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionDraftFields";
+  for (const [fieldName, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    const control = questTimelineChildFieldControl(fieldName, field, draftValues[fieldName], setValue, nodeType);
+    wrap.appendChild(objectFunctionDraftFieldRow(field.label || fieldName, control));
+  }
+  return wrap;
+}
+
+// ---- Rendering: shared bits ----
+
+function questTimelineChildSummary(node) {
+  const def = state.nodeTypes?.[node.type] || {};
+  const label = def.label || node.type;
+  const fields = def.fields || {};
+  const parts = [];
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity" || field.type === "boolean") continue;
+    const value = node.values?.[key];
+    if (value === undefined || value === null || value === "") continue;
+    if (field.type === "reference") {
+      const refState = referencePickerChoiceState(value, field);
+      parts.push((field.label || key) + ": " + (refState.displayLabel || value));
+    } else {
+      parts.push((field.label || key) + ": " + value);
+    }
+    if (parts.length >= 2) break;
+  }
+  return label + (parts.length ? " — " + parts.join(", ") : "");
+}
+
+function renderQuestTimelineChildBadge(node, onManage, onDelete) {
+  const badge = document.createElement("div");
+  badge.className = "objectFunctionBadge questTimelineChildBadge";
+  const accent = document.createElement("span");
+  accent.className = "objectFunctionBadgeAccent";
+  accent.style.background = state.nodeTypes?.[node.type]?.accent || "#7bd4ff";
+  const body = document.createElement("div");
+  body.className = "objectFunctionBadgeBody";
+  const label = document.createElement("div");
+  label.className = "objectFunctionBadgeLabel";
+  label.textContent = state.nodeTypes?.[node.type]?.label || node.type;
+  const meta = document.createElement("div");
+  meta.className = "objectFunctionBadgeMeta";
+  meta.textContent = questTimelineChildSummary(node);
+  body.append(label, meta);
+  const buttons = document.createElement("div");
+  buttons.className = "objectFunctionBadgeButtons";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = "mini";
+  manage.textContent = "Beheren";
+  manage.addEventListener("click", function (event) { event.stopPropagation(); onManage(); });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "deleteNode";
+  remove.textContent = "Verwijderen";
+  remove.addEventListener("click", function (event) { event.stopPropagation(); onDelete(); });
+  buttons.append(manage, remove);
+  badge.append(accent, body, buttons);
+  badge.addEventListener("click", function () { focusGraphNode(node.id); });
+  return badge;
+}
+
+function renderQuestTimelineChildDraftCard(draft) {
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard";
+  if (!draft.type) {
+    const title = document.createElement("div");
+    title.className = "objectFunctionDraftTitle";
+    title.textContent = "Kies een type";
+    card.appendChild(title);
+    const options = document.createElement("div");
+    options.className = "objectFunctionActions";
+    const anchor = (state.graph.nodes || []).find(function (node) { return node.id === draft.anchorId; }) || null;
+    for (const entry of questTimelineAvailableChildTypes(draft.category, anchor)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "objectFunctionActionButton";
+      button.textContent = entry.label;
+      button.addEventListener("click", function () { questTimelineChooseChildType(entry.type); });
+      options.appendChild(button);
+    }
+    card.appendChild(options);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Annuleren";
+    cancel.addEventListener("click", function () { questTimelineClearChildDraft(); });
+    card.appendChild(cancel);
+    return card;
+  }
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = (draft.existingNodeId ? "Bewerk: " : "Nieuw: ") + (state.nodeTypes?.[draft.type]?.label || draft.type);
+  card.appendChild(title);
+  card.appendChild(questTimelineRenderChildForm(draft.type, draft.values || {}, questTimelineSetChildDraftValue));
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = draft.existingNodeId ? "Wijzigingen opslaan" : "Toevoegen";
+  confirm.disabled = !questTimelineChildDraftCanConfirm(draft);
+  confirm.addEventListener("click", function () { void questTimelineCommitChildDraft(); });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", function () { questTimelineClearChildDraft(); });
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderQuestStepSimpleChildSection(anchorNode, port, titleText, addLabel, category) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineChildSection";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionMeta";
+  heading.textContent = titleText;
+  wrap.appendChild(heading);
+  const children = questTimelineDirectSources(state.graph, anchorNode, port);
+  if (children.length) {
+    const stack = document.createElement("div");
+    stack.className = "objectFunctionBadgeRow";
+    for (const child of children) {
+      stack.appendChild(renderQuestTimelineChildBadge(child,
+        function () { questTimelineBeginChildEdit(anchorNode.id, category, child); },
+        function () { void questTimelineDeleteChildNode(anchorNode.id, child); }
+      ));
+    }
+    wrap.appendChild(stack);
+  }
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "objectFunctionActionButton";
+  addButton.textContent = addLabel;
+  addButton.addEventListener("click", function () { questTimelineOpenChildChooser(anchorNode.id, category); });
+  wrap.appendChild(addButton);
+  if (state.questTimelineChildDraft && state.questTimelineChildDraft.anchorId === anchorNode.id && state.questTimelineChildDraft.category === category) {
+    wrap.appendChild(renderQuestTimelineChildDraftCard(state.questTimelineChildDraft));
+  }
+  return wrap;
+}
+
+function renderRewardBundleContents(bundle) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineBundleContents";
+  const label = document.createElement("div");
+  label.className = "objectFunctionDraftHint";
+  label.textContent = "In bundel \"" + nodeDisplayTitle(bundle) + "\":";
+  wrap.appendChild(label);
+  const children = questTimelineDirectSources(state.graph, bundle, "rewards");
+  if (children.length) {
+    const stack = document.createElement("div");
+    stack.className = "objectFunctionBadgeRow";
+    for (const child of children) {
+      stack.appendChild(renderQuestTimelineChildBadge(child,
+        function () { questTimelineBeginChildEdit(bundle.id, "rewardBundleChild", child); },
+        function () { void questTimelineDeleteChildNode(bundle.id, child); }
+      ));
+    }
+    wrap.appendChild(stack);
+  }
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "mini";
+  addButton.textContent = "Beloning toevoegen in bundel";
+  addButton.addEventListener("click", function () { questTimelineOpenChildChooser(bundle.id, "rewardBundleChild"); });
+  wrap.appendChild(addButton);
+  if (state.questTimelineChildDraft && state.questTimelineChildDraft.anchorId === bundle.id && state.questTimelineChildDraft.category === "rewardBundleChild") {
+    wrap.appendChild(renderQuestTimelineChildDraftCard(state.questTimelineChildDraft));
+  }
+  return wrap;
+}
+
+function renderQuestStepRewardsSection(step) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineChildSection";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionMeta";
+  heading.textContent = "Beloningen & acties";
+  wrap.appendChild(heading);
+  const children = questTimelineDirectSources(state.graph, step, "rewards");
+  if (children.length) {
+    const stack = document.createElement("div");
+    stack.className = "objectFunctionBadgeRow";
+    for (const child of children) {
+      stack.appendChild(renderQuestTimelineChildBadge(child,
+        function () { questTimelineBeginChildEdit(step.id, child.type === "reward_bundle" ? "rewardBundle" : "actions", child); },
+        function () { void questTimelineDeleteChildNode(step.id, child); }
+      ));
+    }
+    wrap.appendChild(stack);
+    for (const child of children) {
+      if (child.type === "reward_bundle") wrap.appendChild(renderRewardBundleContents(child));
+    }
+  }
+  const actionsRow = document.createElement("div");
+  actionsRow.className = "objectFunctionActions";
+  const addAction = document.createElement("button");
+  addAction.type = "button";
+  addAction.className = "objectFunctionActionButton";
+  addAction.textContent = "Actie toevoegen";
+  addAction.addEventListener("click", function () { questTimelineOpenChildChooser(step.id, "actions"); });
+  const addBundle = document.createElement("button");
+  addBundle.type = "button";
+  addBundle.className = "objectFunctionActionButton";
+  addBundle.textContent = "Beloning toevoegen";
+  addBundle.addEventListener("click", function () { questTimelineOpenChildChooser(step.id, "rewardBundle"); });
+  actionsRow.append(addAction, addBundle);
+  wrap.appendChild(actionsRow);
+  if (state.questTimelineChildDraft && state.questTimelineChildDraft.anchorId === step.id && (state.questTimelineChildDraft.category === "actions" || state.questTimelineChildDraft.category === "rewardBundle")) {
+    wrap.appendChild(renderQuestTimelineChildDraftCard(state.questTimelineChildDraft));
+  }
+  return wrap;
+}
+
+// ---- Rendering: Quest timeline (Bouwblok 1 + 2) ----
+
+function renderQuestCreateDraft(group, draft) {
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = "Nieuwe Quest";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+  const setValue = function (key, value) { draft.values = Object.assign({}, draft.values || {}, { [key]: value }); };
+  fields.appendChild(objectFunctionDraftFieldRow("Questnaam", questTimelineTextInput(draft.values.displayName, function (v) { setValue("displayName", v); }, { placeholder: "Bijv. De Verdwenen Voorraad" })));
+  fields.appendChild(objectFunctionDraftFieldRow("Korte omschrijving", questTimelineTextInput(draft.values.summary, function (v) { setValue("summary", v); }, { placeholder: "Wat moet de speler doen?" })));
+  const targetField = state.nodeTypes?.quest_definition?.fields?.turnInTargetRef || { type: "reference", referenceKinds: ["target"] };
+  const targetNavigation = questTimelineReferenceNavigationAction(targetField);
+  const targetControl = buildReferencePickerField({ id: "qt-new-quest-target", type: "quest_definition", values: {} }, "turnInTargetRef", targetField, draft.values.turnInTargetRef || null, {
+    onChange: function (v) { setValue("turnInTargetRef", v); renderAuthoringHub(); },
+    openCatalogAction: targetNavigation?.action,
+    openReferenceActionLabel: targetNavigation?.label,
+    openReferenceActionTitle: targetNavigation?.title,
+    hideAdvanced: true
+  });
+  fields.appendChild(objectFunctionDraftFieldRow("Quest Target (optioneel)", targetControl, "De NPC of plek die deze quest geeft/inneemt."));
+  fields.appendChild(objectFunctionDraftFieldRow("Aanbevolen level (optioneel)", questTimelineNumberInput(draft.values.minimumLevel, function (v) { setValue("minimumLevel", v); }, { min: 1, max: 1000, step: 1 })));
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = "Aanmaken";
+  confirm.addEventListener("click", function () { void questTimelineCommitCreateQuest(group, draft); });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", function () { state.questTimelineDraft = null; renderAuthoringHub(); });
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderQuestTimelinePlus(quest, insertIndex) {
+  const holder = document.createElement("span");
+  holder.className = "questTimelinePlusHolder";
+  const draft = state.questTimelineInsertDraft;
+  const isOpenHere = Boolean(draft && draft.questId === quest.id && draft.insertIndex === insertIndex);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "questTimelinePlusButton" + (isOpenHere ? " questTimelinePlusButton--active" : "");
+  button.textContent = "+";
+  button.title = "Nieuwe stap hier invoegen";
+  button.addEventListener("click", function () {
+    state.questTimelineInsertDraft = isOpenHere ? null : { questId: quest.id, insertIndex: insertIndex, name: "" };
+    renderAuthoringHub();
+  });
+  holder.appendChild(button);
+  if (isOpenHere) {
+    const popover = document.createElement("div");
+    popover.className = "questTimelinePlusPopover";
+    const input = questTimelineTextInput(draft.name, function (v) { draft.name = v; }, { placeholder: "Naam van de stap" });
+    popover.appendChild(objectFunctionDraftFieldRow("Stapnaam", input));
+    const rowActions = document.createElement("div");
+    rowActions.className = "objectFunctionDraftActions";
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "primary";
+    confirm.textContent = "Toevoegen";
+    confirm.addEventListener("click", function () { void questTimelineInsertStep(quest, insertIndex, input.value || draft.name); });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Annuleren";
+    cancel.addEventListener("click", function () { state.questTimelineInsertDraft = null; renderAuthoringHub(); });
+    rowActions.append(confirm, cancel);
+    popover.appendChild(rowActions);
+    holder.appendChild(popover);
+  }
+  return holder;
+}
+
+function questTimelineRuntimeCompleteStep(quest) {
+  const steps = questTimelineStepsForQuest(quest, state.graph);
+  if (!steps.length) return null;
+  const last = steps[steps.length - 1];
+  const type = String(last.values?.stepType || "").trim();
+  return (type === "deliver" || type === "reach") ? last : null;
+}
+
+function renderQuestTimelineTerminalChip(quest) {
+  const chip = document.createElement("span");
+  const runtimeStep = questTimelineRuntimeCompleteStep(quest);
+  chip.className = "questTimelineTerminalChip" + (runtimeStep ? "" : " questTimelineTerminalChip--warning");
+  chip.textContent = "Voltooid";
+  chip.title = runtimeStep
+    ? "De bestaande runtime voltooit via de laatste " + String(runtimeStep.values?.stepType || "") + "-stap."
+    : "Geen ondersteund voltooi-eindpunt in compiler/runtime; maak de laatste stap deliver of reach voor runtimevoltooiing.";
+  return chip;
+}
+
+function renderQuestStepChip(quest, step) {
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "questTimelineStepChip" + (state.questTimelineSelectedStepId === step.id ? " questTimelineStepChip--active" : "");
+  const title = document.createElement("div");
+  title.className = "questTimelineStepChipTitle";
+  title.textContent = nodeDisplayTitle(step);
+  const meta = document.createElement("div");
+  meta.className = "questTimelineStepChipMeta";
+  const objectives = questTimelineObjectivesForStep(step, state.graph).length;
+  const conditions = questTimelineConditionsForStep(step, state.graph).length;
+  const rewards = questTimelineRewardsForStep(step, state.graph).length;
+  meta.textContent = objectives + " objective(s) · " + conditions + " voorwaarde(n) · " + rewards + " beloning(en)";
+  chip.append(title, meta);
+  chip.addEventListener("click", function () {
+    state.questTimelineSelectedStepId = state.questTimelineSelectedStepId === step.id ? null : step.id;
+    focusGraphNode(step.id);
+    renderAuthoringHub();
+  });
+  return chip;
+}
+
+function renderQuestStepTimeline(quest) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineFlow";
+  const steps = questTimelineStepsForQuest(quest, state.graph);
+  const startChip = document.createElement("span");
+  startChip.className = "objectFunctionFlowChip objectFunctionFlowChip--model";
+  startChip.textContent = "Start";
+  wrap.appendChild(startChip);
+  wrap.appendChild(renderQuestTimelinePlus(quest, 0));
+  steps.forEach(function (step, index) {
+    wrap.appendChild(renderQuestStepChip(quest, step));
+    wrap.appendChild(renderQuestTimelinePlus(quest, index + 1));
+  });
+  if (steps.length) {
+    wrap.appendChild(renderQuestTimelineTerminalChip(quest));
+  }
+  if (!steps.length) {
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Nog geen stappen. Gebruik + om de eerste stap toe te voegen.";
+    wrap.appendChild(hint);
+  }
+  return wrap;
+}
+
+function questTimelineNextStepByRuntimeOrder(quest, step, steps) {
+  const explicit = questTimelineStepIdForNode(step) && normalizeCanonicalId(step.values?.nextStepRef, "");
+  if (explicit) {
+    return steps.find(function (candidate) { return questTimelineStepIdForNode(candidate) === explicit; }) || null;
+  }
+  const index = steps.findIndex(function (candidate) { return candidate.id === step.id; });
+  return index >= 0 ? steps[index + 1] || null : null;
+}
+
+function questTimelineQuestIssues(quest, graph = state.graph) {
+  const issues = [];
+  const steps = questTimelineStepsForQuest(quest, graph);
+  if (!steps.length) {
+    issues.push({ kind: "error", message: "Quest heeft geen stap." });
+    return issues;
+  }
+  const stepIds = new Set();
+  const sequenceValues = new Set();
+  for (const step of steps) {
+    const stepId = questTimelineStepIdForNode(step);
+    if (!stepId) issues.push({ kind: "error", message: "Een stap mist een geldig Step id." });
+    if (stepId && stepIds.has(stepId)) issues.push({ kind: "error", message: "Dubbele Step id: " + stepId + "." });
+    if (stepId) stepIds.add(stepId);
+    const sequence = String(Number(step.values?.sequenceIndex));
+    if (sequenceValues.has(sequence)) issues.push({ kind: "warning", message: "Meerdere stappen hebben dezelfde volgorde." });
+    sequenceValues.add(sequence);
+    if ((step.parentId || null) !== (quest.parentId || null)) {
+      issues.push({ kind: "error", message: "Stap \"" + nodeDisplayTitle(step) + "\" staat buiten deze Campaign Group." });
+    }
+  }
+  const startRef = normalizeCanonicalId(quest.values?.startStepRef, "") || questTimelineStepIdForNode(steps[0]);
+  const start = steps.find(function (step) { return questTimelineStepIdForNode(step) === startRef; }) || null;
+  if (!start) {
+    issues.push({ kind: "error", message: "Startstap ontbreekt of verwijst naar een ontbrekende stap." });
+    return issues;
+  }
+  const visited = new Set();
+  let current = start;
+  let guard = 0;
+  while (current && guard <= steps.length + 1) {
+    if (visited.has(current.id)) {
+      issues.push({ kind: "error", message: "Deze quest bevat een directe cycle via nextStepRef." });
+      break;
+    }
+    visited.add(current.id);
+    guard += 1;
+    const explicit = normalizeCanonicalId(current.values?.nextStepRef, "");
+    if (explicit && !stepIds.has(explicit)) {
+      issues.push({ kind: "error", message: "Stap \"" + nodeDisplayTitle(current) + "\" verwijst naar een ontbrekende volgende stap." });
+      break;
+    }
+    current = questTimelineNextStepByRuntimeOrder(quest, current, steps);
+  }
+  if (visited.size < steps.length) {
+    issues.push({ kind: "warning", message: "Niet alle stappen zijn bereikbaar vanaf de startstap." });
+  }
+  if (!questTimelineRuntimeCompleteStep(quest)) {
+    issues.push({ kind: "warning", message: "De bestaande runtime voltooit quests alleen via een laatste deliver- of reach-stap." });
+  }
+  return issues;
+}
+
+function renderQuestTimelineIssues(quest) {
+  const issues = questTimelineQuestIssues(quest, state.graph);
+  if (!issues.length) return document.createDocumentFragment();
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineIssueList";
+  for (const issue of issues) {
+    const row = document.createElement("div");
+    row.className = "questTimelineIssue questTimelineIssue--" + issue.kind;
+    row.textContent = issue.message;
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+function renderQuestStepDetail(quest, step) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionDraftCard questTimelineStepDetail";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = nodeDisplayTitle(step);
+  wrap.appendChild(title);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "deleteNode";
+  remove.textContent = "Verwijder stap";
+  remove.addEventListener("click", function () { void questTimelineDeleteStep(quest, step); });
+  wrap.appendChild(remove);
+  wrap.appendChild(renderQuestStepSimpleChildSection(step, "conditions", "Voorwaarden", "Voorwaarde toevoegen", "conditions"));
+  wrap.appendChild(renderQuestStepSimpleChildSection(step, "objectives", "Objectives", "Objective toevoegen", "objectives"));
+  wrap.appendChild(renderQuestStepRewardsSection(step));
+  return wrap;
+}
+
+function renderQuestTimelineView(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelinePane";
+  const quests = questTimelineQuestsInGroup(group, state.graph);
+  const selected = state.questTimelineSelectedQuestId ? quests.find(function (q) { return q.id === state.questTimelineSelectedQuestId; }) : null;
+
+  if (!selected) {
+    const listWrap = document.createElement("div");
+    listWrap.className = "questTimelineList";
+    const newButton = document.createElement("button");
+    newButton.type = "button";
+    newButton.className = "primary";
+    const pendingTargetLabel = questTimelinePendingTargetLabel("quest");
+    newButton.textContent = pendingTargetLabel ? ("Nieuwe Quest voor " + pendingTargetLabel) : "Nieuwe Quest";
+    newButton.addEventListener("click", function () { questTimelineBeginQuestDraft(group); });
+    listWrap.appendChild(newButton);
+    if (!quests.length) {
+      const empty = document.createElement("div");
+      empty.className = "authoringWorkspaceEmpty";
+      empty.textContent = "Nog geen quests in deze Campaign Group.";
+      listWrap.appendChild(empty);
+    } else {
+      for (const quest of quests) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "libButton authoringWorkspaceButton";
+        const dot = document.createElement("span");
+        dot.className = "libDot";
+        dot.style.background = state.nodeTypes?.quest_definition?.accent || "#fbbf24";
+        const text = document.createElement("span");
+        text.className = "authoringRouteText";
+        const t = document.createElement("span");
+        t.className = "authoringRouteTitle";
+        t.textContent = nodeDisplayTitle(quest);
+        const s = document.createElement("span");
+        s.className = "authoringRouteSummary";
+        const stepCount = questTimelineStepsForQuest(quest, state.graph).length;
+        s.textContent = stepCount + (stepCount === 1 ? " stap" : " stappen");
+        text.append(t, s);
+        const plus = document.createElement("span");
+        plus.className = "plus";
+        plus.textContent = ">";
+        button.append(dot, text, plus);
+        button.addEventListener("click", function () {
+          state.questTimelineSelectedQuestId = quest.id;
+          state.questTimelineSelectedStepId = null;
+          focusGraphNode(quest.id);
+          renderAuthoringHub();
+        });
+        listWrap.appendChild(button);
+      }
+    }
+    wrap.appendChild(listWrap);
+    if (state.questTimelineDraft && state.questTimelineDraft.groupId === group.id) {
+      wrap.appendChild(renderQuestCreateDraft(group, state.questTimelineDraft));
+    }
+    return wrap;
+  }
+
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "mini";
+  back.textContent = "← Terug naar questlijst";
+  back.addEventListener("click", function () {
+    state.questTimelineSelectedQuestId = null;
+    state.questTimelineSelectedStepId = null;
+    renderAuthoringHub();
+  });
+  wrap.appendChild(back);
+
+  const questHeader = document.createElement("div");
+  questHeader.className = "questTimelineQuestHeader";
+  const questTitle = document.createElement("div");
+  questTitle.className = "objectFunctionDraftTitle";
+  questTitle.textContent = nodeDisplayTitle(selected);
+  const questSummary = document.createElement("div");
+  questSummary.className = "objectFunctionDraftHint";
+  questSummary.textContent = String(selected.values?.summary || "");
+  questHeader.append(questTitle, questSummary);
+  wrap.appendChild(questHeader);
+  wrap.appendChild(renderQuestTimelineIssues(selected));
+
+  wrap.appendChild(renderQuestStepTimeline(selected));
+
+  const steps = questTimelineStepsForQuest(selected, state.graph);
+  const selectedStep = state.questTimelineSelectedStepId ? steps.find(function (s) { return s.id === state.questTimelineSelectedStepId; }) : null;
+  if (selectedStep) {
+    wrap.appendChild(renderQuestStepDetail(selected, selectedStep));
+  }
+
+  return wrap;
+}
+
+// ---- Rendering: Dialogue timeline (Bouwblok 4) ----
+
+function renderQuestTimelineArrow() {
+  const arrow = document.createElement("span");
+  arrow.className = "questTimelineArrow";
+  arrow.textContent = "→";
+  return arrow;
+}
+
+function renderDialogueEntryChip(dialogue, entry) {
+  const isTerminal = entry.type === "dialogue_terminal";
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "questTimelineStepChip" + (state.questTimelineSelectedEntryId === entry.id ? " questTimelineStepChip--active" : "");
+  const title = document.createElement("div");
+  title.className = "questTimelineStepChipTitle";
+  title.textContent = isTerminal ? "Einde" : (String(entry.values?.text || "").slice(0, 40) || "Regel");
+  const meta = document.createElement("div");
+  meta.className = "questTimelineStepChipMeta";
+  meta.textContent = isTerminal ? "Sluit dialoog" : String(entry.values?.speakerName || "");
+  chip.append(title, meta);
+  chip.addEventListener("click", function () {
+    state.questTimelineSelectedEntryId = state.questTimelineSelectedEntryId === entry.id ? null : entry.id;
+    focusGraphNode(entry.id);
+    renderAuthoringHub();
+  });
+  return chip;
+}
+
+function renderDialogueLineInsertCard(dialogue, sourceNode) {
+  const draft = state.questTimelineDialogueInsertDraft;
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = "Nieuwe tekstregel";
+  card.appendChild(title);
+  const input = questTimelineTextInput(draft.text, function (v) { draft.text = v; }, { placeholder: "Tekst" });
+  card.appendChild(objectFunctionDraftFieldRow("Tekst", input));
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = "Toevoegen";
+  confirm.addEventListener("click", function () { void questTimelineAddDialogueEntry(dialogue, sourceNode, input.value || draft.text); });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", function () { state.questTimelineDialogueInsertDraft = null; renderAuthoringHub(); });
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderDialogueEntryActions(dialogue, entry) {
+  const container = document.createElement("div");
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionActions questTimelineDialogueActions";
+  const addLine = document.createElement("button");
+  addLine.type = "button";
+  addLine.className = "objectFunctionActionButton";
+  addLine.textContent = "Tekstregel toevoegen";
+  addLine.addEventListener("click", function () {
+    state.questTimelineDialogueInsertDraft = { anchorId: entry.id, text: "" };
+    renderAuthoringHub();
+  });
+  const addChoice = document.createElement("button");
+  addChoice.type = "button";
+  addChoice.className = "objectFunctionActionButton";
+  addChoice.textContent = "Keuze toevoegen";
+  addChoice.addEventListener("click", function () { questTimelineOpenChildChooser(entry.id, "choices"); });
+  const endDialogue = document.createElement("button");
+  endDialogue.type = "button";
+  endDialogue.className = "objectFunctionActionButton";
+  endDialogue.textContent = "Dialoog beëindigen";
+  endDialogue.addEventListener("click", function () { void questTimelineEndDialogueFrom(dialogue, entry); });
+  wrap.append(addLine, addChoice, endDialogue);
+  container.appendChild(wrap);
+  if (state.questTimelineDialogueInsertDraft && state.questTimelineDialogueInsertDraft.anchorId === entry.id) {
+    container.appendChild(renderDialogueLineInsertCard(dialogue, entry));
+  }
+  if (state.questTimelineChildDraft && state.questTimelineChildDraft.anchorId === entry.id && state.questTimelineChildDraft.category === "choices") {
+    container.appendChild(renderQuestTimelineChildDraftCard(state.questTimelineChildDraft));
+  }
+  return container;
+}
+
+function renderDialogueChoiceCard(dialogue, entry, choice, visited, depth) {
+  const wrap = document.createElement("div");
+  const card = document.createElement("div");
+  card.className = "objectFunctionBadge questTimelineChildBadge questTimelineChoiceCard";
+  const accent = document.createElement("span");
+  accent.className = "objectFunctionBadgeAccent";
+  accent.style.background = state.nodeTypes?.dialogue_choice?.accent || "#f0abfc";
+  const body = document.createElement("div");
+  body.className = "objectFunctionBadgeBody";
+  const label = document.createElement("div");
+  label.className = "objectFunctionBadgeLabel";
+  label.textContent = String(choice.values?.label || "Keuze");
+  const meta = document.createElement("div");
+  meta.className = "objectFunctionBadgeMeta";
+  const actionText = choice.values?.action && choice.values.action !== "none" ? (" · " + choice.values.action) : "";
+  meta.textContent = (choice.values?.nextEntryRef ? "→ volgt regel" : "geen vervolg") + actionText;
+  body.append(label, meta);
+  const buttons = document.createElement("div");
+  buttons.className = "objectFunctionBadgeButtons";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = "mini";
+  manage.textContent = "Beheren";
+  manage.addEventListener("click", function (event) { event.stopPropagation(); questTimelineBeginChildEdit(entry.id, "choices", choice); });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "deleteNode";
+  remove.textContent = "Verwijderen";
+  remove.addEventListener("click", function (event) { event.stopPropagation(); void questTimelineDeleteChildNode(entry.id, choice); });
+  buttons.append(manage, remove);
+  card.append(accent, body, buttons);
+  card.addEventListener("click", function () { focusGraphNode(choice.id); });
+  wrap.appendChild(card);
+
+  wrap.appendChild(renderQuestStepSimpleChildSection(choice, "conditions", "Voorwaarden bij deze keuze", "Voorwaarde toevoegen", "conditions"));
+
+  if (depth >= QUEST_TIMELINE_MAX_DIALOGUE_RENDER_DEPTH) {
+    const limitNote = document.createElement("div");
+    limitNote.className = "objectFunctionDraftHint";
+    limitNote.textContent = "Dialoogketen te diep om hier verder te tonen. Open de node direct in de graph.";
+    wrap.appendChild(limitNote);
+    return wrap;
+  }
+
+  const nextEntry = choice.values?.nextEntryRef ? questTimelineEntryNodeByLocalId(dialogue, choice.values.nextEntryRef, state.graph) : null;
+  if (nextEntry && visited.has(nextEntry.id)) {
+    const cycleNote = document.createElement("div");
+    cycleNote.className = "objectFunctionDraftHint";
+    cycleNote.textContent = "Verwijst terug naar \"" + nodeDisplayTitle(nextEntry) + "\" (al eerder in deze dialoog getoond).";
+    wrap.appendChild(cycleNote);
+  } else if (nextEntry) {
+    visited.add(nextEntry.id);
+    const continueRow = document.createElement("div");
+    continueRow.className = "questTimelineFlow";
+    continueRow.appendChild(renderQuestTimelineArrow());
+    continueRow.appendChild(renderDialogueEntryChip(dialogue, nextEntry));
+    wrap.appendChild(continueRow);
+    if (nextEntry.type === "dialogue_terminal") {
+      // nothing more to show after a terminal
+    } else {
+      const nextChoices = questTimelineChoicesForEntry(nextEntry, state.graph);
+      if (nextChoices.length) {
+        wrap.appendChild(renderDialogueChoiceStack(dialogue, nextEntry, visited, depth + 1));
+      } else {
+        wrap.appendChild(renderDialogueEntryActions(dialogue, nextEntry));
+      }
+    }
+  } else {
+    const continueActions = document.createElement("div");
+    continueActions.className = "objectFunctionActions";
+    const action = String(choice.values?.action || "none");
+    const closesInRuntime = choice.values?.closeAfterSelect === true || action === "close" || action === "accept_quest";
+    if (closesInRuntime) {
+      const note = document.createElement("div");
+      note.className = "objectFunctionDraftHint";
+      note.textContent = "Deze keuze sluit de dialoog in de runtime.";
+      wrap.appendChild(note);
+      return wrap;
+    }
+    const addLine = document.createElement("button");
+    addLine.type = "button";
+    addLine.className = "objectFunctionActionButton";
+    addLine.textContent = "Vervolgregel toevoegen";
+    addLine.addEventListener("click", function () {
+      state.questTimelineDialogueInsertDraft = { anchorId: choice.id, text: "" };
+      renderAuthoringHub();
+    });
+    const endHere = document.createElement("button");
+    endHere.type = "button";
+    endHere.className = "objectFunctionActionButton";
+    endHere.textContent = "Dialoog beëindigen";
+    endHere.addEventListener("click", function () { void questTimelineEndDialogueFrom(dialogue, choice); });
+    continueActions.append(addLine, endHere);
+    wrap.appendChild(continueActions);
+    if (state.questTimelineDialogueInsertDraft && state.questTimelineDialogueInsertDraft.anchorId === choice.id) {
+      wrap.appendChild(renderDialogueLineInsertCard(dialogue, choice));
+    }
+  }
+  return wrap;
+}
+
+function renderDialogueChoiceStack(dialogue, entry, visited, depth) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineChildSection";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionMeta";
+  heading.textContent = "Keuzes";
+  wrap.appendChild(heading);
+  const choices = questTimelineChoicesForEntry(entry, state.graph);
+  for (const choice of choices) {
+    wrap.appendChild(renderDialogueChoiceCard(dialogue, entry, choice, visited, depth));
+  }
+  const addChoice = document.createElement("button");
+  addChoice.type = "button";
+  addChoice.className = "objectFunctionActionButton";
+  addChoice.textContent = "Keuze toevoegen";
+  addChoice.addEventListener("click", function () { questTimelineOpenChildChooser(entry.id, "choices"); });
+  wrap.appendChild(addChoice);
+  if (state.questTimelineChildDraft && state.questTimelineChildDraft.anchorId === entry.id && state.questTimelineChildDraft.category === "choices") {
+    wrap.appendChild(renderQuestTimelineChildDraftCard(state.questTimelineChildDraft));
+  }
+  return wrap;
+}
+
+function renderDialogueEntryChain(dialogue) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineFlow questTimelineFlow--dialogue";
+  const startChip = document.createElement("span");
+  startChip.className = "objectFunctionFlowChip objectFunctionFlowChip--model";
+  startChip.textContent = "Start";
+  wrap.appendChild(startChip);
+
+  const startEntry = questTimelineEntryNodeByLocalId(dialogue, dialogue.values?.startEntryRef, state.graph);
+  if (!startEntry) {
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Geen startregel gevonden.";
+    wrap.appendChild(hint);
+    return wrap;
+  }
+
+  const visited = new Set();
+  let current = startEntry;
+  let previous = null;
+  let guard = 0;
+  while (current && !visited.has(current.id) && guard < 200) {
+    visited.add(current.id);
+    guard += 1;
+    wrap.appendChild(renderDialogueEntryChip(dialogue, current));
+    previous = current;
+    if (current.type === "dialogue_terminal") { current = null; break; }
+    const choices = questTimelineChoicesForEntry(current, state.graph);
+    if (choices.length) { current = null; break; }
+    const nextRef = current.values?.nextEntryRef;
+    current = nextRef ? questTimelineEntryNodeByLocalId(dialogue, nextRef, state.graph) : null;
+    if (current) wrap.appendChild(renderQuestTimelineArrow());
+  }
+
+  if (previous && previous.type !== "dialogue_terminal") {
+    const previousChoices = questTimelineChoicesForEntry(previous, state.graph);
+    if (previousChoices.length) {
+      wrap.appendChild(renderDialogueChoiceStack(dialogue, previous, visited, 0));
+    } else if (!previous.values?.nextEntryRef) {
+      wrap.appendChild(renderDialogueEntryActions(dialogue, previous));
+    }
+  }
+  return wrap;
+}
+
+function renderDialogueCreateDraft(group, draft) {
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = "Nieuwe Dialoog";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+  const setValue = function (key, value) { draft.values = Object.assign({}, draft.values || {}, { [key]: value }); };
+  fields.appendChild(objectFunctionDraftFieldRow("Naam", questTimelineTextInput(draft.values.displayName, function (v) { setValue("displayName", v); }, { placeholder: "Bijv. Bram - Intro" })));
+  const targetField = state.nodeTypes?.dialogue_definition?.fields?.targetRef || { type: "reference", referenceKinds: ["target"], required: true };
+  const targetNavigation = questTimelineReferenceNavigationAction(targetField);
+  const targetControl = buildReferencePickerField({ id: "qt-new-dialogue-target", type: "dialogue_definition", values: {} }, "targetRef", targetField, draft.values.targetRef || null, {
+    onChange: function (v) { setValue("targetRef", v); renderAuthoringHub(); },
+    openCatalogAction: targetNavigation?.action,
+    openReferenceActionLabel: targetNavigation?.label,
+    openReferenceActionTitle: targetNavigation?.title,
+    hideAdvanced: true
+  });
+  fields.appendChild(objectFunctionDraftFieldRow("Spreker / Quest Target", targetControl));
+  fields.appendChild(objectFunctionDraftFieldRow("Eerste tekstregel", questTimelineTextInput(draft.values.firstText, function (v) { setValue("firstText", v); }, { placeholder: "Wat zegt de spreker als eerste?" })));
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = "Aanmaken";
+  confirm.addEventListener("click", function () { void questTimelineCommitCreateDialogue(group, draft); });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", function () { state.questTimelineDialogueDraft = null; renderAuthoringHub(); });
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderDialogueTimelineView(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelinePane";
+  const dialogues = questTimelineDialoguesInGroup(group, state.graph);
+  const selected = state.questTimelineSelectedDialogueId ? dialogues.find(function (d) { return d.id === state.questTimelineSelectedDialogueId; }) : null;
+
+  if (!selected) {
+    const listWrap = document.createElement("div");
+    listWrap.className = "questTimelineList";
+    const newButton = document.createElement("button");
+    newButton.type = "button";
+    newButton.className = "primary";
+    const pendingTargetLabel = questTimelinePendingTargetLabel("dialogue");
+    newButton.textContent = pendingTargetLabel ? ("Nieuwe Dialoog voor " + pendingTargetLabel) : "Nieuwe Dialoog";
+    newButton.addEventListener("click", function () { questTimelineBeginDialogueDraft(group); });
+    listWrap.appendChild(newButton);
+    if (!dialogues.length) {
+      const empty = document.createElement("div");
+      empty.className = "authoringWorkspaceEmpty";
+      empty.textContent = "Nog geen dialogen in deze Campaign Group.";
+      listWrap.appendChild(empty);
+    } else {
+      for (const dialogue of dialogues) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "libButton authoringWorkspaceButton";
+        const dot = document.createElement("span");
+        dot.className = "libDot";
+        dot.style.background = state.nodeTypes?.dialogue_definition?.accent || "#c084fc";
+        const text = document.createElement("span");
+        text.className = "authoringRouteText";
+        const t = document.createElement("span");
+        t.className = "authoringRouteTitle";
+        t.textContent = nodeDisplayTitle(dialogue);
+        const s = document.createElement("span");
+        s.className = "authoringRouteSummary";
+        s.textContent = questTimelineEntriesForDialogue(dialogue, state.graph).length + " regel(s)";
+        text.append(t, s);
+        const plus = document.createElement("span");
+        plus.className = "plus";
+        plus.textContent = ">";
+        button.append(dot, text, plus);
+        button.addEventListener("click", function () {
+          state.questTimelineSelectedDialogueId = dialogue.id;
+          state.questTimelineSelectedEntryId = null;
+          focusGraphNode(dialogue.id);
+          renderAuthoringHub();
+        });
+        listWrap.appendChild(button);
+      }
+    }
+    wrap.appendChild(listWrap);
+    if (state.questTimelineDialogueDraft && state.questTimelineDialogueDraft.groupId === group.id) {
+      wrap.appendChild(renderDialogueCreateDraft(group, state.questTimelineDialogueDraft));
+    }
+    return wrap;
+  }
+
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "mini";
+  back.textContent = "← Terug naar dialooglijst";
+  back.addEventListener("click", function () {
+    state.questTimelineSelectedDialogueId = null;
+    state.questTimelineSelectedEntryId = null;
+    renderAuthoringHub();
+  });
+  wrap.appendChild(back);
+
+  const header = document.createElement("div");
+  header.className = "questTimelineQuestHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = nodeDisplayTitle(selected);
+  header.appendChild(title);
+  wrap.appendChild(header);
+
+  wrap.appendChild(renderDialogueEntryChain(selected));
+
+  return wrap;
+}
+
+// ---- Top-level entry point: tabs + selected pane ----
+
+function questTimelineTabButton(label, active, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "questTimelineTab" + (active ? " questTimelineTab--active" : "");
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderQuestDialogueWorkspace(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection questTimelineSection";
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = nodeDisplayTitle(group) || "Campaigns Group";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = "Bouw quests en dialogen als leesbare tijdlijn. Geen technische IDs nodig.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+
+  const tabs = document.createElement("div");
+  tabs.className = "questTimelineTabs";
+  const view = state.questTimelineView === "dialogue" ? "dialogue" : "quest";
+  tabs.appendChild(questTimelineTabButton("Questtimeline", view === "quest", function () {
+    state.questTimelineView = "quest";
+    renderAuthoringHub();
+  }));
+  tabs.appendChild(questTimelineTabButton("Dialoogtimeline", view === "dialogue", function () {
+    state.questTimelineView = "dialogue";
+    renderAuthoringHub();
+  }));
+  wrap.appendChild(tabs);
+
+  wrap.appendChild(view === "quest" ? renderQuestTimelineView(group) : renderDialogueTimelineView(group));
+  return wrap;
+}
+
 function focusAssetBrowser() {
   if (isMobileLayout()) {
     if (state.mobilePanel === "all") ensureMobileAllLayout();
@@ -6466,6 +8850,17 @@ function openAuthoringWorkspaceNode(node) {
   if (!node) return;
   ensureMobileAllLayout();
   enterGroup(node);
+}
+
+function openRootAuthoringWorkspace() {
+  ensureMobileAllLayout();
+  if (!state.currentGroupId) return;
+  state.currentGroupId = null;
+  clearSelection({ clearPendingEdge: true });
+  syncBreadcrumb();
+  renderGraph();
+  renderInspector();
+  applyTransform();
 }
 
 function clearAuthoringRoute() {
@@ -6566,6 +8961,9 @@ function renderAuthoringSection(route) {
   const hasAnyZoneCanvas = (state.graph.nodes || []).some(function (node) {
     return isZoneCanvasGroup(node, state.graph);
   });
+  const hasAnyCampaignGroup = (state.graph.nodes || []).some(function (node) {
+    return isCampaignGroupNode(node);
+  });
   if (el.authoringSection) el.authoringSection.hidden = false;
   if (el.authoringButton) {
     el.authoringButton.setAttribute("aria-expanded", state.authoringMenuOpen ? "true" : "false");
@@ -6645,7 +9043,36 @@ function renderAuthoringSection(route) {
       if (route.id === "object_character") {
         el.authoringPanel.appendChild(renderObjectFunctionSection(objectContext));
       }
+      if (route.id === "quest_dialogue") {
+        const campaignGroup = currentCampaignGroupNode();
+        if (campaignGroup) {
+          el.authoringPanel.appendChild(renderQuestDialogueWorkspace(campaignGroup));
+        }
+      }
       const workspaces = authoringWorkspacesForRoute(route.id, state.graph);
+      if (route.id === "quest_dialogue" && !hasAnyCampaignGroup) {
+        const action = document.createElement("div");
+        action.className = "authoringRouteAction";
+        const actionTitle = document.createElement("div");
+        actionTitle.className = "authoringRouteActionTitle";
+        actionTitle.textContent = "Campaign Group ontbreekt";
+        const actionText = document.createElement("div");
+        actionText.className = "authoringRouteActionText";
+        actionText.textContent = "Er is nog geen Campaigns Group. Maak er eerst een aan om quests en dialogen te kunnen bouwen.";
+        const buttons = document.createElement("div");
+        buttons.className = "authoringRouteActionButtons";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "primary";
+        button.textContent = "Nieuwe Campaigns Group";
+        button.addEventListener("click", function () {
+          openRootAuthoringWorkspace();
+          void addSpecialGroup({ kind: "campaign", title: "Campaigns" });
+        });
+        buttons.appendChild(button);
+        action.append(actionTitle, actionText, buttons);
+        el.authoringPanel.appendChild(action);
+      }
       if (route.id === "world_zone" && !hasAnyZoneCanvas) {
         const action = document.createElement("div");
         action.className = "authoringRouteAction";
@@ -8960,7 +11387,7 @@ async function commitGroupTransform(payload) {
       const node = nodeByRuntimeId(entry.entityId);
       if (!node || node.type !== "model_entity") return null;
       patchedNodeIds.add(node.id);
-      return { nodeId: node.id, values: entry.transform };
+      return { nodeId: node.id, values: normalizeModelEntityTransformPatch(node, entry.transform || {}) };
     })
     .filter(Boolean);
   const delta = payload?.mode === "move" ? payload.delta : null;
@@ -8992,16 +11419,27 @@ async function commitGroupTransform(payload) {
     }
   }
   if (!patches.length) return;
-  const nextGraph = cloneGraphForRestore(state.graph);
-  for (const patch of patches) {
-    const target = nextGraph.nodes.find(function (node) { return node.id === patch.nodeId; });
-    if (target) target.values = Object.assign({}, target.values, patch.values);
-  }
-  await restoreGraphObject(nextGraph, {
+  const pureModelTransform = patches.every(function (patch) {
+    const node = nodeById(patch.nodeId);
+    return isModelEntityTransformPatch(node, patch.values);
+  });
+  await applyGraphMutation(async function () {
+    await apiOk("/api/editor/nodes/values/bulk", {
+      method: "POST",
+      body: JSON.stringify({ patches, returnGraph: false })
+    });
+    return graphWithPatchedNodeValuesBulk(state.graph, patches);
+  }, {
     historyLabel: "Groep transform",
-    refreshViewport: true,
+    refreshViewport: !pureModelTransform,
+    refreshGraph: !pureModelTransform,
     refreshEdgeList: false,
-    refreshValidation: false
+    refreshInspector: !pureModelTransform,
+    refreshViewportControls: !pureModelTransform,
+    refreshValidation: false,
+    afterApply: function () {
+      for (const patch of patches) syncRuntimeModelEntityTransform(patch.nodeId);
+    }
   });
 }
 
@@ -11618,6 +14056,8 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
       selectNode(currentNode.id, true, { clearPendingEdge: true });
     };
   const openCatalogAction = typeof options.openCatalogAction === "function" ? options.openCatalogAction : null;
+  const openReferenceActionLabel = String(options.openReferenceActionLabel || "Open Catalog").trim() || "Open Catalog";
+  const openReferenceActionTitle = String(options.openReferenceActionTitle || "Navigeer naar de juiste route om een geldige reference te kiezen.").trim();
   const root = document.createElement("div");
   root.className = "referencePicker";
 
@@ -11711,8 +14151,8 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
     const catalogButton = document.createElement("button");
     catalogButton.type = "button";
     catalogButton.className = "mini";
-    catalogButton.textContent = "Open Catalog";
-    catalogButton.title = "Navigeer naar de catalogus om een geldige reference te kiezen.";
+    catalogButton.textContent = openReferenceActionLabel;
+    catalogButton.title = openReferenceActionTitle;
     catalogButton.addEventListener("click", function () {
       openCatalogAction();
     });
@@ -11810,10 +14250,12 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
       meta.textContent = referenceSymbolTypeLabel(symbol) || symbol.kind || "";
       item.appendChild(meta);
 
-      const advanced = document.createElement("div");
-      advanced.className = "referencePickerAdvanced";
-      advanced.textContent = "Advanced: " + (symbol.id || "");
-      item.appendChild(advanced);
+      if (!options.hideAdvanced) {
+        const advanced = document.createElement("div");
+        advanced.className = "referencePickerAdvanced";
+        advanced.textContent = "Advanced: " + (symbol.id || "");
+        item.appendChild(advanced);
+      }
 
       item.addEventListener("mouseenter", function () {
         activeIndex = index;
@@ -12792,7 +15234,7 @@ async function patchValues(nodeId, patch, options = {}) {
   }
   return await applyGraphMutation(async function () {
     if (localValuePatch) {
-      await apiOk("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: cleanPatch }) });
+      await apiOk("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: cleanPatch, returnGraph: false }) });
       return graphWithPatchedNodeValues(state.graph, nodeId, cleanPatch);
     }
     return api("/api/editor/nodes/" + nodeId + "/values", { method: "PATCH", body: JSON.stringify({ values: cleanPatch }) });
@@ -13180,7 +15622,7 @@ async function bakeMinimapForNode(nodeId) {
     formData.append("quality", String(result.quality));
     formData.append("bounds", JSON.stringify(result.bounds));
     formData.append("file", result.blob, "minimap." + result.format);
-    const response = await fetch("/api/editor/minimap-bakes", { method: "POST", body: formData });
+    const response = await fetchEditorApi("/api/editor/minimap-bakes", { method: "POST", body: formData, timeoutMs: 120000 }, "POST");
     const data = await response.json().catch(function () { return {}; });
     if (!response.ok || !data.ok) throw new Error(data.message || "Minimap bake upload mislukt.");
     if (data.graph) {
@@ -13855,7 +16297,7 @@ function renderAssetImportPanel() {
 
 async function postAssetImport(formData) {
   const requestStartedAt = performance.now();
-  const response = await fetch("/api/assets/import", { method: "POST", body: formData });
+  const response = await fetchEditorApi("/api/assets/import", { method: "POST", body: formData, timeoutMs: 120000 }, "POST");
   const responseReceivedMs = Math.round((performance.now() - requestStartedAt) * 10) / 10;
   const responseBodyStartedAt = performance.now();
   const data = await response.json().catch(function () { return {}; });
@@ -14537,7 +16979,33 @@ async function refreshValidation() {
   }
 }
 
+async function reconnectEditor() {
+  if (state.connection.reconnecting) return;
+  clearConnectionRecoveryTimer();
+  state.connection.reconnecting = true;
+  state.connection.lastError = "";
+  state.connection.status = "standby";
+  renderConnectionStatus();
+  setStatus("Opnieuw verbinden met de server...", "");
+  try {
+    await pingEditorServer(6000);
+    await reloadGraph({ timeoutMs: 10000 });
+    state.connection.lastOkAt = Date.now();
+    state.connection.lastError = "";
+    state.connection.status = "connected";
+    setStatus("Editor opnieuw verbonden.", "success");
+    void refreshValidation();
+  } catch (error) {
+    editorConnectionRequestFailed(error);
+    setStatus("Reconnect mislukt: " + (error?.message || String(error)), "error");
+  } finally {
+    state.connection.reconnecting = false;
+    updateConnectionStatusFromState();
+  }
+}
+
 // ---------- Save / publish / logout ----------
+if (el.connectionButton) el.connectionButton.addEventListener("click", reconnectEditor);
 el.saveDraftButton.addEventListener("click", saveDraft);
 el.publishButton.addEventListener("click", publish);
 if (el.undoButton) el.undoButton.addEventListener("click", undoGraphMutation);
@@ -14550,8 +17018,23 @@ window.addEventListener("pagehide", function () {
   commitActiveEditorControl();
   if (runtime && typeof runtime.flushEditorCameraSave === "function") runtime.flushEditorCameraSave();
 });
+window.addEventListener("offline", function () {
+  clearConnectionRecoveryTimer();
+  state.connection.pending = 0;
+  state.connection.lastError = "browser offline";
+  state.connection.status = "disconnected";
+  renderConnectionStatus();
+});
+window.addEventListener("online", function () {
+  state.connection.lastError = "";
+  state.connection.status = state.connection.lastOkAt ? "connected" : "standby";
+  renderConnectionStatus();
+  scheduleConnectionRecovery(1000);
+});
+startConnectionHeartbeat();
 
 async function saveDraft() {
+  clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
     await apiOk("/api/editor/save-draft", { method: "POST" });
@@ -14565,6 +17048,7 @@ async function saveDraft() {
 }
 
 async function publish() {
+  clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
     await apiOk("/api/editor/publish", { method: "POST" });

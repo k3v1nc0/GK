@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20260907-authoring-01b">
+    <link rel="stylesheet" href="./styles.css?v=20260910-editor-connection-lamp3">
     <script type="importmap">
       {
         "imports": {
@@ -19,6 +19,9 @@
     <header class="topbar">
       <div class="brand"><span class="logo">GK</span><span class="brandName">GAME EDITOR</span></div>
       <div class="topbarRight">
+        <button id="connectionButton" type="button" class="connectionButton connectionButton--standby" title="Serverstatus: standby. Klik om opnieuw te verbinden." aria-label="Serverstatus: standby. Klik om opnieuw te verbinden.">
+          <span class="connectionLight" aria-hidden="true"></span>
+        </button>
         <button id="undoButton" type="button" class="ghost iconButton" title="Ongedaan maken (Ctrl+Z)" aria-label="Ongedaan maken">&#8630;</button>
         <button id="redoButton" type="button" class="ghost iconButton" title="Opnieuw doen (Ctrl+Shift+Z)" aria-label="Opnieuw doen">&#8631;</button>
         <span id="unsavedBadge" class="unsaved">0 actions unsaved</span>
@@ -264,6 +267,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20260909-authoring-02b-layout1"></script>
+    <script type="module" src="./editor.js?v=20260910-editor-connection-lamp3"></script>
   </body>
 </html>
