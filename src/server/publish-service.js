@@ -14,7 +14,7 @@ import {
 import { validateNodeValues } from "./field-validation.js";
 import { GameProjectCompiler } from "./game-project-compiler.js";
 
-const INTERACTABLE_ASSEMBLY_READ_MODEL_VERSION = 1;
+const INTERACTABLE_ASSEMBLY_READ_MODEL_VERSION = 2;
 
 function clone(value) {
   if (value === null || value === undefined) return value;
@@ -2591,15 +2591,16 @@ export function validateGraphForPublish(graph, services = {}) {
       const components = collectResolutionError(errors, function () {
         return incomingNodes(graph, entity, "components", nodeMap);
       }) || [];
-      if (!components.some(function (component) { return component.type === "interaction_component"; })) continue;
       const model = collectResolutionError(errors, function () {
         return firstIncomingNode(graph, entity, "model", nodeMap);
       });
       if (!model) {
-        errors.push("Interactable " + entity.id + " mist een model-verbinding.");
+        if (components.some(function (component) { return component.type === "interaction_component"; })) {
+          errors.push("Interactable " + entity.id + " mist een model-verbinding.");
+        }
         continue;
       }
-      requireAsset(services.assetService, model.values.modelAssetId, "model", "Interactable " + entity.id, errors);
+      requireAsset(services.assetService, model.values.modelAssetId, "model", "Entity Assembly " + entity.id, errors);
     }
     for (const inter of collectResolutionError(errors, function () {
       return incomingNodes(graph, output, "interactables", nodeMap);
@@ -2825,6 +2826,9 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   const modelEntityNodes = entityNodes.filter(function (node) {
     return node.type === "model_entity";
   });
+  const assemblyEntityNodes = entityNodes.filter(function (node) {
+    return node.type === "entity_assembly";
+  });
   const scatterNodes = entityNodes.filter(function (node) {
     return node.type === "bounded_area_scatter";
   });
@@ -2843,6 +2847,10 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
   }
   if (playerNode?.values.modelAssetId) assetIds.add(playerNode.values.modelAssetId);
   for (const node of modelEntityNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
+  for (const node of assemblyEntityNodes) {
+    const model = firstIncomingNode(graph, node, "model", nodeMap);
+    if (model?.values?.modelAssetId) assetIds.add(model.values.modelAssetId);
+  }
   for (const node of interactableNodes) if (node.values.modelAssetId) assetIds.add(node.values.modelAssetId);
   for (const node of uiNodes) {
     if (node?.type !== "game_minimap_hud") continue;
@@ -2890,6 +2898,10 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     performance: worldPerformance
   } : null;
 
+  const assemblyEntityReadModels = assemblyEntityNodes.map(function (node) {
+    return buildZoneEntityReadModel(buildEntityAssemblyRecordFromGraph(graph, node, nodeMap), assetLookup);
+  }).filter(Boolean);
+
   const world = {
     schemaVersion: graph.schemaVersion,
     source: "editor-node-graph",
@@ -2933,7 +2945,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
       if (node.type === "ambient_light") return { id: node.values.lightId, type: "ambient", color: node.values.color, intensity: numberOrNull(node.values.intensity) };
       return { id: node.values.lightId, type: "directional", color: node.values.color, intensity: numberOrNull(node.values.intensity), position: { x: numberOrNull(node.values.x), y: numberOrNull(node.values.y), z: numberOrNull(node.values.z) } };
     }),
-    entities: modelEntityNodes.map(function (node) {
+    entities: uniqueById(modelEntityNodes.map(function (node) {
       return {
         id: node.id,
         nodeId: node.id,
@@ -2956,7 +2968,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
           scale: { x: numberOrNull(node.values.scaleX), y: numberOrNull(node.values.scaleY), z: numberOrNull(node.values.scaleZ) }
         }
       };
-    }).concat(scatterEntities),
+    }).concat(assemblyEntityReadModels, scatterEntities)),
     interactables: interactableNodes.map(function (node) {
       return {
         id: node.values.interactableId,
@@ -3025,16 +3037,27 @@ function buildZonePlayerReadModel(player, assetLookup) {
   };
 }
 
-function zoneEntityHasInteractionComponent(entity) {
-  return Array.isArray(entity?.components) && entity.components.some(function (component) {
-    return component?.nodeType === "interaction_component";
-  });
+function graphNodeRecord(node) {
+  const values = clone(node?.values || {});
+  return Object.assign({ nodeId: node?.id || null, nodeType: node?.type || null }, values);
+}
+
+function buildEntityAssemblyRecordFromGraph(graph, node, nodeMap) {
+  const payload = graphNodeRecord(node);
+  if (node?.type !== "entity_assembly") return payload;
+  const base = firstIncomingNode(graph, node, "base", nodeMap);
+  const model = firstIncomingNode(graph, node, "model", nodeMap);
+  const anchor = firstIncomingNode(graph, node, "anchor", nodeMap);
+  payload.base = base ? graphNodeRecord(base) : null;
+  payload.model = model ? graphNodeRecord(model) : null;
+  payload.anchor = anchor ? graphNodeRecord(anchor) : null;
+  payload.components = incomingNodes(graph, node, "components", nodeMap).map(graphNodeRecord);
+  return payload;
 }
 
 function zoneEntityRenderableAssetId(entity) {
   if (!entity) return null;
   if (entity.nodeType === "entity_assembly") {
-    if (!zoneEntityHasInteractionComponent(entity)) return null;
     return zoneEntityRenderableAssetId(entity.model);
   }
   if (entity.nodeType !== "model_entity") return null;
@@ -3044,7 +3067,6 @@ function zoneEntityRenderableAssetId(entity) {
 function buildZoneEntityReadModel(entity, assetLookup) {
   if (!entity) return null;
   if (entity.nodeType === "entity_assembly") {
-    if (!zoneEntityHasInteractionComponent(entity)) return null;
     const model = buildZoneEntityReadModel(entity.model, assetLookup);
     if (!model) return null;
     return Object.assign({}, model, {

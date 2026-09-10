@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260824-performance-hud-panel2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {

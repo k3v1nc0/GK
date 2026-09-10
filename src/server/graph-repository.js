@@ -734,7 +734,7 @@ export class GraphRepository {
     return this.createNode("model_entity", { x: 560 + count * 26, y: 200 + count * 26 }, values, validParentId);
   }
 
-  updateNodeValues(nodeId, nextValues) {
+  updateNodeValues(nodeId, nextValues, options = {}) {
     const row = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?").get(nodeId);
     if (!row) {
       const error = new Error("Node bestaat niet: " + nodeId);
@@ -765,10 +765,62 @@ export class GraphRepository {
     }
     this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(cleanValues), now(), nodeId);
-    this.touchGraphRevision(this.db);
+    const graphRevision = this.touchGraphRevision(this.db);
     this.clearDraftWorld();
     this.invalidateSymbolIndex();
+    if (options.returnGraph === false) {
+      return { ok: true, nodeId: nodeId, values: cleanValues, graphRevision };
+    }
     return this.getGraph();
+  }
+
+  updateNodeValuesBulk(patches, options = {}) {
+    const rows = Array.isArray(patches) ? patches : [];
+    if (!rows.length) return options.returnGraph === false ? { ok: true, patches: [], graphRevision: this.getGraphRevision() } : this.getGraph();
+    if (rows.length > 200) throw graphError("Te veel node patches in één request.");
+    const selectNode = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?");
+    const updateNode = this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?");
+    const applied = [];
+    this.db.exec("BEGIN");
+    try {
+      for (const patch of rows) {
+        const nodeId = String(patch?.nodeId || "").trim();
+        if (!nodeId) throw graphError("Bulk patch mist nodeId.");
+        const row = selectNode.get(nodeId);
+        if (!row) {
+          const error = new Error("Node bestaat niet: " + nodeId);
+          error.status = 404;
+          throw error;
+        }
+        if (row.type === "group") {
+          throw graphError("Group interface wijzigingen gaan niet via bulk values.");
+        }
+        const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
+        const cleanValues = cleanValuesForType(row.type, patch.values || {}, currentValues, NODE_TYPES);
+        const definition = NODE_TYPES[row.type];
+        const identityFields = Object.entries(definition?.fields || {}).filter(function ([, field]) {
+          return field && field.type === "identity";
+        });
+        for (const [fieldName] of identityFields) {
+          const previousId = String(currentValues?.[fieldName] || "").trim();
+          const nextId = String(cleanValues?.[fieldName] || "").trim();
+          if (previousId && nextId && previousId !== nextId) {
+            this.recordContentAlias(previousId, nextId, row.type, "identity-change", null, this.db);
+          }
+        }
+        updateNode.run(JSON.stringify(cleanValues), now(), nodeId);
+        applied.push({ nodeId, values: cleanValues });
+      }
+      const graphRevision = this.touchGraphRevision(this.db);
+      this.clearDraftWorld();
+      this.db.exec("COMMIT");
+      this.invalidateSymbolIndex();
+      if (options.returnGraph === false) return { ok: true, patches: applied, graphRevision };
+      return this.getGraph();
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   updateNodePosition(nodeId, position) {

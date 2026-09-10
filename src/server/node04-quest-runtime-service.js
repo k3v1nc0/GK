@@ -1224,6 +1224,7 @@ export class Node04QuestRuntimeService {
   runtimeTargetFromQuestTarget(ctx, target, extra) {
     const distance = positionDistance(ctx.position, target);
     const range = Math.max(1, safeNumber(target.radius, 3));
+    const entityRef = safeString(target.entityRef, "");
     return Object.assign({
       instanceId: "node04:" + target.targetId,
       entityKind: "quest",
@@ -1241,7 +1242,10 @@ export class Node04QuestRuntimeService {
       y: safeNumber(target.y, 0),
       z: safeNumber(target.z, 0),
       targetId: target.targetId,
-      zoneRef: target.zoneRef || ctx.zoneId
+      zoneRef: target.zoneRef || ctx.zoneId,
+      entityRef: entityRef || null,
+      visibleInGame: target.visibleInGame !== false,
+      renderMarker: target.visibleInGame !== false && !entityRef
     }, extra || {});
   }
 

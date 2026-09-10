@@ -665,22 +665,48 @@ async function handleApi(req, res, url) {
       authService.requireEditor(req);
       return sendJson(res, 200, repository.getGraph());
     }
+    if ((req.method === "HEAD" || req.method === "GET") && url.pathname === "/api/editor/ping") {
+      authService.requireEditor(req);
+      if (req.method === "HEAD") {
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        return res.end();
+      }
+      return sendJson(res, 200, { ok: true, at: new Date().toISOString() });
+    }
     if (req.method === "POST" && url.pathname === "/api/editor/nodes") {
       authService.requireEditor(req);
       const body = await readJson(req);
       return sendJson(res, 201, repository.createNode(body.type, body.position || {}, body.values || {}, body.parentId || null));
     }
+    if (req.method === "POST" && url.pathname === "/api/editor/nodes/values/bulk") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      const startedAt = performance.now();
+      const returnGraph = body.returnGraph !== false;
+      const result = repository.updateNodeValuesBulk(body.patches || [], { returnGraph });
+      logTiming("server response POST /api/editor/nodes/values/bulk", startedAt, "returnGraph=" + returnGraph + " patches=" + (Array.isArray(body.patches) ? body.patches.length : 0));
+      return sendJson(res, 200, result);
+    }
     const nodeValuesMatch = url.pathname.match(/^\/api\/editor\/nodes\/([^/]+)\/values$/);
     if (req.method === "PATCH" && nodeValuesMatch) {
       authService.requireEditor(req);
       const body = await readJson(req);
-      return sendJson(res, 200, repository.updateNodeValues(nodeValuesMatch[1], body.values || {}));
+      const startedAt = performance.now();
+      const returnGraph = body.returnGraph !== false;
+      const result = repository.updateNodeValues(nodeValuesMatch[1], body.values || {}, {
+        returnGraph
+      });
+      logTiming("server response PATCH " + url.pathname, startedAt, "returnGraph=" + returnGraph);
+      return sendJson(res, 200, result);
     }
     const nodePositionMatch = url.pathname.match(/^\/api\/editor\/nodes\/([^/]+)\/position$/);
     if (req.method === "PATCH" && nodePositionMatch) {
       authService.requireEditor(req);
       const body = await readJson(req);
-      return sendJson(res, 200, repository.updateNodePosition(nodePositionMatch[1], body.position || {}));
+      const startedAt = performance.now();
+      const result = repository.updateNodePosition(nodePositionMatch[1], body.position || {});
+      logTiming("server response PATCH " + url.pathname, startedAt);
+      return sendJson(res, 200, result);
     }
     const nodeDuplicateMatch = url.pathname.match(/^\/api\/editor\/nodes\/([^/]+)\/duplicate$/);
     if (req.method === "POST" && nodeDuplicateMatch) {
@@ -738,11 +764,17 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === RESTORE_GRAPH_ROUTE) {
       authService.requireEditor(req);
       const body = await readJson(req);
-      return sendJson(res, 200, { ok: true, graph: repository.restoreGraph(body.graph || body) });
+      const startedAt = performance.now();
+      const graph = repository.restoreGraph(body.graph || body);
+      logTiming("server response " + RESTORE_GRAPH_ROUTE, startedAt);
+      return sendJson(res, 200, { ok: true, graph });
     }
     if (req.method === "GET" && url.pathname === "/api/editor/validate") {
       authService.requireEditor(req);
-      return sendJson(res, 200, publishService.validate());
+      const startedAt = performance.now();
+      const result = publishService.validate();
+      logTiming("server response /api/editor/validate", startedAt);
+      return sendJson(res, 200, result);
     }
     if (req.method === "GET" && url.pathname === "/api/editor/symbols") {
       authService.requireEditor(req);
@@ -799,8 +831,11 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "GET" && url.pathname === "/api/editor/draft-world") {
       authService.requireEditor(req);
+      const startedAt = performance.now();
       const draftWorld = repository.getDraftWorld();
-      return sendJson(res, 200, publishService.isDraftWorldCacheCurrent(draftWorld) ? draftWorld : publishService.saveDraft());
+      const result = publishService.isDraftWorldCacheCurrent(draftWorld) ? draftWorld : publishService.saveDraft();
+      logTiming("server response /api/editor/draft-world", startedAt);
+      return sendJson(res, 200, result);
     }
     if (req.method === "POST" && url.pathname === "/api/editor/publish") {
       const user = authService.requireEditor(req);

@@ -15642,6 +15642,10 @@ function resolveChunkDebugCenter(policy) {
     for (const target of list) {
       const id = String(target?.instanceId || "").trim();
       if (!id || !Number.isFinite(Number(target?.x)) || !Number.isFinite(Number(target?.z))) continue;
+      if (target?.renderMarker === false || target?.visibleInGame === false) {
+        removeRuntimeTargetRoot(id);
+        continue;
+      }
       desiredIds.add(id);
       let root = runtimeTargetRoots.get(id);
       if (!root) {
