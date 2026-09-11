@@ -6092,7 +6092,11 @@ function objectFunctionBuildNodeValuesForKind(kind, context, draft, existingNode
     next.difficultyRef = normalizeCanonicalId(next.difficultyRef || "", "") || null;
   } else if (kind === "quest") {
     const modelTitle = objectFunctionModelTitle(context);
-    next.targetId = normalizeCanonicalId(next.targetId || "", "") || uniqueCanonicalGraphValue(graph, "target." + objectFunctionModelStem(context.model) + ".quest");
+    const rawTargetId = normalizeCanonicalId(next.targetId || "", "");
+    const defaultTargetId = normalizeCanonicalId(state.nodeTypes?.quest_target_binding?.fields?.targetId?.default || "target.new_target", "");
+    next.targetId = rawTargetId && (existingNode || rawTargetId !== defaultTargetId)
+      ? rawTargetId
+      : uniqueCanonicalGraphValue(graph, "target." + objectFunctionModelStem(context.model) + ".quest");
     next.label = String(Object.prototype.hasOwnProperty.call(draftValues, "label") ? draftValues.label : next.label || modelTitle).trim() || modelTitle;
     next.targetKind = String(next.targetKind || (context.npcComponent ? "npc" : (context.enemyComponent ? "custom" : "marker"))).trim() || "marker";
     next.zoneRef = normalizeCanonicalId(context.zoneDefinition?.values?.zoneId || "", "") || null;
@@ -9236,6 +9240,28 @@ function questTargetBindingsForModel(model, graph = state.graph) {
   return Array.from(bindings.values());
 }
 
+function questTargetBindingsForTargetId(targetId, graph = state.graph) {
+  const normalized = normalizeCanonicalId(targetId, "");
+  if (!normalized) return [];
+  return (graph.nodes || []).filter(function (node) {
+    return node.type === "quest_target_binding" && normalizeCanonicalId(node.values?.targetId, "") === normalized;
+  });
+}
+
+function duplicateQuestTargetCountForBindings(bindings, graph = state.graph) {
+  const ownIds = new Set((bindings || []).map(function (binding) { return binding.id; }));
+  const duplicateIds = new Set();
+  const targetIds = new Set((bindings || []).map(function (binding) {
+    return normalizeCanonicalId(binding.values?.targetId, "");
+  }).filter(Boolean));
+  for (const targetId of targetIds) {
+    for (const binding of questTargetBindingsForTargetId(targetId, graph)) {
+      if (!ownIds.has(binding.id)) duplicateIds.add(binding.id);
+    }
+  }
+  return duplicateIds.size;
+}
+
 function modelAuthoringReferenceInfo(model, graph = state.graph) {
   if (!model) return { model: null, assembly: null, target: null, refs: new Set(), nodes: new Set() };
   const context = objectFunctionContextForModel(model, graph);
@@ -9310,6 +9336,8 @@ function catalogDefinitionNodeIdsForObjectContext(context, graph = state.graph) 
 function renderObjectFunctionReadOnlyInfo(context) {
   const wrap = document.createElement("div");
   wrap.className = "authoring04ReadOnly";
+  const refInfo = modelAuthoringReferenceInfo(context?.model, state.graph);
+  const questBindings = refInfo.questBindings || [];
   const title = document.createElement("div");
   title.className = "objectFunctionMeta";
   title.textContent = "Bestaande onderdelen";
@@ -9320,7 +9348,9 @@ function renderObjectFunctionReadOnlyInfo(context) {
     ["Interactable", context.interactionComponent ? nodeDisplayTitle(context.interactionComponent) : "geen"],
     ["NPC", context.npcComponent ? nodeDisplayTitle(context.npcComponent) : "geen"],
     ["Enemy", context.enemyComponent ? nodeDisplayTitle(context.enemyComponent) : "geen"],
-    ["Quest Target", context.questBinding ? (nodeDisplayTitle(context.questBinding) + " · " + (context.questBinding.values?.targetId || "")) : "geen"]
+    ["Quest Target", questBindings.length ? questBindings.map(function (binding) {
+      return nodeDisplayTitle(binding) + " · " + (binding.values?.targetId || "");
+    }).join(" | ") : "geen"]
   ];
   for (const [labelText, valueText] of rows) {
     const row = document.createElement("div");
@@ -9332,7 +9362,24 @@ function renderObjectFunctionReadOnlyInfo(context) {
     row.append(label, value);
     wrap.appendChild(row);
   }
-  const references = questDialogueReferencesForObjectContext(context, state.graph);
+  const duplicateWarnings = [];
+  const warnedTargetIds = new Set();
+  for (const binding of questBindings) {
+    const targetId = normalizeCanonicalId(binding.values?.targetId, "");
+    if (!targetId || warnedTargetIds.has(targetId)) continue;
+    warnedTargetIds.add(targetId);
+    const matches = questTargetBindingsForTargetId(targetId, state.graph);
+    if (matches.length > 1) {
+      duplicateWarnings.push("Target-id " + targetId + " wordt door " + matches.length + " Quest Targets gebruikt: " + matches.map(nodeDisplayTitle).join(", ") + ".");
+    }
+  }
+  for (const warningText of duplicateWarnings) {
+    const warning = document.createElement("div");
+    warning.className = "objectFunctionDraftHint";
+    warning.textContent = warningText + " Daardoor delen deze objecten dezelfde quest/dialoogverwijzingen.";
+    wrap.appendChild(warning);
+  }
+  const references = questDialogueReferenceNodesForRefs(refInfo.refs, state.graph);
   const referenceTitle = document.createElement("div");
   referenceTitle.className = "objectFunctionMeta";
   referenceTitle.textContent = "Quest/Dialoog verwijzingen";
@@ -9403,6 +9450,20 @@ function questDialogueDefinitionIdsForRefs(refs, graph = state.graph) {
     addOwners(node);
   }
   return ids;
+}
+
+function questDialogueReferenceNodesForRefs(refs, graph = state.graph) {
+  const ids = questDialogueDefinitionIdsForRefs(refs, graph);
+  const quests = [];
+  const dialogues = [];
+  for (const node of graph.nodes || []) {
+    if (!ids.has(node.id)) continue;
+    if (node.type === "quest_definition") quests.push(node);
+    if (node.type === "dialogue_definition") dialogues.push(node);
+  }
+  quests.sort(function (a, b) { return nodeDisplayTitle(a).localeCompare(nodeDisplayTitle(b), "nl", { sensitivity: "base" }); });
+  dialogues.sort(function (a, b) { return nodeDisplayTitle(a).localeCompare(nodeDisplayTitle(b), "nl", { sensitivity: "base" }); });
+  return { quests, dialogues, others: [] };
 }
 
 function authoringWorkspaceContentNodeIds(routeId, workspace, graph = state.graph) {
@@ -10952,19 +11013,23 @@ function authoringIndicatorCountsForModel(model, graph = state.graph) {
   const info = modelAuthoringReferenceInfo(model, graph);
   const objectIds = new Set();
   for (const node of [info.context?.assembly, info.context?.interactionComponent, info.context?.npcComponent, info.context?.enemyComponent]) {
-    if (node) objectIds.add(node.id);
+    if (node && node.type !== "entity_assembly") objectIds.add(node.id);
   }
   const questIds = questDialogueDefinitionIdsForRefs(info.refs, graph);
+  const targetCount = (info.questBindings || []).length;
   return {
     object_character: countGraphNodesByIds(objectIds),
+    quest_target: targetCount,
+    quest_target_duplicate: duplicateQuestTargetCountForBindings(info.questBindings || [], graph),
     quest_dialogue: questIds.size
   };
 }
 
 function authoringIndicatorDefinitions() {
   return [
-    { routeId: "object_character", icon: "O", label: "Object", color: "#06b6d4", meaning: "Objectonderdelen aan deze entity" },
-    { routeId: "quest_dialogue", icon: "Q", label: "Quest", color: "#f59e0b", meaning: "Quests/dialogen die deze entity targeten" }
+    { routeId: "object_character", icon: "Object", label: "Object", color: "#06b6d4", meaning: "Interactable/NPC/Enemy-onderdelen aan deze entity" },
+    { routeId: "quest_target", icon: "Target", label: "Quest Target", color: "#f59e0b", meaning: "Quest Target op deze entity" },
+    { routeId: "quest_dialogue", icon: "Quest", label: "Quest/Dialoog", color: "#f59e0b", meaning: "Quests/dialogen die dit target gebruiken" }
   ];
 }
 
@@ -10998,11 +11063,13 @@ function renderAuthoringIndicators() {
     for (const def of authoringIndicatorDefinitions()) {
       const count = Number(counts[def.routeId] || 0);
       if (!count) continue;
+      const duplicateTargetCount = def.routeId === "quest_target" ? Number(counts.quest_target_duplicate || 0) : 0;
       const dot = document.createElement("span");
-      dot.className = "authoringIndicatorDot";
+      dot.className = "authoringIndicatorDot" + (duplicateTargetCount ? " authoringIndicatorDot--warning" : "");
       dot.style.setProperty("--indicator-color", def.color);
-      dot.textContent = def.icon + String(count);
-      dot.title = def.label + ": " + def.meaning + ". Aantal: " + count + ".";
+      dot.textContent = duplicateTargetCount ? "Target !" : (def.icon + " " + String(count));
+      dot.title = def.label + ": " + def.meaning + ". Aantal: " + count + "."
+        + (duplicateTargetCount ? " Let op: deze target-id wordt ook door " + duplicateTargetCount + " andere Quest Target(s) gebruikt." : "");
       cluster.appendChild(dot);
       visibleCount += 1;
     }

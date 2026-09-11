@@ -1390,9 +1390,9 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
   border: 1px solid var(--indicator-color);
   background: var(--indicator-color);
@@ -1405,6 +1405,11 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .authoringIndicatorDot--empty {
   background: rgba(4, 10, 16, 0.72);
   color: var(--indicator-color);
+}
+.authoringIndicatorDot--warning {
+  --indicator-color: #f97316;
+  background: #f97316;
+  color: #170a03;
 }
 .viewportChromeLeft {
   position: absolute;
