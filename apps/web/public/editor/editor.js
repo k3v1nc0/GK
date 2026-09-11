@@ -1,6 +1,6 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260911-authoring04-fix01";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260911-authoring04-fix01";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260911-authoring04-fix02";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260911-authoring04-fix02";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
@@ -8866,9 +8866,9 @@ function renderQuestDialogueWorkspace(group) {
 // ---------- AUTHORING-04: human route hubs ----------
 
 const AUTHORING04_GROUP_OUTPUT_PORTS = {
-  catalog: { id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false },
-  player_rules: { id: "player_rules", name: "playerRules", label: "Player Rules", dataType: "playerRules", multiple: false },
-  ui: { id: "ui_package", name: "uiPackage", label: "UI Package", dataType: "uiPackage", multiple: false }
+  catalog: { id: "catalog_package", name: "catalogpackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false },
+  player_rules: { id: "player_rules", name: "playerrules", label: "Player Rules", dataType: "playerRules", multiple: false },
+  ui: { id: "ui_package", name: "uipackage", label: "UI Package", dataType: "uiPackage", multiple: false }
 };
 
 const CATALOG_HUB_TYPES = [
@@ -9009,7 +9009,7 @@ function groupInterfaceOutputPortForDataType(group, dataType, preferredName) {
 
 function groupInterfaceOutputPortNameForDataType(group, dataType, preferredName) {
   const port = groupInterfaceOutputPortForDataType(group, dataType, preferredName);
-  return String(port?.name || port?.id || preferredName || "").trim();
+  return slugifyGroupPortName(port?.name || port?.id || preferredName || "", preferredName || "");
 }
 
 function rewriteGroupPackageEdgesToPort(graph, group, dataType, portName) {
@@ -11861,7 +11861,7 @@ function zoneCanvasGroupInterfaceForRole(isRoot, previousInterface = null) {
   } else {
     outputs.push({
       id: "zone_package",
-      name: "zonePackage",
+      name: "zonepackage",
       label: "Zone Package",
       dataType: "zonePackage",
       multiple: false

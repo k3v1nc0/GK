@@ -18,13 +18,31 @@ Oorzaak: het gedeelde zonepreset gebruikte historisch de group-outputpoort `zone
 
 Herstel:
 
-- Nieuwe Zone Groups gebruiken voortaan canoniek `zonePackage` als group-outputnaam.
+- Nieuwe Zone Groups publiceren via datatype `zonePackage`; de werkelijk opgeslagen group-outputnaam is in FIX-02 aangescherpt naar `zonepackage`.
 - Bestaande/historische Zone Groups met `zonepkg` blijven geldig; hun data wordt niet verwijderd of hernoemd.
 - Zone-publicatie leidt de geldige Group Output-poort af uit de Group Interface op basis van datatype `zonePackage`.
 - Dezelfde gevonden poortnaam wordt gebruikt voor `zone_output -> Group Output` en `Group Node -> zone_registry`.
 - Bestaande interne/externe package-edges worden in dezelfde graphkopie naar die gevonden poortnaam herschreven wanneer ze hetzelfde package-datatype publiceren.
 - Dezelfde dynamische aanpak is statisch toegepast op Catalog, Player Rules en UI packagehelpers, zodat `catalogPackage`, `playerRules` en `uiPackage` niet opnieuw blind als grouppoort worden aangenomen bij bestaande aliassen.
 - `src/shared/node-types.js` en `apps/web/public/shared/node-types.js` zijn synchroon gehouden.
+
+Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playwright of browsertest uitgevoerd.
+
+---
+
+## AUTHORING-04-FIX-02 - Geslugde Group Interface-poortnamen
+
+**Status:** implemented, awaiting Kevin acceptance
+
+Oorzaak vervolg: `normalizeGroupInterface` slaat Group Interface-poortnamen op als lowercase/slugs. Daardoor wordt een nieuwe poortnaam zoals `zonePackage` in de restore-validatie feitelijk `zonepackage`. Een snapshot-edge met `toPort: "zonePackage"` bleef daarom ongeldig voor `Group Output`, ook na de eerste fix.
+
+Herstel:
+
+- De canonieke opgeslagen Zone Group-outputpoort voor nieuwe zones is nu `zonepackage`.
+- `zone_output.zonePackage` en `zone_registry.zonePackage` blijven de bestaande echte node-poorten; alleen de Group Interface-poort ertussen is `zonepackage`.
+- Catalog, Player Rules en UI gebruiken dezelfde opgeslagen packagepoortvorm: `catalogpackage`, `playerrules` en `uipackage`.
+- De browser-helper slugt de gekozen group-interfacepoort voordat hij interne en externe package-edges maakt.
+- De server-restore normaliseert bestaande/cached package-boundary-edges vóór validatie naar de werkelijk aanwezige Group Interface-poort op basis van datatype. De edge wordt niet verwijderd en de gewone graph-validatie blijft daarna actief.
 
 Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playwright of browsertest uitgevoerd.
 
@@ -38,7 +56,7 @@ AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die w
 
 - `group` met `groupKind: "zone"` en root-level Zone Canvas.
 - `zone_definition`, `zone_environment_settings`, `zone_gameplay_rules`, `ground_surface`, `spawn_point`, `zone_output`.
-- Rootkoppeling via `zone_output.zonePackage -> group_output.<werkelijke zonePackage grouppoort> -> group.<dezelfde grouppoort> -> zone_registry.zonePackage`. Voor nieuwe zones is die grouppoort `zonePackage`; historische `zonepkg`-groups blijven ondersteund.
+- Rootkoppeling via `zone_output.zonePackage -> group_output.<werkelijke zonePackage grouppoort> -> group.<dezelfde grouppoort> -> zone_registry.zonePackage`. Voor nieuwe zones is die opgeslagen grouppoort `zonepackage`; historische `zonepkg`-groups blijven ondersteund.
 - Gridpositie via `zoneGridX` en `zoneGridY/zoneGridZ`.
 
 **Object of personage**

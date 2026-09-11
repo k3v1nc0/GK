@@ -2464,10 +2464,10 @@ export function normalizeGroupKind(value) {
 export function groupInterfacePresetForKind(groupKind) {
   const kind = normalizeGroupKind(groupKind);
   if (kind === "catalog") {
-    return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogpackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
   }
   if (kind === "zone") {
-    return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "zone_package", name: "zonepackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
   }
   if (kind === "area") {
     return { inputs: [], outputs: [{ id: "area_package", name: "areaPackage", label: "Area Package", dataType: "areaPackage", multiple: false }] };
@@ -2476,10 +2476,10 @@ export function groupInterfacePresetForKind(groupKind) {
     return { inputs: [], outputs: [{ id: "campaign_package", name: "campaignPackage", label: "Campaign Package", dataType: "campaignPackage", multiple: false }] };
   }
   if (kind === "player_rules") {
-    return { inputs: [], outputs: [{ id: "player_rules", name: "playerRules", label: "Player Rules", dataType: "playerRules", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "player_rules", name: "playerrules", label: "Player Rules", dataType: "playerRules", multiple: false }] };
   }
   if (kind === "ui") {
-    return { inputs: [], outputs: [{ id: "ui_package", name: "uiPackage", label: "UI Package", dataType: "uiPackage", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "ui_package", name: "uipackage", label: "UI Package", dataType: "uiPackage", multiple: false }] };
   }
   return groupInterfaceDefault();
 }
