@@ -8928,6 +8928,9 @@ const AUTHORING_ROUTE_COUNT_TYPES = {
   game_settings_ui: PLAYER_RULES_HUB_TYPES.concat(UI_HUB_TYPES)
 };
 
+const AUTHORING_HUMAN_CATALOG_TYPES = new Set(CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }));
+const AUTHORING_HUMAN_SETTINGS_TYPES = new Set(PLAYER_RULES_HUB_TYPES.concat(UI_HUB_TYPES));
+
 function graphNodeByIdInGraph(graph, nodeId) {
   return (graph.nodes || []).find(function (node) { return node.id === nodeId; }) || null;
 }
@@ -9220,10 +9223,23 @@ async function createRootManagedGroup(kind, titleText) {
   });
 }
 
-function selectedModelAuthoringReferenceInfo(graph = state.graph) {
-  const model = selectedSingleModelNode();
+function questTargetBindingsForModel(model, graph = state.graph) {
+  if (!model) return [];
+  const bindings = new Map();
+  const assembly = objectFunctionAssemblyForModel(model, graph);
+  for (const binding of objectFunctionQuestBindingsForAssembly(graph, assembly)) bindings.set(binding.id, binding);
+  for (const edge of graph.edges || []) {
+    if (edge.fromNodeId !== model.id || edge.fromPort !== "entity" || edge.toPort !== "entity") continue;
+    const node = graphNodeByIdInGraph(graph, edge.toNodeId);
+    if (node?.type === "quest_target_binding") bindings.set(node.id, node);
+  }
+  return Array.from(bindings.values());
+}
+
+function modelAuthoringReferenceInfo(model, graph = state.graph) {
   if (!model) return { model: null, assembly: null, target: null, refs: new Set(), nodes: new Set() };
   const context = objectFunctionContextForModel(model, graph);
+  const questBindings = questTargetBindingsForModel(model, graph);
   const refs = new Set();
   const nodes = new Set([model.id]);
   if (context.assembly) {
@@ -9231,15 +9247,19 @@ function selectedModelAuthoringReferenceInfo(graph = state.graph) {
     const entityId = normalizeCanonicalId(context.assembly.values?.entityId, "");
     if (entityId) refs.add(entityId);
   }
-  if (context.questBinding) {
-    nodes.add(context.questBinding.id);
-    const targetId = normalizeCanonicalId(context.questBinding.values?.targetId, "");
+  for (const binding of questBindings) {
+    nodes.add(binding.id);
+    const targetId = normalizeCanonicalId(binding.values?.targetId, "");
     if (targetId) refs.add(targetId);
   }
   for (const component of [context.interactionComponent, context.npcComponent, context.enemyComponent]) {
     if (component) nodes.add(component.id);
   }
-  return { model, assembly: context.assembly, target: context.questBinding, refs, nodes, context };
+  return { model, assembly: context.assembly, target: questBindings[0] || context.questBinding || null, questBindings, refs, nodes, context };
+}
+
+function selectedModelAuthoringReferenceInfo(graph = state.graph) {
+  return modelAuthoringReferenceInfo(selectedSingleModelNode(), graph);
 }
 
 function questDialogueReferencesForObjectContext(context, graph = state.graph) {
@@ -9355,12 +9375,66 @@ function nodeReferencesAny(node, refs) {
   return false;
 }
 
-function authoringRouteNodeIds(routeId, graph = state.graph) {
-  const types = new Set(AUTHORING_ROUTE_COUNT_TYPES[routeId] || []);
+function questDialogueDefinitionIdsForRefs(refs, graph = state.graph) {
   const ids = new Set();
+  if (!refs || !refs.size) return ids;
+  const nodeById = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  function addOwners(startNode) {
+    const queue = [{ node: startNode, depth: 0 }];
+    const seen = new Set();
+    while (queue.length) {
+      const current = queue.shift();
+      const node = current.node;
+      if (!node || seen.has(node.id) || current.depth > 5) continue;
+      seen.add(node.id);
+      if (node.type === "quest_definition" || node.type === "dialogue_definition") {
+        ids.add(node.id);
+        continue;
+      }
+      for (const edge of graph.edges || []) {
+        if (edge.fromNodeId !== node.id) continue;
+        const owner = nodeById.get(edge.toNodeId);
+        if (owner) queue.push({ node: owner, depth: current.depth + 1 });
+      }
+    }
+  }
   for (const node of graph.nodes || []) {
-    if (routeId === "world_zone" && isZoneCanvasGroup(node, graph)) ids.add(node.id);
-    if (types.has(node.type)) ids.add(node.id);
+    if (!nodeReferencesAny(node, refs)) continue;
+    addOwners(node);
+  }
+  return ids;
+}
+
+function authoringWorkspaceContentNodeIds(routeId, workspace, graph = state.graph) {
+  const ids = new Set();
+  if (!workspace) return ids;
+  if (routeId === "world_zone") {
+    if (isZoneCanvasGroup(workspace, graph) && (workspace.parentId || null) === null) ids.add(workspace.id);
+    return ids;
+  }
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== workspace.id) continue;
+    if (routeId === "quest_dialogue" && (node.type === "quest_definition" || node.type === "dialogue_definition")) ids.add(node.id);
+    if (routeId === "item_ability_stat" && AUTHORING_HUMAN_CATALOG_TYPES.has(node.type)) ids.add(node.id);
+    if (routeId === "game_settings_ui" && AUTHORING_HUMAN_SETTINGS_TYPES.has(node.type)) ids.add(node.id);
+  }
+  return ids;
+}
+
+function authoringRouteNodeIds(routeId, graph = state.graph) {
+  const ids = new Set();
+  if (routeId === "object_character") {
+    for (const node of graph.nodes || []) if (node.type === "model_entity") ids.add(node.id);
+    return ids;
+  }
+  const workspaces = authoringWorkspacesForRoute(routeId, graph);
+  for (const workspaceGroup of workspaces) {
+    for (const workspace of workspaceGroup.nodes || []) {
+      for (const id of authoringWorkspaceContentNodeIds(routeId, workspace, graph)) ids.add(id);
+    }
+  }
+  for (const node of graph.nodes || []) {
+    if (routeId === "world_zone" && isZoneCanvasGroup(node, graph) && (node.parentId || null) === null) ids.add(node.id);
   }
   return ids;
 }
@@ -9371,12 +9445,11 @@ function selectedAuthoringRouteNodeIds(routeId, graph = state.graph) {
   const ids = new Set();
   if (routeId === "world_zone") {
     if (selected.context?.zoneGroup) ids.add(selected.context.zoneGroup.id);
-    if (selected.context?.zoneDefinition) ids.add(selected.context.zoneDefinition.id);
-    if (selected.context?.zoneOutput) ids.add(selected.context.zoneOutput.id);
     return ids;
   }
   if (routeId === "object_character") return new Set(Array.from(selected.nodes));
   if (routeId === "item_ability_stat") return catalogDefinitionNodeIdsForObjectContext(selected.context, graph);
+  if (routeId === "quest_dialogue") return questDialogueDefinitionIdsForRefs(selected.refs, graph);
   const routeIds = authoringRouteNodeIds(routeId, graph);
   for (const node of graph.nodes || []) {
     if (!routeIds.has(node.id)) continue;
@@ -9409,12 +9482,25 @@ function appendReadOnlyCountBadge(parent, routeId, graph = state.graph) {
 }
 
 function authoringWorkspaceCount(routeId, workspace, graph = state.graph) {
-  const routeTypes = new Set(AUTHORING_ROUTE_COUNT_TYPES[routeId] || []);
   const selected = selectedSingleModelNode();
   const selectedInfo = selectedModelAuthoringReferenceInfo(graph);
   const ids = new Set();
-  if (!selected && workspace?.id) ids.add(workspace.id);
-  if (selected && routeId === "world_zone" && selectedInfo.context?.zoneGroup?.id === workspace?.id) ids.add(workspace.id);
+  if (!selected) {
+    for (const id of authoringWorkspaceContentNodeIds(routeId, workspace, graph)) ids.add(id);
+    return {
+      count: ids.size,
+      selected: false,
+      title: "Totaal: " + ids.size + " menselijke onderdelen in deze werkruimte."
+    };
+  }
+  if (routeId === "world_zone" && selectedInfo.context?.zoneGroup?.id === workspace?.id) ids.add(workspace.id);
+  if (selected && routeId === "world_zone") {
+    return {
+      count: ids.size,
+      selected: true,
+      title: "Selectie: " + ids.size + " Zone Canvas voor deze selectie."
+    };
+  }
   if (selected && routeId === "item_ability_stat") {
     const catalogIds = catalogDefinitionNodeIdsForObjectContext(selectedInfo.context, graph);
     for (const node of graph.nodes || []) {
@@ -9426,9 +9512,19 @@ function authoringWorkspaceCount(routeId, workspace, graph = state.graph) {
       title: "Selectie: " + ids.size + " gekoppelde/verwijzende onderdelen in deze werkruimte."
     };
   }
+  if (selected && routeId === "quest_dialogue") {
+    const questIds = questDialogueDefinitionIdsForRefs(selectedInfo.refs, graph);
+    for (const node of graph.nodes || []) {
+      if ((node.parentId || null) === workspace.id && questIds.has(node.id)) ids.add(node.id);
+    }
+    return {
+      count: ids.size,
+      selected: true,
+      title: "Selectie: " + ids.size + " quests/dialogen in deze werkruimte."
+    };
+  }
   for (const node of graph.nodes || []) {
     if ((node.parentId || null) !== workspace.id) continue;
-    if (!routeTypes.has(node.type)) continue;
     if (selected && !selectedInfo.nodes.has(node.id) && !nodeReferencesAny(node, selectedInfo.refs)) continue;
     ids.add(node.id);
   }
@@ -10853,37 +10949,22 @@ function countGraphNodesByIds(ids) {
 }
 
 function authoringIndicatorCountsForModel(model, graph = state.graph) {
-  const context = objectFunctionContextForModel(model, graph);
-  const refs = new Set();
-  const entityRef = normalizeCanonicalId(context?.assembly?.values?.entityId, "");
-  const targetRef = normalizeCanonicalId(context?.questBinding?.values?.targetId, "");
-  if (entityRef) refs.add(entityRef);
-  if (targetRef) refs.add(targetRef);
-  const objectIds = new Set([model.id]);
-  for (const node of [context.assembly, context.interactionComponent, context.npcComponent, context.enemyComponent, context.questBinding]) {
+  const info = modelAuthoringReferenceInfo(model, graph);
+  const objectIds = new Set();
+  for (const node of [info.context?.assembly, info.context?.interactionComponent, info.context?.npcComponent, info.context?.enemyComponent]) {
     if (node) objectIds.add(node.id);
   }
-  const questIds = new Set();
-  for (const node of graph.nodes || []) {
-    if (refs.size && nodeReferencesAny(node, refs) && AUTHORING_ROUTE_COUNT_TYPES.quest_dialogue.includes(node.type)) questIds.add(node.id);
-  }
-  const catalogIds = catalogDefinitionNodeIdsForObjectContext(context, graph);
+  const questIds = questDialogueDefinitionIdsForRefs(info.refs, graph);
   return {
-    world_zone: context.zoneGroup ? 1 : 0,
     object_character: countGraphNodesByIds(objectIds),
-    quest_dialogue: questIds.size,
-    item_ability_stat: catalogIds.size,
-    game_settings_ui: 0
+    quest_dialogue: questIds.size
   };
 }
 
 function authoringIndicatorDefinitions() {
   return [
-    { routeId: "world_zone", icon: "W", label: "Wereld/Zone", color: "#22c55e", meaning: "Zone waar deze entity in staat" },
     { routeId: "object_character", icon: "O", label: "Object", color: "#06b6d4", meaning: "Objectonderdelen aan deze entity" },
-    { routeId: "quest_dialogue", icon: "Q", label: "Quest", color: "#f59e0b", meaning: "Quests/dialogen die deze entity targeten" },
-    { routeId: "item_ability_stat", icon: "C", label: "Catalog", color: "#d946ef", meaning: "Catalog-definities die componenten gebruiken" },
-    { routeId: "game_settings_ui", icon: "U", label: "Instellingen/UI", color: "#94a3b8", meaning: "Instellingen/UI-context voor deze entity" }
+    { routeId: "quest_dialogue", icon: "Q", label: "Quest", color: "#f59e0b", meaning: "Quests/dialogen die deze entity targeten" }
   ];
 }
 
@@ -10913,16 +10994,19 @@ function renderAuthoringIndicators() {
     cluster.style.left = Math.round(screen.x - wrapRect.left) + "px";
     cluster.style.top = Math.round(screen.y - wrapRect.top - 18) + "px";
     const counts = authoringIndicatorCountsForModel(model, state.graph);
+    let visibleCount = 0;
     for (const def of authoringIndicatorDefinitions()) {
       const count = Number(counts[def.routeId] || 0);
+      if (!count) continue;
       const dot = document.createElement("span");
-      dot.className = "authoringIndicatorDot" + (count ? "" : " authoringIndicatorDot--empty");
+      dot.className = "authoringIndicatorDot";
       dot.style.setProperty("--indicator-color", def.color);
-      dot.textContent = def.icon + (count ? String(count) : "");
+      dot.textContent = def.icon + String(count);
       dot.title = def.label + ": " + def.meaning + ". Aantal: " + count + ".";
       cluster.appendChild(dot);
+      visibleCount += 1;
     }
-    root.appendChild(cluster);
+    if (visibleCount) root.appendChild(cluster);
   }
 }
 
