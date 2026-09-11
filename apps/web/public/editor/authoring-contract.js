@@ -1,4 +1,4 @@
-import { NODE_TYPES } from "../shared/node-types.js?v=20260904-graph-frames1";
+import { NODE_TYPES } from "../shared/node-types.js?v=20260911-authoring04-fix01";
 
 const GROUP_CLASS_DEFAULTS = Object.freeze({
   world: "viewport_tool",

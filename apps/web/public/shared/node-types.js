@@ -2467,7 +2467,7 @@ export function groupInterfacePresetForKind(groupKind) {
     return { inputs: [], outputs: [{ id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false }] };
   }
   if (kind === "zone") {
-    return { inputs: [], outputs: [{ id: "zonepkg", name: "zonepkg", label: "zonePkg", dataType: "zonePackage", multiple: false }] };
+    return { inputs: [], outputs: [{ id: "zone_package", name: "zonePackage", label: "Zone Package", dataType: "zonePackage", multiple: false }] };
   }
   if (kind === "area") {
     return { inputs: [], outputs: [{ id: "area_package", name: "areaPackage", label: "Area Package", dataType: "areaPackage", multiple: false }] };

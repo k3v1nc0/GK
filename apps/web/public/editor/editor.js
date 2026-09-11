@@ -1,6 +1,6 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260904-graph-frames1";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260907-authoring-01b";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260911-authoring04-fix01";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260911-authoring04-fix01";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
@@ -8976,14 +8976,67 @@ function ensureGroupOutputPort(graph, group, portSpec) {
     : { inputs: [], outputs: [] };
   current.inputs = Array.isArray(current.inputs) ? current.inputs : [];
   current.outputs = Array.isArray(current.outputs) ? current.outputs : [];
-  if (!current.outputs.some(function (port) {
+  const existing = current.outputs.find(function (port) {
     return port && (port.name === portSpec.name || port.id === portSpec.id || port.dataType === portSpec.dataType);
-  })) {
+  }) || null;
+  if (existing) {
+    if (!existing.id) existing.id = portSpec.id;
+    if (!existing.name) existing.name = portSpec.name;
+    if (!existing.label) existing.label = portSpec.label;
+    if (!existing.dataType) existing.dataType = portSpec.dataType;
+    if (existing.multiple === undefined) existing.multiple = Boolean(portSpec.multiple);
+  } else {
     current.outputs.push(clonePlain(portSpec));
   }
   group.values.groupInterface = current;
   ensureGroupSystemNodesInGraph(graph, group.id);
   return graphNodeByIdInGraph(graph, editorGroupSystemNodeId(group.id, "output"));
+}
+
+function groupInterfaceOutputPortForDataType(group, dataType, preferredName) {
+  const outputs = Array.isArray(group?.values?.groupInterface?.outputs) ? group.values.groupInterface.outputs : [];
+  const preferred = String(preferredName || "").trim();
+  if (preferred) {
+    const preferredPort = outputs.find(function (port) {
+      return port && String(port.dataType || "") === dataType && (port.name === preferred || port.id === preferred);
+    });
+    if (preferredPort) return preferredPort;
+  }
+  return outputs.find(function (port) {
+    return port && String(port.dataType || "") === dataType;
+  }) || null;
+}
+
+function groupInterfaceOutputPortNameForDataType(group, dataType, preferredName) {
+  const port = groupInterfaceOutputPortForDataType(group, dataType, preferredName);
+  return String(port?.name || port?.id || preferredName || "").trim();
+}
+
+function rewriteGroupPackageEdgesToPort(graph, group, dataType, portName) {
+  const resolvedPortName = String(portName || "").trim();
+  if (!graph || !group || !resolvedPortName) return false;
+  const systemOutputId = editorGroupSystemNodeId(group.id, "output");
+  const graphNodeById = new Map((graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  let changed = false;
+  for (const edge of graph.edges || []) {
+    if (edge.toNodeId === systemOutputId) {
+      const source = graphNodeById.get(edge.fromNodeId);
+      const sourceOutput = state.nodeTypes?.[source?.type]?.outputs?.[edge.fromPort] || null;
+      if (source && (source.parentId || null) === group.id && String(sourceOutput?.dataType || "") === dataType && edge.toPort !== resolvedPortName) {
+        edge.toPort = resolvedPortName;
+        changed = true;
+      }
+    }
+    if (edge.fromNodeId === group.id) {
+      const target = graphNodeById.get(edge.toNodeId);
+      const targetInput = state.nodeTypes?.[target?.type]?.inputs?.[edge.toPort] || null;
+      if (target && String(targetInput?.dataType || "") === dataType && edge.fromPort !== resolvedPortName) {
+        edge.fromPort = resolvedPortName;
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 function ensureRootWorldAssemblyLink(graph, fromNodeId, fromPort, toPort) {
@@ -8992,7 +9045,7 @@ function ensureRootWorldAssemblyLink(graph, fromNodeId, fromPort, toPort) {
   return Boolean(pushEdgeIfMissing(graph, fromNodeId, fromPort, assembly.id, toPort));
 }
 
-function ensureCatalogRootPlumbing(graph, group, position) {
+function ensureCatalogRootPlumbing(graph, group, position, packagePortName) {
   let registry = firstRootNodeOfType(graph, "catalog_registry");
   if (!registry) {
     registry = {
@@ -9008,7 +9061,8 @@ function ensureCatalogRootPlumbing(graph, group, position) {
     };
     graph.nodes.push(registry);
   }
-  if (group) pushEdgeIfMissing(graph, group.id, "catalogPackage", registry.id, "catalogPackage");
+  const resolvedPackagePortName = packagePortName || groupInterfaceOutputPortNameForDataType(group, "catalogPackage", AUTHORING04_GROUP_OUTPUT_PORTS.catalog.name);
+  if (group && resolvedPackagePortName) pushEdgeIfMissing(graph, group.id, resolvedPackagePortName, registry.id, "catalogPackage");
   ensureRootWorldAssemblyLink(graph, registry.id, "catalogRegistry", "catalogs");
   return registry;
 }
@@ -9033,8 +9087,10 @@ function ensureCatalogGroupPackage(graph, group) {
     };
     graph.nodes.push(output);
   }
-  if (groupOutput) pushEdgeIfMissing(graph, output.id, "catalogPackage", groupOutput.id, "catalogPackage");
-  ensureCatalogRootPlumbing(graph, group, { x: group.x, y: group.y });
+  const packagePortName = groupInterfaceOutputPortNameForDataType(group, "catalogPackage", AUTHORING04_GROUP_OUTPUT_PORTS.catalog.name);
+  rewriteGroupPackageEdgesToPort(graph, group, "catalogPackage", packagePortName);
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "catalogPackage", groupOutput.id, packagePortName);
+  ensureCatalogRootPlumbing(graph, group, { x: group.x, y: group.y }, packagePortName);
   for (const node of graph.nodes || []) {
     if ((node.parentId || null) !== group.id || node.id === output.id) continue;
     if (state.nodeTypes?.[node.type]?.outputs?.catalogDefinition) {
@@ -9064,8 +9120,10 @@ function ensurePlayerRulesGroupPackage(graph, group) {
     };
     graph.nodes.push(output);
   }
-  if (groupOutput) pushEdgeIfMissing(graph, output.id, "playerRules", groupOutput.id, "playerRules");
-  ensureRootWorldAssemblyLink(graph, group.id, "playerRules", "playerRules");
+  const packagePortName = groupInterfaceOutputPortNameForDataType(group, "playerRules", AUTHORING04_GROUP_OUTPUT_PORTS.player_rules.name);
+  rewriteGroupPackageEdgesToPort(graph, group, "playerRules", packagePortName);
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "playerRules", groupOutput.id, packagePortName);
+  ensureRootWorldAssemblyLink(graph, group.id, packagePortName, "playerRules");
   for (const node of graph.nodes || []) {
     if ((node.parentId || null) !== group.id || node.id === output.id) continue;
     const policyPort = outputPortForDataType(node.type, "policy");
@@ -9094,8 +9152,10 @@ function ensureUiGroupPackage(graph, group) {
     };
     graph.nodes.push(output);
   }
-  if (groupOutput) pushEdgeIfMissing(graph, output.id, "uiPackage", groupOutput.id, "uiPackage");
-  ensureRootWorldAssemblyLink(graph, group.id, "uiPackage", "ui");
+  const packagePortName = groupInterfaceOutputPortNameForDataType(group, "uiPackage", AUTHORING04_GROUP_OUTPUT_PORTS.ui.name);
+  rewriteGroupPackageEdgesToPort(graph, group, "uiPackage", packagePortName);
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "uiPackage", groupOutput.id, packagePortName);
+  ensureRootWorldAssemblyLink(graph, group.id, packagePortName, "ui");
   for (const node of graph.nodes || []) {
     if ((node.parentId || null) !== group.id || node.id === output.id) continue;
     const outputs = state.nodeTypes?.[node.type]?.outputs || {};
@@ -11543,10 +11603,12 @@ function ensureZoneCanvasGroupPackageOutput(graph, group) {
   }
   const system = ensureGroupSystemNodesInGraph(graph, group.id);
   const output = zoneOutputForGroup(group.id, graph);
-  if (output && pushEdgeIfMissing(graph, output.id, "zonePackage", system.outputId, "zonePackage")) changed = true;
+  const packagePortName = groupInterfaceOutputPortNameForDataType(group, "zonePackage", "zonePackage");
+  if (rewriteGroupPackageEdgesToPort(graph, group, "zonePackage", packagePortName)) changed = true;
+  if (output && pushEdgeIfMissing(graph, output.id, "zonePackage", system.outputId, packagePortName)) changed = true;
   if ((group.parentId || null) === null) {
     const registry = ensureZoneRegistryForParent(graph, null, { x: group.x, y: group.y });
-    if (registry && pushEdgeIfMissing(graph, group.id, "zonePackage", registry.id, "zonePackage")) changed = true;
+    if (registry && pushEdgeIfMissing(graph, group.id, packagePortName, registry.id, "zonePackage")) changed = true;
   }
   return changed;
 }
@@ -11789,7 +11851,14 @@ function zoneCanvasGroupInterfaceForRole(isRoot, previousInterface = null) {
   const outputs = (current.outputs || []).filter(function (port) {
     return !isZoneCanvasEntityGroupPort(port);
   });
-  if (!outputs.some(isZoneCanvasPackageGroupPort)) {
+  const packagePort = outputs.find(isZoneCanvasPackageGroupPort) || null;
+  if (packagePort) {
+    if (!packagePort.id) packagePort.id = packagePort.name || "zone_package";
+    if (!packagePort.name) packagePort.name = packagePort.id || "zonePackage";
+    if (!packagePort.label) packagePort.label = packagePort.name === "zonepkg" ? "zonePkg" : "Zone Package";
+    if (!packagePort.dataType) packagePort.dataType = "zonePackage";
+    if (packagePort.multiple === undefined) packagePort.multiple = false;
+  } else {
     outputs.push({
       id: "zone_package",
       name: "zonePackage",

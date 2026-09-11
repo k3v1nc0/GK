@@ -1,9 +1,32 @@
 # AUTHORING-04 - Complete visuele authoring voor alle vijf hoofdroutes
 
 **Documenttype:** eindrapport voor Kevin  
-**Status:** implemented, awaiting Kevin acceptance  
+**Status:** implemented, awaiting Kevin acceptance
+
 **Basiscommit:** `0478219ff4ce4fda2410960445df0aa4e2954395`  
 **Afhankelijkheden:** AUTHORING-01, AUTHORING-02, AUTHORING-02B, AUTHORING-03, NODE-01 t/m NODE-05
+
+---
+
+## AUTHORING-04-FIX-01 - Zone Canvas packagepoort
+
+**Status:** implemented, awaiting Kevin acceptance
+
+**Basiscommit fix:** `7ac2edb999a3a3bf3a0570d187025f9f74956b9a`
+
+Oorzaak: het gedeelde zonepreset gebruikte historisch de group-outputpoort `zonepkg`, terwijl AUTHORING-04 bij zone-aanmaak vaste edges met `zonePackage` schreef. Daardoor kon een nieuwe Zone Canvas snapshot een edge krijgen naar een inputpoort die volgens de actuele Group Interface niet bestond.
+
+Herstel:
+
+- Nieuwe Zone Groups gebruiken voortaan canoniek `zonePackage` als group-outputnaam.
+- Bestaande/historische Zone Groups met `zonepkg` blijven geldig; hun data wordt niet verwijderd of hernoemd.
+- Zone-publicatie leidt de geldige Group Output-poort af uit de Group Interface op basis van datatype `zonePackage`.
+- Dezelfde gevonden poortnaam wordt gebruikt voor `zone_output -> Group Output` en `Group Node -> zone_registry`.
+- Bestaande interne/externe package-edges worden in dezelfde graphkopie naar die gevonden poortnaam herschreven wanneer ze hetzelfde package-datatype publiceren.
+- Dezelfde dynamische aanpak is statisch toegepast op Catalog, Player Rules en UI packagehelpers, zodat `catalogPackage`, `playerRules` en `uiPackage` niet opnieuw blind als grouppoort worden aangenomen bij bestaande aliassen.
+- `src/shared/node-types.js` en `apps/web/public/shared/node-types.js` zijn synchroon gehouden.
+
+Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playwright of browsertest uitgevoerd.
 
 ---
 
@@ -15,7 +38,7 @@ AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die w
 
 - `group` met `groupKind: "zone"` en root-level Zone Canvas.
 - `zone_definition`, `zone_environment_settings`, `zone_gameplay_rules`, `ground_surface`, `spawn_point`, `zone_output`.
-- Rootkoppeling via `zone_output.zonePackage -> group_output.zonePackage -> group.zonePackage -> zone_registry.zonePackage`.
+- Rootkoppeling via `zone_output.zonePackage -> group_output.<werkelijke zonePackage grouppoort> -> group.<dezelfde grouppoort> -> zone_registry.zonePackage`. Voor nieuwe zones is die grouppoort `zonePackage`; historische `zonepkg`-groups blijven ondersteund.
 - Gridpositie via `zoneGridX` en `zoneGridY/zoneGridZ`.
 
 **Object of personage**
@@ -71,8 +94,11 @@ AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die w
 ## 4. Gewijzigde bestanden
 
 - `apps/web/public/editor/editor.js`
+- `apps/web/public/editor/authoring-contract.js`
 - `apps/web/public/editor/index.html`
 - `apps/web/public/editor/styles.css`
+- `apps/web/public/shared/node-types.js`
+- `src/shared/node-types.js`
 - `README/fases/AUTHORING-04-Complete-Visual-Authoring.md`
 - `README/fases/README.md`
 
