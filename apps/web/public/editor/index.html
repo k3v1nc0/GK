@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20260910-editor-connection-lamp3">
+    <link rel="stylesheet" href="./styles.css?v=20260910-authoring04">
     <script type="importmap">
       {
         "imports": {
@@ -66,6 +66,7 @@
             <div class="libSearchRow">
               <input id="nodeLibrarySearch" placeholder="Zoek nodes...">
             </div>
+            <button id="nodeLibraryModeToggle" type="button" class="nodeLibraryModeToggle" aria-pressed="false">Alle nodes / Geavanceerd</button>
             <div id="nodeLibrary"></div>
           </div>
         </div>
@@ -103,6 +104,7 @@
           <div class="viewportChromeLeft">
             <div class="viewportChromeBar">
               <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
+              <button id="viewportAuthoringIndicatorToggle" type="button" class="viewportNavButton" aria-pressed="false" title="Authoring-indicatoren">A</button>
               <button id="viewportFocusButton" type="button" class="viewportNavButton" title="Focus selectie" aria-label="Focus selectie">F</button>
               <button id="viewportInfoButton" type="button" class="viewportInfoButton" title="Viewport help" aria-controls="viewportHelpPanel" aria-expanded="false">i</button>
             </div>
@@ -195,6 +197,7 @@
           </div>
           <div class="viewportTransformPanel" id="viewportTransformPanel" hidden></div>
           <canvas id="viewportCanvas"></canvas>
+          <div id="viewportAuthoringIndicators" class="viewportAuthoringIndicators" hidden></div>
           <div id="viewportSelectionBox" class="selectionBox" hidden></div>
           <div class="editorMinimapRoot" id="editorMinimapRoot" hidden>
             <canvas id="editorMinimapCanvas"></canvas>
@@ -267,6 +270,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20260910-editor-connection-lamp3"></script>
+    <script type="module" src="./editor.js?v=20260910-authoring04"></script>
   </body>
 </html>

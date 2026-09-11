@@ -310,6 +310,24 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   font-size: 12px;
   line-height: 1.35;
 }
+.authoringCountBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  margin-top: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid #365268;
+  background: #0d1720;
+  color: #dcecff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+.authoringCountBadge--workspace { background: #121d28; color: #bfe9ff; }
 .authoringWorkspaceGroup {
   display: grid;
   gap: 8px;
@@ -354,6 +372,117 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.authoring04Hub { margin-top: 12px; }
+.authoring04DraftCard { margin-top: 10px; }
+.authoring04Search {
+  width: 100%;
+  margin: 8px 0;
+}
+.authoring04List {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.authoring04ListItem {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #26384a;
+  border-radius: 8px;
+  background: #101922;
+}
+.authoring04ListBody { min-width: 0; }
+.authoring04ListTitle {
+  font-size: 13px;
+  font-weight: 800;
+  color: #ecf6ff;
+}
+.authoring04ListMeta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: #9fb1c3;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.authoring04Actions,
+.authoring04DirectionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.authoring04TypeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.authoring04ReadOnly {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #253648;
+  border-radius: 8px;
+  background: #0f1720;
+}
+.authoring04ReadOnlyRow {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  color: #c8d7e6;
+}
+.authoring04ReadOnlyRow span:first-child { color: #8fa3b6; }
+.referenceListPicker,
+.tagQueryEditor,
+.formulaEditor {
+  display: grid;
+  gap: 6px;
+}
+.referenceListPickerChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.referenceListChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid #365268;
+  background: #142232;
+  color: #dcecff;
+  font-size: 12px;
+}
+.referenceListChip button {
+  border: 0;
+  background: transparent;
+  color: #ffb4b4;
+  cursor: pointer;
+}
+.tagQueryRow {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.formulaEditor {
+  grid-template-columns: minmax(88px, 0.45fr) minmax(0, 1fr);
+}
+.lootEntryEditor {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #26384a;
+}
+.uiRuntimePreview {
+  padding: 12px;
+  border: 1px solid #34485d;
+  border-radius: 8px;
+  background: #071018;
+  color: #f2f7fb;
+  font-size: 13px;
 }
 
 .objectFunctionSection {
@@ -589,6 +718,37 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .objectFunctionDraftField label > *:last-child {
   width: 100%;
   min-width: 0;
+}
+.objectFunctionDraftField input,
+.objectFunctionDraftField select,
+.objectFunctionDraftField textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #28333f;
+  border-radius: 6px;
+  background: #0f161e;
+  color: #eef3f6;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.objectFunctionDraftField textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+.objectFunctionDraftField input[type="checkbox"] {
+  width: auto;
+}
+.objectFunctionDraftField .colorRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.objectFunctionDraftField .colorRow input[type="color"] {
+  width: 42px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 2px;
 }
 .objectFunctionDraftHint {
   font-size: 12px;
@@ -871,6 +1031,55 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .nodeLibraryBody {
   display: grid;
   gap: 12px;
+}
+.nodeLibraryModeToggle {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #2b3b4c;
+  border-radius: 8px;
+  background: #101923;
+  color: #dcecff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+.nodeLibraryModeToggle[aria-pressed="true"] {
+  border-color: #7bd4ff;
+  background: #112637;
+}
+.libButton--blocked {
+  border-color: #59414a;
+  background: #1a1317;
+}
+.nodeLibraryBadge {
+  display: inline-flex;
+  width: max-content;
+  margin-top: 5px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid #365268;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.nodeLibraryBadge--ok {
+  color: #bbf7d0;
+  border-color: #166534;
+}
+.nodeLibraryBadge--warning {
+  color: #fde68a;
+  border-color: #92400e;
+}
+.nodeLibraryBadge--system {
+  color: #cbd5e1;
+  border-color: #475569;
+}
+.nodeLibraryBadge--muted {
+  color: #a8b3c0;
+  border-color: #3d4b5a;
 }
 
 .graphColumn { display: flex; flex-direction: column; min-width: 0; background: #070b10; }
@@ -1162,6 +1371,41 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .viewportColumn { display: flex; flex-direction: column; min-width: 0; background: #060a0e; border-left: 1px solid #1c2733; }
 .viewportWrap { position: relative; flex: 1 1 auto; min-height: 0; }
 #viewportCanvas { width: 100%; height: 100%; display: block; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.viewportAuthoringIndicators {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+.authoringIndicatorCluster {
+  position: absolute;
+  display: flex;
+  gap: 3px;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
+}
+.authoringIndicatorDot {
+  --indicator-color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
+  border: 1px solid var(--indicator-color);
+  background: var(--indicator-color);
+  color: #061018;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: auto;
+}
+.authoringIndicatorDot--empty {
+  background: rgba(4, 10, 16, 0.72);
+  color: var(--indicator-color);
+}
 .viewportChromeLeft {
   position: absolute;
   top: 10px;

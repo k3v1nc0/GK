@@ -1,6 +1,6 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260904-graph-frames1";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute } from "./authoring-contract.js?v=20260907-authoring-01b";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260907-authoring-01b";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
@@ -58,6 +58,7 @@ const ZONE_CANVAS_DIRECTIONS = {
 };
 const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const AUTHORING_ROUTE_STORAGE_KEY = "gk.editorAuthoringRoute";
+const AUTHORING_INDICATORS_STORAGE_KEY = "gk.editorAuthoringIndicators";
 const CURRENT_GROUP_STORAGE_KEY = "gk.editorCurrentGroupId";
 const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
@@ -145,6 +146,17 @@ const state = {
   storedAuthoringRouteId: loadStoredAuthoringRoute(),
   authoringMenuOpen: false,
   nodeLibraryOpen: false,
+  nodeLibraryAdvanced: false,
+  zoneCanvasDraft: null,
+  catalogHubType: "item_definition",
+  catalogHubSelectedNodeId: null,
+  catalogHubDraft: null,
+  catalogHubSearch: "",
+  settingsHubKind: "player_rules",
+  settingsHubSelectedNodeId: null,
+  settingsHubDraft: null,
+  settingsHubSearch: "",
+  authoringIndicatorsEnabled: loadStoredAuthoringIndicators(),
   objectFunctionDraft: null,
   questTimelineView: "quest",
   questTimelineSelectedQuestId: null,
@@ -293,6 +305,7 @@ const el = {
   nodeLibraryToggleTitle: document.querySelector("#nodeLibraryToggleTitle"),
   nodeLibraryToggleState: document.querySelector("#nodeLibraryToggleState"),
   nodeLibraryBody: document.querySelector("#nodeLibraryBody"),
+  nodeLibraryModeToggle: document.querySelector("#nodeLibraryModeToggle"),
   inspectorSection: document.querySelector("#inspectorSection"),
   nodeLibrary: document.querySelector("#nodeLibrary"),
   nodeLibrarySearch: document.querySelector("#nodeLibrarySearch"),
@@ -312,6 +325,8 @@ const el = {
   viewportInfoButton: document.querySelector("#viewportInfoButton"),
   viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
+  viewportAuthoringIndicatorToggle: document.querySelector("#viewportAuthoringIndicatorToggle"),
+  viewportAuthoringIndicators: document.querySelector("#viewportAuthoringIndicators"),
   editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
   editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
   viewportErrors: document.querySelector("#viewportErrors"),
@@ -714,6 +729,20 @@ function loadStoredAuthoringRoute() {
   } catch {
     return null;
   }
+}
+
+function loadStoredAuthoringIndicators() {
+  try {
+    return window.localStorage.getItem(AUTHORING_INDICATORS_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeAuthoringIndicators(enabled) {
+  try {
+    window.localStorage.setItem(AUTHORING_INDICATORS_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {}
 }
 
 function storeAuthoringRoute(routeId) {
@@ -3884,6 +3913,7 @@ function renderViewportControls() {
   scatterRenderOverlayPreview();
   renderStatusLine();
   renderTransformPanel();
+  renderAuthoringIndicators();
 }
 
 function setViewportMode(mode) {
@@ -6427,6 +6457,7 @@ function renderObjectFunctionSection(context) {
   meta.className = "objectFunctionMeta";
   meta.textContent = "Zone Canvas: " + nodeDisplayTitle(context.zoneGroup) + " · Zone Output: aanwezig";
   wrap.appendChild(meta);
+  wrap.appendChild(renderObjectFunctionReadOnlyInfo(context));
 
   const flow = document.createElement("div");
   flow.className = "objectFunctionFlow";
@@ -7806,8 +7837,13 @@ function questTimelineSelectInput(value, options, onChange) {
   const select = document.createElement("select");
   for (const opt of options || []) {
     const item = document.createElement("option");
-    item.value = String(opt);
-    item.textContent = String(opt);
+    if (opt && typeof opt === "object") {
+      item.value = opt.value === undefined || opt.value === null ? "" : String(opt.value);
+      item.textContent = opt.label === undefined || opt.label === null ? item.value : String(opt.label);
+    } else {
+      item.value = String(opt);
+      item.textContent = String(opt);
+    }
     select.appendChild(item);
   }
   select.value = value === null || value === undefined ? "" : String(value);
@@ -8827,6 +8863,2074 @@ function renderQuestDialogueWorkspace(group) {
   return wrap;
 }
 
+// ---------- AUTHORING-04: human route hubs ----------
+
+const AUTHORING04_GROUP_OUTPUT_PORTS = {
+  catalog: { id: "catalog_package", name: "catalogPackage", label: "Catalog Package", dataType: "catalogPackage", multiple: false },
+  player_rules: { id: "player_rules", name: "playerRules", label: "Player Rules", dataType: "playerRules", multiple: false },
+  ui: { id: "ui_package", name: "uiPackage", label: "UI Package", dataType: "uiPackage", multiple: false }
+};
+
+const CATALOG_HUB_TYPES = [
+  { type: "item_definition", label: "Items" },
+  { type: "ability_definition", label: "Abilities" },
+  { type: "stat_definition", label: "Stats" },
+  { type: "currency_definition", label: "Currencies" },
+  { type: "loot_table", label: "Loot Tables" }
+];
+
+const LOOT_ENTRY_TYPES = [
+  { type: "loot_item_entry", label: "Itemregel" },
+  { type: "loot_currency_entry", label: "Currencyregel" },
+  { type: "loot_table_entry", label: "Nested table" }
+];
+
+const PLAYER_RULES_HUB_TYPES = [
+  "player_progression_rules",
+  "inventory_rules",
+  "equipment_rules",
+  "ability_loadout_rules",
+  "death_respawn_rules",
+  "unstuck_rules",
+  "xp_source_rule",
+  "crafting_policy",
+  "vendor_policy",
+  "party_loot_policy",
+  "party_rules",
+  "trade_policy",
+  "market_policy",
+  "mail_policy"
+];
+
+const UI_HUB_TYPES = [
+  "ui_hud_text",
+  "debug_performance_hud",
+  "game_minimap_hud",
+  "hud_layout",
+  "menu_layout",
+  "party_hud",
+  "vendor_hud",
+  "crafting_hud",
+  "market_hud",
+  "trade_hud",
+  "inventory_hud",
+  "wallet_hud",
+  "equipment_hud",
+  "ability_bar_hud",
+  "quest_tracker_hud"
+];
+
+const AUTHORING_ROUTE_COUNT_TYPES = {
+  world_zone: ["group", "zone_definition", "zone_output", "spawn_point", "zone_link", "map_marker_definition", "minimap_bake"],
+  object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "quest_target_binding"],
+  quest_dialogue: ["quest_definition", "quest_step", "dialogue_definition", "dialogue_entry", "dialogue_choice", "dialogue_terminal"],
+  item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(LOOT_ENTRY_TYPES.map(function (entry) { return entry.type; })),
+  game_settings_ui: PLAYER_RULES_HUB_TYPES.concat(UI_HUB_TYPES)
+};
+
+function graphNodeByIdInGraph(graph, nodeId) {
+  return (graph.nodes || []).find(function (node) { return node.id === nodeId; }) || null;
+}
+
+function firstRootNodeOfType(graph, type) {
+  return (graph.nodes || []).find(function (node) { return node.type === type && (node.parentId || null) === null; }) || null;
+}
+
+function identityFieldForType(type) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const entry = Object.entries(fields).find(function ([, field]) { return field?.type === "identity"; });
+  return entry ? entry[0] : "";
+}
+
+function managedInternalTextIdFieldForType(type) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  for (const key of ["moduleId", "hudId", "layoutId", "bindingId", "minimapId"]) {
+    if (fields[key]?.type === "text" && fields[key]?.required) return key;
+  }
+  return "";
+}
+
+function primaryDisplayFieldForType(type) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const internalTextId = managedInternalTextIdFieldForType(type);
+  for (const key of ["displayName", "label", "title", "gameName", "text", "hudId", "moduleId"]) {
+    if (key === internalTextId) continue;
+    if (fields[key]) return key;
+  }
+  return identityFieldForType(type);
+}
+
+function outputPortForDataType(type, dataType) {
+  const outputs = state.nodeTypes?.[type]?.outputs || {};
+  const entry = Object.entries(outputs).find(function ([, port]) {
+    return port && String(port.dataType || "") === dataType;
+  });
+  return entry ? entry[0] : "";
+}
+
+function ensureGroupOutputPort(graph, group, portSpec) {
+  if (!group || !portSpec?.name) return null;
+  group.values = Object.assign({}, group.values || {});
+  const current = group.values.groupInterface && typeof group.values.groupInterface === "object"
+    ? clonePlain(group.values.groupInterface)
+    : { inputs: [], outputs: [] };
+  current.inputs = Array.isArray(current.inputs) ? current.inputs : [];
+  current.outputs = Array.isArray(current.outputs) ? current.outputs : [];
+  if (!current.outputs.some(function (port) {
+    return port && (port.name === portSpec.name || port.id === portSpec.id || port.dataType === portSpec.dataType);
+  })) {
+    current.outputs.push(clonePlain(portSpec));
+  }
+  group.values.groupInterface = current;
+  ensureGroupSystemNodesInGraph(graph, group.id);
+  return graphNodeByIdInGraph(graph, editorGroupSystemNodeId(group.id, "output"));
+}
+
+function ensureRootWorldAssemblyLink(graph, fromNodeId, fromPort, toPort) {
+  const assembly = firstRootNodeOfType(graph, "world_assembly");
+  if (!assembly) return false;
+  return Boolean(pushEdgeIfMissing(graph, fromNodeId, fromPort, assembly.id, toPort));
+}
+
+function ensureCatalogRootPlumbing(graph, group, position) {
+  let registry = firstRootNodeOfType(graph, "catalog_registry");
+  if (!registry) {
+    registry = {
+      id: createZoneGraphId("node_catalog_registry"),
+      type: "catalog_registry",
+      title: "Catalog Registry",
+      x: Math.round(Number(position?.x) || Number(group?.x) || 0) + 620,
+      y: Math.round(Number(position?.y) || Number(group?.y) || 0),
+      parentId: null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("catalog_registry"), {
+        registryId: uniqueCanonicalGraphValue(graph, "catalog_registry.main")
+      })
+    };
+    graph.nodes.push(registry);
+  }
+  if (group) pushEdgeIfMissing(graph, group.id, "catalogPackage", registry.id, "catalogPackage");
+  ensureRootWorldAssemblyLink(graph, registry.id, "catalogRegistry", "catalogs");
+  return registry;
+}
+
+function ensureCatalogGroupPackage(graph, group) {
+  if (!group) return null;
+  const groupOutput = ensureGroupOutputPort(graph, group, AUTHORING04_GROUP_OUTPUT_PORTS.catalog);
+  let output = (graph.nodes || []).find(function (node) {
+    return node.type === "catalog_output" && (node.parentId || null) === group.id;
+  }) || null;
+  if (!output) {
+    output = {
+      id: createZoneGraphId("node_catalog_output"),
+      type: "catalog_output",
+      title: "Catalog Output",
+      x: 820,
+      y: 120,
+      parentId: group.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("catalog_output"), {
+        catalogId: uniqueCanonicalGraphValue(graph, "catalog." + (slugifyGroupPortName(group.values?.title || group.title || "main") || "main"))
+      })
+    };
+    graph.nodes.push(output);
+  }
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "catalogPackage", groupOutput.id, "catalogPackage");
+  ensureCatalogRootPlumbing(graph, group, { x: group.x, y: group.y });
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== group.id || node.id === output.id) continue;
+    if (state.nodeTypes?.[node.type]?.outputs?.catalogDefinition) {
+      pushEdgeIfMissing(graph, node.id, "catalogDefinition", output.id, "definitions");
+    }
+  }
+  return output;
+}
+
+function ensurePlayerRulesGroupPackage(graph, group) {
+  if (!group) return null;
+  const groupOutput = ensureGroupOutputPort(graph, group, AUTHORING04_GROUP_OUTPUT_PORTS.player_rules);
+  let output = (graph.nodes || []).find(function (node) {
+    return node.type === "player_rules_output" && (node.parentId || null) === group.id;
+  }) || null;
+  if (!output) {
+    output = {
+      id: createZoneGraphId("node_player_rules_output"),
+      type: "player_rules_output",
+      title: "Player Rules Output",
+      x: 820,
+      y: 120,
+      parentId: group.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("player_rules_output"), {
+        rulesId: uniqueCanonicalGraphValue(graph, "player_rules." + (slugifyGroupPortName(group.values?.title || group.title || "main") || "main"))
+      })
+    };
+    graph.nodes.push(output);
+  }
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "playerRules", groupOutput.id, "playerRules");
+  ensureRootWorldAssemblyLink(graph, group.id, "playerRules", "playerRules");
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== group.id || node.id === output.id) continue;
+    const policyPort = outputPortForDataType(node.type, "policy");
+    if (policyPort) pushEdgeIfMissing(graph, node.id, policyPort, output.id, "policy");
+  }
+  return output;
+}
+
+function ensureUiGroupPackage(graph, group) {
+  if (!group) return null;
+  const groupOutput = ensureGroupOutputPort(graph, group, AUTHORING04_GROUP_OUTPUT_PORTS.ui);
+  let output = (graph.nodes || []).find(function (node) {
+    return node.type === "ui_output" && (node.parentId || null) === group.id;
+  }) || null;
+  if (!output) {
+    output = {
+      id: createZoneGraphId("node_ui_output"),
+      type: "ui_output",
+      title: "UI Output",
+      x: 820,
+      y: 120,
+      parentId: group.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("ui_output"), {
+        uiId: uniqueCanonicalGraphValue(graph, "ui." + (slugifyGroupPortName(group.values?.title || group.title || "main") || "main"))
+      })
+    };
+    graph.nodes.push(output);
+  }
+  if (groupOutput) pushEdgeIfMissing(graph, output.id, "uiPackage", groupOutput.id, "uiPackage");
+  ensureRootWorldAssemblyLink(graph, group.id, "uiPackage", "ui");
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== group.id || node.id === output.id) continue;
+    const outputs = state.nodeTypes?.[node.type]?.outputs || {};
+    if (outputs.uiModule) pushEdgeIfMissing(graph, node.id, "uiModule", output.id, "uiModules");
+    if (outputs.ui) pushEdgeIfMissing(graph, node.id, "ui", output.id, "ui");
+    if (outputs.minimap) pushEdgeIfMissing(graph, node.id, "minimap", output.id, "minimap");
+    if (outputs.uiLayout) pushEdgeIfMissing(graph, node.id, "uiLayout", output.id, "uiLayout");
+    if (outputs.menuLayout) pushEdgeIfMissing(graph, node.id, "menuLayout", output.id, "uiLayout");
+  }
+  return output;
+}
+
+function ensureManagedGroupPackage(graph, group) {
+  const kind = normalizeEditorKey(group?.values?.groupKind);
+  if (kind === "catalog") return ensureCatalogGroupPackage(graph, group);
+  if (kind === "player_rules") return ensurePlayerRulesGroupPackage(graph, group);
+  if (kind === "ui") return ensureUiGroupPackage(graph, group);
+  return null;
+}
+
+async function createRootManagedGroup(kind, titleText) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const center = viewportCenterInGraph();
+  const title = String(titleText || "").trim() || (kind === "player_rules" ? "Player Rules" : kind === "ui" ? "UI" : "Catalog");
+  const duplicate = (nextGraph.nodes || []).find(function (node) {
+    return node.type === "group"
+      && (node.parentId || null) === null
+      && normalizeEditorKey(node.values?.groupKind) === normalizeEditorKey(kind)
+      && normalizeEditorKey(node.values?.title || node.title) === normalizeEditorKey(title);
+  }) || null;
+  if (duplicate) {
+    enterGroup(duplicate);
+    setStatus(title + " Group bestond al; bestaande groep geopend.", "");
+    return;
+  }
+  const group = {
+    id: createZoneGraphId("node_group"),
+    type: "group",
+    title,
+    x: Math.round(Number(center.x) || 80),
+    y: Math.round(Number(center.y) || 80),
+    parentId: null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("group"), {
+      groupId: uniqueCanonicalGraphValue(nextGraph, slugifyGroupPortName(title, kind) || kind),
+      title,
+      groupKind: kind
+    })
+  };
+  nextGraph.nodes.push(group);
+  ensureManagedGroupPackage(nextGraph, group);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: title + " Group aangemaakt",
+    currentGroupId: group.id,
+    selectedNodeIds: [group.id],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () {
+      enterGroup(group);
+      setStatus(title + " Group aangemaakt.", "success");
+    }
+  });
+}
+
+function selectedModelAuthoringReferenceInfo(graph = state.graph) {
+  const model = selectedSingleModelNode();
+  if (!model) return { model: null, assembly: null, target: null, refs: new Set(), nodes: new Set() };
+  const context = objectFunctionContextForModel(model, graph);
+  const refs = new Set();
+  const nodes = new Set([model.id]);
+  if (context.assembly) {
+    nodes.add(context.assembly.id);
+    const entityId = normalizeCanonicalId(context.assembly.values?.entityId, "");
+    if (entityId) refs.add(entityId);
+  }
+  if (context.questBinding) {
+    nodes.add(context.questBinding.id);
+    const targetId = normalizeCanonicalId(context.questBinding.values?.targetId, "");
+    if (targetId) refs.add(targetId);
+  }
+  for (const component of [context.interactionComponent, context.npcComponent, context.enemyComponent]) {
+    if (component) nodes.add(component.id);
+  }
+  return { model, assembly: context.assembly, target: context.questBinding, refs, nodes, context };
+}
+
+function questDialogueReferencesForObjectContext(context, graph = state.graph) {
+  const refs = new Set();
+  const entityRef = normalizeCanonicalId(context?.assembly?.values?.entityId, "");
+  const targetRef = normalizeCanonicalId(context?.questBinding?.values?.targetId, "");
+  if (entityRef) refs.add(entityRef);
+  if (targetRef) refs.add(targetRef);
+  if (!refs.size) return { quests: [], dialogues: [], others: [] };
+  const quests = [];
+  const dialogues = [];
+  const others = [];
+  for (const node of graph.nodes || []) {
+    if (!nodeReferencesAny(node, refs)) continue;
+    if (node.type === "quest_definition") quests.push(node);
+    else if (node.type === "dialogue_definition") dialogues.push(node);
+    else if (node.type !== "quest_target_binding") others.push(node);
+  }
+  return { quests, dialogues, others };
+}
+
+function catalogDefinitionNodeIdsForObjectContext(context, graph = state.graph) {
+  const catalogRefs = new Set();
+  for (const component of [context?.interactionComponent, context?.npcComponent, context?.enemyComponent]) {
+    if (!component) continue;
+    const fields = state.nodeTypes?.[component.type]?.fields || {};
+    for (const [key, field] of Object.entries(fields)) {
+      if (field?.type === "reference") {
+        const ref = normalizeCanonicalId(component.values?.[key], "");
+        if (ref) catalogRefs.add(ref);
+      } else if (field?.type === "referenceList") {
+        for (const ref of normalizeReferenceList(component.values?.[key])) catalogRefs.add(ref);
+      }
+    }
+  }
+  const ids = new Set();
+  if (!catalogRefs.size) return ids;
+  const catalogTypes = new Set(AUTHORING_ROUTE_COUNT_TYPES.item_ability_stat || []);
+  for (const node of graph.nodes || []) {
+    if (!catalogTypes.has(node.type)) continue;
+    const idField = identityFieldForType(node.type);
+    if (!idField) continue;
+    if (catalogRefs.has(normalizeCanonicalId(node.values?.[idField], ""))) ids.add(node.id);
+  }
+  return ids;
+}
+
+function renderObjectFunctionReadOnlyInfo(context) {
+  const wrap = document.createElement("div");
+  wrap.className = "authoring04ReadOnly";
+  const title = document.createElement("div");
+  title.className = "objectFunctionMeta";
+  title.textContent = "Bestaande onderdelen";
+  wrap.appendChild(title);
+  const rows = [
+    ["Model", context.model ? nodeDisplayTitle(context.model) : "geen selectie"],
+    ["Entity Assembly", context.assembly ? (nodeDisplayTitle(context.assembly) + " · " + (context.assembly.values?.entityId || "")) : "nog niet aangemaakt"],
+    ["Interactable", context.interactionComponent ? nodeDisplayTitle(context.interactionComponent) : "geen"],
+    ["NPC", context.npcComponent ? nodeDisplayTitle(context.npcComponent) : "geen"],
+    ["Enemy", context.enemyComponent ? nodeDisplayTitle(context.enemyComponent) : "geen"],
+    ["Quest Target", context.questBinding ? (nodeDisplayTitle(context.questBinding) + " · " + (context.questBinding.values?.targetId || "")) : "geen"]
+  ];
+  for (const [labelText, valueText] of rows) {
+    const row = document.createElement("div");
+    row.className = "authoring04ReadOnlyRow";
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const value = document.createElement("span");
+    value.textContent = valueText;
+    row.append(label, value);
+    wrap.appendChild(row);
+  }
+  const references = questDialogueReferencesForObjectContext(context, state.graph);
+  const referenceTitle = document.createElement("div");
+  referenceTitle.className = "objectFunctionMeta";
+  referenceTitle.textContent = "Quest/Dialoog verwijzingen";
+  wrap.appendChild(referenceTitle);
+  const refRows = []
+    .concat(references.quests.map(function (node) { return ["Quest", nodeDisplayTitle(node)]; }))
+    .concat(references.dialogues.map(function (node) { return ["Dialoog", nodeDisplayTitle(node)]; }));
+  if (!refRows.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Geen bestaande quests of dialogen verwijzen naar deze selectie.";
+    wrap.appendChild(empty);
+  } else {
+    for (const [labelText, valueText] of refRows) {
+      const row = document.createElement("div");
+      row.className = "authoring04ReadOnlyRow";
+      const label = document.createElement("span");
+      label.textContent = labelText;
+      const value = document.createElement("span");
+      value.textContent = valueText;
+      row.append(label, value);
+      wrap.appendChild(row);
+    }
+  }
+  return wrap;
+}
+
+function nodeReferencesAny(node, refs) {
+  if (!node || !refs || !refs.size) return false;
+  const fields = state.nodeTypes?.[node.type]?.fields || {};
+  for (const [key, field] of Object.entries(fields)) {
+    const value = node.values?.[key];
+    if (field?.type === "reference" && refs.has(normalizeCanonicalId(value, ""))) return true;
+    if (field?.type === "referenceList") {
+      for (const ref of normalizeReferenceList(value)) {
+        if (refs.has(ref)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function authoringRouteNodeIds(routeId, graph = state.graph) {
+  const types = new Set(AUTHORING_ROUTE_COUNT_TYPES[routeId] || []);
+  const ids = new Set();
+  for (const node of graph.nodes || []) {
+    if (routeId === "world_zone" && isZoneCanvasGroup(node, graph)) ids.add(node.id);
+    if (types.has(node.type)) ids.add(node.id);
+  }
+  return ids;
+}
+
+function selectedAuthoringRouteNodeIds(routeId, graph = state.graph) {
+  const selected = selectedModelAuthoringReferenceInfo(graph);
+  if (!selected.model) return new Set();
+  const ids = new Set();
+  if (routeId === "world_zone") {
+    if (selected.context?.zoneGroup) ids.add(selected.context.zoneGroup.id);
+    if (selected.context?.zoneDefinition) ids.add(selected.context.zoneDefinition.id);
+    if (selected.context?.zoneOutput) ids.add(selected.context.zoneOutput.id);
+    return ids;
+  }
+  if (routeId === "object_character") return new Set(Array.from(selected.nodes));
+  if (routeId === "item_ability_stat") return catalogDefinitionNodeIdsForObjectContext(selected.context, graph);
+  const routeIds = authoringRouteNodeIds(routeId, graph);
+  for (const node of graph.nodes || []) {
+    if (!routeIds.has(node.id)) continue;
+    if (selected.nodes.has(node.id) || nodeReferencesAny(node, selected.refs)) ids.add(node.id);
+  }
+  return ids;
+}
+
+function authoringRouteCount(routeId, graph = state.graph) {
+  const selected = selectedSingleModelNode();
+  const ids = selected ? selectedAuthoringRouteNodeIds(routeId, graph) : authoringRouteNodeIds(routeId, graph);
+  return {
+    count: ids.size,
+    selected: Boolean(selected),
+    title: selected
+      ? "Selectie: " + ids.size + " gekoppelde/verwijzende onderdelen voor deze route."
+      : "Totaal: " + ids.size + " relevante onderdelen voor deze route."
+  };
+}
+
+function appendReadOnlyCountBadge(parent, routeId, graph = state.graph) {
+  const badgeInfo = authoringRouteCount(routeId, graph);
+  const badge = document.createElement("span");
+  badge.className = "authoringCountBadge";
+  badge.textContent = String(badgeInfo.count);
+  badge.title = badgeInfo.title;
+  badge.setAttribute("aria-label", badgeInfo.title);
+  parent.appendChild(badge);
+  return badge;
+}
+
+function authoringWorkspaceCount(routeId, workspace, graph = state.graph) {
+  const routeTypes = new Set(AUTHORING_ROUTE_COUNT_TYPES[routeId] || []);
+  const selected = selectedSingleModelNode();
+  const selectedInfo = selectedModelAuthoringReferenceInfo(graph);
+  const ids = new Set();
+  if (!selected && workspace?.id) ids.add(workspace.id);
+  if (selected && routeId === "world_zone" && selectedInfo.context?.zoneGroup?.id === workspace?.id) ids.add(workspace.id);
+  if (selected && routeId === "item_ability_stat") {
+    const catalogIds = catalogDefinitionNodeIdsForObjectContext(selectedInfo.context, graph);
+    for (const node of graph.nodes || []) {
+      if ((node.parentId || null) === workspace.id && catalogIds.has(node.id)) ids.add(node.id);
+    }
+    return {
+      count: ids.size,
+      selected: true,
+      title: "Selectie: " + ids.size + " gekoppelde/verwijzende onderdelen in deze werkruimte."
+    };
+  }
+  for (const node of graph.nodes || []) {
+    if ((node.parentId || null) !== workspace.id) continue;
+    if (!routeTypes.has(node.type)) continue;
+    if (selected && !selectedInfo.nodes.has(node.id) && !nodeReferencesAny(node, selectedInfo.refs)) continue;
+    ids.add(node.id);
+  }
+  return {
+    count: ids.size,
+    selected: Boolean(selected),
+    title: selected
+      ? "Selectie: " + ids.size + " gekoppelde/verwijzende onderdelen in deze werkruimte."
+      : "Totaal: " + ids.size + " relevante onderdelen in deze werkruimte."
+  };
+}
+
+function appendWorkspaceCountBadge(parent, routeId, workspace, graph = state.graph) {
+  const info = authoringWorkspaceCount(routeId, workspace, graph);
+  const badge = document.createElement("span");
+  badge.className = "authoringCountBadge authoringCountBadge--workspace";
+  badge.textContent = String(info.count);
+  badge.title = info.title;
+  badge.setAttribute("aria-label", info.title);
+  parent.appendChild(badge);
+}
+
+function zoneCanvasDisplayName(group, graph = state.graph) {
+  const zone = zoneDefinitionForGroup(group?.id, graph);
+  return String(zone?.values?.displayName || group?.values?.title || group?.title || zoneCanvasTitle(zoneCanvasGridForGroup(group, graph))).trim();
+}
+
+function beginZoneCanvasDraft(sourceGroup, directionName) {
+  const direction = directionName ? ZONE_CANVAS_DIRECTIONS[directionName] : null;
+  if (directionName && (!sourceGroup || !direction)) return;
+  if (sourceGroup && !isZoneCanvasGroup(sourceGroup, state.graph)) return;
+  const sourceGrid = sourceGroup ? zoneCanvasGridForGroup(sourceGroup, state.graph) : null;
+  const grid = direction
+    ? { x: sourceGrid.x + direction.dx, z: sourceGrid.z + direction.dz }
+    : { x: 0, z: 0 };
+  const occupied = findZoneCanvasAtGrid(null, grid, state.graph);
+  if (occupied) {
+    selectNode(occupied.id, true, { clearPendingEdge: true });
+    setStatus("Die zijde is al bezet door " + zoneCanvasDisplayName(occupied) + ".", "error");
+    return;
+  }
+  state.zoneCanvasDraft = {
+    sourceGroupId: sourceGroup?.id || null,
+    directionName: directionName || "",
+    name: zoneCanvasTitle(grid),
+    basisMode: "empty",
+    grid
+  };
+  selectAuthoringRoute("world_zone");
+}
+
+function cancelZoneCanvasDraft() {
+  state.zoneCanvasDraft = null;
+  renderAuthoringHub();
+}
+
+function copySafeZoneBasisValues(nextGraph, sourceGroup, targetGroup, basis) {
+  if (!sourceGroup || !targetGroup || !basis) return;
+  const sourceZone = zoneDefinitionForGroup(sourceGroup.id, nextGraph);
+  const sourceEnvironment = (nextGraph.nodes || []).find(function (node) { return node.parentId === sourceGroup.id && node.type === "zone_environment_settings"; }) || null;
+  const sourceRules = (nextGraph.nodes || []).find(function (node) { return node.parentId === sourceGroup.id && node.type === "zone_gameplay_rules"; }) || null;
+  const sourceGround = (nextGraph.nodes || []).find(function (node) { return node.parentId === sourceGroup.id && node.type === "ground_surface"; }) || null;
+  const targetZone = basis.nodes?.zone;
+  if (sourceZone && targetZone) {
+    const keep = {
+      zoneId: targetZone.values.zoneId,
+      displayName: targetZone.values.displayName,
+      originX: targetZone.values.originX,
+      originY: targetZone.values.originY,
+      originZ: targetZone.values.originZ,
+      width: targetZone.values.width,
+      depth: targetZone.values.depth
+    };
+    targetZone.values = Object.assign({}, sourceZone.values || {}, keep);
+  }
+  if (sourceEnvironment && basis.nodes?.environment) {
+    const environmentId = basis.nodes.environment.values.environmentId;
+    basis.nodes.environment.values = Object.assign({}, sourceEnvironment.values || {}, { environmentId });
+  }
+  if (sourceRules && basis.nodes?.rules) {
+    const rulesId = basis.nodes.rules.values.rulesId;
+    basis.nodes.rules.values = Object.assign({}, sourceRules.values || {}, { rulesId });
+  }
+  if (sourceGround && basis.nodes?.ground) {
+    const keep = {
+      groundId: basis.nodes.ground.values.groundId,
+      minX: basis.nodes.ground.values.minX,
+      maxX: basis.nodes.ground.values.maxX,
+      minZ: basis.nodes.ground.values.minZ,
+      maxZ: basis.nodes.ground.values.maxZ,
+      width: basis.nodes.ground.values.width,
+      depth: basis.nodes.ground.values.depth
+    };
+    basis.nodes.ground.values = Object.assign({}, sourceGround.values || {}, keep);
+  }
+  syncZoneCanvasBoundsToGrid(nextGraph, targetGroup, zoneCanvasGridForGroup(targetGroup, nextGraph));
+}
+
+async function commitZoneCanvasDraft() {
+  const draft = state.zoneCanvasDraft;
+  if (!draft) return;
+  const name = String(draft.name || "").trim();
+  if (!name) {
+    setStatus("Vul eerst een zonenaam in.", "error");
+    return;
+  }
+  const grid = draft.grid || { x: 0, z: 0 };
+  const direction = draft.directionName ? ZONE_CANVAS_DIRECTIONS[draft.directionName] : null;
+  const source = draft.sourceGroupId ? nodeById(draft.sourceGroupId) : null;
+  if (direction && (!source || !isZoneCanvasGroup(source, state.graph))) {
+    setStatus("De bronzone bestaat niet meer.", "error");
+    return;
+  }
+  const occupied = findZoneCanvasAtGrid(null, grid, state.graph);
+  if (occupied) {
+    selectNode(occupied.id, true, { clearPendingEdge: true });
+    setStatus("Die zijde is al bezet door " + zoneCanvasDisplayName(occupied) + ".", "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  normalizeZoneCanvasGroups(nextGraph, null);
+  const nextSource = source ? graphNodeByIdInGraph(nextGraph, source.id) : null;
+  const firstZone = !(nextGraph.nodes || []).some(function (node) { return node.type === "zone_definition"; });
+  const result = appendZoneCanvasGroup(nextGraph, {
+    parentId: null,
+    grid,
+    position: direction && nextSource
+      ? {
+          x: Math.round(Number(nextSource.x) + direction.graphX * ZONE_CANVAS_NODE_STEP_X),
+          y: Math.round(Number(nextSource.y) + direction.graphY * ZONE_CANVAS_NODE_STEP_Y)
+        }
+      : zoneCanvasGraphPosition(null, grid, nextGraph),
+    root: null,
+    isRoot: true
+  });
+  result.group.title = name;
+  result.group.values = Object.assign({}, result.group.values || {}, {
+    title: name,
+    zoneGridX: grid.x,
+    zoneGridZ: grid.z,
+    zoneGridY: grid.z,
+    zoneCanvasRootId: result.group.id,
+    zoneCanvasParentZoneId: "",
+    zoneCanvasParentSide: ""
+  });
+  if (result.basis?.nodes?.zone) {
+    result.basis.nodes.zone.title = "Zone Definition";
+    result.basis.nodes.zone.values = Object.assign({}, result.basis.nodes.zone.values || {}, { displayName: name });
+  }
+  if (draft.basisMode === "copy" && nextSource) {
+    copySafeZoneBasisValues(nextGraph, nextSource, result.group, result.basis);
+  }
+  normalizeZoneCanvasGroups(nextGraph, null);
+  ensureProjectStartZone(nextGraph, result.basis.zoneId, result.basis.spawnId, firstZone);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: direction ? "Nieuwe zone " + direction.label.toLowerCase() : "Nieuwe startzone",
+    selectedNodeIds: [result.group.id],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      state.zoneCanvasDraft = null;
+      focusGraphNode(result.group.id);
+      setStatus("Zone \"" + name + "\" aangemaakt.", "success");
+    }
+  });
+}
+
+async function renameZoneCanvasGroup(group) {
+  if (!group || !isZoneCanvasGroup(group, state.graph)) return;
+  const current = zoneCanvasDisplayName(group, state.graph);
+  const nextName = window.prompt("Nieuwe zonenaam", current);
+  if (nextName === null) return;
+  const name = String(nextName || "").trim();
+  if (!name) {
+    setStatus("Zonenaam mag niet leeg zijn.", "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+  const zone = zoneDefinitionForGroup(group.id, nextGraph);
+  if (!nextGroup) return;
+  nextGroup.title = name;
+  nextGroup.values = Object.assign({}, nextGroup.values || {}, { title: name });
+  if (zone) zone.values = Object.assign({}, zone.values || {}, { displayName: name });
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone hernoemd",
+    selectedNodeIds: [group.id],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () { setStatus("Zone hernoemd.", "success"); }
+  });
+}
+
+async function deleteZoneCanvasGroup(group) {
+  if (!group || !isZoneCanvasGroup(group, state.graph)) return;
+  const zone = zoneDefinitionForGroup(group.id, state.graph);
+  const zoneId = normalizeCanonicalId(zone?.values?.zoneId, "");
+  const children = (state.graph.nodes || []).filter(function (node) { return node.parentId === group.id; });
+  const contentCount = children.filter(function (node) {
+    return !["group_input", "group_output", "zone_definition", "zone_environment_settings", "zone_gameplay_rules", "ground_surface", "spawn_point", "zone_output"].includes(node.type);
+  }).length;
+  const ok = window.confirm("Zone \"" + zoneCanvasDisplayName(group) + "\" verwijderen? Dit verwijdert de zonegroep en " + children.length + " interne node(s)" + (contentCount ? ", inclusief " + contentCount + " content-node(s)" : "") + ".");
+  if (!ok) return;
+  const removeIds = new Set([group.id].concat(children.map(function (node) { return node.id; })));
+  const nextGraph = cloneGraphForRestore(state.graph);
+  nextGraph.nodes = (nextGraph.nodes || []).filter(function (node) { return !removeIds.has(node.id); });
+  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
+    return !removeIds.has(edge.fromNodeId) && !removeIds.has(edge.toNodeId);
+  });
+  for (const node of nextGraph.nodes || []) {
+    if (node.type !== "game_project_settings") continue;
+    node.values = Object.assign({}, node.values || {});
+    if (zoneId && node.values.startZoneRef === zoneId) node.values.startZoneRef = null;
+    if (zoneId && String(node.values.startSpawnRef || "").startsWith("spawn." + zoneId.replace(/^zone\./, ""))) node.values.startSpawnRef = null;
+  }
+  normalizeZoneCanvasGroups(nextGraph, null);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Zone verwijderd",
+    selectedNodeIds: [],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      if (state.currentGroupId === group.id) state.currentGroupId = null;
+      setStatus("Zone verwijderd.", "success");
+    }
+  });
+}
+
+function renderZoneCanvasDraftCard() {
+  const draft = state.zoneCanvasDraft;
+  if (!draft) return null;
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard authoring04DraftCard";
+  const direction = draft.directionName ? ZONE_CANVAS_DIRECTIONS[draft.directionName] : null;
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = direction ? "Nieuwe zone " + direction.label.toLowerCase() : "Nieuwe startzone";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+  fields.appendChild(objectFunctionDraftFieldRow("Zonenaam", questTimelineTextInput(draft.name, function (value) {
+    draft.name = value;
+  }, { placeholder: "Bijv. Bosrand" })));
+  const basisSelect = questTimelineSelectInput(draft.basisMode || "empty", [
+    "empty",
+    "copy"
+  ], function (value) {
+    draft.basisMode = value === "copy" ? "copy" : "empty";
+    renderAuthoringHub();
+  });
+  for (const option of basisSelect.options) {
+    if (option.value === "empty") option.textContent = "Lege zone";
+    if (option.value === "copy") option.textContent = "Veilige basisinstellingen overnemen";
+  }
+  basisSelect.disabled = !draft.sourceGroupId;
+  fields.appendChild(objectFunctionDraftFieldRow("Basis", basisSelect, draft.sourceGroupId ? "Kopieert alleen veilige basisinstellingen; modellen en content blijven achter." : "De eerste zone gebruikt veilige standaardinstellingen."));
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = "Zone maken";
+  confirm.addEventListener("click", function () { void commitZoneCanvasDraft(); });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", cancelZoneCanvasDraft);
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderWorldZoneHub() {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection authoring04Hub";
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = "Wereld / Zone";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = "Zone Canvassen staan root-level en gebruiken gridposities. Bezette zijden blijven geblokkeerd.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+  const draftCard = renderZoneCanvasDraftCard();
+  if (draftCard) wrap.appendChild(draftCard);
+  const zones = zoneCanvasGroupsForParent(null, state.graph).sort(function (a, b) {
+    const ga = zoneCanvasGridForGroup(a, state.graph);
+    const gb = zoneCanvasGridForGroup(b, state.graph);
+    return ga.z - gb.z || ga.x - gb.x || zoneCanvasDisplayName(a).localeCompare(zoneCanvasDisplayName(b), "nl", { sensitivity: "base" });
+  });
+  if (!zones.length) {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "primary";
+    action.textContent = "Nieuwe startzone";
+    action.addEventListener("click", function () { beginZoneCanvasDraft(null, ""); });
+    wrap.appendChild(action);
+    return wrap;
+  }
+  const list = document.createElement("div");
+  list.className = "authoring04List";
+  for (const zoneGroup of zones) {
+    const row = document.createElement("div");
+    row.className = "authoring04ListItem";
+    const body = document.createElement("div");
+    body.className = "authoring04ListBody";
+    const name = document.createElement("div");
+    name.className = "authoring04ListTitle";
+    name.textContent = zoneCanvasDisplayName(zoneGroup);
+    const grid = zoneCanvasGridForGroup(zoneGroup, state.graph);
+    const meta = document.createElement("div");
+    meta.className = "authoring04ListMeta";
+    meta.textContent = "Grid X " + grid.x + " / Y " + grid.z + " · " + zoneCanvasChildSummary(zoneGroup).join(" · ");
+    body.append(name, meta);
+    const actions = document.createElement("div");
+    actions.className = "authoring04Actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "mini";
+    open.textContent = "Open";
+    open.addEventListener("click", function () { enterGroup(zoneGroup); });
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "mini";
+    rename.textContent = "Hernoem";
+    rename.addEventListener("click", function () { void renameZoneCanvasGroup(zoneGroup); });
+    const repair = document.createElement("button");
+    repair.type = "button";
+    repair.className = "mini";
+    repair.textContent = "Basis beheren";
+    repair.addEventListener("click", function () { void repairZoneCanvasBasis(zoneGroup.id); });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijder";
+    remove.addEventListener("click", function () { void deleteZoneCanvasGroup(zoneGroup); });
+    actions.append(open, rename, repair, remove);
+    const directions = document.createElement("div");
+    directions.className = "authoring04DirectionRow";
+    for (const [directionName, direction] of Object.entries(ZONE_CANVAS_DIRECTIONS)) {
+      const targetGrid = { x: grid.x + direction.dx, z: grid.z + direction.dz };
+      const occupied = findZoneCanvasAtGrid(null, targetGrid, state.graph);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mini";
+      button.textContent = "+ " + direction.label;
+      button.disabled = Boolean(occupied);
+      button.title = occupied
+        ? "Bezet door " + zoneCanvasDisplayName(occupied)
+        : "Nieuwe root-level zone " + direction.label.toLowerCase() + " van deze zone.";
+      button.addEventListener("click", function () { beginZoneCanvasDraft(zoneGroup, directionName); });
+      directions.appendChild(button);
+    }
+    row.append(body, actions, directions);
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function currentGroupOfKind(kind, graph = state.graph) {
+  if (!state.currentGroupId) return null;
+  const group = graphNodeByIdInGraph(graph, state.currentGroupId);
+  return group?.type === "group" && normalizeEditorKey(group.values?.groupKind) === kind ? group : null;
+}
+
+function managedDefaultValuesForDraft(type, node = null) {
+  const values = Object.assign({}, objectFunctionDefaultValuesForNodeType(type), node ? clonePlain(node.values || {}) : {});
+  return values;
+}
+
+function managedCanonicalBaseForType(type, values) {
+  const idField = identityFieldForType(type);
+  const field = state.nodeTypes?.[type]?.fields?.[idField] || {};
+  const fallback = String(field.default || type + ".new").trim() || type + ".new";
+  const display = String(values?.displayName || values?.label || values?.title || values?.moduleId || values?.hudId || state.nodeTypes?.[type]?.label || type).trim();
+  const slug = slugifyGroupPortName(display || type, type) || "new";
+  const parts = fallback.split(".");
+  if (parts.length > 1) {
+    parts[parts.length - 1] = slug;
+    return parts.join(".");
+  }
+  return fallback + "." + slug;
+}
+
+function managedSuggestedNodePosition(graph, group, type) {
+  const siblings = (graph.nodes || []).filter(function (node) {
+    return (node.parentId || null) === group.id && node.type === type;
+  });
+  if (!siblings.length) return { x: 80, y: 180 };
+  const lowest = siblings.slice().sort(function (a, b) {
+    return (Number(a.y) || 0) - (Number(b.y) || 0);
+  }).pop();
+  return { x: Number(lowest.x) || 80, y: Math.round((Number(lowest.y) || 180) + graphNodeHeightForStack(lowest) + 24) };
+}
+
+function setManagedDraftValue(scope, key, value) {
+  const draft = scope === "catalog" ? state.catalogHubDraft : state.settingsHubDraft;
+  if (!draft) return;
+  draft.values = Object.assign({}, draft.values || {}, { [key]: value });
+}
+
+function buildReferenceListPickerControl(scope, draft, fieldName, field, value) {
+  const wrap = document.createElement("div");
+  wrap.className = "referenceListPicker";
+  const refs = normalizeReferenceList(value);
+  const list = document.createElement("div");
+  list.className = "referenceListPickerChips";
+  if (!refs.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Geen references gekozen.";
+    list.appendChild(empty);
+  }
+  refs.forEach(function (ref) {
+    const chip = document.createElement("span");
+    chip.className = "referenceListChip";
+    const fakeField = Object.assign({}, field, { type: "reference", allowNull: true });
+    const resolved = referencePickerChoiceState(ref, fakeField);
+    chip.textContent = resolved.displayLabel || ref;
+    chip.title = ref;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "x";
+    remove.title = "Reference verwijderen";
+    remove.addEventListener("click", function () {
+      const nextRefs = refs.filter(function (candidate) { return candidate !== ref; });
+      setManagedDraftValue(scope, fieldName, nextRefs);
+      renderAuthoringHub();
+    });
+    chip.appendChild(remove);
+    list.appendChild(chip);
+  });
+  wrap.appendChild(list);
+  const pickerField = Object.assign({}, field, { type: "reference", allowNull: true, required: false });
+  const fakeNode = { id: scope + "-ref-list-" + draft.type + "-" + fieldName, type: draft.type, values: {} };
+  wrap.appendChild(buildReferencePickerField(fakeNode, fieldName, pickerField, null, {
+    onChange: function (nextValue) {
+      const normalized = normalizeCanonicalId(nextValue, "");
+      if (!normalized) return;
+      const nextRefs = Array.from(new Set(refs.concat([normalized])));
+      setManagedDraftValue(scope, fieldName, nextRefs);
+      renderAuthoringHub();
+    },
+    openCatalogAction: questTimelineReferenceNavigationAction(pickerField)?.action,
+    openReferenceActionLabel: questTimelineReferenceNavigationAction(pickerField)?.label,
+    openReferenceActionTitle: questTimelineReferenceNavigationAction(pickerField)?.title,
+    hideAdvanced: true
+  }));
+  return wrap;
+}
+
+function buildTagQueryControl(scope, draft, fieldName, value) {
+  const current = normalizeTagQuery(value);
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+  function addRow(key, labelText) {
+    const row = document.createElement("label");
+    row.className = "tagQueryRow";
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = (current[key] || []).join(", ");
+    input.placeholder = "tag.een, tag.twee";
+    input.addEventListener("change", function () {
+      const next = Object.assign({}, current, {
+        [key]: normalizeTagList(input.value)
+      });
+      setManagedDraftValue(scope, fieldName, next);
+      renderAuthoringHub();
+    });
+    row.append(label, input);
+    wrap.appendChild(row);
+  }
+  addRow("all", "Alle tags");
+  addRow("any", "Een van");
+  addRow("none", "Niet");
+  return wrap;
+}
+
+function buildFormulaControl(scope, draft, fieldName, value) {
+  const current = value && typeof value === "object" ? clonePlain(value) : { operator: "add", operands: [] };
+  const wrap = document.createElement("div");
+  wrap.className = "formulaEditor";
+  const operator = document.createElement("select");
+  for (const option of ["add", "subtract", "multiply", "divide", "min", "max", "value"]) {
+    const opt = document.createElement("option");
+    opt.value = option;
+    opt.textContent = option;
+    operator.appendChild(opt);
+  }
+  operator.value = String(current.operator || "add");
+  operator.addEventListener("change", function () {
+    setManagedDraftValue(scope, fieldName, Object.assign({}, current, { operator: operator.value }));
+    renderAuthoringHub();
+  });
+  const operands = document.createElement("input");
+  operands.type = "text";
+  operands.value = Array.isArray(current.operands) ? current.operands.join(", ") : "";
+  operands.placeholder = "0, 1, 2";
+  operands.addEventListener("change", function () {
+    const nextOperands = operands.value.split(",").map(function (entry) {
+      const number = Number(entry.trim());
+      return Number.isFinite(number) ? number : entry.trim();
+    }).filter(function (entry) { return entry !== ""; });
+    setManagedDraftValue(scope, fieldName, Object.assign({}, current, { operator: operator.value, operands: nextOperands }));
+    renderAuthoringHub();
+  });
+  wrap.append(operator, operands);
+  return wrap;
+}
+
+function selectOptionsForManagedField(field, draft) {
+  if (field.dynamicOptions === "minimapCategories") return minimapCategorySelectOptions();
+  if (field.dynamicOptions === "assetAnimations") {
+    const asset = assetById(draft.values?.modelAssetId);
+    return animationClipsForAsset(asset).map(function (option) {
+      return { value: option.value || option.name || "", label: option.label || option.name || option.value || "" };
+    });
+  }
+  return (field.options || []).map(function (option) {
+    if (option && typeof option === "object") {
+      return {
+        value: option.value === undefined || option.value === null ? "" : String(option.value),
+        label: option.label === undefined || option.label === null ? String(option.value === undefined || option.value === null ? "" : option.value) : String(option.label)
+      };
+    }
+    return { value: String(option), label: String(option) };
+  });
+}
+
+function buildManagedJsonObjectControl(scope, draft, fieldName, field, value) {
+  const fallback = field.default === undefined ? {} : field.default;
+  const current = value && typeof value === "object" ? clonePlain(value) : clonePlain(fallback);
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+
+  if (Array.isArray(current)) {
+    const textarea = document.createElement("textarea");
+    textarea.rows = 4;
+    textarea.value = current.map(function (entry) {
+      return entry && typeof entry === "object" ? "" : String(entry === null || entry === undefined ? "" : entry);
+    }).filter(Boolean).join("\n");
+    textarea.placeholder = "een waarde per regel";
+    textarea.addEventListener("change", function () {
+      const next = splitDelimitedValues(textarea.value);
+      setManagedDraftValue(scope, fieldName, next);
+      renderAuthoringHub();
+    });
+    wrap.appendChild(textarea);
+    if (current.some(function (entry) { return entry && typeof entry === "object"; })) {
+      const hint = document.createElement("div");
+      hint.className = "objectFunctionDraftHint";
+      hint.textContent = "Deze lijst heeft geen apart schema; beheer complexe regels via Meer nodes of de Inspector.";
+      wrap.appendChild(hint);
+    }
+    return wrap;
+  }
+
+  const source = current && typeof current === "object" ? current : {};
+  const keys = Object.keys(source);
+  if (!keys.length) {
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Geen velden in deze structuur.";
+    wrap.appendChild(hint);
+    return wrap;
+  }
+  for (const key of keys) {
+    const row = document.createElement("label");
+    row.className = "tagQueryRow";
+    const label = document.createElement("span");
+    label.textContent = key;
+    const raw = source[key];
+    const input = document.createElement("input");
+    input.type = typeof raw === "number" ? "number" : "text";
+    input.value = raw === null || raw === undefined ? "" : String(raw);
+    input.addEventListener("change", function () {
+      const next = Object.assign({}, source);
+      next[key] = typeof raw === "number" ? Number(input.value) : input.value;
+      setManagedDraftValue(scope, fieldName, next);
+      renderAuthoringHub();
+    });
+    row.append(label, input);
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+function buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value) {
+  const categories = normalizeMinimapMarkerCategories(value, field.default || []);
+  const root = document.createElement("div");
+  root.className = "minimapCategoryEditor";
+  const commit = function (nextCategories) {
+    setManagedDraftValue(scope, fieldName, normalizeMinimapMarkerCategories(nextCategories, field.default || []));
+    renderAuthoringHub();
+  };
+  const updateAt = function (index, patch) {
+    commit(categories.map(function (category, categoryIndex) {
+      return categoryIndex === index ? Object.assign({}, category, patch) : category;
+    }));
+  };
+  for (const [index, category] of categories.entries()) {
+    const item = document.createElement("details");
+    item.className = "minimapCategoryItem";
+    const summary = document.createElement("summary");
+    summary.className = "minimapCategorySummary";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = category.enabled !== false;
+    enabled.addEventListener("click", function (event) { event.stopPropagation(); });
+    enabled.addEventListener("change", function () { updateAt(index, { enabled: enabled.checked }); });
+    const swatch = document.createElement("span");
+    swatch.className = "minimapCategorySwatch";
+    swatch.style.background = category.color || "#ffffff";
+    const title = document.createElement("span");
+    title.className = "minimapCategoryTitle";
+    title.textContent = (category.label || category.id) + " · " + category.source;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "mini danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      commit(categories.filter(function (_, categoryIndex) { return categoryIndex !== index; }));
+    });
+    summary.append(enabled, swatch, title, remove);
+    item.appendChild(summary);
+    const grid = document.createElement("div");
+    grid.className = "minimapCategoryGrid";
+    const addInput = function (labelText, input) {
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      label.appendChild(input);
+      grid.appendChild(label);
+    };
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.value = category.label || "";
+    labelInput.addEventListener("change", function () { updateAt(index, { label: labelInput.value.trim() || category.id }); });
+    addInput("Naam", labelInput);
+    const sourceSelect = document.createElement("select");
+    for (const option of MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (option.value === category.source) opt.selected = true;
+      sourceSelect.appendChild(opt);
+    }
+    sourceSelect.addEventListener("change", function () { updateAt(index, { source: sourceSelect.value }); });
+    addInput("Bron", sourceSelect);
+    const shapeSelect = document.createElement("select");
+    for (const shape of MINIMAP_MARKER_SHAPE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = shape;
+      opt.textContent = shape;
+      if (shape === category.shape) opt.selected = true;
+      shapeSelect.appendChild(opt);
+    }
+    shapeSelect.addEventListener("change", function () { updateAt(index, { shape: shapeSelect.value }); });
+    addInput("Vorm", shapeSelect);
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = /^#[0-9a-fA-F]{6}$/.test(category.color) ? category.color : "#ffffff";
+    colorInput.addEventListener("change", function () { updateAt(index, { color: colorInput.value }); });
+    addInput("Kleur", colorInput);
+    const sizeInput = document.createElement("input");
+    sizeInput.type = "number";
+    sizeInput.min = "3";
+    sizeInput.max = "64";
+    sizeInput.step = "1";
+    sizeInput.value = String(category.iconSizePx);
+    sizeInput.addEventListener("change", function () { updateAt(index, { iconSizePx: Number(sizeInput.value) }); });
+    addInput("Icon px", sizeInput);
+    const toggles = document.createElement("div");
+    toggles.className = "minimapCategoryToggles";
+    const addToggle = function (labelText, patchKey) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = category[patchKey] === true;
+      input.addEventListener("change", function () { updateAt(index, { [patchKey]: input.checked }); });
+      label.append(input, document.createTextNode(labelText));
+      toggles.appendChild(label);
+    };
+    addToggle("Label", "showLabel");
+    addToggle("Rand", "clampOutside");
+    addToggle("Fog", "showThroughFog");
+    item.append(grid, toggles);
+    root.appendChild(item);
+  }
+  const actions = document.createElement("div");
+  actions.className = "minimapCategoryActions";
+  const source = document.createElement("select");
+  for (const option of MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS) {
+    const opt = document.createElement("option");
+    opt.value = option.value;
+    opt.textContent = option.label;
+    source.appendChild(opt);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "Categorie toevoegen";
+  add.addEventListener("click", function () {
+    const sourceValue = source.value || "custom";
+    const option = MINIMAP_MARKER_CATEGORY_SOURCE_OPTIONS.find(function (entry) { return entry.value === sourceValue; });
+    const id = uniqueMinimapCategoryId(categories, sourceValue);
+    commit(categories.concat([normalizeMinimapMarkerCategory({
+      id,
+      label: option?.label || id,
+      source: sourceValue,
+      enabled: true,
+      color: "#ffffff",
+      shape: "dot",
+      showLabel: true
+    }, categories.length)]));
+  });
+  actions.append(source, add);
+  root.appendChild(actions);
+  return root;
+}
+
+function managedDraftFieldControl(scope, draft, fieldName, field) {
+  const value = draft.values?.[fieldName];
+  if (field.type === "minimapMarkerCategories") return buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value);
+  if (field.type === "reference") {
+    const fakeNode = { id: scope + "-draft-" + draft.type + "-" + fieldName, type: draft.type, values: {} };
+    const navigation = questTimelineReferenceNavigationAction(field);
+    return buildReferencePickerField(fakeNode, fieldName, field, value || null, {
+      onChange: function (nextValue) {
+        setManagedDraftValue(scope, fieldName, nextValue);
+        renderAuthoringHub();
+      },
+      openCatalogAction: navigation?.action,
+      openReferenceActionLabel: navigation?.label,
+      openReferenceActionTitle: navigation?.title,
+      hideAdvanced: true
+    });
+  }
+  if (field.type === "referenceList") return buildReferenceListPickerControl(scope, draft, fieldName, field, value);
+  if (field.type === "tagQuery") return buildTagQueryControl(scope, draft, fieldName, value);
+  if (field.type === "formula") return buildFormulaControl(scope, draft, fieldName, value);
+  if (field.type === "tagList") {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = normalizeTagList(value).join(", ");
+    input.placeholder = "tag.een, tag.twee";
+    input.addEventListener("change", function () {
+      setManagedDraftValue(scope, fieldName, normalizeTagList(input.value));
+      renderAuthoringHub();
+    });
+    return input;
+  }
+  if (field.type === "tokenText") {
+    const textarea = document.createElement("textarea");
+    textarea.rows = 4;
+    textarea.spellcheck = true;
+    textarea.value = value ?? field.default ?? "";
+    textarea.placeholder = "Tekst";
+    textarea.addEventListener("change", function () {
+      setManagedDraftValue(scope, fieldName, normalizeFieldInputValue(field, textarea.value));
+      renderAuthoringHub();
+    });
+    return textarea;
+  }
+  if (field.type === "color") {
+    const row = document.createElement("div");
+    row.className = "colorRow";
+    const color = document.createElement("input");
+    color.type = "color";
+    color.value = /^#[0-9a-fA-F]{6}$/.test(String(value || "")) ? String(value) : "#ffffff";
+    const text = document.createElement("input");
+    text.type = "text";
+    text.value = value ?? field.default ?? "";
+    text.placeholder = "#ffffff";
+    const commit = function (nextValue) {
+      setManagedDraftValue(scope, fieldName, normalizeFieldInputValue(field, nextValue));
+      renderAuthoringHub();
+    };
+    color.addEventListener("input", function () { text.value = color.value; });
+    color.addEventListener("change", function () { commit(color.value); });
+    text.addEventListener("change", function () { commit(text.value); });
+    row.append(color, text);
+    return row;
+  }
+  if (field.type === "json") {
+    return buildManagedJsonObjectControl(scope, draft, fieldName, field, value);
+  }
+  if (field.type === "select") {
+    const select = questTimelineSelectInput(value ?? field.default ?? "", selectOptionsForManagedField(field, draft), function (nextValue) {
+      setManagedDraftValue(scope, fieldName, nextValue);
+      renderAuthoringHub();
+    });
+    if (field.dynamicOptions && !select.options.length) {
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "(geen opties)";
+      select.appendChild(blank);
+    }
+    return select;
+  }
+  if (field.type === "boolean") {
+    return questTimelineCheckboxInput(value === true, function (nextValue) {
+      setManagedDraftValue(scope, fieldName, nextValue);
+    });
+  }
+  if (field.type === "number") {
+    return questTimelineNumberInput(value ?? field.default, function (nextValue) {
+      setManagedDraftValue(scope, fieldName, nextValue);
+    }, { min: field.min, max: field.max, step: field.step });
+  }
+  if (field.type === "asset") {
+    const select = document.createElement("select");
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "(geen asset)";
+    select.appendChild(blank);
+    for (const asset of state.assets.filter(function (item) { return (field.assetTypes || []).includes(item.assetType); })) {
+      const opt = document.createElement("option");
+      opt.value = asset.id;
+      opt.textContent = asset.name;
+      select.appendChild(opt);
+    }
+    select.value = value || "";
+    select.addEventListener("change", function () {
+      setManagedDraftValue(scope, fieldName, select.value || null);
+      renderAuthoringHub();
+    });
+    return select;
+  }
+  return questTimelineTextInput(value ?? field.default ?? "", function (nextValue) {
+    setManagedDraftValue(scope, fieldName, nextValue);
+  }, { placeholder: String(field.default || "") });
+}
+
+function managedVisibleFields(type) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const internalTextId = managedInternalTextIdFieldForType(type);
+  return Object.entries(fields).filter(function ([key, field]) {
+    if (!field || field.hidden || field.type === "identity" || key === internalTextId) return false;
+    if (key === "internalLabel" || key === "definitionVersion") return false;
+    return true;
+  });
+}
+
+function validateManagedDraft(scope, draft) {
+  const fields = state.nodeTypes?.[draft?.type]?.fields || {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.hidden || field.type === "identity" || !field.required) continue;
+    const value = draft.values?.[key];
+    if (field.type === "reference") {
+      if (referencePickerChoiceState(value, field).state !== "ok") {
+        return "Kies eerst een geldige " + (field.label || key) + ".";
+      }
+    } else if (field.type === "referenceList") {
+      if (!normalizeReferenceList(value).length) return "Kies minstens één waarde voor " + (field.label || key) + ".";
+    } else if (isBlankValue(value)) {
+      return "Vul " + (field.label || key) + " in.";
+    }
+  }
+  return "";
+}
+
+function beginCatalogDraft(group, type, node = null) {
+  state.catalogHubType = type;
+  state.catalogHubSelectedNodeId = node?.id || null;
+  state.catalogHubDraft = {
+    groupId: group.id,
+    type,
+    existingNodeId: node?.id || null,
+    values: managedDefaultValuesForDraft(type, node)
+  };
+  renderAuthoringHub();
+}
+
+function beginSettingsDraft(group, type, node = null) {
+  state.settingsHubKind = normalizeEditorKey(group.values?.groupKind) === "ui" ? "ui" : "player_rules";
+  state.settingsHubSelectedNodeId = node?.id || null;
+  state.settingsHubDraft = {
+    groupId: group.id,
+    type,
+    existingNodeId: node?.id || null,
+    values: managedDefaultValuesForDraft(type, node)
+  };
+  renderAuthoringHub();
+}
+
+function titleForManagedNode(type, values) {
+  const key = primaryDisplayFieldForType(type);
+  return String(values?.[key] || values?.displayName || values?.label || state.nodeTypes?.[type]?.label || type).trim();
+}
+
+function connectManagedNodeToPackage(graph, group, node) {
+  const kind = normalizeEditorKey(group?.values?.groupKind);
+  if (kind === "catalog") {
+    const output = ensureCatalogGroupPackage(graph, group);
+    if (output && state.nodeTypes?.[node.type]?.outputs?.catalogDefinition) {
+      pushEdgeIfMissing(graph, node.id, "catalogDefinition", output.id, "definitions");
+    }
+  } else if (kind === "player_rules") {
+    const output = ensurePlayerRulesGroupPackage(graph, group);
+    const policyPort = outputPortForDataType(node.type, "policy");
+    if (output && policyPort) pushEdgeIfMissing(graph, node.id, policyPort, output.id, "policy");
+  } else if (kind === "ui") {
+    const output = ensureUiGroupPackage(graph, group);
+    const outputs = state.nodeTypes?.[node.type]?.outputs || {};
+    if (output && outputs.uiModule) pushEdgeIfMissing(graph, node.id, "uiModule", output.id, "uiModules");
+    if (output && outputs.ui) pushEdgeIfMissing(graph, node.id, "ui", output.id, "ui");
+    if (output && outputs.minimap) pushEdgeIfMissing(graph, node.id, "minimap", output.id, "minimap");
+    if (output && outputs.uiLayout) pushEdgeIfMissing(graph, node.id, "uiLayout", output.id, "uiLayout");
+    if (output && outputs.menuLayout) pushEdgeIfMissing(graph, node.id, "menuLayout", output.id, "uiLayout");
+  }
+}
+
+async function commitManagedDraft(scope, group, draft) {
+  if (!group || !draft) return;
+  const validation = validateManagedDraft(scope, draft);
+  if (validation) {
+    setStatus(validation, "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+  if (!nextGroup) {
+    setStatus("Deze werkruimte bestaat niet meer.", "error");
+    return;
+  }
+  ensureManagedGroupPackage(nextGraph, nextGroup);
+  const fields = state.nodeTypes?.[draft.type]?.fields || {};
+  const idField = identityFieldForType(draft.type);
+  const internalTextIdField = idField ? "" : managedInternalTextIdFieldForType(draft.type);
+  let node = draft.existingNodeId ? graphNodeByIdInGraph(nextGraph, draft.existingNodeId) : null;
+  const isNew = !node;
+  const values = Object.assign({}, objectFunctionDefaultValuesForNodeType(draft.type));
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    if (!Object.prototype.hasOwnProperty.call(draft.values || {}, key)) continue;
+    values[key] = normalizeFieldInputValue(field, draft.values[key]);
+  }
+  if (idField) {
+    values[idField] = isNew
+      ? uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values))
+      : (normalizeCanonicalId(node.values?.[idField], "") || uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values)));
+  } else if (internalTextIdField) {
+    const defaultValue = String(values[internalTextIdField] || fields[internalTextIdField]?.default || slugifyGroupPortName(titleForManagedNode(draft.type, values), draft.type) || draft.type).trim();
+    values[internalTextIdField] = isNew
+      ? uniqueFieldValue(nextGraph, draft.type, internalTextIdField, defaultValue)
+      : (String(node.values?.[internalTextIdField] || "").trim() || uniqueFieldValue(nextGraph, draft.type, internalTextIdField, defaultValue));
+  }
+  const title = titleForManagedNode(draft.type, values);
+  if (isNew) {
+    const duplicate = (nextGraph.nodes || []).find(function (candidate) {
+      return candidate.type === draft.type
+        && (candidate.parentId || null) === nextGroup.id
+        && normalizeEditorKey(titleForManagedNode(candidate.type, candidate.values || candidate)) === normalizeEditorKey(title);
+    }) || null;
+    if (duplicate) {
+      if (scope === "catalog") {
+        state.catalogHubDraft = null;
+        state.catalogHubSelectedNodeId = duplicate.id;
+      } else {
+        state.settingsHubDraft = null;
+        state.settingsHubSelectedNodeId = duplicate.id;
+      }
+      focusGraphNode(duplicate.id);
+      renderAuthoringHub();
+      setStatus("Bestond al; bestaande node geopend.", "");
+      return;
+    }
+  }
+  if (!node) {
+    const position = managedSuggestedNodePosition(nextGraph, nextGroup, draft.type);
+    node = {
+      id: createZoneGraphId("node_" + draft.type),
+      type: draft.type,
+      title,
+      x: position.x,
+      y: position.y,
+      parentId: nextGroup.id,
+      values
+    };
+    nextGraph.nodes.push(node);
+  } else {
+    node.title = title;
+    node.parentId = nextGroup.id;
+    node.values = Object.assign({}, node.values || {}, values);
+  }
+  connectManagedNodeToPackage(nextGraph, nextGroup, node);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: (state.nodeTypes?.[draft.type]?.label || draft.type) + (isNew ? " aangemaakt" : " gewijzigd"),
+    currentGroupId: nextGroup.id,
+    selectedNodeIds: [node.id],
+    selectedEdgeIds: [],
+    refreshViewport: VIEWPORT_AFFECTING_NODE_TYPES.has(draft.type),
+    refreshValidation: true,
+    afterApply: function () {
+      if (scope === "catalog") {
+        state.catalogHubDraft = null;
+        state.catalogHubSelectedNodeId = node.id;
+      } else {
+        state.settingsHubDraft = null;
+        state.settingsHubSelectedNodeId = node.id;
+      }
+      focusGraphNode(node.id);
+      setStatus((state.nodeTypes?.[draft.type]?.label || draft.type) + (isNew ? " aangemaakt." : " gewijzigd."), "success");
+    }
+  });
+}
+
+async function deleteManagedNode(scope, group, node) {
+  if (!group || !node) return;
+  const label = state.nodeTypes?.[node.type]?.label || node.type;
+  const extraEntries = node.type === "loot_table"
+    ? questTimelineDirectSources(state.graph, node, "entries").length
+    : 0;
+  const ok = window.confirm(label + " \"" + nodeDisplayTitle(node) + "\" verwijderen" + (extraEntries ? " inclusief " + extraEntries + " lootregel(s)" : "") + "?");
+  if (!ok) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const removeIds = new Set([node.id]);
+  if (node.type === "loot_table") {
+    const nextTable = graphNodeByIdInGraph(nextGraph, node.id);
+    for (const entry of questTimelineDirectSources(nextGraph, nextTable, "entries")) removeIds.add(entry.id);
+  }
+  nextGraph.nodes = (nextGraph.nodes || []).filter(function (candidate) { return !removeIds.has(candidate.id); });
+  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
+    return !removeIds.has(edge.fromNodeId) && !removeIds.has(edge.toNodeId);
+  });
+  const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+  if (nextGroup) ensureManagedGroupPackage(nextGraph, nextGroup);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: label + " verwijderd",
+    currentGroupId: group.id,
+    selectedNodeIds: [],
+    selectedEdgeIds: [],
+    refreshViewport: VIEWPORT_AFFECTING_NODE_TYPES.has(node.type),
+    refreshValidation: true,
+    afterApply: function () {
+      if (scope === "catalog" && state.catalogHubSelectedNodeId === node.id) state.catalogHubSelectedNodeId = null;
+      if (scope === "settings" && state.settingsHubSelectedNodeId === node.id) state.settingsHubSelectedNodeId = null;
+      setStatus(label + " verwijderd.", "success");
+    }
+  });
+}
+
+function renderManagedDraftCard(scope, group, draft, options = {}) {
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard authoring04DraftCard";
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = (draft.existingNodeId ? "Bewerk: " : "Nieuw: ") + (state.nodeTypes?.[draft.type]?.label || draft.type);
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+  for (const [fieldName, field] of managedVisibleFields(draft.type)) {
+    fields.appendChild(objectFunctionDraftFieldRow(field.label || fieldName, managedDraftFieldControl(scope, draft, fieldName, field)));
+  }
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary";
+  confirm.textContent = options.confirmLabel || (draft.existingNodeId ? "Wijzigingen opslaan" : "Aanmaken");
+  confirm.addEventListener("click", function () {
+    if (typeof options.onConfirm === "function") void options.onConfirm(draft);
+    else void commitManagedDraft(scope, group, draft);
+  });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", function () {
+    if (typeof options.onCancel === "function") {
+      options.onCancel(draft);
+    } else {
+      if (scope === "catalog") state.catalogHubDraft = null;
+      else state.settingsHubDraft = null;
+      renderAuthoringHub();
+    }
+  });
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function managedNodesInGroup(group, types, graph = state.graph) {
+  const typeSet = new Set(types || []);
+  const query = normalizeEditorKey(group.values?.groupKind) === "catalog" ? state.catalogHubSearch : state.settingsHubSearch;
+  const normalizedQuery = normalizeEditorKey(query);
+  return (graph.nodes || []).filter(function (node) {
+    if ((node.parentId || null) !== group.id || !typeSet.has(node.type)) return false;
+    if (!normalizedQuery) return true;
+    const haystack = normalizeEditorKey([nodeDisplayTitle(node), identityValue(node), state.nodeTypes?.[node.type]?.label].join(" "));
+    return haystack.includes(normalizedQuery);
+  }).sort(function (a, b) {
+    return nodeDisplayTitle(a).localeCompare(nodeDisplayTitle(b), "nl", { sensitivity: "base" });
+  });
+}
+
+function renderManagedNodeList(scope, group, types) {
+  const list = document.createElement("div");
+  list.className = "authoring04List";
+  const nodes = managedNodesInGroup(group, types, state.graph);
+  if (!nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "authoringWorkspaceEmpty";
+    empty.textContent = "Nog niets gevonden.";
+    list.appendChild(empty);
+    return list;
+  }
+  for (const node of nodes) {
+    const row = document.createElement("div");
+    row.className = "authoring04ListItem";
+    const body = document.createElement("div");
+    body.className = "authoring04ListBody";
+    const title = document.createElement("div");
+    title.className = "authoring04ListTitle";
+    title.textContent = nodeDisplayTitle(node);
+    const meta = document.createElement("div");
+    meta.className = "authoring04ListMeta";
+    meta.textContent = (state.nodeTypes?.[node.type]?.label || node.type) + " · " + (identityValue(node) || "interne id");
+    body.append(title, meta);
+    const actions = document.createElement("div");
+    actions.className = "authoring04Actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "mini";
+    open.textContent = "Open";
+    open.addEventListener("click", function () {
+      if (scope === "catalog") state.catalogHubSelectedNodeId = node.id;
+      else state.settingsHubSelectedNodeId = node.id;
+      focusGraphNode(node.id);
+      renderAuthoringHub();
+    });
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "mini";
+    edit.textContent = "Bewerk";
+    edit.addEventListener("click", function () {
+      if (scope === "catalog") beginCatalogDraft(group, node.type, node);
+      else beginSettingsDraft(group, node.type, node);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijder";
+    remove.addEventListener("click", function () { void deleteManagedNode(scope, group, node); });
+    actions.append(open, edit, remove);
+    row.append(body, actions);
+    if (node.type === "loot_table") row.appendChild(renderLootTableEntryEditor(group, node));
+    list.appendChild(row);
+  }
+  return list;
+}
+
+function beginLootEntryDraft(group, table, type, entry = null) {
+  state.catalogHubDraft = {
+    groupId: group.id,
+    type,
+    existingNodeId: entry?.id || null,
+    lootTableId: table.id,
+    values: managedDefaultValuesForDraft(type, entry)
+  };
+  renderAuthoringHub();
+}
+
+async function commitLootEntryDraft(group, table, draft) {
+  const validation = validateManagedDraft("catalog", draft);
+  if (validation) {
+    setStatus(validation, "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+  const nextTable = graphNodeByIdInGraph(nextGraph, table.id);
+  if (!nextGroup || !nextTable) {
+    setStatus("Loot Table bestaat niet meer.", "error");
+    return;
+  }
+  const fields = state.nodeTypes?.[draft.type]?.fields || {};
+  const idField = identityFieldForType(draft.type);
+  let node = draft.existingNodeId ? graphNodeByIdInGraph(nextGraph, draft.existingNodeId) : null;
+  const isNew = !node;
+  const values = Object.assign({}, objectFunctionDefaultValuesForNodeType(draft.type));
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    if (!Object.prototype.hasOwnProperty.call(draft.values || {}, key)) continue;
+    values[key] = normalizeFieldInputValue(field, draft.values[key]);
+  }
+  if (idField) values[idField] = isNew
+    ? uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values))
+    : (normalizeCanonicalId(node.values?.[idField], "") || uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values)));
+  const label = state.nodeTypes?.[draft.type]?.label || draft.type;
+  if (!node) {
+    const existingCount = questTimelineDirectSources(nextGraph, nextTable, "entries").length;
+    node = {
+      id: createZoneGraphId("node_" + draft.type),
+      type: draft.type,
+      title: label,
+      x: Math.round(Number(nextTable.x) || 80),
+      y: Math.round((Number(nextTable.y) || 180) + 180 + existingCount * 120),
+      parentId: nextGroup.id,
+      values
+    };
+    nextGraph.nodes.push(node);
+  } else {
+    node.title = label;
+    node.parentId = nextGroup.id;
+    node.values = Object.assign({}, node.values || {}, values);
+  }
+  pushEdgeIfMissing(nextGraph, node.id, "lootEntry", nextTable.id, "entries");
+  ensureCatalogGroupPackage(nextGraph, nextGroup);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: label + (isNew ? " toegevoegd" : " gewijzigd"),
+    currentGroupId: group.id,
+    selectedNodeIds: [node.id],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () {
+      state.catalogHubDraft = null;
+      focusGraphNode(node.id);
+      setStatus(label + (isNew ? " toegevoegd." : " gewijzigd."), "success");
+    }
+  });
+}
+
+function managedReferenceLabel(ref, kinds) {
+  const stateInfo = referencePickerChoiceState(ref, { referenceKinds: kinds || [], allowNull: true });
+  return stateInfo.displayLabel || stateInfo.rawId || ref || "geen keuze";
+}
+
+function lootEntryReadableSummary(entry) {
+  const values = entry.values || {};
+  let target = "";
+  let minMax = "";
+  if (entry.type === "loot_item_entry") {
+    target = "Item: " + managedReferenceLabel(values.itemRef, ["item"]);
+    minMax = "min " + (values.minQuantity ?? 0) + " / max " + (values.maxQuantity ?? 0);
+  } else if (entry.type === "loot_currency_entry") {
+    target = "Currency: " + managedReferenceLabel(values.currencyRef, ["currency"]);
+    minMax = "min " + (values.minAmountMinor ?? 0) + " / max " + (values.maxAmountMinor ?? 0);
+  } else {
+    target = "Loot Table: " + managedReferenceLabel(values.lootTableRef, ["loot_table"]);
+    minMax = "min " + (values.repeatMin ?? 0) + " / max " + (values.repeatMax ?? 0);
+  }
+  return [
+    target,
+    "chance " + (values.chance ?? 1),
+    "weight " + (values.weight ?? 1),
+    minMax
+  ].join(" · ");
+}
+
+function renderLootEntryRow(group, table, entry) {
+  const row = document.createElement("div");
+  row.className = "objectFunctionBadge questTimelineChildBadge";
+  const accent = document.createElement("span");
+  accent.className = "objectFunctionBadgeAccent";
+  accent.style.background = state.nodeTypes?.[entry.type]?.accent || "#fbbf24";
+  const body = document.createElement("div");
+  body.className = "objectFunctionBadgeBody";
+  const label = document.createElement("div");
+  label.className = "objectFunctionBadgeLabel";
+  label.textContent = state.nodeTypes?.[entry.type]?.label || entry.type;
+  const meta = document.createElement("div");
+  meta.className = "objectFunctionBadgeMeta";
+  meta.textContent = lootEntryReadableSummary(entry);
+  meta.title = meta.textContent;
+  body.append(label, meta);
+  const buttons = document.createElement("div");
+  buttons.className = "objectFunctionBadgeButtons";
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = "mini";
+  manage.textContent = "Beheren";
+  manage.addEventListener("click", function (event) {
+    event.stopPropagation();
+    beginLootEntryDraft(group, table, entry.type, entry);
+  });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "deleteNode";
+  remove.textContent = "Verwijderen";
+  remove.addEventListener("click", function (event) {
+    event.stopPropagation();
+    void deleteManagedNode("catalog", group, entry);
+  });
+  buttons.append(manage, remove);
+  row.append(accent, body, buttons);
+  row.addEventListener("click", function () { focusGraphNode(entry.id); });
+  return row;
+}
+
+function renderLootTableEntryEditor(group, table) {
+  const wrap = document.createElement("div");
+  wrap.className = "lootEntryEditor";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionMeta";
+  heading.textContent = "Lootregels";
+  wrap.appendChild(heading);
+  const entries = questTimelineDirectSources(state.graph, table, "entries").filter(function (node) {
+    return LOOT_ENTRY_TYPES.some(function (entry) { return entry.type === node.type; });
+  });
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Nog geen lootregels.";
+    wrap.appendChild(empty);
+  } else {
+    const list = document.createElement("div");
+    list.className = "objectFunctionBadgeRow";
+    for (const entry of entries) {
+      list.appendChild(renderLootEntryRow(group, table, entry));
+    }
+    wrap.appendChild(list);
+  }
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  for (const entryType of LOOT_ENTRY_TYPES) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mini";
+    button.textContent = "+ " + entryType.label;
+    button.addEventListener("click", function () { beginLootEntryDraft(group, table, entryType.type); });
+    actions.appendChild(button);
+  }
+  wrap.appendChild(actions);
+  if (state.catalogHubDraft && state.catalogHubDraft.lootTableId === table.id) {
+    wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft, {
+      onConfirm: function (draft) { return commitLootEntryDraft(group, table, draft); }
+    }));
+  }
+  return wrap;
+}
+
+function renderCatalogHub(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection authoring04Hub";
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = nodeDisplayTitle(group) || "Catalog";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = "Maak en beheer definities. IDs, Catalog Output, Group Output en Registry-koppeling worden automatisch afgehandeld.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+  const search = questTimelineTextInput(state.catalogHubSearch, function (value) {
+    state.catalogHubSearch = value;
+    renderAuthoringHub();
+  }, { placeholder: "Zoek in catalog..." });
+  search.className = "authoring04Search";
+  wrap.appendChild(search);
+  const tabs = document.createElement("div");
+  tabs.className = "questTimelineTabs";
+  for (const entry of CATALOG_HUB_TYPES) {
+    tabs.appendChild(questTimelineTabButton(entry.label, state.catalogHubType === entry.type, function () {
+      state.catalogHubType = entry.type;
+      state.catalogHubDraft = null;
+      renderAuthoringHub();
+    }));
+  }
+  wrap.appendChild(tabs);
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  const create = document.createElement("button");
+  create.type = "button";
+  create.className = "primary";
+  create.textContent = "Nieuwe " + (state.nodeTypes?.[state.catalogHubType]?.label || state.catalogHubType);
+  create.addEventListener("click", function () { beginCatalogDraft(group, state.catalogHubType); });
+  const repair = document.createElement("button");
+  repair.type = "button";
+  repair.className = "mini";
+  repair.textContent = "Package bijwerken";
+  repair.addEventListener("click", async function () {
+    const nextGraph = cloneGraphForRestore(state.graph);
+    const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+    ensureCatalogGroupPackage(nextGraph, nextGroup);
+    await restoreGraphObject(nextGraph, { historyLabel: "Catalog package bijgewerkt", currentGroupId: group.id, selectedNodeIds: [group.id], refreshValidation: true });
+  });
+  actions.append(create, repair);
+  wrap.appendChild(actions);
+  if (state.catalogHubDraft && state.catalogHubDraft.groupId === group.id && !state.catalogHubDraft.lootTableId) {
+    wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft));
+  }
+  wrap.appendChild(renderManagedNodeList("catalog", group, [state.catalogHubType]));
+  return wrap;
+}
+
+function renderUiPreview(node) {
+  const supported = new Set(["ui_hud_text", "debug_performance_hud", "game_minimap_hud"]);
+  const wrap = document.createElement("div");
+  wrap.className = "uiRuntimePreview";
+  if (!supported.has(node.type)) {
+    wrap.textContent = "Geen bestaande runtime-preview voor dit UI-type.";
+    return wrap;
+  }
+  if (node.type === "ui_hud_text") {
+    wrap.textContent = String(node.values?.text || "HUD tekst");
+  } else if (node.type === "debug_performance_hud") {
+    wrap.textContent = String(node.values?.label || "Performance") + " · FPS · Frame";
+  } else if (node.type === "game_minimap_hud") {
+    wrap.textContent = "Minimap " + String(node.values?.sizePx || 180) + "px";
+  }
+  return wrap;
+}
+
+function countGraphNodesByIds(ids) {
+  return ids instanceof Set ? ids.size : 0;
+}
+
+function authoringIndicatorCountsForModel(model, graph = state.graph) {
+  const context = objectFunctionContextForModel(model, graph);
+  const refs = new Set();
+  const entityRef = normalizeCanonicalId(context?.assembly?.values?.entityId, "");
+  const targetRef = normalizeCanonicalId(context?.questBinding?.values?.targetId, "");
+  if (entityRef) refs.add(entityRef);
+  if (targetRef) refs.add(targetRef);
+  const objectIds = new Set([model.id]);
+  for (const node of [context.assembly, context.interactionComponent, context.npcComponent, context.enemyComponent, context.questBinding]) {
+    if (node) objectIds.add(node.id);
+  }
+  const questIds = new Set();
+  for (const node of graph.nodes || []) {
+    if (refs.size && nodeReferencesAny(node, refs) && AUTHORING_ROUTE_COUNT_TYPES.quest_dialogue.includes(node.type)) questIds.add(node.id);
+  }
+  const catalogIds = catalogDefinitionNodeIdsForObjectContext(context, graph);
+  return {
+    world_zone: context.zoneGroup ? 1 : 0,
+    object_character: countGraphNodesByIds(objectIds),
+    quest_dialogue: questIds.size,
+    item_ability_stat: catalogIds.size,
+    game_settings_ui: 0
+  };
+}
+
+function authoringIndicatorDefinitions() {
+  return [
+    { routeId: "world_zone", icon: "W", label: "Wereld/Zone", color: "#22c55e", meaning: "Zone waar deze entity in staat" },
+    { routeId: "object_character", icon: "O", label: "Object", color: "#06b6d4", meaning: "Objectonderdelen aan deze entity" },
+    { routeId: "quest_dialogue", icon: "Q", label: "Quest", color: "#f59e0b", meaning: "Quests/dialogen die deze entity targeten" },
+    { routeId: "item_ability_stat", icon: "C", label: "Catalog", color: "#d946ef", meaning: "Catalog-definities die componenten gebruiken" },
+    { routeId: "game_settings_ui", icon: "U", label: "Instellingen/UI", color: "#94a3b8", meaning: "Instellingen/UI-context voor deze entity" }
+  ];
+}
+
+function renderAuthoringIndicators() {
+  if (el.viewportAuthoringIndicatorToggle) {
+    el.viewportAuthoringIndicatorToggle.classList.toggle("active", state.authoringIndicatorsEnabled);
+    el.viewportAuthoringIndicatorToggle.setAttribute("aria-pressed", state.authoringIndicatorsEnabled ? "true" : "false");
+    el.viewportAuthoringIndicatorToggle.title = state.authoringIndicatorsEnabled ? "Authoring-indicatoren verbergen" : "Authoring-indicatoren tonen";
+  }
+  const root = el.viewportAuthoringIndicators;
+  if (!root) return;
+  root.innerHTML = "";
+  root.hidden = !state.authoringIndicatorsEnabled;
+  if (!state.authoringIndicatorsEnabled || !runtime || typeof runtime.worldToScreen !== "function") return;
+  const wrapRect = el.viewportWrap?.getBoundingClientRect();
+  if (!wrapRect) return;
+  const models = (state.graph.nodes || []).filter(function (node) { return node.type === "model_entity"; });
+  for (const model of models) {
+    const x = Number(model.values?.x);
+    const y = Number(model.values?.y);
+    const z = Number(model.values?.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    const screen = runtime.worldToScreen({ x, y: Number.isFinite(y) ? y + 1.2 : 1.2, z });
+    if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) continue;
+    const cluster = document.createElement("div");
+    cluster.className = "authoringIndicatorCluster";
+    cluster.style.left = Math.round(screen.x - wrapRect.left) + "px";
+    cluster.style.top = Math.round(screen.y - wrapRect.top - 18) + "px";
+    const counts = authoringIndicatorCountsForModel(model, state.graph);
+    for (const def of authoringIndicatorDefinitions()) {
+      const count = Number(counts[def.routeId] || 0);
+      const dot = document.createElement("span");
+      dot.className = "authoringIndicatorDot" + (count ? "" : " authoringIndicatorDot--empty");
+      dot.style.setProperty("--indicator-color", def.color);
+      dot.textContent = def.icon + (count ? String(count) : "");
+      dot.title = def.label + ": " + def.meaning + ". Aantal: " + count + ".";
+      cluster.appendChild(dot);
+    }
+    root.appendChild(cluster);
+  }
+}
+
+function renderSettingsUiHub(group) {
+  const kind = normalizeEditorKey(group.values?.groupKind) === "ui" ? "ui" : "player_rules";
+  state.settingsHubKind = kind;
+  const types = kind === "ui" ? UI_HUB_TYPES.filter(function (type) { return state.nodeTypes[type]; }) : PLAYER_RULES_HUB_TYPES.filter(function (type) { return state.nodeTypes[type]; });
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection authoring04Hub";
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = nodeDisplayTitle(group) || (kind === "ui" ? "UI Group" : "Player Rules Group");
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = kind === "ui"
+    ? "Beheer ondersteunde UI-node-types. Preview verschijnt alleen voor UI die de bestaande runtime kent."
+    : "Beheer ondersteunde player/economy policies. Output en World Assembly-koppeling worden automatisch bijgewerkt.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+  const search = questTimelineTextInput(state.settingsHubSearch, function (value) {
+    state.settingsHubSearch = value;
+    renderAuthoringHub();
+  }, { placeholder: "Zoek in instellingen..." });
+  search.className = "authoring04Search";
+  wrap.appendChild(search);
+  const categories = document.createElement("div");
+  categories.className = "authoring04TypeGrid";
+  for (const type of types) {
+    const existing = managedNodesInGroup(group, [type], state.graph)[0] || null;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "objectFunctionActionButton";
+    button.textContent = (state.nodeTypes?.[type]?.label || type) + (existing ? " beheren" : " maken");
+    button.title = existing ? "Duplicaatbescherming: bestaande node openen." : "Nieuwe node aanmaken en koppelen.";
+    button.addEventListener("click", function () {
+      beginSettingsDraft(group, type, existing);
+      if (existing) focusGraphNode(existing.id);
+    });
+    categories.appendChild(button);
+  }
+  wrap.appendChild(categories);
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  const repair = document.createElement("button");
+  repair.type = "button";
+  repair.className = "mini";
+  repair.textContent = "Package bijwerken";
+  repair.addEventListener("click", async function () {
+    const nextGraph = cloneGraphForRestore(state.graph);
+    const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
+    ensureManagedGroupPackage(nextGraph, nextGroup);
+    await restoreGraphObject(nextGraph, { historyLabel: "Package bijgewerkt", currentGroupId: group.id, selectedNodeIds: [group.id], refreshValidation: true });
+  });
+  actions.appendChild(repair);
+  wrap.appendChild(actions);
+  if (state.settingsHubDraft && state.settingsHubDraft.groupId === group.id) {
+    wrap.appendChild(renderManagedDraftCard("settings", group, state.settingsHubDraft));
+  }
+  wrap.appendChild(renderManagedNodeList("settings", group, types));
+  if (kind === "ui") {
+    const selected = state.settingsHubSelectedNodeId ? graphNodeByIdInGraph(state.graph, state.settingsHubSelectedNodeId) : null;
+    if (selected && (selected.parentId || null) === group.id) wrap.appendChild(renderUiPreview(selected));
+  }
+  return wrap;
+}
+
 function focusAssetBrowser() {
   if (isMobileLayout()) {
     if (state.mobilePanel === "all") ensureMobileAllLayout();
@@ -8942,6 +11046,7 @@ function renderAuthoringRouteWorkspaceGroup(route, workspaceGroup) {
         summary.textContent = workspaceGroup.label;
       }
       text.append(titleText, summary);
+      appendWorkspaceCountBadge(text, route.id, node, state.graph);
       const plus = document.createElement("span");
       plus.className = "plus";
       plus.textContent = ">";
@@ -8958,9 +11063,6 @@ function renderAuthoringRouteWorkspaceGroup(route, workspaceGroup) {
 
 function renderAuthoringSection(route) {
   const selectedViewportNode = selectedViewportAuthoringNode();
-  const hasAnyZoneCanvas = (state.graph.nodes || []).some(function (node) {
-    return isZoneCanvasGroup(node, state.graph);
-  });
   const hasAnyCampaignGroup = (state.graph.nodes || []).some(function (node) {
     return isCampaignGroupNode(node);
   });
@@ -9000,6 +11102,7 @@ function renderAuthoringSection(route) {
         summary.className = "authoringRouteSummary";
         summary.textContent = candidate.summary;
         text.append(title, summary);
+        appendReadOnlyCountBadge(text, candidate.id, state.graph);
         const plus = document.createElement("span");
         plus.className = "plus";
         plus.textContent = "+";
@@ -9043,13 +11146,79 @@ function renderAuthoringSection(route) {
       if (route.id === "object_character") {
         el.authoringPanel.appendChild(renderObjectFunctionSection(objectContext));
       }
+      if (route.id === "world_zone") {
+        el.authoringPanel.appendChild(renderWorldZoneHub());
+      }
       if (route.id === "quest_dialogue") {
         const campaignGroup = currentCampaignGroupNode();
         if (campaignGroup) {
           el.authoringPanel.appendChild(renderQuestDialogueWorkspace(campaignGroup));
         }
       }
+      if (route.id === "item_ability_stat") {
+        const catalogGroup = currentGroupOfKind("catalog");
+        if (catalogGroup) el.authoringPanel.appendChild(renderCatalogHub(catalogGroup));
+      }
+      if (route.id === "game_settings_ui") {
+        const playerRulesGroup = currentGroupOfKind("player_rules");
+        const uiGroup = currentGroupOfKind("ui");
+        if (playerRulesGroup || uiGroup) el.authoringPanel.appendChild(renderSettingsUiHub(playerRulesGroup || uiGroup));
+      }
       const workspaces = authoringWorkspacesForRoute(route.id, state.graph);
+      if (route.id === "item_ability_stat" && !workspaces.some(function (workspace) { return workspace.kind === "catalog" && workspace.nodes.length; })) {
+        const action = document.createElement("div");
+        action.className = "authoringRouteAction";
+        const actionTitle = document.createElement("div");
+        actionTitle.className = "authoringRouteActionTitle";
+        actionTitle.textContent = "Catalog Group ontbreekt";
+        const actionText = document.createElement("div");
+        actionText.className = "authoringRouteActionText";
+        actionText.textContent = "Maak een root-level Catalog Group om items, abilities, stats, currencies en loot tables te beheren.";
+        const buttons = document.createElement("div");
+        buttons.className = "authoringRouteActionButtons";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "primary";
+        button.textContent = "Nieuwe Catalog Group";
+        button.addEventListener("click", function () { void createRootManagedGroup("catalog", "Catalog"); });
+        buttons.appendChild(button);
+        action.append(actionTitle, actionText, buttons);
+        el.authoringPanel.appendChild(action);
+      }
+      if (route.id === "game_settings_ui") {
+        const hasPlayerRules = workspaces.some(function (workspace) { return workspace.kind === "player_rules" && workspace.nodes.length; });
+        const hasUi = workspaces.some(function (workspace) { return workspace.kind === "ui" && workspace.nodes.length; });
+        if (!hasPlayerRules || !hasUi) {
+          const action = document.createElement("div");
+          action.className = "authoringRouteAction";
+          const actionTitle = document.createElement("div");
+          actionTitle.className = "authoringRouteActionTitle";
+          actionTitle.textContent = "Root-groep maken";
+          const actionText = document.createElement("div");
+          actionText.className = "authoringRouteActionText";
+          actionText.textContent = "Player Rules en UI Groups worden alleen op rootniveau aangemaakt en direct aan de publishroute gekoppeld.";
+          const buttons = document.createElement("div");
+          buttons.className = "authoringRouteActionButtons";
+          if (!hasPlayerRules) {
+            const player = document.createElement("button");
+            player.type = "button";
+            player.className = "primary";
+            player.textContent = "Nieuwe Player Rules Group";
+            player.addEventListener("click", function () { void createRootManagedGroup("player_rules", "Player Rules"); });
+            buttons.appendChild(player);
+          }
+          if (!hasUi) {
+            const ui = document.createElement("button");
+            ui.type = "button";
+            ui.className = "primary";
+            ui.textContent = "Nieuwe UI Group";
+            ui.addEventListener("click", function () { void createRootManagedGroup("ui", "UI"); });
+            buttons.appendChild(ui);
+          }
+          action.append(actionTitle, actionText, buttons);
+          el.authoringPanel.appendChild(action);
+        }
+      }
       if (route.id === "quest_dialogue" && !hasAnyCampaignGroup) {
         const action = document.createElement("div");
         action.className = "authoringRouteAction";
@@ -9073,29 +11242,6 @@ function renderAuthoringSection(route) {
         action.append(actionTitle, actionText, buttons);
         el.authoringPanel.appendChild(action);
       }
-      if (route.id === "world_zone" && !hasAnyZoneCanvas) {
-        const action = document.createElement("div");
-        action.className = "authoringRouteAction";
-        const actionTitle = document.createElement("div");
-        actionTitle.className = "authoringRouteActionTitle";
-        actionTitle.textContent = route.primaryActionLabel || "Nieuwe Zone Canvas";
-        const actionText = document.createElement("div");
-        actionText.className = "authoringRouteActionText";
-        actionText.textContent = "Maakt de eerste root-level Zone Canvas aan met bestaande autowiring.";
-        const buttons = document.createElement("div");
-        buttons.className = "authoringRouteActionButtons";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "primary";
-        button.textContent = route.primaryActionLabel || "Nieuwe Zone Canvas";
-        button.addEventListener("click", function () {
-          ensureMobileAllLayout();
-          void addZoneCanvasFromLibrary();
-        });
-        buttons.appendChild(button);
-        action.append(actionTitle, actionText, buttons);
-        el.authoringPanel.appendChild(action);
-      }
       for (const workspaceGroup of workspaces) {
         el.authoringPanel.appendChild(renderAuthoringRouteWorkspaceGroup(route, workspaceGroup));
       }
@@ -9106,42 +11252,138 @@ function renderAuthoringSection(route) {
   }
 }
 
+function nodeLibraryStatusForType(route, type, def) {
+  const classification = classifyAuthoringNodeType(type, def);
+  if (def?.system || ["group_input", "group_output"].includes(type)) {
+    return { label: "system", tone: "system", text: "Wordt automatisch door de editor beheerd." };
+  }
+  if (def?.internal) return { label: "internal", tone: "system", text: "Interne compatibility-node; alleen handmatig wanneer de graphcontext klopt." };
+  if (def?.deprecated) return { label: "deprecated", tone: "warning", text: "Oude of legacy route; gebruik alleen voor reparatie." };
+  if (def?.hidden) return { label: "unsupported", tone: "warning", text: "Geregistreerd maar niet als normale visuele route ondersteund." };
+  if (classification === "managed_infrastructure") return { label: "infra", tone: "system", text: "Infrastructuur voor package/publish-plumbing." };
+  if (classification === "hidden_future") return { label: "future", tone: "warning", text: "Geregistreerd maar niet normaal ondersteund in deze route." };
+  if (route && !authoringLibraryGroupsForRoute(route.id, { [type]: def }, "").some(function (group) { return group.items.length; })) {
+    return { label: "buiten route", tone: "muted", text: "Bestaat wel, maar hoort niet bij de normale routecontext." };
+  }
+  return { label: "ok", tone: "ok", text: "Past bij de huidige route wanneer parent en ports geldig zijn." };
+}
+
+function nodePlacementIssueForType(type) {
+  const def = state.nodeTypes?.[type] || {};
+  const parent = state.currentGroupId ? nodeById(state.currentGroupId) : null;
+  const parentKind = normalizeEditorKey(parent?.values?.groupKind);
+  if (["group_input", "group_output"].includes(type)) return "Group Input/Output wordt automatisch beheerd.";
+  if (def.system && type !== "group") return "System nodes worden door bestaande helpers aangemaakt.";
+  if (type === "zone_definition" || type === "zone_output" || type === "zone_environment_settings" || type === "zone_gameplay_rules") {
+    if (!parent || !isZoneCanvasGroup(parent, state.graph)) return "Open eerst een Zone Canvas.";
+  }
+  if (type === "area_output" || type === "area_definition") {
+    if (!parent) return "Open eerst een Zone of Area Group.";
+  }
+  if (state.nodeTypes?.[type]?.outputs?.catalogDefinition && parentKind !== "catalog") return "Open eerst een Catalog Group.";
+  if (outputPortForDataType(type, "policy") && parentKind !== "player_rules") return "Open eerst een Player Rules Group.";
+  const outputs = state.nodeTypes?.[type]?.outputs || {};
+  if ((outputs.ui || outputs.uiModule || outputs.minimap || outputs.uiLayout || outputs.menuLayout) && parentKind !== "ui") return "Open eerst een UI Group.";
+  return "";
+}
+
+function renderNodeLibraryEntry(route, entry, options = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "libButton";
+  const issue = nodePlacementIssueForType(entry.type);
+  if (issue) button.classList.add("libButton--blocked");
+  const dot = document.createElement("span");
+  dot.className = "libDot";
+  dot.style.background = accentColorForNodeDef(entry.def);
+  const body = document.createElement("span");
+  body.className = "authoringRouteText";
+  const label = document.createElement("span");
+  label.className = "authoringRouteTitle";
+  label.textContent = entry.def.label || entry.type;
+  body.appendChild(label);
+  if (options.advanced) {
+    const status = nodeLibraryStatusForType(route, entry.type, entry.def);
+    const meta = document.createElement("span");
+    meta.className = "authoringRouteSummary";
+    meta.textContent = entry.type + " · " + status.text;
+    body.appendChild(meta);
+    const badge = document.createElement("span");
+    badge.className = "nodeLibraryBadge nodeLibraryBadge--" + status.tone;
+    badge.textContent = status.label;
+    body.appendChild(badge);
+  }
+  const plus = document.createElement("span");
+  plus.className = "plus";
+  plus.textContent = issue ? "!" : "+";
+  const info = createHelpIcon(buildNodeDefinitionHelpText(entry.type, entry.def) + (issue ? " Plaatsing geblokkeerd: " + issue : ""), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
+  button.append(dot, body, plus);
+  if (info) button.appendChild(info);
+  button.title = issue ? issue : (entry.def.description || "");
+  button.addEventListener("click", function () {
+    if (issue) {
+      setStatus(issue, "error");
+      return;
+    }
+    addNode(entry.type);
+  });
+  return button;
+}
+
+function advancedNodeLibraryGroups(route, query) {
+  const normalizedQuery = normalizeEditorKey(query);
+  const buckets = new Map();
+  for (const [type, def] of Object.entries(state.nodeTypes || {})) {
+    const groupName = String(def?.group || "Other").trim() || "Other";
+    const haystack = normalizeEditorKey([type, def?.label, def?.description, groupName, nodeLibraryStatusForType(route, type, def).label].join(" "));
+    if (normalizedQuery && !haystack.includes(normalizedQuery)) continue;
+    if (!buckets.has(groupName)) buckets.set(groupName, []);
+    buckets.get(groupName).push({ type, def, classification: classifyAuthoringNodeType(type, def) });
+  }
+  return Array.from(buckets.entries()).map(function ([group, items]) {
+    items.sort(function (left, right) {
+      return String(left.def?.label || left.type).localeCompare(String(right.def?.label || right.type), "nl", { sensitivity: "base" });
+    });
+    return { group, items };
+  }).sort(function (left, right) {
+    return left.group.localeCompare(right.group, "nl", { sensitivity: "base" });
+  });
+}
+
 function renderNodeLibrary(route) {
   const routeLabel = route ? route.label : "";
-  const libraryOpen = Boolean(route) && Boolean(state.nodeLibraryOpen);
+  const libraryOpen = Boolean(state.nodeLibraryOpen);
   if (el.nodeLibraryToggleTitle) {
     el.nodeLibraryToggleTitle.textContent = route ? "Meer nodes voor " + routeLabel : "Meer nodes";
   }
   if (el.nodeLibraryToggleState) {
-    el.nodeLibraryToggleState.textContent = route
-      ? (libraryOpen ? "Open" : "Ingeklapt")
-      : "Kies een route";
+    el.nodeLibraryToggleState.textContent = libraryOpen ? "Open" : "Ingeklapt";
   }
   if (el.nodeLibraryToggle) {
-    el.nodeLibraryToggle.disabled = !route;
+    el.nodeLibraryToggle.disabled = false;
     el.nodeLibraryToggle.setAttribute("aria-expanded", libraryOpen ? "true" : "false");
   }
   if (el.nodeLibraryBody) el.nodeLibraryBody.hidden = !libraryOpen;
   if (el.nodeLibrarySearch) {
-    el.nodeLibrarySearch.placeholder = route ? "Zoek binnen " + routeLabel + "..." : "Kies eerst een route";
+    el.nodeLibrarySearch.placeholder = route ? "Zoek binnen " + routeLabel + "..." : "Zoek alle nodes...";
+  }
+  if (el.nodeLibraryModeToggle) {
+    el.nodeLibraryModeToggle.hidden = false;
+    el.nodeLibraryModeToggle.setAttribute("aria-pressed", state.nodeLibraryAdvanced ? "true" : "false");
+    el.nodeLibraryModeToggle.textContent = state.nodeLibraryAdvanced ? (route ? "Contextnodes" : "Alle nodes") : "Alle nodes / Geavanceerd";
+    el.nodeLibraryModeToggle.title = state.nodeLibraryAdvanced
+      ? "Terug naar de route- en contextgeschikte nodes."
+      : "Toon alle geregistreerde node-types met compatibiliteitsstatus.";
   }
   if (!libraryOpen) {
     if (el.nodeLibrary) el.nodeLibrary.innerHTML = "";
     return;
   }
-  if (!route) {
-    if (el.nodeLibrary) {
-      el.nodeLibrary.innerHTML = "";
-      const empty = document.createElement("div");
-      empty.className = "libEmpty";
-      empty.textContent = "Kies eerst een route via + Maken.";
-      el.nodeLibrary.appendChild(empty);
-    }
-    return;
-  }
   if (el.nodeLibrary) el.nodeLibrary.innerHTML = "";
   const query = (el.nodeLibrarySearch?.value || "").trim();
-  const groups = authoringLibraryGroupsForRoute(route.id, state.nodeTypes, query);
+  const groups = state.nodeLibraryAdvanced || !route
+    ? advancedNodeLibraryGroups(route, query)
+    : authoringLibraryGroupsForRoute(route.id, state.nodeTypes, query);
   if (!groups.length) {
     const empty = document.createElement("div");
     empty.className = "libEmpty";
@@ -9159,27 +11401,11 @@ function renderNodeLibrary(route) {
     title.textContent = group.group;
     wrap.appendChild(title);
     for (const entry of group.items) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "libButton";
-      const dot = document.createElement("span");
-      dot.className = "libDot";
-      dot.style.background = accentColorForNodeDef(entry.def);
-      const label = document.createElement("span");
-      label.textContent = entry.def.label;
-      const plus = document.createElement("span");
-      plus.className = "plus";
-      plus.textContent = "+";
-      const info = createHelpIcon(buildNodeDefinitionHelpText(entry.type, entry.def), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
-      button.append(dot, label, plus);
-      if (info) button.appendChild(info);
-      button.addEventListener("click", function () {
-        addNode(entry.type);
-      });
-      wrap.appendChild(button);
+      wrap.appendChild(renderNodeLibraryEntry(route, entry, { advanced: state.nodeLibraryAdvanced }));
     }
     el.nodeLibrary.appendChild(wrap);
   }
+  renderSpecialGroupLibrary(query.toLowerCase());
 }
 
 function renderAuthoringHub() {
@@ -9230,6 +11456,9 @@ function renderSpecialGroupLibrary(query = "") {
 }
 
 async function addSpecialGroup(preset) {
+  if (preset?.kind === "catalog") return createRootManagedGroup("catalog", preset.title || "Catalog");
+  if (preset?.kind === "player_rules") return createRootManagedGroup("player_rules", preset.title || "Player Rules");
+  if (preset?.kind === "ui") return createRootManagedGroup("ui", preset.title || "UI");
   await addNode("group", {
     groupId: slugifyGroupPortName(preset.title, preset.kind),
     title: preset.title,
@@ -9291,6 +11520,37 @@ function zoneOutputForGroup(groupId, graph = state.graph) {
   }) || null;
 }
 
+function ensureZoneCanvasGroupPackageOutput(graph, group) {
+  if (!group || !isZoneCanvasGroup(group, graph)) return false;
+  let changed = false;
+  const rootSibling = (group.parentId || null) === null;
+  group.values = Object.assign({}, group.values || {}, {
+    groupKind: "zone",
+    zoneCanvas: true,
+    groupInterface: zoneCanvasGroupInterfaceForRole(rootSibling, group.values?.groupInterface)
+  });
+  if (rootSibling && group.values.zoneCanvasRootId !== group.id) {
+    group.values.zoneCanvasRootId = group.id;
+    changed = true;
+  }
+  if (rootSibling && group.values.zoneCanvasParentZoneId) {
+    group.values.zoneCanvasParentZoneId = "";
+    changed = true;
+  }
+  if (rootSibling && group.values.zoneCanvasParentSide) {
+    group.values.zoneCanvasParentSide = "";
+    changed = true;
+  }
+  const system = ensureGroupSystemNodesInGraph(graph, group.id);
+  const output = zoneOutputForGroup(group.id, graph);
+  if (output && pushEdgeIfMissing(graph, output.id, "zonePackage", system.outputId, "zonePackage")) changed = true;
+  if ((group.parentId || null) === null) {
+    const registry = ensureZoneRegistryForParent(graph, null, { x: group.x, y: group.y });
+    if (registry && pushEdgeIfMissing(graph, group.id, "zonePackage", registry.id, "zonePackage")) changed = true;
+  }
+  return changed;
+}
+
 // Which zone-canvas group's declared world-space bounds contain this ground position -
 // used to place a newly dropped/placed model into the zone it visually landed in when
 // there's no zone open in the Nodes graph to fall back on otherwise (see placeModel).
@@ -9318,7 +11578,9 @@ function isZoneCanvasGroup(node, graph = state.graph) {
 
 function zoneCanvasGridForGroup(group, graph = state.graph) {
   const explicitX = Number(group?.values?.zoneGridX);
-  const explicitZ = Number(group?.values?.zoneGridZ);
+  const explicitZ = Number.isFinite(Number(group?.values?.zoneGridY))
+    ? Number(group.values.zoneGridY)
+    : Number(group?.values?.zoneGridZ);
   if (Number.isFinite(explicitX) && Number.isFinite(explicitZ) && group?.values?.zoneCanvas === true) {
     return { x: Math.trunc(explicitX), z: Math.trunc(explicitZ) };
   }
@@ -9497,10 +11759,8 @@ function removeZoneCanvasGroupBoundaryEdges(graph, group) {
     return names.map(function (name) { return [name, port]; });
   }));
   graph.edges = (graph.edges || []).filter(function (edge) {
-    if (edge.fromNodeId === group.id && isZoneCanvasPortName(edge.fromPort)) return false;
     if (edge.fromNodeId === group.id && isZoneCanvasEntityGroupPort(outputPortByName.get(String(edge.fromPort || "")))) return false;
     if (edge.fromNodeId === group.id && ["entity", "entities"].includes(String(edge.fromPort || ""))) return false;
-    if (edge.toNodeId === systemOutputId && isZoneCanvasPortName(edge.toPort)) return false;
     if (edge.toNodeId === systemOutputId) {
       const source = graphNodeById.get(edge.fromNodeId);
       const sourceOutput = state.nodeTypes?.[source?.type]?.outputs?.[edge.fromPort] || null;
@@ -9527,8 +11787,17 @@ function zoneCanvasGroupInterfaceForRole(isRoot, previousInterface = null) {
     return !isZoneCanvasPackageGroupPort(port) && !isZoneCanvasChildPortName(port?.name) && !isZoneCanvasChildPortName(port?.id);
   });
   const outputs = (current.outputs || []).filter(function (port) {
-    return !isZoneCanvasPackageGroupPort(port) && !isZoneCanvasEntityGroupPort(port);
+    return !isZoneCanvasEntityGroupPort(port);
   });
+  if (!outputs.some(isZoneCanvasPackageGroupPort)) {
+    outputs.push({
+      id: "zone_package",
+      name: "zonePackage",
+      label: "Zone Package",
+      dataType: "zonePackage",
+      multiple: false
+    });
+  }
   return { inputs, outputs };
 }
 
@@ -9784,6 +12053,7 @@ function ensureZoneCanvasBasis(graph, group, options = {}) {
   applyZoneCanvasGroupRole(graph, group, { root, isRoot });
   group.values.zoneGridX = grid.x;
   group.values.zoneGridZ = grid.z;
+  group.values.zoneGridY = grid.z;
   if (!isRoot) {
     group.values.zoneCanvasParentZoneId = String(options.parentZoneId || group.values.zoneCanvasParentZoneId || root.id || "");
     group.values.zoneCanvasParentSide = String(options.parentSide || group.values.zoneCanvasParentSide || "");
@@ -9949,6 +12219,7 @@ function ensureZoneCanvasBasis(graph, group, options = {}) {
   pushEdgeIfMissing(graph, nodes.rules.id, "rules", nodes.output.id, "rules");
   pushEdgeIfMissing(graph, nodes.ground.id, "ground", nodes.output.id, "ground");
   pushEdgeIfMissing(graph, nodes.spawn.id, "spawnPoint", nodes.output.id, "spawns");
+  ensureZoneCanvasGroupPackageOutput(graph, group);
   return { nodes, zoneId: effectiveZoneId, spawnId: nodes.spawn.values?.spawnId || spawnId };
 }
 
@@ -9977,9 +12248,7 @@ function wireExistingZoneCanvasBasis(graph, group) {
   if (ground) pushEdgeIfMissing(graph, ground.id, "ground", output.id, "ground");
   if (spawn) pushEdgeIfMissing(graph, spawn.id, "spawnPoint", output.id, "spawns");
   wireZoneCanvasChildrenToOutput(graph, group);
-  if (isRoot) {
-    ensureZoneRegistryForParent(graph, group.parentId || null, { x: group.x, y: group.y });
-  }
+  ensureZoneCanvasGroupPackageOutput(graph, group);
   return true;
 }
 
@@ -9987,14 +12256,16 @@ function normalizeZoneCanvasGroups(graph, parentId = null) {
   const groups = zoneCanvasGroupsForParent(parentId, graph);
   if (!groups.length) return null;
   const root = zoneCanvasRootGroupForParent(parentId, graph) || groups[0];
+  const rootSiblingMode = (parentId || null) === null;
   removeZoneOutputLightEdges(graph);
   relocateZoneCanvasLightsToRoot(graph, parentId, groups);
   for (const group of groups) {
-    const isRoot = group.id === root.id;
-    const grid = isRoot ? { x: 0, z: 0 } : zoneCanvasGridForGroup(group, graph);
+    const isRoot = rootSiblingMode ? true : group.id === root.id;
+    const grid = zoneCanvasGridForGroup(group, graph);
     group.values = Object.assign({}, group.values || {}, {
       zoneGridX: grid.x,
-      zoneGridZ: grid.z
+      zoneGridZ: grid.z,
+      zoneGridY: grid.z
     });
     applyZoneCanvasGroupRole(graph, group, { root, isRoot });
     removeZoneCanvasGroupBoundaryEdges(graph, group);
@@ -10003,6 +12274,7 @@ function normalizeZoneCanvasGroups(graph, parentId = null) {
     if (output) {
       ensureGroupSystemNodesInGraph(graph, group.id);
       wireZoneCanvasChildrenToOutput(graph, group);
+      ensureZoneCanvasGroupPackageOutput(graph, group);
     }
   }
   ensureZoneRegistryForParent(graph, parentId, { x: root.x, y: root.y });
@@ -10158,6 +12430,7 @@ function appendZoneCanvasGroup(graph, options) {
       zoneCanvas: true,
       zoneGridX: grid.x,
       zoneGridZ: grid.z,
+      zoneGridY: grid.z,
       zoneCanvasRootId: isRoot ? "" : root.id,
       zoneCanvasParentZoneId: isRoot ? "" : String(options.parentZoneId || root.id),
       zoneCanvasParentSide: isRoot ? "" : String(options.parentSide || ""),
@@ -10225,40 +12498,7 @@ async function expandZoneCanvas(groupId, directionName) {
     setStatus("Zone " + direction.label.toLowerCase() + " bestaat al.", "");
     return;
   }
-  const nextGraph = cloneGraphForRestore(state.graph);
-  normalizeZoneCanvasGroups(nextGraph, parentId);
-  const nextSource = nextGraph.nodes.find(function (node) { return node.id === groupId; });
-  const sourceRoot = zoneCanvasRootGroupForGroup(nextSource, nextGraph) || nextSource;
-  ensureZoneCanvasBasis(nextGraph, nextSource, {
-    grid: sourceGrid,
-    root: sourceRoot,
-    isRoot: sourceRoot?.id === nextSource?.id
-  });
-  const position = {
-    x: Math.round(Number(nextSource?.x || source.x || 0) + direction.graphX * ZONE_CANVAS_NODE_STEP_X),
-    y: Math.round(Number(nextSource?.y || source.y || 0) + direction.graphY * ZONE_CANVAS_NODE_STEP_Y)
-  };
-  const result = appendZoneCanvasGroup(nextGraph, {
-    parentId,
-    grid: targetGrid,
-    position,
-    root: sourceRoot,
-    isRoot: false,
-    parentZoneId: nextSource?.id || groupId,
-    parentSide: directionName
-  });
-  normalizeZoneCanvasGroups(nextGraph, parentId);
-  await restoreGraphObject(nextGraph, {
-    historyLabel: "Zone Canvas uitgebreid",
-    selectedNodeIds: [result.group.id],
-    selectedEdgeIds: [],
-    refreshViewport: true,
-    refreshValidation: true,
-    afterApply: function () {
-      focusGraphNode(result.group.id);
-      setStatus("Zone " + direction.label.toLowerCase() + " toegevoegd.", "success");
-    }
-  });
+  beginZoneCanvasDraft(source, directionName);
 }
 
 async function repairZoneCanvasBasis(groupId) {
@@ -12905,14 +15145,8 @@ function renderInspector() {
 function syncAsideContext(route = sanitizeAuthoringRouteState()) {
   const showInspector = hasInspectorSelection();
   if (isMobileLayout() && !showInspector && state.mobilePanel === "inspector") setMobilePanel("graph", false);
-  // In de Blender-achtige "All"-lay-out zijn Tools/Nodes/3D vaak tegelijk zichtbaar,
-  // dus daar wisselt het Tools-paneel tussen Node library en Inspector i.p.v. te stapelen.
-  // (Let op: niet de module-scope `allLayoutActive` gebruiken hier - syncAsideContext()
-  // wordt al bij regel ~341 top-level aangeroepen, vóór die `let` geïnitialiseerd is,
-  // wat anders een TDZ ReferenceError geeft die de hele scriptinit blokkeert.)
-  const swapInPlace = !isMobileLayout() || state.mobilePanel === "all";
-  const routeActive = Boolean(route);
-  if (el.nodeLibrarySection) el.nodeLibrarySection.hidden = routeActive ? false : (swapInPlace && showInspector);
+  // Meer nodes blijft altijd zichtbaar als reparatie-/snelweg naast de Inspector.
+  if (el.nodeLibrarySection) el.nodeLibrarySection.hidden = false;
   if (el.inspectorSection) el.inspectorSection.hidden = !showInspector;
   if (el.validationSection) el.validationSection.hidden = false;
 }
@@ -16587,8 +18821,13 @@ if (el.authoringBackButton) {
 }
 if (el.nodeLibraryToggle) {
   el.nodeLibraryToggle.addEventListener("click", function () {
-    if (!currentAuthoringRoute()) return;
     state.nodeLibraryOpen = !state.nodeLibraryOpen;
+    renderAuthoringHub();
+  });
+}
+if (el.nodeLibraryModeToggle) {
+  el.nodeLibraryModeToggle.addEventListener("click", function () {
+    state.nodeLibraryAdvanced = !state.nodeLibraryAdvanced;
     renderAuthoringHub();
   });
 }
@@ -16621,6 +18860,13 @@ el.assetFilter.addEventListener("change", function () { state.assetFilter = el.a
 if (el.assetCardSize) {
   el.assetCardSize.addEventListener("input", function () {
     applyAssetCardSize(el.assetCardSize.value);
+  });
+}
+if (el.viewportAuthoringIndicatorToggle) {
+  el.viewportAuthoringIndicatorToggle.addEventListener("click", function () {
+    state.authoringIndicatorsEnabled = !state.authoringIndicatorsEnabled;
+    storeAuthoringIndicators(state.authoringIndicatorsEnabled);
+    renderViewportControls();
   });
 }
 if (el.assetImportToggle) {
