@@ -5380,6 +5380,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
   let onModelLoadTiming = options.onModelLoadTiming || function () {};
+  let onRenderFrame = typeof options.onRenderFrame === "function" ? options.onRenderFrame : function () {};
   const loadErrors = [];
   let editorViewInitialized = false;
   let disposed = false;
@@ -9187,6 +9188,9 @@ function resolveChunkDebugCenter(policy) {
     sectionStart = performance.now();
     renderer.render(scene, camera);
     frameTiming.renderMs = round(performance.now() - sectionStart);
+    try {
+      onRenderFrame({ timing: frameTiming });
+    } catch {}
     sectionStart = performance.now();
     if (mode === "game") updatePerformanceHud(time);
     frameTiming.hudMs = round(performance.now() - sectionStart);
@@ -15819,12 +15823,14 @@ function resolveChunkDebugCenter(policy) {
 
   function worldToScreen(position) {
     const vector = new THREE.Vector3(num(position?.x, 0), num(position?.y, 0), num(position?.z, 0));
+    const distance = camera.position.distanceTo(vector);
     vector.project(camera);
     if (!Number.isFinite(vector.x) || !Number.isFinite(vector.y) || !Number.isFinite(vector.z) || vector.z < -1 || vector.z > 1) return null;
     const rect = canvas.getBoundingClientRect();
     return {
       x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
-      y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top
+      y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top,
+      distance: Number.isFinite(distance) ? distance : null
     };
   }
 
