@@ -16,6 +16,29 @@ const now = function () {
   return new Date().toISOString();
 };
 
+export const DEFAULT_PUBLISH_HISTORY_RETENTION = 50;
+
+function normalizePublishHistoryRetentionLimit(value = DEFAULT_PUBLISH_HISTORY_RETENTION) {
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("Publish history retention moet een positief geheel getal zijn.");
+  }
+  return limit;
+}
+
+function deleteOlderPublishHistory(dbOrTransaction, keepLimit = DEFAULT_PUBLISH_HISTORY_RETENTION) {
+  const limit = normalizePublishHistoryRetentionLimit(keepLimit);
+  return dbOrTransaction.prepare(`
+    DELETE FROM publish_history
+    WHERE id IN (
+      SELECT id
+      FROM publish_history
+      ORDER BY published_at DESC, id DESC
+      LIMIT -1 OFFSET ?
+    )
+  `).run(limit).changes;
+}
+
 function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
@@ -473,6 +496,9 @@ export class GraphRepository {
   constructor(db, services = {}) {
     this.db = db;
     this.services = services;
+    this.publishHistoryRetentionLimit = normalizePublishHistoryRetentionLimit(
+      services.publishHistoryRetentionLimit ?? DEFAULT_PUBLISH_HISTORY_RETENTION
+    );
   }
 
   setServices(services = {}) {
@@ -1076,20 +1102,29 @@ export class GraphRepository {
     const buildId = meta.buildId || world?.buildId || null;
     const schemaVersion = meta.schemaVersion || world?.schemaVersion || null;
     const contentHash = meta.contentHash || world?.contentHash || null;
-    this.db.prepare(`
-      INSERT INTO published_world_state (id, world_json, build_id, schema_version, content_hash, published_at)
-      VALUES (1, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        world_json = excluded.world_json,
-        build_id = excluded.build_id,
-        schema_version = excluded.schema_version,
-        content_hash = excluded.content_hash,
-        published_at = excluded.published_at
-    `).run(JSON.stringify(world), buildId, schemaVersion, contentHash, publishedAt);
-    this.db.prepare(`
-      INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(crypto.randomUUID(), JSON.stringify(world), buildId, schemaVersion, contentHash, actorUserId || null, publishedAt);
+    const worldJson = JSON.stringify(world);
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare(`
+        INSERT INTO published_world_state (id, world_json, build_id, schema_version, content_hash, published_at)
+        VALUES (1, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          world_json = excluded.world_json,
+          build_id = excluded.build_id,
+          schema_version = excluded.schema_version,
+          content_hash = excluded.content_hash,
+          published_at = excluded.published_at
+      `).run(worldJson, buildId, schemaVersion, contentHash, publishedAt);
+      this.db.prepare(`
+        INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(crypto.randomUUID(), worldJson, buildId, schemaVersion, contentHash, actorUserId || null, publishedAt);
+      deleteOlderPublishHistory(this.db, this.publishHistoryRetentionLimit);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   getDraftWorld() {
@@ -1123,6 +1158,6 @@ export class GraphRepository {
   }
 
   publishHistory(limit = 20) {
-    return this.db.prepare("SELECT id, build_id, schema_version, content_hash, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC LIMIT ?").all(limit);
+    return this.db.prepare("SELECT id, build_id, schema_version, content_hash, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC, id DESC LIMIT ?").all(limit);
   }
 }
