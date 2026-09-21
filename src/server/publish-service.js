@@ -36,6 +36,19 @@ function validationIssueMessage(issue) {
   return String(issue || "");
 }
 
+function validationIssueForNode(node, issue) {
+  const definition = NODE_TYPES[node?.type] || {};
+  const message = validationIssueMessage(issue);
+  const values = node?.values || {};
+  const nodeTitle = values.label || values.title || node?.title || definition.label || node?.id || "";
+  return Object.assign({}, (issue && typeof issue === "object") ? issue : {}, {
+    message,
+    nodeId: node?.id || null,
+    nodeType: node?.type || null,
+    nodeTitle
+  });
+}
+
 function withInteractableAssemblyReadModelVersion(world) {
   if (!world || typeof world !== "object") return world;
   return Object.assign({}, world, {
@@ -2491,7 +2504,9 @@ export function validateGraphForPublish(graph, services = {}) {
     }
     if (node.type === "editor_camera") continue;
     const result = validateNodeValues(node.type, node.values, NODE_TYPES);
-    errors.push.apply(errors, result.errors);
+    errors.push.apply(errors, (result.errors || []).map(function (issue) {
+      return validationIssueForNode(node, issue);
+    }));
     if (node.type === "group") {
       const inputNodes = graph.nodes.filter(function (candidate) {
         return candidate.parentId === node.id && candidate.type === "group_input";

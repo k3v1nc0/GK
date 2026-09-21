@@ -79,6 +79,40 @@ function positionDistance(position, target) {
   return Math.hypot(safeNumber(position.x, 0) - safeNumber(target.x, 0), safeNumber(position.z, 0) - safeNumber(target.z, 0));
 }
 
+function modelVisualFromZoneEntity(entity) {
+  if (!entity || !entity.modelAssetId) return {};
+  return {
+    modelAssetId: entity.modelAssetId || null,
+    modelScaleX: safeNumber(entity.scaleX, 1),
+    modelScaleY: safeNumber(entity.scaleY, 1),
+    modelScaleZ: safeNumber(entity.scaleZ, 1),
+    modelRotationX: safeNumber(entity.rotationX, 0),
+    modelRotationY: safeNumber(entity.rotationY, 0),
+    modelRotationZ: safeNumber(entity.rotationZ, 0)
+  };
+}
+
+function zoneLinkVisualModel(ctx, link, position) {
+  const entities = Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : [];
+  const candidates = entities.filter(function (entity) {
+    if (!entity || !entity.modelAssetId) return false;
+    const x = Number(entity.x);
+    const z = Number(entity.z);
+    return Number.isFinite(x) && Number.isFinite(z);
+  }).map(function (entity) {
+    const label = (safeString(entity.label, "") + " " + safeString(entity.entityId, "") + " " + safeString(entity.nodeId, "")).toLowerCase();
+    const portalMatch = /\b(portal|gate|travel|link)\b/.test(label);
+    const distance = Math.hypot(safeNumber(entity.x, 0) - safeNumber(position?.x, 0), safeNumber(entity.z, 0) - safeNumber(position?.z, 0));
+    return { entity, distance, portalMatch };
+  }).filter(function (entry) {
+    return entry.distance <= (entry.portalMatch ? 12 : 3.5);
+  }).sort(function (left, right) {
+    if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
+    return left.distance - right.distance;
+  });
+  return candidates.length ? modelVisualFromZoneEntity(candidates[0].entity) : {};
+}
+
 function xpForLevel(catalogs, curveRef, level) {
   const targetLevel = Math.max(1, safeInteger(level, 1));
   if (targetLevel <= 1) return 0;
@@ -966,12 +1000,13 @@ export class Node04QuestRuntimeService {
         return candidate?.targetId === targetId || candidate?.id === targetId;
       });
       if (target) {
+        const linked = target.linkedEntity && typeof target.linkedEntity === "object" ? target.linkedEntity : null;
         return Object.assign({}, target, {
           targetId: target.targetId || target.id,
           zoneRef: target.zoneRef || zone.zoneId,
-          x: safeNumber(target.x, 0),
-          y: safeNumber(target.y, 0),
-          z: safeNumber(target.z, 0),
+          x: safeNumber(linked?.x, safeNumber(target.x, 0)),
+          y: safeNumber(linked?.y, safeNumber(target.y, 0)),
+          z: safeNumber(linked?.z, safeNumber(target.z, 0)),
           radius: Math.max(0.1, safeNumber(target.radius, 3))
         });
       }
@@ -1191,7 +1226,7 @@ export class Node04QuestRuntimeService {
     const position = this.linkOriginPosition(ctx, link);
     const targetZone = ctx.project?.zones?.byId?.[link.toZoneRef] || null;
     const distance = positionDistance(ctx.position, position);
-    return {
+    return Object.assign({
       instanceId: link.linkId,
       entityKind: "quest",
       targetKind: "quest",
@@ -1208,7 +1243,7 @@ export class Node04QuestRuntimeService {
       x: position.x,
       y: position.y,
       z: position.z
-    };
+    }, zoneLinkVisualModel(ctx, link, position));
   }
 
   linkOriginPosition(ctx, link) {
@@ -1225,6 +1260,8 @@ export class Node04QuestRuntimeService {
     const distance = positionDistance(ctx.position, target);
     const range = Math.max(1, safeNumber(target.radius, 3));
     const entityRef = safeString(target.entityRef, "");
+    const hasLinkedEntity = Boolean(target.linkedEntity && typeof target.linkedEntity === "object");
+    const linkedEntity = hasLinkedEntity ? target.linkedEntity : null;
     return Object.assign({
       instanceId: "node04:" + target.targetId,
       entityKind: "quest",
@@ -1244,8 +1281,16 @@ export class Node04QuestRuntimeService {
       targetId: target.targetId,
       zoneRef: target.zoneRef || ctx.zoneId,
       entityRef: entityRef || null,
+      linkedEntity,
+      modelAssetId: linkedEntity?.modelAssetId || null,
+      modelScaleX: safeNumber(linkedEntity?.modelScaleX, 1),
+      modelScaleY: safeNumber(linkedEntity?.modelScaleY, 1),
+      modelScaleZ: safeNumber(linkedEntity?.modelScaleZ, 1),
+      modelRotationX: safeNumber(linkedEntity?.modelRotationX, 0),
+      modelRotationY: safeNumber(linkedEntity?.modelRotationY, 0),
+      modelRotationZ: safeNumber(linkedEntity?.modelRotationZ, 0),
       visibleInGame: target.visibleInGame !== false,
-      renderMarker: target.visibleInGame !== false && !entityRef
+      renderMarker: target.visibleInGame !== false
     }, extra || {});
   }
 

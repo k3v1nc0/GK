@@ -6076,8 +6076,21 @@ function gameMinimapNeedsNode03Runtime(config = resolveGameMinimapConfig()) {
   return gameMinimapHasEnabledMarkerSource(config, ["enemy", "boss", "wildlife", "resource", "item"]);
 }
 
+function gameWorldHasNode03RuntimeContent() {
+  return gameMinimapZonePackages().some(function (zone) {
+    if (Array.isArray(zone?.links) && zone.links.length) return true;
+    return (Array.isArray(zone?.spawnControllers) ? zone.spawnControllers : []).some(function (controller) {
+      return (Array.isArray(controller?.spawnSets) ? controller.spawnSets : []).some(function (spawnSet) {
+        return (Array.isArray(spawnSet?.spawns) ? spawnSet.spawns : []).some(function (spawn) {
+          return spawn && ["enemy_spawn_area", "resource_spawn", "pickup_spawn"].includes(spawn.nodeType);
+        });
+      });
+    });
+  });
+}
+
 function shouldLoadNode03State() {
-  return node03Modules().length > 0 || gameMinimapNeedsNode03Runtime();
+  return node03Modules().length > 0 || gameMinimapNeedsNode03Runtime() || gameWorldHasNode03RuntimeContent();
 }
 
 function node03ModuleSignature(modules) {
@@ -6643,11 +6656,11 @@ function syncNode03RuntimeTargets() {
 }
 
 function refreshNode03ClientRanges(now = performance.now()) {
-  if (!state.node03.snapshot || !node03Modules().length) return;
+  if (!state.node03.snapshot) return;
   if (now - num(state.node03.lastRangeRenderAt, 0) < 200) return;
   state.node03.lastRangeRenderAt = now;
   syncNode03RuntimeTargets();
-  updateNode03RangeDom();
+  if (node03Modules().length) updateNode03RangeDom();
   maybeRunPendingNode03TargetAction("range");
 }
 
@@ -7244,8 +7257,17 @@ function gameMinimapNeedsNode04Runtime(config = resolveGameMinimapConfig()) {
   return gameMinimapHasEnabledMarkerSource(config, ["npc", "quest", "teleport"]);
 }
 
+function gameWorldHasNode04RuntimeContent() {
+  return gameMinimapZonePackages().some(function (zone) {
+    if (Array.isArray(zone?.questTargets) && zone.questTargets.length) return true;
+    return (Array.isArray(zone?.areas) ? zone.areas : []).some(function (area) {
+      return Array.isArray(area?.questTargets) && area.questTargets.length;
+    });
+  });
+}
+
 function shouldLoadNode04State() {
-  return node04Modules().length > 0 || gameMinimapNeedsNode04Runtime();
+  return node04Modules().length > 0 || gameMinimapNeedsNode04Runtime() || gameWorldHasNode04RuntimeContent();
 }
 
 function node04ModuleSignature(modules) {
@@ -7377,9 +7399,9 @@ function node04RuntimeTargetsForScene() {
 function syncRuntimeTargets() {
   if (!state.runtime || typeof state.runtime.setRuntimeTargets !== "function") return;
   const targets = [];
-  if (state.node03.snapshot && node03Modules().length) targets.push.apply(targets, node03RuntimeTargetsForScene());
-  if (state.node04.snapshot && node04Modules().length) targets.push.apply(targets, node04RuntimeTargetsForScene());
-  if (state.node05.snapshot && node05Modules().length) targets.push.apply(targets, node05RuntimeTargetsForScene());
+  if (state.node03.snapshot) targets.push.apply(targets, node03RuntimeTargetsForScene());
+  if (state.node04.snapshot) targets.push.apply(targets, node04RuntimeTargetsForScene());
+  if (state.node05.snapshot) targets.push.apply(targets, node05RuntimeTargetsForScene());
   if (!targets.length) {
     if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
     return;
@@ -7390,7 +7412,7 @@ function syncRuntimeTargets() {
 }
 
 function refreshNode04ClientRanges(now = performance.now()) {
-  if (!state.node04.snapshot || !node04Modules().length) return;
+  if (!state.node04.snapshot) return;
   if (now - num(state.node04.lastRangeRenderAt, 0) < 250) return;
   state.node04.lastRangeRenderAt = now;
   syncRuntimeTargets();
@@ -8485,7 +8507,7 @@ async function loadNode05State(options = {}) {
 }
 
 function refreshNode05ClientRanges(now = performance.now()) {
-  if (!state.node05.snapshot || !node05Modules().length) return;
+  if (!state.node05.snapshot) return;
   if (now - num(state.node05.lastRangeRenderAt, 0) < 350) return;
   state.node05.lastRangeRenderAt = now;
   syncRuntimeTargets();
@@ -11041,6 +11063,7 @@ function applySnapshotToRuntime(snapshot, options = {}) {
       state.runtimeWorldKey = nextWorldKey;
     }
     syncLocalPlayerNameplate();
+    syncRuntimeTargets();
   }
   state.mmoReady.runtimeReady = Boolean(state.runtime);
   const incomingPosition = normalizeIncomingServerPosition(snapshot.position || snapshot.spawn || state.position, "snapshot");

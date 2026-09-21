@@ -22,6 +22,51 @@ function safeString(value, fallback = "") {
   return text || fallback;
 }
 
+function safeEntityReferenceId(value, fallback = "entity") {
+  const normalized = safeString(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9_:-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "") || fallback;
+  if (normalized.length <= 64) return normalized;
+  const hash = crypto.createHash("sha1").update(normalized).digest("hex").slice(0, 8);
+  return normalized.slice(0, 55).replace(/[:_-]+$/g, "") + "_" + hash;
+}
+
+function modelVisualFromEntity(entity) {
+  if (!entity || !entity.modelAssetId) return {};
+  return {
+    modelAssetId: entity.modelAssetId || null,
+    modelScaleX: safeNumber(entity.scaleX, 1),
+    modelScaleY: safeNumber(entity.scaleY, 1),
+    modelScaleZ: safeNumber(entity.scaleZ, 1),
+    modelRotationX: safeNumber(entity.rotationX, 0),
+    modelRotationY: safeNumber(entity.rotationY, 0),
+    modelRotationZ: safeNumber(entity.rotationZ, 0)
+  };
+}
+
+function zoneLinkVisualModel(ctx, link, position) {
+  const entities = Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : [];
+  const candidates = entities.filter(function (entity) {
+    if (!entity || !entity.modelAssetId) return false;
+    const x = Number(entity.x);
+    const z = Number(entity.z);
+    return Number.isFinite(x) && Number.isFinite(z);
+  }).map(function (entity) {
+    const label = (safeString(entity.label, "") + " " + safeString(entity.entityId, "") + " " + safeString(entity.nodeId, "")).toLowerCase();
+    const portalMatch = /\b(portal|gate|travel|link)\b/.test(label);
+    const distance = Math.hypot(safeNumber(entity.x, 0) - safeNumber(position?.x, 0), safeNumber(entity.z, 0) - safeNumber(position?.z, 0));
+    return { entity, distance, portalMatch };
+  }).filter(function (entry) {
+    return entry.distance <= (entry.portalMatch ? 12 : 3.5);
+  }).sort(function (left, right) {
+    if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
+    return left.distance - right.distance;
+  });
+  return candidates.length ? modelVisualFromEntity(candidates[0].entity) : {};
+}
+
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -648,6 +693,8 @@ export class Node03RuntimeService {
     const stats = applyStatMultipliers(statBlockValues(ctx.catalogs, enemy.statBlockRef || "stat_block.enemy.sand_raider"), variant);
     const healthMax = healthFromStats(stats);
     const displayName = safeString(variant.displayNameOverride || enemy.displayName, "Enemy");
+    const modelAssetId = variant.modelAssetOverride || enemy.modelAssetId || enemy.worldModelAssetId || null;
+    const modelScale = safeNumber(enemy.scale, 1) * safeNumber(variant.scaleMultiplier, 1);
     const result = [];
     for (let index = 0; index < count; index += 1) {
       const offset = spawnOffset(index, count, safeNumber(spawn.radius, 0));
@@ -666,6 +713,9 @@ export class Node03RuntimeService {
         variantRef: spawn.variantRef || null,
         difficultyRef: spawn.difficultyRef || null,
         displayName,
+        visualEntityId: safeEntityReferenceId(instanceId),
+        modelAssetId,
+        modelScale,
         level: Math.max(1, safeInteger(spawn.fixedLevel, 1)),
         x: round(safeNumber(spawn.x, 0) + offset.x),
         y: round(safeNumber(spawn.y, 0)),
@@ -704,6 +754,9 @@ export class Node03RuntimeService {
         spawnControllerId: controller.spawnControllerId || controller.nodeId || null,
         resourceRef: spawn.resourceRef || resource.id || null,
         displayName: safeString(resource.displayName, "Resource"),
+        visualEntityId: safeEntityReferenceId(instanceId),
+        modelAssetId: resource.worldModelAssetId || null,
+        modelScale: safeNumber(resource.worldModelScale || spawn.worldModelScale, 0.45),
         x: round(safeNumber(spawn.x, 0) + offset.x),
         y: round(safeNumber(spawn.y, 0)),
         z: round(safeNumber(spawn.z, 0) + offset.z),
@@ -724,6 +777,7 @@ export class Node03RuntimeService {
     const kind = safeString(spawn.pickupKind, "item");
     const instanceId = NODE03_INSTANCE_PREFIX + ctx.zoneId + ":" + safeString(spawn.spawnEntryId || spawn.nodeId, "pickup_spawn") + ":pickup";
     const definitionId = kind === "currency" ? safeString(spawn.currencyRef, "") : safeString(spawn.itemRef, "");
+    const item = kind === "item" ? (catalogSection(ctx.catalogs, "items")[definitionId] || {}) : {};
     return {
       version: 1,
       instanceId,
@@ -739,6 +793,9 @@ export class Node03RuntimeService {
       currencyRef: kind === "currency" ? definitionId : null,
       definitionId,
       displayName: kind === "currency" ? displayForCurrency(ctx.catalogs, definitionId) : displayForItem(ctx.catalogs, definitionId),
+      visualEntityId: safeEntityReferenceId(instanceId),
+      modelAssetId: item.worldModelAssetId || null,
+      modelScale: safeNumber(item.worldModelScale || spawn.worldModelScale, 0.45),
       amount: Math.max(1, safeInteger(spawn.amount || spawn.minAmount, 1)),
       minAmount: Math.max(1, safeInteger(spawn.minAmount || spawn.amount, 1)),
       maxAmount: Math.max(1, safeInteger(spawn.maxAmount || spawn.amount, 1)),
@@ -1613,7 +1670,7 @@ export class Node03RuntimeService {
       const distance = positionDistance(ctx.position, position);
       const range = Math.max(3, safeNumber(link.preloadDistance, 30));
       const targetName = targetZone?.zone?.displayName || link.toZoneRef;
-      return {
+      return Object.assign({
         instanceId: link.linkId,
         entityKind: "zone_link",
         targetKind: "zone_link",
@@ -1633,7 +1690,7 @@ export class Node03RuntimeService {
         z: position.z,
         toZoneRef: link.toZoneRef,
         toSpawnRef: link.toSpawnRef
-      };
+      }, zoneLinkVisualModel(ctx, link, position));
     });
   }
 
@@ -1664,6 +1721,9 @@ export class Node03RuntimeService {
           inRange: distance === null ? true : distance <= range + safeNumber(entity.radius, 0),
           healthCurrent: entity.healthCurrent ?? null,
           healthMax: entity.healthMax ?? null,
+          visualEntityId: entity.visualEntityId || null,
+          modelAssetId: entity.modelAssetId || null,
+          modelScale: safeNumber(entity.modelScale, 1),
           lootTableRef: entity.lootTableRef || null,
           x: entity.x,
           y: entity.y,
