@@ -7,6 +7,7 @@ import {
   normalizeGroupInterface,
   resolveNodePort,
   resolveNodePorts,
+  slugifyGroupPortName,
   isContainer
 } from "../shared/node-types.js";
 import { cleanValuesForType } from "./field-validation.js";
@@ -14,6 +15,29 @@ import { cleanValuesForType } from "./field-validation.js";
 const now = function () {
   return new Date().toISOString();
 };
+
+export const DEFAULT_PUBLISH_HISTORY_RETENTION = 50;
+
+function normalizePublishHistoryRetentionLimit(value = DEFAULT_PUBLISH_HISTORY_RETENTION) {
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error("Publish history retention moet een positief geheel getal zijn.");
+  }
+  return limit;
+}
+
+function deleteOlderPublishHistory(dbOrTransaction, keepLimit = DEFAULT_PUBLISH_HISTORY_RETENTION) {
+  const limit = normalizePublishHistoryRetentionLimit(keepLimit);
+  return dbOrTransaction.prepare(`
+    DELETE FROM publish_history
+    WHERE id IN (
+      SELECT id
+      FROM publish_history
+      ORDER BY published_at DESC, id DESC
+      LIMIT -1 OFFSET ?
+    )
+  `).run(limit).changes;
+}
 
 function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
@@ -201,6 +225,72 @@ function applyGroupInterfaceBackfill(nodes, edges, nodeMap) {
     }
     if (!passChanged) break;
     changed = true;
+  }
+  return changed;
+}
+
+const GROUP_PACKAGE_DATA_TYPES = new Set(["catalogPackage", "zonePackage", "playerRules", "uiPackage"]);
+
+function groupOutputPortForDataType(group, dataType, preferredName) {
+  if (!group || group.type !== "group" || !GROUP_PACKAGE_DATA_TYPES.has(String(dataType || ""))) return null;
+  const groupInterface = normalizeGroupInterface(group.values?.groupInterface);
+  const outputs = Array.isArray(groupInterface.outputs) ? groupInterface.outputs : [];
+  const candidates = outputs.filter(function (port) {
+    return port && String(port.dataType || "") === dataType && port.name;
+  });
+  if (!candidates.length) return null;
+  const preferred = String(preferredName || "").trim();
+  const preferredSlug = slugifyGroupPortName(preferred, preferred);
+  if (preferred || preferredSlug) {
+    const matching = candidates.find(function (port) {
+      return port.name === preferred
+        || port.id === preferred
+        || port.name === preferredSlug
+        || port.id === preferredSlug
+        || slugifyGroupPortName(port.name || port.id || "", port.id || "") === preferredSlug
+        || slugifyGroupPortName(port.label || "", port.name || port.id || "") === preferredSlug;
+    });
+    if (matching) return matching;
+  }
+  return candidates[0];
+}
+
+function normalizeGroupInterfacesForRestore(nodes) {
+  for (const node of nodes || []) {
+    if (node?.type !== "group") continue;
+    node.values = Object.assign({}, node.values || {}, {
+      groupInterface: normalizeGroupInterface(node.values?.groupInterface)
+    });
+  }
+}
+
+function normalizePackageGroupBoundaryEdges(edges, nodeMap) {
+  let changed = false;
+  for (const edge of edges || []) {
+    const fromNode = nodeMap.get(edge.fromNodeId);
+    const toNode = nodeMap.get(edge.toNodeId);
+    if (!fromNode || !toNode) continue;
+    if (toNode.type === "group_output") {
+      const group = nodeMap.get(toNode.parentId);
+      const sourcePort = resolveNodePort(fromNode, edge.fromPort, "output", nodeMap);
+      if (group?.type === "group" && (fromNode.parentId || null) === group.id && sourcePort) {
+        const groupPort = groupOutputPortForDataType(group, sourcePort.dataType, edge.toPort);
+        if (groupPort?.name && edge.toPort !== groupPort.name) {
+          edge.toPort = groupPort.name;
+          changed = true;
+        }
+      }
+    }
+    if (fromNode.type === "group") {
+      const targetPort = resolveNodePort(toNode, edge.toPort, "input", nodeMap);
+      if (targetPort) {
+        const groupPort = groupOutputPortForDataType(fromNode, targetPort.dataType, edge.fromPort);
+        if (groupPort?.name && edge.fromPort !== groupPort.name) {
+          edge.fromPort = groupPort.name;
+          changed = true;
+        }
+      }
+    }
   }
   return changed;
 }
@@ -406,6 +496,9 @@ export class GraphRepository {
   constructor(db, services = {}) {
     this.db = db;
     this.services = services;
+    this.publishHistoryRetentionLimit = normalizePublishHistoryRetentionLimit(
+      services.publishHistoryRetentionLimit ?? DEFAULT_PUBLISH_HISTORY_RETENTION
+    );
   }
 
   setServices(services = {}) {
@@ -931,6 +1024,8 @@ export class GraphRepository {
       };
     });
     applyGroupInterfaceBackfill(nodes, edges, nodeMap);
+    normalizeGroupInterfacesForRestore(nodes);
+    normalizePackageGroupBoundaryEdges(edges, nodeMap);
     const refreshedNodeMap = new Map(nodes.map(function (node) { return [node.id, node]; }));
     const existingEdgeKeyById = new Map(this.db.prepare("SELECT id, from_node_id, from_port, to_node_id, to_port FROM editor_node_edges").all().map(function (row) {
       return [row.id, [row.from_node_id, row.from_port, row.to_node_id, row.to_port].join("\u001f")];
@@ -1007,20 +1102,29 @@ export class GraphRepository {
     const buildId = meta.buildId || world?.buildId || null;
     const schemaVersion = meta.schemaVersion || world?.schemaVersion || null;
     const contentHash = meta.contentHash || world?.contentHash || null;
-    this.db.prepare(`
-      INSERT INTO published_world_state (id, world_json, build_id, schema_version, content_hash, published_at)
-      VALUES (1, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        world_json = excluded.world_json,
-        build_id = excluded.build_id,
-        schema_version = excluded.schema_version,
-        content_hash = excluded.content_hash,
-        published_at = excluded.published_at
-    `).run(JSON.stringify(world), buildId, schemaVersion, contentHash, publishedAt);
-    this.db.prepare(`
-      INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(crypto.randomUUID(), JSON.stringify(world), buildId, schemaVersion, contentHash, actorUserId || null, publishedAt);
+    const worldJson = JSON.stringify(world);
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare(`
+        INSERT INTO published_world_state (id, world_json, build_id, schema_version, content_hash, published_at)
+        VALUES (1, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          world_json = excluded.world_json,
+          build_id = excluded.build_id,
+          schema_version = excluded.schema_version,
+          content_hash = excluded.content_hash,
+          published_at = excluded.published_at
+      `).run(worldJson, buildId, schemaVersion, contentHash, publishedAt);
+      this.db.prepare(`
+        INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(crypto.randomUUID(), worldJson, buildId, schemaVersion, contentHash, actorUserId || null, publishedAt);
+      deleteOlderPublishHistory(this.db, this.publishHistoryRetentionLimit);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   getDraftWorld() {
@@ -1054,6 +1158,6 @@ export class GraphRepository {
   }
 
   publishHistory(limit = 20) {
-    return this.db.prepare("SELECT id, build_id, schema_version, content_hash, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC LIMIT ?").all(limit);
+    return this.db.prepare("SELECT id, build_id, schema_version, content_hash, actor_user_id, published_at FROM publish_history ORDER BY published_at DESC, id DESC LIMIT ?").all(limit);
   }
 }

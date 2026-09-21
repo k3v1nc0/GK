@@ -5380,6 +5380,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let onTransformEnd = options.onTransformEnd || function () {};
   let onTransformChange = options.onTransformChange || function () {};
   let onModelLoadTiming = options.onModelLoadTiming || function () {};
+  let onRenderFrame = typeof options.onRenderFrame === "function" ? options.onRenderFrame : function () {};
   const loadErrors = [];
   let editorViewInitialized = false;
   let disposed = false;
@@ -9187,6 +9188,9 @@ function resolveChunkDebugCenter(policy) {
     sectionStart = performance.now();
     renderer.render(scene, camera);
     frameTiming.renderMs = round(performance.now() - sectionStart);
+    try {
+      onRenderFrame({ timing: frameTiming });
+    } catch {}
     sectionStart = performance.now();
     if (mode === "game") updatePerformanceHud(time);
     frameTiming.hudMs = round(performance.now() - sectionStart);
@@ -9211,6 +9215,7 @@ function resolveChunkDebugCenter(policy) {
     clearScatterEditorOverlay();
     clearChunkDebugOverlay();
     clearTerrainRuntimeVisuals();
+    clearRuntimeTargets();
     removeDuplicateRuntimeGroups();
     clearWalkabilityIndex();
     resetRuntimeStats();
@@ -15441,9 +15446,14 @@ function resolveChunkDebugCenter(policy) {
     const distance = Number.isFinite(Number(target?.distance)) ? String(Math.round(Number(target.distance))) + "m" : "";
     const rangeText = target?.inRange === false ? "out of range" : "in range";
     const status = String(target?.status || kind || "").trim();
+    const tags = (Array.isArray(target?.targetTags) ? target.targetTags : (Array.isArray(target?.tags) ? target.tags : []))
+      .map(function (tag) { return String(tag || "").trim(); })
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(" #");
     return {
       name,
-      sub: [status, distance, rangeText].filter(Boolean).join(" · ")
+      sub: [(tags ? "#" + tags : ""), status, distance, rangeText].filter(Boolean).join(" · ")
     };
   }
 
@@ -15497,9 +15507,16 @@ function resolveChunkDebugCenter(policy) {
     });
     const sprite = new THREE.Sprite(material);
     sprite.name = "node03-runtime-target-nameplate";
-    sprite.position.set(0, 2.65, 0);
+    const modelScaleY = Number.isFinite(Number(target?.modelScaleY))
+      ? Number(target.modelScaleY)
+      : (Number.isFinite(Number(target?.modelScale)) ? Number(target.modelScale) : 1);
+    const nameplateY = Number.isFinite(Number(target?.nameplateY))
+      ? Number(target.nameplateY)
+      : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
+    sprite.position.set(0, nameplateY, 0);
     sprite.scale.set(4.2, 1.22, 1);
     sprite.renderOrder = 4100;
+    sprite.frustumCulled = false;
     sprite.userData.runtimeAlive = true;
     sprite.userData.runtimeTarget = true;
     sprite.userData.runtimeTargetId = target?.instanceId || null;
@@ -15507,18 +15524,526 @@ function resolveChunkDebugCenter(policy) {
     return sprite;
   }
 
+  function runtimeTargetHitRadius(target) {
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    if (Number.isFinite(Number(target?.clickRadius))) return clamp(Number(target.clickRadius), 0.4, 8);
+    if (Number.isFinite(Number(target?.hitRadius))) return clamp(Number(target.hitRadius), 0.4, 8);
+    if (kind === "zone_link") return 4.5;
+    if (kind === "enemy") return 1.35;
+    if (kind === "resource") return 1.55;
+    if (kind === "pickup") return 1.35;
+    if (kind === "quest") return clamp(Number(target?.radius) || 1.8, 1.2, 4);
+    return 1.5;
+  }
+
+  function runtimeTargetEditorSelectableId(target) {
+    return mode === "editor" ? String(target?.editorSelectableId || "").trim() : "";
+  }
+
+  function createRuntimeTargetHitProxy(target) {
+    const radius = runtimeTargetHitRadius(target);
+    const height = clamp(radius * 1.8, 1.8, 5.2);
+    const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1);
+    const material = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false
+    });
+    material.colorWrite = false;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = "node03-runtime-target-hit-proxy";
+    mesh.position.y = height / 2;
+    mesh.renderOrder = -1;
+    mesh.userData.runtimeAlive = true;
+    mesh.userData.runtimeTarget = true;
+    mesh.userData.runtimeTargetId = target?.instanceId || null;
+    mesh.userData.runtimeTargetPayload = Object.assign({}, target);
+    const editorSelectableId = runtimeTargetEditorSelectableId(target);
+    if (editorSelectableId) mesh.userData.entityId = editorSelectableId;
+    return mesh;
+  }
+
   function markRuntimeTargetTree(root, target) {
     const payload = Object.assign({}, target);
+    const editorSelectableId = runtimeTargetEditorSelectableId(target);
     root.traverse(function (child) {
       child.userData = child.userData || {};
       child.userData.runtimeAlive = true;
       child.userData.runtimeTarget = true;
       child.userData.runtimeTargetId = target?.instanceId || null;
       child.userData.runtimeTargetPayload = payload;
+      if (editorSelectableId) child.userData.entityId = editorSelectableId;
+    });
+  }
+
+  function fallbackRuntimeTargetModel(target) {
+    const assets = Array.isArray(world?.assets) ? world.assets.filter(function (asset) {
+      return asset && asset.assetType === "model" && asset.sourcePath;
+    }) : [];
+    if (!assets.length) return null;
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    const findByName = function (patterns) {
+      return assets.find(function (asset) {
+        const name = String(asset.name || asset.id || "").toLowerCase();
+        return patterns.some(function (pattern) { return name.includes(pattern); });
+      }) || null;
+    };
+    const targetText = [
+      target?.displayName,
+      target?.entityKind,
+      target?.targetKind,
+      target?.resourceRef,
+      target?.itemRef,
+      target?.currencyRef,
+      target?.definitionId,
+      target?.spawnEntryId
+    ].map(function (value) {
+      return String(value || "").toLowerCase();
+    }).join(" ");
+    const targetHas = function (patterns) {
+      return patterns.some(function (pattern) { return targetText.includes(pattern); });
+    };
+    if (targetHas(["wood", "tree", "log"])) return findByName(["tree"]) || assets[0] || null;
+    if (targetHas(["iron", "ore", "metal", "ingot"])) return findByName(["forge", "black", "blacksmit"]) || assets[0] || null;
+    if (targetHas(["sun", "crystal", "crystals"])) return findByName(["alchemy", "forge"]) || assets[0] || null;
+    if (targetHas(["gold", "coin", "currency", "cache"])) return findByName(["alchemy", "forge", "taverne"]) || assets[0] || null;
+    const picked = kind === "enemy"
+      ? findByName(["wizard", "black", "blacksmit"])
+      : (kind === "npc" || kind === "service")
+        ? findByName(["wizard", "black", "blacksmit", "forge", "taverne"])
+        : kind === "resource"
+          ? findByName(["tree", "forge", "alchemy"])
+          : kind === "zone_link"
+            ? findByName(["alchemy", "taverne", "bridge", "forge"])
+            : kind === "pickup"
+              ? findByName(["forge", "alchemy", "taverne", "tree"])
+              : kind === "quest"
+                ? findByName(["wizard", "black", "blacksmit", "forge", "alchemy"])
+                : null;
+    return picked || assets[0] || null;
+  }
+
+  function runtimeCatalogSection(worldData, key) {
+    const catalogs = worldData?.gameProject?.catalogs || worldData?.catalogs || {};
+    const section = catalogs && typeof catalogs[key] === "object" && catalogs[key] ? catalogs[key] : {};
+    return section && typeof section === "object" ? section : {};
+  }
+
+  function runtimeCatalogEntry(worldData, sectionKey, id) {
+    const key = String(id || "").trim();
+    if (!key) return {};
+    return runtimeCatalogSection(worldData, sectionKey)[key] || {};
+  }
+
+  function runtimeCatalogDisplay(entry, id, fallback) {
+    return String(entry?.displayName || entry?.label || entry?.name || id || fallback || "").trim() || fallback;
+  }
+
+  function runtimeTargetTags() {
+    const tags = [];
+    for (const source of Array.from(arguments)) {
+      for (const tag of Array.isArray(source) ? source : [source]) {
+        const value = String(tag || "").trim();
+        if (value && !tags.includes(value)) tags.push(value);
+      }
+    }
+    return tags;
+  }
+
+  function runtimeSpawnOffset(index, count, radius) {
+    const total = Math.max(1, Math.floor(num(count, 1)));
+    const angle = (index * 137.50776405003785) * Math.PI / 180;
+    const distance = num(radius, 0) * (0.2 + ((index % total) + 1) / (total + 1) * 0.68);
+    return {
+      x: Math.cos(angle) * distance,
+      z: Math.sin(angle) * distance
+    };
+  }
+
+  function editorRuntimeZonePackage(worldData) {
+    if (!worldData) return null;
+    const activeZoneId = String(
+      worldData.activeZoneId
+      || worldData.zonePackage?.zoneId
+      || worldData.gameProject?.runtime?.activeZoneId
+      || ""
+    ).trim();
+    if (activeZoneId && worldData.gameProject?.zones?.byId?.[activeZoneId]) return worldData.gameProject.zones.byId[activeZoneId];
+    return worldData.zonePackage || null;
+  }
+
+  function editorRuntimeZonePackages(worldData) {
+    if (!worldData) return [];
+    const packages = [];
+    const addPackage = function (zonePackage) {
+      if (!zonePackage) return;
+      packages.push(zonePackage);
+    };
+    addPackage(worldData.zonePackage || null);
+    const zones = worldData.gameProject?.zones || worldData.zones || {};
+    if (Array.isArray(zones.packages)) zones.packages.forEach(addPackage);
+    if (zones.byId && typeof zones.byId === "object") Object.values(zones.byId).forEach(addPackage);
+    const active = editorRuntimeZonePackage(worldData);
+    addPackage(active);
+    const seen = new Set();
+    return packages.filter(function (zonePackage) {
+      const zoneId = String(zonePackage?.zoneId || zonePackage?.id || "").trim();
+      const key = zoneId || JSON.stringify(zonePackage?.zone || {});
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function runtimeVisualFromZoneEntity(entity) {
+    if (!entity || !entity.modelAssetId) return {};
+    return {
+      modelAssetId: entity.modelAssetId || null,
+      modelScaleX: num(entity.scaleX, 1),
+      modelScaleY: num(entity.scaleY, 1),
+      modelScaleZ: num(entity.scaleZ, 1),
+      modelRotationX: num(entity.rotationX, 0),
+      modelRotationY: num(entity.rotationY, 0),
+      modelRotationZ: num(entity.rotationZ, 0)
+    };
+  }
+
+  function runtimeVisibleZoneEntities(zonePackage) {
+    return (Array.isArray(zonePackage?.entities) ? zonePackage.entities : []).filter(function (entity) {
+      return entity && entity.nodeType === "model_entity";
+    });
+  }
+
+  function runtimeZoneEntityForComponent(zonePackage, component) {
+    const entityId = String(component?.linkedEntityId || component?.entityRef || "").trim();
+    if (!entityId) return null;
+    return runtimeVisibleZoneEntities(zonePackage).find(function (entity) {
+      return entity
+        && (entity.entityId === entityId || entity.nodeId === entityId || entity.id === entityId);
+    }) || null;
+  }
+
+  function runtimeConnectedZoneComponents(zonePackage) {
+    const components = Array.isArray(zonePackage?.entityComponents) ? zonePackage.entityComponents.slice() : [];
+    for (const entity of Array.isArray(zonePackage?.entities) ? zonePackage.entities : []) {
+      if (Array.isArray(entity?.components)) components.push.apply(components, entity.components);
+    }
+    return components.filter(Boolean);
+  }
+
+  function runtimeLinkOrigin(worldData, zonePackage, link) {
+    const targetRef = String(link?.fromTargetRef || link?.fromSpawnRef || "").trim();
+    const spawns = Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : [];
+    const spawn = spawns.find(function (candidate) {
+      return candidate && targetRef && candidate.spawnId === targetRef;
+    }) || spawns.find(function (candidate) {
+      return candidate && candidate.role === "zone_default";
+    }) || null;
+    if (spawn) return { x: num(spawn.x, 0), y: num(spawn.y, 0), z: num(spawn.z, 0) };
+    return {
+      x: num(worldData?.spawn?.x, 0),
+      y: num(worldData?.spawn?.y, num(worldData?.ground?.y, 0)),
+      z: num(worldData?.spawn?.z, 0)
+    };
+  }
+
+  function runtimeZoneLinkVisual(worldData, zonePackage, position) {
+    const entities = Array.isArray(zonePackage?.entities) ? zonePackage.entities : [];
+    const candidates = entities.filter(function (entity) {
+      if (!entity || !entity.modelAssetId) return false;
+      const x = Number(entity.x);
+      const z = Number(entity.z);
+      return Number.isFinite(x) && Number.isFinite(z);
+    }).map(function (entity) {
+      const label = (String(entity.label || "") + " " + String(entity.entityId || "") + " " + String(entity.nodeId || "")).toLowerCase();
+      const portalMatch = /\b(portal|gate|travel|link|bridge|brug)\b/.test(label);
+      const distance = Math.hypot(num(entity.x, 0) - num(position?.x, 0), num(entity.z, 0) - num(position?.z, 0));
+      return { entity, distance, portalMatch };
+    }).filter(function (entry) {
+      return entry.distance <= (entry.portalMatch ? 12 : 3.5);
+    }).sort(function (left, right) {
+      if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
+      return left.distance - right.distance;
+    });
+    return candidates.length ? runtimeVisualFromZoneEntity(candidates[0].entity) : {};
+  }
+
+  function editorRuntimeQuestTargets(worldData, zonePackage) {
+    const targets = Array.isArray(zonePackage?.questTargets) ? zonePackage.questTargets.slice() : [];
+    for (const area of Array.isArray(zonePackage?.areas) ? zonePackage.areas : []) {
+      if (Array.isArray(area?.questTargets)) targets.push.apply(targets, area.questTargets);
+    }
+    return targets.map(function (target) {
+      const linked = target?.linkedEntity || null;
+      const targetKind = String(target?.targetKind || "quest").trim() || "quest";
+      const x = Number.isFinite(Number(linked?.x)) ? Number(linked.x) : num(target?.x, 0);
+      const y = Number.isFinite(Number(linked?.y)) ? Number(linked.y) : num(target?.y, num(worldData?.ground?.y, 0));
+      const z = Number.isFinite(Number(linked?.z)) ? Number(linked.z) : num(target?.z, 0);
+      const modelVisual = linked?.modelAssetId ? runtimeVisualFromZoneEntity(linked) : {};
+      return Object.assign({
+        instanceId: "editor:quest:" + String(target?.targetId || target?.nodeId || Math.random()),
+        entityKind: targetKind === "resource" ? "resource" : (targetKind === "zone_link" ? "zone_link" : "quest"),
+        targetKind: targetKind,
+        action: target?.action || "editor:select",
+        prompt: target?.prompt || "Select",
+        displayName: target?.label || linked?.label || target?.targetId || "Quest Target",
+        status: targetKind,
+        available: true,
+        inRange: true,
+        range: num(target?.radius, 2.5),
+        radius: num(target?.radius, 1.8),
+        targetTags: runtimeTargetTags(target?.targetTags, targetKind),
+        editorSelectableId: target?.nodeId || linked?.nodeId || "",
+        x,
+        y,
+        z
+      }, modelVisual);
+    });
+  }
+
+  function editorRuntimeZoneLinkTargets(worldData, zonePackage) {
+    const project = worldData?.gameProject || {};
+    return (Array.isArray(zonePackage?.links) ? zonePackage.links : []).map(function (link) {
+      if (!link || !link.linkId) return null;
+      const position = runtimeLinkOrigin(worldData, zonePackage, link);
+      const targetZone = project.zones?.byId?.[link.toZoneRef] || null;
+      const targetName = targetZone?.zone?.displayName || link.toZoneRef || link.prompt || "Portal";
+      return Object.assign({
+        instanceId: "editor:zone_link:" + String(link.linkId),
+        entityKind: "zone_link",
+        targetKind: "zone_link",
+        action: "editor:select",
+        prompt: link.prompt || "Travel",
+        displayName: targetName,
+        status: link.mode || "portal",
+        available: true,
+        inRange: true,
+        range: Math.max(3, num(link.preloadDistance, 30)),
+        radius: 2,
+        targetTags: runtimeTargetTags(["portal", "zone_link"], link.mode),
+        editorSelectableId: link.nodeId || "",
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        toZoneRef: link.toZoneRef,
+        toSpawnRef: link.toSpawnRef
+      }, runtimeZoneLinkVisual(worldData, zonePackage, position));
+    }).filter(Boolean);
+  }
+
+  function editorRuntimeServiceTargets(worldData, zonePackage) {
+    const serviceTypes = {
+      crafting_station_component: {
+        targetKind: "crafting",
+        idField: "stationId",
+        fallbackName: "Crafting Station",
+        prompt: "Craft"
+      },
+      vendor_component: {
+        targetKind: "vendor",
+        idField: "vendorId",
+        fallbackName: "Vendor",
+        prompt: "Trade"
+      },
+      marketplace_access_component: {
+        targetKind: "market",
+        idField: "marketAccessId",
+        fallbackName: "Market Board",
+        prompt: "Market"
+      }
+    };
+    return runtimeConnectedZoneComponents(zonePackage).map(function (component) {
+      const config = serviceTypes[component?.nodeType];
+      if (!config) return null;
+      const entity = runtimeZoneEntityForComponent(zonePackage, component);
+      const x = Number.isFinite(Number(entity?.x)) ? Number(entity.x) : num(component?.x, 0);
+      const y = Number.isFinite(Number(entity?.y)) ? Number(entity.y) : num(component?.y, num(worldData?.ground?.y, 0));
+      const z = Number.isFinite(Number(entity?.z)) ? Number(entity.z) : num(component?.z, 0);
+      const serviceId = component?.[config.idField] || component?.componentId || component?.nodeId || config.targetKind;
+      return Object.assign({
+        instanceId: "editor:service:" + String(serviceId),
+        entityKind: "service",
+        targetKind: config.targetKind,
+        action: "editor:select",
+        prompt: component?.interactionPrompt || config.prompt,
+        displayName: entity?.label || component?.displayName || component?.label || serviceId || config.fallbackName,
+        status: "service",
+        available: true,
+        inRange: true,
+        range: Math.max(1, num(component?.range || component?.distance, 5)),
+        radius: num(component?.radius, 1.5),
+        renderBody: false,
+        targetTags: runtimeTargetTags(["service", config.targetKind], component?.tags),
+        editorSelectableId: component?.nodeId || entity?.nodeId || "",
+        serviceId,
+        linkedEntityId: entity?.entityId || entity?.nodeId || null,
+        x,
+        y,
+        z
+      }, runtimeVisualFromZoneEntity(entity));
+    }).filter(Boolean);
+  }
+
+  function editorRuntimeSpawnTargets(worldData, zonePackage) {
+    const targets = [];
+    const controllers = Array.isArray(zonePackage?.spawnControllers) ? zonePackage.spawnControllers : [];
+    for (const controller of controllers) {
+      for (const spawnSet of Array.isArray(controller?.spawnSets) ? controller.spawnSets : []) {
+        for (const spawn of Array.isArray(spawnSet?.spawns) ? spawnSet.spawns : []) {
+          if (!spawn || !spawn.nodeType) continue;
+          if (spawn.nodeType === "enemy_spawn_area") {
+            const count = clamp(Math.floor(num(spawn.countMax || spawn.countMin || spawn.maxAlive, 1)), 1, 12);
+            const enemy = runtimeCatalogEntry(worldData, "enemies", spawn.enemyRef);
+            const variant = runtimeCatalogEntry(worldData, "variants", spawn.variantRef);
+            const displayName = runtimeCatalogDisplay(variant, spawn.variantRef, "") || runtimeCatalogDisplay(enemy, spawn.enemyRef, "Enemy");
+            const modelAssetId = variant.modelAssetOverride || enemy.modelAssetId || enemy.worldModelAssetId || null;
+            const modelScale = Math.max(0.001, num(enemy.scale, 1) * num(variant.scaleMultiplier, 1));
+            for (let index = 0; index < count; index += 1) {
+              const offset = runtimeSpawnOffset(index, count, num(spawn.radius, 0));
+              targets.push({
+                instanceId: "editor:enemy:" + String(spawn.spawnEntryId || spawn.nodeId || "enemy") + ":" + (index + 1),
+                entityKind: "enemy",
+                targetKind: "enemy",
+                action: "editor:select",
+                prompt: "Select",
+                displayName,
+                status: "spawn",
+                available: true,
+                inRange: true,
+                range: 2.8,
+                radius: 0.8,
+                targetTags: runtimeTargetTags(["enemy", "spawn"], enemy.tags, variant.tags),
+                editorSelectableId: spawn.nodeId || "",
+                enemyRef: spawn.enemyRef || null,
+                variantRef: spawn.variantRef || null,
+                modelAssetId,
+                modelScale,
+                x: num(spawn.x, 0) + offset.x,
+                y: num(spawn.y, num(worldData?.ground?.y, 0)),
+                z: num(spawn.z, 0) + offset.z
+              });
+            }
+          } else if (spawn.nodeType === "resource_spawn") {
+            const count = clamp(Math.floor(num(spawn.count, 1)), 1, 24);
+            const resource = runtimeCatalogEntry(worldData, "resources", spawn.resourceRef);
+            const displayName = runtimeCatalogDisplay(resource, spawn.resourceRef, "Resource");
+            for (let index = 0; index < count; index += 1) {
+              const offset = runtimeSpawnOffset(index, count, num(spawn.radius, 0));
+              targets.push({
+                instanceId: "editor:resource:" + String(spawn.spawnEntryId || spawn.nodeId || "resource") + ":" + (index + 1),
+                entityKind: "resource",
+                targetKind: "resource",
+                action: "editor:select",
+                prompt: "Select",
+                displayName,
+                status: "spawn",
+                available: true,
+                inRange: true,
+                range: num(resource.range, 3) || 3,
+                radius: 1.5,
+                targetTags: runtimeTargetTags(["resource", "spawn"], resource.tags),
+                editorSelectableId: spawn.nodeId || "",
+                resourceRef: spawn.resourceRef || null,
+                modelAssetId: resource.worldModelAssetId || spawn.worldModelAssetId || null,
+                modelScale: num(resource.worldModelScale || spawn.worldModelScale, 0.45),
+                x: num(spawn.x, 0) + offset.x,
+                y: num(spawn.y, num(worldData?.ground?.y, 0)),
+                z: num(spawn.z, 0) + offset.z
+              });
+            }
+          } else if (spawn.nodeType === "pickup_spawn") {
+            const pickupKind = String(spawn.pickupKind || "item").trim() || "item";
+            const definitionId = pickupKind === "currency" ? spawn.currencyRef : spawn.itemRef;
+            const item = pickupKind === "item" ? runtimeCatalogEntry(worldData, "items", definitionId) : {};
+            const currency = pickupKind === "currency" ? runtimeCatalogEntry(worldData, "currencies", definitionId) : {};
+            targets.push({
+              instanceId: "editor:pickup:" + String(spawn.spawnEntryId || spawn.nodeId || "pickup"),
+              entityKind: "pickup",
+              targetKind: "pickup",
+              action: "editor:select",
+              prompt: "Select",
+              displayName: pickupKind === "currency"
+                ? runtimeCatalogDisplay(currency, definitionId, "Gold")
+                : runtimeCatalogDisplay(item, definitionId, "Item"),
+              status: pickupKind,
+              available: true,
+              inRange: true,
+              range: 3,
+              radius: 1.2,
+              targetTags: runtimeTargetTags([pickupKind, "pickup", "spawn"], item.tags, currency.tags),
+              editorSelectableId: spawn.nodeId || "",
+              pickupKind,
+              itemRef: pickupKind === "item" ? definitionId : null,
+              currencyRef: pickupKind === "currency" ? definitionId : null,
+              definitionId,
+              modelAssetId: item.worldModelAssetId || spawn.worldModelAssetId || null,
+              modelScale: num(item.worldModelScale || spawn.worldModelScale, 0.45),
+              x: num(spawn.x, 0),
+              y: num(spawn.y, num(worldData?.ground?.y, 0)),
+              z: num(spawn.z, 0)
+            });
+          }
+        }
+      }
+    }
+    return targets;
+  }
+
+  function editorRuntimeTargetsFromWorld(worldData) {
+    if (mode !== "editor" || !worldData) return [];
+    const targets = [];
+    for (const zonePackage of editorRuntimeZonePackages(worldData)) {
+      const zoneId = String(zonePackage?.zoneId || zonePackage?.id || "zone").trim() || "zone";
+      const zoneTargets = []
+        .concat(editorRuntimeQuestTargets(worldData, zonePackage))
+        .concat(editorRuntimeZoneLinkTargets(worldData, zonePackage))
+        .concat(editorRuntimeServiceTargets(worldData, zonePackage))
+        .concat(editorRuntimeSpawnTargets(worldData, zonePackage));
+      for (const target of zoneTargets) {
+        if (!target) continue;
+        targets.push(Object.assign({}, target, {
+          instanceId: "editor:" + zoneId + ":" + String(target.instanceId || ""),
+          zoneId: target.zoneId || zoneId
+        }));
+      }
+    }
+    return targets.filter(function (target) {
+      return target
+        && target.instanceId
+        && Number.isFinite(Number(target.x))
+        && Number.isFinite(Number(target.z));
     });
   }
 
   function createRuntimeTargetBody(target) {
+    const directAssetId = String(target?.modelAssetId || "").trim();
+    const fallbackAsset = directAssetId ? null : fallbackRuntimeTargetModel(target);
+    const assetId = directAssetId || String(fallbackAsset?.id || "").trim();
+    if (assetId && assetById(world, assetId)?.sourcePath) {
+      const group = new THREE.Group();
+      group.name = "node03-runtime-target-model";
+      const fallbackScale = Math.max(0.001, directAssetId ? num(target?.modelScale, 1) : 0.38);
+      const scaleX = Math.max(0.001, Number.isFinite(Number(target?.modelScaleX)) ? Number(target.modelScaleX) : fallbackScale);
+      const scaleY = Math.max(0.001, Number.isFinite(Number(target?.modelScaleY)) ? Number(target.modelScaleY) : fallbackScale);
+      const scaleZ = Math.max(0.001, Number.isFinite(Number(target?.modelScaleZ)) ? Number(target.modelScaleZ) : fallbackScale);
+      group.scale.set(scaleX, scaleY, scaleZ);
+      group.rotation.set(
+        num(target?.modelRotationX, 0) * Math.PI / 180,
+        num(target?.modelRotationY, 0) * Math.PI / 180,
+        num(target?.modelRotationZ, 0) * Math.PI / 180
+      );
+      group.userData.runtimeAlive = true;
+      group.userData.runtimeTarget = true;
+      group.userData.runtimeTargetId = target?.instanceId || null;
+      group.userData.runtimeTargetPayload = Object.assign({}, target);
+      loadModelInto(group, assetId, world, function () {
+        markRuntimeTargetTree(group, target);
+      }, {
+        castShadow: false,
+        receiveShadow: true
+      });
+      return group;
+    }
     const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
     const color = new THREE.Color(runtimeTargetColor(target));
     const material = new THREE.MeshStandardMaterial({
@@ -15573,14 +16098,20 @@ function resolveChunkDebugCenter(policy) {
   function createRuntimeTargetRoot(target) {
     const root = new THREE.Group();
     root.name = "node03-runtime-target:" + String(target?.instanceId || "target");
+    const editorSelectableId = runtimeTargetEditorSelectableId(target);
     root.userData.transformable = false;
     root.userData.snapToGround = false;
     root.userData.runtimeAlive = true;
     root.userData.runtimeTarget = true;
     root.userData.runtimeTargetId = target?.instanceId || null;
     root.userData.runtimeTargetPayload = Object.assign({}, target);
+    if (editorSelectableId) {
+      root.userData.entityId = editorSelectableId;
+      root.userData.editorRuntimeSelectableId = editorSelectableId;
+    }
     root.add(createRuntimeTargetRangeRing(target));
-    root.add(createRuntimeTargetBody(target));
+    if (target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
+    root.add(createRuntimeTargetHitProxy(target));
     const nameplate = createRuntimeTargetNameplate(target);
     if (nameplate) root.add(nameplate);
     markRuntimeTargetTree(root, target);
@@ -15592,6 +16123,11 @@ function resolveChunkDebugCenter(policy) {
     root.position.set(num(target.x, 0), num(target.y, 0), num(target.z, 0));
     root.visible = target?.available !== false || target?.entityKind === "enemy";
     root.userData.runtimeTargetPayload = Object.assign({}, target);
+    const editorSelectableId = runtimeTargetEditorSelectableId(target);
+    if (editorSelectableId) {
+      root.userData.entityId = editorSelectableId;
+      root.userData.editorRuntimeSelectableId = editorSelectableId;
+    }
     const signature = JSON.stringify({
       kind: target.entityKind || target.targetKind || "",
       name: target.displayName || "",
@@ -15601,6 +16137,18 @@ function resolveChunkDebugCenter(policy) {
       selected: target.selected === true,
       hp: target.healthCurrent ?? null,
       hpMax: target.healthMax ?? null,
+      modelAssetId: target.modelAssetId || "",
+      modelScale: target.modelScale ?? null,
+      modelScaleX: target.modelScaleX ?? null,
+      modelScaleY: target.modelScaleY ?? null,
+      modelScaleZ: target.modelScaleZ ?? null,
+      modelRotationX: target.modelRotationX ?? null,
+      modelRotationY: target.modelRotationY ?? null,
+      modelRotationZ: target.modelRotationZ ?? null,
+      clickRadius: target.clickRadius ?? null,
+      hitRadius: target.hitRadius ?? null,
+      nameplateY: target.nameplateY ?? null,
+      renderBody: target.renderBody !== false,
       distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
     });
     if (root.userData.runtimeTargetSignature !== signature) {
@@ -15609,7 +16157,8 @@ function resolveChunkDebugCenter(policy) {
         disposeObject(child);
       }
       root.add(createRuntimeTargetRangeRing(target));
-      root.add(createRuntimeTargetBody(target));
+      if (target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
+      root.add(createRuntimeTargetHitProxy(target));
       const nameplate = createRuntimeTargetNameplate(target);
       if (nameplate) root.add(nameplate);
       root.userData.runtimeTargetSignature = signature;
@@ -15621,6 +16170,12 @@ function resolveChunkDebugCenter(policy) {
     const id = String(instanceId || "").trim();
     const root = runtimeTargetRoots.get(id);
     if (!root) return false;
+    const editorSelectableId = root.userData?.editorRuntimeSelectableId || "";
+    if (editorSelectableId && entityRoots.get(editorSelectableId) === root) entityRoots.delete(editorSelectableId);
+    root.traverse(function (child) {
+      child.userData = child.userData || {};
+      child.userData.runtimeAlive = false;
+    });
     const counts = countObjectTree(root);
     if (root.parent) root.parent.remove(root);
     disposeObject(root);
@@ -15636,7 +16191,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function setRuntimeTargets(targets) {
-    if (mode !== "game" || !content) return false;
+    if (!content) return false;
     const list = Array.isArray(targets) ? targets : [];
     const desiredIds = new Set();
     for (const target of list) {
@@ -15655,6 +16210,8 @@ function resolveChunkDebugCenter(policy) {
         const counts = countObjectTree(root);
         runtimeStats.sceneObjects += counts.objects || 0;
         runtimeStats.meshes += counts.meshes || 0;
+        const editorSelectableId = root.userData?.editorRuntimeSelectableId || "";
+        if (editorSelectableId && !entityRoots.has(editorSelectableId)) entityRoots.set(editorSelectableId, root);
       }
       updateRuntimeTargetRoot(root, target);
     }
@@ -15819,12 +16376,14 @@ function resolveChunkDebugCenter(policy) {
 
   function worldToScreen(position) {
     const vector = new THREE.Vector3(num(position?.x, 0), num(position?.y, 0), num(position?.z, 0));
+    const distance = camera.position.distanceTo(vector);
     vector.project(camera);
     if (!Number.isFinite(vector.x) || !Number.isFinite(vector.y) || !Number.isFinite(vector.z) || vector.z < -1 || vector.z > 1) return null;
     const rect = canvas.getBoundingClientRect();
     return {
       x: (vector.x * 0.5 + 0.5) * rect.width + rect.left,
-      y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top
+      y: (-vector.y * 0.5 + 0.5) * rect.height + rect.top,
+      distance: Number.isFinite(distance) ? distance : null
     };
   }
 
@@ -17161,6 +17720,9 @@ function resolveChunkDebugCenter(policy) {
     }
     buildKeyMap(world);
     publishedWorldItemCount = contentBlueprintIndex.blueprintWorldItemCount;
+    if (mode === "editor") {
+      setRuntimeTargets(editorRuntimeTargetsFromWorld(world));
+    }
     if (mode === "game") {
       hudTokenContext = buildHudTokenContext(world);
       setHudModules(world?.ui || []);

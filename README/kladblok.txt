@@ -22,3 +22,4 @@ CLEAN_CODE_SERVER=1 RESET_SWAP=1 bash scripts/reset.sh
 sudo systemctl restart code-server@$USER
 
 
+zip -r game.zip mydir

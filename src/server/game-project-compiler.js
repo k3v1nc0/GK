@@ -262,6 +262,29 @@ function recordFromNode(node) {
   return Object.assign({ nodeId: node?.id || null, nodeType: node?.type || null }, values);
 }
 
+function entityPositionRecord(entity) {
+  if (!entity) return null;
+  const isAssembly = entity.nodeType === "entity_assembly";
+  const model = entity.nodeType === "entity_assembly" ? entity.model : entity;
+  if (!model || model.nodeType !== "model_entity") return null;
+  return {
+    nodeId: model.nodeId || null,
+    nodeType: model.nodeType || null,
+    entityId: isAssembly ? (entity.entityId || entity.nodeId || null) : (model.entityId || model.nodeId || null),
+    label: isAssembly ? (entity.label || model.label || null) : (model.label || null),
+    modelAssetId: model.modelAssetId || null,
+    modelScaleX: Number(model.scaleX),
+    modelScaleY: Number(model.scaleY),
+    modelScaleZ: Number(model.scaleZ),
+    modelRotationX: Number(model.rotationX),
+    modelRotationY: Number(model.rotationY),
+    modelRotationZ: Number(model.rotationZ),
+    x: Number(model.x),
+    y: Number(model.y),
+    z: Number(model.z)
+  };
+}
+
 function buildEntityPayload(graph, node, nodeMap) {
   const payload = recordFromNode(node);
   if (node?.type !== "entity_assembly") return payload;
@@ -278,6 +301,29 @@ function buildEntityPayload(graph, node, nodeMap) {
 function entityRecordsFromSources(graph, outputNode, portName, nodeMap) {
   return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
     return buildEntityPayload(graph, node, nodeMap);
+  });
+}
+
+function buildQuestTargetPayload(graph, node, nodeMap) {
+  const payload = recordFromNode(node);
+  if (node?.type !== "quest_target_binding") return payload;
+  const entityNode = firstIncomingNode(graph, node, "entity", nodeMap);
+  const entity = entityNode ? buildEntityPayload(graph, entityNode, nodeMap) : null;
+  const entityPosition = entityPositionRecord(entity);
+  if (!entityPosition) return payload;
+  const next = Object.assign({}, payload, {
+    linkedEntity: entityPosition,
+    entityRef: payload.entityRef || entityPosition.entityId || null
+  });
+  if (Number.isFinite(entityPosition.x)) next.x = entityPosition.x;
+  if (Number.isFinite(entityPosition.y)) next.y = entityPosition.y;
+  if (Number.isFinite(entityPosition.z)) next.z = entityPosition.z;
+  return next;
+}
+
+function questTargetRecordsFromSources(graph, outputNode, portName, nodeMap) {
+  return resolveInputSources(graph, outputNode, portName, nodeMap).map(function (node) {
+    return buildQuestTargetPayload(graph, node, nodeMap);
   });
 }
 
@@ -339,7 +385,7 @@ function buildAreaPackage(graph, areaOutputNode, nodeMap) {
     lights: recordsFromSources(graph, areaOutputNode, "lights", nodeMap),
     entities: entityRecordsFromSources(graph, areaOutputNode, "entities", nodeMap),
     spawns: recordsFromSources(graph, areaOutputNode, "spawns", nodeMap),
-    questTargets: recordsFromSources(graph, areaOutputNode, "questTargets", nodeMap),
+    questTargets: questTargetRecordsFromSources(graph, areaOutputNode, "questTargets", nodeMap),
     markers: recordsFromSources(graph, areaOutputNode, "markers", nodeMap),
     audioAssignments: recordsFromSources(graph, areaOutputNode, "audioAssignments", nodeMap),
     paths: recordsFromSources(graph, areaOutputNode, "paths", nodeMap),
@@ -388,7 +434,7 @@ function buildZonePackage(graph, zoneOutputNode, nodeMap) {
       return Object.assign({}, link, { fromZoneRef: link.fromZoneRef || zoneId });
     }),
     discoveries: recordsFromSources(graph, zoneOutputNode, "discoveries", nodeMap),
-    questTargets: recordsFromSources(graph, zoneOutputNode, "questTargets", nodeMap),
+    questTargets: questTargetRecordsFromSources(graph, zoneOutputNode, "questTargets", nodeMap),
     markers: recordsFromSources(graph, zoneOutputNode, "markers", nodeMap),
     minimaps,
     audioAssignments: recordsFromSources(graph, zoneOutputNode, "audioAssignments", nodeMap),

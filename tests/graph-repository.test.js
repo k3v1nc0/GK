@@ -3,6 +3,55 @@ import test from "node:test";
 import { GraphRepository } from "../src/server/graph-repository.js";
 import { createMigrationDatabase } from "./fixtures.js";
 
+function createPublishHistoryDatabase() {
+  const db = createMigrationDatabase();
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE published_world_state (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      world_json TEXT NOT NULL,
+      build_id TEXT,
+      schema_version TEXT,
+      content_hash TEXT,
+      published_at TEXT NOT NULL
+    );
+    CREATE TABLE publish_history (
+      id TEXT PRIMARY KEY,
+      world_json TEXT NOT NULL,
+      build_id TEXT,
+      schema_version TEXT,
+      content_hash TEXT,
+      actor_user_id TEXT,
+      published_at TEXT NOT NULL
+    );
+    CREATE TABLE publish_history_zones (
+      publish_history_id TEXT NOT NULL,
+      zone_id TEXT NOT NULL,
+      FOREIGN KEY (publish_history_id) REFERENCES publish_history(id) ON DELETE CASCADE
+    );
+  `);
+  return db;
+}
+
+function seedPublishHistory(db, count) {
+  const insertHistory = db.prepare(`
+    INSERT INTO publish_history (id, world_json, build_id, schema_version, content_hash, actor_user_id, published_at)
+    VALUES (?, ?, ?, 'schema-test', ?, 'actor-test', '2026-01-01T00:00:00.000Z')
+  `);
+  const insertZone = db.prepare("INSERT INTO publish_history_zones (publish_history_id, zone_id) VALUES (?, ?)");
+  for (let index = 0; index < count; index += 1) {
+    const id = "hist-" + String(index).padStart(3, "0");
+    insertHistory.run(id, JSON.stringify({ index }), "build-" + index, "hash-" + index);
+    insertZone.run(id, "zone-" + index);
+  }
+}
+
+function publishHistoryIds(db) {
+  return db.prepare("SELECT id FROM publish_history ORDER BY published_at DESC, id DESC").all().map(function (row) {
+    return row.id;
+  });
+}
+
 function seedOutput(db) {
   db.prepare(`
     INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, schema_version, created_at, updated_at)
@@ -129,4 +178,83 @@ test("restore preserves existing internal migration edges while moving visible n
   assert.equal(restored.edges.some(function (edge) {
     return edge.id === "foundation.edge.legacy_world_to_assembly";
   }), true);
+});
+
+test("publish history retention keeps existing rows when the limit is reached exactly", function () {
+  const db = createPublishHistoryDatabase();
+  seedPublishHistory(db, 49);
+  const repository = new GraphRepository(db);
+
+  repository.publishWorld({ buildId: "current-build", zones: [] }, "actor-test", {
+    buildId: "current-build",
+    schemaVersion: "schema-test",
+    contentHash: "current-hash"
+  });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM publish_history").get().total, 50);
+  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM publish_history_zones").get().total, 49);
+  assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
+});
+
+test("publish history retention keeps the newest 50 rows and cascades dependent rows", function () {
+  const db = createPublishHistoryDatabase();
+  seedPublishHistory(db, 55);
+  const repository = new GraphRepository(db);
+
+  repository.publishWorld({ buildId: "current-build", zones: [{ id: "zone-current" }] }, "actor-test", {
+    buildId: "current-build",
+    schemaVersion: "schema-test",
+    contentHash: "current-hash"
+  });
+
+  const ids = publishHistoryIds(db);
+  assert.equal(ids.length, 50);
+  assert.equal(ids.some(function (id) { return id.startsWith("hist-00") && Number(id.slice(5)) < 6; }), false);
+  assert.equal(ids.includes("hist-006"), true);
+  assert.equal(ids.includes("hist-054"), true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS total FROM publish_history_zones").get().total, 49);
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM publish_history_zones AS zones
+    LEFT JOIN publish_history AS history ON history.id = zones.publish_history_id
+    WHERE history.id IS NULL
+  `).get().total, 0);
+
+  const published = repository.getPublishedWorld();
+  assert.equal(published.buildId, "current-build");
+  assert.equal(published.contentHash, "current-hash");
+});
+
+test("failed publish rolls back published world and leaves valid history intact", function () {
+  const db = createPublishHistoryDatabase();
+  seedPublishHistory(db, 50);
+  const repository = new GraphRepository(db);
+  repository.publishWorld({ buildId: "previous-build" }, "actor-test", {
+    buildId: "previous-build",
+    schemaVersion: "schema-test",
+    contentHash: "previous-hash"
+  });
+  const beforeIds = publishHistoryIds(db);
+  const beforePublished = repository.getPublishedWorld();
+
+  db.exec(`
+    CREATE TRIGGER fail_bad_publish_history_insert
+    BEFORE INSERT ON publish_history
+    WHEN NEW.build_id = 'bad-build'
+    BEGIN
+      SELECT RAISE(ABORT, 'test publish history failure');
+    END;
+  `);
+
+  assert.throws(function () {
+    repository.publishWorld({ buildId: "bad-build" }, "actor-test", {
+      buildId: "bad-build",
+      schemaVersion: "schema-test",
+      contentHash: "bad-hash"
+    });
+  }, /test publish history failure/);
+
+  assert.deepEqual(publishHistoryIds(db), beforeIds);
+  assert.equal(repository.getPublishedWorld().contentHash, beforePublished.contentHash);
+  assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
 });
