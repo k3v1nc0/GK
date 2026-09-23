@@ -33,40 +33,6 @@ function safeEntityReferenceId(value, fallback = "entity") {
   return normalized.slice(0, 55).replace(/[:_-]+$/g, "") + "_" + hash;
 }
 
-function modelVisualFromEntity(entity) {
-  if (!entity || !entity.modelAssetId) return {};
-  return {
-    modelAssetId: entity.modelAssetId || null,
-    modelScaleX: safeNumber(entity.scaleX, 1),
-    modelScaleY: safeNumber(entity.scaleY, 1),
-    modelScaleZ: safeNumber(entity.scaleZ, 1),
-    modelRotationX: safeNumber(entity.rotationX, 0),
-    modelRotationY: safeNumber(entity.rotationY, 0),
-    modelRotationZ: safeNumber(entity.rotationZ, 0)
-  };
-}
-
-function zoneLinkVisualModel(ctx, link, position) {
-  const entities = Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : [];
-  const candidates = entities.filter(function (entity) {
-    if (!entity || !entity.modelAssetId) return false;
-    const x = Number(entity.x);
-    const z = Number(entity.z);
-    return Number.isFinite(x) && Number.isFinite(z);
-  }).map(function (entity) {
-    const label = (safeString(entity.label, "") + " " + safeString(entity.entityId, "") + " " + safeString(entity.nodeId, "")).toLowerCase();
-    const portalMatch = /\b(portal|gate|travel|link)\b/.test(label);
-    const distance = Math.hypot(safeNumber(entity.x, 0) - safeNumber(position?.x, 0), safeNumber(entity.z, 0) - safeNumber(position?.z, 0));
-    return { entity, distance, portalMatch };
-  }).filter(function (entry) {
-    return entry.distance <= (entry.portalMatch ? 12 : 3.5);
-  }).sort(function (left, right) {
-    if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
-    return left.distance - right.distance;
-  });
-  return candidates.length ? modelVisualFromEntity(candidates[0].entity) : {};
-}
-
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -1670,7 +1636,7 @@ export class Node03RuntimeService {
       const distance = positionDistance(ctx.position, position);
       const range = Math.max(3, safeNumber(link.preloadDistance, 30));
       const targetName = targetZone?.zone?.displayName || link.toZoneRef;
-      return Object.assign({
+      return {
         instanceId: link.linkId,
         entityKind: "zone_link",
         targetKind: "zone_link",
@@ -1690,7 +1656,7 @@ export class Node03RuntimeService {
         z: position.z,
         toZoneRef: link.toZoneRef,
         toSpawnRef: link.toSpawnRef
-      }, zoneLinkVisualModel(ctx, link, position));
+      };
     });
   }
 

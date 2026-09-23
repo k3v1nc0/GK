@@ -48,6 +48,112 @@ Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playw
 
 ---
 
+## AUTHORING-04-FIX-03 - Authoring convergence entity/component ownership
+
+**Status:** implemented, awaiting Kevin acceptance
+
+Gerichte auditketen voor de demoquest:
+
+```text
+Authoring Object of personage
+-> model_entity + entity_assembly + component/quest_target_binding nodes
+-> GameProjectCompiler zonePackage entities/questTargets
+-> draft-world merge naar runtime-readmodel
+-> editor preview via shared world-runtime
+-> publish via dezelfde GameProjectCompiler/merge
+-> game NODE-03/04/05 runtime targets
+```
+
+Hoofdoorzaak: `model_entity`/`entity_assembly` was al de bedoelde eigenaar van mesh en transform, maar `world-runtime.js` reconstrueerde in editor mode nog aparte runtime-targetfamilies voor quest targets, zone links, services en spawns. Voor questtargets met `linkedEntity` werd het gekoppelde model opnieuw als targetbody geladen. Daardoor kon Bram tegelijk als echte authored mesh en als questmarker/runtime-targetmesh verschijnen. Dezelfde soort naamgebaseerde portal/target-visualisatie bestond server-side in NODE-03/04.
+
+Ownership-matrix na deze fix:
+
+| Onderdeel | Identiteit | Mesh/asset | Transform | Naam/nameplate | Click/hit target | Gedrag | Quest-/servicerefs |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Bram/model | `entity_assembly.entityId` + `model_entity.nodeId` | `model_entity.modelAssetId` | `model_entity` transformvelden | label/displayName van entity/model | linked runtime target selecteert `model_entity.nodeId` | componenten op dezelfde assembly | refs blijven naar entity/component/quest nodes |
+| Bram NPC/interactie | `npc_component` en `interaction_component` | geen eigen mesh | volgt Bram `model_entity` | NPC-label via dezelfde entity | hitproxy volgt attached entity | NPC/interactable component | dialogue/quest start refs |
+| Questballon/statusicoon | runtime marker id | geen meshmodel | volgt attached `model_entity` | presentatie van questtarget/state | marker/hitproxy selecteert attached entity | geen contentgedrag | `quest_target_binding` + quest state |
+| Dialoog | `dialogue_definition`/entries | geen mesh | n.v.t. | menselijke dialoognaam | gestart via Bram interactable/NPC | dialogue flow | gekoppeld aan NPC/interactie |
+| Quest start/voortgang/rewards | `quest_definition`, steps, objectives, rewards | geen mesh | n.v.t. | questtitel/objective label | via gekoppelde targets | quest runtime state | refs naar NPC/items/enemies/services |
+| Wood/Iron/Sun Crystal | catalog/spawn/target refs | expliciete catalog/spawn assetref indien beschikbaar | spawnpositie of authored entity | target/objective label | NODE-03 targetlaag | resource/pickup target | objective refs |
+| Enemies | spawn entry + catalog/enemy definition | expliciete definition/spawn assetref | spawnpositie/runtime instance | enemy label | NODE-03 enemy target | enemy runtime behavior | objective refs |
+| Portals | `zone_link` | geen naamgebaseerd geleend model | link-origin/spawnpositie | prompt/target zone | marker/hit target | travel behavior | `toZoneRef`/`toSpawnRef` |
+| Start Forge | `crafting_station_component` + linked entity | linked `model_entity` | linked `model_entity` | service label/nameplate | attached hit target selects entity | crafting station | recipe/policy refs |
+| Mira Trader | `vendor_component` + linked entity | linked `model_entity` | linked `model_entity` | service label/nameplate | attached hit target selects entity | vendor | stock/currency refs |
+| Market Board | `marketplace_access_component` + linked entity | linked `model_entity` | linked `model_entity` | service label/nameplate | attached hit target selects entity | market access | market policy refs |
+
+Herstel:
+
+- Editor-runtime normaliseert raw `entity_assembly` en vlakke `model_entity` records naar één canonieke visible zone entity voor selectie, positie en servicekoppelingen.
+- Questtarget/service editorlagen krijgen bij een gekoppelde entity `editorSelectableId` en `editorAttachedEntityId` van de echte `model_entity`; klikken op naamplaat/ring/hitproxy selecteert dus de authored mesh.
+- G/transform-workflow blijft de bestaande `model_entity` patchroute gebruiken; gekoppelde editor-targetlagen volgen live via dezelfde runtime transform.
+- Questmarkers met een linked entity sturen in de game geen tweede `modelAssetId` meer mee; zij blijven marker/nameplate/hit target.
+- Naamgebaseerde target/portal model-fallbacks zijn verwijderd uit `world-runtime.js`, `node03-runtime-service.js` en `node04-quest-runtime-service.js`.
+- NODE-05 service runtime resolveert components nu ook tegen `entity_assembly` records, niet alleen tegen losse `model_entity` records.
+- Object of personage kan nu naast Interactable/NPC/Enemy/Quest Target ook Crafting Station, Vendor en Market Access als component op dezelfde assembly maken/beheren/verwijderen.
+- Servicecomponenten erven hun linked entity uit de assembly wanneer er nog geen expliciete `linkedEntityId` staat; normale Authoring hoeft die ID niet handmatig te vragen.
+
+Niet opgelost of niet live bewezen:
+
+- Er is geen nieuwe databasecontent of golden-path quest aangemaakt; dat blijft Kevins live acceptatiestap via normale Authoring.
+- Enemy/resource/pickup spawns blijven runtime instances vanuit NODE-03 spawnsets, niet per stuk `model_entity` authored objects.
+- Branch/join/parallel questflow blijft niet ondersteund zolang het schema/compilercontract ontbreekt.
+- Ik heb geen browser, Playwright, smoke, npm check/test, serverstart of tweede poort gebruikt.
+
+Gewijzigde bestanden in deze fix:
+
+- `apps/web/public/shared/world-runtime.js`
+- `apps/web/public/editor/editor.js`
+- `apps/web/public/editor/index.html`
+- `apps/web/public/game/game.js`
+- `apps/web/public/game/index.html`
+- `src/server/node03-runtime-service.js`
+- `src/server/node04-quest-runtime-service.js`
+- `src/server/node05-economy-runtime-service.js`
+- `README/fases/AUTHORING-04-Complete-Visual-Authoring.md`
+- `README/fases/README.md`
+
+---
+
+## AUTHORING-MIRROR-DEMO microfase 1 - Catalog Coverage
+
+**Status:** implemented, awaiting Kevin acceptance
+
+Doel: de normale Catalog-route breed genoeg maken om de definities voor een onafhankelijke Authoring Proof Demo te kunnen maken, zonder wereldplaatsingen, demo-hardcode, raw nodes of handgeschreven IDs.
+
+Herstel:
+
+- De Authoring-route heet nu `Catalog / Definities` en de Catalog Group toont ook NPCs, enemies, resources, recipes en vendor catalogs.
+- `npc_archetype`, `enemy_archetype`, `resource_definition`, `recipe_definition` en `vendor_catalog` worden via dezelfde managed Catalog-route aangemaakt als items/currencies/loot tables.
+- `recipe_ingredient` en `vendor_offer` zijn geen losse catalogdefinities gemaakt; ze worden als child-regels beheerd onder respectievelijk `recipe_definition.ingredients` en `vendor_catalog.offers`, conform het bestaande compilercontract.
+- Recipe outputs gebruiken de bestaande `outputItems` en `outputCurrencies` velden, maar krijgen in de normale Catalog-form typed item/currency pickers in plaats van ruwe JSON-invoer.
+- Catalogregels tonen waar een definitie wordt gebruikt, met menselijke labels. Verwijderen van gebruikte definities toont een waarschuwing met de gekoppelde gebruikers.
+- De Catalog-intro zegt expliciet dat een definitie nog geen geplaatst wereldobject is; world placement en G-verplaatsen blijven voor latere microfasen.
+
+Gebruikte bestaande contracten:
+
+- `catalog-compiler.js`: `npcs`, `enemies`, `resources`, `recipes`, `vendorCatalogs`, `items`, `currencies`, `lootTables`.
+- `symbol-index-service.js`: typed reference kinds `npc`, `enemy`, `resource`, `recipe`, `vendor_catalog`, `item`, `currency`, `loot_table`.
+- NODE-03 runtime: enemy/resource/item/currency/loot catalog consumers.
+- NODE-05 runtime: recipe en vendor catalog consumers.
+
+Niet opgelost of niet live bewezen:
+
+- Deze microfase plaatst nog geen resources, pickups, enemies, portals of services in de wereld.
+- G-verplaatsen van bomen/items/enemies/iron/portals hoort bij latere placement-microfasen.
+- `vendor_offer` en `recipe_ingredient` zijn child-records, geen zelfstandig publiceerbare definities.
+- Er is geen browser, Playwright, smoke, npm check/test, serverstart of tweede poort gebruikt.
+
+Gewijzigde bestanden in deze microfase:
+
+- `apps/web/public/editor/editor.js`
+- `apps/web/public/editor/authoring-contract.js`
+- `apps/web/public/editor/index.html`
+- `README/fases/AUTHORING-04-Complete-Visual-Authoring.md`
+- `README/fases/README.md`
+
+---
+
 ## 1. Werkelijke contractinventaris
 
 AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die werkelijk bestaan. Er zijn geen nieuwe schema-, compiler- of runtimecontracten verzonnen.
@@ -71,10 +177,12 @@ AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die w
 - Nieuwe catalog-definities zijn direct zichtbaar in reference-pickers, omdat ze echte identityvelden krijgen en via de bestaande reference-index lopen.
 - Geen branch/join/fail/parallel gebouwd; AUTHORING-03C-contracten ontbreken.
 
-**Item / Ability / Stat**
+**Catalog / Definities**
 
-- Normale Catalog-hub voor `item_definition`, `ability_definition`, `stat_definition`, `currency_definition`, `loot_table`.
+- Normale Catalog-hub voor `npc_archetype`, `enemy_archetype`, `resource_definition`, `item_definition`, `recipe_definition`, `vendor_catalog`, `ability_definition`, `stat_definition`, `currency_definition`, `loot_table`.
 - Lootregels gebruiken bestaande technische nodes `loot_item_entry`, `loot_currency_entry`, `loot_table_entry`, maar die zitten achter de visuele Loot Table-editor.
+- Recipe ingredienten gebruiken bestaande technische nodes `recipe_ingredient`, maar die zitten achter de visuele Recipe-editor.
+- Vendor offers gebruiken bestaande technische nodes `vendor_offer`, maar die zitten achter de visuele Vendor Catalog-editor.
 - Automatische route: definitie `catalogDefinition -> catalog_output.definitions -> group_output.catalogPackage -> group.catalogPackage -> catalog_registry.catalogPackage -> world_assembly.catalogs`.
 
 **Game-instellingen / UI**
@@ -92,7 +200,7 @@ AUTHORING-04 is gebouwd op de node-types, ports, compilers en runtimepaden die w
 - Wereld / Zone toont alle root-level zones, maakt een startzone, maakt buren links/rechts/boven/onder, blokkeert bezette zijden, vraagt naam en basis, en kan openen/hernoemen/basis herstellen/verwijderen.
 - Object of personage behoudt AUTHORING-02 en toont read-only onderdelen plus quests/dialogen die naar de selectie verwijzen.
 - Quest / Dialoog behoudt AUTHORING-03 en gebruikt nieuwe catalog-content direct via bestaande reference-pickers.
-- Catalog-hub heeft zoeken, tabs, maken, bewerken, verwijderen en visuele Loot Table-regels met item/currency/table, chance, weight en min/max.
+- Catalog-hub heeft zoeken, tabs, maken, bewerken, verwijderen, gebruiksbacklinks, delete-waarschuwingen en visuele child-regels voor Loot Tables, Recipes en Vendor Catalogs.
 - Player Rules/UI-hub heeft root-only groepaanmaak, categorieknoppen, zoeken, bewerken, verwijderen, duplicatebescherming en automatische outputs/koppelingen.
 - Meer nodes is altijd bruikbaar, met contextweergave en schakelaar Alle nodes / Geavanceerd. Alle geregistreerde node-types zijn vindbaar met statusbadges voor ok, buiten route, infra, system, internal, deprecated, future en unsupported.
 - Route- en workspaceknoppen hebben read-only aantalbadges. Zonder 3D-selectie tonen ze totalen; met selectie tonen ze gekoppelde/verwijzende onderdelen.
@@ -177,23 +285,25 @@ Er zijn geen tests, smokechecks, Playwright-checks, performancechecks, serversta
 13. Controleer dat nieuwe items/currencies/abilities uit de Catalog-pickers verschijnen.
 14. Controleer dat er geen branch/join/fail-knoppen als normale workflow verschijnen.
 
-### Route 4 - Item / Ability / Stat
+### Route 4 - Catalog / Definities
 
 1. Open `+ Maken`.
-2. Klik `Item / Ability / Stat`.
+2. Klik `Catalog / Definities`.
 3. Maak of open een Catalog Group.
 4. Zoek in de Catalog-hub.
-5. Maak een Item Definition.
-6. Maak een Ability Definition.
-7. Maak een Stat Definition.
-8. Maak een Currency Definition.
-9. Maak een Loot Table.
-10. Voeg een Itemregel toe.
-11. Kies het item via de picker.
-12. Vul chance, weight, minimum en maximum in.
-13. Voeg een Currencyregel toe.
-14. Bewerk een lootregel.
-15. Verwijder een testdefinitie en gebruik Undo.
+5. Maak een NPC Definition.
+6. Maak een Enemy Definition.
+7. Maak een Resource Definition.
+8. Maak een Item Definition.
+9. Maak een Recipe Definition.
+10. Voeg een ingredient toe via de Recipe-editor.
+11. Voeg een item-output of currency-output toe via de typed picker.
+12. Maak een Vendor Catalog.
+13. Voeg een Vendor Offer toe via de Vendor Catalog-editor.
+14. Maak of controleer Ability, Stat, Currency en Loot Table waar nodig.
+15. Controleer bij een gebruikte definitie `Gebruikt door`.
+16. Probeer een gebruikte testdefinitie te verwijderen en controleer de waarschuwing.
+17. Save Draft, refresh en controleer dat de definities en child-regels terugkomen.
 
 ### Route 5 - Game-instellingen / UI
 

@@ -14287,6 +14287,7 @@ function resolveChunkDebugCenter(policy) {
     transformObject(root, normalized);
     root.updateMatrixWorld(true);
     setWorldEntityTransform(entityId, normalized);
+    updateAttachedRuntimeTargetRoots(entityId);
     if (selectedEntityId && selectableIdForObject(root) === selectedEntityId) {
       selectedRoot = root;
       if (selectionHelper?.object === root && typeof selectionHelper.update === "function") selectionHelper.update();
@@ -15537,7 +15538,28 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function runtimeTargetEditorSelectableId(target) {
-    return mode === "editor" ? String(target?.editorSelectableId || "").trim() : "";
+    return mode === "editor" ? String(target?.editorSelectableId || runtimeTargetAttachedEntityId(target) || "").trim() : "";
+  }
+
+  function runtimeTargetAttachedEntityId(target) {
+    return mode === "editor" ? String(target?.editorAttachedEntityId || "").trim() : "";
+  }
+
+  function runtimeTargetPosition(target) {
+    const attachedEntityId = runtimeTargetAttachedEntityId(target);
+    const attachedRoot = attachedEntityId ? rootForSelectableId(attachedEntityId) : null;
+    if (attachedRoot) {
+      return {
+        x: attachedRoot.position.x,
+        y: attachedRoot.position.y,
+        z: attachedRoot.position.z
+      };
+    }
+    return {
+      x: num(target?.x, 0),
+      y: num(target?.y, 0),
+      z: num(target?.z, 0)
+    };
   }
 
   function createRuntimeTargetHitProxy(target) {
@@ -15566,61 +15588,17 @@ function resolveChunkDebugCenter(policy) {
   function markRuntimeTargetTree(root, target) {
     const payload = Object.assign({}, target);
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
+    const attachedEntityId = runtimeTargetAttachedEntityId(target);
+    root.userData.runtimeTargetAttachedEntityId = attachedEntityId || null;
     root.traverse(function (child) {
       child.userData = child.userData || {};
       child.userData.runtimeAlive = true;
       child.userData.runtimeTarget = true;
       child.userData.runtimeTargetId = target?.instanceId || null;
       child.userData.runtimeTargetPayload = payload;
+      child.userData.runtimeTargetAttachedEntityId = attachedEntityId || null;
       if (editorSelectableId) child.userData.entityId = editorSelectableId;
     });
-  }
-
-  function fallbackRuntimeTargetModel(target) {
-    const assets = Array.isArray(world?.assets) ? world.assets.filter(function (asset) {
-      return asset && asset.assetType === "model" && asset.sourcePath;
-    }) : [];
-    if (!assets.length) return null;
-    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
-    const findByName = function (patterns) {
-      return assets.find(function (asset) {
-        const name = String(asset.name || asset.id || "").toLowerCase();
-        return patterns.some(function (pattern) { return name.includes(pattern); });
-      }) || null;
-    };
-    const targetText = [
-      target?.displayName,
-      target?.entityKind,
-      target?.targetKind,
-      target?.resourceRef,
-      target?.itemRef,
-      target?.currencyRef,
-      target?.definitionId,
-      target?.spawnEntryId
-    ].map(function (value) {
-      return String(value || "").toLowerCase();
-    }).join(" ");
-    const targetHas = function (patterns) {
-      return patterns.some(function (pattern) { return targetText.includes(pattern); });
-    };
-    if (targetHas(["wood", "tree", "log"])) return findByName(["tree"]) || assets[0] || null;
-    if (targetHas(["iron", "ore", "metal", "ingot"])) return findByName(["forge", "black", "blacksmit"]) || assets[0] || null;
-    if (targetHas(["sun", "crystal", "crystals"])) return findByName(["alchemy", "forge"]) || assets[0] || null;
-    if (targetHas(["gold", "coin", "currency", "cache"])) return findByName(["alchemy", "forge", "taverne"]) || assets[0] || null;
-    const picked = kind === "enemy"
-      ? findByName(["wizard", "black", "blacksmit"])
-      : (kind === "npc" || kind === "service")
-        ? findByName(["wizard", "black", "blacksmit", "forge", "taverne"])
-        : kind === "resource"
-          ? findByName(["tree", "forge", "alchemy"])
-          : kind === "zone_link"
-            ? findByName(["alchemy", "taverne", "bridge", "forge"])
-            : kind === "pickup"
-              ? findByName(["forge", "alchemy", "taverne", "tree"])
-              : kind === "quest"
-                ? findByName(["wizard", "black", "blacksmit", "forge", "alchemy"])
-                : null;
-    return picked || assets[0] || null;
   }
 
   function runtimeCatalogSection(worldData, key) {
@@ -15695,38 +15673,73 @@ function resolveChunkDebugCenter(policy) {
     });
   }
 
-  function runtimeVisualFromZoneEntity(entity) {
-    if (!entity || !entity.modelAssetId) return {};
+  function runtimeCanonicalZoneEntity(entity) {
+    if (!entity) return null;
+    if (entity.nodeType === "entity_assembly") {
+      const model = entity.model || null;
+      if (!model || model.nodeType !== "model_entity") return null;
+      return Object.assign({}, model, {
+        nodeId: model.nodeId || null,
+        entityId: entity.entityId || model.entityId || model.nodeId || null,
+        label: entity.label || model.label || entity.entityId || model.entityId || model.nodeId || null,
+        assemblyNodeId: entity.nodeId || null,
+        assemblyEntityId: entity.entityId || null,
+        assemblyLabel: entity.label || null,
+        components: Array.isArray(entity.components) ? entity.components : []
+      });
+    }
+    if (entity.nodeType === "model_entity") return entity;
+    if (entity.modelAssetId && (entity.transform || Number.isFinite(Number(entity.x)) || Number.isFinite(Number(entity.z)))) return entity;
+    return null;
+  }
+
+  function runtimeZoneEntityIdValues(entity) {
+    const values = [];
+    for (const value of [
+      entity?.entityId,
+      entity?.nodeId,
+      entity?.id,
+      entity?.assemblyEntityId,
+      entity?.assemblyNodeId
+    ]) {
+      const text = String(value || "").trim();
+      if (text && !values.includes(text)) values.push(text);
+    }
+    return values;
+  }
+
+  function runtimeZoneEntityPosition(entity, worldData = world) {
+    const position = entity?.transform?.position || {};
     return {
-      modelAssetId: entity.modelAssetId || null,
-      modelScaleX: num(entity.scaleX, 1),
-      modelScaleY: num(entity.scaleY, 1),
-      modelScaleZ: num(entity.scaleZ, 1),
-      modelRotationX: num(entity.rotationX, 0),
-      modelRotationY: num(entity.rotationY, 0),
-      modelRotationZ: num(entity.rotationZ, 0)
+      x: Number.isFinite(Number(position.x)) ? Number(position.x) : num(entity?.x, 0),
+      y: Number.isFinite(Number(position.y)) ? Number(position.y) : num(entity?.y, num(worldData?.ground?.y, 0)),
+      z: Number.isFinite(Number(position.z)) ? Number(position.z) : num(entity?.z, 0)
     };
   }
 
   function runtimeVisibleZoneEntities(zonePackage) {
-    return (Array.isArray(zonePackage?.entities) ? zonePackage.entities : []).filter(function (entity) {
-      return entity && entity.nodeType === "model_entity";
-    });
+    return (Array.isArray(zonePackage?.entities) ? zonePackage.entities : [])
+      .map(runtimeCanonicalZoneEntity)
+      .filter(Boolean);
   }
 
   function runtimeZoneEntityForComponent(zonePackage, component) {
     const entityId = String(component?.linkedEntityId || component?.entityRef || "").trim();
     if (!entityId) return null;
     return runtimeVisibleZoneEntities(zonePackage).find(function (entity) {
-      return entity
-        && (entity.entityId === entityId || entity.nodeId === entityId || entity.id === entityId);
+      return runtimeZoneEntityIdValues(entity).includes(entityId);
     }) || null;
   }
 
   function runtimeConnectedZoneComponents(zonePackage) {
     const components = Array.isArray(zonePackage?.entityComponents) ? zonePackage.entityComponents.slice() : [];
     for (const entity of Array.isArray(zonePackage?.entities) ? zonePackage.entities : []) {
-      if (Array.isArray(entity?.components)) components.push.apply(components, entity.components);
+      if (!Array.isArray(entity?.components)) continue;
+      const linkedEntityId = String(entity?.entityId || entity?.model?.entityId || entity?.model?.nodeId || entity?.nodeId || "").trim();
+      components.push.apply(components, entity.components.map(function (component) {
+        if (!component || !linkedEntityId || component.linkedEntityId || component.entityRef) return component;
+        return Object.assign({}, component, { linkedEntityId: linkedEntityId });
+      }));
     }
     return components.filter(Boolean);
   }
@@ -15747,27 +15760,6 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
-  function runtimeZoneLinkVisual(worldData, zonePackage, position) {
-    const entities = Array.isArray(zonePackage?.entities) ? zonePackage.entities : [];
-    const candidates = entities.filter(function (entity) {
-      if (!entity || !entity.modelAssetId) return false;
-      const x = Number(entity.x);
-      const z = Number(entity.z);
-      return Number.isFinite(x) && Number.isFinite(z);
-    }).map(function (entity) {
-      const label = (String(entity.label || "") + " " + String(entity.entityId || "") + " " + String(entity.nodeId || "")).toLowerCase();
-      const portalMatch = /\b(portal|gate|travel|link|bridge|brug)\b/.test(label);
-      const distance = Math.hypot(num(entity.x, 0) - num(position?.x, 0), num(entity.z, 0) - num(position?.z, 0));
-      return { entity, distance, portalMatch };
-    }).filter(function (entry) {
-      return entry.distance <= (entry.portalMatch ? 12 : 3.5);
-    }).sort(function (left, right) {
-      if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
-      return left.distance - right.distance;
-    });
-    return candidates.length ? runtimeVisualFromZoneEntity(candidates[0].entity) : {};
-  }
-
   function editorRuntimeQuestTargets(worldData, zonePackage) {
     const targets = Array.isArray(zonePackage?.questTargets) ? zonePackage.questTargets.slice() : [];
     for (const area of Array.isArray(zonePackage?.areas) ? zonePackage.areas : []) {
@@ -15779,8 +15771,8 @@ function resolveChunkDebugCenter(policy) {
       const x = Number.isFinite(Number(linked?.x)) ? Number(linked.x) : num(target?.x, 0);
       const y = Number.isFinite(Number(linked?.y)) ? Number(linked.y) : num(target?.y, num(worldData?.ground?.y, 0));
       const z = Number.isFinite(Number(linked?.z)) ? Number(linked.z) : num(target?.z, 0);
-      const modelVisual = linked?.modelAssetId ? runtimeVisualFromZoneEntity(linked) : {};
-      return Object.assign({
+      const linkedNodeId = String(linked?.nodeId || "").trim();
+      return {
         instanceId: "editor:quest:" + String(target?.targetId || target?.nodeId || Math.random()),
         entityKind: targetKind === "resource" ? "resource" : (targetKind === "zone_link" ? "zone_link" : "quest"),
         targetKind: targetKind,
@@ -15793,11 +15785,13 @@ function resolveChunkDebugCenter(policy) {
         range: num(target?.radius, 2.5),
         radius: num(target?.radius, 1.8),
         targetTags: runtimeTargetTags(target?.targetTags, targetKind),
-        editorSelectableId: target?.nodeId || linked?.nodeId || "",
+        editorSelectableId: linkedNodeId || target?.nodeId || "",
+        editorAttachedEntityId: linkedNodeId || "",
+        renderBody: linkedNodeId ? false : target?.renderBody,
         x,
         y,
         z
-      }, modelVisual);
+      };
     });
   }
 
@@ -15808,7 +15802,7 @@ function resolveChunkDebugCenter(policy) {
       const position = runtimeLinkOrigin(worldData, zonePackage, link);
       const targetZone = project.zones?.byId?.[link.toZoneRef] || null;
       const targetName = targetZone?.zone?.displayName || link.toZoneRef || link.prompt || "Portal";
-      return Object.assign({
+      return {
         instanceId: "editor:zone_link:" + String(link.linkId),
         entityKind: "zone_link",
         targetKind: "zone_link",
@@ -15827,7 +15821,7 @@ function resolveChunkDebugCenter(policy) {
         z: position.z,
         toZoneRef: link.toZoneRef,
         toSpawnRef: link.toSpawnRef
-      }, runtimeZoneLinkVisual(worldData, zonePackage, position));
+      };
     }).filter(Boolean);
   }
 
@@ -15856,11 +15850,13 @@ function resolveChunkDebugCenter(policy) {
       const config = serviceTypes[component?.nodeType];
       if (!config) return null;
       const entity = runtimeZoneEntityForComponent(zonePackage, component);
-      const x = Number.isFinite(Number(entity?.x)) ? Number(entity.x) : num(component?.x, 0);
-      const y = Number.isFinite(Number(entity?.y)) ? Number(entity.y) : num(component?.y, num(worldData?.ground?.y, 0));
-      const z = Number.isFinite(Number(entity?.z)) ? Number(entity.z) : num(component?.z, 0);
+      const entityPosition = runtimeZoneEntityPosition(entity, worldData);
+      const x = entity ? entityPosition.x : num(component?.x, 0);
+      const y = entity ? entityPosition.y : num(component?.y, num(worldData?.ground?.y, 0));
+      const z = entity ? entityPosition.z : num(component?.z, 0);
       const serviceId = component?.[config.idField] || component?.componentId || component?.nodeId || config.targetKind;
-      return Object.assign({
+      const entityNodeId = String(entity?.nodeId || "").trim();
+      return {
         instanceId: "editor:service:" + String(serviceId),
         entityKind: "service",
         targetKind: config.targetKind,
@@ -15874,13 +15870,14 @@ function resolveChunkDebugCenter(policy) {
         radius: num(component?.radius, 1.5),
         renderBody: false,
         targetTags: runtimeTargetTags(["service", config.targetKind], component?.tags),
-        editorSelectableId: component?.nodeId || entity?.nodeId || "",
+        editorSelectableId: entityNodeId || component?.nodeId || "",
+        editorAttachedEntityId: entityNodeId || "",
         serviceId,
         linkedEntityId: entity?.entityId || entity?.nodeId || null,
         x,
         y,
         z
-      }, runtimeVisualFromZoneEntity(entity));
+      };
     }).filter(Boolean);
   }
 
@@ -16017,12 +16014,11 @@ function resolveChunkDebugCenter(policy) {
 
   function createRuntimeTargetBody(target) {
     const directAssetId = String(target?.modelAssetId || "").trim();
-    const fallbackAsset = directAssetId ? null : fallbackRuntimeTargetModel(target);
-    const assetId = directAssetId || String(fallbackAsset?.id || "").trim();
+    const assetId = directAssetId;
     if (assetId && assetById(world, assetId)?.sourcePath) {
       const group = new THREE.Group();
       group.name = "node03-runtime-target-model";
-      const fallbackScale = Math.max(0.001, directAssetId ? num(target?.modelScale, 1) : 0.38);
+      const fallbackScale = Math.max(0.001, num(target?.modelScale, 1));
       const scaleX = Math.max(0.001, Number.isFinite(Number(target?.modelScaleX)) ? Number(target.modelScaleX) : fallbackScale);
       const scaleY = Math.max(0.001, Number.isFinite(Number(target?.modelScaleY)) ? Number(target.modelScaleY) : fallbackScale);
       const scaleZ = Math.max(0.001, Number.isFinite(Number(target?.modelScaleZ)) ? Number(target.modelScaleZ) : fallbackScale);
@@ -16105,6 +16101,7 @@ function resolveChunkDebugCenter(policy) {
     root.userData.runtimeTarget = true;
     root.userData.runtimeTargetId = target?.instanceId || null;
     root.userData.runtimeTargetPayload = Object.assign({}, target);
+    root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
     if (editorSelectableId) {
       root.userData.entityId = editorSelectableId;
       root.userData.editorRuntimeSelectableId = editorSelectableId;
@@ -16120,9 +16117,11 @@ function resolveChunkDebugCenter(policy) {
 
   function updateRuntimeTargetRoot(root, target) {
     if (!root || !target) return;
-    root.position.set(num(target.x, 0), num(target.y, 0), num(target.z, 0));
+    const targetPosition = runtimeTargetPosition(target);
+    root.position.set(targetPosition.x, targetPosition.y, targetPosition.z);
     root.visible = target?.available !== false || target?.entityKind === "enemy";
     root.userData.runtimeTargetPayload = Object.assign({}, target);
+    root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     if (editorSelectableId) {
       root.userData.entityId = editorSelectableId;
@@ -16164,6 +16163,15 @@ function resolveChunkDebugCenter(policy) {
       root.userData.runtimeTargetSignature = signature;
     }
     markRuntimeTargetTree(root, target);
+  }
+
+  function updateAttachedRuntimeTargetRoots(entityId) {
+    const id = String(entityId || "").trim();
+    if (!id) return;
+    for (const root of runtimeTargetRoots.values()) {
+      if (String(root?.userData?.runtimeTargetAttachedEntityId || "") !== id) continue;
+      updateRuntimeTargetRoot(root, root.userData.runtimeTargetPayload || {});
+    }
   }
 
   function removeRuntimeTargetRoot(instanceId) {

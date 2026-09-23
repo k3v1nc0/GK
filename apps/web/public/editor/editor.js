@@ -1,6 +1,6 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260913-authoring-indicators-pan1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260921-authoring-convergence2";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260911-authoring04-fix02";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260911-authoring04-fix02";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260921-catalog-coverage1";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
@@ -5578,18 +5578,30 @@ function objectFunctionContextForModel(model, graph = state.graph) {
   const interactionNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "interaction_component");
   const npcNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "npc_component");
   const enemyNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "enemy_component");
+  const craftingNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "crafting_station_component");
+  const vendorNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "vendor_component");
+  const marketNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "marketplace_access_component");
   const questNodes = questTargetBindingsForModel(model, graph);
   const interactionComponent = interactionNodes[0] || null;
   const npcComponent = npcNodes[0] || null;
   const enemyComponent = enemyNodes[0] || null;
+  const craftingComponent = craftingNodes[0] || null;
+  const vendorComponent = vendorNodes[0] || null;
+  const marketComponent = marketNodes[0] || null;
   const questBinding = questNodes[0] || null;
   const interactionEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "interaction_component");
   const npcEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "npc_component");
   const enemyEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "enemy_component");
+  const craftingEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "crafting_station_component");
+  const vendorEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "vendor_component");
+  const marketEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "marketplace_access_component");
   const questEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "quest_target_binding");
   const duplicateInteractionCount = Math.max(interactionNodes.length, interactionEdgeCount);
   const duplicateNpcCount = Math.max(npcNodes.length, npcEdgeCount);
   const duplicateEnemyCount = Math.max(enemyNodes.length, enemyEdgeCount);
+  const duplicateCraftingCount = Math.max(craftingNodes.length, craftingEdgeCount);
+  const duplicateVendorCount = Math.max(vendorNodes.length, vendorEdgeCount);
+  const duplicateMarketCount = Math.max(marketNodes.length, marketEdgeCount);
   const duplicateQuestCount = Math.max(questNodes.length, questEdgeCount);
   const issues = [];
   if (!model) {
@@ -5614,6 +5626,15 @@ function objectFunctionContextForModel(model, graph = state.graph) {
   if (duplicateEnemyCount > 1) {
     issues.push({ kind: "enemy", message: "Meerdere Enemy Components zijn aan deze assembly gekoppeld." });
   }
+  if (duplicateCraftingCount > 1) {
+    issues.push({ kind: "crafting", message: "Meerdere Crafting Station Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateVendorCount > 1) {
+    issues.push({ kind: "vendor", message: "Meerdere Vendor Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateMarketCount > 1) {
+    issues.push({ kind: "market", message: "Meerdere Marketplace Access Components zijn aan deze assembly gekoppeld." });
+  }
   if (duplicateQuestCount > 1) {
     issues.push({ kind: "quest", message: "Meerdere Quest Target bindings zijn aan deze assembly gekoppeld." });
   }
@@ -5631,12 +5652,15 @@ function objectFunctionContextForModel(model, graph = state.graph) {
     interactionComponent: interactionComponent || null,
     npcComponent: npcComponent || null,
     enemyComponent: enemyComponent || null,
+    craftingComponent: craftingComponent || null,
+    vendorComponent: vendorComponent || null,
+    marketComponent: marketComponent || null,
     questBinding: questBinding || null,
     modelStem: model ? objectFunctionModelStem(model) : "",
     assemblyEntityId: objectFunctionAssemblyEntityId(model, graph),
     issues: issues,
     canCreate: Boolean(model && zoneGroup && zoneOutput && issues.every(function (issue) {
-      return !["selection", "parent", "zone", "output", "assembly", "interaction", "npc", "enemy", "quest", "conflict"].includes(issue.kind);
+      return !["selection", "parent", "zone", "output", "assembly", "interaction", "npc", "enemy", "crafting", "vendor", "market", "quest", "conflict"].includes(issue.kind);
     }))
   };
 }
@@ -5646,6 +5670,9 @@ function objectFunctionExistingNodeForKind(context, kind) {
   if (kind === "interaction") return context.interactionComponent;
   if (kind === "npc") return context.npcComponent;
   if (kind === "enemy") return context.enemyComponent;
+  if (kind === "crafting") return context.craftingComponent;
+  if (kind === "vendor") return context.vendorComponent;
+  if (kind === "market") return context.marketComponent;
   if (kind === "quest") return context.questBinding;
   return null;
 }
@@ -5661,6 +5688,9 @@ function objectFunctionKindLabel(kind) {
   if (kind === "interaction") return "Interactable";
   if (kind === "npc") return "NPC";
   if (kind === "enemy") return "Enemy";
+  if (kind === "crafting") return "Crafting Station";
+  if (kind === "vendor") return "Vendor";
+  if (kind === "market") return "Market Access";
   if (kind === "quest") return "Quest Target";
   return kind;
 }
@@ -5669,6 +5699,9 @@ function objectFunctionNodeTypeForKind(kind) {
   if (kind === "interaction") return "interaction_component";
   if (kind === "npc") return "npc_component";
   if (kind === "enemy") return "enemy_component";
+  if (kind === "crafting") return "crafting_station_component";
+  if (kind === "vendor") return "vendor_component";
+  if (kind === "market") return "marketplace_access_component";
   if (kind === "quest") return "quest_target_binding";
   return "";
 }
@@ -5699,6 +5732,23 @@ function objectFunctionDraftDefaults(kind, context) {
       levelMode: "fixed",
       fixedLevel: 1
     },
+    crafting: {
+      stationType: "crafting.station",
+      craftingPolicyRef: null,
+      interactionPrompt: "Craft",
+      range: 5
+    },
+    vendor: {
+      vendorCatalogRef: null,
+      interactionPrompt: "Trade",
+      range: 5
+    },
+    market: {
+      marketPolicyRef: null,
+      interactionPrompt: "Market",
+      remoteAccessAllowed: false,
+      range: 5
+    },
     quest: {
       label: modelLabel,
       targetKind: context.npcComponent ? "npc" : (context.enemyComponent ? "custom" : "marker"),
@@ -5715,6 +5765,9 @@ function objectFunctionTitleForKind(kind, context) {
   if (kind === "interaction") return objectFunctionExistingNodeForKind(context, kind) ? "Interactable beheren" : "Interactable maken";
   if (kind === "npc") return objectFunctionExistingNodeForKind(context, kind) ? "NPC beheren" : "NPC maken";
   if (kind === "enemy") return objectFunctionExistingNodeForKind(context, kind) ? "Enemy beheren" : "Enemy maken";
+  if (kind === "crafting") return objectFunctionExistingNodeForKind(context, kind) ? "Crafting Station beheren" : "Crafting Station maken";
+  if (kind === "vendor") return objectFunctionExistingNodeForKind(context, kind) ? "Vendor beheren" : "Vendor maken";
+  if (kind === "market") return objectFunctionExistingNodeForKind(context, kind) ? "Market Access beheren" : "Market Access maken";
   if (kind === "quest") return objectFunctionExistingNodeForKind(context, kind) ? "Quest Target beheren" : "Quest Target maken";
   return objectFunctionKindLabel(kind);
 }
@@ -5723,6 +5776,9 @@ function objectFunctionFocusNodeIdForKind(context, kind) {
   if (kind === "interaction") return context.interactionComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "npc") return context.npcComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "enemy") return context.enemyComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "crafting") return context.craftingComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "vendor") return context.vendorComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "market") return context.marketComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "quest") return context.questBinding?.id || context.assembly?.id || context.model?.id || null;
   return context.model?.id || null;
 }
@@ -5751,6 +5807,8 @@ function objectFunctionBeginDraft(kind, context) {
     state.objectFunctionDraft.values.entityRef = existing && !existingEntityRef
       ? null
       : (context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph));
+  } else if (["crafting", "vendor", "market"].includes(kind)) {
+    state.objectFunctionDraft.values.linkedEntityId = context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph);
   }
   renderAuthoringHub();
 }
@@ -5764,6 +5822,15 @@ function objectFunctionClearDraft() {
 function objectFunctionOpenCatalog() {
   selectAuthoringRoute("item_ability_stat");
   const workspaces = authoringWorkspacesForRoute("item_ability_stat", state.graph);
+  const workspace = workspaces.length ? workspaces[0].nodes[0] : null;
+  if (workspace) {
+    selectNode(workspace.id, true, { clearPendingEdge: true, showMobileInspector: true });
+  }
+}
+
+function objectFunctionOpenSettings() {
+  selectAuthoringRoute("game_settings_ui");
+  const workspaces = authoringWorkspacesForRoute("game_settings_ui", state.graph);
   const workspace = workspaces.length ? workspaces[0].nodes[0] : null;
   if (workspace) {
     selectNode(workspace.id, true, { clearPendingEdge: true, showMobileInspector: true });
@@ -5845,6 +5912,9 @@ function objectFunctionGraphTitleForKind(kind, context) {
   if (kind === "interaction") return modelTitle + " Interactable";
   if (kind === "npc") return modelTitle + " NPC";
   if (kind === "enemy") return modelTitle + " Enemy";
+  if (kind === "crafting") return modelTitle + " Crafting Station";
+  if (kind === "vendor") return modelTitle + " Vendor";
+  if (kind === "market") return modelTitle + " Market Access";
   if (kind === "quest") return modelTitle + " Quest Target";
   return modelTitle + " " + objectFunctionKindLabel(kind);
 }
@@ -5901,7 +5971,14 @@ function objectFunctionConnectedComponentNodesForAssembly(graph, assembly) {
   if (!assembly) return [];
   const nodes = [];
   const seen = new Set();
-  for (const type of ["interaction_component", "npc_component", "enemy_component"]) {
+  for (const type of [
+    "interaction_component",
+    "npc_component",
+    "enemy_component",
+    "crafting_station_component",
+    "vendor_component",
+    "marketplace_access_component"
+  ]) {
     for (const node of objectFunctionConnectedNodesForAssembly(graph, assembly, type)) {
       if (!node || seen.has(node.id)) continue;
       seen.add(node.id);
@@ -5971,6 +6048,9 @@ function objectFunctionSuggestedModelPositionInZone(parentId, graph = state.grap
     "interaction_component",
     "npc_component",
     "enemy_component",
+    "crafting_station_component",
+    "vendor_component",
+    "marketplace_access_component",
     "quest_target_binding"
   ]);
   const siblings = (graph.nodes || []).filter(function (node) {
@@ -6012,6 +6092,15 @@ function objectFunctionSuggestedNodePosition(kind, context, graph = state.graph)
   }
   if (kind === "enemy") {
     return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 2 };
+  }
+  if (kind === "crafting") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 3 };
+  }
+  if (kind === "vendor") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 4 };
+  }
+  if (kind === "market") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 5 };
   }
   if (kind === "quest") {
     return {
@@ -6146,6 +6235,29 @@ function objectFunctionBuildNodeValuesForKind(kind, context, draft, existingNode
     next.enemyRef = normalizeCanonicalId(next.enemyRef || "", "");
     next.variantRef = normalizeCanonicalId(next.variantRef || "", "") || null;
     next.difficultyRef = normalizeCanonicalId(next.difficultyRef || "", "") || null;
+  } else if (kind === "crafting") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.crafting." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.stationId = normalizeCanonicalId(next.stationId || "", "") || uniqueCanonicalGraphValue(graph, "station." + objectFunctionModelStem(context.model));
+    next.stationType = normalizeCanonicalId(next.stationType || "", "") || "crafting.station";
+    next.craftingPolicyRef = normalizeCanonicalId(next.craftingPolicyRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Craft").trim() || "Craft";
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
+  } else if (kind === "vendor") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.vendor." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.vendorId = normalizeCanonicalId(next.vendorId || "", "") || uniqueCanonicalGraphValue(graph, "vendor." + objectFunctionModelStem(context.model));
+    next.vendorCatalogRef = normalizeCanonicalId(next.vendorCatalogRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Trade").trim() || "Trade";
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
+  } else if (kind === "market") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.market." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.marketAccessId = normalizeCanonicalId(next.marketAccessId || "", "") || uniqueCanonicalGraphValue(graph, "market." + objectFunctionModelStem(context.model));
+    next.marketPolicyRef = normalizeCanonicalId(next.marketPolicyRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Market").trim() || "Market";
+    next.remoteAccessAllowed = next.remoteAccessAllowed === true;
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
   } else if (kind === "quest") {
     const modelTitle = objectFunctionModelTitle(context);
     const rawTargetId = normalizeCanonicalId(next.targetId || "", "");
@@ -6194,7 +6306,7 @@ function objectFunctionNextGraphMutation(context, draft) {
   let node = existingNode || null;
   const title = objectFunctionGraphTitleForKind(kind, nextContext);
 
-  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "quest") {
+  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "crafting" || kind === "vendor" || kind === "market" || kind === "quest") {
     if (!node) {
       node = {
         id: createZoneGraphId("node_" + type),
@@ -6213,7 +6325,7 @@ function objectFunctionNextGraphMutation(context, draft) {
     }
   }
 
-  if (kind === "interaction" || kind === "npc" || kind === "enemy") {
+  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "crafting" || kind === "vendor" || kind === "market") {
     if (node) {
       let keptComponentEdgeId = null;
       objectFunctionRemoveEdges(nextGraph, function (edge) {
@@ -6576,7 +6688,7 @@ function renderObjectFunctionSection(context) {
 
   const actions = document.createElement("div");
   actions.className = "objectFunctionActions";
-  const availableKinds = ["interaction", "npc", "enemy", "quest"].filter(function (kind) {
+  const availableKinds = ["interaction", "npc", "enemy", "crafting", "vendor", "market", "quest"].filter(function (kind) {
     if (kind === "npc" && context.enemyComponent && !context.npcComponent) return false;
     if (kind === "enemy" && context.npcComponent && !context.enemyComponent) return false;
     return true;
@@ -6604,6 +6716,9 @@ function renderObjectFunctionSection(context) {
     ["interaction", context.interactionComponent],
     ["npc", context.npcComponent],
     ["enemy", context.enemyComponent],
+    ["crafting", context.craftingComponent],
+    ["vendor", context.vendorComponent],
+    ["market", context.marketComponent],
     ["quest", context.questBinding]
   ];
   for (const [kind, node] of kinds) {
@@ -6741,6 +6856,43 @@ function renderObjectFunctionSection(context) {
       fields.append(
         objectFunctionDraftFieldRow("Variant", objectFunctionDraftReferenceInput("enemy", "variantRef", draft, null), "Optioneel."),
         objectFunctionDraftFieldRow("Difficulty", objectFunctionDraftReferenceInput("enemy", "difficultyRef", draft, null), "Optioneel.")
+      );
+    } else if (draft.kind === "crafting") {
+      const policyField = objectFunctionDraftReferenceInput("crafting", "craftingPolicyRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenSettings();
+        },
+        openReferenceActionLabel: "Open instellingen"
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Station type", objectFunctionDraftTextInput(draft, "stationType", { placeholder: "crafting.station" })),
+        objectFunctionDraftFieldRow("Crafting policy", policyField, "Optioneel; kies een bestaande Player Rules policy."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Craft" })),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
+      );
+    } else if (draft.kind === "vendor") {
+      const vendorCatalogField = objectFunctionDraftReferenceInput("vendor", "vendorCatalogRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenCatalog();
+        }
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Vendor catalog", vendorCatalogField, "Optioneel; kies een bestaande Vendor Catalog."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Trade" })),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
+      );
+    } else if (draft.kind === "market") {
+      const marketPolicyField = objectFunctionDraftReferenceInput("market", "marketPolicyRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenSettings();
+        },
+        openReferenceActionLabel: "Open instellingen"
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Market policy", marketPolicyField, "Optioneel; kies een bestaande Player Rules policy."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Market" })),
+        objectFunctionDraftFieldRow("Remote access", objectFunctionDraftCheckboxInput(draft, "remoteAccessAllowed")),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
       );
     } else if (draft.kind === "quest") {
       const zoneState = referencePickerChoiceState(context.zoneDefinition?.values?.zoneId || "", state.nodeTypes?.quest_target_binding?.fields?.zoneRef || {});
@@ -8962,7 +9114,12 @@ const AUTHORING04_GROUP_OUTPUT_PORTS = {
 };
 
 const CATALOG_HUB_TYPES = [
+  { type: "npc_archetype", label: "NPCs" },
+  { type: "enemy_archetype", label: "Enemies" },
+  { type: "resource_definition", label: "Resources" },
   { type: "item_definition", label: "Items" },
+  { type: "recipe_definition", label: "Recipes" },
+  { type: "vendor_catalog", label: "Vendor Catalogs" },
   { type: "ability_definition", label: "Abilities" },
   { type: "stat_definition", label: "Stats" },
   { type: "currency_definition", label: "Currencies" },
@@ -8974,6 +9131,46 @@ const LOOT_ENTRY_TYPES = [
   { type: "loot_currency_entry", label: "Currencyregel" },
   { type: "loot_table_entry", label: "Nested table" }
 ];
+
+const RECIPE_INGREDIENT_TYPES = [
+  { type: "recipe_ingredient", label: "Ingredient" }
+];
+
+const VENDOR_OFFER_TYPES = [
+  { type: "vendor_offer", label: "Offer" }
+];
+
+const CATALOG_CHILD_ROUTE_TYPES = LOOT_ENTRY_TYPES.concat(RECIPE_INGREDIENT_TYPES, VENDOR_OFFER_TYPES);
+
+const CATALOG_CHILD_EDITOR_SPECS = Object.freeze({
+  loot_table: {
+    id: "loot",
+    title: "Lootregels",
+    emptyText: "Nog geen lootregels.",
+    parentMissingText: "Loot Table bestaat niet meer.",
+    inputPort: "entries",
+    outputPort: "lootEntry",
+    childTypes: LOOT_ENTRY_TYPES
+  },
+  recipe_definition: {
+    id: "recipe_ingredients",
+    title: "Ingredienten",
+    emptyText: "Nog geen ingredienten.",
+    parentMissingText: "Recipe bestaat niet meer.",
+    inputPort: "ingredients",
+    outputPort: "ingredient",
+    childTypes: RECIPE_INGREDIENT_TYPES
+  },
+  vendor_catalog: {
+    id: "vendor_offers",
+    title: "Vendor offers",
+    emptyText: "Nog geen vendor offers.",
+    parentMissingText: "Vendor Catalog bestaat niet meer.",
+    inputPort: "offers",
+    outputPort: "vendorOffer",
+    childTypes: VENDOR_OFFER_TYPES
+  }
+});
 
 const PLAYER_RULES_HUB_TYPES = [
   "player_progression_rules",
@@ -9012,9 +9209,9 @@ const UI_HUB_TYPES = [
 
 const AUTHORING_ROUTE_COUNT_TYPES = {
   world_zone: ["group", "zone_definition", "zone_output", "spawn_point", "zone_link", "map_marker_definition", "minimap_bake"],
-  object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "quest_target_binding"],
+  object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "crafting_station_component", "vendor_component", "marketplace_access_component", "quest_target_binding"],
   quest_dialogue: ["quest_definition", "quest_step", "dialogue_definition", "dialogue_entry", "dialogue_choice", "dialogue_terminal"],
-  item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(LOOT_ENTRY_TYPES.map(function (entry) { return entry.type; })),
+  item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(CATALOG_CHILD_ROUTE_TYPES.map(function (entry) { return entry.type; })),
   game_settings_ui: PLAYER_RULES_HUB_TYPES.concat(UI_HUB_TYPES)
 };
 
@@ -9411,7 +9608,14 @@ function questDialogueReferencesForObjectContext(context, graph = state.graph) {
 
 function catalogDefinitionNodeIdsForObjectContext(context, graph = state.graph) {
   const catalogRefs = new Set();
-  for (const component of [context?.interactionComponent, context?.npcComponent, context?.enemyComponent]) {
+  for (const component of [
+    context?.interactionComponent,
+    context?.npcComponent,
+    context?.enemyComponent,
+    context?.craftingComponent,
+    context?.vendorComponent,
+    context?.marketComponent
+  ]) {
     if (!component) continue;
     const fields = state.nodeTypes?.[component.type]?.fields || {};
     for (const [key, field] of Object.entries(fields)) {
@@ -10299,6 +10503,120 @@ function buildManagedJsonObjectControl(scope, draft, fieldName, field, value) {
   return wrap;
 }
 
+function recipeGrantFieldKind(draft, fieldName) {
+  if (draft?.type !== "recipe_definition") return "";
+  if (fieldName === "outputItems") return "item";
+  if (fieldName === "outputCurrencies") return "currency";
+  return "";
+}
+
+function normalizeRecipeGrantList(value, kind) {
+  const source = Array.isArray(value) ? value : [];
+  if (kind === "currency") {
+    return source.map(function (entry) {
+      return {
+        currencyRef: normalizeCanonicalId(entry?.currencyRef, ""),
+        amountMinor: Math.max(0, Math.floor(Number(entry?.amountMinor ?? entry?.amount ?? 0) || 0))
+      };
+    });
+  }
+  return source.map(function (entry) {
+    return {
+      itemRef: normalizeCanonicalId(entry?.itemRef, ""),
+      amount: Math.max(1, Math.floor(Number(entry?.amount ?? 1) || 1))
+    };
+  });
+}
+
+function buildRecipeGrantListControl(scope, draft, fieldName, field, value, kind) {
+  const entries = normalizeRecipeGrantList(value, kind);
+  const refKey = kind === "currency" ? "currencyRef" : "itemRef";
+  const amountKey = kind === "currency" ? "amountMinor" : "amount";
+  const refKinds = kind === "currency" ? ["currency"] : ["item"];
+  const labelText = kind === "currency" ? "currency-output" : "item-output";
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+
+  function commit(nextEntries) {
+    setManagedDraftValue(scope, fieldName, normalizeRecipeGrantList(nextEntries, kind));
+    renderAuthoringHub();
+  }
+
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Geen " + labelText + " ingesteld.";
+    wrap.appendChild(empty);
+  }
+
+  entries.forEach(function (entry, index) {
+    const row = document.createElement("div");
+    row.className = "objectFunctionBadge questTimelineChildBadge";
+    const accent = document.createElement("span");
+    accent.className = "objectFunctionBadgeAccent";
+    accent.style.background = kind === "currency" ? "#facc15" : "#84cc16";
+    const body = document.createElement("div");
+    body.className = "objectFunctionBadgeBody";
+    const title = document.createElement("div");
+    title.className = "objectFunctionBadgeLabel";
+    title.textContent = (kind === "currency" ? "Currency" : "Item") + " output";
+    const picker = buildReferencePickerField({
+      id: scope + "-recipe-output-" + fieldName + "-" + index,
+      type: draft.type,
+      values: {}
+    }, refKey, {
+      label: kind === "currency" ? "Currency" : "Item",
+      type: "reference",
+      referenceKinds: refKinds,
+      allowNull: true,
+      required: false
+    }, entry[refKey] || null, {
+      onChange: function (nextValue) {
+        const nextEntries = entries.slice();
+        nextEntries[index] = Object.assign({}, entry, { [refKey]: normalizeCanonicalId(nextValue, "") });
+        commit(nextEntries);
+      },
+      openCatalogAction: function () { selectAuthoringRoute("item_ability_stat"); },
+      openReferenceActionLabel: "Open Catalog",
+      openReferenceActionTitle: "Maak of kies eerst de bijbehorende Catalog-definitie.",
+      hideAdvanced: true
+    });
+    const amount = questTimelineNumberInput(entry[amountKey], function (nextValue) {
+      const nextEntries = entries.slice();
+      nextEntries[index] = Object.assign({}, entry, { [amountKey]: nextValue });
+      setManagedDraftValue(scope, fieldName, normalizeRecipeGrantList(nextEntries, kind));
+    }, { min: kind === "currency" ? 0 : 1, step: 1 });
+    const amountRow = objectFunctionDraftFieldRow(kind === "currency" ? "Amount minor" : "Amount", amount);
+    body.append(title, picker, amountRow);
+    const buttons = document.createElement("div");
+    buttons.className = "objectFunctionBadgeButtons";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijderen";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      commit(entries.filter(function (_, entryIndex) { return entryIndex !== index; }));
+    });
+    buttons.appendChild(remove);
+    row.append(accent, body, buttons);
+    wrap.appendChild(row);
+  });
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "+ " + (kind === "currency" ? "Currency output" : "Item output");
+  add.addEventListener("click", function () {
+    commit(entries.concat([kind === "currency"
+      ? { currencyRef: "", amountMinor: 1 }
+      : { itemRef: "", amount: 1 }]));
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
 function buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value) {
   const categories = normalizeMinimapMarkerCategories(value, field.default || []);
   const root = document.createElement("div");
@@ -10436,6 +10754,8 @@ function buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, fie
 
 function managedDraftFieldControl(scope, draft, fieldName, field) {
   const value = draft.values?.[fieldName];
+  const recipeGrantKind = recipeGrantFieldKind(draft, fieldName);
+  if (recipeGrantKind) return buildRecipeGrantListControl(scope, draft, fieldName, field, value, recipeGrantKind);
   if (field.type === "minimapMarkerCategories") return buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value);
   if (field.type === "reference") {
     const fakeNode = { id: scope + "-draft-" + draft.type + "-" + fieldName, type: draft.type, values: {} };
@@ -10721,19 +11041,125 @@ async function commitManagedDraft(scope, group, draft) {
   });
 }
 
+function catalogChildEditorSpecForParentType(type) {
+  return CATALOG_CHILD_EDITOR_SPECS[type] || null;
+}
+
+function managedNodeCanonicalIdentity(node) {
+  const idField = identityFieldForType(node?.type);
+  return normalizeCanonicalId(node?.values?.[idField], "");
+}
+
+function referenceValueMatchesManagedTarget(value, field, targetId) {
+  const normalizedTarget = normalizeCanonicalId(targetId, "");
+  if (!normalizedTarget || !field) return false;
+  const refs = field.type === "referenceList"
+    ? normalizeReferenceList(value)
+    : [normalizeCanonicalId(value, "")].filter(Boolean);
+  return refs.some(function (ref) {
+    if (ref === normalizedTarget) return true;
+    const resolved = normalizeCanonicalId(referencePickerChoiceState(ref, field).resolvedId, "");
+    return resolved === normalizedTarget;
+  });
+}
+
+function managedNodeUsageEntries(graph, targetNode, options = {}) {
+  const targetId = managedNodeCanonicalIdentity(targetNode);
+  if (!targetId) return [];
+  const ignoreIds = options.ignoreIds instanceof Set ? options.ignoreIds : new Set();
+  const entries = [];
+  for (const candidate of graph.nodes || []) {
+    if (!candidate || candidate.id === targetNode.id || ignoreIds.has(candidate.id)) continue;
+    const fields = state.nodeTypes?.[candidate.type]?.fields || {};
+    for (const [fieldName, field] of Object.entries(fields)) {
+      if (!field || (field.type !== "reference" && field.type !== "referenceList")) continue;
+      if (!referenceValueMatchesManagedTarget(candidate.values?.[fieldName], field, targetId)) continue;
+      entries.push({
+        node: candidate,
+        fieldName,
+        fieldLabel: field.label || fieldName
+      });
+    }
+  }
+  return entries;
+}
+
+function catalogParentForChildNode(graph, childNode) {
+  if (!childNode) return null;
+  for (const spec of Object.values(CATALOG_CHILD_EDITOR_SPECS)) {
+    if (!spec.childTypes.some(function (entry) { return entry.type === childNode.type; })) continue;
+    const edge = (graph.edges || []).find(function (candidate) {
+      return candidate.fromNodeId === childNode.id
+        && candidate.fromPort === spec.outputPort
+        && candidate.toPort === spec.inputPort;
+    }) || null;
+    if (!edge) continue;
+    const parent = graphNodeByIdInGraph(graph, edge.toNodeId);
+    if (parent) return { parent, spec };
+  }
+  return null;
+}
+
+function managedUsageNodeLabel(entry) {
+  const childParent = catalogParentForChildNode(state.graph, entry.node);
+  if (childParent) {
+    return (state.nodeTypes?.[entry.node?.type]?.label || entry.node?.type || "Node") + " in " + nodeDisplayTitle(childParent.parent);
+  }
+  return nodeDisplayTitle(entry.node);
+}
+
+function managedUsageEntryLabel(entry) {
+  return managedUsageNodeLabel(entry) + " (" + (state.nodeTypes?.[entry.node?.type]?.label || entry.node?.type || "node") + ") - " + entry.fieldLabel;
+}
+
+function renderManagedUsageSummary(entries) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionMeta";
+  if (!entries.length) {
+    wrap.textContent = "Nog nergens gebruikt.";
+    return wrap;
+  }
+  wrap.textContent = "Gebruikt door: ";
+  entries.slice(0, 6).forEach(function (entry, index) {
+    if (index > 0) wrap.appendChild(document.createTextNode(", "));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mini";
+    button.textContent = managedUsageNodeLabel(entry);
+    button.title = managedUsageEntryLabel(entry);
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      focusGraphNode(entry.node.id);
+    });
+    wrap.appendChild(button);
+  });
+  if (entries.length > 6) wrap.appendChild(document.createTextNode(" +" + (entries.length - 6) + " meer"));
+  return wrap;
+}
+
 async function deleteManagedNode(scope, group, node) {
   if (!group || !node) return;
   const label = state.nodeTypes?.[node.type]?.label || node.type;
-  const extraEntries = node.type === "loot_table"
-    ? questTimelineDirectSources(state.graph, node, "entries").length
-    : 0;
-  const ok = window.confirm(label + " \"" + nodeDisplayTitle(node) + "\" verwijderen" + (extraEntries ? " inclusief " + extraEntries + " lootregel(s)" : "") + "?");
+  const childSpec = catalogChildEditorSpecForParentType(node.type);
+  const childEntries = childSpec ? questTimelineDirectSources(state.graph, node, childSpec.inputPort).filter(function (candidate) {
+    return childSpec.childTypes.some(function (entry) { return entry.type === candidate.type; });
+  }) : [];
+  const cascadeIds = new Set(childEntries.map(function (entry) { return entry.id; }));
+  const usageEntries = managedNodeUsageEntries(state.graph, node, { ignoreIds: cascadeIds });
+  const childText = childEntries.length ? " inclusief " + childEntries.length + " gekoppelde regel(s)" : "";
+  const usageText = usageEntries.length
+    ? "\n\nGebruikt door:\n- " + usageEntries.slice(0, 10).map(managedUsageEntryLabel).join("\n- ") + (usageEntries.length > 10 ? "\n- +" + (usageEntries.length - 10) + " meer" : "")
+    : "";
+  const ok = window.confirm(label + " \"" + nodeDisplayTitle(node) + "\" verwijderen" + childText + "?" + usageText);
   if (!ok) return;
   const nextGraph = cloneGraphForRestore(state.graph);
   const removeIds = new Set([node.id]);
-  if (node.type === "loot_table") {
-    const nextTable = graphNodeByIdInGraph(nextGraph, node.id);
-    for (const entry of questTimelineDirectSources(nextGraph, nextTable, "entries")) removeIds.add(entry.id);
+  if (childSpec) {
+    const nextParent = graphNodeByIdInGraph(nextGraph, node.id);
+    for (const entry of questTimelineDirectSources(nextGraph, nextParent, childSpec.inputPort)) {
+      if (childSpec.childTypes.some(function (childType) { return childType.type === entry.type; })) removeIds.add(entry.id);
+    }
   }
   nextGraph.nodes = (nextGraph.nodes || []).filter(function (candidate) { return !removeIds.has(candidate.id); });
   nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
@@ -10833,7 +11259,7 @@ function renderManagedNodeList(scope, group, types) {
     const meta = document.createElement("div");
     meta.className = "authoring04ListMeta";
     meta.textContent = (state.nodeTypes?.[node.type]?.label || node.type) + " · " + (identityValue(node) || "interne id");
-    body.append(title, meta);
+    body.append(title, meta, renderManagedUsageSummary(managedNodeUsageEntries(state.graph, node)));
     const actions = document.createElement("div");
     actions.className = "authoring04Actions";
     const open = document.createElement("button");
@@ -10861,24 +11287,26 @@ function renderManagedNodeList(scope, group, types) {
     remove.addEventListener("click", function () { void deleteManagedNode(scope, group, node); });
     actions.append(open, edit, remove);
     row.append(body, actions);
-    if (node.type === "loot_table") row.appendChild(renderLootTableEntryEditor(group, node));
+    const childSpec = catalogChildEditorSpecForParentType(node.type);
+    if (childSpec) row.appendChild(renderCatalogChildEntryEditor(group, node, childSpec));
     list.appendChild(row);
   }
   return list;
 }
 
-function beginLootEntryDraft(group, table, type, entry = null) {
+function beginCatalogChildEntryDraft(group, parent, spec, type, entry = null) {
   state.catalogHubDraft = {
     groupId: group.id,
     type,
     existingNodeId: entry?.id || null,
-    lootTableId: table.id,
+    catalogChildParentId: parent.id,
+    catalogChildSpecId: spec.id,
     values: managedDefaultValuesForDraft(type, entry)
   };
   renderAuthoringHub();
 }
 
-async function commitLootEntryDraft(group, table, draft) {
+async function commitCatalogChildEntryDraft(group, parent, spec, draft) {
   const validation = validateManagedDraft("catalog", draft);
   if (validation) {
     setStatus(validation, "error");
@@ -10886,9 +11314,9 @@ async function commitLootEntryDraft(group, table, draft) {
   }
   const nextGraph = cloneGraphForRestore(state.graph);
   const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
-  const nextTable = graphNodeByIdInGraph(nextGraph, table.id);
-  if (!nextGroup || !nextTable) {
-    setStatus("Loot Table bestaat niet meer.", "error");
+  const nextParent = graphNodeByIdInGraph(nextGraph, parent.id);
+  if (!nextGroup || !nextParent) {
+    setStatus(spec.parentMissingText || "Definitie bestaat niet meer.", "error");
     return;
   }
   const fields = state.nodeTypes?.[draft.type]?.fields || {};
@@ -10906,13 +11334,13 @@ async function commitLootEntryDraft(group, table, draft) {
     : (normalizeCanonicalId(node.values?.[idField], "") || uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values)));
   const label = state.nodeTypes?.[draft.type]?.label || draft.type;
   if (!node) {
-    const existingCount = questTimelineDirectSources(nextGraph, nextTable, "entries").length;
+    const existingCount = questTimelineDirectSources(nextGraph, nextParent, spec.inputPort).length;
     node = {
       id: createZoneGraphId("node_" + draft.type),
       type: draft.type,
       title: label,
-      x: Math.round(Number(nextTable.x) || 80),
-      y: Math.round((Number(nextTable.y) || 180) + 180 + existingCount * 120),
+      x: Math.round(Number(nextParent.x) || 80),
+      y: Math.round((Number(nextParent.y) || 180) + 180 + existingCount * 120),
       parentId: nextGroup.id,
       values
     };
@@ -10922,7 +11350,7 @@ async function commitLootEntryDraft(group, table, draft) {
     node.parentId = nextGroup.id;
     node.values = Object.assign({}, node.values || {}, values);
   }
-  pushEdgeIfMissing(nextGraph, node.id, "lootEntry", nextTable.id, "entries");
+  pushEdgeIfMissing(nextGraph, node.id, spec.outputPort, nextParent.id, spec.inputPort);
   ensureCatalogGroupPackage(nextGraph, nextGroup);
   await restoreGraphObject(nextGraph, {
     historyLabel: label + (isNew ? " toegevoegd" : " gewijzigd"),
@@ -10966,7 +11394,49 @@ function lootEntryReadableSummary(entry) {
   ].join(" · ");
 }
 
-function renderLootEntryRow(group, table, entry) {
+function tagQueryReadableSummary(value) {
+  const query = normalizeTagQuery(value);
+  const parts = [];
+  if (query.all.length) parts.push("all " + query.all.join(", "));
+  if (query.any.length) parts.push("any " + query.any.join(", "));
+  if (query.none.length) parts.push("none " + query.none.join(", "));
+  return parts.join(" / ") || "geen tags";
+}
+
+function recipeIngredientReadableSummary(entry) {
+  const values = entry.values || {};
+  const kind = String(values.kind || "item");
+  let target = "";
+  if (kind === "currency") target = "Currency: " + managedReferenceLabel(values.currencyRef, ["currency"]);
+  else if (kind === "item_tag") target = "Item tags: " + tagQueryReadableSummary(values.itemTagQuery);
+  else target = "Item: " + managedReferenceLabel(values.itemRef, ["item"]);
+  return [
+    target,
+    "amount " + (values.amount ?? 1),
+    values.consume === false ? "niet consumeren" : "consumeren"
+  ].join(" · ");
+}
+
+function vendorOfferReadableSummary(entry) {
+  const values = entry.values || {};
+  const priceParts = [];
+  if (values.sellCurrencyRef) priceParts.push("sell " + (values.sellPriceMinor ?? 0) + " " + managedReferenceLabel(values.sellCurrencyRef, ["currency"]));
+  if (values.buyCurrencyRef) priceParts.push("buy " + (values.buyPriceMinor ?? 0) + " " + managedReferenceLabel(values.buyCurrencyRef, ["currency"]));
+  return [
+    "Item: " + managedReferenceLabel(values.itemRef, ["item"]),
+    "mode " + (values.mode || "both"),
+    priceParts.join(" / ") || "geen prijs",
+    "stock " + (values.stockMode || "infinite")
+  ].join(" · ");
+}
+
+function catalogChildEntryReadableSummary(entry) {
+  if (entry.type === "recipe_ingredient") return recipeIngredientReadableSummary(entry);
+  if (entry.type === "vendor_offer") return vendorOfferReadableSummary(entry);
+  return lootEntryReadableSummary(entry);
+}
+
+function renderCatalogChildEntryRow(group, parent, spec, entry) {
   const row = document.createElement("div");
   row.className = "objectFunctionBadge questTimelineChildBadge";
   const accent = document.createElement("span");
@@ -10979,7 +11449,7 @@ function renderLootEntryRow(group, table, entry) {
   label.textContent = state.nodeTypes?.[entry.type]?.label || entry.type;
   const meta = document.createElement("div");
   meta.className = "objectFunctionBadgeMeta";
-  meta.textContent = lootEntryReadableSummary(entry);
+  meta.textContent = catalogChildEntryReadableSummary(entry);
   meta.title = meta.textContent;
   body.append(label, meta);
   const buttons = document.createElement("div");
@@ -10990,7 +11460,7 @@ function renderLootEntryRow(group, table, entry) {
   manage.textContent = "Beheren";
   manage.addEventListener("click", function (event) {
     event.stopPropagation();
-    beginLootEntryDraft(group, table, entry.type, entry);
+    beginCatalogChildEntryDraft(group, parent, spec, entry.type, entry);
   });
   const remove = document.createElement("button");
   remove.type = "button";
@@ -11006,43 +11476,43 @@ function renderLootEntryRow(group, table, entry) {
   return row;
 }
 
-function renderLootTableEntryEditor(group, table) {
+function renderCatalogChildEntryEditor(group, parent, spec) {
   const wrap = document.createElement("div");
   wrap.className = "lootEntryEditor";
   const heading = document.createElement("div");
   heading.className = "objectFunctionMeta";
-  heading.textContent = "Lootregels";
+  heading.textContent = spec.title;
   wrap.appendChild(heading);
-  const entries = questTimelineDirectSources(state.graph, table, "entries").filter(function (node) {
-    return LOOT_ENTRY_TYPES.some(function (entry) { return entry.type === node.type; });
+  const entries = questTimelineDirectSources(state.graph, parent, spec.inputPort).filter(function (node) {
+    return spec.childTypes.some(function (entry) { return entry.type === node.type; });
   });
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "objectFunctionDraftHint";
-    empty.textContent = "Nog geen lootregels.";
+    empty.textContent = spec.emptyText;
     wrap.appendChild(empty);
   } else {
     const list = document.createElement("div");
     list.className = "objectFunctionBadgeRow";
     for (const entry of entries) {
-      list.appendChild(renderLootEntryRow(group, table, entry));
+      list.appendChild(renderCatalogChildEntryRow(group, parent, spec, entry));
     }
     wrap.appendChild(list);
   }
   const actions = document.createElement("div");
   actions.className = "authoring04Actions";
-  for (const entryType of LOOT_ENTRY_TYPES) {
+  for (const entryType of spec.childTypes) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "mini";
     button.textContent = "+ " + entryType.label;
-    button.addEventListener("click", function () { beginLootEntryDraft(group, table, entryType.type); });
+    button.addEventListener("click", function () { beginCatalogChildEntryDraft(group, parent, spec, entryType.type); });
     actions.appendChild(button);
   }
   wrap.appendChild(actions);
-  if (state.catalogHubDraft && state.catalogHubDraft.lootTableId === table.id) {
+  if (state.catalogHubDraft && state.catalogHubDraft.catalogChildParentId === parent.id && state.catalogHubDraft.catalogChildSpecId === spec.id) {
     wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft, {
-      onConfirm: function (draft) { return commitLootEntryDraft(group, table, draft); }
+      onConfirm: function (draft) { return commitCatalogChildEntryDraft(group, parent, spec, draft); }
     }));
   }
   return wrap;
@@ -11058,7 +11528,7 @@ function renderCatalogHub(group) {
   title.textContent = nodeDisplayTitle(group) || "Catalog";
   const intro = document.createElement("div");
   intro.className = "objectFunctionIntro";
-  intro.textContent = "Maak en beheer definities. IDs, Catalog Output, Group Output en Registry-koppeling worden automatisch afgehandeld.";
+  intro.textContent = "Maak en beheer definities. Een definitie plaatst nog geen wereldobject; plaatsen en G-verplaatsen gebeurt later via de World/Object-routes. IDs, Catalog Output, Group Output en Registry-koppeling worden automatisch afgehandeld.";
   header.append(title, intro);
   wrap.appendChild(header);
   const search = questTimelineTextInput(state.catalogHubSearch, function (value) {
@@ -11096,7 +11566,7 @@ function renderCatalogHub(group) {
   });
   actions.append(create, repair);
   wrap.appendChild(actions);
-  if (state.catalogHubDraft && state.catalogHubDraft.groupId === group.id && !state.catalogHubDraft.lootTableId) {
+  if (state.catalogHubDraft && state.catalogHubDraft.groupId === group.id && !state.catalogHubDraft.catalogChildParentId) {
     wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft));
   }
   wrap.appendChild(renderManagedNodeList("catalog", group, [state.catalogHubType]));
@@ -11541,7 +12011,7 @@ function renderAuthoringSection(route) {
         actionTitle.textContent = "Catalog Group ontbreekt";
         const actionText = document.createElement("div");
         actionText.className = "authoringRouteActionText";
-        actionText.textContent = "Maak een root-level Catalog Group om items, abilities, stats, currencies en loot tables te beheren.";
+        actionText.textContent = "Maak een root-level Catalog Group om NPCs, enemies, resources, items, recipes, vendor catalogs, abilities, stats, currencies en loot tables te beheren.";
         const buttons = document.createElement("div");
         buttons.className = "authoringRouteActionButtons";
         const button = document.createElement("button");
