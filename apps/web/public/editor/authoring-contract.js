@@ -1,4 +1,4 @@
-import { NODE_TYPES } from "../shared/node-types.js?v=20260911-authoring04-fix02";
+import { NODE_TYPES } from "../shared/node-types.js?v=20261006-portal-pair2";
 
 const GROUP_CLASS_DEFAULTS = Object.freeze({
   world: "viewport_tool",
@@ -98,10 +98,10 @@ const AUTHORING_ROUTES = Object.freeze([
   },
   {
     id: "item_ability_stat",
-    label: "Item / Ability / Stat",
-    summary: "Open bestaande Catalog Groups en werk in item-, ability-, stat- en loot-definities.",
+    label: "Catalog / Definities",
+    summary: "Open bestaande Catalog Groups en werk in item-, NPC-, enemy-, resource-, recipe-, vendor-, ability-, stat- en loot-definities.",
     allowedClasses: ["data_reference"],
-    libraryGroups: ["Catalog", "Combat", "Values"],
+    libraryGroups: ["Catalog", "Combat", "Values", "Crafting", "Vendors"],
     workspaceKinds: [
       { kind: "catalog", label: "Catalog Group", emptyText: "Nog geen Catalog Group gevonden." }
     ]

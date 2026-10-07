@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20260913-authoring-selection-context1">
+    <link rel="stylesheet" href="./styles.css?v=20261007-editor-nameplates1">
     <script type="importmap">
       {
         "imports": {
@@ -105,6 +105,9 @@
             <div class="viewportChromeBar">
               <div class="viewportStatus" id="viewportStatus">Draft viewport</div>
               <button id="viewportAuthoringIndicatorToggle" type="button" class="viewportNavButton" aria-pressed="false" title="Authoring-indicatoren">A</button>
+              <button id="viewportRuntimeNameplateToggle" type="button" class="viewportNavButton active" aria-pressed="true" title="Gameplayballonnen verbergen" aria-label="Gameplayballonnen tonen of verbergen">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 4.5h16v11H9l-5 4v-15Z"></path><path d="M8 9h8M8 12h5"></path></svg>
+              </button>
               <button id="viewportFocusButton" type="button" class="viewportNavButton" title="Focus selectie" aria-label="Focus selectie">F</button>
               <button id="viewportInfoButton" type="button" class="viewportInfoButton" title="Viewport help" aria-controls="viewportHelpPanel" aria-expanded="false">i</button>
             </div>
@@ -270,6 +273,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20260913-authoring-selection-context1"></script>
+    <script type="module" src="./editor.js?v=20261007-editor-nameplates1"></script>
   </body>
 </html>

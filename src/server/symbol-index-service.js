@@ -153,6 +153,7 @@ function specForNodeType(type) {
     case "encounter_controller":
       return { kind: "encounter", identityField: "encounterId", labelField: "encounterId" };
     case "resource_component":
+    case "pickup_component":
     case "lootable_component":
     case "destructible_component":
     case "enemy_component":
@@ -165,6 +166,8 @@ function specForNodeType(type) {
     case "vendor_component":
     case "marketplace_access_component":
       return { kind: "entity_component", identityField: "componentId", labelField: "componentId" };
+    case "portal_component":
+      return { kind: "portal", identityField: "componentId", labelField: "componentId" };
     case "xp_source_rule":
       return { kind: "policy", identityField: "xpRuleId", labelField: "xpRuleId" };
     case "player_progression_rules":

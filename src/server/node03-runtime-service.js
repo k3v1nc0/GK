@@ -33,40 +33,6 @@ function safeEntityReferenceId(value, fallback = "entity") {
   return normalized.slice(0, 55).replace(/[:_-]+$/g, "") + "_" + hash;
 }
 
-function modelVisualFromEntity(entity) {
-  if (!entity || !entity.modelAssetId) return {};
-  return {
-    modelAssetId: entity.modelAssetId || null,
-    modelScaleX: safeNumber(entity.scaleX, 1),
-    modelScaleY: safeNumber(entity.scaleY, 1),
-    modelScaleZ: safeNumber(entity.scaleZ, 1),
-    modelRotationX: safeNumber(entity.rotationX, 0),
-    modelRotationY: safeNumber(entity.rotationY, 0),
-    modelRotationZ: safeNumber(entity.rotationZ, 0)
-  };
-}
-
-function zoneLinkVisualModel(ctx, link, position) {
-  const entities = Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : [];
-  const candidates = entities.filter(function (entity) {
-    if (!entity || !entity.modelAssetId) return false;
-    const x = Number(entity.x);
-    const z = Number(entity.z);
-    return Number.isFinite(x) && Number.isFinite(z);
-  }).map(function (entity) {
-    const label = (safeString(entity.label, "") + " " + safeString(entity.entityId, "") + " " + safeString(entity.nodeId, "")).toLowerCase();
-    const portalMatch = /\b(portal|gate|travel|link)\b/.test(label);
-    const distance = Math.hypot(safeNumber(entity.x, 0) - safeNumber(position?.x, 0), safeNumber(entity.z, 0) - safeNumber(position?.z, 0));
-    return { entity, distance, portalMatch };
-  }).filter(function (entry) {
-    return entry.distance <= (entry.portalMatch ? 12 : 3.5);
-  }).sort(function (left, right) {
-    if (left.portalMatch !== right.portalMatch) return left.portalMatch ? -1 : 1;
-    return left.distance - right.distance;
-  });
-  return candidates.length ? modelVisualFromEntity(candidates[0].entity) : {};
-}
-
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -675,7 +641,124 @@ export class Node03RuntimeService {
         }
       }
     }
+    for (const entity of Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : []) {
+      result.push.apply(result, this.desiredStatesForAuthoredEntity(ctx, entity));
+    }
     return result;
+  }
+
+  desiredStatesForAuthoredEntity(ctx, entity) {
+    if (!entity || entity.nodeType !== "entity_assembly" || entity.model?.nodeType !== "model_entity") return [];
+    const model = entity.model;
+    const components = Array.isArray(entity.components) ? entity.components : [];
+    const authoredId = safeString(entity.entityId || model.entityId || model.nodeId || entity.nodeId, "authored_entity");
+    const base = {
+      x: safeNumber(model.x, 0),
+      y: safeNumber(model.y, 0),
+      z: safeNumber(model.z, 0),
+      visualEntityId: model.nodeId || model.entityId || null,
+      authoredEntityId: authoredId,
+      modelAssetId: null,
+      renderBody: false,
+      modelScaleX: safeNumber(model.scaleX, 1),
+      modelScaleY: safeNumber(model.scaleY, 1),
+      modelScaleZ: safeNumber(model.scaleZ, 1),
+      modelRotationX: safeNumber(model.rotationX, 0),
+      modelRotationY: safeNumber(model.rotationY, 0),
+      modelRotationZ: safeNumber(model.rotationZ, 0)
+    };
+    const states = [];
+    const enemyComponent = components.find(function (component) { return component?.nodeType === "enemy_component"; });
+    if (enemyComponent) {
+      const spawn = Object.assign({}, enemyComponent, {
+        nodeType: "enemy_component",
+        spawnEntryId: enemyComponent.componentId || entity.nodeId,
+        x: base.x,
+        y: base.y,
+        z: base.z,
+        radius: 0,
+        countMin: 1,
+        countMax: 1,
+        maxAlive: 1
+      });
+      const desired = this.desiredEnemiesForSpawn(ctx, {}, {}, spawn)[0];
+      if (desired) {
+        const definition = catalogSection(ctx.catalogs, "enemies")[enemyComponent.enemyRef] || {};
+        const variant = catalogSection(ctx.catalogs, "variants")[enemyComponent.variantRef] || {};
+        const stats = applyStatMultipliers(statBlockValues(ctx.catalogs, definition.statBlockRef || ""), variant);
+        const healthMax = healthFromStats(stats);
+        states.push(Object.assign({}, desired, base, {
+          instanceId: NODE03_INSTANCE_PREFIX + ctx.zoneId + ":authored:" + safeEntityReferenceId(authoredId) + ":enemy",
+          spawnEntryId: null,
+          enemyRef: enemyComponent.enemyRef || definition.id || null,
+          displayName: safeString(definition.displayName || entity.label || model.label, "Enemy"),
+          stats,
+          healthMax,
+          healthCurrent: healthMax,
+          lootTableRef: enemyComponent.lootOverrideRef || definition.lootTableRef || null,
+          respawnPolicyRef: enemyComponent.respawnOverrideRef || definition.defaultRespawnPolicyRef || null
+        }));
+      }
+    }
+    const resourceComponent = components.find(function (component) { return component?.nodeType === "resource_component"; });
+    if (resourceComponent) {
+      const spawn = Object.assign({}, resourceComponent, {
+        nodeType: "resource_component",
+        spawnEntryId: resourceComponent.componentId || entity.nodeId,
+        x: base.x,
+        y: base.y,
+        z: base.z,
+        radius: 0,
+        count: 1
+      });
+      const desired = this.desiredResourcesForSpawn(ctx, {}, {}, spawn)[0];
+      if (desired) {
+        const definition = catalogSection(ctx.catalogs, "resources")[resourceComponent.resourceRef] || {};
+        states.push(Object.assign({}, desired, base, {
+          instanceId: NODE03_INSTANCE_PREFIX + ctx.zoneId + ":authored:" + safeEntityReferenceId(authoredId) + ":resource",
+          spawnEntryId: null,
+          resourceRef: resourceComponent.resourceRef || definition.id || null,
+          displayName: safeString(definition.displayName || entity.label || model.label, "Resource"),
+          lootTableRef: definition.yieldLootTableRef || null,
+          yieldItemRefs: Array.isArray(definition.yieldItemRefs) ? definition.yieldItemRefs : [],
+          yieldMultiplier: Math.max(0, safeNumber(resourceComponent.yieldMultiplier, 1)),
+          requiredAbilityRef: definition.requiredAbilityRef || null,
+          respawnPolicyRef: resourceComponent.respawnPolicyOverrideRef || definition.respawnPolicyRef || null
+        }));
+      }
+    }
+    const pickupComponent = components.find(function (component) { return component?.nodeType === "pickup_component"; });
+    if (pickupComponent) {
+      const spawn = Object.assign({}, pickupComponent, {
+        nodeType: "pickup_component",
+        spawnEntryId: pickupComponent.componentId || entity.nodeId,
+        pickupKind: "item",
+        x: base.x,
+        y: base.y,
+        z: base.z,
+        minAmount: pickupComponent.amount,
+        maxAmount: pickupComponent.amount
+      });
+      const desired = this.desiredPickupForSpawn(ctx, {}, {}, spawn);
+      const definition = catalogSection(ctx.catalogs, "items")[pickupComponent.itemRef] || {};
+      states.push(Object.assign({}, desired, base, {
+        instanceId: NODE03_INSTANCE_PREFIX + ctx.zoneId + ":authored:" + safeEntityReferenceId(authoredId) + ":pickup",
+        spawnEntryId: null,
+        itemRef: pickupComponent.itemRef || definition.id || null,
+        definitionId: pickupComponent.itemRef || definition.id || null,
+        displayName: safeString(definition.displayName || entity.label || model.label, "Item"),
+        amount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
+        minAmount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
+        maxAmount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
+        respawnPolicyRef: pickupComponent.respawnPolicyRef || null,
+        interaction: {
+          action: "pickup",
+          prompt: safeString(pickupComponent.interactionPrompt, "Pick up"),
+          range: Math.max(0.1, safeNumber(pickupComponent.range, 3))
+        }
+      }));
+    }
+    return states;
   }
 
   desiredStatesForSpawn(ctx, controller, spawnSet, spawn) {
@@ -1033,7 +1116,7 @@ export class Node03RuntimeService {
       return safeNumber(ability.range, 2.8);
     }
     if (action === "gather") {
-      const ability = catalogSection(ctx.catalogs, "abilities")[entity.requiredAbilityRef || "ability.gather_sun_crystal"] || {};
+      const ability = catalogSection(ctx.catalogs, "abilities")[entity.requiredAbilityRef] || {};
       return safeNumber(ability.range, 3);
     }
     return safeNumber(entity?.interaction?.range, 3);
@@ -1132,7 +1215,13 @@ export class Node03RuntimeService {
       return { action: "gather", targetId: resource.instanceId, message: resource.displayName + " is tijdelijk depleted.", events: [] };
     }
     this.assertInRange(ctx, resource, "gather");
-    const grants = this.grantLootTable(ctx, resource.lootTableRef, operationId, resource.instanceId, "resource_gathered");
+    const yieldMultiplier = Math.max(0, safeNumber(resource.yieldMultiplier, 1));
+    const grants = yieldMultiplier > 0
+      ? this.grantLootTable(ctx, resource.lootTableRef, operationId, resource.instanceId, "resource_gathered", yieldMultiplier)
+      : [];
+    for (const itemRef of yieldMultiplier > 0 && Array.isArray(resource.yieldItemRefs) ? resource.yieldItemRefs : []) {
+      grants.push.apply(grants, this.grantItem(ctx, itemRef, Math.max(1, Math.round(yieldMultiplier)), "resource_gathered", resource.instanceId, operationId));
+    }
     resource.available = false;
     resource.status = "depleted";
     resource.depletedBy = ctx.profile.id;
@@ -1249,20 +1338,22 @@ export class Node03RuntimeService {
     };
   }
 
-  grantLootTable(ctx, lootTableRef, operationId, sourceRef, reason) {
+  grantLootTable(ctx, lootTableRef, operationId, sourceRef, reason, multiplier = 1) {
     const table = catalogSection(ctx.catalogs, "lootTables")[lootTableRef] || null;
     const grants = [];
+    const quantityMultiplier = Math.max(0, safeNumber(multiplier, 1));
+    if (quantityMultiplier <= 0) return grants;
     for (const entry of Array.isArray(table?.entries) ? table.entries : []) {
       const chance = safeNumber(entry?.chance, 1);
       if (entry?.guaranteed !== true && chance < 0.5) continue;
       if (entry.itemRef) {
         const min = Math.max(1, safeInteger(entry.minQuantity, 1));
         const max = Math.max(min, safeInteger(entry.maxQuantity, min));
-        grants.push.apply(grants, this.grantItem(ctx, entry.itemRef, Math.round((min + max) / 2), reason, sourceRef, operationId));
+        grants.push.apply(grants, this.grantItem(ctx, entry.itemRef, Math.max(1, Math.round(((min + max) / 2) * quantityMultiplier)), reason, sourceRef, operationId));
       } else if (entry.currencyRef) {
         const min = Math.max(1, safeInteger(entry.minAmountMinor, 1));
         const max = Math.max(min, safeInteger(entry.maxAmountMinor, min));
-        grants.push(this.grantCurrency(ctx, entry.currencyRef, Math.round((min + max) / 2), reason, sourceRef, operationId));
+        grants.push(this.grantCurrency(ctx, entry.currencyRef, Math.max(1, Math.round(((min + max) / 2) * quantityMultiplier)), reason, sourceRef, operationId));
       }
     }
     return grants.filter(Boolean);
@@ -1649,6 +1740,22 @@ export class Node03RuntimeService {
   }
 
   linkOriginPosition(ctx, link) {
+    const portal = (Array.isArray(ctx.zonePackage?.entities) ? ctx.zonePackage.entities : []).map(function (entity) {
+      if (entity?.nodeType !== "entity_assembly" || entity.model?.nodeType !== "model_entity") return null;
+      const component = (Array.isArray(entity.components) ? entity.components : []).find(function (candidate) {
+        return candidate?.nodeType === "portal_component" && candidate.zoneLinkRef === link?.linkId;
+      });
+      return component ? { entity, component } : null;
+    }).find(Boolean);
+    if (portal) {
+      return {
+        x: safeNumber(portal.entity.model.x, 0),
+        y: safeNumber(portal.entity.model.y, 0),
+        z: safeNumber(portal.entity.model.z, 0),
+        visualEntityId: portal.entity.model.nodeId || portal.entity.model.entityId || null,
+        component: portal.component
+      };
+    }
     const targetRef = safeString(link?.fromTargetRef || link?.fromSpawnRef, "");
     const spawns = Array.isArray(ctx.zonePackage?.spawns) ? ctx.zonePackage.spawns : [];
     const spawn = spawns.find(function (candidate) {
@@ -1663,19 +1770,21 @@ export class Node03RuntimeService {
   buildZoneLinkTargets(ctx) {
     const links = Array.isArray(ctx.zonePackage?.links) ? ctx.zonePackage.links : [];
     return links.filter(function (link) {
-      return link && link.toZoneRef && link.toSpawnRef && link.linkId && link.toZoneRef !== ctx.zonePackage?.zoneId;
+      return link && link.toZoneRef && (link.toSpawnRef || link.toPortalRef) && link.linkId;
     }).map((link) => {
       const position = this.linkOriginPosition(ctx, link);
       const targetZone = ctx.project?.zones?.byId?.[link.toZoneRef] || null;
       const distance = positionDistance(ctx.position, position);
-      const range = Math.max(3, safeNumber(link.preloadDistance, 30));
+      const range = position.component
+        ? Math.max(0.1, safeNumber(position.component.range, 4))
+        : Math.max(3, safeNumber(link.preloadDistance, 30));
       const targetName = targetZone?.zone?.displayName || link.toZoneRef;
-      return Object.assign({
+      return {
         instanceId: link.linkId,
         entityKind: "zone_link",
         targetKind: "zone_link",
         action: "travel",
-        prompt: link.prompt || "Travel",
+        prompt: position.component?.interactionPrompt || link.prompt || "Travel",
         displayName: targetName,
         status: "available",
         available: true,
@@ -1688,9 +1797,12 @@ export class Node03RuntimeService {
         x: position.x,
         y: position.y,
         z: position.z,
+        visualEntityId: position.visualEntityId || null,
+        renderBody: position.visualEntityId ? false : undefined,
         toZoneRef: link.toZoneRef,
-        toSpawnRef: link.toSpawnRef
-      }, zoneLinkVisualModel(ctx, link, position));
+        toSpawnRef: link.toSpawnRef,
+        toPortalRef: link.toPortalRef
+      };
     });
   }
 
@@ -1724,6 +1836,13 @@ export class Node03RuntimeService {
           visualEntityId: entity.visualEntityId || null,
           modelAssetId: entity.modelAssetId || null,
           modelScale: safeNumber(entity.modelScale, 1),
+          modelScaleX: entity.modelScaleX ?? null,
+          modelScaleY: entity.modelScaleY ?? null,
+          modelScaleZ: entity.modelScaleZ ?? null,
+          modelRotationX: entity.modelRotationX ?? null,
+          modelRotationY: entity.modelRotationY ?? null,
+          modelRotationZ: entity.modelRotationZ ?? null,
+          renderBody: entity.renderBody !== false,
           lootTableRef: entity.lootTableRef || null,
           x: entity.x,
           y: entity.y,

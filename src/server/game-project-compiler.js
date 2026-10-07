@@ -267,12 +267,18 @@ function entityPositionRecord(entity) {
   const isAssembly = entity.nodeType === "entity_assembly";
   const model = entity.nodeType === "entity_assembly" ? entity.model : entity;
   if (!model || model.nodeType !== "model_entity") return null;
+  const components = Array.isArray(entity.components) ? entity.components : [];
+  const npc = components.find(function (component) { return component.nodeType === "npc_component"; });
   return {
     nodeId: model.nodeId || null,
     nodeType: model.nodeType || null,
     entityId: isAssembly ? (entity.entityId || entity.nodeId || null) : (model.entityId || model.nodeId || null),
     label: isAssembly ? (entity.label || model.label || null) : (model.label || null),
     modelAssetId: model.modelAssetId || null,
+    npcRef: npc?.npcRef || null,
+    interactionEnabled: npc ? components.some(function (component) {
+      return component.nodeType === "interaction_component" && component.enabled !== false;
+    }) : undefined,
     modelScaleX: Number(model.scaleX),
     modelScaleY: Number(model.scaleY),
     modelScaleZ: Number(model.scaleZ),

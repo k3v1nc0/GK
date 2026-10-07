@@ -25,6 +25,7 @@ body {
 .graphColumn,
 .viewportColumn,
 .assetColumn {
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -154,9 +155,17 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
     8px
     minmax(0, var(--assets-width));
   min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
-.tools { overflow-y: auto; background: #0c1218; border-right: 1px solid #1c2733; }
+.tools {
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #0c1218;
+  border-right: 1px solid #1c2733;
+}
 
 /* Blender-achtige vrije venster-indeling voor het "All" tabblad (alleen mobiel/smal, zie media query) */
 .allLayoutRoot { display: none; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -263,21 +272,21 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   flex: 0 0 auto;
 }
 .authoringRouteChip {
-  flex: 0 1 auto;
+  flex: 1 1 180px;
   min-width: 0;
   display: inline-flex;
   align-items: center;
   min-height: 32px;
-  padding: 0 10px;
+  padding: 7px 10px;
   border-radius: 999px;
   background: #13202b;
   border: 1px solid #294050;
   color: #cdd6dd;
   font-size: 12px;
   font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .authoringSelectionChip {
   border-color: #314955;
@@ -410,6 +419,25 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
+}
+.authoring04Actions > *,
+.authoring04DirectionRow > * {
+  min-width: 0;
+}
+.authoring04ListBody > .objectFunctionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.authoring04ListBody > .objectFunctionMeta .mini {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 .authoring04TypeGrid {
   display: grid;
@@ -688,6 +716,52 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   border: 1px solid #32404f;
   background: linear-gradient(180deg, #101821, #0c1218);
 }
+.visualBuilder {
+  border-color: #3b6280;
+  background: linear-gradient(180deg, rgba(14, 33, 46, 0.98), rgba(9, 21, 30, 0.98));
+}
+.visualBuilderStart { width: 100%; }
+.visualBuilderProgress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+.visualBuilderProgress button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px;
+  border: 1px solid #2d4050;
+  border-radius: 8px;
+  background: #0c151d;
+  color: #7f93a3;
+  font: inherit;
+  font-size: 9px;
+  line-height: 1.2;
+}
+.visualBuilderProgress button.active {
+  border-color: #7bd4ff;
+  color: #effaff;
+  background: #123047;
+}
+.visualBuilderProgress button.done { color: #a7e8c7; border-color: #276047; }
+.visualBuilderRoles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+.visualBuilderRoles button {
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid #314554;
+  border-radius: 9px;
+  background: #111d27;
+  color: #e8f0f5;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+}
+.visualBuilderRoles button.selected { border-color: #7bd4ff; background: #143149; }
+.visualBuilderReview { display: grid; gap: 7px; color: #d8e6ee; font-size: 12px; }
 .objectFunctionDraftTitle {
   font-size: 14px;
   font-weight: 900;
@@ -767,10 +841,13 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 
 .questTimelineTabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 .questTimelineTab {
-  flex: 1 1 auto;
+  flex: 1 1 112px;
+  min-width: 0;
   min-height: 34px;
   padding: 7px 10px;
   border-radius: 8px;
@@ -781,6 +858,9 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
 }
 .questTimelineTab--active {
   border-color: #7bd4ff;
@@ -1460,12 +1540,22 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .viewportNavButton {
   border-radius: 7px;
 }
+.viewportNavButton svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
 .viewportInfoButton:hover,
 .viewportNavButton:hover {
   border-color: #4e6d86;
   background: #132130;
 }
-.viewportInfoButton.active {
+.viewportInfoButton.active,
+.viewportNavButton.active {
   background: #1b2a39;
   border-color: #5b88ab;
   color: #d8f1ff;
@@ -2014,6 +2104,14 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .referencePickerResult--active {
   border-color: #7bd4ff;
   box-shadow: inset 0 0 0 1px rgba(123, 212, 255, 0.25);
+}
+.referencePickerResult--selected {
+  border-color: #3c9c73;
+  background: rgba(20, 69, 52, 0.42);
+}
+.referencePickerResult--selected.referencePickerResult--active {
+  border-color: #8be7be;
+  box-shadow: inset 0 0 0 1px rgba(139, 231, 190, 0.28);
 }
 .referencePickerResultTitle {
   font-size: 12px;
