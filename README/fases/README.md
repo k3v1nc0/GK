@@ -6,7 +6,9 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn niet automatisch actief.
 
-- [AUTHORING-04 - Complete visuele authoring voor alle vijf hoofdroutes](./AUTHORING-04-Complete-Visual-Authoring.md) - implemented, awaiting Kevin acceptance on 2026-09-11; AUTHORING-04-FIX-01/FIX-02 Zone Canvas packagepoort applied.
+- [AUTHORING VISUAL BUILDER - Fase 1 van 3](./AUTHORING-VISUAL-BUILDER-01.md) - Fase 1 implemented, awaiting Kevin acceptance on 2026-10-06.
+
+- [AUTHORING-04 - Complete visuele authoring voor alle vijf hoofdroutes](./AUTHORING-04-Complete-Visual-Authoring.md) - implemented, awaiting Kevin acceptance on 2026-09-11; AUTHORING-04-FIX-01/FIX-02 Zone Canvas packagepoort, FIX-03 authoring-convergence entity/component ownership, and AUTHORING-MIRROR-DEMO microfase 1 Catalog Coverage applied.
 - [NODE-02 - Zones, Areas, Entity Composition, Spawns, Travel, Minimap](./NODE-02-Zones-Areas-Entity-Composition-Spawns-Travel-Minimap.md) - implemented on 2026-07-19; Kevin acceptance depends on explicit follow-up/microfase. Evidence: [NODE-02 zones composition](./evidence/NODE-02-zones-composition/README.md).
 - [Fase MMO-01 - Account, Login, WebSocket Live Player Sync en Persisted Player Start](./MMO-01-Account-Login-WebSocket-Live-Player-Sync.md)
 - [Fase MMO-02 - Real MMO Presence: Andere Players Zien](./MMO-02-Real-MMO-Presence-Andere-Players-Zien.md)

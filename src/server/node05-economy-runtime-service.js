@@ -113,15 +113,49 @@ function operationIdFromPayload(payload) {
 function connectedComponents(zonePackage) {
   const components = Array.isArray(zonePackage?.entityComponents) ? zonePackage.entityComponents.slice() : [];
   for (const entity of Array.isArray(zonePackage?.entities) ? zonePackage.entities : []) {
-    if (Array.isArray(entity?.components)) components.push.apply(components, entity.components);
+    if (!Array.isArray(entity?.components)) continue;
+    const linkedEntityId = safeString(entity?.entityId || entity?.model?.entityId || entity?.model?.nodeId || entity?.nodeId || "", "");
+    components.push.apply(components, entity.components.map(function (component) {
+      if (!component || !linkedEntityId || component.linkedEntityId || component.entityRef) return component;
+      return Object.assign({}, component, { linkedEntityId });
+    }));
   }
   return components.filter(Boolean);
 }
 
+function canonicalZoneEntity(entity) {
+  if (!entity) return null;
+  if (entity.nodeType === "entity_assembly") {
+    const model = entity.model || null;
+    if (!model || model.nodeType !== "model_entity") return null;
+    return Object.assign({}, model, {
+      entityId: entity.entityId || model.entityId || model.nodeId || null,
+      label: entity.label || model.label || entity.entityId || model.entityId || model.nodeId || null,
+      assemblyNodeId: entity.nodeId || null,
+      assemblyEntityId: entity.entityId || null
+    });
+  }
+  if (entity.nodeType === "model_entity") return entity;
+  if (entity.modelAssetId && (entity.transform || Number.isFinite(Number(entity.x)) || Number.isFinite(Number(entity.z)))) return entity;
+  return null;
+}
+
+function zoneEntityIdValues(entity) {
+  return [
+    entity?.entityId,
+    entity?.nodeId,
+    entity?.id,
+    entity?.assemblyEntityId,
+    entity?.assemblyNodeId
+  ].map(function (value) {
+    return safeString(value, "");
+  }).filter(Boolean);
+}
+
 function visibleEntities(zonePackage) {
-  return (Array.isArray(zonePackage?.entities) ? zonePackage.entities : []).filter(function (entity) {
-    return entity && entity.nodeType === "model_entity";
-  });
+  return (Array.isArray(zonePackage?.entities) ? zonePackage.entities : [])
+    .map(canonicalZoneEntity)
+    .filter(Boolean);
 }
 
 function linkedEntityForComponent(zonePackage, component) {
@@ -129,7 +163,7 @@ function linkedEntityForComponent(zonePackage, component) {
   const entities = visibleEntities(zonePackage);
   if (entityId) {
     const found = entities.find(function (entity) {
-      return entity.entityId === entityId || entity.nodeId === entityId || entity.id === entityId;
+      return zoneEntityIdValues(entity).includes(entityId);
     });
     if (found) return found;
   }
@@ -138,9 +172,10 @@ function linkedEntityForComponent(zonePackage, component) {
 
 function positionedComponent(ctx, component) {
   const entity = linkedEntityForComponent(ctx.zonePackage, component);
-  const x = safeNumber(entity?.x ?? component?.x, safeNumber(ctx.position?.x, 0));
-  const y = safeNumber(entity?.y ?? component?.y, 0);
-  const z = safeNumber(entity?.z ?? component?.z, safeNumber(ctx.position?.z, 0));
+  const entityPosition = entity?.transform?.position || {};
+  const x = safeNumber(entityPosition.x ?? entity?.x ?? component?.x, safeNumber(ctx.position?.x, 0));
+  const y = safeNumber(entityPosition.y ?? entity?.y ?? component?.y, 0);
+  const z = safeNumber(entityPosition.z ?? entity?.z ?? component?.z, safeNumber(ctx.position?.z, 0));
   const distance = positionDistance(ctx.position, { x, z });
   const range = Math.max(1, safeNumber(component?.range || component?.distance || 5, 5));
   return Object.assign({}, component, {

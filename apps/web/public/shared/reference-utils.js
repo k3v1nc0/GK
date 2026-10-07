@@ -7,7 +7,7 @@ import {
   normalizeReferenceList,
   normalizeTagList,
   normalizeTagQuery
-} from "./node-contract.js";
+} from "./node-contract.js?v=20261006-portal-pair2";
 
 function safeString(value) {
   return String(value === null || value === undefined ? "" : value).trim();
@@ -107,4 +107,3 @@ export function referencePickerSort(left, right) {
 }
 
 export { isCanonicalId, isCanonicalTag };
-

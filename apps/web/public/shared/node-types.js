@@ -2347,6 +2347,7 @@ const FOUNDATION_REFERENCE_KINDS = [
   "vfx",
   "policy",
   "spawn",
+  "portal",
   "tag"
 ];
 
@@ -3046,12 +3047,13 @@ const ZONE_NODE_DEFS = {
       fromZoneRef: { label: "From zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: false },
       fromTargetRef: { label: "From target", type: "reference", referenceKinds: ["spawn", "target"], allowNull: true, default: null, required: false },
       toZoneRef: { label: "To zone", type: "reference", referenceKinds: ["zone"], allowNull: true, default: null, required: true },
-      toSpawnRef: { label: "To spawn", type: "reference", referenceKinds: ["spawn"], allowNull: true, default: null, required: true },
+      toSpawnRef: { label: "To spawn", type: "reference", referenceKinds: ["spawn"], allowNull: true, default: null, required: false },
+      toPortalRef: { label: "To portal", type: "reference", referenceKinds: ["portal"], allowNull: true, default: null, required: false },
       mode: { label: "Mode", type: "select", options: ["door", "portal", "teleport", "fast_travel", "seamless_boundary", "scripted_transport"], default: "portal", required: true },
       bidirectional: { label: "Bidirectional", type: "boolean", default: false, required: true },
       reverseLinkRef: { label: "Reverse link", type: "reference", referenceKinds: ["zone_link"], allowNull: true, default: null, required: false },
       transitionVisual: { label: "Transition visual", type: "select", options: ["none", "fade", "loading_screen"], default: "fade", required: true },
-      loadingText: { label: "Loading text", type: "tokenText", default: "Reizen naar @{zone.name}", required: false, maxLength: 240 },
+      loadingText: { label: "Loading text", type: "tokenText", default: "Reizen...", required: false, maxLength: 240, allowRuntimeTokens: true },
       preloadDistance: { label: "Preload distance", type: "number", default: 30, min: 0, max: 500, step: 1, required: true },
       interactionRequired: { label: "Interaction required", type: "boolean", default: true, required: true },
       prompt: { label: "Prompt", type: "tokenText", default: "Gebruik doorgang", required: false, maxLength: 240 },
@@ -4040,6 +4042,38 @@ const NODE03_RUNTIME_NODE_DEFS = {
       yieldMultiplier: numberField("Yield x", 1, 0, 1000, 0.01),
       respawnPolicyOverrideRef: refField("Respawn override", ["respawn_policy"]),
       scopeOverride: { label: "Scope override", type: "select", options: ["", "shared_zone", "per_player", "instance"], default: "", required: false, allowBlank: true }
+    }
+  },
+  pickup_component: {
+    label: "Pickup Component",
+    group: "Entities",
+    accent: "#fbbf24",
+    description: "Turns the linked authored entity into a physical item pickup.",
+    inputs: {},
+    outputs: { component: { label: "Entity Component", dataType: "entityComponent" } },
+    fields: {
+      componentId: { label: "Component id", type: "identity", default: "component.pickup", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      itemRef: refField("Item", ["item"], true),
+      amount: numberField("Amount", 1, 1, 1000000, 1),
+      ownershipMode: { label: "Ownership", type: "select", options: ["personal", "shared", "party_policy"], default: "shared", required: true },
+      respawnPolicyRef: refField("Respawn policy", ["respawn_policy"]),
+      interactionPrompt: { label: "Prompt", type: "tokenText", default: "Pick up", required: false, maxLength: 160 },
+      range: numberField("Range", 3, 0.1, 1000, 0.1)
+    }
+  },
+  portal_component: {
+    label: "Portal Component",
+    group: "Entities",
+    accent: "#06b6d4",
+    description: "Attaches an existing Zone Link to one authored visible entity.",
+    inputs: {},
+    outputs: { component: { label: "Entity Component", dataType: "entityComponent" } },
+    fields: {
+      componentId: { label: "Component id", type: "identity", default: "portal.new_portal", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
+      zoneLinkRef: refField("Zone link", ["zone_link"]),
+      interactionPrompt: { label: "Prompt", type: "tokenText", default: "Travel", required: false, maxLength: 160 },
+      range: numberField("Range", 4, 0.1, 1000, 0.1),
+      autoActivate: { label: "Auto activate", type: "boolean", default: false, required: true }
     }
   },
   lootable_component: {
@@ -5411,7 +5445,7 @@ const NODE04_CAMPAIGN_NODE_DEFS = {
     fields: {
       dialogueId: { label: "Dialogue id", type: "identity", default: "dialogue.new", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
       displayName: { label: "Display name", type: "text", default: "New Dialogue", required: true, maxLength: 120 },
-      targetRef: refField("Target", ["target"], true),
+      targetRef: refField("Target", ["target"]),
       startEntryRef: refField("Start entry", ["dialogue_entry"]),
       tags: { label: "Tags", type: "tagList", default: [], required: false }
     }

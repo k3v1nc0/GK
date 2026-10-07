@@ -81,6 +81,7 @@ export const REFERENCE_KINDS = Object.freeze([
   "area",
   "checkpoint",
   "zone_link",
+  "portal",
   "marker",
   "minimap",
   "entity_component",

@@ -1,14 +1,15 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20260913-authoring-indicators-pan1";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20260911-authoring04-fix02";
-import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20260911-authoring04-fix02";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261007-editor-nameplates1";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261006-portal-pair2";
+import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
   normalizeCanonicalId,
   normalizeReferenceKind,
   normalizeReferenceList,
   normalizeTagList,
   normalizeTagQuery
-} from "../shared/node-contract.js?v=20260717-node01-foundation";
-import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20260717-node01-foundation";
+} from "../shared/node-contract.js?v=20261006-portal-pair2";
+import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
+import { removeVisualObjects, visualObjectRelations } from "./visual-object-relations.js?v=20261006-portal-pair3";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -59,8 +60,9 @@ const ZONE_CANVAS_DIRECTIONS = {
 const ASSET_CARD_SIZE_STORAGE_KEY = "gk.assetCardSize";
 const AUTHORING_ROUTE_STORAGE_KEY = "gk.editorAuthoringRoute";
 const AUTHORING_INDICATORS_STORAGE_KEY = "gk.editorAuthoringIndicators";
+const RUNTIME_NAMEPLATES_STORAGE_KEY = "gk.editorRuntimeNameplates";
 const CURRENT_GROUP_STORAGE_KEY = "gk.editorCurrentGroupId";
-const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes";
+const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes.v2";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
 const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayoutTree";
 const ALL_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
@@ -157,7 +159,10 @@ const state = {
   settingsHubDraft: null,
   settingsHubSearch: "",
   authoringIndicatorsEnabled: loadStoredAuthoringIndicators(),
+  runtimeNameplatesEnabled: loadStoredRuntimeNameplates(),
   objectFunctionDraft: null,
+  visualBuilderDraft: null,
+  visualObjectNodeScope: null,
   questTimelineView: "quest",
   questTimelineSelectedQuestId: null,
   questTimelineSelectedStepId: null,
@@ -327,6 +332,7 @@ const el = {
   viewportHelpPanel: document.querySelector("#viewportHelpPanel"),
   viewportTransformPanel: document.querySelector("#viewportTransformPanel"),
   viewportAuthoringIndicatorToggle: document.querySelector("#viewportAuthoringIndicatorToggle"),
+  viewportRuntimeNameplateToggle: document.querySelector("#viewportRuntimeNameplateToggle"),
   viewportAuthoringIndicators: document.querySelector("#viewportAuthoringIndicators"),
   editorMinimapRoot: document.querySelector("#editorMinimapRoot"),
   editorMinimapCanvas: document.querySelector("#editorMinimapCanvas"),
@@ -746,6 +752,20 @@ function storeAuthoringIndicators(enabled) {
   } catch {}
 }
 
+function loadStoredRuntimeNameplates() {
+  try {
+    return window.localStorage.getItem(RUNTIME_NAMEPLATES_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function storeRuntimeNameplates(enabled) {
+  try {
+    window.localStorage.setItem(RUNTIME_NAMEPLATES_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {}
+}
+
 function storeAuthoringRoute(routeId) {
   try {
     if (routeId) window.localStorage.setItem(AUTHORING_ROUTE_STORAGE_KEY, String(routeId));
@@ -818,7 +838,8 @@ function applyStoredEditorLayoutSizes() {
       "--assets-width",
       "--mobile-tools-height",
       "--mobile-graph-height",
-      "--mobile-viewport-height"
+      "--mobile-viewport-height",
+      "--mobile-assets-height"
     ]);
     for (const [name, value] of Object.entries(stored || {})) {
       if (!allowed.has(name)) continue;
@@ -837,7 +858,8 @@ function persistEditorLayoutSizes() {
       "--assets-width",
       "--mobile-tools-height",
       "--mobile-graph-height",
-      "--mobile-viewport-height"
+      "--mobile-viewport-height",
+      "--mobile-assets-height"
     ];
     const stored = {};
     for (const name of names) {
@@ -3918,6 +3940,16 @@ function renderViewportControls() {
     el.viewportInfoButton.setAttribute("aria-expanded", state.viewportHelpOpen ? "true" : "false");
   }
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = !state.viewportHelpOpen;
+  if (el.viewportRuntimeNameplateToggle) {
+    el.viewportRuntimeNameplateToggle.classList.toggle("active", state.runtimeNameplatesEnabled);
+    el.viewportRuntimeNameplateToggle.setAttribute("aria-pressed", state.runtimeNameplatesEnabled ? "true" : "false");
+    el.viewportRuntimeNameplateToggle.title = state.runtimeNameplatesEnabled
+      ? "Gameplayballonnen verbergen"
+      : "Gameplayballonnen tonen";
+  }
+  if (runtime && typeof runtime.setRuntimeTargetNameplatesVisible === "function") {
+    runtime.setRuntimeTargetNameplatesVisible(state.runtimeNameplatesEnabled);
+  }
   if (el.snapModeSelect && el.snapModeSelect.value !== state.snapMode) el.snapModeSelect.value = state.snapMode;
   if (el.snapGridInput) {
     const nextValue = String(state.snapGridSize || 1);
@@ -5562,6 +5594,52 @@ function objectFunctionNavigationZoneGroup(model, graph = state.graph) {
   return zoneCanvasAncestorForNode(model, graph) || firstZoneCanvasGroup(graph);
 }
 
+function objectFunctionRehomePackageToSpatialZone(graph, model) {
+  if (!model || model.type !== "model_entity") return null;
+  const zoneGroup = zoneCanvasGroupContainingPoint(Number(model.values?.x), Number(model.values?.z), graph);
+  const zoneOutput = zoneGroup ? zoneOutputForGroup(zoneGroup.id, graph) : null;
+  if (!zoneGroup || !zoneDefinitionForGroup(zoneGroup.id, graph) || !zoneOutput) return null;
+
+  const assemblyIds = new Set((graph.edges || []).filter(function (edge) {
+    return edge.fromNodeId === model.id && edge.fromPort === "entity" && edge.toPort === "model";
+  }).map(function (edge) {
+    return edge.toNodeId;
+  }));
+  const packageIds = new Set([model.id]);
+  for (const assemblyId of assemblyIds) packageIds.add(assemblyId);
+  for (const edge of graph.edges || []) {
+    if (assemblyIds.has(edge.toNodeId) && edge.fromPort === "component" && edge.toPort === "components") {
+      packageIds.add(edge.fromNodeId);
+    }
+    if (assemblyIds.has(edge.fromNodeId) && edge.fromPort === "entity" && edge.toPort === "entity") {
+      packageIds.add(edge.toNodeId);
+    }
+  }
+  const portalLinkRefs = new Set((graph.nodes || []).filter(function (node) {
+    return packageIds.has(node.id) && node.type === "portal_component";
+  }).map(function (node) {
+    return normalizeCanonicalId(node.values?.zoneLinkRef, "");
+  }).filter(Boolean));
+  for (const node of graph.nodes || []) {
+    if (node.type === "zone_link" && portalLinkRefs.has(normalizeCanonicalId(node.values?.linkId, ""))) {
+      packageIds.add(node.id);
+    }
+    if (packageIds.has(node.id)) node.parentId = zoneGroup.id;
+  }
+  objectFunctionRemoveEdges(graph, function (edge) {
+    const target = graphNodeByIdInGraph(graph, edge.toNodeId);
+    return target?.type === "zone_output"
+      && edge.fromPort === "entity"
+      && edge.toPort === "entities"
+      && (edge.fromNodeId === model.id || assemblyIds.has(edge.fromNodeId))
+      && edge.toNodeId !== zoneOutput.id;
+  });
+  for (const assemblyId of assemblyIds) {
+    pushEdgeIfMissing(graph, assemblyId, "entity", zoneOutput.id, "entities");
+  }
+  return zoneGroup;
+}
+
 function objectFunctionContextForModel(model, graph = state.graph) {
   const parentGroup = model?.parentId ? (graph.nodes || []).find(function (node) {
     return node.id === model.parentId && node.type === "group";
@@ -5578,18 +5656,42 @@ function objectFunctionContextForModel(model, graph = state.graph) {
   const interactionNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "interaction_component");
   const npcNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "npc_component");
   const enemyNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "enemy_component");
+  const resourceNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "resource_component");
+  const pickupNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "pickup_component");
+  const portalNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "portal_component");
+  const craftingNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "crafting_station_component");
+  const vendorNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "vendor_component");
+  const marketNodes = objectFunctionConnectedNodesForAssembly(graph, assembly, "marketplace_access_component");
   const questNodes = questTargetBindingsForModel(model, graph);
   const interactionComponent = interactionNodes[0] || null;
   const npcComponent = npcNodes[0] || null;
   const enemyComponent = enemyNodes[0] || null;
+  const resourceComponent = resourceNodes[0] || null;
+  const pickupComponent = pickupNodes[0] || null;
+  const portalComponent = portalNodes[0] || null;
+  const craftingComponent = craftingNodes[0] || null;
+  const vendorComponent = vendorNodes[0] || null;
+  const marketComponent = marketNodes[0] || null;
   const questBinding = questNodes[0] || null;
   const interactionEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "interaction_component");
   const npcEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "npc_component");
   const enemyEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "enemy_component");
+  const resourceEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "resource_component");
+  const pickupEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "pickup_component");
+  const portalEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "portal_component");
+  const craftingEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "crafting_station_component");
+  const vendorEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "vendor_component");
+  const marketEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "marketplace_access_component");
   const questEdgeCount = objectFunctionConnectedEdgeCountForAssembly(graph, assembly, "quest_target_binding");
   const duplicateInteractionCount = Math.max(interactionNodes.length, interactionEdgeCount);
   const duplicateNpcCount = Math.max(npcNodes.length, npcEdgeCount);
   const duplicateEnemyCount = Math.max(enemyNodes.length, enemyEdgeCount);
+  const duplicateResourceCount = Math.max(resourceNodes.length, resourceEdgeCount);
+  const duplicatePickupCount = Math.max(pickupNodes.length, pickupEdgeCount);
+  const duplicatePortalCount = Math.max(portalNodes.length, portalEdgeCount);
+  const duplicateCraftingCount = Math.max(craftingNodes.length, craftingEdgeCount);
+  const duplicateVendorCount = Math.max(vendorNodes.length, vendorEdgeCount);
+  const duplicateMarketCount = Math.max(marketNodes.length, marketEdgeCount);
   const duplicateQuestCount = Math.max(questNodes.length, questEdgeCount);
   const issues = [];
   if (!model) {
@@ -5614,6 +5716,24 @@ function objectFunctionContextForModel(model, graph = state.graph) {
   if (duplicateEnemyCount > 1) {
     issues.push({ kind: "enemy", message: "Meerdere Enemy Components zijn aan deze assembly gekoppeld." });
   }
+  if (duplicateResourceCount > 1) {
+    issues.push({ kind: "resource", message: "Meerdere Resource Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicatePickupCount > 1) {
+    issues.push({ kind: "pickup", message: "Meerdere Pickup Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicatePortalCount > 1) {
+    issues.push({ kind: "portal", message: "Meerdere Portal Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateCraftingCount > 1) {
+    issues.push({ kind: "crafting", message: "Meerdere Crafting Station Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateVendorCount > 1) {
+    issues.push({ kind: "vendor", message: "Meerdere Vendor Components zijn aan deze assembly gekoppeld." });
+  }
+  if (duplicateMarketCount > 1) {
+    issues.push({ kind: "market", message: "Meerdere Marketplace Access Components zijn aan deze assembly gekoppeld." });
+  }
   if (duplicateQuestCount > 1) {
     issues.push({ kind: "quest", message: "Meerdere Quest Target bindings zijn aan deze assembly gekoppeld." });
   }
@@ -5631,12 +5751,18 @@ function objectFunctionContextForModel(model, graph = state.graph) {
     interactionComponent: interactionComponent || null,
     npcComponent: npcComponent || null,
     enemyComponent: enemyComponent || null,
+    resourceComponent: resourceComponent || null,
+    pickupComponent: pickupComponent || null,
+    portalComponent: portalComponent || null,
+    craftingComponent: craftingComponent || null,
+    vendorComponent: vendorComponent || null,
+    marketComponent: marketComponent || null,
     questBinding: questBinding || null,
     modelStem: model ? objectFunctionModelStem(model) : "",
     assemblyEntityId: objectFunctionAssemblyEntityId(model, graph),
     issues: issues,
     canCreate: Boolean(model && zoneGroup && zoneOutput && issues.every(function (issue) {
-      return !["selection", "parent", "zone", "output", "assembly", "interaction", "npc", "enemy", "quest", "conflict"].includes(issue.kind);
+      return !["selection", "parent", "zone", "output", "assembly", "interaction", "npc", "enemy", "resource", "pickup", "portal", "crafting", "vendor", "market", "quest", "conflict"].includes(issue.kind);
     }))
   };
 }
@@ -5646,6 +5772,12 @@ function objectFunctionExistingNodeForKind(context, kind) {
   if (kind === "interaction") return context.interactionComponent;
   if (kind === "npc") return context.npcComponent;
   if (kind === "enemy") return context.enemyComponent;
+  if (kind === "resource") return context.resourceComponent;
+  if (kind === "pickup") return context.pickupComponent;
+  if (kind === "portal") return context.portalComponent;
+  if (kind === "crafting") return context.craftingComponent;
+  if (kind === "vendor") return context.vendorComponent;
+  if (kind === "market") return context.marketComponent;
   if (kind === "quest") return context.questBinding;
   return null;
 }
@@ -5661,6 +5793,12 @@ function objectFunctionKindLabel(kind) {
   if (kind === "interaction") return "Interactable";
   if (kind === "npc") return "NPC";
   if (kind === "enemy") return "Enemy";
+  if (kind === "resource") return "Resource";
+  if (kind === "pickup") return "Item / Pickup";
+  if (kind === "portal") return "Portal";
+  if (kind === "crafting") return "Crafting Station";
+  if (kind === "vendor") return "Vendor";
+  if (kind === "market") return "Market Access";
   if (kind === "quest") return "Quest Target";
   return kind;
 }
@@ -5669,6 +5807,12 @@ function objectFunctionNodeTypeForKind(kind) {
   if (kind === "interaction") return "interaction_component";
   if (kind === "npc") return "npc_component";
   if (kind === "enemy") return "enemy_component";
+  if (kind === "resource") return "resource_component";
+  if (kind === "pickup") return "pickup_component";
+  if (kind === "portal") return "portal_component";
+  if (kind === "crafting") return "crafting_station_component";
+  if (kind === "vendor") return "vendor_component";
+  if (kind === "market") return "marketplace_access_component";
   if (kind === "quest") return "quest_target_binding";
   return "";
 }
@@ -5699,6 +5843,23 @@ function objectFunctionDraftDefaults(kind, context) {
       levelMode: "fixed",
       fixedLevel: 1
     },
+    crafting: {
+      stationType: "crafting.station",
+      craftingPolicyRef: null,
+      interactionPrompt: "Craft",
+      range: 5
+    },
+    vendor: {
+      vendorCatalogRef: null,
+      interactionPrompt: "Trade",
+      range: 5
+    },
+    market: {
+      marketPolicyRef: null,
+      interactionPrompt: "Market",
+      remoteAccessAllowed: false,
+      range: 5
+    },
     quest: {
       label: modelLabel,
       targetKind: context.npcComponent ? "npc" : (context.enemyComponent ? "custom" : "marker"),
@@ -5715,6 +5876,12 @@ function objectFunctionTitleForKind(kind, context) {
   if (kind === "interaction") return objectFunctionExistingNodeForKind(context, kind) ? "Interactable beheren" : "Interactable maken";
   if (kind === "npc") return objectFunctionExistingNodeForKind(context, kind) ? "NPC beheren" : "NPC maken";
   if (kind === "enemy") return objectFunctionExistingNodeForKind(context, kind) ? "Enemy beheren" : "Enemy maken";
+  if (kind === "resource") return objectFunctionExistingNodeForKind(context, kind) ? "Resource beheren" : "Resource maken";
+  if (kind === "pickup") return objectFunctionExistingNodeForKind(context, kind) ? "Pickup beheren" : "Pickup maken";
+  if (kind === "portal") return objectFunctionExistingNodeForKind(context, kind) ? "Portal beheren" : "Portal maken";
+  if (kind === "crafting") return objectFunctionExistingNodeForKind(context, kind) ? "Crafting Station beheren" : "Crafting Station maken";
+  if (kind === "vendor") return objectFunctionExistingNodeForKind(context, kind) ? "Vendor beheren" : "Vendor maken";
+  if (kind === "market") return objectFunctionExistingNodeForKind(context, kind) ? "Market Access beheren" : "Market Access maken";
   if (kind === "quest") return objectFunctionExistingNodeForKind(context, kind) ? "Quest Target beheren" : "Quest Target maken";
   return objectFunctionKindLabel(kind);
 }
@@ -5723,6 +5890,12 @@ function objectFunctionFocusNodeIdForKind(context, kind) {
   if (kind === "interaction") return context.interactionComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "npc") return context.npcComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "enemy") return context.enemyComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "resource") return context.resourceComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "pickup") return context.pickupComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "portal") return context.portalComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "crafting") return context.craftingComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "vendor") return context.vendorComponent?.id || context.assembly?.id || context.model?.id || null;
+  if (kind === "market") return context.marketComponent?.id || context.assembly?.id || context.model?.id || null;
   if (kind === "quest") return context.questBinding?.id || context.assembly?.id || context.model?.id || null;
   return context.model?.id || null;
 }
@@ -5751,6 +5924,8 @@ function objectFunctionBeginDraft(kind, context) {
     state.objectFunctionDraft.values.entityRef = existing && !existingEntityRef
       ? null
       : (context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph));
+  } else if (["crafting", "vendor", "market"].includes(kind)) {
+    state.objectFunctionDraft.values.linkedEntityId = context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, state.graph);
   }
   renderAuthoringHub();
 }
@@ -5764,6 +5939,15 @@ function objectFunctionClearDraft() {
 function objectFunctionOpenCatalog() {
   selectAuthoringRoute("item_ability_stat");
   const workspaces = authoringWorkspacesForRoute("item_ability_stat", state.graph);
+  const workspace = workspaces.length ? workspaces[0].nodes[0] : null;
+  if (workspace) {
+    selectNode(workspace.id, true, { clearPendingEdge: true, showMobileInspector: true });
+  }
+}
+
+function objectFunctionOpenSettings() {
+  selectAuthoringRoute("game_settings_ui");
+  const workspaces = authoringWorkspacesForRoute("game_settings_ui", state.graph);
   const workspace = workspaces.length ? workspaces[0].nodes[0] : null;
   if (workspace) {
     selectNode(workspace.id, true, { clearPendingEdge: true, showMobileInspector: true });
@@ -5845,6 +6029,9 @@ function objectFunctionGraphTitleForKind(kind, context) {
   if (kind === "interaction") return modelTitle + " Interactable";
   if (kind === "npc") return modelTitle + " NPC";
   if (kind === "enemy") return modelTitle + " Enemy";
+  if (kind === "crafting") return modelTitle + " Crafting Station";
+  if (kind === "vendor") return modelTitle + " Vendor";
+  if (kind === "market") return modelTitle + " Market Access";
   if (kind === "quest") return modelTitle + " Quest Target";
   return modelTitle + " " + objectFunctionKindLabel(kind);
 }
@@ -5901,7 +6088,17 @@ function objectFunctionConnectedComponentNodesForAssembly(graph, assembly) {
   if (!assembly) return [];
   const nodes = [];
   const seen = new Set();
-  for (const type of ["interaction_component", "npc_component", "enemy_component"]) {
+  for (const type of [
+    "interaction_component",
+    "npc_component",
+    "enemy_component",
+    "resource_component",
+    "pickup_component",
+    "portal_component",
+    "crafting_station_component",
+    "vendor_component",
+    "marketplace_access_component"
+  ]) {
     for (const node of objectFunctionConnectedNodesForAssembly(graph, assembly, type)) {
       if (!node || seen.has(node.id)) continue;
       seen.add(node.id);
@@ -5971,6 +6168,9 @@ function objectFunctionSuggestedModelPositionInZone(parentId, graph = state.grap
     "interaction_component",
     "npc_component",
     "enemy_component",
+    "crafting_station_component",
+    "vendor_component",
+    "marketplace_access_component",
     "quest_target_binding"
   ]);
   const siblings = (graph.nodes || []).filter(function (node) {
@@ -6012,6 +6212,15 @@ function objectFunctionSuggestedNodePosition(kind, context, graph = state.graph)
   }
   if (kind === "enemy") {
     return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 2 };
+  }
+  if (kind === "crafting") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 3 };
+  }
+  if (kind === "vendor") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 4 };
+  }
+  if (kind === "market") {
+    return { x: columns.sourceX, y: baseY + OBJECT_RECIPE_COMPONENT_Y_OFFSET + OBJECT_RECIPE_COMPONENT_Y_STEP * 5 };
   }
   if (kind === "quest") {
     return {
@@ -6146,6 +6355,29 @@ function objectFunctionBuildNodeValuesForKind(kind, context, draft, existingNode
     next.enemyRef = normalizeCanonicalId(next.enemyRef || "", "");
     next.variantRef = normalizeCanonicalId(next.variantRef || "", "") || null;
     next.difficultyRef = normalizeCanonicalId(next.difficultyRef || "", "") || null;
+  } else if (kind === "crafting") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.crafting." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.stationId = normalizeCanonicalId(next.stationId || "", "") || uniqueCanonicalGraphValue(graph, "station." + objectFunctionModelStem(context.model));
+    next.stationType = normalizeCanonicalId(next.stationType || "", "") || "crafting.station";
+    next.craftingPolicyRef = normalizeCanonicalId(next.craftingPolicyRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Craft").trim() || "Craft";
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
+  } else if (kind === "vendor") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.vendor." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.vendorId = normalizeCanonicalId(next.vendorId || "", "") || uniqueCanonicalGraphValue(graph, "vendor." + objectFunctionModelStem(context.model));
+    next.vendorCatalogRef = normalizeCanonicalId(next.vendorCatalogRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Trade").trim() || "Trade";
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
+  } else if (kind === "market") {
+    next.componentId = normalizeCanonicalId(next.componentId || "", "") || uniqueCanonicalGraphValue(graph, "component.market." + objectFunctionModelStem(context.model));
+    next.linkedEntityId = normalizeCanonicalId(context.assembly?.values?.entityId || objectFunctionAssemblyEntityId(context.model, graph), "");
+    next.marketAccessId = normalizeCanonicalId(next.marketAccessId || "", "") || uniqueCanonicalGraphValue(graph, "market." + objectFunctionModelStem(context.model));
+    next.marketPolicyRef = normalizeCanonicalId(next.marketPolicyRef || "", "") || null;
+    next.interactionPrompt = String(next.interactionPrompt || "Market").trim() || "Market";
+    next.remoteAccessAllowed = next.remoteAccessAllowed === true;
+    next.range = Number.isFinite(Number(next.range)) ? Number(next.range) : 5;
   } else if (kind === "quest") {
     const modelTitle = objectFunctionModelTitle(context);
     const rawTargetId = normalizeCanonicalId(next.targetId || "", "");
@@ -6194,7 +6426,7 @@ function objectFunctionNextGraphMutation(context, draft) {
   let node = existingNode || null;
   const title = objectFunctionGraphTitleForKind(kind, nextContext);
 
-  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "quest") {
+  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "crafting" || kind === "vendor" || kind === "market" || kind === "quest") {
     if (!node) {
       node = {
         id: createZoneGraphId("node_" + type),
@@ -6213,7 +6445,7 @@ function objectFunctionNextGraphMutation(context, draft) {
     }
   }
 
-  if (kind === "interaction" || kind === "npc" || kind === "enemy") {
+  if (kind === "interaction" || kind === "npc" || kind === "enemy" || kind === "crafting" || kind === "vendor" || kind === "market") {
     if (node) {
       let keptComponentEdgeId = null;
       objectFunctionRemoveEdges(nextGraph, function (edge) {
@@ -6344,6 +6576,7 @@ async function objectFunctionDeleteKind(kind, context) {
   }) || null;
   if (!nextContextModel || !nextZoneOutput || !nextNode) return;
   if (kind !== "quest" && !assembly) return;
+  if (nextNode.type === "portal_component") visualBuilderDetachPortalPair(nextGraph, nextNode);
   objectFunctionRemoveNodeAndEdges(nextGraph, nextNode.id);
   if (assembly && objectFunctionAssemblyShouldRemain(nextGraph, context, assembly)) {
     objectFunctionEnsureAssemblyRouting(nextGraph, context, assembly, nextZoneOutput);
@@ -6477,6 +6710,1634 @@ function objectFunctionDraftReferenceInput(kind, fieldName, draft, onChange, opt
   });
 }
 
+// ---------- Viewport-first Visual Builder (fase 1) ----------
+
+const VISUAL_BUILDER_ROLES = Object.freeze([
+  { id: "npc", label: "NPC", definitionType: "npc_archetype", referenceKinds: ["npc"] },
+  { id: "enemy", label: "Enemy", definitionType: "enemy_archetype", referenceKinds: ["enemy"] },
+  { id: "resource", label: "Resource", definitionType: "resource_definition", referenceKinds: ["resource"] },
+  { id: "pickup", label: "Fysiek item / pickup", definitionType: "item_definition", referenceKinds: ["item"] },
+  { id: "portal", label: "Portal" },
+  { id: "crafting", label: "Crafting Station", definitionType: "recipe_definition", referenceKinds: ["recipe"] },
+  { id: "vendor", label: "Vendor", definitionType: "vendor_catalog", referenceKinds: ["vendor_catalog"] },
+  { id: "market", label: "Market Access" },
+  { id: "decoration", label: "Decoratie" }
+]);
+
+const VISUAL_BUILDER_PRIMARY_COMPONENT_TYPES = new Set([
+  "npc_component",
+  "enemy_component",
+  "resource_component",
+  "pickup_component",
+  "portal_component",
+  "crafting_station_component",
+  "vendor_component",
+  "marketplace_access_component"
+]);
+
+function visualBuilderRoleSpec(roleId) {
+  return VISUAL_BUILDER_ROLES.find(function (entry) { return entry.id === roleId; }) || null;
+}
+
+function visualBuilderRoleForContext(context) {
+  if (context?.npcComponent) return "npc";
+  if (context?.enemyComponent) return "enemy";
+  if (context?.resourceComponent) return "resource";
+  if (context?.pickupComponent) return "pickup";
+  if (context?.portalComponent) return "portal";
+  if (context?.craftingComponent) return "crafting";
+  if (context?.vendorComponent) return "vendor";
+  if (context?.marketComponent) return "market";
+  return context?.assembly ? "decoration" : "";
+}
+
+function visualBuilderComponentForRole(context, roleId) {
+  if (roleId === "npc") return context?.npcComponent || null;
+  if (roleId === "enemy") return context?.enemyComponent || null;
+  if (roleId === "resource") return context?.resourceComponent || null;
+  if (roleId === "pickup") return context?.pickupComponent || null;
+  if (roleId === "portal") return context?.portalComponent || null;
+  if (roleId === "crafting") return context?.craftingComponent || null;
+  if (roleId === "vendor") return context?.vendorComponent || null;
+  if (roleId === "market") return context?.marketComponent || null;
+  return null;
+}
+
+function visualBuilderDefinitionRefForRole(roleId, component) {
+  if (!component) return "";
+  if (roleId === "npc") return component.values?.npcRef || "";
+  if (roleId === "enemy") return component.values?.enemyRef || "";
+  if (roleId === "resource") return component.values?.resourceRef || "";
+  if (roleId === "pickup") return component.values?.itemRef || "";
+  if (roleId === "crafting") return normalizeReferenceList(component.values?.recipeRefs)[0] || "";
+  if (roleId === "vendor") return component.values?.vendorCatalogRef || "";
+  return "";
+}
+
+function visualBuilderVendorCatalogByRef(graph, ref) {
+  const catalogRef = normalizeCanonicalId(ref, "");
+  if (!catalogRef) return null;
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "vendor_catalog"
+      && normalizeCanonicalId(node.values?.vendorCatalogId, "") === catalogRef;
+  }) || null;
+}
+
+function visualBuilderVendorOfferNodes(graph, catalog) {
+  if (!catalog) return [];
+  const offerIds = new Set((graph.edges || []).filter(function (edge) {
+    return edge.fromPort === "vendorOffer" && edge.toNodeId === catalog.id && edge.toPort === "offers";
+  }).map(function (edge) { return edge.fromNodeId; }));
+  return (graph.nodes || []).filter(function (node) {
+    return node.type === "vendor_offer" && offerIds.has(node.id);
+  });
+}
+
+function visualBuilderDefaultVendorOfferRow() {
+  return {
+    nodeId: "",
+    itemMode: "existing",
+    itemRef: "",
+    itemName: "",
+    mode: "sell_to_player",
+    currencyMode: "existing",
+    currencyRef: "",
+    currencyName: "",
+    sellPriceMinor: 10,
+    buyCurrencyMode: "existing",
+    buyCurrencyRef: "",
+    buyCurrencyName: "",
+    buyPriceMinor: 5,
+    stockMode: "infinite",
+    initialStock: 1
+  };
+}
+
+function visualBuilderVendorDraftRows(graph, catalogRef) {
+  const catalog = visualBuilderVendorCatalogByRef(graph, catalogRef);
+  const rows = visualBuilderVendorOfferNodes(graph, catalog).map(function (offer) {
+    return {
+      nodeId: offer.id,
+      itemMode: "existing",
+      itemRef: normalizeCanonicalId(offer.values?.itemRef, ""),
+      itemName: "",
+      mode: ["sell_to_player", "buy_from_player", "both"].includes(offer.values?.mode) ? offer.values.mode : "sell_to_player",
+      currencyMode: "existing",
+      currencyRef: normalizeCanonicalId(offer.values?.sellCurrencyRef, ""),
+      currencyName: "",
+      sellPriceMinor: Math.max(0, Math.floor(Number(offer.values?.sellPriceMinor) || 0)),
+      buyCurrencyMode: "existing",
+      buyCurrencyRef: normalizeCanonicalId(offer.values?.buyCurrencyRef, ""),
+      buyCurrencyName: "",
+      buyPriceMinor: Math.max(0, Math.floor(Number(offer.values?.buyPriceMinor) || 0)),
+      stockMode: offer.values?.stockMode === "limited" ? "limited" : "infinite",
+      initialStock: Math.max(0, Math.floor(Number(offer.values?.initialStock) || 0))
+    };
+  });
+  return rows.length ? rows : [visualBuilderDefaultVendorOfferRow()];
+}
+
+function visualBuilderPortalLink(component, graph = state.graph) {
+  const ref = normalizeCanonicalId(component?.values?.zoneLinkRef, "");
+  if (!ref) return null;
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "zone_link" && normalizeCanonicalId(node.values?.linkId, "") === ref;
+  }) || null;
+}
+
+function visualBuilderPortalComponentByRef(graph, ref) {
+  const portalRef = normalizeCanonicalId(ref, "");
+  if (!portalRef) return null;
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "portal_component"
+      && normalizeCanonicalId(node.values?.componentId, "") === portalRef;
+  }) || null;
+}
+
+function visualBuilderPortalPlacement(graph, portalComponent) {
+  if (!portalComponent) return null;
+  const componentEdge = (graph.edges || []).find(function (edge) {
+    return edge.fromNodeId === portalComponent.id && edge.fromPort === "component" && edge.toPort === "components";
+  }) || null;
+  const assembly = componentEdge ? graphNodeByIdInGraph(graph, componentEdge.toNodeId) : null;
+  const modelEdge = assembly ? (graph.edges || []).find(function (edge) {
+    return edge.fromPort === "entity" && edge.toNodeId === assembly.id && edge.toPort === "model";
+  }) : null;
+  const model = modelEdge ? graphNodeByIdInGraph(graph, modelEdge.fromNodeId) : null;
+  if (!assembly || !model) return null;
+  const context = objectFunctionContextForModel(model, graph);
+  if (!context.zoneDefinition || !context.zoneOutput) return null;
+  return { component: portalComponent, assembly, model, context };
+}
+
+function visualBuilderEnsurePortalIdentity(graph, portalComponent, model) {
+  const currentRef = normalizeCanonicalId(portalComponent?.values?.componentId, "");
+  if (currentRef.startsWith("portal.")) return currentRef;
+  const nextRef = uniqueCanonicalGraphValue(graph, "portal." + objectFunctionModelStem(model));
+  portalComponent.values = Object.assign({}, portalComponent.values || {}, { componentId: nextRef });
+  if (currentRef) {
+    for (const node of graph.nodes || []) {
+      if (normalizeCanonicalId(node.values?.toPortalRef, "") === currentRef) {
+        node.values = Object.assign({}, node.values || {}, { toPortalRef: nextRef });
+      }
+    }
+  }
+  return nextRef;
+}
+
+function visualBuilderDetachPortalPair(graph, portalComponent) {
+  if (!portalComponent) return false;
+  const componentRef = normalizeCanonicalId(portalComponent.values?.componentId, "");
+  const link = visualBuilderPortalLink(portalComponent, graph);
+  if (!link) {
+    portalComponent.values = Object.assign({}, portalComponent.values || {}, { zoneLinkRef: null });
+    return false;
+  }
+  const targetPortalRef = normalizeCanonicalId(link.values?.toPortalRef, "");
+  const reverseLinkRef = normalizeCanonicalId(link.values?.reverseLinkRef, "");
+  objectFunctionRemoveNodeAndEdges(graph, link.id);
+  portalComponent.values = Object.assign({}, portalComponent.values || {}, { zoneLinkRef: null });
+  const targetComponent = visualBuilderPortalComponentByRef(graph, targetPortalRef);
+  const targetLink = visualBuilderPortalLink(targetComponent, graph);
+  if (targetComponent && targetLink) {
+    const pointsBack = normalizeCanonicalId(targetLink.values?.toPortalRef, "") === componentRef
+      || normalizeCanonicalId(targetLink.values?.linkId, "") === reverseLinkRef;
+    if (pointsBack) {
+      objectFunctionRemoveNodeAndEdges(graph, targetLink.id);
+      targetComponent.values = Object.assign({}, targetComponent.values || {}, { zoneLinkRef: null });
+    }
+  }
+  return true;
+}
+
+function visualBuilderCreatePortalLink(graph, placement, title) {
+  const link = {
+    id: createZoneGraphId("node_zone_link"),
+    type: "zone_link",
+    title,
+    x: (Number(placement.assembly.x) || 0) + OBJECT_RECIPE_COLUMN_STEP,
+    y: Number(placement.assembly.y) || 0,
+    parentId: placement.model.parentId || null,
+    values: objectFunctionDefaultValuesForNodeType("zone_link")
+  };
+  link.values.linkId = uniqueCanonicalGraphValue(graph, "zone_link." + objectFunctionModelStem(placement.model));
+  graph.nodes.push(link);
+  pushEdgeIfMissing(graph, link.id, "zoneLink", placement.context.zoneOutput.id, "links");
+  return link;
+}
+
+function visualBuilderRepairDanglingPortalPackages(graph) {
+  const removeIds = new Set();
+  for (const component of (graph.nodes || []).filter(function (node) { return node.type === "portal_component"; })) {
+    if (visualBuilderPortalPlacement(graph, component)) continue;
+    removeIds.add(component.id);
+    const componentEdge = (graph.edges || []).find(function (edge) {
+      return edge.fromNodeId === component.id && edge.fromPort === "component" && edge.toPort === "components";
+    }) || null;
+    const assembly = componentEdge ? graphNodeByIdInGraph(graph, componentEdge.toNodeId) : null;
+    if (!assembly) continue;
+    const hasModel = (graph.edges || []).some(function (edge) {
+      return edge.fromPort === "entity" && edge.toNodeId === assembly.id && edge.toPort === "model"
+        && graphNodeByIdInGraph(graph, edge.fromNodeId)?.type === "model_entity";
+    });
+    if (!hasModel) removeIds.add(assembly.id);
+  }
+  return removeIds.size
+    ? removeVisualObjects(graph, state.nodeTypes, Array.from(removeIds))
+    : graph;
+}
+
+function visualBuilderDraftForContext(context) {
+  const draft = state.visualBuilderDraft;
+  return draft && context?.model && draft.modelId === context.model.id ? draft : null;
+}
+
+function visualBuilderBegin(context, options = {}) {
+  if (!context?.model) return;
+  const currentRole = visualBuilderRoleForContext(context);
+  const role = options.role || currentRole || "";
+  const component = visualBuilderComponentForRole(context, role);
+  const portalLink = role === "portal" ? visualBuilderPortalLink(component) : null;
+  const definitionRef = visualBuilderDefinitionRefForRole(role, component);
+  state.visualBuilderDraft = {
+    modelId: context.model.id,
+    step: role ? 2 : 1,
+    role,
+    definitionMode: visualBuilderRoleSpec(role)?.definitionType ? (component ? "existing" : "existing") : "none",
+    definitionRef,
+    definitionName: "",
+    values: {
+      name: context.assembly?.values?.label || context.model.values?.label || nodeDisplayTitle(context.model) || "Object",
+      level: component?.values?.level || component?.values?.fixedLevel || 1,
+      yieldMultiplier: component?.values?.yieldMultiplier || 1,
+      amount: component?.values?.amount || 1,
+      prompt: component?.values?.interactionPrompt || portalLink?.values?.prompt || (role === "vendor" ? "Trade" : role === "market" ? "Market" : role === "crafting" ? "Craft" : role === "portal" ? "Travel" : "Gebruik"),
+      range: component?.values?.range || 4,
+      solid: context.model.values?.solid === true,
+      targetPortalRef: portalLink?.values?.toPortalRef || "",
+      initialTargetPortalRef: portalLink?.values?.toPortalRef || "",
+      legacyPortalLink: Boolean(portalLink?.values?.toSpawnRef && !portalLink?.values?.toPortalRef),
+      questMode: "none",
+      questRef: "",
+      dialogueRef: "",
+      questItemRef: "",
+      newYieldItemMode: "existing",
+      newYieldItemRef: "",
+      newYieldItemName: "",
+      newOutputItemMode: "existing",
+      newOutputItemRef: "",
+      newOutputItemName: "",
+      craftingIngredients: [{ mode: "existing", itemRef: "", itemName: "", amount: 2, consume: true }],
+      craftingOutputs: [{ mode: "existing", itemRef: "", itemName: "", amount: 1, category: "material", tags: "", equipmentSlotRef: "" }],
+      craftDurationSeconds: 0,
+      vendorOffers: role === "vendor"
+        ? visualBuilderVendorDraftRows(state.graph, definitionRef)
+        : [visualBuilderDefaultVendorOfferRow()]
+    }
+  };
+  selectAuthoringRoute("object_character");
+  renderAuthoringHub();
+}
+
+function visualBuilderSet(key, value) {
+  if (!state.visualBuilderDraft) return;
+  if (["role", "definitionMode", "definitionRef", "definitionName", "step"].includes(key)) {
+    state.visualBuilderDraft[key] = value;
+  } else {
+    state.visualBuilderDraft.values = Object.assign({}, state.visualBuilderDraft.values || {}, { [key]: value });
+  }
+}
+
+function visualBuilderReferenceInput(draft, fieldName, kinds, label, options = {}) {
+  const fakeNode = { id: "visual-builder-" + draft.modelId + "-" + fieldName, type: "model_entity", values: { [fieldName]: draft.values?.[fieldName] || "" } };
+  const field = { label, type: "reference", referenceKinds: kinds, allowNull: options.required !== true, required: options.required === true };
+  return buildReferencePickerField(fakeNode, fieldName, field, draft.values?.[fieldName] || null, {
+    onChange: function (nextValue) {
+      visualBuilderSet(fieldName, nextValue || "");
+    },
+    hideAdvanced: true
+  });
+}
+
+function visualBuilderSetCraftingRow(draft, key, index, patch, rerender = false) {
+  const rows = visualBuilderCraftingRows(draft, key).map(function (row, rowIndex) {
+    return rowIndex === index ? Object.assign({}, row, patch) : row;
+  });
+  visualBuilderSet(key, rows);
+  if (rerender) renderAuthoringHub();
+}
+
+function visualBuilderCraftingRowPicker(draft, key, index, fieldName, kinds, label) {
+  const row = visualBuilderCraftingRows(draft, key)[index] || {};
+  return buildReferencePickerField({
+    id: "visual-builder-crafting-" + draft.modelId + "-" + key + "-" + index + "-" + fieldName,
+    type: "recipe_definition",
+    values: { [fieldName]: row[fieldName] || "" }
+  }, fieldName, {
+    label,
+    type: "reference",
+    referenceKinds: kinds,
+    allowNull: true,
+    required: false
+  }, row[fieldName] || null, {
+    onChange: function (nextValue) {
+      visualBuilderSetCraftingRow(draft, key, index, { [fieldName]: nextValue || "" }, true);
+    },
+    hideAdvanced: true
+  });
+}
+
+function visualBuilderCraftingItemList(draft, key, options = {}) {
+  const output = options.output === true;
+  const rows = visualBuilderCraftingRows(draft, key);
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+  rows.forEach(function (entry, index) {
+    const row = document.createElement("div");
+    row.className = "objectFunctionBadge questTimelineChildBadge";
+    const accent = document.createElement("span");
+    accent.className = "objectFunctionBadgeAccent";
+    accent.style.background = output ? "#84cc16" : "#ca8a04";
+    const body = document.createElement("div");
+    body.className = "objectFunctionBadgeBody";
+    const title = document.createElement("div");
+    title.className = "objectFunctionBadgeLabel";
+    title.textContent = (output ? "Output " : "Ingrediënt ") + (index + 1);
+    body.appendChild(title);
+
+    const mode = questTimelineSelectInput(entry.mode === "new" ? "new" : "existing", ["existing", "new"], function (value) {
+      visualBuilderSetCraftingRow(draft, key, index, { mode: value === "new" ? "new" : "existing" }, true);
+    });
+    mode.options[0].textContent = "Gebruik bestaand item";
+    mode.options[1].textContent = "Maak nieuw item";
+    body.appendChild(objectFunctionDraftFieldRow("Item", mode));
+
+    if (entry.mode === "new") {
+      body.appendChild(objectFunctionDraftFieldRow("Naam", questTimelineTextInput(entry.itemName, function (value) {
+        visualBuilderSetCraftingRow(draft, key, index, { itemName: value }, true);
+      }, { placeholder: output ? "Bijv. Plank of Schild" : "Bijv. Hout" })));
+      if (output) {
+        const category = questTimelineSelectInput(entry.category || "misc", ["material", "consumable", "equipment", "quest", "misc", "custom"], function (value) {
+          visualBuilderSetCraftingRow(draft, key, index, { category: value }, true);
+        });
+        ["Grondstof", "Verbruiksitem", "Uitrusting", "Questitem", "Overig", "Anders"].forEach(function (label, optionIndex) {
+          category.options[optionIndex].textContent = label;
+        });
+        body.appendChild(objectFunctionDraftFieldRow("Soort item", category));
+        body.appendChild(objectFunctionDraftFieldRow("Tags (optioneel)", questTimelineTextInput(entry.tags, function (value) {
+          visualBuilderSetCraftingRow(draft, key, index, { tags: value });
+        }, { placeholder: "Bijv. hout, plank, schild" }), "Komma-gescheiden labels voor catalogus- en inventoryregels."));
+        if ((entry.category || "") === "equipment") {
+          body.appendChild(objectFunctionDraftFieldRow("Uitrustingsplek (optioneel)", visualBuilderCraftingRowPicker(draft, key, index, "equipmentSlotRef", ["equipment_slot"], "Equipment slot")));
+        }
+      }
+    } else {
+      body.appendChild(visualBuilderCraftingRowPicker(draft, key, index, "itemRef", ["item"], output ? "Output-item" : "Ingrediënt-item"));
+    }
+
+    body.appendChild(objectFunctionDraftFieldRow("Aantal", questTimelineNumberInput(entry.amount, function (value) {
+      visualBuilderSetCraftingRow(draft, key, index, { amount: Math.max(1, Math.floor(Number(value) || 1)) });
+    }, { min: 1, max: 1000000, step: 1 })));
+    if (!output) {
+      body.appendChild(objectFunctionDraftFieldRow("Verbruiken", questTimelineCheckboxInput(entry.consume !== false, function (value) {
+        visualBuilderSetCraftingRow(draft, key, index, { consume: value });
+      }), "Zet uit voor gereedschap dat alleen aanwezig hoeft te zijn."));
+    }
+
+    const buttons = document.createElement("div");
+    buttons.className = "objectFunctionBadgeButtons";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijderen";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      visualBuilderSet(key, rows.filter(function (_, rowIndex) { return rowIndex !== index; }));
+      renderAuthoringHub();
+    });
+    buttons.appendChild(remove);
+    row.append(accent, body, buttons);
+    wrap.appendChild(row);
+  });
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = output ? "+ Output" : "+ Ingrediënt";
+  add.addEventListener("click", function () {
+    const next = output
+      ? { mode: "existing", itemRef: "", itemName: "", amount: 1, category: "misc", tags: "", equipmentSlotRef: "" }
+      : { mode: "existing", itemRef: "", itemName: "", amount: 1, consume: true };
+    visualBuilderSet(key, rows.concat([next]));
+    renderAuthoringHub();
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
+function visualBuilderDefinitionInput(draft, spec) {
+  const fakeNode = { id: "visual-builder-definition-" + draft.modelId, type: spec.definitionType, values: { definitionRef: draft.definitionRef || "" } };
+  const field = { label: state.nodeTypes?.[spec.definitionType]?.label || "Type", type: "reference", referenceKinds: spec.referenceKinds, allowNull: false, required: true };
+  return buildReferencePickerField(fakeNode, "definitionRef", field, draft.definitionRef || null, {
+    onChange: function (nextValue) {
+      const definitionRef = nextValue || "";
+      visualBuilderSet("definitionRef", definitionRef);
+      if (draft.role === "vendor") {
+        visualBuilderSet("vendorOffers", visualBuilderVendorDraftRows(state.graph, definitionRef));
+      }
+    },
+    hideAdvanced: true
+  });
+}
+
+function visualBuilderCraftingRows(draft, key) {
+  return Array.isArray(draft?.values?.[key]) ? draft.values[key] : [];
+}
+
+function visualBuilderCraftingItemRowValid(row, output = false) {
+  if (!row || Math.max(1, Math.floor(Number(row.amount) || 0)) < 1) return false;
+  if (row.mode === "new") {
+    if (!String(row.itemName || "").trim()) return false;
+    if (output && row.equipmentSlotRef
+      && referencePickerChoiceState(row.equipmentSlotRef, { type: "reference", referenceKinds: ["equipment_slot"], required: false }).state !== "ok") return false;
+    return true;
+  }
+  return referencePickerChoiceState(row.itemRef, { type: "reference", referenceKinds: ["item"], required: true }).state === "ok";
+}
+
+function visualBuilderVendorRows(draft) {
+  return Array.isArray(draft?.values?.vendorOffers) ? draft.values.vendorOffers : [];
+}
+
+function visualBuilderSetVendorRow(draft, index, patch, rerender = false) {
+  const rows = visualBuilderVendorRows(draft).map(function (row, rowIndex) {
+    return rowIndex === index ? Object.assign({}, row, patch) : row;
+  });
+  visualBuilderSet("vendorOffers", rows);
+  if (rerender) renderAuthoringHub();
+}
+
+function visualBuilderVendorRowPicker(draft, index, fieldName, kinds, label) {
+  const row = visualBuilderVendorRows(draft)[index] || {};
+  return buildReferencePickerField({
+    id: "visual-builder-vendor-" + draft.modelId + "-" + index + "-" + fieldName,
+    type: "vendor_offer",
+    values: { [fieldName]: row[fieldName] || "" }
+  }, fieldName, {
+    label,
+    type: "reference",
+    referenceKinds: kinds,
+    allowNull: true,
+    required: false
+  }, row[fieldName] || null, {
+    onChange: function (nextValue) {
+      visualBuilderSetVendorRow(draft, index, { [fieldName]: nextValue || "" }, true);
+    },
+    hideAdvanced: true
+  });
+}
+
+function visualBuilderVendorRowValid(row) {
+  if (!row) return false;
+  const mode = ["sell_to_player", "buy_from_player", "both"].includes(row.mode) ? row.mode : "sell_to_player";
+  const itemValid = row.itemMode === "new"
+    ? Boolean(String(row.itemName || "").trim())
+    : referencePickerChoiceState(row.itemRef, { type: "reference", referenceKinds: ["item"], required: true }).state === "ok";
+  const sellCurrencyValid = row.currencyMode === "new"
+    ? Boolean(String(row.currencyName || "").trim())
+    : referencePickerChoiceState(row.currencyRef, { type: "reference", referenceKinds: ["currency"], required: true }).state === "ok";
+  const buyCurrencyValid = row.buyCurrencyMode === "new"
+    ? Boolean(String(row.buyCurrencyName || "").trim())
+    : referencePickerChoiceState(row.buyCurrencyRef, { type: "reference", referenceKinds: ["currency"], required: true }).state === "ok";
+  return itemValid
+    && (!["sell_to_player", "both"].includes(mode) || (sellCurrencyValid && Number(row.sellPriceMinor) >= 0))
+    && (!["buy_from_player", "both"].includes(mode) || (buyCurrencyValid && Number(row.buyPriceMinor) >= 0))
+    && (row.stockMode !== "limited" || Number(row.initialStock) >= 0);
+}
+
+function visualBuilderVendorOfferList(draft) {
+  const rows = visualBuilderVendorRows(draft);
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+  rows.forEach(function (entry, index) {
+    const row = document.createElement("div");
+    row.className = "objectFunctionBadge questTimelineChildBadge";
+    const accent = document.createElement("span");
+    accent.className = "objectFunctionBadgeAccent";
+    accent.style.background = "#f97316";
+    const body = document.createElement("div");
+    body.className = "objectFunctionBadgeBody";
+    const title = document.createElement("div");
+    title.className = "objectFunctionBadgeLabel";
+    title.textContent = "Artikel " + (index + 1);
+    body.appendChild(title);
+
+    const itemMode = questTimelineSelectInput(entry.itemMode === "new" ? "new" : "existing", ["existing", "new"], function (value) {
+      visualBuilderSetVendorRow(draft, index, { itemMode: value === "new" ? "new" : "existing" }, true);
+    });
+    itemMode.options[0].textContent = "Gebruik bestaand item";
+    itemMode.options[1].textContent = "Maak nieuw item";
+    body.appendChild(objectFunctionDraftFieldRow("Wat verkoop je?", itemMode));
+    body.appendChild(entry.itemMode === "new"
+      ? objectFunctionDraftFieldRow("Naam van het item", questTimelineTextInput(entry.itemName, function (value) {
+        visualBuilderSetVendorRow(draft, index, { itemName: value }, true);
+      }, { placeholder: "Bijv. Appel" }))
+      : visualBuilderVendorRowPicker(draft, index, "itemRef", ["item"], "Item"));
+
+    const offerMode = questTimelineSelectInput(
+      ["sell_to_player", "buy_from_player", "both"].includes(entry.mode) ? entry.mode : "sell_to_player",
+      ["sell_to_player", "buy_from_player", "both"],
+      function (value) { visualBuilderSetVendorRow(draft, index, { mode: value }, true); }
+    );
+    offerMode.options[0].textContent = "Vendor verkoopt aan speler";
+    offerMode.options[1].textContent = "Vendor koopt van speler";
+    offerMode.options[2].textContent = "Kopen en verkopen";
+    body.appendChild(objectFunctionDraftFieldRow("Wat doet de vendor?", offerMode));
+
+    if (["sell_to_player", "both"].includes(entry.mode || "sell_to_player")) {
+      const currencyMode = questTimelineSelectInput(entry.currencyMode === "new" ? "new" : "existing", ["existing", "new"], function (value) {
+        visualBuilderSetVendorRow(draft, index, { currencyMode: value === "new" ? "new" : "existing" }, true);
+      });
+      currencyMode.options[0].textContent = "Gebruik bestaande currency";
+      currencyMode.options[1].textContent = "Maak nieuwe currency";
+      body.appendChild(objectFunctionDraftFieldRow("Waarmee betaalt de speler?", currencyMode));
+      body.appendChild(entry.currencyMode === "new"
+        ? objectFunctionDraftFieldRow("Naam van de currency", questTimelineTextInput(entry.currencyName, function (value) {
+          visualBuilderSetVendorRow(draft, index, { currencyName: value }, true);
+        }, { placeholder: "Bijv. Munten" }))
+        : visualBuilderVendorRowPicker(draft, index, "currencyRef", ["currency"], "Currency"));
+      body.appendChild(objectFunctionDraftFieldRow("Verkoopprijs", questTimelineNumberInput(entry.sellPriceMinor, function (value) {
+        visualBuilderSetVendorRow(draft, index, { sellPriceMinor: Math.max(0, Math.floor(Number(value) || 0)) });
+      }, { min: 0, max: 100000000000, step: 1 })));
+      const stockMode = questTimelineSelectInput(entry.stockMode === "limited" ? "limited" : "infinite", ["infinite", "limited"], function (value) {
+        visualBuilderSetVendorRow(draft, index, { stockMode: value === "limited" ? "limited" : "infinite" }, true);
+      });
+      stockMode.options[0].textContent = "Altijd op voorraad";
+      stockMode.options[1].textContent = "Beperkte voorraad";
+      body.appendChild(objectFunctionDraftFieldRow("Voorraad", stockMode));
+      if (entry.stockMode === "limited") {
+        body.appendChild(objectFunctionDraftFieldRow("Aantal op voorraad", questTimelineNumberInput(entry.initialStock, function (value) {
+          visualBuilderSetVendorRow(draft, index, { initialStock: Math.max(0, Math.floor(Number(value) || 0)) });
+        }, { min: 0, max: 1000000, step: 1 }), "De runtime vermindert dit aantal bij iedere aankoop; automatisch restocken wordt nog niet aangeboden."));
+      }
+    }
+
+    if (["buy_from_player", "both"].includes(entry.mode || "sell_to_player")) {
+      const buyCurrencyMode = questTimelineSelectInput(entry.buyCurrencyMode === "new" ? "new" : "existing", ["existing", "new"], function (value) {
+        visualBuilderSetVendorRow(draft, index, { buyCurrencyMode: value === "new" ? "new" : "existing" }, true);
+      });
+      buyCurrencyMode.options[0].textContent = "Gebruik bestaande currency";
+      buyCurrencyMode.options[1].textContent = "Maak nieuwe currency";
+      body.appendChild(objectFunctionDraftFieldRow("Waarmee betaalt de vendor?", buyCurrencyMode));
+      body.appendChild(entry.buyCurrencyMode === "new"
+        ? objectFunctionDraftFieldRow("Naam van de currency", questTimelineTextInput(entry.buyCurrencyName, function (value) {
+          visualBuilderSetVendorRow(draft, index, { buyCurrencyName: value }, true);
+        }, { placeholder: "Bijv. Munten" }))
+        : visualBuilderVendorRowPicker(draft, index, "buyCurrencyRef", ["currency"], "Currency"));
+      body.appendChild(objectFunctionDraftFieldRow("Inkoopprijs", questTimelineNumberInput(entry.buyPriceMinor, function (value) {
+        visualBuilderSetVendorRow(draft, index, { buyPriceMinor: Math.max(0, Math.floor(Number(value) || 0)) });
+      }, { min: 0, max: 100000000000, step: 1 })));
+    }
+
+    const buttons = document.createElement("div");
+    buttons.className = "objectFunctionBadgeButtons";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijderen";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      visualBuilderSet("vendorOffers", rows.filter(function (_, rowIndex) { return rowIndex !== index; }));
+      renderAuthoringHub();
+    });
+    buttons.appendChild(remove);
+    row.append(accent, body, buttons);
+    wrap.appendChild(row);
+  });
+
+  const firstIncompleteIndex = rows.findIndex(function (entry) { return !visualBuilderVendorRowValid(entry); });
+  if (firstIncompleteIndex >= 0) {
+    const incomplete = document.createElement("div");
+    incomplete.className = "objectFunctionDraftHint";
+    incomplete.textContent = "Vul artikel " + (firstIncompleteIndex + 1) + " af: kies het item, de benodigde currency en de prijs. Daarna wordt Volgende actief.";
+    wrap.appendChild(incomplete);
+  } else if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Een shop heeft minstens één artikel nodig. Klik op + Artikel.";
+    wrap.appendChild(empty);
+  }
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "+ Artikel";
+  add.addEventListener("click", function () {
+    visualBuilderSet("vendorOffers", rows.concat([visualBuilderDefaultVendorOfferRow()]));
+    renderAuthoringHub();
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
+function visualBuilderStepValid(draft, step) {
+  const spec = visualBuilderRoleSpec(draft?.role);
+  if (!draft) return false;
+  if (step === 1) return Boolean(spec);
+  if (step === 2 && spec?.definitionType) {
+    if (draft.role === "vendor") {
+      const definitionValid = draft.definitionMode === "new"
+        ? Boolean(String(draft.definitionName || "").trim())
+        : referencePickerChoiceState(draft.definitionRef, { type: "reference", referenceKinds: spec.referenceKinds, required: true }).state === "ok";
+      const offers = visualBuilderVendorRows(draft);
+      return definitionValid && offers.length > 0 && offers.every(visualBuilderVendorRowValid);
+    }
+    if (draft.definitionMode === "new") {
+      if (!String(draft.definitionName || "").trim()) return false;
+      if (draft.role === "resource") {
+        return draft.values?.newYieldItemMode === "new"
+          ? Boolean(String(draft.values?.newYieldItemName || "").trim())
+          : referencePickerChoiceState(draft.values?.newYieldItemRef, { type: "reference", referenceKinds: ["item"], required: true }).state === "ok";
+      }
+      if (draft.role === "crafting") {
+        const ingredients = visualBuilderCraftingRows(draft, "craftingIngredients");
+        const outputs = visualBuilderCraftingRows(draft, "craftingOutputs");
+        return ingredients.length > 0 && outputs.length > 0
+          && ingredients.every(function (row) { return visualBuilderCraftingItemRowValid(row, false); })
+          && outputs.every(function (row) { return visualBuilderCraftingItemRowValid(row, true); });
+      }
+      return true;
+    }
+    return referencePickerChoiceState(draft.definitionRef, { type: "reference", referenceKinds: spec.referenceKinds, required: true }).state === "ok";
+  }
+  if (step === 3) {
+    if (!String(draft.values?.name || "").trim()) return false;
+    if (draft.role === "portal") {
+      const targetPortalRef = normalizeCanonicalId(draft.values?.targetPortalRef, "");
+      if (!targetPortalRef) return true;
+      const targetComponent = visualBuilderPortalComponentByRef(state.graph, targetPortalRef);
+      if (!targetComponent) return false;
+      const model = graphNodeByIdInGraph(state.graph, draft.modelId);
+      const context = objectFunctionContextForModel(model, state.graph);
+      return targetComponent.id !== context.portalComponent?.id;
+    }
+  }
+  if (step === 4 && draft.values?.questMode !== "none") {
+    if (referencePickerChoiceState(draft.values?.questRef, { type: "reference", referenceKinds: ["quest"], required: true }).state !== "ok") return false;
+    if (draft.role === "npc" && ["giver", "talk"].includes(draft.values.questMode)
+      && referencePickerChoiceState(draft.values?.dialogueRef, { type: "reference", referenceKinds: ["dialogue"], required: true }).state !== "ok") return false;
+    if (["collect", "deliver"].includes(draft.values.questMode)) {
+      const definitionRef = draft.role === "pickup" ? draft.definitionRef : draft.values?.questItemRef;
+      if (referencePickerChoiceState(definitionRef, { type: "reference", referenceKinds: ["item"], required: true }).state !== "ok") return false;
+    }
+  }
+  return true;
+}
+
+function visualBuilderGoToStep(draft, step) {
+  const target = Math.max(1, Math.min(5, Number(step) || 1));
+  if (target > draft.step && !visualBuilderStepValid(draft, draft.step)) {
+    setStatus("Vul deze korte stap eerst af.", "error");
+    return;
+  }
+  draft.step = target;
+  renderAuthoringHub();
+}
+
+function visualBuilderEnsureCatalogGroup(graph) {
+  let group = (graph.nodes || []).find(function (node) {
+    return node.type === "group" && normalizeEditorKey(node.values?.groupKind) === "catalog";
+  }) || null;
+  if (!group) {
+    group = {
+      id: createZoneGraphId("node_group"),
+      type: "group",
+      title: "Catalog",
+      x: 80,
+      y: 80,
+      parentId: null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("group"), {
+        groupId: uniqueCanonicalGraphValue(graph, "catalog"),
+        title: "Catalog",
+        groupKind: "catalog"
+      })
+    };
+    graph.nodes.push(group);
+  }
+  ensureCatalogGroupPackage(graph, group);
+  return group;
+}
+
+function visualBuilderCreateInlineDefinition(graph, group, type, name, options = {}) {
+  const values = objectFunctionDefaultValuesForNodeType(type);
+  const displayName = String(name || state.nodeTypes?.[type]?.label || "Type").trim();
+  if (Object.prototype.hasOwnProperty.call(values, "displayName")) values.displayName = displayName;
+  if (type === "item_definition") {
+    const category = ["material", "consumable", "equipment", "quest", "misc", "custom"].includes(options.category)
+      ? options.category
+      : "misc";
+    values.category = category;
+    values.stackable = category !== "equipment";
+    values.stackLimit = category === "equipment" ? 1 : Math.max(1, Number(values.stackLimit) || 99);
+    values.inventoryTags = splitDelimitedValues(options.tags || "");
+    values.equipmentSlotRef = normalizeCanonicalId(options.equipmentSlotRef, "") || null;
+  }
+  const idField = identityFieldForType(type);
+  if (idField) values[idField] = uniqueCanonicalGraphValue(graph, managedCanonicalBaseForType(type, values));
+  const position = managedSuggestedNodePosition(graph, group, type);
+  const node = {
+    id: createZoneGraphId("node_" + type),
+    type,
+    title: displayName,
+    x: position.x,
+    y: position.y,
+    parentId: group.id,
+    values
+  };
+  graph.nodes.push(node);
+  connectManagedNodeToPackage(graph, group, node);
+  return normalizeCanonicalId(values[idField], "");
+}
+
+function visualBuilderCreateDefinition(graph, draft, model) {
+  const spec = visualBuilderRoleSpec(draft.role);
+  if (!spec?.definitionType || draft.definitionMode !== "new") return { ref: normalizeCanonicalId(draft.definitionRef, ""), node: null };
+  const group = visualBuilderEnsureCatalogGroup(graph);
+  const type = spec.definitionType;
+  const values = objectFunctionDefaultValuesForNodeType(type);
+  const name = String(draft.definitionName || draft.values?.name || state.nodeTypes?.[type]?.label || "Type").trim();
+  if (Object.prototype.hasOwnProperty.call(values, "displayName")) values.displayName = name;
+  if (Object.prototype.hasOwnProperty.call(values, "modelAssetId")) values.modelAssetId = model.values?.modelAssetId || null;
+  if (Object.prototype.hasOwnProperty.call(values, "worldModelAssetId")) values.worldModelAssetId = model.values?.modelAssetId || null;
+  let craftingIngredients = [];
+  if (draft.role === "resource") {
+    const yieldItemRef = draft.values?.newYieldItemMode === "new"
+      ? visualBuilderCreateInlineDefinition(graph, group, "item_definition", draft.values?.newYieldItemName)
+      : normalizeCanonicalId(draft.values?.newYieldItemRef, "");
+    values.yieldItemRefs = [yieldItemRef].filter(Boolean);
+  } else if (draft.role === "crafting") {
+    craftingIngredients = visualBuilderCraftingRows(draft, "craftingIngredients").map(function (row) {
+      const itemRef = row.mode === "new"
+        ? visualBuilderCreateInlineDefinition(graph, group, "item_definition", row.itemName, { category: "material" })
+        : normalizeCanonicalId(row.itemRef, "");
+      return { itemRef, amount: Math.max(1, Math.floor(Number(row.amount) || 1)), consume: row.consume !== false };
+    });
+    values.outputItems = visualBuilderCraftingRows(draft, "craftingOutputs").map(function (row) {
+      const itemRef = row.mode === "new"
+        ? visualBuilderCreateInlineDefinition(graph, group, "item_definition", row.itemName, {
+          category: row.category,
+          tags: row.tags,
+          equipmentSlotRef: row.equipmentSlotRef
+        })
+        : normalizeCanonicalId(row.itemRef, "");
+      return { itemRef, amount: Math.max(1, Math.floor(Number(row.amount) || 1)) };
+    });
+    values.craftDurationMs = Math.max(0, Math.round((Number(draft.values?.craftDurationSeconds) || 0) * 1000));
+    values.batchAllowed = false;
+    values.maxBatch = 1;
+  }
+  const idField = identityFieldForType(type);
+  if (idField) values[idField] = uniqueCanonicalGraphValue(graph, managedCanonicalBaseForType(type, values));
+  const position = managedSuggestedNodePosition(graph, group, type);
+  const node = {
+    id: createZoneGraphId("node_" + type),
+    type,
+    title: name,
+    x: position.x,
+    y: position.y,
+    parentId: group.id,
+    values
+  };
+  graph.nodes.push(node);
+  connectManagedNodeToPackage(graph, group, node);
+  if (draft.role === "crafting") {
+    craftingIngredients.forEach(function (ingredient, index) {
+      const ingredientValues = objectFunctionDefaultValuesForNodeType("recipe_ingredient");
+      ingredientValues.ingredientId = uniqueCanonicalGraphValue(graph, "recipe_ingredient." + objectFunctionModelStem(model) + "." + (index + 1));
+      ingredientValues.kind = "item";
+      ingredientValues.itemRef = ingredient.itemRef;
+      ingredientValues.amount = ingredient.amount;
+      ingredientValues.consume = ingredient.consume;
+      ingredientValues.selectionPolicy = "oldest_first";
+      const ingredientNode = {
+        id: createZoneGraphId("node_recipe_ingredient"),
+        type: "recipe_ingredient",
+        title: name + " ingredient " + (index + 1),
+        x: position.x - OBJECT_RECIPE_COLUMN_STEP,
+        y: position.y + index * 130,
+        parentId: group.id,
+        values: ingredientValues
+      };
+      graph.nodes.push(ingredientNode);
+      pushEdgeIfMissing(graph, ingredientNode.id, "ingredient", node.id, "ingredients");
+    });
+  }
+  return { ref: normalizeCanonicalId(values[idField], ""), node };
+}
+
+function visualBuilderApplyVendorOffers(graph, draft, model, catalog) {
+  if (!catalog) throw new Error("De gekozen Vendor Catalog bestaat niet meer.");
+  const group = graphNodeByIdInGraph(graph, catalog.parentId) || visualBuilderEnsureCatalogGroup(graph);
+  const existingOffers = visualBuilderVendorOfferNodes(graph, catalog);
+  const existingById = new Map(existingOffers.map(function (offer) { return [offer.id, offer]; }));
+  const keptIds = new Set();
+  const inlineDefinitions = new Map();
+  const inlineDefinition = function (type, name) {
+    const key = type + ":" + String(name || "").trim().toLowerCase();
+    if (inlineDefinitions.has(key)) return inlineDefinitions.get(key);
+    const ref = visualBuilderCreateInlineDefinition(graph, group, type, name);
+    inlineDefinitions.set(key, ref);
+    return ref;
+  };
+  visualBuilderVendorRows(draft).forEach(function (row, index) {
+    const mode = ["sell_to_player", "buy_from_player", "both"].includes(row.mode) ? row.mode : "sell_to_player";
+    const itemRef = row.itemMode === "new"
+      ? inlineDefinition("item_definition", row.itemName)
+      : normalizeCanonicalId(row.itemRef, "");
+    const currencyRef = ["sell_to_player", "both"].includes(mode)
+      ? (row.currencyMode === "new"
+        ? inlineDefinition("currency_definition", row.currencyName)
+        : normalizeCanonicalId(row.currencyRef, ""))
+      : "";
+    const buyCurrencyRef = ["buy_from_player", "both"].includes(mode)
+      ? (row.buyCurrencyMode === "new"
+        ? inlineDefinition("currency_definition", row.buyCurrencyName)
+        : normalizeCanonicalId(row.buyCurrencyRef, ""))
+      : "";
+    let offer = existingById.get(row.nodeId) || null;
+    if (!offer) {
+      offer = {
+        id: createZoneGraphId("node_vendor_offer"),
+        type: "vendor_offer",
+        title: "Shopartikel " + (index + 1),
+        x: (Number(catalog.x) || 0) - OBJECT_RECIPE_COLUMN_STEP,
+        y: (Number(catalog.y) || 0) + index * 150,
+        parentId: catalog.parentId || group.id,
+        values: objectFunctionDefaultValuesForNodeType("vendor_offer")
+      };
+      offer.values.offerId = uniqueCanonicalGraphValue(graph, "vendor_offer." + objectFunctionModelStem(model) + "." + (index + 1));
+      graph.nodes.push(offer);
+    }
+    const itemNode = (graph.nodes || []).find(function (candidate) {
+      return candidate.type === "item_definition" && normalizeCanonicalId(candidate.values?.itemId, "") === itemRef;
+    }) || null;
+    offer.parentId = catalog.parentId || group.id;
+    offer.title = (itemNode ? referenceNodeLabel(itemNode) : String(row.itemName || "Shopartikel").trim() || "Shopartikel") + " aanbod";
+    offer.values = Object.assign({}, offer.values || {}, {
+      itemRef,
+      mode,
+      sellCurrencyRef: currencyRef || null,
+      sellPriceMinor: Math.max(0, Math.floor(Number(row.sellPriceMinor) || 0)),
+      buyCurrencyRef: buyCurrencyRef || null,
+      buyPriceMinor: Math.max(0, Math.floor(Number(row.buyPriceMinor) || 0)),
+      stockMode: ["sell_to_player", "both"].includes(mode) && row.stockMode === "limited" ? "limited" : "infinite",
+      initialStock: ["sell_to_player", "both"].includes(mode) && row.stockMode === "limited" ? Math.max(0, Math.floor(Number(row.initialStock) || 0)) : 0,
+      maxStock: ["sell_to_player", "both"].includes(mode) && row.stockMode === "limited" ? Math.max(0, Math.floor(Number(row.initialStock) || 0)) : 0,
+      restockAmount: 0,
+      restockSeconds: 0
+    });
+    pushEdgeIfMissing(graph, offer.id, "vendorOffer", catalog.id, "offers");
+    keptIds.add(offer.id);
+  });
+
+  existingOffers.forEach(function (offer) {
+    if (keptIds.has(offer.id)) return;
+    const usedByOtherCatalog = (graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === offer.id && edge.fromPort === "vendorOffer" && edge.toPort === "offers" && edge.toNodeId !== catalog.id;
+    });
+    graph.edges = (graph.edges || []).filter(function (edge) {
+      return !(edge.fromNodeId === offer.id && edge.fromPort === "vendorOffer" && edge.toNodeId === catalog.id && edge.toPort === "offers");
+    });
+    if (!usedByOtherCatalog) objectFunctionRemoveNodeAndEdges(graph, offer.id);
+  });
+}
+
+function visualBuilderEnsureComponent(graph, assembly, model, role, values) {
+  const type = objectFunctionNodeTypeForKind(role);
+  if (!type) return null;
+  let component = objectFunctionConnectedNodesForAssembly(graph, assembly, type)[0] || null;
+  if (!component) {
+    component = {
+      id: createZoneGraphId("node_" + type),
+      type,
+      title: (values.name || nodeDisplayTitle(model) || "Object") + " " + objectFunctionKindLabel(role),
+      x: Number(model.x) || 0,
+      y: (Number(model.y) || 0) + OBJECT_RECIPE_COMPONENT_Y_OFFSET,
+      parentId: model.parentId || null,
+      values: objectFunctionDefaultValuesForNodeType(type)
+    };
+    graph.nodes.push(component);
+  }
+  component.parentId = model.parentId || null;
+  component.title = (values.name || nodeDisplayTitle(model) || "Object") + " " + objectFunctionKindLabel(role);
+  component.values = Object.assign({}, component.values || {}, values);
+  pushEdgeIfMissing(graph, component.id, "component", assembly.id, "components");
+  return component;
+}
+
+function visualBuilderRemoveOtherRoles(graph, assembly, keepType) {
+  for (const node of (graph.nodes || []).slice()) {
+    if (!VISUAL_BUILDER_PRIMARY_COMPONENT_TYPES.has(node.type) || node.type === keepType) continue;
+    const connected = (graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === node.id && edge.fromPort === "component" && edge.toNodeId === assembly.id && edge.toPort === "components";
+    });
+    if (!connected) continue;
+    if (node.type === "portal_component") visualBuilderDetachPortalPair(graph, node);
+    objectFunctionRemoveNodeAndEdges(graph, node.id);
+  }
+}
+
+function visualBuilderEnsureQuestTarget(graph, context, assembly, model, role, name) {
+  let target = objectFunctionConnectedNodesForAssembly(graph, assembly, "quest_target_binding")[0] || null;
+  const isNew = !target;
+  if (!target) {
+    target = {
+      id: createZoneGraphId("node_quest_target_binding"),
+      type: "quest_target_binding",
+      title: name + " Quest Target",
+      x: Number(model.x) || 0,
+      y: Number(model.y) || 0,
+      parentId: model.parentId || null,
+      values: objectFunctionDefaultValuesForNodeType("quest_target_binding")
+    };
+    graph.nodes.push(target);
+  }
+  const kind = role === "npc" ? "npc" : role === "resource" || role === "pickup" ? "resource" : role === "portal" ? "zone_link" : "custom";
+  const rawTargetId = normalizeCanonicalId(target.values?.targetId, "");
+  const defaultTargetId = normalizeCanonicalId(state.nodeTypes?.quest_target_binding?.fields?.targetId?.default || "target.new_target", "");
+  target.parentId = model.parentId || null;
+  target.title = name + " Quest Target";
+  target.values = Object.assign({}, target.values || {}, {
+    targetId: rawTargetId && (!isNew || rawTargetId !== defaultTargetId)
+      ? rawTargetId
+      : uniqueCanonicalGraphValue(graph, "target." + objectFunctionModelStem(model)),
+    label: name,
+    targetKind: kind,
+    zoneRef: normalizeCanonicalId(context.zoneDefinition?.values?.zoneId, "") || null,
+    entityRef: normalizeCanonicalId(assembly.values?.entityId, "") || null,
+    x: Number(model.values?.x) || 0,
+    y: Number(model.values?.y) || 0,
+    z: Number(model.values?.z) || 0,
+    radius: 3,
+    visibleInGame: true
+  });
+  pushEdgeIfMissing(graph, assembly.id, "entity", target.id, "entity");
+  pushEdgeIfMissing(graph, target.id, "questTarget", context.zoneOutput.id, "questTargets");
+  return target;
+}
+
+function visualBuilderEnsureObjective(graph, quest, type, values) {
+  const step = questTimelineStepsForQuest(quest, graph)[0] || null;
+  if (!step) throw new Error("De gekozen quest heeft nog geen stap. Voeg eerst één queststap toe.");
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const equivalent = questTimelineObjectivesForStep(step, graph).find(function (node) {
+    if (node.type !== type) return false;
+    return Object.keys(values).every(function (key) {
+      const field = fields[key] || {};
+      if (field.type === "reference") return normalizeCanonicalId(node.values?.[key], "") === normalizeCanonicalId(values[key], "");
+      return node.values?.[key] === values[key];
+    });
+  }) || null;
+  if (equivalent) return equivalent;
+  const objective = {
+    id: createZoneGraphId("node_" + type),
+    type,
+    title: String(values.instruction || state.nodeTypes?.[type]?.label || "Objective"),
+    x: Number(step.x) || 0,
+    y: (Number(step.y) || 0) + QUEST_TIMELINE_CHILD_ROW_STEP,
+    parentId: step.parentId || null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType(type), values)
+  };
+  const idField = identityFieldForType(type);
+  if (idField) objective.values[idField] = uniqueCanonicalGraphValue(graph, managedCanonicalBaseForType(type, objective.values));
+  graph.nodes.push(objective);
+  pushEdgeIfMissing(graph, objective.id, "objective", step.id, "objectives");
+  const stepType = questTimelineStepTypeForObjective(type);
+  if (stepType) step.values = Object.assign({}, step.values || {}, { stepType });
+  return objective;
+}
+
+function visualBuilderApplyQuestLinks(graph, draft, context, assembly, model, definitionRef) {
+  const questMode = String(draft.values?.questMode || "none");
+  const dialogueRef = normalizeCanonicalId(draft.values?.dialogueRef, "");
+  if (questMode === "none" && !dialogueRef) return null;
+  const target = visualBuilderEnsureQuestTarget(graph, context, assembly, model, draft.role, String(draft.values?.name || "Object").trim());
+  const targetRef = target.values.targetId;
+  if (dialogueRef) {
+    const dialogue = (graph.nodes || []).find(function (node) {
+      return node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.dialogueId, "") === dialogueRef;
+    });
+    if (dialogue) dialogue.values = Object.assign({}, dialogue.values || {}, { targetRef });
+  }
+  if (questMode === "none") return target;
+  const questRef = normalizeCanonicalId(draft.values?.questRef, "");
+  const quest = (graph.nodes || []).find(function (node) {
+    return node.type === "quest_definition" && normalizeCanonicalId(node.values?.questId, "") === questRef;
+  }) || null;
+  if (!quest) throw new Error("De gekozen quest bestaat niet meer.");
+  const zoneRef = normalizeCanonicalId(context.zoneDefinition?.values?.zoneId, "");
+  if (questMode === "giver") {
+    quest.values = Object.assign({}, quest.values || {}, {
+      turnInTargetRef: targetRef,
+      startDialogueRef: dialogueRef || quest.values?.startDialogueRef || null
+    });
+  } else if (questMode === "talk") {
+    visualBuilderEnsureObjective(graph, quest, "objective_talk", { instruction: "Praat met " + draft.values.name, targetRef, zoneRef, requiredCount: 1 });
+  } else if (questMode === "collect") {
+    const itemRef = draft.role === "pickup" ? definitionRef : normalizeCanonicalId(draft.values?.questItemRef, "");
+    visualBuilderEnsureObjective(graph, quest, "objective_collect", { instruction: "Verzamel " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: Math.max(1, Number(draft.values?.amount) || 1) });
+  } else if (questMode === "deliver") {
+    const itemRef = draft.role === "pickup" ? definitionRef : normalizeCanonicalId(draft.values?.questItemRef, "");
+    visualBuilderEnsureObjective(graph, quest, "objective_deliver", { instruction: "Breng het naar " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: 1 });
+  } else if (questMode === "reach") {
+    visualBuilderEnsureObjective(graph, quest, "objective_reach", { instruction: "Bereik " + draft.values.name, targetRef, zoneRef, radius: 4 });
+  }
+  return target;
+}
+
+async function visualBuilderCommit(context, draft) {
+  if (![1, 2, 3, 4].every(function (step) { return visualBuilderStepValid(draft, step); })) {
+    setStatus("Controleer de ingevulde stappen.", "error");
+    return;
+  }
+  let nextGraph = cloneGraphForRestore(state.graph);
+  nextGraph = visualBuilderRepairDanglingPortalPackages(nextGraph);
+  const model = graphNodeByIdInGraph(nextGraph, context.model.id);
+  if (!model) {
+    setStatus("Het geplaatste model bestaat niet meer.", "error");
+    return;
+  }
+  objectFunctionRehomePackageToSpatialZone(nextGraph, model);
+  const nextContext = objectFunctionContextForModel(model, nextGraph);
+  const zoneOutput = nextContext.zoneOutput;
+  if (!zoneOutput) {
+    setStatus("Het geplaatste model of de Zone Output bestaat niet meer.", "error");
+    return;
+  }
+  const name = String(draft.values?.name || nodeDisplayTitle(model) || "Object").trim();
+  model.title = name;
+  model.values = Object.assign({}, model.values || {}, { label: name, solid: draft.values?.solid === true });
+  const assembly = objectFunctionEnsureAssemblyNode(nextGraph, Object.assign({}, nextContext, { model }));
+  assembly.values = Object.assign({}, assembly.values || {}, { label: name });
+  assembly.title = name + " Assembly";
+  objectFunctionEnsureAssemblyRouting(nextGraph, Object.assign({}, nextContext, { model }), assembly, zoneOutput);
+  const definition = visualBuilderCreateDefinition(nextGraph, draft, model);
+  const definitionRef = definition.ref || normalizeCanonicalId(draft.definitionRef, "");
+  if (draft.role === "vendor") {
+    try {
+      visualBuilderApplyVendorOffers(
+        nextGraph,
+        draft,
+        model,
+        definition.node || visualBuilderVendorCatalogByRef(nextGraph, definitionRef)
+      );
+    } catch (error) {
+      setStatus(error.message, "error");
+      return;
+    }
+  }
+  const keepType = draft.role === "decoration" ? "" : objectFunctionNodeTypeForKind(draft.role);
+  visualBuilderRemoveOtherRoles(nextGraph, assembly, keepType);
+  let component = null;
+  if (draft.role === "npc") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "npc", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "npc_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.npc." + objectFunctionModelStem(model)),
+      npcRef: definitionRef,
+      level: Math.max(1, Number(draft.values?.level) || 1),
+      persistenceScope: "zone"
+    });
+  } else if (draft.role === "enemy") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "enemy", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "enemy_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.enemy." + objectFunctionModelStem(model)),
+      enemyRef: definitionRef,
+      levelMode: "fixed",
+      fixedLevel: Math.max(1, Number(draft.values?.level) || 1)
+    });
+  } else if (draft.role === "resource") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "resource", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "resource_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.resource." + objectFunctionModelStem(model)),
+      resourceRef: definitionRef,
+      yieldMultiplier: Math.max(0, Number(draft.values?.yieldMultiplier) || 1),
+      scopeOverride: ""
+    });
+  } else if (draft.role === "pickup") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "pickup", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "pickup_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.pickup." + objectFunctionModelStem(model)),
+      itemRef: definitionRef,
+      amount: Math.max(1, Number(draft.values?.amount) || 1),
+      ownershipMode: "shared",
+      interactionPrompt: String(draft.values?.prompt || "Pick up"),
+      range: Math.max(0.1, Number(draft.values?.range) || 3)
+    });
+  } else if (draft.role === "portal") {
+    let portalComponent = objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "portal_component")[0] || null;
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "portal", {
+      componentId: portalComponent?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "portal." + objectFunctionModelStem(model)),
+      zoneLinkRef: portalComponent?.values?.zoneLinkRef || null,
+      interactionPrompt: String(draft.values?.prompt || "Travel"),
+      range: Math.max(0.1, Number(draft.values?.range) || 4),
+      autoActivate: false
+    });
+    portalComponent = component;
+    const ownPortalRef = visualBuilderEnsurePortalIdentity(nextGraph, portalComponent, model);
+    let targetPortalRef = normalizeCanonicalId(draft.values?.targetPortalRef, "");
+    const currentTargetPortalRef = normalizeCanonicalId(visualBuilderPortalLink(portalComponent, nextGraph)?.values?.toPortalRef, "");
+    if (!targetPortalRef) {
+      if (currentTargetPortalRef) visualBuilderDetachPortalPair(nextGraph, portalComponent);
+    } else {
+      const targetComponent = visualBuilderPortalComponentByRef(nextGraph, targetPortalRef);
+      if (!targetComponent || targetComponent.id === portalComponent.id || targetPortalRef === ownPortalRef) {
+        setStatus("Kies een andere bestaande portal als bestemming.", "error");
+        return;
+      }
+      let sourcePlacement = visualBuilderPortalPlacement(nextGraph, portalComponent);
+      let targetPlacement = visualBuilderPortalPlacement(nextGraph, targetComponent);
+      if (targetPlacement) {
+        objectFunctionRehomePackageToSpatialZone(nextGraph, targetPlacement.model);
+        sourcePlacement = visualBuilderPortalPlacement(nextGraph, portalComponent);
+        targetPlacement = visualBuilderPortalPlacement(nextGraph, targetComponent);
+      }
+      if (!sourcePlacement || !targetPlacement) {
+        setStatus("De gekozen portal mist zijn entity, Zone Canvas of Zone Output.", "error");
+        return;
+      }
+      targetPortalRef = visualBuilderEnsurePortalIdentity(nextGraph, targetComponent, targetPlacement.model);
+      const occupiedTargetLink = visualBuilderPortalLink(targetComponent, nextGraph);
+      const occupiedBy = normalizeCanonicalId(occupiedTargetLink?.values?.toPortalRef, "");
+      if (occupiedTargetLink && occupiedBy && occupiedBy !== ownPortalRef) {
+        const occupiedPartner = visualBuilderPortalComponentByRef(nextGraph, occupiedBy);
+        if (visualBuilderPortalPlacement(nextGraph, occupiedPartner)) {
+          setStatus("De gekozen doelportal is al aan een andere geldige portal gekoppeld. Maak die koppeling eerst leeg.", "error");
+          return;
+        }
+        visualBuilderDetachPortalPair(nextGraph, targetComponent);
+      }
+      if (occupiedTargetLink && !occupiedBy) {
+        visualBuilderDetachPortalPair(nextGraph, targetComponent);
+      }
+      visualBuilderDetachPortalPair(nextGraph, portalComponent);
+      const sourceLink = visualBuilderCreatePortalLink(nextGraph, sourcePlacement, name + " naar " + nodeDisplayTitle(targetPlacement.model));
+      const targetLink = visualBuilderCreatePortalLink(nextGraph, targetPlacement, nodeDisplayTitle(targetPlacement.model) + " naar " + name);
+      const sourceZoneName = String(sourcePlacement.context.zoneDefinition.values?.displayName || sourcePlacement.context.zoneDefinition.title || "zone");
+      const targetZoneName = String(targetPlacement.context.zoneDefinition.values?.displayName || targetPlacement.context.zoneDefinition.title || "zone");
+      sourceLink.values = Object.assign({}, sourceLink.values || {}, {
+        fromZoneRef: normalizeCanonicalId(sourcePlacement.context.zoneDefinition.values?.zoneId, "") || null,
+        toZoneRef: normalizeCanonicalId(targetPlacement.context.zoneDefinition.values?.zoneId, "") || null,
+        toSpawnRef: null,
+        toPortalRef: targetPortalRef,
+        mode: "portal",
+        bidirectional: true,
+        reverseLinkRef: targetLink.values.linkId,
+        loadingText: "Reizen naar " + targetZoneName,
+        interactionRequired: true,
+        prompt: String(portalComponent.values?.interactionPrompt || "Travel")
+      });
+      targetLink.values = Object.assign({}, targetLink.values || {}, {
+        fromZoneRef: normalizeCanonicalId(targetPlacement.context.zoneDefinition.values?.zoneId, "") || null,
+        toZoneRef: normalizeCanonicalId(sourcePlacement.context.zoneDefinition.values?.zoneId, "") || null,
+        toSpawnRef: null,
+        toPortalRef: ownPortalRef,
+        mode: "portal",
+        bidirectional: true,
+        reverseLinkRef: sourceLink.values.linkId,
+        loadingText: "Reizen naar " + sourceZoneName,
+        interactionRequired: true,
+        prompt: String(targetComponent.values?.interactionPrompt || "Travel")
+      });
+      portalComponent.values = Object.assign({}, portalComponent.values || {}, { zoneLinkRef: sourceLink.values.linkId });
+      targetComponent.values = Object.assign({}, targetComponent.values || {}, { zoneLinkRef: targetLink.values.linkId });
+    }
+  } else if (draft.role === "crafting") {
+    const existingCraftingComponent = objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "crafting_station_component")[0] || null;
+    const recipeRefs = normalizeReferenceList(existingCraftingComponent?.values?.recipeRefs).concat(definitionRef ? [definitionRef] : []);
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "crafting", {
+      componentId: existingCraftingComponent?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.crafting." + objectFunctionModelStem(model)),
+      linkedEntityId: assembly.values.entityId,
+      stationId: existingCraftingComponent?.values?.stationId || uniqueCanonicalGraphValue(nextGraph, "station." + objectFunctionModelStem(model)),
+      stationType: "crafting.station",
+      recipeRefs: Array.from(new Set(recipeRefs)),
+      interactionPrompt: String(draft.values?.prompt || "Craft"),
+      range: Math.max(1, Number(draft.values?.range) || 5)
+    });
+  } else if (draft.role === "vendor") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "vendor", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "vendor_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.vendor." + objectFunctionModelStem(model)),
+      linkedEntityId: assembly.values.entityId,
+      vendorId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "vendor_component")[0]?.values?.vendorId || uniqueCanonicalGraphValue(nextGraph, "vendor." + objectFunctionModelStem(model)),
+      vendorCatalogRef: definitionRef,
+      interactionPrompt: String(draft.values?.prompt || "Trade"),
+      range: Math.max(1, Number(draft.values?.range) || 5)
+    });
+  } else if (draft.role === "market") {
+    component = visualBuilderEnsureComponent(nextGraph, assembly, model, "market", {
+      componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "marketplace_access_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.market." + objectFunctionModelStem(model)),
+      linkedEntityId: assembly.values.entityId,
+      marketAccessId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "marketplace_access_component")[0]?.values?.marketAccessId || uniqueCanonicalGraphValue(nextGraph, "market." + objectFunctionModelStem(model)),
+      interactionPrompt: String(draft.values?.prompt || "Market"),
+      remoteAccessAllowed: false,
+      range: Math.max(1, Number(draft.values?.range) || 5)
+    });
+  }
+  try {
+    visualBuilderApplyQuestLinks(nextGraph, draft, Object.assign({}, nextContext, { zoneOutput }), assembly, model, definitionRef);
+  } catch (error) {
+    setStatus(error.message, "error");
+    return;
+  }
+  objectFunctionApplyRecipeLayout(nextGraph, { model, zoneOutput });
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Visual Builder: " + (visualBuilderRoleSpec(draft.role)?.label || draft.role),
+    selectedNodeIds: [model.id],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      state.visualBuilderDraft = null;
+      state.visualObjectNodeScope = null;
+      selectNode(model.id, true, { clearPendingEdge: true });
+      setStatus(name + " is gemaakt als " + (visualBuilderRoleSpec(draft.role)?.label || draft.role) + ".", "success");
+    }
+  });
+}
+
+function visualBuilderQuestModeOptions(role) {
+  if (role === "npc") return [
+    { value: "none", label: "Niet koppelen" },
+    { value: "giver", label: "Questgever / inleverpunt" },
+    { value: "talk", label: "Praatdoel" },
+    { value: "deliver", label: "Afleverdoel" }
+  ];
+  if (role === "resource" || role === "pickup") return [
+    { value: "none", label: "Niet koppelen" },
+    { value: "collect", label: "Verzameldoel" },
+    { value: "deliver", label: "Afleverdoel" }
+  ];
+  if (role === "portal") return [
+    { value: "none", label: "Niet koppelen" },
+    { value: "reach", label: "Bereik- / reisdoel" }
+  ];
+  return [{ value: "none", label: "Niet koppelen" }];
+}
+
+function visualBuilderStepHeader(card, draft) {
+  const labels = ["Wat wil je maken?", "Bestaand of nieuw type", "Naam en gedrag", "Quest koppelen", "Controleer en maak"];
+  const progress = document.createElement("div");
+  progress.className = "visualBuilderProgress";
+  labels.forEach(function (label, index) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = index + 1 === draft.step ? "active" : (index + 1 < draft.step ? "done" : "");
+    button.textContent = (index + 1) + ". " + label;
+    button.disabled = index + 1 > draft.step;
+    button.addEventListener("click", function () { visualBuilderGoToStep(draft, index + 1); });
+    progress.appendChild(button);
+  });
+  card.appendChild(progress);
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = labels[draft.step - 1];
+  card.appendChild(title);
+}
+
+function visualBuilderFooter(card, context, draft) {
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  if (draft.step > 1) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost";
+    back.textContent = "Terug";
+    back.addEventListener("click", function () { visualBuilderGoToStep(draft, draft.step - 1); });
+    actions.appendChild(back);
+  }
+  if (draft.step < 5) {
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "primary";
+    next.textContent = "Volgende";
+    next.disabled = !visualBuilderStepValid(draft, draft.step);
+    next.addEventListener("click", function () { visualBuilderGoToStep(draft, draft.step + 1); });
+    actions.appendChild(next);
+  } else {
+    const make = document.createElement("button");
+    make.type = "button";
+    make.className = "primary";
+    make.textContent = visualBuilderRoleForContext(context) ? "Wijzigingen maken" : "Maak object";
+    make.addEventListener("click", function () { void visualBuilderCommit(context, draft); });
+    actions.appendChild(make);
+  }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost";
+  cancel.textContent = "Sluiten";
+  cancel.addEventListener("click", function () {
+    state.visualBuilderDraft = null;
+    renderAuthoringHub();
+  });
+  actions.appendChild(cancel);
+  card.appendChild(actions);
+}
+
+function renderVisualBuilder(context) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection visualBuilder";
+  const header = document.createElement("div");
+  header.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = "Visual Builder";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = context?.model
+    ? "Geplaatst model: " + objectFunctionModelTitle(context) + ". Mesh en transform blijven van dit ene model."
+    : "Sleep eerst een GLB-model naar de 3D-viewport.";
+  header.append(title, intro);
+  wrap.appendChild(header);
+  if (!context?.model || !context.zoneGroup || !context.zoneOutput) return wrap;
+  let draft = visualBuilderDraftForContext(context);
+  if (!draft) {
+    const start = document.createElement("button");
+    start.type = "button";
+    start.className = "primary visualBuilderStart";
+    start.textContent = visualBuilderRoleForContext(context) ? "Dit object bewerken" : "Wat wil je hiervan maken?";
+    start.addEventListener("click", function () { visualBuilderBegin(context); });
+    wrap.appendChild(start);
+    return wrap;
+  }
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard visualBuilderCard";
+  visualBuilderStepHeader(card, draft);
+  const spec = visualBuilderRoleSpec(draft.role);
+  if (draft.step === 1) {
+    const roles = document.createElement("div");
+    roles.className = "visualBuilderRoles";
+    for (const role of VISUAL_BUILDER_ROLES) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = draft.role === role.id ? "selected" : "";
+      button.textContent = role.label;
+      button.addEventListener("click", function () {
+        draft.role = role.id;
+        draft.definitionMode = role.definitionType ? "existing" : "none";
+        draft.definitionRef = "";
+        draft.definitionName = "";
+        draft.values.questMode = "none";
+        renderAuthoringHub();
+      });
+      roles.appendChild(button);
+    }
+    card.appendChild(roles);
+  } else if (draft.step === 2) {
+    if (!spec?.definitionType) {
+      const note = document.createElement("div");
+      note.className = "objectFunctionDraftHint";
+      note.textContent = draft.role === "portal"
+        ? "De eerste Portal mag ongekoppeld blijven. Bij de tweede kies je het zichtbare portalobject; de editor maakt echte Zone Links in beide richtingen."
+        : draft.role === "market"
+          ? "Market Access gebruikt het bestaande market-enginecontract; een policy is optioneel."
+          : "Decoratie heeft geen gameplaydefinitie nodig.";
+      card.appendChild(note);
+    } else {
+      const mode = questTimelineSelectInput(draft.definitionMode, ["existing", "new"], function (value) {
+        draft.definitionMode = value === "new" ? "new" : "existing";
+        if (draft.role === "vendor") {
+          draft.values.vendorOffers = draft.definitionMode === "new"
+            ? [visualBuilderDefaultVendorOfferRow()]
+            : visualBuilderVendorDraftRows(state.graph, draft.definitionRef);
+        }
+        renderAuthoringHub();
+      });
+      mode.options[0].textContent = "Gebruik bestaand type";
+      mode.options[1].textContent = "Maak nieuw type";
+      card.appendChild(objectFunctionDraftFieldRow("Type", mode));
+      if (draft.definitionMode === "new") {
+        card.appendChild(objectFunctionDraftFieldRow("Naam van het nieuwe type", questTimelineTextInput(draft.definitionName, function (value) {
+          draft.definitionName = value;
+          renderAuthoringHub();
+        }, { placeholder: "Bijv. Boswachter" }), "Het geplaatste GLB-model wordt als standaard wereldmodel ingevuld."));
+        if (draft.role === "resource") {
+          const itemMode = questTimelineSelectInput(draft.values.newYieldItemMode, ["existing", "new"], function (value) {
+            visualBuilderSet("newYieldItemMode", value === "new" ? "new" : "existing");
+            renderAuthoringHub();
+          });
+          itemMode.options[0].textContent = "Gebruik bestaand item";
+          itemMode.options[1].textContent = "Maak nieuw item";
+          card.appendChild(objectFunctionDraftFieldRow("Opbrengst", itemMode));
+          card.appendChild(draft.values.newYieldItemMode === "new"
+            ? objectFunctionDraftFieldRow("Naam van het item", questTimelineTextInput(draft.values.newYieldItemName, function (value) {
+              visualBuilderSet("newYieldItemName", value);
+              renderAuthoringHub();
+            }, { placeholder: "Bijv. Hout" }), "De resource krijgt direct een echte opbrengst.")
+            : objectFunctionDraftFieldRow("Geeft dit item", visualBuilderReferenceInput(draft, "newYieldItemRef", ["item"], "Item", { required: true }), "De resource krijgt direct een echte opbrengst."));
+        } else if (draft.role === "crafting") {
+          const recipeHint = document.createElement("div");
+          recipeHint.className = "objectFunctionDraftHint";
+          recipeHint.textContent = "Kies alle benodigdheden en wat dit recept maakt. Een nieuw output-item is daarna direct als ingrediënt in een volgend recept te kiezen.";
+          card.appendChild(recipeHint);
+          card.appendChild(objectFunctionDraftFieldRow(
+            "Wat heb je nodig?",
+            visualBuilderCraftingItemList(draft, "craftingIngredients"),
+            "Voor twee stukken hout kies je Hout en vul je aantal 2 in. Voeg extra ingrediënten of een niet-verbruikt gereedschap toe met + Ingrediënt."
+          ));
+          card.appendChild(objectFunctionDraftFieldRow(
+            "Wat maak je?",
+            visualBuilderCraftingItemList(draft, "craftingOutputs", { output: true }),
+            "Je kunt een bestaand item kiezen of hier meteen Plank, Schild of een ander echt Item maken."
+          ));
+          card.appendChild(objectFunctionDraftFieldRow("Maaktijd in seconden", questTimelineNumberInput(draft.values.craftDurationSeconds, function (value) {
+            visualBuilderSet("craftDurationSeconds", Math.max(0, Number(value) || 0));
+          }, { min: 0, max: 86400, step: 0.1 })));
+          const traitBlocker = document.createElement("div");
+          traitBlocker.className = "objectFunctionDraftHint";
+          traitBlocker.textContent = "Stat-traits zijn nog niet beschikbaar: Item Modifier Definition produceert itemModifierDef-catalogdata, maar een runtime-consumer die statModifierRefs op crafted items toepast ontbreekt.";
+          card.appendChild(traitBlocker);
+        } else if (draft.role === "vendor") {
+          card.appendChild(objectFunctionDraftFieldRow("Artikelen in deze shop", visualBuilderVendorOfferList(draft), "Voeg zoveel artikelen toe als nodig. Elk artikel wordt een echt Vendor Offer."));
+        }
+      } else {
+        card.appendChild(objectFunctionDraftFieldRow(state.nodeTypes?.[spec.definitionType]?.label || "Bestaand type", visualBuilderDefinitionInput(draft, spec)));
+        if (draft.role === "vendor" && draft.definitionRef) {
+          card.appendChild(objectFunctionDraftFieldRow("Artikelen in deze shop", visualBuilderVendorOfferList(draft), "Dit bewerkt de offers van de gekozen bestaande Vendor Catalog; er wordt geen tweede catalogus gemaakt."));
+        }
+      }
+    }
+  } else if (draft.step === 3) {
+    const fields = document.createElement("div");
+    fields.className = "objectFunctionDraftFields";
+    fields.appendChild(objectFunctionDraftFieldRow("Naam in de wereld", questTimelineTextInput(draft.values.name, function (value) { visualBuilderSet("name", value); }, { placeholder: "Naam" })));
+    if (["npc", "enemy"].includes(draft.role)) {
+      fields.appendChild(objectFunctionDraftFieldRow("Level", questTimelineNumberInput(draft.values.level, function (value) { visualBuilderSet("level", value); }, { min: 1, max: 1000, step: 1 })));
+    }
+    if (draft.role === "resource") {
+      fields.appendChild(objectFunctionDraftFieldRow("Opbrengst x", questTimelineNumberInput(draft.values.yieldMultiplier, function (value) { visualBuilderSet("yieldMultiplier", value); }, { min: 0, max: 1000, step: 0.1 })));
+    }
+    if (draft.role === "pickup") {
+      fields.appendChild(objectFunctionDraftFieldRow("Aantal", questTimelineNumberInput(draft.values.amount, function (value) { visualBuilderSet("amount", value); }, { min: 1, max: 1000000, step: 1 })));
+    }
+    if (draft.role === "portal") {
+      fields.appendChild(objectFunctionDraftFieldRow("Koppel aan portal (optioneel)", visualBuilderReferenceInput(draft, "targetPortalRef", ["portal"], "Doelportal"), "Sla de eerste portal leeg op. Kies hem daarna hier bij de tweede portal; de editor maakt beide reisrichtingen."));
+      if (draft.values.legacyPortalLink && !draft.values.targetPortalRef) {
+        const legacyNote = document.createElement("div");
+        legacyNote.className = "objectFunctionDraftHint";
+        legacyNote.textContent = "Deze bestaande portal gebruikt nog een oude spawnbestemming. Laat dit leeg om die koppeling te behouden, of kies een zichtbare portal om hem om te zetten.";
+        fields.appendChild(legacyNote);
+      }
+    }
+    if (["pickup", "portal", "crafting", "vendor", "market"].includes(draft.role)) {
+      fields.appendChild(objectFunctionDraftFieldRow("Tekst voor speler", questTimelineTextInput(draft.values.prompt, function (value) { visualBuilderSet("prompt", value); }, { placeholder: "Gebruik" })));
+      fields.appendChild(objectFunctionDraftFieldRow("Afstand", questTimelineNumberInput(draft.values.range, function (value) { visualBuilderSet("range", value); }, { min: 0.1, max: 1000, step: 0.1 })));
+    }
+    fields.appendChild(objectFunctionDraftFieldRow("Blokkeert de speler", questTimelineCheckboxInput(draft.values.solid === true, function (value) { visualBuilderSet("solid", value); })));
+    card.appendChild(fields);
+  } else if (draft.step === 4) {
+    if (draft.role === "enemy") {
+      const blocker = document.createElement("div");
+      blocker.className = "objectFunctionIssues";
+      blocker.textContent = "Versla-doel is nog niet aan te bieden: producer objective_defeat, datatype objective en consumer campaign/runtime ontbreken. De Enemy zelf werkt wel.";
+      card.appendChild(blocker);
+    } else if (["crafting", "vendor", "market", "decoration"].includes(draft.role)) {
+      const note = document.createElement("div");
+      note.className = "objectFunctionDraftHint";
+      note.textContent = "Voor deze wereldrol bestaat geen betekenisvolle directe questkoppeling in het huidige enginecontract.";
+      card.appendChild(note);
+    } else {
+      const modeOptions = visualBuilderQuestModeOptions(draft.role);
+      const mode = questTimelineSelectInput(draft.values.questMode, modeOptions.map(function (entry) { return entry.value; }), function (value) {
+        visualBuilderSet("questMode", value);
+        renderAuthoringHub();
+      });
+      modeOptions.forEach(function (entry, index) { mode.options[index].textContent = entry.label; });
+      card.appendChild(objectFunctionDraftFieldRow("Questrol", mode));
+      if (draft.values.questMode !== "none") {
+        card.appendChild(objectFunctionDraftFieldRow("Bestaande quest", visualBuilderReferenceInput(draft, "questRef", ["quest"], "Quest", { required: true })));
+      }
+      if (draft.role === "resource" && draft.values.questMode === "collect") {
+        card.appendChild(objectFunctionDraftFieldRow("Item dat de speler verzamelt", visualBuilderReferenceInput(draft, "questItemRef", ["item"], "Item", { required: true })));
+      }
+      if (draft.role === "resource" && draft.values.questMode === "deliver") {
+        card.appendChild(objectFunctionDraftFieldRow("Item om af te leveren", visualBuilderReferenceInput(draft, "questItemRef", ["item"], "Item", { required: true })));
+      }
+      if (draft.role === "npc") {
+        const dialogueRequired = ["giver", "talk"].includes(draft.values.questMode);
+        card.appendChild(objectFunctionDraftFieldRow(dialogueRequired ? "Bestaande dialoog" : "Bestaande dialoog (optioneel)", visualBuilderReferenceInput(draft, "dialogueRef", ["dialogue"], "Dialoog", { required: dialogueRequired }), dialogueRequired ? "Een questgever of praatdoel heeft een echte dialoog nodig." : "Hiermee wordt dit NPC-model een spreker."));
+      }
+    }
+  } else if (draft.step === 5) {
+    const review = document.createElement("div");
+    review.className = "visualBuilderReview";
+    const definitionText = spec?.definitionType
+      ? (draft.definitionMode === "new" ? "nieuw type: " + draft.definitionName : "bestaand type: " + (referencePickerChoiceState(draft.definitionRef, { type: "reference", referenceKinds: spec.referenceKinds }).displayLabel || draft.definitionRef))
+      : "geen losse definitie nodig";
+    const reviewRows = [
+      "Model: " + objectFunctionModelTitle(context),
+      "Rol: " + (spec?.label || draft.role),
+      "Naam: " + draft.values.name,
+      "Type: " + definitionText,
+      "Quest: " + (draft.values.questMode === "none" ? "niet gekoppeld" : draft.values.questMode)
+    ];
+    if (draft.role === "crafting" && draft.definitionMode === "new") {
+      reviewRows.push(
+        "Recept: " + visualBuilderCraftingRows(draft, "craftingIngredients").length + " ingrediënt(en) → "
+          + visualBuilderCraftingRows(draft, "craftingOutputs").length + " output(s)"
+      );
+    }
+    if (draft.role === "vendor") {
+      reviewRows.push("Shop: " + visualBuilderVendorRows(draft).length + " artikel(en)");
+    }
+    reviewRows.forEach(function (textValue) {
+      const row = document.createElement("div");
+      row.textContent = textValue;
+      review.appendChild(row);
+    });
+    const note = document.createElement("div");
+    note.className = "objectFunctionDraftHint";
+    note.textContent = "De editor maakt echte nodes en korte verbindingen. Het geplaatste model blijft de enige eigenaar van mesh en transform.";
+    review.appendChild(note);
+    card.appendChild(review);
+  }
+  visualBuilderFooter(card, context, draft);
+  wrap.appendChild(card);
+  return wrap;
+}
+
+function visualBuilderLocalPackageNodeIds(context, graph = state.graph) {
+  if (!context?.model) return new Set();
+  const relations = visualObjectRelations(graph, state.nodeTypes, context.model.id);
+  const ids = new Set(relations.localNodeIds || []);
+  if (context.zoneOutput) ids.add(context.zoneOutput.id);
+  for (const component of [
+    context.npcComponent,
+    context.enemyComponent,
+    context.resourceComponent,
+    context.pickupComponent,
+    context.portalComponent,
+    context.craftingComponent,
+    context.vendorComponent,
+    context.marketComponent
+  ]) {
+    if (!component) continue;
+    for (const [key, field] of Object.entries(state.nodeTypes?.[component.type]?.fields || {})) {
+      if (field?.type !== "reference" && field?.type !== "referenceList") continue;
+      const refs = field.type === "referenceList" ? normalizeReferenceList(component.values?.[key]) : [normalizeCanonicalId(component.values?.[key], "")].filter(Boolean);
+      for (const node of graph.nodes || []) {
+        const identityField = identityFieldForType(node.type);
+        if (identityField && refs.includes(normalizeCanonicalId(node.values?.[identityField], ""))) ids.add(node.id);
+      }
+    }
+  }
+  const portalLink = visualBuilderPortalLink(context.portalComponent, graph);
+  if (portalLink) ids.add(portalLink.id);
+  return ids;
+}
+
+function visualBuilderToggleLocalNodes(context) {
+  const active = state.visualObjectNodeScope?.modelId === context?.model?.id;
+  if (active) {
+    state.visualObjectNodeScope = null;
+  } else if (context?.model) {
+    if (state.currentGroupId !== (context.model.parentId || null)) {
+      state.currentGroupId = context.model.parentId || null;
+      syncBreadcrumb();
+    }
+    state.visualObjectNodeScope = {
+      modelId: context.model.id,
+      parentId: context.model.parentId || null,
+      nodeIds: Array.from(visualBuilderLocalPackageNodeIds(context))
+    };
+  }
+  renderGraph();
+  renderAuthoringHub();
+  if (!active && context?.model) requestAnimationFrame(function () { focusGraphNode(context.model.id); });
+}
+
+async function visualBuilderDeleteObject(context) {
+  if (!context?.model) return;
+  const relations = visualObjectRelations(state.graph, state.nodeTypes, context.model.id);
+  const backlinks = (relations.quests?.length || 0) + (relations.dialogues?.length || 0);
+  const message = "Object \"" + objectFunctionModelTitle(context) + "\" verwijderen? De mesh, assembly, eigen componenten en eigen targetrelaties worden opgeruimd. Gedeelde definities blijven bestaan."
+    + (backlinks ? " Er zijn " + backlinks + " quest/dialoog-backlink(s); verplichte koppelingen worden veilig gecontroleerd." : "");
+  if (!window.confirm(message)) return;
+  let nextGraph;
+  try {
+    nextGraph = removeVisualObjects(state.graph, state.nodeTypes, [context.model.id]);
+  } catch (error) {
+    setStatus(error.message, "error");
+    return;
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Wereldobject verwijderd",
+    selectedNodeIds: [],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      state.visualBuilderDraft = null;
+      state.visualObjectNodeScope = null;
+      setStatus("Object verwijderd; gedeelde definities zijn behouden.", "success");
+    }
+  });
+}
+
 function renderObjectFunctionSection(context) {
   const wrap = document.createElement("div");
   wrap.className = "objectFunctionSection";
@@ -6485,11 +8346,11 @@ function renderObjectFunctionSection(context) {
   header.className = "objectFunctionHeader";
   const title = document.createElement("div");
   title.className = "objectFunctionTitle";
-  title.textContent = "Geef dit object een functie";
+  title.textContent = "Object beheren";
   const intro = document.createElement("div");
   intro.className = "objectFunctionIntro";
   intro.textContent = context?.model
-    ? "Kies een functie. Bestaande nodes worden hergebruikt; de editor maakt nooit een tweede eigenaar van hetzelfde model."
+    ? "Bekijk backlinks, extra interactie en de echte onderliggende nodes. De Visual Builder beheert de wereldrol."
     : "Selecteer precies één model in de 3D-viewport.";
   header.append(title, intro);
   wrap.appendChild(header);
@@ -6528,23 +8389,39 @@ function renderObjectFunctionSection(context) {
   meta.className = "objectFunctionMeta";
   meta.textContent = "Zone Canvas: " + nodeDisplayTitle(context.zoneGroup) + " · Zone Output: aanwezig";
   wrap.appendChild(meta);
-  wrap.appendChild(renderObjectFunctionReadOnlyInfo(context));
+  const packageActions = document.createElement("div");
+  packageActions.className = "objectFunctionActions";
+  const packageButton = document.createElement("button");
+  packageButton.type = "button";
+  packageButton.className = "objectFunctionActionButton";
+  const packageActive = state.visualObjectNodeScope?.modelId === context.model.id;
+  packageButton.textContent = packageActive ? "Toon alle nodes" : "Toon onderliggende nodes";
+  packageButton.addEventListener("click", function () { visualBuilderToggleLocalNodes(context); });
+  const removeObject = document.createElement("button");
+  removeObject.type = "button";
+  removeObject.className = "deleteNode";
+  removeObject.textContent = "Verwijder object";
+  removeObject.addEventListener("click", function () { void visualBuilderDeleteObject(context); });
+  packageActions.append(packageButton, removeObject);
+  wrap.appendChild(packageActions);
+  if (packageActive) wrap.appendChild(renderObjectFunctionReadOnlyInfo(context));
 
-  const flow = document.createElement("div");
-  flow.className = "objectFunctionFlow";
-  const makeChip = function (text, tone) {
-    const chip = document.createElement("span");
-    chip.className = "objectFunctionFlowChip" + (tone ? " objectFunctionFlowChip--" + tone : "");
-    chip.textContent = text;
-    return chip;
-  };
-  flow.appendChild(makeChip("model_entity", "model"));
-  flow.appendChild(makeChip("entity_assembly", context.assembly ? "assembly" : "pending"));
-  flow.appendChild(makeChip("Zone Output", "output"));
-  if (context.questBinding) {
-    flow.appendChild(makeChip("quest_target_binding", "quest"));
+  if (packageActive) {
+    const flow = document.createElement("div");
+    flow.className = "objectFunctionFlow";
+    const makeChip = function (text, tone) {
+      const chip = document.createElement("span");
+      chip.className = "objectFunctionFlowChip" + (tone ? " objectFunctionFlowChip--" + tone : "");
+      chip.textContent = text;
+      return chip;
+    };
+    flow.appendChild(makeChip("Geplaatst model", "model"));
+    flow.appendChild(makeChip("Gedrag / type", "assembly"));
+    flow.appendChild(makeChip("Samengesteld object", context.assembly ? "assembly" : "pending"));
+    flow.appendChild(makeChip("Zone-output", "output"));
+    if (context.questBinding) flow.appendChild(makeChip("Questkoppeling", "quest"));
+    wrap.appendChild(flow);
   }
-  wrap.appendChild(flow);
 
   if (context.questBinding) {
     const shortcuts = document.createElement("div");
@@ -6576,11 +8453,7 @@ function renderObjectFunctionSection(context) {
 
   const actions = document.createElement("div");
   actions.className = "objectFunctionActions";
-  const availableKinds = ["interaction", "npc", "enemy", "quest"].filter(function (kind) {
-    if (kind === "npc" && context.enemyComponent && !context.npcComponent) return false;
-    if (kind === "enemy" && context.npcComponent && !context.enemyComponent) return false;
-    return true;
-  });
+  const availableKinds = ["interaction", "quest"];
   for (const kind of availableKinds) {
     const existing = objectFunctionExistingNodeForKind(context, kind);
     const button = document.createElement("button");
@@ -6604,6 +8477,12 @@ function renderObjectFunctionSection(context) {
     ["interaction", context.interactionComponent],
     ["npc", context.npcComponent],
     ["enemy", context.enemyComponent],
+    ["resource", context.resourceComponent],
+    ["pickup", context.pickupComponent],
+    ["portal", context.portalComponent],
+    ["crafting", context.craftingComponent],
+    ["vendor", context.vendorComponent],
+    ["market", context.marketComponent],
     ["quest", context.questBinding]
   ];
   for (const [kind, node] of kinds) {
@@ -6645,8 +8524,12 @@ function renderObjectFunctionSection(context) {
     manage.addEventListener("click", function (event) {
       event.preventDefault();
       event.stopPropagation();
-      objectFunctionBeginDraft(kind, context);
-      focusGraphNode(node.id);
+      if (["npc", "enemy", "resource", "pickup", "portal", "crafting", "vendor", "market"].includes(kind)) {
+        visualBuilderBegin(context, { role: kind });
+      } else {
+        objectFunctionBeginDraft(kind, context);
+        focusGraphNode(node.id);
+      }
     });
     const remove = document.createElement("button");
     remove.type = "button";
@@ -6741,6 +8624,43 @@ function renderObjectFunctionSection(context) {
       fields.append(
         objectFunctionDraftFieldRow("Variant", objectFunctionDraftReferenceInput("enemy", "variantRef", draft, null), "Optioneel."),
         objectFunctionDraftFieldRow("Difficulty", objectFunctionDraftReferenceInput("enemy", "difficultyRef", draft, null), "Optioneel.")
+      );
+    } else if (draft.kind === "crafting") {
+      const policyField = objectFunctionDraftReferenceInput("crafting", "craftingPolicyRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenSettings();
+        },
+        openReferenceActionLabel: "Open instellingen"
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Station type", objectFunctionDraftTextInput(draft, "stationType", { placeholder: "crafting.station" })),
+        objectFunctionDraftFieldRow("Crafting policy", policyField, "Optioneel; kies een bestaande Player Rules policy."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Craft" })),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
+      );
+    } else if (draft.kind === "vendor") {
+      const vendorCatalogField = objectFunctionDraftReferenceInput("vendor", "vendorCatalogRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenCatalog();
+        }
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Vendor catalog", vendorCatalogField, "Optioneel; kies een bestaande Vendor Catalog."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Trade" })),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
+      );
+    } else if (draft.kind === "market") {
+      const marketPolicyField = objectFunctionDraftReferenceInput("market", "marketPolicyRef", draft, null, {
+        openCatalogAction: function () {
+          objectFunctionOpenSettings();
+        },
+        openReferenceActionLabel: "Open instellingen"
+      });
+      fields.append(
+        objectFunctionDraftFieldRow("Market policy", marketPolicyField, "Optioneel; kies een bestaande Player Rules policy."),
+        objectFunctionDraftFieldRow("Prompt", objectFunctionDraftTextInput(draft, "interactionPrompt", { placeholder: "Market" })),
+        objectFunctionDraftFieldRow("Remote access", objectFunctionDraftCheckboxInput(draft, "remoteAccessAllowed")),
+        objectFunctionDraftFieldRow("Range", objectFunctionDraftNumberInput(draft, "range", { min: 1, max: 1000, step: 0.1 }))
       );
     } else if (draft.kind === "quest") {
       const zoneState = referencePickerChoiceState(context.zoneDefinition?.values?.zoneId || "", state.nodeTypes?.quest_target_binding?.fields?.zoneRef || {});
@@ -8962,7 +10882,12 @@ const AUTHORING04_GROUP_OUTPUT_PORTS = {
 };
 
 const CATALOG_HUB_TYPES = [
+  { type: "npc_archetype", label: "NPCs" },
+  { type: "enemy_archetype", label: "Enemies" },
+  { type: "resource_definition", label: "Resources" },
   { type: "item_definition", label: "Items" },
+  { type: "recipe_definition", label: "Recipes" },
+  { type: "vendor_catalog", label: "Vendor Catalogs" },
   { type: "ability_definition", label: "Abilities" },
   { type: "stat_definition", label: "Stats" },
   { type: "currency_definition", label: "Currencies" },
@@ -8974,6 +10899,46 @@ const LOOT_ENTRY_TYPES = [
   { type: "loot_currency_entry", label: "Currencyregel" },
   { type: "loot_table_entry", label: "Nested table" }
 ];
+
+const RECIPE_INGREDIENT_TYPES = [
+  { type: "recipe_ingredient", label: "Ingredient" }
+];
+
+const VENDOR_OFFER_TYPES = [
+  { type: "vendor_offer", label: "Offer" }
+];
+
+const CATALOG_CHILD_ROUTE_TYPES = LOOT_ENTRY_TYPES.concat(RECIPE_INGREDIENT_TYPES, VENDOR_OFFER_TYPES);
+
+const CATALOG_CHILD_EDITOR_SPECS = Object.freeze({
+  loot_table: {
+    id: "loot",
+    title: "Lootregels",
+    emptyText: "Nog geen lootregels.",
+    parentMissingText: "Loot Table bestaat niet meer.",
+    inputPort: "entries",
+    outputPort: "lootEntry",
+    childTypes: LOOT_ENTRY_TYPES
+  },
+  recipe_definition: {
+    id: "recipe_ingredients",
+    title: "Ingredienten",
+    emptyText: "Nog geen ingredienten.",
+    parentMissingText: "Recipe bestaat niet meer.",
+    inputPort: "ingredients",
+    outputPort: "ingredient",
+    childTypes: RECIPE_INGREDIENT_TYPES
+  },
+  vendor_catalog: {
+    id: "vendor_offers",
+    title: "Vendor offers",
+    emptyText: "Nog geen vendor offers.",
+    parentMissingText: "Vendor Catalog bestaat niet meer.",
+    inputPort: "offers",
+    outputPort: "vendorOffer",
+    childTypes: VENDOR_OFFER_TYPES
+  }
+});
 
 const PLAYER_RULES_HUB_TYPES = [
   "player_progression_rules",
@@ -9012,9 +10977,9 @@ const UI_HUB_TYPES = [
 
 const AUTHORING_ROUTE_COUNT_TYPES = {
   world_zone: ["group", "zone_definition", "zone_output", "spawn_point", "zone_link", "map_marker_definition", "minimap_bake"],
-  object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "quest_target_binding"],
+  object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "resource_component", "pickup_component", "portal_component", "crafting_station_component", "vendor_component", "marketplace_access_component", "quest_target_binding"],
   quest_dialogue: ["quest_definition", "quest_step", "dialogue_definition", "dialogue_entry", "dialogue_choice", "dialogue_terminal"],
-  item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(LOOT_ENTRY_TYPES.map(function (entry) { return entry.type; })),
+  item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(CATALOG_CHILD_ROUTE_TYPES.map(function (entry) { return entry.type; })),
   game_settings_ui: PLAYER_RULES_HUB_TYPES.concat(UI_HUB_TYPES)
 };
 
@@ -9380,7 +11345,7 @@ function modelAuthoringReferenceInfo(model, graph = state.graph) {
     const targetId = normalizeCanonicalId(binding.values?.targetId, "");
     if (targetId) refs.add(targetId);
   }
-  for (const component of [context.interactionComponent, context.npcComponent, context.enemyComponent]) {
+  for (const component of [context.interactionComponent, context.npcComponent, context.enemyComponent, context.resourceComponent, context.pickupComponent, context.portalComponent, context.craftingComponent, context.vendorComponent, context.marketComponent]) {
     if (component) nodes.add(component.id);
   }
   return { model, assembly: context.assembly, target: questBindings[0] || context.questBinding || null, questBindings, refs, nodes, context };
@@ -9411,7 +11376,17 @@ function questDialogueReferencesForObjectContext(context, graph = state.graph) {
 
 function catalogDefinitionNodeIdsForObjectContext(context, graph = state.graph) {
   const catalogRefs = new Set();
-  for (const component of [context?.interactionComponent, context?.npcComponent, context?.enemyComponent]) {
+  for (const component of [
+    context?.interactionComponent,
+    context?.npcComponent,
+    context?.enemyComponent,
+    context?.resourceComponent,
+    context?.pickupComponent,
+    context?.portalComponent,
+    context?.craftingComponent,
+    context?.vendorComponent,
+    context?.marketComponent
+  ]) {
     if (!component) continue;
     const fields = state.nodeTypes?.[component.type]?.fields || {};
     for (const [key, field] of Object.entries(fields)) {
@@ -9440,19 +11415,32 @@ function renderObjectFunctionReadOnlyInfo(context) {
   wrap.className = "authoring04ReadOnly";
   const refInfo = modelAuthoringReferenceInfo(context?.model, state.graph);
   const questBindings = refInfo.questBindings || [];
+  const worldRole = visualBuilderRoleForContext(context);
+  const roleSpec = visualBuilderRoleSpec(worldRole);
+  const roleComponent = visualBuilderComponentForRole(context, worldRole);
+  const roleDefinitionRef = visualBuilderDefinitionRefForRole(worldRole, roleComponent);
+  const roleDefinition = roleSpec?.definitionType && roleDefinitionRef
+    ? referencePickerChoiceState(roleDefinitionRef, { type: "reference", referenceKinds: roleSpec.referenceKinds || [] }).displayLabel
+    : "";
   const title = document.createElement("div");
   title.className = "objectFunctionMeta";
   title.textContent = "Bestaande onderdelen";
   wrap.appendChild(title);
   const rows = [
     ["Model", context.model ? nodeDisplayTitle(context.model) : "geen selectie"],
-    ["Entity Assembly", context.assembly ? (nodeDisplayTitle(context.assembly) + " · " + (context.assembly.values?.entityId || "")) : "nog niet aangemaakt"],
+    ["Wereldrol", roleSpec?.label || "Decoratie"],
+    ["Gedeeld type", roleDefinition || "niet nodig"],
+    ["Entity Assembly", context.assembly ? nodeDisplayTitle(context.assembly) : "nog niet aangemaakt"],
     ["Interactable", context.interactionComponent ? nodeDisplayTitle(context.interactionComponent) : "geen"],
     ["NPC", context.npcComponent ? nodeDisplayTitle(context.npcComponent) : "geen"],
     ["Enemy", context.enemyComponent ? nodeDisplayTitle(context.enemyComponent) : "geen"],
-    ["Quest Target", questBindings.length ? questBindings.map(function (binding) {
-      return nodeDisplayTitle(binding) + " · " + (binding.values?.targetId || "");
-    }).join(" | ") : "geen"]
+    ["Resource", context.resourceComponent ? nodeDisplayTitle(context.resourceComponent) : "geen"],
+    ["Pickup", context.pickupComponent ? nodeDisplayTitle(context.pickupComponent) : "geen"],
+    ["Portal", context.portalComponent ? nodeDisplayTitle(context.portalComponent) : "geen"],
+    ["Crafting", context.craftingComponent ? nodeDisplayTitle(context.craftingComponent) : "geen"],
+    ["Vendor", context.vendorComponent ? nodeDisplayTitle(context.vendorComponent) : "geen"],
+    ["Market", context.marketComponent ? nodeDisplayTitle(context.marketComponent) : "geen"],
+    ["Quest Target", questBindings.length ? questBindings.map(nodeDisplayTitle).join(" | ") : "geen"]
   ];
   for (const [labelText, valueText] of rows) {
     const row = document.createElement("div");
@@ -10299,6 +12287,120 @@ function buildManagedJsonObjectControl(scope, draft, fieldName, field, value) {
   return wrap;
 }
 
+function recipeGrantFieldKind(draft, fieldName) {
+  if (draft?.type !== "recipe_definition") return "";
+  if (fieldName === "outputItems") return "item";
+  if (fieldName === "outputCurrencies") return "currency";
+  return "";
+}
+
+function normalizeRecipeGrantList(value, kind) {
+  const source = Array.isArray(value) ? value : [];
+  if (kind === "currency") {
+    return source.map(function (entry) {
+      return {
+        currencyRef: normalizeCanonicalId(entry?.currencyRef, ""),
+        amountMinor: Math.max(0, Math.floor(Number(entry?.amountMinor ?? entry?.amount ?? 0) || 0))
+      };
+    });
+  }
+  return source.map(function (entry) {
+    return {
+      itemRef: normalizeCanonicalId(entry?.itemRef, ""),
+      amount: Math.max(1, Math.floor(Number(entry?.amount ?? 1) || 1))
+    };
+  });
+}
+
+function buildRecipeGrantListControl(scope, draft, fieldName, field, value, kind) {
+  const entries = normalizeRecipeGrantList(value, kind);
+  const refKey = kind === "currency" ? "currencyRef" : "itemRef";
+  const amountKey = kind === "currency" ? "amountMinor" : "amount";
+  const refKinds = kind === "currency" ? ["currency"] : ["item"];
+  const labelText = kind === "currency" ? "currency-output" : "item-output";
+  const wrap = document.createElement("div");
+  wrap.className = "tagQueryEditor";
+
+  function commit(nextEntries) {
+    setManagedDraftValue(scope, fieldName, normalizeRecipeGrantList(nextEntries, kind));
+    renderAuthoringHub();
+  }
+
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "objectFunctionDraftHint";
+    empty.textContent = "Geen " + labelText + " ingesteld.";
+    wrap.appendChild(empty);
+  }
+
+  entries.forEach(function (entry, index) {
+    const row = document.createElement("div");
+    row.className = "objectFunctionBadge questTimelineChildBadge";
+    const accent = document.createElement("span");
+    accent.className = "objectFunctionBadgeAccent";
+    accent.style.background = kind === "currency" ? "#facc15" : "#84cc16";
+    const body = document.createElement("div");
+    body.className = "objectFunctionBadgeBody";
+    const title = document.createElement("div");
+    title.className = "objectFunctionBadgeLabel";
+    title.textContent = (kind === "currency" ? "Currency" : "Item") + " output";
+    const picker = buildReferencePickerField({
+      id: scope + "-recipe-output-" + fieldName + "-" + index,
+      type: draft.type,
+      values: {}
+    }, refKey, {
+      label: kind === "currency" ? "Currency" : "Item",
+      type: "reference",
+      referenceKinds: refKinds,
+      allowNull: true,
+      required: false
+    }, entry[refKey] || null, {
+      onChange: function (nextValue) {
+        const nextEntries = entries.slice();
+        nextEntries[index] = Object.assign({}, entry, { [refKey]: normalizeCanonicalId(nextValue, "") });
+        commit(nextEntries);
+      },
+      openCatalogAction: function () { selectAuthoringRoute("item_ability_stat"); },
+      openReferenceActionLabel: "Open Catalog",
+      openReferenceActionTitle: "Maak of kies eerst de bijbehorende Catalog-definitie.",
+      hideAdvanced: true
+    });
+    const amount = questTimelineNumberInput(entry[amountKey], function (nextValue) {
+      const nextEntries = entries.slice();
+      nextEntries[index] = Object.assign({}, entry, { [amountKey]: nextValue });
+      setManagedDraftValue(scope, fieldName, normalizeRecipeGrantList(nextEntries, kind));
+    }, { min: kind === "currency" ? 0 : 1, step: 1 });
+    const amountRow = objectFunctionDraftFieldRow(kind === "currency" ? "Amount minor" : "Amount", amount);
+    body.append(title, picker, amountRow);
+    const buttons = document.createElement("div");
+    buttons.className = "objectFunctionBadgeButtons";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "deleteNode";
+    remove.textContent = "Verwijderen";
+    remove.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      commit(entries.filter(function (_, entryIndex) { return entryIndex !== index; }));
+    });
+    buttons.appendChild(remove);
+    row.append(accent, body, buttons);
+    wrap.appendChild(row);
+  });
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "mini";
+  add.textContent = "+ " + (kind === "currency" ? "Currency output" : "Item output");
+  add.addEventListener("click", function () {
+    commit(entries.concat([kind === "currency"
+      ? { currencyRef: "", amountMinor: 1 }
+      : { itemRef: "", amount: 1 }]));
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
 function buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value) {
   const categories = normalizeMinimapMarkerCategories(value, field.default || []);
   const root = document.createElement("div");
@@ -10436,6 +12538,8 @@ function buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, fie
 
 function managedDraftFieldControl(scope, draft, fieldName, field) {
   const value = draft.values?.[fieldName];
+  const recipeGrantKind = recipeGrantFieldKind(draft, fieldName);
+  if (recipeGrantKind) return buildRecipeGrantListControl(scope, draft, fieldName, field, value, recipeGrantKind);
   if (field.type === "minimapMarkerCategories") return buildManagedMinimapMarkerCategoriesControl(scope, draft, fieldName, field, value);
   if (field.type === "reference") {
     const fakeNode = { id: scope + "-draft-" + draft.type + "-" + fieldName, type: draft.type, values: {} };
@@ -10721,19 +12825,125 @@ async function commitManagedDraft(scope, group, draft) {
   });
 }
 
+function catalogChildEditorSpecForParentType(type) {
+  return CATALOG_CHILD_EDITOR_SPECS[type] || null;
+}
+
+function managedNodeCanonicalIdentity(node) {
+  const idField = identityFieldForType(node?.type);
+  return normalizeCanonicalId(node?.values?.[idField], "");
+}
+
+function referenceValueMatchesManagedTarget(value, field, targetId) {
+  const normalizedTarget = normalizeCanonicalId(targetId, "");
+  if (!normalizedTarget || !field) return false;
+  const refs = field.type === "referenceList"
+    ? normalizeReferenceList(value)
+    : [normalizeCanonicalId(value, "")].filter(Boolean);
+  return refs.some(function (ref) {
+    if (ref === normalizedTarget) return true;
+    const resolved = normalizeCanonicalId(referencePickerChoiceState(ref, field).resolvedId, "");
+    return resolved === normalizedTarget;
+  });
+}
+
+function managedNodeUsageEntries(graph, targetNode, options = {}) {
+  const targetId = managedNodeCanonicalIdentity(targetNode);
+  if (!targetId) return [];
+  const ignoreIds = options.ignoreIds instanceof Set ? options.ignoreIds : new Set();
+  const entries = [];
+  for (const candidate of graph.nodes || []) {
+    if (!candidate || candidate.id === targetNode.id || ignoreIds.has(candidate.id)) continue;
+    const fields = state.nodeTypes?.[candidate.type]?.fields || {};
+    for (const [fieldName, field] of Object.entries(fields)) {
+      if (!field || (field.type !== "reference" && field.type !== "referenceList")) continue;
+      if (!referenceValueMatchesManagedTarget(candidate.values?.[fieldName], field, targetId)) continue;
+      entries.push({
+        node: candidate,
+        fieldName,
+        fieldLabel: field.label || fieldName
+      });
+    }
+  }
+  return entries;
+}
+
+function catalogParentForChildNode(graph, childNode) {
+  if (!childNode) return null;
+  for (const spec of Object.values(CATALOG_CHILD_EDITOR_SPECS)) {
+    if (!spec.childTypes.some(function (entry) { return entry.type === childNode.type; })) continue;
+    const edge = (graph.edges || []).find(function (candidate) {
+      return candidate.fromNodeId === childNode.id
+        && candidate.fromPort === spec.outputPort
+        && candidate.toPort === spec.inputPort;
+    }) || null;
+    if (!edge) continue;
+    const parent = graphNodeByIdInGraph(graph, edge.toNodeId);
+    if (parent) return { parent, spec };
+  }
+  return null;
+}
+
+function managedUsageNodeLabel(entry) {
+  const childParent = catalogParentForChildNode(state.graph, entry.node);
+  if (childParent) {
+    return (state.nodeTypes?.[entry.node?.type]?.label || entry.node?.type || "Node") + " in " + nodeDisplayTitle(childParent.parent);
+  }
+  return nodeDisplayTitle(entry.node);
+}
+
+function managedUsageEntryLabel(entry) {
+  return managedUsageNodeLabel(entry) + " (" + (state.nodeTypes?.[entry.node?.type]?.label || entry.node?.type || "node") + ") - " + entry.fieldLabel;
+}
+
+function renderManagedUsageSummary(entries) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionMeta";
+  if (!entries.length) {
+    wrap.textContent = "Nog nergens gebruikt.";
+    return wrap;
+  }
+  wrap.textContent = "Gebruikt door: ";
+  entries.slice(0, 6).forEach(function (entry, index) {
+    if (index > 0) wrap.appendChild(document.createTextNode(", "));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mini";
+    button.textContent = managedUsageNodeLabel(entry);
+    button.title = managedUsageEntryLabel(entry);
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      focusGraphNode(entry.node.id);
+    });
+    wrap.appendChild(button);
+  });
+  if (entries.length > 6) wrap.appendChild(document.createTextNode(" +" + (entries.length - 6) + " meer"));
+  return wrap;
+}
+
 async function deleteManagedNode(scope, group, node) {
   if (!group || !node) return;
   const label = state.nodeTypes?.[node.type]?.label || node.type;
-  const extraEntries = node.type === "loot_table"
-    ? questTimelineDirectSources(state.graph, node, "entries").length
-    : 0;
-  const ok = window.confirm(label + " \"" + nodeDisplayTitle(node) + "\" verwijderen" + (extraEntries ? " inclusief " + extraEntries + " lootregel(s)" : "") + "?");
+  const childSpec = catalogChildEditorSpecForParentType(node.type);
+  const childEntries = childSpec ? questTimelineDirectSources(state.graph, node, childSpec.inputPort).filter(function (candidate) {
+    return childSpec.childTypes.some(function (entry) { return entry.type === candidate.type; });
+  }) : [];
+  const cascadeIds = new Set(childEntries.map(function (entry) { return entry.id; }));
+  const usageEntries = managedNodeUsageEntries(state.graph, node, { ignoreIds: cascadeIds });
+  const childText = childEntries.length ? " inclusief " + childEntries.length + " gekoppelde regel(s)" : "";
+  const usageText = usageEntries.length
+    ? "\n\nGebruikt door:\n- " + usageEntries.slice(0, 10).map(managedUsageEntryLabel).join("\n- ") + (usageEntries.length > 10 ? "\n- +" + (usageEntries.length - 10) + " meer" : "")
+    : "";
+  const ok = window.confirm(label + " \"" + nodeDisplayTitle(node) + "\" verwijderen" + childText + "?" + usageText);
   if (!ok) return;
   const nextGraph = cloneGraphForRestore(state.graph);
   const removeIds = new Set([node.id]);
-  if (node.type === "loot_table") {
-    const nextTable = graphNodeByIdInGraph(nextGraph, node.id);
-    for (const entry of questTimelineDirectSources(nextGraph, nextTable, "entries")) removeIds.add(entry.id);
+  if (childSpec) {
+    const nextParent = graphNodeByIdInGraph(nextGraph, node.id);
+    for (const entry of questTimelineDirectSources(nextGraph, nextParent, childSpec.inputPort)) {
+      if (childSpec.childTypes.some(function (childType) { return childType.type === entry.type; })) removeIds.add(entry.id);
+    }
   }
   nextGraph.nodes = (nextGraph.nodes || []).filter(function (candidate) { return !removeIds.has(candidate.id); });
   nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
@@ -10833,7 +13043,7 @@ function renderManagedNodeList(scope, group, types) {
     const meta = document.createElement("div");
     meta.className = "authoring04ListMeta";
     meta.textContent = (state.nodeTypes?.[node.type]?.label || node.type) + " · " + (identityValue(node) || "interne id");
-    body.append(title, meta);
+    body.append(title, meta, renderManagedUsageSummary(managedNodeUsageEntries(state.graph, node)));
     const actions = document.createElement("div");
     actions.className = "authoring04Actions";
     const open = document.createElement("button");
@@ -10861,24 +13071,26 @@ function renderManagedNodeList(scope, group, types) {
     remove.addEventListener("click", function () { void deleteManagedNode(scope, group, node); });
     actions.append(open, edit, remove);
     row.append(body, actions);
-    if (node.type === "loot_table") row.appendChild(renderLootTableEntryEditor(group, node));
+    const childSpec = catalogChildEditorSpecForParentType(node.type);
+    if (childSpec) row.appendChild(renderCatalogChildEntryEditor(group, node, childSpec));
     list.appendChild(row);
   }
   return list;
 }
 
-function beginLootEntryDraft(group, table, type, entry = null) {
+function beginCatalogChildEntryDraft(group, parent, spec, type, entry = null) {
   state.catalogHubDraft = {
     groupId: group.id,
     type,
     existingNodeId: entry?.id || null,
-    lootTableId: table.id,
+    catalogChildParentId: parent.id,
+    catalogChildSpecId: spec.id,
     values: managedDefaultValuesForDraft(type, entry)
   };
   renderAuthoringHub();
 }
 
-async function commitLootEntryDraft(group, table, draft) {
+async function commitCatalogChildEntryDraft(group, parent, spec, draft) {
   const validation = validateManagedDraft("catalog", draft);
   if (validation) {
     setStatus(validation, "error");
@@ -10886,9 +13098,9 @@ async function commitLootEntryDraft(group, table, draft) {
   }
   const nextGraph = cloneGraphForRestore(state.graph);
   const nextGroup = graphNodeByIdInGraph(nextGraph, group.id);
-  const nextTable = graphNodeByIdInGraph(nextGraph, table.id);
-  if (!nextGroup || !nextTable) {
-    setStatus("Loot Table bestaat niet meer.", "error");
+  const nextParent = graphNodeByIdInGraph(nextGraph, parent.id);
+  if (!nextGroup || !nextParent) {
+    setStatus(spec.parentMissingText || "Definitie bestaat niet meer.", "error");
     return;
   }
   const fields = state.nodeTypes?.[draft.type]?.fields || {};
@@ -10906,13 +13118,13 @@ async function commitLootEntryDraft(group, table, draft) {
     : (normalizeCanonicalId(node.values?.[idField], "") || uniqueCanonicalGraphValue(nextGraph, managedCanonicalBaseForType(draft.type, values)));
   const label = state.nodeTypes?.[draft.type]?.label || draft.type;
   if (!node) {
-    const existingCount = questTimelineDirectSources(nextGraph, nextTable, "entries").length;
+    const existingCount = questTimelineDirectSources(nextGraph, nextParent, spec.inputPort).length;
     node = {
       id: createZoneGraphId("node_" + draft.type),
       type: draft.type,
       title: label,
-      x: Math.round(Number(nextTable.x) || 80),
-      y: Math.round((Number(nextTable.y) || 180) + 180 + existingCount * 120),
+      x: Math.round(Number(nextParent.x) || 80),
+      y: Math.round((Number(nextParent.y) || 180) + 180 + existingCount * 120),
       parentId: nextGroup.id,
       values
     };
@@ -10922,7 +13134,7 @@ async function commitLootEntryDraft(group, table, draft) {
     node.parentId = nextGroup.id;
     node.values = Object.assign({}, node.values || {}, values);
   }
-  pushEdgeIfMissing(nextGraph, node.id, "lootEntry", nextTable.id, "entries");
+  pushEdgeIfMissing(nextGraph, node.id, spec.outputPort, nextParent.id, spec.inputPort);
   ensureCatalogGroupPackage(nextGraph, nextGroup);
   await restoreGraphObject(nextGraph, {
     historyLabel: label + (isNew ? " toegevoegd" : " gewijzigd"),
@@ -10966,7 +13178,49 @@ function lootEntryReadableSummary(entry) {
   ].join(" · ");
 }
 
-function renderLootEntryRow(group, table, entry) {
+function tagQueryReadableSummary(value) {
+  const query = normalizeTagQuery(value);
+  const parts = [];
+  if (query.all.length) parts.push("all " + query.all.join(", "));
+  if (query.any.length) parts.push("any " + query.any.join(", "));
+  if (query.none.length) parts.push("none " + query.none.join(", "));
+  return parts.join(" / ") || "geen tags";
+}
+
+function recipeIngredientReadableSummary(entry) {
+  const values = entry.values || {};
+  const kind = String(values.kind || "item");
+  let target = "";
+  if (kind === "currency") target = "Currency: " + managedReferenceLabel(values.currencyRef, ["currency"]);
+  else if (kind === "item_tag") target = "Item tags: " + tagQueryReadableSummary(values.itemTagQuery);
+  else target = "Item: " + managedReferenceLabel(values.itemRef, ["item"]);
+  return [
+    target,
+    "amount " + (values.amount ?? 1),
+    values.consume === false ? "niet consumeren" : "consumeren"
+  ].join(" · ");
+}
+
+function vendorOfferReadableSummary(entry) {
+  const values = entry.values || {};
+  const priceParts = [];
+  if (values.sellCurrencyRef) priceParts.push("sell " + (values.sellPriceMinor ?? 0) + " " + managedReferenceLabel(values.sellCurrencyRef, ["currency"]));
+  if (values.buyCurrencyRef) priceParts.push("buy " + (values.buyPriceMinor ?? 0) + " " + managedReferenceLabel(values.buyCurrencyRef, ["currency"]));
+  return [
+    "Item: " + managedReferenceLabel(values.itemRef, ["item"]),
+    "mode " + (values.mode || "both"),
+    priceParts.join(" / ") || "geen prijs",
+    "stock " + (values.stockMode || "infinite")
+  ].join(" · ");
+}
+
+function catalogChildEntryReadableSummary(entry) {
+  if (entry.type === "recipe_ingredient") return recipeIngredientReadableSummary(entry);
+  if (entry.type === "vendor_offer") return vendorOfferReadableSummary(entry);
+  return lootEntryReadableSummary(entry);
+}
+
+function renderCatalogChildEntryRow(group, parent, spec, entry) {
   const row = document.createElement("div");
   row.className = "objectFunctionBadge questTimelineChildBadge";
   const accent = document.createElement("span");
@@ -10979,7 +13233,7 @@ function renderLootEntryRow(group, table, entry) {
   label.textContent = state.nodeTypes?.[entry.type]?.label || entry.type;
   const meta = document.createElement("div");
   meta.className = "objectFunctionBadgeMeta";
-  meta.textContent = lootEntryReadableSummary(entry);
+  meta.textContent = catalogChildEntryReadableSummary(entry);
   meta.title = meta.textContent;
   body.append(label, meta);
   const buttons = document.createElement("div");
@@ -10990,7 +13244,7 @@ function renderLootEntryRow(group, table, entry) {
   manage.textContent = "Beheren";
   manage.addEventListener("click", function (event) {
     event.stopPropagation();
-    beginLootEntryDraft(group, table, entry.type, entry);
+    beginCatalogChildEntryDraft(group, parent, spec, entry.type, entry);
   });
   const remove = document.createElement("button");
   remove.type = "button";
@@ -11006,43 +13260,43 @@ function renderLootEntryRow(group, table, entry) {
   return row;
 }
 
-function renderLootTableEntryEditor(group, table) {
+function renderCatalogChildEntryEditor(group, parent, spec) {
   const wrap = document.createElement("div");
   wrap.className = "lootEntryEditor";
   const heading = document.createElement("div");
   heading.className = "objectFunctionMeta";
-  heading.textContent = "Lootregels";
+  heading.textContent = spec.title;
   wrap.appendChild(heading);
-  const entries = questTimelineDirectSources(state.graph, table, "entries").filter(function (node) {
-    return LOOT_ENTRY_TYPES.some(function (entry) { return entry.type === node.type; });
+  const entries = questTimelineDirectSources(state.graph, parent, spec.inputPort).filter(function (node) {
+    return spec.childTypes.some(function (entry) { return entry.type === node.type; });
   });
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "objectFunctionDraftHint";
-    empty.textContent = "Nog geen lootregels.";
+    empty.textContent = spec.emptyText;
     wrap.appendChild(empty);
   } else {
     const list = document.createElement("div");
     list.className = "objectFunctionBadgeRow";
     for (const entry of entries) {
-      list.appendChild(renderLootEntryRow(group, table, entry));
+      list.appendChild(renderCatalogChildEntryRow(group, parent, spec, entry));
     }
     wrap.appendChild(list);
   }
   const actions = document.createElement("div");
   actions.className = "authoring04Actions";
-  for (const entryType of LOOT_ENTRY_TYPES) {
+  for (const entryType of spec.childTypes) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "mini";
     button.textContent = "+ " + entryType.label;
-    button.addEventListener("click", function () { beginLootEntryDraft(group, table, entryType.type); });
+    button.addEventListener("click", function () { beginCatalogChildEntryDraft(group, parent, spec, entryType.type); });
     actions.appendChild(button);
   }
   wrap.appendChild(actions);
-  if (state.catalogHubDraft && state.catalogHubDraft.lootTableId === table.id) {
+  if (state.catalogHubDraft && state.catalogHubDraft.catalogChildParentId === parent.id && state.catalogHubDraft.catalogChildSpecId === spec.id) {
     wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft, {
-      onConfirm: function (draft) { return commitLootEntryDraft(group, table, draft); }
+      onConfirm: function (draft) { return commitCatalogChildEntryDraft(group, parent, spec, draft); }
     }));
   }
   return wrap;
@@ -11058,7 +13312,7 @@ function renderCatalogHub(group) {
   title.textContent = nodeDisplayTitle(group) || "Catalog";
   const intro = document.createElement("div");
   intro.className = "objectFunctionIntro";
-  intro.textContent = "Maak en beheer definities. IDs, Catalog Output, Group Output en Registry-koppeling worden automatisch afgehandeld.";
+  intro.textContent = "Maak en beheer definities. Een definitie plaatst nog geen wereldobject; plaatsen en G-verplaatsen gebeurt later via de World/Object-routes. IDs, Catalog Output, Group Output en Registry-koppeling worden automatisch afgehandeld.";
   header.append(title, intro);
   wrap.appendChild(header);
   const search = questTimelineTextInput(state.catalogHubSearch, function (value) {
@@ -11096,7 +13350,7 @@ function renderCatalogHub(group) {
   });
   actions.append(create, repair);
   wrap.appendChild(actions);
-  if (state.catalogHubDraft && state.catalogHubDraft.groupId === group.id && !state.catalogHubDraft.lootTableId) {
+  if (state.catalogHubDraft && state.catalogHubDraft.groupId === group.id && !state.catalogHubDraft.catalogChildParentId) {
     wrap.appendChild(renderManagedDraftCard("catalog", group, state.catalogHubDraft));
   }
   wrap.appendChild(renderManagedNodeList("catalog", group, [state.catalogHubType]));
@@ -11128,7 +13382,18 @@ function countGraphNodesByIds(ids) {
 function authoringIndicatorCountsForModel(model, graph = state.graph) {
   const info = modelAuthoringReferenceInfo(model, graph);
   const objectIds = new Set();
-  for (const node of [info.context?.assembly, info.context?.interactionComponent, info.context?.npcComponent, info.context?.enemyComponent]) {
+  for (const node of [
+    info.context?.assembly,
+    info.context?.interactionComponent,
+    info.context?.npcComponent,
+    info.context?.enemyComponent,
+    info.context?.resourceComponent,
+    info.context?.pickupComponent,
+    info.context?.portalComponent,
+    info.context?.craftingComponent,
+    info.context?.vendorComponent,
+    info.context?.marketComponent
+  ]) {
     if (node && node.type !== "entity_assembly") objectIds.add(node.id);
   }
   const questIds = questDialogueDefinitionIdsForRefs(info.refs, graph);
@@ -11443,8 +13708,9 @@ function renderAuthoringSection(route) {
     el.authoringRouteChip.textContent = route ? "Werkroute: " + route.label : "";
   }
   if (el.authoringSelectionChip) {
-    el.authoringSelectionChip.hidden = !selectedViewportNode;
-    el.authoringSelectionChip.textContent = selectedViewportNode ? "Selectie: " + nodeDisplayTitle(selectedViewportNode) : "";
+    const selectionTitle = selectedViewportNode ? nodeDisplayTitle(selectedViewportNode).trim() : "";
+    el.authoringSelectionChip.hidden = !selectionTitle;
+    el.authoringSelectionChip.textContent = selectionTitle ? "Selectie: " + selectionTitle : "";
   }
   if (el.authoringBackButton) {
     el.authoringBackButton.hidden = !route;
@@ -11512,6 +13778,7 @@ function renderAuthoringSection(route) {
       }
       el.authoringPanel.appendChild(note);
       if (route.id === "object_character") {
+        el.authoringPanel.appendChild(renderVisualBuilder(objectContext));
         el.authoringPanel.appendChild(renderObjectFunctionSection(objectContext));
       }
       if (route.id === "world_zone") {
@@ -11541,7 +13808,7 @@ function renderAuthoringSection(route) {
         actionTitle.textContent = "Catalog Group ontbreekt";
         const actionText = document.createElement("div");
         actionText.className = "authoringRouteActionText";
-        actionText.textContent = "Maak een root-level Catalog Group om items, abilities, stats, currencies en loot tables te beheren.";
+        actionText.textContent = "Maak een root-level Catalog Group om NPCs, enemies, resources, items, recipes, vendor catalogs, abilities, stats, currencies en loot tables te beheren.";
         const buttons = document.createElement("div");
         buttons.className = "authoringRouteActionButtons";
         const button = document.createElement("button");
@@ -13157,7 +15424,11 @@ function visibleNodes() {
   return state.graph.nodes.filter(function (n) {
     const def = state.nodeTypes[n.type] || {};
     const isGroupInterfaceNode = n.type === "group_input" || n.type === "group_output";
-    return (n.parentId || null) === state.currentGroupId && !def.internal && (!def.hidden || isGroupInterfaceNode);
+    const inCurrentGroup = (n.parentId || null) === state.currentGroupId;
+    const inLocalPackage = !state.visualObjectNodeScope
+      || state.visualObjectNodeScope.parentId !== state.currentGroupId
+      || state.visualObjectNodeScope.nodeIds.includes(n.id);
+    return inCurrentGroup && inLocalPackage && !def.internal && (!def.hidden || isGroupInterfaceNode);
   });
 }
 
@@ -14585,11 +16856,17 @@ function applyEditorLayoutResize(drag, event) {
   if (drag.mobile) {
     const deltaY = event.clientY - drag.startY;
     if (drag.id === "tools") {
-      setRootCssVar("--mobile-tools-height", Math.round(clampNumber(drag.toolsHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+      const pair = resizePair(drag.toolsHeight, drag.graphHeight, deltaY, 0, 0);
+      setRootCssVar("--mobile-tools-height", Math.round(pair.a) + "px", false);
+      setRootCssVar("--mobile-graph-height", Math.round(pair.b) + "px", false);
     } else if (drag.id === "graph") {
-      setRootCssVar("--mobile-graph-height", Math.round(clampNumber(drag.graphHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+      const pair = resizePair(drag.graphHeight, drag.viewportHeight, deltaY, 0, 0);
+      setRootCssVar("--mobile-graph-height", Math.round(pair.a) + "px", false);
+      setRootCssVar("--mobile-viewport-height", Math.round(pair.b) + "px", false);
     } else if (drag.id === "viewport") {
-      setRootCssVar("--mobile-viewport-height", Math.round(clampNumber(drag.viewportHeight + deltaY, 0, drag.mobileMaxHeight)) + "px", false);
+      const pair = resizePair(drag.viewportHeight, drag.assetsHeight, deltaY, 0, 0);
+      setRootCssVar("--mobile-viewport-height", Math.round(pair.a) + "px", false);
+      setRootCssVar("--mobile-assets-height", Math.round(pair.b) + "px", false);
     }
     resizeRuntimeAfterLayout();
     return;
@@ -14597,8 +16874,9 @@ function applyEditorLayoutResize(drag, event) {
 
   const deltaX = event.clientX - drag.startX;
   if (drag.id === "tools") {
-    const maxTools = Math.max(0, Math.min(460, drag.layoutWidth));
-    setRootCssVar("--tools-width", Math.round(clampNumber(drag.toolsWidth + deltaX, 0, maxTools)) + "px", false);
+    const pair = resizePair(drag.toolsWidth, drag.graphWidth, deltaX, 0, 0);
+    setRootCssVar("--tools-width", Math.round(pair.a) + "px", false);
+    setRootCssVar("--graph-width", Math.round(pair.b) + "px", false);
   } else if (drag.id === "graph") {
     const pair = resizePair(drag.graphWidth, drag.viewportWidth, deltaX, 0, 0);
     setRootCssVar("--graph-width", Math.round(pair.a) + "px", false);
@@ -14634,7 +16912,8 @@ function beginEditorLayoutResize(event, resizer) {
     assetsWidth: assets?.getBoundingClientRect().width || 310,
     toolsHeight: tools?.getBoundingClientRect().height || 220,
     graphHeight: graph?.getBoundingClientRect().height || 340,
-    viewportHeight: viewport?.getBoundingClientRect().height || 360
+    viewportHeight: viewport?.getBoundingClientRect().height || 360,
+    assetsHeight: assets?.getBoundingClientRect().height || 260
   };
   resizer.classList.add("active");
   try { resizer.setPointerCapture?.(event.pointerId); } catch {}
@@ -16464,7 +18743,9 @@ function patchInspectorField(node, key, field, value) {
 }
 
 const REFERENCE_PICKER_DEBOUNCE_MS = 180;
-const REFERENCE_PICKER_MIN_QUERY_LENGTH = 2;
+const REFERENCE_PICKER_MIN_QUERY_LENGTH = 1;
+const REFERENCE_PICKER_DEFAULT_LIMIT = 100;
+const REFERENCE_PICKER_SEARCH_LIMIT = 60;
 const referenceIdentityFieldCache = new Map();
 let referenceNodeIndexCache = { graphRevision: null, nodeCount: null, map: null };
 let referenceAliasIndexCache = { graphRevision: null, aliasCount: null, map: null };
@@ -16548,6 +18829,35 @@ function referenceNodeForReferenceId(referenceId) {
   return aliasTargetId ? (nodes.get(aliasTargetId) || null) : null;
 }
 
+function referencePickerAvailableSymbols(expectedKinds, options = {}) {
+  const kinds = Array.isArray(expectedKinds) ? expectedKinds.map(normalizeReferenceKind).filter(Boolean) : [];
+  const query = String(options.query || "").trim().toLowerCase();
+  const limit = Math.max(1, Math.min(200, Math.floor(Number(options.limit) || REFERENCE_PICKER_DEFAULT_LIMIT)));
+  const symbols = [];
+  for (const [id, node] of referenceNodeIndex().entries()) {
+    if (kinds.length && !referenceMatchesKinds(id, kinds)) continue;
+    const kind = normalizeReferenceKind(referenceKindFromId(id));
+    const label = referenceNodeLabel(node) || id;
+    const typeLabel = state.nodeTypes?.[node.type]?.label || humanizeReferenceKind(kind || node.type);
+    if (query) {
+      const terms = [label, id, kind, typeLabel, node.type, node.title]
+        .map(function (entry) { return String(entry || "").toLowerCase(); });
+      if (!terms.some(function (term) { return term.includes(query); })) continue;
+    }
+    symbols.push({
+      id,
+      kind,
+      nodeId: node.id,
+      parentId: node.parentId || null,
+      label,
+      nodeType: node.type,
+      published: false
+    });
+  }
+  symbols.sort(referencePickerSort);
+  return symbols.slice(0, limit);
+}
+
 function referenceNodeLabel(node) {
   if (!node || typeof node !== "object") return "";
   return String(
@@ -16624,7 +18934,7 @@ async function fetchReferencePickerSymbols(query, expectedKinds, options = {}) {
   const normalizedQuery = String(query === null || query === undefined ? "" : query).trim();
   const kinds = Array.isArray(expectedKinds) ? expectedKinds.map(normalizeReferenceKind).filter(Boolean) : [];
   const minLength = Math.max(1, Number(options.minLength) || REFERENCE_PICKER_MIN_QUERY_LENGTH);
-  const limit = Math.max(4, Math.min(20, Math.floor(Number(options.limit) || 8)));
+  const limit = Math.max(4, Math.min(100, Math.floor(Number(options.limit) || REFERENCE_PICKER_SEARCH_LIMIT)));
   if (!kinds.length || normalizedQuery.length < minLength) return [];
   const perKindLimit = kinds.length > 1 ? Math.max(4, Math.ceil(limit / kinds.length) + 2) : limit;
   const requests = kinds.map(function (kind) {
@@ -16685,7 +18995,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
 
   const currentChip = document.createElement("div");
   currentChip.className = "referencePickerChip" + (
-    current.state === "missing" ? " referencePickerChip--missing" : (
+    current.state === "missing" && current.rawId ? " referencePickerChip--missing" : (
       current.state === "mismatch" ? " referencePickerChip--mismatch" : ""
     )
   );
@@ -16695,7 +19005,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   currentTitle.textContent = current.state === "empty"
     ? "Geen bron gekozen"
     : current.state === "missing"
-      ? "Ontbrekende bron"
+      ? (current.rawId ? "Ontbrekende bron" : "Kies een bestaande bron")
       : current.displayLabel || "Bron";
   currentChip.appendChild(currentTitle);
 
@@ -16738,8 +19048,8 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   const searchButton = document.createElement("button");
   searchButton.type = "button";
   searchButton.className = "mini";
-  searchButton.textContent = "Andere waarde zoeken";
-  searchButton.title = "Focus de zoekbox om een andere bron te kiezen.";
+  searchButton.textContent = "Kies uit bestaande lijst";
+  searchButton.title = "Bekijk en filter alle bestaande bronnen die bij dit veld passen.";
   actions.appendChild(searchButton);
 
   const sourceButton = document.createElement("button");
@@ -16797,7 +19107,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   searchInput.autocapitalize = "none";
   searchInput.spellcheck = false;
   searchInput.placeholder = allowedKinds.length
-    ? "Zoek bron op naam of type..."
+    ? "Filter de bestaande lijst op naam of type..."
     : "Geen zoekbare reference kinds";
   searchInput.disabled = !allowedKinds.length;
   searchInput.setAttribute("enterkeyhint", "search");
@@ -16821,7 +19131,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   root.appendChild(searchBlock);
 
   let activeIndex = -1;
-  let currentResults = [];
+  let currentResults = referencePickerAvailableSymbols(allowedKinds, { limit: REFERENCE_PICKER_DEFAULT_LIMIT });
   let requestToken = 0;
   let searchTimer = null;
   let controller = null;
@@ -16830,33 +19140,43 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   function renderResults() {
     results.textContent = "";
     const query = String(searchInput.value || "").trim();
-    const showResults = allowedKinds.length && query.length >= REFERENCE_PICKER_MIN_QUERY_LENGTH && (loading || currentResults.length > 0);
+    const showResults = allowedKinds.length && (loading || currentResults.length > 0);
     searchInput.setAttribute("aria-expanded", showResults ? "true" : "false");
     searchInput.setAttribute("aria-activedescendant", activeIndex >= 0 && currentResults[activeIndex] ? (results.id + "-option-" + activeIndex) : "");
     if (!allowedKinds.length) {
       status.textContent = "Deze reference heeft geen toegestane kinds.";
       return;
     }
-    if (query.length < REFERENCE_PICKER_MIN_QUERY_LENGTH) {
-      status.textContent = "Typ minstens " + REFERENCE_PICKER_MIN_QUERY_LENGTH + " tekens om te zoeken.";
-      return;
-    }
     if (!showResults || !currentResults.length) {
-      status.textContent = loading ? "Zoeken..." : "Geen resultaten.";
+      status.textContent = loading
+        ? "Lijst laden..."
+        : query
+          ? "Geen passende bestaande bronnen."
+          : "Er bestaan nog geen bronnen van het toegestane type.";
       const empty = document.createElement("div");
       empty.className = "referencePickerEmpty";
-      empty.textContent = loading ? "Zoeken..." : "Geen resultaten.";
+      empty.textContent = status.textContent;
       results.appendChild(empty);
       return;
     }
-    status.textContent = "";
+    status.textContent = loading
+      ? currentResults.length + " directe keuze(s); lijst bijwerken..."
+      : query
+        ? currentResults.length + " passende keuze(s). Wis het filter om alles te zien."
+      : currentResults.length >= REFERENCE_PICKER_DEFAULT_LIMIT
+        ? "De eerste " + currentResults.length + " bestaande keuzes. Typ om de lijst te filteren."
+        : currentResults.length + " bestaande keuze(s). Typ alleen om deze lijst te filteren.";
     currentResults.forEach(function (symbol, index) {
+      const selectedId = normalizeCanonicalId(current.resolvedId || current.rawId, "");
+      const isSelected = selectedId && selectedId === normalizeCanonicalId(symbol.id, "");
       const item = document.createElement("button");
       item.type = "button";
-      item.className = "referencePickerResult" + (index === activeIndex ? " referencePickerResult--active" : "");
+      item.className = "referencePickerResult"
+        + (index === activeIndex ? " referencePickerResult--active" : "")
+        + (isSelected ? " referencePickerResult--selected" : "");
       item.id = results.id + "-option-" + index;
       item.setAttribute("role", "option");
-      item.setAttribute("aria-selected", index === activeIndex ? "true" : "false");
+      item.setAttribute("aria-selected", isSelected ? "true" : "false");
       item.tabIndex = -1;
 
       const title = document.createElement("div");
@@ -16866,7 +19186,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
 
       const meta = document.createElement("div");
       meta.className = "referencePickerResultMeta";
-      meta.textContent = referenceSymbolTypeLabel(symbol) || symbol.kind || "";
+      meta.textContent = (referenceSymbolTypeLabel(symbol) || symbol.kind || "") + (isSelected ? " · Gekozen" : "");
       item.appendChild(meta);
 
       if (!options.hideAdvanced) {
@@ -16876,10 +19196,6 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
         item.appendChild(advanced);
       }
 
-      item.addEventListener("mouseenter", function () {
-        activeIndex = index;
-        renderResults();
-      });
       item.addEventListener("click", function () {
         commitReferenceValue(normalizeCanonicalId(symbol.id, ""));
       });
@@ -16900,8 +19216,8 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
       return;
     }
     const query = String(searchInput.value || "").trim();
-    if (query.length < REFERENCE_PICKER_MIN_QUERY_LENGTH) {
-      currentResults = [];
+    if (!query) {
+      currentResults = referencePickerAvailableSymbols(allowedKinds, { limit: REFERENCE_PICKER_DEFAULT_LIMIT });
       activeIndex = -1;
       loading = false;
       if (controller) controller.abort();
@@ -16914,12 +19230,12 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
     const requestController = new AbortController();
     controller = requestController;
     loading = true;
-    currentResults = [];
-    activeIndex = -1;
+    currentResults = referencePickerAvailableSymbols(allowedKinds, { query, limit: REFERENCE_PICKER_SEARCH_LIMIT });
+    activeIndex = currentResults.length ? 0 : -1;
     renderResults();
     try {
       const symbols = await fetchReferencePickerSymbols(query, allowedKinds, {
-        limit: 8,
+        limit: REFERENCE_PICKER_SEARCH_LIMIT,
         signal: requestController.signal
       });
       if (token !== requestToken || requestController.signal.aborted || !root.isConnected) return;
@@ -16930,16 +19246,16 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
       renderResults();
     } catch (error) {
       if (requestController.signal.aborted || token !== requestToken) return;
-      currentResults = [];
+      currentResults = referencePickerAvailableSymbols(allowedKinds, { query, limit: REFERENCE_PICKER_SEARCH_LIMIT });
       activeIndex = -1;
       loading = false;
       controller = null;
-      status.textContent = error && error.message ? error.message : "Zoeken mislukt.";
-      results.textContent = "";
-      const errorNode = document.createElement("div");
-      errorNode.className = "referencePickerEmpty err";
-      errorNode.textContent = status.textContent;
-      results.appendChild(errorNode);
+      renderResults();
+      if (!currentResults.length) {
+        status.textContent = error && error.message ? error.message : "Zoeken mislukt.";
+        const errorNode = results.querySelector(".referencePickerEmpty");
+        if (errorNode) errorNode.classList.add("err");
+      }
     }
   }
 
@@ -16959,7 +19275,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   }
 
   function selectActiveResult() {
-    const symbol = currentResults[activeIndex] || currentResults[0] || null;
+    const symbol = activeIndex >= 0 ? (currentResults[activeIndex] || null) : null;
     if (!symbol) return;
     commitReferenceValue(normalizeCanonicalId(symbol.id, ""));
   }
@@ -16967,10 +19283,10 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
   searchButton.addEventListener("click", function () {
     searchInput.focus();
     if (typeof searchInput.select === "function") searchInput.select();
-    if (searchInput.value.trim().length >= REFERENCE_PICKER_MIN_QUERY_LENGTH) {
+    if (searchInput.value.trim()) {
       scheduleSearch();
     } else {
-      renderResults();
+      void runSearch();
     }
   });
 
@@ -16982,16 +19298,16 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
     if (searchTimer) clearTimeout(searchTimer);
     if (controller) controller.abort();
     controller = null;
-    if (query.length < REFERENCE_PICKER_MIN_QUERY_LENGTH) {
+    if (!query) {
       loading = false;
-      currentResults = [];
+      currentResults = referencePickerAvailableSymbols(allowedKinds, { limit: REFERENCE_PICKER_DEFAULT_LIMIT });
       activeIndex = -1;
       renderResults();
       return;
     }
     loading = true;
-    currentResults = [];
-    activeIndex = -1;
+    currentResults = referencePickerAvailableSymbols(allowedKinds, { query, limit: REFERENCE_PICKER_SEARCH_LIMIT });
+    activeIndex = currentResults.length ? 0 : -1;
     renderResults();
     scheduleSearch();
   });
@@ -17011,7 +19327,7 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
     if (event.key === "Enter") {
       event.preventDefault();
       event.stopPropagation();
-      if (currentResults.length) {
+      if (activeIndex >= 0 && currentResults.length) {
         selectActiveResult();
       }
       return;
@@ -17024,12 +19340,10 @@ function buildReferencePickerField(node, key, field, value, options = {}) {
       if (controller) controller.abort();
       controller = null;
       loading = false;
-      currentResults = [];
+      searchInput.value = "";
+      currentResults = referencePickerAvailableSymbols(allowedKinds, { limit: REFERENCE_PICKER_DEFAULT_LIMIT });
       activeIndex = -1;
-      status.textContent = "Zoeken gesloten.";
-      results.textContent = "";
-      searchInput.setAttribute("aria-expanded", "false");
-      searchInput.setAttribute("aria-activedescendant", "");
+      renderResults();
     }
   });
   searchInput.addEventListener("blur", function () {
@@ -18705,16 +21019,7 @@ function copySelectionToClipboard() {
 }
 
 function buildDeletionGraph(nodeIds, edgeIds) {
-  const nextGraph = cloneGraphForRestore(state.graph);
-  const removeNodes = new Set(collectDescendantNodeIds(nodeIds, nextGraph));
-  const removeEdges = new Set(edgeIds || []);
-  nextGraph.nodes = (nextGraph.nodes || []).filter(function (node) {
-    return !removeNodes.has(node.id);
-  });
-  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
-    return !removeNodes.has(edge.fromNodeId) && !removeNodes.has(edge.toNodeId) && !removeEdges.has(edge.id);
-  });
-  return nextGraph;
+  return removeVisualObjects(state.graph, state.nodeTypes, nodeIds, edgeIds);
 }
 
 async function deleteSelectedNodes() {
@@ -18724,7 +21029,13 @@ async function deleteSelectedNodes() {
     setStatus("Geen selectie om te verwijderen.", "");
     return;
   }
-  const nextGraph = buildDeletionGraph(nodeIds, edgeIds);
+  let nextGraph;
+  try {
+    nextGraph = buildDeletionGraph(nodeIds, edgeIds);
+  } catch (error) {
+    setStatus(error.message || "De selectie kan nog niet veilig worden verwijderd.", "error");
+    return;
+  }
   await restoreGraphObject(nextGraph, {
     historyLabel: nodeIds.length ? "Nodes verwijderd" : "Verbindingen verwijderd",
     selectedNodeIds: [],
@@ -19178,11 +21489,10 @@ function editorCameraCenterModelPosition() {
 
 async function placeModel(assetId, position) {
   const startedAt = performance.now();
-  // No zone open in the Nodes graph to place into - falling back straight to root put
-  // every drag-dropped asset there regardless of where in the world it visually landed.
-  // Prefer whichever zone's own bounds actually contain the drop position instead.
-  const fallbackZone = state.currentGroupId ? null : zoneCanvasGroupContainingPoint(position?.x, position?.z);
-  const requestedParentId = state.currentGroupId || fallbackZone?.id || null;
+  // Viewport placement owns the spatial choice: an open Nodes group may not silently
+  // assign a model in another visible zone to the wrong Zone Output.
+  const spatialZone = zoneCanvasGroupContainingPoint(position?.x, position?.z);
+  const requestedParentId = spatialZone?.id || state.currentGroupId || null;
   let createdNodeId = null;
   try {
     await applyGraphMutation(function () {
@@ -19202,6 +21512,15 @@ async function placeModel(assetId, position) {
     });
     if (createdNodeId && isZoneCanvasGroup(nodeById(requestedParentId))) {
       await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
+    }
+    if (createdNodeId) {
+      const placedModel = nodeById(createdNodeId);
+      const context = objectFunctionContextForModel(placedModel, state.graph);
+      if (context.model && context.zoneGroup && context.zoneOutput) {
+        state.authoringSelectedModelNodeId = createdNodeId;
+        visualBuilderBegin(context);
+        setStatus("Model geplaatst. Wat wil je hiervan maken?", "success");
+      }
     }
   } finally {
     logTiming("placeModel", startedAt, "asset=" + assetId);
@@ -19261,6 +21580,13 @@ if (el.viewportAuthoringIndicatorToggle) {
   el.viewportAuthoringIndicatorToggle.addEventListener("click", function () {
     state.authoringIndicatorsEnabled = !state.authoringIndicatorsEnabled;
     storeAuthoringIndicators(state.authoringIndicatorsEnabled);
+    renderViewportControls();
+  });
+}
+if (el.viewportRuntimeNameplateToggle) {
+  el.viewportRuntimeNameplateToggle.addEventListener("click", function () {
+    state.runtimeNameplatesEnabled = !state.runtimeNameplatesEnabled;
+    storeRuntimeNameplates(state.runtimeNameplatesEnabled);
     renderViewportControls();
   });
 }

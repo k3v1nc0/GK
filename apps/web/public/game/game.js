@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20260910-entity-assembly-mesh1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261006-portal-pair2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
@@ -6958,6 +6958,26 @@ function scheduleNode03Poll() {
   }, 2500);
 }
 
+function node03SnapshotMatchesCurrentZone(snapshot) {
+  if (!snapshot) return false;
+  const expectedZoneId = String(state.position?.zoneId || activeGameWorldZoneId() || "").trim();
+  const snapshotZoneId = String(snapshot.zoneId || "").trim();
+  return !expectedZoneId || !snapshotZoneId || snapshotZoneId === expectedZoneId;
+}
+
+function clearNode03SnapshotForZoneChange(nextZoneId) {
+  const currentSnapshotZoneId = String(state.node03.snapshot?.zoneId || "").trim();
+  const destinationZoneId = String(nextZoneId || "").trim();
+  if (!currentSnapshotZoneId || !destinationZoneId || currentSnapshotZoneId === destinationZoneId) return false;
+  state.node03.snapshot = null;
+  state.node03.selectedTargetId = "";
+  state.node03.pendingTargetAction = null;
+  state.node03.signature = "";
+  state.node03.reloadQueued = state.node03.loadInFlight === true;
+  syncRuntimeTargets();
+  return true;
+}
+
 async function loadNode03State(options = {}) {
   if (!shouldLoadNode03State()) {
     removeNode03Hud();
@@ -6982,9 +7002,7 @@ async function loadNode03State(options = {}) {
       renderNode03Hud();
       return false;
     }
-    const expectedZoneId = String(state.position?.zoneId || activeGameWorldZoneId() || "").trim();
-    const snapshotZoneId = String(data.zoneId || "").trim();
-    if (expectedZoneId && snapshotZoneId && snapshotZoneId !== expectedZoneId) {
+    if (!node03SnapshotMatchesCurrentZone(data)) {
       if (options.force !== true) state.node03.reloadQueued = true;
       return false;
     }
@@ -7398,16 +7416,23 @@ function node04RuntimeTargetsForScene() {
 
 function syncRuntimeTargets() {
   if (!state.runtime || typeof state.runtime.setRuntimeTargets !== "function") return;
-  const targets = [];
-  if (state.node03.snapshot) targets.push.apply(targets, node03RuntimeTargetsForScene());
-  if (state.node04.snapshot) targets.push.apply(targets, node04RuntimeTargetsForScene());
-  if (state.node05.snapshot) targets.push.apply(targets, node05RuntimeTargetsForScene());
-  if (!targets.length) {
+  const byId = new Map();
+  const addTargets = function (targets) {
+    for (const target of targets) {
+      const id = String(target?.instanceId || "").trim();
+      if (!id || byId.has(id)) continue;
+      byId.set(id, target);
+    }
+  };
+  // NODE-03 owns physical interaction targets. Quest/service modules may point
+  // at the same target, but must not replace its model attachment and hit area.
+  if (state.node03.snapshot) addTargets(node03RuntimeTargetsForScene());
+  if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
+  if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
+  if (!byId.size) {
     if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
     return;
   }
-  const byId = new Map();
-  for (const target of targets) byId.set(target.instanceId, target);
   state.runtime.setRuntimeTargets(Array.from(byId.values()));
 }
 
@@ -7689,7 +7714,6 @@ async function loadNode04State(options = {}) {
       return false;
     }
     state.node04.snapshot = data;
-    if (data.node03) state.node03.snapshot = data.node03;
     state.node04.lastLoadedAt = performance.now();
     state.node04.lastError = "";
     if (state.minimapHud.elements) state.minimapHud.dirty = true;
@@ -7774,7 +7798,6 @@ async function runNode04Action(action, targetId, extra = {}) {
     if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
     if (data.snapshot) {
       state.node04.snapshot = data.snapshot;
-      if (data.snapshot.node03) state.node03.snapshot = data.snapshot.node03;
       if (state.minimapHud.elements) state.minimapHud.dirty = true;
       syncRuntimeTargets();
     }
@@ -8486,7 +8509,6 @@ async function loadNode05State(options = {}) {
       return false;
     }
     state.node05.snapshot = data;
-    if (data.node03) state.node03.snapshot = data.node03;
     state.node05.lastLoadedAt = performance.now();
     state.node05.lastError = "";
     if (state.minimapHud.elements) state.minimapHud.dirty = true;
@@ -8583,7 +8605,6 @@ async function runNode05Action(action, payload = {}) {
     if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
     if (data.snapshot) {
       state.node05.snapshot = data.snapshot;
-      if (data.snapshot.node03) state.node03.snapshot = data.snapshot.node03;
       if (state.minimapHud.elements) state.minimapHud.dirty = true;
       syncRuntimeTargets();
     }
@@ -11639,6 +11660,7 @@ function applyInstantTravelResponse(response) {
     })
   }, "http-zone-link");
   if (!nextPosition) return false;
+  clearNode03SnapshotForZoneChange(nextPosition.zoneId);
   clearLocalMovementForTeleport();
   if (response.gameWorld) {
     applySnapshotToRuntime({

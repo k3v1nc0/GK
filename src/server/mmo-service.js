@@ -2032,6 +2032,20 @@ export class MmoService {
     return spawn ? { zonePackage, spawn } : null;
   }
 
+  findZonePortal(world, zoneId, portalRef) {
+    const targetRef = String(portalRef || "").trim();
+    const zonePackage = world?.gameProject?.zones?.byId?.[zoneId] || null;
+    if (!zonePackage || !targetRef) return null;
+    for (const entity of Array.isArray(zonePackage.entities) ? zonePackage.entities : []) {
+      if (entity?.nodeType !== "entity_assembly" || entity.model?.nodeType !== "model_entity") continue;
+      const portal = (Array.isArray(entity.components) ? entity.components : []).find(function (component) {
+        return component?.nodeType === "portal_component" && component.componentId === targetRef;
+      }) || null;
+      if (portal) return { zonePackage, entity, portal, model: entity.model };
+    }
+    return null;
+  }
+
   travelByZoneLink(req, payload = {}) {
     const sessionContext = this.getSessionContextFromRequest(req);
     this.authService.touchSession(sessionContext.session.id, false);
@@ -2044,21 +2058,25 @@ export class MmoService {
       throw error;
     }
     const link = linkResult.link;
-    const target = this.findZoneSpawn(worldContext.world, link.toZoneRef, link.toSpawnRef);
+    const target = link.toPortalRef
+      ? this.findZonePortal(worldContext.world, link.toZoneRef, link.toPortalRef)
+      : this.findZoneSpawn(worldContext.world, link.toZoneRef, link.toSpawnRef);
     if (!target) {
-      const error = new Error("Target zone/spawn voor Zone Link ontbreekt.");
+      const error = new Error(link.toPortalRef ? "Doelportal voor Zone Link ontbreekt." : "Target zone/spawn voor Zone Link ontbreekt.");
       error.status = 400;
       throw error;
     }
+    const arrival = target.model || target.spawn;
+    const arrivalRef = link.toPortalRef || link.toSpawnRef;
     const connection = { user: sessionContext.user, session: sessionContext.session, player: profile, worldId: worldContext.worldId };
     const nextState = this.applyTeleportState(connection, {
       zoneId: link.toZoneRef,
-      spawnId: link.toSpawnRef,
+      spawnId: arrivalRef,
       position: {
-        x: target.spawn.x,
-        y: target.spawn.y,
-        z: target.spawn.z,
-        rotationY: target.spawn.facing || 0
+        x: arrival.x,
+        y: arrival.y,
+        z: arrival.z,
+        rotationY: arrival.facing || arrival.rotationY || 0
       },
       animationState: "idle"
     }, { transport: "http-zone-link" });
@@ -2070,7 +2088,8 @@ export class MmoService {
       linkId: link.linkId,
       fromZoneId: link.fromZoneRef || linkResult.fromZone?.zoneId || null,
       zoneId: link.toZoneRef,
-      spawnId: link.toSpawnRef,
+      spawnId: link.toSpawnRef || null,
+      portalRef: link.toPortalRef || null,
       position: this.publicPositionForPlayer(nextState, sessionContext.session, worldContext.worldId),
       gameWorld: worldForZone(worldContext.world, link.toZoneRef, link.toSpawnRef)
     };
