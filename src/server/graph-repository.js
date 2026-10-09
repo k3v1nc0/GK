@@ -775,6 +775,78 @@ export class GraphRepository {
     return this.getGraph();
   }
 
+  deleteGraphSelection(changeSet = {}) {
+    const nodeIds = Array.from(new Set((Array.isArray(changeSet.nodeIds) ? changeSet.nodeIds : [])
+      .map(function (id) { return String(id || "").trim(); }).filter(Boolean)));
+    const edgeIds = Array.from(new Set((Array.isArray(changeSet.edgeIds) ? changeSet.edgeIds : [])
+      .map(function (id) { return String(id || "").trim(); }).filter(Boolean)));
+    const patches = Array.isArray(changeSet.patches) ? changeSet.patches : [];
+    if (nodeIds.length > 5000 || edgeIds.length > 10000 || patches.length > 500) {
+      throw graphError("Te veel onderdelen in één verwijderactie.");
+    }
+    if (!nodeIds.length && !edgeIds.length && !patches.length) return this.getGraph();
+
+    const removedNodeIds = new Set(nodeIds);
+    const selectNode = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?");
+    const rows = nodeIds.map(function (nodeId) {
+      const row = selectNode.get(nodeId);
+      if (!row) {
+        const error = new Error("Node bestaat niet: " + nodeId);
+        error.status = 404;
+        throw error;
+      }
+      if (row.type === "game_output") throw graphError("De Game Output node kan niet verwijderd worden.");
+      if (isGroupSystemNodeType(row.type) && !removedNodeIds.has(row.parent_id)) {
+        throw graphError("Group system nodes kunnen niet los verwijderd worden.");
+      }
+      return row;
+    });
+
+    const updateNode = this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?");
+    const deleteEdge = this.db.prepare("DELETE FROM editor_node_edges WHERE id = ?");
+    const deleteNode = this.db.prepare("DELETE FROM editor_nodes WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      for (const patch of patches) {
+        const nodeId = String(patch?.nodeId || "").trim();
+        if (!nodeId) throw graphError("Verwijderpatch mist nodeId.");
+        if (removedNodeIds.has(nodeId)) throw graphError("Een verwijderde node kan niet tegelijk worden bijgewerkt.");
+        const row = selectNode.get(nodeId);
+        if (!row) {
+          const error = new Error("Node bestaat niet: " + nodeId);
+          error.status = 404;
+          throw error;
+        }
+        if (row.type === "group") throw graphError("Group interface wijzigingen gaan niet via verwijderen.");
+        const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
+        const cleanValues = cleanValuesForType(row.type, patch.values || {}, currentValues, NODE_TYPES);
+        updateNode.run(JSON.stringify(cleanValues), now(), nodeId);
+      }
+      for (const edgeId of edgeIds) deleteEdge.run(edgeId);
+      // Delete children before parents. ON DELETE CASCADE remains the final safety net
+      // for group descendants and every edge connected to a removed node.
+      const depths = new Map();
+      const rowById = new Map(rows.map(function (row) { return [row.id, row]; }));
+      const depthFor = function (row) {
+        if (depths.has(row.id)) return depths.get(row.id);
+        const parent = row.parent_id ? rowById.get(row.parent_id) : null;
+        const depth = parent ? depthFor(parent) + 1 : 0;
+        depths.set(row.id, depth);
+        return depth;
+      };
+      rows.sort(function (left, right) { return depthFor(right) - depthFor(left); });
+      for (const row of rows) deleteNode.run(row.id);
+      this.touchGraphRevision(this.db);
+      this.clearDraftWorld();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    this.invalidateSymbolIndex();
+    return this.getGraph();
+  }
+
   duplicateNode(nodeId) {
     const row = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?").get(nodeId);
     if (!row) {

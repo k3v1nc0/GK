@@ -582,6 +582,16 @@ export class Node03RuntimeService {
     }
   }
 
+  runtimeEntityIsAvailable(entity) {
+    if (entity?.entityKind === "enemy") return entity.alive !== false && entity.status !== "dead";
+    return entity?.available !== false && !["depleted", "claimed"].includes(String(entity?.status || ""));
+  }
+
+  syncRuntimeEntityCollider(entity) {
+    if (!entity?.visualEntityId || !this.mmoService || typeof this.mmoService.setWorldEntityColliderEnabled !== "function") return;
+    this.mmoService.setWorldEntityColliderEnabled(entity.visualEntityId, this.runtimeEntityIsAvailable(entity));
+  }
+
   ownedItemCount(playerId, itemId) {
     const stack = this.db.prepare("SELECT COALESCE(SUM(quantity), 0) AS qty FROM player_inventory_stacks WHERE player_id = ? AND item_id = ?")
       .get(playerId, itemId);
@@ -613,6 +623,7 @@ export class Node03RuntimeService {
           INSERT INTO world_entity_state (world_id, zone_id, instance_id, state_kind, state_json, revision, updated_at)
           VALUES (?, ?, ?, 'node03_runtime', ?, 1, ?)
         `).run(ctx.worldId, ctx.zoneId, entity.instanceId, stableJson(entity), stamp);
+        this.syncRuntimeEntityCollider(entity);
         continue;
       }
       const row = existingRows.find(function (candidate) { return candidate.instance_id === entity.instanceId; });
@@ -626,6 +637,7 @@ export class Node03RuntimeService {
           WHERE world_id = ? AND zone_id = ? AND instance_id = ?
         `).run(nextJson, stamp, ctx.worldId, ctx.zoneId, entity.instanceId);
       }
+      this.syncRuntimeEntityCollider(merged);
     }
   }
 
@@ -691,12 +703,12 @@ export class Node03RuntimeService {
           instanceId: NODE03_INSTANCE_PREFIX + ctx.zoneId + ":authored:" + safeEntityReferenceId(authoredId) + ":enemy",
           spawnEntryId: null,
           enemyRef: enemyComponent.enemyRef || definition.id || null,
-          displayName: safeString(definition.displayName || entity.label || model.label, "Enemy"),
+          displayName: safeString(entity.label || model.label || definition.displayName, "Enemy"),
           stats,
           healthMax,
           healthCurrent: healthMax,
           lootTableRef: enemyComponent.lootOverrideRef || definition.lootTableRef || null,
-          respawnPolicyRef: enemyComponent.respawnOverrideRef || definition.defaultRespawnPolicyRef || null
+          respawnPolicyRef: enemyComponent.respawnOverrideRef || definition.defaultRespawnPolicyRef || "respawn_policy.node03_quick"
         }));
       }
     }
@@ -718,12 +730,12 @@ export class Node03RuntimeService {
           instanceId: NODE03_INSTANCE_PREFIX + ctx.zoneId + ":authored:" + safeEntityReferenceId(authoredId) + ":resource",
           spawnEntryId: null,
           resourceRef: resourceComponent.resourceRef || definition.id || null,
-          displayName: safeString(definition.displayName || entity.label || model.label, "Resource"),
+          displayName: safeString(entity.label || model.label || definition.displayName, "Resource"),
           lootTableRef: definition.yieldLootTableRef || null,
           yieldItemRefs: Array.isArray(definition.yieldItemRefs) ? definition.yieldItemRefs : [],
           yieldMultiplier: Math.max(0, safeNumber(resourceComponent.yieldMultiplier, 1)),
           requiredAbilityRef: definition.requiredAbilityRef || null,
-          respawnPolicyRef: resourceComponent.respawnPolicyOverrideRef || definition.respawnPolicyRef || null
+          respawnPolicyRef: resourceComponent.respawnPolicyOverrideRef || definition.respawnPolicyRef || "respawn_policy.node03_quick"
         }));
       }
     }
@@ -746,11 +758,11 @@ export class Node03RuntimeService {
         spawnEntryId: null,
         itemRef: pickupComponent.itemRef || definition.id || null,
         definitionId: pickupComponent.itemRef || definition.id || null,
-        displayName: safeString(definition.displayName || entity.label || model.label, "Item"),
+        displayName: safeString(entity.label || model.label || definition.displayName, "Item"),
         amount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
         minAmount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
         maxAmount: Math.max(1, safeInteger(pickupComponent.amount, 1)),
-        respawnPolicyRef: pickupComponent.respawnPolicyRef || null,
+        respawnPolicyRef: pickupComponent.respawnPolicyRef || "respawn_policy.node03_quick",
         interaction: {
           action: "pickup",
           prompt: safeString(pickupComponent.interactionPrompt, "Pick up"),
@@ -901,11 +913,16 @@ export class Node03RuntimeService {
     });
     if (desired.entityKind === "enemy") {
       const wasAlive = current.alive !== false && current.status !== "dead";
+      const currentRespawnTime = Date.parse(current.respawnAt || "");
       merged.alive = wasAlive;
       merged.status = wasAlive ? "alive" : "dead";
       merged.healthMax = desired.healthMax;
       merged.healthCurrent = wasAlive ? clamp(safeNumber(current.healthCurrent, desired.healthMax), 0, desired.healthMax) : 0;
-      if (!wasAlive && current.respawnAt && Date.parse(current.respawnAt) <= Date.now()) {
+      if (!merged.respawnPolicyRef) merged.respawnAt = null;
+      if (!wasAlive && merged.respawnPolicyRef && !Number.isFinite(currentRespawnTime)) {
+        merged.respawnAt = addMs(respawnDelayMs(ctx.catalogs, merged.respawnPolicyRef));
+      }
+      if (!wasAlive && merged.respawnPolicyRef && Number.isFinite(currentRespawnTime) && currentRespawnTime <= Date.now()) {
         merged.alive = true;
         merged.status = "alive";
         merged.healthCurrent = desired.healthMax;
@@ -914,9 +931,14 @@ export class Node03RuntimeService {
       }
     } else {
       const available = current.available !== false && !["depleted", "claimed"].includes(current.status);
+      const currentRespawnTime = Date.parse(current.respawnAt || "");
       merged.available = available;
       merged.status = available ? "available" : current.status;
-      if (!available && current.respawnAt && Date.parse(current.respawnAt) <= Date.now()) {
+      if (!merged.respawnPolicyRef) merged.respawnAt = null;
+      if (!available && merged.respawnPolicyRef && !Number.isFinite(currentRespawnTime)) {
+        merged.respawnAt = addMs(respawnDelayMs(ctx.catalogs, merged.respawnPolicyRef));
+      }
+      if (!available && merged.respawnPolicyRef && Number.isFinite(currentRespawnTime) && currentRespawnTime <= Date.now()) {
         merged.available = true;
         merged.status = "available";
         merged.respawnAt = null;
@@ -1095,6 +1117,7 @@ export class Node03RuntimeService {
       SET state_json = ?, revision = revision + 1, updated_at = ?
       WHERE world_id = ? AND zone_id = ? AND instance_id = ?
     `).run(stableJson(entity), now(), ctx.worldId, zoneId, entity.instanceId);
+    this.syncRuntimeEntityCollider(entity);
   }
 
   assertInRange(ctx, entity, action) {
@@ -1149,7 +1172,7 @@ export class Node03RuntimeService {
       enemy.alive = false;
       enemy.status = "dead";
       enemy.defeatedBy = ctx.profile.id;
-      enemy.respawnAt = addMs(respawnDelayMs(ctx.catalogs, enemy.respawnPolicyRef));
+      enemy.respawnAt = enemy.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, enemy.respawnPolicyRef)) : null;
       grants = grants.concat(this.grantLootTable(ctx, enemy.lootTableRef, operationId, enemy.instanceId, "enemy_defeated"));
       const xpGrant = this.grantXpForEnemy(ctx, enemy, operationId);
       if (xpGrant) grants.push(xpGrant);
@@ -1225,7 +1248,7 @@ export class Node03RuntimeService {
     resource.available = false;
     resource.status = "depleted";
     resource.depletedBy = ctx.profile.id;
-    resource.respawnAt = addMs(respawnDelayMs(ctx.catalogs, resource.respawnPolicyRef));
+    resource.respawnAt = resource.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, resource.respawnPolicyRef)) : null;
     resource.updatedAt = now();
     this.saveEntityState(ctx, resource);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", resource.instanceId, { grants });
@@ -1259,7 +1282,7 @@ export class Node03RuntimeService {
     pickup.available = false;
     pickup.status = "claimed";
     pickup.claimedBy = ctx.profile.id;
-    pickup.respawnAt = addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef));
+    pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
     pickup.updatedAt = now();
     this.saveEntityState(ctx, pickup);
     this.recordGameplayEvent(ctx, "pickup_claimed", "player", pickup.instanceId, { grants });
@@ -1752,7 +1775,9 @@ export class Node03RuntimeService {
         x: safeNumber(portal.entity.model.x, 0),
         y: safeNumber(portal.entity.model.y, 0),
         z: safeNumber(portal.entity.model.z, 0),
+        radius: Math.max(0, safeNumber(portal.entity.model.collisionRadius, 0)),
         visualEntityId: portal.entity.model.nodeId || portal.entity.model.entityId || null,
+        label: safeString(portal.entity.label || portal.entity.model.label, ""),
         component: portal.component
       };
     }
@@ -1778,7 +1803,8 @@ export class Node03RuntimeService {
       const range = position.component
         ? Math.max(0.1, safeNumber(position.component.range, 4))
         : Math.max(3, safeNumber(link.preloadDistance, 30));
-      const targetName = targetZone?.zone?.displayName || link.toZoneRef;
+      const radius = Math.max(0, safeNumber(position.radius, 0));
+      const targetName = position.label || targetZone?.zone?.displayName || link.toZoneRef;
       return {
         instanceId: link.linkId,
         entityKind: "zone_link",
@@ -1790,7 +1816,8 @@ export class Node03RuntimeService {
         available: true,
         distance: distance === null ? null : round(distance),
         range,
-        inRange: link.interactionRequired === false || distance === null || distance <= range,
+        radius,
+        inRange: link.interactionRequired === false || distance === null || distance <= range + radius,
         healthCurrent: null,
         healthMax: null,
         lootTableRef: null,

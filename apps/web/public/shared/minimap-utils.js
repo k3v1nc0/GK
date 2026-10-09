@@ -78,6 +78,57 @@ function clampNum(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+const MINIMAP_ENTITY_ROLE_BY_COMPONENT = new Map([
+  ["portal_component", "teleport"],
+  ["enemy_component", "enemy"],
+  ["resource_component", "resource"],
+  ["pickup_component", "item"],
+  ["crafting_station_component", "crafting"],
+  ["vendor_component", "vendor"],
+  ["marketplace_access_component", "market"],
+  ["npc_component", "npc"]
+]);
+
+// One authored assembly can be exposed by several runtime systems. Resolve its
+// human role from the real component package so a model is not also presented as
+// a generic NPC beside its portal/service/resource marker.
+export function minimapEntityRole(source) {
+  if (!source || typeof source !== "object") return null;
+  const components = Array.isArray(source.assemblyComponents)
+    ? source.assemblyComponents
+    : Array.isArray(source.components)
+      ? source.components
+      : [];
+  for (const componentType of MINIMAP_ENTITY_ROLE_BY_COMPONENT.keys()) {
+    const component = components.find(function (candidate) {
+      return candidate?.nodeType === componentType && candidate.enabled !== false;
+    });
+    if (!component) continue;
+    if (componentType === "crafting_station_component") {
+      const stationType = String(component.stationType || "").toLowerCase();
+      if (stationType.includes("cook")) return "cooking";
+    }
+    return MINIMAP_ENTITY_ROLE_BY_COMPONENT.get(componentType);
+  }
+  const kind = String(source.entityKind || source.targetKind || source.kind || source.markerType || "").trim().toLowerCase();
+  if (["zone_link", "portal", "teleport", "travel"].includes(kind)) return "teleport";
+  if (kind === "pickup") return "item";
+  if (["enemy", "boss", "wildlife", "npc", "resource", "item", "crafting", "cooking", "vendor", "market", "quest", "object"].includes(kind)) return kind;
+  const action = String(source.action?.type || source.action || "").trim().toLowerCase();
+  if (action === "teleport" || action === "travel") return "teleport";
+  return null;
+}
+
+export function minimapPhysicalMarkerKey(source, zoneId = "", precision = 100) {
+  const position = source?.transform?.position || source?.position || source;
+  const x = Number(position?.x);
+  const z = Number(position?.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return "";
+  const scale = Math.max(1, Number(precision) || 100);
+  const zone = String(source?.zoneId || zoneId || "").trim();
+  return zone + ":" + Math.round(x * scale) + ":" + Math.round(z * scale);
+}
+
 // A "minimap view" is the interactive zoom/pan state of one minimap canvas: it never touches the
 // baked image (which always covers the full Ground Surface) or any node value. `worldDistance` is
 // how many world-units are visible across the canvas width/height.

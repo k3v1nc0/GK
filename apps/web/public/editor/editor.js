@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261007-editor-nameplates1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261009-delete-refresh1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261006-portal-pair2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -9,7 +9,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { removeVisualObjects, visualObjectRelations } from "./visual-object-relations.js?v=20261006-portal-pair3";
+import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -18,15 +18,19 @@ import {
   drawDiamondMarker,
   drawSquareMarker,
   drawCrossMarker,
+  drawStarMarker,
   drawMarkerLabel,
   squareGroundBounds,
   createMinimapView,
   clampMinimapView,
   minimapViewBounds,
-  attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260729-mobile-editor-fix3";
+  attachMinimapInteractions,
+  minimapEntityRole,
+  minimapPhysicalMarkerKey
+} from "../shared/minimap-utils.js?v=20261008-minimap-roles1";
 
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
+const DELETE_GRAPH_SELECTION_ROUTE = "/api/editor/graph/delete-selection";
 const EDITOR_API_TIMEOUT_MS = 20000;
 const EDITOR_HEALTHCHECK_STALE_MS = 45000;
 const EDITOR_HEALTHCHECK_INTERVAL_MS = 15000;
@@ -147,6 +151,7 @@ const state = {
   authoringRouteId: null,
   storedAuthoringRouteId: loadStoredAuthoringRoute(),
   authoringMenuOpen: false,
+  authoringOverviewActive: true,
   nodeLibraryOpen: false,
   nodeLibraryAdvanced: false,
   zoneCanvasDraft: null,
@@ -163,6 +168,7 @@ const state = {
   objectFunctionDraft: null,
   visualBuilderDraft: null,
   visualObjectNodeScope: null,
+  authoringOverviewSearch: "",
   questTimelineView: "quest",
   questTimelineSelectedQuestId: null,
   questTimelineSelectedStepId: null,
@@ -3986,10 +3992,18 @@ function setViewportSnap(mode, gridSize) {
 
 function syncRuntimeModelSelectionForTransform() {
   if (!runtime || runtimeTransformActive()) return selectedModelNode();
-  // A multi-selection already active in the runtime must not get collapsed back down to
-  // one entity right before G/R/S starts - that was silently breaking group transforms.
-  if (typeof runtime.getSelectedEntityIds === "function" && runtime.getSelectedEntityIds().length > 1) {
-    return selectedModelNode();
+  // A finished transform clears the runtime's transient selection, while the editor's
+  // authored node selection intentionally remains. Rebuild the complete runtime set
+  // before every new G/R/S action; selecting only the primary node here would silently
+  // turn the next group transform back into a one-object transform.
+  if (state.selectedNodeIds.length > 1 && typeof runtime.selectEntities === "function") {
+    const runtimeIds = Array.from(new Set(state.selectedNodeIds
+      .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
+      .filter(Boolean)));
+    runtime.selectEntities(runtimeIds);
+    return state.selectedNodeIds
+      .map(function (nodeId) { return nodeById(nodeId); })
+      .find(function (node) { return node?.type === "model_entity"; }) || null;
   }
   let node = selectedModelNode();
   let runtimeId = runtimeNodeId(node);
@@ -4828,6 +4842,12 @@ function setSelection(nodeIds, edgeIds, options = {}) {
     const primaryNode = state.selectedNodeId ? nodeById(state.selectedNodeId) : null;
     if (primaryNode?.type === "model_entity" && nextNodeIds.length === 1) {
       state.authoringSelectedModelNodeId = primaryNode.id;
+      if (state.visualObjectNodeScope && state.visualObjectNodeScope.modelId !== primaryNode.id) {
+        state.visualObjectNodeScope = null;
+        renderGraph();
+      }
+    } else if (nextNodeIds.length !== 1 || primaryNode?.type !== "model_entity") {
+      state.authoringSelectedModelNodeId = null;
     }
   }
   if (options.clearPendingEdge) state.pendingEdge = null;
@@ -5012,7 +5032,7 @@ function applyGraphMutationResult(result, options = {}) {
   if (options.refreshViewportControls !== false) renderViewportControls();
   if (options.refreshViewport) {
     invalidateDraftWorld();
-    scheduleViewportRefresh(false);
+    scheduleViewportRefresh(options.refreshViewportImmediately === true);
   }
   if (options.refreshValidation !== false) scheduleValidationRefresh();
   if (typeof options.afterApply === "function") options.afterApply(nextGraph, result);
@@ -6952,6 +6972,149 @@ function visualBuilderDraftForContext(context) {
   return draft && context?.model && draft.modelId === context.model.id ? draft : null;
 }
 
+const VISUAL_BUILDER_RESPAWN_ROLES = new Set(["enemy", "resource", "pickup"]);
+
+function visualBuilderRespawnPolicyRef(role, component) {
+  if (!component) return "";
+  if (role === "enemy") return normalizeCanonicalId(component.values?.respawnOverrideRef, "");
+  if (role === "resource") return normalizeCanonicalId(component.values?.respawnPolicyOverrideRef, "");
+  if (role === "pickup") return normalizeCanonicalId(component.values?.respawnPolicyRef, "");
+  return "";
+}
+
+function visualBuilderRespawnPolicyNode(graph, ref) {
+  const policyRef = normalizeCanonicalId(ref, "");
+  if (!policyRef) return null;
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "respawn_policy_definition"
+      && normalizeCanonicalId(node.values?.respawnPolicyId, "") === policyRef;
+  }) || null;
+}
+
+function visualBuilderRespawnSeconds(role, component, graph = state.graph) {
+  const explicitRef = visualBuilderRespawnPolicyRef(role, component);
+  const policy = visualBuilderRespawnPolicyNode(graph, explicitRef || "respawn_policy.node03_quick");
+  if (!policy) return 30;
+  const min = Math.max(0, Number(policy.values?.minDelayMs) || 0);
+  const max = Math.max(min, Number(policy.values?.maxDelayMs) || min);
+  return Math.max(1, Math.round(((min + max) / 2) / 1000));
+}
+
+function visualBuilderLocalRespawnPolicyBase(model) {
+  return normalizeCanonicalId("respawn_policy.visual." + objectFunctionModelStem(model), "");
+}
+
+function visualBuilderIsLocalRespawnPolicy(model, policy) {
+  const base = visualBuilderLocalRespawnPolicyBase(model);
+  const ref = normalizeCanonicalId(policy?.values?.respawnPolicyId, "");
+  return Boolean(base && ref && (ref === base || ref.startsWith(base + ".")));
+}
+
+function visualBuilderEnsureRespawnPolicy(graph, model, seconds) {
+  const base = visualBuilderLocalRespawnPolicyBase(model);
+  let policy = (graph.nodes || []).find(function (node) {
+    return node.type === "respawn_policy_definition" && visualBuilderIsLocalRespawnPolicy(model, node);
+  }) || null;
+  const group = visualBuilderEnsureCatalogGroup(graph);
+  if (!policy) {
+    const values = objectFunctionDefaultValuesForNodeType("respawn_policy_definition");
+    values.respawnPolicyId = uniqueCanonicalGraphValue(graph, base);
+    const position = managedSuggestedNodePosition(graph, group, "respawn_policy_definition");
+    policy = {
+      id: createZoneGraphId("node_respawn_policy_definition"),
+      type: "respawn_policy_definition",
+      title: (model.values?.label || model.title || "Object") + " respawn",
+      x: position.x,
+      y: position.y,
+      parentId: group.id,
+      values
+    };
+    graph.nodes.push(policy);
+  }
+  const delayMs = Math.max(1000, Math.round((Number(seconds) || 30) * 1000));
+  policy.title = (model.values?.label || model.title || "Object") + " respawn";
+  policy.values = Object.assign({}, policy.values || {}, {
+    displayName: policy.title,
+    minDelayMs: delayMs,
+    maxDelayMs: delayMs,
+    jitterMode: "none",
+    oneTimeSpawn: false
+  });
+  connectManagedNodeToPackage(graph, group, policy);
+  return normalizeCanonicalId(policy.values?.respawnPolicyId, "");
+}
+
+function visualBuilderCleanupLocalRespawnPolicies(graph, model, keepRef = "") {
+  const kept = normalizeCanonicalId(keepRef, "");
+  const candidates = (graph.nodes || []).filter(function (node) {
+    return node.type === "respawn_policy_definition"
+      && visualBuilderIsLocalRespawnPolicy(model, node)
+      && normalizeCanonicalId(node.values?.respawnPolicyId, "") !== kept;
+  });
+  for (const policy of candidates) {
+    const ref = normalizeCanonicalId(policy.values?.respawnPolicyId, "");
+    const referenced = (graph.nodes || []).some(function (node) {
+      if (node.id === policy.id) return false;
+      const fields = state.nodeTypes?.[node.type]?.fields || {};
+      return Object.entries(fields).some(function ([key, field]) {
+        if (field?.type === "reference") return normalizeCanonicalId(node.values?.[key], "") === ref;
+        if (field?.type === "referenceList") return normalizeReferenceList(node.values?.[key]).includes(ref);
+        return false;
+      });
+    });
+    if (!referenced) objectFunctionRemoveNodeAndEdges(graph, policy.id);
+  }
+}
+
+function visualBuilderQuestForStep(graph, step) {
+  if (!step) return null;
+  const edge = (graph.edges || []).find(function (candidate) {
+    return candidate.fromNodeId === step.id && candidate.fromPort === "questStep" && candidate.toPort === "steps";
+  }) || null;
+  const quest = edge ? graphNodeByIdInGraph(graph, edge.toNodeId) : null;
+  return quest?.type === "quest_definition" ? quest : null;
+}
+
+function visualBuilderExistingQuestState(context, role, graph = state.graph) {
+  const targetRef = normalizeCanonicalId(context?.questBinding?.values?.targetId, "");
+  const empty = { questMode: "none", questRef: "", questStepRef: "", dialogueRef: "", questItemRef: "" };
+  if (!targetRef) return empty;
+  const dialogue = (graph.nodes || []).find(function (node) {
+    return node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.targetRef, "") === targetRef;
+  }) || null;
+  const objectives = (graph.nodes || []).filter(function (node) {
+    return ["objective_talk", "objective_collect", "objective_deliver", "objective_reach"].includes(node.type)
+      && normalizeCanonicalId(node.values?.targetRef, "") === targetRef;
+  });
+  const preferredTypes = role === "npc"
+    ? ["objective_talk", "objective_deliver"]
+    : role === "resource" || role === "pickup"
+      ? ["objective_collect", "objective_deliver"]
+      : role === "portal" ? ["objective_reach"] : [];
+  const objective = objectives.find(function (node) { return preferredTypes.includes(node.type); }) || null;
+  const stepEdge = objective ? (graph.edges || []).find(function (edge) {
+    return edge.fromNodeId === objective.id && edge.fromPort === "objective" && edge.toPort === "objectives";
+  }) : null;
+  const step = stepEdge ? graphNodeByIdInGraph(graph, stepEdge.toNodeId) : null;
+  const objectiveQuest = visualBuilderQuestForStep(graph, step);
+  const giverQuest = role === "npc" ? (graph.nodes || []).find(function (node) {
+    return node.type === "quest_definition" && normalizeCanonicalId(node.values?.turnInTargetRef, "") === targetRef;
+  }) || null : null;
+  const quest = giverQuest || objectiveQuest;
+  const questMode = giverQuest ? "giver"
+    : objective?.type === "objective_talk" ? "talk"
+      : objective?.type === "objective_collect" ? "collect"
+        : objective?.type === "objective_deliver" ? "deliver"
+          : objective?.type === "objective_reach" ? "reach" : "none";
+  return {
+    questMode,
+    questRef: normalizeCanonicalId(quest?.values?.questId, ""),
+    questStepRef: normalizeCanonicalId(step?.values?.stepId, ""),
+    dialogueRef: normalizeCanonicalId(dialogue?.values?.dialogueId, ""),
+    questItemRef: normalizeCanonicalId(objective?.values?.itemRef, "")
+  };
+}
+
 function visualBuilderBegin(context, options = {}) {
   if (!context?.model) return;
   const currentRole = visualBuilderRoleForContext(context);
@@ -6959,6 +7122,7 @@ function visualBuilderBegin(context, options = {}) {
   const component = visualBuilderComponentForRole(context, role);
   const portalLink = role === "portal" ? visualBuilderPortalLink(component) : null;
   const definitionRef = visualBuilderDefinitionRefForRole(role, component);
+  const existingQuest = visualBuilderExistingQuestState(context, role);
   state.visualBuilderDraft = {
     modelId: context.model.id,
     step: role ? 2 : 1,
@@ -6971,16 +7135,22 @@ function visualBuilderBegin(context, options = {}) {
       level: component?.values?.level || component?.values?.fixedLevel || 1,
       yieldMultiplier: component?.values?.yieldMultiplier || 1,
       amount: component?.values?.amount || 1,
+      respawnSeconds: visualBuilderRespawnSeconds(role, component),
       prompt: component?.values?.interactionPrompt || portalLink?.values?.prompt || (role === "vendor" ? "Trade" : role === "market" ? "Market" : role === "crafting" ? "Craft" : role === "portal" ? "Travel" : "Gebruik"),
       range: component?.values?.range || 4,
       solid: context.model.values?.solid === true,
       targetPortalRef: portalLink?.values?.toPortalRef || "",
       initialTargetPortalRef: portalLink?.values?.toPortalRef || "",
       legacyPortalLink: Boolean(portalLink?.values?.toSpawnRef && !portalLink?.values?.toPortalRef),
-      questMode: "none",
-      questRef: "",
-      dialogueRef: "",
-      questItemRef: "",
+      questMode: existingQuest.questMode,
+      questRef: existingQuest.questRef,
+      questStepRef: existingQuest.questStepRef,
+      dialogueRef: existingQuest.dialogueRef,
+      questItemRef: existingQuest.questItemRef,
+      initialQuestMode: existingQuest.questMode,
+      initialQuestRef: existingQuest.questRef,
+      initialQuestStepRef: existingQuest.questStepRef,
+      initialDialogueRef: existingQuest.dialogueRef,
       newYieldItemMode: "existing",
       newYieldItemRef: "",
       newYieldItemName: "",
@@ -7014,6 +7184,8 @@ function visualBuilderReferenceInput(draft, fieldName, kinds, label, options = {
   return buildReferencePickerField(fakeNode, fieldName, field, draft.values?.[fieldName] || null, {
     onChange: function (nextValue) {
       visualBuilderSet(fieldName, nextValue || "");
+      if (typeof options.onChange === "function") options.onChange(nextValue || "");
+      if (options.rerender) renderAuthoringHub();
     },
     hideAdvanced: true
   });
@@ -7390,6 +7562,15 @@ function visualBuilderStepValid(draft, step) {
       const definitionRef = draft.role === "pickup" ? draft.definitionRef : draft.values?.questItemRef;
       if (referencePickerChoiceState(definitionRef, { type: "reference", referenceKinds: ["item"], required: true }).state !== "ok") return false;
     }
+    if (draft.values.questMode !== "giver") {
+      const quest = (state.graph.nodes || []).find(function (node) {
+        return node.type === "quest_definition" && normalizeCanonicalId(node.values?.questId, "") === normalizeCanonicalId(draft.values?.questRef, "");
+      }) || null;
+      const stepRefs = new Set(questTimelineStepsForQuest(quest, state.graph).map(function (node) {
+        return normalizeCanonicalId(node.values?.stepId, "");
+      }).filter(Boolean));
+      if (!stepRefs.has(normalizeCanonicalId(draft.values?.questStepRef, ""))) return false;
+    }
   }
   return true;
 }
@@ -7686,9 +7867,13 @@ function visualBuilderEnsureQuestTarget(graph, context, assembly, model, role, n
   return target;
 }
 
-function visualBuilderEnsureObjective(graph, quest, type, values) {
-  const step = questTimelineStepsForQuest(quest, graph)[0] || null;
-  if (!step) throw new Error("De gekozen quest heeft nog geen stap. Voeg eerst één queststap toe.");
+function visualBuilderEnsureObjective(graph, quest, stepRef, type, values) {
+  const normalizedStepRef = normalizeCanonicalId(stepRef, "");
+  const steps = questTimelineStepsForQuest(quest, graph);
+  const step = steps.find(function (candidate) {
+    return normalizeCanonicalId(candidate.values?.stepId, "") === normalizedStepRef;
+  }) || null;
+  if (!step) throw new Error("Kies een bestaande stap van deze quest.");
   const fields = state.nodeTypes?.[type]?.fields || {};
   const equivalent = questTimelineObjectivesForStep(step, graph).find(function (node) {
     if (node.type !== type) return false;
@@ -7717,16 +7902,90 @@ function visualBuilderEnsureObjective(graph, quest, type, values) {
   return objective;
 }
 
+function visualBuilderRemoveQuestLinksForTarget(graph, target, draft) {
+  const targetRef = normalizeCanonicalId(target?.values?.targetId, "");
+  if (!targetRef) return;
+  const initialQuestRef = normalizeCanonicalId(draft.values?.initialQuestRef, "");
+  const initialStepRef = normalizeCanonicalId(draft.values?.initialQuestStepRef, "");
+  const initialDialogueRef = normalizeCanonicalId(draft.values?.initialDialogueRef, "");
+  const initialQuestMode = String(draft.values?.initialQuestMode || "none");
+  const dialogueRefs = new Set();
+  const affectedStepIds = new Set();
+  for (const node of (graph.nodes || []).slice()) {
+    if (node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.targetRef, "") === targetRef
+      && normalizeCanonicalId(node.values?.dialogueId, "") === initialDialogueRef) {
+      const dialogueRef = normalizeCanonicalId(node.values?.dialogueId, "");
+      if (dialogueRef) dialogueRefs.add(dialogueRef);
+      node.values = Object.assign({}, node.values || {}, { targetRef: null });
+    }
+    if (node.type === "quest_definition" && normalizeCanonicalId(node.values?.turnInTargetRef, "") === targetRef
+      && normalizeCanonicalId(node.values?.questId, "") === initialQuestRef) {
+      node.values = Object.assign({}, node.values || {}, { turnInTargetRef: null });
+    }
+    if (initialQuestMode !== "none" && initialQuestMode !== "giver"
+      && ["objective_talk", "objective_collect", "objective_deliver", "objective_reach"].includes(node.type)
+      && normalizeCanonicalId(node.values?.targetRef, "") === targetRef) {
+      const stepEdge = (graph.edges || []).find(function (edge) {
+        return edge.fromNodeId === node.id && edge.fromPort === "objective" && edge.toPort === "objectives";
+      }) || null;
+      const step = stepEdge ? graphNodeByIdInGraph(graph, stepEdge.toNodeId) : null;
+      const quest = visualBuilderQuestForStep(graph, step);
+      const matchesStep = !initialStepRef || normalizeCanonicalId(step?.values?.stepId, "") === initialStepRef;
+      const matchesQuest = !initialQuestRef || normalizeCanonicalId(quest?.values?.questId, "") === initialQuestRef;
+      if (matchesStep && matchesQuest) {
+        if (step) affectedStepIds.add(step.id);
+        objectFunctionRemoveNodeAndEdges(graph, node.id);
+      }
+    }
+  }
+  for (const stepId of affectedStepIds) {
+    const step = graphNodeByIdInGraph(graph, stepId);
+    if (!step) continue;
+    const remaining = questTimelineObjectivesForStep(step, graph)[0] || null;
+    step.values = Object.assign({}, step.values || {}, {
+      stepType: remaining ? (questTimelineStepTypeForObjective(remaining.type) || "custom") : "custom"
+    });
+  }
+  for (const quest of graph.nodes || []) {
+    if (quest.type !== "quest_definition") continue;
+    const startDialogueRef = normalizeCanonicalId(quest.values?.startDialogueRef, "");
+    if (dialogueRefs.has(startDialogueRef)) quest.values = Object.assign({}, quest.values || {}, { startDialogueRef: null });
+  }
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (edge.toPort !== "startDialogue") return true;
+    const dialogue = graphNodeByIdInGraph(graph, edge.fromNodeId);
+    return !dialogueRefs.has(normalizeCanonicalId(dialogue?.values?.dialogueId, ""));
+  });
+}
+
+function visualBuilderQuestTargetStillUsed(graph, target) {
+  const targetRef = normalizeCanonicalId(target?.values?.targetId, "");
+  if (!targetRef) return false;
+  return (graph.nodes || []).some(function (node) {
+    if (node.id === target.id) return false;
+    const fields = state.nodeTypes?.[node.type]?.fields || {};
+    return Object.entries(fields).some(function ([key, field]) {
+      return field?.type === "reference" && normalizeCanonicalId(node.values?.[key], "") === targetRef;
+    });
+  });
+}
+
 function visualBuilderApplyQuestLinks(graph, draft, context, assembly, model, definitionRef) {
   const questMode = String(draft.values?.questMode || "none");
   const dialogueRef = normalizeCanonicalId(draft.values?.dialogueRef, "");
-  if (questMode === "none" && !dialogueRef) return null;
-  const target = visualBuilderEnsureQuestTarget(graph, context, assembly, model, draft.role, String(draft.values?.name || "Object").trim());
+  let target = objectFunctionConnectedNodesForAssembly(graph, assembly, "quest_target_binding")[0] || null;
+  if (target) visualBuilderRemoveQuestLinksForTarget(graph, target, draft);
+  if (questMode === "none" && !dialogueRef) {
+    if (target && !visualBuilderQuestTargetStillUsed(graph, target)) objectFunctionRemoveNodeAndEdges(graph, target.id);
+    return null;
+  }
+  target = visualBuilderEnsureQuestTarget(graph, context, assembly, model, draft.role, String(draft.values?.name || "Object").trim());
   const targetRef = target.values.targetId;
+  let dialogue = null;
   if (dialogueRef) {
-    const dialogue = (graph.nodes || []).find(function (node) {
+    dialogue = (graph.nodes || []).find(function (node) {
       return node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.dialogueId, "") === dialogueRef;
-    });
+    }) || null;
     if (dialogue) dialogue.values = Object.assign({}, dialogue.values || {}, { targetRef });
   }
   if (questMode === "none") return target;
@@ -7741,16 +8000,17 @@ function visualBuilderApplyQuestLinks(graph, draft, context, assembly, model, de
       turnInTargetRef: targetRef,
       startDialogueRef: dialogueRef || quest.values?.startDialogueRef || null
     });
+    if (dialogue) pushEdgeIfMissing(graph, dialogue.id, "dialogueDef", quest.id, "startDialogue");
   } else if (questMode === "talk") {
-    visualBuilderEnsureObjective(graph, quest, "objective_talk", { instruction: "Praat met " + draft.values.name, targetRef, zoneRef, requiredCount: 1 });
+    visualBuilderEnsureObjective(graph, quest, draft.values?.questStepRef, "objective_talk", { instruction: "Praat met " + draft.values.name, targetRef, zoneRef, requiredCount: 1 });
   } else if (questMode === "collect") {
     const itemRef = draft.role === "pickup" ? definitionRef : normalizeCanonicalId(draft.values?.questItemRef, "");
-    visualBuilderEnsureObjective(graph, quest, "objective_collect", { instruction: "Verzamel " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: Math.max(1, Number(draft.values?.amount) || 1) });
+    visualBuilderEnsureObjective(graph, quest, draft.values?.questStepRef, "objective_collect", { instruction: "Verzamel " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: Math.max(1, Number(draft.values?.amount) || 1) });
   } else if (questMode === "deliver") {
     const itemRef = draft.role === "pickup" ? definitionRef : normalizeCanonicalId(draft.values?.questItemRef, "");
-    visualBuilderEnsureObjective(graph, quest, "objective_deliver", { instruction: "Breng het naar " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: 1 });
+    visualBuilderEnsureObjective(graph, quest, draft.values?.questStepRef, "objective_deliver", { instruction: "Breng het naar " + draft.values.name, itemRef, targetRef, zoneRef, requiredAmount: 1 });
   } else if (questMode === "reach") {
-    visualBuilderEnsureObjective(graph, quest, "objective_reach", { instruction: "Bereik " + draft.values.name, targetRef, zoneRef, radius: 4 });
+    visualBuilderEnsureObjective(graph, quest, draft.values?.questStepRef, "objective_reach", { instruction: "Bereik " + draft.values.name, targetRef, zoneRef, radius: 4 });
   }
   return target;
 }
@@ -7798,6 +8058,9 @@ async function visualBuilderCommit(context, draft) {
   }
   const keepType = draft.role === "decoration" ? "" : objectFunctionNodeTypeForKind(draft.role);
   visualBuilderRemoveOtherRoles(nextGraph, assembly, keepType);
+  const respawnPolicyRef = VISUAL_BUILDER_RESPAWN_ROLES.has(draft.role)
+    ? visualBuilderEnsureRespawnPolicy(nextGraph, model, draft.values?.respawnSeconds)
+    : "";
   let component = null;
   if (draft.role === "npc") {
     component = visualBuilderEnsureComponent(nextGraph, assembly, model, "npc", {
@@ -7811,13 +8074,15 @@ async function visualBuilderCommit(context, draft) {
       componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "enemy_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.enemy." + objectFunctionModelStem(model)),
       enemyRef: definitionRef,
       levelMode: "fixed",
-      fixedLevel: Math.max(1, Number(draft.values?.level) || 1)
+      fixedLevel: Math.max(1, Number(draft.values?.level) || 1),
+      respawnOverrideRef: respawnPolicyRef
     });
   } else if (draft.role === "resource") {
     component = visualBuilderEnsureComponent(nextGraph, assembly, model, "resource", {
       componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "resource_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.resource." + objectFunctionModelStem(model)),
       resourceRef: definitionRef,
       yieldMultiplier: Math.max(0, Number(draft.values?.yieldMultiplier) || 1),
+      respawnPolicyOverrideRef: respawnPolicyRef,
       scopeOverride: ""
     });
   } else if (draft.role === "pickup") {
@@ -7826,6 +8091,7 @@ async function visualBuilderCommit(context, draft) {
       itemRef: definitionRef,
       amount: Math.max(1, Number(draft.values?.amount) || 1),
       ownershipMode: "shared",
+      respawnPolicyRef: respawnPolicyRef,
       interactionPrompt: String(draft.values?.prompt || "Pick up"),
       range: Math.max(0.1, Number(draft.values?.range) || 3)
     });
@@ -7938,6 +8204,7 @@ async function visualBuilderCommit(context, draft) {
       range: Math.max(1, Number(draft.values?.range) || 5)
     });
   }
+  visualBuilderCleanupLocalRespawnPolicies(nextGraph, model, respawnPolicyRef);
   try {
     visualBuilderApplyQuestLinks(nextGraph, draft, Object.assign({}, nextContext, { zoneOutput }), assembly, model, definitionRef);
   } catch (error) {
@@ -7977,6 +8244,51 @@ function visualBuilderQuestModeOptions(role) {
     { value: "reach", label: "Bereik- / reisdoel" }
   ];
   return [{ value: "none", label: "Niet koppelen" }];
+}
+
+function visualBuilderQuestByRef(ref, graph = state.graph) {
+  const questRef = normalizeCanonicalId(ref, "");
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "quest_definition" && normalizeCanonicalId(node.values?.questId, "") === questRef;
+  }) || null;
+}
+
+function visualBuilderQuestStepSelect(draft) {
+  const quest = visualBuilderQuestByRef(draft.values?.questRef);
+  const steps = questTimelineStepsForQuest(quest, state.graph);
+  const options = steps.map(function (step) {
+    return { value: normalizeCanonicalId(step.values?.stepId, ""), label: nodeDisplayTitle(step) };
+  }).filter(function (entry) { return entry.value; });
+  if (!options.length) {
+    const note = document.createElement("div");
+    note.className = "objectFunctionIssues";
+    note.textContent = "Deze quest heeft nog geen stap. Open Quests en dialogen en voeg eerst een stap toe.";
+    return note;
+  }
+  const current = normalizeCanonicalId(draft.values?.questStepRef, "");
+  if (!options.some(function (entry) { return entry.value === current; })) visualBuilderSet("questStepRef", options[0].value);
+  return questTimelineSelectInput(state.visualBuilderDraft?.values?.questStepRef || options[0].value, options, function (value) {
+    visualBuilderSet("questStepRef", value);
+  });
+}
+
+function visualBuilderDialogueHasQuestAcceptance(dialogueRef, questRef, graph = state.graph) {
+  const dialogueId = normalizeCanonicalId(dialogueRef, "");
+  const wantedQuestRef = normalizeCanonicalId(questRef, "");
+  const dialogue = (graph.nodes || []).find(function (node) {
+    return node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.dialogueId, "") === dialogueId;
+  }) || null;
+  if (!dialogue || !wantedQuestRef) return false;
+  const entries = questTimelineEntriesForDialogue(dialogue, graph);
+  const entryIds = new Set(entries.map(function (entry) { return entry.id; }));
+  return (graph.nodes || []).some(function (node) {
+    if (node.type !== "dialogue_choice" || node.values?.action !== "accept_quest"
+      || normalizeCanonicalId(node.values?.questRef, "") !== wantedQuestRef) return false;
+    return (graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === node.id && edge.fromPort === "dialogueChoice"
+        && edge.toPort === "choices" && entryIds.has(edge.toNodeId);
+    });
+  });
 }
 
 function visualBuilderStepHeader(card, draft) {
@@ -8174,6 +8486,15 @@ function renderVisualBuilder(context) {
     if (draft.role === "pickup") {
       fields.appendChild(objectFunctionDraftFieldRow("Aantal", questTimelineNumberInput(draft.values.amount, function (value) { visualBuilderSet("amount", value); }, { min: 1, max: 1000000, step: 1 })));
     }
+    if (VISUAL_BUILDER_RESPAWN_ROLES.has(draft.role)) {
+      fields.appendChild(objectFunctionDraftFieldRow(
+        "Komt terug na (seconden)",
+        questTimelineNumberInput(draft.values.respawnSeconds, function (value) {
+          visualBuilderSet("respawnSeconds", Math.max(1, Number(value) || 30));
+        }, { min: 1, max: 86400, step: 1 }),
+        "Na verslaan, verzamelen of oppakken verschijnt ditzelfde object na deze tijd opnieuw."
+      ));
+    }
     if (draft.role === "portal") {
       fields.appendChild(objectFunctionDraftFieldRow("Koppel aan portal (optioneel)", visualBuilderReferenceInput(draft, "targetPortalRef", ["portal"], "Doelportal"), "Sla de eerste portal leeg op. Kies hem daarna hier bij de tweede portal; de editor maakt beide reisrichtingen."));
       if (draft.values.legacyPortalLink && !draft.values.targetPortalRef) {
@@ -8193,7 +8514,7 @@ function renderVisualBuilder(context) {
     if (draft.role === "enemy") {
       const blocker = document.createElement("div");
       blocker.className = "objectFunctionIssues";
-      blocker.textContent = "Versla-doel is nog niet aan te bieden: producer objective_defeat, datatype objective en consumer campaign/runtime ontbreken. De Enemy zelf werkt wel.";
+      blocker.textContent = "Versla-doel is nog niet aan te bieden: node-type/producer objective_defeat ontbreekt, dus ook compileroutput objectiveType ‘defeat’ en de defeat-consumer in de quest-runtime. Het algemene poortdatatype objective bestaat wel voor talk, collect, deliver en reach. De Enemy zelf werkt wel.";
       card.appendChild(blocker);
     } else if (["crafting", "vendor", "market", "decoration"].includes(draft.role)) {
       const note = document.createElement("div");
@@ -8209,17 +8530,31 @@ function renderVisualBuilder(context) {
       modeOptions.forEach(function (entry, index) { mode.options[index].textContent = entry.label; });
       card.appendChild(objectFunctionDraftFieldRow("Questrol", mode));
       if (draft.values.questMode !== "none") {
-        card.appendChild(objectFunctionDraftFieldRow("Bestaande quest", visualBuilderReferenceInput(draft, "questRef", ["quest"], "Quest", { required: true })));
+        card.appendChild(objectFunctionDraftFieldRow("Bestaande quest", visualBuilderReferenceInput(draft, "questRef", ["quest"], "Quest", {
+          required: true,
+          rerender: true,
+          onChange: function () { visualBuilderSet("questStepRef", ""); }
+        })));
+        if (draft.values.questMode !== "giver") {
+          card.appendChild(objectFunctionDraftFieldRow("Queststap", visualBuilderQuestStepSelect(draft), "De objective wordt in deze bestaande stap opgeslagen."));
+        }
       }
       if (draft.role === "resource" && draft.values.questMode === "collect") {
         card.appendChild(objectFunctionDraftFieldRow("Item dat de speler verzamelt", visualBuilderReferenceInput(draft, "questItemRef", ["item"], "Item", { required: true })));
       }
-      if (draft.role === "resource" && draft.values.questMode === "deliver") {
+      if (["resource", "npc"].includes(draft.role) && draft.values.questMode === "deliver") {
         card.appendChild(objectFunctionDraftFieldRow("Item om af te leveren", visualBuilderReferenceInput(draft, "questItemRef", ["item"], "Item", { required: true })));
       }
       if (draft.role === "npc") {
         const dialogueRequired = ["giver", "talk"].includes(draft.values.questMode);
         card.appendChild(objectFunctionDraftFieldRow(dialogueRequired ? "Bestaande dialoog" : "Bestaande dialoog (optioneel)", visualBuilderReferenceInput(draft, "dialogueRef", ["dialogue"], "Dialoog", { required: dialogueRequired }), dialogueRequired ? "Een questgever of praatdoel heeft een echte dialoog nodig." : "Hiermee wordt dit NPC-model een spreker."));
+        if (draft.values.questMode === "giver" && draft.values.dialogueRef && draft.values.questRef
+          && !visualBuilderDialogueHasQuestAcceptance(draft.values.dialogueRef, draft.values.questRef)) {
+          const acceptanceWarning = document.createElement("div");
+          acceptanceWarning.className = "objectFunctionIssues";
+          acceptanceWarning.textContent = "Deze dialoog heeft nog geen keuze met ‘accept quest’ voor de gekozen quest. De NPC en startdialoog worden echt gekoppeld, maar de speler kan de quest pas aannemen nadat je die bestaande dialoogactie toevoegt.";
+          card.appendChild(acceptanceWarning);
+        }
       }
     }
   } else if (draft.step === 5) {
@@ -8244,6 +8579,9 @@ function renderVisualBuilder(context) {
     if (draft.role === "vendor") {
       reviewRows.push("Shop: " + visualBuilderVendorRows(draft).length + " artikel(en)");
     }
+    if (VISUAL_BUILDER_RESPAWN_ROLES.has(draft.role)) {
+      reviewRows.push("Komt terug na: " + Math.max(1, Number(draft.values.respawnSeconds) || 30) + " seconden");
+    }
     reviewRows.forEach(function (textValue) {
       const row = document.createElement("div");
       row.textContent = textValue;
@@ -8264,6 +8602,7 @@ function visualBuilderLocalPackageNodeIds(context, graph = state.graph) {
   if (!context?.model) return new Set();
   const relations = visualObjectRelations(graph, state.nodeTypes, context.model.id);
   const ids = new Set(relations.localNodeIds || []);
+  for (const id of relations.relationNodeIds || []) ids.add(id);
   if (context.zoneOutput) ids.add(context.zoneOutput.id);
   for (const component of [
     context.npcComponent,
@@ -8287,7 +8626,104 @@ function visualBuilderLocalPackageNodeIds(context, graph = state.graph) {
   }
   const portalLink = visualBuilderPortalLink(context.portalComponent, graph);
   if (portalLink) ids.add(portalLink.id);
+  const identityIndex = new Map();
+  for (const node of graph.nodes || []) {
+    const identityField = identityFieldForType(node.type);
+    const identity = identityField ? normalizeCanonicalId(node.values?.[identityField], "") : "";
+    if (identity && !identityIndex.has(identity)) identityIndex.set(identity, node.id);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const nodeId of Array.from(ids)) {
+      const node = graphNodeByIdInGraph(graph, nodeId);
+      if (!node) continue;
+      for (const [key, field] of Object.entries(state.nodeTypes?.[node.type]?.fields || {})) {
+        const refs = field?.type === "referenceList"
+          ? normalizeReferenceList(node.values?.[key])
+          : field?.type === "reference" ? [normalizeCanonicalId(node.values?.[key], "")].filter(Boolean) : [];
+        for (const ref of refs) {
+          const targetId = identityIndex.get(ref);
+          if (targetId && !ids.has(targetId)) {
+            ids.add(targetId);
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const edge of graph.edges || []) {
+      if (!ids.has(edge.toNodeId) || ids.has(edge.fromNodeId)) continue;
+      if (!["steps", "objectives", "conditions", "rewards", "startDialogue", "entries", "choices", "offers", "ingredients"].includes(edge.toPort)) continue;
+      ids.add(edge.fromNodeId);
+      changed = true;
+    }
+  }
   return ids;
+}
+
+function visualBuilderPackageColumn(node) {
+  if (!node) return 4;
+  if (node.type === "model_entity" || /(?:_definition|_archetype)$/.test(node.type)) return 0;
+  if (node.type.endsWith("_component") || ["recipe_ingredient", "vendor_offer"].includes(node.type)) return 1;
+  if (node.type === "entity_assembly") return 2;
+  if (node.type === "zone_output") return 3;
+  return 4;
+}
+
+function visualBuilderArrangePackageInGraph(graph, context, baseY = 100, positioned = new Set()) {
+  const ids = visualBuilderLocalPackageNodeIds(context, graph);
+  const nodes = Array.from(ids).map(function (id) { return graphNodeByIdInGraph(graph, id); }).filter(Boolean);
+  const anchorX = Math.min.apply(null, nodes.map(function (node) { return Number(node.x) || 0; }).concat([80]));
+  const columnY = [baseY, baseY, baseY, baseY, baseY];
+  const columnX = [0, 1, 2, 3, 4].map(function (index) { return anchorX + index * OBJECT_RECIPE_COLUMN_STEP; });
+  nodes.sort(function (left, right) {
+    return visualBuilderPackageColumn(left) - visualBuilderPackageColumn(right)
+      || nodeDisplayTitle(left).localeCompare(nodeDisplayTitle(right), "nl", { sensitivity: "base" });
+  });
+  for (const node of nodes) {
+    if (positioned.has(node.id)) continue;
+    const column = visualBuilderPackageColumn(node);
+    objectFunctionSetNodeGraphPosition(node, { x: columnX[column], y: columnY[column] });
+    columnY[column] += objectFunctionEstimatedNodeHeight(node) + OBJECT_RECIPE_STACK_GAP;
+    positioned.add(node.id);
+  }
+  return Math.max.apply(null, columnY) + OBJECT_RECIPE_STACK_GAP;
+}
+
+async function visualBuilderArrangePackage(context, workspace = false) {
+  if (!context?.model) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const positioned = new Set();
+  let nextY = 100;
+  const models = workspace
+    ? (nextGraph.nodes || []).filter(function (node) {
+      return node.type === "model_entity" && (node.parentId || null) === (context.model.parentId || null);
+    }).sort(function (left, right) {
+      return nodeDisplayTitle(left).localeCompare(nodeDisplayTitle(right), "nl", { sensitivity: "base" });
+    })
+    : [graphNodeByIdInGraph(nextGraph, context.model.id)].filter(Boolean);
+  for (const model of models) {
+    const nextContext = objectFunctionContextForModel(model, nextGraph);
+    nextY = visualBuilderArrangePackageInGraph(nextGraph, nextContext, nextY, positioned);
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: workspace ? "Workspace geordend" : "Objectpakket geordend",
+    currentGroupId: context.model.parentId || null,
+    selectedNodeIds: [context.model.id],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: false,
+    afterApply: function () {
+      state.visualObjectNodeScope = {
+        modelId: context.model.id,
+        parentId: context.model.parentId || null,
+        nodeIds: Array.from(visualBuilderLocalPackageNodeIds(objectFunctionContextForModel(graphNodeByIdInGraph(state.graph, context.model.id), state.graph)))
+      };
+      renderGraph();
+      requestAnimationFrame(fitGraphViewToNodes);
+      setStatus(workspace ? "Workspace geordend." : "Dit pakket is geordend.", "success");
+    }
+  });
 }
 
 function visualBuilderToggleLocalNodes(context) {
@@ -8307,7 +8743,7 @@ function visualBuilderToggleLocalNodes(context) {
   }
   renderGraph();
   renderAuthoringHub();
-  if (!active && context?.model) requestAnimationFrame(function () { focusGraphNode(context.model.id); });
+  if (!active && context?.model) requestAnimationFrame(fitGraphViewToNodes);
 }
 
 async function visualBuilderDeleteObject(context) {
@@ -8320,19 +8756,25 @@ async function visualBuilderDeleteObject(context) {
   let nextGraph;
   try {
     nextGraph = removeVisualObjects(state.graph, state.nodeTypes, [context.model.id]);
+    visualBuilderCleanupLocalRespawnPolicies(nextGraph, context.model, "");
   } catch (error) {
     setStatus(error.message, "error");
     return;
   }
-  await restoreGraphObject(nextGraph, {
+  await deleteGraphSelectionObject(nextGraph, {
     historyLabel: "Wereldobject verwijderd",
     selectedNodeIds: [],
     selectedEdgeIds: [],
     refreshViewport: true,
+    refreshViewportImmediately: true,
     refreshValidation: true,
     afterApply: function () {
       state.visualBuilderDraft = null;
       state.visualObjectNodeScope = null;
+      state.authoringRouteId = null;
+      state.storedAuthoringRouteId = null;
+      state.authoringOverviewActive = true;
+      storeAuthoringRoute(null);
       setStatus("Object verwijderd; gedeelde definities zijn behouden.", "success");
     }
   });
@@ -8395,14 +8837,24 @@ function renderObjectFunctionSection(context) {
   packageButton.type = "button";
   packageButton.className = "objectFunctionActionButton";
   const packageActive = state.visualObjectNodeScope?.modelId === context.model.id;
-  packageButton.textContent = packageActive ? "Toon alle nodes" : "Toon onderliggende nodes";
+  packageButton.textContent = packageActive ? "Sluit nodepakket" : "Toon in nodes";
   packageButton.addEventListener("click", function () { visualBuilderToggleLocalNodes(context); });
+  const arrangePackage = document.createElement("button");
+  arrangePackage.type = "button";
+  arrangePackage.className = "objectFunctionActionButton";
+  arrangePackage.textContent = "Orden dit pakket";
+  arrangePackage.addEventListener("click", function () { void visualBuilderArrangePackage(context, false); });
+  const arrangeWorkspace = document.createElement("button");
+  arrangeWorkspace.type = "button";
+  arrangeWorkspace.className = "objectFunctionActionButton";
+  arrangeWorkspace.textContent = "Orden deze workspace";
+  arrangeWorkspace.addEventListener("click", function () { void visualBuilderArrangePackage(context, true); });
   const removeObject = document.createElement("button");
   removeObject.type = "button";
   removeObject.className = "deleteNode";
   removeObject.textContent = "Verwijder object";
   removeObject.addEventListener("click", function () { void visualBuilderDeleteObject(context); });
-  packageActions.append(packageButton, removeObject);
+  packageActions.append(packageButton, arrangePackage, arrangeWorkspace, removeObject);
   wrap.appendChild(packageActions);
   if (packageActive) wrap.appendChild(renderObjectFunctionReadOnlyInfo(context));
 
@@ -9762,6 +10214,7 @@ function questTimelineStartFromObjectFunction(intent, context) {
   state.questTimelineSelectedQuestId = null;
   state.questTimelineSelectedDialogueId = null;
   state.questTimelineView = intent === "dialogue" ? "dialogue" : "quest";
+  clearSelection({ clearPendingEdge: true, clearAuthoringSelection: true });
   selectAuthoringRoute("quest_dialogue");
 }
 
@@ -10379,6 +10832,10 @@ function renderQuestTimelineView(group) {
         const stepCount = questTimelineStepsForQuest(quest, state.graph).length;
         s.textContent = stepCount + (stepCount === 1 ? " stap" : " stappen");
         text.append(t, s);
+        const nodesLabel = document.createElement("span");
+        nodesLabel.className = "authoringRouteSummary authoringShowNodesLabel";
+        nodesLabel.textContent = "Toon in nodes";
+        text.appendChild(nodesLabel);
         if (selectedRelationIds.has(quest.id)) text.appendChild(selectedObjectRelationBadge());
         const plus = document.createElement("span");
         plus.className = "plus";
@@ -10420,7 +10877,14 @@ function renderQuestTimelineView(group) {
   questSummary.className = "objectFunctionDraftHint";
   questSummary.textContent = String(selected.values?.summary || "");
   questHeader.append(questTitle, questSummary);
+  const questNodes = document.createElement("button");
+  questNodes.type = "button";
+  questNodes.className = "mini";
+  questNodes.textContent = "Toon in nodes";
+  questNodes.addEventListener("click", function () { focusGraphNode(selected.id); });
+  questHeader.appendChild(questNodes);
   if (selectedRelationIds.has(selected.id)) questHeader.appendChild(selectedObjectRelationBadge());
+  questHeader.appendChild(renderRelationObjectBacklinks(selected));
   wrap.appendChild(questHeader);
   wrap.appendChild(renderQuestTimelineIssues(selected));
 
@@ -10772,6 +11236,10 @@ function renderDialogueTimelineView(group) {
         s.className = "authoringRouteSummary";
         s.textContent = questTimelineEntriesForDialogue(dialogue, state.graph).length + " regel(s)";
         text.append(t, s);
+        const nodesLabel = document.createElement("span");
+        nodesLabel.className = "authoringRouteSummary authoringShowNodesLabel";
+        nodesLabel.textContent = "Toon in nodes";
+        text.appendChild(nodesLabel);
         if (selectedRelationIds.has(dialogue.id)) text.appendChild(selectedObjectRelationBadge());
         const plus = document.createElement("span");
         plus.className = "plus";
@@ -10810,7 +11278,14 @@ function renderDialogueTimelineView(group) {
   title.className = "objectFunctionDraftTitle";
   title.textContent = nodeDisplayTitle(selected);
   header.appendChild(title);
+  const dialogueNodes = document.createElement("button");
+  dialogueNodes.type = "button";
+  dialogueNodes.className = "mini";
+  dialogueNodes.textContent = "Toon in nodes";
+  dialogueNodes.addEventListener("click", function () { focusGraphNode(selected.id); });
+  header.appendChild(dialogueNodes);
   if (selectedRelationIds.has(selected.id)) header.appendChild(selectedObjectRelationBadge());
+  header.appendChild(renderRelationObjectBacklinks(selected));
   wrap.appendChild(header);
 
   wrap.appendChild(renderDialogueEntryChain(selected));
@@ -11497,6 +11972,60 @@ function renderObjectFunctionReadOnlyInfo(context) {
   return wrap;
 }
 
+function renderObjectWorkbenchSummary(context) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection objectWorkbenchSummary";
+  const role = visualBuilderRoleForContext(context) || "decoration";
+  const roleLabel = visualBuilderRoleSpec(role)?.label || "Decoratie";
+  const asset = assetById(context.model?.values?.modelAssetId);
+  const relationInfo = visualObjectRelations(state.graph, state.nodeTypes, context.model.id);
+  const blockingIssues = (context.issues || []).filter(function (issue) {
+    return ["parent", "zone", "output", "assembly", "conflict"].includes(issue.kind);
+  });
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = objectFunctionModelTitle(context);
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = roleLabel + " in " + (context.zoneDefinition?.values?.displayName || nodeDisplayTitle(context.zoneGroup) || "onbekende zone");
+  wrap.append(title, intro);
+  const rows = document.createElement("div");
+  rows.className = "workbenchStatusGrid";
+  const values = [
+    ["Asset", asset ? asset.name : "ontbreekt", asset ? "ok" : "warning"],
+    ["Transform", "X " + Number(context.model.values?.x || 0).toFixed(2) + " · Y " + Number(context.model.values?.y || 0).toFixed(2) + " · Z " + Number(context.model.values?.z || 0).toFixed(2), "ok"],
+    ["Volledigheid", blockingIssues.length ? blockingIssues.length + " blokkade(s)" : (context.assembly ? "compleet pakket" : "rol nog kiezen"), blockingIssues.length ? "warning" : "ok"],
+    ["Relaties", relationInfo.quests.length + " quest(s) · " + relationInfo.dialogues.length + " dialoog/dialogen", "info"]
+  ];
+  for (const [labelText, valueText, tone] of values) {
+    const row = document.createElement("div");
+    row.className = "workbenchStatus workbenchStatus--" + tone;
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const value = document.createElement("strong");
+    value.textContent = valueText;
+    row.append(label, value);
+    rows.appendChild(row);
+  }
+  wrap.appendChild(rows);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionActions";
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.className = "primary";
+  edit.textContent = "Bewerken in Visual Builder";
+  edit.addEventListener("click", function () { visualBuilderBegin(context, { role }); });
+  const show = document.createElement("button");
+  show.type = "button";
+  show.className = "objectFunctionActionButton";
+  show.textContent = "Toon in nodes";
+  show.addEventListener("click", function () { visualBuilderToggleLocalNodes(context); });
+  actions.append(edit, show);
+  wrap.appendChild(actions);
+  wrap.appendChild(renderObjectFunctionReadOnlyInfo(context));
+  return wrap;
+}
+
 function nodeReferencesAny(node, refs) {
   if (!node || !refs || !refs.size) return false;
   const fields = state.nodeTypes?.[node.type]?.fields || {};
@@ -11568,6 +12097,25 @@ function selectedObjectRelationBadge(labelText = "Geselecteerd object") {
   badge.textContent = labelText;
   badge.title = "Deze quest/dialoog verwijst naar het geselecteerde 3D-object via zijn Quest Target.";
   return badge;
+}
+
+function renderRelationObjectBacklinks(relationNode) {
+  const models = visualModelsForRelation(state.graph, state.nodeTypes, relationNode?.id);
+  const wrap = document.createElement("div");
+  wrap.className = "relationObjectBacklinks";
+  const label = document.createElement("span");
+  label.className = "objectFunctionMeta";
+  label.textContent = models.length ? "Wereldobjecten" : "Geen gekoppeld wereldobject";
+  wrap.appendChild(label);
+  for (const model of models) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mini";
+    button.textContent = nodeDisplayTitle(model);
+    button.addEventListener("click", function () { selectNode(model.id, true, { clearPendingEdge: true }); });
+    wrap.appendChild(button);
+  }
+  return wrap;
 }
 
 function authoringWorkspaceContentNodeIds(routeId, workspace, graph = state.graph) {
@@ -12028,12 +12576,17 @@ function renderWorldZoneHub() {
     repair.className = "mini";
     repair.textContent = "Basis beheren";
     repair.addEventListener("click", function () { void repairZoneCanvasBasis(zoneGroup.id); });
+    const showNodes = document.createElement("button");
+    showNodes.type = "button";
+    showNodes.className = "mini";
+    showNodes.textContent = "Toon in nodes";
+    showNodes.addEventListener("click", function () { authoringOverviewShowWorkspaceNodes(zoneGroup); });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "deleteNode";
     remove.textContent = "Verwijder";
     remove.addEventListener("click", function () { void deleteZoneCanvasGroup(zoneGroup); });
-    actions.append(open, rename, repair, remove);
+    actions.append(open, rename, repair, showNodes, remove);
     const directions = document.createElement("div");
     directions.className = "authoring04DirectionRow";
     for (const [directionName, direction] of Object.entries(ZONE_CANVAS_DIRECTIONS)) {
@@ -13049,7 +13602,7 @@ function renderManagedNodeList(scope, group, types) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "mini";
-    open.textContent = "Open";
+    open.textContent = "Toon in nodes";
     open.addEventListener("click", function () {
       if (scope === "catalog") state.catalogHubSelectedNodeId = node.id;
       else state.settingsHubSelectedNodeId = node.id;
@@ -13604,6 +14157,7 @@ function clearAuthoringRoute() {
   state.authoringRouteId = null;
   state.storedAuthoringRouteId = null;
   state.authoringMenuOpen = true;
+  state.authoringOverviewActive = true;
   state.nodeLibraryOpen = false;
   if (el.nodeLibrarySearch) el.nodeLibrarySearch.value = "";
   storeAuthoringRoute(null);
@@ -13621,6 +14175,7 @@ function selectAuthoringRoute(routeId) {
   state.authoringRouteId = route.id;
   state.storedAuthoringRouteId = route.id;
   state.authoringMenuOpen = false;
+  state.authoringOverviewActive = false;
   state.nodeLibraryOpen = false;
   if (el.nodeLibrarySearch) el.nodeLibrarySearch.value = "";
   storeAuthoringRoute(route.id);
@@ -13694,8 +14249,234 @@ function renderAuthoringRouteWorkspaceGroup(route, workspaceGroup) {
   return wrap;
 }
 
+function authoringOverviewCurrentZone() {
+  const current = state.currentGroupId ? graphNodeByIdInGraph(state.graph, state.currentGroupId) : null;
+  if (current && isZoneCanvasGroup(current, state.graph)) return current;
+  return firstZoneCanvasGroup(state.graph);
+}
+
+function authoringOverviewOpenRoute(routeId, workspace = null) {
+  state.visualObjectNodeScope = null;
+  if (workspace) {
+    state.currentGroupId = workspace.id;
+    syncBreadcrumb();
+    renderGraph();
+  } else if (routeId !== "world_zone") {
+    state.currentGroupId = null;
+    syncBreadcrumb();
+    renderGraph();
+  }
+  selectAuthoringRoute(routeId);
+}
+
+function authoringOverviewShowWorkspaceNodes(workspace) {
+  state.visualObjectNodeScope = null;
+  if (workspace) {
+    state.currentGroupId = workspace.id;
+    syncBreadcrumb();
+    renderGraph();
+    renderInspector();
+  } else {
+    state.currentGroupId = null;
+    syncBreadcrumb();
+    renderGraph();
+  }
+  requestAnimationFrame(fitGraphViewToNodes);
+}
+
+function authoringOverviewCard(titleText, summaryText, countText, openLabel, onOpen, onNodes) {
+  const card = document.createElement("div");
+  card.className = "buildOverviewCard";
+  const title = document.createElement("div");
+  title.className = "buildOverviewCardTitle";
+  title.textContent = titleText;
+  const count = document.createElement("span");
+  count.className = "authoringCountBadge";
+  count.textContent = countText;
+  title.appendChild(count);
+  const summary = document.createElement("div");
+  summary.className = "buildOverviewCardSummary";
+  summary.textContent = summaryText;
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "primary";
+  open.textContent = openLabel;
+  open.addEventListener("click", onOpen);
+  const nodes = document.createElement("button");
+  nodes.type = "button";
+  nodes.className = "mini";
+  nodes.textContent = "Toon in nodes";
+  nodes.addEventListener("click", onNodes);
+  actions.append(open, nodes);
+  card.append(title, summary, actions);
+  return card;
+}
+
+function authoringOverviewOpenNode(node) {
+  if (!node) return;
+  if (node.type === "model_entity") {
+    state.authoringMenuOpen = false;
+    selectNode(node.id, true, { clearPendingEdge: true });
+    return;
+  }
+  if (isZoneCanvasGroup(node, state.graph)) {
+    authoringOverviewOpenRoute("world_zone");
+    return;
+  }
+  if (["quest_definition", "dialogue_definition"].includes(node.type)) {
+    const group = graphNodeByIdInGraph(state.graph, node.parentId);
+    if (node.type === "quest_definition") state.questTimelineSelectedQuestId = node.id;
+    else state.questTimelineSelectedDialogueId = node.id;
+    state.questTimelineView = node.type === "quest_definition" ? "quest" : "dialogue";
+    authoringOverviewOpenRoute("quest_dialogue", group);
+    return;
+  }
+  const parent = graphNodeByIdInGraph(state.graph, node.parentId);
+  const kind = normalizeEditorKey(parent?.values?.groupKind);
+  if (kind === "catalog") {
+    state.catalogHubType = node.type;
+    state.catalogHubSelectedNodeId = node.id;
+    authoringOverviewOpenRoute("item_ability_stat", parent);
+  } else if (kind === "player_rules" || kind === "ui") {
+    state.settingsHubSelectedNodeId = node.id;
+    authoringOverviewOpenRoute("game_settings_ui", parent);
+  }
+}
+
+function authoringOverviewSearchNodes(query) {
+  const normalized = normalizeEditorKey(query);
+  if (!normalized) return [];
+  return (state.graph.nodes || []).filter(function (node) {
+    const parent = graphNodeByIdInGraph(state.graph, node.parentId);
+    const parentKind = normalizeEditorKey(parent?.values?.groupKind);
+    const human = node.type === "model_entity" || isZoneCanvasGroup(node, state.graph)
+      || ["quest_definition", "dialogue_definition"].includes(node.type)
+      || AUTHORING_HUMAN_CATALOG_TYPES.has(node.type)
+      || AUTHORING_HUMAN_SETTINGS_TYPES.has(node.type)
+      || ["catalog", "campaign", "player_rules", "ui"].includes(parentKind);
+    if (!human) return false;
+    const haystack = normalizeEditorKey([nodeDisplayTitle(node), state.nodeTypes?.[node.type]?.label, identityValue(node), node.type].join(" "));
+    return haystack.includes(normalized);
+  }).sort(function (left, right) {
+    return nodeDisplayTitle(left).localeCompare(nodeDisplayTitle(right), "nl", { sensitivity: "base" });
+  }).slice(0, 30);
+}
+
+function renderAuthoringBuildOverview() {
+  const wrap = document.createElement("div");
+  wrap.className = "buildOverview";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionHeader";
+  const title = document.createElement("div");
+  title.className = "objectFunctionTitle";
+  title.textContent = "Bouw-overzicht";
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionIntro";
+  intro.textContent = "Kies wat je wilt beheren. De onderliggende nodes en edges blijven de enige opslag.";
+  heading.append(title, intro);
+  wrap.appendChild(heading);
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "authoring04Search";
+  search.placeholder = "Zoek objecten, quests, dialogen, definities of instellingen...";
+  search.value = state.authoringOverviewSearch;
+  search.addEventListener("change", function () {
+    state.authoringOverviewSearch = search.value;
+    renderAuthoringHub();
+  });
+  wrap.appendChild(search);
+
+  const currentZone = authoringOverviewCurrentZone();
+  const zoneChildren = currentZone ? (state.graph.nodes || []).filter(function (node) { return node.parentId === currentZone.id; }) : [];
+  const models = (state.graph.nodes || []).filter(function (node) { return node.type === "model_entity"; });
+  const campaigns = (state.graph.nodes || []).filter(isCampaignGroupNode);
+  const catalogGroups = (state.graph.nodes || []).filter(function (node) { return node.type === "group" && normalizeEditorKey(node.values?.groupKind) === "catalog"; });
+  const settingsGroups = (state.graph.nodes || []).filter(function (node) {
+    return node.type === "group" && ["player_rules", "ui"].includes(normalizeEditorKey(node.values?.groupKind));
+  });
+  const roleCounts = { npc: 0, enemy: 0, resource: 0, pickup: 0, portal: 0, crafting: 0, vendor: 0, market: 0 };
+  for (const model of models) {
+    const role = visualBuilderRoleForContext(objectFunctionContextForModel(model, state.graph));
+    if (Object.prototype.hasOwnProperty.call(roleCounts, role)) roleCounts[role] += 1;
+  }
+  const warnings = [];
+  if (!currentZone) warnings.push("Er is nog geen Zone Canvas.");
+  if (currentZone && !zoneChildren.some(function (node) { return node.type === "zone_environment_settings"; })) warnings.push("De huidige zone mist omgeving-instellingen.");
+  if (currentZone && !zoneChildren.some(function (node) { return node.type === "zone_output"; })) warnings.push("De huidige zone mist een Zone Output.");
+  if (!campaigns.length) warnings.push("Er is nog geen Campaign Group voor quests en dialogen.");
+  if (!catalogGroups.length) warnings.push("Er is nog geen Catalog Group voor definities.");
+  const warning = document.createElement("div");
+  warning.className = warnings.length ? "buildOverviewWarnings" : "buildOverviewWarnings buildOverviewWarnings--ok";
+  warning.textContent = warnings.length ? warnings.join(" ") : "Geen ontbrekende basiswerkruimtes gevonden.";
+  wrap.appendChild(warning);
+
+  const results = authoringOverviewSearchNodes(state.authoringOverviewSearch);
+  if (state.authoringOverviewSearch.trim()) {
+    const resultList = document.createElement("div");
+    resultList.className = "buildOverviewResults";
+    if (!results.length) {
+      const empty = document.createElement("div");
+      empty.className = "authoringWorkspaceEmpty";
+      empty.textContent = "Geen bestaande content gevonden.";
+      resultList.appendChild(empty);
+    }
+    for (const node of results) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "libButton authoringWorkspaceButton";
+      button.textContent = nodeDisplayTitle(node) + " · " + (state.nodeTypes?.[node.type]?.label || node.type);
+      button.addEventListener("click", function () { authoringOverviewOpenNode(node); });
+      resultList.appendChild(button);
+    }
+    wrap.appendChild(resultList);
+  }
+
+  const cards = document.createElement("div");
+  cards.className = "buildOverviewCards";
+  const currentPortals = zoneChildren.filter(function (node) { return node.type === "portal_component" || node.type === "zone_link"; }).length;
+  const currentModels = zoneChildren.filter(function (node) { return node.type === "model_entity"; }).length;
+  cards.appendChild(authoringOverviewCard(
+    currentZone ? "Huidige zone: " + zoneCanvasDisplayName(currentZone) : "Huidige zone",
+    currentZone ? currentModels + " geplaatste objecten · " + currentPortals + " portal/link-onderdelen · omgeving " + (zoneChildren.some(function (node) { return node.type === "zone_environment_settings"; }) ? "aanwezig" : "ontbreekt") : "Maak eerst een onafhankelijke startzone.",
+    String(currentModels), "Open zonebeheer",
+    function () { authoringOverviewOpenRoute("world_zone"); },
+    function () { authoringOverviewShowWorkspaceNodes(currentZone); }
+  ));
+  cards.appendChild(authoringOverviewCard("Wereld en zones", "Omgeving, portals, grond, spawns en zone-output.", String(zoneCanvasGroupsForParent(null, state.graph).length), "Open Wereld / Zone", function () { authoringOverviewOpenRoute("world_zone"); }, function () { authoringOverviewShowWorkspaceNodes(null); }));
+  const questCount = (state.graph.nodes || []).filter(function (node) { return node.type === "quest_definition"; }).length;
+  const dialogueCount = (state.graph.nodes || []).filter(function (node) { return node.type === "dialogue_definition"; }).length;
+  cards.appendChild(authoringOverviewCard("Quests en dialogen", questCount + " quests · " + dialogueCount + " dialogen.", String(questCount + dialogueCount), "Open questeditor", function () { authoringOverviewOpenRoute("quest_dialogue", campaigns[0] || null); }, function () { authoringOverviewShowWorkspaceNodes(campaigns[0] || null); }));
+  const definitionCount = (state.graph.nodes || []).filter(function (node) { return AUTHORING_HUMAN_CATALOG_TYPES.has(node.type); }).length;
+  cards.appendChild(authoringOverviewCard("Catalogus en definities", "NPCs, enemies, resources, items, recipes, offers en overige definities.", String(definitionCount), "Open Catalogus", function () { authoringOverviewOpenRoute("item_ability_stat", catalogGroups[0] || null); }, function () { authoringOverviewShowWorkspaceNodes(catalogGroups[0] || null); }));
+  const settingsCount = (state.graph.nodes || []).filter(function (node) { return AUTHORING_HUMAN_SETTINGS_TYPES.has(node.type); }).length;
+  cards.appendChild(authoringOverviewCard("Game en UI", "Spelregels, economy-policies en ondersteunde UI.", String(settingsCount), "Open Game / UI", function () { authoringOverviewOpenRoute("game_settings_ui", settingsGroups[0] || null); }, function () { authoringOverviewShowWorkspaceNodes(settingsGroups[0] || null); }));
+  const gameplayCard = authoringOverviewCard("Geplaatste gameplay", "NPC " + roleCounts.npc + " · Enemy " + roleCounts.enemy + " · Resource " + roleCounts.resource + " · Pickup " + roleCounts.pickup + " · Portal " + roleCounts.portal + " · Crafting " + roleCounts.crafting + " · Vendor " + roleCounts.vendor + " · Market " + roleCounts.market + ".", String(models.length), "Assets / object plaatsen", function () { focusAssetBrowser(); }, function () { authoringOverviewShowWorkspaceNodes(currentZone); });
+  if (models.length) {
+    const placed = document.createElement("div");
+    placed.className = "buildOverviewPlaced";
+    for (const model of models) {
+      const context = objectFunctionContextForModel(model, state.graph);
+      const role = visualBuilderRoleSpec(visualBuilderRoleForContext(context))?.label || "Decoratie";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "mini";
+      button.textContent = nodeDisplayTitle(model) + " · " + role;
+      button.addEventListener("click", function () { selectNode(model.id, true, { clearPendingEdge: true }); });
+      placed.appendChild(button);
+    }
+    gameplayCard.appendChild(placed);
+  }
+  cards.appendChild(gameplayCard);
+  wrap.appendChild(cards);
+  return wrap;
+}
+
 function renderAuthoringSection(route) {
   const selectedViewportNode = selectedViewportAuthoringNode();
+  const selectedModel = selectedSingleModelNode();
+  const selectedObjectContext = selectedModel ? objectFunctionContextForModel(selectedModel, state.graph) : null;
   const hasAnyCampaignGroup = (state.graph.nodes || []).some(function (node) {
     return isCampaignGroupNode(node);
   });
@@ -13704,8 +14485,8 @@ function renderAuthoringSection(route) {
     el.authoringButton.setAttribute("aria-expanded", state.authoringMenuOpen ? "true" : "false");
   }
   if (el.authoringRouteChip) {
-    el.authoringRouteChip.hidden = !route;
-    el.authoringRouteChip.textContent = route ? "Werkroute: " + route.label : "";
+    el.authoringRouteChip.hidden = !route || Boolean(selectedModel);
+    el.authoringRouteChip.textContent = route && !selectedModel ? "Werkroute: " + route.label : "";
   }
   if (el.authoringSelectionChip) {
     const selectionTitle = selectedViewportNode ? nodeDisplayTitle(selectedViewportNode).trim() : "";
@@ -13713,13 +14494,40 @@ function renderAuthoringSection(route) {
     el.authoringSelectionChip.textContent = selectionTitle ? "Selectie: " + selectionTitle : "";
   }
   if (el.authoringBackButton) {
-    el.authoringBackButton.hidden = !route;
+    el.authoringBackButton.hidden = !route || Boolean(selectedModel);
   }
   if (el.authoringMenu) {
     el.authoringMenu.hidden = !state.authoringMenuOpen;
     el.authoringMenu.innerHTML = "";
     if (state.authoringMenuOpen) {
-      for (const candidate of AUTHORING_ROUTES) {
+      if (selectedObjectContext) {
+        const actions = [
+          { label: "Bewerken in Visual Builder", summary: "Wijzig rol, definitie, gedrag en echte questrelaties.", run: function () { visualBuilderBegin(selectedObjectContext, { role: visualBuilderRoleForContext(selectedObjectContext) || "decoration" }); } },
+          { label: selectedObjectContext.interactionComponent ? "Interactable beheren" : "Interactable toevoegen", summary: "Voeg een extra ondersteunde interactiecomponent toe.", run: function () { objectFunctionBeginDraft("interaction", selectedObjectContext); } },
+          { label: "Quest of dialoog koppelen", summary: "Open stap 4 met bestaande typed pickers.", run: function () { visualBuilderBegin(selectedObjectContext, { role: visualBuilderRoleForContext(selectedObjectContext) || "decoration" }); state.visualBuilderDraft.step = 4; renderAuthoringHub(); } },
+          { label: "Toon in nodes", summary: "Open uitsluitend het lokale objectpakket en zijn relaties.", run: function () { visualBuilderToggleLocalNodes(selectedObjectContext); } }
+        ];
+        for (const actionInfo of actions) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "libButton authoringRouteButton";
+          const text = document.createElement("span");
+          text.className = "authoringRouteText";
+          const title = document.createElement("span");
+          title.className = "authoringRouteTitle";
+          title.textContent = actionInfo.label;
+          const summary = document.createElement("span");
+          summary.className = "authoringRouteSummary";
+          summary.textContent = actionInfo.summary;
+          text.append(title, summary);
+          button.appendChild(text);
+          button.addEventListener("click", function () {
+            state.authoringMenuOpen = false;
+            actionInfo.run();
+          });
+          el.authoringMenu.appendChild(button);
+        }
+      } else for (const candidate of AUTHORING_ROUTES) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "libButton authoringRouteButton";
@@ -13749,9 +14557,15 @@ function renderAuthoringSection(route) {
     }
   }
   if (el.authoringPanel) {
-    el.authoringPanel.hidden = !route;
+    el.authoringPanel.hidden = false;
     el.authoringPanel.innerHTML = "";
-    if (route) {
+    if (selectedObjectContext) {
+      el.authoringPanel.appendChild(renderObjectWorkbenchSummary(selectedObjectContext));
+      if (visualBuilderDraftForContext(selectedObjectContext)) el.authoringPanel.appendChild(renderVisualBuilder(selectedObjectContext));
+      el.authoringPanel.appendChild(renderObjectFunctionSection(selectedObjectContext));
+    } else if (!route) {
+      el.authoringPanel.appendChild(renderAuthoringBuildOverview());
+    } else {
       const objectContext = route.id === "object_character" ? objectFunctionContextForModel(selectedSingleModelNode(), state.graph) : null;
       const note = document.createElement("div");
       note.className = "authoringRouteAction";
@@ -13883,7 +14697,7 @@ function renderAuthoringSection(route) {
     }
   }
   if (el.authoringButton) {
-    el.authoringButton.textContent = "+ Maken";
+    el.authoringButton.textContent = selectedModel ? "+ Aan dit object" : "+ Maken";
   }
 }
 
@@ -13900,34 +14714,13 @@ function nodeLibraryStatusForType(route, type, def) {
   if (route && !authoringLibraryGroupsForRoute(route.id, { [type]: def }, "").some(function (group) { return group.items.length; })) {
     return { label: "buiten route", tone: "muted", text: "Bestaat wel, maar hoort niet bij de normale routecontext." };
   }
-  return { label: "ok", tone: "ok", text: "Past bij de huidige route wanneer parent en ports geldig zijn." };
-}
-
-function nodePlacementIssueForType(type) {
-  const def = state.nodeTypes?.[type] || {};
-  const parent = state.currentGroupId ? nodeById(state.currentGroupId) : null;
-  const parentKind = normalizeEditorKey(parent?.values?.groupKind);
-  if (["group_input", "group_output"].includes(type)) return "Group Input/Output wordt automatisch beheerd.";
-  if (def.system && type !== "group") return "System nodes worden door bestaande helpers aangemaakt.";
-  if (type === "zone_definition" || type === "zone_output" || type === "zone_environment_settings" || type === "zone_gameplay_rules") {
-    if (!parent || !isZoneCanvasGroup(parent, state.graph)) return "Open eerst een Zone Canvas.";
-  }
-  if (type === "area_output" || type === "area_definition") {
-    if (!parent) return "Open eerst een Zone of Area Group.";
-  }
-  if (state.nodeTypes?.[type]?.outputs?.catalogDefinition && parentKind !== "catalog") return "Open eerst een Catalog Group.";
-  if (outputPortForDataType(type, "policy") && parentKind !== "player_rules") return "Open eerst een Player Rules Group.";
-  const outputs = state.nodeTypes?.[type]?.outputs || {};
-  if ((outputs.ui || outputs.uiModule || outputs.minimap || outputs.uiLayout || outputs.menuLayout) && parentKind !== "ui") return "Open eerst een UI Group.";
-  return "";
+  return { label: "open", tone: "ok", text: "Vrij toe te voegen op het huidige canvas." };
 }
 
 function renderNodeLibraryEntry(route, entry, options = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "libButton";
-  const issue = nodePlacementIssueForType(entry.type);
-  if (issue) button.classList.add("libButton--blocked");
   const dot = document.createElement("span");
   dot.className = "libDot";
   dot.style.background = accentColorForNodeDef(entry.def);
@@ -13950,16 +14743,12 @@ function renderNodeLibraryEntry(route, entry, options = {}) {
   }
   const plus = document.createElement("span");
   plus.className = "plus";
-  plus.textContent = issue ? "!" : "+";
-  const info = createHelpIcon(buildNodeDefinitionHelpText(entry.type, entry.def) + (issue ? " Plaatsing geblokkeerd: " + issue : ""), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
+  plus.textContent = "+";
+  const info = createHelpIcon(buildNodeDefinitionHelpText(entry.type, entry.def), { className: "helpInfoIcon helpInfoIcon--library", side: "right" });
   button.append(dot, body, plus);
   if (info) button.appendChild(info);
-  button.title = issue ? issue : (entry.def.description || "");
+  button.title = entry.def.description || "";
   button.addEventListener("click", function () {
-    if (issue) {
-      setStatus(issue, "error");
-      return;
-    }
     addNode(entry.type);
   });
   return button;
@@ -14044,7 +14833,7 @@ function renderNodeLibrary(route) {
 }
 
 function renderAuthoringHub() {
-  const route = sanitizeAuthoringRouteState();
+  const route = state.authoringOverviewActive && !selectedSingleModelNode() ? null : sanitizeAuthoringRouteState();
   renderAuthoringSection(route);
   renderNodeLibrary(route);
   syncAsideContext(route);
@@ -15424,10 +16213,11 @@ function visibleNodes() {
   return state.graph.nodes.filter(function (n) {
     const def = state.nodeTypes[n.type] || {};
     const isGroupInterfaceNode = n.type === "group_input" || n.type === "group_output";
-    const inCurrentGroup = (n.parentId || null) === state.currentGroupId;
-    const inLocalPackage = !state.visualObjectNodeScope
-      || state.visualObjectNodeScope.parentId !== state.currentGroupId
-      || state.visualObjectNodeScope.nodeIds.includes(n.id);
+    const packageProjection = state.visualObjectNodeScope && state.visualObjectNodeScope.parentId === state.currentGroupId;
+    const inCurrentGroup = packageProjection
+      ? state.visualObjectNodeScope.nodeIds.includes(n.id)
+      : (n.parentId || null) === state.currentGroupId;
+    const inLocalPackage = !packageProjection || state.visualObjectNodeScope.nodeIds.includes(n.id);
     return inCurrentGroup && inLocalPackage && !def.internal && (!def.hidden || isGroupInterfaceNode);
   });
 }
@@ -16199,14 +16989,18 @@ function renderEdges(nodes) {
     const path = "M " + a.x + " " + a.y + " C " + (a.x + dx) + " " + a.y + " " + (b.x - dx) + " " + b.y + " " + b.x + " " + b.y;
     const isSelected = state.selectedEdgeIds.includes(edge.id);
     const selected = isSelected ? " selected" : "";
-    const edgeColor = isSelected ? "#7bd4ff" : dataTypeColor(edgeDataType(fromNode, edge.fromPort));
+    const dataType = edgeDataType(fromNode, edge.fromPort);
+    const edgeColor = isSelected ? "#7bd4ff" : dataTypeColor(dataType);
+    const semantic = /Package$/.test(dataType) ? "package"
+      : /(?:Def|definition|Ref)$/.test(dataType) ? "reference"
+        : toNode.type.endsWith("_output") ? "output" : "flow";
     if (isSelected) {
       const midX = Math.round((a.x + b.x) / 2);
       const midY = Math.round((a.y + b.y) / 2);
       markup += "<path class=\"edgeGlow\" d=\"" + path + "\"></path>";
       markup += "<circle class=\"edgeMarker\" cx=\"" + midX + "\" cy=\"" + midY + "\" r=\"4\"></circle>";
     }
-    markup += "<path class=\"typed" + selected + "\" data-edge-id=\"" + edge.id + "\" d=\"" + path + "\" stroke=\"" + edgeColor + "\"></path>";
+    markup += "<path class=\"typed edgeSemantic--" + semantic + selected + "\" data-edge-id=\"" + edge.id + "\" d=\"" + path + "\" stroke=\"" + edgeColor + "\"><title>" + semantic + " · " + escapeSvgAttr(dataType) + "</title></path>";
   }
   markup += renderZoneCanvasAdjacencyLinks(nodes);
   el.edgeLayer.innerHTML = markup;
@@ -16350,6 +17144,53 @@ async function restoreGraphObject(nextGraph, options = {}) {
     refreshEdgeList: false,
     refreshInspector: true,
     refreshViewport: false,
+    refreshValidation: true,
+    clearPendingEdge: true
+  }, options));
+}
+
+function compactGraphDeletionChangeSet(nextGraph) {
+  const currentNodes = new Map((state.graph.nodes || []).map(function (node) { return [node.id, node]; }));
+  const nextNodes = new Map((nextGraph.nodes || []).map(function (node) { return [node.id, node]; }));
+  const currentEdges = new Map((state.graph.edges || []).map(function (edge) { return [edge.id, edge]; }));
+  const nextEdges = new Map((nextGraph.edges || []).map(function (edge) { return [edge.id, edge]; }));
+  for (const nodeId of nextNodes.keys()) {
+    if (!currentNodes.has(nodeId)) throw new Error("Compact verwijderen kan geen nieuwe nodes toevoegen.");
+  }
+  for (const edgeId of nextEdges.keys()) {
+    if (!currentEdges.has(edgeId)) throw new Error("Compact verwijderen kan geen nieuwe verbindingen toevoegen.");
+  }
+  const nodeIds = Array.from(currentNodes.keys()).filter(function (nodeId) { return !nextNodes.has(nodeId); });
+  const edgeIds = Array.from(currentEdges.keys()).filter(function (edgeId) { return !nextEdges.has(edgeId); });
+  const patches = [];
+  for (const [nodeId, nextNode] of nextNodes.entries()) {
+    const currentNode = currentNodes.get(nodeId);
+    if (JSON.stringify(currentNode?.values || {}) !== JSON.stringify(nextNode?.values || {})) {
+      patches.push({ nodeId: nodeId, values: nextNode.values || {} });
+    }
+  }
+  return { nodeIds: nodeIds, edgeIds: edgeIds, patches: patches };
+}
+
+async function deleteGraphSelectionObject(nextGraph, options = {}) {
+  let changeSet;
+  try {
+    changeSet = compactGraphDeletionChangeSet(nextGraph);
+  } catch (error) {
+    setStatus(error.message, "error");
+    return null;
+  }
+  return await applyGraphMutation(function () {
+    return api(DELETE_GRAPH_SELECTION_ROUTE, {
+      method: "POST",
+      body: JSON.stringify(changeSet)
+    });
+  }, Object.assign({
+    refreshGraph: true,
+    refreshEdgeList: false,
+    refreshInspector: true,
+    refreshViewport: true,
+    refreshViewportImmediately: true,
     refreshValidation: true,
     clearPendingEdge: true
   }, options));
@@ -17799,7 +18640,10 @@ function renderInspector() {
     del.type = "button";
     del.className = "deleteNode";
     del.textContent = "Verwijder";
-    del.addEventListener("click", function () { deleteNode(node.id); });
+    del.addEventListener("click", function () {
+      if (node.type === "model_entity") void deleteSelectedNodes();
+      else void deleteNode(node.id);
+    });
     actions.append(dup, del);
   }
   el.inspectorForm.appendChild(actions);
@@ -20707,6 +21551,52 @@ function scheduleEditorMinimapRedraw(delayMs = 80) {
   }, Math.max(0, Number(delayMs) || 0));
 }
 
+const EDITOR_MINIMAP_ROLE_STYLES = {
+  enemy: { color: "#ef4444", shape: "square", showLabel: false },
+  boss: { color: "#f97316", shape: "star", showLabel: true },
+  wildlife: { color: "#22c55e", shape: "dot", showLabel: false },
+  npc: { color: "#c084fc", shape: "diamond", showLabel: true },
+  quest: { color: "#facc15", shape: "dot", showLabel: true },
+  teleport: { color: "#22d3ee", shape: "diamond", showLabel: true },
+  crafting: { color: "#fb923c", shape: "square", showLabel: true },
+  cooking: { color: "#f59e0b", shape: "square", showLabel: true },
+  vendor: { color: "#a78bfa", shape: "diamond", showLabel: true },
+  market: { color: "#38bdf8", shape: "diamond", showLabel: true },
+  resource: { color: "#84cc16", shape: "dot", showLabel: false },
+  item: { color: "#fbbf24", shape: "square", showLabel: false },
+  object: { color: "#94a3b8", shape: "dot", showLabel: false }
+};
+
+function editorMinimapMarkerStyle(entity, fallbackRole = "object") {
+  const role = minimapEntityRole(entity) || fallbackRole;
+  const categories = Array.isArray(state.viewportWorld?.minimap?.game?.markerCategories)
+    ? state.viewportWorld.minimap.game.markerCategories
+    : [];
+  const categoryRef = String(entity?.minimapCategoryRef || "").trim();
+  const category = (categoryRef ? categories.find(function (candidate) {
+    return String(candidate?.id || "") === categoryRef;
+  }) : null) || categories.find(function (candidate) {
+    return candidate?.source === role;
+  }) || null;
+  const fallback = EDITOR_MINIMAP_ROLE_STYLES[role] || EDITOR_MINIMAP_ROLE_STYLES.object;
+  return {
+    role,
+    color: category?.color || fallback.color,
+    shape: category?.shape || fallback.shape,
+    showLabel: category ? category.showLabel === true : fallback.showLabel === true
+  };
+}
+
+function drawEditorMinimapSemanticMarker(ctx, point, markerSize, style, lineWidth) {
+  const markerStyle = { fill: style.color, stroke: "rgba(0,0,0,0.64)", lineWidth };
+  if (style.shape === "square") drawSquareMarker(ctx, point.x, point.y, markerSize, markerStyle);
+  else if (style.shape === "triangle") drawTriangleMarker(ctx, point.x, point.y, markerSize, 0, markerStyle);
+  else if (style.shape === "cross") drawCrossMarker(ctx, point.x, point.y, markerSize, { stroke: style.color, lineWidth });
+  else if (style.shape === "star") drawStarMarker(ctx, point.x, point.y, markerSize, markerStyle);
+  else if (style.shape === "dot" || style.shape === "label") drawDotMarker(ctx, point.x, point.y, markerSize, markerStyle);
+  else drawDiamondMarker(ctx, point.x, point.y, markerSize, markerStyle);
+}
+
 function redrawEditorMinimap() {
   if (!el.editorMinimapRoot || !el.editorMinimapCanvas) return;
   if (state.editorMinimapSuppressed) {
@@ -20787,19 +21677,26 @@ function redrawEditorMinimap() {
     ctx.textAlign = "center";
     ctx.fillText("Nog geen bake", size / 2, size / 2);
   }
+  const markerZoneId = String(state.viewportWorld?.activeZoneId || state.viewportWorld?.zonePackage?.zoneId || "");
+  const claimedMarkerPositions = new Set();
   if (config.showModelEntities !== false || config.showScatterInstances === true) {
     for (const entity of snapshot.entities) {
       const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      const entityRole = minimapEntityRole(entity);
       if (isScatter && config.showScatterInstances === false) continue;
-      if (!isScatter && entity.kind !== "scatter" && config.showNpcEntities === false) continue;
+      if (!isScatter && entityRole === "npc" && config.showNpcEntities === false) continue;
       const point = resolveMinimapPoint(entity.x, entity.z, viewBounds, size, size, false);
       if (!point) continue;
-      drawDiamondMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 5), {
-        fill: isScatter ? "#7ccf6b" : "#d59bff",
-        stroke: "rgba(0,0,0,0.6)",
-        lineWidth: markerLineWidth
-      });
-      const showName = isScatter ? config.showScatterNames === true : config.showEntityNames !== false;
+      const positionKey = minimapPhysicalMarkerKey(entity, markerZoneId);
+      if (positionKey && claimedMarkerPositions.has(positionKey)) continue;
+      if (positionKey) claimedMarkerPositions.add(positionKey);
+      const markerStyle = isScatter
+        ? { role: "object", color: "#7ccf6b", shape: "diamond", showLabel: config.showScatterNames === true }
+        : editorMinimapMarkerStyle(entity, entityRole || "object");
+      drawEditorMinimapSemanticMarker(ctx, point, editorMinimapMarkerSize(size, 5), markerStyle, markerLineWidth);
+      const showName = isScatter
+        ? config.showScatterNames === true
+        : config.showEntityNames !== false && markerStyle.showLabel === true;
       if (showName) {
         drawMarkerLabel(
           ctx,
@@ -20818,11 +21715,19 @@ function redrawEditorMinimap() {
     for (const item of snapshot.interactables) {
       const point = resolveMinimapPoint(item.x, item.z, viewBounds, size, size, false);
       if (!point) continue;
-      drawSquareMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 4), {
-        fill: "#9be870",
-        stroke: "rgba(0,0,0,0.6)",
-        lineWidth: markerLineWidth
-      });
+      const positionKey = minimapPhysicalMarkerKey(item, markerZoneId);
+      if (positionKey && claimedMarkerPositions.has(positionKey)) continue;
+      if (positionKey) claimedMarkerPositions.add(positionKey);
+      const role = minimapEntityRole(item);
+      if (role) {
+        drawEditorMinimapSemanticMarker(ctx, point, editorMinimapMarkerSize(size, 5), editorMinimapMarkerStyle(item, role), markerLineWidth);
+      } else {
+        drawSquareMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 4), {
+          fill: "#9be870",
+          stroke: "rgba(0,0,0,0.6)",
+          lineWidth: markerLineWidth
+        });
+      }
     }
   }
   if (config.showPlayerSpawn !== false && state.viewportWorld?.spawn) {
@@ -20835,11 +21740,15 @@ function redrawEditorMinimap() {
   }
   if (config.showSelectedObject !== false && snapshot.selectedEntity) {
     const point = resolveMinimapPoint(snapshot.selectedEntity.x, snapshot.selectedEntity.z, viewBounds, size, size, false);
-    if (point) drawDiamondMarker(ctx, point.x, point.y, editorMinimapMarkerSize(size, 7), {
-      fill: "#ffe08a",
-      stroke: "rgba(0,0,0,0.7)",
-      lineWidth: markerLineWidth
-    });
+    if (point) {
+      ctx.save();
+      ctx.strokeStyle = "#ffe08a";
+      ctx.lineWidth = Math.max(markerLineWidth, 1);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, editorMinimapMarkerSize(size, 8), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
   if (config.showEditorCamera !== false) {
     const point = resolveMinimapPoint(snapshot.cameraTarget.x, snapshot.cameraTarget.z, viewBounds, size, size, false);
@@ -20871,7 +21780,8 @@ async function deleteNode(nodeId) {
   }, {
     historyLabel: "Node verwijderd",
     clearPendingEdge: true,
-    refreshViewport: false,
+    refreshViewport: true,
+    refreshViewportImmediately: true,
     refreshValidation: false,
     selectedNodeIds: [],
     selectedEdgeIds: [],
@@ -20923,7 +21833,8 @@ async function deleteEdge(edgeId) {
   }, {
     historyLabel: "Verbinding verwijderd",
     clearPendingEdge: true,
-    refreshViewport: false,
+    refreshViewport: true,
+    refreshViewportImmediately: true,
     refreshValidation: false,
     selectedEdgeIds: [],
     afterApply: function () {
@@ -21036,7 +21947,7 @@ async function deleteSelectedNodes() {
     setStatus(error.message || "De selectie kan nog niet veilig worden verwijderd.", "error");
     return;
   }
-  await restoreGraphObject(nextGraph, {
+  await deleteGraphSelectionObject(nextGraph, {
     historyLabel: nodeIds.length ? "Nodes verwijderd" : "Verbindingen verwijderd",
     selectedNodeIds: [],
     selectedEdgeIds: [],
@@ -21044,9 +21955,9 @@ async function deleteSelectedNodes() {
     refreshEdgeList: false,
     refreshInspector: true,
     refreshValidation: false,
-    refreshViewport: false,
+    refreshViewport: true,
+    refreshViewportImmediately: true,
     afterApply: function () {
-      invalidateDraftWorld();
       clearSelection({ clearPendingEdge: true });
       setStatus("Selectie verwijderd.", "success");
     }
@@ -22700,6 +23611,12 @@ async function terrainPatchPoints(node, nextPoints, historyLabel) {
     terrainFinishWithRender();
     return false;
   }
+  // The editor overlay reads the authored points directly, but a Surface Layer's
+  // textured strip (and the other terrain geometry) is compiled into runtime meshes.
+  // Rebuild once after the point edit is committed so those meshes cannot remain at
+  // their old coordinates until a full browser refresh. Do not rebuild per pointermove.
+  const refreshedWorld = await refreshViewport({ force: true });
+  if (!refreshedWorld) return false;
   return true;
 }
 
@@ -23245,9 +24162,16 @@ function beginPointMarqueeSession(event, options) {
 
 function deselectViewportClick() {
   clearPointLongPress();
+  state.authoringRouteId = null;
+  state.storedAuthoringRouteId = null;
+  state.authoringMenuOpen = false;
+  state.authoringOverviewActive = true;
+  state.visualBuilderDraft = null;
+  state.visualObjectNodeScope = null;
+  storeAuthoringRoute(null);
   clearSelection({ clearPendingEdge: true, clearAuthoringSelection: true });
   renderGraph();
-  setStatus("Deselected.", "");
+  setStatus("Selectie gewist. Bouw-overzicht geopend.", "");
   redrawEditorMinimap();
 }
 
@@ -24314,8 +25238,8 @@ function handleEditorKeyDown(event) {
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
-    event.preventDefault();
-    deleteSelectedNodes();
+    consumeShortcutEvent(event);
+    void deleteSelectedNodes();
     return;
   }
   if (!event.altKey && !meta && (keyMatches(event, "g")) && runtime) {
