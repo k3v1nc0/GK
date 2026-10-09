@@ -728,6 +728,11 @@ async function handleApi(req, res, url) {
       authService.requireEditor(req);
       return sendJson(res, 200, repository.deleteEdge(edgeDeleteMatch[1]));
     }
+    if (req.method === "POST" && url.pathname === "/api/editor/graph/delete-selection") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      return sendJson(res, 200, repository.deleteGraphSelection(body));
+    }
     if (req.method === "POST" && url.pathname === "/api/editor/place-model-asset") {
       authService.requireEditor(req);
       const body = await readJson(req);

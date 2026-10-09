@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261006-portal-pair2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261008-minimap-roles1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
@@ -16,8 +16,10 @@ import {
   createMinimapView,
   clampMinimapView,
   minimapViewBounds,
-  attachMinimapInteractions
-} from "../shared/minimap-utils.js?v=20260729-zones-save-fix15";
+  attachMinimapInteractions,
+  minimapEntityRole,
+  minimapPhysicalMarkerKey
+} from "../shared/minimap-utils.js?v=20261008-minimap-roles1";
 
 const canvas = document.querySelector("#gameCanvas");
 const hud = document.querySelector("#hud");
@@ -90,6 +92,10 @@ const CLICK_MOVE_ARRIVAL_RADIUS = 0.06;
 const CLICK_MOVE_SELF_RADIUS_MULTIPLIER = 1.35;
 const CLICK_MOVE_BLOCKED_RADIUS = 0.015;
 const CLICK_MOVE_BLOCKED_TIMEOUT_MS = 420;
+const LOCAL_COLLISION_STOP_DELAY_MS = 120;
+const MAX_MOVEMENT_FRAME_DELTA_SECONDS = 0.25;
+const DEBUG_HUD_COLLAPSED_REFRESH_MS = 100;
+const DEBUG_HUD_EXPANDED_REFRESH_MS = 250;
 const NODE03_PENDING_TARGET_ACTION_TTL_MS = 15000;
 const NODE03_PENDING_TARGET_ACTION_DELAY_MS = 140;
 const POINTER_HOLD_RELEASE_THRESHOLD_MS = 180;
@@ -319,7 +325,9 @@ const state = {
     activeControllerSessionId: null,
     lastLocalControlAt: 0,
     passiveSince: 0,
-    lastControlSource: null
+    lastControlSource: null,
+    collisionBlockedSince: 0,
+    collisionStopSent: false
   },
   remote: {
     players: new Map(),
@@ -354,7 +362,12 @@ const state = {
     inFlight: false,
     lastSilentSyncAt: 0,
     zoneRefreshInFlight: false,
-    pendingZoneId: null
+    pendingZoneId: null,
+    zoneRefreshTimerId: 0
+  },
+  portalTravel: {
+    active: false,
+    targetZoneId: ""
   },
   mmoReady: {
     httpSnapshotLoaded: false,
@@ -457,7 +470,9 @@ const state = {
   },
   debugHud: {
     elements: null,
-    signature: null
+    signature: null,
+    lastUpdateAt: 0,
+    refreshTimerId: 0
   },
   minimapHud: {
     elements: null,
@@ -736,6 +751,25 @@ function showOverlay(text) {
 function hideOverlay() {
   overlay.classList.add("hidden");
   overlayText.textContent = "";
+}
+
+function beginPortalTravel(target = null) {
+  state.portalTravel.active = true;
+  state.portalTravel.targetZoneId = String(target?.zoneId || "").trim();
+  if (state.sync.zoneRefreshTimerId) {
+    window.clearTimeout(state.sync.zoneRefreshTimerId);
+    state.sync.zoneRefreshTimerId = 0;
+    state.sync.zoneRefreshInFlight = false;
+    state.sync.pendingZoneId = null;
+  }
+  clearLocalMovementForTeleport();
+}
+
+function finishPortalTravel() {
+  state.portalTravel.active = false;
+  state.portalTravel.targetZoneId = "";
+  state.sync.pendingZoneId = null;
+  state.sync.zoneRefreshInFlight = false;
 }
 
 function resetMmoReadiness(reason = "reset") {
@@ -5603,6 +5637,25 @@ function deriveRemoteAnimationState(nextPosition, distance) {
 function applyAuthoritativeUpdate(update, options = {}) {
   const nextPosition = normalizeIncomingServerPosition(update, options.transport || update?.transport || null);
   if (!nextPosition) return null;
+  const nextTransport = options.transport || nextPosition.transport || null;
+  const incomingZoneId = String(nextPosition.zoneId || "").trim();
+  const installedZoneId = activeGameWorldZoneId();
+  if (
+    state.portalTravel.active
+    && nextTransport !== "http-zone-link"
+    && incomingZoneId
+    && installedZoneId
+    && incomingZoneId !== installedZoneId
+  ) {
+    // De server broadcast de nieuwe portalpositie soms eerder dan het HTTP-antwoord
+    // met het bijbehorende zonepakket arriveert. Pas die coördinaten nooit toe op de
+    // nog actieve oude zone: positie en wereld worden samen geplaatst zodra dat
+    // antwoord binnen is, zodat er geen zichtbare reis tussen beide portals ontstaat.
+    state.portalTravel.targetZoneId = incomingZoneId;
+    state.net.lastIgnoredReason = "portal_world_pending";
+    syncNetDebugState();
+    return null;
+  }
   if (!state.position) {
     state.net.lastAppliedServerRevision = Number(nextPosition.revision) || 0;
     state.net.lastAppliedServerUpdatedAt = nextPosition.updatedAt || "";
@@ -5623,7 +5676,6 @@ function applyAuthoritativeUpdate(update, options = {}) {
   const authoritativeAnimation = incomingAnimationState || (incomingMoving === false ? "idle" : "walk");
   const previousPosition = state.predictedPosition ? clonePosition(state.predictedPosition) : clonePosition(state.position);
   const distance = previousPosition ? Math.hypot(previousPosition.x - nextPosition.x, previousPosition.z - nextPosition.z) : 0;
-  const nextTransport = options.transport || nextPosition.transport || null;
   const localInputActive = hasMovementInput();
   const netSettings = mmoNetworkSettings();
   const postInputHoldActive = postInputPredictionHoldActive();
@@ -5847,6 +5899,10 @@ function setMmoDebugExpanded(expanded) {
   els.body.hidden = !expanded;
   els.toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
   els.toggle.textContent = expanded ? "Verberg debug" : "Debug";
+  if (expanded) {
+    state.debugHud.lastUpdateAt = 0;
+    updateHud({ force: true });
+  }
 }
 
 function buildMmoDebugHudDom(config) {
@@ -6028,6 +6084,10 @@ function buildMmoDebugHudDom(config) {
 }
 
 function removeMmoDebugHud() {
+  if (state.debugHud.refreshTimerId) {
+    window.clearTimeout(state.debugHud.refreshTimerId);
+    state.debugHud.refreshTimerId = 0;
+  }
   if (state.debugHud.elements && state.debugHud.elements.frame) {
     state.debugHud.elements.frame.remove();
   } else if (state.debugHud.elements && state.debugHud.elements.root) {
@@ -6035,6 +6095,7 @@ function removeMmoDebugHud() {
   }
   state.debugHud.elements = null;
   state.debugHud.signature = null;
+  state.debugHud.lastUpdateAt = 0;
 }
 
 function refreshMmoDebugHud() {
@@ -6655,13 +6716,14 @@ function syncNode03RuntimeTargets() {
   syncRuntimeTargets();
 }
 
-function refreshNode03ClientRanges(now = performance.now()) {
+function refreshNode03ClientRanges(now = performance.now(), options = {}) {
   if (!state.node03.snapshot) return;
   if (now - num(state.node03.lastRangeRenderAt, 0) < 200) return;
   state.node03.lastRangeRenderAt = now;
-  syncNode03RuntimeTargets();
+  if (options.deferRuntimeSync !== true) syncNode03RuntimeTargets();
   if (node03Modules().length) updateNode03RangeDom();
   maybeRunPendingNode03TargetAction("range");
+  return true;
 }
 
 function node03TargetMetaText(target, module = {}) {
@@ -6718,7 +6780,7 @@ function selectNode03Target(targetId) {
 function setNode03PendingTargetAction(action, target, attemptsOverride = null) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
   const targetId = String(target?.instanceId || target?.targetId || target || "").trim();
-  if (!normalizedAction || !targetId || normalizedAction === "travel" || normalizedAction.startsWith("debug_")) return;
+  if (!normalizedAction || !targetId || normalizedAction.startsWith("debug_")) return;
   const current = state.node03.pendingTargetAction || null;
   const attempts = attemptsOverride !== null && attemptsOverride !== undefined
     ? Math.max(0, Number(attemptsOverride || 0) || 0)
@@ -6748,7 +6810,12 @@ function maybeRunPendingNode03TargetAction(reason = "range") {
     clearNode03PendingTargetAction();
     return false;
   }
-  const target = node03TargetWithClientRange(node03TargetById(pending.targetId));
+  const node04Action = pending.action.startsWith("node04:");
+  const rawTarget = node03TargetById(pending.targetId)
+    || (node04Action ? node04TargetById(pending.targetId) : null);
+  const target = node04Action
+    ? node04TargetWithClientRange(rawTarget)
+    : node03TargetWithClientRange(rawTarget);
   if (!target || target.available === false) {
     clearNode03PendingTargetAction(pending.targetId);
     return false;
@@ -7033,6 +7100,7 @@ async function loadNode03State(options = {}) {
 
 async function runNode03Action(action, targetId, extra = {}) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
+  const isTravel = normalizedAction === "travel";
   const isRespawn = normalizedAction === "reset_demo" || normalizedAction === "reset";
   const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
   if (isNode03Defeated() && !bypassDefeatState) {
@@ -7047,9 +7115,8 @@ async function runNode03Action(action, targetId, extra = {}) {
   if (!action || state.node03.actionInFlight) return;
   const currentTarget = node03TargetWithClientRange(node03TargetById(targetId));
   if (currentTarget?.instanceId) {
-    const wasSelectedTarget = String(currentTarget.instanceId || "") === String(state.node03.selectedTargetId || "");
     selectNode03Target(currentTarget.instanceId);
-    if (extra.skipMoveToTarget !== true && !wasSelectedTarget && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+    if (extra.skipMoveToTarget !== true && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
       setNode03PendingTargetAction(normalizedAction || action, currentTarget);
       const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node03-target");
       state.node03.lastActionMessage = started
@@ -7063,8 +7130,8 @@ async function runNode03Action(action, targetId, extra = {}) {
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
   renderNode03Hud();
+  if (isTravel) beginPortalTravel(currentTarget);
   try {
-    const isTravel = normalizedAction === "travel";
     const response = await fetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
       method: "POST",
       credentials: "same-origin",
@@ -7111,7 +7178,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     if (isTravel) {
       applyInstantTravelResponse(data);
       await loadSessionState({
-        forceWorld: true,
+        forceWorld: false,
         showLoading: false,
         keepPrediction: false,
         silent: true,
@@ -7131,6 +7198,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     state.node03.lastError = String(error?.message || error || "NODE-03 actie mislukt.");
     showHudError(state.node03.lastError);
   } finally {
+    if (isTravel && state.portalTravel.active) finishPortalTravel();
     state.node03.actionInFlight = false;
     await loadNode03State({ silent: true });
   }
@@ -7378,9 +7446,10 @@ function node04TargetById(targetId) {
 }
 
 function node04ClientDistance(target) {
-  if (!target || !state.position) return null;
+  const position = currentLocalPlayerPosition();
+  if (!target || !position) return null;
   if (!Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return null;
-  return Math.hypot(num(state.position.x, 0) - num(target.x, 0), num(state.position.z, 0) - num(target.z, 0));
+  return Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0));
 }
 
 function node04TargetWithClientRange(target) {
@@ -7388,10 +7457,12 @@ function node04TargetWithClientRange(target) {
   const distance = node04ClientDistance(target);
   if (distance === null) return target;
   const range = Math.max(0, num(target.range, 0));
-  const radius = Math.max(0, num(target.radius, 0));
   return Object.assign({}, target, {
     distance: round(distance),
-    inRange: distance <= range + radius
+    // Quest targets expose their authored radius as `range` as well as
+    // `radius`; adding both made the client stop twice as far away as the
+    // actual dialogue/delivery target.
+    inRange: distance <= range
   });
 }
 
@@ -7436,11 +7507,12 @@ function syncRuntimeTargets() {
   state.runtime.setRuntimeTargets(Array.from(byId.values()));
 }
 
-function refreshNode04ClientRanges(now = performance.now()) {
+function refreshNode04ClientRanges(now = performance.now(), options = {}) {
   if (!state.node04.snapshot) return;
   if (now - num(state.node04.lastRangeRenderAt, 0) < 250) return;
   state.node04.lastRangeRenderAt = now;
-  syncRuntimeTargets();
+  if (options.deferRuntimeSync !== true) syncRuntimeTargets();
+  return true;
 }
 
 function node04PrimaryTarget() {
@@ -7751,6 +7823,7 @@ async function runNode04Action(action, targetId, extra = {}) {
   }
   const currentTarget = node04TargetWithClientRange(node04TargetById(targetId));
   if (currentTarget?.instanceId && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
+    setNode03PendingTargetAction(action, currentTarget);
     const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node04-target");
     state.node04.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || "quest target") + "."
@@ -7945,7 +8018,7 @@ function node05Vendors() {
       targetKind: "vendor",
       id: vendor.vendorId,
       targetId: vendor.vendorId,
-      label: vendor.displayName || vendor.linkedEntity?.label || vendor.vendorId,
+      label: vendor.linkedEntity?.label || vendor.displayName || vendor.vendorId,
       prompt: vendor.interactionPrompt || "Trade"
     }, vendor));
   }).filter(Boolean);
@@ -8528,11 +8601,23 @@ async function loadNode05State(options = {}) {
   }
 }
 
-function refreshNode05ClientRanges(now = performance.now()) {
+function refreshNode05ClientRanges(now = performance.now(), options = {}) {
   if (!state.node05.snapshot) return;
   if (now - num(state.node05.lastRangeRenderAt, 0) < 350) return;
   state.node05.lastRangeRenderAt = now;
-  syncRuntimeTargets();
+  if (options.deferRuntimeSync !== true) syncRuntimeTargets();
+  return true;
+}
+
+function refreshGameplayClientRanges(now = performance.now()) {
+  // All three systems feed the same runtime target collection. During movement
+  // they used to rebuild it independently in one frame (200/250/350 ms).
+  const options = { deferRuntimeSync: true };
+  const node03Due = refreshNode03ClientRanges(now, options) === true;
+  const node04Due = refreshNode04ClientRanges(now, options) === true;
+  const node05Due = refreshNode05ClientRanges(now, options) === true;
+  if (node03Due || node04Due || node05Due) syncRuntimeTargets();
+  maybeRunPendingNode03TargetAction("gameplay-range");
 }
 
 async function runNode05Action(action, payload = {}) {
@@ -9411,9 +9496,10 @@ function currentLocalPlayerPosition() {
 
 function gameMinimapRefreshInterval(config, performanceMode = null) {
   const configured = Number(config?.markerUpdateMs);
+  const liteMode = performanceMode !== "full" || isGameMinimapLite(config);
   const baseInterval = Number.isFinite(configured)
-    ? configured
-    : (isGameMinimapLite(config) ? 250 : 120);
+    ? (liteMode ? Math.max(250, configured) : configured)
+    : (liteMode ? 250 : 120);
   const floor = performanceMode === "ultra"
     ? 120
     : performanceMode === "lite"
@@ -9790,18 +9876,6 @@ function drawNode03MinimapEnemyMarkers(ctx, config, viewBounds, size, clampOutsi
   }
 }
 
-function addGameMinimapMarker(markers, source, id, label, position, extra = {}) {
-  const resolved = minimapMarkerPosition(position);
-  if (!resolved) return;
-  markers.push(Object.assign({
-    source,
-    id: String(id || source || "marker"),
-    label: String(label || id || source || "Marker"),
-    x: resolved.x,
-    z: resolved.z
-  }, extra));
-}
-
 function gameMinimapSourceFromMarkerType(type) {
   const value = String(type || "").trim().toLowerCase();
   if (["portal", "zone_link", "teleport", "travel"].includes(value)) return "teleport";
@@ -9813,32 +9887,63 @@ function gameMinimapSourceFromMarkerType(type) {
 function gameMinimapCategorizedMarkers(config = resolveGameMinimapConfig()) {
   const markers = [];
   const markerIds = new Set();
+  const physicalMarkerKeys = new Set();
+  const enabledCategories = gameMinimapMarkerCategories(config).filter(function (category) {
+    return category.enabled !== false;
+  });
+  const visibleCategoryIds = new Set(enabledCategories.map(function (category) { return category.id; }));
+  const visibleCategorySources = new Set(enabledCategories.map(function (category) { return category.source; }));
   const addMarker = function (source, id, label, position, extra = {}) {
     const resolved = minimapMarkerPosition(position);
     if (!resolved) return;
     const markerId = String(id || source || "marker");
-    const dedupeKey = String(extra.markerKind || source || "marker") + ":" + markerId;
-    if (markerIds.has(dedupeKey)) return;
-    markerIds.add(dedupeKey);
-    markers.push(Object.assign({
+    const marker = Object.assign({
       source,
       id: markerId,
       label: String(label || id || source || "Marker"),
       x: resolved.x,
       z: resolved.z
-    }, extra));
+    }, extra);
+    // Een verborgen categorie mag de fysieke plek niet reserveren; een tweede,
+    // werkelijk zichtbare componentrol op hetzelfde object moet nog kunnen tekenen.
+    const categoryId = gameMinimapCategoryId(marker.categoryId || "", "");
+    if (!visibleCategoryIds.has(categoryId) && !visibleCategorySources.has(source)) return;
+    const dedupeKey = String(extra.markerKind || source || "marker") + ":" + markerId;
+    if (markerIds.has(dedupeKey)) return;
+    const physicalKey = extra.allowPhysicalOverlap === true
+      ? ""
+      : minimapPhysicalMarkerKey(Object.assign({}, position, resolved, { zoneId: extra.zoneId || position?.zoneId }), gameMinimapCurrentZoneId());
+    if (physicalKey && physicalMarkerKeys.has(physicalKey)) return;
+    markerIds.add(dedupeKey);
+    if (physicalKey) physicalMarkerKeys.add(physicalKey);
+    markers.push(marker);
   };
   const localPosition = currentLocalPlayerPosition();
   if (localPosition) {
     addMarker("character", state.player?.id || "local_player", state.player?.displayName || state.player?.id || "Player", localPosition, {
       categoryId: "character",
       markerKind: "local_player",
+      allowPhysicalOverlap: true,
       rotationY: num(localPosition.rotationY, 0)
     });
   }
   for (const entry of state.remote.players.values()) {
     const position = entry.renderState?.position || entry.position;
-    addMarker("users", entry.playerId, entry.displayName || entry.playerId, position, { markerKind: "remote_player" });
+    addMarker("users", entry.playerId, entry.displayName || entry.playerId, position, { markerKind: "remote_player", allowPhysicalOverlap: true });
+  }
+  const zonePackage = state.gameWorld?.zonePackage || null;
+  const markerLists = [state.gameWorld?.markers, zonePackage?.markers].filter(Array.isArray);
+  for (const list of markerLists) {
+    for (const marker of list) {
+      const explicitCategory = gameMinimapEntityCategoryId(marker);
+      const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
+        ? explicitCategory
+        : gameMinimapSourceFromMarkerType(marker.markerType || marker.type || marker.source);
+      addMarker(source, marker.markerId || marker.id || marker.nodeId, marker.label || marker.displayName || marker.markerId || marker.id, marker, {
+        categoryId: explicitCategory,
+        markerKind: "map_marker"
+      });
+    }
   }
   for (const enemy of node03MinimapEnemies()) {
     const source = gameMinimapMarkerSourceForEnemy(enemy);
@@ -9861,6 +9966,13 @@ function gameMinimapCategorizedMarkers(config = resolveGameMinimapConfig()) {
   }
   for (const marker of gameMinimapPublishedSpawnMarkers(config)) {
     addMarker(marker.source, marker.id, marker.label, marker, marker);
+  }
+  for (const target of node03RuntimeTargetsForScene()) {
+    if (target.entityKind !== "zone_link" && target.targetKind !== "zone_link" && String(target.action || "") !== "travel") continue;
+    addMarker("teleport", target.instanceId || target.targetId, target.displayName || target.prompt || "Teleport", target, {
+      markerKind: "teleport",
+      visualEntityId: target.visualEntityId || null
+    });
   }
   for (const target of node04MinimapTargets()) {
     const action = String(target.action || "");
@@ -9887,39 +9999,27 @@ function gameMinimapCategorizedMarkers(config = resolveGameMinimapConfig()) {
     for (const entity of state.gameWorld.entities) {
       const explicitCategory = gameMinimapEntityCategoryId(entity);
       const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      const componentRole = minimapEntityRole(entity);
       const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
         ? explicitCategory
-        : isScatter ? "object" : "npc";
+        : componentRole || "object";
       addMarker(source, entity.entityId || entity.id || entity.instanceId, entity.label || entity.displayName || entity.entityId || entity.id, entity, {
         categoryId: explicitCategory,
-        markerKind: isScatter ? "scatter" : "entity"
+        markerKind: isScatter ? "scatter" : componentRole || "entity"
       });
     }
   }
   if (Array.isArray(state.gameWorld?.interactables)) {
     for (const item of state.gameWorld.interactables) {
-      addMarker("object", item.interactableId || item.id, item.label || item.displayName || item.id, item.position || item, {
+      const role = minimapEntityRole(item) || "object";
+      addMarker(role, item.interactableId || item.id, item.label || item.displayName || item.prompt || item.id, item.position || item, {
         categoryId: gameMinimapEntityCategoryId(item),
-        markerKind: "interactable"
-      });
-    }
-  }
-  const zonePackage = state.gameWorld?.zonePackage || null;
-  const markerLists = [state.gameWorld?.markers, zonePackage?.markers].filter(Array.isArray);
-  for (const list of markerLists) {
-    for (const marker of list) {
-      const explicitCategory = gameMinimapEntityCategoryId(marker);
-      const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
-        ? explicitCategory
-        : gameMinimapSourceFromMarkerType(marker.markerType || marker.type || marker.source);
-      addGameMinimapMarker(markers, source, marker.markerId || marker.id || marker.nodeId, marker.label || marker.displayName || marker.markerId || marker.id, marker, {
-        categoryId: explicitCategory,
-        markerKind: "map_marker"
+        markerKind: role
       });
     }
   }
   if (state.gameWorld?.spawn) {
-    addGameMinimapMarker(markers, "spawn", state.gameWorld.spawn.spawnId || "spawn", "Spawn", state.gameWorld.spawn, { markerKind: "spawn" });
+    addMarker("spawn", state.gameWorld.spawn.spawnId || "spawn", "Spawn", state.gameWorld.spawn, { markerKind: "spawn" });
   }
   return markers;
 }
@@ -10422,7 +10522,7 @@ function drawRoundedFogRect(ctx, x, y, w, h, radius) {
   ctx.fill();
 }
 
-function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size) {
+function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size, allowBlur = true) {
   const cellSize = Math.max(1, num(fogConfig.cellSize, 24));
   const spanX = viewBounds.maxX - viewBounds.minX || 1;
   const spanZ = viewBounds.maxZ - viewBounds.minZ || 1;
@@ -10432,13 +10532,15 @@ function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size) {
   const baseRadius = pxPerCell * 0.72;
   const featherPx = Math.max(0, num(fogConfig.fogFeatherRadius, 1.5)) * Math.max(pxPerCellX, pxPerCellZ);
   const shape = fogConfig.smoothFog === false ? "hardCells" : (fogConfig.revealShape || "circle");
-  const mask = shape === "hardCells" || fogConfig.debugOverlay === true
+  const mask = !allowBlur || shape === "hardCells" || fogConfig.debugOverlay === true
     ? null
     : ensureMinimapFogMask(size);
   const targetCtx = mask ? mask.ctx : ctx;
   targetCtx.save();
   targetCtx.globalAlpha = 1;
-  targetCtx.globalCompositeOperation = "source-over";
+  // The caller uses destination-out to reveal discovered cells. Only the
+  // intermediate blur mask needs normal source-over drawing.
+  if (mask) targetCtx.globalCompositeOperation = "source-over";
   targetCtx.fillStyle = "rgba(0,0,0,1)";
 
   const featherCells = shape === "hardCells" ? 0 : Math.ceil(Math.max(0, num(fogConfig.fogFeatherRadius, 1.5)));
@@ -10480,7 +10582,7 @@ function drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size) {
   }
 }
 
-function drawGameMinimapFogOverlay(config, activeView, size, dpr, forceRedraw = false) {
+function drawGameMinimapFogOverlay(config, activeView, size, dpr, forceRedraw = false, performanceMode = "full") {
   const elements = state.minimapHud.elements;
   if (!elements?.fogCanvas || !elements?.fogCtx) return;
   const fogConfig = syncMinimapFogWorld(config);
@@ -10509,6 +10611,7 @@ function drawGameMinimapFogOverlay(config, activeView, size, dpr, forceRedraw = 
     Math.round(num(fogConfig.fogFeatherRadius, 0) * 100),
     fogConfig.revealShape || "circle",
     fogConfig.debugOverlay ? "debug" : "normal",
+    performanceMode,
     state.minimapFog.discoveredCells.size,
     Math.round(viewBounds.minX * 100) / 100,
     Math.round(viewBounds.maxX * 100) / 100,
@@ -10530,7 +10633,7 @@ function drawGameMinimapFogOverlay(config, activeView, size, dpr, forceRedraw = 
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "destination-out";
 
-  drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size);
+  drawSmoothMinimapFogCells(ctx, fogConfig, viewBounds, size, performanceMode === "full");
   ctx.globalCompositeOperation = "source-over";
   if (fogConfig.debugOverlay) drawMinimapFogDebug(ctx, fogConfig, viewBounds, size);
 }
@@ -10539,12 +10642,11 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   const elements = state.minimapHud.elements;
   if (!elements) return;
   const liteMode = performanceMode !== "full";
-  const ultraLiteMode = performanceMode === "ultra";
   const size = syncGameMinimapFitSize(config);
   const canvas = elements.canvas;
   // Backing store at devicePixelRatio, all drawing math in logical px: without this the canvas is
   // blurry on HiDPI screens no matter how high the bake resolution is.
-  const dprCap = ultraLiteMode ? 1.5 : liteMode ? 2 : 3;
+  const dprCap = liteMode ? 1 : 2;
   const dpr = Math.max(1, Math.min(dprCap, Number(window.devicePixelRatio) || 1));
   const backing = Math.round(size * dpr);
   if (canvas.width !== backing || canvas.height !== backing) {
@@ -10582,7 +10684,7 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   }
   ctx.globalAlpha = 1;
   drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, false, performanceMode, performance.now());
-  drawGameMinimapFogOverlay(config, activeView, size, dpr, gameMinimapHasThroughFogMarkers(config));
+  drawGameMinimapFogOverlay(config, activeView, size, dpr, gameMinimapHasThroughFogMarkers(config), performanceMode);
   drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now());
 }
 
@@ -10619,9 +10721,32 @@ function drawGameMinimapIfDue(now) {
   recordGameLoopTiming("minimapDraw", drawFinishedAt - drawStartedAt, drawFinishedAt);
 }
 
-function updateHud() {
+function updateHud(options = {}) {
   const els = state.debugHud.elements;
   if (!els) return;
+  const now = performance.now();
+  const expanded = Boolean(els.body && els.body.hidden === false);
+  const refreshInterval = expanded ? DEBUG_HUD_EXPANDED_REFRESH_MS : DEBUG_HUD_COLLAPSED_REFRESH_MS;
+  const elapsed = now - Number(state.debugHud.lastUpdateAt || 0);
+  if (options.force !== true && elapsed < refreshInterval) {
+    if (!state.debugHud.refreshTimerId) {
+      state.debugHud.refreshTimerId = window.setTimeout(function () {
+        state.debugHud.refreshTimerId = 0;
+        updateHud({ force: true });
+      }, Math.max(0, refreshInterval - elapsed));
+    }
+    return;
+  }
+  if (state.debugHud.refreshTimerId) {
+    window.clearTimeout(state.debugHud.refreshTimerId);
+    state.debugHud.refreshTimerId = 0;
+  }
+  state.debugHud.lastUpdateAt = now;
+  if (els.hudPosition) els.hudPosition.textContent = state.position ? formatPosition(state.position) : "-";
+  if (els.hudRevision) els.hudRevision.textContent = state.position ? String(state.position.revision) : "-";
+  // The collapsed panel only displays this summary. Building the complete
+  // network snapshot and touching dozens of hidden nodes was pure overhead.
+  if (!expanded) return;
   const debugState = buildClientDebugState();
   if (els.hudUser) els.hudUser.textContent = state.user ? (state.user.username || state.user.email || state.user.id) : "-";
   if (els.hudPlayer) els.hudPlayer.textContent = state.player ? ((state.player.displayName || state.player.id) + " · " + state.player.id.slice(0, 8)) : "-";
@@ -11014,13 +11139,23 @@ function activeGameWorldZoneId() {
 function maybeRefreshWorldForPositionZone(position) {
   const nextZoneId = String(position?.zoneId || "").trim();
   if (!nextZoneId) return;
+  if (state.portalTravel.active) {
+    state.portalTravel.targetZoneId = nextZoneId;
+    return;
+  }
   const currentZoneId = activeGameWorldZoneId();
   const node03ZoneId = String(state.node03.snapshot?.zoneId || "").trim();
   if ((!currentZoneId || currentZoneId === nextZoneId) && (!node03ZoneId || node03ZoneId === nextZoneId)) return;
   if (state.sync.zoneRefreshInFlight && state.sync.pendingZoneId === nextZoneId) return;
   state.sync.zoneRefreshInFlight = true;
   state.sync.pendingZoneId = nextZoneId;
-  window.setTimeout(async function () {
+  state.sync.zoneRefreshTimerId = window.setTimeout(async function () {
+    state.sync.zoneRefreshTimerId = 0;
+    if (state.portalTravel.active) {
+      state.sync.pendingZoneId = null;
+      state.sync.zoneRefreshInFlight = false;
+      return;
+    }
     try {
       await loadSessionState({
         forceWorld: true,
@@ -11073,6 +11208,8 @@ function shouldApplyServerPosition(next) {
 }
 
 function applySnapshotToRuntime(snapshot, options = {}) {
+  const snapshotTransport = options.transport || "snapshot";
+  const incomingPosition = normalizeIncomingServerPosition(snapshot?.position || snapshot?.spawn || state.position, snapshotTransport);
   primeHttpSnapshotState(snapshot);
   if (state.gameWorld) {
     const runtime = ensureRuntime(state.gameWorld);
@@ -11080,17 +11217,19 @@ function applySnapshotToRuntime(snapshot, options = {}) {
     const nextWorldKey = snapshotWorldKey(snapshot);
     if (!state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey || options.forceWorld === true) {
       clearRemotePlayers("world-reset");
-      runtime.setWorld(state.gameWorld);
+      runtime.setWorld(state.gameWorld, {
+        playerState: incomingPosition,
+        progressiveChunkBootstrap: incomingPosition?.teleport === true
+      });
       state.runtimeWorldKey = nextWorldKey;
     }
     syncLocalPlayerNameplate();
     syncRuntimeTargets();
   }
   state.mmoReady.runtimeReady = Boolean(state.runtime);
-  const incomingPosition = normalizeIncomingServerPosition(snapshot.position || snapshot.spawn || state.position, "snapshot");
   if (incomingPosition) {
     applyAuthoritativeUpdate(incomingPosition, {
-      transport: "snapshot",
+      transport: snapshotTransport,
       keepPrediction: options.keepPrediction === true
     });
   }
@@ -11669,7 +11808,7 @@ function applyInstantTravelResponse(response) {
       position: nextPosition,
       worldPublishedAt: response.gameWorld.publishedAt || state.lastPublishedAt || state.publishedAt,
       publishedAt: response.gameWorld.publishedAt || state.publishedAt
-    }, { forceWorld: true, keepPrediction: false });
+    }, { forceWorld: true, keepPrediction: false, transport: "http-zone-link" });
   } else {
     applyAuthoritativeUpdate(nextPosition, { transport: "http-zone-link", keepPrediction: false });
   }
@@ -11903,6 +12042,8 @@ function clearMovementInput(reason, options = {}) {
   if (options.resetSprint) state.input.sprint = false;
   state.net.localControllerActive = false;
   state.control.passiveSince = 0;
+  state.control.collisionBlockedSince = 0;
+  state.control.collisionStopSent = false;
   clearPointerTarget(false);
   setMovementAnimationState("idle");
   if (sendFinalIntent) {
@@ -11918,7 +12059,11 @@ function stepMovement(now) {
     return;
   }
   if (!state.lastFrameAt) state.lastFrameAt = now;
-  const dt = clamp((now - state.lastFrameAt) / 1000, 0, 0.05);
+  // On a slow laptop a 50 ms cap made local prediction run at half speed (or
+  // worse), while the authoritative server continued in real time. Allow a
+  // larger, still bounded catch-up step; resolveMovement performs collision
+  // substeps internally.
+  const dt = clamp((now - state.lastFrameAt) / 1000, 0, MAX_MOVEMENT_FRAME_DELTA_SECONDS);
   state.lastFrameAt = now;
   const netSettings = mmoNetworkSettings();
 
@@ -11988,6 +12133,13 @@ function stepMovement(now) {
     rotationY: Math.atan2(nx, nz) * 180 / Math.PI
   };
   const movedDistance = Math.hypot(nextPosition.x - state.predictedPosition.x, nextPosition.z - state.predictedPosition.z);
+  const collisionBlocked = resolved.collided === true && movedDistance <= CLICK_MOVE_BLOCKED_RADIUS;
+  if (collisionBlocked) {
+    state.control.collisionBlockedSince = state.control.collisionBlockedSince || now;
+  } else {
+    state.control.collisionBlockedSince = 0;
+    state.control.collisionStopSent = false;
+  }
   if (state.pointer.active && state.pointer.mode === "click_to_move" && state.pointer.target) {
     const remainingDistance = Math.hypot(state.pointer.target.x - nextPosition.x, state.pointer.target.z - nextPosition.z);
     const previousRemainingDistance = Number.isFinite(Number(state.pointer.lastDistanceToTarget))
@@ -12010,7 +12162,7 @@ function stepMovement(now) {
     state.predictedPosition = clonePosition(nextPosition);
   }
   scheduleMinimapFogDiscovery("movement");
-  setMovementAnimationState(state.input.sprint ? "run" : "walk");
+  setMovementAnimationState(collisionBlocked ? "idle" : (state.input.sprint ? "run" : "walk"));
   if (netSettings.predictionEnabled !== false) {
     applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
   }
@@ -12018,10 +12170,19 @@ function stepMovement(now) {
     state.minimapHud.dirty = true;
     drawGameMinimapIfDue(now);
   }
-  refreshNode03ClientRanges(now);
-  refreshNode04ClientRanges(now);
-  refreshNode05ClientRanges(now);
-  if (now - state.lastSendAt >= netSettings.moveSendIntervalMs) {
+  refreshGameplayClientRanges(now);
+  // A held keyboard direction against a local solid must never keep the server
+  // walking through that object. Send one authoritative stop at the visible
+  // position and suppress repeated move packets until movement is possible
+  // again. Input itself stays held, so changing direction resumes normally.
+  if (
+    collisionBlocked
+    && !state.control.collisionStopSent
+    && now - state.control.collisionBlockedSince >= LOCAL_COLLISION_STOP_DELAY_MS
+  ) {
+    state.control.collisionStopSent = true;
+    sendInputState({ force: true, stop: true, reason: "local-collision-blocked" });
+  } else if (!collisionBlocked && now - state.lastSendAt >= netSettings.moveSendIntervalMs) {
     sendInputState({ force: true });
   }
   } finally {

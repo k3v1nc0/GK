@@ -79,6 +79,10 @@ function positionDistance(position, target) {
   return Math.hypot(safeNumber(position.x, 0) - safeNumber(target.x, 0), safeNumber(position.z, 0) - safeNumber(target.z, 0));
 }
 
+function questTargetWorldName(target, fallback = "Quest Target") {
+  return safeString(target?.linkedEntity?.label || target?.label, safeString(fallback, "Quest Target"));
+}
+
 function xpForLevel(catalogs, curveRef, level) {
   const targetLevel = Math.max(1, safeInteger(level, 1));
   if (targetLevel <= 1) return 0;
@@ -1066,7 +1070,7 @@ export class Node04QuestRuntimeService {
           action: "node04:start_dialogue",
           questId: quest.id,
           dialogueId: dialogue?.id || null,
-          displayName: target.label || quest.displayName,
+          displayName: questTargetWorldName(target, quest.displayName),
           prompt: "Talk",
           status: "quest available"
         }));
@@ -1113,7 +1117,7 @@ export class Node04QuestRuntimeService {
       instanceId: "node04:" + trackedQuest.questId + ":" + step.stepId,
       action,
       questId: trackedQuest.questId,
-      displayName: target.label || step.displayName || trackedQuest.displayName,
+      displayName: questTargetWorldName(target, step.displayName || trackedQuest.displayName),
       prompt,
       status: step.displayName || "quest target"
     });
@@ -1195,20 +1199,21 @@ export class Node04QuestRuntimeService {
     const range = position.component
       ? Math.max(0.1, safeNumber(position.component.range, 4))
       : Math.max(3, safeNumber(link.preloadDistance, 30));
+    const radius = Math.max(0, safeNumber(position.radius, 0));
     return {
       instanceId: link.linkId,
       entityKind: "quest",
       targetKind: "quest",
       action: "travel",
       questId: null,
-      displayName: "Travel: " + (targetZone?.zone?.displayName || link.toZoneRef),
+      displayName: position.label || ("Travel: " + (targetZone?.zone?.displayName || link.toZoneRef)),
       prompt: link.prompt || "Travel",
       status: "quest route",
       available: true,
       distance: distance === null ? null : round(distance),
       range,
-      radius: 2.5,
-      inRange: link.interactionRequired === false || distance === null || distance <= range,
+      radius,
+      inRange: link.interactionRequired === false || distance === null || distance <= range + radius,
       visualEntityId: position.visualEntityId || null,
       renderBody: position.visualEntityId ? false : undefined,
       x: position.x,
@@ -1232,7 +1237,7 @@ export class Node04QuestRuntimeService {
       entityKind: "quest",
       targetKind: "quest",
       action: "node04:move_marker",
-      displayName: target.label || target.targetId,
+      displayName: questTargetWorldName(target, target.targetId),
       prompt: target.prompt || "Quest",
       status: "quest target",
       available: true,
@@ -1261,7 +1266,7 @@ export class Node04QuestRuntimeService {
         instanceId: "node04:" + target.targetId + ":dialogue",
         action: "node04:start_dialogue",
         dialogueId: dialogue.id,
-        displayName: target.label || dialogue.displayName || dialogue.id,
+        displayName: questTargetWorldName(target, dialogue.displayName || dialogue.id),
         prompt: "Talk",
         status: "dialogue"
       });

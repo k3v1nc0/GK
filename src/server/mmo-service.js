@@ -455,6 +455,33 @@ function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
   return worldContext.crossZoneWalkabilityIndex;
 }
 
+// Keep the authoritative simulation on the same collision set as the browser.
+// Static model entities are registered as circular `activeSolids` by the world
+// runtime, but the server previously passed no solids to resolveMovement. That
+// let the server walk straight through tents, signs and other solid props while
+// the local player remained blocked against them. On key-up the next snapshot
+// could consequently move the player hundreds of units away.
+export function solidCollisionEntriesForWorld(world) {
+  const entries = [];
+  for (const entity of Array.isArray(world?.entities) ? world.entities : []) {
+    if (!entity || entity.solid !== true || entity.walkable === true) continue;
+    const position = entity.transform?.position || {};
+    const x = Number(position.x);
+    const z = Number(position.z);
+    const radius = Number(entity.collisionRadius);
+    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius <= 0) continue;
+    entries.push({
+      id: String(entity.id || entity.entityId || entity.nodeId || "entity") + "::solid",
+      entityId: entity.id || entity.entityId || entity.nodeId || null,
+      x: x,
+      z: z,
+      radius: radius,
+      enabled: true
+    });
+  }
+  return entries;
+}
+
 function defaultSpawnForZone(zonePackage) {
   const spawns = Array.isArray(zonePackage?.spawns) ? zonePackage.spawns : [];
   return spawns.find(function (spawn) { return spawn && spawn.role === "zone_default"; }) || spawns[0] || null;
@@ -864,9 +891,23 @@ export class MmoService {
     }
     const worldId = worldIdFor(world);
     const walkabilityIndex = buildWalkabilityIndex(world);
-    this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, walkabilityIndex: walkabilityIndex };
+    const solidColliders = solidCollisionEntriesForWorld(world);
+    this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, walkabilityIndex: walkabilityIndex, solidColliders: solidColliders };
     this.lastWorldBuildAt = nowMs();
     return this.worldCache;
+  }
+
+  setWorldEntityColliderEnabled(entityId, enabled) {
+    const id = String(entityId || "").trim();
+    if (!id || !this.worldCache || !Array.isArray(this.worldCache.solidColliders)) return 0;
+    let changed = 0;
+    for (const collider of this.worldCache.solidColliders) {
+      if (String(collider?.entityId || "") !== id) continue;
+      const nextEnabled = enabled !== false;
+      if (collider.enabled !== nextEnabled) changed += 1;
+      collider.enabled = nextEnabled;
+    }
+    return changed;
   }
 
   buildGameWorldResponse() {
@@ -2136,7 +2177,8 @@ export class MmoService {
     const resolved = moving
       ? resolveMovement(currentPosition, desired, {
         radius: radius,
-        index: movementIndex
+        index: movementIndex,
+        solids: Array.isArray(worldContext?.solidColliders) ? worldContext.solidColliders : []
       })
       : currentPosition;
     const deltaX = resolved.x - currentPosition.x;

@@ -461,6 +461,65 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   color: #c8d7e6;
 }
 .authoring04ReadOnlyRow span:first-child { color: #8fa3b6; }
+.objectWorkbenchSummary { border-color: #3c6680; }
+.workbenchStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 7px;
+}
+.workbenchStatus {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid #2a3948;
+  border-radius: 8px;
+  background: #0d161f;
+  font-size: 11px;
+  color: #8fa3b6;
+}
+.workbenchStatus strong { color: #e8f2f8; font-size: 12px; overflow-wrap: anywhere; }
+.workbenchStatus--ok { border-color: #275844; }
+.workbenchStatus--warning { border-color: #76552b; background: #211a10; }
+.buildOverview {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+.buildOverviewWarnings {
+  padding: 9px 10px;
+  border: 1px solid #75502c;
+  border-radius: 8px;
+  background: #211810;
+  color: #ffd69b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.buildOverviewWarnings--ok { border-color: #285842; background: #0e1e18; color: #bdebd5; }
+.buildOverviewCards,
+.buildOverviewResults { display: grid; gap: 8px; }
+.buildOverviewCard {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid #2c4051;
+  border-radius: 10px;
+  background: #101922;
+}
+.buildOverviewCardTitle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  color: #eef7fb;
+  font-size: 14px;
+  font-weight: 900;
+}
+.buildOverviewCardTitle .authoringCountBadge { flex: 0 0 auto; margin-top: 0; }
+.buildOverviewCardSummary { color: #9fb1c3; font-size: 12px; line-height: 1.45; }
+.buildOverviewPlaced { display: flex; flex-wrap: wrap; gap: 6px; }
+.buildOverviewPlaced .mini { max-width: 100%; white-space: normal; text-align: left; }
+.authoringShowNodesLabel { color: #7bd4ff; font-weight: 800; }
+.relationObjectBacklinks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .referenceListPicker,
 .tagQueryEditor,
 .formulaEditor {
@@ -1202,6 +1261,9 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .edgeLayer { position: absolute; top: 0; left: 0; width: 6000px; height: 4000px; pointer-events: none; overflow: visible; }
 .edgeLayer path { stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
 .edgeLayer path.typed { stroke-width: 2.4; }
+.edgeLayer path.edgeSemantic--reference { stroke-dasharray: 7 5; }
+.edgeLayer path.edgeSemantic--package { stroke-width: 3.2; stroke-dasharray: 14 5; }
+.edgeLayer path.edgeSemantic--output { stroke-width: 3.4; }
 .edgeLayer path.edgeGlow {
   stroke: rgba(255, 255, 255, 0.92);
   stroke-width: 9;
