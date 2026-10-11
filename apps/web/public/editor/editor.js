@@ -55,6 +55,48 @@ const ZONE_CANVAS_PORT_ALIASES = new Set(["zonePackage", "zonepackage", "zonePkg
 const ZONE_CANVAS_ROOT_NODE_TYPES = new Set(["ambient_light", "directional_light"]);
 const ZONE_CANVAS_NODE_STEP_X = 340;
 const ZONE_CANVAS_NODE_STEP_Y = 230;
+const PROJECT_ENVIRONMENT_PRESETS = Object.freeze({
+  neutral: Object.freeze({
+    label: "Neutraal daglicht",
+    summary: "Helder neutraal daglicht, lichte mist en een natuurlijk groen grondvlak.",
+    environment: Object.freeze({ backgroundColor: "#b8d9e6", fogColor: "#c9dde3", fogDensity: 0.0015, smoothShading: true, timeOfDayOffset: 0, shadowPresetOverride: "middel" }),
+    ground: Object.freeze({ materialColor: "#7fa86f" }),
+    ambient: Object.freeze({ color: "#ffffff", intensity: 1.1 }),
+    directional: Object.freeze({ color: "#fff4d8", intensity: 2.4, x: 80, y: 120, z: 60 })
+  }),
+  bright: Object.freeze({
+    label: "Helder daglicht",
+    summary: "Hoge middagzon, heldere lucht, vrijwel geen mist en een licht grondvlak.",
+    environment: Object.freeze({ backgroundColor: "#d2ecfa", fogColor: "#e2f0f5", fogDensity: 0, smoothShading: true, timeOfDayOffset: 0, shadowPresetOverride: "licht" }),
+    ground: Object.freeze({ materialColor: "#9dbc83" }),
+    ambient: Object.freeze({ color: "#ffffff", intensity: 1.35 }),
+    directional: Object.freeze({ color: "#fff8e8", intensity: 3, x: 70, y: 140, z: 50 })
+  }),
+  subdued: Object.freeze({
+    label: "Gedempt daglicht",
+    summary: "Koel bewolkt daglicht met zachte mist, zonder dat grond of speler zwart wegvallen.",
+    environment: Object.freeze({ backgroundColor: "#8395a3", fogColor: "#97a6ae", fogDensity: 0.004, smoothShading: true, timeOfDayOffset: 0, shadowPresetOverride: "middel" }),
+    ground: Object.freeze({ materialColor: "#73826c" }),
+    ambient: Object.freeze({ color: "#e8f0ff", intensity: 0.9 }),
+    directional: Object.freeze({ color: "#fff0d2", intensity: 1.9, x: 60, y: 100, z: 75 })
+  })
+});
+const PROJECT_CAMERA_PRESETS = Object.freeze({
+  standard: Object.freeze({ label: "Top-down standaard", summary: "55 graden, startzoom 24, zoombereik 10–48.", values: Object.freeze({ pitch: 55, yaw: 0, startDistance: 24, distance: 24, minDistance: 10, maxDistance: 48, fov: 50, targetHeightOffset: 1.6, follow: true, rotateSpeed: 90 }) }),
+  close: Object.freeze({ label: "Top-down dichtbij", summary: "60 graden, startzoom 16, zoombereik 7–34.", values: Object.freeze({ pitch: 60, yaw: 0, startDistance: 16, distance: 16, minDistance: 7, maxDistance: 34, fov: 50, targetHeightOffset: 1.6, follow: true, rotateSpeed: 90 }) }),
+  wide: Object.freeze({ label: "Top-down ruim", summary: "50 graden, startzoom 32, zoombereik 14–64.", values: Object.freeze({ pitch: 50, yaw: 0, startDistance: 32, distance: 32, minDistance: 14, maxDistance: 64, fov: 50, targetHeightOffset: 1.6, follow: true, rotateSpeed: 90 }) })
+});
+const PROJECT_CONTROL_PRESETS = Object.freeze({
+  wasd: Object.freeze({ label: "WASD standaard", summary: "WASD bewegen, Shift sprinten en E interacteren." })
+});
+const PROJECT_DEFAULT_KEYBINDS = Object.freeze([
+  Object.freeze({ action: "move_forward", label: "Vooruit", keyCode: "KeyW" }),
+  Object.freeze({ action: "move_back", label: "Achteruit", keyCode: "KeyS" }),
+  Object.freeze({ action: "move_left", label: "Links", keyCode: "KeyA" }),
+  Object.freeze({ action: "move_right", label: "Rechts", keyCode: "KeyD" }),
+  Object.freeze({ action: "sprint", label: "Sprint", keyCode: "ShiftLeft" }),
+  Object.freeze({ action: "interact", label: "Interactie", keyCode: "KeyE" })
+]);
 const ZONE_CANVAS_DIRECTIONS = {
   top: { label: "Boven", dx: 0, dz: -1, graphX: 0, graphY: -1 },
   right: { label: "Rechts", dx: 1, dz: 0, graphX: 1, graphY: 0 },
@@ -154,6 +196,7 @@ const state = {
   authoringOverviewActive: true,
   nodeLibraryOpen: false,
   nodeLibraryAdvanced: false,
+  projectFoundationWizard: null,
   zoneCanvasDraft: null,
   catalogHubType: "item_definition",
   catalogHubSelectedNodeId: null,
@@ -11357,6 +11400,7 @@ const AUTHORING04_GROUP_OUTPUT_PORTS = {
 };
 
 const CATALOG_HUB_TYPES = [
+  { type: "playable_character_definition", label: "Speler" },
   { type: "npc_archetype", label: "NPCs" },
   { type: "enemy_archetype", label: "Enemies" },
   { type: "resource_definition", label: "Resources" },
@@ -11572,28 +11616,279 @@ function rewriteGroupPackageEdgesToPort(graph, group, dataType, portName) {
   return changed;
 }
 
+function schemaPortForNode(node, direction, dataType, preferredName = "") {
+  if (!node) return null;
+  const wantedDirection = direction === "input" ? "inputs" : "outputs";
+  let entries = [];
+  if (node.type === "group") {
+    const ports = Array.isArray(node.values?.groupInterface?.[wantedDirection]) ? node.values.groupInterface[wantedDirection] : [];
+    entries = ports.map(function (port) {
+      return { name: String(port?.name || port?.id || ""), port };
+    });
+  } else {
+    entries = Object.entries(state.nodeTypes?.[node.type]?.[wantedDirection] || {}).map(function ([name, port]) {
+      return { name, port };
+    });
+  }
+  const preferred = String(preferredName || "").trim();
+  const match = entries.find(function (entry) {
+    return entry.name === preferred && String(entry.port?.dataType || "") === dataType;
+  }) || entries.find(function (entry) {
+    return String(entry.port?.dataType || "") === dataType;
+  }) || null;
+  return match && match.name ? match : null;
+}
+
+function ensureTypedGraphEdge(graph, fromNode, toNode, dataType, options = {}) {
+  const from = schemaPortForNode(fromNode, "output", dataType, options.fromPort);
+  const to = schemaPortForNode(toNode, "input", dataType, options.toPort);
+  if (!from || !to) {
+    throw new Error("Projectbasis kan " + dataType + " niet koppelen: het actuele nodeschema mist een passende poort.");
+  }
+  const existing = (graph.edges || []).find(function (edge) {
+    return edge.fromNodeId === fromNode.id
+      && edge.fromPort === from.name
+      && edge.toNodeId === toNode.id
+      && edge.toPort === to.name;
+  }) || null;
+  return existing || pushEdgeIfMissing(graph, fromNode.id, from.name, toNode.id, to.name);
+}
+
+function hasTypedGraphEdge(graph, fromNode, toNode, dataType) {
+  if (!fromNode || !toNode) return false;
+  const from = schemaPortForNode(fromNode, "output", dataType);
+  const to = schemaPortForNode(toNode, "input", dataType);
+  if (!from || !to) return false;
+  return (graph.edges || []).some(function (edge) {
+    return edge.fromNodeId === fromNode.id && edge.fromPort === from.name && edge.toNodeId === toNode.id && edge.toPort === to.name;
+  });
+}
+
+function hasTypedGraphInput(graph, toNode, dataType) {
+  if (!toNode) return false;
+  const to = schemaPortForNode(toNode, "input", dataType);
+  if (!to) return false;
+  return (graph.edges || []).some(function (edge) {
+    if (edge.toNodeId !== toNode.id || edge.toPort !== to.name) return false;
+    const source = graphNodeByIdInGraph(graph, edge.fromNodeId);
+    const from = schemaPortForNode(source, "output", dataType, edge.fromPort);
+    return Boolean(from && from.name === edge.fromPort);
+  });
+}
+
+function hasTypedGraphOutput(graph, fromNode, dataType) {
+  if (!fromNode) return false;
+  const from = schemaPortForNode(fromNode, "output", dataType);
+  if (!from) return false;
+  return (graph.edges || []).some(function (edge) {
+    if (edge.fromNodeId !== fromNode.id || edge.fromPort !== from.name) return false;
+    const target = graphNodeByIdInGraph(graph, edge.toNodeId);
+    const to = schemaPortForNode(target, "input", dataType, edge.toPort);
+    return Boolean(to && to.name === edge.toPort);
+  });
+}
+
+function firstRootGroupOfKind(graph, kind) {
+  const wanted = normalizeEditorKey(kind);
+  return (graph.nodes || []).find(function (node) {
+    return node.type === "group" && (node.parentId || null) === null && normalizeEditorKey(node.values?.groupKind) === wanted;
+  }) || null;
+}
+
+function ensureFoundationRootNode(graph, type, title, x, y, valuePatch = {}) {
+  let node = firstRootNodeOfType(graph, type);
+  let created = false;
+  if (!node) {
+    node = (graph.nodes || []).find(function (candidate) { return candidate.type === type; }) || null;
+    if (node) node.parentId = null;
+  }
+  if (!node) {
+    node = {
+      id: createZoneGraphId("node_" + type),
+      type,
+      title,
+      x,
+      y,
+      parentId: null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType(type), valuePatch)
+    };
+    graph.nodes.push(node);
+    created = true;
+  }
+  return { node, created };
+}
+
+function ensureFoundationGroup(graph, kind, title, x, y) {
+  let group = firstRootGroupOfKind(graph, kind);
+  let created = false;
+  if (!group) {
+    group = {
+      id: createZoneGraphId("node_group"),
+      type: "group",
+      title,
+      x,
+      y,
+      parentId: null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("group"), {
+        groupId: uniqueCanonicalGraphValue(graph, slugifyGroupPortName(title, kind) || kind),
+        title,
+        groupKind: kind
+      })
+    };
+    graph.nodes.push(group);
+    created = true;
+  }
+  return { group, created };
+}
+
+function ensureCampaignRootPlumbing(graph, group, position = {}) {
+  const assembly = firstRootNodeOfType(graph, "world_assembly");
+  if (!assembly) throw new Error("Projectbasis ontbreekt: maak of herstel eerst de World Assembly.");
+  const output = questTimelineEnsureCampaignOutput(graph, group);
+  const registryResult = ensureFoundationRootNode(
+    graph,
+    "campaign_registry",
+    "Campaign Registry",
+    Math.round(Number(position.x) || 1040),
+    Math.round(Number(position.y) || 40),
+    { registryId: uniqueCanonicalGraphValue(graph, "campaign_registry.main") }
+  );
+  const packagePortName = groupInterfaceOutputPortNameForDataType(group, "campaignPackage", QUEST_TIMELINE_CAMPAIGN_PACKAGE_PORT.name);
+  rewriteGroupPackageEdgesToPort(graph, group, "campaignPackage", packagePortName);
+  ensureTypedGraphEdge(graph, group, registryResult.node, "campaignPackage", { fromPort: packagePortName });
+  ensureTypedGraphEdge(graph, registryResult.node, assembly, "campaignRegistry");
+  return { output, registry: registryResult.node };
+}
+
+function ensureKeybindFoundationConnection(graph, keybind, assembly) {
+  const parent = keybind?.parentId ? graphNodeByIdInGraph(graph, keybind.parentId) : null;
+  if (!parent || parent.type !== "group") {
+    ensureTypedGraphEdge(graph, keybind, assembly, "keybind");
+    return;
+  }
+  const spec = { id: "output_keybinds", name: "keybinds_out", label: "Keybinds", dataType: "keybind", multiple: true };
+  const groupOutput = ensureGroupOutputPort(graph, parent, spec);
+  const portName = groupInterfaceOutputPortNameForDataType(parent, "keybind", spec.name);
+  if (!groupOutput || !portName) throw new Error("Keybind Group mist een geldige outputpoort.");
+  const keybindPort = schemaPortForNode(keybind, "output", "keybind");
+  if (!keybindPort) throw new Error("Het actuele nodeschema mist de Keybind-outputpoort.");
+  pushEdgeIfMissing(graph, keybind.id, keybindPort.name, groupOutput.id, portName);
+  ensureTypedGraphEdge(graph, parent, assembly, "keybind", { fromPort: portName });
+}
+
+function projectFoundationStatus(graph = state.graph) {
+  const nodes = graph.nodes || [];
+  const output = nodes.find(function (node) { return node.type === "game_output" && (node.parentId || null) === null; }) || null;
+  const assembly = firstRootNodeOfType(graph, "world_assembly");
+  const project = firstRootNodeOfType(graph, "game_project_settings");
+  const chunkGrid = firstRootNodeOfType(graph, "chunk_grid_definition");
+  const zoneRegistry = firstRootNodeOfType(graph, "zone_registry");
+  const catalogRegistry = firstRootNodeOfType(graph, "catalog_registry");
+  const campaignRegistry = firstRootNodeOfType(graph, "campaign_registry");
+  const catalogGroup = firstRootGroupOfKind(graph, "catalog");
+  const campaignGroup = firstRootGroupOfKind(graph, "campaign");
+  const playerRulesGroup = firstRootGroupOfKind(graph, "player_rules");
+  const uiGroup = firstRootGroupOfKind(graph, "ui");
+  const rootZoneGroups = zoneCanvasGroupsForParent(null, graph);
+  const startZoneRef = normalizeCanonicalId(project?.values?.startZoneRef, "");
+  const zoneGroup = rootZoneGroups.find(function (group) {
+    return normalizeCanonicalId(zoneDefinitionForGroup(group.id, graph)?.values?.zoneId, "") === startZoneRef;
+  }) || rootZoneGroups[0] || null;
+  const zoneOutput = zoneGroup ? zoneOutputForGroup(zoneGroup.id, graph) : null;
+  const zone = zoneGroup ? zoneDefinitionForGroup(zoneGroup.id, graph) : null;
+  const zoneChildren = zoneGroup ? nodes.filter(function (node) { return node.parentId === zoneGroup.id; }) : [];
+  const spawn = zoneChildren.find(function (node) { return node.type === "spawn_point"; }) || null;
+  const environment = zoneChildren.find(function (node) { return node.type === "zone_environment_settings"; }) || null;
+  const rules = zoneChildren.find(function (node) { return node.type === "zone_gameplay_rules"; }) || null;
+  const ground = zoneChildren.find(function (node) { return node.type === "ground_surface"; }) || null;
+  const player = zoneChildren.find(function (node) { return node.type === "player_character"; }) || null;
+  const camera = zoneChildren.find(function (node) { return node.type === "game_camera"; }) || null;
+  const playable = nodes.find(function (node) {
+    return node.type === "playable_character_definition" && normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(player?.values?.playableCharacterRef, "");
+  }) || null;
+  const keybinds = nodes.filter(function (node) { return node.type === "keybind"; });
+  const ambient = nodes.find(function (node) { return node.type === "ambient_light" && (node.parentId || null) === null; }) || null;
+  const directional = nodes.find(function (node) { return node.type === "directional_light" && (node.parentId || null) === null; }) || null;
+  const actions = new Set(keybinds.map(function (node) { return String(node.values?.action || ""); }));
+  const missing = [];
+  function need(condition, label) { if (!condition) missing.push(label); }
+  need(output, "Game Output");
+  need(assembly, "World Assembly");
+  need(project, "projectinstellingen");
+  need(chunkGrid, "chunk-grid");
+  need(output && assembly && hasTypedGraphEdge(graph, assembly, output, "gameProject"), "publishverbinding");
+  need(project && assembly && hasTypedGraphEdge(graph, project, assembly, "projectSettings"), "projectkoppeling");
+  need(chunkGrid && assembly && hasTypedGraphEdge(graph, chunkGrid, assembly, "chunkGrid"), "chunk-gridkoppeling");
+  need(zoneRegistry && assembly && hasTypedGraphEdge(graph, zoneRegistry, assembly, "zoneRegistry"), "zone-rootplumbing");
+  need(catalogRegistry && assembly && hasTypedGraphEdge(graph, catalogRegistry, assembly, "catalogRegistry"), "catalog-rootplumbing");
+  need(campaignRegistry && assembly && hasTypedGraphEdge(graph, campaignRegistry, assembly, "campaignRegistry"), "campaign-rootplumbing");
+  need(catalogGroup, "Catalog Group");
+  need(campaignGroup, "Campaign Group");
+  need(zoneGroup && zoneRegistry && hasTypedGraphEdge(graph, zoneGroup, zoneRegistry, "zonePackage"), "zonepackage-koppeling");
+  need(catalogGroup && catalogRegistry && hasTypedGraphInput(graph, catalogRegistry, "catalogPackage"), "catalogpackage-koppeling");
+  need(campaignGroup && campaignRegistry && hasTypedGraphInput(graph, campaignRegistry, "campaignPackage"), "campaignpackage-koppeling");
+  need(playerRulesGroup && assembly && hasTypedGraphInput(graph, assembly, "playerRules"), "Player Rules-rootplumbing");
+  need(uiGroup && assembly && hasTypedGraphInput(graph, assembly, "uiPackage"), "UI-rootplumbing");
+  need(zoneGroup && zone && environment && rules && ground && spawn && zoneOutput, "complete eerste zone");
+  need(player && player.values?.modelAssetId, "speler met model");
+  need(playable && hasTypedGraphOutput(graph, playable, "catalogDefinition"), "gepubliceerde spelerdefinitie");
+  need(camera && zoneOutput && hasTypedGraphEdge(graph, camera, zoneOutput, "camera"), "gamecamera");
+  need(player && zoneOutput && hasTypedGraphEdge(graph, player, zoneOutput, "player"), "spelerkoppeling");
+  need(ambient && directional && assembly && hasTypedGraphEdge(graph, ambient, assembly, "light") && hasTypedGraphEdge(graph, directional, assembly, "light"), "basislicht");
+  need(PROJECT_DEFAULT_KEYBINDS.every(function (binding) { return actions.has(binding.action); }), "WASD-, sprint- en interactiebesturing");
+  need(assembly && (graph.edges || []).some(function (edge) { return edge.toNodeId === assembly.id && schemaPortForNode(assembly, "input", "keybind")?.name === edge.toPort; }), "besturingskoppeling");
+  need(project && zone && spawn
+    && normalizeCanonicalId(project.values?.startZoneRef, "") === normalizeCanonicalId(zone.values?.zoneId, "")
+    && normalizeCanonicalId(project.values?.startSpawnRef, "") === normalizeCanonicalId(spawn.values?.spawnId, ""), "startzone en startspawn");
+  const contentNodes = nodes.filter(function (node) { return node.type !== "game_output"; });
+  return {
+    complete: missing.length === 0,
+    fresh: Boolean(output) && contentNodes.length === 0,
+    missing,
+    output,
+    assembly,
+    project,
+    chunkGrid,
+    zoneRegistry,
+    catalogRegistry,
+    campaignRegistry,
+    catalogGroup,
+    campaignGroup,
+    playerRulesGroup,
+    uiGroup,
+    zoneGroup,
+    zone,
+    zoneOutput,
+    spawn,
+    environment,
+    ground,
+    player,
+    playable,
+    camera,
+    keybinds
+  };
+}
+
 function ensureRootWorldAssemblyLink(graph, fromNodeId, fromPort, toPort) {
   const assembly = firstRootNodeOfType(graph, "world_assembly");
-  if (!assembly) return false;
-  return Boolean(pushEdgeIfMissing(graph, fromNodeId, fromPort, assembly.id, toPort));
+  if (!assembly) throw new Error("Projectbasis ontbreekt: maak of herstel eerst de World Assembly.");
+  const source = graphNodeByIdInGraph(graph, fromNodeId);
+  const sourcePort = source ? schemaPortForNode(source, "output", String(state.nodeTypes?.world_assembly?.inputs?.[toPort]?.dataType || ""), fromPort) : null;
+  const targetPort = state.nodeTypes?.world_assembly?.inputs?.[toPort] || null;
+  const dataType = String(sourcePort?.port?.dataType || targetPort?.dataType || "");
+  if (!source || !dataType) throw new Error("Projectbasis kan de rootpackage niet uit het actuele nodeschema afleiden.");
+  return Boolean(ensureTypedGraphEdge(graph, source, assembly, dataType, { fromPort, toPort }));
 }
 
 function ensureCatalogRootPlumbing(graph, group, position, packagePortName) {
-  let registry = firstRootNodeOfType(graph, "catalog_registry");
-  if (!registry) {
-    registry = {
-      id: createZoneGraphId("node_catalog_registry"),
-      type: "catalog_registry",
-      title: "Catalog Registry",
-      x: Math.round(Number(position?.x) || Number(group?.x) || 0) + 620,
-      y: Math.round(Number(position?.y) || Number(group?.y) || 0),
-      parentId: null,
-      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("catalog_registry"), {
-        registryId: uniqueCanonicalGraphValue(graph, "catalog_registry.main")
-      })
-    };
-    graph.nodes.push(registry);
-  }
+  const registry = ensureFoundationRootNode(
+    graph,
+    "catalog_registry",
+    "Catalog Registry",
+    Math.round(Number(position?.x) || Number(group?.x) || 0) + 620,
+    Math.round(Number(position?.y) || Number(group?.y) || 0),
+    { registryId: uniqueCanonicalGraphValue(graph, "catalog_registry.main") }
+  ).node;
   const resolvedPackagePortName = packagePortName || groupInterfaceOutputPortNameForDataType(group, "catalogPackage", AUTHORING04_GROUP_OUTPUT_PORTS.catalog.name);
   if (group && resolvedPackagePortName) pushEdgeIfMissing(graph, group.id, resolvedPackagePortName, registry.id, "catalogPackage");
   ensureRootWorldAssemblyLink(graph, registry.id, "catalogRegistry", "catalogs");
@@ -11709,7 +12004,328 @@ function ensureManagedGroupPackage(graph, group) {
   return null;
 }
 
+function projectFoundationPresetKey(presets, values, valueKey) {
+  for (const [key, preset] of Object.entries(presets)) {
+    const expected = preset[valueKey] || preset.values || {};
+    if (Object.entries(expected).every(function ([field, value]) { return values?.[field] === value; })) return key;
+  }
+  return Object.keys(presets)[0] || "";
+}
+
+function projectFoundationDraftValues(status) {
+  const definitionOptions = (state.graph.nodes || []).filter(function (node) { return node.type === "playable_character_definition"; });
+  const selectedDefinition = status.playable || definitionOptions[0] || null;
+  const keybinds = {};
+  for (const binding of PROJECT_DEFAULT_KEYBINDS) {
+    const existing = status.keybinds.find(function (node) { return node.values?.action === binding.action; });
+    keybinds[binding.action] = String(existing?.values?.keyCode || binding.keyCode);
+  }
+  return {
+    projectName: String(status.project?.values?.gameName || "Mijn game"),
+    zoneName: String(status.zone?.values?.displayName || "Startzone"),
+    environmentPreset: projectFoundationPresetKey(PROJECT_ENVIRONMENT_PRESETS, status.environment?.values || {}, "environment"),
+    playerDefinitionRef: normalizeCanonicalId(selectedDefinition?.values?.characterId, ""),
+    playerAssetId: String(status.player?.values?.modelAssetId || selectedDefinition?.values?.modelAssetId || ""),
+    cameraPreset: projectFoundationPresetKey(PROJECT_CAMERA_PRESETS, status.camera?.values || {}, "values"),
+    controlPreset: "wasd",
+    keybinds
+  };
+}
+
+function beginProjectFoundationWizard(mode = "new") {
+  const status = projectFoundationStatus(state.graph);
+  state.projectFoundationWizard = {
+    mode: status.fresh ? "new" : (mode === "manage" && status.complete ? "manage" : "repair"),
+    step: 1,
+    values: projectFoundationDraftValues(status)
+  };
+  state.authoringRouteId = null;
+  state.authoringOverviewActive = true;
+  state.authoringMenuOpen = false;
+  storeAuthoringRoute(null);
+  renderAuthoringHub();
+}
+
+function cancelProjectFoundationWizard() {
+  state.projectFoundationWizard = null;
+  renderAuthoringHub();
+}
+
+function ensureProjectFoundationOrRedirect(actionLabel) {
+  const status = projectFoundationStatus(state.graph);
+  if (status.complete) return true;
+  beginProjectFoundationWizard(status.fresh ? "new" : "repair");
+  setStatus((actionLabel || "Deze route") + " heeft eerst een complete Projectbasis nodig.", "error");
+  return false;
+}
+
+function ensureProjectFoundationGraph(graph, values, options = {}) {
+  const updateExisting = options.mode === "manage";
+  const environmentPreset = PROJECT_ENVIRONMENT_PRESETS[values.environmentPreset] || PROJECT_ENVIRONMENT_PRESETS.neutral;
+  const cameraPreset = PROJECT_CAMERA_PRESETS[values.cameraPreset] || PROJECT_CAMERA_PRESETS.standard;
+  const outputResult = ensureFoundationRootNode(graph, "game_output", "Game Output", 1480, 80, { publishTarget: "runtime_world" });
+  const assemblyResult = ensureFoundationRootNode(graph, "world_assembly", "World Assembly", 1160, 80, {
+    assemblyId: uniqueCanonicalGraphValue(graph, "world_assembly.main")
+  });
+  const projectResult = ensureFoundationRootNode(graph, "game_project_settings", "Game Project Settings", 80, 40, {
+    projectId: uniqueCanonicalGraphValue(graph, "game.project"),
+    gameName: values.projectName
+  });
+  const chunkResult = ensureFoundationRootNode(graph, "chunk_grid_definition", "Chunk Grid Definition", 80, 240, {
+    gridId: uniqueCanonicalGraphValue(graph, "chunk_grid.main")
+  });
+  if (updateExisting || projectResult.created) {
+    projectResult.node.values = Object.assign({}, projectResult.node.values || {}, { gameName: values.projectName });
+  }
+  ensureTypedGraphEdge(graph, projectResult.node, assemblyResult.node, "projectSettings");
+  ensureTypedGraphEdge(graph, chunkResult.node, assemblyResult.node, "chunkGrid");
+  ensureTypedGraphEdge(graph, assemblyResult.node, outputResult.node, "gameProject");
+
+  const catalogFoundation = ensureFoundationGroup(graph, "catalog", "Catalog", 80, 520);
+  const playerRulesFoundation = ensureFoundationGroup(graph, "player_rules", "Player Rules", 420, 520);
+  const uiFoundation = ensureFoundationGroup(graph, "ui", "UI", 760, 520);
+  const campaignFoundation = ensureFoundationGroup(graph, "campaign", "Campaigns", 1100, 520);
+  const catalogOutput = ensureCatalogGroupPackage(graph, catalogFoundation.group);
+  const legacyPlayerRulesOutput = firstRootNodeOfType(graph, "player_rules_output");
+  const legacyUiOutput = firstRootNodeOfType(graph, "ui_output");
+  if (!legacyPlayerRulesOutput || !hasTypedGraphEdge(graph, legacyPlayerRulesOutput, assemblyResult.node, "playerRules")) {
+    ensurePlayerRulesGroupPackage(graph, playerRulesFoundation.group);
+  }
+  if (!legacyUiOutput || !hasTypedGraphEdge(graph, legacyUiOutput, assemblyResult.node, "uiPackage")) {
+    ensureUiGroupPackage(graph, uiFoundation.group);
+  }
+  ensureCampaignRootPlumbing(graph, campaignFoundation.group, { x: 1040, y: 280 });
+
+  let zoneGroup = zoneCanvasGroupsForParent(null, graph)[0] || null;
+  let zoneCreated = false;
+  let basis;
+  if (!zoneGroup) {
+    const result = appendZoneCanvasGroup(graph, {
+      parentId: null,
+      grid: { x: 0, z: 0 },
+      position: { x: 420, y: 80 },
+      isRoot: true
+    });
+    zoneGroup = result.group;
+    basis = result.basis;
+    zoneCreated = true;
+  } else {
+    basis = ensureZoneCanvasBasis(graph, zoneGroup, {
+      root: zoneCanvasRootGroupForGroup(zoneGroup, graph) || zoneGroup,
+      isRoot: isZoneCanvasRootGroup(zoneGroup, graph)
+    });
+  }
+  const zoneNode = basis.nodes.zone;
+  if (updateExisting || zoneCreated) {
+    zoneGroup.title = values.zoneName;
+    zoneGroup.values = Object.assign({}, zoneGroup.values || {}, { title: values.zoneName });
+    zoneNode.title = "Zone Definition";
+    zoneNode.values = Object.assign({}, zoneNode.values || {}, { displayName: values.zoneName });
+  }
+  if (updateExisting || zoneCreated || !basis.nodes.environment.values?.backgroundColor) {
+    basis.nodes.environment.values = Object.assign({}, basis.nodes.environment.values || {}, environmentPreset.environment);
+  }
+  if (updateExisting || zoneCreated || !basis.nodes.ground.values?.materialColor) {
+    basis.nodes.ground.values = Object.assign({}, basis.nodes.ground.values || {}, environmentPreset.ground);
+  }
+
+  const ambientResult = ensureFoundationRootNode(graph, "ambient_light", "Ambient Light", 760, 80, {
+    lightId: uniqueFieldValue(graph, "ambient_light", "lightId", "ambient_light"),
+    ...environmentPreset.ambient
+  });
+  const directionalResult = ensureFoundationRootNode(graph, "directional_light", "Directional Light", 760, 250, {
+    lightId: uniqueFieldValue(graph, "directional_light", "lightId", "sun_light"),
+    ...environmentPreset.directional
+  });
+  if (updateExisting) {
+    ambientResult.node.values = Object.assign({}, ambientResult.node.values || {}, environmentPreset.ambient);
+    directionalResult.node.values = Object.assign({}, directionalResult.node.values || {}, environmentPreset.directional);
+  }
+  ensureTypedGraphEdge(graph, ambientResult.node, assemblyResult.node, "light");
+  ensureTypedGraphEdge(graph, directionalResult.node, assemblyResult.node, "light");
+
+  let playerDefinition = (graph.nodes || []).find(function (node) {
+    return node.type === "playable_character_definition" && normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(values.playerDefinitionRef, "");
+  }) || null;
+  if (!playerDefinition) {
+    playerDefinition = {
+      id: createZoneGraphId("node_playable_character_definition"),
+      type: "playable_character_definition",
+      title: "Speler",
+      x: 100,
+      y: 180,
+      parentId: catalogFoundation.group.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("playable_character_definition"), {
+        characterId: uniqueCanonicalGraphValue(graph, "player.main"),
+        displayName: "Speler",
+        modelAssetId: values.playerAssetId || null
+      })
+    };
+    graph.nodes.push(playerDefinition);
+  } else if (updateExisting || !playerDefinition.values?.modelAssetId) {
+    playerDefinition.values = Object.assign({}, playerDefinition.values || {}, { modelAssetId: values.playerAssetId || playerDefinition.values?.modelAssetId || null });
+  }
+  if (!hasTypedGraphOutput(graph, playerDefinition, "catalogDefinition")) {
+    let definitionGroup = graphNodeByIdInGraph(graph, playerDefinition.parentId);
+    if (!definitionGroup || definitionGroup.type !== "group" || normalizeEditorKey(definitionGroup.values?.groupKind) !== "catalog") {
+      playerDefinition.parentId = catalogFoundation.group.id;
+      definitionGroup = catalogFoundation.group;
+    }
+    const definitionOutput = definitionGroup?.type === "group" && normalizeEditorKey(definitionGroup.values?.groupKind) === "catalog"
+      ? ensureCatalogGroupPackage(graph, definitionGroup)
+      : catalogOutput;
+    ensureTypedGraphEdge(graph, playerDefinition, definitionOutput, "catalogDefinition");
+  }
+
+  const selectedAssetId = values.playerAssetId || playerDefinition.values?.modelAssetId || "";
+  if (!selectedAssetId) throw new Error("Kies eerst een modelasset voor de speler.");
+  let playerNode = (graph.nodes || []).find(function (node) {
+    return node.parentId === zoneGroup.id && node.type === "player_character";
+  }) || null;
+  const selectedAsset = assetById(selectedAssetId);
+  if (!playerNode) {
+    playerNode = {
+      id: createZoneGraphId("node_player_character"),
+      type: "player_character",
+      title: "Player Character",
+      x: 440,
+      y: 500,
+      parentId: zoneGroup.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("player_character"), {
+        playerId: uniqueFieldValue(graph, "player_character", "playerId", "player"),
+        modelAssetId: selectedAssetId,
+        playableCharacterRef: playerDefinition.values.characterId,
+        animationClip: resolveAnimationClipForAsset(selectedAsset, null),
+        idleAnimation: resolveIdleAnimationForAsset(selectedAsset, null),
+        walkAnimation: resolveOptionalAnimationForAsset(selectedAsset, null),
+        runAnimation: resolveOptionalAnimationForAsset(selectedAsset, null)
+      })
+    };
+    graph.nodes.push(playerNode);
+  } else if (updateExisting || !playerNode.values?.modelAssetId || !playerNode.values?.playableCharacterRef) {
+    playerNode.values = Object.assign({}, playerNode.values || {}, {
+      modelAssetId: selectedAssetId,
+      playableCharacterRef: playerDefinition.values.characterId
+    });
+  }
+  ensureTypedGraphEdge(graph, playerNode, basis.nodes.output, "player");
+
+  let cameraNode = (graph.nodes || []).find(function (node) {
+    return node.parentId === zoneGroup.id && node.type === "game_camera";
+  }) || null;
+  if (!cameraNode) {
+    cameraNode = {
+      id: createZoneGraphId("node_game_camera"),
+      type: "game_camera",
+      title: "Game Camera",
+      x: 440,
+      y: 690,
+      parentId: zoneGroup.id,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("game_camera"), {
+        cameraId: uniqueFieldValue(graph, "game_camera", "cameraId", "main_camera")
+      }, cameraPreset.values)
+    };
+    graph.nodes.push(cameraNode);
+  } else if (updateExisting) {
+    cameraNode.values = Object.assign({}, cameraNode.values || {}, cameraPreset.values);
+  }
+  ensureTypedGraphEdge(graph, cameraNode, basis.nodes.output, "camera");
+
+  for (const binding of PROJECT_DEFAULT_KEYBINDS) {
+    let keybind = (graph.nodes || []).find(function (node) {
+      return node.type === "keybind" && node.values?.action === binding.action;
+    }) || null;
+    if (!keybind) {
+      keybind = {
+        id: createZoneGraphId("node_keybind"),
+        type: "keybind",
+        title: binding.label,
+        x: 80 + PROJECT_DEFAULT_KEYBINDS.indexOf(binding) * 170,
+        y: 820,
+        parentId: null,
+        values: Object.assign({}, objectFunctionDefaultValuesForNodeType("keybind"), {
+          bindingId: uniqueFieldValue(graph, "keybind", "bindingId", "key_" + binding.action),
+          action: binding.action,
+          keyCode: values.keybinds?.[binding.action] || binding.keyCode
+        })
+      };
+      graph.nodes.push(keybind);
+    } else if (updateExisting) {
+      keybind.values = Object.assign({}, keybind.values || {}, { keyCode: values.keybinds?.[binding.action] || binding.keyCode });
+    }
+    ensureKeybindFoundationConnection(graph, keybind, assemblyResult.node);
+  }
+
+  normalizeZoneCanvasGroups(graph, null);
+  const currentStartZoneRef = normalizeCanonicalId(projectResult.node.values?.startZoneRef, "");
+  const currentStartSpawnRef = normalizeCanonicalId(projectResult.node.values?.startSpawnRef, "");
+  const currentStartZone = (graph.nodes || []).find(function (node) {
+    return node.type === "zone_definition" && normalizeCanonicalId(node.values?.zoneId, "") === currentStartZoneRef;
+  }) || null;
+  const hasCurrentStartSpawn = (graph.nodes || []).some(function (node) {
+    return node.type === "spawn_point"
+      && normalizeCanonicalId(node.values?.spawnId, "") === currentStartSpawnRef
+      && (node.parentId || null) === (currentStartZone?.parentId || null);
+  });
+  ensureProjectStartZone(graph, basis.zoneId, basis.spawnId, true, !currentStartZone || !hasCurrentStartSpawn);
+  ensureTypedGraphEdge(graph, firstRootNodeOfType(graph, "zone_registry"), assemblyResult.node, "zoneRegistry");
+  return {
+    output: outputResult.node,
+    assembly: assemblyResult.node,
+    project: projectResult.node,
+    zoneGroup,
+    zone: zoneNode,
+    spawn: basis.nodes.spawn,
+    player: playerNode,
+    playerDefinition,
+    camera: cameraNode
+  };
+}
+
+async function commitProjectFoundationWizard() {
+  const wizard = state.projectFoundationWizard;
+  if (!wizard) return;
+  const values = wizard.values || {};
+  if (!String(values.projectName || "").trim()) { setStatus("Vul een projectnaam in.", "error"); return; }
+  if (!String(values.zoneName || "").trim()) { setStatus("Vul een naam voor de eerste zone in.", "error"); return; }
+  const existingDefinition = (state.graph.nodes || []).find(function (node) {
+    return node.type === "playable_character_definition" && normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(values.playerDefinitionRef, "");
+  }) || null;
+  if (!values.playerAssetId && !existingDefinition?.values?.modelAssetId) {
+    setStatus("Kies eerst een modelasset voor de speler. Importeer zo nodig eerst een model via Assets.", "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  let result;
+  try {
+    result = ensureProjectFoundationGraph(nextGraph, Object.assign({}, values, {
+      projectName: String(values.projectName).trim(),
+      zoneName: String(values.zoneName).trim()
+    }), { mode: wizard.mode });
+  } catch (error) {
+    setStatus(error.message, "error");
+    return;
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: wizard.mode === "new" ? "Nieuw gameproject" : wizard.mode === "manage" ? "Projectbasis bijgewerkt" : "Projectbasis hersteld",
+    currentGroupId: null,
+    selectedNodeIds: [],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      state.projectFoundationWizard = null;
+      state.authoringRouteId = null;
+      state.authoringOverviewActive = true;
+      setStatus(wizard.mode === "new" ? "Gameproject aangemaakt." : wizard.mode === "manage" ? "Projectbasis bijgewerkt." : "Projectbasis hersteld.", "success");
+      authoringOverviewShowWorkspaceNodes(null);
+    }
+  });
+  return result;
+}
+
 async function createRootManagedGroup(kind, titleText) {
+  if (!ensureProjectFoundationOrRedirect("Een nieuwe " + (titleText || kind) + " Group")) return;
   const nextGraph = cloneGraphForRestore(state.graph);
   const center = viewportCenterInGraph();
   const title = String(titleText || "").trim() || (kind === "player_rules" ? "Player Rules" : kind === "ui" ? "UI" : "Catalog");
@@ -11749,6 +12365,51 @@ async function createRootManagedGroup(kind, titleText) {
     afterApply: function () {
       enterGroup(group, { preserveAuthoringSelection: true });
       setStatus(title + " Group aangemaakt.", "success");
+    }
+  });
+}
+
+async function createRootCampaignGroup(titleText) {
+  if (!ensureProjectFoundationOrRedirect("Een nieuwe Campaign Group")) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const center = viewportCenterInGraph();
+  const title = String(titleText || "").trim() || "Campaigns";
+  const duplicate = (nextGraph.nodes || []).find(function (node) {
+    return node.type === "group"
+      && (node.parentId || null) === null
+      && normalizeEditorKey(node.values?.groupKind) === "campaign"
+      && normalizeEditorKey(node.values?.title || node.title) === normalizeEditorKey(title);
+  }) || null;
+  if (duplicate) {
+    enterGroup(duplicate, { preserveAuthoringSelection: true });
+    setStatus(title + " Group bestond al; bestaande groep geopend.", "");
+    return;
+  }
+  const group = {
+    id: createZoneGraphId("node_group"),
+    type: "group",
+    title,
+    x: Math.round(Number(center.x) || 80),
+    y: Math.round(Number(center.y) || 80),
+    parentId: null,
+    values: Object.assign({}, objectFunctionDefaultValuesForNodeType("group"), {
+      groupId: uniqueCanonicalGraphValue(nextGraph, slugifyGroupPortName(title, "campaign") || "campaign"),
+      title,
+      groupKind: "campaign"
+    })
+  };
+  nextGraph.nodes.push(group);
+  ensureCampaignRootPlumbing(nextGraph, group, { x: group.x + 620, y: group.y });
+  await restoreGraphObject(nextGraph, {
+    historyLabel: title + " Group aangemaakt",
+    currentGroupId: group.id,
+    selectedNodeIds: [group.id],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () {
+      enterGroup(group, { preserveAuthoringSelection: true });
+      setStatus(title + " Group aangemaakt en aan de Projectbasis gekoppeld.", "success");
     }
   });
 }
@@ -12337,6 +12998,7 @@ function copySafeZoneBasisValues(nextGraph, sourceGroup, targetGroup, basis) {
 }
 
 async function commitZoneCanvasDraft() {
+  if (!ensureProjectFoundationOrRedirect("Een nieuwe zone")) return;
   const draft = state.zoneCanvasDraft;
   if (!draft) return;
   const name = String(draft.name || "").trim();
@@ -14172,6 +14834,7 @@ function toggleAuthoringMenu() {
 function selectAuthoringRoute(routeId) {
   const route = authoringRouteById(routeId);
   if (!route) return;
+  if (!ensureProjectFoundationOrRedirect(route.label)) return;
   state.authoringRouteId = route.id;
   state.storedAuthoringRouteId = route.id;
   state.authoringMenuOpen = false;
@@ -14314,6 +14977,233 @@ function authoringOverviewCard(titleText, summaryText, countText, openLabel, onO
   return card;
 }
 
+function projectFoundationSelect(options, currentValue, onChange) {
+  const select = document.createElement("select");
+  for (const optionInfo of options) {
+    const option = document.createElement("option");
+    option.value = optionInfo.value;
+    option.textContent = optionInfo.label;
+    select.appendChild(option);
+  }
+  select.value = currentValue || options[0]?.value || "";
+  select.addEventListener("change", function () { onChange(select.value); });
+  return select;
+}
+
+function projectFoundationWizardStepError(wizard) {
+  const values = wizard?.values || {};
+  if (wizard.step === 1 && !String(values.projectName || "").trim()) return "Vul een projectnaam in.";
+  if (wizard.step === 2 && !String(values.zoneName || "").trim()) return "Vul een naam voor de eerste zone in.";
+  if (wizard.step === 4) {
+    const definition = (state.graph.nodes || []).find(function (node) {
+      return node.type === "playable_character_definition" && normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(values.playerDefinitionRef, "");
+    }) || null;
+    if (!values.playerAssetId && !definition?.values?.modelAssetId) return "Kies een modelasset voor de speler.";
+  }
+  if (wizard.step === 5 && PROJECT_DEFAULT_KEYBINDS.some(function (binding) { return !String(values.keybinds?.[binding.action] || "").trim(); })) {
+    return "Vul voor iedere besturing een toetscode in.";
+  }
+  return "";
+}
+
+function renderProjectFoundationWizard() {
+  const wizard = state.projectFoundationWizard;
+  const values = wizard.values;
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard authoring04DraftCard";
+  const heading = document.createElement("div");
+  heading.className = "objectFunctionDraftTitle";
+  heading.textContent = (wizard.mode === "new" ? "Nieuw gameproject" : wizard.mode === "repair" ? "Projectbasis herstellen" : "Projectbasis beheren") + " · stap " + wizard.step + " van 6";
+  card.appendChild(heading);
+  const intro = document.createElement("div");
+  intro.className = "objectFunctionDraftHint";
+  intro.textContent = "De bevestiging schrijft één bestaande graphmutatie. Technische namen en verbindingen worden automatisch uit het nodeschema afgeleid.";
+  card.appendChild(intro);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+
+  if (wizard.step === 1) {
+    fields.appendChild(objectFunctionDraftFieldRow("Projectnaam", questTimelineTextInput(values.projectName, function (value) {
+      values.projectName = value;
+    }, { placeholder: "Mijn game" })));
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Deze naam verschijnt in het gepubliceerde gameproject.";
+    fields.appendChild(hint);
+  } else if (wizard.step === 2) {
+    fields.appendChild(objectFunctionDraftFieldRow("Eerste zone", questTimelineTextInput(values.zoneName, function (value) {
+      values.zoneName = value;
+    }, { placeholder: "Startzone" })));
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "De editor maakt hiervoor een 500 × 500 Zone Canvas met grond en een veilige spawn in het midden.";
+    fields.appendChild(hint);
+  } else if (wizard.step === 3) {
+    const options = Object.entries(PROJECT_ENVIRONMENT_PRESETS).map(function ([value, preset]) { return { value, label: preset.label }; });
+    fields.appendChild(objectFunctionDraftFieldRow("Basiswereld / omgeving", projectFoundationSelect(options, values.environmentPreset, function (value) {
+      values.environmentPreset = value;
+      renderAuthoringHub();
+    })));
+    const preset = PROJECT_ENVIRONMENT_PRESETS[values.environmentPreset] || PROJECT_ENVIRONMENT_PRESETS.neutral;
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = preset.summary + " De keuze maakt alleen engine-neutrale omgeving-, grond- en lichtwaarden.";
+    fields.appendChild(hint);
+  } else if (wizard.step === 4) {
+    const definitions = (state.graph.nodes || []).filter(function (node) { return node.type === "playable_character_definition"; });
+    const definitionOptions = [{ value: "", label: "Nieuwe spelerdefinitie" }].concat(definitions.map(function (node) {
+      return { value: normalizeCanonicalId(node.values?.characterId, ""), label: String(node.values?.displayName || node.title || "Speler") };
+    }));
+    fields.appendChild(objectFunctionDraftFieldRow("Spelerdefinitie", projectFoundationSelect(definitionOptions, values.playerDefinitionRef, function (value) {
+      values.playerDefinitionRef = value;
+      const definition = definitions.find(function (node) { return normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(value, ""); });
+      if (definition?.values?.modelAssetId) values.playerAssetId = definition.values.modelAssetId;
+      renderAuthoringHub();
+    })));
+    const assetOptions = [{ value: "", label: "Kies een modelasset" }].concat(state.assets.filter(function (asset) {
+      return asset.assetType === "model";
+    }).map(function (asset) {
+      return { value: asset.id, label: asset.name };
+    }));
+    if (values.playerAssetId && !assetOptions.some(function (option) { return option.value === values.playerAssetId; })) {
+      assetOptions.push({ value: values.playerAssetId, label: "Bestaand spelermodel" });
+    }
+    fields.appendChild(objectFunctionDraftFieldRow("Spelermodel", projectFoundationSelect(assetOptions, values.playerAssetId, function (value) {
+      values.playerAssetId = value;
+    })));
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = state.assets.some(function (asset) { return asset.assetType === "model"; })
+      ? "Alleen modelassets worden aangeboden. De definitie en zone-speler worden automatisch gekoppeld."
+      : "Er zijn nog geen modelassets. Annuleer, importeer eerst een model via Assets en open Nieuw gameproject opnieuw.";
+    fields.appendChild(hint);
+  } else if (wizard.step === 5) {
+    const cameraOptions = Object.entries(PROJECT_CAMERA_PRESETS).map(function ([value, preset]) { return { value, label: preset.label }; });
+    fields.appendChild(objectFunctionDraftFieldRow("Camerapreset", projectFoundationSelect(cameraOptions, values.cameraPreset, function (value) {
+      values.cameraPreset = value;
+      renderAuthoringHub();
+    })));
+    const camera = PROJECT_CAMERA_PRESETS[values.cameraPreset] || PROJECT_CAMERA_PRESETS.standard;
+    const cameraHint = document.createElement("div");
+    cameraHint.className = "objectFunctionDraftHint";
+    cameraHint.textContent = camera.summary;
+    fields.appendChild(cameraHint);
+    const controlOptions = Object.entries(PROJECT_CONTROL_PRESETS).map(function ([value, preset]) { return { value, label: preset.label }; });
+    fields.appendChild(objectFunctionDraftFieldRow("Besturingspreset", projectFoundationSelect(controlOptions, values.controlPreset, function (value) {
+      values.controlPreset = value;
+      renderAuthoringHub();
+    })));
+    const controlTitle = document.createElement("div");
+    controlTitle.className = "objectFunctionDraftTitle";
+    const controlPreset = PROJECT_CONTROL_PRESETS[values.controlPreset] || PROJECT_CONTROL_PRESETS.wasd;
+    controlTitle.textContent = "Besturing · " + controlPreset.summary;
+    fields.appendChild(controlTitle);
+    for (const binding of PROJECT_DEFAULT_KEYBINDS) {
+      fields.appendChild(objectFunctionDraftFieldRow(binding.label, questTimelineTextInput(values.keybinds?.[binding.action] || binding.keyCode, function (value) {
+        values.keybinds[binding.action] = String(value || "").trim();
+      }, { placeholder: binding.keyCode })));
+    }
+    const hint = document.createElement("div");
+    hint.className = "objectFunctionDraftHint";
+    hint.textContent = "Standaard: W/S/A/D, ShiftLeft en E. Deze waarden blijven later via Projectbasis beheren wijzigbaar.";
+    fields.appendChild(hint);
+  } else {
+    const definition = (state.graph.nodes || []).find(function (node) {
+      return node.type === "playable_character_definition" && normalizeCanonicalId(node.values?.characterId, "") === normalizeCanonicalId(values.playerDefinitionRef, "");
+    }) || null;
+    const asset = assetById(values.playerAssetId || definition?.values?.modelAssetId);
+    const environment = PROJECT_ENVIRONMENT_PRESETS[values.environmentPreset] || PROJECT_ENVIRONMENT_PRESETS.neutral;
+    const camera = PROJECT_CAMERA_PRESETS[values.cameraPreset] || PROJECT_CAMERA_PRESETS.standard;
+    const rows = [
+      ["Project", values.projectName],
+      ["Eerste zone", values.zoneName],
+      ["Omgeving", environment.label],
+      ["Speler", (definition?.values?.displayName || "Nieuwe spelerdefinitie") + " · " + (asset?.name || "model gekozen")],
+      ["Camera", camera.label],
+      ["Besturing", (PROJECT_CONTROL_PRESETS[values.controlPreset] || PROJECT_CONTROL_PRESETS.wasd).label + " · " + PROJECT_DEFAULT_KEYBINDS.map(function (binding) { return binding.label + ": " + (values.keybinds?.[binding.action] || binding.keyCode); }).join(" · ")]
+    ];
+    for (const [labelText, valueText] of rows) {
+      const row = document.createElement("div");
+      row.className = "objectFunctionBadge";
+      const body = document.createElement("div");
+      body.className = "objectFunctionBadgeBody";
+      const label = document.createElement("div");
+      label.className = "objectFunctionBadgeLabel";
+      label.textContent = labelText;
+      const value = document.createElement("div");
+      value.className = "objectFunctionBadgeMeta";
+      value.textContent = valueText;
+      body.append(label, value);
+      row.appendChild(body);
+      fields.appendChild(row);
+    }
+  }
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "mini";
+  cancel.textContent = "Annuleren";
+  cancel.addEventListener("click", cancelProjectFoundationWizard);
+  actions.appendChild(cancel);
+  if (wizard.step > 1) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "mini";
+    back.textContent = "Vorige";
+    back.addEventListener("click", function () { wizard.step -= 1; renderAuthoringHub(); });
+    actions.appendChild(back);
+  }
+  const forward = document.createElement("button");
+  forward.type = "button";
+  forward.className = "primary";
+  forward.textContent = wizard.step === 6 ? (wizard.mode === "new" ? "Project maken" : wizard.mode === "repair" ? "Projectbasis herstellen" : "Wijzigingen opslaan") : "Volgende";
+  forward.addEventListener("click", function () {
+    const error = projectFoundationWizardStepError(wizard);
+    if (error) { setStatus(error, "error"); return; }
+    if (wizard.step < 6) {
+      wizard.step += 1;
+      renderAuthoringHub();
+      return;
+    }
+    void commitProjectFoundationWizard();
+  });
+  actions.appendChild(forward);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderProjectFoundationOverview(status) {
+  const card = document.createElement("div");
+  card.className = "buildOverviewCard";
+  const title = document.createElement("div");
+  title.className = "buildOverviewCardTitle";
+  title.textContent = status.fresh ? "Nog geen gameproject" : status.complete ? "Projectbasis compleet" : "Projectbasis onvolledig";
+  const summary = document.createElement("div");
+  summary.className = "buildOverviewCardSummary";
+  summary.textContent = status.fresh
+    ? "Maak de eerste speelbare projectbasis via begrijpelijke keuzes."
+    : status.complete
+      ? "Project, rootpackages, eerste zone, speler, camera en besturing zijn aangesloten."
+      : "Ontbreekt: " + status.missing.join(", ") + ".";
+  const actions = document.createElement("div");
+  actions.className = "authoring04Actions";
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "primary";
+  action.textContent = status.fresh ? "Nieuw gameproject" : status.complete ? "Projectbasis beheren" : "Projectbasis herstellen";
+  action.addEventListener("click", function () { beginProjectFoundationWizard(status.complete ? "manage" : status.fresh ? "new" : "repair"); });
+  const nodes = document.createElement("button");
+  nodes.type = "button";
+  nodes.className = "mini";
+  nodes.textContent = "Toon in nodes";
+  nodes.addEventListener("click", function () { authoringOverviewShowWorkspaceNodes(null); });
+  actions.append(action, nodes);
+  card.append(title, summary, actions);
+  return card;
+}
+
 function authoringOverviewOpenNode(node) {
   if (!node) return;
   if (node.type === "model_entity") {
@@ -14377,6 +15267,12 @@ function renderAuthoringBuildOverview() {
   intro.textContent = "Kies wat je wilt beheren. De onderliggende nodes en edges blijven de enige opslag.";
   heading.append(title, intro);
   wrap.appendChild(heading);
+  if (state.projectFoundationWizard) {
+    wrap.appendChild(renderProjectFoundationWizard());
+    return wrap;
+  }
+  const foundationStatus = projectFoundationStatus(state.graph);
+  wrap.appendChild(renderProjectFoundationOverview(foundationStatus));
   const search = document.createElement("input");
   search.type = "search";
   search.className = "authoring04Search";
@@ -14402,6 +15298,7 @@ function renderAuthoringBuildOverview() {
     if (Object.prototype.hasOwnProperty.call(roleCounts, role)) roleCounts[role] += 1;
   }
   const warnings = [];
+  if (!foundationStatus.complete) warnings.push("De Projectbasis is nog niet compleet.");
   if (!currentZone) warnings.push("Er is nog geen Zone Canvas.");
   if (currentZone && !zoneChildren.some(function (node) { return node.type === "zone_environment_settings"; })) warnings.push("De huidige zone mist omgeving-instellingen.");
   if (currentZone && !zoneChildren.some(function (node) { return node.type === "zone_output"; })) warnings.push("De huidige zone mist een Zone Output.");
@@ -14883,6 +15780,8 @@ async function addSpecialGroup(preset) {
   if (preset?.kind === "catalog") return createRootManagedGroup("catalog", preset.title || "Catalog");
   if (preset?.kind === "player_rules") return createRootManagedGroup("player_rules", preset.title || "Player Rules");
   if (preset?.kind === "ui") return createRootManagedGroup("ui", preset.title || "UI");
+  if (preset?.kind === "campaign") return createRootCampaignGroup(preset.title || "Campaigns");
+  if (!ensureProjectFoundationOrRedirect("Een nieuwe workspace")) return;
   await addNode("group", {
     groupId: slugifyGroupPortName(preset.title, preset.kind),
     title: preset.title,
@@ -15119,6 +16018,10 @@ function ensureZoneRegistryForParent(graph, parentId, position) {
   let registry = (graph.nodes || []).find(function (node) {
     return node.type === "zone_registry" && (node.parentId || null) === wantedParentId;
   }) || null;
+  if (!registry && wantedParentId === null) {
+    registry = (graph.nodes || []).find(function (node) { return node.type === "zone_registry"; }) || null;
+    if (registry) registry.parentId = null;
+  }
   if (!registry) {
     registry = {
       id: createZoneGraphId("node_zone_registry"),
@@ -15134,8 +16037,11 @@ function ensureZoneRegistryForParent(graph, parentId, position) {
   const assembly = (graph.nodes || []).find(function (node) {
     return node.type === "world_assembly" && (node.parentId || null) === wantedParentId;
   }) || null;
-  if (assembly && !(graph.edges || []).some(function (edge) { return edge.toNodeId === assembly.id && edge.toPort === "zones"; })) {
-    pushEdgeIfMissing(graph, registry.id, "zoneRegistry", assembly.id, "zones");
+  if (!assembly && wantedParentId === null) {
+    throw new Error("Projectbasis ontbreekt: de Zone Registry kan niet zonder World Assembly worden gekoppeld.");
+  }
+  if (assembly && !hasTypedGraphEdge(graph, registry, assembly, "zoneRegistry")) {
+    ensureTypedGraphEdge(graph, registry, assembly, "zoneRegistry");
   }
   return registry;
 }
@@ -15833,13 +16739,13 @@ function snapMovedZoneCanvasGroups(graph, movedNodeIds) {
   return { moved: true, collisions };
 }
 
-function ensureProjectStartZone(graph, zoneId, spawnId, shouldSet) {
+function ensureProjectStartZone(graph, zoneId, spawnId, shouldSet, replaceExisting = false) {
   if (!shouldSet) return;
   const project = (graph.nodes || []).find(function (node) { return node.type === "game_project_settings"; }) || null;
-  if (!project) return;
+  if (!project) throw new Error("Projectbasis ontbreekt: startzone en startspawn kunnen niet worden opgeslagen.");
   project.values = Object.assign({}, project.values || {});
-  if (!project.values.startZoneRef) project.values.startZoneRef = zoneId;
-  if (!project.values.startSpawnRef) project.values.startSpawnRef = spawnId;
+  if (replaceExisting || !project.values.startZoneRef) project.values.startZoneRef = zoneId;
+  if (replaceExisting || !project.values.startSpawnRef) project.values.startSpawnRef = spawnId;
 }
 
 function appendZoneCanvasGroup(graph, options) {
@@ -15884,6 +16790,7 @@ function appendZoneCanvasGroup(graph, options) {
 }
 
 async function addZoneCanvasFromLibrary() {
+  if (!ensureProjectFoundationOrRedirect("Een nieuwe Zone Canvas")) return;
   const parentId = null;
   if ((state.graph.nodes || []).some(function (node) { return isZoneCanvasGroup(node, state.graph); })) {
     return;
