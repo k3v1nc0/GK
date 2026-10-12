@@ -1,11 +1,11 @@
 # AUTHORING MICROFASE 3 - Fresh Project Golden Path
 
-**Status:** Checkpoint 2 implemented, awaiting Kevin acceptance
-**Datum:** 2026-10-11
+**Status:** Checkpoint 1 accepted; Checkpoint 2 accepted; Checkpoint 3 in progress
+**Datum:** 2026-10-12
 
 ## Scope van deze uitvoering
 
-Checkpoint 1, de menselijke fresh-projectbootstrap en volledige rootplumbing, is live door Kevin geaccepteerd. Checkpoint 2 voegt de ontbrekende menselijke world-, area-, surface- en spawn-authoring toe. Checkpoint 3 (Kevins onafhankelijke mirror- en lifecycle-acceptatie) is niet uitgevoerd.
+Checkpoint 1, de menselijke fresh-projectbootstrap en volledige rootplumbing, is live door Kevin geaccepteerd. Checkpoint 2, de menselijke world-, area-, surface- en spawn-authoring, is na alle 25 live stappen door Kevin geaccepteerd. Checkpoint 3 (Kevins onafhankelijke mirror-, playthrough- en lifecycleacceptatie) is in uitvoering.
 
 De actieve demo, bestaande scripts en databasecontent zijn niet als template gebruikt. Een nieuw project krijgt alleen engine-neutrale basiswaarden en de door de gebruiker gekozen namen, omgeving, speler, camera en besturing.
 
@@ -115,6 +115,18 @@ Het draft-/publish-readmodel neemt voor deze spawns ook het werkelijk door NODE-
 - AI movement speed, sight/aggroafstand, preferred/attack range, faction, difficulty en animationprofielen worden niet door het huidige NODE-03-spawngedrag geconsumeerd en zijn niet in deze wizard gezet.
 - Enemy- en resource-modelvelden zijn in het bestaande schema optioneel. De wizard eist daarom geen modelasset; bestaande definitiemodellen worden door preview/runtime gebruikt en anders blijft de bestaande fallbackweergave gelden.
 
+## Checkpoint 3 blocker: semantische veldhulp
+
+Tijdens Checkpoint 3 is aangetoond dat de bestaande I-tooltip bij normale inspectorvelden begon met technische key en datatype en daarna voornamelijk generieke uitleg per veldtype gaf. Daardoor kon Kevin uit de editor niet betrouwbaar afleiden welk gameplay-effect een veld heeft, waarom de default bestaat en of compiler en runtime het veld daadwerkelijk gebruiken. Dit is een acceptance-blocker; Checkpoint 3 blijft open totdat Kevin de hulp in de normale route heeft gecontroleerd.
+
+De editor gebruikt nu één deterministisch semantisch helpregister, exact geïndexeerd op `(nodeType, fieldKey)`. Iedere zichtbare schemacombinatie krijgt `Doet`, de schema-default met een bewezen reden of een expliciete melding dat geen ontwerpvoorkeur bewezen is, praktisch advies, type-afhankelijke betekenis en een runtime-status. Technische key en datatype staan pas op de laatste regel. References vertellen wat gekozen wordt, in welke normale authoringroute de definitie staat en wat leeg werkelijk betekent. Waar code geen voorkeursbereik bewijst, staat letterlijk dat Kevin in de eigen game moet testen.
+
+De read-only coveragecontrole `node scripts/check-semantic-field-help.js` inventariseert het actuele schema en faalt bij een ontbrekende entry of wanneer alleen de oude generieke fallback overblijft. Op 2026-10-12 rapporteert hij 1.851 zichtbare combinaties, 1.851 semantisch gedekt, 242 bewust technisch, 96 aantoonbaar nog niet actief en geen ontbrekende of uitsluitend generieke entries. De aantallen worden uit het actuele schema berekend en zijn geen handmatig vastgezette acceptatiegetallen.
+
+Codebewijs is daarbij leidend. Onder meer `enemy_spawn_area.radius`, stat-block health/attack power, respawngemiddelde, portalrange, questobjectives, recipe-input/output, vendorprijzen, camera-afstanden en minimap-fog worden door hun bestaande compiler/readmodel/runtimeketen geconsumeerd. Daartegenover worden `enemy_spawn_area.pathRef`, spawn-distributie/spacing/activation, de losse `enemy_spawn_point`-runtimevelden, difficulty health/damage-multipliers en meerdere uitgebreide respawnopties wel opgeslagen of gecompileerd maar niet door de huidige runtime toegepast. De tooltip zegt dat nu expliciet en suggereert geen ontbrekende fallback of functionaliteit.
+
+Deze blockerwijziging voegt geen runtimeconsumer toe, verandert geen schemawaarde/default, compilercontract, gameplaycontent of databasecontent en sluit Checkpoint 3 niet.
+
 ## Bewuste grenzen
 
 Deze uitvoering maakt zelf geen demo-, proof-, quest-, NPC-, vendor-, enemy-, resource-, pickup- of portalcontent. De bestaande demo/database bleef read-only referentie en de bestaande fallback- en legacyroutes zijn niet verwijderd.
@@ -127,4 +139,4 @@ Ook buiten deze uitvoering blijven `objective_defeat`, quest branch/join/paralle
 
 Er is geen server gestart of herstart. Er zijn geen npm-test/check, smoke, Playwright- of performancechecks uitgevoerd. Alleen gerichte JavaScript-syntaxcontrole en read-only diffinspectie horen bij deze checkpointuitvoering.
 
-**Checkpoint 2 implemented, awaiting Kevin acceptance**
+**Checkpoint 1 accepted; Checkpoint 2 accepted; Checkpoint 3 in progress**

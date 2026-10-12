@@ -10,6 +10,7 @@ import {
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
+import { createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -20514,46 +20515,6 @@ function buildZoneCanvasInspectorBlock(group) {
   return wrap;
 }
 
-const FIELD_TYPE_LABELS = Object.freeze({
-  asset: "asset picker",
-  boolean: "checkbox aan/uit",
-  color: "kleurwaarde",
-  formula: "veilige formule JSON",
-  identity: "stabiele canonical ID",
-  json: "JSON data",
-  keycode: "keyboard code",
-  localizedText: "localization key met fallback",
-  minimapMarkerCategories: "minimap marker categorieen",
-  number: "nummer",
-  reference: "zoekbare reference",
-  referenceList: "lijst met typed references",
-  select: "keuzelijst",
-  tagList: "taglijst",
-  tagQuery: "tag query",
-  text: "tekst",
-  tokenText: "tekst met @{...} tokens"
-});
-
-const FIELD_TYPE_HELP = Object.freeze({
-  asset: "Kiest een asset uit de asset library. De node bewaart alleen het asset id; de runtime laadt het echte bestand via de gepublishte asset manifest.",
-  boolean: "Checkbox. Aan betekent dat deze optie actief is in compiler of runtime. Uit betekent dat de node dit gedrag niet meeneemt.",
-  color: "Kleur in hexvorm, bijvoorbeeld #ffffff. De editor gebruikt dit voor preview/UI; de runtime gebruikt dezelfde waarde wanneer de node gepubliceerd wordt.",
-  formula: "Declaratieve formule als JSON. Dit blijft data en wordt veilig gevalideerd; er wordt geen JavaScript uitgevoerd.",
-  identity: "Stabiele technische ID. Andere nodes verwijzen naar deze waarde, dus verander dit bewust zodra content al gebruikt of gepublished is.",
-  json: "Vrije gestructureerde data. Gebruik geldige JSON zodat de compiler het exact kan lezen.",
-  keycode: "KeyboardEvent.code waarde, bijvoorbeeld KeyW of Space. Dit is layout-stabieler dan losse letters.",
-  localizedText: "Verwijst naar een localization entry en heeft een fallbacktekst. Handig wanneer dezelfde node meerdere talen moet ondersteunen.",
-  minimapMarkerCategories: "Bepaalt welke markerbronnen op de minimap verschijnen, hoe ze heten, welke vorm/kleur ze gebruiken en of ze door fog of aan de rand zichtbaar blijven.",
-  number: "Numerieke instelling. Min, max en step komen uit het node-schema en voorkomen waarden die de editor of runtime onstabiel maken.",
-  reference: "Zoek en kies een andere bron in de picker. De editor bewaart intern de canonical ID en controleert of de gekozen soort past bij het schema.",
-  referenceList: "Meerdere typed references. Een waarde per regel of komma-gescheiden. De compiler gebruikt de lijst om meerdere dependencies of unlocks te volgen.",
-  select: "Keuzelijst. Alleen de opties uit het schema zijn geldig, zodat compiler en runtime dezelfde betekenis blijven gebruiken.",
-  tagList: "Tags groeperen content semantisch. Ze zijn bedoeld voor filtering, ownership, queries en latere automation.",
-  tagQuery: "Filter met all/any/none tags. Hiermee selecteer je content declaratief zonder code te schrijven.",
-  text: "Gewone tekst voor labels, namen of kleine technische waarden.",
-  tokenText: "Tekst die @{...} tokens mag bevatten. De preview probeert static tokens te tonen; runtime tokens worden later door de game-server opgelost."
-});
-
 const NODE_WORKFLOW_HELP = Object.freeze({
   game_output: "Eindpunt van de publish-flow. In de moderne route verbind je World Assembly.gameProject met Game Output.gameProject. Zodra die verbinding bestaat, worden oudere directe Game Output inputs genegeerd.",
   world_assembly: "Bouwt de definitieve game project manifest. Verbind hier Project Settings, Chunk Grid, Catalog Registry, Zone Registry, Campaign Registry, Player Rules en UI Output. Daarna gaat World Assembly.gameProject naar Game Output.",
@@ -20606,67 +20567,6 @@ function tooltipValue(value) {
     try { return JSON.stringify(value, null, 2); } catch { return String(value); }
   }
   return String(value);
-}
-
-function fieldTypeLabel(field) {
-  return FIELD_TYPE_LABELS[field?.type] || cleanTooltipText(field?.type || "waarde");
-}
-
-function fieldHelpText(field) {
-  return cleanTooltipText(field?.help || field?.description || "");
-}
-
-function defaultReasonText(field) {
-  if (!field || field.default === undefined) {
-    return "Dit veld heeft geen vaste schema-default. Leeg betekent meestal: de compiler of runtime gebruikt een contextuele fallback, of de waarde is alleen nodig wanneer je deze feature actief gebruikt.";
-  }
-  if (field.type === "boolean") {
-    return field.default === true
-      ? "De standaard is aan omdat nieuwe content dan direct zichtbaar of bruikbaar is zonder extra wiring. Zet hem uit wanneer je dit gedrag bewust wilt uitschakelen."
-      : "De standaard is uit omdat dit meestal optioneel, debug, test of extra gedrag is. Zo blijft een nieuwe node rustig totdat jij die functie bewust activeert.";
-  }
-  if (field.type === "number") {
-    return "De standaard is een veilige startwaarde uit het node-schema. Min, max en step begrenzen de waarde zodat publish en runtime voorspelbaar blijven.";
-  }
-  if (field.type === "select") {
-    return "De standaard kiest de meest neutrale of meest gebruikte route uit de toegestane opties. Andere keuzes veranderen expliciet hoe compiler of runtime deze node interpreteert.";
-  }
-  if (field.type === "identity") {
-    return "De standaard is een voorbeeld-ID. Maak hem uniek en stabiel voordat andere nodes ernaar verwijzen.";
-  }
-  if (field.type === "reference" || field.type === "referenceList") {
-    return "De standaard is leeg omdat references pas kloppen zodra de bedoelde target, item, quest, zone of andere definition echt bestaat.";
-  }
-  return "De standaard komt uit het shared node-schema. Hij is bedoeld als geldige beginwaarde zodat een nieuwe node begrijpelijk start en pas verandert wanneer jij ontwerpkeuzes invult.";
-}
-
-function fieldConstraintLines(field) {
-  const lines = [];
-  if (!field) return lines;
-  if (field.required) lines.push("Verplicht: ja. De validator verwacht een bruikbare waarde of een geldige default.");
-  else lines.push("Verplicht: nee. Leeg laten betekent dat de compiler/runtime de feature overslaat of een fallback gebruikt.");
-  if (field.min !== undefined || field.max !== undefined || field.step !== undefined) {
-    lines.push("Bereik: min " + tooltipValue(field.min) + ", max " + tooltipValue(field.max) + ", stap " + tooltipValue(field.step) + ".");
-  }
-  if (Array.isArray(field.options) && field.options.length) {
-    lines.push("Keuzes: " + field.options.map(function (option) {
-      if (option && typeof option === "object") return cleanTooltipText(option.label || option.value || "");
-      return cleanTooltipText(option);
-    }).filter(Boolean).join(", ") + ".");
-  }
-  if (Array.isArray(field.referenceKinds) && field.referenceKinds.length) {
-    lines.push("Verwachte reference kinds: " + field.referenceKinds.join(", ") + ".");
-  }
-  if (Array.isArray(field.assetTypes) && field.assetTypes.length) {
-    lines.push("Toegestane asset types: " + field.assetTypes.join(", ") + ".");
-  }
-  if (field.dynamicOptions) {
-    lines.push("Opties worden dynamisch gevuld uit: " + field.dynamicOptions + ".");
-  }
-  if (field.pattern) {
-    lines.push("Pattern: " + field.pattern + ".");
-  }
-  return lines;
 }
 
 function nodePortsForHelp(node, def) {
@@ -20754,23 +20654,9 @@ function buildPortHelpText(node, portName, port, direction) {
 }
 
 function buildFieldHelpText(node, key, field, value) {
-  const def = state.nodeTypes[node?.type] || {};
-  const lines = [
-    "Setting: " + (field.label || key),
-    "Node: " + (def.label || node?.type || "unknown") + " (" + nodeDisplayTitle(node) + ")",
-    "Technische key: " + key,
-    "Type: " + fieldTypeLabel(field),
-    "Huidige waarde: " + tooltipValue(value),
-    "Standaard: " + tooltipValue(field.default),
-    "Waarom deze standaard: " + defaultReasonText(field)
-  ];
-  const schemaHelp = fieldHelpText(field);
-  if (schemaHelp) lines.push("", "Schema-uitleg:", schemaHelp);
-  lines.push("", "Wat doet deze setting:", FIELD_TYPE_HELP[field?.type] || "Deze waarde wordt opgeslagen in de node en door validation, compiler of runtime gelezen wanneer de node gepubliceerd wordt.");
-  lines.push.apply(lines, fieldConstraintLines(field));
-  lines.push("", "Hoe gebruik je hem:", "Pas deze waarde aan wanneer dit gedrag voor deze node anders moet zijn dan de standaard. Laat hem op default staan als je nog aan het bouwen bent en eerst de nodeketen werkend wilt krijgen.");
-  lines.push("", "Node-context:", nodeWorkflowText(node, node?.type || "", def));
-  return lines.join("\n");
+  const registry = createSemanticFieldHelpRegistry(state.nodeTypes || {});
+  const entry = semanticFieldHelpEntry(registry, node?.type || "", key);
+  return formatSemanticFieldHelp(entry, field);
 }
 
 function buildSpecialGroupHelpText(preset) {
