@@ -15633,6 +15633,10 @@ function resolveChunkDebugCenter(policy) {
     return mode === "editor" ? String(target?.editorSelectableId || runtimeTargetAttachedEntityId(target) || "").trim() : "";
   }
 
+  function runtimeTargetEditorTransformable(target) {
+    return mode === "editor" && target?.editorTransformable === true && Boolean(runtimeTargetEditorSelectableId(target));
+  }
+
   function runtimeTargetAttachedEntityId(target) {
     const explicit = mode === "editor" ? target?.editorAttachedEntityId : null;
     return String(explicit || (target?.renderBody === false ? target?.visualEntityId : null) || "").trim();
@@ -16124,6 +16128,7 @@ function resolveChunkDebugCenter(policy) {
                 radius: 0.8,
                 targetTags: runtimeTargetTags(["enemy", "spawn"], enemy.tags, variant.tags),
                 editorSelectableId: spawn.nodeId || "",
+                editorTransformable: true,
                 enemyRef: spawn.enemyRef || null,
                 variantRef: spawn.variantRef || null,
                 modelAssetId,
@@ -16153,6 +16158,7 @@ function resolveChunkDebugCenter(policy) {
                 radius: 1.5,
                 targetTags: runtimeTargetTags(["resource", "spawn"], resource.tags),
                 editorSelectableId: spawn.nodeId || "",
+                editorTransformable: true,
                 resourceRef: spawn.resourceRef || null,
                 modelAssetId: resource.worldModelAssetId || spawn.worldModelAssetId || null,
                 modelScale: num(resource.worldModelScale || spawn.worldModelScale, 0.45),
@@ -16182,6 +16188,7 @@ function resolveChunkDebugCenter(policy) {
               radius: 1.2,
               targetTags: runtimeTargetTags([pickupKind, "pickup", "spawn"], item.tags, currency.tags),
               editorSelectableId: spawn.nodeId || "",
+              editorTransformable: true,
               pickupKind,
               itemRef: pickupKind === "item" ? definitionId : null,
               currencyRef: pickupKind === "currency" ? definitionId : null,
@@ -16240,10 +16247,14 @@ function resolveChunkDebugCenter(policy) {
     if (assetId && assetById(world, assetId)?.sourcePath) {
       const group = new THREE.Group();
       group.name = "node03-runtime-target-model";
-      const fallbackScale = Math.max(0.001, num(target?.modelScale, 1));
-      const scaleX = Math.max(0.001, Number.isFinite(Number(target?.modelScaleX)) ? Number(target.modelScaleX) : fallbackScale);
-      const scaleY = Math.max(0.001, Number.isFinite(Number(target?.modelScaleY)) ? Number(target.modelScaleY) : fallbackScale);
-      const scaleZ = Math.max(0.001, Number.isFinite(Number(target?.modelScaleZ)) ? Number(target.modelScaleZ) : fallbackScale);
+      // NODE-03 serializes absent per-axis overrides as null. Number(null) is
+      // zero, so treating it as a numeric override collapsed runtime models to
+      // the 0.001 safety minimum while editor targets (undefined) stayed at the
+      // intended catalog scale.
+      const fallbackScale = Math.max(0.001, numOrDefault(target?.modelScale, 1));
+      const scaleX = Math.max(0.001, numOrDefault(target?.modelScaleX, fallbackScale));
+      const scaleY = Math.max(0.001, numOrDefault(target?.modelScaleY, fallbackScale));
+      const scaleZ = Math.max(0.001, numOrDefault(target?.modelScaleZ, fallbackScale));
       group.scale.set(scaleX, scaleY, scaleZ);
       group.rotation.set(
         num(target?.modelRotationX, 0) * Math.PI / 180,
@@ -16327,8 +16338,8 @@ function resolveChunkDebugCenter(policy) {
     const root = new THREE.Group();
     root.name = "node03-runtime-target:" + String(target?.instanceId || "target");
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
-    root.userData.transformable = false;
-    root.userData.snapToGround = false;
+    root.userData.transformable = runtimeTargetEditorTransformable(target);
+    root.userData.snapToGround = root.userData.transformable;
     root.userData.runtimeAlive = true;
     root.userData.runtimeTarget = true;
     root.userData.runtimeTargetId = target?.instanceId || null;
@@ -16355,6 +16366,8 @@ function resolveChunkDebugCenter(policy) {
     root.visible = runtimeTargetVisible(target);
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
+    root.userData.transformable = runtimeTargetEditorTransformable(target);
+    root.userData.snapToGround = root.userData.transformable;
     const attachedEntityId = runtimeTargetAttachedEntityId(target);
     if (previousAttachedEntityId && previousAttachedEntityId !== attachedEntityId) {
       syncRuntimeTargetAttachedEntitySuppression(previousAttachedEntityId);

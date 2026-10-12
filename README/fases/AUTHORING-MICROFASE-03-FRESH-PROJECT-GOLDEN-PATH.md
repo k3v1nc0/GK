@@ -1,11 +1,11 @@
 # AUTHORING MICROFASE 3 - Fresh Project Golden Path
 
-**Status:** Checkpoint 1 implemented, awaiting Kevin acceptance  
+**Status:** Checkpoint 2 implemented, awaiting Kevin acceptance
 **Datum:** 2026-10-11
 
 ## Scope van deze uitvoering
 
-Deze uitvoering bevat uitsluitend checkpoint 1: de menselijke fresh-projectbootstrap en volledige rootplumbing. Checkpoint 2 (ontbrekende demo-zichtbare world/spawn/gameplay-authoring) en checkpoint 3 (Kevins onafhankelijke mirror- en lifecycle-acceptatie) zijn niet uitgevoerd.
+Checkpoint 1, de menselijke fresh-projectbootstrap en volledige rootplumbing, is live door Kevin geaccepteerd. Checkpoint 2 voegt de ontbrekende menselijke world-, area-, surface- en spawn-authoring toe. Checkpoint 3 (Kevins onafhankelijke mirror- en lifecycle-acceptatie) is niet uitgevoerd.
 
 De actieve demo, bestaande scripts en databasecontent zijn niet als template gebruikt. Een nieuw project krijgt alleen engine-neutrale basiswaarden en de door de gebruiker gekozen namen, omgeving, speler, camera en besturing.
 
@@ -55,11 +55,71 @@ Poorten worden opgezocht op het actuele node-type, datatype en de bestaande Grou
 - Wereld/Zone, Catalog, Campaign, Player Rules en UI sturen bij een ontbrekende basis terug naar dezelfde herstelwizard. Zij maken niet langer stil ongekoppelde rootcontent.
 - Raw nodes blijven via `Toon in nodes` inspecteerbaar, maar zijn niet de aanmaak- of herstelworkflow.
 
+## Checkpoint 2: Wereldinhoud
+
+Het Bouw-overzicht toont bij de actieve zone één sectie `Wereldinhoud` met de acties `Gebied tekenen`, `Surface toevoegen`, `Enemy-groep plaatsen`, `Resourcegroep plaatsen`, `Itempickup plaatsen` en `Currencypickup plaatsen`.
+
+Iedere actie opent een korte taakspecifieke wizard in `aside.tools`. De wizard gebruikt menselijke namen, typed referencepickers, een typed texturepicker voor surfaces, normale getalvelden en een plaatskeuze door in de bestaande 3D-viewport te klikken. Er is geen tweede authoringmodel en de gebruiker voert geen canonical IDs of JSON in.
+
+Gebieden gebruiken uitsluitend de bewezen collisioncontracten:
+
+- `blocker_area -> zone_output.collision` voor niet-betreedbare polygonen;
+- `walkable_surface -> zone_output.collision` voor loopvlakken, inclusief hoogte;
+- `surface_layer -> zone_output.terrain` voor path/road/water/river/mud/lava/snow/custom-surfaces.
+
+Deze nodes blijven in de bestaande point/polygon- en Surface Layer-tool selecteerbaar. De center/point-handles, G-verplaatsing, F-extrude en de bestaande surfacebewerking blijven eigenaar van de geometrie.
+
+## Checkpoint 2: Spawnpakketten
+
+Een menselijke spawngroep wordt opgeslagen als een bestaand lokaal graphpakket:
+
+1. `enemy_spawn_area`, `resource_spawn` of `pickup_spawn`;
+2. één eigen `spawn_set`;
+3. de bestaande zone-singleton `spawn_controller` (find-or-create);
+4. verbinding naar `zone_output.spawnControllers`;
+5. een hergebruikte of eigen `respawn_policy_definition` in het bestaande Catalog package;
+6. de gekozen bestaande enemy-, resource-, item-, currency-, loot- en yield-definities.
+
+Heropenen zoekt het pakket via bestaande typed edges en references. Opslaan hergebruikt de bestaande set/controller/policy waar die lokaal is en maakt geen dubbele edges. Een gedeeld stat block of respawnprofiel wordt niet stil voor andere content herschreven: dan krijgt de gekozen enemy/spawn een eigen profiel via het bestaande contract.
+
+De editorpreview en game gebruiken dezelfde door de compiler gebouwde `zonePackage.spawnControllers[].spawnSets[].spawns[]`. De preview toont de bestaande individuele enemy-, resource- en pickupinstanties en gebruikt hun `nodeId` als editorselectie. Er wordt geen extra `model_entity` of tweede mesh aangemaakt.
+
+Het draft-/publish-readmodel neemt voor deze spawns ook het werkelijk door NODE-03 gekozen catalogusmodel op in `world.assets`: enemy `modelAssetId` of variantoverride, resource `worldModelAssetId` en item `worldModelAssetId`. Daardoor kan de game dezelfde bestaande asset laden als de editorpreview zonder een extra gameplay- of meshesysteem.
+
+## Selectie, G, nodes en verwijderen
+
+- Klikken op een gebied, surface of spawnmarkering selecteert de echte authored node en opent direct de menselijke wizard met de bestaande waarden.
+- Gebieden en surfaces gebruiken het bestaande point/polygon-G-model.
+- Een spawnmarkering gebruikt G als delta op het groepscentrum; daardoor verplaatst een resource- of enemygroep als geheel zonder de offset van de aangeklikte instantie als nieuw centrum op te slaan.
+- `Toon in nodes` projecteert alleen de spawn/surface/area-node, lokale set, gedeelde controller, lokale policy, relevante definities en Zone Output.
+- Verwijderen meldt de pakketgrootte en externe koppelingen, verwijdert de eigen spawn en set, verwijdert een controller alleen wanneer geen andere sets overblijven, en verwijdert een respawnpolicy alleen wanneer die niet elders wordt gebruikt. Gedeelde gameplaydefinities en loot tables blijven bestaan.
+
+## Aantoonbaar geconsumeerde velden
+
+- Enemy-aantal: NODE-03 en editorpreview gebruiken `countMax` om het aantal instanties te maken; de wizard schrijft daarom één eerlijk `Aantal actief` naar `countMin`, `countMax` en `maxAlive`.
+- Enemy health: `stat.health` uit het verbonden `stat_block` wordt `healthMax`.
+- Enemy damage: `stat.attack_power` wordt gebruikt voor retaliation damage.
+- Enemy loot: `enemy_archetype.lootTableRef` wordt bij defeat door de NODE-03 lootgrant gebruikt.
+- Resource-aantal/radius: `resource_spawn.count` en `radius` bouwen de zichtbare resourceinstanties.
+- Resource yield: `resource_definition.yieldLootTableRef` wordt bij gather gebruikt.
+- Itempickup-aantal: `pickup_spawn.amount` wordt als itemgrant gebruikt.
+- Currencypickup minimum/maximum: `minAmount` en `maxAmount` worden door de currency-pickupconsumer gelezen; de huidige NODE-03-consumer geeft daarvan deterministisch het afgeronde middenbedrag en kiest niet willekeurig.
+- Respawnseconden: `respawn_policy_definition.minDelayMs/maxDelayMs` bepalen de NODE-03 respawntijd.
+- Surface texture/kleur/breedte en collisionpolygonen lopen via de bestaande publish-readmodels naar de bestaande world-runtime.
+
+## Niet ontsloten wegens ontbrekende consumer
+
+- `safe_rule_area`, `discovery_area` en `checkpoint` hebben producer en compileroutput, maar geen aantoonbare gebieds-/activatieconsumer in de huidige game-runtime. Zij worden niet als werkende gebiedsrol aangeboden.
+- `respawn_policy_definition.oneTimeSpawn` wordt gecompileerd, maar NODE-03 leest het veld niet. Daarom is `respawn uit` niet als nep-schakelaar aangeboden; alleen de werkelijk werkende respawnvertraging is beschikbaar.
+- `enemy_spawn_area.countMin` wordt niet als willekeurig minimum gebruikt; NODE-03 kiest het maximum. De UI toont daarom één exact actief-aantal.
+- AI movement speed, sight/aggroafstand, preferred/attack range, faction, difficulty en animationprofielen worden niet door het huidige NODE-03-spawngedrag geconsumeerd en zijn niet in deze wizard gezet.
+- Enemy- en resource-modelvelden zijn in het bestaande schema optioneel. De wizard eist daarom geen modelasset; bestaande definitiemodellen worden door preview/runtime gebruikt en anders blijft de bestaande fallbackweergave gelden.
+
 ## Bewuste grenzen
 
-Checkpoint 1 maakt geen quests, NPCs, vendors, enemies, resources, pickups, portals of andere democontent. De bestaande fallback- en legacyroutes zijn niet verwijderd.
+Deze uitvoering maakt zelf geen demo-, proof-, quest-, NPC-, vendor-, enemy-, resource-, pickup- of portalcontent. De bestaande demo/database bleef read-only referentie en de bestaande fallback- en legacyroutes zijn niet verwijderd.
 
-Checkpoint 2 blijft verantwoordelijk voor de nog ontbrekende zichtbare world-, area-, spawncluster-, encounter-, pickup- en advanced gameplay-authoring die nodig is voor gedragsmatige demo-gelijkwaardigheid.
+Encountercontrollers zijn niet nodig voor de bewezen zone-loaded NODE-03-spawnketen en worden niet aangemaakt. Spawn sets en controllers blijven technische implementatiedetails achter de menselijke wizard.
 
 Checkpoint 3 blijft verantwoordelijk voor Kevins onafhankelijke mirror, publish/gamebewijs, reload/persistence en delete/republish-lifecycleacceptatie.
 
@@ -67,4 +127,4 @@ Ook buiten deze uitvoering blijven `objective_defeat`, quest branch/join/paralle
 
 Er is geen server gestart of herstart. Er zijn geen npm-test/check, smoke, Playwright- of performancechecks uitgevoerd. Alleen gerichte JavaScript-syntaxcontrole en read-only diffinspectie horen bij deze checkpointuitvoering.
 
-**Checkpoint 1 implemented, awaiting Kevin acceptance**
+**Checkpoint 2 implemented, awaiting Kevin acceptance**

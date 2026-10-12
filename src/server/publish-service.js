@@ -3079,6 +3079,36 @@ function zoneEntityRenderableAssetId(entity) {
   return entity.modelAssetId || null;
 }
 
+function addSpawnCatalogAssetIds(assetIds, zonePackages, catalogs) {
+  const sections = catalogs && typeof catalogs === "object" ? catalogs : {};
+  const entry = function (section, id) {
+    const key = String(id || "").trim();
+    const values = sections?.[section];
+    return key && values && typeof values === "object" ? values[key] || {} : {};
+  };
+  const add = function (assetId) {
+    const id = String(assetId || "").trim();
+    if (id) assetIds.add(id);
+  };
+  for (const zonePackage of Array.isArray(zonePackages) ? zonePackages : []) {
+    for (const controller of Array.isArray(zonePackage?.spawnControllers) ? zonePackage.spawnControllers : []) {
+      for (const spawnSet of Array.isArray(controller?.spawnSets) ? controller.spawnSets : []) {
+        for (const spawn of Array.isArray(spawnSet?.spawns) ? spawnSet.spawns : []) {
+          if (spawn?.nodeType === "enemy_spawn_area") {
+            const enemy = entry("enemies", spawn.enemyRef);
+            const variant = entry("variants", spawn.variantRef);
+            add(variant.modelAssetOverride || enemy.modelAssetId || enemy.worldModelAssetId);
+          } else if (spawn?.nodeType === "resource_spawn") {
+            add(entry("resources", spawn.resourceRef).worldModelAssetId);
+          } else if (spawn?.nodeType === "pickup_spawn" && String(spawn.pickupKind || "item") === "item") {
+            add(entry("items", spawn.itemRef).worldModelAssetId);
+          }
+        }
+      }
+    }
+  }
+}
+
 function buildZoneEntityReadModel(entity, assetLookup) {
   if (!entity) return null;
   if (entity.nodeType === "entity_assembly") {
@@ -3315,6 +3345,7 @@ export class PublishService {
       const assetId = zoneEntityRenderableAssetId(entity);
       if (assetId) zoneAssetIds.add(assetId);
     }
+    addSpawnCatalogAssetIds(zoneAssetIds, zoneContentPackages, manifest.catalogs);
     // Bounded Area Scatter nodes wired to a Zone Output's "entities" port arrive here as
     // a single raw node-value record (via recordsFromSources), not the expanded
     // per-instance placements the legacy path produces. Interactable entity assemblies

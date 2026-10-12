@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261009-delete-refresh1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261012-runtime-null-scale1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261006-portal-pair2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -132,6 +132,12 @@ const VIEWPORT_AFFECTING_NODE_TYPES = new Set([
   "player_spawn",
   "model_entity",
   "bounded_area_scatter",
+  "blocker_area",
+  "walkable_surface",
+  "area_definition",
+  "enemy_spawn_area",
+  "resource_spawn",
+  "pickup_spawn",
   "interactable",
   "keybind",
   "ui_hud_text",
@@ -171,6 +177,13 @@ const TERRAIN_CLOSED_SHAPE_NODE_TYPES = new Set([
   "area_definition",
   "location_anchor"
 ]);
+const WORLD_CONTENT_AREA_TYPES = new Set(["blocker_area", "walkable_surface"]);
+const WORLD_CONTENT_SPAWN_TYPES = new Set(["enemy_spawn_area", "resource_spawn", "pickup_spawn"]);
+const WORLD_CONTENT_NODE_TYPES = new Set([
+  "surface_layer",
+  ...WORLD_CONTENT_AREA_TYPES,
+  ...WORLD_CONTENT_SPAWN_TYPES
+]);
 
 const state = {
   graph: { nodes: [], edges: [], nodeTypes: {} },
@@ -198,6 +211,8 @@ const state = {
   nodeLibraryAdvanced: false,
   projectFoundationWizard: null,
   zoneCanvasDraft: null,
+  worldContentDraft: null,
+  worldContentTransformStart: null,
   catalogHubType: "item_definition",
   catalogHubSelectedNodeId: null,
   catalogHubDraft: null,
@@ -2404,6 +2419,11 @@ function selectedModelNode() {
   return node && node.type === "model_entity" ? node : null;
 }
 
+function selectedWorldContentPositionNode() {
+  const node = nodeById(state.selectedNodeId);
+  return node && WORLD_CONTENT_SPAWN_TYPES.has(node.type) ? node : null;
+}
+
 function selectedTransformSnapshot() {
   if (!runtime || typeof runtime.getSelectedEntityTransform !== "function") return null;
   const snapshot = runtime.getSelectedEntityTransform();
@@ -4034,7 +4054,7 @@ function setViewportSnap(mode, gridSize) {
 }
 
 function syncRuntimeModelSelectionForTransform() {
-  if (!runtime || runtimeTransformActive()) return selectedModelNode();
+  if (!runtime || runtimeTransformActive()) return selectedModelNode() || selectedWorldContentPositionNode();
   // A finished transform clears the runtime's transient selection, while the editor's
   // authored node selection intentionally remains. Rebuild the complete runtime set
   // before every new G/R/S action; selecting only the primary node here would silently
@@ -4048,12 +4068,12 @@ function syncRuntimeModelSelectionForTransform() {
       .map(function (nodeId) { return nodeById(nodeId); })
       .find(function (node) { return node?.type === "model_entity"; }) || null;
   }
-  let node = selectedModelNode();
+  let node = selectedModelNode() || selectedWorldContentPositionNode();
   let runtimeId = runtimeNodeId(node);
   if (!runtimeId) {
-    runtimeId = runtimeModelEntityIdAtLastPointer();
+    runtimeId = runtimeEntityIdAtLastPointer();
     const pointerNode = nodeByRuntimeId(runtimeId);
-    if (pointerNode && pointerNode.type === "model_entity") node = pointerNode;
+    if (pointerNode && (pointerNode.type === "model_entity" || WORLD_CONTENT_SPAWN_TYPES.has(pointerNode.type))) node = pointerNode;
   }
   if (runtimeId && typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeId);
   return node;
@@ -4065,11 +4085,25 @@ function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
     setStatus(statusText, "");
     return true;
   }
-  syncRuntimeModelSelectionForTransform();
+  const transformNode = syncRuntimeModelSelectionForTransform();
   const selectedId = runtimeSelectedEntityId() || runtimeModelEntityIdAtLastPointer();
   if (!selectedId && state.selectedNodeIds.length <= 1) {
     setStatus("No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", "error");
     return false;
+  }
+  if (transformNode && WORLD_CONTENT_SPAWN_TYPES.has(transformNode.type) && mode !== "move") {
+    setStatus("Deze groep ondersteunt alleen verplaatsen met G.", "error");
+    return false;
+  }
+  if (transformNode && WORLD_CONTENT_SPAWN_TYPES.has(transformNode.type) && typeof runtime.getSelectedEntityTransform === "function") {
+    const snapshot = runtime.getSelectedEntityTransform();
+    state.worldContentTransformStart = snapshot ? {
+      nodeId: transformNode.id,
+      nodePosition: { x: Number(transformNode.values?.x) || 0, y: Number(transformNode.values?.y) || 0, z: Number(transformNode.values?.z) || 0 },
+      runtimePosition: clonePlain(snapshot.position || {})
+    } : null;
+  } else {
+    state.worldContentTransformStart = null;
   }
   // On touch there's no driving gesture yet at button-press time - starting the transform
   // right here means its very first real input is a brand new touchdown a moment later,
@@ -4239,6 +4273,32 @@ function appendModelTransformActions(parent) {
     title: "Focus selected",
     onClick: focusTerrainOrSelected
   }));
+}
+
+function appendPositionTransformActions(parent) {
+  const activeTransform = runtimeTransformActive();
+  parent.appendChild(transformActionButton("Move (G)", {
+    title: "Verplaats de groep",
+    active: activeTransform,
+    onClick: function (event) {
+      setViewportMode("translate");
+      setViewportAxis(null);
+      beginRuntimeTransformFromShortcut("move", "Verplaats de groep.", event);
+    }
+  }));
+  parent.appendChild(transformActionButton("OK (Enter)", {
+    title: "Bevestig verplaatsing", className: "ok", disabled: !activeTransform,
+    onPointerDown: confirmRuntimeTransform, onClick: confirmRuntimeTransform
+  }));
+  parent.appendChild(transformActionButton("Del (Del)", {
+    title: "Verwijder groep en lokaal pakket", className: "danger",
+    onClick: function () { if (activeTransform) cancelRuntimeTransform(); void deleteSelectedNodes(); }
+  }));
+  parent.appendChild(transformActionButton("Esc (Esc)", {
+    title: activeTransform ? "Annuleer verplaatsing" : "Deselecteer", className: "danger",
+    onClick: function () { if (activeTransform) cancelRuntimeTransform(); else deselectViewportClick(); }
+  }));
+  parent.appendChild(transformActionButton("Focus (F)", { title: "Focus selectie", onClick: focusTerrainOrSelected }));
 }
 
 function selectedToolPointIndex(toolState) {
@@ -4531,9 +4591,10 @@ function transformPanelFloatingOptions(hasMatrix) {
 function renderTransformPanel() {
   if (!el.viewportTransformPanel) return;
   const node = selectedModelNode();
-  const terrainNode = node ? null : selectedTerrainNode();
-  const scatterNode = node || terrainNode ? null : selectedScatterNode();
-  if (!node && !terrainNode && !scatterNode) {
+  const positionNode = node ? null : selectedWorldContentPositionNode();
+  const terrainNode = node || positionNode ? null : selectedTerrainNode();
+  const scatterNode = node || positionNode || terrainNode ? null : selectedScatterNode();
+  if (!node && !positionNode && !terrainNode && !scatterNode) {
     setEditorMinimapSuppressed(false);
     el.viewportTransformPanel.hidden = true;
     el.viewportTransformPanel.classList.remove("minimapSlotPanel");
@@ -4548,6 +4609,7 @@ function renderTransformPanel() {
   const actions = document.createElement("div");
   actions.className = "transformMobileActions";
   if (node) appendModelTransformActions(actions);
+  else if (positionNode) appendPositionTransformActions(actions, positionNode);
   else if (terrainNode) appendTerrainTransformActions(actions, terrainNode);
   else appendScatterTransformActions(actions, scatterNode);
   el.viewportTransformPanel.appendChild(actions);
@@ -4892,6 +4954,12 @@ function setSelection(nodeIds, edgeIds, options = {}) {
     } else if (nextNodeIds.length !== 1 || primaryNode?.type !== "model_entity") {
       state.authoringSelectedModelNodeId = null;
     }
+  }
+  const selectedWorldContent = nextNodeIds.length === 1 ? nodeById(state.selectedNodeId) : null;
+  if (selectedWorldContent && WORLD_CONTENT_NODE_TYPES.has(selectedWorldContent.type)) {
+    if (state.worldContentDraft?.existingNodeId !== selectedWorldContent.id) beginWorldContentEdit(selectedWorldContent, { silent: true });
+  } else if (state.worldContentDraft?.existingNodeId) {
+    state.worldContentDraft = null;
   }
   if (options.clearPendingEdge) state.pendingEdge = null;
   syncSelectedNodeCard();
@@ -5290,6 +5358,28 @@ async function boot() {
         return;
       }
       const node = nodeByRuntimeId(entityIdOrPayload);
+      if (node && WORLD_CONTENT_SPAWN_TYPES.has(node.type)) {
+        const start = state.worldContentTransformStart?.nodeId === node.id ? state.worldContentTransformStart : null;
+        const runtimeStart = start?.runtimePosition || {};
+        const nodeStart = start?.nodePosition || { x: Number(node.values?.x) || 0, y: Number(node.values?.y) || 0, z: Number(node.values?.z) || 0 };
+        const patch = {
+          x: nodeStart.x + ((Number(transform?.x) || 0) - (Number(runtimeStart.x) || 0)),
+          y: nodeStart.y + ((Number(transform?.y) || 0) - (Number(runtimeStart.y) || 0)),
+          z: nodeStart.z + ((Number(transform?.z) || 0) - (Number(runtimeStart.z) || 0))
+        };
+        if (state.worldContentDraft?.existingNodeId === node.id) {
+          state.worldContentDraft.values = Object.assign({}, state.worldContentDraft.values || {}, patch);
+        }
+        void patchValues(node.id, patch, {
+          historyLabel: "Spawn-groep verplaatst",
+          refreshViewport: true,
+          refreshEdgeList: false,
+          refreshValidation: false
+        });
+        state.worldContentTransformStart = null;
+        setViewportAxis(null);
+        return;
+      }
       if (!node || node.type !== "model_entity") {
         state.lastTransformCommitError = "Transform niet opgeslagen: runtime entity niet gevonden (" + String(entityIdOrPayload || "unknown") + ").";
         setStatus(state.lastTransformCommitError, "error");
@@ -11495,7 +11585,7 @@ const UI_HUB_TYPES = [
 ];
 
 const AUTHORING_ROUTE_COUNT_TYPES = {
-  world_zone: ["group", "zone_definition", "zone_output", "spawn_point", "zone_link", "map_marker_definition", "minimap_bake"],
+  world_zone: ["group", "zone_definition", "zone_output", "spawn_point", "zone_link", "map_marker_definition", "minimap_bake", "surface_layer", "blocker_area", "walkable_surface", "enemy_spawn_area", "resource_spawn", "pickup_spawn"],
   object_character: ["model_entity", "entity_assembly", "interaction_component", "npc_component", "enemy_component", "resource_component", "pickup_component", "portal_component", "crafting_station_component", "vendor_component", "marketplace_access_component", "quest_target_binding"],
   quest_dialogue: ["quest_definition", "quest_step", "dialogue_definition", "dialogue_entry", "dialogue_choice", "dialogue_terminal"],
   item_ability_stat: CATALOG_HUB_TYPES.map(function (entry) { return entry.type; }).concat(CATALOG_CHILD_ROUTE_TYPES.map(function (entry) { return entry.type; })),
@@ -13175,6 +13265,695 @@ function renderZoneCanvasDraftCard() {
   actions.append(confirm, cancel);
   card.appendChild(actions);
   return card;
+}
+
+function worldContentSelectedNode() {
+  const node = graphNodeByIdInGraph(state.graph, state.selectedNodeId);
+  return node && WORLD_CONTENT_NODE_TYPES.has(node.type) ? node : null;
+}
+
+function worldContentZoneGroupForNode(node, graph = state.graph) {
+  if (!node) return null;
+  const parent = graphNodeByIdInGraph(graph, node.parentId);
+  return parent && isZoneCanvasGroup(parent, graph) ? parent : null;
+}
+
+function worldContentDefinitionNode(ref, type, graph = state.graph) {
+  const wanted = normalizeCanonicalId(ref, "");
+  if (!wanted) return null;
+  const idField = identityFieldForType(type);
+  return (graph.nodes || []).find(function (node) {
+    return node.type === type && normalizeCanonicalId(node.values?.[idField], "") === wanted;
+  }) || null;
+}
+
+function worldContentReferenceInput(draft, fieldName, kinds, label, options = {}) {
+  const field = { label, type: "reference", referenceKinds: kinds, allowNull: options.required !== true, required: options.required === true };
+  const fakeNode = { id: "world-content-" + draft.kind + "-" + fieldName, type: "zone_output", values: {} };
+  return buildReferencePickerField(fakeNode, fieldName, field, draft.values?.[fieldName] || null, {
+    onChange: function (nextValue) {
+      draft.values = Object.assign({}, draft.values || {}, { [fieldName]: nextValue || "" });
+      if (typeof options.onChange === "function") options.onChange(nextValue || "");
+      renderAuthoringHub();
+    },
+    hideAdvanced: true
+  });
+}
+
+function worldContentDraftPosition(zoneGroup) {
+  const pointer = terrainLastPointerGroundPoint();
+  if (pointer) return { x: pointer.x, y: terrainGroundY(), z: pointer.z };
+  const zone = zoneDefinitionForGroup(zoneGroup?.id, state.graph);
+  return {
+    x: Number(zone?.values?.originX) || 0,
+    y: Number(zone?.values?.originY) || terrainGroundY(),
+    z: Number(zone?.values?.originZ) || 0
+  };
+}
+
+function beginWorldContentDraft(kind, zoneGroup = authoringOverviewCurrentZone()) {
+  if (!ensureProjectFoundationOrRedirect("Wereldinhoud")) return;
+  if (!zoneGroup || !isZoneCanvasGroup(zoneGroup, state.graph)) {
+    setStatus("Maak of open eerst een Zone Canvas.", "error");
+    return;
+  }
+  const position = worldContentDraftPosition(zoneGroup);
+  const base = {
+    kind,
+    step: 1,
+    existingNodeId: null,
+    zoneGroupId: zoneGroup.id,
+    awaitingPlacement: false,
+    values: { name: "", x: position.x, y: position.y, z: position.z }
+  };
+  if (kind === "area") {
+    base.values = Object.assign(base.values, { role: "blocker", width: 8, depth: 8, height: 0.35, reason: "forbidden" });
+  } else if (kind === "surface") {
+    base.values = Object.assign(base.values, { surfaceKind: "path", width: 3, color: "#8a6f45", textureAssetId: null });
+  } else if (kind === "enemy") {
+    base.values = Object.assign(base.values, { definitionRef: "", count: 3, radius: 8, health: 50, damage: 8, lootTableRef: "", respawnSeconds: 30 });
+  } else if (kind === "resource") {
+    base.values = Object.assign(base.values, { definitionRef: "", count: 1, radius: 8, lootTableRef: "", respawnSeconds: 30 });
+  } else if (kind === "item") {
+    base.values = Object.assign(base.values, { definitionRef: "", amount: 1, respawnSeconds: 30 });
+  } else if (kind === "currency") {
+    base.values = Object.assign(base.values, { definitionRef: "", minAmount: 1, maxAmount: 1, respawnSeconds: 30 });
+  }
+  state.worldContentDraft = base;
+  state.authoringRouteId = null;
+  state.authoringOverviewActive = true;
+  state.authoringMenuOpen = false;
+  renderAuthoringHub();
+}
+
+function worldContentSpawnSetForEntry(entry, graph = state.graph) {
+  if (!entry) return null;
+  const edge = (graph.edges || []).find(function (candidate) {
+    return candidate.fromNodeId === entry.id && candidate.toPort === "spawns";
+  });
+  const node = edge ? graphNodeByIdInGraph(graph, edge.toNodeId) : null;
+  return node?.type === "spawn_set" ? node : null;
+}
+
+function worldContentControllerForSet(spawnSet, graph = state.graph) {
+  if (!spawnSet) return null;
+  const edge = (graph.edges || []).find(function (candidate) {
+    return candidate.fromNodeId === spawnSet.id && candidate.toPort === "spawnSets";
+  });
+  const node = edge ? graphNodeByIdInGraph(graph, edge.toNodeId) : null;
+  return node?.type === "spawn_controller" ? node : null;
+}
+
+function worldContentStatValue(enemyNode, statRef, graph = state.graph, fallback = 0) {
+  const statBlock = worldContentDefinitionNode(enemyNode?.values?.statBlockRef, "stat_block", graph);
+  const entry = (Array.isArray(statBlock?.values?.entries) ? statBlock.values.entries : []).find(function (candidate) {
+    return normalizeCanonicalId(candidate?.statRef, "") === statRef;
+  });
+  return Number.isFinite(Number(entry?.baseValue)) ? Number(entry.baseValue) : fallback;
+}
+
+function worldContentRespawnSeconds(node, graph = state.graph) {
+  const ref = node?.type === "resource_spawn" ? node.values?.respawnOverrideRef : node?.values?.respawnPolicyRef;
+  const policy = worldContentDefinitionNode(ref, "respawn_policy_definition", graph);
+  const min = Number(policy?.values?.minDelayMs);
+  const max = Number(policy?.values?.maxDelayMs);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return 30;
+  return Math.max(0, Math.round(((Number.isFinite(min) ? min : max) + (Number.isFinite(max) ? max : min)) / 2000));
+}
+
+function beginWorldContentEdit(node, options = {}) {
+  if (!node || !WORLD_CONTENT_NODE_TYPES.has(node.type)) return;
+  const zoneGroup = worldContentZoneGroupForNode(node);
+  if (!zoneGroup) return;
+  let kind = node.type === "surface_layer" ? "surface"
+    : WORLD_CONTENT_AREA_TYPES.has(node.type) ? "area"
+      : node.type === "enemy_spawn_area" ? "enemy"
+        : node.type === "resource_spawn" ? "resource"
+          : node.values?.pickupKind === "currency" ? "currency" : "item";
+  const values = {
+    name: node.values?.label || node.title || "",
+    x: Number(node.values?.x) || 0,
+    y: Number(node.values?.y) || terrainGroundY(),
+    z: Number(node.values?.z) || 0
+  };
+  if (kind === "area") Object.assign(values, {
+    role: node.type === "walkable_surface" ? "walkable" : "blocker",
+    width: Number(node.values?.width) || 8,
+    depth: Number(node.values?.depth) || 8,
+    height: Number(node.values?.y) || 0.35,
+    reason: node.values?.reason || "forbidden"
+  });
+  if (kind === "surface") Object.assign(values, {
+    surfaceKind: node.values?.surfaceKind || "path",
+    width: Number(node.values?.width) || 3,
+    color: node.values?.fallbackColor || "#8a6f45",
+    textureAssetId: node.values?.textureAssetId || null
+  });
+  if (kind === "enemy") {
+    const enemy = worldContentDefinitionNode(node.values?.enemyRef, "enemy_archetype");
+    Object.assign(values, {
+      definitionRef: node.values?.enemyRef || "",
+      count: Number(node.values?.countMax || node.values?.countMin || node.values?.maxAlive) || 1,
+      radius: Number(node.values?.radius) || 8,
+      health: worldContentStatValue(enemy, "stat.health", state.graph, 50),
+      damage: worldContentStatValue(enemy, "stat.attack_power", state.graph, 8),
+      lootTableRef: enemy?.values?.lootTableRef || "",
+      respawnSeconds: worldContentRespawnSeconds(node)
+    });
+  }
+  if (kind === "resource") {
+    const resource = worldContentDefinitionNode(node.values?.resourceRef, "resource_definition");
+    Object.assign(values, {
+      definitionRef: node.values?.resourceRef || "",
+      count: Number(node.values?.count) || 1,
+      radius: Number(node.values?.radius) || 8,
+      lootTableRef: resource?.values?.yieldLootTableRef || "",
+      respawnSeconds: worldContentRespawnSeconds(node)
+    });
+  }
+  if (kind === "item") Object.assign(values, {
+    definitionRef: node.values?.itemRef || "",
+    amount: Number(node.values?.amount) || 1,
+    respawnSeconds: worldContentRespawnSeconds(node)
+  });
+  if (kind === "currency") Object.assign(values, {
+    definitionRef: kind === "currency" ? node.values?.currencyRef || "" : node.values?.itemRef || "",
+    minAmount: Number(node.values?.minAmount ?? node.values?.amount) || 1,
+    maxAmount: Number(node.values?.maxAmount ?? node.values?.amount) || 1,
+    respawnSeconds: worldContentRespawnSeconds(node)
+  });
+  state.worldContentDraft = { kind, step: 1, existingNodeId: node.id, zoneGroupId: zoneGroup.id, awaitingPlacement: false, values };
+  if (!options.silent) renderAuthoringHub();
+}
+
+function worldContentKindLabel(kind) {
+  return kind === "area" ? "Gebied" : kind === "surface" ? "Surface" : kind === "enemy" ? "Enemy-groep"
+    : kind === "resource" ? "Resourcegroep" : kind === "currency" ? "Currencypickup" : "Itempickup";
+}
+
+function worldContentDraftValid(draft, step) {
+  if (!draft || !String(draft.values?.name || "").trim()) return false;
+  if (["enemy", "resource", "item", "currency"].includes(draft.kind) && step >= 1) {
+    const kinds = draft.kind === "enemy" ? ["enemy"] : draft.kind === "resource" ? ["resource"] : draft.kind === "currency" ? ["currency"] : ["item"];
+    if (referencePickerChoiceState(draft.values?.definitionRef, { type: "reference", referenceKinds: kinds, required: true }).state !== "ok") return false;
+  }
+  return true;
+}
+
+function worldContentEnsureController(graph, zoneGroup, zoneOutput) {
+  let controller = (graph.nodes || []).find(function (node) {
+    return node.parentId === zoneGroup.id && node.type === "spawn_controller";
+  }) || null;
+  if (!controller) {
+    const values = objectFunctionDefaultValuesForNodeType("spawn_controller");
+    values.spawnControllerId = uniqueCanonicalGraphValue(graph, "spawn_controller." + objectFunctionModelStem(zoneGroup));
+    controller = { id: createZoneGraphId("node_spawn_controller"), type: "spawn_controller", title: "Spawnbeheer " + zoneCanvasDisplayName(zoneGroup, graph), x: 900, y: 520, parentId: zoneGroup.id, values };
+    graph.nodes.push(controller);
+  }
+  ensureTypedGraphEdge(graph, controller, zoneOutput, "spawnController");
+  return controller;
+}
+
+function worldContentEnsureRespawnPolicy(graph, entry, name, seconds) {
+  const currentRef = entry?.type === "resource_spawn" ? entry.values?.respawnOverrideRef : entry?.values?.respawnPolicyRef;
+  let policy = worldContentDefinitionNode(currentRef, "respawn_policy_definition", graph);
+  const catalogGroup = visualBuilderEnsureCatalogGroup(graph);
+  const ownSet = worldContentSpawnSetForEntry(entry, graph);
+  const ownIds = new Set([entry.id]);
+  if (ownSet) ownIds.add(ownSet.id);
+  if (policy && graphReferenceUseCount(graph, currentRef, ownIds) > 0) policy = null;
+  if (!policy) {
+    const values = objectFunctionDefaultValuesForNodeType("respawn_policy_definition");
+    values.respawnPolicyId = uniqueCanonicalGraphValue(graph, "respawn_policy.visual." + (slugifyGroupPortName(name, "spawn") || "spawn"));
+    const position = managedSuggestedNodePosition(graph, catalogGroup, "respawn_policy_definition");
+    policy = { id: createZoneGraphId("node_respawn_policy_definition"), type: "respawn_policy_definition", title: name + " respawn", x: position.x, y: position.y, parentId: catalogGroup.id, values };
+    graph.nodes.push(policy);
+  }
+  const delay = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
+  policy.values = Object.assign({}, policy.values || {}, { displayName: name + " respawn", minDelayMs: delay, maxDelayMs: delay, jitterMode: "none", oneTimeSpawn: false });
+  connectManagedNodeToPackage(graph, catalogGroup, policy);
+  return normalizeCanonicalId(policy.values?.respawnPolicyId, "");
+}
+
+function worldContentEnsureEnemyStats(graph, enemy, name, health, damage) {
+  if (!enemy) return null;
+  const currentRef = enemy.values?.statBlockRef;
+  let block = worldContentDefinitionNode(currentRef, "stat_block", graph);
+  const enemyParent = graphNodeByIdInGraph(graph, enemy.parentId);
+  const catalogGroup = enemyParent?.type === "group" && normalizeEditorKey(enemyParent.values?.groupKind) === "catalog"
+    ? enemyParent
+    : visualBuilderEnsureCatalogGroup(graph);
+  if (block && graphReferenceUseCount(graph, currentRef, new Set([enemy.id])) > 0) block = null;
+  if (!block) {
+    const values = objectFunctionDefaultValuesForNodeType("stat_block");
+    values.statBlockId = uniqueCanonicalGraphValue(graph, "stat_block.visual." + (slugifyGroupPortName(name, "enemy") || "enemy"));
+    const position = managedSuggestedNodePosition(graph, catalogGroup, "stat_block");
+    block = { id: createZoneGraphId("node_stat_block"), type: "stat_block", title: name + " stats", x: position.x, y: position.y, parentId: catalogGroup.id, values };
+    graph.nodes.push(block);
+  }
+  const entries = (Array.isArray(block.values?.entries) ? clonePlain(block.values.entries) : []).filter(function (entry) {
+    return !["stat.health", "stat.attack_power"].includes(normalizeCanonicalId(entry?.statRef, ""));
+  });
+  entries.push({ statRef: "stat.health", baseValue: Math.max(1, Number(health) || 1) });
+  entries.push({ statRef: "stat.attack_power", baseValue: Math.max(0, Number(damage) || 0) });
+  block.values = Object.assign({}, block.values || {}, { displayName: name + " stats", entries });
+  enemy.values = Object.assign({}, enemy.values || {}, { statBlockRef: block.values.statBlockId });
+  const blockParent = graphNodeByIdInGraph(graph, block.parentId);
+  const blockCatalogGroup = blockParent?.type === "group" && normalizeEditorKey(blockParent.values?.groupKind) === "catalog" ? blockParent : catalogGroup;
+  connectManagedNodeToPackage(graph, blockCatalogGroup, block);
+  const canUseDirectStatEdge = (block.parentId || null) === (enemy.parentId || null);
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    return !(edge.toNodeId === enemy.id && edge.toPort === "statBlock" && (edge.fromNodeId !== block.id || !canUseDirectStatEdge));
+  });
+  if (canUseDirectStatEdge) ensureTypedGraphEdge(graph, block, enemy, "statBlock");
+  return block;
+}
+
+async function commitWorldContentDraft() {
+  const draft = state.worldContentDraft;
+  if (!draft || !worldContentDraftValid(draft, draft.step)) {
+    setStatus("Vul de naam en de verplichte bestaande definitie in.", "error");
+    return;
+  }
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const zoneGroup = graphNodeByIdInGraph(nextGraph, draft.zoneGroupId);
+  const zoneOutput = zoneOutputForGroup(zoneGroup?.id, nextGraph);
+  if (!zoneGroup || !zoneOutput) {
+    setStatus("De gekozen zone of Zone Output bestaat niet meer.", "error");
+    return;
+  }
+  const name = String(draft.values.name || "").trim();
+  const x = Number(draft.values.x) || 0;
+  const y = Number(draft.values.y) || 0;
+  const z = Number(draft.values.z) || 0;
+  let node = draft.existingNodeId ? graphNodeByIdInGraph(nextGraph, draft.existingNodeId) : null;
+  const isNew = !node;
+  if (draft.kind === "area") {
+    const type = draft.values.role === "walkable" ? "walkable_surface" : "blocker_area";
+    if (node && node.type !== type) {
+      const oldId = node.id;
+      nextGraph.edges = (nextGraph.edges || []).filter(function (edge) { return edge.fromNodeId !== oldId && edge.toNodeId !== oldId; });
+      nextGraph.nodes = (nextGraph.nodes || []).filter(function (candidate) { return candidate.id !== oldId; });
+      node = null;
+    }
+    const freshAreaNode = !node;
+    if (!node) node = { id: createZoneGraphId("node_" + type), type, title: name, x: 120, y: 520, parentId: zoneGroup.id, values: objectFunctionDefaultValuesForNodeType(type) };
+    node.title = name;
+    node.parentId = zoneGroup.id;
+    node.values = Object.assign({}, node.values || {}, {
+      label: name, x, z, width: Math.max(0.1, Number(draft.values.width) || 8), depth: Math.max(0.1, Number(draft.values.depth) || 8)
+    });
+    if (type === "blocker_area") {
+      node.values.blockerId = node.values.blockerId && !freshAreaNode ? node.values.blockerId : uniqueFieldValue(nextGraph, type, "blockerId", "blocker_" + (slugifyGroupPortName(name, "area") || "area"));
+      node.values.reason = draft.values.reason || "forbidden";
+      node.values.shapeType = Array.isArray(node.values.points) && node.values.points.length ? "polygon" : "box";
+    } else {
+      node.values.surfaceId = node.values.surfaceId && !freshAreaNode ? node.values.surfaceId : uniqueFieldValue(nextGraph, type, "surfaceId", "walkable_" + (slugifyGroupPortName(name, "area") || "area"));
+      node.values.y = Number(draft.values.height) || 0;
+    }
+    if (!nextGraph.nodes.some(function (candidate) { return candidate.id === node.id; })) nextGraph.nodes.push(node);
+    ensureTypedGraphEdge(nextGraph, node, zoneOutput, "collision");
+  } else if (draft.kind === "surface") {
+    if (!node) node = { id: createZoneGraphId("node_surface_layer"), type: "surface_layer", title: name, x: 340, y: 520, parentId: zoneGroup.id, values: objectFunctionDefaultValuesForNodeType("surface_layer") };
+    node.title = name;
+    node.parentId = zoneGroup.id;
+    node.values = Object.assign({}, node.values || {}, {
+      surfaceId: node.values?.surfaceId && !isNew ? node.values.surfaceId : uniqueFieldValue(nextGraph, "surface_layer", "surfaceId", "surface_" + (slugifyGroupPortName(name, "surface") || "surface")),
+      label: name,
+      surfaceKind: draft.values.surfaceKind || "path",
+      fallbackColor: draft.values.color || "#8a6f45",
+      textureAssetId: draft.values.textureAssetId || null,
+      width: Math.max(0.1, Number(draft.values.width) || 3),
+      points: Array.isArray(node.values?.points) && node.values.points.length >= 2 ? node.values.points : [{ x: x - 3, z }, { x: x + 3, z }]
+    });
+    if (!nextGraph.nodes.some(function (candidate) { return candidate.id === node.id; })) nextGraph.nodes.push(node);
+    ensureTypedGraphEdge(nextGraph, node, zoneOutput, "terrain");
+  } else {
+    const type = draft.kind === "enemy" ? "enemy_spawn_area" : draft.kind === "resource" ? "resource_spawn" : "pickup_spawn";
+    if (!node) node = { id: createZoneGraphId("node_" + type), type, title: name, x: 560, y: 520, parentId: zoneGroup.id, values: objectFunctionDefaultValuesForNodeType(type) };
+    node.title = name;
+    node.parentId = zoneGroup.id;
+    node.values = Object.assign({}, node.values || {}, {
+      spawnEntryId: node.values?.spawnEntryId && !isNew ? node.values.spawnEntryId : uniqueCanonicalGraphValue(nextGraph, "spawn." + (slugifyGroupPortName(name, "group") || "group")),
+      x, y, z
+    });
+    if (draft.kind === "enemy") Object.assign(node.values, {
+      enemyRef: draft.values.definitionRef,
+      countMin: Math.max(1, Math.floor(Number(draft.values.count) || 1)),
+      countMax: Math.max(1, Math.floor(Number(draft.values.count) || 1)),
+      maxAlive: Math.max(1, Math.floor(Number(draft.values.count) || 1)),
+      radius: Math.max(0, Number(draft.values.radius) || 0),
+      distribution: "blue_noise"
+    });
+    if (draft.kind === "resource") Object.assign(node.values, {
+      resourceRef: draft.values.definitionRef,
+      count: Math.max(1, Math.floor(Number(draft.values.count) || 1)),
+      radius: Math.max(0, Number(draft.values.radius) || 0),
+      distribution: "blue_noise"
+    });
+    if (draft.kind === "item" || draft.kind === "currency") Object.assign(node.values, {
+      pickupKind: draft.kind,
+      itemRef: draft.kind === "item" ? draft.values.definitionRef : null,
+      currencyRef: draft.kind === "currency" ? draft.values.definitionRef : null,
+      amount: Math.max(1, Math.floor(Number(draft.kind === "item" ? draft.values.amount : draft.values.minAmount) || 1)),
+      minAmount: Math.max(1, Math.floor(Number(draft.kind === "item" ? draft.values.amount : draft.values.minAmount) || 1)),
+      maxAmount: Math.max(1, Math.floor(Number(draft.kind === "item" ? draft.values.amount : draft.values.maxAmount) || 1)),
+      ownershipMode: "shared"
+    });
+    if (draft.kind === "currency" && node.values.maxAmount < node.values.minAmount) node.values.maxAmount = node.values.minAmount;
+    if (!nextGraph.nodes.some(function (candidate) { return candidate.id === node.id; })) nextGraph.nodes.push(node);
+    const policyRef = worldContentEnsureRespawnPolicy(nextGraph, node, name, draft.values.respawnSeconds);
+    if (draft.kind === "resource") node.values.respawnOverrideRef = policyRef;
+    else node.values.respawnPolicyRef = policyRef;
+
+    const definitionType = draft.kind === "enemy" ? "enemy_archetype" : draft.kind === "resource" ? "resource_definition" : draft.kind === "item" ? "item_definition" : "currency_definition";
+    const definition = worldContentDefinitionNode(draft.values.definitionRef, definitionType, nextGraph);
+    if (draft.kind === "enemy" && definition) {
+      definition.values = Object.assign({}, definition.values || {}, { lootTableRef: draft.values.lootTableRef || null });
+      worldContentEnsureEnemyStats(nextGraph, definition, definition.values?.displayName || name, draft.values.health, draft.values.damage);
+    }
+    if (draft.kind === "resource" && definition) {
+      definition.values = Object.assign({}, definition.values || {}, { yieldLootTableRef: draft.values.lootTableRef || null });
+    }
+    const controller = worldContentEnsureController(nextGraph, zoneGroup, zoneOutput);
+    let spawnSet = worldContentSpawnSetForEntry(node, nextGraph);
+    if (!spawnSet) {
+      const setValues = objectFunctionDefaultValuesForNodeType("spawn_set");
+      setValues.spawnSetId = uniqueCanonicalGraphValue(nextGraph, "spawn_set." + (slugifyGroupPortName(name, "group") || "group"));
+      spawnSet = { id: createZoneGraphId("node_spawn_set"), type: "spawn_set", title: name + " pakket", x: 760, y: 520, parentId: zoneGroup.id, values: setValues };
+      nextGraph.nodes.push(spawnSet);
+    }
+    const activeCount = draft.kind === "enemy" ? Number(node.values.countMax) : draft.kind === "resource" ? Number(node.values.count) : 1;
+    spawnSet.values = Object.assign({}, spawnSet.values || {}, { activationMode: "zone_loaded", maxAliveTotal: Math.max(1, activeCount), sharedRespawnPolicyRef: policyRef });
+    ensureTypedGraphEdge(nextGraph, node, spawnSet, "spawnEntry");
+    ensureTypedGraphEdge(nextGraph, spawnSet, controller, "spawnSet");
+  }
+  await restoreGraphObject(nextGraph, {
+    historyLabel: worldContentKindLabel(draft.kind) + (isNew ? " geplaatst" : " gewijzigd"),
+    currentGroupId: zoneGroup.id,
+    selectedNodeIds: [node.id],
+    selectedEdgeIds: [],
+    refreshViewport: true,
+    refreshValidation: true,
+    afterApply: function () {
+      state.worldContentDraft = null;
+      selectNode(node.id, true, { clearPendingEdge: true });
+      setStatus(name + (isNew ? " is geplaatst. Gebruik G in de viewport om te verplaatsen." : " is bijgewerkt."), "success");
+    }
+  });
+}
+
+function worldContentDraftStepCount(draft) {
+  return ["enemy", "resource", "item", "currency"].includes(draft?.kind) ? 4 : 3;
+}
+
+function worldContentPlaceButton(draft) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = draft.awaitingPlacement ? "primary" : "mini";
+  button.textContent = draft.awaitingPlacement ? "Klik nu in de 3D-viewport" : "Plaats kiezen in 3D";
+  button.addEventListener("click", function () {
+    draft.awaitingPlacement = true;
+    setStatus("Klik op de gewenste plaats in de 3D-viewport.", "");
+    renderAuthoringHub();
+  });
+  return button;
+}
+
+function worldContentColorInput(value, onChange) {
+  const input = document.createElement("input");
+  input.type = "color";
+  input.value = /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value) : "#8a6f45";
+  input.addEventListener("change", function () { onChange(input.value); });
+  return input;
+}
+
+function renderWorldContentWizard() {
+  const draft = state.worldContentDraft;
+  if (!draft) return null;
+  const card = document.createElement("div");
+  card.className = "objectFunctionDraftCard visualBuilderCard";
+  const count = worldContentDraftStepCount(draft);
+  const title = document.createElement("div");
+  title.className = "objectFunctionDraftTitle";
+  title.textContent = worldContentKindLabel(draft.kind) + " · stap " + draft.step + " van " + count;
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "objectFunctionDraftFields";
+  if (draft.step === 1) {
+    fields.appendChild(objectFunctionDraftFieldRow("Menselijke naam", questTimelineTextInput(draft.values.name, function (value) { draft.values.name = value; renderAuthoringHub(); }, { placeholder: "Bijv. Kristallen bij de rots" })));
+    if (draft.kind === "area") {
+      const role = questTimelineSelectInput(draft.values.role, [{ value: "blocker", label: "Blocker (niet betreedbaar)" }, { value: "walkable", label: "Walkable surface" }], function (value) { draft.values.role = value; renderAuthoringHub(); });
+      fields.appendChild(objectFunctionDraftFieldRow("Rol", role, "Alleen rollen met een bestaande publish- én runtimeconsumer worden getoond."));
+    }
+    if (draft.kind === "surface") {
+      fields.appendChild(objectFunctionDraftFieldRow("Surface-soort", questTimelineSelectInput(draft.values.surfaceKind, ["path", "road", "water", "river", "mud", "lava", "snow", "custom"], function (value) { draft.values.surfaceKind = value; })));
+      fields.appendChild(objectFunctionDraftFieldRow("Bestaande textuur (optioneel)", buildImageAssetSelect(draft.values.textureAssetId, function (value) { draft.values.textureAssetId = value; }), "Zonder textuur gebruikt de surface de fallbackkleur."));
+    }
+    if (draft.kind === "enemy") fields.appendChild(objectFunctionDraftFieldRow("Bestaande enemy", worldContentReferenceInput(draft, "definitionRef", ["enemy"], "Enemy", { required: true, onChange: function (ref) {
+      const enemy = worldContentDefinitionNode(ref, "enemy_archetype");
+      draft.values.health = worldContentStatValue(enemy, "stat.health", state.graph, 50);
+      draft.values.damage = worldContentStatValue(enemy, "stat.attack_power", state.graph, 8);
+      draft.values.lootTableRef = enemy?.values?.lootTableRef || "";
+    } })));
+    if (draft.kind === "resource") fields.appendChild(objectFunctionDraftFieldRow("Bestaande resource", worldContentReferenceInput(draft, "definitionRef", ["resource"], "Resource", { required: true, onChange: function (ref) {
+      draft.values.lootTableRef = worldContentDefinitionNode(ref, "resource_definition")?.values?.yieldLootTableRef || "";
+    } })));
+    if (draft.kind === "item") fields.appendChild(objectFunctionDraftFieldRow("Bestaand item", worldContentReferenceInput(draft, "definitionRef", ["item"], "Item", { required: true })));
+    if (draft.kind === "currency") fields.appendChild(objectFunctionDraftFieldRow("Bestaande currency", worldContentReferenceInput(draft, "definitionRef", ["currency"], "Currency", { required: true })));
+  } else if (draft.step === 2) {
+    fields.appendChild(worldContentPlaceButton(draft));
+    fields.appendChild(objectFunctionDraftFieldRow("X", questTimelineNumberInput(draft.values.x, function (value) { draft.values.x = value; }, { step: 0.01 })));
+    fields.appendChild(objectFunctionDraftFieldRow("Z", questTimelineNumberInput(draft.values.z, function (value) { draft.values.z = value; }, { step: 0.01 })));
+    if (draft.kind === "area") {
+      fields.appendChild(objectFunctionDraftFieldRow("Breedte", questTimelineNumberInput(draft.values.width, function (value) { draft.values.width = value; }, { min: 0.1, max: 10000, step: 0.1 })));
+      fields.appendChild(objectFunctionDraftFieldRow("Diepte", questTimelineNumberInput(draft.values.depth, function (value) { draft.values.depth = value; }, { min: 0.1, max: 10000, step: 0.1 })));
+      if (draft.values.role === "walkable") fields.appendChild(objectFunctionDraftFieldRow("Hoogte", questTimelineNumberInput(draft.values.height, function (value) { draft.values.height = value; }, { step: 0.01 })));
+    }
+    if (draft.kind === "surface") {
+      fields.appendChild(objectFunctionDraftFieldRow("Breedte", questTimelineNumberInput(draft.values.width, function (value) { draft.values.width = value; }, { min: 0.1, max: 10000, step: 0.1 })));
+      fields.appendChild(objectFunctionDraftFieldRow("Fallbackkleur", worldContentColorInput(draft.values.color, function (value) { draft.values.color = value; })));
+    }
+    if (draft.kind === "enemy") {
+      fields.appendChild(objectFunctionDraftFieldRow("Aantal actief", questTimelineNumberInput(draft.values.count, function (value) { draft.values.count = value; }, { min: 1, max: 12, step: 1 }), "NODE-03 maakt exact dit aantal instanties."));
+      fields.appendChild(objectFunctionDraftFieldRow("Spreidingsradius", questTimelineNumberInput(draft.values.radius, function (value) { draft.values.radius = value; }, { min: 0, max: 100000, step: 0.1 })));
+    }
+    if (draft.kind === "resource") {
+      fields.appendChild(objectFunctionDraftFieldRow("Aantal", questTimelineNumberInput(draft.values.count, function (value) { draft.values.count = value; }, { min: 1, max: 24, step: 1 })));
+      fields.appendChild(objectFunctionDraftFieldRow("Spreidingsradius", questTimelineNumberInput(draft.values.radius, function (value) { draft.values.radius = value; }, { min: 0, max: 100000, step: 0.1 })));
+    }
+    if (draft.kind === "item") {
+      fields.appendChild(objectFunctionDraftFieldRow("Aantal", questTimelineNumberInput(draft.values.amount, function (value) { draft.values.amount = value; }, { min: 1, max: 1000000, step: 1 })));
+    }
+    if (draft.kind === "currency") {
+      fields.appendChild(objectFunctionDraftFieldRow("Minimum hoeveelheid", questTimelineNumberInput(draft.values.minAmount, function (value) { draft.values.minAmount = value; }, { min: 1, max: 1000000, step: 1 })));
+      fields.appendChild(objectFunctionDraftFieldRow("Maximum hoeveelheid", questTimelineNumberInput(draft.values.maxAmount, function (value) { draft.values.maxAmount = value; }, { min: 1, max: 1000000, step: 1 })));
+    }
+  } else if (draft.step === 3 && count === 4) {
+    if (draft.kind === "enemy") {
+      fields.appendChild(objectFunctionDraftFieldRow("Health", questTimelineNumberInput(draft.values.health, function (value) { draft.values.health = value; }, { min: 1, max: 1000000, step: 1 }), "NODE-03 leest stat.health voor healthMax."));
+      fields.appendChild(objectFunctionDraftFieldRow("Damage", questTimelineNumberInput(draft.values.damage, function (value) { draft.values.damage = value; }, { min: 0, max: 1000000, step: 1 }), "NODE-03 leest stat.attack_power voor retaliation damage."));
+      fields.appendChild(objectFunctionDraftFieldRow("Loot table", worldContentReferenceInput(draft, "lootTableRef", ["loot_table"], "Loot table")));
+    }
+    if (draft.kind === "resource") fields.appendChild(objectFunctionDraftFieldRow("Yield table", worldContentReferenceInput(draft, "lootTableRef", ["loot_table"], "Yield table")));
+    fields.appendChild(objectFunctionDraftFieldRow("Respawn na seconden", questTimelineNumberInput(draft.values.respawnSeconds, function (value) { draft.values.respawnSeconds = value; }, { min: 0, max: 86400, step: 1 }), "Een policy met exact deze vertraging wordt hergebruikt. Respawn-uit ontbreekt omdat NODE-03 oneTimeSpawn nog niet consumeert."));
+  } else {
+    const review = document.createElement("div");
+    review.className = "visualBuilderReview";
+    const lines = [draft.values.name, "Plaats: X " + Number(draft.values.x || 0).toFixed(2) + " / Z " + Number(draft.values.z || 0).toFixed(2)];
+    if (draft.kind === "enemy") lines.push("Enemies: " + draft.values.count, "Health " + draft.values.health + " · damage " + draft.values.damage);
+    if (draft.kind === "resource") lines.push("Resources: " + draft.values.count);
+    if (draft.kind === "item") lines.push("Aantal: " + draft.values.amount);
+    if (draft.kind === "currency") lines.push("Bedrag: " + draft.values.minAmount + "–" + draft.values.maxAmount);
+    lines.forEach(function (line) { const row = document.createElement("div"); row.textContent = line; review.appendChild(row); });
+    card.appendChild(review);
+  }
+  card.appendChild(fields);
+  const actions = document.createElement("div");
+  actions.className = "objectFunctionDraftActions";
+  if (draft.step > 1) {
+    const back = document.createElement("button"); back.type = "button"; back.className = "ghost"; back.textContent = "Terug";
+    back.addEventListener("click", function () { draft.step -= 1; draft.awaitingPlacement = false; renderAuthoringHub(); }); actions.appendChild(back);
+  }
+  if (draft.step < count) {
+    const next = document.createElement("button"); next.type = "button"; next.className = "primary"; next.textContent = "Volgende"; next.disabled = !worldContentDraftValid(draft, draft.step);
+    next.addEventListener("click", function () { draft.step += 1; draft.awaitingPlacement = false; renderAuthoringHub(); }); actions.appendChild(next);
+  } else {
+    const save = document.createElement("button"); save.type = "button"; save.className = "primary"; save.textContent = draft.existingNodeId ? "Wijzigingen opslaan" : "Plaatsen";
+    save.addEventListener("click", function () { void commitWorldContentDraft(); }); actions.appendChild(save);
+  }
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost"; cancel.textContent = "Sluiten";
+  cancel.addEventListener("click", function () { state.worldContentDraft = null; renderAuthoringHub(); }); actions.appendChild(cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderWorldContentSection(zoneGroup) {
+  const section = document.createElement("div");
+  section.className = "objectFunctionSection authoring04Hub worldContentSection";
+  const title = document.createElement("div"); title.className = "objectFunctionTitle"; title.textContent = "Wereldinhoud";
+  const intro = document.createElement("div"); intro.className = "objectFunctionIntro";
+  intro.textContent = zoneGroup ? "Maak zichtbare inhoud in " + zoneCanvasDisplayName(zoneGroup) + ". Technische pakketten worden automatisch gekoppeld." : "Open eerst een zone.";
+  section.append(title, intro);
+  if (state.worldContentDraft) section.appendChild(renderWorldContentWizard());
+  const actions = document.createElement("div"); actions.className = "authoringRouteActionButtons worldContentActions";
+  [
+    ["Gebied tekenen", "area"], ["Surface toevoegen", "surface"], ["Enemy-groep plaatsen", "enemy"],
+    ["Resourcegroep plaatsen", "resource"], ["Itempickup plaatsen", "item"], ["Currencypickup plaatsen", "currency"]
+  ].forEach(function ([label, kind]) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "mini"; button.textContent = label; button.disabled = !zoneGroup;
+    button.addEventListener("click", function () { beginWorldContentDraft(kind, zoneGroup); }); actions.appendChild(button);
+  });
+  section.appendChild(actions);
+  if (zoneGroup) {
+    const nodes = (state.graph.nodes || []).filter(function (node) { return node.parentId === zoneGroup.id && WORLD_CONTENT_NODE_TYPES.has(node.type); });
+    if (nodes.length) {
+      const list = document.createElement("div"); list.className = "buildOverviewPlaced";
+      nodes.forEach(function (node) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "mini";
+        button.textContent = nodeDisplayTitle(node) + " · " + (state.nodeTypes?.[node.type]?.label || node.type);
+        button.addEventListener("click", function () { selectNode(node.id, true, { clearPendingEdge: true }); }); list.appendChild(button);
+      });
+      section.appendChild(list);
+    }
+  }
+  return section;
+}
+
+function worldContentReferencedNodeIds(node, graph = state.graph) {
+  const ids = [];
+  if (!node) return ids;
+  const definitionType = node.type === "enemy_spawn_area" ? "enemy_archetype"
+    : node.type === "resource_spawn" ? "resource_definition"
+      : node.type === "pickup_spawn" && node.values?.pickupKind === "currency" ? "currency_definition"
+        : node.type === "pickup_spawn" ? "item_definition" : "";
+  const definitionRef = node.type === "enemy_spawn_area" ? node.values?.enemyRef
+    : node.type === "resource_spawn" ? node.values?.resourceRef
+      : node.values?.pickupKind === "currency" ? node.values?.currencyRef : node.values?.itemRef;
+  const definition = definitionType ? worldContentDefinitionNode(definitionRef, definitionType, graph) : null;
+  if (definition) ids.push(definition.id);
+  if (definition?.type === "enemy_archetype") {
+    for (const [ref, type] of [[definition.values?.statBlockRef, "stat_block"], [definition.values?.lootTableRef, "loot_table"]]) {
+      const linked = worldContentDefinitionNode(ref, type, graph); if (linked) ids.push(linked.id);
+    }
+  }
+  if (definition?.type === "resource_definition") {
+    const linked = worldContentDefinitionNode(definition.values?.yieldLootTableRef, "loot_table", graph); if (linked) ids.push(linked.id);
+  }
+  const respawnRef = node.type === "resource_spawn" ? node.values?.respawnOverrideRef : node.values?.respawnPolicyRef;
+  const policy = worldContentDefinitionNode(respawnRef, "respawn_policy_definition", graph);
+  if (policy) ids.push(policy.id);
+  return ids;
+}
+
+function worldContentLocalPackageNodeIds(node, graph = state.graph) {
+  const ids = [];
+  function add(candidate) { if (candidate && !ids.includes(candidate.id)) ids.push(candidate.id); }
+  add(node);
+  if (WORLD_CONTENT_SPAWN_TYPES.has(node?.type)) {
+    const spawnSet = worldContentSpawnSetForEntry(node, graph);
+    const controller = worldContentControllerForSet(spawnSet, graph);
+    add(spawnSet);
+    add(controller);
+    worldContentReferencedNodeIds(node, graph).forEach(function (id) { add(graphNodeByIdInGraph(graph, id)); });
+  }
+  add(zoneOutputForGroup(node?.parentId, graph));
+  return ids;
+}
+
+function worldContentShowNodes(node) {
+  if (!node) return;
+  if (state.currentGroupId !== (node.parentId || null)) {
+    state.currentGroupId = node.parentId || null;
+    syncBreadcrumb();
+  }
+  state.visualObjectNodeScope = {
+    modelId: "world-content:" + node.id,
+    parentId: node.parentId || null,
+    nodeIds: worldContentLocalPackageNodeIds(node)
+  };
+  renderGraph();
+  renderAuthoringHub();
+  requestAnimationFrame(fitGraphViewToNodes);
+}
+
+function graphReferenceUseCount(graph, ref, excludedIds) {
+  const wanted = normalizeCanonicalId(ref, "");
+  if (!wanted) return 0;
+  let count = 0;
+  for (const node of graph.nodes || []) {
+    if (excludedIds?.has(node.id)) continue;
+    const fields = state.nodeTypes?.[node.type]?.fields || {};
+    for (const [key, field] of Object.entries(fields)) {
+      if (field?.type === "reference" && normalizeCanonicalId(node.values?.[key], "") === wanted) count += 1;
+      if (field?.type === "referenceList" && normalizeReferenceList(node.values?.[key]).includes(wanted)) count += 1;
+    }
+  }
+  return count;
+}
+
+async function deleteWorldContentPackage(node) {
+  if (!node || !WORLD_CONTENT_NODE_TYPES.has(node.type)) return;
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextNode = graphNodeByIdInGraph(nextGraph, node.id);
+  if (!nextNode) return;
+  const removeIds = new Set([nextNode.id]);
+  let spawnSet = null;
+  let controller = null;
+  let policy = null;
+  if (WORLD_CONTENT_SPAWN_TYPES.has(nextNode.type)) {
+    spawnSet = worldContentSpawnSetForEntry(nextNode, nextGraph);
+    controller = worldContentControllerForSet(spawnSet, nextGraph);
+    if (spawnSet) removeIds.add(spawnSet.id);
+    const respawnRef = nextNode.type === "resource_spawn" ? nextNode.values?.respawnOverrideRef : nextNode.values?.respawnPolicyRef;
+    policy = worldContentDefinitionNode(respawnRef, "respawn_policy_definition", nextGraph);
+    if (policy && graphReferenceUseCount(nextGraph, respawnRef, removeIds) === 0) removeIds.add(policy.id);
+    if (controller) {
+      const otherSets = (nextGraph.edges || []).some(function (edge) {
+        return edge.toNodeId === controller.id && edge.toPort === "spawnSets" && !removeIds.has(edge.fromNodeId);
+      });
+      if (!otherSets) removeIds.add(controller.id);
+    }
+  }
+  const externalEdges = (state.graph.edges || []).filter(function (edge) {
+    return removeIds.has(edge.fromNodeId) !== removeIds.has(edge.toNodeId);
+  }).length;
+  const linkedText = externalEdges ? " Er worden " + externalEdges + " gekoppelde verbinding(en) losgemaakt." : "";
+  if (!window.confirm("\"" + nodeDisplayTitle(node) + "\" verwijderen? Het lokale pakket van " + removeIds.size + " node(s) wordt opgeruimd." + linkedText + " Gedeelde definities en loot tables blijven bestaan.")) return;
+  nextGraph.nodes = (nextGraph.nodes || []).filter(function (candidate) { return !removeIds.has(candidate.id); });
+  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) { return !removeIds.has(edge.fromNodeId) && !removeIds.has(edge.toNodeId); });
+  await deleteGraphSelectionObject(nextGraph, {
+    historyLabel: worldContentKindLabel(nextNode.type === "surface_layer" ? "surface" : WORLD_CONTENT_AREA_TYPES.has(nextNode.type) ? "area" : nextNode.type === "enemy_spawn_area" ? "enemy" : nextNode.type === "resource_spawn" ? "resource" : nextNode.values?.pickupKind === "currency" ? "currency" : "item") + " verwijderd",
+    selectedNodeIds: [], selectedEdgeIds: [], refreshViewport: true, refreshViewportImmediately: true, refreshValidation: true,
+    afterApply: function () {
+      state.worldContentDraft = null;
+      state.visualObjectNodeScope = null;
+      clearSelection({ clearPendingEdge: true });
+      setStatus("Wereldinhoud en het lokale graphpakket zijn verwijderd.", "success");
+    }
+  });
+}
+
+function renderWorldContentWorkbench(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "objectFunctionSection objectWorkbenchSummary";
+  const title = document.createElement("div"); title.className = "objectFunctionTitle"; title.textContent = nodeDisplayTitle(node);
+  const zone = worldContentZoneGroupForNode(node);
+  const intro = document.createElement("div"); intro.className = "objectFunctionIntro";
+  intro.textContent = (state.nodeTypes?.[node.type]?.label || node.type) + " in " + (zone ? zoneCanvasDisplayName(zone) : "onbekende zone") + ".";
+  wrap.append(title, intro);
+  const actions = document.createElement("div"); actions.className = "objectFunctionActions";
+  if (WORLD_CONTENT_SPAWN_TYPES.has(node.type)) {
+    const move = document.createElement("button"); move.type = "button"; move.className = "primary"; move.textContent = "Verplaats met G";
+    move.addEventListener("click", function (event) { setViewportMode("translate"); setViewportAxis(null); beginRuntimeTransformFromShortcut("move", "Verplaats de groep en bevestig met Enter of klik.", event); });
+    actions.appendChild(move);
+  }
+  const show = document.createElement("button"); show.type = "button"; show.className = "objectFunctionActionButton"; show.textContent = "Toon in nodes"; show.addEventListener("click", function () { worldContentShowNodes(node); });
+  const remove = document.createElement("button"); remove.type = "button"; remove.className = "deleteNode"; remove.textContent = "Verwijderen"; remove.addEventListener("click", function () { void deleteWorldContentPackage(node); });
+  actions.append(show, remove); wrap.appendChild(actions);
+  if (!state.worldContentDraft || state.worldContentDraft.existingNodeId !== node.id) beginWorldContentEdit(node, { silent: true });
+  const wizard = renderWorldContentWizard(); if (wizard) wrap.appendChild(wizard);
+  return wrap;
 }
 
 function renderWorldZoneHub() {
@@ -15308,6 +16087,7 @@ function renderAuthoringBuildOverview() {
   warning.className = warnings.length ? "buildOverviewWarnings" : "buildOverviewWarnings buildOverviewWarnings--ok";
   warning.textContent = warnings.length ? warnings.join(" ") : "Geen ontbrekende basiswerkruimtes gevonden.";
   wrap.appendChild(warning);
+  wrap.appendChild(renderWorldContentSection(currentZone));
 
   const results = authoringOverviewSearchNodes(state.authoringOverviewSearch);
   if (state.authoringOverviewSearch.trim()) {
@@ -15374,6 +16154,7 @@ function renderAuthoringSection(route) {
   const selectedViewportNode = selectedViewportAuthoringNode();
   const selectedModel = selectedSingleModelNode();
   const selectedObjectContext = selectedModel ? objectFunctionContextForModel(selectedModel, state.graph) : null;
+  const selectedWorldContent = worldContentSelectedNode();
   const hasAnyCampaignGroup = (state.graph.nodes || []).some(function (node) {
     return isCampaignGroupNode(node);
   });
@@ -15460,6 +16241,8 @@ function renderAuthoringSection(route) {
       el.authoringPanel.appendChild(renderObjectWorkbenchSummary(selectedObjectContext));
       if (visualBuilderDraftForContext(selectedObjectContext)) el.authoringPanel.appendChild(renderVisualBuilder(selectedObjectContext));
       el.authoringPanel.appendChild(renderObjectFunctionSection(selectedObjectContext));
+    } else if (selectedWorldContent) {
+      el.authoringPanel.appendChild(renderWorldContentWorkbench(selectedWorldContent));
     } else if (!route) {
       el.authoringPanel.appendChild(renderAuthoringBuildOverview());
     } else {
@@ -22847,6 +23630,13 @@ async function deleteSelectedNodes() {
     setStatus("Geen selectie om te verwijderen.", "");
     return;
   }
+  if (nodeIds.length === 1 && !edgeIds.length) {
+    const worldContent = graphNodeByIdInGraph(state.graph, nodeIds[0]);
+    if (worldContent && WORLD_CONTENT_NODE_TYPES.has(worldContent.type)) {
+      await deleteWorldContentPackage(worldContent);
+      return;
+    }
+  }
   let nextGraph;
   try {
     nextGraph = buildDeletionGraph(nodeIds, edgeIds);
@@ -23650,6 +24440,27 @@ function handleViewportAssetPlacementPointerEnd(event) {
   void placeModel(assetId, { x: ground.x, y: Number(ground.y) || 0, z: ground.z });
 }
 
+function handleWorldContentPlacementClick(event) {
+  const draft = state.worldContentDraft;
+  if (!draft?.awaitingPlacement || !runtime || !terrainCanvasTarget(event)) return;
+  const ground = runtime.screenToGround(event.clientX, event.clientY);
+  if (!ground || !Number.isFinite(ground.x) || !Number.isFinite(ground.z)) {
+    setStatus("Geen grondpunt gevonden.", "error");
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  draft.values = Object.assign({}, draft.values || {}, {
+    x: ground.x,
+    y: Number.isFinite(Number(ground.y)) ? Number(ground.y) : terrainGroundY(),
+    z: ground.z
+  });
+  draft.awaitingPlacement = false;
+  setStatus("Plaats gekozen. Ga verder in de wizard.", "success");
+  renderAuthoringHub();
+}
+
 // Drag asset to viewport to place at clicked ground position.
 if (el.assetColumn) {
   el.assetColumn.addEventListener("dragenter", function (event) {
@@ -23697,6 +24508,7 @@ el.viewportCanvas.addEventListener("drop", function (event) {
   placeModel(assetId, ground);
 });
 el.viewportCanvas.addEventListener("pointerdown", handleViewportAssetPlacementPointerDown, true);
+el.viewportCanvas.addEventListener("click", handleWorldContentPlacementClick, true);
 window.addEventListener("pointerup", handleViewportAssetPlacementPointerEnd, true);
 window.addEventListener("pointercancel", handleViewportAssetPlacementPointerEnd, true);
 
