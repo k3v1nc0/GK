@@ -7,6 +7,34 @@ Vervolgstatus 2026-10-06: de viewport-first Visual Builder Fase 1 is
 geïmplementeerd en wacht op Kevins live acceptatie. Zie
 `AUTHORING-VISUAL-BUILDER-01.md`.
 
+## AUTHORING-04-FIX-04 - Nieuwe Catalog-, Player Rules- en UI-groepen
+
+**Status:** implemented, awaiting Kevin acceptance
+
+Blokker: zodra één Catalog, Player Rules of UI Group bestond, verdween in de
+normale authoringroute de aanmaakactie. Een extra economycatalogus of benoemde
+instellingen-/UI-groep kon daardoor alleen via de ruwe Nodes-route worden
+gemaakt.
+
+Herstel:
+
+- Catalog / Definities toont de aanmaakactie altijd en vraagt een menselijke
+  groepsnaam; iedere Catalog Group publiceert via de bestaande Catalog Registry.
+- Game-instellingen / UI toont altijd acties voor een nieuwe Player Rules Group
+  en UI Group, eveneens met een gevraagde naam.
+- Meerdere Player Rules- en UI-groepen leveren hun bestaande `policy`, `ui`,
+  `uiModule`, `minimap` en `uiPackage` outputs aan de gedeelde root
+  `player_rules_output` en `ui_output`; World Assembly houdt dus zijn bestaande
+  enkelvoudige packagecontract.
+- `economy_tax_rule` is toegevoegd aan de normale Player Rules-editor. De hulp
+  meldt eerlijk dat deze waarden wel worden opgeslagen/gecompileerd, maar nog
+  geen aangetoonde runtimeconsumer hebben.
+- Er zijn geen schema-defaults, gameplaywaarden, databasecontent of
+  runtimeconsumers gewijzigd.
+
+Alleen syntax-, coverage- en diffcontrole zijn uitgevoerd; geen serverstart,
+smoke, Playwright, npm-test of performancecheck.
+
 **Basiscommit:** `0478219ff4ce4fda2410960445df0aa4e2954395`  
 **Afhankelijkheden:** AUTHORING-01, AUTHORING-02, AUTHORING-02B, AUTHORING-03, NODE-01 t/m NODE-05
 

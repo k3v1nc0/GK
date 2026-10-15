@@ -426,9 +426,7 @@ function buildZonePackage(graph, zoneOutputNode, nodeMap) {
     ground: valuePayload(firstIncomingNode(graph, zoneOutputNode, "ground", nodeMap), "groundId"),
     terrain: recordsFromSources(graph, zoneOutputNode, "terrain", nodeMap),
     collision: recordsFromSources(graph, zoneOutputNode, "collision", nodeMap),
-    camera: valuePayload(firstIncomingNode(graph, zoneOutputNode, "camera", nodeMap), "cameraId"),
     player: valuePayload(firstIncomingNode(graph, zoneOutputNode, "player", nodeMap), "playerId"),
-    cameraOverrides: recordsFromSources(graph, zoneOutputNode, "cameraOverrides", nodeMap),
     areas: areaOutputs.map(function (areaOutput) { return buildAreaPackage(graph, areaOutput, nodeMap); }),
     entities: entityRecordsFromSources(graph, zoneOutputNode, "entities", nodeMap),
     entityComponents: recordsFromSources(graph, zoneOutputNode, "entityComponents", nodeMap),
@@ -718,6 +716,38 @@ function buildValidationContext(graph, symbolIndex, tokenResolver) {
 
   if (!worldAssemblyNode) {
     errors.push(buildError("FOUNDATION_WORLD_ASSEMBLY_MISSING", "World Assembly node ontbreekt."));
+  } else {
+    const cameraNodes = resolveInputSources(graph, worldAssemblyNode, "camera", nodeMap);
+    const gameCameraNodes = cameraNodes.filter(function (node) { return node.type === "game_camera"; });
+    const editorCameraNodes = cameraNodes.filter(function (node) { return node.type === "editor_camera"; });
+    if (gameCameraNodes.length !== 1) {
+      errors.push(buildError("FOUNDATION_GAME_CAMERA_INVALID", "World Assembly moet exact één root-Game Camera hebben.", {
+        nodeId: worldAssemblyNode.id,
+        port: "camera"
+      }));
+    } else if ((gameCameraNodes[0].parentId || null) !== (worldAssemblyNode.parentId || null)) {
+      errors.push(buildError("FOUNDATION_GAME_CAMERA_INVALID", "De Game Camera moet naast World Assembly op root staan.", {
+        nodeId: gameCameraNodes[0].id,
+        port: "camera"
+      }));
+    }
+    if (editorCameraNodes.length !== 1) {
+      errors.push(buildError("FOUNDATION_EDITOR_CAMERA_INVALID", "World Assembly moet exact één root-Editor Camera hebben.", {
+        nodeId: worldAssemblyNode.id,
+        port: "camera"
+      }));
+    } else if ((editorCameraNodes[0].parentId || null) !== (worldAssemblyNode.parentId || null)) {
+      errors.push(buildError("FOUNDATION_EDITOR_CAMERA_INVALID", "De Editor Camera moet naast World Assembly op root staan.", {
+        nodeId: editorCameraNodes[0].id,
+        port: "camera"
+      }));
+    }
+    if (cameraNodes.length !== gameCameraNodes.length + editorCameraNodes.length) {
+      errors.push(buildError("FOUNDATION_CAMERA_TYPE_INVALID", "World Assembly accepteert alleen de root-Game Camera en root-Editor Camera.", {
+        nodeId: worldAssemblyNode.id,
+        port: "camera"
+      }));
+    }
   }
   if (gameProjectSource && !projectNode) {
     errors.push(buildError("FOUNDATION_PROJECT_SETTINGS_MISSING", "Game Project Settings node ontbreekt."));
@@ -948,6 +978,9 @@ export class GameProjectCompiler {
     const projectPayload = buildProjectPayload(projectNode);
     const chunkGridPayload = buildChunkGridPayload(chunkGridNode);
     const zoneRegistry = buildZonePackagesFromGraph(graph, worldAssemblyNode, nodeMap);
+    const globalCameraNode = resolveInputSources(graph, worldAssemblyNode, "camera", nodeMap).find(function (node) {
+      return node.type === "game_camera";
+    }) || null;
     const typedCatalogs = buildCatalogsFromGraph(graph, worldAssemblyNode, nodeMap);
     const typedCampaigns = buildCampaignsFromGraph(graph, worldAssemblyNode, nodeMap);
     if (typedCatalogs) {
@@ -964,6 +997,7 @@ export class GameProjectCompiler {
       schemaVersion: GAME_PROJECT_SCHEMA_VERSION,
       project: projectPayload,
       chunkGrid: chunkGridPayload,
+      camera: globalCameraNode ? valuePayload(globalCameraNode, "cameraId") : null,
       catalogs: Object.assign({}, symbolCatalogs, typedCatalogs?.catalog || {}, {
         registry: typedCatalogs ? {
           schemaVersion: typedCatalogs.schemaVersion,

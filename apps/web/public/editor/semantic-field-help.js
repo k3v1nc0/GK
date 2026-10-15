@@ -60,7 +60,7 @@ const REFERENCE_PLACES = Object.freeze({
 
 const FULL_RUNTIME_NODE_TYPES = new Set([
   "world_settings", "editor_world_settings", "game_world_settings", "ground_surface", "terrain_layer",
-  "surface_layer", "blocker_area", "walkable_surface", "game_camera", "top_down_camera", "ambient_light",
+  "surface_layer", "blocker_area", "walkable_surface", "game_camera", "ambient_light",
   "directional_light", "player_character", "player_spawn", "model_entity", "interactable", "keybind",
   "zone_definition", "zone_environment_settings", "area_definition", "location_anchor", "spawn_point",
   "zone_link", "entity_assembly", "interaction_component", "quest_target_binding", "portal_component",
@@ -264,6 +264,41 @@ const GOLDEN_OVERRIDES = Object.freeze({
     defaultReason: "3 cellen — gedeelde server/clientfallback.",
     advice: "Toegestaan: 0–64 cellen. Geen bewezen voorkeursbereik; beoordeel dit samen met Cell size.",
     lower: "kleiner onthuld gebied", higher: "groter onthuld gebied", unit: "cellen", status: FIELD_HELP_STATUSES.FULL
+  },
+  "economy_tax_rule.operationKind": {
+    effect: "markeert voor welk soort economyhandeling deze belastingregel bedoeld is; de huidige runtime past de regel nog niet toe.",
+    defaultReason: "sale — de schema-startregel is bedoeld voor verkoop.",
+    advice: "Kies de bedoelde handeling, maar verwacht nog geen berekende heffing in de game.",
+    choices: "listing = advertentie plaatsen; sale = verkoop; vendor = vendortransactie; trade = directe trade; transfer = overdracht.",
+    status: FIELD_HELP_STATUSES.COMPILED
+  },
+  "economy_tax_rule.currencyRef": {
+    effect: "kiest de currency waarin deze toekomstige heffing wordt uitgedrukt; de huidige runtime gebruikt de regel nog niet.",
+    defaultReason: "leeg — er is nog geen currency aan de regel gekoppeld.",
+    advice: "Maak/selecteer eerst een Currency in Catalog/Definities; leeg laat de regel zonder currency.",
+    reference: "Een Currency uit Catalog/Definities. Leeg betekent dat deze opgeslagen regel geen currency aanwijst.",
+    status: FIELD_HELP_STATUSES.COMPILED
+  },
+  "economy_tax_rule.basisPoints": {
+    effect: "slaat het bedoelde belastingpercentage in basispunten op; de huidige runtime berekent dit nog niet.",
+    defaultReason: "500 basispunten (5%) — schema-startwaarde, geen bewezen economieadvies.",
+    advice: "Toegestaan: 0–10000 basispunten. Geen bewezen voorkeursbereik; test dit pas wanneer een runtimeconsumer bestaat.",
+    lower: "lager bedoeld percentage", higher: "hoger bedoeld percentage", unit: "basispunten",
+    status: FIELD_HELP_STATUSES.COMPILED
+  },
+  "economy_tax_rule.minimumFeeMinor": {
+    effect: "slaat de bedoelde minimumheffing in minor currency units op; de huidige runtime past haar nog niet toe.",
+    defaultReason: "0 minor units — het schema legt standaard geen minimum vast.",
+    advice: "Toegestaan: 0–100000000000 minor units. Geen bewezen voorkeursbereik; test dit pas wanneer een runtimeconsumer bestaat.",
+    lower: "lagere bedoelde minimumheffing", higher: "hogere bedoelde minimumheffing", unit: "minor currency units",
+    status: FIELD_HELP_STATUSES.COMPILED
+  },
+  "economy_tax_rule.maximumFeeMinor": {
+    effect: "slaat de bedoelde maximumheffing in minor currency units op; de huidige runtime past haar nog niet toe.",
+    defaultReason: "0 minor units — code bewijst geen actieve betekenis of onbeperkte fallback voor nul.",
+    advice: "Toegestaan: 0–100000000000 minor units. Geen bewezen voorkeursbereik; test dit pas wanneer een runtimeconsumer bestaat.",
+    lower: "lagere bedoelde bovengrens", higher: "hogere bedoelde bovengrens", unit: "minor currency units",
+    status: FIELD_HELP_STATUSES.COMPILED
   }
 });
 

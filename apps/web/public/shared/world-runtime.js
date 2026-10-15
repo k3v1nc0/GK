@@ -6471,9 +6471,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
     nextResidentState.lastSyncMs = round(performance.now() - startedAt);
     nextResidentState.lastDesiredSignature = loadedChunkKeys.join("|");
     nextResidentState.pendingLoadCount = nextResidentState.pendingChunkKeys.length;
-    if (progressiveBootstrap && nextResidentState.pendingChunkKeys.length === 0) {
+    // A budget-blocked queue never drains (drainPendingResidentChunkBuilds skips it), so waiting
+    // for an empty queue kept progressive mode on forever after a portal teleport into a dense
+    // scatter zone: only the center chunk was force-built and active/visible chunks stayed empty
+    // no matter how far the player walked. End the bootstrap and redo this pass in normal mode so
+    // active/visible chunks get force-built like after any other setWorld.
+    if (progressiveBootstrap && (nextResidentState.pendingChunkKeys.length === 0 || pendingBlockedByBudget)) {
       nextResidentState.progressiveBootstrap = false;
       nextResidentState.progressiveCenterChunkKey = "";
+      if (pendingBlockedByBudget) return syncResidentChunkContent(nextChunkState, reason);
     }
     return nextResidentState;
   }
@@ -9676,10 +9682,23 @@ function resolveChunkDebugCenter(policy) {
   // is an open path the user extends point by point.
   function buildTerrainEditorOverlay(nextOverlay) {
     if (!terrainEditorOverlay || mode !== "editor") return;
-    clearTerrainEditorOverlay();
-    const markers = Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
+    const refreshMarkers = Object.prototype.hasOwnProperty.call(nextOverlay || {}, "markers");
+    const markers = refreshMarkers && Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
     const hasSelected = Boolean(nextOverlay && nextOverlay.nodeType);
-    if (!hasSelected && !markers.length) return;
+    // Keep the unchanged project-wide marker meshes alive during point dragging.
+    // Previously clearTerrainEditorOverlay() disposed and recreated every marker on
+    // each pointer frame, even though only the selected shape had moved.
+    for (const child of Array.from(terrainEditorOverlay.children)) {
+      if (child?.userData?.terrainMarker === true && !refreshMarkers) continue;
+      terrainEditorOverlay.remove(child);
+      disposeObject(child);
+    }
+    if (!hasSelected && !markers.length && !terrainEditorOverlay.children.length) {
+      terrainEditorOverlayState = null;
+      terrainEditorOverlay.visible = false;
+      requestRender("terrain-overlay-update");
+      return;
+    }
     terrainEditorOverlayState = nextOverlay;
     terrainEditorOverlay.visible = true;
 
@@ -9695,6 +9714,7 @@ function resolveChunkDebugCenter(policy) {
         null,
         false
       );
+      markerHandle.userData.terrainMarker = true;
       terrainEditorOverlay.add(markerHandle);
     }
 
@@ -10749,6 +10769,13 @@ function resolveChunkDebugCenter(policy) {
     return new THREE.Vector2(pair.x, pair.y);
   }
 
+  function centeredSurfaceTextureOffsetX(repeatX) {
+    // Keep U=0.5 (the path centreline where authored points live) fixed while repeat
+    // changes. This makes extra copies grow equally toward both path edges instead of
+    // pinning the texture to the left edge.
+    return 0.5 - (num(repeatX, 1) * 0.5);
+  }
+
   function getOrCreateSurfaceDefaultWhiteTex() {
     if (surfaceDefaultWhiteTex && !surfaceDefaultWhiteTex.isDisposed) return surfaceDefaultWhiteTex;
     const data = new Uint8Array([255, 255, 255, 255]);
@@ -10782,65 +10809,74 @@ function resolveChunkDebugCenter(policy) {
   function updateSurfaceMaterialUniforms(material, patch = {}) {
     const uniforms = material?.userData?.surfaceUniforms || null;
     if (!uniforms) return;
-    const surface = patch || {};
-    if (surface.textureScaleX !== undefined || surface.textureScaleY !== undefined || surface.textureScale !== undefined) {
+    const previousSurface = material.userData.surfaceState || {};
+    const surface = Object.assign({}, previousSurface, patch || {});
+    const width = Math.max(0.1, num(surface.width, 3));
+    const widthChanged = patch.width !== undefined;
+    if (widthChanged || patch.textureScaleX !== undefined || patch.textureScaleY !== undefined || patch.textureScale !== undefined) {
       const main = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
       uniforms.mainScale.value.set(main.x, main.y);
       if (material.map) {
         material.map.repeat.set(main.x, main.y);
+        material.map.offset.x = centeredSurfaceTextureOffsetX(main.x);
         material.map.needsUpdate = true;
+        for (const entry of surfaceAnimMaterials) {
+          if (entry?.material !== material) continue;
+          entry.mainMap = material.map;
+          entry.baseMainOffset.x = material.map.offset.x;
+        }
       }
     }
-    if (surface.secondaryTextureScaleX !== undefined || surface.secondaryTextureScaleY !== undefined || surface.secondaryTextureScale !== undefined) {
+    if (widthChanged || patch.secondaryTextureScaleX !== undefined || patch.secondaryTextureScaleY !== undefined || patch.secondaryTextureScale !== undefined) {
       const secondary = surfaceTextureScaleVector(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
       uniforms.secondaryScale.value.set(secondary.x, secondary.y);
     }
-    if (surface.edgeFadeNoiseScaleX !== undefined || surface.edgeFadeNoiseScaleY !== undefined || surface.edgeFadeNoiseScale !== undefined) {
+    if (widthChanged || patch.edgeFadeNoiseScaleX !== undefined || patch.edgeFadeNoiseScaleY !== undefined || patch.edgeFadeNoiseScale !== undefined) {
       const edge = surfaceTextureScaleVector(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
       uniforms.edgeNoiseScale.value.set(edge.x, edge.y);
     }
-    if (surface.secondaryTextureStrength !== undefined) uniforms.secondaryStrength.value = clamp(num(surface.secondaryTextureStrength, uniforms.secondaryStrength.value), 0, 1);
-    if (surface.edgeFadeWidth !== undefined) {
-      const width = Math.max(0.1, num(surface.width !== undefined ? surface.width : material.userData.surfaceState?.width, 3));
+    if (patch.secondaryTextureStrength !== undefined) uniforms.secondaryStrength.value = clamp(num(surface.secondaryTextureStrength, uniforms.secondaryStrength.value), 0, 1);
+    if (patch.edgeFadeWidth !== undefined || widthChanged) {
       const edgeFade = num(surface.edgeFadeWidth, uniforms.edgeFadeWidth.value * width);
       uniforms.edgeFadeWidth.value = edgeFade > 0 ? clamp(edgeFade / width, 0, 0.45) : 0;
     }
-    if (surface.edgeFadeNoiseStrength !== undefined) uniforms.edgeNoiseStrength.value = clamp(num(surface.edgeFadeNoiseStrength, uniforms.edgeNoiseStrength.value), 0, 1);
-    if (surface.opacity !== undefined) uniforms.opacity.value = clamp(num(surface.opacity, uniforms.opacity.value), 0, 1);
-    if (surface.flowSpeed !== undefined) uniforms.flowSpeed.value = num(surface.flowSpeed, uniforms.flowSpeed.value);
-    if (surface.flowDirection !== undefined) {
+    if (patch.edgeFadeNoiseStrength !== undefined) uniforms.edgeNoiseStrength.value = clamp(num(surface.edgeFadeNoiseStrength, uniforms.edgeNoiseStrength.value), 0, 1);
+    if (patch.opacity !== undefined) uniforms.opacity.value = clamp(num(surface.opacity, uniforms.opacity.value), 0, 1);
+    if (patch.flowSpeed !== undefined) uniforms.flowSpeed.value = num(surface.flowSpeed, uniforms.flowSpeed.value);
+    if (patch.flowDirection !== undefined) {
       const flowRad = num(surface.flowDirection, 0) * Math.PI / 180;
       uniforms.flowDir.value.set(Math.sin(flowRad), Math.cos(flowRad));
     }
-    if (surface.flowTextureLayer !== undefined) {
+    if (patch.flowTextureLayer !== undefined) {
       const ftl = String(surface.flowTextureLayer || "main");
       uniforms.flowMain.value = (ftl === "main" || ftl === "both") ? 1.0 : 0.0;
       uniforms.flowSecondary.value = (ftl === "secondary" || ftl === "both") ? 1.0 : 0.0;
     }
-    if (surface.fallbackColor !== undefined) {
+    if (patch.fallbackColor !== undefined) {
       uniforms.fallbackColor.value.copy(colorFromHex(surface.fallbackColor, "#8a6f45"));
       if (!material.map) material.color.copy(colorFromHex(surface.fallbackColor, "#8a6f45"));
     }
-    if (surface.textureAssetId !== undefined) {
+    if (patch.textureAssetId !== undefined) {
       if (!surface.textureAssetId) {
         replaceMaterialMapTexture(material, null);
         material.color.copy(uniforms.fallbackColor.value);
         material.needsUpdate = true;
       }
     }
-    if (surface.secondaryTextureAssetId !== undefined) {
+    if (patch.secondaryTextureAssetId !== undefined) {
       uniforms.hasSecondaryTex.value = 0.0;
       replaceUniformTexture(uniforms.secondaryTex, cloneSurfaceFallbackTexture());
     }
-    if (surface.edgeFadeNoiseAssetId !== undefined) {
+    if (patch.edgeFadeNoiseAssetId !== undefined) {
       uniforms.hasEdgeNoiseTex.value = 0.0;
       replaceUniformTexture(uniforms.edgeNoiseTex, cloneSurfaceFallbackTexture());
     }
-    if (surface.opacity !== undefined || surface.edgeFadeWidth !== undefined) {
+    if (patch.opacity !== undefined || patch.edgeFadeWidth !== undefined || widthChanged) {
       const transparent = uniforms.opacity.value < 0.999 || uniforms.edgeFadeWidth.value > 0.0;
       material.transparent = transparent;
       material.depthWrite = !transparent;
     }
+    material.userData.surfaceState = surface;
     requestRender("surface-material-preview");
   }
 
@@ -10855,6 +10891,57 @@ function resolveChunkDebugCenter(policy) {
       updateSurfaceMaterialUniforms(record.material, patch || {});
       updated = true;
     }
+    return updated;
+  }
+
+  function setTerrainSurfaceGeometryPreview(surfaceId, patch = {}) {
+    if (!surfaceId || !Array.isArray(patch.points)) return false;
+    const recordSet = surfaceMaterialRecords.get(surfaceId);
+    if (!recordSet) return false;
+    const records = recordSet instanceof Set ? Array.from(recordSet) : [recordSet];
+    const firstRecord = records.find(function (record) { return record?.material && record?.mesh; }) || null;
+    if (!firstRecord) return false;
+    const previousSurface = firstRecord.material.userData?.surfaceState || {};
+    const surface = Object.assign({}, previousSurface, patch);
+    const width = Math.max(0.1, num(surface.width, 3));
+    const rawPoints = normalizeWorldPointList(surface.points);
+    if (rawPoints.length < 2) return false;
+    const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
+    const policy = resolveChunkPolicy(world, mode);
+    const gamePolicy = mode === "game" ? policy : resolveChunkPolicy(world, "game");
+    const maxSegmentLength = Math.max(1, Math.min(gamePolicy.chunkWorldWidth, gamePolicy.chunkWorldDepth) / 2);
+    const pieces = segmentPolylineForChunks(centerline, policy, {
+      width: width,
+      maxSegmentLength: maxSegmentLength,
+      segmentBaseId: String(surfaceId)
+    });
+    const pieceBySegmentId = new Map(pieces.map(function (piece) { return [piece.segmentId, piece]; }));
+    const surfaceY = num(world?.ground?.y, 0) + num(surface.yOffset, 0.02);
+    let updated = false;
+    for (const record of records) {
+      if (!record?.mesh) continue;
+      const piece = pieceBySegmentId.get(record.segmentId);
+      if (!piece) {
+        record.mesh.visible = false;
+        continue;
+      }
+      const geometry = buildSurfaceStripGeometry(piece.points, {
+        width: width,
+        y: surfaceY,
+        uvScale: width,
+        uvStartLength: piece.startLength,
+        prevPoint: piece.prevPoint,
+        nextPoint: piece.nextPoint
+      });
+      if (!geometry) continue;
+      const previousGeometry = record.mesh.geometry;
+      record.mesh.geometry = geometry;
+      record.mesh.visible = true;
+      if (previousGeometry && previousGeometry !== geometry && typeof previousGeometry.dispose === "function") previousGeometry.dispose();
+      if (record.material?.userData) record.material.userData.surfaceState = surface;
+      updated = true;
+    }
+    if (updated) requestRender("surface-geometry-preview");
     return updated;
   }
 
@@ -10924,9 +11011,9 @@ function resolveChunkDebugCenter(policy) {
     function createTerrainSurfaceMaterial(surface, options) {
       const opacity = clamp(num(surface?.opacity, 1), 0, 1);
       const width = Math.max(0.1, num(surface?.width, 3));
-      const mainScale = surfaceScalePair(surface, "textureScaleX", "textureScaleY", "textureScale");
-      const secondaryScale = surfaceScalePair(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
-      const edgeScale = surfaceScalePair(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
+      const mainScale = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
+      const secondaryScale = surfaceTextureScaleVector(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
+      const edgeScale = surfaceTextureScaleVector(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
       const secondaryStrength = clamp(num(surface?.secondaryTextureStrength, 0.25), 0, 1);
       const edgeFadeW = num(surface?.edgeFadeWidth, 0.8);
       const edgeFadeWidthUV = edgeFadeW > 0 ? clamp(edgeFadeW / width, 0, 0.45) : 0;
@@ -11002,7 +11089,7 @@ function resolveChunkDebugCenter(policy) {
           .replace("#include <uv_vertex>", "#include <uv_vertex>\nvSurfaceUv = uv;");
         shader.fragmentShader = shader.fragmentShader
           .replace("#include <common>", "#include <common>\nvarying vec2 vSurfaceUv;\nuniform sampler2D secondaryTex;\nuniform float hasSecondaryTex;\nuniform float secondaryStrength;\nuniform vec2 secondaryScale;\nuniform sampler2D edgeNoiseTex;\nuniform float hasEdgeNoiseTex;\nuniform float edgeFadeWidth;\nuniform float edgeNoiseStrength;\nuniform vec2 edgeNoiseScale;\nuniform float time;\nuniform float flowSpeed;\nuniform vec2 flowDir;\nuniform float flowMain;\nuniform float flowSecondary;\nuniform vec3 fallbackColor;")
-          .replace("#include <color_fragment>", "#include <color_fragment>\nvec2 surfaceFlow = flowDir * time * flowSpeed;\nvec2 surfaceSecondaryUv = vSurfaceUv * secondaryScale + surfaceFlow * flowSecondary;\nvec2 surfaceEdgeNoiseUv = vSurfaceUv * edgeNoiseScale;\nvec3 surfaceBaseColor = diffuseColor.rgb;\nvec4 surfaceSecondarySample = hasSecondaryTex > 0.5 ? sRGBTransferEOTF(texture2D(secondaryTex, surfaceSecondaryUv)) : vec4(surfaceBaseColor, diffuseColor.a);\nvec3 surfaceFinalColor = mix(surfaceBaseColor, surfaceSecondarySample.rgb, secondaryStrength * hasSecondaryTex);\nfloat surfaceEdgeDistance = min(vSurfaceUv.x, 1.0 - vSurfaceUv.x);\nfloat surfaceEdgeNoise = 0.0;\nif (hasEdgeNoiseTex > 0.5 && edgeNoiseStrength > 0.0 && edgeFadeWidth > 0.0) {\n  surfaceEdgeNoise = (texture2D(edgeNoiseTex, surfaceEdgeNoiseUv).r * 2.0 - 1.0) * edgeNoiseStrength * max(edgeFadeWidth, 0.001);\n}\nfloat surfaceEdgeAlpha = edgeFadeWidth > 0.001 ? smoothstep(0.0, edgeFadeWidth, surfaceEdgeDistance + surfaceEdgeNoise) : 1.0;\ndiffuseColor.rgb = surfaceFinalColor;\ndiffuseColor.a *= surfaceEdgeAlpha;");
+          .replace("#include <color_fragment>", "#include <color_fragment>\nvec2 surfaceFlow = flowDir * time * flowSpeed;\nvec2 surfaceCenter = vec2(0.5, 0.0);\nvec2 surfaceSecondaryUv = (vSurfaceUv - surfaceCenter) * secondaryScale + surfaceCenter + surfaceFlow * flowSecondary;\nvec2 surfaceEdgeNoiseUv = (vSurfaceUv - surfaceCenter) * edgeNoiseScale + surfaceCenter;\nvec3 surfaceBaseColor = diffuseColor.rgb;\nvec4 surfaceSecondarySample = hasSecondaryTex > 0.5 ? sRGBTransferEOTF(texture2D(secondaryTex, surfaceSecondaryUv)) : vec4(surfaceBaseColor, diffuseColor.a);\nvec3 surfaceFinalColor = mix(surfaceBaseColor, surfaceSecondarySample.rgb, secondaryStrength * hasSecondaryTex);\nfloat surfaceEdgeDistance = min(vSurfaceUv.x, 1.0 - vSurfaceUv.x);\nfloat surfaceEdgeNoise = 0.0;\nif (hasEdgeNoiseTex > 0.5 && edgeNoiseStrength > 0.0 && edgeFadeWidth > 0.0) {\n  surfaceEdgeNoise = (texture2D(edgeNoiseTex, surfaceEdgeNoiseUv).r * 2.0 - 1.0) * edgeNoiseStrength * max(edgeFadeWidth, 0.001);\n}\nfloat surfaceEdgeAlpha = edgeFadeWidth > 0.001 ? smoothstep(0.0, edgeFadeWidth, surfaceEdgeDistance + surfaceEdgeNoise) : 1.0;\ndiffuseColor.rgb = surfaceFinalColor;\ndiffuseColor.a *= surfaceEdgeAlpha;");
       };
       material.userData.surfaceUniforms = uniforms;
       material.userData.surfaceState = Object.assign({}, surface);
@@ -11019,6 +11106,7 @@ function resolveChunkDebugCenter(policy) {
         const clone = cloneTerrainTexture(texture, repeatX, repeatZ);
         if (uniformName === "mainTex") {
           clone.repeat.set(Math.max(0.0001, num(repeatX, 1)), Math.max(0.0001, num(repeatZ, 1)));
+          clone.offset.x = centeredSurfaceTextureOffsetX(clone.repeat.x);
           replaceMaterialMapTexture(material, clone);
           material.color.set(0xffffff);
           material.needsUpdate = true;
@@ -11133,6 +11221,13 @@ function resolveChunkDebugCenter(policy) {
     for (const surface of surfaces) {
       const width = Math.max(0, num(surface?.width, 0));
       if (width <= 0) continue;
+      const authoredSurfaceId = String(surface?.id || surface?.surfaceId || "surface");
+      // surfaceId remains the authored/game identity. The editor node id is the live
+      // viewport identity so even an old broken duplicate with the same surfaceId gets
+      // its own mesh, texture and selectable center handle.
+      const surfaceRuntimeId = mode === "editor" && surface?.editorNodeId
+        ? String(surface.editorNodeId)
+        : authoredSurfaceId;
       const rawPoints = normalizeWorldPointList(surface?.points);
       if (rawPoints.length < 2) continue;
       const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
@@ -11140,14 +11235,14 @@ function resolveChunkDebugCenter(policy) {
       const pieces = segmentPolylineForChunks(centerline, policy, {
         width: width,
         maxSegmentLength: maxSegmentLength,
-        segmentBaseId: String(surface?.id || surface?.surfaceId || "surface")
+        segmentBaseId: surfaceRuntimeId
       });
       for (const piece of pieces) {
         registerTerrainPiece({
           id: piece.id,
           type: "terrainSurface",
           terrainKind: "surface",
-          layerId: surface?.id || surface?.surfaceId || null,
+          layerId: surfaceRuntimeId,
           segmentId: piece.segmentId,
           chunkKey: surfaceVisualChunkingEnabled ? piece.chunkKey : null,
           chunkKeys: surfaceVisualChunkingEnabled ? piece.chunkKeys : [],
@@ -11164,23 +11259,29 @@ function resolveChunkDebugCenter(policy) {
           const geometry = buildSurfaceStripGeometry(piece.points, {
             width: width,
             y: surfaceY,
-            uvScale: 1,
+            // U is normalized across the complete path width. Use that same authored
+            // width as the world length of one V tile: at scale 1/1 there is one tile
+            // across and every tile stays square along the path. Changing path width
+            // therefore changes both physical tile dimensions together instead of
+            // stretching the image. startLength keeps V continuous across chunks.
+            uvScale: width,
             uvStartLength: piece.startLength,
             prevPoint: piece.prevPoint,
             nextPoint: piece.nextPoint
           });
           if (!geometry) return null;
           const mesh = new THREE.Mesh(geometry, material);
-          mesh.name = "GK surface layer " + String(surface?.id || "surface") + "::" + piece.segmentId;
+          mesh.name = "GK surface layer " + surfaceRuntimeId + "::" + piece.segmentId;
           mesh.renderOrder = 3500;
           mesh.castShadow = false;
           mesh.receiveShadow = Boolean(terrainShadowOptions().receiveShadow);
           mesh.userData.terrainRuntime = true;
-          mesh.userData.surfaceLayerId = surface?.id || null;
-          mesh.userData.entityId = surface?.id || null;
+          mesh.userData.surfaceLayerId = surfaceRuntimeId;
+          mesh.userData.entityId = surfaceRuntimeId;
 
           const surfaceRecord = {
-            surfaceId: String(surface?.id || surface?.surfaceId || "surface"),
+            surfaceId: surfaceRuntimeId,
+            segmentId: piece.segmentId,
             material: material,
             uniforms: material.userData.surfaceUniforms,
             mesh: mesh
@@ -11195,9 +11296,8 @@ function resolveChunkDebugCenter(policy) {
             });
           }
           if (surface?.textureAssetId) {
-            const repeatX = Math.max(0.01, num(surface?.textureScaleX, num(surface?.textureScale, 1)));
-            const repeatY = Math.max(0.01, num(surface?.textureScaleY, num(surface?.textureScale, 1)));
-            applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex", repeatX, repeatY);
+            const repeat = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
+            applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex", repeat.x, repeat.y);
           }
           if (surface?.secondaryTextureAssetId && num(surface?.secondaryTextureStrength, 0) > 0) {
             const repeatX = Math.max(0.01, num(surface?.secondaryTextureScaleX, num(surface?.secondaryTextureScale, 1)));
@@ -18389,6 +18489,7 @@ function resolveChunkDebugCenter(policy) {
     setScatterEditorOverlay: setScatterEditorOverlay,
     clearScatterEditorOverlay: clearScatterEditorOverlay,
     setTerrainSurfacePreview: setTerrainSurfacePreview,
+    setTerrainSurfaceGeometryPreview: setTerrainSurfaceGeometryPreview,
     pickTerrainEditorHandle: pickTerrainEditorHandle,
     pickScatterEditorHandle: pickScatterEditorHandle,
     pickEntityAt: pickEntityAt,

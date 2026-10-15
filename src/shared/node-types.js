@@ -1662,17 +1662,6 @@ export const NODE_TYPES = {
     fields: EDITOR_CAMERA_FIELDS
   },
 
-  top_down_camera: {
-    label: "Top-Down Camera",
-    group: "World",
-    accent: "#7bd4ff",
-    description: "Legacy alias for Game Camera.",
-    hidden: true,
-    inputs: {},
-    outputs: { camera: { label: "Camera", dataType: "camera" } },
-    fields: GAME_CAMERA_FIELDS
-  },
-
   ambient_light: {
     label: "Ambient Light",
     group: "World",
@@ -2770,7 +2759,7 @@ const FOUNDATION_NODE_DEFS = {
       chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: true, multiple: false },
       editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
       gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
-      camera: { label: "Camera", dataType: "camera", required: false, multiple: true },
+      camera: { label: "Cameras", dataType: "camera", required: true, multiple: true },
       lights: { label: "Lights", dataType: "light", required: false, multiple: true },
       chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
       chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
@@ -3220,9 +3209,7 @@ const ZONE_NODE_DEFS = {
       ground: { label: "Ground", dataType: "ground", required: false, multiple: false },
       terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
       collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
-      camera: { label: "Camera", dataType: "camera", required: false, multiple: false },
       player: { label: "Player", dataType: "player", required: false, multiple: false },
-      cameraOverrides: { label: "Camera Overrides", dataType: "cameraOverride", required: false, multiple: true },
       areas: { label: "Areas", dataType: "areaPackage", required: false, multiple: true },
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },

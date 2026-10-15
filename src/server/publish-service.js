@@ -2936,6 +2936,7 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
       minDistance: numberOrNull(cameraNode.values.minDistance),
       maxDistance: numberOrNull(cameraNode.values.maxDistance),
       fov: numberOrNull(cameraNode.values.fov),
+      targetHeightOffset: numberOrNull(cameraNode.values.targetHeightOffset) ?? 1.6,
       follow: cameraNode.values.follow !== false,
       rotateSpeed: numberOrNull(cameraNode.values.rotateSpeed)
     } : null,
@@ -3032,6 +3033,7 @@ function buildZoneCameraReadModel(camera) {
     minDistance: numberOrNull(camera.minDistance),
     maxDistance: numberOrNull(camera.maxDistance),
     fov: numberOrNull(camera.fov),
+    targetHeightOffset: numberOrNull(camera.targetHeightOffset) ?? 1.6,
     follow: camera.follow !== false,
     rotateSpeed: numberOrNull(camera.rotateSpeed)
   };
@@ -3432,7 +3434,7 @@ export class PublishService {
       return buildZoneEntityReadModel(entity, assetLookup);
     }).filter(Boolean).concat(zoneScatterEntities);
     const zoneInteractables = allZoneEntityRecords.flatMap(buildZoneAssemblyInteractableReadModels);
-    const zoneCamera = buildZoneCameraReadModel(activeZone?.camera);
+    const globalCamera = buildZoneCameraReadModel(manifest.camera);
     const zonePlayer = buildZonePlayerReadModel(activeZone?.player, assetLookup);
     return withInteractableAssemblyReadModelVersion(Object.assign({}, world, {
       schemaVersion: manifest.schemaVersion || world.schemaVersion,
@@ -3452,7 +3454,7 @@ export class PublishService {
         facing: Number(startSpawn.facing) || 0
       }) : world.spawn,
       ground: zoneGround ? Object.assign({}, world.ground, zoneGround) : world.ground,
-      camera: zoneCamera || world.camera,
+      camera: globalCamera || world.camera,
       player: zonePlayer || world.player,
       lights: world.lights,
       entities: zoneEntities.length ? uniqueById((world.entities || []).concat(zoneEntities)) : world.entities,
