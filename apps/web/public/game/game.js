@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261014-surface-copy1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261016-scatter-pattern2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import {
@@ -491,6 +491,9 @@ const state = {
     view: null,
     userOverride: false,
     configKey: "",
+    defaultsKey: "",
+    zoomSaveTimerId: 0,
+    pendingZoomPreference: null,
     interactions: null,
     resizeObserver: null
   },
@@ -952,6 +955,57 @@ function gameHudLayoutBaseStorageKey() {
   const userId = String(state.user?.id || state.user?.username || state.player?.id || "anonymous").trim() || "anonymous";
   return "gk:game:hud-layout:" + projectId + ":" + userId;
 }
+
+function gameMinimapZoomDefaultsKey(config) {
+  return [
+    Number(config?.startDistance) || 120,
+    Number(config?.minDistance) || 20,
+    Number(config?.maxDistance) || 1000
+  ].join("|");
+}
+
+function gameMinimapZoomStorageKey(config) {
+  const userId = String(state.user?.id || state.user?.username || state.player?.id || "anonymous").trim() || "anonymous";
+  const hudId = String(config?.hudId || "game_minimap").trim() || "game_minimap";
+  return "gk:game:minimap-zoom:" + gameHudProjectId() + ":" + userId + ":" + hudId;
+}
+
+function readGameMinimapZoomPreference(config) {
+  try {
+    const raw = window.localStorage.getItem(gameMinimapZoomStorageKey(config));
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || parsed.version !== 1 || parsed.defaultsKey !== gameMinimapZoomDefaultsKey(config)) return null;
+    const distance = Number(parsed.worldDistance);
+    return Number.isFinite(distance) && distance > 0 ? distance : null;
+  } catch {
+    return null;
+  }
+}
+
+function flushGameMinimapZoomPreference() {
+  const hudState = state.minimapHud;
+  if (hudState.zoomSaveTimerId) {
+    window.clearTimeout(hudState.zoomSaveTimerId);
+    hudState.zoomSaveTimerId = 0;
+  }
+  const pending = hudState.pendingZoomPreference;
+  hudState.pendingZoomPreference = null;
+  if (!pending) return;
+  try { window.localStorage.setItem(pending.key, JSON.stringify(pending.value)); } catch {}
+}
+
+function persistGameMinimapZoomPreference(config, worldDistance) {
+  const distance = Number(worldDistance);
+  if (!config || !Number.isFinite(distance) || distance <= 0) return;
+  state.minimapHud.pendingZoomPreference = {
+    key: gameMinimapZoomStorageKey(config),
+    value: { version: 1, defaultsKey: gameMinimapZoomDefaultsKey(config), worldDistance: distance }
+  };
+  if (state.minimapHud.zoomSaveTimerId) window.clearTimeout(state.minimapHud.zoomSaveTimerId);
+  state.minimapHud.zoomSaveTimerId = window.setTimeout(flushGameMinimapZoomPreference, 120);
+}
+
+window.addEventListener("pagehide", flushGameMinimapZoomPreference);
 
 function gameHudSelectedProfileStorageKey(bucket = gameHudDeviceProfileBucket()) {
   return gameHudLayoutBaseStorageKey() + ":selected:" + bucket;
@@ -7101,7 +7155,7 @@ async function loadNode03State(options = {}) {
 async function runNode03Action(action, targetId, extra = {}) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
   const isTravel = normalizedAction === "travel";
-  const isRespawn = normalizedAction === "reset_demo" || normalizedAction === "reset";
+  const isRespawn = normalizedAction === "respawn" || normalizedAction === "reset_demo" || normalizedAction === "reset";
   const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
   if (isNode03Defeated() && !bypassDefeatState) {
     clearLocalMovementForDefeat({ force: true, sendStop: true });
@@ -7269,7 +7323,7 @@ function currentGameHudDialogueNotice() {
       title: "Respawn",
       text: "Je bent verslagen.",
       tone: "warning",
-      action: "node03:reset_demo",
+      action: "node03:respawn",
       actionLabel: "Respawn",
       dismissible: false
     };
@@ -9319,6 +9373,13 @@ function computeGameMinimapSignature(config, bake) {
     borderRadiusPx: config.borderRadiusPx,
     backgroundOpacity: config.backgroundOpacity,
     zIndex: config.zIndex,
+    startDistance: config.startDistance,
+    minDistance: config.minDistance,
+    maxDistance: config.maxDistance,
+    followPlayer: config.followPlayer,
+    allowZoom: config.allowZoom,
+    allowPan: config.allowPan,
+    allowPinchZoom: config.allowPinchZoom,
     fogOfWar: config.fogOfWar || null,
     markerSettings: {
       debugMode: config.debugMode,
@@ -9999,6 +10060,10 @@ function gameMinimapCategorizedMarkers(config = resolveGameMinimapConfig()) {
     for (const entity of state.gameWorld.entities) {
       const explicitCategory = gameMinimapEntityCategoryId(entity);
       const isScatter = entity.kind === "scatter" || entity.type === "scatter" || Boolean(entity.scatterId);
+      // A flattened published scatter can contain hundreds or thousands of instances. When
+      // scatter markers are disabled, do not keep resolving/category-matching every instance on
+      // each moving-minimap refresh just to discard it as a hidden "object" category later.
+      if (isScatter && config.showScatterInstances !== true) continue;
       const componentRole = minimapEntityRole(entity);
       const source = GAME_MINIMAP_MARKER_SOURCE_SET.has(explicitCategory)
         ? explicitCategory
@@ -10142,8 +10207,8 @@ function drawGameMinimapCategoryMarker(ctx, category, marker, viewBounds, size, 
   }
 }
 
-function drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, throughFog, performanceMode, now) {
-  const markers = gameMinimapCategorizedMarkers(config);
+function drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, throughFog, performanceMode, now, preparedMarkers = null) {
+  const markers = Array.isArray(preparedMarkers) ? preparedMarkers : gameMinimapCategorizedMarkers(config);
   if (!markers.length) return;
   const markerScale = gameMinimapMarkerPixelScale(config, viewBounds, size);
   for (const marker of markers) {
@@ -10154,7 +10219,7 @@ function drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, throug
   }
 }
 
-function drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, now) {
+function drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, now, preparedMarkers = null) {
   const elements = state.minimapHud.elements;
   if (!elements?.fogCanvas || !elements?.fogCtx || !activeView) return;
   const ctx = elements.fogCtx;
@@ -10166,19 +10231,31 @@ function drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, perfor
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
-  drawGameMinimapCategorizedMarkers(ctx, config, minimapViewBounds(activeView), size, true, performanceMode, now);
+  drawGameMinimapCategorizedMarkers(ctx, config, minimapViewBounds(activeView), size, true, performanceMode, now, preparedMarkers);
 }
 
-// Follows the local player until the user pans/zooms (userOverride), and resets whenever the
-// active hud/source minimap identity changes. Never touches node values - purely client view state.
+// The root HUD owns zoom across zones. A zone switch changes only the bake/source and must not
+// reset the player's zoom. Author changes to start/min/max do deliberately establish a new base.
 function ensureGameMinimapView(config, groundBounds) {
   const hudState = state.minimapHud;
-  const configKey = (config.sourceMinimapId || "") + "|" + (config.hudId || "");
-  if (!hudState.view || hudState.configKey !== configKey) {
+  const userId = String(state.user?.id || state.user?.username || state.player?.id || "anonymous").trim() || "anonymous";
+  const configKey = gameHudProjectId() + "|" + userId + "|" + (config.hudId || "game_minimap");
+  const defaultsKey = gameMinimapZoomDefaultsKey(config);
+  const groundMax = groundBounds
+    ? Math.max(1, Number(groundBounds.maxX) - Number(groundBounds.minX), Number(groundBounds.maxZ) - Number(groundBounds.minZ))
+    : Infinity;
+  const configuredMax = Math.max(1, num(config.maxDistance, 1000));
+  const maxDistance = Math.min(configuredMax, groundMax);
+  const minDistance = Math.min(maxDistance, Math.max(1, num(config.minDistance, 20)));
+  const startDistance = clamp(num(config.startDistance, 120), minDistance, maxDistance);
+  if (!hudState.view || hudState.configKey !== configKey || hudState.defaultsKey !== defaultsKey) {
     hudState.configKey = configKey;
+    hudState.defaultsKey = defaultsKey;
     hudState.userOverride = false;
     const localPos = currentLocalPlayerPosition();
-    hudState.view = createMinimapView(localPos ? localPos.x : 0, localPos ? localPos.z : 0, config.startDistance);
+    const savedDistance = readGameMinimapZoomPreference(config);
+    const initialDistance = clamp(savedDistance === null ? startDistance : savedDistance, minDistance, maxDistance);
+    hudState.view = createMinimapView(localPos ? localPos.x : 0, localPos ? localPos.z : 0, initialDistance);
   }
   if (config.followPlayer !== false && !hudState.userOverride) {
     const localPos = currentLocalPlayerPosition();
@@ -10250,9 +10327,13 @@ function buildGameMinimapDom(config, bake) {
   state.minimapHud.interactions = attachMinimapInteractions(canvas, {
     getView: function () { return state.minimapHud.view; },
     setView: function (view) {
+      const previousDistance = Number(state.minimapHud.view?.worldDistance);
       state.minimapHud.view = view;
       state.minimapHud.userOverride = true;
       state.minimapHud.dirty = true;
+      if (Number(view?.worldDistance) !== previousDistance) {
+        persistGameMinimapZoomPreference(resolveGameMinimapConfig(), view?.worldDistance);
+      }
     },
     getGroundBounds: function () {
       const liveConfig = resolveGameMinimapConfig();
@@ -10264,10 +10345,7 @@ function buildGameMinimapDom(config, bake) {
     getMinDistance: function () { return resolveGameMinimapConfig()?.minDistance || 20; },
     getMaxDistance: function () {
       const liveConfig = resolveGameMinimapConfig();
-      const configuredMax = liveConfig?.maxDistance || 1000;
-      const bounds = liveConfig ? resolveGameMinimapBakeBounds(resolveGameMinimapBake(liveConfig)) : null;
-      const worldMax = bounds ? Math.max(Number(bounds.maxX) - Number(bounds.minX), Number(bounds.maxZ) - Number(bounds.minZ), 1) : 1;
-      return Math.max(configuredMax, worldMax);
+      return liveConfig?.maxDistance || 1000;
     },
     allowZoom: function () { return resolveGameMinimapConfig()?.allowZoom !== false; },
     allowPan: function () { return resolveGameMinimapConfig()?.allowPan !== false; },
@@ -10683,9 +10761,10 @@ function drawGameMinimap(config, bake, view, performanceMode) {
     ctx.fillText("Minimap laden", size / 2, size / 2);
   }
   ctx.globalAlpha = 1;
-  drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, false, performanceMode, performance.now());
+  const categorizedMarkers = gameMinimapCategorizedMarkers(config);
+  drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, false, performanceMode, performance.now(), categorizedMarkers);
   drawGameMinimapFogOverlay(config, activeView, size, dpr, gameMinimapHasThroughFogMarkers(config), performanceMode);
-  drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now());
+  drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now(), categorizedMarkers);
 }
 
 function drawGameMinimapIfDue(now) {
@@ -11834,8 +11913,20 @@ function applyInstantRespawnResponse(response) {
     })
   }, "http-respawn");
   if (!nextPosition) return false;
+  clearNode03SnapshotForZoneChange(nextPosition.zoneId);
   clearLocalMovementForTeleport();
-  applyAuthoritativeUpdate(nextPosition, { transport: "http-respawn", keepPrediction: false });
+  if (response.gameWorld) {
+    applySnapshotToRuntime({
+      gameWorld: response.gameWorld,
+      gameProject: response.gameWorld.gameProject || state.gameProject,
+      position: nextPosition,
+      worldPublishedAt: response.gameWorld.publishedAt || state.lastPublishedAt || state.publishedAt,
+      publishedAt: response.gameWorld.publishedAt || state.publishedAt
+    }, { forceWorld: true, keepPrediction: false, transport: "http-respawn" });
+  } else {
+    applyAuthoritativeUpdate(nextPosition, { transport: "http-respawn", keepPrediction: false });
+  }
+  if (response.snapshot) state.node03.snapshot = response.snapshot;
   state.position = clonePosition(nextPosition);
   state.predictedPosition = clonePosition(nextPosition);
   state.authoritativePosition = clonePosition(nextPosition);

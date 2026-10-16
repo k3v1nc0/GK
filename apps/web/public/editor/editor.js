@@ -1,5 +1,5 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261015-editor-latency4";
-import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261006-portal-pair2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261016-scatter-pattern2";
+import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
   normalizeCanonicalId,
@@ -53,7 +53,7 @@ const GRAPH_FRAME_MIN_HEIGHT = 180;
 const ZONE_CANVAS_SIZE = 500;
 const ZONE_CANVAS_HALF_SIZE = ZONE_CANVAS_SIZE / 2;
 const ZONE_CANVAS_PORT_ALIASES = new Set(["zonePackage", "zonepackage", "zonePkg", "zonepkg"]);
-const ZONE_CANVAS_ROOT_NODE_TYPES = new Set(["ambient_light", "directional_light"]);
+const ZONE_CANVAS_ROOT_NODE_TYPES = new Set(["ambient_light", "directional_light", "game_minimap_hud"]);
 const ZONE_CANVAS_NODE_STEP_X = 340;
 const ZONE_CANVAS_NODE_STEP_Y = 230;
 const PROJECT_ENVIRONMENT_PRESETS = Object.freeze({
@@ -342,6 +342,7 @@ const state = {
   dragSessionCounter: 0,
   selectedNodeIds: [],
   selectedEdgeIds: [],
+  viewportMarqueeSelection: false,
   authoringSelectedModelNodeId: null,
   clipboard: null,
   marquee: null,
@@ -1738,6 +1739,67 @@ function runtimeNodeId(node) {
   return null;
 }
 
+function zoneLinkPortalModelNodes(link, graph = state.graph) {
+  if (!link || link.type !== "zone_link") return [];
+  const linkRef = normalizeCanonicalId(link.values?.linkId, "");
+  if (!linkRef) return [];
+  const models = [];
+  const seen = new Set();
+  for (const component of graph.nodes || []) {
+    if (component.type !== "portal_component") continue;
+    if (normalizeCanonicalId(component.values?.zoneLinkRef, "") !== linkRef) continue;
+    const model = visualBuilderPortalPlacement(graph, component)?.model || null;
+    if (!model || seen.has(model.id)) continue;
+    seen.add(model.id);
+    models.push(model);
+  }
+  return models;
+}
+
+// A Zone Link has deliberately no duplicate x/y/z fields: its visible position is the
+// model carrying the linked Portal component. Expand that relationship only for viewport
+// transforms, so moving a selected Zone Link moves the portal and the link follows from
+// its canonical relation instead of inventing a second position source.
+function selectedAuthoringTransformNodes() {
+  const nodes = [];
+  const seen = new Set();
+  for (const nodeId of state.selectedNodeIds || []) {
+    const node = nodeById(nodeId);
+    if (!node) continue;
+    const targets = node.type === "zone_link" ? zoneLinkPortalModelNodes(node) : [node];
+    for (const target of targets) {
+      if (!target || seen.has(target.id)) continue;
+      seen.add(target.id);
+      nodes.push(target);
+    }
+  }
+  return nodes;
+}
+
+function selectedAuthoringTransformPivot(nodes = selectedAuthoringTransformNodes()) {
+  const points = nodes.map(viewportSelectablePoint).filter(Boolean);
+  if (!points.length) return null;
+  const bounds = points.reduce(function (result, point) {
+    result.minX = Math.min(result.minX, point.x);
+    result.maxX = Math.max(result.maxX, point.x);
+    result.minY = Math.min(result.minY, Number(point.y) || 0);
+    result.maxY = Math.max(result.maxY, Number(point.y) || 0);
+    result.minZ = Math.min(result.minZ, point.z);
+    result.maxZ = Math.max(result.maxZ, point.z);
+    return result;
+  }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity });
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+    z: (bounds.minZ + bounds.maxZ) / 2
+  };
+}
+
+function hasMultiAuthoringTransformSelection() {
+  return state.selectedNodeIds.length > 1
+    || (state.viewportMarqueeSelection && state.selectedNodeIds.length > 0);
+}
+
 function isModelEntityTransformPatch(node, patch) {
   const keys = Object.keys(patch || {});
   return Boolean(node && node.type === "model_entity" && keys.length && keys.every(function (key) {
@@ -2446,11 +2508,13 @@ function terrainTypeLabel(type) {
 }
 
 function selectedTerrainNode() {
+  if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
   return node && TERRAIN_TOOL_NODE_TYPES.has(node.type) ? node : null;
 }
 
 function selectedScatterNode() {
+  if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
   return node && node.type === "bounded_area_scatter" ? node : null;
 }
@@ -3152,6 +3216,7 @@ function scatterSelectionText(node) {
   extras.push(title + " - " + modeText);
   extras.push(scatterShortcutSummaryText());
   if (node.values?.boundaryBlocksPlayer) extras.push("Boundary blocks player");
+  if (node.values?.itemsBlockPlayer) extras.push("Scatter items block player");
   return extras.join(" | ");
 }
 
@@ -3939,7 +4004,12 @@ function terrainOverlayState() {
 // Definition / Surface Layer / Bounded Area Scatter node from the 3D viewport.
 function terrainAllNodeMarkers() {
   const groundY = terrainGroundY();
-  const selectedId = state.selectedNodeId;
+  // A single active shape renders its own editable center handle. A box/multi-selection
+  // intentionally renders no path/scatter lines or point handles, so keep the center
+  // marker for every selected shape in that case.
+  const selectedId = !state.viewportMarqueeSelection && state.selectedNodeIds.length === 1
+    ? state.selectedNodeId
+    : null;
   const markers = [];
   for (const node of state.graph.nodes || []) {
     if (node.id === selectedId) continue;
@@ -4094,11 +4164,11 @@ function setViewportMode(mode) {
   renderViewportControls();
 }
 
-function setViewportAxis(axis) {
+function setViewportAxis(axis, options = {}) {
   state.viewportAxis = ["x", "y", "z"].includes(axis) ? axis : null;
   if (runtime && typeof runtime.setTransformAxis === "function") runtime.setTransformAxis(state.viewportAxis);
   else if (runtime && typeof runtime.setTransformAxisConstraint === "function") runtime.setTransformAxisConstraint(state.viewportAxis);
-  renderViewportControls();
+  if (options.render !== false) renderViewportControls();
 }
 
 function setViewportSnap(mode, gridSize) {
@@ -4114,14 +4184,17 @@ function syncRuntimeModelSelectionForTransform() {
   // authored node selection intentionally remains. Rebuild the complete runtime set
   // before every new G/R/S action; selecting only the primary node here would silently
   // turn the next group transform back into a one-object transform.
-  if (state.selectedNodeIds.length > 1 && typeof runtime.selectEntities === "function") {
-    const runtimeIds = Array.from(new Set(state.selectedNodeIds
-      .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
+  const transformNodes = selectedAuthoringTransformNodes();
+  if ((hasMultiAuthoringTransformSelection() || transformNodes.some(function (node) { return !state.selectedNodeIds.includes(node.id); }))
+    && typeof runtime.selectEntities === "function") {
+    const runtimeIds = Array.from(new Set(transformNodes
+      .map(function (node) { return runtimeNodeId(node); })
       .filter(Boolean)));
-    runtime.selectEntities(runtimeIds);
-    return state.selectedNodeIds
-      .map(function (nodeId) { return nodeById(nodeId); })
-      .find(function (node) { return node?.type === "model_entity"; }) || null;
+    runtime.selectEntities(runtimeIds, {
+      authoringIds: transformNodes.map(function (node) { return node.id; }),
+      selectionCount: state.selectedNodeIds.length
+    });
+    return transformNodes.find(function (node) { return node?.type === "model_entity"; }) || null;
   }
   let node = selectedModelNode() || selectedWorldContentPositionNode();
   let runtimeId = runtimeNodeId(node);
@@ -4142,7 +4215,9 @@ function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
   }
   const transformNode = syncRuntimeModelSelectionForTransform();
   const selectedId = runtimeSelectedEntityId() || runtimeModelEntityIdAtLastPointer();
-  if (!selectedId && state.selectedNodeIds.length <= 1) {
+  const transformNodes = selectedAuthoringTransformNodes();
+  const groupTransform = hasMultiAuthoringTransformSelection();
+  if (!selectedId && !groupTransform) {
     setStatus("No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", "error");
     return false;
   }
@@ -4188,7 +4263,10 @@ function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
   // objects to drag; commitGroupTransform() below applies the resulting move delta to
   // whichever selected nodes don't have a live object of their own.
   const started = typeof runtime.beginTransform === "function"
-    ? runtime.beginTransform(mode, { forceGroup: state.selectedNodeIds.length > 1 })
+    ? runtime.beginTransform(mode, {
+      forceGroup: groupTransform,
+      pivot: groupTransform ? selectedAuthoringTransformPivot(transformNodes) : null
+    })
     : typeof runtime.beginKeyboardTransform === "function" && runtime.beginKeyboardTransform();
   setStatus(started ? statusText : "No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", started ? "" : "error");
   return Boolean(started);
@@ -4328,6 +4406,54 @@ function appendModelTransformActions(parent) {
     title: "Focus selected",
     onClick: focusTerrainOrSelected
   }));
+}
+
+function focusAuthoringTransformSelection() {
+  if (!runtime) return;
+  const points = selectedAuthoringTransformNodes().map(viewportSelectablePoint).filter(Boolean);
+  if (points.length && typeof runtime.frameWorldPoints === "function") {
+    runtime.frameWorldPoints(points);
+    return;
+  }
+  if (typeof runtime.focusSelected === "function") runtime.focusSelected();
+}
+
+function appendGroupTransformActions(parent) {
+  const activeTransform = runtimeTransformActive();
+  for (const config of [
+    { label: "Move (G)", mode: "move", viewportMode: "translate", status: "Groep verplaatsen." },
+    { label: "Rot (R)", mode: "rotate", viewportMode: "rotate", status: "Groep draaien." },
+    { label: "Scale (T)", mode: "scale", viewportMode: "scale", status: "Groep schalen." }
+  ]) {
+    parent.appendChild(transformActionButton(config.label, {
+      active: activeTransform && state.viewportMode === config.viewportMode,
+      onClick: function (event) {
+        setViewportMode(config.viewportMode);
+        setViewportAxis(null);
+        beginRuntimeTransformFromShortcut(config.mode, config.status, event);
+      }
+    }));
+  }
+  for (const axis of ["x", "y", "z"]) {
+    parent.appendChild(transformActionButton(axis.toUpperCase(), {
+      title: "Beperk tot as " + axis.toUpperCase(),
+      active: activeTransform && state.viewportAxis === axis,
+      onClick: function () { setViewportAxis(state.viewportAxis === axis ? null : axis); }
+    }));
+  }
+  parent.appendChild(transformActionButton("OK (Enter)", {
+    className: "ok", disabled: !activeTransform,
+    onPointerDown: confirmRuntimeTransform, onClick: confirmRuntimeTransform
+  }));
+  parent.appendChild(transformActionButton("Del (Del)", {
+    className: "danger",
+    onClick: function () { if (activeTransform) cancelRuntimeTransform(); void deleteSelectedNodes(); }
+  }));
+  parent.appendChild(transformActionButton("Esc (Esc)", {
+    className: "danger",
+    onClick: function () { if (activeTransform) cancelRuntimeTransform(); else deselectViewportClick(); }
+  }));
+  parent.appendChild(transformActionButton("Focus (F)", { onClick: focusAuthoringTransformSelection }));
 }
 
 function appendPositionTransformActions(parent) {
@@ -4682,11 +4808,14 @@ function transformPanelFloatingOptions(hasMatrix) {
 
 function renderTransformPanel() {
   if (!el.viewportTransformPanel) return;
-  const node = selectedModelNode();
+  const transformNodes = selectedAuthoringTransformNodes();
+  const selectedZoneLink = state.selectedNodeIds.length === 1 && nodeById(state.selectedNodeIds[0])?.type === "zone_link";
+  const groupSelection = hasMultiAuthoringTransformSelection() || (selectedZoneLink && transformNodes.length > 0);
+  const node = groupSelection ? null : selectedModelNode();
   const positionNode = node ? null : selectedWorldContentPositionNode();
-  const terrainNode = node || positionNode ? null : selectedTerrainNode();
-  const scatterNode = node || positionNode || terrainNode ? null : selectedScatterNode();
-  if (!node && !positionNode && !terrainNode && !scatterNode) {
+  const terrainNode = node || positionNode || groupSelection ? null : selectedTerrainNode();
+  const scatterNode = node || positionNode || terrainNode || groupSelection ? null : selectedScatterNode();
+  if (!groupSelection && !node && !positionNode && !terrainNode && !scatterNode) {
     setEditorMinimapSuppressed(false);
     el.viewportTransformPanel.hidden = true;
     el.viewportTransformPanel.classList.remove("minimapSlotPanel");
@@ -4700,7 +4829,8 @@ function renderTransformPanel() {
 
   const actions = document.createElement("div");
   actions.className = "transformMobileActions";
-  if (node) appendModelTransformActions(actions);
+  if (groupSelection) appendGroupTransformActions(actions);
+  else if (node) appendModelTransformActions(actions);
   else if (positionNode) appendPositionTransformActions(actions, positionNode);
   else if (terrainNode) appendTerrainTransformActions(actions, terrainNode);
   else appendScatterTransformActions(actions, scatterNode);
@@ -5030,6 +5160,7 @@ function setSelection(nodeIds, edgeIds, options = {}) {
   const nextEdgeIds = Array.from(new Set((edgeIds || []).filter(Boolean)));
   state.selectedNodeIds = nextNodeIds;
   state.selectedEdgeIds = nextEdgeIds;
+  state.viewportMarqueeSelection = options.marquee === true;
   state.selectedNodeId = options.primaryNodeId !== undefined
     ? options.primaryNodeId
     : (nextNodeIds.length ? nextNodeIds[0] : null);
@@ -5141,7 +5272,10 @@ function syncRuntimeSelection() {
     .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
     .filter(Boolean);
   if (typeof runtime.selectEntities === "function") {
-    runtime.selectEntities(runtimeIds);
+    runtime.selectEntities(runtimeIds, {
+      authoringIds: state.selectedNodeIds,
+      selectionCount: state.selectedNodeIds.length
+    });
   } else if (runtimeIds.length) {
     runtime.selectEntity(runtimeIds[0]);
   } else {
@@ -5394,7 +5528,9 @@ async function boot() {
         deselectViewportClick();
         return;
       }
-      setSelection(nodeIds, [], { primaryNodeId: nodeIds[0], clearPendingEdge: true });
+      // This callback is used for Shift/Ctrl viewport clicks. Keep the same compact
+      // yellow-box selection mode as marquee selection, including when Ctrl leaves one.
+      setSelection(nodeIds, [], { primaryNodeId: nodeIds[0], clearPendingEdge: true, marquee: true });
       renderGraph();
       focusGraphNode(nodeIds[0]);
       scheduleEditorMinimapRedraw();
@@ -5418,7 +5554,7 @@ async function boot() {
         deselectViewportClick();
         return;
       }
-      setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true });
+      setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true, marquee: true });
       renderGraph();
       scheduleEditorMinimapRedraw();
     },
@@ -5426,16 +5562,21 @@ async function boot() {
       // Purely visual, live feedback while dragging - the unsaved count and undo entry
       // are only created once on actual commit below (mouse release), not while the
       // object is still being dragged around.
-      renderViewportControls();
+      // The runtime is also moving the selected path/scatter center handles. Rebuilding
+      // all overlays here would snap those helpers back to their authored coordinates on
+      // every pointer frame, before the final values have been committed.
+      renderStatusLine();
       scheduleEditorMinimapRedraw();
     },
     onTransformEnd: function (info) {
       if (!info) return;
-      setViewportAxis(null);
+      setViewportAxis(null, { render: false });
       if (info.action === "cancel") {
         clearSelection({ clearPendingEdge: true });
       }
       renderGraph();
+      renderStatusLine();
+      renderTransformPanel();
       scheduleEditorMinimapRedraw();
       if (info.action === "confirm") {
         if (state.lastTransformCommitError) {
@@ -5452,7 +5593,7 @@ async function boot() {
       state.lastTransformCommitError = "";
       if (entityIdOrPayload && typeof entityIdOrPayload === "object" && Array.isArray(entityIdOrPayload.commits)) {
         void commitGroupTransform(entityIdOrPayload);
-        setViewportAxis(null);
+        setViewportAxis(null, { render: false });
         return;
       }
       const node = nodeByRuntimeId(entityIdOrPayload);
@@ -5522,6 +5663,7 @@ async function boot() {
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
   await reloadGraph();
   await repairLoadedGlobalGameCameraGraph();
+  await repairLoadedGlobalGameMinimapGraph();
   await reloadAssets();
   renderViewportControls();
   setViewportSnap(state.snapMode, state.snapGridSize);
@@ -5597,6 +5739,47 @@ async function repairLoadedGlobalGameCameraGraph() {
     return Boolean(camera);
   } catch (error) {
     setStatus("Game Camera-consolidatie overgeslagen: " + (error?.message || String(error)), "error");
+    return false;
+  }
+}
+
+function globalGameMinimapGraphNeedsRepair(graph) {
+  const minimaps = (graph?.nodes || []).filter(function (node) { return node.type === "game_minimap_hud"; });
+  if (!minimaps.length) return false;
+  const uiOutput = firstRootNodeOfType(graph, "ui_output");
+  if (!uiOutput || minimaps.length !== 1 || (minimaps[0].parentId || null) !== null) return true;
+  return !(graph.edges || []).some(function (edge) {
+    return edge.fromNodeId === minimaps[0].id
+      && edge.fromPort === "minimap"
+      && edge.toNodeId === uiOutput.id
+      && edge.toPort === "minimap";
+  });
+}
+
+async function repairLoadedGlobalGameMinimapGraph() {
+  try {
+    if (!globalGameMinimapGraphNeedsRepair(state.graph)) return false;
+    const nextGraph = cloneGraphForRestore(state.graph);
+    const uiOutput = firstRootNodeOfType(nextGraph, "ui_output");
+    if (!uiOutput) return false;
+    const minimap = ensureSingleRootGameMinimap(nextGraph, uiOutput, { create: false });
+    if (!minimap) return false;
+    const result = await api(RESTORE_GRAPH_ROUTE, {
+      method: "POST",
+      body: JSON.stringify({ graph: nextGraph })
+    });
+    state.graph = result.graph || result;
+    state.nodeTypes = state.graph.nodeTypes || state.nodeTypes;
+    restoreCurrentGroupAfterGraphLoad();
+    ensureCurrentGroupExists();
+    renderGraph();
+    renderEdgeList();
+    renderInspector();
+    renderAuthoringHub();
+    setStatus("Game Minimap HUD verplaatst naar één rootnode; de bestaande instellingen zijn behouden.", "success");
+    return true;
+  } catch (error) {
+    setStatus("Game Minimap-consolidatie overgeslagen: " + (error?.message || String(error)), "error");
     return false;
   }
 }
@@ -12098,6 +12281,60 @@ function ensureSingleRootGameCamera(graph, assembly, presetValues = null, option
   return camera;
 }
 
+function ensureSingleRootGameMinimap(graph, uiOutput, options = {}) {
+  const minimaps = (graph.nodes || []).filter(function (node) { return node.type === "game_minimap_hud"; });
+  if (!minimaps.length && options.create === false) return null;
+  const project = (graph.nodes || []).find(function (node) { return node.type === "game_project_settings"; }) || null;
+  const startZoneRef = normalizeCanonicalId(project?.values?.startZoneRef, "");
+  const startZone = (graph.nodes || []).find(function (node) {
+    return node.type === "zone_definition" && normalizeCanonicalId(node.values?.zoneId, "") === startZoneRef;
+  }) || null;
+  const connectedToUi = minimaps.find(function (node) {
+    return (graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === node.id && edge.fromPort === "minimap" && edge.toNodeId === uiOutput?.id && edge.toPort === "minimap";
+    });
+  }) || null;
+  const startZoneMinimap = minimaps.find(function (node) {
+    return startZone && (node.parentId || null) === (startZone.parentId || null);
+  }) || null;
+  const rootMinimap = minimaps.find(function (node) { return (node.parentId || null) === null; }) || null;
+  const effectiveMinimap = connectedToUi || startZoneMinimap || rootMinimap || minimaps[0] || null;
+  let minimap = rootMinimap || effectiveMinimap;
+  if (!minimap) {
+    minimap = {
+      id: createZoneGraphId("node_game_minimap_hud"),
+      type: "game_minimap_hud",
+      title: "Game Minimap HUD",
+      x: 1180,
+      y: 520,
+      parentId: null,
+      values: Object.assign({}, objectFunctionDefaultValuesForNodeType("game_minimap_hud"), {
+        hudId: uniqueFieldValue(graph, "game_minimap_hud", "hudId", "game_minimap")
+      })
+    };
+    graph.nodes.push(minimap);
+  }
+  if (effectiveMinimap && effectiveMinimap.id !== minimap.id) {
+    minimap.values = Object.assign({}, minimap.values || {}, clonePlain(effectiveMinimap.values || {}));
+  }
+  minimap.parentId = null;
+  minimap.title = "Game Minimap HUD";
+  const removeIds = new Set(minimaps.filter(function (node) { return node.id !== minimap.id; }).map(function (node) { return node.id; }));
+  if (removeIds.size) {
+    graph.nodes = (graph.nodes || []).filter(function (node) { return !removeIds.has(node.id); });
+  }
+  graph.edges = (graph.edges || []).filter(function (edge) {
+    if (removeIds.has(edge.fromNodeId) || removeIds.has(edge.toNodeId)) return false;
+    if (edge.fromNodeId !== minimap.id && edge.toNodeId !== minimap.id) return true;
+    return edge.fromNodeId === minimap.id
+      && edge.fromPort === "minimap"
+      && edge.toNodeId === uiOutput?.id
+      && edge.toPort === "minimap";
+  });
+  if (uiOutput) pushEdgeIfMissing(graph, minimap.id, "minimap", uiOutput.id, "minimap");
+  return minimap;
+}
+
 function ensureFoundationGroup(graph, kind, title, x, y) {
   let group = firstRootGroupOfKind(graph, kind);
   let created = false;
@@ -12483,6 +12720,8 @@ function ensureProjectFoundationGraph(graph, values, options = {}) {
   if (!legacyUiOutput || !hasTypedGraphEdge(graph, legacyUiOutput, assemblyResult.node, "uiPackage")) {
     ensureUiGroupPackage(graph, uiFoundation.group);
   }
+  const rootUiOutput = firstRootNodeOfType(graph, "ui_output");
+  if (rootUiOutput) ensureSingleRootGameMinimap(graph, rootUiOutput);
   ensureCampaignRootPlumbing(graph, campaignFoundation.group, { x: 1040, y: 280 });
 
   let zoneGroup = zoneCanvasGroupsForParent(null, graph)[0] || null;
@@ -15132,7 +15371,11 @@ function connectManagedNodeToPackage(graph, group, node) {
     const policyPort = outputPortForDataType(node.type, "policy");
     if (output && policyPort && targetPort) pushEdgeIfMissing(graph, node.id, policyPort, output.id, targetPort);
   } else if (kind === "ui") {
-    ensureUiGroupPackage(graph, group);
+    const uiOutput = ensureUiGroupPackage(graph, group);
+    if (node.type === "game_minimap_hud") {
+      ensureSingleRootGameMinimap(graph, uiOutput);
+      return;
+    }
     const output = graphNodeByIdInGraph(graph, editorGroupSystemNodeId(group.id, "output"));
     for (const spec of AUTHORING04_UI_GROUP_OUTPUT_PORTS) {
       const sourcePort = outputPortForDataType(node.type, spec.dataType);
@@ -15181,7 +15424,7 @@ async function commitManagedDraft(scope, group, draft) {
   if (isNew) {
     const duplicate = (nextGraph.nodes || []).find(function (candidate) {
       return candidate.type === draft.type
-        && (candidate.parentId || null) === nextGroup.id
+        && (draft.type === "game_minimap_hud" || (candidate.parentId || null) === nextGroup.id)
         && normalizeEditorKey(titleForManagedNode(candidate.type, candidate.values || candidate)) === normalizeEditorKey(title);
     }) || null;
     if (duplicate) {
@@ -15206,13 +15449,13 @@ async function commitManagedDraft(scope, group, draft) {
       title,
       x: position.x,
       y: position.y,
-      parentId: nextGroup.id,
+      parentId: draft.type === "game_minimap_hud" ? null : nextGroup.id,
       values
     };
     nextGraph.nodes.push(node);
   } else {
     node.title = title;
-    node.parentId = nextGroup.id;
+    node.parentId = draft.type === "game_minimap_hud" ? null : nextGroup.id;
     node.values = Object.assign({}, node.values || {}, values);
   }
   connectManagedNodeToPackage(nextGraph, nextGroup, node);
@@ -15424,7 +15667,10 @@ function managedNodesInGroup(group, types, graph = state.graph) {
   const query = normalizeEditorKey(group.values?.groupKind) === "catalog" ? state.catalogHubSearch : state.settingsHubSearch;
   const normalizedQuery = normalizeEditorKey(query);
   return (graph.nodes || []).filter(function (node) {
-    if ((node.parentId || null) !== group.id || !typeSet.has(node.type)) return false;
+    const globalGameMinimap = normalizeEditorKey(group.values?.groupKind) === "ui"
+      && node.type === "game_minimap_hud"
+      && (node.parentId || null) === null;
+    if ((!globalGameMinimap && (node.parentId || null) !== group.id) || !typeSet.has(node.type)) return false;
     if (!normalizedQuery) return true;
     const haystack = normalizeEditorKey([nodeDisplayTitle(node), identityValue(node), state.nodeTypes?.[node.type]?.label].join(" "));
     return haystack.includes(normalizedQuery);
@@ -15966,7 +16212,9 @@ function renderSettingsUiHub(group) {
   wrap.appendChild(renderManagedNodeList("settings", group, types));
   if (kind === "ui") {
     const selected = state.settingsHubSelectedNodeId ? graphNodeByIdInGraph(state.graph, state.settingsHubSelectedNodeId) : null;
-    if (selected && (selected.parentId || null) === group.id) wrap.appendChild(renderUiPreview(selected));
+    if (selected && ((selected.parentId || null) === group.id || (selected.type === "game_minimap_hud" && (selected.parentId || null) === null))) {
+      wrap.appendChild(renderUiPreview(selected));
+    }
   }
   return wrap;
 }
@@ -18161,6 +18409,26 @@ async function autoWireRootGameCamera(nodeId) {
   });
 }
 
+async function autoWireRootGameMinimap(nodeId) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const uiOutput = firstRootNodeOfType(nextGraph, "ui_output");
+  if (!uiOutput) {
+    setStatus("Maak of herstel eerst de Projectbasis voordat je de Game Minimap HUD toevoegt.", "error");
+    return;
+  }
+  const minimap = ensureSingleRootGameMinimap(nextGraph, uiOutput);
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Root Game Minimap gekoppeld",
+    selectedNodeIds: [minimap?.id || nodeId],
+    selectedEdgeIds: [],
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus("De enige Game Minimap HUD staat op root en is aan UI Output gekoppeld.", "success");
+    }
+  });
+}
+
 
 function editorCameraGroundPoint() {
   if (runtime && typeof runtime.getMinimapMarkerSnapshot === "function") {
@@ -18224,6 +18492,14 @@ async function addNode(type, values = {}) {
       return existingCamera.id;
     }
   }
+  if (type === "game_minimap_hud") {
+    const existingMinimap = (state.graph.nodes || []).find(function (node) { return node.type === "game_minimap_hud"; }) || null;
+    if (existingMinimap) {
+      selectNode(existingMinimap.id, true);
+      setStatus("Er kan maar één globale Game Minimap HUD bestaan. Pas de bestaande rootnode aan.", "error");
+      return existingMinimap.id;
+    }
+  }
   const center = viewportCenterInGraph();
   const spawnValues = Object.assign({}, viewportCenterWorldValues(type), values);
   const editorOnlyGraphFrame = type === "graph_frame";
@@ -18231,7 +18507,8 @@ async function addNode(type, values = {}) {
   const requestedParent = nodeById(requestedParentId);
   const zoneParentAdd = isZoneCanvasGroup(requestedParent);
   const rootOnlyGameCamera = type === "game_camera";
-  const rootOnlyZoneNode = zoneParentAdd && !editorOnlyGraphFrame && (isZoneCanvasRootOnlyNodeType(type) || rootOnlyGameCamera);
+  const rootOnlyGameMinimap = type === "game_minimap_hud";
+  const rootOnlyZoneNode = zoneParentAdd && !editorOnlyGraphFrame && (isZoneCanvasRootOnlyNodeType(type) || rootOnlyGameCamera || rootOnlyGameMinimap);
   const parentId = rootOnlyZoneNode ? (requestedParent.parentId || null) : requestedParentId;
   const position = rootOnlyZoneNode
     ? { x: Math.round(Number(requestedParent.x) || 0) + 48, y: Math.round(Number(requestedParent.y) || 0) - 105 }
@@ -18253,13 +18530,17 @@ async function addNode(type, values = {}) {
       // en laat selectNode() hierboven de nieuwe node daarin focussen, in plaats van
       // hier weg te springen naar de losse "Nodes"-tab (zie showMobileInspectorPanel).
       if (result?.nodeId && isMobileLayout() && state.mobilePanel !== "all") setMobilePanel("graph");
-      setStatus(editorOnlyGraphFrame ? "Frame toegevoegd." : (rootOnlyGameCamera ? "Game Camera toegevoegd op root." : (rootOnlyZoneNode ? "Light toegevoegd op root." : "Node toegevoegd.")), "success");
+      setStatus(editorOnlyGraphFrame ? "Frame toegevoegd." : (rootOnlyGameCamera
+        ? "Game Camera toegevoegd op root."
+        : (rootOnlyGameMinimap ? "Game Minimap HUD toegevoegd op root." : (rootOnlyZoneNode ? "Light toegevoegd op root." : "Node toegevoegd."))), "success");
     }
   });
   if (createdNodeId && zoneParentAdd && !rootOnlyZoneNode && !editorOnlyGraphFrame) {
     await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
   } else if (createdNodeId && rootOnlyGameCamera) {
     await autoWireRootGameCamera(createdNodeId);
+  } else if (createdNodeId && rootOnlyGameMinimap) {
+    await autoWireRootGameMinimap(createdNodeId);
   } else if (createdNodeId && rootOnlyZoneNode) {
     await autoWireRootLightNode(createdNodeId, parentId);
   }
@@ -19244,46 +19525,106 @@ el.edgeLayer.addEventListener("pointerdown", function (event) {
 async function commitGroupTransform(payload) {
   const commits = payload?.commits || [];
   const patchedNodeIds = new Set();
-  const patches = [];
+  const patchMap = new Map();
+  function addPatch(nodeId, values) {
+    if (!nodeId || !values || !Object.keys(values).length) return;
+    patchMap.set(nodeId, Object.assign({}, patchMap.get(nodeId) || {}, values));
+    patchedNodeIds.add(nodeId);
+  }
   for (const entry of commits) {
     const node = nodeByRuntimeId(entry.entityId);
     if (!node || node.type !== "model_entity") continue;
     const values = normalizeModelEntityTransformPatch(node, entry.transform || {});
-    patchedNodeIds.add(node.id);
-    patches.push({ nodeId: node.id, values: values });
+    addPatch(node.id, values);
     for (const targetPatch of linkedQuestTargetPatchesForModelTransform(node, values, state.graph, patchedNodeIds)) {
-      patchedNodeIds.add(targetPatch.nodeId);
-      patches.push(targetPatch);
+      addPatch(targetPatch.nodeId, targetPatch.values);
     }
   }
-  const delta = payload?.mode === "move" ? payload.delta : null;
-  if (delta && (delta.x || delta.z)) {
-    for (const nodeId of state.selectedNodeIds) {
-      if (patchedNodeIds.has(nodeId)) continue;
-      const node = nodeById(nodeId);
-      if (!node) continue;
-      if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
-        const explicitPoints = Array.isArray(node.values?.points) ? node.values.points : [];
-        if (explicitPoints.length > 0) {
-          // A genuinely edited polygon - shift every point, same as the single-node
-          // "move via center handle" (terrainCommitSurfaceDrag).
-          const nextPoints = scatterTranslatePoints(terrainNodePoints(node), delta.x, delta.z);
-          patches.push({ nodeId: node.id, values: terrainPointsPatch(node, nextPoints) });
-          continue;
-        }
-        // No explicit points yet (still the default rectangle/point derived from x/z) -
-        // just shift x/z directly below. Reusing terrainPointsPatch here would write a
-        // points array and force shapeType to "polygon", silently changing how the node
-        // edits, which a plain move shouldn't do.
+  const mode = payload?.mode;
+  const axis = payload?.axis || null;
+  const pivot = payload?.pivot;
+  const hasPivot = Number.isFinite(Number(pivot?.x)) && Number.isFinite(Number(pivot?.z));
+  const delta = mode === "move" ? payload?.delta : null;
+  const rotationDelta = mode === "rotate" ? Number(payload?.rotationDelta) || 0 : 0;
+  const rotationDegrees = rotationDelta * 180 / Math.PI;
+  const scaleFactor = mode === "scale" ? Number(payload?.scaleFactor) || 1 : 1;
+  const scaleX = mode === "scale" && (!axis || axis === "x") ? scaleFactor : 1;
+  const scaleZ = mode === "scale" && (!axis || axis === "y") ? scaleFactor : 1;
+
+  function transformXZ(x, z) {
+    const point = { x: Number(x) || 0, z: Number(z) || 0 };
+    if (mode === "move" && delta) {
+      return { x: point.x + (Number(delta.x) || 0), z: point.z + (Number(delta.z) || 0) };
+    }
+    if (!hasPivot) return point;
+    if (mode === "rotate") {
+      const cos = Math.cos(rotationDelta);
+      const sin = Math.sin(rotationDelta);
+      const offsetX = point.x - Number(pivot.x);
+      const offsetZ = point.z - Number(pivot.z);
+      return {
+        x: Number(pivot.x) + (offsetX * cos + offsetZ * sin),
+        z: Number(pivot.z) + (-offsetX * sin + offsetZ * cos)
+      };
+    }
+    if (mode === "scale") {
+      return {
+        x: Number(pivot.x) + ((point.x - Number(pivot.x)) * scaleX),
+        z: Number(pivot.z) + ((point.z - Number(pivot.z)) * scaleZ)
+      };
+    }
+    return point;
+  }
+
+  function transformPoints(points) {
+    return terrainClonePoints(points).map(function (point) {
+      const next = transformXZ(point.x, point.z);
+      if (Number.isFinite(Number(point?.y))) next.y = Number(point.y);
+      return next;
+    });
+  }
+
+  for (const node of selectedAuthoringTransformNodes()) {
+    if (!node || patchedNodeIds.has(node.id)) continue;
+    const fields = state.nodeTypes?.[node.type]?.fields || {};
+    const explicitPoints = Array.isArray(node.values?.points) ? node.values.points : [];
+    if (node.type === "bounded_area_scatter" && explicitPoints.length) {
+      const nextPoints = transformPoints(scatterNodePoints(node));
+      const bounds = scatterPointBounds(nextPoints);
+      addPatch(node.id, {
+        points: nextPoints,
+        areaCenterX: bounds ? bounds.centerX : Number(node.values?.areaCenterX) || 0,
+        areaCenterZ: bounds ? bounds.centerZ : Number(node.values?.areaCenterZ) || 0,
+        areaWidth: bounds ? bounds.width : Number(node.values?.areaWidth) || 0,
+        areaDepth: bounds ? bounds.depth : Number(node.values?.areaDepth) || 0,
+        areaRotationY: mode === "rotate"
+          ? normalizeDegrees((Number(node.values?.areaRotationY) || 0) + rotationDegrees)
+          : Number(node.values?.areaRotationY) || 0
+      });
+      continue;
+    }
+    if (TERRAIN_TOOL_NODE_TYPES.has(node.type) && explicitPoints.length) {
+      const values = terrainPointsPatch(node, transformPoints(terrainNodePoints(node)));
+      if (mode === "rotate" && fields.rotationY) {
+        values.rotationY = normalizeDegrees((Number(node.values?.rotationY) || 0) + rotationDegrees);
       }
-      // Generic locator fallback (Player Spawn, and anything else with a plain x/z
-      // world position but no points array) - same field check as nodeCoordinatePoint.
-      const fields = state.nodeTypes?.[node.type]?.fields;
-      if (!fields || !fields.x || !fields.z) continue;
-      const values = { x: Number(node.values?.x || 0) + delta.x, z: Number(node.values?.z || 0) + delta.z };
-      patches.push({ nodeId: node.id, values: values });
+      addPatch(node.id, values);
+      continue;
     }
+    if (!fields.x || !fields.z) continue;
+    const nextPosition = transformXZ(node.values?.x, node.values?.z);
+    const values = { x: nextPosition.x, z: nextPosition.z };
+    if (mode === "rotate") {
+      if (fields.rotationY) values.rotationY = normalizeDegrees((Number(node.values?.rotationY) || 0) + rotationDegrees);
+      if (fields.facing) values.facing = normalizeDegrees((Number(node.values?.facing) || 0) + rotationDegrees);
+    } else if (mode === "scale") {
+      if (fields.width) values.width = Math.max(0, (Number(node.values?.width) || 0) * scaleX);
+      if (fields.depth) values.depth = Math.max(0, (Number(node.values?.depth) || 0) * scaleZ);
+      if (fields.radius && !axis) values.radius = Math.max(0, (Number(node.values?.radius) || 0) * scaleFactor);
+    }
+    addPatch(node.id, values);
   }
+  const patches = Array.from(patchMap, function ([nodeId, values]) { return { nodeId, values }; });
   if (!patches.length) return;
   const pureModelTransform = patches.every(function (patch) {
     const node = nodeById(patch.nodeId);
@@ -22302,7 +22643,13 @@ function buildField(node, key, field) {
     if (node.type === "bounded_area_scatter" && key === "boundaryBlocksPlayer") {
       const hint = document.createElement("div");
       hint.className = "inspectorHint";
-      hint.textContent = "When enabled, the polygon blocks the player.";
+      hint.textContent = "The complete polygon blocks the player, including gaps between items.";
+      wrap.appendChild(hint);
+    }
+    if (node.type === "bounded_area_scatter" && key === "itemsBlockPlayer") {
+      const hint = document.createElement("div");
+      hint.className = "inspectorHint";
+      hint.textContent = "Each placed item gets its own collision. Gaps between items remain walkable.";
       wrap.appendChild(hint);
     }
   } else if (field.type === "select") {
@@ -26709,7 +27056,19 @@ function handleTerrainPointerDown(event) {
         if (runtime && typeof runtime.markEditorTouchHandled === "function") {
           runtime.markEditorTouchHandled(event.pointerId);
         }
-        selectNode(markerNode.id, true, { clearPendingEdge: true });
+        if (event.ctrlKey || event.metaKey) {
+          const nextIds = state.selectedNodeIds.filter(function (nodeId) { return nodeId !== markerNode.id; });
+          if (nextIds.length) {
+            setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true, marquee: true });
+          } else {
+            deselectViewportClick();
+          }
+        } else if (event.shiftKey) {
+          const nextIds = Array.from(new Set(state.selectedNodeIds.concat(markerNode.id)));
+          setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true, marquee: true });
+        } else {
+          selectNode(markerNode.id, true, { clearPendingEdge: true });
+        }
       });
       return;
     }
@@ -26740,6 +27099,10 @@ function handleTerrainPointerDown(event) {
       return;
     }
     if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
+      // Shift/Ctrl + drag belongs to viewport object box-selection. Let the runtime
+      // marquee receive it so repeated Shift boxes add nodes and Ctrl boxes remove
+      // nodes, even when the current selection happens to be one editable path.
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return;
       beginPointMarqueeSession(event, {
         getPoints: function () { return terrainNodePoints(node); },
         yForPoint: function (point) {
@@ -26758,6 +27121,16 @@ function handleTerrainPointerDown(event) {
   suppressNextViewportRuntimeClick();
 
   if (hit && hit.nodeId === node.id) {
+    if ((event.ctrlKey || event.metaKey) && hit.handleRole === "center" && state.selectedNodeIds.includes(node.id)) {
+      const nextIds = state.selectedNodeIds.filter(function (nodeId) { return nodeId !== node.id; });
+      if (nextIds.length) setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true, marquee: true });
+      else deselectViewportClick();
+      return;
+    }
+    if (event.shiftKey && hit.handleRole === "center") {
+      setSelection(state.selectedNodeIds, [], { primaryNodeId: state.selectedNodeIds[0], clearPendingEdge: true, marquee: true });
+      return;
+    }
     if (capabilities.centerEditable && hit.handleRole === "center") {
       if (state.terrainTool.mode === "delete") {
         setStatus("Select a point to delete.", "error");
@@ -26942,6 +27315,7 @@ function handleScatterPointerDown(event) {
       return false;
     }
     if (!hit && !meshEntityId && (mode === "select" || mode === "move")) {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
       beginPointMarqueeSession(event, {
         getPoints: function () { return scatterNodePoints(node); },
         yForPoint: function () { return terrainGroundY(); },
@@ -26957,6 +27331,17 @@ function handleScatterPointerDown(event) {
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   suppressNextViewportRuntimeClick();
+
+  if ((event.ctrlKey || event.metaKey) && hit.handleRole === "center" && state.selectedNodeIds.includes(node.id)) {
+    const nextIds = state.selectedNodeIds.filter(function (nodeId) { return nodeId !== node.id; });
+    if (nextIds.length) setSelection(nextIds, [], { primaryNodeId: nextIds[0], clearPendingEdge: true, marquee: true });
+    else deselectViewportClick();
+    return true;
+  }
+  if (event.shiftKey && hit.handleRole === "center") {
+    setSelection(state.selectedNodeIds, [], { primaryNodeId: state.selectedNodeIds[0], clearPendingEdge: true, marquee: true });
+    return true;
+  }
 
   if (Number.isInteger(hit.pointIndex)) {
     const alreadyInMultiSelect = state.scatterTool.selectedPointIndices.length > 1
@@ -27276,6 +27661,9 @@ function consumeShortcutEvent(event) {
 
 function terrainKeyboardOwnsShortcuts(terrainNode, event) {
   if (!terrainNode) return false;
+  // A terrain node can be the primary item of a mixed viewport marquee. In that case
+  // G/R/T belongs to the complete authoring selection, not to this one shape's points.
+  if (hasMultiAuthoringTransformSelection()) return false;
   if (terrainHasActiveSession()) return true;
   if (runtimeTransformActive()) return false;
   if (!event?.altKey && !(event?.ctrlKey || event?.metaKey)
@@ -27288,6 +27676,7 @@ function terrainKeyboardOwnsShortcuts(terrainNode, event) {
 
 function scatterKeyboardOwnsShortcuts(scatterNode, event) {
   if (!scatterNode) return false;
+  if (hasMultiAuthoringTransformSelection()) return false;
   if (scatterHasActiveSession()) return true;
   if (runtimeTransformActive()) return false;
   if (event?.altKey || event?.ctrlKey || event?.metaKey) return false;

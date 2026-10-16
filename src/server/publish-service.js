@@ -1086,6 +1086,10 @@ function scatterSettingsSeed(settings, sourceAssetIds) {
   if (settings.edgeSpacing > 0 && settings.spacingStrength > 0 && settings.edgeDensity > 0) seed.edgeSpacing = settings.edgeSpacing;
   if (settings.spacingStrength > 0) seed.spacingStrength = settings.spacingStrength;
   if (settings.distributionMode !== "random") seed.distributionMode = settings.distributionMode;
+  if (settings.patternRandomness < 100) {
+    seed.patternType = settings.patternType;
+    seed.patternRandomness = settings.patternRandomness;
+  }
   if (normalizeScatterPercent(settings.edgeDensity, 0) > 0) {
     seed.edgeDensity = normalizeScatterPercent(settings.edgeDensity, 0);
     seed.edgeJitter = settings.edgeJitter;
@@ -1117,6 +1121,13 @@ function normalizeScatterSettings(node) {
     sourceNodeIds: normalizeNodeIdList(node.values.sourceNodeIds),
     randomObjectSelection: node.values.randomObjectSelection === true,
     boundaryBlocksPlayer: node.values.boundaryBlocksPlayer === true,
+    itemsBlockPlayer: node.values.itemsBlockPlayer === true,
+    collisionRadius: clampNumber(numberOrNull(node.values.collisionRadius), 0.05, 100, 0.6),
+    groundCoverEnabled: node.values.groundCoverEnabled === true,
+    groundColor: String(node.values.groundColor || "#355c32"),
+    groundEdgeFade: clampNumber(numberOrNull(node.values.groundEdgeFade), 0, 100, 1.5),
+    patternType: String(node.values.patternType || "straight") === "brick" ? "brick" : "straight",
+    patternRandomness: normalizeScatterPercent(node.values.patternRandomness, 100),
     minSpacing: minSpacing,
     edgeSpacing: edgeSpacing,
     spacingStrength: normalizeScatterPercent(node.values.spacingStrength, 0),
@@ -1206,6 +1217,14 @@ function buildScatterAreaReadModel(node, resolvedSources, placementInfo = {}) {
     scatterId: node.values.scatterId,
     enabled: settings.enabled,
     boundaryBlocksPlayer: settings.boundaryBlocksPlayer,
+    itemsBlockPlayer: settings.itemsBlockPlayer,
+    collisionRadius: settings.collisionRadius,
+    groundCoverEnabled: settings.groundCoverEnabled,
+    groundColor: settings.groundColor,
+    groundEdgeFade: settings.groundEdgeFade,
+    patternType: settings.patternType,
+    patternRandomness: settings.patternRandomness,
+    groundY: numberOrNull(placementInfo?.groundY) ?? 0,
     minSpacing: settings.minSpacing,
     edgeSpacing: settings.edgeSpacing,
     spacingStrength: settings.spacingStrength,
@@ -1311,9 +1330,11 @@ function buildLegacyScatterInstances(node, sourceAssets, groundY) {
       idleAnimation: defaultAnimation,
       walkAnimation: null,
       runAnimation: null,
-      solid: false,
-      walkable: true,
-      collisionRadius: null,
+      solid: settings.itemsBlockPlayer,
+      walkable: !settings.itemsBlockPlayer,
+      collisionRadius: settings.itemsBlockPlayer
+        ? Math.max(0.05, settings.collisionRadius * scale * scaleMultiplier)
+        : null,
       transform: {
         position: {
           x: position.x,
@@ -1336,6 +1357,62 @@ function buildLegacyScatterInstances(node, sourceAssets, groundY) {
   return instances;
 }
 
+function buildScatterPatternCandidates(settings, points, bounds) {
+  const count = Math.max(0, Math.floor(Number(settings?.count) || 0));
+  if (!bounds || count <= 0) return [];
+  const width = Math.max(SCATTER_EDGE_EPSILON, bounds.maxX - bounds.minX);
+  const depth = Math.max(SCATTER_EDGE_EPSILON, bounds.maxZ - bounds.minZ);
+  const aspect = width / depth;
+  const idealColumns = Math.max(1, Math.sqrt(count * aspect));
+  let columns = Math.max(1, Math.round(idealColumns));
+  let rows = Math.max(1, Math.ceil(count / columns));
+  let bestScore = Infinity;
+  const searchStart = Math.max(1, Math.floor(idealColumns) - 8);
+  const searchEnd = Math.max(searchStart, Math.ceil(idealColumns) + 8);
+  for (let candidateColumns = searchStart; candidateColumns <= searchEnd; candidateColumns += 1) {
+    const candidateRows = Math.max(1, Math.ceil(count / candidateColumns));
+    const unused = (candidateColumns * candidateRows) - count;
+    const candidateAspect = candidateColumns / candidateRows;
+    const aspectError = Math.abs(Math.log(Math.max(SCATTER_EDGE_EPSILON, candidateAspect / aspect)));
+    const score = (unused * 10) + aspectError;
+    if (score < bestScore) {
+      bestScore = score;
+      columns = candidateColumns;
+      rows = candidateRows;
+    }
+  }
+
+  let valid = [];
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    valid = [];
+    const brick = settings?.patternType === "brick";
+    const cellWidth = width / (brick ? columns + 0.5 : columns);
+    const cellDepth = depth / rows;
+    for (let row = 0; row < rows; row += 1) {
+      const rowOffset = brick && row % 2 === 1 ? 0.5 : 0;
+      for (let column = 0; column < columns; column += 1) {
+        const candidate = {
+          x: bounds.minX + ((column + 0.5 + rowOffset) * cellWidth),
+          z: bounds.minZ + ((row + 0.5) * cellDepth)
+        };
+        if (pointInPolygon2D(candidate.x, candidate.z, points)) valid.push(candidate);
+      }
+    }
+    if (valid.length >= count) break;
+    const growth = valid.length > 0
+      ? Math.max(1.1, Math.sqrt(count / valid.length) * 1.08)
+      : 1.5;
+    columns = Math.max(columns + 1, Math.ceil(columns * growth));
+    rows = Math.max(rows + 1, Math.ceil(rows * growth));
+  }
+  if (valid.length <= count) return valid;
+  const selected = [];
+  for (let index = 0; index < count; index += 1) {
+    selected.push(valid[Math.floor((index * valid.length) / count)]);
+  }
+  return selected;
+}
+
 function buildScatterInstances(node, sourceAssets, groundY) {
   const settings = normalizeScatterSettings(node);
   const sourceList = Array.isArray(sourceAssets) ? sourceAssets.slice().sort(function (left, right) {
@@ -1352,7 +1429,8 @@ function buildScatterInstances(node, sourceAssets, groundY) {
   const sourceIds = sourceList.map(function (source) { return source.id; });
   const legacyMode = settings.spacingStrength === 0
     && settings.distributionMode === "random"
-    && settings.edgeDensity === 0;
+    && settings.edgeDensity === 0
+    && settings.patternRandomness >= 100;
   if (legacyMode) {
     const legacyInstances = buildLegacyScatterInstances(node, sourceAssets, groundY);
     legacyInstances.placementWarnings = [];
@@ -1362,6 +1440,10 @@ function buildScatterInstances(node, sourceAssets, groundY) {
   }
 
   const random = createDeterministicRandom(scatterSettingsSeed(settings, sourceIds));
+  const patternRandomness = clamp01(settings.patternRandomness / 100);
+  const patternCandidates = patternRandomness < 1
+    ? buildScatterPatternCandidates(settings, points, bounds)
+    : [];
   const instances = [];
   const accepted = [];
   const placementWarnings = [];
@@ -1503,6 +1585,20 @@ function buildScatterInstances(node, sourceAssets, groundY) {
         let candidate = null;
         if (isEdgeSlot) {
           candidate = makeEdgeCandidate(boundaryAnchors[boundaryCursor], factor);
+        } else if (patternRandomness < 1 && patternCandidates.length) {
+          const patternCandidate = patternCandidates[slotIndex % patternCandidates.length];
+          if (patternRandomness <= SCATTER_EDGE_EPSILON) {
+            candidate = { x: patternCandidate.x, z: patternCandidate.z };
+          } else {
+            const randomCandidate = sampleInteriorCandidate();
+            candidate = {
+              x: lerpNumber(patternCandidate.x, randomCandidate.x, patternRandomness),
+              z: lerpNumber(patternCandidate.z, randomCandidate.z, patternRandomness)
+            };
+            if (!pointInPolygon2D(candidate.x, candidate.z, points)) {
+              candidate = { x: patternCandidate.x, z: patternCandidate.z };
+            }
+          }
         } else if (settings.distributionMode === "dense_fill" && !usedDenseFillCandidate && denseFillCursor < denseFillCandidates.length) {
           candidate = denseFillCandidates[denseFillCursor];
           denseFillCursor += 1;
@@ -1555,9 +1651,11 @@ function buildScatterInstances(node, sourceAssets, groundY) {
       idleAnimation: defaultAnimation,
       walkAnimation: null,
       runAnimation: null,
-      solid: false,
-      walkable: true,
-      collisionRadius: null,
+      solid: settings.itemsBlockPlayer,
+      walkable: !settings.itemsBlockPlayer,
+      collisionRadius: settings.itemsBlockPlayer
+        ? Math.max(0.05, settings.collisionRadius * scale * scaleMultiplier)
+        : null,
       transform: {
         position: {
           x: acceptedCandidate.x,
@@ -1896,6 +1994,9 @@ function buildWorldPerformanceReadModel(worldNode, editorWorldSettingsNode = nul
     const preset = explicitPreset || shadowState.shadow.preset;
     return {
       preset: preset,
+      ...(mode === "game" ? {
+        pixelRatioMin: numberOrFallback(source[prefix + "PixelRatioMin"], defaults.pixelRatioMin)
+      } : {}),
       pixelRatioCap: numberOrFallback(source[prefix + "PixelRatioCap"], defaults.pixelRatioCap),
       antialias: source[prefix + "Antialias"] !== undefined ? source[prefix + "Antialias"] === true : defaults.antialias === true,
       fogEnabled: source[prefix + "FogEnabled"] !== undefined ? source[prefix + "FogEnabled"] === true : defaults.fogEnabled === true,
@@ -2440,9 +2541,19 @@ function collectMinimapReadModel(nodes, groundNode, includeEditor, warnings = []
 }
 
 function firstGameMinimapHudReadModelFromGraph(graph) {
-  const node = Array.isArray(graph?.nodes)
-    ? graph.nodes.find(function (candidate) { return candidate.type === "game_minimap_hud"; }) || null
-    : null;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const candidates = nodes.filter(function (candidate) { return candidate.type === "game_minimap_hud"; });
+  const rootNode = candidates.find(function (candidate) { return (candidate.parentId || null) === null; }) || null;
+  const uiOutputIds = new Set(nodes.filter(function (candidate) { return candidate.type === "ui_output"; }).map(function (candidate) { return candidate.id; }));
+  const connectedNode = candidates.find(function (candidate) {
+    return (graph.edges || []).some(function (edge) {
+      return edge.fromNodeId === candidate.id
+        && edge.fromPort === "minimap"
+        && uiOutputIds.has(edge.toNodeId)
+        && edge.toPort === "minimap";
+    });
+  }) || null;
+  const node = rootNode || connectedNode || candidates[0] || null;
   return node ? buildGameMinimapHudReadModel(node) : null;
 }
 
@@ -2684,9 +2795,6 @@ export function validateGraphForPublish(graph, services = {}) {
       if (settings.enabled && settings.count > 0 && !resolved.sourceAssets.length) {
         errors.push(label + " heeft minstens één bron mesh nodig.");
       }
-      if (settings.boundaryBlocksPlayer && settings.distributionMode !== "dense_fill" && settings.minSpacing === 0) {
-        pushUniqueWarning(warnings, label + " blocks player but has no dense fill or min spacing; minimap may show misleading gaps.");
-      }
       for (const source of resolved.sourceAssets) {
         requireAsset(services.assetService, source.id, "model", label + " bron " + source.id, errors);
       }
@@ -2886,7 +2994,8 @@ export function buildWorldFromGraph(graph, services = {}, options = {}) {
     const scatterInstances = buildScatterInstances(node, resolved.sourceAssets, groundY);
     scatterAreas.push(buildScatterAreaReadModel(node, resolved, {
       placedCount: scatterInstances.placedCount ?? scatterInstances.length,
-      placementWarnings: scatterInstances.placementWarnings || []
+      placementWarnings: scatterInstances.placementWarnings || [],
+      groundY: groundY
     }));
     scatterEntities.push.apply(scatterEntities, scatterInstances);
     if (settings.boundaryBlocksPlayer) {
@@ -3364,10 +3473,6 @@ export class PublishService {
       const resolved = resolveScatterSources(node, nodeMap, services, [], label);
       for (const assetId of resolved.sourceAssetIds) zoneAssetIds.add(assetId);
       zoneScatterSources.push({ node, resolved });
-      // Same silent-drop as the entities above: "Boundary blocks player" was only ever
-      // wired up in the legacy Output "entities" path (see buildWorldFromGraph), so a
-      // scatter node routed through World Assembly placed its instances fine but the
-      // toggle did nothing - no blocker polygon was ever built for this path.
       const settings = normalizeScatterSettings(node);
       if (settings.boundaryBlocksPlayer) {
         zoneScatterCollisionBlockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
@@ -3397,8 +3502,15 @@ export class PublishService {
     const zoneGround = activeZone?.ground ? buildGroundReadModel({ values: activeZone.ground }) : null;
     const zoneScatterGroundY = numberOrNull(zoneGround?.y) ?? numberOrNull(world.ground?.y) ?? 0;
     const zoneScatterEntities = [];
+    const zoneScatterAreas = [];
     for (const { node, resolved } of zoneScatterSources) {
-      zoneScatterEntities.push.apply(zoneScatterEntities, buildScatterInstances(node, resolved.sourceAssets, zoneScatterGroundY));
+      const instances = buildScatterInstances(node, resolved.sourceAssets, zoneScatterGroundY);
+      zoneScatterEntities.push.apply(zoneScatterEntities, instances);
+      zoneScatterAreas.push(buildScatterAreaReadModel(node, resolved, {
+        placedCount: instances.placedCount ?? instances.length,
+        placementWarnings: instances.placementWarnings || [],
+        groundY: zoneScatterGroundY
+      }));
     }
     let resolvedActiveMinimap = activeMinimap;
     if (activeMinimap) {
@@ -3420,16 +3532,19 @@ export class PublishService {
       if (!resolvedActiveMinimap.bounds && matchingWorldBake?.bounds) resolvedActiveMinimap.bounds = matchingWorldBake.bounds;
     }
     const graphGameMinimapHud = graph ? firstGameMinimapHudReadModelFromGraph(graph) : null;
-    const baseGameMinimapHud = world.minimap?.game || graphGameMinimapHud || {};
+    const baseGameMinimapHud = graphGameMinimapHud || world.minimap?.game || {};
     const zoneMinimap = resolvedActiveMinimap ? {
       bakes: uniqueById([resolvedActiveMinimap].concat(Array.isArray(world.minimap?.bakes) ? world.minimap.bakes : [])),
-      game: Object.assign({}, graphGameMinimapHud || {}, world.minimap?.game || {}, {
+      game: Object.assign({}, world.minimap?.game || {}, graphGameMinimapHud || {}, {
         enabled: baseGameMinimapHud.enabled !== false,
         sourceMode: "active_zone_registry",
         sourceMinimapId: resolvedActiveMinimap.minimapId || resolvedActiveMinimap.id || "zone_minimap"
       }),
       editor: world.minimap?.editor || null
     } : null;
+    const globalMinimap = graphGameMinimapHud ? Object.assign({}, world.minimap || {}, {
+      game: Object.assign({}, world.minimap?.game || {}, graphGameMinimapHud)
+    }) : world.minimap;
     const zoneEntities = allZoneEntityRecords.map(function (entity) {
       return buildZoneEntityReadModel(entity, assetLookup);
     }).filter(Boolean).concat(zoneScatterEntities);
@@ -3468,7 +3583,8 @@ export class PublishService {
         blockers: uniqueById((world.collision?.blockers || []).concat(zoneCollision.blockers, zoneScatterCollisionBlockers)),
         walkableSurfaces: uniqueById((world.collision?.walkableSurfaces || []).concat(zoneCollision.walkableSurfaces))
       },
-      minimap: zoneMinimap || world.minimap,
+      scatterAreas: uniqueById((world.scatterAreas || []).concat(zoneScatterAreas)),
+      minimap: zoneMinimap || globalMinimap,
       assets: mergedAssets,
       publishedAt: publishedAt || world.publishedAt || undefined
     }));

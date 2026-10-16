@@ -208,8 +208,8 @@ async function main() {
     await assertPerfHudTopRight(pageA);
 
     console.log("");
-    console.log("== Collision: Bounded Area Scatter boundaryBlocksPlayer ==");
-    await assertScatterBoundaryBlocksMovement(pageA);
+    console.log("== Collision: Bounded Area Scatter per item ==");
+    await assertScatterItemsBlockMovement(pageA);
 
     console.log("");
     console.log("== WASD is camera-relatief (niet hardcoded wereldas) ==");
@@ -1827,17 +1827,40 @@ async function assertPerfHudTopRight(page) {
   assert(info.left > info.viewportWidth / 2, "performance HUD staat niet meer linksboven (left=" + info.left.toFixed(0) + ")");
 }
 
-async function assertScatterBoundaryBlocksMovement(page) {
+async function assertScatterItemsBlockMovement(page) {
   const result = await page.evaluate(function () {
     const runtime = window.__GK_GAME_RUNTIME;
-    return runtime.resolvePlayerMovementIntent(
-      { x: 60, y: 0, z: 200 },
-      { x: 140, y: 0, z: 200 },
-      { radius: 0.5 }
-    );
+    return fetch("/api/game/world", { headers: { Accept: "application/json" } }).then(function (response) {
+      return response.json();
+    }).then(function (world) {
+      const entity = (world.entities || []).find(function (candidate) {
+        return candidate?.scatterId === "browser_check_scatter" && candidate?.solid === true;
+      });
+      if (!entity) return { missing: true };
+      const position = entity.transform.position;
+      const collisionRadius = Number(entity.collisionRadius) || 0.6;
+      const movement = runtime.resolvePlayerMovementIntent(
+        { x: position.x - collisionRadius - 3, y: 0, z: position.z },
+        { x: position.x, y: 0, z: position.z },
+        { radius: 0.5 }
+      );
+      return {
+        missing: false,
+        movement: movement,
+        target: position,
+        collisionRadius: collisionRadius,
+        hasBoundaryBlocker: (world.collision?.blockers || []).some(function (blocker) {
+          return blocker?.reason === "browser_check_scatter";
+        })
+      };
+    });
   });
-  assert(result.blocked === true, "resolvePlayerMovementIntent meldt blocked=true bij het oversteken van de scatter boundary");
-  assert(result.x < 100, "beweging stopt vóór het midden van de scatter boundary (x=" + result.x.toFixed(2) + ")");
+  assert(result.missing !== true, "gepubliceerde scatter bevat individuele solid instances");
+  if (result.missing) return;
+  assert(result.hasBoundaryBlocker === false, "scatter publiceert geen collider over de volledige boundary");
+  assert(result.movement.blocked === true, "resolvePlayerMovementIntent meldt blocked=true bij een scatter-item");
+  const remainingDistance = Math.hypot(result.movement.x - result.target.x, result.movement.z - result.target.z);
+  assert(remainingDistance >= result.collisionRadius + 0.49, "beweging stopt vóór de individuele scatter collider (afstand=" + remainingDistance.toFixed(2) + ")");
 }
 
 async function assertCameraRelativeWasd(page) {
@@ -2167,7 +2190,12 @@ async function buildAndPublishWorld() {
     count: 4,
     sourceAssetIds: [treeAsset.asset.id],
     randomObjectSelection: false,
-    boundaryBlocksPlayer: true,
+    boundaryBlocksPlayer: false,
+    itemsBlockPlayer: true,
+    collisionRadius: 0.7,
+    groundCoverEnabled: true,
+    groundColor: "#315a2f",
+    groundEdgeFade: 2,
     seed: "browser_check_seed",
     scaleMin: 0.9,
     scaleMax: 1.1,

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
 const MANA_STAT_ID = "stat.mana";
+const STAMINA_STAT_ID = "stat.stamina";
 const ARMOR_STAT_ID = "stat.armor";
 const ATTACK_POWER_STAT_ID = "stat.attack_power";
 const GOLD_CURRENCY_ID = "currency.gold";
@@ -950,6 +951,7 @@ export class Node03RuntimeService {
   }
 
   performAction(ctx, action, payload, operationId) {
+    if (action === "respawn") return this.respawnPlayer(ctx, operationId);
     if (action === "reset_demo" || action === "reset") return this.resetDemo(ctx, operationId);
     if (action === "debug_inventory_add" || action === "inventory_add") return this.debugAdjustInventory(ctx, payload, operationId, 1);
     if (action === "debug_inventory_remove" || action === "inventory_remove") return this.debugAdjustInventory(ctx, payload, operationId, -1);
@@ -958,7 +960,7 @@ export class Node03RuntimeService {
     if (action === "debug_currency_add" || action === "currency_add") return this.debugAdjustCurrency(ctx, payload, operationId, 1);
     if (action === "debug_currency_remove" || action === "currency_remove") return this.debugAdjustCurrency(ctx, payload, operationId, -1);
     if (this.isPlayerDead(ctx)) {
-      const error = new Error("Je speler is verslagen. Gebruik Reset demo om opnieuw te testen.");
+      const error = new Error("Je speler is verslagen. Gebruik Respawn om verder te spelen.");
       error.status = 409;
       throw error;
     }
@@ -1292,6 +1294,155 @@ export class Node03RuntimeService {
       message: pickup.displayName + " picked up.",
       events: [{ type: "picked_up", targetId: pickup.instanceId, label: pickup.displayName }],
       grants
+    };
+  }
+
+  physicalPortalCandidates(ctx) {
+    const candidates = [];
+    for (const zonePackage of projectZonePackages(ctx.project)) {
+      const links = new Set((Array.isArray(zonePackage?.links) ? zonePackage.links : []).map(function (link) {
+        return safeString(link?.linkId, "");
+      }).filter(Boolean));
+      for (const entity of Array.isArray(zonePackage?.entities) ? zonePackage.entities : []) {
+        if (entity?.nodeType !== "entity_assembly" || entity.model?.nodeType !== "model_entity") continue;
+        if (!safeString(entity.model.modelAssetId, "")) continue;
+        const portal = (Array.isArray(entity.components) ? entity.components : []).find(function (component) {
+          return component?.nodeType === "portal_component" && links.has(safeString(component.zoneLinkRef, ""));
+        }) || null;
+        if (!portal) continue;
+        candidates.push({
+          zoneId: safeString(zonePackage.zoneId || zonePackage.id, ""),
+          zonePackage,
+          portalRef: safeString(portal.componentId || portal.nodeId, ""),
+          linkId: safeString(portal.zoneLinkRef, ""),
+          x: safeNumber(entity.model.x, 0),
+          y: safeNumber(entity.model.y, 0),
+          z: safeNumber(entity.model.z, 0),
+          facing: safeNumber(entity.model.facing ?? entity.model.rotationY, 0),
+          label: safeString(entity.label || entity.model.label || portal.label, "Portal")
+        });
+      }
+    }
+    return candidates.filter(function (candidate) { return candidate.zoneId && candidate.portalRef; });
+  }
+
+  nearestDiscoveredRespawnPortal(ctx) {
+    const config = this.mmoService.fogConfigForWorld(ctx.world);
+    const discovered = config.enabled
+      ? new Set(this.mmoService.listFogDiscoveryCells(ctx.profile.id, ctx.worldId, config.mapLayer || "overworld"))
+      : null;
+    const cellSize = Math.max(1, safeNumber(config.cellSize ?? config.fogChunkSize, 24));
+    const originX = safeNumber(ctx.position?.x, 0);
+    const originZ = safeNumber(ctx.position?.z, 0);
+    return this.physicalPortalCandidates(ctx).filter(function (candidate) {
+      if (!discovered) return true;
+      const cellKey = Math.floor(candidate.x / cellSize) + ":" + Math.floor(candidate.z / cellSize);
+      return discovered.has(cellKey);
+    }).map(function (candidate) {
+      const dx = candidate.x - originX;
+      const dz = candidate.z - originZ;
+      return Object.assign({ distanceSquared: dx * dx + dz * dz }, candidate);
+    }).sort(function (left, right) {
+      return left.distanceSquared - right.distanceSquared
+        || left.portalRef.localeCompare(right.portalRef);
+    })[0] || null;
+  }
+
+  respawnPlayer(ctx, operationId) {
+    if (!this.isPlayerDead(ctx)) {
+      const error = new Error("Respawn is alleen beschikbaar wanneer je speler verslagen is.");
+      error.status = 409;
+      throw error;
+    }
+    const portal = this.nearestDiscoveredRespawnPortal(ctx);
+    const targetZonePackage = portal?.zonePackage || ctx.zonePackage;
+    const fallbackSpawn = zoneDefaultSpawn(targetZonePackage, ctx.world);
+    const target = portal || {
+      zoneId: safeString(targetZonePackage?.zoneId, ctx.zoneId),
+      portalRef: null,
+      linkId: null,
+      x: safeNumber(fallbackSpawn.x, 0),
+      y: safeNumber(fallbackSpawn.y, 0),
+      z: safeNumber(fallbackSpawn.z, 0),
+      facing: safeNumber(fallbackSpawn.facing, 0),
+      label: safeString(targetZonePackage?.zone?.displayName, "zone start")
+    };
+    const policy = policiesOfType(ctx.project, "death_respawn_rules")[0] || {};
+    const restorePercentByStat = {
+      [HEALTH_STAT_ID]: clamp(safeNumber(policy.healthRestorePercent, 1), 0, 1),
+      [MANA_STAT_ID]: clamp(safeNumber(policy.manaRestorePercent, 1), 0, 1),
+      [STAMINA_STAT_ID]: clamp(safeNumber(policy.staminaRestorePercent, 1), 0, 1)
+    };
+    const stats = this.loadPlayerStats(ctx.profile.id);
+    const stamp = now();
+    for (const statId of [HEALTH_STAT_ID, MANA_STAT_ID, STAMINA_STAT_ID]) {
+      const row = stats.byId[statId];
+      if (!row) continue;
+      const maximum = effectiveMaxStat(row, row.baseValue);
+      let restored = maximum * restorePercentByStat[statId];
+      if (statId === HEALTH_STAT_ID && maximum > 0) restored = Math.max(1, restored);
+      this.db.prepare(`
+        UPDATE player_stats
+        SET current_value = ?, revision = revision + 1, updated_at = ?
+        WHERE player_id = ? AND stat_id = ?
+      `).run(restored, stamp, ctx.profile.id, statId);
+    }
+    const spawnRef = portal ? portal.portalRef : (fallbackSpawn.spawnId || null);
+    this.db.prepare(`
+      INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT(player_id, world_id) DO UPDATE SET
+        current_zone_id = excluded.current_zone_id,
+        current_spawn_id = excluded.current_spawn_id,
+        active_checkpoint_id = NULL,
+        x = excluded.x,
+        y = excluded.y,
+        z = excluded.z,
+        rotation_y = excluded.rotation_y,
+        revision = player_positions.revision + 1,
+        last_update_source_session_id = excluded.last_update_source_session_id,
+        updated_at = excluded.updated_at
+    `).run(
+      ctx.profile.id,
+      ctx.worldId,
+      target.zoneId,
+      spawnRef,
+      target.x,
+      target.y,
+      target.z,
+      target.facing,
+      ctx.sessionContext.session.id,
+      stamp
+    );
+    this.db.prepare("UPDATE player_profiles SET current_zone_id = ?, current_world_id = ?, updated_at = ? WHERE id = ?")
+      .run(target.zoneId, ctx.worldId, stamp, ctx.profile.id);
+    if (this.mmoService.playerStateCache && typeof this.mmoService.playerStateCache.delete === "function") {
+      this.mmoService.playerStateCache.delete(ctx.profile.id + "::" + ctx.worldId);
+    }
+    const positionRow = this.db.prepare("SELECT * FROM player_positions WHERE player_id = ? AND world_id = ? LIMIT 1")
+      .get(ctx.profile.id, ctx.worldId);
+    const normalized = this.mmoService.normalizePositionRecord(positionRow, ctx.sessionContext, ctx.worldId);
+    const stopped = this.mmoService.resetPlayerMovementAfterRespawn(ctx.profile.id, ctx.worldId, ctx.sessionContext, normalized);
+    ctx.position = stopped || normalized;
+    ctx.zonePackage = targetZonePackage;
+    ctx.zoneId = target.zoneId;
+    ctx.profile.current_zone_id = target.zoneId;
+    ctx.profile.current_world_id = ctx.worldId;
+    this.recordGameplayEvent(ctx, "player_respawned", "player", portal?.portalRef || null, {
+      zoneId: target.zoneId,
+      portalRef: portal?.portalRef || null,
+      zoneDefaultFallback: !portal
+    });
+    return {
+      action: "respawn",
+      message: portal ? "Respawn bij " + portal.label + "." : "Geen vrijgespeelde portal gevonden; respawn bij de zone-start.",
+      position: this.mmoService.publicPositionForPlayer(ctx.position, ctx.sessionContext.session, ctx.worldId),
+      gameWorld: this.mmoService.gameWorldForZone(ctx.world, target.zoneId, portal ? null : spawnRef),
+      respawnPortalRef: portal?.portalRef || null,
+      respawnLinkId: portal?.linkId || null,
+      usedZoneDefaultFallback: !portal,
+      events: [{ type: "respawn", zoneId: target.zoneId, portalRef: portal?.portalRef || null }],
+      grants: []
     };
   }
 
@@ -1777,6 +1928,7 @@ export class Node03RuntimeService {
         z: safeNumber(portal.entity.model.z, 0),
         radius: Math.max(0, safeNumber(portal.entity.model.collisionRadius, 0)),
         visualEntityId: portal.entity.model.nodeId || portal.entity.model.entityId || null,
+        modelAssetId: safeString(portal.entity.model.modelAssetId, ""),
         label: safeString(portal.entity.label || portal.entity.model.label, ""),
         component: portal.component
       };
@@ -1798,11 +1950,10 @@ export class Node03RuntimeService {
       return link && link.toZoneRef && (link.toSpawnRef || link.toPortalRef) && link.linkId;
     }).map((link) => {
       const position = this.linkOriginPosition(ctx, link);
+      if (!position.component || !position.visualEntityId || !position.modelAssetId) return null;
       const targetZone = ctx.project?.zones?.byId?.[link.toZoneRef] || null;
       const distance = positionDistance(ctx.position, position);
-      const range = position.component
-        ? Math.max(0.1, safeNumber(position.component.range, 4))
-        : Math.max(3, safeNumber(link.preloadDistance, 30));
+      const range = Math.max(0.1, safeNumber(position.component.range, 4));
       const radius = Math.max(0, safeNumber(position.radius, 0));
       const targetName = position.label || targetZone?.zone?.displayName || link.toZoneRef;
       return {
@@ -1825,12 +1976,12 @@ export class Node03RuntimeService {
         y: position.y,
         z: position.z,
         visualEntityId: position.visualEntityId || null,
-        renderBody: position.visualEntityId ? false : undefined,
+        renderBody: false,
         toZoneRef: link.toZoneRef,
         toSpawnRef: link.toSpawnRef,
         toPortalRef: link.toPortalRef
       };
-    });
+    }).filter(Boolean);
   }
 
   buildInteractionTargets(ctx, entities) {

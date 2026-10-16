@@ -1186,19 +1186,23 @@ export class Node04QuestRuntimeService {
   }
 
   travelTargetTowardZone(ctx, targetZoneId) {
-    const links = Array.isArray(ctx.zonePackage?.links) ? ctx.zonePackage.links : [];
-    const directLink = links.find(function (candidate) { return candidate.toZoneRef === targetZoneId; }) || null;
-    const outwardLink = links.find(function (candidate) {
-      return candidate.toZoneRef && candidate.toZoneRef !== ctx.zoneId;
+    const routes = (Array.isArray(ctx.zonePackage?.links) ? ctx.zonePackage.links : []).map((link) => ({
+      link,
+      position: this.linkOriginPosition(ctx, link)
+    })).filter(function (route) {
+      return route.position.component && route.position.visualEntityId && route.position.modelAssetId;
+    });
+    const direct = routes.find(function (candidate) { return candidate.link.toZoneRef === targetZoneId; }) || null;
+    const outward = routes.find(function (candidate) {
+      return candidate.link.toZoneRef && candidate.link.toZoneRef !== ctx.zoneId;
     }) || null;
-    const link = directLink || outwardLink || links[0] || null;
-    if (!link) return null;
-    const position = this.linkOriginPosition(ctx, link);
+    const route = direct || outward || routes[0] || null;
+    if (!route) return null;
+    const link = route.link;
+    const position = route.position;
     const targetZone = ctx.project?.zones?.byId?.[link.toZoneRef] || null;
     const distance = positionDistance(ctx.position, position);
-    const range = position.component
-      ? Math.max(0.1, safeNumber(position.component.range, 4))
-      : Math.max(3, safeNumber(link.preloadDistance, 30));
+    const range = Math.max(0.1, safeNumber(position.component.range, 4));
     const radius = Math.max(0, safeNumber(position.radius, 0));
     return {
       instanceId: link.linkId,
@@ -1215,7 +1219,7 @@ export class Node04QuestRuntimeService {
       radius,
       inRange: link.interactionRequired === false || distance === null || distance <= range + radius,
       visualEntityId: position.visualEntityId || null,
-      renderBody: position.visualEntityId ? false : undefined,
+      renderBody: false,
       x: position.x,
       y: position.y,
       z: position.z
