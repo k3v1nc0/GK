@@ -487,6 +487,7 @@ const WORLD_PERFORMANCE_DEFAULTS = {
   },
   game: {
     preset: "middel_schaduw",
+    pixelRatioMin: 0.5,
     pixelRatioCap: 1,
     antialias: false,
     fogEnabled: true,
@@ -1133,8 +1134,6 @@ export function resolveWorldPerformanceForRenderer(worldData, rendererProfile = 
     terrainReceiveShadows: editorPolicy.terrainReceives
   });
   if (software) {
-    editorPerformance.pixelRatioCap = Math.min(num(editorPerformance.pixelRatioCap, WORLD_PERFORMANCE_DEFAULTS.editor.pixelRatioCap), 1);
-    gamePerformance.pixelRatioCap = Math.min(num(gamePerformance.pixelRatioCap, WORLD_PERFORMANCE_DEFAULTS.game.pixelRatioCap), 0.7);
     if (gamePerformance.shadow) {
       gamePerformance.shadow.enabled = false;
       gamePerformance.shadow.preset = "geen_schaduw";
@@ -5238,15 +5237,19 @@ export function createGkWorldRuntime(canvas, options = {}) {
     || (Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 4)
     || (Number.isFinite(hardwareConcurrency) && hardwareConcurrency > 0 && hardwareConcurrency <= 4)
   );
+  let rendererProfile = { software: false };
 
-  // A DPR of 2 quadruples the game canvas workload. That is especially costly
-  // on laptop integrated GPUs and was enough to starve movement/input frames in
-  // the recorded world. The editor can still use its authored high-DPI value;
-  // the real-time game viewport is capped at native CSS-pixel resolution.
+  // The device profile picks an automatic ratio, but authored game settings own the
+  // actual limits. This keeps low-power mobile defaults economical while allowing the
+  // Game World Settings minimum to demand a sharper image when the project can afford it.
   const effectivePixelRatio = function (performance) {
-    const configured = Math.max(0.25, num(performance?.pixelRatioCap, 1));
-    const modeCap = mode === "game" ? (lowPowerGameDevice ? 0.75 : 1) : configured;
-    return Math.min(window.devicePixelRatio || 1, configured, modeCap);
+    const configuredMax = Math.max(0.5, num(performance?.pixelRatioCap, 1));
+    const configuredMin = Math.min(configuredMax, Math.max(0.5, num(performance?.pixelRatioMin, 0.5)));
+    const deviceRatio = Math.max(0.5, num(window.devicePixelRatio, 1));
+    let automaticRatio = deviceRatio;
+    if (mode === "game" && lowPowerGameDevice) automaticRatio = Math.min(automaticRatio, 0.75);
+    if (rendererProfile.software === true) automaticRatio = Math.min(automaticRatio, mode === "game" ? 0.7 : 1);
+    return Math.max(configuredMin, Math.min(configuredMax, automaticRatio));
   };
 
   const worldPerformanceDefaults = WORLD_PERFORMANCE_DEFAULTS;
@@ -5286,12 +5289,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
   renderer.info.autoReset = true;
   renderer.shadowMap.enabled = shadowPolicy.enabled;
   renderer.shadowMap.type = shadowPolicy.mapType || THREE.PCFShadowMap;
-  const rendererProfile = detectRendererProfile(renderer);
+  rendererProfile = detectRendererProfile(renderer);
   if (rendererProfile.software === true) {
     renderer.shadowMap.enabled = false;
-    if (mode === "editor") {
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1));
-    }
+    renderer.setPixelRatio(effectivePixelRatio(mode === "editor" ? worldPerformance.editor : worldPerformance.game));
   }
 
   const scene = new THREE.Scene();
@@ -5315,6 +5316,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let orbitControls = null;
   let selectionHelper = null;
   let multiSelectionHelpers = [];
+  let multiSelectionBoundsHelper = null;
   let transformGuide = null;
   let terrainEditorOverlay = null;
   let terrainEditorOverlayState = null;
@@ -5391,6 +5393,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   let surfaceDefaultWhiteTex = null;
   let selectedEntityId = null;
   let selectedEntityIds = new Set();
+  let selectedAuthoringIds = new Set();
+  let selectedAuthoringSelectionCount = 0;
   let selectedRoot = null;
   let transformSession = null;
   let onSelectEntity = options.onSelectEntity || function () {};
@@ -5796,12 +5800,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
   function applyWorldPerformance(worldData) {
     worldPerformance = resolveWorldPerformance(worldData);
     if (lowPowerGameDevice) {
-      worldPerformance.game.pixelRatioCap = Math.min(worldPerformance.game.pixelRatioCap, 0.75);
       worldPerformance.game.surfaceAnimationEnabled = false;
     }
     if (rendererProfile.software === true) {
-      worldPerformance.editor.pixelRatioCap = Math.min(worldPerformance.editor.pixelRatioCap, 1);
-      worldPerformance.game.pixelRatioCap = Math.min(worldPerformance.game.pixelRatioCap, 0.7);
       if (worldPerformance.game.shadow) {
         worldPerformance.game.shadow.enabled = false;
         worldPerformance.game.shadow.preset = "geen_schaduw";
@@ -5904,6 +5905,26 @@ export function createGkWorldRuntime(canvas, options = {}) {
         chunkKey: chunkKeyValue,
         chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
       });
+      if (entity?.solid && entity?.walkable !== true) {
+        const solidClone = {
+          id: String(entity.id || entity.nodeId || "entity") + "::solid",
+          entityId: entity.id || entity.nodeId || null,
+          x: num(entity?.transform?.position?.x, 0),
+          z: num(entity?.transform?.position?.z, 0),
+          radius: num(entity?.collisionRadius, 1),
+          enabled: true,
+          runtimeManaged: true,
+          scatterInstance: entity?.type === "scatter" || entity?.kind === "scatter",
+          chunkKey: chunkKeyValue,
+          chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
+        };
+        if (chunkKeyValue) ensureChunkBucket(index.solidsByChunkKey, chunkKeyValue).push(solidClone);
+        else index.alwaysLoaded.push({
+          type: "solid",
+          id: solidClone.id,
+          value: solidClone
+        });
+      }
       if (entity?.type === "scatter" || entity?.kind === "scatter") {
         if (chunkKeyValue) {
           ensureChunkBucket(index.scatterByChunkKey, chunkKeyValue).push(clone);
@@ -5923,25 +5944,6 @@ export function createGkWorldRuntime(canvas, options = {}) {
           type: "entity",
           id: clone.id || clone.nodeId || null,
           value: clone
-        });
-      }
-      if (entity?.solid && entity?.walkable !== true) {
-        const solidClone = {
-          id: String(entity.id || entity.nodeId || "entity") + "::solid",
-          entityId: entity.id || entity.nodeId || null,
-          x: num(entity?.transform?.position?.x, 0),
-          z: num(entity?.transform?.position?.z, 0),
-          radius: num(entity?.collisionRadius, 1),
-          enabled: true,
-          runtimeManaged: true,
-          chunkKey: chunkKeyValue,
-          chunkKeys: chunkKeyValue ? [chunkKeyValue] : []
-        };
-        if (chunkKeyValue) ensureChunkBucket(index.solidsByChunkKey, chunkKeyValue).push(solidClone);
-        else index.alwaysLoaded.push({
-          type: "solid",
-          id: solidClone.id,
-          value: solidClone
         });
       }
     }
@@ -6150,9 +6152,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
     const chunkEntities = contentBlueprintIndex.entitiesByChunkKey.get(chunkKey) || [];
     const chunkInteractables = contentBlueprintIndex.interactablesByChunkKey.get(chunkKey) || [];
     const chunkScatter = contentBlueprintIndex.scatterByChunkKey.get(chunkKey) || [];
+    const chunkSolids = contentBlueprintIndex.solidsByChunkKey.get(chunkKey) || [];
     const entityBatchGroups = new Map();
     const interactableBatchGroups = new Map();
-    const scatterBatchGroups = new Map();
+    let scatterBatchGroups = new Map();
     const shadowOptions = scatterShadowOptions();
     const modelPolicy = { chunkKey: chunkKey, residentStreaming: true };
     for (const entity of chunkEntities) {
@@ -6203,17 +6206,82 @@ export function createGkWorldRuntime(canvas, options = {}) {
         addInteractable(world, inter, Object.assign({}, modelShadowOptions(world, assetId), modelPolicy));
       }
     }
+    for (const solid of chunkSolids) {
+      // Normal model entities register their solid inside addEntity(). Scatter visuals
+      // are batch-built and never pass through addEntity(), so only they need this path.
+      if (solid?.scatterInstance !== true) continue;
+      const solidEntry = Object.assign({}, solid, {
+        enabled: solid?.enabled !== false,
+        runtimeChunkActive: true,
+        runtimeManaged: true
+      });
+      solids.push(solidEntry);
+      registerChunkRuntimeEntry({
+        id: solidEntry.id,
+        type: "solid",
+        solid: solidEntry,
+        chunkKey: chunkKey,
+        chunkKeys: [chunkKey],
+        hasVisual: false
+      });
+      registerResidentChunkRecord("solid", chunkKey, solidEntry.id, {
+        id: solidEntry.id,
+        type: "solid",
+        solid: solidEntry,
+        chunkKey: chunkKey,
+        chunkKeys: [chunkKey]
+      });
+    }
     for (const scatter of chunkScatter) {
       const assetId = scatter?.modelAssetId || scatter?.sourceAssetId || "";
       if (!assetId) continue;
       const nodeId = scatter?.nodeId || scatter?.scatterId || scatter?.id || "";
-      const groupKey = nodeId + "::" + assetId;
+      // In game mode the scatter node identity has no visual meaning. Keeping it in the batch
+      // key made adjacent forest/scatter authoring areas with the same model render as separate
+      // InstancedMeshes inside the same chunk. Merge those instances by asset; editor mode keeps
+      // the node boundary because selection/transform tooling still needs it.
+      const groupKey = mode === "game" ? assetId : nodeId + "::" + assetId;
       let bucket = scatterBatchGroups.get(groupKey);
       if (!bucket) {
-        bucket = { nodeId: nodeId, assetId: assetId, instances: [] };
+        bucket = { nodeId: nodeId, nodeIds: new Set(), assetId: assetId, instances: [] };
         scatterBatchGroups.set(groupKey, bucket);
       }
+      if (nodeId) bucket.nodeIds.add(nodeId);
       bucket.instances.push(scatter);
+    }
+    if (mode === "game") {
+      const chunkSize = chunkSizeForPolicy(policy);
+      const renderCellWidth = Math.min(chunkSize.width, Math.max(8, Math.min(16, chunkSize.width / 2)));
+      const renderCellDepth = Math.min(chunkSize.depth, Math.max(8, Math.min(16, chunkSize.depth / 2)));
+      const spatialGroups = new Map();
+      for (const [groupKey, bucket] of scatterBatchGroups.entries()) {
+        // Small batches already have little overdraw. Splitting only dense chunks avoids trading
+        // a handful of saved triangles for lots of extra draw calls in sparse scenery.
+        if (bucket.instances.length < 24) {
+          spatialGroups.set(groupKey, bucket);
+          continue;
+        }
+        for (const instance of bucket.instances) {
+          const position = instance?.transform?.position || {};
+          const cellX = Math.floor(num(position.x, 0) / renderCellWidth);
+          const cellZ = Math.floor(num(position.z, 0) / renderCellDepth);
+          const cellKey = cellX + "," + cellZ;
+          const spatialKey = groupKey + "::render-cell::" + cellKey;
+          let spatialBucket = spatialGroups.get(spatialKey);
+          if (!spatialBucket) {
+            spatialBucket = {
+              nodeId: bucket.nodeId,
+              nodeIds: new Set(bucket.nodeIds || []),
+              assetId: bucket.assetId,
+              renderCellKey: cellKey,
+              instances: []
+            };
+            spatialGroups.set(spatialKey, spatialBucket);
+          }
+          spatialBucket.instances.push(instance);
+        }
+      }
+      scatterBatchGroups = spatialGroups;
     }
     for (const [assetId, descriptors] of entityBatchGroups.entries()) {
       if (!addStaticPropBatch(world, assetId, descriptors, {
@@ -6241,7 +6309,10 @@ export function createGkWorldRuntime(canvas, options = {}) {
       const assetId = bucket.assetId;
       const instances = bucket.instances;
       const root = new THREE.Group();
-      const rootKey = String(chunkKey) + "::scatter::" + String(bucket.nodeId || "node") + "::" + String(assetId || "asset");
+      const rootKey = String(chunkKey)
+        + "::scatter::" + String(bucket.nodeId || "node")
+        + "::" + String(assetId || "asset")
+        + (bucket.renderCellKey ? "::" + bucket.renderCellKey : "");
       root.name = rootKey;
       root.userData.chunkRuntimeType = "scatter";
       root.userData.runtimeAlive = true;
@@ -6251,7 +6322,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
       if (bucket.nodeId) root.userData.entityId = bucket.nodeId;
       content.add(root);
       runtimeStats.sceneObjects += 1;
-      if (bucket.nodeId) entityRoots.set(bucket.nodeId, root);
+      for (const nodeId of bucket.nodeIds || []) entityRoots.set(nodeId, root);
       registerChunkRuntimeEntry({
         id: rootKey,
         type: "scatter",
@@ -6471,9 +6542,15 @@ export function createGkWorldRuntime(canvas, options = {}) {
     nextResidentState.lastSyncMs = round(performance.now() - startedAt);
     nextResidentState.lastDesiredSignature = loadedChunkKeys.join("|");
     nextResidentState.pendingLoadCount = nextResidentState.pendingChunkKeys.length;
-    if (progressiveBootstrap && nextResidentState.pendingChunkKeys.length === 0) {
+    // A budget-blocked queue never drains (drainPendingResidentChunkBuilds skips it), so waiting
+    // for an empty queue kept progressive mode on forever after a portal teleport into a dense
+    // scatter zone: only the center chunk was force-built and active/visible chunks stayed empty
+    // no matter how far the player walked. End the bootstrap and redo this pass in normal mode so
+    // active/visible chunks get force-built like after any other setWorld.
+    if (progressiveBootstrap && (nextResidentState.pendingChunkKeys.length === 0 || pendingBlockedByBudget)) {
       nextResidentState.progressiveBootstrap = false;
       nextResidentState.progressiveCenterChunkKey = "";
+      if (pendingBlockedByBudget) return syncResidentChunkContent(nextChunkState, reason);
     }
     return nextResidentState;
   }
@@ -8539,6 +8616,18 @@ function resolveChunkDebugCenter(policy) {
     markDebugOverlayTree(selectionHelper, "selection");
     sanitizeNonWorldShadowCasters(selectionHelper);
     scene.add(selectionHelper);
+    multiSelectionBoundsHelper = new THREE.Box3Helper(new THREE.Box3(), 0xffd166);
+    multiSelectionBoundsHelper.visible = false;
+    multiSelectionBoundsHelper.material.depthTest = false;
+    multiSelectionBoundsHelper.material.depthWrite = false;
+    multiSelectionBoundsHelper.material.transparent = true;
+    multiSelectionBoundsHelper.material.opacity = 1;
+    multiSelectionBoundsHelper.material.toneMapped = false;
+    multiSelectionBoundsHelper.renderOrder = 1000;
+    multiSelectionBoundsHelper.raycast = function () {};
+    markDebugOverlayTree(multiSelectionBoundsHelper, "selection-total");
+    sanitizeNonWorldShadowCasters(multiSelectionBoundsHelper);
+    scene.add(multiSelectionBoundsHelper);
     transformGuide = createTransformGuide();
     sanitizeNonWorldShadowCasters(transformGuide);
     scene.add(transformGuide);
@@ -9486,6 +9575,76 @@ function resolveChunkDebugCenter(policy) {
     return null;
   }
 
+  function rootsForGroupSelectableId(entityId) {
+    const wantedId = String(entityId || "").trim();
+    if (!wantedId) return [];
+    const roots = [];
+    const seen = new Set();
+    const addRoot = function (root) {
+      if (!root || seen.has(root)) return;
+      seen.add(root);
+      roots.push(root);
+    };
+    const primary = rootForSelectableId(wantedId);
+    // A scatter area can be split into several live roots (per asset and resident
+    // chunk). entityRoots deliberately stores only one primary root for picking, so
+    // collect every direct content root here for complete group feedback/preview.
+    if (mode === "editor" && content) {
+      for (const child of content.children) {
+        if (child?.userData?.runtimeTarget === true) continue;
+        if (String(selectableIdForObject(child) || "").trim() === wantedId) addRoot(child);
+      }
+      // Surface paths/roads are chunked under the separate terrain runtime group and
+      // therefore never appear in entityRoots/content. Every matching segment must be
+      // previewed or its road mesh stays behind while only its center marker moves.
+      if (terrainRuntimeGroup) {
+        terrainRuntimeGroup.traverse(function (child) {
+          if (child === terrainRuntimeGroup || child?.userData?.runtimeTarget === true) return;
+          if (String(selectableIdForObject(child) || "").trim() === wantedId) addRoot(child);
+        });
+      }
+    }
+    // Runtime targets are useful as the only visual for some technical selections,
+    // but must not duplicate a real attached model when that model exists.
+    if (!roots.length || primary?.userData?.runtimeTarget !== true) addRoot(primary);
+    return roots;
+  }
+
+  function selectedAuthoringOverlayRoots() {
+    if (mode !== "editor" || !selectedAuthoringIds.size) return [];
+    const roots = [];
+    const seen = new Set();
+    for (const overlay of [terrainEditorOverlay, scatterEditorOverlay]) {
+      if (!overlay) continue;
+      for (const child of overlay.children) {
+        const nodeId = String(child?.userData?.nodeId || "").trim();
+        if (!nodeId || !selectedAuthoringIds.has(nodeId)) continue;
+        // Lines stay out of compact multi-selection, but every visible handle belonging
+        // to a selected shape must follow the live group preview.
+        if (!["center", "point"].includes(String(child?.userData?.handleRole || ""))) continue;
+        if (seen.has(child)) continue;
+        seen.add(child);
+        roots.push(child);
+      }
+    }
+    return roots;
+  }
+
+  function selectedVisualRoots() {
+    const roots = [];
+    const seen = new Set();
+    const add = function (root) {
+      if (!root || seen.has(root)) return;
+      seen.add(root);
+      roots.push(root);
+    };
+    for (const id of selectedEntityIds) {
+      for (const root of rootsForGroupSelectableId(id)) add(root);
+    }
+    for (const root of selectedAuthoringOverlayRoots()) add(root);
+    return roots;
+  }
+
   function refreshSelectedRootReference() {
     if (!selectedEntityId) {
       selectedRoot = null;
@@ -9676,10 +9835,23 @@ function resolveChunkDebugCenter(policy) {
   // is an open path the user extends point by point.
   function buildTerrainEditorOverlay(nextOverlay) {
     if (!terrainEditorOverlay || mode !== "editor") return;
-    clearTerrainEditorOverlay();
-    const markers = Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
+    const refreshMarkers = Object.prototype.hasOwnProperty.call(nextOverlay || {}, "markers");
+    const markers = refreshMarkers && Array.isArray(nextOverlay?.markers) ? nextOverlay.markers : [];
     const hasSelected = Boolean(nextOverlay && nextOverlay.nodeType);
-    if (!hasSelected && !markers.length) return;
+    // Keep the unchanged project-wide marker meshes alive during point dragging.
+    // Previously clearTerrainEditorOverlay() disposed and recreated every marker on
+    // each pointer frame, even though only the selected shape had moved.
+    for (const child of Array.from(terrainEditorOverlay.children)) {
+      if (child?.userData?.terrainMarker === true && !refreshMarkers) continue;
+      terrainEditorOverlay.remove(child);
+      disposeObject(child);
+    }
+    if (!hasSelected && !markers.length && !terrainEditorOverlay.children.length) {
+      terrainEditorOverlayState = null;
+      terrainEditorOverlay.visible = false;
+      requestRender("terrain-overlay-update");
+      return;
+    }
     terrainEditorOverlayState = nextOverlay;
     terrainEditorOverlay.visible = true;
 
@@ -9695,6 +9867,7 @@ function resolveChunkDebugCenter(policy) {
         null,
         false
       );
+      markerHandle.userData.terrainMarker = true;
       terrainEditorOverlay.add(markerHandle);
     }
 
@@ -9860,18 +10033,22 @@ function resolveChunkDebugCenter(policy) {
     if (mode !== "editor" || !terrainEditorOverlay) return;
     if (!nextOverlay) {
       clearTerrainEditorOverlay();
+      updateSelectionHelper();
       return;
     }
     buildTerrainEditorOverlay(nextOverlay);
+    updateSelectionHelper();
   }
 
   function setScatterEditorOverlay(nextOverlay) {
     if (mode !== "editor" || !scatterEditorOverlay) return;
     if (!nextOverlay) {
       clearScatterEditorOverlay();
+      updateSelectionHelper();
       return;
     }
     buildScatterEditorOverlay(nextOverlay);
+    updateSelectionHelper();
   }
 
   function ensureTerrainRuntimeGroup() {
@@ -10749,6 +10926,13 @@ function resolveChunkDebugCenter(policy) {
     return new THREE.Vector2(pair.x, pair.y);
   }
 
+  function centeredSurfaceTextureOffsetX(repeatX) {
+    // Keep U=0.5 (the path centreline where authored points live) fixed while repeat
+    // changes. This makes extra copies grow equally toward both path edges instead of
+    // pinning the texture to the left edge.
+    return 0.5 - (num(repeatX, 1) * 0.5);
+  }
+
   function getOrCreateSurfaceDefaultWhiteTex() {
     if (surfaceDefaultWhiteTex && !surfaceDefaultWhiteTex.isDisposed) return surfaceDefaultWhiteTex;
     const data = new Uint8Array([255, 255, 255, 255]);
@@ -10782,65 +10966,74 @@ function resolveChunkDebugCenter(policy) {
   function updateSurfaceMaterialUniforms(material, patch = {}) {
     const uniforms = material?.userData?.surfaceUniforms || null;
     if (!uniforms) return;
-    const surface = patch || {};
-    if (surface.textureScaleX !== undefined || surface.textureScaleY !== undefined || surface.textureScale !== undefined) {
+    const previousSurface = material.userData.surfaceState || {};
+    const surface = Object.assign({}, previousSurface, patch || {});
+    const width = Math.max(0.1, num(surface.width, 3));
+    const widthChanged = patch.width !== undefined;
+    if (widthChanged || patch.textureScaleX !== undefined || patch.textureScaleY !== undefined || patch.textureScale !== undefined) {
       const main = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
       uniforms.mainScale.value.set(main.x, main.y);
       if (material.map) {
         material.map.repeat.set(main.x, main.y);
+        material.map.offset.x = centeredSurfaceTextureOffsetX(main.x);
         material.map.needsUpdate = true;
+        for (const entry of surfaceAnimMaterials) {
+          if (entry?.material !== material) continue;
+          entry.mainMap = material.map;
+          entry.baseMainOffset.x = material.map.offset.x;
+        }
       }
     }
-    if (surface.secondaryTextureScaleX !== undefined || surface.secondaryTextureScaleY !== undefined || surface.secondaryTextureScale !== undefined) {
+    if (widthChanged || patch.secondaryTextureScaleX !== undefined || patch.secondaryTextureScaleY !== undefined || patch.secondaryTextureScale !== undefined) {
       const secondary = surfaceTextureScaleVector(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
       uniforms.secondaryScale.value.set(secondary.x, secondary.y);
     }
-    if (surface.edgeFadeNoiseScaleX !== undefined || surface.edgeFadeNoiseScaleY !== undefined || surface.edgeFadeNoiseScale !== undefined) {
+    if (widthChanged || patch.edgeFadeNoiseScaleX !== undefined || patch.edgeFadeNoiseScaleY !== undefined || patch.edgeFadeNoiseScale !== undefined) {
       const edge = surfaceTextureScaleVector(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
       uniforms.edgeNoiseScale.value.set(edge.x, edge.y);
     }
-    if (surface.secondaryTextureStrength !== undefined) uniforms.secondaryStrength.value = clamp(num(surface.secondaryTextureStrength, uniforms.secondaryStrength.value), 0, 1);
-    if (surface.edgeFadeWidth !== undefined) {
-      const width = Math.max(0.1, num(surface.width !== undefined ? surface.width : material.userData.surfaceState?.width, 3));
+    if (patch.secondaryTextureStrength !== undefined) uniforms.secondaryStrength.value = clamp(num(surface.secondaryTextureStrength, uniforms.secondaryStrength.value), 0, 1);
+    if (patch.edgeFadeWidth !== undefined || widthChanged) {
       const edgeFade = num(surface.edgeFadeWidth, uniforms.edgeFadeWidth.value * width);
       uniforms.edgeFadeWidth.value = edgeFade > 0 ? clamp(edgeFade / width, 0, 0.45) : 0;
     }
-    if (surface.edgeFadeNoiseStrength !== undefined) uniforms.edgeNoiseStrength.value = clamp(num(surface.edgeFadeNoiseStrength, uniforms.edgeNoiseStrength.value), 0, 1);
-    if (surface.opacity !== undefined) uniforms.opacity.value = clamp(num(surface.opacity, uniforms.opacity.value), 0, 1);
-    if (surface.flowSpeed !== undefined) uniforms.flowSpeed.value = num(surface.flowSpeed, uniforms.flowSpeed.value);
-    if (surface.flowDirection !== undefined) {
+    if (patch.edgeFadeNoiseStrength !== undefined) uniforms.edgeNoiseStrength.value = clamp(num(surface.edgeFadeNoiseStrength, uniforms.edgeNoiseStrength.value), 0, 1);
+    if (patch.opacity !== undefined) uniforms.opacity.value = clamp(num(surface.opacity, uniforms.opacity.value), 0, 1);
+    if (patch.flowSpeed !== undefined) uniforms.flowSpeed.value = num(surface.flowSpeed, uniforms.flowSpeed.value);
+    if (patch.flowDirection !== undefined) {
       const flowRad = num(surface.flowDirection, 0) * Math.PI / 180;
       uniforms.flowDir.value.set(Math.sin(flowRad), Math.cos(flowRad));
     }
-    if (surface.flowTextureLayer !== undefined) {
+    if (patch.flowTextureLayer !== undefined) {
       const ftl = String(surface.flowTextureLayer || "main");
       uniforms.flowMain.value = (ftl === "main" || ftl === "both") ? 1.0 : 0.0;
       uniforms.flowSecondary.value = (ftl === "secondary" || ftl === "both") ? 1.0 : 0.0;
     }
-    if (surface.fallbackColor !== undefined) {
+    if (patch.fallbackColor !== undefined) {
       uniforms.fallbackColor.value.copy(colorFromHex(surface.fallbackColor, "#8a6f45"));
       if (!material.map) material.color.copy(colorFromHex(surface.fallbackColor, "#8a6f45"));
     }
-    if (surface.textureAssetId !== undefined) {
+    if (patch.textureAssetId !== undefined) {
       if (!surface.textureAssetId) {
         replaceMaterialMapTexture(material, null);
         material.color.copy(uniforms.fallbackColor.value);
         material.needsUpdate = true;
       }
     }
-    if (surface.secondaryTextureAssetId !== undefined) {
+    if (patch.secondaryTextureAssetId !== undefined) {
       uniforms.hasSecondaryTex.value = 0.0;
       replaceUniformTexture(uniforms.secondaryTex, cloneSurfaceFallbackTexture());
     }
-    if (surface.edgeFadeNoiseAssetId !== undefined) {
+    if (patch.edgeFadeNoiseAssetId !== undefined) {
       uniforms.hasEdgeNoiseTex.value = 0.0;
       replaceUniformTexture(uniforms.edgeNoiseTex, cloneSurfaceFallbackTexture());
     }
-    if (surface.opacity !== undefined || surface.edgeFadeWidth !== undefined) {
+    if (patch.opacity !== undefined || patch.edgeFadeWidth !== undefined || widthChanged) {
       const transparent = uniforms.opacity.value < 0.999 || uniforms.edgeFadeWidth.value > 0.0;
       material.transparent = transparent;
       material.depthWrite = !transparent;
     }
+    material.userData.surfaceState = surface;
     requestRender("surface-material-preview");
   }
 
@@ -10855,6 +11048,57 @@ function resolveChunkDebugCenter(policy) {
       updateSurfaceMaterialUniforms(record.material, patch || {});
       updated = true;
     }
+    return updated;
+  }
+
+  function setTerrainSurfaceGeometryPreview(surfaceId, patch = {}) {
+    if (!surfaceId || !Array.isArray(patch.points)) return false;
+    const recordSet = surfaceMaterialRecords.get(surfaceId);
+    if (!recordSet) return false;
+    const records = recordSet instanceof Set ? Array.from(recordSet) : [recordSet];
+    const firstRecord = records.find(function (record) { return record?.material && record?.mesh; }) || null;
+    if (!firstRecord) return false;
+    const previousSurface = firstRecord.material.userData?.surfaceState || {};
+    const surface = Object.assign({}, previousSurface, patch);
+    const width = Math.max(0.1, num(surface.width, 3));
+    const rawPoints = normalizeWorldPointList(surface.points);
+    if (rawPoints.length < 2) return false;
+    const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
+    const policy = resolveChunkPolicy(world, mode);
+    const gamePolicy = mode === "game" ? policy : resolveChunkPolicy(world, "game");
+    const maxSegmentLength = Math.max(1, Math.min(gamePolicy.chunkWorldWidth, gamePolicy.chunkWorldDepth) / 2);
+    const pieces = segmentPolylineForChunks(centerline, policy, {
+      width: width,
+      maxSegmentLength: maxSegmentLength,
+      segmentBaseId: String(surfaceId)
+    });
+    const pieceBySegmentId = new Map(pieces.map(function (piece) { return [piece.segmentId, piece]; }));
+    const surfaceY = num(world?.ground?.y, 0) + num(surface.yOffset, 0.02);
+    let updated = false;
+    for (const record of records) {
+      if (!record?.mesh) continue;
+      const piece = pieceBySegmentId.get(record.segmentId);
+      if (!piece) {
+        record.mesh.visible = false;
+        continue;
+      }
+      const geometry = buildSurfaceStripGeometry(piece.points, {
+        width: width,
+        y: surfaceY,
+        uvScale: width,
+        uvStartLength: piece.startLength,
+        prevPoint: piece.prevPoint,
+        nextPoint: piece.nextPoint
+      });
+      if (!geometry) continue;
+      const previousGeometry = record.mesh.geometry;
+      record.mesh.geometry = geometry;
+      record.mesh.visible = true;
+      if (previousGeometry && previousGeometry !== geometry && typeof previousGeometry.dispose === "function") previousGeometry.dispose();
+      if (record.material?.userData) record.material.userData.surfaceState = surface;
+      updated = true;
+    }
+    if (updated) requestRender("surface-geometry-preview");
     return updated;
   }
 
@@ -10924,9 +11168,9 @@ function resolveChunkDebugCenter(policy) {
     function createTerrainSurfaceMaterial(surface, options) {
       const opacity = clamp(num(surface?.opacity, 1), 0, 1);
       const width = Math.max(0.1, num(surface?.width, 3));
-      const mainScale = surfaceScalePair(surface, "textureScaleX", "textureScaleY", "textureScale");
-      const secondaryScale = surfaceScalePair(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
-      const edgeScale = surfaceScalePair(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
+      const mainScale = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
+      const secondaryScale = surfaceTextureScaleVector(surface, "secondaryTextureScaleX", "secondaryTextureScaleY", "secondaryTextureScale");
+      const edgeScale = surfaceTextureScaleVector(surface, "edgeFadeNoiseScaleX", "edgeFadeNoiseScaleY", "edgeFadeNoiseScale");
       const secondaryStrength = clamp(num(surface?.secondaryTextureStrength, 0.25), 0, 1);
       const edgeFadeW = num(surface?.edgeFadeWidth, 0.8);
       const edgeFadeWidthUV = edgeFadeW > 0 ? clamp(edgeFadeW / width, 0, 0.45) : 0;
@@ -11002,7 +11246,7 @@ function resolveChunkDebugCenter(policy) {
           .replace("#include <uv_vertex>", "#include <uv_vertex>\nvSurfaceUv = uv;");
         shader.fragmentShader = shader.fragmentShader
           .replace("#include <common>", "#include <common>\nvarying vec2 vSurfaceUv;\nuniform sampler2D secondaryTex;\nuniform float hasSecondaryTex;\nuniform float secondaryStrength;\nuniform vec2 secondaryScale;\nuniform sampler2D edgeNoiseTex;\nuniform float hasEdgeNoiseTex;\nuniform float edgeFadeWidth;\nuniform float edgeNoiseStrength;\nuniform vec2 edgeNoiseScale;\nuniform float time;\nuniform float flowSpeed;\nuniform vec2 flowDir;\nuniform float flowMain;\nuniform float flowSecondary;\nuniform vec3 fallbackColor;")
-          .replace("#include <color_fragment>", "#include <color_fragment>\nvec2 surfaceFlow = flowDir * time * flowSpeed;\nvec2 surfaceSecondaryUv = vSurfaceUv * secondaryScale + surfaceFlow * flowSecondary;\nvec2 surfaceEdgeNoiseUv = vSurfaceUv * edgeNoiseScale;\nvec3 surfaceBaseColor = diffuseColor.rgb;\nvec4 surfaceSecondarySample = hasSecondaryTex > 0.5 ? sRGBTransferEOTF(texture2D(secondaryTex, surfaceSecondaryUv)) : vec4(surfaceBaseColor, diffuseColor.a);\nvec3 surfaceFinalColor = mix(surfaceBaseColor, surfaceSecondarySample.rgb, secondaryStrength * hasSecondaryTex);\nfloat surfaceEdgeDistance = min(vSurfaceUv.x, 1.0 - vSurfaceUv.x);\nfloat surfaceEdgeNoise = 0.0;\nif (hasEdgeNoiseTex > 0.5 && edgeNoiseStrength > 0.0 && edgeFadeWidth > 0.0) {\n  surfaceEdgeNoise = (texture2D(edgeNoiseTex, surfaceEdgeNoiseUv).r * 2.0 - 1.0) * edgeNoiseStrength * max(edgeFadeWidth, 0.001);\n}\nfloat surfaceEdgeAlpha = edgeFadeWidth > 0.001 ? smoothstep(0.0, edgeFadeWidth, surfaceEdgeDistance + surfaceEdgeNoise) : 1.0;\ndiffuseColor.rgb = surfaceFinalColor;\ndiffuseColor.a *= surfaceEdgeAlpha;");
+          .replace("#include <color_fragment>", "#include <color_fragment>\nvec2 surfaceFlow = flowDir * time * flowSpeed;\nvec2 surfaceCenter = vec2(0.5, 0.0);\nvec2 surfaceSecondaryUv = (vSurfaceUv - surfaceCenter) * secondaryScale + surfaceCenter + surfaceFlow * flowSecondary;\nvec2 surfaceEdgeNoiseUv = (vSurfaceUv - surfaceCenter) * edgeNoiseScale + surfaceCenter;\nvec3 surfaceBaseColor = diffuseColor.rgb;\nvec4 surfaceSecondarySample = hasSecondaryTex > 0.5 ? sRGBTransferEOTF(texture2D(secondaryTex, surfaceSecondaryUv)) : vec4(surfaceBaseColor, diffuseColor.a);\nvec3 surfaceFinalColor = mix(surfaceBaseColor, surfaceSecondarySample.rgb, secondaryStrength * hasSecondaryTex);\nfloat surfaceEdgeDistance = min(vSurfaceUv.x, 1.0 - vSurfaceUv.x);\nfloat surfaceEdgeNoise = 0.0;\nif (hasEdgeNoiseTex > 0.5 && edgeNoiseStrength > 0.0 && edgeFadeWidth > 0.0) {\n  surfaceEdgeNoise = (texture2D(edgeNoiseTex, surfaceEdgeNoiseUv).r * 2.0 - 1.0) * edgeNoiseStrength * max(edgeFadeWidth, 0.001);\n}\nfloat surfaceEdgeAlpha = edgeFadeWidth > 0.001 ? smoothstep(0.0, edgeFadeWidth, surfaceEdgeDistance + surfaceEdgeNoise) : 1.0;\ndiffuseColor.rgb = surfaceFinalColor;\ndiffuseColor.a *= surfaceEdgeAlpha;");
       };
       material.userData.surfaceUniforms = uniforms;
       material.userData.surfaceState = Object.assign({}, surface);
@@ -11019,6 +11263,7 @@ function resolveChunkDebugCenter(policy) {
         const clone = cloneTerrainTexture(texture, repeatX, repeatZ);
         if (uniformName === "mainTex") {
           clone.repeat.set(Math.max(0.0001, num(repeatX, 1)), Math.max(0.0001, num(repeatZ, 1)));
+          clone.offset.x = centeredSurfaceTextureOffsetX(clone.repeat.x);
           replaceMaterialMapTexture(material, clone);
           material.color.set(0xffffff);
           material.needsUpdate = true;
@@ -11133,6 +11378,13 @@ function resolveChunkDebugCenter(policy) {
     for (const surface of surfaces) {
       const width = Math.max(0, num(surface?.width, 0));
       if (width <= 0) continue;
+      const authoredSurfaceId = String(surface?.id || surface?.surfaceId || "surface");
+      // surfaceId remains the authored/game identity. The editor node id is the live
+      // viewport identity so even an old broken duplicate with the same surfaceId gets
+      // its own mesh, texture and selectable center handle.
+      const surfaceRuntimeId = mode === "editor" && surface?.editorNodeId
+        ? String(surface.editorNodeId)
+        : authoredSurfaceId;
       const rawPoints = normalizeWorldPointList(surface?.points);
       if (rawPoints.length < 2) continue;
       const centerline = rawPoints.length >= 3 ? smoothPolyline(rawPoints, 8) : rawPoints;
@@ -11140,14 +11392,14 @@ function resolveChunkDebugCenter(policy) {
       const pieces = segmentPolylineForChunks(centerline, policy, {
         width: width,
         maxSegmentLength: maxSegmentLength,
-        segmentBaseId: String(surface?.id || surface?.surfaceId || "surface")
+        segmentBaseId: surfaceRuntimeId
       });
       for (const piece of pieces) {
         registerTerrainPiece({
           id: piece.id,
           type: "terrainSurface",
           terrainKind: "surface",
-          layerId: surface?.id || surface?.surfaceId || null,
+          layerId: surfaceRuntimeId,
           segmentId: piece.segmentId,
           chunkKey: surfaceVisualChunkingEnabled ? piece.chunkKey : null,
           chunkKeys: surfaceVisualChunkingEnabled ? piece.chunkKeys : [],
@@ -11164,23 +11416,29 @@ function resolveChunkDebugCenter(policy) {
           const geometry = buildSurfaceStripGeometry(piece.points, {
             width: width,
             y: surfaceY,
-            uvScale: 1,
+            // U is normalized across the complete path width. Use that same authored
+            // width as the world length of one V tile: at scale 1/1 there is one tile
+            // across and every tile stays square along the path. Changing path width
+            // therefore changes both physical tile dimensions together instead of
+            // stretching the image. startLength keeps V continuous across chunks.
+            uvScale: width,
             uvStartLength: piece.startLength,
             prevPoint: piece.prevPoint,
             nextPoint: piece.nextPoint
           });
           if (!geometry) return null;
           const mesh = new THREE.Mesh(geometry, material);
-          mesh.name = "GK surface layer " + String(surface?.id || "surface") + "::" + piece.segmentId;
+          mesh.name = "GK surface layer " + surfaceRuntimeId + "::" + piece.segmentId;
           mesh.renderOrder = 3500;
           mesh.castShadow = false;
           mesh.receiveShadow = Boolean(terrainShadowOptions().receiveShadow);
           mesh.userData.terrainRuntime = true;
-          mesh.userData.surfaceLayerId = surface?.id || null;
-          mesh.userData.entityId = surface?.id || null;
+          mesh.userData.surfaceLayerId = surfaceRuntimeId;
+          mesh.userData.entityId = surfaceRuntimeId;
 
           const surfaceRecord = {
-            surfaceId: String(surface?.id || surface?.surfaceId || "surface"),
+            surfaceId: surfaceRuntimeId,
+            segmentId: piece.segmentId,
             material: material,
             uniforms: material.userData.surfaceUniforms,
             mesh: mesh
@@ -11195,9 +11453,8 @@ function resolveChunkDebugCenter(policy) {
             });
           }
           if (surface?.textureAssetId) {
-            const repeatX = Math.max(0.01, num(surface?.textureScaleX, num(surface?.textureScale, 1)));
-            const repeatY = Math.max(0.01, num(surface?.textureScaleY, num(surface?.textureScale, 1)));
-            applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex", repeatX, repeatY);
+            const repeat = surfaceTextureScaleVector(surface, "textureScaleX", "textureScaleY", "textureScale");
+            applySurfaceLayerTexture(material, surface.textureAssetId, "mainTex", "hasMainTex", repeat.x, repeat.y);
           }
           if (surface?.secondaryTextureAssetId && num(surface?.secondaryTextureStrength, 0) > 0) {
             const repeatX = Math.max(0.01, num(surface?.secondaryTextureScaleX, num(surface?.secondaryTextureScale, 1)));
@@ -11287,21 +11544,37 @@ function resolveChunkDebugCenter(policy) {
 
   function updateTransformGuide() {
     if (!transformGuide) return;
-    if (!debugHelpersVisibleInCurrentMode()) {
+    if (mode !== "editor") {
       transformGuide.visible = false;
       return;
     }
-    const object = selectedRoot;
-    transformGuide.visible = Boolean(object);
-    if (!object) return;
-    object.updateWorldMatrix(true, true);
     const position = new THREE.Vector3();
-    object.getWorldPosition(position);
+    const selectedRoots = selectedVisualRoots();
+    const groupPivot = transformSession?.objects && transformSession?.pivot ? transformSession.pivot : null;
+    let bounds = null;
+    if (groupPivot) {
+      position.copy(groupPivot);
+      bounds = new THREE.Box3();
+      for (const root of selectedRoots) bounds.expandByObject(root);
+    } else if (selectedRoots.length > 1) {
+      bounds = new THREE.Box3();
+      for (const root of selectedRoots) bounds.expandByObject(root);
+      if (!bounds.isEmpty()) bounds.getCenter(position);
+    } else {
+      const object = selectedRoot;
+      if (!object) {
+        transformGuide.visible = false;
+        return;
+      }
+      object.updateWorldMatrix(true, true);
+      object.getWorldPosition(position);
+      bounds = new THREE.Box3().setFromObject(object);
+    }
+    transformGuide.visible = true;
     transformGuide.position.copy(position);
     transformGuide.quaternion.identity();
-    const box = new THREE.Box3().setFromObject(object);
     const size = new THREE.Vector3();
-    if (!box.isEmpty()) box.getSize(size);
+    if (bounds && !bounds.isEmpty()) bounds.getSize(size);
     const maxSize = Math.max(size.x, size.y, size.z, 1);
     transformGuide.scale.setScalar(Math.min(6, Math.max(0.75, maxSize * 0.65)));
   }
@@ -11690,6 +11963,7 @@ function resolveChunkDebugCenter(policy) {
     if (bakeWorld?.ground) addGround(bakeWorld);
     buildTerrainRuntimeStreamingVisuals(bakeWorld);
     addZoneGrounds(bakeWorld);
+    addScatterGroundCovers(bakeWorld);
     addZoneEdgeFadeOverlays(bakeWorld);
     syncWorldShadowCasterState(currentShadowPolicy().enabled === true);
     for (const entry of chunkRuntimeEntries) {
@@ -11792,6 +12066,7 @@ function resolveChunkDebugCenter(policy) {
       if (!shouldUseChunkedGround(world, mode) && world?.ground) addGround(world);
       buildTerrainRuntimeStreamingVisuals(world);
       addZoneGrounds(world);
+      addScatterGroundCovers(world);
       addZoneEdgeFadeOverlays(world);
       syncWorldShadowCasterState(currentShadowPolicy().enabled === true);
       syncChunkDebugState("minimap-bake-restore-chunks", { force: true });
@@ -11973,64 +12248,52 @@ function resolveChunkDebugCenter(policy) {
 
   function hideMultiSelectionHelpers() {
     for (const helper of multiSelectionHelpers) helper.visible = false;
+    if (multiSelectionBoundsHelper) multiSelectionBoundsHelper.visible = false;
   }
 
   function updateMultiSelectionHelpers(roots) {
-    while (multiSelectionHelpers.length < roots.length) multiSelectionHelpers.push(createSelectionOutlineHelper());
-    roots.forEach(function (root, index) {
-      const helper = multiSelectionHelpers[index];
+    // One group should read as one selection. Individual cyan boxes were both noisy and
+    // misleading for scatter nodes split across several runtime roots.
+    for (const helper of multiSelectionHelpers) helper.visible = false;
+    const totalBounds = new THREE.Box3();
+    roots.forEach(function (root) {
       root.updateWorldMatrix(true, true);
-      helper.setFromObject(root);
-      helper.visible = true;
+      totalBounds.expandByObject(root);
     });
-    for (let index = roots.length; index < multiSelectionHelpers.length; index += 1) {
-      multiSelectionHelpers[index].visible = false;
+    if (multiSelectionBoundsHelper) {
+      if (totalBounds.isEmpty()) {
+        multiSelectionBoundsHelper.visible = false;
+      } else {
+        multiSelectionBoundsHelper.box.copy(totalBounds);
+        multiSelectionBoundsHelper.visible = true;
+        multiSelectionBoundsHelper.updateMatrixWorld(true);
+      }
     }
   }
 
   function updateSelectionHelper() {
     if (!selectionHelper) return;
-    if (mode === "editor" || !debugHelpersVisibleInCurrentMode()) {
+    // Selection feedback is an editor control, not an optional debug overlay. It must
+    // remain visible even when chunk/debug helpers have been disabled for performance.
+    if (mode !== "editor") {
       selectionHelper.object = null;
       selectionHelper.visible = false;
       hideMultiSelectionHelpers();
       updateTransformGuide();
       return;
     }
-    if (selectedEntityIds.size > 1) {
-      selectionHelper.object = null;
-      selectionHelper.visible = false;
-      const roots = Array.from(selectedEntityIds).map(rootForSelectableId).filter(Boolean);
-      updateMultiSelectionHelpers(roots);
-      updateTransformGuide();
-      return;
-    }
-    hideMultiSelectionHelpers();
-    const object = refreshSelectedRootReference();
-    if (!object) {
-      selectionHelper.object = null;
-      selectionHelper.visible = false;
-      if (selectionHelper.geometry?.computeBoundingBox) selectionHelper.geometry.computeBoundingBox();
-      if (selectionHelper.geometry?.computeBoundingSphere) selectionHelper.geometry.computeBoundingSphere();
-      updateTransformGuide();
-      return;
-    }
-    object.updateWorldMatrix(true, true);
-    object.traverse(function (child) {
-      child.updateWorldMatrix(true, false);
-    });
-    selectionHelper.object = object;
-    selectionHelper.visible = true;
-    if (typeof selectionHelper.setFromObject === "function") selectionHelper.setFromObject(object);
-    else selectionHelper.update();
-    if (selectionHelper.geometry?.computeBoundingBox) selectionHelper.geometry.computeBoundingBox();
-    if (selectionHelper.geometry?.computeBoundingSphere) selectionHelper.geometry.computeBoundingSphere();
+    selectionHelper.object = null;
+    selectionHelper.visible = false;
+    if (selectedAuthoringSelectionCount >= 2) updateMultiSelectionHelpers(selectedVisualRoots());
+    else hideMultiSelectionHelpers();
     updateTransformGuide();
   }
 
   function clearSelectedRuntimeEntity() {
     selectedEntityId = null;
     selectedEntityIds.clear();
+    selectedAuthoringIds.clear();
+    selectedAuthoringSelectionCount = 0;
     selectedRoot = null;
     transformSession = null;
     transformState.active = false;
@@ -12323,8 +12586,14 @@ function resolveChunkDebugCenter(policy) {
       const factor = radialScaleFactor(transform, pointer);
       const next = transform.startScale.clone();
       if (!axis) {
-        const uniform = Math.max(0.001, transform.startScale.x * factor);
-        next.set(uniform, uniform, uniform);
+        // Keep the scale the object had when T was pressed. Using X as a new
+        // uniform scale changed Y/Z immediately for non-uniformly scaled models,
+        // which could make them appear extremely small before the mouse moved.
+        next.set(
+          Math.max(0.001, transform.startScale.x * factor),
+          Math.max(0.001, transform.startScale.y * factor),
+          Math.max(0.001, transform.startScale.z * factor)
+        );
       } else if (axis === "x") {
         next.x = Math.max(0.001, transform.startScale.x * factor);
       } else if (axis === "y") {
@@ -12392,8 +12661,9 @@ function resolveChunkDebugCenter(policy) {
       groundDelta.addScaledVector(basis.right, dx * scale);
       groundDelta.addScaledVector(basis.forward, -dy * scale);
       const ground = screenToGround(pointer.x, pointer.y);
-      if (ground && pivot && Number.isFinite(ground.x) && Number.isFinite(ground.z)) {
-        groundDelta.set(ground.x - pivot.x, 0, ground.z - pivot.z);
+      const startGround = session.startGround;
+      if (ground && startGround && Number.isFinite(ground.x) && Number.isFinite(ground.z)) {
+        groundDelta.set(ground.x - startGround.x, 0, ground.z - startGround.z);
       }
       // Recorded regardless of whether any live object actually moved (there may be
       // none - forceGroup sessions can hold a selection with zero live meshes), so
@@ -12432,15 +12702,18 @@ function resolveChunkDebugCenter(policy) {
     } else if (mode === "rotate") {
       const rotationAxis = constraintKeyToAxis(axis || "z") || "y";
       const deltaAngle = radialRotationDelta(session, pointer);
+      session.rotationDelta = Number.isFinite(deltaAngle) ? deltaAngle : 0;
       if (Number.isFinite(deltaAngle)) {
         const cos = Math.cos(deltaAngle);
         const sin = Math.sin(deltaAngle);
         for (const entry of session.objects) {
           const nextRotation = entry.startRotation.clone();
-          nextRotation[rotationAxis] = entry.startRotation[rotationAxis] + deltaAngle;
-          if (!entry.object.rotation.equals(nextRotation)) {
-            entry.object.rotation.copy(nextRotation);
-            changed = true;
+          if (!entry.authoringHandle) {
+            nextRotation[rotationAxis] = entry.startRotation[rotationAxis] + deltaAngle;
+            if (!entry.object.rotation.equals(nextRotation)) {
+              entry.object.rotation.copy(nextRotation);
+              changed = true;
+            }
           }
           if (rotationAxis === "y" && pivot) {
             // Matches THREE's own makeRotationY(deltaAngle) (x'=x*cos+z*sin, z'=-x*sin+z*cos)
@@ -12465,22 +12738,28 @@ function resolveChunkDebugCenter(policy) {
       }
     } else if (mode === "scale") {
       const factor = radialScaleFactor(session, pointer);
+      session.scaleFactor = Number.isFinite(factor) ? factor : 1;
       const revolvePosition = pivot && (!axis || axis === "x" || axis === "y");
       for (const entry of session.objects) {
         const nextScale = entry.startScale.clone();
-        if (!axis) {
-          const uniform = Math.max(0.001, entry.startScale.x * factor);
-          nextScale.set(uniform, uniform, uniform);
-        } else if (axis === "x") {
-          nextScale.x = Math.max(0.001, entry.startScale.x * factor);
-        } else if (axis === "y") {
-          nextScale.z = Math.max(0.001, entry.startScale.z * factor);
-        } else if (axis === "z") {
-          nextScale.y = Math.max(0.001, entry.startScale.y * factor);
-        }
-        if (!entry.object.scale.equals(nextScale)) {
-          entry.object.scale.copy(nextScale);
-          changed = true;
+        if (!entry.authoringHandle) {
+          if (!axis) {
+            nextScale.set(
+              Math.max(0.001, entry.startScale.x * factor),
+              Math.max(0.001, entry.startScale.y * factor),
+              Math.max(0.001, entry.startScale.z * factor)
+            );
+          } else if (axis === "x") {
+            nextScale.x = Math.max(0.001, entry.startScale.x * factor);
+          } else if (axis === "y") {
+            nextScale.z = Math.max(0.001, entry.startScale.z * factor);
+          } else if (axis === "z") {
+            nextScale.y = Math.max(0.001, entry.startScale.y * factor);
+          }
+          if (!entry.object.scale.equals(nextScale)) {
+            entry.object.scale.copy(nextScale);
+            changed = true;
+          }
         }
         if (revolvePosition) {
           const nextPosition = entry.startPosition.clone();
@@ -12494,7 +12773,9 @@ function resolveChunkDebugCenter(policy) {
       }
     }
     const deltaChanged = Boolean(mode === "move" && session.moveDelta && (Math.abs(session.moveDelta.x) > 1e-6 || Math.abs(session.moveDelta.z) > 1e-6));
-    const previewChanged = changed || deltaChanged;
+    const rotationChanged = Boolean(mode === "rotate" && Math.abs(Number(session.rotationDelta) || 0) > 1e-6);
+    const scaleChanged = Boolean(mode === "scale" && Math.abs((Number(session.scaleFactor) || 1) - 1) > 1e-6);
+    const previewChanged = changed || deltaChanged || rotationChanged || scaleChanged;
     transformDebugState = {
       active: true,
       rootId: session.rootId,
@@ -12586,8 +12867,26 @@ function resolveChunkDebugCenter(policy) {
 
   function beginGroupTransform(modeName, options = {}) {
     const entries = Array.from(selectedEntityIds)
-      .map(function (id) { return { id: id, root: rootForSelectableId(id) }; })
-      .filter(function (entry) { return entry.root && entry.root.userData.transformable !== false; });
+      .flatMap(function (id) {
+        return rootsForGroupSelectableId(id).map(function (root) { return { id: id, root: root }; });
+      })
+      .filter(function (entry) {
+        // Single-object tools keep respecting transformable=false. During an explicit
+        // authoring group transform these roots are safe preview proxies: the editor
+        // commits their real point/area fields from the shared group delta afterwards.
+        return entry.root && (options.forceGroup || entry.root.userData.transformable !== false);
+      });
+    const existingRoots = new Set(entries.map(function (entry) { return entry.root; }));
+    for (const root of selectedAuthoringOverlayRoots()) {
+      if (existingRoots.has(root)) continue;
+      existingRoots.add(root);
+      entries.push({
+        id: String(root?.userData?.nodeId || "authoring-center"),
+        root: root,
+        previewOnly: true,
+        authoringHandle: true
+      });
+    }
     if (!options.forceGroup && entries.length < 2) {
       // Fewer than two actually-transformable roots (e.g. the rest were scatter areas) -
       // fall back to the ordinary single-object session for whichever one remains.
@@ -12604,7 +12903,7 @@ function resolveChunkDebugCenter(policy) {
     viewportPanSession = null;
     const mode = modeName === "translate" ? "move" : modeName === "rotate" || modeName === "scale" ? modeName : "move";
     const rect = canvas.getBoundingClientRect();
-    const startPointer = lastEditorPointer
+    let startPointer = lastEditorPointer
       ? { x: lastEditorPointer.clientX, y: lastEditorPointer.clientY }
       : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     const pivotBox = new THREE.Box3();
@@ -12614,18 +12913,32 @@ function resolveChunkDebugCenter(policy) {
       entry.root.getWorldPosition(worldPosition);
       pivotBox.expandByPoint(worldPosition);
     }
+    const requestedPivot = options?.pivot;
     let pivot;
-    if (pivotBox.isEmpty()) {
+    if (Number.isFinite(Number(requestedPivot?.x)) && Number.isFinite(Number(requestedPivot?.z))) {
+      pivot = new THREE.Vector3(Number(requestedPivot.x), Number(requestedPivot.y) || 0, Number(requestedPivot.z));
+    } else if (pivotBox.isEmpty()) {
       const ground = screenToGround(startPointer.x, startPointer.y);
       pivot = new THREE.Vector3(ground?.x || 0, 0, ground?.z || 0);
     } else {
       pivot = pivotBox.getCenter(new THREE.Vector3());
+    }
+    if (mode === "move") {
+      const pivotScreen = worldToScreen(pivot);
+      if (pivotScreen && Number.isFinite(pivotScreen.x) && Number.isFinite(pivotScreen.y)) {
+        // Modal group Move is anchored to the yellow total-selection pivot. On the first
+        // mouse movement that pivot follows the cursor, rather than preserving an opaque
+        // offset from whichever object happened to be the runtime primary selection.
+        startPointer = { x: pivotScreen.x, y: pivotScreen.y };
+      }
     }
     const radialCenter = mode === "rotate" || mode === "scale" ? worldToScreen(pivot) : null;
     const objects = entries.map(function (entry) {
       return {
         object: entry.root,
         rootId: entry.id,
+        previewOnly: entry.previewOnly === true,
+        authoringHandle: entry.authoringHandle === true,
         start: captureTransformStart(entry.root),
         startPosition: entry.root.position.clone(),
         startRotation: entry.root.rotation.clone(),
@@ -12644,6 +12957,7 @@ function resolveChunkDebugCenter(policy) {
       axis: transformAxisConstraint,
       startPointer: startPointer,
       currentPointer: { x: startPointer.x, y: startPointer.y },
+      startGround: mode === "move" ? { x: pivot.x, y: pivot.y, z: pivot.z } : screenToGround(startPointer.x, startPointer.y),
       radialCenter: radialCenter,
       radialStartAngle: radialAngleForPointer(radialCenter, startPointer),
       radialStartDistance: radialDistanceForPointer(radialCenter, startPointer)
@@ -12724,7 +13038,11 @@ function resolveChunkDebugCenter(policy) {
     if (orbitControls) orbitControls.enabled = true;
     canvas.style.cursor = "";
     transformAxisConstraint = null;
-    clearSelectedRuntimeEntity();
+    // Confirmation ends the modal transform, not the editor selection. Keeping the
+    // selected roots here lets the yellow group box remain visible until the editor's
+    // committed world refresh replaces them.
+    refreshSelectedRootReference();
+    applyLocalView();
     if (shouldCommit) onTransformCommit(rootId, current);
     onTransformEnd({
       action: commit ? "confirm" : "cancel",
@@ -12752,17 +13070,20 @@ function resolveChunkDebugCenter(policy) {
       if (changed) anyChanged = true;
       if (!commit) {
         if (entry.start) restoreTransformStart(entry.start, entry.object);
-      } else if (changed) {
+      } else if (changed && entry.previewOnly !== true) {
         commits.push({ entityId: entry.rootId, transform: current });
       }
     }
-    // Move's ground-plane delta applies to every selected node, live-dragged or not -
-    // the caller uses it to patch whichever selected nodes had no live object above
-    // (Walkable Surface, Location Anchor, ...). Rotate/scale don't carry a delta: that
-    // combination isn't supported for value-only nodes yet.
+    // These shared group values let the editor apply the exact same operation to
+    // authoring shapes that intentionally have no transformable runtime root, such as
+    // Surface Paths and Bounded Area Scatters.
     const delta = session.mode === "move" ? session.moveDelta : null;
     const deltaChanged = Boolean(delta && (Math.abs(delta.x) > 1e-6 || Math.abs(delta.z) > 1e-6));
-    if (deltaChanged) anyChanged = true;
+    const rotationDelta = session.mode === "rotate" ? Number(session.rotationDelta) || 0 : 0;
+    const rotationChanged = Math.abs(rotationDelta) > 1e-6;
+    const scaleFactor = session.mode === "scale" ? Number(session.scaleFactor) || 1 : 1;
+    const scaleChanged = Math.abs(scaleFactor - 1) > 1e-6;
+    if (deltaChanged || rotationChanged || scaleChanged) anyChanged = true;
     transformSession = null;
     transformState.active = false;
     transformState.cancelled = !commit;
@@ -12783,9 +13104,18 @@ function resolveChunkDebugCenter(policy) {
     if (orbitControls) orbitControls.enabled = true;
     canvas.style.cursor = "";
     transformAxisConstraint = null;
-    clearSelectedRuntimeEntity();
-    const shouldCommit = Boolean(commit && (commits.length || deltaChanged));
-    if (shouldCommit) onTransformCommit({ commits: commits, mode: session.mode, delta: deltaChanged ? delta : null });
+    refreshSelectedRootReference();
+    applyLocalView();
+    const shouldCommit = Boolean(commit && (commits.length || deltaChanged || rotationChanged || scaleChanged));
+    if (shouldCommit) onTransformCommit({
+      commits: commits,
+      mode: session.mode,
+      axis: session.axis || null,
+      pivot: session.pivot ? { x: session.pivot.x, y: session.pivot.y, z: session.pivot.z } : null,
+      delta: deltaChanged ? delta : null,
+      rotationDelta: rotationChanged ? rotationDelta : 0,
+      scaleFactor: scaleChanged ? scaleFactor : 1
+    });
     onTransformEnd({
       action: commit ? "confirm" : "cancel",
       entityId: session.rootId,
@@ -12845,6 +13175,11 @@ function resolveChunkDebugCenter(policy) {
       previewTransformAt(event.clientX, event.clientY, true);
       return;
     }
+    // Keyboard transforms must start at the pointer's current position. Previously we
+    // only remembered clicks (and moves after a transform had already started), so T
+    // could use a much older click position. The first tiny mouse movement then looked
+    // like a jump of hundreds of pixels and collapsed the object to the minimum scale.
+    if (transformPointerEventTargetsCanvas(event)) rememberEditorPointer(event);
     if (viewportPanSession) handleViewportPanMove(event);
   }
 
@@ -13680,6 +14015,109 @@ function resolveChunkDebugCenter(policy) {
     }
   }
 
+  function createScatterGroundAlphaTexture(points, bounds, fadeWidth) {
+    const width = Math.max(0.0001, bounds.maxX - bounds.minX);
+    const depth = Math.max(0.0001, bounds.maxZ - bounds.minZ);
+    const longestSide = Math.max(width, depth);
+    const fade = Math.max(0, num(fadeWidth, 0));
+    const targetLongestResolution = fade > 0
+      ? clamp(Math.ceil((longestSide / Math.max(fade, 0.05)) * 12), 64, 256)
+      : 128;
+    const textureWidth = Math.max(16, Math.round(targetLongestResolution * (width / longestSide)));
+    const textureHeight = Math.max(16, Math.round(targetLongestResolution * (depth / longestSide)));
+    const data = new Uint8Array(textureWidth * textureHeight * 4);
+    for (let row = 0; row < textureHeight; row += 1) {
+      const z = bounds.minZ + (((row + 0.5) / textureHeight) * depth);
+      for (let column = 0; column < textureWidth; column += 1) {
+        const x = bounds.minX + (((column + 0.5) / textureWidth) * width);
+        let alpha = 0;
+        if (pointInPolygon2D(x, z, points)) {
+          if (fade <= COLLISION_EPSILON) {
+            alpha = 1;
+          } else {
+            let nearestDistanceSq = Infinity;
+            for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+              const current = points[pointIndex];
+              const next = points[(pointIndex + 1) % points.length];
+              nearestDistanceSq = Math.min(nearestDistanceSq, distanceSquaredToSegment(
+                x,
+                z,
+                current.x,
+                current.z,
+                next.x,
+                next.z
+              ));
+            }
+            const progress = clamp(Math.sqrt(nearestDistanceSq) / fade, 0, 1);
+            alpha = progress * progress * (3 - (2 * progress));
+          }
+        }
+        const value = Math.round(alpha * 255);
+        const offset = ((row * textureWidth) + column) * 4;
+        data[offset] = value;
+        data[offset + 1] = value;
+        data[offset + 2] = value;
+        data[offset + 3] = 255;
+      }
+    }
+    const texture = new THREE.DataTexture(data, textureWidth, textureHeight, THREE.RGBAFormat, THREE.UnsignedByteType);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  function addScatterGroundCovers(worldData) {
+    for (const area of Array.isArray(worldData?.scatterAreas) ? worldData.scatterAreas : []) {
+      if (area?.enabled === false || area?.groundCoverEnabled !== true) continue;
+      const points = normalizeWorldPointList(area?.points);
+      if (points.length < 3) continue;
+      const bounds = boundsForPoints(points);
+      if (!bounds || bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) continue;
+      const groundY = num(area?.groundY, num(worldData?.ground?.y, 0));
+      const geometry = createWorldPlaneGeometry(
+        bounds.minX,
+        bounds.maxX,
+        bounds.minZ,
+        bounds.maxZ,
+        groundY + 0.035,
+        {
+          minX: bounds.minX,
+          maxX: bounds.maxX,
+          minZ: bounds.minZ,
+          maxZ: bounds.maxZ,
+          repeatX: 1,
+          repeatZ: 1
+        }
+      );
+      if (!geometry) continue;
+      const alphaMap = createScatterGroundAlphaTexture(points, bounds, area.groundEdgeFade);
+      const material = createOverlayMaterial(area.groundColor || "#355c32", 1, {
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3
+      });
+      material.alphaMap = alphaMap;
+      material.transparent = true;
+      material.alphaTest = 0.002;
+      material.needsUpdate = true;
+      const mesh = new THREE.Mesh(geometry, material);
+      const areaId = String(area.id || area.scatterId || "scatter");
+      mesh.name = "GK scatter ground cover " + areaId;
+      mesh.renderOrder = 1200;
+      mesh.userData.terrainRuntime = true;
+      mesh.userData.scatterGroundCover = true;
+      addTerrainRuntimeMesh(mesh, {
+        id: areaId + "::ground-cover",
+        type: "terrainLayer",
+        terrainKind: "scatterGroundCover",
+        layerId: areaId + "::ground-cover"
+      });
+    }
+  }
+
   function zoneEdgeBlendGroundEntries(worldData) {
     const entries = [];
     function addGroundEntry(ground) {
@@ -14146,7 +14584,11 @@ function resolveChunkDebugCenter(policy) {
       mesh.name = template.name ? template.name + " [" + batchKind + "]" : batchKind + " [instances]";
       mesh.castShadow = options.castShadow !== false;
       mesh.receiveShadow = options.receiveShadow !== false;
-      mesh.frustumCulled = batchKind !== "scatter";
+      // Instance transforms are included in the bounding sphere below. Scatter used to disable
+      // frustum culling completely, which forced every resident tree/prop batch through both the
+      // colour and shadow passes even when its chunk was outside the camera. Chunk streaming then
+      // reduced memory, but barely reduced per-frame GPU work.
+      mesh.frustumCulled = true;
       mesh.matrixAutoUpdate = false;
       for (let index = 0; index < instanceTransforms.length; index += 1) {
         const transform = instanceTransforms[index];
@@ -14836,6 +15278,29 @@ function resolveChunkDebugCenter(policy) {
     const grouped = new Map();
     const chunkPolicy = resolveChunkPolicy(worldData, mode);
     for (const entity of scatterEntities || []) {
+      if (entity?.solid === true && entity?.walkable !== true) {
+        const entityId = String(entity.id || entity.nodeId || "scatter");
+        const chunkKeyValue = chunkKeyForTransform(entity?.transform || null, chunkPolicy);
+        const solidEntry = {
+          id: entityId + "::solid",
+          entityId: entityId,
+          x: num(entity?.transform?.position?.x, 0),
+          z: num(entity?.transform?.position?.z, 0),
+          radius: Math.max(0.05, num(entity?.collisionRadius, 0.6)),
+          enabled: true,
+          runtimeChunkActive: true,
+          runtimeManaged: true
+        };
+        solids.push(solidEntry);
+        registerChunkRuntimeEntry({
+          id: solidEntry.id,
+          type: "solid",
+          solid: solidEntry,
+          chunkKey: chunkKeyValue || null,
+          chunkKeys: chunkKeyValue ? [chunkKeyValue] : [],
+          hasVisual: false
+        });
+      }
       const rootKey = entity?.nodeId || entity?.scatterId || entity?.id || entity?.modelAssetId || "scatter";
       let entry = grouped.get(rootKey);
       if (!entry) {
@@ -15633,6 +16098,10 @@ function resolveChunkDebugCenter(policy) {
     return mode === "editor" ? String(target?.editorSelectableId || runtimeTargetAttachedEntityId(target) || "").trim() : "";
   }
 
+  function runtimeTargetEditorTransformable(target) {
+    return mode === "editor" && target?.editorTransformable === true && Boolean(runtimeTargetEditorSelectableId(target));
+  }
+
   function runtimeTargetAttachedEntityId(target) {
     const explicit = mode === "editor" ? target?.editorAttachedEntityId : null;
     return String(explicit || (target?.renderBody === false ? target?.visualEntityId : null) || "").trim();
@@ -15904,6 +16373,7 @@ function resolveChunkDebugCenter(policy) {
       const position = runtimeZoneEntityPosition(portalEntity, worldData);
       return Object.assign({}, position, {
         entityNodeId: portalEntity.nodeId || null,
+        modelAssetId: String(portalEntity.modelAssetId || "").trim(),
         label: portalEntity.label || null,
         radius: Math.max(0, num(portalEntity.collisionRadius, 0)),
         component: portalComponent
@@ -15964,6 +16434,9 @@ function resolveChunkDebugCenter(policy) {
     return (Array.isArray(zonePackage?.links) ? zonePackage.links : []).map(function (link) {
       if (!link || !link.linkId) return null;
       const position = runtimeLinkOrigin(worldData, zonePackage, link);
+      // A Zone Link is routing data, not a visible portal by itself. Only expose a
+      // travel target when an authored Portal Component is attached to a real model.
+      if (!position.component || !position.entityNodeId || !position.modelAssetId) return null;
       const targetZone = project.zones?.byId?.[link.toZoneRef] || null;
       const targetName = targetZone?.zone?.displayName || link.toZoneRef || link.prompt || "Portal";
       return {
@@ -15976,13 +16449,13 @@ function resolveChunkDebugCenter(policy) {
         status: link.mode || "portal",
         available: true,
         inRange: true,
-        range: position.component ? Math.max(0.1, num(position.component.range, 4)) : Math.max(3, num(link.preloadDistance, 30)),
+        range: Math.max(0.1, num(position.component.range, 4)),
         radius: Math.max(0, num(position.radius, 0)),
         targetTags: runtimeTargetTags(["portal", "zone_link"], link.mode),
         editorSelectableId: position.entityNodeId || link.nodeId || "",
         editorAttachedEntityId: position.entityNodeId || "",
         visualEntityId: position.entityNodeId || null,
-        renderBody: position.entityNodeId ? false : undefined,
+        renderBody: false,
         x: position.x,
         y: position.y,
         z: position.z,
@@ -16054,8 +16527,7 @@ function resolveChunkDebugCenter(policy) {
       { nodeType: "enemy_component", kind: "enemy", refField: "enemyRef", catalog: "enemies", prompt: "Attack", range: 2.8 },
       { nodeType: "resource_component", kind: "resource", refField: "resourceRef", catalog: "resources", prompt: "Gather", range: 3 },
       { nodeType: "pickup_component", kind: "pickup", refField: "itemRef", catalog: "items", prompt: "Pick up", range: 3 },
-      { nodeType: "npc_component", kind: "npc", refField: "npcRef", catalog: "npcs", prompt: "Talk", range: 3 },
-      { nodeType: "portal_component", kind: "zone_link", refField: "zoneLinkRef", catalog: "", prompt: "Travel", range: 4 }
+      { nodeType: "npc_component", kind: "npc", refField: "npcRef", catalog: "npcs", prompt: "Talk", range: 3 }
     ];
     const targets = [];
     for (const entity of runtimeVisibleZoneEntities(zonePackage)) {
@@ -16124,6 +16596,7 @@ function resolveChunkDebugCenter(policy) {
                 radius: 0.8,
                 targetTags: runtimeTargetTags(["enemy", "spawn"], enemy.tags, variant.tags),
                 editorSelectableId: spawn.nodeId || "",
+                editorTransformable: true,
                 enemyRef: spawn.enemyRef || null,
                 variantRef: spawn.variantRef || null,
                 modelAssetId,
@@ -16153,6 +16626,7 @@ function resolveChunkDebugCenter(policy) {
                 radius: 1.5,
                 targetTags: runtimeTargetTags(["resource", "spawn"], resource.tags),
                 editorSelectableId: spawn.nodeId || "",
+                editorTransformable: true,
                 resourceRef: spawn.resourceRef || null,
                 modelAssetId: resource.worldModelAssetId || spawn.worldModelAssetId || null,
                 modelScale: num(resource.worldModelScale || spawn.worldModelScale, 0.45),
@@ -16182,6 +16656,7 @@ function resolveChunkDebugCenter(policy) {
               radius: 1.2,
               targetTags: runtimeTargetTags([pickupKind, "pickup", "spawn"], item.tags, currency.tags),
               editorSelectableId: spawn.nodeId || "",
+              editorTransformable: true,
               pickupKind,
               itemRef: pickupKind === "item" ? definitionId : null,
               currencyRef: pickupKind === "currency" ? definitionId : null,
@@ -16240,10 +16715,14 @@ function resolveChunkDebugCenter(policy) {
     if (assetId && assetById(world, assetId)?.sourcePath) {
       const group = new THREE.Group();
       group.name = "node03-runtime-target-model";
-      const fallbackScale = Math.max(0.001, num(target?.modelScale, 1));
-      const scaleX = Math.max(0.001, Number.isFinite(Number(target?.modelScaleX)) ? Number(target.modelScaleX) : fallbackScale);
-      const scaleY = Math.max(0.001, Number.isFinite(Number(target?.modelScaleY)) ? Number(target.modelScaleY) : fallbackScale);
-      const scaleZ = Math.max(0.001, Number.isFinite(Number(target?.modelScaleZ)) ? Number(target.modelScaleZ) : fallbackScale);
+      // NODE-03 serializes absent per-axis overrides as null. Number(null) is
+      // zero, so treating it as a numeric override collapsed runtime models to
+      // the 0.001 safety minimum while editor targets (undefined) stayed at the
+      // intended catalog scale.
+      const fallbackScale = Math.max(0.001, numOrDefault(target?.modelScale, 1));
+      const scaleX = Math.max(0.001, numOrDefault(target?.modelScaleX, fallbackScale));
+      const scaleY = Math.max(0.001, numOrDefault(target?.modelScaleY, fallbackScale));
+      const scaleZ = Math.max(0.001, numOrDefault(target?.modelScaleZ, fallbackScale));
       group.scale.set(scaleX, scaleY, scaleZ);
       group.rotation.set(
         num(target?.modelRotationX, 0) * Math.PI / 180,
@@ -16327,8 +16806,8 @@ function resolveChunkDebugCenter(policy) {
     const root = new THREE.Group();
     root.name = "node03-runtime-target:" + String(target?.instanceId || "target");
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
-    root.userData.transformable = false;
-    root.userData.snapToGround = false;
+    root.userData.transformable = runtimeTargetEditorTransformable(target);
+    root.userData.snapToGround = root.userData.transformable;
     root.userData.runtimeAlive = true;
     root.userData.runtimeTarget = true;
     root.userData.runtimeTargetId = target?.instanceId || null;
@@ -16355,6 +16834,8 @@ function resolveChunkDebugCenter(policy) {
     root.visible = runtimeTargetVisible(target);
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
+    root.userData.transformable = runtimeTargetEditorTransformable(target);
+    root.userData.snapToGround = root.userData.transformable;
     const attachedEntityId = runtimeTargetAttachedEntityId(target);
     if (previousAttachedEntityId && previousAttachedEntityId !== attachedEntityId) {
       syncRuntimeTargetAttachedEntitySuppression(previousAttachedEntityId);
@@ -16529,6 +17010,8 @@ function resolveChunkDebugCenter(policy) {
   function selectEntity(entityId) {
     selectedEntityId = entityId || null;
     selectedEntityIds = new Set(entityId ? [entityId] : []);
+    selectedAuthoringIds = new Set(entityId ? [entityId] : []);
+    selectedAuthoringSelectionCount = entityId ? 1 : 0;
     refreshSelectedRootReference();
     applyLocalView();
     if (selectionHelper) updateSelectionHelper();
@@ -16538,9 +17021,14 @@ function resolveChunkDebugCenter(policy) {
   // Multi-select: selects a whole set at once (marquee, or a Shift/Ctrl click resolved by
   // the caller into the next full set). The first id becomes "primary" for focus/frame/
   // inspector purposes; the modal G/R/S transform activates its group path once size > 1.
-  function selectEntities(entityIds) {
+  function selectEntities(entityIds, options = {}) {
     const ids = Array.from(new Set((entityIds || []).filter(Boolean)));
     selectedEntityIds = new Set(ids);
+    const authoringIds = Array.from(new Set((options.authoringIds || ids).filter(Boolean)));
+    selectedAuthoringIds = new Set(authoringIds);
+    selectedAuthoringSelectionCount = Number.isFinite(Number(options.selectionCount))
+      ? Math.max(0, Math.floor(Number(options.selectionCount)))
+      : authoringIds.length;
     selectedEntityId = ids.length ? ids[0] : null;
     refreshSelectedRootReference();
     applyLocalView();
@@ -17354,6 +17842,7 @@ function resolveChunkDebugCenter(policy) {
     const game = worldPerformance.game || {};
     const editor = worldPerformance.editor || {};
     const compareKeys = [
+      "pixelRatioMin",
       "pixelRatioCap",
       "antialias",
       "fogEnabled",
@@ -17946,6 +18435,7 @@ function resolveChunkDebugCenter(policy) {
     runtimeStats.collisionShapes = runtimeCollisionBaseCount;
     buildTerrainRuntimeStreamingVisuals(world);
     addZoneGrounds(world);
+    addScatterGroundCovers(world);
     addZoneEdgeFadeOverlays(world);
     addZoneCanvasBounds(world);
     addLights(world);
@@ -18097,6 +18587,12 @@ function resolveChunkDebugCenter(policy) {
       if (helper.material) helper.material.dispose();
     }
     multiSelectionHelpers = [];
+    if (multiSelectionBoundsHelper) {
+      scene.remove(multiSelectionBoundsHelper);
+      if (multiSelectionBoundsHelper.geometry) multiSelectionBoundsHelper.geometry.dispose();
+      if (multiSelectionBoundsHelper.material) multiSelectionBoundsHelper.material.dispose();
+      multiSelectionBoundsHelper = null;
+    }
     clearTerrainRuntimeVisuals();
     clearWalkabilityIndex();
     if (transformGuide) {
@@ -18376,6 +18872,7 @@ function resolveChunkDebugCenter(policy) {
     setScatterEditorOverlay: setScatterEditorOverlay,
     clearScatterEditorOverlay: clearScatterEditorOverlay,
     setTerrainSurfacePreview: setTerrainSurfacePreview,
+    setTerrainSurfaceGeometryPreview: setTerrainSurfaceGeometryPreview,
     pickTerrainEditorHandle: pickTerrainEditorHandle,
     pickScatterEditorHandle: pickScatterEditorHandle,
     pickEntityAt: pickEntityAt,

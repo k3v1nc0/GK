@@ -689,16 +689,21 @@ export class GraphRepository {
       const parent = this.db.prepare("SELECT * FROM editor_nodes WHERE id = ?").get(row.parent_id);
       if (!parent || parent.type !== "group") return false;
       const parentValues = parseJson(parent.values_json, defaultValuesForType("group"));
-      if (parentValues.zoneCanvas === true) return false;
-      const ensured = ensureGroupEntityOutputPortInRow(parent);
-      if (ensured.changed) {
-        this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
-          .run(JSON.stringify(ensured.values), now(), parent.id);
-        changed = true;
+      if (parentValues.zoneCanvas === true || String(parentValues.groupKind || "").trim().toLowerCase() === "zone") {
+        targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'zone_output' LIMIT 1").get(parent.id);
+        if (!targetNode) return false;
+        targetPort = "entities";
+      } else {
+        const ensured = ensureGroupEntityOutputPortInRow(parent);
+        if (ensured.changed) {
+          this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?")
+            .run(JSON.stringify(ensured.values), now(), parent.id);
+          changed = true;
+        }
+        targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_output' LIMIT 1").get(parent.id);
+        if (!targetNode) return changed;
+        targetPort = ensured.portName;
       }
-      targetNode = this.db.prepare("SELECT id FROM editor_nodes WHERE parent_id = ? AND type = 'group_output' LIMIT 1").get(parent.id);
-      if (!targetNode) return changed;
-      targetPort = ensured.portName;
     } else {
       return false;
     }
@@ -709,7 +714,7 @@ export class GraphRepository {
     return true;
   }
 
-  createNode(type, position, values = {}, parentId = null) {
+  createNode(type, position, values = {}, parentId = null, options = {}) {
     const definition = NODE_TYPES[type];
     if (!definition) {
       const error = new Error("Onbekend node-type: " + type);
@@ -742,12 +747,29 @@ export class GraphRepository {
     const cleanValues = cleanValuesForType(type, values, {}, NODE_TYPES);
     const identityRows = this.db.prepare("SELECT values_json FROM editor_nodes WHERE type = ?").all(type);
     const nextValues = uniquifyIdentityFields(type, cleanValues, identityRows);
+    const createdAt = now();
     this.db.prepare("INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, type, title, Math.round(x), Math.round(y), parentId || null, JSON.stringify(nextValues), now(), now());
+      .run(id, type, title, Math.round(x), Math.round(y), parentId || null, JSON.stringify(nextValues), createdAt, createdAt);
     if (type === "model_entity") this.ensureModelEntityWiring(id);
-    this.touchGraphRevision(this.db);
+    const graphRevision = this.touchGraphRevision(this.db);
     this.clearDraftWorld();
     this.invalidateSymbolIndex();
+    if (options.returnGraph === false) {
+      return {
+        ok: true,
+        nodeId: id,
+        node: {
+          id: id,
+          type: type,
+          title: title,
+          x: Math.round(x),
+          y: Math.round(y),
+          parentId: parentId || null,
+          values: nextValues
+        },
+        graphRevision: graphRevision
+      };
+    }
     return { graph: this.getGraph(), nodeId: id };
   }
 
@@ -1004,7 +1026,7 @@ export class GraphRepository {
     return this.getGraph();
   }
 
-  createEdge(edge) {
+  createEdge(edge, options = {}) {
     const rows = this.db.prepare("SELECT * FROM editor_nodes").all();
     const nodeMap = new Map(rows.map(function (row) { return [row.id, toNode(row)]; }));
     const from = nodeMap.get(edge?.fromNodeId);
@@ -1050,11 +1072,25 @@ export class GraphRepository {
         throw error;
       }
     }
+    const edgeId = "edge_" + crypto.randomUUID().slice(0, 10);
     this.db.prepare("INSERT INTO editor_node_edges (id, from_node_id, from_port, to_node_id, to_port, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("edge_" + crypto.randomUUID().slice(0, 10), from.id, edge.fromPort, to.id, edge.toPort, now());
-    this.touchGraphRevision(this.db);
+      .run(edgeId, from.id, edge.fromPort, to.id, edge.toPort, now());
+    const graphRevision = this.touchGraphRevision(this.db);
     this.clearDraftWorld();
     this.invalidateSymbolIndex();
+    if (options.returnGraph === false) {
+      return {
+        ok: true,
+        edge: {
+          id: edgeId,
+          fromNodeId: from.id,
+          fromPort: edge.fromPort,
+          toNodeId: to.id,
+          toPort: edge.toPort
+        },
+        graphRevision: graphRevision
+      };
+    }
     return this.getGraph();
   }
 

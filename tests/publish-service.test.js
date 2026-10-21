@@ -3,6 +3,132 @@ import test from "node:test";
 import { buildWorldFromGraph } from "../src/server/publish-service.js";
 import { mmoNetworkPresetNodePatch } from "../src/shared/node-types.js";
 
+test("bounded scatter keeps boundary and per-item collision as separate compatible choices", function () {
+  const asset = { id: "tree", name: "Tree", assetType: "model", metadata: {} };
+  const assetService = {
+    get(id) {
+      return id === asset.id ? asset : null;
+    },
+    manifestForIds(ids) {
+      return ids.includes(asset.id) ? [asset] : [];
+    }
+  };
+  const graph = {
+    nodes: [
+      { id: "output", type: "game_output", values: {} },
+      {
+        id: "forest",
+        type: "bounded_area_scatter",
+        values: {
+          scatterId: "forest",
+          enabled: true,
+          count: 1,
+          sourceAssetIds: ["tree"],
+          sourceScaleMultipliers: { tree: 1.5 },
+          randomObjectSelection: false,
+          boundaryBlocksPlayer: true,
+          itemsBlockPlayer: true,
+          collisionRadius: 0.75,
+          groundCoverEnabled: true,
+          groundColor: "#294d28",
+          groundEdgeFade: 2.5,
+          seed: "forest-test",
+          scaleMin: 2,
+          scaleMax: 2,
+          rotationYMin: 0,
+          rotationYMax: 0,
+          points: [
+            { x: -5, z: -5 },
+            { x: 5, z: -5 },
+            { x: 5, z: 5 },
+            { x: -5, z: 5 }
+          ]
+        }
+      }
+    ],
+    edges: [
+      { id: "scatter_output", fromNodeId: "forest", fromPort: "entity", toNodeId: "output", toPort: "entities" }
+    ]
+  };
+
+  const world = buildWorldFromGraph(graph, { assetService });
+
+  assert.equal(world.entities.length, 1);
+  assert.equal(world.entities[0].solid, true);
+  assert.equal(world.entities[0].walkable, false);
+  assert.equal(world.entities[0].collisionRadius, 2.25);
+  assert.equal(world.collision.blockers.length, 1, "boundary collision remains available separately");
+  assert.equal(world.collision.blockers[0].reason, "forest");
+  assert.equal(world.scatterAreas[0].groundCoverEnabled, true);
+  assert.equal(world.scatterAreas[0].groundColor, "#294d28");
+  assert.equal(world.scatterAreas[0].groundEdgeFade, 2.5);
+});
+
+test("bounded scatter mixes a straight or brick pattern into the existing random placement", function () {
+  const asset = { id: "tree", name: "Tree", assetType: "model", metadata: {} };
+  const assetService = {
+    get() { return asset; },
+    manifestForIds() { return [asset]; }
+  };
+  function build(patternType, patternRandomness) {
+    return buildWorldFromGraph({
+      nodes: [
+        { id: "output", type: "game_output", values: {} },
+        {
+          id: "pattern",
+          type: "bounded_area_scatter",
+          values: {
+            scatterId: "pattern",
+            enabled: true,
+            count: 6,
+            sourceAssetIds: ["tree"],
+            sourceScaleMultipliers: {},
+            randomObjectSelection: false,
+            patternType: patternType,
+            patternRandomness: patternRandomness,
+            seed: "pattern-test",
+            scaleMin: 1,
+            scaleMax: 1,
+            rotationYMin: 0,
+            rotationYMax: 0,
+            points: [
+              { x: 0, z: 0 },
+              { x: 6, z: 0 },
+              { x: 6, z: 4 },
+              { x: 0, z: 4 }
+            ]
+          }
+        }
+      ],
+      edges: [
+        { id: "pattern_output", fromNodeId: "pattern", fromPort: "entity", toNodeId: "output", toPort: "entities" }
+      ]
+    }, { assetService });
+  }
+
+  const straight = build("straight", 0).entities.map(function (entity) { return entity.transform.position; });
+  const brick = build("brick", 0).entities.map(function (entity) { return entity.transform.position; });
+  const random = build("straight", 100).entities.map(function (entity) { return entity.transform.position; });
+  const straightRows = new Map();
+  const brickRows = new Map();
+  for (const point of straight) {
+    const row = point.z.toFixed(4);
+    if (!straightRows.has(row)) straightRows.set(row, []);
+    straightRows.get(row).push(point.x);
+  }
+  for (const point of brick) {
+    const row = point.z.toFixed(4);
+    if (!brickRows.has(row)) brickRows.set(row, []);
+    brickRows.get(row).push(point.x);
+  }
+  assert.ok(straightRows.size >= 2);
+  const straightOffsets = Array.from(straightRows.values()).map(function (row) { return Math.min.apply(Math, row); });
+  assert.equal(new Set(straightOffsets.map(function (value) { return value.toFixed(4); })).size, 1, "straight rows line up");
+  const brickOffsets = Array.from(brickRows.values()).map(function (row) { return Math.min.apply(Math, row); });
+  assert.ok(new Set(brickOffsets.map(function (value) { return value.toFixed(4); })).size > 1, "brick rows alternate their offset");
+  assert.notDeepEqual(random, straight, "100% preserves random placement instead of the grid");
+});
+
 test("chunk loading node size fields override connected chunk grid defaults", function () {
   const graph = {
     nodes: [

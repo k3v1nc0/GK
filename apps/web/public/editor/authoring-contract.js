@@ -47,9 +47,7 @@ const MANAGED_INFRASTRUCTURE_TYPES = new Set([
   "legacy_world_adapter"
 ]);
 
-const HIDDEN_FUTURE_TYPES = new Set([
-  "top_down_camera"
-]);
+const HIDDEN_FUTURE_TYPES = new Set([]);
 
 const VIEWPORT_TOOL_TYPES = new Set([
   "model_entity",
@@ -99,7 +97,7 @@ const AUTHORING_ROUTES = Object.freeze([
   {
     id: "item_ability_stat",
     label: "Catalog / Definities",
-    summary: "Open bestaande Catalog Groups en werk in item-, NPC-, enemy-, resource-, recipe-, vendor-, ability-, stat- en loot-definities.",
+    summary: "Maak of open benoemde Catalog Groups en werk in item-, NPC-, enemy-, resource-, recipe-, vendor-, ability-, stat-, currency- en loot-definities.",
     allowedClasses: ["data_reference"],
     libraryGroups: ["Catalog", "Combat", "Values", "Crafting", "Vendors"],
     workspaceKinds: [
@@ -109,7 +107,7 @@ const AUTHORING_ROUTES = Object.freeze([
   {
     id: "game_settings_ui",
     label: "Game-instellingen / UI",
-    summary: "Kies tussen Player Rules en UI zonder project- of systeeminfrastructuur als normaal startpunt.",
+    summary: "Maak of open benoemde Player Rules- en UI-groepen zonder project- of systeeminfrastructuur handmatig te bouwen.",
     allowedClasses: ["logic_flow", "contextual_behavior"],
     libraryGroups: ["Player Rules", "UI"],
     workspaceKinds: [
@@ -140,7 +138,7 @@ function isManagedInfrastructureType(type, def) {
   if (MANAGED_INFRASTRUCTURE_TYPES.has(normalizedType)) return true;
   if (normalizedType.endsWith("_output")) return true;
   if (normalizedType.endsWith("_registry")) return true;
-  if (def?.hidden && normalizedType !== "top_down_camera") return true;
+  if (def?.hidden) return true;
   return false;
 }
 

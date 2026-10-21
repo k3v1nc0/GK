@@ -914,6 +914,10 @@ export class MmoService {
     return this.getPublishedWorldContext().world;
   }
 
+  gameWorldForZone(world, zoneId, spawnId = null) {
+    return worldForZone(world, zoneId, spawnId);
+  }
+
   fogConfigForWorld(world) {
     return normalizeFogConfig(world);
   }
@@ -2082,6 +2086,22 @@ export class MmoService {
       const portal = (Array.isArray(entity.components) ? entity.components : []).find(function (component) {
         return component?.nodeType === "portal_component" && component.componentId === targetRef;
       }) || null;
+      if (portal && String(entity.model.modelAssetId || "").trim()) {
+        return { zonePackage, entity, portal, model: entity.model };
+      }
+    }
+    return null;
+  }
+
+  findZoneLinkPortal(zonePackage, linkId) {
+    const targetLinkId = String(linkId || "").trim();
+    if (!zonePackage || !targetLinkId) return null;
+    for (const entity of Array.isArray(zonePackage.entities) ? zonePackage.entities : []) {
+      if (entity?.nodeType !== "entity_assembly" || entity.model?.nodeType !== "model_entity") continue;
+      if (!String(entity.model.modelAssetId || "").trim()) continue;
+      const portal = (Array.isArray(entity.components) ? entity.components : []).find(function (component) {
+        return component?.nodeType === "portal_component" && component.zoneLinkRef === targetLinkId;
+      }) || null;
       if (portal) return { zonePackage, entity, portal, model: entity.model };
     }
     return null;
@@ -2099,6 +2119,31 @@ export class MmoService {
       throw error;
     }
     const link = linkResult.link;
+    const sourcePortal = this.findZoneLinkPortal(linkResult.fromZone, link.linkId);
+    if (!sourcePortal) {
+      const error = new Error("Deze Zone Link heeft geen portal met een model-asset.");
+      error.status = 400;
+      throw error;
+    }
+    const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
+    const sourceZoneId = linkResult.fromZone?.zoneId || link.fromZoneRef || null;
+    if (sourceZoneId && position.current_zone_id !== sourceZoneId) {
+      const error = new Error("Deze portal staat niet in je huidige zone.");
+      error.status = 409;
+      throw error;
+    }
+    if (link.interactionRequired !== false) {
+      const dx = num(position.x, 0) - num(sourcePortal.model.x, 0);
+      const dz = num(position.z, 0) - num(sourcePortal.model.z, 0);
+      const distance = Math.hypot(dx, dz);
+      const range = Math.max(0.1, num(sourcePortal.portal.range, 4))
+        + Math.max(0, num(sourcePortal.model.collisionRadius, 0));
+      if (distance > range) {
+        const error = new Error("Je bent te ver weg van deze portal.");
+        error.status = 409;
+        throw error;
+      }
+    }
     const target = link.toPortalRef
       ? this.findZonePortal(worldContext.world, link.toZoneRef, link.toPortalRef)
       : this.findZoneSpawn(worldContext.world, link.toZoneRef, link.toSpawnRef);

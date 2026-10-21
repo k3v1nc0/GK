@@ -2448,6 +2448,11 @@ async function main() {
       sourceAssetIds: [modelId, treeAssetId],
       randomObjectSelection: true,
       boundaryBlocksPlayer: true,
+      itemsBlockPlayer: true,
+      collisionRadius: 0.7,
+      groundCoverEnabled: true,
+      groundColor: "#315a2f",
+      groundEdgeFade: 1.75,
       seed: "scatter_seed_01",
       scaleMin: 0.8,
       scaleMax: 1.2,
@@ -2808,9 +2813,9 @@ async function main() {
     assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
       return String(message || "").includes("nog geen minimap image gebakken");
     }), "validatie waarschuwt dat Game Minimap HUD nog geen gebakken image heeft");
-    assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
+    assert(!validate.json.warnings.some(function (message) {
       return String(message || "").includes("blocks player but has no dense fill or min spacing");
-    }), "scatter boundaryBlocksPlayer zonder dense fill/min spacing geeft minimap-gap waarschuwing");
+    }), "scatter-item collision geeft geen verouderde boundary-gap waarschuwing");
 
     const scatterNodeBaseline = JSON.parse(JSON.stringify(scatterNode.values));
     const scatterBasePoints = Array.isArray(scatterNodeBaseline.points) ? scatterNodeBaseline.points : [];
@@ -2944,6 +2949,8 @@ async function main() {
     assert(Array.isArray(draftWorld.json.scatterAreas) && draftWorld.json.scatterAreas.length === 1, "draft world publiceert één scatter area");
     assert(Array.isArray(draftWorld.json.scatterAreas[0].points) && draftWorld.json.scatterAreas[0].points.length >= 6, "scatter area publiceert polygon points");
     assert(draftWorld.json.scatterAreas[0].boundaryBlocksPlayer === true, "scatter area publiceert boundary flag");
+    assert(draftWorld.json.scatterAreas[0].collisionRadius === 0.7, "scatter area publiceert per-item collision radius");
+    assert(draftWorld.json.scatterAreas[0].groundCoverEnabled === true && draftWorld.json.scatterAreas[0].groundColor === "#315a2f" && draftWorld.json.scatterAreas[0].groundEdgeFade === 1.75, "scatter area publiceert ground cover kleur en edge fade");
     const initialScatterSignature = scatterSignature(draftWorld.json, scatterNode.id);
     assert(initialScatterSignature.length > 0, "scatter publiceert preview instances in draft world");
     assert((draftWorld.json.entities || []).filter(function (entity) { return entity && entity.nodeId === scatterNode.id; }).length === 6, "draft world publiceert 6 scatter instances");
@@ -3119,28 +3126,36 @@ async function main() {
     assert(Array.isArray(after.json.terrain.surfaces[0].points) && after.json.terrain.surfaces[0].points.length === 3, "surface layer publiceert points");
     assert(after.json.terrain.surfaces[0].textureAssetId === surfaceMainTextureId, "surface layer publiceert textureAssetId");
     const publishedCollisionBlockers = after.json.collision && Array.isArray(after.json.collision.blockers) ? after.json.collision.blockers : [];
-    assert(publishedCollisionBlockers.length === 2, "collision blockers zijn gepubliceerd");
+    assert(publishedCollisionBlockers.length === 2, "expliciete area- en scatter-boundary blockers zijn gepubliceerd");
     const publishedMountainBlocker = publishedCollisionBlockers.find(function (entry) { return entry && entry.reason === "mountain"; }) || null;
     const publishedScatterBlocker = publishedCollisionBlockers.find(function (entry) { return entry && entry.reason === "scatter_forest_patch"; }) || null;
     assert(publishedMountainBlocker && Array.isArray(publishedMountainBlocker.points) && publishedMountainBlocker.points.length === 3, "blocker area publiceert polygon points");
     assert(publishedMountainBlocker && publishedMountainBlocker.reason === "mountain", "blocker area publiceert reason");
-    assert(publishedScatterBlocker && Array.isArray(publishedScatterBlocker.points) && publishedScatterBlocker.points.length >= 6, "scatter boundary publiceert polygon points");
-    assert(publishedScatterBlocker && publishedScatterBlocker.reason === "scatter_forest_patch", "scatter boundary publiceert reason");
+    assert(publishedScatterBlocker && Array.isArray(publishedScatterBlocker.points) && publishedScatterBlocker.points.length >= 6, "scatter boundary blijft als aparte keuze gepubliceerd");
 
-    // MMO-01-FIX-2: boundaryBlocksPlayer op een Bounded Area Scatter moet beweging er echt doorheen tegenhouden.
-    const scatterBoundaryOutside = { x: -20, y: 0, z: -3 };
-    const scatterBoundaryInsideTarget = { x: 8, y: 0, z: -3 };
-    assert(!isPointBlockedByBlocker(publishedWalkability, scatterBoundaryOutside.x, scatterBoundaryOutside.z, 0.5), "startpunt buiten de scatter boundary is niet geblokkeerd");
-    assert(isPointBlockedByBlocker(publishedWalkability, scatterBoundaryInsideTarget.x, scatterBoundaryInsideTarget.z, 0.5), "doelpunt binnen de scatter boundary is geblokkeerd");
-    const scatterBoundaryMove = resolveMovement(
-      scatterBoundaryOutside,
-      scatterBoundaryInsideTarget,
-      { radius: 0.5, ground: after.json.ground, solids: [], index: publishedWalkability }
-    );
-    assert(!isPointBlockedByBlocker(publishedWalkability, scatterBoundaryMove.x, scatterBoundaryMove.z, 0.5), "resolveMovement laat de speler niet door de scatter boundary heen lopen");
-    const scatterBoundaryTraveled = Math.hypot(scatterBoundaryMove.x - scatterBoundaryOutside.x, scatterBoundaryMove.z - scatterBoundaryOutside.z);
-    const scatterBoundaryDesired = Math.hypot(scatterBoundaryInsideTarget.x - scatterBoundaryOutside.x, scatterBoundaryInsideTarget.z - scatterBoundaryOutside.z);
-    assert(scatterBoundaryTraveled < scatterBoundaryDesired - 1, "beweging naar de scatter boundary stopt ruim voor het volledige doel");
+    const publishedScatterSolids = (after.json.entities || []).filter(function (entity) {
+      return entity && entity.nodeId === scatterNode.id && entity.solid === true && entity.walkable === false;
+    });
+    assert(publishedScatterSolids.length === 6, "ieder scatter-product publiceert een eigen collider");
+    assert(publishedScatterSolids.every(function (entity) { return Number(entity.collisionRadius) > 0; }), "scatter-product colliders hebben een geldige radius");
+    const targetScatterSolid = publishedScatterSolids[0];
+    const targetScatterPosition = targetScatterSolid.transform.position;
+    const scatterSolidStart = { x: targetScatterPosition.x - targetScatterSolid.collisionRadius - 2, y: 0, z: targetScatterPosition.z };
+    const scatterSolidTarget = { x: targetScatterPosition.x, y: 0, z: targetScatterPosition.z };
+    const scatterSolidMove = resolveMovement(scatterSolidStart, scatterSolidTarget, {
+      radius: 0.5,
+      ground: after.json.ground,
+      index: publishedWalkability,
+      solids: publishedScatterSolids.map(function (entity) {
+        return {
+          x: entity.transform.position.x,
+          z: entity.transform.position.z,
+          radius: entity.collisionRadius,
+          enabled: true
+        };
+      })
+    });
+    assert(Math.hypot(scatterSolidMove.x - scatterSolidTarget.x, scatterSolidMove.z - scatterSolidTarget.z) >= targetScatterSolid.collisionRadius + 0.49, "beweging stopt bij het individuele scatter-product");
 
     assert(Array.isArray(after.json.collision.walkableSurfaces) && after.json.collision.walkableSurfaces.length === 1, "walkable surfaces zijn gepubliceerd");
     assert(after.json.collision.walkableSurfaces[0].width === 6 && after.json.collision.walkableSurfaces[0].depth === 2.5, "walkable surface publiceert afmetingen");

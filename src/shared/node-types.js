@@ -783,8 +783,10 @@ function worldSettingsModeHelpText(modeLabel, key) {
     case "Preset":
     case "Shadow preset":
       return "Kies één shadow preset voor de " + modeLower + ". De engine vult daar de shadow-instellingen uit en toont geen losse shadow-tuners meer.";
-    case "Pixel ratio cap":
-      return "Beperkt de renderer naar deze maximale pixel ratio. Lager is sneller, hoger is scherper. Aanbevolen voor " + modeLower + ": hoger voor kwaliteit, lager voor laptop/mobiel.";
+    case "Pixel ratio minimum":
+      return "Laagste pixel ratio die de game automatisch mag gebruiken. Hoger blijft scherper op mobiel, maar kost meer GPU-werk.";
+    case "Pixel ratio maximum":
+      return "Hoogste pixel ratio die de renderer mag gebruiken. Hoger kan scherper zijn op HiDPI-schermen, maar kost meer GPU-werk.";
     case "Antialias":
       return "Schakelt antialiasing aan of uit. Aan is mooier maar iets zwaarder; uit is sneller en kan op laptop/mobiel beter zijn.";
     case "Fog":
@@ -825,16 +827,29 @@ function buildWorldSettingsModeFields(mode, defaults = {}, hidden = false) {
       required: true,
       help: worldSettingsModeHelpText(modeLabel, "Shadow preset")
     }),
-    [prefix + "PixelRatioCap"]: field("Pixel ratio cap", {
+    ...(mode === "game" ? {
+      [prefix + "PixelRatioMin"]: field("Pixel ratio minimum", {
+        section: "Render",
+        label: "Pixel ratio minimum",
+        type: "number",
+        default: defaults.pixelRatioMin,
+        min: 0.5,
+        max: 2,
+        step: 0.05,
+        required: true,
+        help: worldSettingsModeHelpText(modeLabel, "Pixel ratio minimum")
+      })
+    } : {}),
+    [prefix + "PixelRatioCap"]: field("Pixel ratio maximum", {
       section: "Render",
-      label: "Pixel ratio cap",
+      label: "Pixel ratio maximum",
       type: "number",
       default: defaults.pixelRatioCap,
       min: 0.5,
       max: 2,
       step: 0.05,
       required: true,
-      help: worldSettingsModeHelpText(modeLabel, "Pixel ratio cap")
+      help: worldSettingsModeHelpText(modeLabel, "Pixel ratio maximum")
     }),
     [prefix + "Antialias"]: field("Antialias", {
       section: "Render",
@@ -1006,6 +1021,7 @@ const WORLD_SETTINGS_EDITOR_FIELDS = buildWorldSettingsModeFields("editor", {
 
 const WORLD_SETTINGS_GAME_FIELDS = buildWorldSettingsModeFields("game", {
   preset: "middel_schaduw",
+  pixelRatioMin: 0.5,
   pixelRatioCap: 1,
   antialias: false,
   fogEnabled: true,
@@ -1662,17 +1678,6 @@ export const NODE_TYPES = {
     fields: EDITOR_CAMERA_FIELDS
   },
 
-  top_down_camera: {
-    label: "Top-Down Camera",
-    group: "World",
-    accent: "#7bd4ff",
-    description: "Legacy alias for Game Camera.",
-    hidden: true,
-    inputs: {},
-    outputs: { camera: { label: "Camera", dataType: "camera" } },
-    fields: GAME_CAMERA_FIELDS
-  },
-
   ambient_light: {
     label: "Ambient Light",
     group: "World",
@@ -1793,7 +1798,83 @@ export const NODE_TYPES = {
       sourceScaleMultipliers: { label: "Source scale multipliers", type: "json", default: {}, required: true, hidden: true },
       sourceNodeIds: { label: "Source meshes (legacy)", type: "json", default: [], required: true, hidden: true },
       randomObjectSelection: { label: "Random object selection", type: "boolean", default: false, required: true },
-      boundaryBlocksPlayer: { label: "Boundary blocks player", type: "boolean", default: false, required: true },
+      boundaryBlocksPlayer: {
+        section: "Collision",
+        label: "Boundary blocks player",
+        type: "boolean",
+        default: false,
+        required: true,
+        help: "Blokkeert de volledige scatter-boundary, ook in de lege ruimte tussen objecten."
+      },
+      itemsBlockPlayer: {
+        section: "Collision",
+        label: "Scatter items block player",
+        type: "boolean",
+        default: false,
+        required: true,
+        help: "Geeft ieder geplaatst scatter-object een eigen ronde collision; de lege ruimte tussen objecten blijft beloopbaar."
+      },
+      collisionRadius: {
+        section: "Collision",
+        label: "Per-item collision radius",
+        type: "number",
+        default: 0.6,
+        min: 0.05,
+        max: 100,
+        step: 0.05,
+        required: true,
+        help: "Basisradius per object. De uiteindelijke radius schaalt mee met de willekeurige en bron-specifieke schaal."
+      },
+      groundCoverEnabled: {
+        section: "Ground cover",
+        label: "Show ground color",
+        type: "boolean",
+        default: false,
+        required: true,
+        help: "Tekent een gekleurde ondergrond binnen de scattervorm."
+      },
+      groundColor: {
+        section: "Ground cover",
+        label: "Ground color",
+        type: "color",
+        default: "#355c32",
+        required: true
+      },
+      groundEdgeFade: {
+        section: "Ground cover",
+        label: "Ground edge fade",
+        type: "number",
+        default: 1.5,
+        min: 0,
+        max: 100,
+        step: 0.1,
+        required: true,
+        help: "Breedte in wereldmeters waarover de kleur vanaf de boundary geleidelijk zichtbaar wordt. 0 geeft een harde rand."
+      },
+      patternType: {
+        section: "Placement",
+        label: "Pattern",
+        type: "select",
+        options: [
+          { value: "straight", label: "Straight rows" },
+          { value: "brick", label: "Brick rows" }
+        ],
+        default: "straight",
+        required: true,
+        help: "Kiest het basispatroon dat zichtbaar is wanneer Pattern → random op 0% staat."
+      },
+      patternRandomness: {
+        section: "Placement",
+        label: "Pattern → random",
+        type: "number",
+        default: 100,
+        min: 0,
+        max: 100,
+        step: 1,
+        required: true,
+        editorControl: "range",
+        help: "0% is een strak patroon, 100% is volledig random zoals het bestaande scattergedrag."
+      },
       minSpacing: {
         section: "Placement",
         label: "Min spacing",
@@ -2123,7 +2204,7 @@ export const NODE_TYPES = {
     label: "Game Minimap HUD",
     group: "UI",
     accent: "#8de0c0",
-    description: "Toont de gebakken minimap in de game HUD met live 2D markers.",
+    description: "Globale rootinstelling voor de game-minimap, zoom en live 2D-markers; zone-nodes leveren alleen hun eigen Minimap Bake.",
     inputs: {},
     outputs: { minimap: { label: "Minimap", dataType: "minimap" } },
     fields: {
@@ -2770,7 +2851,7 @@ const FOUNDATION_NODE_DEFS = {
       chunkGrid: { label: "Chunk Grid", dataType: "chunkGrid", required: true, multiple: false },
       editorWorldSettings: { label: "Editor World Settings", dataType: "editorWorldSettings", required: false, multiple: false },
       gameWorldSettings: { label: "Game World Settings", dataType: "gameWorldSettings", required: false, multiple: false },
-      camera: { label: "Camera", dataType: "camera", required: false, multiple: true },
+      camera: { label: "Cameras", dataType: "camera", required: true, multiple: true },
       lights: { label: "Lights", dataType: "light", required: false, multiple: true },
       chunkPolicies: { label: "Chunk Policies", dataType: "chunkPolicy", required: false, multiple: true },
       chunkLoading: { label: "Chunk Loading", dataType: "chunkLoading", required: false, multiple: true },
@@ -3220,9 +3301,7 @@ const ZONE_NODE_DEFS = {
       ground: { label: "Ground", dataType: "ground", required: false, multiple: false },
       terrain: { label: "Terrain", dataType: "terrain", required: false, multiple: true },
       collision: { label: "Collision", dataType: "collision", required: false, multiple: true },
-      camera: { label: "Camera", dataType: "camera", required: false, multiple: false },
       player: { label: "Player", dataType: "player", required: false, multiple: false },
-      cameraOverrides: { label: "Camera Overrides", dataType: "cameraOverride", required: false, multiple: true },
       areas: { label: "Areas", dataType: "areaPackage", required: false, multiple: true },
       entities: { label: "Entities", dataType: "entity", required: false, multiple: true },
       spawns: { label: "Spawns", dataType: "spawnPoint", required: false, multiple: true },

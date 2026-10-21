@@ -80,6 +80,46 @@ test("root model placement does not create legacy Game Output entity edges", fun
   assert.equal(legacyEdges, 0);
 });
 
+test("model placement inside a zone canvas connects to Zone Output atomically", function () {
+  const db = createMigrationDatabase();
+  seedOutput(db);
+  const repository = new GraphRepository(db);
+  const timestamp = "2026-10-20T00:00:00.000Z";
+  db.prepare(`
+    INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, schema_version, created_at, updated_at)
+    VALUES ('zone_group', 'group', 'Zone', 0, 0, NULL, ?, 1, ?, ?)
+  `).run(JSON.stringify({
+    groupId: "zone_group",
+    title: "Zone",
+    groupKind: "zone",
+    zoneCanvas: true,
+    groupInterface: { inputs: [], outputs: [] }
+  }), timestamp, timestamp);
+  db.prepare(`
+    INSERT INTO editor_nodes (id, type, title, x, y, parent_id, values_json, schema_version, created_at, updated_at)
+    VALUES ('zone_output', 'zone_output', 'Zone Output', 600, 0, 'zone_group', ?, 1, ?, ?)
+  `).run(JSON.stringify({ packageId: "zone.test.package", packageVersion: 1 }), timestamp, timestamp);
+
+  const result = repository.createModelEntityFromAsset({
+    id: "asset_test_model",
+    name: "Test Model",
+    assetType: "model",
+    metadata: {}
+  }, { x: 1, y: 0, z: 2 }, "zone_group");
+
+  const edge = db.prepare(`
+    SELECT from_node_id, from_port, to_node_id, to_port
+    FROM editor_node_edges
+    WHERE from_node_id = ?
+  `).get(result.nodeId);
+  assert.deepEqual({ ...edge }, {
+    from_node_id: result.nodeId,
+    from_port: "entity",
+    to_node_id: "zone_output",
+    to_port: "entities"
+  });
+});
+
 test("node position updates reject invalid coordinates and persist valid coordinates", function () {
   const db = createMigrationDatabase();
   seedOutput(db);

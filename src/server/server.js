@@ -676,7 +676,9 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/editor/nodes") {
       authService.requireEditor(req);
       const body = await readJson(req);
-      return sendJson(res, 201, repository.createNode(body.type, body.position || {}, body.values || {}, body.parentId || null));
+      return sendJson(res, 201, repository.createNode(body.type, body.position || {}, body.values || {}, body.parentId || null, {
+        returnGraph: body.returnGraph !== false
+      }));
     }
     if (req.method === "POST" && url.pathname === "/api/editor/nodes/values/bulk") {
       authService.requireEditor(req);
@@ -721,7 +723,9 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/editor/edges") {
       authService.requireEditor(req);
       const body = await readJson(req);
-      return sendJson(res, 201, repository.createEdge(body.edge || {}));
+      return sendJson(res, 201, repository.createEdge(body.edge || {}, {
+        returnGraph: body.returnGraph !== false
+      }));
     }
     const edgeDeleteMatch = url.pathname.match(/^\/api\/editor\/edges\/([^/]+)$/);
     if (req.method === "DELETE" && edgeDeleteMatch) {
