@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261007-visual-builder2">
+    <link rel="stylesheet" href="./styles.css?v=20261021-workbench-w1-resize-bottom">
     <script type="importmap">
       {
         "imports": {
@@ -18,6 +18,10 @@
   <body>
     <header class="topbar">
       <div class="brand"><span class="logo">GK</span><span class="brandName">GAME EDITOR</span></div>
+      <nav class="editorModeTabs" aria-label="Editorweergave">
+        <button id="nodesModeButton" type="button" class="editorModeTab active" aria-pressed="true">Nodes</button>
+        <button id="workbenchModeButton" type="button" class="editorModeTab" aria-pressed="false">Werkbank</button>
+      </nav>
       <div class="topbarRight">
         <button id="connectionButton" type="button" class="connectionButton connectionButton--standby" title="Serverstatus: standby. Klik om opnieuw te verbinden." aria-label="Serverstatus: standby. Klik om opnieuw te verbinden.">
           <span class="connectionLight" aria-hidden="true"></span>
@@ -43,6 +47,7 @@
 
     <main class="layout">
       <aside class="tools">
+        <section id="workbenchSelectionPanel" class="workbenchPanel workbenchSelectionPanel" aria-label="Werkbank selectie"></section>
         <div id="authoringSection" class="panel authoringSection">
           <div class="authoringHeader">
             <button id="authoringButton" type="button" class="primary authoringButton">+ Maken</button>
@@ -207,12 +212,15 @@
           </div>
           <div class="viewportErrors" id="viewportErrors"></div>
         </div>
+        <div id="workbenchRelationResizer" class="layoutResizer horizontal workbenchRelationResizer" role="separator" aria-label="Resize relation strip" tabindex="0"></div>
+        <section id="workbenchRelationStrip" class="workbenchRelationStrip" aria-label="Enemy- en lootrelatie"></section>
         <div class="statusLine" id="statusText">Laden...</div>
       </section>
 
       <div class="layoutResizer vertical" data-resizer="viewport" role="separator" aria-label="Resize 3D viewport" tabindex="0"></div>
 
       <aside class="assetColumn">
+        <section id="workbenchLibraryPanel" class="workbenchPanel workbenchLibraryPanel" aria-label="Visual Game Library"></section>
         <div class="assetSearchRow">
           <input id="assetSearch" placeholder="Zoek assets...">
           <button type="button" id="assetControlsToggle" class="assetControlsToggle" title="Sorteren &amp; weergave" aria-label="Sorteren &amp; weergave" aria-expanded="false">&#9881;</button>
@@ -254,25 +262,11 @@
               <div id="assetUploadDetailsList" class="assetUploadDetailsList"></div>
             </details>
           </div>
-        <form id="assetForm" class="assetForm" hidden>
-          <h3>Importeer asset</h3>
-          <input name="name" placeholder="Naam" required>
-          <input name="category" placeholder="Categorie" required>
-          <select name="assetType">
-            <option value="model">GLB model</option>
-            <option value="texture">Texture</option>
-            <option value="image">Image</option>
-            <option value="audio">Audio</option>
-            <option value="data">Data</option>
-          </select>
-          <input name="file" type="file" required>
-          <button type="submit" class="primary">Upload</button>
-        </form>
       </aside>
 
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261016-scatter-pattern2"></script>
+    <script type="module" src="./editor.js?v=20261021-workbench-w1-resize-bottom"></script>
   </body>
 </html>

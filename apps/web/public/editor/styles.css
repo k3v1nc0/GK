@@ -4,10 +4,17 @@
   --graph-width: 1.2fr;
   --viewport-width: 1fr;
   --assets-width: 310px;
+  --workbench-tools-width: 250px;
+  --workbench-viewport-width: 1fr;
+  --workbench-assets-width: 310px;
+  --workbench-relations-height: 220px;
   --mobile-tools-height: 220px;
   --mobile-graph-height: 340px;
   --mobile-viewport-height: 56vh;
   --mobile-assets-height: 260px;
+  --workbench-mobile-tools-height: 220px;
+  --workbench-mobile-viewport-height: 56vh;
+  --workbench-mobile-assets-height: 260px;
 }
 html, body { height: 100%; margin: 0; }
 body {
@@ -47,6 +54,30 @@ body {
   color: #20140a; font-weight: 900; font-size: 15px;
 }
 .brandName { font-weight: 800; letter-spacing: 1.5px; font-size: 14px; color: #cfd8df; }
+
+.editorModeTabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #2a3744;
+  border-radius: 9px;
+  background: #0b1118;
+}
+.editorModeTab {
+  min-height: 30px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8fa0ad;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.editorModeTab:hover { color: #e5edf3; background: #151f29; }
+.editorModeTab.active { color: #251707; background: #ffb454; }
 
 .breadcrumb { display: flex; align-items: center; gap: 6px; min-width: 0; color: #8ea0ad; }
 .breadcrumb button {
@@ -210,6 +241,11 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   cursor: col-resize;
   border-left: 1px solid #111a24;
   border-right: 1px solid #1d2b38;
+}
+.layoutResizer.horizontal {
+  cursor: row-resize;
+  border-top: 1px solid #111a24;
+  border-bottom: 1px solid #1d2b38;
 }
 .layoutResizer::before {
   content: "";
@@ -2668,7 +2704,6 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 }
 
 .assetImportHeader { display: grid; gap: 8px; padding: 0 12px 12px; }
-.assetImportToggle { justify-self: start; }
 .assetUploadStatus {
   display: grid;
   gap: 4px;
@@ -2768,14 +2803,9 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .assetUploadStatus[hidden],
 .assetUploadSummary[hidden],
 .assetUploadDetails[hidden],
-.assetDropOverlay[hidden],
-.assetForm[hidden] {
+.assetDropOverlay[hidden] {
   display: none !important;
 }
-
-.assetForm { border-top: 1px solid #1c2733; padding: 12px; display: grid; gap: 8px; scroll-margin-top: 12px; }
-.assetForm h3 { margin: 0; font-size: 12px; color: #7f8d99; text-transform: uppercase; letter-spacing: 0.6px; }
-.assetForm input, .assetForm select { background: #0f161e; border: 1px solid #28333f; color: #fff; padding: 8px; border-radius: 6px; font: inherit; font-size: 12px; }
 
 .assetManageOverlay {
   position: absolute;
@@ -2967,6 +2997,215 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 }
 .assetDragGhost img { width: 100%; height: 100%; object-fit: cover; }
 
+/* Visual Content Workbench W1: a projection of the existing graph, never a second store. */
+.workbenchPanel,
+.workbenchRelationStrip,
+.workbenchRelationResizer { display: none; }
+
+body.workbenchMode .layout {
+  grid-template-columns:
+    minmax(0, var(--workbench-tools-width))
+    8px
+    minmax(0, var(--workbench-viewport-width))
+    8px
+    minmax(0, var(--workbench-assets-width));
+  overflow: hidden;
+}
+body.workbenchMode .graphColumn,
+body.workbenchMode .layoutResizer[data-resizer="graph"] { display: none; }
+body.workbenchMode .tools > :not(#workbenchSelectionPanel),
+body.workbenchMode:not(.workbenchAssetsOpen) .assetColumn > :not(#workbenchLibraryPanel) { display: none !important; }
+body.workbenchMode .workbenchPanel { display: flex; }
+body.workbenchMode .workbenchRelationStrip { display: block; }
+body.workbenchMode .workbenchRelationResizer { display: block; flex: 0 0 8px; }
+body.workbenchMode .tools,
+body.workbenchMode .assetColumn { overflow: hidden; }
+body.workbenchMode .viewportColumn { border-left: 1px solid #1c2733; }
+body.workbenchMode.workbenchAssetsOpen #workbenchLibraryPanel {
+  flex: 0 0 auto;
+  height: auto;
+  overflow: visible;
+  padding-bottom: 8px;
+}
+
+.workbenchPanel {
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+  background: linear-gradient(180deg, #0e151d, #0a1016);
+}
+.workbenchHeader { display: grid; gap: 4px; }
+.workbenchTitle { color: #f3f6f8; font-size: 18px; font-weight: 900; }
+.workbenchSubtitle { color: #8798a5; font-size: 12px; line-height: 1.4; }
+.workbenchSectionTitle {
+  margin-top: 4px;
+  color: #dce4e9;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.55px;
+}
+.workbenchEmpty {
+  padding: 14px;
+  border: 1px dashed #344250;
+  border-radius: 10px;
+  color: #91a1ad;
+  background: #0b1219;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.workbenchHero,
+.workbenchRelationCard,
+.workbenchLibraryCard,
+.workbenchEditorCard {
+  border: 1px solid #293947;
+  border-radius: 10px;
+  background: #101922;
+}
+.workbenchHero { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; padding: 10px; }
+.workbenchThumb {
+  width: 74px;
+  height: 74px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #304354;
+  border-radius: 8px;
+  color: #718392;
+  background: #091018;
+  font-size: 11px;
+  font-weight: 900;
+}
+.workbenchThumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.workbenchHeroBody { min-width: 0; display: grid; align-content: center; gap: 5px; }
+.workbenchName { color: #f4f7f9; font-size: 15px; font-weight: 900; overflow-wrap: anywhere; }
+.workbenchMeta { color: #8fa1ae; font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.workbenchBadgeRow { display: flex; flex-wrap: wrap; gap: 5px; }
+.workbenchBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid #365067;
+  border-radius: 999px;
+  color: #bfe8ff;
+  background: #112333;
+  font-size: 10px;
+  font-weight: 800;
+}
+.workbenchBadge.linked { color: #9cf2b5; border-color: #27633c; background: #10291a; }
+.workbenchBadge.warning { color: #ffd09a; border-color: #6b4925; background: #2b1d10; }
+.workbenchRelationList { display: grid; gap: 7px; }
+.workbenchRelationCard { padding: 9px; display: grid; gap: 5px; }
+button.workbenchRelationCard,
+button.workbenchLibraryCard { width: 100%; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+button.workbenchRelationCard:hover,
+button.workbenchLibraryCard:hover { border-color: #ffb454; background: #15202a; }
+.workbenchRelationLabel { color: #758997; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px; }
+.workbenchRelationValue { color: #e8edf1; font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }
+.workbenchWarning {
+  padding: 8px 9px;
+  border: 1px solid #684126;
+  border-radius: 8px;
+  color: #ffd0aa;
+  background: #281812;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.workbenchActions { display: flex; flex-wrap: wrap; gap: 7px; }
+.workbenchActions button { flex: 1 1 110px; }
+.workbenchEditorCard { display: grid; gap: 9px; padding: 10px; border-color: #405368; }
+.workbenchFields { display: grid; gap: 9px; }
+.workbenchField { display: grid; gap: 4px; color: #9fb0bc; font-size: 11px; }
+.workbenchFieldLabel { display: flex; align-items: center; gap: 5px; font-weight: 800; }
+.workbenchField input,
+.workbenchField select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #2f4050;
+  border-radius: 7px;
+  color: #edf3f6;
+  background: #0a121a;
+  font: inherit;
+  font-size: 12px;
+}
+.workbenchFieldCheck { display: flex; align-items: center; gap: 7px; color: #dbe4ea; font-size: 12px; }
+.workbenchFieldCheck input { width: auto; }
+.workbenchAssetPicker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.workbenchAssetChoice {
+  min-width: 0;
+  padding: 5px;
+  border: 1px solid #283a49;
+  border-radius: 7px;
+  color: #cdd8df;
+  background: #0b141d;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.workbenchAssetChoice:hover,
+.workbenchAssetChoice.selected { border-color: #ffb454; color: #fff; }
+.workbenchAssetChoice img { width: 100%; height: 52px; object-fit: cover; display: block; margin-bottom: 4px; border-radius: 4px; }
+.workbenchLibraryControls { display: grid; gap: 7px; }
+.workbenchLibraryTabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.workbenchLibraryTabs button { min-width: 0; }
+.workbenchSearch {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #304150;
+  border-radius: 8px;
+  color: #eef3f6;
+  background: #09121a;
+  font: inherit;
+  font-size: 12px;
+}
+.workbenchLibraryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.workbenchLibraryCard { min-width: 0; padding: 8px; display: grid; gap: 6px; }
+.workbenchLibraryCard.current { border-color: #ff934f; box-shadow: inset 0 0 0 1px rgba(255, 147, 79, 0.24); }
+.workbenchLibraryCard .workbenchThumb { width: 100%; height: 84px; }
+.workbenchLibraryCardActions { display: flex; flex-wrap: wrap; gap: 5px; }
+.workbenchLibraryCardActions button { flex: 1 1 72px; min-width: 0; }
+.workbenchLibraryMore { color: #788a97; font-size: 11px; text-align: center; }
+
+.workbenchRelationStrip {
+  flex: 0 0 var(--workbench-relations-height);
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-top: 1px solid #263746;
+  background: linear-gradient(180deg, #0c151e, #091018);
+}
+.workbenchRelationFlow { display: flex; align-items: stretch; gap: 7px; min-width: min-content; }
+.workbenchFlowArrow { display: grid; place-items: center; color: #ffb454; font-weight: 900; }
+.workbenchFlowCard {
+  width: 150px;
+  min-height: 65px;
+  padding: 8px;
+  border: 1px solid #2d4050;
+  border-radius: 9px;
+  color: inherit;
+  background: #101a23;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workbenchFlowCard:hover { border-color: #ffb454; }
+.workbenchFlowCard.missing { border-style: dashed; color: #8799a6; }
+.workbenchFlowCard.dropReady { border-color: #35d07f; box-shadow: inset 0 0 0 1px #35d07f; }
+.workbenchFlowRules { display: flex; gap: 6px; }
+.workbenchFlowRule { width: 165px; }
+.workbenchStripEditor { margin-top: 9px; max-width: 620px; }
+
+@media (max-width: 1250px) and (min-width: 981px) {
+  .workbenchPanel { padding: 10px; }
+  .workbenchLibraryGrid { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 980px) {
   body { min-width: 0; }
   .topbar {
@@ -2984,6 +3223,8 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
     font-size: 11px;
   }
   .brandName { display: none; }
+  .editorModeTabs { flex: 0 0 auto; padding: 2px; }
+  .editorModeTab { min-height: 26px; padding-inline: 7px; font-size: 9px; }
   .breadcrumb button { padding: 2px 3px; }
   .topbarRight {
     margin-left: auto;
@@ -3115,6 +3356,25 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   body[data-mobile-panel="all"] .allLayoutRoot {
     display: flex;
   }
+  body.workbenchMode .mobilePanelTabs { display: none; }
+  body.workbenchMode .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows:
+      minmax(0, var(--workbench-mobile-tools-height))
+      16px
+      minmax(0, var(--workbench-mobile-viewport-height))
+      16px
+      minmax(0, var(--workbench-mobile-assets-height));
+    overflow-y: auto;
+  }
+  body.workbenchMode .tools,
+  body.workbenchMode .viewportColumn,
+  body.workbenchMode .assetColumn { display: flex !important; width: 100%; }
+  body.workbenchMode .layoutResizer[data-resizer="tools"],
+  body.workbenchMode .layoutResizer[data-resizer="viewport"] { display: block !important; }
+  body.workbenchMode .layoutResizer[data-resizer="graph"] { display: none !important; }
+  body.workbenchMode .workbenchRelationResizer { display: block !important; flex-basis: 16px; }
+  body.workbenchMode .allLayoutRoot { display: none !important; }
 }
 
 @media (pointer: coarse) {
@@ -3152,8 +3412,6 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   .libSearchRow input,
   .objectFunctionDraftField .referencePickerSearch input,
   .assetControls select,
-  .assetForm input,
-  .assetForm select,
   .snapControl select,
   .snapControl input {
     min-height: 42px;
