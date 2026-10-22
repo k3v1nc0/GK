@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261021-workbench-w1-resize-bottom">
+    <link rel="stylesheet" href="./styles.css?v=20261022-compact-workbench-relations">
     <script type="importmap">
       {
         "imports": {
@@ -212,8 +212,9 @@
           </div>
           <div class="viewportErrors" id="viewportErrors"></div>
         </div>
+        <section id="workbenchOverviewPanel" class="workbenchOverview" aria-label="Contentoverzicht"></section>
         <div id="workbenchRelationResizer" class="layoutResizer horizontal workbenchRelationResizer" role="separator" aria-label="Resize relation strip" tabindex="0"></div>
-        <section id="workbenchRelationStrip" class="workbenchRelationStrip" aria-label="Enemy- en lootrelatie"></section>
+        <section id="workbenchRelationStrip" class="workbenchRelationStrip" aria-label="Relaties en flow"></section>
         <div class="statusLine" id="statusText">Laden...</div>
       </section>
 
@@ -267,6 +268,6 @@
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261021-workbench-w1-resize-bottom"></script>
+    <script type="module" src="./editor.js?v=20261022-compact-workbench-relations"></script>
   </body>
 </html>

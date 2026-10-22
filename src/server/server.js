@@ -115,6 +115,39 @@ async function readJson(req) {
   }
 }
 
+const editorLayoutViews = {
+  nodes: new Set(["tools", "graph", "viewport", "assets"]),
+  workbench: new Set(["workbench", "viewport", "relations", "library"])
+};
+
+function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 8) return null;
+  if (typeof node.view === "string") {
+    return allowedViews.has(node.view) ? { view: node.view } : null;
+  }
+  if (!(["row", "col"].includes(node.dir)) || !Array.isArray(node.children) || node.children.length < 1 || node.children.length > 8) return null;
+  const children = [];
+  for (const child of node.children) {
+    const normalizedNode = normalizeEditorLayoutNode(child?.node, allowedViews, depth + 1);
+    const size = Number(child?.size);
+    if (!normalizedNode || !Number.isFinite(size) || size <= 0) return null;
+    children.push({ size: Math.min(1000, Math.max(0.02, size)), node: normalizedNode });
+  }
+  return { dir: node.dir, children };
+}
+
+function normalizeEditorUserLayout(value) {
+  if (!value || typeof value !== "object") return null;
+  const nodes = normalizeEditorLayoutNode(value.layouts?.nodes, editorLayoutViews.nodes);
+  const workbench = normalizeEditorLayoutNode(value.layouts?.workbench, editorLayoutViews.workbench);
+  if (!nodes || !workbench) return null;
+  return {
+    version: 1,
+    editorMode: value.editorMode === "workbench" ? "workbench" : "nodes",
+    layouts: { nodes, workbench }
+  };
+}
+
 async function readRequestBuffer(req, maxBytes) {
   const chunks = [];
   let size = 0;
@@ -403,6 +436,26 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/auth/me") {
       const snapshot = mmoService.getAuthMeSnapshot(req);
       return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/layout") {
+      const user = authService.requireEditor(req);
+      const row = db.prepare("SELECT layout_json, updated_at FROM editor_user_layouts WHERE user_id = ?").get(user.id);
+      let layout = null;
+      try { layout = row ? normalizeEditorUserLayout(JSON.parse(row.layout_json)) : null; } catch { layout = null; }
+      return sendJson(res, 200, { ok: true, layout, updatedAt: row?.updated_at || null });
+    }
+    if (req.method === "PUT" && url.pathname === "/api/editor/layout") {
+      const user = authService.requireEditor(req);
+      const body = await readJson(req);
+      const layout = normalizeEditorUserLayout(body.layout);
+      if (!layout) return sendJson(res, 400, { ok: false, message: "Ongeldige editorindeling." });
+      const updatedAt = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO editor_user_layouts (user_id, layout_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET layout_json = excluded.layout_json, updated_at = excluded.updated_at
+      `).run(user.id, JSON.stringify(layout), updatedAt);
+      return sendJson(res, 200, { ok: true, layout, updatedAt });
     }
     if (req.method === "GET" && url.pathname === "/api/game/player") {
       const snapshot = mmoService.getPlayerSnapshot(req);

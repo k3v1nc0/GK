@@ -1,6 +1,6 @@
 # Visual Content Workbench W1
 
-**Status:** implemented, awaiting Kevin acceptance  
+**Status:** accepted by Kevin  
 **Datum:** 2026-10-21
 
 ## Opgeleverde route
@@ -36,4 +36,4 @@ W1 bevat alleen Enemies en Loot Tables. Items, Resources, Recipes, Vendors, ques
 
 Microfase 3 is hiermee niet automatisch compleet. De bestaande onafhankelijke browser-, publish-, gameplay- en lifecycleacceptatie blijft nodig.
 
-**Visual Content Workbench W1 implemented, awaiting Kevin acceptance.**
+**Visual Content Workbench W1 accepted by Kevin.** Vervolg: `VISUAL-CONTENT-WORKBENCH-W2.md`.

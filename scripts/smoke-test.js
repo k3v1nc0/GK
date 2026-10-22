@@ -105,7 +105,7 @@ function removeSmokeFixtureAssets() {
 }
 
 function restoreSmokeFixtureAssets() {
-  spawnSync("git", ["restore", "--source=HEAD", "--", "assets/uploads/wizard.glb", "assets/thumbnails/wizard.png", "assets/thumbnails/wizard.tmp.png", "assets/thumbnails/tree-large.tmp.png"], {
+  spawnSync("git", ["restore", "--source=HEAD", "--", "assets/uploads/wizard.glb", "assets/thumbnails/wizard.png"], {
     cwd: rootDir,
     stdio: "ignore"
   });

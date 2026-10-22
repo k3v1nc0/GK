@@ -4798,6 +4798,8 @@ const NODE05_ECONOMY_NODE_DEFS = {
     },
     fields: definitionFields("recipeId", "recipe.new", "New Recipe", {
       description: { label: "Description", type: "tokenText", default: "", required: false, maxLength: 320 },
+      iconAssetId: { label: "Icon asset", type: "asset", assetTypes: ["image"], default: null, required: false },
+      previewModelAssetId: { label: "Preview model asset", type: "asset", assetTypes: ["model"], default: null, required: false },
       category: { label: "Category", type: "text", default: "general", required: false, maxLength: 96 },
       stationType: { label: "Station type", type: "identity", default: "crafting.station", required: true, maxLength: 160, pattern: CANONICAL_FIELD_PATTERN },
       craftDurationMs: numberField("Duration ms", 0, 0, 86400000, 1),

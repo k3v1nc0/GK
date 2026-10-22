@@ -24,6 +24,20 @@ function logTiming(label, startedAt, details) {
 }
 
 const allowedAssetTypes = new Set(["model", "texture", "image", "audio", "data"]);
+// Hard stop for one GLB thumbnail run. Normal runs take 8-20 s; a stalled
+// network check (cdn.shopify.com model-viewer) used to block the single
+// thumbnail queue for 7-30 minutes. The helper has its own 90 s watchdog.
+const GLB_THUMBNAIL_HARD_LIMIT_MS = 120000;
+// A killed, stalled or network-failed run goes back into the queue after a
+// short pause (other thumbnails can run meanwhile), up to this many attempts.
+const GLB_THUMBNAIL_MAX_ATTEMPTS = 3;
+const GLB_THUMBNAIL_RETRY_DELAY_MS = 15000;
+// Kevin always wants a thumbnail: a round that ends in "failed" gets exactly
+// one more automatic round (also after a server restart). A manual retry resets
+// this, so a truly broken model never loops forever.
+const GLB_THUMBNAIL_EXTRA_ROUND_DELAY_MS = 60000;
+const GLB_THUMBNAIL_RETRYABLE_EXIT_CODES = new Set([-1, 124, 137, 143]);
+const GLB_THUMBNAIL_NETWORK_ERROR = /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|socket hang up|cannot be used to render|net::ERR_/i;
 const extensionsByType = {
   model: new Set([".glb"]),
   texture: new Set([".png", ".jpg", ".jpeg", ".webp"]),
@@ -114,8 +128,12 @@ function resolveStorageStem({ preferredStem, fallbackStem, directory, ext, curre
       return stem;
     }
   }
-  const baseStem = candidates[1] || candidates[0] || "asset";
-  return baseStem + "-" + crypto.randomUUID().slice(0, 8);
+  const baseStem = candidates[0] || candidates[1] || "asset";
+  let suffix = 2;
+  while (fs.existsSync(path.join(directory, baseStem + "-" + suffix + ext))) {
+    suffix += 1;
+  }
+  return baseStem + "-" + suffix;
 }
 
 function renameFileIfNeeded(fromPath, toPath) {
@@ -156,18 +174,33 @@ export class AssetService {
     const rows = this.db.prepare("SELECT id, source_path, asset_type, metadata_json FROM asset_library WHERE asset_type = 'model'").all();
     for (const row of rows) {
       const metadata = normalizeAssetMetadata(row);
-      if (metadata.thumbnailStatus !== "pending" && metadata.thumbnailStatus !== "processing") continue;
+      const extraRound = metadata.thumbnailStatus === "failed" && metadata.thumbnailExtraRoundDone !== true;
+      if (metadata.thumbnailStatus !== "pending" && metadata.thumbnailStatus !== "processing" && !extraRound) continue;
       const sourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
       if (!sourceFilePath || !fs.existsSync(sourceFilePath)) continue;
-      this.enqueueThumbnailJob({ assetId: row.id });
+      if (extraRound) this.startThumbnailExtraRound(row.id);
+      else this.enqueueThumbnailJob({ assetId: row.id });
     }
+  }
+
+  // One extra automatic round for a thumbnail that ended in "failed".
+  startThumbnailExtraRound(assetId) {
+    const row = this.db.prepare("SELECT metadata_json FROM asset_library WHERE id = ?").get(assetId);
+    const metadata = row ? parseJson(row.metadata_json, {}) : null;
+    if (!metadata || metadata.thumbnailStatus !== "failed" || metadata.thumbnailExtraRoundDone === true) return;
+    this.updateAssetThumbnailState(assetId, null, {
+      thumbnailStatus: "pending",
+      thumbnailError: "Extra automatische ronde na mislukte thumbnail.",
+      thumbnailExtraRoundDone: true
+    });
+    this.enqueueThumbnailJob({ assetId: assetId, attempt: 1 });
   }
 
   enqueueThumbnailJob(job) {
     const assetId = String(job?.assetId || "").trim();
     if (!assetId || this.thumbnailQueuedAssetIds.has(assetId)) return;
     this.thumbnailQueuedAssetIds.add(assetId);
-    this.thumbnailQueue.push({ assetId: assetId });
+    this.thumbnailQueue.push({ assetId: assetId, attempt: Math.max(1, Math.floor(Number(job?.attempt) || 1)) });
     this.scheduleThumbnailQueueKick();
   }
 
@@ -233,7 +266,8 @@ export class AssetService {
       thumbnailError: null,
       thumbnailStartedAt: null,
       thumbnailFinishedAt: null,
-      thumbnailDurationMs: null
+      thumbnailDurationMs: null,
+      thumbnailExtraRoundDone: false
     });
     this.enqueueThumbnailJob({ assetId: id });
     return this.get(id);
@@ -331,6 +365,24 @@ export class AssetService {
           });
           return;
         }
+        const attempt = Math.max(1, Math.floor(Number(job?.attempt) || 1));
+        if (attempt < GLB_THUMBNAIL_MAX_ATTEMPTS) {
+          // Stays "pending", so a server restart also picks it up again.
+          this.updateAssetThumbnailState(assetId, null, {
+            thumbnailStatus: "pending",
+            thumbnailError: "Poging " + attempt + " mislukte; nieuwe poging over " + Math.round(GLB_THUMBNAIL_RETRY_DELAY_MS / 1000) + " s.",
+            thumbnailStartedAt: startedAtIso,
+            thumbnailFinishedAt: finishedAtIso,
+            thumbnailDurationMs: durationMs
+          });
+          console.warn("[thumbnail] asset=" + assetId + " attempt " + attempt + " failed (" + (result.error || "stall") + "); retrying in " + GLB_THUMBNAIL_RETRY_DELAY_MS + " ms.");
+          setTimeout(() => {
+            const current = this.db.prepare("SELECT metadata_json FROM asset_library WHERE id = ?").get(assetId);
+            if (!current || parseJson(current.metadata_json, {}).thumbnailStatus !== "pending") return;
+            this.enqueueThumbnailJob({ assetId: assetId, attempt: attempt + 1 });
+          }, GLB_THUMBNAIL_RETRY_DELAY_MS).unref?.();
+          return;
+        }
         this.updateAssetThumbnailState(assetId, null, {
           thumbnailStatus: "failed",
           thumbnailError: shortThumbnailErrorMessage(result.error || "GLB thumbnail generatie mislukt."),
@@ -338,6 +390,10 @@ export class AssetService {
           thumbnailFinishedAt: finishedAtIso,
           thumbnailDurationMs: durationMs
         });
+        if (parseJson(latestRow.metadata_json, {}).thumbnailExtraRoundDone !== true) {
+          console.warn("[thumbnail] asset=" + assetId + " failed after " + attempt + " attempts; extra round in " + GLB_THUMBNAIL_EXTRA_ROUND_DELAY_MS + " ms.");
+          setTimeout(() => { this.startThumbnailExtraRound(assetId); }, GLB_THUMBNAIL_EXTRA_ROUND_DELAY_MS).unref?.();
+        }
       } catch (error) {
         this.updateAssetThumbnailState(assetId, null, {
           thumbnailStatus: "failed",
@@ -346,6 +402,7 @@ export class AssetService {
           thumbnailFinishedAt: now(),
           thumbnailDurationMs: timingNumber(startedAt)
         });
+        setTimeout(() => { this.startThumbnailExtraRound(assetId); }, GLB_THUMBNAIL_EXTRA_ROUND_DELAY_MS).unref?.();
       } finally {
         if (workingDir) {
           try { fs.rmSync(workingDir, { recursive: true, force: true }); } catch {}
@@ -386,13 +443,14 @@ export class AssetService {
       throw error;
     }
     const sourceExt = path.extname(row.source_path || row.original_filename || "").toLowerCase();
+    const preferredSourceStem = assetSlugForName(name) || "asset";
     const sourceStem = resolveStorageStem({
-      preferredStem: assetSlugForName(name),
-      fallbackStem: row.id,
+      preferredStem: preferredSourceStem,
+      fallbackStem: null,
       directory: this.uploadsDir,
       ext: sourceExt,
       currentFilePath: currentSourceFilePath
-    }) || row.id;
+    }) || preferredSourceStem;
     const nextSourceAssetPath = assetPathForStem(this.rootDir, "uploads", sourceStem, sourceExt);
     const nextSourceFilePath = nextSourceAssetPath.filePath;
     const nextSourcePath = nextSourceAssetPath.path;
@@ -465,13 +523,14 @@ export class AssetService {
       }
       const id = "asset_" + crypto.randomUUID();
       fs.mkdirSync(this.uploadsDir, { recursive: true });
+      const preferredSourceStem = assetSlugForName(name) || "asset";
       const sourceStem = resolveStorageStem({
-        preferredStem: assetSlugForName(name),
-        fallbackStem: id,
+        preferredStem: preferredSourceStem,
+        fallbackStem: null,
         directory: this.uploadsDir,
         ext: ext,
         currentFilePath: null
-      }) || id;
+      }) || preferredSourceStem;
       const sourceAssetPath = assetPathForStem(this.rootDir, "uploads", sourceStem, ext);
       const sourceFilePath = sourceAssetPath.filePath;
       fs.writeFileSync(sourceFilePath, file.data);
@@ -843,7 +902,17 @@ async function generateGlbThumbnail({ rootDir, scriptPath, thumbnailStem, source
   });
   console.info("[timing] thumbnail generation start stem=" + resolvedStem);
   try {
-    const result = await runProcess("sh", [scriptPath, sourceFilePath, temporaryFilePath], { cwd: rootDir, env: env });
+    const result = await runProcess("sh", [scriptPath, sourceFilePath, temporaryFilePath], { cwd: rootDir, env: env, timeoutMs: GLB_THUMBNAIL_HARD_LIMIT_MS });
+    const stalled = result.timedOut || /THUMBNAIL_WATCHDOG/.test(result.stderr || "");
+    // Killed (signal/OOM), stalled or a network hiccup: worth another try later.
+    const retryable = stalled || GLB_THUMBNAIL_RETRYABLE_EXIT_CODES.has(result.code) || GLB_THUMBNAIL_NETWORK_ERROR.test(result.stderr || "");
+    if (stalled) {
+      return {
+        status: "failed",
+        thumbnailPath: null,
+        error: "Thumbnail bleef hangen (netwerk of browser reageerde niet) en is gestopt."
+      };
+    }
     if (result.code === 0 && fs.existsSync(temporaryFilePath)) {
       fs.renameSync(temporaryFilePath, finalFilePath);
       return {
@@ -862,7 +931,7 @@ async function generateGlbThumbnail({ rootDir, scriptPath, thumbnailStem, source
     return {
       status: "failed",
       thumbnailPath: null,
-      error: shortThumbnailErrorMessage((result.stderr || "").trim() || "GLB thumbnail generatie mislukt.")
+      error: shortThumbnailErrorMessage((result.stderr || "").trim() || (retryable ? "Thumbnailproces werd gestopt." : "GLB thumbnail generatie mislukt."))
     };
   } catch (error) {
     return {
@@ -884,18 +953,41 @@ function shortThumbnailErrorMessage(message) {
 
 function runProcess(command, args, options) {
   return new Promise(function (resolve, reject) {
+    const timeoutMs = Math.max(0, Number(options?.timeoutMs) || 0);
+    // With a time limit the child gets its own process group, so a timeout can
+    // stop the whole tree (sh, xvfb-run, Xvfb, node, Chrome) at once.
     const child = spawn(command, args, {
       cwd: options?.cwd,
       env: options?.env,
-      stdio: ["ignore", "ignore", "pipe"]
+      stdio: ["ignore", "ignore", "pipe"],
+      detached: timeoutMs > 0
     });
     let stderr = "";
+    let timedOut = false;
+    let closed = false;
+    const stopTree = function (signal) {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        try { child.kill(signal); } catch {}
+      }
+    };
+    const timer = timeoutMs > 0 ? setTimeout(function () {
+      timedOut = true;
+      stopTree("SIGTERM");
+      setTimeout(function () { if (!closed) stopTree("SIGKILL"); }, 3000).unref();
+    }, timeoutMs) : null;
     child.stderr.on("data", function (data) {
       stderr += data.toString("utf8");
     });
-    child.on("error", reject);
+    child.on("error", function (error) {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
     child.on("close", function (code) {
-      resolve({ code: code === null ? -1 : code, stderr: stderr });
+      closed = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code: code === null ? -1 : code, stderr: stderr, timedOut: timedOut });
     });
   });
 }

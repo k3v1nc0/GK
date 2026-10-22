@@ -44,6 +44,15 @@ function safeInteger(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+// Random whole amount between minimum and maximum (inclusive), scaled by a
+// yield multiplier. 0 means "nothing this time".
+function rollLootAmount(minValue, maxValue, multiplier = 1) {
+  const min = Math.max(0, safeInteger(minValue, 1));
+  const max = Math.max(min, safeInteger(maxValue, min));
+  const rolled = min + Math.floor(Math.random() * (max - min + 1));
+  return Math.max(0, Math.round(rolled * multiplier));
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -1518,16 +1527,16 @@ export class Node03RuntimeService {
     const quantityMultiplier = Math.max(0, safeNumber(multiplier, 1));
     if (quantityMultiplier <= 0) return grants;
     for (const entry of Array.isArray(table?.entries) ? table.entries : []) {
-      const chance = safeNumber(entry?.chance, 1);
-      if (entry?.guaranteed !== true && chance < 0.5) continue;
+      // Every rule rolls on its own: "guaranteed" always drops, otherwise the
+      // chance (0..1) is a real probability.
+      const chance = Math.max(0, Math.min(1, safeNumber(entry?.chance, 1)));
+      if (entry?.guaranteed !== true && !(Math.random() < chance)) continue;
       if (entry.itemRef) {
-        const min = Math.max(1, safeInteger(entry.minQuantity, 1));
-        const max = Math.max(min, safeInteger(entry.maxQuantity, min));
-        grants.push.apply(grants, this.grantItem(ctx, entry.itemRef, Math.max(1, Math.round(((min + max) / 2) * quantityMultiplier)), reason, sourceRef, operationId));
+        const amount = rollLootAmount(entry.minQuantity, entry.maxQuantity, quantityMultiplier);
+        if (amount > 0) grants.push.apply(grants, this.grantItem(ctx, entry.itemRef, amount, reason, sourceRef, operationId));
       } else if (entry.currencyRef) {
-        const min = Math.max(1, safeInteger(entry.minAmountMinor, 1));
-        const max = Math.max(min, safeInteger(entry.maxAmountMinor, min));
-        grants.push(this.grantCurrency(ctx, entry.currencyRef, Math.max(1, Math.round(((min + max) / 2) * quantityMultiplier)), reason, sourceRef, operationId));
+        const amount = rollLootAmount(entry.minAmountMinor, entry.maxAmountMinor, quantityMultiplier);
+        if (amount > 0) grants.push(this.grantCurrency(ctx, entry.currencyRef, amount, reason, sourceRef, operationId));
       }
     }
     return grants.filter(Boolean);

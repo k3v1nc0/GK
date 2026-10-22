@@ -9,7 +9,25 @@ const { FileServer } = require("@shopify/screenshot-glb/dist/file-server.js");
 const { htmlTemplate } = require("@shopify/screenshot-glb/dist/html-template.js");
 const { prepareAppOptions } = require("@shopify/screenshot-glb/dist/prepare-app-options.js");
 
-main().catch(function (error) {
+// Watchdog: network and browser steps have no overall limit. Never hang longer
+// than this; the server sees THUMBNAIL_WATCHDOG and queues a retry.
+const WATCHDOG_MS = Math.max(30000, Number(process.env.GLB_THUMBNAIL_WATCHDOG_MS || 90000));
+setTimeout(function () {
+  // The screenshot may already be written; then only an idle socket lingers.
+  const outputPath = process.argv[3];
+  try {
+    if (outputPath && fs.statSync(outputPath).size > 0) process.exit(0);
+  } catch {}
+  console.error("THUMBNAIL_WATCHDOG: gestopt na " + Math.round(WATCHDOG_MS / 1000) + " s; netwerk of browser reageerde niet.");
+  process.exit(124);
+}, WATCHDOG_MS).unref();
+
+// Exit as soon as the work is done: screenshot-glb's model-viewer check
+// (https.get without consuming the response) leaves a keep-alive socket open,
+// which kept this process alive until the CDN closed it (~400 s).
+main().then(function () {
+  process.exit(0);
+}, function (error) {
   console.error(error && error.stack ? error.stack : String(error));
   process.exit(1);
 });

@@ -10,7 +10,24 @@ import {
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
-import { createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
+import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
+import {
+  ASSET_ROLE_LABELS,
+  CONTENT_TYPE_SPECS,
+  OVERVIEW_BANDS,
+  WORKBENCH_CATEGORIES,
+  buildContentIndex,
+  definitionFacts,
+  definitionIsUsed,
+  fieldRuntimeStatus,
+  formatChance,
+  formatDuration,
+  formatNumber,
+  formatRange,
+  optionLabel,
+  relationScope,
+  thumbnailStandIns
+} from "./content-workbench.js?v=20261021-workbench-w2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -111,13 +128,28 @@ const RUNTIME_NAMEPLATES_STORAGE_KEY = "gk.editorRuntimeNameplates";
 const CURRENT_GROUP_STORAGE_KEY = "gk.editorCurrentGroupId";
 const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes.v2";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
-const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayoutTree";
-const ALL_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
-const ALL_PANE_LABELS = { tools: "Tools", graph: "Nodes", viewport: "3D", assets: "Assets" };
+const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayouts.v2";
+const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
+const WORKBENCH_PANE_VIEWS = ["workbench", "viewport", "relations", "library"];
+const ALL_PANE_LABELS = {
+  tools: "Tools",
+  graph: "Nodes",
+  viewport: "3D",
+  assets: "Assets",
+  workbench: "Werkbank",
+  relations: "Relaties",
+  library: "Bibliotheek"
+};
 const EDITOR_FLOATING_PANELS_STORAGE_KEY = "gk.editorFloatingPanels";
 const EDITOR_MODE_STORAGE_KEY = "gk.editorMode";
 const WORKBENCH_SELECTION_STORAGE_KEY = "gk.workbenchSelectedModel";
 const WORKBENCH_LIBRARY_LIMIT = 40;
+const WORKBENCH_STAGE_STORAGE_KEY = "gk.workbenchStage";
+const WORKBENCH_DEFINITION_STORAGE_KEY = "gk.workbenchDefinition";
+const WORKBENCH_COLLECTION_STORAGE_KEY = "gk.workbenchCollection";
+const WORKBENCH_OVERVIEW_COLUMN_LIMIT = 24;
+const WORKBENCH_OVERVIEW_RELATION_LIMIT = 40;
+const WORKBENCH_ASSET_PICKER_LIMIT = 24;
 const MOBILE_LAYOUT_QUERY = window.matchMedia ? window.matchMedia("(max-width: 980px)") : null;
 const COARSE_POINTER_QUERY = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
 const GRAPH_ZOOM_FACTOR = 1.21;
@@ -206,6 +238,7 @@ const state = {
   assetCardSize: loadStoredAssetCardSize(),
   mobilePanel: loadStoredMobilePanel(),
   allLayoutTree: null,
+  allLayoutTrees: null,
   authoringRouteId: null,
   storedAuthoringRouteId: loadStoredAuthoringRoute(),
   authoringMenuOpen: false,
@@ -365,7 +398,18 @@ const state = {
   workbenchEnemyEditNodeId: null,
   workbenchEnemyDraft: null,
   workbenchAssetPickerField: "",
-  workbenchLootRuleDraft: null
+  workbenchLootRuleDraft: null,
+  workbenchStage: loadStoredWorkbenchValue(WORKBENCH_STAGE_STORAGE_KEY) === "overview" ? "overview" : "world",
+  workbenchDefinitionId: loadStoredWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY) || null,
+  workbenchRelationScope: "direct",
+  workbenchCreateDraft: null,
+  workbenchDefinitionDraft: null,
+  workbenchRowDraft: null,
+  workbenchDropNotice: null,
+  workbenchUsageOpen: false,
+  workbenchDeleteNodeId: null,
+  workbenchAssetSlotPicker: "",
+  workbenchAssetPickerQuery: ""
 };
 
 const el = {
@@ -451,7 +495,8 @@ const el = {
   workbenchRelationResizer: document.querySelector("#workbenchRelationResizer"),
   workbenchSelectionPanel: document.querySelector("#workbenchSelectionPanel"),
   workbenchLibraryPanel: document.querySelector("#workbenchLibraryPanel"),
-  workbenchRelationStrip: document.querySelector("#workbenchRelationStrip")
+  workbenchRelationStrip: document.querySelector("#workbenchRelationStrip"),
+  workbenchOverviewPanel: document.querySelector("#workbenchOverviewPanel")
 };
 
 let runtime = null;
@@ -483,6 +528,8 @@ let viewportTouchEditSuppress = false;
 // aborted the whole script's startup.
 let allLayoutActive = false;
 let allLayoutLastUsedViews = new Set();
+let editorLayoutServerReady = false;
+let editorLayoutSaveTimer = null;
 const POINT_LONG_PRESS_MS = 520;
 const POINT_LONG_PRESS_MOVE_PX = 9;
 const floatingPanelLiveStates = new Map();
@@ -827,6 +874,21 @@ function loadStoredWorkbenchSelection() {
   }
 }
 
+function loadStoredWorkbenchValue(key) {
+  try {
+    return String(window.localStorage.getItem(key) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function storeWorkbenchValue(key, value) {
+  try {
+    if (value) window.localStorage.setItem(key, String(value));
+    else window.localStorage.removeItem(key);
+  } catch {}
+}
+
 function storeWorkbenchSelection(modelId) {
   state.workbenchSelectedModelId = modelId || null;
   try {
@@ -911,14 +973,8 @@ function elementContainsPoint(element, clientX, clientY) {
   return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
 }
 
-// Whether the 3D viewport is already visible somewhere on screen right now -
-// desktop always shows it, on mobile only the dedicated "3D" tab or an "All"
-// layout that currently includes a viewport pane do.
 function isViewportPaneVisible() {
-  if (!isMobileLayout()) return true;
-  if (state.mobilePanel === "viewport") return true;
-  if (state.mobilePanel === "all") return collectUsedAllViews(state.allLayoutTree).has("viewport");
-  return false;
+  return collectUsedAllViews(state.allLayoutTree).has("viewport");
 }
 
 function hasInspectorSelection() {
@@ -5552,6 +5608,13 @@ async function boot() {
   } catch {
     return;
   }
+  try {
+    await loadEditorLayoutFromServer();
+  } catch (error) {
+    editorLayoutServerReady = true;
+    console.warn("Opgeslagen editorindeling kon niet worden geladen:", error?.message || error);
+  }
+  setEditorMode(state.editorMode, false);
   runtime = createGkWorldRuntime(el.viewportCanvas, {
     mode: "editor",
     onModelLoadTiming: function (info) {
@@ -5567,6 +5630,7 @@ async function boot() {
       }
       const node = nodeByRuntimeId(entityId);
       if (!node) return;
+      if (state.editorMode === "workbench" && state.workbenchDefinitionId) workbenchSelectDefinition(null, { render: false, showOverview: false });
       selectNode(node.id, false);
       // Always follow into the clicked object's zone (not just on desktop), so the
       // current zone context stays consistent across every tab/pane, incl. the mobile
@@ -5998,7 +6062,7 @@ function authoringRouteAccent(routeId) {
 }
 
 function ensureMobileAllLayout() {
-  if (isMobileLayout() && state.mobilePanel !== "all") setMobilePanel("all", false);
+  if (state.mobilePanel !== "all") setMobilePanel("all", false);
 }
 
 function selectedViewportAuthoringNode() {
@@ -15493,6 +15557,11 @@ async function commitManagedDraft(scope, group, draft, options = {}) {
         && normalizeEditorKey(titleForManagedNode(candidate.type, candidate.values || candidate)) === normalizeEditorKey(title);
     }) || null;
     if (duplicate) {
+      if (options.preserveEditorContext) {
+        setStatus("Bestond al; er is niets nieuws gemaakt.", "");
+        if (typeof options.onDuplicate === "function") options.onDuplicate(duplicate);
+        return;
+      }
       if (scope === "catalog") {
         state.catalogHubDraft = null;
         state.catalogHubSelectedNodeId = duplicate.id;
@@ -15524,13 +15593,15 @@ async function commitManagedDraft(scope, group, draft, options = {}) {
     node.values = Object.assign({}, node.values || {}, values);
   }
   connectManagedNodeToPackage(nextGraph, nextGroup, node);
+  // preserveEditorContext (Workbench): keep the current zone and viewport
+  // selection, so later asset placement never lands inside the Catalog Group.
   await restoreGraphObject(nextGraph, {
     historyLabel: (state.nodeTypes?.[draft.type]?.label || draft.type) + (isNew ? " aangemaakt" : " gewijzigd"),
-    currentGroupId: options.returnToModelId
+    currentGroupId: options.preserveEditorContext ? undefined : options.returnToModelId
       ? (graphNodeByIdInGraph(nextGraph, options.returnToModelId)?.parentId || null)
       : nextGroup.id,
-    selectedNodeIds: options.returnToModelId ? [options.returnToModelId] : [node.id],
-    selectedEdgeIds: [],
+    selectedNodeIds: options.preserveEditorContext ? undefined : options.returnToModelId ? [options.returnToModelId] : [node.id],
+    selectedEdgeIds: options.preserveEditorContext ? undefined : [],
     refreshViewport: VIEWPORT_AFFECTING_NODE_TYPES.has(draft.type),
     refreshValidation: true,
     afterApply: function () {
@@ -15544,7 +15615,7 @@ async function commitManagedDraft(scope, group, draft, options = {}) {
       if (options.returnToModelId) {
         state.authoringSelectedModelNodeId = options.returnToModelId;
         storeWorkbenchSelection(options.returnToModelId);
-      } else {
+      } else if (!options.preserveEditorContext) {
         focusGraphNode(node.id);
       }
       setStatus((state.nodeTypes?.[draft.type]?.label || draft.type) + (isNew ? " aangemaakt." : " gewijzigd."), "success");
@@ -15650,7 +15721,7 @@ function renderManagedUsageSummary(entries) {
   return wrap;
 }
 
-async function deleteManagedNode(scope, group, node) {
+async function deleteManagedNode(scope, group, node, options = {}) {
   if (!group || !node) return;
   const label = state.nodeTypes?.[node.type]?.label || node.type;
   const childSpec = catalogChildEditorSpecForParentType(node.type);
@@ -15681,15 +15752,16 @@ async function deleteManagedNode(scope, group, node) {
   if (nextGroup) ensureManagedGroupPackage(nextGraph, nextGroup);
   await restoreGraphObject(nextGraph, {
     historyLabel: label + " verwijderd",
-    currentGroupId: group.id,
-    selectedNodeIds: [],
-    selectedEdgeIds: [],
+    currentGroupId: options.preserveEditorContext ? undefined : group.id,
+    selectedNodeIds: options.preserveEditorContext ? undefined : [],
+    selectedEdgeIds: options.preserveEditorContext ? undefined : [],
     refreshViewport: VIEWPORT_AFFECTING_NODE_TYPES.has(node.type),
     refreshValidation: true,
     afterApply: function () {
       if (scope === "catalog" && state.catalogHubSelectedNodeId === node.id) state.catalogHubSelectedNodeId = null;
       if (scope === "settings" && state.settingsHubSelectedNodeId === node.id) state.settingsHubSelectedNodeId = null;
       setStatus(label + " verwijderd.", "success");
+      if (typeof options.afterApply === "function") options.afterApply();
     }
   });
 }
@@ -15869,11 +15941,11 @@ async function commitCatalogChildEntryDraft(group, parent, spec, draft, options 
   ensureCatalogGroupPackage(nextGraph, nextGroup);
   await restoreGraphObject(nextGraph, {
     historyLabel: label + (isNew ? " toegevoegd" : " gewijzigd"),
-    currentGroupId: options.returnToModelId
+    currentGroupId: options.preserveEditorContext ? undefined : options.returnToModelId
       ? (graphNodeByIdInGraph(nextGraph, options.returnToModelId)?.parentId || null)
       : group.id,
-    selectedNodeIds: options.returnToModelId ? [options.returnToModelId] : [node.id],
-    selectedEdgeIds: [],
+    selectedNodeIds: options.preserveEditorContext ? undefined : options.returnToModelId ? [options.returnToModelId] : [node.id],
+    selectedEdgeIds: options.preserveEditorContext ? undefined : [],
     refreshViewport: false,
     refreshValidation: true,
     afterApply: function () {
@@ -15881,7 +15953,7 @@ async function commitCatalogChildEntryDraft(group, parent, spec, draft, options 
       if (options.returnToModelId) {
         state.authoringSelectedModelNodeId = options.returnToModelId;
         storeWorkbenchSelection(options.returnToModelId);
-      } else {
+      } else if (!options.preserveEditorContext) {
         focusGraphNode(node.id);
       }
       setStatus(label + (isNew ? " toegevoegd." : " gewijzigd."), "success");
@@ -16044,14 +16116,23 @@ function renderCatalogChildEntryEditor(group, parent, spec) {
 // ---------- Visual Content Workbench W1 ----------
 
 function setEditorMode(mode, persist = true) {
-  state.editorMode = mode === "workbench" ? "workbench" : "nodes";
+  const nextMode = mode === "workbench" ? "workbench" : "nodes";
+  const previousMode = state.editorMode;
+  if (!state.allLayoutTrees) state.allLayoutTrees = loadStoredAllLayoutTrees();
+  if (state.allLayoutTree && previousMode) state.allLayoutTrees[previousMode] = state.allLayoutTree;
+  state.editorMode = nextMode;
+  state.allLayoutTree = state.allLayoutTrees[nextMode] || defaultAllLayoutTree(nextMode);
+  if (previousMode !== nextMode) allLayoutLastUsedViews = new Set();
+  if (state.editorMode === "workbench" && String(state.visualObjectNodeScope?.modelId || "").startsWith("definition:")) {
+    state.visualObjectNodeScope = null;
+    renderGraph();
+  }
   if (state.editorMode === "workbench" && state.graphLoaded && state.workbenchSelectedModelId) {
     const remembered = graphNodeByIdInGraph(state.graph, state.workbenchSelectedModelId);
     if (remembered?.type === "model_entity" && state.selectedNodeId !== remembered.id) {
       setSelection([remembered.id], [], { primaryNodeId: remembered.id, clearPendingEdge: true });
     }
   }
-  updateAllLayoutMode();
   document.body.classList.toggle("workbenchMode", state.editorMode === "workbench");
   if (el.nodesModeButton) {
     el.nodesModeButton.classList.toggle("active", state.editorMode === "nodes");
@@ -16063,7 +16144,9 @@ function setEditorMode(mode, persist = true) {
   }
   if (persist) {
     try { window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode); } catch {}
+    persistAllLayoutTree();
   }
+  updateAllLayoutMode();
   renderWorkbench();
   requestAnimationFrame(function () {
     window.dispatchEvent(new Event("resize"));
@@ -16082,6 +16165,9 @@ function workbenchContext(graph = state.graph) {
   const entries = lootTable ? questTimelineDirectSources(graph, lootTable, "entries").filter(function (node) {
     return LOOT_ENTRY_TYPES.some(function (entry) { return entry.type === node.type; });
   }) : [];
+  const resourceComponent = object?.resourceComponent || null;
+  const resourceRef = normalizeCanonicalId(resourceComponent?.values?.resourceRef, "");
+  const resource = resourceRef ? referenceNodeForReferenceId(resourceRef) : null;
   return {
     model,
     object,
@@ -16090,7 +16176,10 @@ function workbenchContext(graph = state.graph) {
     enemy: enemy?.type === "enemy_archetype" ? enemy : null,
     lootRef,
     lootTable: lootTable?.type === "loot_table" ? lootTable : null,
-    entries
+    entries,
+    resourceComponent,
+    resourceRef,
+    resource: resource?.type === "resource_definition" ? resource : null
   };
 }
 
@@ -16129,10 +16218,13 @@ function workbenchHeader(titleText, subtitleText) {
   const title = document.createElement("div");
   title.className = "workbenchTitle";
   title.textContent = titleText;
-  const subtitle = document.createElement("div");
-  subtitle.className = "workbenchSubtitle";
-  subtitle.textContent = subtitleText;
-  header.append(title, subtitle);
+  header.appendChild(title);
+  if (subtitleText) {
+    const subtitle = document.createElement("div");
+    subtitle.className = "workbenchSubtitle";
+    subtitle.textContent = subtitleText;
+    header.appendChild(subtitle);
+  }
   return header;
 }
 
@@ -16202,8 +16294,13 @@ function workbenchDefinitionOptions(type, emptyLabel) {
 }
 
 function workbenchOpenEnemyCreate(context) {
+  workbenchOpenRoleCreate(context, "enemy");
+}
+
+// Starts the existing Visual Builder for one role (enemy/resource) at step 2.
+function workbenchOpenRoleCreate(context, role) {
   const currentRole = visualBuilderRoleForContext(context?.object);
-  if (currentRole && !["enemy", "decoration"].includes(currentRole)) {
+  if (currentRole && ![role, "decoration"].includes(currentRole)) {
     setStatus("Dit object heeft al de wereldrol " + objectFunctionKindLabel(currentRole) + ". Wijzig die rol eerst via de bestaande Visual Builder.", "error");
     return;
   }
@@ -16211,7 +16308,7 @@ function workbenchOpenEnemyCreate(context) {
     setStatus("Dit model mist een geldige Zone Canvas- of Zone Output-context.", "error");
     return;
   }
-  visualBuilderBegin(context.object, { role: "enemy" });
+  visualBuilderBegin(context.object, { role });
   if (state.visualBuilderDraft) {
     state.visualBuilderDraft.step = 2;
     state.visualBuilderDraft.values.questMode = "none";
@@ -16278,6 +16375,84 @@ function workbenchRenderEnemyCreate(context) {
   return card;
 }
 
+function workbenchRenderResourceCreate(context) {
+  const draft = visualBuilderDraftForContext(context.object);
+  if (!draft || draft.role !== "resource" || context.resourceComponent) return null;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = "Maak Resource";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields";
+  const fakeResource = { type: "resource_definition", values: {} };
+  fields.appendChild(workbenchField(fakeResource, "displayName", "Definitie", workbenchSelect(draft.definitionMode, [
+    { value: "existing", label: "Gebruik bestaande Resource-definitie" },
+    { value: "new", label: "Maak nieuwe Resource-definitie" }
+  ], function (value) {
+    draft.definitionMode = value === "new" ? "new" : "existing";
+    renderWorkbench();
+  })));
+  if (draft.definitionMode === "new") {
+    fields.appendChild(workbenchField(fakeResource, "displayName", "Naam van de nieuwe Resource", workbenchTextInput(draft.definitionName, function (value) {
+      draft.definitionName = value;
+    }, { placeholder: "Bijv. Vleesbron" })));
+    fields.appendChild(workbenchField(fakeResource, "yieldItemRefs", "Opbrengst", workbenchSelect(draft.values.newYieldItemMode, [
+      { value: "existing", label: "Bestaand item" },
+      { value: "new", label: "Maak nieuw item" }
+    ], function (value) {
+      draft.values.newYieldItemMode = value === "new" ? "new" : "existing";
+      renderWorkbench();
+    })));
+    if (draft.values.newYieldItemMode === "new") {
+      fields.appendChild(workbenchField(fakeResource, "yieldItemRefs", "Naam van het nieuwe item", workbenchTextInput(draft.values.newYieldItemName, function (value) {
+        draft.values.newYieldItemName = value;
+      }, { placeholder: "Bijv. Meat" })));
+    } else {
+      fields.appendChild(workbenchFieldWrap(fakeResource, "yieldItemRefs", "Item dat je krijgt", buildReferencePickerField({ id: "workbench-resource-yield", type: "resource_definition", values: {} }, "yieldItemRefs", {
+        label: "Item", type: "reference", referenceKinds: ["item"], allowNull: true, required: true
+      }, draft.values.newYieldItemRef || null, {
+        onChange: function (value) {
+          draft.values.newYieldItemRef = value || "";
+          renderWorkbench();
+        },
+        onFocusNode: workbenchFocusReferenceNode,
+        hideAdvanced: true,
+        hideRawId: true,
+        rerender: false
+      })));
+    }
+  } else {
+    fields.appendChild(workbenchField(fakeResource, "resourceId", "Bestaande Resource-definitie", workbenchSelect(draft.definitionRef, workbenchDefinitionOptions("resource_definition", "Kies een Resource"), function (value) {
+      draft.definitionRef = value;
+    })));
+  }
+  fields.appendChild(workbenchField(context.model, "label", "Naam in de wereld", workbenchTextInput(draft.values?.name, function (value) {
+    draft.values.name = value;
+  }, { placeholder: nodeDisplayTitle(context.model) })));
+  fields.appendChild(workbenchField({ type: "resource_component", values: {} }, "yieldMultiplier", "Opbrengst x per oogst", workbenchTextInput(draft.values?.yieldMultiplier ?? 1, function (value) {
+    draft.values.yieldMultiplier = Math.max(0, Number(value) || 0);
+  }, { type: "number", min: 0, max: 1000, step: 0.1 })));
+  fields.appendChild(workbenchField({ type: "resource_component", values: {} }, "respawnPolicyOverrideRef", "Komt terug na (seconden)", workbenchTextInput(draft.values?.respawnSeconds ?? 30, function (value) {
+    draft.values.respawnSeconds = Math.max(1, Number(value) || 30);
+  }, { type: "number", min: 1, max: 86400, step: 1 })));
+  card.appendChild(fields);
+  const note = document.createElement("div");
+  note.className = "workbenchMeta";
+  note.textContent = "Het geselecteerde model blijft de enige mesh; bij een nieuwe Resource wordt dit GLB het wereldmodel. Daarna sleep je onderaan Items of een Loot Table op Opbrengst.";
+  card.appendChild(note);
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton("Resource maken", function () { void visualBuilderCommit(context.object, draft); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () {
+    state.visualBuilderDraft = null;
+    renderWorkbench();
+  }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
 function workbenchBeginEnemyEdit(enemy) {
   if (!enemy) return;
   state.workbenchEnemyEditNodeId = enemy.id;
@@ -16297,7 +16472,13 @@ function workbenchAssetField(enemy, draft, fieldName, assetTypes) {
     draft.values[fieldName] = value || null;
     renderWorkbench();
   });
-  wrap.appendChild(workbenchField(enemy, fieldName, fieldName === "modelAssetId" ? "3D-model" : "Icoon", select));
+  wrap.appendChild(workbenchField(enemy, fieldName, fieldName === "modelAssetId" ? "Model bij spawn-gebieden" : "Icoon", select));
+  if (fieldName === "modelAssetId") {
+    const note = document.createElement("div");
+    note.className = "workbenchMeta";
+    note.textContent = "Alleen voor enemies uit een spawn-gebied. Het geplaatste object houdt zijn eigen model; dat wijzig je met 'Kies 3D-model'.";
+    wrap.appendChild(note);
+  }
   const choose = document.createElement("button");
   choose.type = "button";
   choose.className = "mini";
@@ -16650,7 +16831,7 @@ function renderWorkbenchSelection(context) {
   const root = el.workbenchSelectionPanel;
   if (!root) return;
   root.innerHTML = "";
-  root.appendChild(workbenchHeader("Werkbank", "Selecteer een echt geplaatst model en beheer de Enemy → Loot-keten."));
+  root.appendChild(workbenchLeftHeader());
   if (!context.model) {
     const empty = document.createElement("div");
     empty.className = "workbenchEmpty";
@@ -16678,11 +16859,12 @@ function renderWorkbenchSelection(context) {
   name.textContent = nodeDisplayTitle(context.model);
   const meta = document.createElement("div");
   meta.className = "workbenchMeta";
-  meta.textContent = context.enemyComponent ? "Geplaatst model · Enemy" : "Geplaatst 3D-model";
+  meta.textContent = context.enemyComponent ? "Geplaatst model · Enemy" : context.resourceComponent ? "Geplaatst model · Resource" : "Geplaatst 3D-model";
   const badges = document.createElement("div");
   badges.className = "workbenchBadgeRow";
   badges.appendChild(workbenchBadge(modelAsset ? modelAsset.name : "3D-model ontbreekt", modelAsset ? "linked" : "warning"));
   if (context.enemyComponent) badges.appendChild(workbenchBadge("Enemy gekoppeld", "linked"));
+  if (context.resourceComponent) badges.appendChild(workbenchBadge("Resource gekoppeld", "linked"));
   body.append(name, meta, badges);
   hero.appendChild(body);
   root.appendChild(hero);
@@ -16699,22 +16881,33 @@ function renderWorkbenchSelection(context) {
     relations.appendChild(workbenchSelectionRelation("Enemy-modelbinding", enemyModelAsset?.name || "Geen modelasset op de definitie"));
     relations.appendChild(workbenchSelectionRelation("Icoon", iconAsset?.name || "Geen icoon gekoppeld"));
   }
-  relations.appendChild(workbenchSelectionRelation("Enemy-definitie", context.enemy ? nodeDisplayTitle(context.enemy) : (context.enemyRef ? "Ontbrekende Enemy-reference" : "Niet gekoppeld"), context.enemy ? function () { workbenchBeginEnemyEdit(context.enemy); } : null));
-  relations.appendChild(workbenchSelectionRelation("Loot Table", context.lootTable ? nodeDisplayTitle(context.lootTable) : (context.lootRef ? "Ontbrekende Loot Table-reference" : "Niet gekoppeld"), context.lootTable ? function () {
-    state.workbenchLibraryType = "loot";
-    renderWorkbench();
-  } : null));
+  if (context.resourceComponent) {
+    const resourceEntry = context.resource ? workbenchContentIndex().byNodeId.get(context.resource.id) : null;
+    relations.appendChild(workbenchSelectionRelation("Resource-definitie", resourceEntry ? resourceEntry.name : (context.resourceRef ? "Ontbrekende Resource-reference" : "Niet gekoppeld"), resourceEntry ? function () { workbenchSelectDefinition(resourceEntry.id, { showOverview: false }); } : null));
+    relations.appendChild(workbenchSelectionRelation("Opbrengst", resourceEntry ? (definitionFacts(workbenchContentIndex(), resourceEntry).props.join(" · ") || "Nog geen opbrengst") : "—"));
+  } else {
+    relations.appendChild(workbenchSelectionRelation("Enemy-definitie", context.enemy ? nodeDisplayTitle(context.enemy) : (context.enemyRef ? "Ontbrekende Enemy-reference" : "Niet gekoppeld"), context.enemy ? function () { workbenchBeginEnemyEdit(context.enemy); } : null));
+    relations.appendChild(workbenchSelectionRelation("Loot Table", context.lootTable ? nodeDisplayTitle(context.lootTable) : (context.lootRef ? "Ontbrekende Loot Table-reference" : "Niet gekoppeld"), context.lootTable ? function () {
+      state.workbenchLibraryType = "loot";
+      renderWorkbench();
+    } : null));
+  }
   root.appendChild(relations);
+  if (context.resourceRef && !context.resource) root.appendChild(workbenchWarning("De Resource-component verwijst naar een definitie die niet meer bestaat."));
   for (const issue of context.object?.issues || []) root.appendChild(workbenchWarning(issue.message));
   if (context.enemyRef && !context.enemy) root.appendChild(workbenchWarning("De Enemy-component verwijst naar een definitie die niet meer bestaat."));
   if (context.lootRef && !context.lootTable) root.appendChild(workbenchWarning("De Enemy-definitie verwijst naar een Loot Table die niet meer bestaat."));
   const existingRole = visualBuilderRoleForContext(context.object);
-  if (!context.enemyComponent && existingRole && existingRole !== "decoration") {
+  if (!context.enemyComponent && !context.resourceComponent && existingRole && existingRole !== "decoration") {
     root.appendChild(workbenchWarning("Dit model heeft al de wereldrol " + objectFunctionKindLabel(existingRole) + ". De Werkbank vervangt die rol niet stil; gebruik daarvoor de bestaande Visual Builder."));
   }
   const actions = document.createElement("div");
   actions.className = "workbenchActions";
-  if (!context.enemyComponent) {
+  if (context.resourceComponent) {
+    if (context.resource) {
+      actions.appendChild(workbenchMiniButton("Open Resource", function () { workbenchSelectDefinition(context.resource.id, { showOverview: false }); }, "primary"));
+    }
+  } else if (!context.enemyComponent) {
     const make = document.createElement("button");
     make.type = "button";
     make.className = "primary";
@@ -16722,6 +16915,9 @@ function renderWorkbenchSelection(context) {
     make.disabled = Boolean(existingRole && existingRole !== "decoration");
     make.addEventListener("click", function () { workbenchOpenEnemyCreate(context); });
     actions.appendChild(make);
+    const makeResource = workbenchMiniButton("Maak Resource", function () { workbenchOpenRoleCreate(context, "resource"); }, "primary");
+    makeResource.disabled = Boolean(existingRole && existingRole !== "decoration");
+    actions.appendChild(makeResource);
   } else if (context.enemy) {
     const edit = document.createElement("button");
     edit.type = "button";
@@ -16752,94 +16948,80 @@ function renderWorkbenchSelection(context) {
   root.appendChild(actions);
   const placedModelPicker = workbenchRenderPlacedModelPicker(context);
   if (placedModelPicker) root.appendChild(placedModelPicker);
-  const createCard = workbenchRenderEnemyCreate(context);
+  const createCard = workbenchRenderEnemyCreate(context) || workbenchRenderResourceCreate(context);
   if (createCard) root.appendChild(createCard);
   const editCard = workbenchRenderEnemyEditor(context);
   if (editCard) root.appendChild(editCard);
 }
 
-function workbenchLibraryWarning(node) {
-  if (node.type === "enemy_archetype") {
-    if (node.values?.modelAssetId && !assetById(node.values.modelAssetId)) return "3D-model ontbreekt";
-    const lootRef = normalizeCanonicalId(node.values?.lootTableRef, "");
-    if (lootRef && !referenceNodeForReferenceId(lootRef)) return "Loot Table ontbreekt";
-  }
-  if (node.type === "loot_table") {
-    const entries = questTimelineDirectSources(state.graph, node, "entries");
-    const invalid = entries.some(function (entry) {
-      const key = entry.type === "loot_item_entry" ? "itemRef" : entry.type === "loot_currency_entry" ? "currencyRef" : "lootTableRef";
-      const field = state.nodeTypes?.[entry.type]?.fields?.[key];
-      return field && referencePickerChoiceState(entry.values?.[key], field).state !== "ok";
-    });
-    if (invalid) return "Lootregel mist een geldige bron";
-  }
-  return "";
-}
-
-function renderWorkbenchLibraryCard(node, context) {
+function renderWorkbenchLibraryCard(entry, context, options = {}) {
   const card = document.createElement("article");
-  const isEnemy = node.type === "enemy_archetype";
-  const identity = managedNodeCanonicalIdentity(node);
-  const current = isEnemy ? context.enemy?.id === node.id : context.lootTable?.id === node.id;
-  card.className = "workbenchLibraryCard" + (current ? " current" : "");
-  if (!isEnemy) {
-    card.draggable = true;
-    card.addEventListener("dragstart", function (event) {
-      event.dataTransfer?.setData("application/x-gk-loot-table", identity);
-      event.dataTransfer?.setData("text/plain", identity);
-    });
-  }
-  const asset = isEnemy ? workbenchAssetForEnemy(node, null) : null;
-  card.appendChild(workbenchThumbnail(asset, isEnemy ? "Enemy" : "Loot"));
+  const index = workbenchContentIndex();
+  const focused = workbenchSelectedDefinition();
+  const current = focused ? focused.id === entry.id
+    : (entry.type === "enemy_archetype" ? context.enemy?.id === entry.id : entry.type === "loot_table" ? context.lootTable?.id === entry.id : false);
+  card.className = "workbenchLibraryCard workbenchContentCard" + (current ? " current" : "");
+  card.tabIndex = 0;
+  card.draggable = true;
+  card.title = entry.name + " · " + workbenchTypeLabel(entry.type);
+  card.addEventListener("dragstart", function (event) { workbenchStartDefinitionDrag(event, entry); });
+  card.addEventListener("dragend", workbenchEndDefinitionDrag);
+  card.appendChild(workbenchEntryThumb(entry));
+  const body = document.createElement("div");
+  body.className = "workbenchContentCardBody";
   const title = document.createElement("div");
   title.className = "workbenchName";
-  title.textContent = nodeDisplayTitle(node);
+  title.textContent = entry.name;
   const meta = document.createElement("div");
   meta.className = "workbenchMeta";
-  meta.textContent = isEnemy ? "Enemy-definitie" : "Loot Table";
+  const group = options.multipleCollections && entry.groupId ? index.nodeById.get(entry.groupId) : null;
+  meta.textContent = workbenchTypeLabel(entry.type) + (options.multipleCollections ? " · " + (group ? workbenchCollectionName(group) : "buiten Collectie") : "");
+  body.append(title, meta);
+  const facts = definitionFacts(index, entry);
+  if (facts.props.length) {
+    const props = document.createElement("div");
+    props.className = "workbenchCardProps";
+    for (const prop of facts.props) {
+      const line = document.createElement("div");
+      line.textContent = prop;
+      props.appendChild(line);
+    }
+    body.appendChild(props);
+  }
   const badges = document.createElement("div");
   badges.className = "workbenchBadgeRow";
-  const linked = isEnemy
-    ? (state.graph.nodes || []).some(function (candidate) { return candidate.type === "enemy_component" && normalizeCanonicalId(candidate.values?.enemyRef, "") === identity; })
-    : (state.graph.nodes || []).some(function (candidate) { return candidate.type === "enemy_archetype" && normalizeCanonicalId(candidate.values?.lootTableRef, "") === identity; });
-  badges.appendChild(workbenchBadge(linked ? "Gekoppeld" : "Niet gekoppeld", linked ? "linked" : ""));
-  const warningText = workbenchLibraryWarning(node);
-  if (warningText) badges.appendChild(workbenchBadge(warningText, "warning"));
-  card.append(title, meta, badges);
+  for (const count of facts.counts) badges.appendChild(workbenchBadge(count.label + " " + count.value, count.value ? "" : "muted"));
+  badges.appendChild(workbenchBadge(definitionIsUsed(entry) ? "Gebruikt" : "Ongebruikt", definitionIsUsed(entry) ? "linked" : "muted"));
+  for (const warning of workbenchEntryWarnings(entry).slice(0, 2)) badges.appendChild(workbenchBadge(warning, "warning"));
+  body.appendChild(badges);
+  card.appendChild(body);
   const actions = document.createElement("div");
   actions.className = "workbenchLibraryCardActions";
-  if (isEnemy && context.model && !context.enemyComponent) {
-    const use = document.createElement("button");
-    use.type = "button";
-    use.className = "mini";
-    use.textContent = "Gebruik voor model";
-    use.addEventListener("click", function () {
+  // W1 Enemy -> Loot route for the selected world model stays available.
+  if (!focused && entry.type === "enemy_archetype" && context.model && !context.enemyComponent) {
+    actions.appendChild(workbenchMiniButton("Gebruik voor model", function () {
       workbenchOpenEnemyCreate(context);
       const draft = visualBuilderDraftForContext(context.object);
       if (draft) {
         draft.definitionMode = "existing";
-        draft.definitionRef = identity;
+        draft.definitionRef = entry.ref;
         renderWorkbench();
       }
-    });
-    actions.appendChild(use);
+    }));
   }
-  if (!isEnemy && context.enemy) {
-    const link = document.createElement("button");
-    link.type = "button";
-    link.className = "mini";
-    link.textContent = current ? "Gekoppeld" : "Koppel";
+  if (!focused && entry.type === "loot_table" && context.enemy) {
+    const link = workbenchMiniButton(current ? "Gekoppeld" : "Koppel", function () { void workbenchLinkLootTable(context, entry.ref); });
     link.disabled = current;
-    link.addEventListener("click", function () { void workbenchLinkLootTable(context, identity); });
     actions.appendChild(link);
   }
-  const show = document.createElement("button");
-  show.type = "button";
-  show.className = "mini";
-  show.textContent = "Toon in nodes";
-  show.addEventListener("click", function () { workbenchShowNode(node.id); });
-  actions.appendChild(show);
-  card.appendChild(actions);
+  if (actions.childElementCount) card.appendChild(actions);
+  card.addEventListener("click", function (event) {
+    if (event.target.closest("button")) return;
+    workbenchSelectDefinition(entry.id);
+  });
+  card.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && event.target === card) workbenchSelectDefinition(entry.id);
+  });
   return card;
 }
 
@@ -16847,30 +17029,27 @@ function renderWorkbenchLibrary(context) {
   const root = el.workbenchLibraryPanel;
   if (!root) return;
   root.innerHTML = "";
-  root.appendChild(workbenchHeader("Visual Game Library", "Bestaande assets en graphdefinities; er wordt geen kopie opgeslagen."));
+  const index = workbenchContentIndex();
   const controls = document.createElement("div");
   controls.className = "workbenchLibraryControls";
   const tabs = document.createElement("div");
-  tabs.className = "workbenchLibraryTabs";
-  for (const type of [
-    { value: "assets", label: "Assets" },
-    { value: "enemy", label: "Enemies" },
-    { value: "loot", label: "Loot Tables" }
-  ]) {
+  tabs.className = "workbenchLibraryTabs workbenchCategoryTabs";
+  const tabEntries = [{ id: "assets", label: "Assets" }].concat(WORKBENCH_CATEGORIES);
+  for (const category of tabEntries) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = state.workbenchLibraryType === type.value ? "primary" : "ghost";
-    button.textContent = type.label;
-    button.addEventListener("click", function () { state.workbenchLibraryType = type.value; renderWorkbench(); });
+    button.className = "workbenchCategoryTab" + (state.workbenchLibraryType === category.id ? " active" : "");
+    button.textContent = category.label + (category.id === "assets" ? "" : " " + (index.counts[category.id] || 0));
+    button.setAttribute("aria-pressed", state.workbenchLibraryType === category.id ? "true" : "false");
+    button.addEventListener("click", function () {
+      state.workbenchLibraryType = category.id;
+      renderWorkbench();
+    });
     tabs.appendChild(button);
   }
   controls.appendChild(tabs);
   root.appendChild(controls);
   if (state.workbenchLibraryType === "assets") {
-    const help = document.createElement("div");
-    help.className = "workbenchMeta";
-    help.textContent = "Sleep bestanden hierheen om ze te importeren. Sleep daarna een GLB naar de viewport of klik op het plaats-icoon; selecteer het geplaatste model en kies Maak Enemy.";
-    root.appendChild(help);
     renderAssets();
     return;
   }
@@ -16882,25 +17061,29 @@ function renderWorkbenchLibrary(context) {
   search.addEventListener("input", function () {
     state.workbenchSearch = search.value;
     renderWorkbenchLibrary(workbenchContext());
+    scheduleWorkbenchOverviewRender();
     const next = el.workbenchLibraryPanel?.querySelector(".workbenchSearch");
     if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
   });
   controls.appendChild(search);
-  const nodeType = state.workbenchLibraryType === "loot" ? "loot_table" : "enemy_archetype";
+  const type = workbenchCategoryType(state.workbenchLibraryType);
   const query = normalizeEditorKey(state.workbenchSearch);
-  const all = (state.graph.nodes || []).filter(function (node) {
-    if (node.type !== nodeType) return false;
-    return !query || normalizeEditorKey(nodeDisplayTitle(node)).includes(query);
+  const all = index.definitions.filter(function (entry) {
+    if (type && entry.type !== type) return false;
+    return !query || normalizeEditorKey(entry.name).includes(query);
   }).sort(function (left, right) {
-    return nodeDisplayTitle(left).localeCompare(nodeDisplayTitle(right), "nl", { sensitivity: "base" });
+    return left.name.localeCompare(right.name, "nl", { sensitivity: "base" });
   });
   const grid = document.createElement("div");
-  grid.className = "workbenchLibraryGrid";
-  for (const node of all.slice(0, WORKBENCH_LIBRARY_LIMIT)) grid.appendChild(renderWorkbenchLibraryCard(node, context));
+  grid.className = "workbenchLibraryGrid workbenchContentList";
+  const cardOptions = { multipleCollections: workbenchCollections().length > 1 };
+  for (const entry of all.slice(0, WORKBENCH_LIBRARY_LIMIT)) grid.appendChild(renderWorkbenchLibraryCard(entry, context, cardOptions));
   if (!all.length) {
     const empty = document.createElement("div");
     empty.className = "workbenchEmpty";
-    empty.textContent = query ? "Geen definities gevonden." : (nodeType === "loot_table" ? "Nog geen Loot Tables in de graph." : "Nog geen Enemies in de graph.");
+    empty.textContent = query
+      ? "Geen definities gevonden."
+      : "Nog geen " + (WORKBENCH_CATEGORIES.find(function (entry) { return entry.id === state.workbenchLibraryType; })?.label || "definities") + " in de graph. Gebruik + Nieuwe definitie.";
     root.appendChild(empty);
   } else {
     root.appendChild(grid);
@@ -16908,7 +17091,7 @@ function renderWorkbenchLibrary(context) {
   if (all.length > WORKBENCH_LIBRARY_LIMIT) {
     const more = document.createElement("div");
     more.className = "workbenchLibraryMore";
-    more.textContent = "Toont de eerste " + WORKBENCH_LIBRARY_LIMIT + " resultaten. Verfijn de zoekterm.";
+    more.textContent = "Toont de eerste " + WORKBENCH_LIBRARY_LIMIT + " van " + all.length + " resultaten. Verfijn de zoekterm.";
     root.appendChild(more);
   }
 }
@@ -16942,6 +17125,10 @@ function renderWorkbenchRelationStrip(context) {
     root.appendChild(workbenchWarning("Selecteer een geplaatst model om de relatie Wereldobject → Enemy-definitie → Loot Table → Loot-regels te zien."));
     return;
   }
+  if (context.resourceComponent) {
+    renderWorkbenchResourceObjectStrip(context, root);
+    return;
+  }
   const flow = document.createElement("div");
   flow.className = "workbenchRelationFlow";
   const arrow = function () {
@@ -16963,7 +17150,7 @@ function renderWorkbenchRelationStrip(context) {
     onClick: function () { state.workbenchLibraryType = "loot"; renderWorkbench(); }
   });
   lootCard.addEventListener("dragover", function (event) {
-    if (!context.enemy) return;
+    if (!context.enemy || !Array.from(event.dataTransfer?.types || []).includes("application/x-gk-loot-table")) return;
     event.preventDefault();
     lootCard.classList.add("dropReady");
   });
@@ -16971,8 +17158,8 @@ function renderWorkbenchRelationStrip(context) {
   lootCard.addEventListener("drop", function (event) {
     event.preventDefault();
     lootCard.classList.remove("dropReady");
-    const ref = event.dataTransfer?.getData("application/x-gk-loot-table") || event.dataTransfer?.getData("text/plain") || "";
-    if (ref) void workbenchLinkLootTable(context, ref);
+    const ref = event.dataTransfer?.getData("application/x-gk-loot-table") || "";
+    if (ref && workbenchContentIndex().resolve(ref)?.type === "loot_table") void workbenchLinkLootTable(context, ref);
   });
   flow.appendChild(lootCard);
   flow.appendChild(arrow());
@@ -17018,13 +17205,2318 @@ function renderWorkbenchRelationStrip(context) {
 
 function renderWorkbench() {
   if (!el.workbenchSelectionPanel || !el.workbenchLibraryPanel || !el.workbenchRelationStrip) return;
-  document.body.classList.toggle("workbenchMode", state.editorMode === "workbench");
-  document.body.classList.toggle("workbenchAssetsOpen", state.editorMode === "workbench" && state.workbenchLibraryType === "assets");
-  if (state.editorMode !== "workbench") return;
-  const context = workbenchContext();
-  renderWorkbenchSelection(context);
-  renderWorkbenchLibrary(context);
-  renderWorkbenchRelationStrip(context);
+  const inWorkbench = state.editorMode === "workbench";
+  document.body.classList.toggle("workbenchMode", inWorkbench);
+  document.body.classList.toggle("workbenchAssetsOpen", inWorkbench && state.workbenchLibraryType === "assets");
+  document.body.classList.toggle("workbenchStageOverview", inWorkbench && state.workbenchStage === "overview");
+  if (!inWorkbench) return;
+  // Runs after every graph mutation: a drawing error must never cancel the
+  // mutation's history entry, so it is reported instead of thrown.
+  try {
+    const context = workbenchContext();
+    const definition = workbenchSelectedDefinition();
+    if (state.workbenchCreateDraft) renderWorkbenchCreatePanel(context);
+    else if (definition) renderWorkbenchDefinitionPanel(definition, context);
+    else renderWorkbenchSelection(context);
+    renderWorkbenchLibrary(context);
+    if (definition) renderWorkbenchDefinitionFlow(definition, context);
+    else renderWorkbenchRelationStrip(context);
+    if (state.workbenchStage === "overview") renderWorkbenchOverview(context, definition);
+  } catch (error) {
+    console.error("Werkbank render failed", error);
+    setStatus("Werkbank kon niet volledig tekenen: " + (error?.message || error), "error");
+  }
+}
+
+// ---------- Visual Content Workbench W2 ----------
+// A visual projection of the real graph. Cards, overview and flows read the
+// derived content index (content-workbench.js); every change goes through the
+// existing managed catalog mutations, patchValues or restoreGraphObject, so
+// history, validation, Save Draft and publish stay the only routes.
+
+let workbenchContentIndexCache = { graph: null, nodeCount: -1, edgeCount: -1, revision: null, nodeTypes: null, index: null };
+let workbenchAssetMapCache = { assets: null, length: -1, map: new Map() };
+let workbenchDragPayload = null;
+let workbenchDragAssetId = "";
+let workbenchOverviewSignature = "";
+let workbenchOverviewRelations = [];
+let workbenchOverviewLinkFrame = 0;
+let workbenchOverviewRenderTimer = 0;
+let workbenchOverviewResizeObserver = null;
+let workbenchOverviewIndexStamp = null;
+
+const WORKBENCH_CREATE_TYPES = ["item_definition", "currency_definition", "resource_definition", "recipe_definition", "vendor_catalog", "loot_table", "enemy_archetype", "npc_archetype", "ability_definition", "stat_definition"];
+const WORKBENCH_INLINE_FIELD_TYPES = new Set(["text", "tokenText", "number", "boolean", "select", "reference", "referenceList", "tagList"]);
+const WORKBENCH_FIELD_LABELS = {
+  displayName: "Naam", role: "Rol", statBlockRef: "Stat Block", lootTableRef: "Loot Table", scale: "Schaal",
+  yieldItemRefs: "Opbrengst-items", yieldLootTableRef: "Oogst-loot", requiredAbilityRef: "Vereiste ability",
+  category: "Categorie", stackable: "Stapelbaar", rarity: "Zeldzaamheid", craftDurationMs: "Crafttijd (ms)",
+  unlockMode: "Beschikbaarheid", abilityType: "Type", range: "Bereik", cooldownMs: "Cooldown (ms)",
+  valueType: "Waardetype", minimum: "Minimum", maximum: "Maximum", defaultValue: "Startwaarde",
+  showInPrimaryWallet: "Zichtbaar in wallet", sortOrder: "Volgorde in wallet"
+};
+
+function workbenchContentIndex() {
+  const graph = state.graph || { nodes: [], edges: [] };
+  const cache = workbenchContentIndexCache;
+  const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : 0;
+  const edgeCount = Array.isArray(graph.edges) ? graph.edges.length : 0;
+  if (cache.index && cache.graph === graph && cache.nodeCount === nodeCount && cache.edgeCount === edgeCount
+    && cache.revision === graph.graphRevision && cache.nodeTypes === state.nodeTypes) {
+    return cache.index;
+  }
+  const index = buildContentIndex(graph, state.nodeTypes || {});
+  workbenchContentIndexCache = { graph, nodeCount, edgeCount, revision: graph.graphRevision, nodeTypes: state.nodeTypes, index };
+  return index;
+}
+
+function workbenchAsset(assetId) {
+  if (!assetId) return null;
+  const cache = workbenchAssetMapCache;
+  if (cache.assets !== state.assets || cache.length !== state.assets.length) {
+    workbenchAssetMapCache = {
+      assets: state.assets,
+      length: state.assets.length,
+      map: new Map(state.assets.map(function (asset) { return [asset.id, asset]; }))
+    };
+  }
+  return workbenchAssetMapCache.map.get(assetId) || null;
+}
+
+function workbenchTypeLabel(type) {
+  return CONTENT_TYPE_SPECS[type]?.label || state.nodeTypes?.[type]?.label || type;
+}
+
+function workbenchAssetRoleLabel(type, key, field) {
+  if (type === "enemy_archetype" && key === "modelAssetId") return "Model bij spawn-gebieden";
+  return ASSET_ROLE_LABELS[key] || field?.label || key;
+}
+
+function workbenchFieldLabel(type, key) {
+  return WORKBENCH_FIELD_LABELS[key] || ASSET_ROLE_LABELS[key] || state.nodeTypes?.[type]?.fields?.[key]?.label || key;
+}
+
+function workbenchCategoryType(categoryId) {
+  return WORKBENCH_CATEGORIES.find(function (category) { return category.id === categoryId; })?.type || "";
+}
+
+function workbenchMiniButton(label, onClick, className = "mini") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", function (event) {
+    event.stopPropagation();
+    onClick(event);
+  });
+  return button;
+}
+
+function workbenchEntryAsset(entry) {
+  const index = workbenchContentIndex();
+  const fromEntry = function (candidate, requireThumb) {
+    for (const key of candidate?.spec?.thumbAssets || []) {
+      const asset = workbenchAsset(candidate.node.values?.[key]);
+      if (asset && (!requireThumb || asset.thumbnailPath)) return asset;
+    }
+    return null;
+  };
+  const own = fromEntry(entry, true);
+  if (own) return own;
+  for (const id of thumbnailStandIns(entry)) {
+    const standIn = fromEntry(index.byNodeId.get(id), true);
+    if (standIn) return standIn;
+  }
+  return fromEntry(entry, false);
+}
+
+function workbenchEntryThumb(entry, extraClass = "") {
+  const thumb = workbenchThumbnail(entry ? workbenchEntryAsset(entry) : null, entry?.spec?.badge || "?");
+  if (extraClass) thumb.classList.add(extraClass);
+  if (entry?.spec?.color) thumb.style.setProperty("--wb-type-color", entry.spec.color);
+  return thumb;
+}
+
+function workbenchMissingText(entry, missing) {
+  const field = state.nodeTypes?.[entry.type]?.fields?.[missing.field];
+  const label = missing.label && missing.label !== missing.field ? missing.label : workbenchFieldLabel(entry.type, missing.field) || field?.label;
+  if (missing.reason === "empty") return label + " mist een keuze.";
+  if (missing.reason === "type") return label + " verwijst naar een verkeerd soort definitie.";
+  return label + " verwijst naar iets dat niet meer bestaat.";
+}
+
+function workbenchEntryWarnings(entry) {
+  const warnings = [];
+  for (const [key, field] of Object.entries(state.nodeTypes?.[entry.type]?.fields || {})) {
+    if (field?.type !== "asset") continue;
+    const assetId = entry.node.values?.[key];
+    if (assetId && !workbenchAsset(assetId)) warnings.push((ASSET_ROLE_LABELS[key] || field.label || key) + " ontbreekt");
+  }
+  if (entry.missing.length) warnings.push(entry.missing.length === 1 ? "Ontbrekende reference" : entry.missing.length + " ontbrekende references");
+  if (!entry.packaged) warnings.push("Niet in package");
+  return warnings;
+}
+
+function workbenchCollections() {
+  return (state.graph.nodes || []).filter(function (node) {
+    return node.type === "group" && normalizeEditorKey(node.values?.groupKind) === "catalog";
+  }).sort(function (left, right) {
+    return workbenchCollectionName(left).localeCompare(workbenchCollectionName(right), "nl", { sensitivity: "base" });
+  });
+}
+
+function workbenchCollectionName(group) {
+  return String(group?.values?.title || group?.title || "").trim() || "Collectie";
+}
+
+function workbenchCatalogGroupFor(node) {
+  const group = node?.parentId ? graphNodeByIdInGraph(state.graph, node.parentId) : null;
+  return group?.type === "group" && normalizeEditorKey(group.values?.groupKind) === "catalog" ? group : null;
+}
+
+function workbenchSelectedDefinition() {
+  const id = state.workbenchDefinitionId;
+  if (!id) return null;
+  const entry = workbenchContentIndex().byNodeId.get(id) || null;
+  if (!entry && state.graphLoaded) {
+    state.workbenchDefinitionId = null;
+    storeWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY, "");
+  }
+  return entry;
+}
+
+function workbenchSelectDefinition(nodeId, options = {}) {
+  const next = nodeId || null;
+  if (state.workbenchDefinitionId !== next) {
+    state.workbenchDefinitionDraft = null;
+    state.workbenchRowDraft = null;
+    state.workbenchDropNotice = null;
+    state.workbenchDeleteNodeId = null;
+    state.workbenchAssetSlotPicker = "";
+    state.workbenchUsageOpen = false;
+  }
+  state.workbenchDefinitionId = next;
+  storeWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY, next || "");
+  if (next) state.workbenchCreateDraft = null;
+  if (next && options.showOverview !== false && state.workbenchStage !== "overview") setWorkbenchStage("overview", { render: false });
+  workbenchOverviewSignature = "";
+  if (options.render !== false) renderWorkbench();
+}
+
+function setWorkbenchStage(stage, options = {}) {
+  const next = stage === "overview" ? "overview" : "world";
+  const changed = state.workbenchStage !== next;
+  state.workbenchStage = next;
+  storeWorkbenchValue(WORKBENCH_STAGE_STORAGE_KEY, next);
+  workbenchOverviewSignature = "";
+  if (options.render !== false) renderWorkbench();
+  if (changed && next === "world") {
+    requestAnimationFrame(function () {
+      window.dispatchEvent(new Event("resize"));
+      resizeRuntimeAfterLayout();
+    });
+  }
+}
+
+function workbenchStartDefinitionDrag(event, entry) {
+  workbenchDragPayload = { nodeId: entry.id, type: entry.type, ref: entry.ref };
+  if (!event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "copyLink";
+  event.dataTransfer.setData("application/x-gk-definition", JSON.stringify(workbenchDragPayload));
+  event.dataTransfer.setData("text/plain", entry.name);
+  // W1: a Loot Table card still drops on the Enemy -> Loot slot of a model.
+  if (entry.type === "loot_table") event.dataTransfer.setData("application/x-gk-loot-table", entry.ref);
+}
+
+function workbenchEndDefinitionDrag() {
+  workbenchDragPayload = null;
+  for (const element of document.querySelectorAll(".workbenchDropReady")) element.classList.remove("workbenchDropReady");
+}
+
+function workbenchDropPayload(event) {
+  if (workbenchDragPayload) return workbenchDragPayload;
+  try {
+    const raw = event.dataTransfer?.getData("application/x-gk-definition");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Context-sensitive drop target: highlights only for payloads it accepts.
+function workbenchIsDefinitionDrag(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("application/x-gk-definition");
+}
+
+function workbenchAttachDrop(element, accepts, onDrop) {
+  element.addEventListener("dragover", function (event) {
+    const payload = workbenchIsDefinitionDrag(event) ? workbenchDragPayload : null;
+    if (!payload || !accepts(payload)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "link";
+    element.classList.add("workbenchDropReady");
+  });
+  element.addEventListener("dragleave", function (event) {
+    if (event.relatedTarget && element.contains(event.relatedTarget)) return;
+    element.classList.remove("workbenchDropReady");
+  });
+  element.addEventListener("drop", function (event) {
+    const payload = workbenchIsDefinitionDrag(event) ? workbenchDropPayload(event) : null;
+    element.classList.remove("workbenchDropReady");
+    if (!payload || !accepts(payload)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    workbenchDragPayload = null;
+    onDrop(payload);
+  });
+}
+
+function workbenchAttachAssetDrop(element, assetTypes, onDrop) {
+  const fits = function () {
+    const asset = workbenchAsset(workbenchDragAssetId);
+    return Boolean(asset && assetTypes.includes(asset.assetType));
+  };
+  element.addEventListener("dragover", function (event) {
+    if (!Array.from(event.dataTransfer?.types || []).includes("text/gk-asset") || !fits()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    element.classList.add("workbenchDropReady");
+  });
+  element.addEventListener("dragleave", function (event) {
+    if (event.relatedTarget && element.contains(event.relatedTarget)) return;
+    element.classList.remove("workbenchDropReady");
+  });
+  element.addEventListener("drop", function (event) {
+    element.classList.remove("workbenchDropReady");
+    const assetId = event.dataTransfer?.getData("text/gk-asset") || "";
+    const asset = workbenchAsset(assetId);
+    if (!asset || !assetTypes.includes(asset.assetType)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onDrop(asset);
+  });
+}
+
+function workbenchShowDefinitionNodes(entry) {
+  if (!entry) return;
+  const ids = [entry.id].concat(entry.children.map(function (child) { return child.id; }));
+  const output = (state.graph.nodes || []).find(function (node) {
+    return node.type === "catalog_output" && (node.parentId || null) === (entry.node.parentId || null)
+      && (state.graph.edges || []).some(function (edge) { return edge.fromNodeId === entry.id && edge.toNodeId === node.id; });
+  });
+  if (output) ids.push(output.id);
+  if (state.currentGroupId !== (entry.node.parentId || null)) {
+    state.currentGroupId = entry.node.parentId || null;
+    syncBreadcrumb();
+  }
+  state.visualObjectNodeScope = { modelId: "definition:" + entry.id, parentId: entry.node.parentId || null, nodeIds: ids };
+  setEditorMode("nodes");
+  renderGraph();
+  requestAnimationFrame(fitGraphViewToNodes);
+  setStatus("Nodes tonen alleen het pakket van " + entry.name + ". Klik op een lege plek in de 3D-viewport of open de Werkbank om weer alle nodes te zien.", "");
+}
+
+function workbenchShowWorldNode(nodeId) {
+  const node = nodeId ? graphNodeByIdInGraph(state.graph, nodeId) : null;
+  if (!node) return;
+  workbenchSelectDefinition(null, { render: false, showOverview: false });
+  setWorkbenchStage("world", { render: false });
+  if (node.type === "model_entity") {
+    workbenchShowWorld(node);
+  } else {
+    selectNode(node.id, false, { clearPendingEdge: true });
+    requestAnimationFrame(focusViewportSelection);
+  }
+  renderWorkbench();
+}
+
+function workbenchFieldInactive(type, key) {
+  const status = fieldRuntimeStatus(type, key);
+  if (status) return status === "inactive";
+  const entry = semanticFieldHelpEntry(createSemanticFieldHelpRegistry(state.nodeTypes || {}), type, key);
+  return entry?.status === FIELD_HELP_STATUSES.INACTIVE || entry?.status === FIELD_HELP_STATUSES.COMPILED;
+}
+
+function workbenchInactiveBadge(text = "Nog niet actief") {
+  const badge = workbenchBadge(text, "inactive");
+  badge.title = "Deze waarde wordt opgeslagen en gecompileerd, maar de huidige game-runtime leest haar (nog) niet.";
+  return badge;
+}
+
+function workbenchFieldWrap(node, key, labelText, control) {
+  if (control && ["INPUT", "SELECT", "TEXTAREA"].includes(control.tagName)) return workbenchField(node, key, labelText, control);
+  // Pickers and checkboxes stay outside a <label>, so a click on empty space
+  // never activates a button inside the picker.
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchField wide";
+  wrap.append(workbenchSemanticLabel(node, key, labelText), control);
+  return wrap;
+}
+
+function workbenchLabeledField(type, key, labelText, control, fakeNode = null) {
+  const field = workbenchFieldWrap(fakeNode || { type, values: {} }, key, labelText || workbenchFieldLabel(type, key), control);
+  if (workbenchFieldInactive(type, key)) field.querySelector(".workbenchFieldLabel")?.appendChild(workbenchInactiveBadge());
+  return field;
+}
+
+function workbenchReferenceDisplay(value, field) {
+  const choice = referencePickerChoiceState(value, field);
+  if (choice.state === "ok") return choice.displayLabel;
+  if (choice.state === "empty") return "Niet gekoppeld";
+  return choice.rawId ? "Ontbrekende verwijzing" : "Niet gekoppeld";
+}
+
+function workbenchFieldDisplayValue(type, key, field, value) {
+  if (!field) return "—";
+  if (field.type === "boolean") return value === true ? "Ja" : "Nee";
+  if (field.type === "select") return optionLabel(type, key, value ?? field.default ?? "") || "—";
+  if (field.type === "reference") return workbenchReferenceDisplay(value, field);
+  if (field.type === "referenceList") {
+    const refs = normalizeReferenceList(value);
+    return refs.length ? refs.map(function (ref) { return workbenchReferenceDisplay(ref, Object.assign({}, field, { type: "reference" })); }).join(", ") : "Geen";
+  }
+  if (field.type === "number") return /Ms$/.test(key) ? formatDuration(value ?? field.default ?? 0) : formatNumber(value ?? field.default ?? 0);
+  if (field.type === "tagList") return normalizeTagList(value).join(", ") || "—";
+  if (field.type === "asset") return workbenchAsset(value)?.name || (value ? "Ontbrekende asset" : "Geen asset");
+  return String(value ?? "").trim() || "—";
+}
+
+async function workbenchPatchNode(node, patch, historyLabel, options = {}) {
+  if (!node || !patch || !Object.keys(patch).length) return null;
+  return await patchValues(node.id, patch, {
+    historyLabel,
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus(historyLabel + ".", "success");
+      if (typeof options.afterApply === "function") options.afterApply();
+    }
+  });
+}
+
+// Definition edits keep node.title in sync with the human name, exactly like
+// the managed Catalog route, in one restore (= one history entry).
+async function workbenchRestoreDefinition(node, patch, historyLabel, options = {}) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const nextNode = graphNodeByIdInGraph(nextGraph, node.id);
+  if (!nextNode) {
+    setStatus("Deze definitie bestaat niet meer.", "error");
+    return null;
+  }
+  nextNode.values = Object.assign({}, nextNode.values || {}, clonePlain(patch));
+  const name = String(patch.displayName || "").trim();
+  if (name) nextNode.title = name;
+  return await restoreGraphObject(nextGraph, {
+    historyLabel,
+    refreshViewport: VIEWPORT_AFFECTING_NODE_TYPES.has(node.type),
+    refreshValidation: true,
+    afterApply: function () {
+      setStatus(historyLabel + ".", "success");
+      if (typeof options.afterApply === "function") options.afterApply();
+    }
+  });
+}
+
+function workbenchDuplicateName(type, name, groupId, ignoreNodeId = "") {
+  const key = normalizeEditorKey(name);
+  return workbenchContentIndex().definitions.find(function (entry) {
+    return entry.type === type && entry.groupId === groupId && entry.id !== ignoreNodeId && normalizeEditorKey(entry.name) === key;
+  }) || null;
+}
+
+// ---- Left panel header: + Nieuwe definitie, title and Wereld | Contentoverzicht ----
+
+function workbenchStageTabs() {
+  const tabs = document.createElement("div");
+  tabs.className = "workbenchStageTabs";
+  for (const option of [{ id: "world", label: "Wereld" }, { id: "overview", label: "Contentoverzicht" }]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "workbenchStageTab" + (state.workbenchStage === option.id ? " active" : "");
+    button.textContent = option.label;
+    button.setAttribute("aria-pressed", state.workbenchStage === option.id ? "true" : "false");
+    button.addEventListener("click", function () { setWorkbenchStage(option.id); });
+    tabs.appendChild(button);
+  }
+  return tabs;
+}
+
+function workbenchLeftHeader(options = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchLeftHeader";
+  if (!options.hideCreate) {
+    const create = document.createElement("button");
+    create.type = "button";
+    create.className = "primary workbenchCreateButton";
+    create.textContent = "+ Nieuwe definitie";
+    create.addEventListener("click", function () { workbenchBeginCreate(workbenchCategoryType(state.workbenchLibraryType)); });
+    wrap.appendChild(create);
+  }
+  wrap.appendChild(workbenchStageTabs());
+  return wrap;
+}
+
+// ---- Definition panel (left) ----
+
+function workbenchRecipeStations(entry) {
+  const stationType = normalizeCanonicalId(entry.node.values?.stationType, "crafting.station");
+  let count = 0;
+  for (const node of state.graph.nodes || []) {
+    if (node.type !== "crafting_station_component") continue;
+    const refs = normalizeReferenceList(node.values?.recipeRefs);
+    if (refs.length ? refs.includes(entry.ref) : normalizeCanonicalId(node.values?.stationType, "crafting.station") === stationType) count += 1;
+  }
+  return { stationType, count };
+}
+
+function renderWorkbenchDefinitionProperties(entry) {
+  const list = document.createElement("div");
+  list.className = "workbenchRelationList";
+  const fields = state.nodeTypes?.[entry.type]?.fields || {};
+  for (const key of entry.spec.keyFields || []) {
+    if (key === "displayName" || !fields[key]) continue;
+    const card = workbenchSelectionRelation(workbenchFieldLabel(entry.type, key), workbenchFieldDisplayValue(entry.type, key, fields[key], entry.node.values?.[key]));
+    if (workbenchFieldInactive(entry.type, key)) card.querySelector(".workbenchRelationLabel")?.appendChild(workbenchInactiveBadge());
+    list.appendChild(card);
+  }
+  if (entry.type === "recipe_definition") {
+    const stations = workbenchRecipeStations(entry);
+    list.appendChild(workbenchSelectionRelation("Crafting station", stations.count
+      ? "Craftbaar bij " + stations.count + " station" + (stations.count === 1 ? "" : "s") + " in de wereld"
+      : "Nog geen crafting station in de wereld dat deze recipe aanbiedt"));
+  }
+  for (const via of entry.vias) {
+    const card = workbenchSelectionRelation(via.type === "stat_block" ? "Stats horen bij Stat Block" : "Abilities via Combat Profile", via.name, function () { workbenchShowNode(via.nodeId); });
+    if (!via.active) card.querySelector(".workbenchRelationLabel")?.appendChild(workbenchInactiveBadge());
+    list.appendChild(card);
+  }
+  return list;
+}
+
+function workbenchUsageRows(entry) {
+  const index = workbenchContentIndex();
+  const rows = [];
+  const seenDefinitions = new Set();
+  for (const relation of entry.in) {
+    if (seenDefinitions.has(relation.from)) continue;
+    seenDefinitions.add(relation.from);
+    const owner = index.byNodeId.get(relation.from);
+    if (owner) rows.push({ label: owner.name, meta: workbenchTypeLabel(owner.type), definitionId: owner.id });
+  }
+  for (const usage of entry.usage) {
+    if (usage.area === "definition") {
+      if (usage.ownerId && !seenDefinitions.has(usage.ownerId)) {
+        seenDefinitions.add(usage.ownerId);
+        const owner = index.byNodeId.get(usage.ownerId);
+        if (owner) rows.push({ label: owner.name, meta: workbenchTypeLabel(owner.type), definitionId: owner.id });
+      }
+      continue;
+    }
+    const source = index.nodeById.get(usage.sourceId);
+    const model = usage.modelId ? index.nodeById.get(usage.modelId) : null;
+    const typeLabel = state.nodeTypes?.[usage.sourceType]?.label || usage.sourceType;
+    rows.push({
+      label: model ? nodeDisplayTitle(model) : (definitionNameForNode(source) || typeLabel),
+      meta: (usage.area === "world" ? "Wereld · " : usage.area === "quest" ? "Quest/dialoog · " : "") + typeLabel + " · " + usage.fieldLabel,
+      worldNodeId: model ? model.id : (usage.area === "world" && VIEWPORT_AFFECTING_NODE_TYPES.has(usage.sourceType) ? usage.sourceId : ""),
+      nodeId: usage.sourceId
+    });
+  }
+  return rows;
+}
+
+function definitionNameForNode(node) {
+  if (!node) return "";
+  return String(node.values?.displayName || node.values?.label || node.values?.title || node.title || "").trim();
+}
+
+function renderWorkbenchUsageList(entry) {
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = "Waar gebruikt";
+  wrap.appendChild(title);
+  const rows = workbenchUsageRows(entry);
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "workbenchMeta";
+    empty.textContent = "Nog nergens gebruikt. Deze definitie is los/ongebruikt.";
+    wrap.appendChild(empty);
+    return wrap;
+  }
+  const list = document.createElement("div");
+  list.className = "workbenchRelationList";
+  for (const row of rows.slice(0, 30)) {
+    const card = workbenchSelectionRelation(row.meta, row.label, row.definitionId
+      ? function () { workbenchSelectDefinition(row.definitionId); }
+      : row.worldNodeId ? function () { workbenchShowWorldNode(row.worldNodeId); } : function () { workbenchShowNode(row.nodeId); });
+    list.appendChild(card);
+  }
+  wrap.appendChild(list);
+  if (rows.length > 30) {
+    const more = document.createElement("div");
+    more.className = "workbenchMeta";
+    more.textContent = "+" + (rows.length - 30) + " meer.";
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+function renderWorkbenchDeleteWarning(entry) {
+  const group = entry.groupId ? graphNodeByIdInGraph(state.graph, entry.groupId) : null;
+  const rows = workbenchUsageRows(entry);
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard workbenchDangerCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = rows.length ? "Let op: deze definitie wordt gebruikt" : "Definitie verwijderen";
+  card.appendChild(title);
+  const text = document.createElement("div");
+  text.className = "workbenchMeta";
+  text.textContent = rows.length
+    ? "Gebruikt door " + rows.length + " onderdeel/onderdelen, onder andere: " + rows.slice(0, 5).map(function (row) { return row.label; }).join(", ") + ". Na verwijderen verwijzen die naar iets dat niet meer bestaat."
+    : "Deze definitie wordt nergens gebruikt" + (entry.children.length ? "; haar " + entry.children.length + " eigen regel(s) worden mee verwijderd." : ".");
+  card.appendChild(text);
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  const confirm = workbenchMiniButton(rows.length ? "Toch verwijderen" : "Verwijderen", function () {
+    if (!group) {
+      setStatus("Deze definitie staat buiten een Group; verwijder haar via Nodes.", "error");
+      return;
+    }
+    void deleteManagedNode("catalog", group, entry.node, {
+      preserveEditorContext: true,
+      afterApply: function () {
+        state.workbenchDeleteNodeId = null;
+        if (state.workbenchDefinitionId === entry.id) workbenchSelectDefinition(null, { render: false, showOverview: false });
+      }
+    });
+  }, "deleteNode");
+  const cancel = workbenchMiniButton("Annuleren", function () {
+    state.workbenchDeleteNodeId = null;
+    renderWorkbench();
+  }, "ghost");
+  actions.append(confirm, cancel);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderWorkbenchDefinitionPanel(entry, context) {
+  const root = el.workbenchSelectionPanel;
+  if (!root) return;
+  root.innerHTML = "";
+  const group = workbenchCatalogGroupFor(entry.node);
+  root.appendChild(workbenchLeftHeader());
+  const nav = document.createElement("div");
+  nav.className = "workbenchActions workbenchNavRow";
+  nav.appendChild(workbenchMiniButton(context.model ? "← Terug naar " + nodeDisplayTitle(context.model) : "Sluit definitie", function () {
+    workbenchSelectDefinition(null, { showOverview: false });
+  }, "ghost"));
+  root.appendChild(nav);
+
+  const hero = document.createElement("div");
+  hero.className = "workbenchHero";
+  hero.appendChild(workbenchEntryThumb(entry));
+  const body = document.createElement("div");
+  body.className = "workbenchHeroBody";
+  const name = document.createElement("div");
+  name.className = "workbenchName";
+  name.textContent = entry.name;
+  const meta = document.createElement("div");
+  meta.className = "workbenchMeta";
+  meta.textContent = workbenchTypeLabel(entry.type);
+  const badges = document.createElement("div");
+  badges.className = "workbenchBadgeRow";
+  const used = definitionIsUsed(entry);
+  badges.appendChild(workbenchBadge(used ? "Gebruikt" : "Ongebruikt", used ? "linked" : "muted"));
+  for (const count of definitionFacts(workbenchContentIndex(), entry).counts) {
+    if (count.value) badges.appendChild(workbenchBadge(count.label + " " + count.value));
+  }
+  body.append(name, meta, badges);
+  hero.appendChild(body);
+  root.appendChild(hero);
+
+  for (const missing of entry.missing.slice(0, 4)) root.appendChild(workbenchWarning(workbenchMissingText(entry, missing)));
+  if (entry.missing.length > 4) root.appendChild(workbenchWarning("+" + (entry.missing.length - 4) + " andere ontbrekende references."));
+  for (const warning of workbenchEntryWarnings(entry)) {
+    if (warning.endsWith("ontbreekt")) root.appendChild(workbenchWarning(warning + ": de gekoppelde asset staat niet meer in de Asset Library."));
+  }
+  if (!entry.packaged) root.appendChild(workbenchWarning("Niet gekoppeld aan een Catalog Output: deze definitie wordt niet gepubliceerd. Gebruik in de Catalogus 'Package bijwerken'."));
+  if (!group) root.appendChild(workbenchWarning("Deze definitie staat niet in een Collectie. Regels en verwijderen gaan dan via Nodes."));
+
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  const editing = state.workbenchDefinitionDraft?.nodeId === entry.id;
+  const edit = workbenchMiniButton(editing ? "Bewerken sluiten" : "Bewerk", function () {
+    if (editing) state.workbenchDefinitionDraft = null;
+    else state.workbenchDefinitionDraft = { nodeId: entry.id, values: clonePlain(entry.node.values || {}), showMore: false };
+    renderWorkbench();
+  }, "primary");
+  actions.appendChild(edit);
+  if (entry.spec.duplicate && group) actions.appendChild(workbenchMiniButton("Dupliceer", function () { void workbenchDuplicateDefinition(entry); }, "ghost"));
+  actions.appendChild(workbenchMiniButton("Verwijder", function () {
+    state.workbenchDeleteNodeId = state.workbenchDeleteNodeId === entry.id ? null : entry.id;
+    renderWorkbench();
+  }, "ghost"));
+  actions.appendChild(workbenchMiniButton("Toon in nodes", function () { workbenchShowDefinitionNodes(entry); }, "ghost"));
+  actions.appendChild(workbenchMiniButton(state.workbenchUsageOpen ? "Sluit gebruik" : "Waar gebruikt", function () {
+    state.workbenchUsageOpen = !state.workbenchUsageOpen;
+    if (state.workbenchUsageOpen) state.workbenchRelationScope = "used";
+    workbenchOverviewSignature = "";
+    renderWorkbench();
+  }, "ghost"));
+  root.appendChild(actions);
+  if (state.workbenchDeleteNodeId === entry.id) root.appendChild(renderWorkbenchDeleteWarning(entry));
+  if (state.workbenchUsageOpen) root.appendChild(renderWorkbenchUsageList(entry));
+  if (editing) root.appendChild(renderWorkbenchDefinitionEditor(entry));
+
+  const heading = document.createElement("div");
+  heading.className = "workbenchSectionTitle";
+  heading.textContent = "Eigenschappen";
+  root.appendChild(heading);
+  root.appendChild(renderWorkbenchDefinitionProperties(entry));
+  const assets = renderWorkbenchAssetSlots(entry);
+  if (assets) root.appendChild(assets);
+}
+
+async function workbenchDuplicateDefinition(entry) {
+  const group = workbenchCatalogGroupFor(entry.node);
+  if (!group || !entry.spec.duplicate) return;
+  let name = entry.name + " (kopie)";
+  for (let index = 2; workbenchDuplicateName(entry.type, name, group.id); index += 1) name = entry.name + " (kopie " + index + ")";
+  const values = clonePlain(entry.node.values || {});
+  values.displayName = name;
+  await commitManagedDraft("catalog", group, { groupId: group.id, type: entry.type, existingNodeId: null, values }, {
+    preserveEditorContext: true,
+    afterApply: function (node) { workbenchSelectDefinition(node.id, { render: false }); }
+  });
+}
+
+// ---- Inline editing (Bewerk) ----
+
+function workbenchEditableFields(type) {
+  const spec = CONTENT_TYPE_SPECS[type] || {};
+  const dedicated = new Set(spec.dedicatedFields || []);
+  return managedVisibleFields(type).filter(function ([key, field]) {
+    return field.type !== "asset" && !dedicated.has(key);
+  });
+}
+
+function workbenchReferenceListControl(type, key, field, draft) {
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchRefList";
+  const refs = normalizeReferenceList(draft.values?.[key]);
+  const single = Object.assign({}, field, { type: "reference", allowNull: true, required: false });
+  const chips = document.createElement("div");
+  chips.className = "workbenchBadgeRow";
+  for (const ref of refs) {
+    const chip = workbenchBadge(workbenchReferenceDisplay(ref, single));
+    chip.appendChild(workbenchMiniButton("×", function () {
+      draft.values[key] = refs.filter(function (candidate) { return candidate !== ref; });
+      renderWorkbench();
+    }, "workbenchChipRemove"));
+    chips.appendChild(chip);
+  }
+  if (!refs.length) chips.appendChild(workbenchBadge("Geen", "muted"));
+  wrap.appendChild(chips);
+  wrap.appendChild(buildReferencePickerField({ id: "workbench-list-" + type + "-" + key, type, values: {} }, key, single, null, {
+    onChange: function (next) {
+      const normalized = normalizeCanonicalId(next, "");
+      if (!normalized) return;
+      draft.values[key] = Array.from(new Set(refs.concat([normalized])));
+      renderWorkbench();
+    },
+    onFocusNode: workbenchFocusReferenceNode,
+    hideAdvanced: true,
+    hideRawId: true,
+    rerender: false
+  }));
+  return wrap;
+}
+
+function workbenchFocusReferenceNode(node) {
+  if (!node) return;
+  if (workbenchContentIndex().byNodeId.has(node.id)) workbenchSelectDefinition(node.id);
+  else workbenchShowNode(node.id);
+}
+
+function workbenchDraftFieldControl(type, key, field, draft) {
+  const value = draft.values?.[key];
+  const set = function (next) { draft.values[key] = next; };
+  if (field.type === "boolean") {
+    const label = document.createElement("label");
+    label.className = "workbenchFieldCheck";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = value === true;
+    input.addEventListener("change", function () { set(input.checked); });
+    label.append(input, document.createTextNode(value === true ? "Aan" : "Uit"));
+    input.addEventListener("change", function () { label.lastChild.textContent = input.checked ? "Aan" : "Uit"; });
+    return label;
+  }
+  if (field.type === "number") return workbenchTextInput(value ?? field.default ?? "", set, { type: "number", min: field.min, max: field.max, step: field.step });
+  if (field.type === "select") {
+    const options = selectOptionsForManagedField(field, draft).map(function (option) {
+      return { value: option.value, label: optionLabel(type, key, option.value) || option.label || "(geen)" };
+    });
+    return workbenchSelect(String(value ?? field.default ?? ""), options, set);
+  }
+  if (field.type === "reference") {
+    return buildReferencePickerField({ id: "workbench-field-" + type + "-" + key, type, values: {} }, key, field, value || null, {
+      onChange: function (next) {
+        set(next || null);
+        renderWorkbench();
+      },
+      onFocusNode: workbenchFocusReferenceNode,
+      hideAdvanced: true,
+      hideRawId: true,
+      rerender: false
+    });
+  }
+  if (field.type === "referenceList") return workbenchReferenceListControl(type, key, field, draft);
+  if (field.type === "tagList") return workbenchTextInput(normalizeTagList(value).join(", "), set, { placeholder: "tag.een, tag.twee" });
+  if (field.type === "tokenText") {
+    const textarea = document.createElement("textarea");
+    textarea.rows = 3;
+    textarea.value = String(value ?? "");
+    textarea.addEventListener("input", function () { set(textarea.value); });
+    return textarea;
+  }
+  return workbenchTextInput(value ?? "", set);
+}
+
+function renderWorkbenchDefinitionEditor(entry) {
+  const draft = state.workbenchDefinitionDraft;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = workbenchTypeLabel(entry.type) + " bewerken";
+  card.appendChild(title);
+  const keyFields = new Set(entry.spec.keyFields || []);
+  const editable = workbenchEditableFields(entry.type);
+  const main = document.createElement("div");
+  main.className = "workbenchFields";
+  const more = document.createElement("div");
+  more.className = "workbenchFields";
+  const advanced = [];
+  for (const [key, field] of editable) {
+    if (!WORKBENCH_INLINE_FIELD_TYPES.has(field.type)) {
+      advanced.push(workbenchFieldLabel(entry.type, key));
+      continue;
+    }
+    const row = workbenchLabeledField(entry.type, key, workbenchFieldLabel(entry.type, key), workbenchDraftFieldControl(entry.type, key, field, draft), entry.node);
+    (keyFields.has(key) ? main : more).appendChild(row);
+  }
+  card.appendChild(main);
+  const details = document.createElement("details");
+  details.className = "workbenchMore";
+  details.open = draft.showMore === true;
+  details.addEventListener("toggle", function () { draft.showMore = details.open; });
+  const summary = document.createElement("summary");
+  summary.textContent = "Meer eigenschappen";
+  details.append(summary, more);
+  if (advanced.length) {
+    const note = document.createElement("div");
+    note.className = "workbenchMeta";
+    note.textContent = "Geavanceerd (bewerk via Toon in nodes): " + advanced.join(", ") + ".";
+    details.appendChild(note);
+  }
+  card.appendChild(details);
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton("Wijzigingen opslaan", function () { void workbenchSaveDefinitionEdit(entry); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () {
+    state.workbenchDefinitionDraft = null;
+    renderWorkbench();
+  }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
+async function workbenchSaveDefinitionEdit(entry) {
+  const draft = state.workbenchDefinitionDraft;
+  if (!draft || draft.nodeId !== entry.id) return;
+  const name = String(draft.values?.displayName || "").trim();
+  if (!name) {
+    setStatus("Vul een menselijke naam in.", "error");
+    return;
+  }
+  const duplicate = workbenchDuplicateName(entry.type, name, entry.groupId, entry.id);
+  if (duplicate) {
+    setStatus("Er bestaat al een " + workbenchTypeLabel(entry.type) + " met de naam " + name + " in deze Collectie.", "error");
+    return;
+  }
+  const patch = {};
+  for (const [key, field] of workbenchEditableFields(entry.type)) {
+    if (!WORKBENCH_INLINE_FIELD_TYPES.has(field.type)) continue;
+    let next;
+    try {
+      next = normalizeFieldInputValue(field, draft.values?.[key]);
+    } catch {
+      setStatus(workbenchFieldLabel(entry.type, key) + " is ongeldig.", "error");
+      return;
+    }
+    if (field.type === "number" && (!Number.isFinite(Number(next)) || (field.min !== undefined && next < field.min) || (field.max !== undefined && next > field.max))) {
+      setStatus(workbenchFieldLabel(entry.type, key) + " moet tussen " + field.min + " en " + field.max + " liggen.", "error");
+      return;
+    }
+    if (field.type === "reference" && field.required && referencePickerChoiceState(next, field).state !== "ok") {
+      setStatus("Kies een geldige " + workbenchFieldLabel(entry.type, key) + ".", "error");
+      return;
+    }
+    if (JSON.stringify(next ?? null) !== JSON.stringify(entry.node.values?.[key] ?? null)) patch[key] = next;
+  }
+  if (!Object.keys(patch).length) {
+    state.workbenchDefinitionDraft = null;
+    setStatus("Geen wijzigingen.", "");
+    renderWorkbench();
+    return;
+  }
+  await workbenchRestoreDefinition(entry.node, patch, workbenchTypeLabel(entry.type) + " gewijzigd", {
+    afterApply: function () { state.workbenchDefinitionDraft = null; }
+  });
+}
+
+// ---- Asset binding (generic over the schema's asset fields) ----
+
+function renderWorkbenchAssetSlots(entry, draftValues = null) {
+  const fields = Object.entries(state.nodeTypes?.[entry.type]?.fields || {}).filter(function ([, field]) { return field?.type === "asset"; });
+  if (!fields.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchAssetSection";
+  const heading = document.createElement("div");
+  heading.className = "workbenchSectionTitle";
+  heading.textContent = "Assets";
+  wrap.appendChild(heading);
+  for (const [key, field] of fields) {
+    const assetTypes = Array.isArray(field.assetTypes) ? field.assetTypes : [];
+    const currentId = draftValues ? draftValues[key] : entry.node.values?.[key];
+    const asset = workbenchAsset(currentId);
+    const commit = function (assetId) {
+      if (draftValues) {
+        draftValues[key] = assetId || null;
+        state.workbenchAssetSlotPicker = "";
+        renderWorkbench();
+        return;
+      }
+      state.workbenchAssetSlotPicker = "";
+      void workbenchPatchNode(entry.node, { [key]: assetId || null }, workbenchAssetRoleLabel(entry.type, key, field) + (assetId ? " gekoppeld" : " ontkoppeld"));
+    };
+    const slot = document.createElement("div");
+    slot.className = "workbenchAssetSlot";
+    slot.appendChild(workbenchThumbnail(asset, assetTypes.includes("model") ? "3D" : "IMG"));
+    const info = document.createElement("div");
+    info.className = "workbenchAssetSlotBody";
+    const label = document.createElement("div");
+    label.className = "workbenchRelationLabel";
+    label.textContent = workbenchAssetRoleLabel(entry.type, key, field);
+    if (workbenchFieldInactive(entry.type, key)) label.appendChild(workbenchInactiveBadge("Nog niet in game"));
+    const value = document.createElement("div");
+    value.className = "workbenchRelationValue";
+    value.textContent = asset ? asset.name : currentId ? "Ontbrekende asset" : "Geen asset — sleep er een op of kies";
+    const buttons = document.createElement("div");
+    buttons.className = "workbenchLibraryCardActions";
+    const pickerKey = (draftValues ? "create:" : entry.id + ":") + key;
+    buttons.appendChild(workbenchMiniButton(state.workbenchAssetSlotPicker === pickerKey ? "Sluit" : "Kies", function () {
+      state.workbenchAssetSlotPicker = state.workbenchAssetSlotPicker === pickerKey ? "" : pickerKey;
+      state.workbenchAssetPickerQuery = "";
+      renderWorkbench();
+    }));
+    if (currentId) buttons.appendChild(workbenchMiniButton("Ontkoppel", function () { commit(null); }));
+    if (asset) buttons.appendChild(workbenchMiniButton("Assetgebruik", function () {
+      state.workbenchLibraryType = "assets";
+      renderWorkbench();
+      openAssetManageOverlay(asset.id);
+    }));
+    info.append(label, value, buttons);
+    slot.appendChild(info);
+    workbenchAttachAssetDrop(slot, assetTypes, function (dropped) { commit(dropped.id); });
+    wrap.appendChild(slot);
+    if (state.workbenchAssetSlotPicker === pickerKey) wrap.appendChild(renderWorkbenchAssetPicker(assetTypes, currentId, commit));
+  }
+  return wrap;
+}
+
+function renderWorkbenchAssetPicker(assetTypes, currentId, onPick) {
+  const wrap = document.createElement("div");
+  wrap.className = "workbenchEditorCard";
+  const search = workbenchTextInput(state.workbenchAssetPickerQuery, function (next) {
+    state.workbenchAssetPickerQuery = next;
+    const grid = wrap.querySelector(".workbenchAssetPicker");
+    if (grid) grid.replaceWith(buildGrid());
+  }, { placeholder: "Zoek asset..." });
+  search.type = "search";
+  wrap.appendChild(search);
+  function buildGrid() {
+    const query = normalizeEditorKey(state.workbenchAssetPickerQuery);
+    const assets = state.assets.filter(function (asset) {
+      return assetTypes.includes(asset.assetType) && (!query || normalizeEditorKey(asset.name + " " + asset.category).includes(query));
+    });
+    const grid = document.createElement("div");
+    grid.className = "workbenchAssetPicker";
+    for (const asset of assets.slice(0, WORKBENCH_ASSET_PICKER_LIMIT)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "workbenchAssetChoice" + (currentId === asset.id ? " selected" : "");
+      if (asset.thumbnailPath) {
+        const img = document.createElement("img");
+        img.src = asset.thumbnailPath;
+        img.alt = asset.name;
+        img.loading = "lazy";
+        button.appendChild(img);
+      }
+      button.appendChild(document.createTextNode(asset.name));
+      button.addEventListener("click", function () { onPick(asset.id); });
+      grid.appendChild(button);
+    }
+    if (!assets.length) {
+      const empty = document.createElement("div");
+      empty.className = "workbenchMeta";
+      empty.textContent = "Geen passende assets. Importeer ze via de tab Assets.";
+      grid.appendChild(empty);
+    } else if (assets.length > WORKBENCH_ASSET_PICKER_LIMIT) {
+      const more = document.createElement("div");
+      more.className = "workbenchMeta";
+      more.textContent = "Toont " + WORKBENCH_ASSET_PICKER_LIMIT + " van " + assets.length + "; zoek verder.";
+      grid.appendChild(more);
+    }
+    return grid;
+  }
+  wrap.appendChild(buildGrid());
+  return wrap;
+}
+
+// ---- Nieuwe definitie ----
+
+function workbenchBeginCreate(type) {
+  const nextType = CONTENT_TYPE_SPECS[type] ? type : "item_definition";
+  const collections = workbenchCollections();
+  const remembered = loadStoredWorkbenchValue(WORKBENCH_COLLECTION_STORAGE_KEY);
+  state.workbenchCreateDraft = {
+    type: nextType,
+    name: "",
+    values: managedDefaultValuesForDraft(nextType),
+    collectionId: collections.length === 1 ? collections[0].id : (collections.some(function (group) { return group.id === remembered; }) ? remembered : "")
+  };
+  state.workbenchAssetSlotPicker = "";
+  renderWorkbench();
+  requestAnimationFrame(function () { el.workbenchSelectionPanel?.querySelector(".workbenchCreateName")?.focus(); });
+}
+
+function renderWorkbenchCreatePanel(context) {
+  const root = el.workbenchSelectionPanel;
+  if (!root) return;
+  root.innerHTML = "";
+  const draft = state.workbenchCreateDraft;
+  root.appendChild(workbenchLeftHeader({ hideCreate: true }));
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const typeLabel = document.createElement("div");
+  typeLabel.className = "workbenchSectionTitle";
+  typeLabel.textContent = "1. Soort";
+  card.appendChild(typeLabel);
+  const types = document.createElement("div");
+  types.className = "workbenchTypeChoices";
+  for (const type of WORKBENCH_CREATE_TYPES) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "workbenchCategoryTab" + (draft.type === type ? " active" : "");
+    button.textContent = workbenchTypeLabel(type);
+    button.addEventListener("click", function () {
+      if (draft.type === type) return;
+      draft.type = type;
+      draft.values = managedDefaultValuesForDraft(type);
+      state.workbenchAssetSlotPicker = "";
+      renderWorkbench();
+    });
+    types.appendChild(button);
+  }
+  card.appendChild(types);
+  const fakeNode = { type: draft.type, values: draft.values };
+  const nameTitle = document.createElement("div");
+  nameTitle.className = "workbenchSectionTitle";
+  nameTitle.textContent = "2. Naam";
+  card.appendChild(nameTitle);
+  const nameInput = workbenchTextInput(draft.name, function (value) {
+    draft.name = value;
+    const warning = card.querySelector(".workbenchCreateDuplicate");
+    if (warning) warning.replaceWith(renderCreateDuplicateWarning());
+  }, { placeholder: "Bijv. IJzererts, Gouden munt, Smidse-recepten" });
+  nameInput.classList.add("workbenchCreateName");
+  card.appendChild(workbenchField(fakeNode, "displayName", "Menselijke naam", nameInput));
+  function renderCreateDuplicateWarning() {
+    const holder = document.createElement("div");
+    holder.className = "workbenchCreateDuplicate";
+    const duplicate = draft.collectionId && draft.name.trim() ? workbenchDuplicateName(draft.type, draft.name, draft.collectionId) : null;
+    if (duplicate) {
+      holder.appendChild(workbenchWarning("Er bestaat al een " + workbenchTypeLabel(draft.type) + " met deze naam in deze Collectie."));
+      holder.appendChild(workbenchMiniButton("Open bestaande", function () { workbenchSelectDefinition(duplicate.id); }));
+    }
+    return holder;
+  }
+  card.appendChild(renderCreateDuplicateWarning());
+  const specEntry = { id: "create", type: draft.type, spec: CONTENT_TYPE_SPECS[draft.type], node: fakeNode };
+  const assets = renderWorkbenchAssetSlots(specEntry, draft.values);
+  if (assets) {
+    assets.querySelector(".workbenchSectionTitle").textContent = "3. Assets (optioneel)";
+    card.appendChild(assets);
+  }
+  const createFields = (CONTENT_TYPE_SPECS[draft.type]?.createFields || []).filter(function (key) {
+    return state.nodeTypes?.[draft.type]?.fields?.[key];
+  });
+  if (createFields.length) {
+    const valuesTitle = document.createElement("div");
+    valuesTitle.className = "workbenchSectionTitle";
+    valuesTitle.textContent = "4. Belangrijkste waarden";
+    card.appendChild(valuesTitle);
+    const fields = document.createElement("div");
+    fields.className = "workbenchFields";
+    for (const key of createFields) {
+      const field = state.nodeTypes[draft.type].fields[key];
+      fields.appendChild(workbenchLabeledField(draft.type, key, workbenchFieldLabel(draft.type, key), workbenchDraftFieldControl(draft.type, key, field, draft), fakeNode));
+    }
+    card.appendChild(fields);
+  }
+  const collectionTitle = document.createElement("div");
+  collectionTitle.className = "workbenchSectionTitle";
+  collectionTitle.textContent = "5. Collectie";
+  card.appendChild(collectionTitle);
+  const collections = workbenchCollections();
+  if (collections.length === 1) draft.collectionId = collections[0].id;
+  else if (draft.collectionId && !collections.some(function (group) { return group.id === draft.collectionId; })) draft.collectionId = "";
+  if (!collections.length) {
+    card.appendChild(workbenchWarning("Er is nog geen Collectie voor definities. Maak er eerst bewust één aan."));
+    card.appendChild(workbenchMiniButton("Maak Collectie", function () {
+      const previousGroupId = state.currentGroupId;
+      void createRootManagedGroup("catalog", nextManagedGroupTitle("catalog", "Catalog")).then(function () {
+        if (state.editorMode !== "workbench") return;
+        // The managed route opens the new group; the Workbench keeps working in the zone it was in.
+        if (!previousGroupId || graphNodeByIdInGraph(state.graph, previousGroupId)) {
+          state.currentGroupId = previousGroupId || null;
+          syncBreadcrumb();
+        }
+        renderWorkbench();
+      });
+    }));
+  } else if (collections.length === 1) {
+    const only = document.createElement("div");
+    only.className = "workbenchMeta";
+    only.textContent = "Wordt gemaakt in Collectie " + workbenchCollectionName(collections[0]) + ".";
+    card.appendChild(only);
+  } else {
+    card.appendChild(workbenchField(fakeNode, "displayName", "Kies Collectie", workbenchSelect(draft.collectionId, [{ value: "", label: "Kies een Collectie" }].concat(collections.map(function (group) {
+      return { value: group.id, label: workbenchCollectionName(group) };
+    })), function (value) {
+      draft.collectionId = value;
+      renderWorkbench();
+    })));
+  }
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton("Aanmaken", function () { void workbenchCommitCreate(); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () {
+    state.workbenchCreateDraft = null;
+    state.workbenchAssetSlotPicker = "";
+    renderWorkbench();
+  }, "ghost"));
+  card.appendChild(actions);
+  root.appendChild(card);
+}
+
+async function workbenchCommitCreate() {
+  const draft = state.workbenchCreateDraft;
+  if (!draft) return;
+  const name = String(draft.name || "").trim();
+  if (!name) {
+    setStatus("Vul een menselijke naam in.", "error");
+    return;
+  }
+  const group = draft.collectionId ? graphNodeByIdInGraph(state.graph, draft.collectionId) : null;
+  if (!group || normalizeEditorKey(group.values?.groupKind) !== "catalog") {
+    setStatus("Kies eerst een Collectie.", "error");
+    return;
+  }
+  if (workbenchDuplicateName(draft.type, name, group.id)) {
+    setStatus("Er bestaat al een " + workbenchTypeLabel(draft.type) + " met deze naam in deze Collectie.", "error");
+    return;
+  }
+  storeWorkbenchValue(WORKBENCH_COLLECTION_STORAGE_KEY, group.id);
+  const values = Object.assign(managedDefaultValuesForDraft(draft.type), clonePlain(draft.values || {}), { displayName: name });
+  await commitManagedDraft("catalog", group, { groupId: group.id, type: draft.type, existingNodeId: null, values }, {
+    preserveEditorContext: true,
+    afterApply: function (node) {
+      state.workbenchCreateDraft = null;
+      state.workbenchAssetSlotPicker = "";
+      state.workbenchLibraryType = CONTENT_TYPE_SPECS[draft.type]?.category || state.workbenchLibraryType;
+      workbenchSelectDefinition(node.id, { render: false });
+    }
+  });
+}
+
+// ---- Flow strip (bottom): owned rows, drop zones and inline forms ----
+
+const WORKBENCH_ROW_FORMS = {
+  loot_item_entry: [
+    { key: "itemRef", label: "Item" },
+    { key: "minQuantity", label: "Minimum", int: true, min: 0 },
+    { key: "maxQuantity", label: "Maximum", int: true, min: 0 },
+    { key: "chance", label: "Kans (%)", percent: true },
+    { key: "guaranteed", label: "Altijd toekennen" }
+  ],
+  loot_currency_entry: [
+    { key: "currencyRef", label: "Currency" },
+    { key: "minAmountMinor", label: "Minimum", int: true, min: 0 },
+    { key: "maxAmountMinor", label: "Maximum", int: true, min: 0 },
+    { key: "chance", label: "Kans (%)", percent: true },
+    { key: "guaranteed", label: "Altijd toekennen" }
+  ],
+  loot_table_entry: [
+    { key: "lootTableRef", label: "Geneste Loot Table" },
+    { key: "repeatMin", label: "Minimum keer", int: true, min: 0 },
+    { key: "repeatMax", label: "Maximum keer", int: true, min: 0 },
+    { key: "chance", label: "Kans (%)", percent: true }
+  ],
+  recipe_ingredient: [
+    { key: "kind", label: "Soort", options: ["item", "currency"] },
+    { key: "itemRef", label: "Item", showIf: function (values) { return values.kind !== "currency"; } },
+    { key: "currencyRef", label: "Currency", showIf: function (values) { return values.kind === "currency"; } },
+    { key: "amount", label: "Aantal", int: true, min: 1 },
+    { key: "consume", label: "Verbruiken bij craften" }
+  ],
+  vendor_offer: [
+    { key: "itemRef", label: "Item" },
+    { key: "mode", label: "Handel" },
+    { key: "sellCurrencyRef", label: "Currency (speler betaalt)", showIf: function (values) { return values.mode !== "buy_from_player"; } },
+    { key: "sellPriceMinor", label: "Verkoopprijs", int: true, min: 0, showIf: function (values) { return values.mode !== "buy_from_player"; } },
+    { key: "buyCurrencyRef", label: "Currency (speler ontvangt)", showIf: function (values) { return values.mode !== "sell_to_player"; } },
+    { key: "buyPriceMinor", label: "Inkoopprijs", int: true, min: 0, showIf: function (values) { return values.mode !== "sell_to_player"; } },
+    { key: "stockMode", label: "Voorraad" },
+    { key: "initialStock", label: "Startvoorraad", int: true, min: 0, showIf: function (values) { return values.stockMode === "limited"; } },
+    { key: "maxStock", label: "Maximale voorraad", int: true, min: 0, more: true },
+    { key: "restockAmount", label: "Aanvulhoeveelheid", int: true, min: 0, more: true },
+    { key: "restockSeconds", label: "Aanvullen na (s)", int: true, min: 0, more: true },
+    { key: "bindOnPurchase", label: "Binden bij kopen", more: true }
+  ],
+  output_item: [
+    { key: "itemRef", label: "Item" },
+    { key: "amount", label: "Aantal", int: true, min: 1 }
+  ],
+  output_currency: [
+    { key: "currencyRef", label: "Currency" },
+    { key: "amountMinor", label: "Hoeveelheid", int: true, min: 1 }
+  ]
+};
+
+const WORKBENCH_ROW_TARGET_KEY = {
+  loot_item_entry: "itemRef", loot_currency_entry: "currencyRef", loot_table_entry: "lootTableRef",
+  vendor_offer: "itemRef", output_item: "itemRef", output_currency: "currencyRef"
+};
+
+function workbenchRowTargetKey(type, values) {
+  if (type === "recipe_ingredient") return values?.kind === "currency" ? "currencyRef" : "itemRef";
+  return WORKBENCH_ROW_TARGET_KEY[type] || "";
+}
+
+function workbenchRowField(type, key) {
+  if (type === "output_item" || type === "output_currency") {
+    if (key === "itemRef") return { label: "Item", type: "reference", referenceKinds: ["item"], allowNull: true, required: true };
+    if (key === "currencyRef") return { label: "Currency", type: "reference", referenceKinds: ["currency"], allowNull: true, required: true };
+    return { label: key, type: "number", min: 1, step: 1, default: 1 };
+  }
+  return state.nodeTypes?.[type]?.fields?.[key] || null;
+}
+
+function workbenchRowFieldOwnerType(type) {
+  return type === "output_item" || type === "output_currency" ? "recipe_definition" : type;
+}
+
+function workbenchRowLabel(type) {
+  if (type === "output_item") return "Item-output";
+  if (type === "output_currency") return "Currency-output";
+  return { loot_item_entry: "Itemdrop", loot_currency_entry: "Currencydrop", loot_table_entry: "Geneste Loot Table", recipe_ingredient: "Ingrediënt", vendor_offer: "Offer" }[type] || type;
+}
+
+function workbenchExistingRow(parentEntry, type, ref) {
+  const wanted = normalizeCanonicalId(ref, "");
+  if (!wanted) return null;
+  if (type === "output_item" || type === "output_currency") {
+    const listKey = type === "output_item" ? "outputItems" : "outputCurrencies";
+    const refKey = type === "output_item" ? "itemRef" : "currencyRef";
+    const list = Array.isArray(parentEntry.node.values?.[listKey]) ? parentEntry.node.values[listKey] : [];
+    const index = list.findIndex(function (row) { return normalizeCanonicalId(row?.[refKey], "") === wanted; });
+    return index >= 0 ? { outputIndex: index } : null;
+  }
+  return parentEntry.children.find(function (child) {
+    if (child.type !== type) return false;
+    return normalizeCanonicalId(child.values?.[workbenchRowTargetKey(type, child.values)], "") === wanted;
+  }) || null;
+}
+
+function workbenchBeginRow(parentEntry, zone, type, presets = {}, existing = null) {
+  let values;
+  let outputIndex = null;
+  if (type === "output_item" || type === "output_currency") {
+    const listKey = type === "output_item" ? "outputItems" : "outputCurrencies";
+    const list = normalizeRecipeGrantList(parentEntry.node.values?.[listKey], type === "output_item" ? "item" : "currency");
+    if (existing && Number.isInteger(existing.outputIndex)) {
+      outputIndex = existing.outputIndex;
+      values = Object.assign({}, list[outputIndex]);
+    } else {
+      values = type === "output_item" ? { itemRef: "", amount: 1 } : { currencyRef: "", amountMinor: 1 };
+    }
+  } else {
+    values = managedDefaultValuesForDraft(type, existing && existing.id ? existing : null);
+  }
+  Object.assign(values, presets);
+  const targetKey = workbenchRowTargetKey(type, values);
+  const duplicate = !existing && values[targetKey] ? workbenchExistingRow(parentEntry, type, values[targetKey]) : null;
+  state.workbenchRowDraft = {
+    parentId: parentEntry.id,
+    zone,
+    type,
+    existingNodeId: existing?.id || null,
+    outputIndex,
+    values,
+    duplicate,
+    confirmDuplicate: false
+  };
+  state.workbenchDropNotice = null;
+  renderWorkbench();
+}
+
+function workbenchRowControl(draft, spec, field) {
+  const ownerType = workbenchRowFieldOwnerType(draft.type);
+  const value = draft.values?.[spec.key];
+  if (field.type === "reference") {
+    return buildReferencePickerField({ id: "workbench-row-" + draft.type + "-" + spec.key, type: ownerType, values: {} }, spec.key, field, value || null, {
+      onChange: function (next) {
+        draft.values[spec.key] = next || null;
+        renderWorkbench();
+      },
+      onFocusNode: workbenchFocusReferenceNode,
+      hideAdvanced: true,
+      hideRawId: true,
+      rerender: false
+    });
+  }
+  if (spec.percent) {
+    return workbenchTextInput(Math.round(Math.max(0, Math.min(1, Number(value ?? 1))) * 100), function (next) {
+      draft.values[spec.key] = Math.max(0, Math.min(100, Number(next) || 0)) / 100;
+    }, { type: "number", min: 0, max: 100, step: 1 });
+  }
+  if (field.type === "boolean") {
+    const label = document.createElement("label");
+    label.className = "workbenchFieldCheck";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = value === true;
+    input.addEventListener("change", function () { draft.values[spec.key] = input.checked; });
+    label.append(input, document.createTextNode(spec.label));
+    return label;
+  }
+  if (field.type === "select") {
+    const options = (spec.options || (field.options || []).map(function (option) { return option && typeof option === "object" ? option.value : option; }))
+      .map(function (option) { return { value: String(option), label: optionLabel(ownerType, spec.key, option) || String(option) }; });
+    return workbenchSelect(String(value ?? field.default ?? ""), options, function (next) {
+      draft.values[spec.key] = next;
+      renderWorkbench();
+    });
+  }
+  return workbenchTextInput(value ?? field.default ?? "", function (next) {
+    draft.values[spec.key] = spec.int ? Math.max(spec.min ?? 0, Math.floor(Number(next) || 0)) : next;
+  }, { type: "number", min: spec.min ?? field.min, max: field.max, step: 1 });
+}
+
+function renderWorkbenchRowForm(parentEntry) {
+  const draft = state.workbenchRowDraft;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard workbenchRowForm";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = (draft.existingNodeId || draft.outputIndex !== null ? "Bewerk " : "Nieuw: ") + workbenchRowLabel(draft.type);
+  card.appendChild(title);
+  if (draft.type === "loot_table_entry") card.appendChild(workbenchWarning("Geneste Loot Tables worden gecompileerd, maar de huidige runtime kent hun drops nog niet toe."));
+  if (draft.duplicate && !draft.confirmDuplicate) {
+    const label = workbenchRowLabel(draft.type).toLowerCase();
+    card.appendChild(workbenchWarning("Dit staat al als " + label + " in " + parentEntry.name + ". Een tweede regel is meestal een vergissing."));
+    const choices = document.createElement("div");
+    choices.className = "workbenchActions";
+    choices.appendChild(workbenchMiniButton(draft.type === "vendor_offer" ? "Bestaand offer bewerken" : "Bestaande regel bewerken", function () {
+      workbenchBeginRow(parentEntry, draft.zone, draft.type, {}, draft.duplicate);
+    }, "primary"));
+    choices.appendChild(workbenchMiniButton("Toch een extra regel maken", function () {
+      draft.confirmDuplicate = true;
+      renderWorkbench();
+    }, "ghost"));
+    choices.appendChild(workbenchMiniButton("Annuleren", function () {
+      state.workbenchRowDraft = null;
+      renderWorkbench();
+    }, "ghost"));
+    card.appendChild(choices);
+    return card;
+  }
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields workbenchRowFields";
+  const more = document.createElement("div");
+  more.className = "workbenchFields";
+  const ownerType = workbenchRowFieldOwnerType(draft.type);
+  const fakeNode = { id: "workbench-row", type: ownerType, values: draft.values };
+  for (const spec of WORKBENCH_ROW_FORMS[draft.type] || []) {
+    if (typeof spec.showIf === "function" && !spec.showIf(draft.values)) continue;
+    const field = workbenchRowField(draft.type, spec.key);
+    if (!field) continue;
+    const control = workbenchRowControl(draft, spec, field);
+    const helpKey = ownerType === "recipe_definition" ? (draft.type === "output_item" ? "outputItems" : "outputCurrencies") : spec.key;
+    const row = field.type === "boolean"
+      ? control
+      : workbenchFieldWrap(fakeNode, helpKey, spec.label, control);
+    if (draft.type !== "output_item" && draft.type !== "output_currency" && workbenchFieldInactive(draft.type, spec.key)) {
+      (row.querySelector(".workbenchFieldLabel") || row).appendChild(workbenchInactiveBadge());
+    }
+    (spec.more ? more : fields).appendChild(row);
+  }
+  card.appendChild(fields);
+  if (more.childElementCount) {
+    const details = document.createElement("details");
+    details.className = "workbenchMore";
+    const summary = document.createElement("summary");
+    summary.textContent = "Meer eigenschappen";
+    details.append(summary, more);
+    card.appendChild(details);
+  }
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton(draft.existingNodeId || draft.outputIndex !== null ? "Opslaan" : "Toevoegen", function () { void workbenchSaveRowDraft(); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () {
+    state.workbenchRowDraft = null;
+    renderWorkbench();
+  }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
+function workbenchValidateRowDraft(parentEntry, draft) {
+  const visible = (WORKBENCH_ROW_FORMS[draft.type] || []).filter(function (spec) {
+    return typeof spec.showIf !== "function" || spec.showIf(draft.values);
+  });
+  for (const spec of visible) {
+    const field = workbenchRowField(draft.type, spec.key);
+    if (field?.type !== "reference") continue;
+    const required = spec.key === workbenchRowTargetKey(draft.type, draft.values) || /CurrencyRef$/.test(spec.key);
+    if (required && referencePickerChoiceState(draft.values[spec.key], Object.assign({}, field, { required: true })).state !== "ok") {
+      return "Kies een geldige " + spec.label.replace(/ \(.*\)$/, "").toLowerCase() + ".";
+    }
+  }
+  const pairs = [["minQuantity", "maxQuantity"], ["minAmountMinor", "maxAmountMinor"], ["repeatMin", "repeatMax"]];
+  for (const [minKey, maxKey] of pairs) {
+    if (draft.values[minKey] === undefined || draft.values[maxKey] === undefined) continue;
+    if (Number(draft.values[minKey]) > Number(draft.values[maxKey])) return "Minimum mag niet groter zijn dan maximum.";
+  }
+  if (draft.type === "loot_table_entry" && normalizeCanonicalId(draft.values.lootTableRef, "") === parentEntry.ref) return "Een Loot Table kan zichzelf niet bevatten.";
+  return "";
+}
+
+async function workbenchSaveRowDraft() {
+  const draft = state.workbenchRowDraft;
+  const parentEntry = draft ? workbenchContentIndex().byNodeId.get(draft.parentId) : null;
+  if (!draft || !parentEntry) {
+    setStatus("De definitie bestaat niet meer.", "error");
+    return;
+  }
+  const error = workbenchValidateRowDraft(parentEntry, draft);
+  if (error) {
+    setStatus(error, "error");
+    return;
+  }
+  const label = workbenchRowLabel(draft.type);
+  if (draft.type === "output_item" || draft.type === "output_currency") {
+    const kind = draft.type === "output_item" ? "item" : "currency";
+    const listKey = kind === "item" ? "outputItems" : "outputCurrencies";
+    const list = normalizeRecipeGrantList(parentEntry.node.values?.[listKey], kind);
+    const row = normalizeRecipeGrantList([draft.values], kind)[0];
+    if (kind === "currency") row.amountMinor = Math.max(1, row.amountMinor);
+    if (draft.outputIndex !== null && list[draft.outputIndex]) list[draft.outputIndex] = row;
+    else list.push(row);
+    await workbenchPatchNode(parentEntry.node, { [listKey]: list }, label + (draft.outputIndex !== null ? " gewijzigd" : " toegevoegd"), {
+      afterApply: function () { state.workbenchRowDraft = null; }
+    });
+    return;
+  }
+  const visibleKeys = (WORKBENCH_ROW_FORMS[draft.type] || []).map(function (spec) { return spec.key; });
+  if (draft.existingNodeId) {
+    const child = graphNodeByIdInGraph(state.graph, draft.existingNodeId);
+    if (!child) {
+      setStatus("Deze regel bestaat niet meer.", "error");
+      return;
+    }
+    const fields = state.nodeTypes?.[draft.type]?.fields || {};
+    const patch = {};
+    for (const key of visibleKeys) {
+      if (!fields[key] || !Object.prototype.hasOwnProperty.call(draft.values, key)) continue;
+      const next = normalizeFieldInputValue(fields[key], draft.values[key]);
+      if (JSON.stringify(next ?? null) !== JSON.stringify(child.values?.[key] ?? null)) patch[key] = next;
+    }
+    if (!Object.keys(patch).length) {
+      state.workbenchRowDraft = null;
+      renderWorkbench();
+      return;
+    }
+    await workbenchPatchNode(child, patch, label + " gewijzigd", { afterApply: function () { state.workbenchRowDraft = null; } });
+    return;
+  }
+  const group = workbenchCatalogGroupFor(parentEntry.node);
+  const spec = catalogChildEditorSpecForParentType(parentEntry.type);
+  if (!group || !spec) {
+    setStatus("Deze definitie staat niet in een Collectie; voeg regels toe via Nodes.", "error");
+    return;
+  }
+  const values = managedDefaultValuesForDraft(draft.type);
+  for (const key of visibleKeys) {
+    if (Object.prototype.hasOwnProperty.call(draft.values, key)) values[key] = draft.values[key];
+  }
+  await commitCatalogChildEntryDraft(group, parentEntry.node, spec, {
+    groupId: group.id,
+    type: draft.type,
+    existingNodeId: null,
+    catalogChildParentId: parentEntry.id,
+    catalogChildSpecId: spec.id,
+    values
+  }, {
+    preserveEditorContext: true,
+    afterApply: function () { state.workbenchRowDraft = null; }
+  });
+}
+
+function workbenchDeleteRow(parentEntry, child) {
+  const group = workbenchCatalogGroupFor(parentEntry.node);
+  if (!group) {
+    setStatus("Deze definitie staat niet in een Collectie; verwijder regels via Nodes.", "error");
+    return;
+  }
+  void deleteManagedNode("catalog", group, child, { preserveEditorContext: true });
+}
+
+async function workbenchRemoveOutput(parentEntry, kind, outputIndex) {
+  const listKey = kind === "item" ? "outputItems" : "outputCurrencies";
+  const list = normalizeRecipeGrantList(parentEntry.node.values?.[listKey], kind).filter(function (_, index) { return index !== outputIndex; });
+  await workbenchPatchNode(parentEntry.node, { [listKey]: list }, (kind === "item" ? "Item-output" : "Currency-output") + " verwijderd");
+}
+
+async function workbenchMoveOutput(parentEntry, kind, outputIndex, delta) {
+  const listKey = kind === "item" ? "outputItems" : "outputCurrencies";
+  const list = normalizeRecipeGrantList(parentEntry.node.values?.[listKey], kind);
+  const target = outputIndex + delta;
+  if (target < 0 || target >= list.length) return;
+  const moved = list.splice(outputIndex, 1)[0];
+  list.splice(target, 0, moved);
+  await workbenchPatchNode(parentEntry.node, { [listKey]: list }, "Volgorde van outputs gewijzigd");
+}
+
+// A Resource is never silently treated as an Item: only its real yield items
+// (resource_definition.yieldItemRefs) are offered as an explicit choice.
+function workbenchResourceDropNotice(parentEntry, zone, resourceEntry, onItem) {
+  const index = workbenchContentIndex();
+  const yields = resourceEntry.out.filter(function (relation) { return relation.kind === "resource_yield"; })
+    .map(function (relation) { return index.byNodeId.get(relation.to); }).filter(Boolean);
+  const recipe = parentEntry.type === "recipe_definition";
+  state.workbenchDropNotice = {
+    parentId: parentEntry.id,
+    zone,
+    text: (recipe ? "Een Resource-definitie is geen recipe-item." : "Een Resource-definitie is geen item.")
+      + (yields.length ? " " + resourceEntry.name + " levert deze items op; kies er bewust één:" : " Kies het item dat deze resource oplevert."),
+    choices: yields.map(function (item) { return { label: "Gebruik " + item.name, run: function () { onItem(item); } }; })
+  };
+  renderWorkbench();
+}
+
+function workbenchDropOnZone(parentEntry, zone, payload) {
+  const index = workbenchContentIndex();
+  const source = index.byNodeId.get(payload.nodeId);
+  if (!source) return;
+  const itemAccepting = ["drops", "ingredients", "outputs", "offers", "yields"].includes(zone);
+  if (source.type === "resource_definition" && itemAccepting) {
+    workbenchResourceDropNotice(parentEntry, zone, source, function (item) { workbenchDropOnZone(parentEntry, zone, { nodeId: item.id, type: item.type, ref: item.ref }); });
+    return;
+  }
+  const item = source.type === "item_definition";
+  const currency = source.type === "currency_definition";
+  if (zone === "drops") {
+    if (item) return workbenchBeginRow(parentEntry, zone, "loot_item_entry", { itemRef: source.ref });
+    if (currency) return workbenchBeginRow(parentEntry, zone, "loot_currency_entry", { currencyRef: source.ref });
+    if (source.type === "loot_table") {
+      if (source.id === parentEntry.id) {
+        setStatus("Een Loot Table kan zichzelf niet bevatten.", "error");
+        return;
+      }
+      return workbenchBeginRow(parentEntry, zone, "loot_table_entry", { lootTableRef: source.ref });
+    }
+  }
+  if (zone === "ingredients") {
+    if (item) return workbenchBeginRow(parentEntry, zone, "recipe_ingredient", { kind: "item", itemRef: source.ref });
+    if (currency) return workbenchBeginRow(parentEntry, zone, "recipe_ingredient", { kind: "currency", currencyRef: source.ref });
+  }
+  if (zone === "outputs") {
+    if (item) return workbenchBeginRow(parentEntry, zone, "output_item", { itemRef: source.ref, amount: 1 });
+    if (currency) return workbenchBeginRow(parentEntry, zone, "output_currency", { currencyRef: source.ref, amountMinor: 1 });
+  }
+  if (zone === "offers") {
+    if (item) {
+      const presets = { itemRef: source.ref };
+      const itemCurrency = normalizeCanonicalId(source.node.values?.vendorCurrencyRef, "");
+      const currencies = index.definitions.filter(function (entry) { return entry.type === "currency_definition"; });
+      const preset = itemCurrency && index.resolve(itemCurrency)?.type === "currency_definition" ? itemCurrency : (currencies.length === 1 ? currencies[0].ref : "");
+      if (preset) {
+        presets.sellCurrencyRef = preset;
+        presets.buyCurrencyRef = preset;
+      }
+      const baseValue = Math.floor(Number(source.node.values?.vendorBaseValueMinor) || 0);
+      if (baseValue > 0) presets.buyPriceMinor = baseValue;
+      return workbenchBeginRow(parentEntry, zone, "vendor_offer", presets);
+    }
+    if (currency) {
+      state.workbenchDropNotice = { parentId: parentEntry.id, zone, text: "Sleep een Currency op een bestaand offer om daar de prijs-currency te kiezen.", choices: [] };
+      renderWorkbench();
+      return;
+    }
+  }
+  if (zone === "yields") {
+    if (item) {
+      const refs = normalizeReferenceList(parentEntry.node.values?.yieldItemRefs);
+      if (refs.includes(source.ref)) {
+        setStatus(source.name + " is al een opbrengst van " + parentEntry.name + ".", "");
+        return;
+      }
+      void workbenchPatchNode(parentEntry.node, { yieldItemRefs: refs.concat([source.ref]) }, "Opbrengst-item toegevoegd");
+      return;
+    }
+    if (source.type === "loot_table") {
+      void workbenchPatchNode(parentEntry.node, { yieldLootTableRef: source.ref }, "Oogst-loot gekoppeld");
+      return;
+    }
+  }
+  if (zone === "enemyLoot" && source.type === "loot_table") {
+    void workbenchPatchNode(parentEntry.node, { lootTableRef: source.ref }, "Loot Table gekoppeld aan " + parentEntry.name);
+  }
+}
+
+function workbenchZoneAccepts(zone, parentEntry) {
+  return function (payload) {
+    const type = payload?.type;
+    if (!type || payload.nodeId === parentEntry.id && zone !== "drops") return false;
+    if (zone === "drops") return ["item_definition", "currency_definition", "loot_table", "resource_definition"].includes(type) && payload.nodeId !== parentEntry.id;
+    if (zone === "ingredients" || zone === "outputs") return ["item_definition", "currency_definition", "resource_definition"].includes(type);
+    if (zone === "offers") return ["item_definition", "currency_definition", "resource_definition"].includes(type);
+    if (zone === "yields") return ["item_definition", "loot_table", "resource_definition"].includes(type);
+    if (zone === "enemyLoot") return type === "loot_table";
+    return false;
+  };
+}
+
+function workbenchOfferCurrencyDrop(parentEntry, offer, currencyEntry) {
+  const mode = String(offer.values?.mode || "both");
+  if (mode === "sell_to_player") {
+    void workbenchPatchNode(offer, { sellCurrencyRef: currencyEntry.ref }, "Prijs-currency gekozen");
+    return;
+  }
+  if (mode === "buy_from_player") {
+    void workbenchPatchNode(offer, { buyCurrencyRef: currencyEntry.ref }, "Prijs-currency gekozen");
+    return;
+  }
+  state.workbenchDropNotice = {
+    parentId: parentEntry.id,
+    zone: "offers",
+    text: "Dit offer verkoopt én koopt. Voor welke prijs geldt " + currencyEntry.name + "?",
+    choices: [
+      { label: "Verkoopprijs (speler betaalt)", run: function () { void workbenchPatchNode(offer, { sellCurrencyRef: currencyEntry.ref }, "Prijs-currency gekozen"); } },
+      { label: "Inkoopprijs (speler ontvangt)", run: function () { void workbenchPatchNode(offer, { buyCurrencyRef: currencyEntry.ref }, "Prijs-currency gekozen"); } },
+      { label: "Beide", run: function () { void workbenchPatchNode(offer, { sellCurrencyRef: currencyEntry.ref, buyCurrencyRef: currencyEntry.ref }, "Prijs-currency gekozen"); } }
+    ]
+  };
+  renderWorkbench();
+}
+
+function workbenchFlowItem(options) {
+  const index = workbenchContentIndex();
+  const target = options.entryId ? index.byNodeId.get(options.entryId) : null;
+  const item = document.createElement("div");
+  item.className = "workbenchFlowItem" + (options.inactive ? " inactive" : "") + (options.warning ? " missing" : "");
+  if (options.asset !== undefined) {
+    // Rows without a definition (e.g. a placed world object) show their own asset.
+    const thumb = workbenchThumbnail(options.asset, "GLB");
+    thumb.classList.add("small");
+    item.appendChild(thumb);
+  } else {
+    item.appendChild(workbenchEntryThumb(target, "small"));
+  }
+  const body = document.createElement("div");
+  body.className = "workbenchFlowItemBody";
+  const name = document.createElement("div");
+  name.className = "workbenchRelationValue";
+  name.textContent = options.name || target?.name || "Onbekend";
+  body.appendChild(name);
+  const detailText = [options.detail, options.warning].filter(Boolean).join(" · ");
+  if (detailText || options.inactive) {
+    const detail = document.createElement("div");
+    detail.className = "workbenchMeta";
+    detail.textContent = detailText;
+    if (options.inactive) detail.appendChild(workbenchInactiveBadge());
+    body.appendChild(detail);
+  }
+  item.appendChild(body);
+  if (!options.static && (typeof options.onOpen === "function" || target)) {
+    body.classList.add("clickable");
+    body.title = "Open " + (options.name || target?.name || "");
+    body.addEventListener("click", function () {
+      if (typeof options.onOpen === "function") options.onOpen();
+      else workbenchSelectDefinition(target.id);
+    });
+  }
+  if (options.actions?.length) {
+    const actions = document.createElement("div");
+    actions.className = "workbenchFlowItemActions";
+    for (const action of options.actions) actions.appendChild(workbenchMiniButton(action.label, action.onClick, action.className || "mini"));
+    item.appendChild(actions);
+  }
+  if (options.drop) workbenchAttachDrop(item, options.drop.accepts, options.drop.onDrop);
+  return item;
+}
+
+function workbenchFlowZone(options) {
+  const zone = document.createElement("section");
+  zone.className = "workbenchFlowZone" + (options.drop ? " workbenchDropZone" : "") + (options.inactive ? " inactive" : "") + (options.center ? " center" : "");
+  const header = document.createElement("div");
+  header.className = "workbenchRelationLabel";
+  header.textContent = options.title;
+  if (options.inactive) header.appendChild(workbenchInactiveBadge());
+  zone.appendChild(header);
+  if (options.note) {
+    const note = document.createElement("div");
+    note.className = "workbenchMeta";
+    note.textContent = options.note;
+    zone.appendChild(note);
+  }
+  const list = document.createElement("div");
+  list.className = "workbenchFlowList";
+  for (const row of options.rows || []) list.appendChild(row instanceof HTMLElement ? row : workbenchFlowItem(row));
+  if (!(options.rows || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "workbenchFlowEmpty";
+    empty.textContent = options.empty || "Nog niets.";
+    list.appendChild(empty);
+  }
+  zone.appendChild(list);
+  if (options.actions?.length) {
+    const actions = document.createElement("div");
+    actions.className = "workbenchActions";
+    for (const action of options.actions) actions.appendChild(workbenchMiniButton(action.label, action.onClick));
+    zone.appendChild(actions);
+  }
+  const extras = (options.extras || []).filter(Boolean);
+  for (const extra of extras) zone.appendChild(extra);
+  if (extras.length) zone.classList.add("withForm");
+  if (options.drop) workbenchAttachDrop(zone, options.drop.accepts, options.drop.onDrop);
+  return zone;
+}
+
+function workbenchFlowArrow() {
+  const arrow = document.createElement("div");
+  arrow.className = "workbenchFlowArrow";
+  arrow.textContent = "→";
+  return arrow;
+}
+
+function workbenchCenterCard(entry) {
+  const card = document.createElement("div");
+  card.className = "workbenchFlowZone center";
+  const item = workbenchFlowItem({ entryId: entry.id, name: entry.name, detail: workbenchTypeLabel(entry.type), static: true });
+  card.appendChild(item);
+  const facts = definitionFacts(workbenchContentIndex(), entry);
+  for (const prop of facts.props) {
+    const line = document.createElement("div");
+    line.className = "workbenchMeta";
+    line.textContent = prop;
+    card.appendChild(line);
+  }
+  return card;
+}
+
+function workbenchZoneExtras(parentEntry, zone) {
+  const extras = [];
+  const notice = state.workbenchDropNotice;
+  if (notice && notice.parentId === parentEntry.id && notice.zone === zone) {
+    const card = document.createElement("div");
+    card.className = "workbenchEditorCard";
+    card.appendChild(workbenchWarning(notice.text));
+    const actions = document.createElement("div");
+    actions.className = "workbenchActions";
+    for (const choice of notice.choices || []) actions.appendChild(workbenchMiniButton(choice.label, function () {
+      state.workbenchDropNotice = null;
+      choice.run();
+    }, "primary"));
+    actions.appendChild(workbenchMiniButton("Sluiten", function () {
+      state.workbenchDropNotice = null;
+      renderWorkbench();
+    }, "ghost"));
+    card.appendChild(actions);
+    extras.push(card);
+  }
+  const draft = state.workbenchRowDraft;
+  if (draft && draft.parentId === parentEntry.id && draft.zone === zone) extras.push(renderWorkbenchRowForm(parentEntry));
+  return extras;
+}
+
+function workbenchChildRow(parentEntry, child, zone) {
+  const index = workbenchContentIndex();
+  const key = workbenchRowTargetKey(child.type, child.values);
+  const targetNode = index.resolve(child.values?.[key]);
+  const target = targetNode ? index.byNodeId.get(targetNode.id) : null;
+  const values = child.values || {};
+  let detail = "";
+  let inactive = false;
+  let name = target?.name || "";
+  if (child.type === "loot_item_entry") detail = formatRange(values.minQuantity ?? 1, values.maxQuantity ?? 1) + " · " + (values.guaranteed === true ? "altijd" : formatChance(values.chance ?? 1));
+  else if (child.type === "loot_currency_entry") detail = formatRange(values.minAmountMinor ?? 1, values.maxAmountMinor ?? 1) + " · " + (values.guaranteed === true ? "altijd" : formatChance(values.chance ?? 1));
+  else if (child.type === "loot_table_entry") {
+    detail = formatRange(values.repeatMin ?? 1, values.repeatMax ?? 1) + "× · " + formatChance(values.chance ?? 1);
+    inactive = true;
+  } else if (child.type === "recipe_ingredient") {
+    if (values.kind === "item_tag") {
+      name = "Item-tags";
+      inactive = true;
+    }
+    detail = "×" + formatNumber(Math.max(1, Math.floor(Number(values.amount) || 1))) + (values.consume === false ? " · blijft behouden" : " · wordt verbruikt");
+  } else if (child.type === "vendor_offer") {
+    // Same fallbacks as node05 vendorOfferSummary: offer -> item vendor currency
+    // -> currency.gold, and buy price -> item vendor base value.
+    const mode = String(values.mode || "both");
+    const parts = [];
+    const itemCurrency = normalizeCanonicalId(target?.node.values?.vendorCurrencyRef, "");
+    const sellRef = normalizeCanonicalId(values.sellCurrencyRef, "") || itemCurrency || "currency.gold";
+    const buyRef = normalizeCanonicalId(values.buyCurrencyRef, "") || itemCurrency || sellRef;
+    const currencyName = function (ref, explicit) {
+      const node = index.resolve(ref);
+      const label = node ? (index.byNodeId.get(node.id)?.name || "") : "ontbrekende currency";
+      return label + (explicit ? "" : " (standaard)");
+    };
+    const buyPrice = Math.floor(Number(values.buyPriceMinor) || 0) || Math.floor(Number(target?.node.values?.vendorBaseValueMinor) || 0);
+    if (mode !== "buy_from_player") parts.push("verkoopt voor " + formatNumber(values.sellPriceMinor ?? 0) + " " + currencyName(sellRef, Boolean(values.sellCurrencyRef)));
+    if (mode !== "sell_to_player") parts.push("koopt voor " + formatNumber(buyPrice) + " " + currencyName(buyRef, Boolean(values.buyCurrencyRef)));
+    if (values.stockMode === "limited") parts.push("voorraad " + formatNumber(values.initialStock ?? 0));
+    detail = parts.join(" · ");
+  }
+  return workbenchFlowItem({
+    entryId: target?.id || "",
+    name: name || (child.values?.[key] ? "Ontbrekende verwijzing" : "Nog geen keuze"),
+    detail,
+    inactive,
+    warning: target || name === "Item-tags" ? "" : "kies opnieuw",
+    actions: [
+      { label: "Bewerk", onClick: function () { workbenchBeginRow(parentEntry, zone, child.type, {}, child); } },
+      { label: "×", className: "mini deleteNode", onClick: function () { workbenchDeleteRow(parentEntry, child); } }
+    ],
+    drop: child.type === "vendor_offer" ? {
+      accepts: function (payload) { return payload?.type === "currency_definition"; },
+      onDrop: function (payload) {
+        const currency = index.byNodeId.get(payload.nodeId);
+        if (currency) workbenchOfferCurrencyDrop(parentEntry, child, currency);
+      }
+    } : null
+  });
+}
+
+function workbenchRelationRows(entry, relations, side) {
+  const index = workbenchContentIndex();
+  const rows = [];
+  const seen = new Set();
+  for (const relation of relations) {
+    const otherId = relation[side];
+    const key = otherId + "|" + relation.kind + "|" + relation.via;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const other = index.byNodeId.get(otherId);
+    if (!other) continue;
+    rows.push({ entryId: other.id, name: other.name, detail: [relation.detail, relation.viaName].filter(Boolean).join(" · "), inactive: !relation.active });
+  }
+  return rows;
+}
+
+function workbenchWorldRows(entry) {
+  return workbenchUsageRows(entry).filter(function (row) { return row.worldNodeId; }).map(function (row) {
+    const node = graphNodeByIdInGraph(state.graph, row.worldNodeId);
+    return { name: row.label, detail: row.meta, asset: workbenchAsset(node?.values?.modelAssetId), onOpen: function () { workbenchShowWorldNode(row.worldNodeId); } };
+  });
+}
+
+// Opbrengst of a Resource definition: yield items and harvest loot, with drop.
+// perGather is the placed object's amount per yield item (null = per object).
+function workbenchResourceYieldZone(entry, perGather) {
+  const index = workbenchContentIndex();
+  const rows = entry.out.filter(function (relation) { return relation.kind === "resource_yield"; }).map(function (relation) {
+    return {
+      entryId: relation.to,
+      detail: perGather === null ? "×1 per oogst × opbrengstfactor van het object" : "×" + formatNumber(perGather) + " per oogst",
+      actions: [{ label: "×", className: "mini deleteNode", onClick: function () {
+        const refs = normalizeReferenceList(entry.node.values?.yieldItemRefs).filter(function (ref) { return index.resolve(ref)?.id !== relation.to; });
+        void workbenchPatchNode(entry.node, { yieldItemRefs: refs }, "Opbrengst-item verwijderd");
+      } }]
+    };
+  });
+  const loot = entry.out.find(function (relation) { return relation.kind === "resource_loot"; });
+  if (loot) rows.push({ entryId: loot.to, detail: "Oogst-loot", actions: [{ label: "Ontkoppel", onClick: function () { void workbenchPatchNode(entry.node, { yieldLootTableRef: null }, "Oogst-loot ontkoppeld"); } }] });
+  return workbenchFlowZone({
+    title: "Opbrengst",
+    note: "Sleep een Item (opbrengst) of Loot Table (oogst-loot) hierheen.",
+    rows,
+    empty: "Nog geen opbrengst; oogsten levert dan niets op.",
+    extras: workbenchZoneExtras(entry, "yields"),
+    drop: { accepts: workbenchZoneAccepts("yields", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "yields", payload); } }
+  });
+}
+
+// Model focus: Wereldobject -> Resource-definitie -> Opbrengst.
+function renderWorkbenchResourceObjectStrip(context, root) {
+  const entry = context.resource ? workbenchContentIndex().byNodeId.get(context.resource.id) : null;
+  const flow = document.createElement("div");
+  flow.className = "workbenchRelationFlow workbenchFlowBoard";
+  flow.appendChild(workbenchFlowZone({
+    title: "Wereldobject",
+    rows: [{ name: nodeDisplayTitle(context.model), detail: "Geplaatst model", asset: workbenchAsset(context.model.values?.modelAssetId), onOpen: function () { workbenchShowWorld(context.model); } }]
+  }));
+  flow.appendChild(workbenchFlowArrow());
+  flow.appendChild(workbenchFlowZone({
+    title: "Resource-definitie",
+    rows: entry ? [{ entryId: entry.id, detail: "Open voor alle eigenschappen", onOpen: function () { workbenchSelectDefinition(entry.id, { showOverview: false }); } }] : [],
+    empty: context.resourceRef ? "Ontbrekende Resource-definitie." : "Niet gekoppeld."
+  }));
+  if (entry) {
+    flow.appendChild(workbenchFlowArrow());
+    const multiplier = Math.max(0, Number(context.resourceComponent.values?.yieldMultiplier ?? 1) || 0);
+    flow.appendChild(workbenchResourceYieldZone(entry, multiplier > 0 ? Math.max(1, Math.round(multiplier)) : 0));
+  }
+  root.appendChild(flow);
+}
+
+function renderWorkbenchDefinitionFlow(entry, context) {
+  const root = el.workbenchRelationStrip;
+  if (!root) return;
+  root.innerHTML = "";
+  const index = workbenchContentIndex();
+  const flow = document.createElement("div");
+  flow.className = "workbenchRelationFlow workbenchFlowBoard";
+  const inOf = function () {
+    const kinds = Array.from(arguments);
+    return entry.in.filter(function (relation) { return kinds.includes(relation.kind); });
+  };
+  const outOf = function () {
+    const kinds = Array.from(arguments);
+    return entry.out.filter(function (relation) { return kinds.includes(relation.kind); });
+  };
+  const offerMode = function (relation) { return String(index.nodeById.get(relation.via)?.values?.mode || "both"); };
+  const add = function (element) { flow.appendChild(element); };
+  const editable = Boolean(workbenchCatalogGroupFor(entry.node));
+  if (entry.type === "recipe_definition") {
+    add(workbenchFlowZone({
+      title: "Ingrediënten",
+      note: "Sleep een Item of Currency hierheen.",
+      rows: entry.children.map(function (child) { return workbenchChildRow(entry, child, "ingredients"); }),
+      empty: "Nog geen ingrediënten.",
+      actions: editable ? [
+        { label: "+ Item", onClick: function () { workbenchBeginRow(entry, "ingredients", "recipe_ingredient", { kind: "item" }); } },
+        { label: "+ Currency", onClick: function () { workbenchBeginRow(entry, "ingredients", "recipe_ingredient", { kind: "currency" }); } }
+      ] : [],
+      extras: workbenchZoneExtras(entry, "ingredients"),
+      drop: editable ? { accepts: workbenchZoneAccepts("ingredients", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "ingredients", payload); } } : null
+    }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    const outputRows = [];
+    for (const kind of ["item", "currency"]) {
+      const listKey = kind === "item" ? "outputItems" : "outputCurrencies";
+      const list = normalizeRecipeGrantList(entry.node.values?.[listKey], kind);
+      list.forEach(function (row, outputIndex) {
+        const ref = kind === "item" ? row.itemRef : row.currencyRef;
+        const node = index.resolve(ref);
+        const target = node ? index.byNodeId.get(node.id) : null;
+        outputRows.push(workbenchFlowItem({
+          entryId: target?.id || "",
+          name: target?.name || (ref ? "Ontbrekende verwijzing" : "Nog geen keuze"),
+          detail: "×" + formatNumber(kind === "item" ? row.amount : row.amountMinor) + (kind === "currency" ? " (currency)" : ""),
+          warning: target ? "" : "kies opnieuw",
+          actions: [
+            { label: "↑", onClick: function () { void workbenchMoveOutput(entry, kind, outputIndex, -1); } },
+            { label: "↓", onClick: function () { void workbenchMoveOutput(entry, kind, outputIndex, 1); } },
+            { label: "Bewerk", onClick: function () { workbenchBeginRow(entry, "outputs", kind === "item" ? "output_item" : "output_currency", {}, { outputIndex }); } },
+            { label: "×", className: "mini deleteNode", onClick: function () { void workbenchRemoveOutput(entry, kind, outputIndex); } }
+          ]
+        }));
+      });
+    }
+    add(workbenchFlowZone({
+      title: "Outputs",
+      note: "Sleep een Item of Currency hierheen. Volgorde = volgorde in de crafting-HUD.",
+      rows: outputRows,
+      empty: "Nog geen outputs; craften levert dan niets op.",
+      actions: [
+        { label: "+ Item-output", onClick: function () { workbenchBeginRow(entry, "outputs", "output_item"); } },
+        { label: "+ Currency-output", onClick: function () { workbenchBeginRow(entry, "outputs", "output_currency"); } }
+      ],
+      extras: workbenchZoneExtras(entry, "outputs"),
+      drop: { accepts: workbenchZoneAccepts("outputs", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "outputs", payload); } }
+    }));
+  } else if (entry.type === "vendor_catalog") {
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchFlowZone({
+      title: "Offers",
+      note: "Sleep een Item hierheen voor een nieuw offer; sleep een Currency op een offer om de prijs-currency te kiezen.",
+      rows: entry.children.map(function (child) { return workbenchChildRow(entry, child, "offers"); }),
+      empty: "Nog geen offers.",
+      actions: editable ? [{ label: "+ Offer", onClick: function () { workbenchBeginRow(entry, "offers", "vendor_offer"); } }] : [],
+      extras: workbenchZoneExtras(entry, "offers"),
+      drop: editable ? { accepts: workbenchZoneAccepts("offers", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "offers", payload); } } : null
+    }));
+    add(workbenchFlowZone({ title: "In de wereld", rows: workbenchWorldRows(entry), empty: "Nog geen vendor in de wereld gebruikt deze catalog." }));
+  } else if (entry.type === "loot_table") {
+    add(workbenchFlowZone({ title: "Bronnen", rows: workbenchRelationRows(entry, inOf("enemy_loot", "resource_loot", "loot_nested"), "from"), empty: "Nog geen Enemy of Resource gebruikt deze Loot Table." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchFlowZone({
+      title: "Drops",
+      note: "In de game gooit elke regel apart met zijn kans ('altijd' valt altijd); het aantal is willekeurig tussen minimum en maximum. Geneste Loot Tables doen nog niet mee.",
+      rows: entry.children.map(function (child) { return workbenchChildRow(entry, child, "drops"); }),
+      empty: "Nog geen drops. Sleep een Item of Currency hierheen.",
+      actions: editable ? [
+        { label: "+ Item", onClick: function () { workbenchBeginRow(entry, "drops", "loot_item_entry"); } },
+        { label: "+ Currency", onClick: function () { workbenchBeginRow(entry, "drops", "loot_currency_entry"); } },
+        { label: "+ Loot Table", onClick: function () { workbenchBeginRow(entry, "drops", "loot_table_entry"); } }
+      ] : [],
+      extras: workbenchZoneExtras(entry, "drops"),
+      drop: editable ? { accepts: workbenchZoneAccepts("drops", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "drops", payload); } } : null
+    }));
+  } else if (entry.type === "resource_definition") {
+    add(workbenchFlowZone({ title: "In de wereld", rows: workbenchWorldRows(entry), empty: "Nog niet in de wereld geplaatst." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchResourceYieldZone(entry, null));
+    add(workbenchFlowZone({ title: "Vereisten", rows: workbenchRelationRows(entry, outOf("resource_ability", "resource_skill"), "to"), empty: "Geen vereiste ability of skill." }));
+  } else if (entry.type === "enemy_archetype") {
+    add(workbenchFlowZone({ title: "In de wereld", rows: workbenchWorldRows(entry), empty: "Nog niet aan een wereldobject gekoppeld." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    const loot = outOf("enemy_loot")[0];
+    add(workbenchFlowZone({
+      title: "Loot Table",
+      note: "Sleep een Loot Table hierheen om te koppelen.",
+      rows: loot ? [{ entryId: loot.to, detail: index.byNodeId.get(loot.to)?.children.length + " drop(s)", actions: [{ label: "Ontkoppel", onClick: function () { void workbenchPatchNode(entry.node, { lootTableRef: null }, "Loot Table ontkoppeld"); } }] }] : [],
+      empty: "Geen Loot Table.",
+      drop: { accepts: workbenchZoneAccepts("enemyLoot", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "enemyLoot", payload); } }
+    }));
+    add(workbenchFlowZone({ title: "Stats via Stat Block", rows: workbenchRelationRows(entry, outOf("enemy_stats"), "to"), empty: "Geen Stat Block of geen stat-regels." }));
+    const abilities = outOf("enemy_ability");
+    if (abilities.length || entry.vias.some(function (via) { return via.type === "combat_profile"; })) {
+      add(workbenchFlowZone({ title: "Abilities via Combat Profile", inactive: true, rows: workbenchRelationRows(entry, abilities, "to"), empty: "Combat Profile zonder abilities." }));
+    }
+  } else if (entry.type === "item_definition" || entry.type === "currency_definition") {
+    const item = entry.type === "item_definition";
+    const sources = item
+      ? inOf("resource_yield", "loot_drop", "recipe_output").concat(inOf("vendor_offer").filter(function (relation) { return offerMode(relation) !== "buy_from_player"; }))
+      : inOf("loot_drop", "recipe_output").concat(inOf("vendor_price").filter(function (relation) { return relation.field === "buyCurrencyRef"; }));
+    const uses = item
+      ? inOf("recipe_ingredient").concat(inOf("vendor_offer").filter(function (relation) { return offerMode(relation) !== "sell_to_player"; }))
+      : inOf("recipe_ingredient").concat(inOf("vendor_price").filter(function (relation) { return relation.field === "sellCurrencyRef"; }), inOf("item_currency"));
+    add(workbenchFlowZone({ title: "Herkomst", note: item ? "Resources, loot, recipes en vendors die dit opleveren." : "Loot, recipes en vendors die dit uitbetalen.", rows: workbenchRelationRows(entry, sources, "from"), empty: "Nog nergens te krijgen." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchFlowZone({ title: item ? "Gebruik" : "Uitgaven", note: item ? "Recipes en vendors die dit vragen of inkopen." : "Vendorprijzen, recipe-ingrediënten en items met deze vendorvaluta.", rows: workbenchRelationRows(entry, uses, "from"), empty: "Nog nergens gebruikt." }));
+    if (item) add(workbenchFlowZone({ title: "In de wereld", rows: workbenchWorldRows(entry), empty: "Geen pickups of andere wereldobjecten." }));
+  } else if (entry.type === "ability_definition") {
+    add(workbenchFlowZone({ title: "Gebruikers", rows: workbenchRelationRows(entry, inOf("resource_ability", "enemy_ability"), "from").concat(workbenchUsageRows(entry).filter(function (row) { return !row.definitionId; }).map(function (row) { return { name: row.label, detail: row.meta, onOpen: function () { workbenchShowNode(row.nodeId); } }; })), empty: "Nog niet gebruikt." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchFlowZone({ title: "Kosten-stat", inactive: true, rows: workbenchRelationRows(entry, outOf("ability_cost"), "to"), empty: "Geen kosten-stat." }));
+  } else if (entry.type === "stat_definition") {
+    add(workbenchFlowZone({ title: "Waarden via Stat Blocks", rows: workbenchRelationRows(entry, inOf("enemy_stats"), "from"), empty: "Nog geen Enemy krijgt deze stat via een Stat Block." }));
+    add(workbenchFlowZone({ title: "Overig gebruik", rows: workbenchRelationRows(entry, inOf("resource_skill", "ability_cost"), "from").concat(workbenchUsageRows(entry).filter(function (row) { return !row.definitionId; }).map(function (row) { return { name: row.label, detail: row.meta, onOpen: function () { workbenchShowNode(row.nodeId); } }; })), empty: "Geen ander gebruik." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+  } else {
+    add(workbenchFlowZone({ title: "In de wereld", rows: workbenchWorldRows(entry), empty: "Nog niet aan een wereldobject gekoppeld." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    const note = document.createElement("div");
+    note.className = "workbenchMeta workbenchFlowNote";
+    note.textContent = "Het huidige NPC-schema heeft geen abilities, Stat Block of loot; die relaties worden daarom niet getoond.";
+    add(note);
+  }
+  root.appendChild(flow);
+}
+
+// ---- Contentoverzicht (center) ----
+
+function scheduleWorkbenchOverviewRender() {
+  if (state.workbenchStage !== "overview") return;
+  clearTimeout(workbenchOverviewRenderTimer);
+  workbenchOverviewRenderTimer = setTimeout(function () {
+    if (state.editorMode !== "workbench" || state.workbenchStage !== "overview") return;
+    renderWorkbenchOverview(workbenchContext(), workbenchSelectedDefinition());
+  }, 160);
+}
+
+function renderWorkbenchOverview(context, definition) {
+  const root = el.workbenchOverviewPanel;
+  if (!root) return;
+  const index = workbenchContentIndex();
+  const selectedId = definition?.id || (context.enemy && index.byNodeId.has(context.enemy.id) ? context.enemy.id : "");
+  const scope = state.workbenchRelationScope;
+  // Rebuild only when the derived index or the view inputs changed.
+  const signature = [selectedId, scope, state.workbenchSearch, state.assets.length].join("|");
+  if (signature === workbenchOverviewSignature && root.childElementCount && workbenchOverviewIndexStamp === index) {
+    scheduleWorkbenchOverviewLinks();
+    return;
+  }
+  const selectionChanged = workbenchOverviewSignature.split("|")[0] !== selectedId;
+  workbenchOverviewSignature = signature;
+  workbenchOverviewIndexStamp = index;
+  root.innerHTML = "";
+  // Related cards are sorted to the top of each column; show them after a new selection.
+  if (selectionChanged) root.scrollTop = 0;
+  const toolbar = document.createElement("div");
+  toolbar.className = "workbenchOverviewToolbar";
+  const title = document.createElement("div");
+  title.className = "workbenchHeader";
+  const titleText = document.createElement("div");
+  titleText.className = "workbenchTitle";
+  titleText.textContent = "Contentoverzicht";
+  const subtitle = document.createElement("div");
+  subtitle.className = "workbenchSubtitle";
+  subtitle.textContent = selectedId
+    ? "Gekozen: " + (index.byNodeId.get(selectedId)?.name || "") + ". Alleen bewezen relaties worden verbonden."
+    : "Kies een kaart om zijn echte relaties te zien. Losse kaarten hebben geen relatie.";
+  title.append(titleText, subtitle);
+  toolbar.appendChild(title);
+  const scopes = document.createElement("div");
+  scopes.className = "workbenchStageTabs";
+  for (const option of [{ id: "direct", label: "Alleen directe relaties" }, { id: "all", label: "Alle relaties" }, { id: "used", label: "Waar gebruikt" }]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "workbenchStageTab" + (scope === option.id ? " active" : "");
+    button.textContent = option.label;
+    button.disabled = !selectedId;
+    button.addEventListener("click", function () {
+      state.workbenchRelationScope = option.id;
+      workbenchOverviewSignature = "";
+      renderWorkbenchOverview(workbenchContext(), workbenchSelectedDefinition());
+    });
+    scopes.appendChild(button);
+  }
+  toolbar.appendChild(scopes);
+  const result = selectedId
+    ? relationScope(index, selectedId, scope, { maxNodes: 60, maxRelations: WORKBENCH_OVERVIEW_RELATION_LIMIT })
+    : { related: new Map(), relations: [], truncated: false };
+  const legend = document.createElement("div");
+  legend.className = "workbenchMeta";
+  legend.textContent = selectedId
+    ? result.relations.length + " relatie(s) getoond" + (result.truncated ? " (begrensd)" : "") + " · doorgetrokken = actief in de game · gestreept = nog niet actief"
+    : index.definitions.length + " definities";
+  toolbar.appendChild(legend);
+  root.appendChild(toolbar);
+  if (selectedId && scope === "used") {
+    const entry = index.byNodeId.get(selectedId);
+    const others = entry ? workbenchUsageRows(entry).filter(function (row) { return !row.definitionId; }) : [];
+    if (others.length) {
+      const usage = document.createElement("div");
+      usage.className = "workbenchBadgeRow workbenchOverviewUsage";
+      usage.appendChild(workbenchBadge("Ook gebruikt door:", "muted"));
+      for (const row of others.slice(0, 8)) {
+        const chip = workbenchMiniButton(row.label, function () {
+          if (row.worldNodeId) workbenchShowWorldNode(row.worldNodeId);
+          else workbenchShowNode(row.nodeId);
+        });
+        chip.title = row.meta;
+        usage.appendChild(chip);
+      }
+      if (others.length > 8) usage.appendChild(workbenchBadge("+" + (others.length - 8), "muted"));
+      root.appendChild(usage);
+    }
+  }
+  const board = document.createElement("div");
+  board.className = "workbenchOverviewBoard";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("workbenchOverviewLinks");
+  svg.setAttribute("aria-hidden", "true");
+  board.appendChild(svg);
+  const query = normalizeEditorKey(state.workbenchSearch);
+  for (const band of OVERVIEW_BANDS) {
+    const bandElement = document.createElement("section");
+    bandElement.className = "workbenchOverviewBand";
+    const bandTitle = document.createElement("div");
+    bandTitle.className = "workbenchSectionTitle";
+    bandTitle.textContent = band.label + ": " + band.columns.map(function (column) { return column.label; }).join(" → ");
+    bandElement.appendChild(bandTitle);
+    const columns = document.createElement("div");
+    columns.className = "workbenchOverviewColumns";
+    columns.style.setProperty("--wb-columns", String(band.columns.length));
+    for (const column of band.columns) {
+      const columnElement = document.createElement("div");
+      columnElement.className = "workbenchOverviewColumn";
+      const entries = index.definitions.filter(function (entry) {
+        if (!column.types.includes(entry.type)) return false;
+        if (entry.id === selectedId || result.related.has(entry.id)) return true;
+        return !query || normalizeEditorKey(entry.name).includes(query);
+      }).sort(function (left, right) {
+        const rank = function (entry) { return entry.id === selectedId ? 0 : result.related.has(entry.id) ? 1 : 2; };
+        return rank(left) - rank(right) || left.name.localeCompare(right.name, "nl", { sensitivity: "base" });
+      });
+      const header = document.createElement("div");
+      header.className = "workbenchOverviewColumnHeader";
+      header.textContent = column.label + " · " + entries.length;
+      columnElement.appendChild(header);
+      for (const entry of entries.slice(0, WORKBENCH_OVERVIEW_COLUMN_LIMIT)) {
+        columnElement.appendChild(renderWorkbenchOverviewCard(entry, selectedId, result.related.get(entry.id) || null));
+      }
+      if (!entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "workbenchFlowEmpty";
+        empty.textContent = query ? "Geen resultaten." : "Leeg.";
+        columnElement.appendChild(empty);
+      } else if (entries.length > WORKBENCH_OVERVIEW_COLUMN_LIMIT) {
+        const more = document.createElement("div");
+        more.className = "workbenchLibraryMore";
+        more.textContent = "+" + (entries.length - WORKBENCH_OVERVIEW_COLUMN_LIMIT) + " meer; zoek in de bibliotheek.";
+        columnElement.appendChild(more);
+      }
+      columns.appendChild(columnElement);
+    }
+    bandElement.appendChild(columns);
+    board.appendChild(bandElement);
+  }
+  root.appendChild(board);
+  workbenchOverviewRelations = result.relations;
+  if (typeof ResizeObserver === "function") {
+    if (!workbenchOverviewResizeObserver) workbenchOverviewResizeObserver = new ResizeObserver(scheduleWorkbenchOverviewLinks);
+    workbenchOverviewResizeObserver.disconnect();
+    workbenchOverviewResizeObserver.observe(board);
+  }
+  scheduleWorkbenchOverviewLinks();
+}
+
+function renderWorkbenchOverviewCard(entry, selectedId, related) {
+  const card = document.createElement("button");
+  card.type = "button";
+  card.dataset.nodeId = entry.id;
+  const loose = !entry.in.length && !entry.out.length && !entry.usage.length;
+  card.className = "workbenchOverviewCard"
+    + (entry.id === selectedId ? " selected" : "")
+    + (related ? " related" : "")
+    + (selectedId && entry.id !== selectedId && !related ? " dimmed" : "");
+  card.draggable = true;
+  card.addEventListener("dragstart", function (event) { workbenchStartDefinitionDrag(event, entry); });
+  card.addEventListener("dragend", workbenchEndDefinitionDrag);
+  card.appendChild(workbenchEntryThumb(entry, "small"));
+  const body = document.createElement("div");
+  body.className = "workbenchOverviewCardBody";
+  const name = document.createElement("div");
+  name.className = "workbenchRelationValue";
+  name.textContent = entry.name;
+  const meta = document.createElement("div");
+  meta.className = "workbenchMeta";
+  meta.textContent = workbenchTypeLabel(entry.type);
+  body.append(name, meta);
+  const chips = document.createElement("div");
+  chips.className = "workbenchBadgeRow";
+  if (related) {
+    for (const chip of related.chips) chips.appendChild(workbenchBadge(chip.text, chip.active ? "linked" : "inactive"));
+  } else if (loose) {
+    chips.appendChild(workbenchBadge("Los", "muted"));
+  }
+  if (entry.missing.length) chips.appendChild(workbenchBadge("!", "warning"));
+  if (chips.childElementCount) body.appendChild(chips);
+  card.appendChild(body);
+  card.addEventListener("click", function () { workbenchSelectDefinition(entry.id); });
+  return card;
+}
+
+function scheduleWorkbenchOverviewLinks() {
+  if (workbenchOverviewLinkFrame) return;
+  workbenchOverviewLinkFrame = requestAnimationFrame(function () {
+    workbenchOverviewLinkFrame = 0;
+    drawWorkbenchOverviewLinks();
+  });
+}
+
+function drawWorkbenchOverviewLinks() {
+  const board = el.workbenchOverviewPanel?.querySelector(".workbenchOverviewBoard");
+  const svg = board?.querySelector(".workbenchOverviewLinks");
+  if (!board || !svg || state.workbenchStage !== "overview") return;
+  svg.innerHTML = "";
+  const boardRect = board.getBoundingClientRect();
+  if (!boardRect.width || !boardRect.height) return;
+  svg.setAttribute("width", String(Math.ceil(board.scrollWidth)));
+  svg.setAttribute("height", String(Math.ceil(board.scrollHeight)));
+  const cards = new Map();
+  for (const card of board.querySelectorAll(".workbenchOverviewCard")) cards.set(card.dataset.nodeId, card);
+  for (const relation of workbenchOverviewRelations) {
+    const from = cards.get(relation.from);
+    const to = cards.get(relation.to);
+    if (!from || !to) continue;
+    const a = from.getBoundingClientRect();
+    const b = to.getBoundingClientRect();
+    const ax = a.left - boardRect.left;
+    const bx = b.left - boardRect.left;
+    const ay = a.top - boardRect.top + a.height / 2;
+    const by = b.top - boardRect.top + b.height / 2;
+    let x1;
+    let x2;
+    let c1;
+    let c2;
+    if (Math.abs(ax - bx) < 8) {
+      x1 = ax + a.width;
+      x2 = bx + b.width;
+      c1 = x1 + 36;
+      c2 = x2 + 36;
+    } else if (ax < bx) {
+      x1 = ax + a.width;
+      x2 = bx;
+      c1 = x1 + Math.max(24, (x2 - x1) / 2);
+      c2 = x2 - Math.max(24, (x2 - x1) / 2);
+    } else {
+      x1 = ax;
+      x2 = bx + b.width;
+      c1 = x1 - Math.max(24, (x1 - x2) / 2);
+      c2 = x2 + Math.max(24, (x1 - x2) / 2);
+    }
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M " + x1 + " " + ay + " C " + c1 + " " + ay + ", " + c2 + " " + by + ", " + x2 + " " + by);
+    path.setAttribute("class", relation.active ? "active" : "inactive");
+    svg.appendChild(path);
+  }
+}
+
+function initWorkbenchW2() {
+  // The asset grid owns its own drag; we only remember which asset is in flight
+  // so Workbench asset slots can light up for matching asset types.
+  el.assetGrid?.addEventListener("dragstart", function (event) {
+    workbenchDragAssetId = event.target?.closest?.(".assetCard")?.dataset.assetId || "";
+  }, true);
+  el.assetGrid?.addEventListener("dragend", function () {
+    workbenchDragAssetId = "";
+    for (const element of document.querySelectorAll(".workbenchDropReady")) element.classList.remove("workbenchDropReady");
+  }, true);
+  document.addEventListener("dragend", function () {
+    workbenchDragPayload = null;
+    workbenchDragAssetId = "";
+  }, true);
+  window.addEventListener("resize", function () {
+    if (state.editorMode === "workbench" && state.workbenchStage === "overview") scheduleWorkbenchOverviewLinks();
+  });
 }
 
 function renderCatalogHub(group) {
@@ -21387,7 +23879,8 @@ function beginWorkbenchRelationResize(event) {
   event.stopPropagation();
   const pointerId = event.pointerId;
   const startY = event.clientY;
-  const viewportHeight = el.viewportWrap.getBoundingClientRect().height;
+  const stageElement = state.workbenchStage === "overview" && el.workbenchOverviewPanel ? el.workbenchOverviewPanel : el.viewportWrap;
+  const viewportHeight = stageElement.getBoundingClientRect().height;
   const relationHeight = strip.getBoundingClientRect().height;
   resizer.classList.add("active");
   try { resizer.setPointerCapture?.(pointerId); } catch {}
@@ -21413,51 +23906,142 @@ function beginWorkbenchRelationResize(event) {
 }
 
 // ---------------------------------------------------------------------------
-// "All" tab: Blender-achtige vrije venster-indeling (split-boom van panes).
-// De 4 bestaande paneel-elementen (.tools/.graphColumn/.viewportColumn/.assetColumn)
-// worden hier NIET gekloond maar verplaatst (appendChild) naar hun plek in de boom,
-// zodat canvas/WebGL-state en event listeners intact blijven. Elk paneeltype kan
-// maar op 1 plek tegelijk zichtbaar zijn.
+// Gedeelde Blender-achtige vensterindeling voor Nodes en Werkbank.
+// De bestaande paneel-elementen worden niet gekloond maar verplaatst, zodat
+// canvas/WebGL-state en event listeners intact blijven.
 // ---------------------------------------------------------------------------
 
-function defaultAllLayoutTree() {
+function allPaneViews(mode = state.editorMode) {
+  return mode === "workbench" ? WORKBENCH_PANE_VIEWS : NODE_PANE_VIEWS;
+}
+
+function defaultAllLayoutTree(mode = state.editorMode) {
+  const leftTop = "viewport";
+  const leftBottom = mode === "workbench" ? "library" : "assets";
+  const rightTop = mode === "workbench" ? "workbench" : "tools";
+  const rightBottom = mode === "workbench" ? "relations" : "graph";
   return {
-    dir: "col",
+    dir: "row",
     children: [
-      { size: 1, node: { view: "tools" } },
-      { size: 1, node: { view: "graph" } },
-      { size: 1, node: { view: "viewport" } },
-      { size: 1, node: { view: "assets" } }
+      {
+        size: 1,
+        node: {
+          dir: "col",
+          children: [
+            { size: 1, node: { view: leftTop } },
+            { size: 1, node: { view: leftBottom } }
+          ]
+        }
+      },
+      {
+        size: 1,
+        node: {
+          dir: "col",
+          children: [
+            { size: 1, node: { view: rightTop } },
+            { size: 1, node: { view: rightBottom } }
+          ]
+        }
+      }
     ]
   };
 }
 
-function isValidAllLayoutNode(node) {
+function isValidAllLayoutNode(node, allowedViews = allPaneViews()) {
   if (!node || typeof node !== "object") return false;
-  if (node.view) return ALL_PANE_VIEWS.includes(node.view);
+  if (node.view) return allowedViews.includes(node.view);
   if (node.dir === "row" || node.dir === "col") {
     return Array.isArray(node.children) && node.children.length >= 1 &&
       node.children.every(function (child) {
-        return child && typeof child.size === "number" && isValidAllLayoutNode(child.node);
+        return child && typeof child.size === "number" && child.size > 0 && isValidAllLayoutNode(child.node, allowedViews);
       });
   }
   return false;
 }
 
-function loadStoredAllLayoutTree() {
+function defaultAllLayoutTrees() {
+  return {
+    nodes: defaultAllLayoutTree("nodes"),
+    workbench: defaultAllLayoutTree("workbench")
+  };
+}
+
+function isValidAllLayoutTrees(layouts) {
+  return Boolean(layouts
+    && isValidAllLayoutNode(layouts.nodes, NODE_PANE_VIEWS)
+    && isValidAllLayoutNode(layouts.workbench, WORKBENCH_PANE_VIEWS));
+}
+
+function loadStoredAllLayoutTrees() {
   try {
     const raw = window.localStorage.getItem(ALL_LAYOUT_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (isValidAllLayoutNode(parsed)) return parsed;
+      if (isValidAllLayoutTrees(parsed)) return parsed;
     }
   } catch {}
-  return defaultAllLayoutTree();
+  return defaultAllLayoutTrees();
+}
+
+function currentEditorLayoutPayload() {
+  if (!state.allLayoutTrees) state.allLayoutTrees = defaultAllLayoutTrees();
+  if (state.allLayoutTree) state.allLayoutTrees[state.editorMode] = state.allLayoutTree;
+  return {
+    version: 1,
+    editorMode: state.editorMode,
+    layouts: state.allLayoutTrees
+  };
+}
+
+function scheduleEditorLayoutServerSave() {
+  if (!editorLayoutServerReady) return;
+  if (editorLayoutSaveTimer) clearTimeout(editorLayoutSaveTimer);
+  editorLayoutSaveTimer = setTimeout(function () {
+    editorLayoutSaveTimer = null;
+    void api("/api/editor/layout", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layout: currentEditorLayoutPayload() })
+    }).catch(function (error) {
+      console.warn("Editorindeling kon niet worden opgeslagen:", error?.message || error);
+    });
+  }, 250);
+}
+
+function flushEditorLayoutServerSave() {
+  if (!editorLayoutServerReady) return;
+  if (editorLayoutSaveTimer) {
+    clearTimeout(editorLayoutSaveTimer);
+    editorLayoutSaveTimer = null;
+  }
+  void window.fetch("/api/editor/layout", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ layout: currentEditorLayoutPayload() }),
+    keepalive: true
+  }).catch(function () {});
 }
 
 function persistAllLayoutTree() {
-  if (!state.allLayoutTree) return;
-  try { window.localStorage.setItem(ALL_LAYOUT_STORAGE_KEY, JSON.stringify(state.allLayoutTree)); } catch {}
+  const payload = currentEditorLayoutPayload();
+  try { window.localStorage.setItem(ALL_LAYOUT_STORAGE_KEY, JSON.stringify(payload.layouts)); } catch {}
+  scheduleEditorLayoutServerSave();
+}
+
+async function loadEditorLayoutFromServer() {
+  const result = await api("/api/editor/layout");
+  const stored = result?.layout;
+  if (stored && isValidAllLayoutTrees(stored.layouts)) {
+    state.allLayoutTrees = stored.layouts;
+    state.editorMode = stored.editorMode === "workbench" ? "workbench" : "nodes";
+    state.allLayoutTree = state.allLayoutTrees[state.editorMode];
+    try {
+      window.localStorage.setItem(ALL_LAYOUT_STORAGE_KEY, JSON.stringify(state.allLayoutTrees));
+      window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode);
+    } catch {}
+  }
+  editorLayoutServerReady = true;
+  if (!stored) persistAllLayoutTree();
 }
 
 function allPaneContentElement(view) {
@@ -21465,6 +24049,9 @@ function allPaneContentElement(view) {
   if (view === "graph") return document.querySelector(".graphColumn");
   if (view === "viewport") return document.querySelector(".viewportColumn");
   if (view === "assets") return document.querySelector(".assetColumn");
+  if (view === "workbench") return document.querySelector(".tools");
+  if (view === "relations") return el.workbenchRelationStrip;
+  if (view === "library") return document.querySelector(".assetColumn");
   return null;
 }
 
@@ -21500,7 +24087,8 @@ function setAllLayoutNodeAt(path, newNode) {
 
 function renderAllLayout() {
   if (!el.allLayoutRoot) return;
-  if (!state.allLayoutTree) state.allLayoutTree = loadStoredAllLayoutTree();
+  if (!state.allLayoutTrees) state.allLayoutTrees = loadStoredAllLayoutTrees();
+  if (!state.allLayoutTree) state.allLayoutTree = state.allLayoutTrees[state.editorMode] || defaultAllLayoutTree(state.editorMode);
   // Park the real panel elements in the (always-attached) overflow holder
   // *before* wiping the tree below. They are currently nested inside
   // el.allLayoutRoot from the previous render, so clearing its innerHTML
@@ -21508,9 +24096,9 @@ function renderAllLayout() {
   // querySelector calls in buildAllPane/allPaneContentElement would then
   // never find them again (they'd be silently lost, leaving empty panes).
   if (el.allLayoutOverflow) {
-    for (const view of ALL_PANE_VIEWS) {
-      const contentEl = allPaneContentElement(view);
-      if (contentEl) el.allLayoutOverflow.appendChild(contentEl);
+    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
+    for (const contentEl of contentElements) {
+      el.allLayoutOverflow.appendChild(contentEl);
     }
   }
   el.allLayoutRoot.innerHTML = "";
@@ -21563,7 +24151,8 @@ function buildAllPane(node, path) {
   const used = collectUsedAllViews(state.allLayoutTree);
   const select = document.createElement("select");
   select.setAttribute("aria-label", "Paneel-inhoud");
-  for (const view of ALL_PANE_VIEWS) {
+  const paneViews = allPaneViews();
+  for (const view of paneViews) {
     if (view !== node.view && used.has(view)) continue;
     const option = document.createElement("option");
     option.value = view;
@@ -21574,7 +24163,7 @@ function buildAllPane(node, path) {
   select.addEventListener("change", function () { setAllPaneView(path, select.value); });
   header.appendChild(select);
 
-  const canSplit = used.size < ALL_PANE_VIEWS.length;
+  const canSplit = used.size < paneViews.length;
   const splitRowBtn = document.createElement("button");
   splitRowBtn.type = "button";
   splitRowBtn.textContent = "⬌";
@@ -21612,7 +24201,7 @@ function buildAllPane(node, path) {
 }
 
 function setAllPaneView(path, view) {
-  if (!ALL_PANE_VIEWS.includes(view)) return;
+  if (!allPaneViews().includes(view)) return;
   const node = getAllLayoutNodeAt(path);
   if (!node || node.view === view) return;
   const used = collectUsedAllViews(state.allLayoutTree);
@@ -21624,7 +24213,7 @@ function setAllPaneView(path, view) {
 
 function splitAllPane(path, dir) {
   const used = collectUsedAllViews(state.allLayoutTree);
-  const freeView = ALL_PANE_VIEWS.find(function (view) { return !used.has(view); });
+  const freeView = allPaneViews().find(function (view) { return !used.has(view); });
   if (!freeView) return;
   const target = getAllLayoutNodeAt(path);
   if (!target || !target.view) return;
@@ -21711,12 +24300,17 @@ function restoreFlatEditorLayoutOrder() {
   if (graphEl && resizerGraph) el.layout.insertBefore(graphEl, resizerGraph);
   if (viewportEl && resizerViewport) el.layout.insertBefore(viewportEl, resizerViewport);
   if (assetsEl) el.layout.appendChild(assetsEl);
+  if (el.workbenchRelationStrip && el.statusText?.parentElement === viewportEl) {
+    viewportEl.insertBefore(el.workbenchRelationStrip, el.statusText);
+  }
 }
 
 function updateAllLayoutMode() {
-  const shouldBeActive = state.editorMode !== "workbench" && state.mobilePanel === "all" && isMobileLayout();
+  const shouldBeActive = true;
   if (shouldBeActive && !allLayoutActive) {
     allLayoutActive = true;
+    renderAllLayout();
+  } else if (shouldBeActive && allLayoutActive) {
     renderAllLayout();
   } else if (!shouldBeActive && allLayoutActive) {
     allLayoutActive = false;
@@ -21725,7 +24319,8 @@ function updateAllLayoutMode() {
 }
 
 function initAllLayoutControls() {
-  if (!state.allLayoutTree) state.allLayoutTree = loadStoredAllLayoutTree();
+  if (!state.allLayoutTrees) state.allLayoutTrees = loadStoredAllLayoutTrees();
+  state.allLayoutTree = state.allLayoutTrees[state.editorMode] || defaultAllLayoutTree(state.editorMode);
 }
 
 function updateEditorFullscreenButton() {
@@ -21773,7 +24368,7 @@ function focusViewportSelection() {
 function initMobileControls() {
   applyStoredEditorLayoutSizes();
   initAllLayoutControls();
-  setMobilePanel(state.mobilePanel, false);
+  setMobilePanel("all", false);
   updateTopbarLabels();
   if (el.mobilePanelTabs) {
     for (const button of el.mobilePanelTabs.querySelectorAll("[data-mobile-panel]")) {
@@ -21783,6 +24378,7 @@ function initMobileControls() {
     }
   }
   initEditorLayoutResizers();
+  initWorkbenchW2();
   if (el.fullscreenButton) el.fullscreenButton.addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("fullscreenchange", updateEditorFullscreenButton);
   MOBILE_LAYOUT_QUERY?.addEventListener?.("change", updateTopbarLabels);
@@ -25902,7 +28498,7 @@ function buildAssetCard(asset) {
   card.className = "assetCard";
   card.dataset.assetId = asset.id;
   if (state.mobileSelectedAssetId === asset.id) card.classList.add("selected");
-  card.draggable = asset.assetType === "model";
+  card.draggable = asset.assetType === "model" || (state.editorMode === "workbench" && asset.assetType === "image");
   const animationNames = animationClipsForAsset(asset).map(function (entry) { return entry.name; });
   const titleParts = [asset.name, asset.assetType, asset.category];
   if (asset.assetType === "model" && animationNames.length) titleParts.push(animationNames.join(", "));
@@ -26398,6 +28994,7 @@ el.viewportCanvas.addEventListener("drop", function (event) {
   el.viewportCanvas.classList.remove("dropHint");
   const assetId = event.dataTransfer.getData("text/gk-asset");
   if (!assetId || !runtime) return;
+  if (assetById(assetId)?.assetType !== "model") return;
   const ground = runtime.screenToGround(event.clientX, event.clientY) || { x: 0, y: 0, z: 0 };
   placeModel(assetId, ground);
 });
@@ -29092,6 +31689,7 @@ window.addEventListener("pointerup", handleTerrainPointerUp, true);
 window.addEventListener("pointercancel", handleTerrainPointerUp, true);
 window.addEventListener("mouseup", handleTerrainMouseUpFallback, true);
 window.addEventListener("blur", clearViewportTouchEditState, true);
+window.addEventListener("pagehide", flushEditorLayoutServerSave);
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { setEditorMode("nodes"); });
 if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setEditorMode("workbench"); });

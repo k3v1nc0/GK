@@ -198,7 +198,7 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
   border-right: 1px solid #1c2733;
 }
 
-/* Blender-achtige vrije venster-indeling voor het "All" tabblad (alleen mobiel/smal, zie media query) */
+/* Blender-achtige vrije venster-indeling voor Nodes en Werkbank op ieder schermformaat. */
 .allLayoutRoot { display: none; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 
 .allSplit { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
@@ -214,7 +214,16 @@ button.iconButton:disabled:hover { border-color: #2c3845; }
 .allSplitResizer:hover, .allSplitResizer.active { background: #101a24; }
 .allSplitResizer:hover::before, .allSplitResizer.active::before { background: #7bd4ff; }
 
-.allPane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #0c1218; }
+.allPane {
+  container-name: editor-pane;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c1218;
+}
 .allPaneHeader { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: 1px solid #1c2733; background: #0e151c; }
 .allPaneHeader select {
   flex: 1 1 auto; min-height: 30px; min-width: 0; font: inherit; font-size: 11px; font-weight: 800;
@@ -3201,9 +3210,229 @@ button.workbenchLibraryCard:hover { border-color: #ffb454; background: #15202a; 
 .workbenchFlowRule { width: 165px; }
 .workbenchStripEditor { margin-top: 9px; max-width: 620px; }
 
+/* Visual Content Workbench W2: visual catalog, crafting, loot and vendors.
+   Still a projection of the graph; no extra store, no node ports or cables. */
+.workbenchOverview { display: none; }
+.workbenchLeftHeader { display: grid; gap: 8px; }
+.workbenchTitleRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; }
+.workbenchTitleRow .workbenchTitle { min-width: 0; }
+body.workbenchMode.workbenchStageOverview .viewportWrap { display: none; }
+body.workbenchMode.workbenchStageOverview .workbenchOverview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: #070c11;
+}
+.workbenchStageTabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #2a3744;
+  border-radius: 8px;
+  background: #0b1118;
+}
+.workbenchStageTab {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #8fa0ad;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.workbenchStageTab:hover:not(:disabled) { color: #e5edf3; background: #151f29; }
+.workbenchStageTab.active { color: #251707; background: #ffb454; }
+.workbenchStageTab:disabled { opacity: 0.45; cursor: default; }
+
+.workbenchThumb { background: color-mix(in srgb, var(--wb-type-color, #718392) 14%, #091018); color: var(--wb-type-color, #718392); }
+.workbenchThumb.small { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 6px; font-size: 8px; }
+.workbenchBadge.muted { color: #91a1ad; border-color: #2e3d4a; background: #0f1820; }
+.workbenchBadge.inactive { color: #c9b6ff; border-color: #4a3a73; background: #1a1430; border-style: dashed; }
+.workbenchFieldLabel .workbenchBadge,
+.workbenchRelationLabel .workbenchBadge { margin-left: 4px; text-transform: none; letter-spacing: 0; }
+
+.workbenchCreateButton {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1.2;
+}
+.workbenchLibraryTabs.workbenchCategoryTabs,
+.workbenchTypeChoices { display: flex; flex-wrap: wrap; gap: 4px; }
+.workbenchCategoryTab {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid #2c3845;
+  border-radius: 999px;
+  color: #b9c6cf;
+  background: #111a23;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.workbenchCategoryTab:hover { border-color: #4a5a6a; color: #fff; }
+.workbenchCategoryTab.active { color: #251707; border-color: #ffb454; background: #ffb454; }
+/* Compact cards; a wider library (vertical resizer) places them side by side. */
+.workbenchLibraryGrid.workbenchContentList { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; }
+.workbenchContentCard {
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 8px;
+  padding: 6px;
+  cursor: pointer;
+}
+.workbenchContentCard .workbenchName { font-size: 13px; }
+.workbenchContentCard .workbenchBadge { min-height: 17px; padding: 1px 6px; font-size: 9.5px; }
+.workbenchContentCard:hover,
+.workbenchContentCard:focus-visible { border-color: #ffb454; outline: none; }
+.workbenchContentCard .workbenchThumb { width: 44px; height: 44px; border-radius: 7px; }
+.workbenchContentCardBody { min-width: 0; display: grid; gap: 3px; }
+.workbenchContentCard .workbenchLibraryCardActions { grid-column: 1 / -1; }
+.workbenchContentCard .workbenchLibraryCardActions:empty { display: none; }
+.workbenchCardProps { display: grid; gap: 0; color: #b3c1cb; font-size: 10.5px; line-height: 1.3; }
+.workbenchCardProps > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbenchNavRow button { flex: 0 1 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbenchDangerCard { border-color: #6b2f35; background: #1e1215; }
+.workbenchMore summary { cursor: pointer; color: #cfd8df; font-size: 12px; font-weight: 800; padding: 4px 0; }
+.workbenchMore[open] summary { margin-bottom: 6px; }
+.workbenchField textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #2f4050;
+  border-radius: 7px;
+  color: #edf3f6;
+  background: #0a121a;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.workbenchRefList { display: grid; gap: 6px; }
+.workbenchChipRemove { margin-left: 5px; padding: 0 5px; border: 0; border-radius: 999px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.workbenchAssetSection { display: grid; gap: 7px; }
+.workbenchAssetSlot {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px;
+  border: 1px dashed #304354;
+  border-radius: 9px;
+  background: #0d151d;
+}
+.workbenchAssetSlot .workbenchThumb { width: 56px; height: 56px; }
+.workbenchAssetSlotBody { min-width: 0; display: grid; gap: 4px; align-content: start; }
+.workbenchDropReady {
+  border-color: #35d07f !important;
+  border-style: solid !important;
+  box-shadow: inset 0 0 0 1px #35d07f;
+  background: #0f2418 !important;
+}
+
+.workbenchFlowBoard { align-items: flex-start; flex-wrap: nowrap; }
+.workbenchFlowBoard .workbenchFlowArrow { align-self: center; }
+.workbenchFlowZone {
+  flex: 0 0 auto;
+  width: 250px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 8px;
+  border: 1px solid #263746;
+  border-radius: 10px;
+  background: #0d1720;
+}
+.workbenchFlowZone.center { width: 190px; border-color: #405368; background: #101a23; }
+.workbenchFlowZone.inactive { border-style: dashed; opacity: 0.85; }
+.workbenchDropZone { border-style: dashed; border-color: #36506a; }
+.workbenchFlowList { display: grid; gap: 5px; }
+.workbenchFlowItem {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 5px;
+  border: 1px solid #22323f;
+  border-radius: 8px;
+  background: #0a1219;
+}
+.workbenchFlowItem.inactive { border-style: dashed; }
+.workbenchFlowItem.missing { border-color: #684126; }
+.workbenchFlowItemBody { min-width: 0; display: grid; gap: 2px; }
+.workbenchFlowItemBody .workbenchRelationValue { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbenchFlowItemBody.clickable { cursor: pointer; }
+.workbenchFlowItemBody.clickable:hover .workbenchRelationValue { color: #ffc473; }
+.workbenchFlowItemActions { display: flex; gap: 3px; }
+.workbenchFlowItemActions button { padding: 3px 7px; font-size: 11px; }
+.workbenchFlowEmpty { padding: 8px; border: 1px dashed #2b3b49; border-radius: 8px; color: #7d8f9c; font-size: 11px; }
+.workbenchFlowNote { align-self: center; max-width: 260px; }
+.workbenchFlowZone .workbenchActions button { flex: 1 1 auto; padding: 5px 8px; font-size: 11px; }
+.workbenchRowForm { width: 100%; }
+.workbenchRowFields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.workbenchRowFields > .wide,
+.workbenchRowFields > .workbenchFieldCheck { grid-column: 1 / -1; }
+.workbenchFlowZone.withForm { width: 380px; }
+
+.workbenchOverviewToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.workbenchOverviewToolbar .workbenchHeader { flex: 1 1 260px; min-width: 0; }
+.workbenchOverviewUsage { align-items: center; }
+.workbenchOverviewBoard { position: relative; display: grid; gap: 14px; min-width: 0; }
+.workbenchOverviewLinks { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 2; }
+.workbenchOverviewLinks path { fill: none; stroke-width: 2; }
+.workbenchOverviewLinks path.active { stroke: #ffb454; opacity: 0.85; }
+.workbenchOverviewLinks path.inactive { stroke: #9a86d6; stroke-dasharray: 5 4; opacity: 0.75; }
+.workbenchOverviewBand { display: grid; gap: 7px; }
+.workbenchOverviewColumns { display: grid; grid-template-columns: repeat(var(--wb-columns, 3), minmax(150px, 1fr)); gap: 26px; }
+.workbenchOverviewColumn { min-width: 0; display: grid; gap: 5px; align-content: start; }
+.workbenchOverviewColumnHeader { color: #758997; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px; }
+.workbenchOverviewCard {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid #263746;
+  border-radius: 8px;
+  color: inherit;
+  background: #0d1720;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workbenchOverviewCard:hover { border-color: #ffb454; }
+.workbenchOverviewCard.selected { border-color: #ffb454; box-shadow: 0 0 0 1px #ffb454; background: #1b160d; }
+.workbenchOverviewCard.related { border-color: #4d7a5b; background: #0f1d16; }
+.workbenchOverviewCard.dimmed { opacity: 0.38; }
+.workbenchOverviewCardBody { min-width: 0; display: grid; gap: 2px; }
+.workbenchOverviewCardBody .workbenchRelationValue { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 @media (max-width: 1250px) and (min-width: 981px) {
   .workbenchPanel { padding: 10px; }
   .workbenchLibraryGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 980px) {
+  .workbenchOverviewColumns { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .workbenchFlowBoard { flex-wrap: wrap; }
+  .workbenchFlowZone,
+  .workbenchFlowZone.withForm { width: min(100%, 360px); }
+  .workbenchRowFields { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 980px) {
@@ -3462,6 +3691,85 @@ button.workbenchLibraryCard:hover { border-color: #ffb454; background: #15202a; 
     min-height: 28px;
     font-size: 9px;
     padding-inline: 6px;
+  }
+}
+
+/* Eén paneelindeling voor Nodes en Werkbank, op ieder schermformaat. */
+.mobilePanelTabs { display: none !important; }
+.layout,
+body.workbenchMode .layout {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.layout > .tools,
+.layout > .graphColumn,
+.layout > .viewportColumn,
+.layout > .assetColumn,
+body .layout > .layoutResizer,
+body.workbenchMode .layout > .layoutResizer {
+  display: none !important;
+}
+.layout > .allLayoutRoot,
+body.workbenchMode .layout > .allLayoutRoot,
+body[data-mobile-panel="all"] .layout > .allLayoutRoot {
+  display: flex !important;
+  width: 100%;
+  height: 100%;
+}
+.allSplit[data-dir="row"] > .allSplitResizer { width: 8px; }
+.allSplit[data-dir="col"] > .allSplitResizer { height: 8px; }
+.allPaneBody > .graphColumn,
+.allPaneBody > .viewportColumn,
+.allPaneBody > .assetColumn {
+  display: flex !important;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.allPaneBody > .tools,
+.allPaneBody > .workbenchRelationStrip {
+  display: block !important;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+body.workbenchMode .allPaneBody > .tools { display: block !important; }
+body.workbenchMode .allPaneBody > .workbenchRelationStrip {
+  flex: 1 1 auto;
+  overflow: auto;
+}
+body.workbenchMode .workbenchRelationResizer { display: none !important; }
+
+@container editor-pane (max-width: 720px) {
+  .workbenchRelationFlow,
+  .workbenchRelationFlow.workbenchFlowBoard {
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+  .workbenchFlowArrow,
+  .workbenchFlowBoard .workbenchFlowArrow {
+    min-height: 18px;
+    align-self: stretch;
+    transform: rotate(90deg);
+  }
+  .workbenchFlowCard,
+  .workbenchFlowRule,
+  .workbenchFlowRules,
+  .workbenchFlowZone,
+  .workbenchFlowZone.center,
+  .workbenchFlowZone.withForm {
+    width: 100%;
+    max-width: none;
+  }
+  .workbenchFlowRules {
+    flex-direction: column;
   }
 }
 
