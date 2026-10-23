@@ -1,5 +1,0 @@
-storage/
-node_modules/
-*.vsix
-*.deb
-minimap-bakes/

@@ -1,6 +1,6 @@
 # Visual Content Workbench W2
 
-**Status:** implemented, awaiting Kevin acceptance  
+**Status:** partially accepted by Kevin  
 **Datum:** 2026-10-21  
 **Basis:** W1 (`f9635f4`, accepted by Kevin)
 

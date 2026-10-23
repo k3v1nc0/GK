@@ -1,6 +1,6 @@
 import { normalizeCanonicalId, normalizeReferenceList } from "../shared/node-contract.js";
 
-// Visual Content Workbench W2: one declarative content spec plus a light derived
+// Visual Content Workbench W3: one declarative content spec plus a light derived
 // relation index. These helpers read an ordinary persistent graph and return
 // plain data. They own no UI state, never write the graph and never infer a
 // relation from a name, tag or id prefix: every relation is a typed schema field
@@ -19,9 +19,11 @@ export const WORKBENCH_CATEGORIES = Object.freeze([
   { id: "recipe", label: "Recipes", type: "recipe_definition" },
   { id: "vendor", label: "Vendor Catalogs", type: "vendor_catalog" },
   { id: "ability", label: "Abilities", type: "ability_definition" },
-  { id: "stat", label: "Stats", type: "stat_definition" },
+  { id: "stat", label: "Stats", types: ["stat_definition", "stat_block", "stat_curve"] },
   { id: "currency", label: "Currencies", type: "currency_definition" },
-  { id: "loot", label: "Loot Tables", type: "loot_table" }
+  { id: "loot", label: "Loot Tables", type: "loot_table" },
+  { id: "quest", label: "Quests", type: "quest_definition" },
+  { id: "dialogue", label: "Dialogen", type: "dialogue_definition" }
 ]);
 
 export const ASSET_ROLE_LABELS = Object.freeze({
@@ -49,7 +51,16 @@ export const RELATION_KINDS = Object.freeze({
   vendor_offer: { outLabel: "aanbod", inLabel: "verhandelt dit", active: true },
   vendor_price: { outLabel: "prijs-currency", inLabel: "rekent in deze currency", active: true },
   loot_drop: { outLabel: "drop", inLabel: "dropt dit", active: true },
-  loot_nested: { outLabel: "geneste tabel", inLabel: "bevat deze tabel", active: false }
+  loot_nested: { outLabel: "geneste tabel", inLabel: "bevat deze tabel", active: false },
+  stat_block_stat: { outLabel: "statregel", inLabel: "gebruikt in Stat Block", active: true },
+  quest_item: { outLabel: "questitem", inLabel: "gebruikt door quest", active: true },
+  quest_currency: { outLabel: "currencyreward", inLabel: "reward van quest", active: true },
+  quest_ability: { outLabel: "abilityreward", inLabel: "reward van quest", active: true },
+  quest_dialogue: { outLabel: "startdialoog", inLabel: "start deze quest", active: true },
+  quest_quest: { outLabel: "questrelatie", inLabel: "gerelateerde quest", active: true },
+  dialogue_quest: { outLabel: "questactie", inLabel: "gekoppeld vanuit dialoog", active: true },
+  quest_npc: { outLabel: "NPC / target", inLabel: "questrelatie", active: true },
+  dialogue_npc: { outLabel: "spreker", inLabel: "heeft dialoog", active: true }
 });
 
 export const OPTION_LABELS = Object.freeze({
@@ -59,6 +70,8 @@ export const OPTION_LABELS = Object.freeze({
   "enemy_archetype.role": { normal: "Normaal", ranged: "Afstand", healer: "Healer", tank: "Tank", elite: "Elite", boss: "Boss", ambient: "Omgeving" },
   "ability_definition.abilityType": { basic_attack: "Basisaanval", melee: "Melee", ranged: "Afstand", spell: "Spreuk", heal: "Heal", buff: "Buff", debuff: "Debuff", movement: "Beweging", passive: "Passief", gather: "Oogsten" },
   "stat_definition.valueType": { integer: "Geheel getal", decimal: "Decimaal", percent: "Percentage" },
+  "quest_definition.questType": { main: "Hoofdquest", side: "Zijquest", tutorial: "Tutorial", daily: "Dagelijks", event: "Event" },
+  "quest_definition.repeatMode": { once_per_character: "Eenmaal per personage", repeatable: "Herhaalbaar", daily: "Dagelijks", weekly: "Wekelijks", event_window: "Eventvenster" },
   "recipe_definition.unlockMode": { default_available: "Direct beschikbaar", player_unlock_required: "Speler moet ontgrendelen" },
   "recipe_ingredient.kind": { item: "Item", currency: "Currency", item_tag: "Item-tags" },
   "vendor_offer.mode": { sell_to_player: "Verkoopt aan speler", buy_from_player: "Koopt van speler", both: "Verkoopt en koopt" },
@@ -82,7 +95,10 @@ const ACTIVE_FIELDS = new Set([
   "loot_item_entry.itemRef", "loot_item_entry.chance", "loot_item_entry.guaranteed", "loot_item_entry.minQuantity", "loot_item_entry.maxQuantity",
   "loot_currency_entry.currencyRef", "loot_currency_entry.chance", "loot_currency_entry.guaranteed", "loot_currency_entry.minAmountMinor", "loot_currency_entry.maxAmountMinor",
   "ability_definition.displayName", "ability_definition.range", "ability_definition.damageFormula",
-  "stat_definition.displayName"
+  "stat_definition.displayName",
+  "stat_block.displayName", "stat_block.entries",
+  "quest_definition.displayName", "quest_definition.summary", "quest_definition.description", "quest_definition.startStepRef", "quest_definition.turnInTargetRef", "quest_definition.prerequisiteQuestRefs", "quest_definition.nextQuestRefs", "quest_definition.autoTrack", "quest_definition.repeatMode",
+  "dialogue_definition.displayName", "dialogue_definition.targetRef", "dialogue_definition.startEntryRef"
 ]);
 
 const INACTIVE_FIELDS = new Set([
@@ -99,8 +115,12 @@ const INACTIVE_FIELDS = new Set([
   "loot_item_entry.weight", "loot_item_entry.qualityMode", "loot_item_entry.qualityValue", "loot_item_entry.modifierPoolRefs", "loot_item_entry.conditionTagQuery",
   "loot_currency_entry.weight",
   "loot_table_entry.lootTableRef", "loot_table_entry.chance", "loot_table_entry.weight", "loot_table_entry.repeatMin", "loot_table_entry.repeatMax",
-  "ability_definition.iconAssetId", "ability_definition.abilityType", "ability_definition.cooldownMs", "ability_definition.castTimeMs", "ability_definition.globalCooldownMs", "ability_definition.resourceCostStatRef", "ability_definition.resourceCostFormula",
-  "stat_definition.valueType", "stat_definition.minimum", "stat_definition.maximum", "stat_definition.defaultValue", "stat_definition.persistCurrentValue", "stat_definition.replicateMode", "stat_definition.uiFormat"
+  "ability_definition.iconAssetId", "ability_definition.minimapCategoryRef", "ability_definition.abilityType", "ability_definition.cooldownMs", "ability_definition.castTimeMs", "ability_definition.globalCooldownMs", "ability_definition.resourceCostStatRef", "ability_definition.resourceCostFormula", "ability_definition.minimumRange", "ability_definition.areaShape", "ability_definition.areaRadius", "ability_definition.coneAngle", "ability_definition.targetMode", "ability_definition.requiresLineOfSight", "ability_definition.requiresWeaponTagQuery", "ability_definition.healFormula", "ability_definition.damageTypeRef", "ability_definition.statusEffectRefs", "ability_definition.animationRole", "ability_definition.castAudioRef", "ability_definition.impactAudioRef", "ability_definition.castVfxRef", "ability_definition.impactVfxRef", "ability_definition.interruptible", "ability_definition.movementAllowedDuringCast", "ability_definition.serverPredictionMode",
+  "stat_definition.valueType", "stat_definition.minimum", "stat_definition.maximum", "stat_definition.defaultValue", "stat_definition.persistCurrentValue", "stat_definition.replicateMode", "stat_definition.uiFormat",
+  "stat_curve.displayName", "stat_curve.inputKind", "stat_curve.interpolation", "stat_curve.points", "stat_curve.clampBefore", "stat_curve.clampAfter",
+  // Stored and compiled, but no quest/stat runtime consumer reads them yet.
+  "stat_block.overrideMode",
+  "quest_definition.questType", "quest_definition.recommendedZoneRef", "quest_definition.minimumLevel"
 ]);
 
 export function fieldRuntimeStatus(type, key) {
@@ -181,6 +201,17 @@ export const CONTENT_TYPE_SPECS = Object.freeze({
     thumbAssets: [], duplicate: true,
     relations: []
   },
+  stat_block: {
+    category: "stat", label: "Stat Block", badge: "BLOCK", color: "#0d9488",
+    keyFields: ["displayName", "overrideMode"], createFields: ["overrideMode"],
+    thumbAssets: [], duplicate: false, dedicatedFields: ["entries"],
+    relations: [{ kind: "stat_block_stat", json: "entries", refKey: "statRef", amountKey: "baseValue", target: "stat_definition", rawValue: true, rowLabel: "Statregel" }]
+  },
+  stat_curve: {
+    category: "stat", label: "Stat Curve", badge: "CURVE", color: "#2dd4bf",
+    keyFields: ["displayName", "inputKind", "interpolation"], createFields: [],
+    thumbAssets: [], duplicate: false, relations: []
+  },
   currency_definition: {
     category: "currency", label: "Currency", badge: "CUR", color: "#facc15",
     keyFields: ["displayName", "showInPrimaryWallet", "sortOrder"], createFields: [],
@@ -193,6 +224,18 @@ export const CONTENT_TYPE_SPECS = Object.freeze({
     thumbAssets: [], duplicate: false,
     children: { port: "entries", types: ["loot_item_entry", "loot_currency_entry", "loot_table_entry"] },
     relations: [{ kind: "loot_drop", children: true }]
+  },
+  quest_definition: {
+    category: "quest", label: "Quest", badge: "QUEST", color: "#fbbf24",
+    keyFields: ["displayName", "summary", "questType", "minimumLevel", "turnInTargetRef", "recommendedZoneRef", "autoTrack", "repeatMode"],
+    createFields: ["summary", "questType", "minimumLevel"], thumbAssets: [], duplicate: false,
+    children: { port: "steps", types: ["quest_step"] }, relations: []
+  },
+  dialogue_definition: {
+    category: "dialogue", label: "Dialoog", badge: "DIA", color: "#c084fc",
+    keyFields: ["displayName", "targetRef", "startEntryRef"], createFields: [],
+    thumbAssets: [], duplicate: false,
+    children: { port: "entries", types: ["dialogue_entry", "dialogue_terminal"] }, relations: []
   }
 });
 
@@ -209,7 +252,10 @@ export const CHILD_ROW_SPECS = Object.freeze({
   ] },
   loot_item_entry: { label: "Itemdrop", targets: [{ field: "itemRef", kind: "loot_drop", target: "item_definition" }] },
   loot_currency_entry: { label: "Currencydrop", targets: [{ field: "currencyRef", kind: "loot_drop", target: "currency_definition" }] },
-  loot_table_entry: { label: "Geneste Loot Table", targets: [{ field: "lootTableRef", kind: "loot_nested", target: "loot_table" }] }
+  loot_table_entry: { label: "Geneste Loot Table", targets: [{ field: "lootTableRef", kind: "loot_nested", target: "loot_table" }] },
+  quest_step: { label: "Queststap", targets: [] },
+  dialogue_entry: { label: "Dialoogregel", targets: [] },
+  dialogue_terminal: { label: "Dialoogeinde", targets: [] }
 });
 
 // Proven JSON-embedded references (compiler-normalized and runtime-consumed),
@@ -231,8 +277,16 @@ export const OVERVIEW_BANDS = Object.freeze([
   ] },
   { id: "creatures", label: "Wezens en gevecht", columns: [
     { id: "creatures", label: "Enemies & NPC's", types: ["enemy_archetype", "npc_archetype"] },
-    { id: "combat", label: "Abilities & Stats", types: ["ability_definition", "stat_definition"] },
+    { id: "combat", label: "Abilities & Stats", types: ["ability_definition", "stat_definition", "stat_block", "stat_curve"] },
     { id: "loot", label: "Loot Tables", types: ["loot_table"] }
+  ] },
+  // Quest rewards (Items/Currencies/Abilities) are drawn to their cards in the
+  // bands above: the overview links to one card per definition, so the story
+  // band must not repeat those types.
+  { id: "story", label: "Verhaal", columns: [
+    { id: "npcs", label: "NPC's", types: ["npc_archetype"] },
+    { id: "dialogues", label: "Dialogen", types: ["dialogue_definition"] },
+    { id: "quests", label: "Quests", types: ["quest_definition"] }
   ] }
 ]);
 
@@ -358,7 +412,9 @@ export function buildContentIndex(graph, nodeTypes) {
     const toType = nodeById.get(edge.toNodeId)?.type;
     if (edge.fromPort === "component" && edge.toPort === "components" && toType === "entity_assembly") assemblyOfComponent.set(edge.fromNodeId, edge.toNodeId);
     if (edge.fromPort === "entity" && edge.toPort === "model" && toType === "entity_assembly" && nodeById.get(edge.fromNodeId)?.type === "model_entity") modelOfAssembly.set(edge.toNodeId, edge.fromNodeId);
-    if (edge.fromPort === "catalogDefinition") definitionEdgeSources.add(edge.fromNodeId);
+    if (edge.fromPort === "catalogDefinition"
+      || (edge.fromPort === "questDef" && edge.toPort === "quests")
+      || (edge.fromPort === "dialogueDef" && edge.toPort === "dialogues")) definitionEdgeSources.add(edge.fromNodeId);
   }
 
   const definitions = [];
@@ -398,6 +454,30 @@ export function buildContentIndex(graph, nodeTypes) {
       entry.children.push(child);
       if (!childParent.has(child.id)) childParent.set(child.id, entry.id);
     }
+  }
+
+  // Quest/dialogue nodes remain independently authorable definitions, while
+  // their steps, objectives, actions, entries and choices are real owned graph
+  // children. Resolve that ownership only from the compiler-facing child edges.
+  const ownedPorts = new Set(["steps", "objectives", "conditions", "rewards", "entries", "choices"]);
+  const definitionOwner = new Map(definitions.map(function (entry) { return [entry.id, entry.id]; }));
+  let ownershipChanged = true;
+  while (ownershipChanged) {
+    ownershipChanged = false;
+    for (const edge of edges) {
+      if (!ownedPorts.has(edge.toPort) || definitionOwner.has(edge.fromNodeId)) continue;
+      const ownerId = definitionOwner.get(edge.toNodeId);
+      if (!ownerId) continue;
+      definitionOwner.set(edge.fromNodeId, ownerId);
+      if (!childParent.has(edge.fromNodeId)) childParent.set(edge.fromNodeId, ownerId);
+      ownershipChanged = true;
+    }
+  }
+  for (const [nodeId, ownerId] of definitionOwner.entries()) {
+    if (nodeId === ownerId) continue;
+    const owner = byNodeId.get(ownerId);
+    const child = nodeById.get(nodeId);
+    if (owner && child && !owner.children.some(function (row) { return row.id === nodeId; })) owner.children.push(child);
   }
 
   const relations = [];
@@ -465,19 +545,24 @@ export function buildContentIndex(graph, nodeTypes) {
       }
       if (extractor.json) {
         const list = Array.isArray(values[extractor.json]) ? values[extractor.json] : [];
+        const rowLabel = extractor.rowLabel || "Output";
         list.forEach(function (row, index) {
           const ref = canonical(row?.[extractor.refKey]);
           if (!ref) {
-            addMissing(entry, extractor.json, "", "empty", "Output");
+            addMissing(entry, extractor.json, "", "empty", rowLabel);
             return;
           }
           const node = resolve(ref);
           if (!node || node.type !== extractor.target) {
-            addMissing(entry, extractor.json, ref, node ? "type" : "missing", "Output");
+            addMissing(entry, extractor.json, ref, node ? "type" : "missing", rowLabel);
             return;
           }
-          const amount = Math.max(0, Math.floor(finite(row?.[extractor.amountKey], extractor.amountKey === "amount" ? 1 : 0)));
-          addRelation(extractor.kind, entry, node, { field: extractor.json + "." + index, detail: "×" + formatNumber(amount) });
+          // Stat Block base values are real (possibly decimal/negative) values,
+          // not quantities: show them exactly as the runtime reads them.
+          const detail = extractor.rawValue
+            ? formatNumber(finite(row?.[extractor.amountKey], 0))
+            : "×" + formatNumber(Math.max(0, Math.floor(finite(row?.[extractor.amountKey], extractor.amountKey === "amount" ? 1 : 0))));
+          addRelation(extractor.kind, entry, node, { field: extractor.json + "." + index, detail });
         });
         continue;
       }
@@ -537,6 +622,57 @@ export function buildContentIndex(graph, nodeTypes) {
     }
   }
 
+  const targetNpc = new Map();
+  for (const binding of nodes.filter(function (node) { return node.type === "quest_target_binding"; })) {
+    const targetRef = canonical(binding.values?.targetId);
+    if (!targetRef) continue;
+    const entityEdge = edges.find(function (edge) {
+      return edge.toNodeId === binding.id && edge.toPort === "entity";
+    });
+    const assembly = entityEdge ? nodeById.get(entityEdge.fromNodeId) : null;
+    if (assembly?.type !== "entity_assembly") continue;
+    const npcEdge = edges.find(function (edge) {
+      return edge.toNodeId === assembly.id && edge.toPort === "components" && nodeById.get(edge.fromNodeId)?.type === "npc_component";
+    });
+    const npcRef = npcEdge ? canonical(nodeById.get(npcEdge.fromNodeId)?.values?.npcRef) : "";
+    const npc = npcRef ? resolve(npcRef) : null;
+    if (npc?.type === "npc_archetype") targetNpc.set(targetRef, npc);
+  }
+
+  // Story relations follow typed references inside the owned campaign nodes.
+  // This includes objective targets and concrete Item/Currency/Ability rewards.
+  for (const node of nodes) {
+    const ownerId = definitionOwner.get(node.id);
+    const owner = ownerId ? byNodeId.get(ownerId) : null;
+    if (!owner || !["quest_definition", "dialogue_definition"].includes(owner.type)) continue;
+    const fields = types[node.type]?.fields || {};
+    for (const [key, field] of Object.entries(fields)) {
+      if (field?.type !== "reference" && field?.type !== "referenceList") continue;
+      const refs = field.type === "referenceList" ? normalizeReferenceList(node.values?.[key]) : [canonical(node.values?.[key])].filter(Boolean);
+      for (const ref of refs) {
+        const target = resolve(ref);
+        if (target && target.id !== owner.id) {
+          let kind = "";
+          if (target.type === "item_definition") kind = "quest_item";
+          else if (target.type === "currency_definition") kind = "quest_currency";
+          else if (target.type === "ability_definition") kind = "quest_ability";
+          else if (target.type === "quest_definition") kind = owner.type === "dialogue_definition" ? "dialogue_quest" : "quest_quest";
+          if (kind) addRelation(kind, owner, target, { via: node.id, field: key });
+        }
+        const npc = targetNpc.get(ref);
+        if (npc) addRelation(owner.type === "dialogue_definition" ? "dialogue_npc" : "quest_npc", owner, npc, { via: node.id, field: key });
+      }
+    }
+  }
+  for (const edge of edges) {
+    if (edge.toPort !== "startDialogue") continue;
+    const quest = byNodeId.get(edge.toNodeId);
+    const dialogue = byNodeId.get(edge.fromNodeId);
+    if (quest?.type === "quest_definition" && dialogue?.type === "dialogue_definition") {
+      addRelation("quest_dialogue", quest, dialogue.node, { field: "startDialogue" });
+    }
+  }
+
   // Generic "Waar gebruikt" scan: every typed reference to a library definition.
   const usageSeen = new Set();
   function pushUsage(targetNode, source, field, fieldLabel) {
@@ -582,9 +718,7 @@ export function buildContentIndex(graph, nodeTypes) {
     }
   }
   const counts = { all: definitions.length };
-  for (const category of WORKBENCH_CATEGORIES) {
-    if (category.type) counts[category.id] = 0;
-  }
+  for (const category of WORKBENCH_CATEGORIES) if (category.type || category.types) counts[category.id] = 0;
   for (const entry of definitions) counts[entry.spec.category] = (counts[entry.spec.category] || 0) + 1;
 
   return { graph, definitions, byNodeId, relations, childParent, counts, resolve, nodeById };
@@ -743,6 +877,30 @@ export function definitionFacts(index, entry) {
       counts.push({ label: "Stat Blocks", value: blocks });
       break;
     }
+    case "stat_block": {
+      const stats = outOf("stat_block_stat");
+      props.push(stats.length + " statregel" + (stats.length === 1 ? "" : "s"));
+      if (stats.length) props.push(namesFor(index, stats, "to"));
+      counts.push({ label: "Enemies", value: entry.usage.filter(function (usage) { return usage.sourceType === "enemy_archetype"; }).length });
+      break;
+    }
+    case "stat_curve":
+      props.push(optionLabel(entry.type, "inputKind", values.inputKind || "level"));
+      props.push(optionLabel(entry.type, "interpolation", values.interpolation || "linear"));
+      break;
+    case "quest_definition": {
+      props.push(optionLabel(entry.type, "questType", values.questType || "main"));
+      const steps = entry.children.filter(function (child) { return child.type === "quest_step"; });
+      props.push(steps.length + " stap" + (steps.length === 1 ? "" : "pen"));
+      counts.push({ label: "Rewards", value: outOf("quest_currency").length + outOf("quest_ability").length });
+      break;
+    }
+    case "dialogue_definition": {
+      const entries = entry.children.filter(function (child) { return child.type === "dialogue_entry"; });
+      props.push(entries.length + " regel" + (entries.length === 1 ? "" : "s"));
+      counts.push({ label: "Quests", value: outOf("dialogue_quest").length + inOf("quest_dialogue").length });
+      break;
+    }
     case "loot_table": {
       const drops = outOf("loot_drop");
       props.push(entry.children.length + " drop" + (entry.children.length === 1 ? "" : "s"));
@@ -766,7 +924,9 @@ export function definitionFacts(index, entry) {
 export function thumbnailStandIns(entry) {
   const preferred = entry.type === "recipe_definition" ? ["recipe_output", "recipe_ingredient"]
     : entry.type === "vendor_catalog" ? ["vendor_offer"]
-      : entry.type === "loot_table" ? ["loot_drop"] : [];
+      : entry.type === "loot_table" ? ["loot_drop"]
+        : entry.type === "quest_definition" ? ["quest_npc", "quest_item", "quest_currency", "quest_ability"]
+          : entry.type === "dialogue_definition" ? ["dialogue_npc"] : [];
   const ids = [];
   for (const kind of preferred) {
     for (const relation of entry.out) {

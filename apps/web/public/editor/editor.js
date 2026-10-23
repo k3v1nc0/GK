@@ -27,7 +27,7 @@ import {
   optionLabel,
   relationScope,
   thumbnailStandIns
-} from "./content-workbench.js?v=20261021-workbench-w2";
+} from "./content-workbench.js?v=20261022-workbench-w3";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -409,7 +409,8 @@ const state = {
   workbenchUsageOpen: false,
   workbenchDeleteNodeId: null,
   workbenchAssetSlotPicker: "",
-  workbenchAssetPickerQuery: ""
+  workbenchAssetPickerQuery: "",
+  workbenchStatRuleDraft: null
 };
 
 const el = {
@@ -7778,6 +7779,7 @@ function visualBuilderBegin(context, options = {}) {
     values: {
       name: context.assembly?.values?.label || context.model.values?.label || nodeDisplayTitle(context.model) || "Object",
       level: component?.values?.level || component?.values?.fixedLevel || 1,
+      persistenceScope: component?.values?.persistenceScope || "zone",
       yieldMultiplier: component?.values?.yieldMultiplier || 1,
       amount: component?.values?.amount || 1,
       respawnSeconds: visualBuilderRespawnSeconds(role, component),
@@ -8166,6 +8168,9 @@ function visualBuilderStepValid(draft, step) {
       const definitionValid = draft.definitionMode === "new"
         ? Boolean(String(draft.definitionName || "").trim())
         : referencePickerChoiceState(draft.definitionRef, { type: "reference", referenceKinds: spec.referenceKinds, required: true }).state === "ok";
+      // Workbench: only links an existing catalog; its real offers stay owned
+      // by the catalog, so at least one real vendor_offer is the requirement.
+      if (draft.workbenchRoleEdit) return definitionValid && draft.definitionMode !== "new" && workbenchVendorOfferCount(draft.definitionRef) > 0;
       const offers = visualBuilderVendorRows(draft);
       return definitionValid && offers.length > 0 && offers.every(visualBuilderVendorRowValid);
     }
@@ -8225,6 +8230,12 @@ function visualBuilderGoToStep(draft, step) {
   if (target > draft.step && !visualBuilderStepValid(draft, draft.step)) {
     setStatus("Vul deze korte stap eerst af.", "error");
     return;
+  }
+  if (draft.workbenchRoleEdit) {
+    // A Workbench draft continued in the full Visual Builder regains the
+    // normal behavior there: offers and quest links exactly as it shows them.
+    draft.values.questMode = draft.values.initialQuestMode || "none";
+    delete draft.workbenchRoleEdit;
   }
   draft.step = target;
   renderAuthoringHub();
@@ -8462,8 +8473,13 @@ function visualBuilderEnsureComponent(graph, assembly, model, role, values) {
 }
 
 function visualBuilderRemoveOtherRoles(graph, assembly, keepType) {
+  const compatibleTypes = keepType === "npc_component"
+    ? new Set(["npc_component", "vendor_component"])
+    : keepType === "vendor_component"
+      ? new Set(["vendor_component", "npc_component"])
+      : new Set([keepType]);
   for (const node of (graph.nodes || []).slice()) {
-    if (!VISUAL_BUILDER_PRIMARY_COMPONENT_TYPES.has(node.type) || node.type === keepType) continue;
+    if (!VISUAL_BUILDER_PRIMARY_COMPONENT_TYPES.has(node.type) || compatibleTypes.has(node.type)) continue;
     const connected = (graph.edges || []).some(function (edge) {
       return edge.fromNodeId === node.id && edge.fromPort === "component" && edge.toNodeId === assembly.id && edge.toPort === "components";
     });
@@ -8696,7 +8712,7 @@ async function visualBuilderCommit(context, draft) {
   objectFunctionEnsureAssemblyRouting(nextGraph, Object.assign({}, nextContext, { model }), assembly, zoneOutput);
   const definition = visualBuilderCreateDefinition(nextGraph, draft, model);
   const definitionRef = definition.ref || normalizeCanonicalId(draft.definitionRef, "");
-  if (draft.role === "vendor") {
+  if (draft.role === "vendor" && !draft.workbenchRoleEdit) {
     try {
       visualBuilderApplyVendorOffers(
         nextGraph,
@@ -8720,7 +8736,7 @@ async function visualBuilderCommit(context, draft) {
       componentId: objectFunctionConnectedNodesForAssembly(nextGraph, assembly, "npc_component")[0]?.values?.componentId || uniqueCanonicalGraphValue(nextGraph, "component.npc." + objectFunctionModelStem(model)),
       npcRef: definitionRef,
       level: Math.max(1, Number(draft.values?.level) || 1),
-      persistenceScope: "zone"
+      persistenceScope: ["disposable", "zone", "world"].includes(draft.values?.persistenceScope) ? draft.values.persistenceScope : "zone"
     });
   } else if (draft.role === "enemy") {
     component = visualBuilderEnsureComponent(nextGraph, assembly, model, "enemy", {
@@ -8859,7 +8875,7 @@ async function visualBuilderCommit(context, draft) {
   }
   visualBuilderCleanupLocalRespawnPolicies(nextGraph, model, respawnPolicyRef);
   try {
-    visualBuilderApplyQuestLinks(nextGraph, draft, Object.assign({}, nextContext, { zoneOutput }), assembly, model, definitionRef);
+    if (!draft.workbenchRoleEdit) visualBuilderApplyQuestLinks(nextGraph, draft, Object.assign({}, nextContext, { zoneOutput }), assembly, model, definitionRef);
   } catch (error) {
     setStatus(error.message, "error");
     return;
@@ -10202,6 +10218,7 @@ async function questTimelineCommitCreateQuest(group, draft) {
       questId: questId,
       displayName: displayName,
       summary: summary,
+      questType: String(draft.values?.questType || "main"),
       turnInTargetRef: turnInTargetRef || null,
       minimumLevel: Number.isFinite(Number(minimumLevel)) ? Math.max(1, Math.floor(Number(minimumLevel))) : 1
     })
@@ -10238,6 +10255,11 @@ async function questTimelineCommitCreateQuest(group, draft) {
         state.questTimelineDraft = null;
         state.questTimelineSelectedQuestId = quest.id;
         state.questTimelineSelectedStepId = step.id;
+        if (draft.workbench) {
+          state.workbenchCreateDraft = null;
+          state.workbenchLibraryType = "quest";
+          workbenchSelectDefinition(quest.id, { render: false });
+        }
         focusGraphNode(quest.id);
         setStatus("Quest \"" + displayName + "\" aangemaakt.", "success");
       }
@@ -10714,6 +10736,11 @@ async function questTimelineCommitCreateDialogue(group, draft) {
         state.questTimelineDialogueDraft = null;
         state.questTimelineSelectedDialogueId = dialogue.id;
         state.questTimelineSelectedEntryId = entry.id;
+        if (draft.workbench) {
+          state.workbenchCreateDraft = null;
+          state.workbenchLibraryType = "dialogue";
+          workbenchSelectDefinition(dialogue.id, { render: false });
+        }
         focusGraphNode(dialogue.id);
         setStatus("Dialoog \"" + displayName + "\" aangemaakt.", "success");
       }
@@ -16168,6 +16195,30 @@ function workbenchContext(graph = state.graph) {
   const resourceComponent = object?.resourceComponent || null;
   const resourceRef = normalizeCanonicalId(resourceComponent?.values?.resourceRef, "");
   const resource = resourceRef ? referenceNodeForReferenceId(resourceRef) : null;
+  const npcComponent = object?.npcComponent || null;
+  const npcRef = normalizeCanonicalId(npcComponent?.values?.npcRef, "");
+  const npc = npcRef ? referenceNodeForReferenceId(npcRef) : null;
+  const vendorComponent = object?.vendorComponent || null;
+  const vendorRef = normalizeCanonicalId(vendorComponent?.values?.vendorCatalogRef, "");
+  const vendorCatalog = vendorRef ? referenceNodeForReferenceId(vendorRef) : null;
+  const targetRef = normalizeCanonicalId(object?.questBinding?.values?.targetId, "");
+  const dialogues = targetRef ? (graph.nodes || []).filter(function (node) {
+    return node.type === "dialogue_definition" && normalizeCanonicalId(node.values?.targetRef, "") === targetRef;
+  }) : [];
+  const quests = targetRef ? (graph.nodes || []).filter(function (node) {
+    if (node.type !== "quest_definition") return false;
+    if (normalizeCanonicalId(node.values?.turnInTargetRef, "") === targetRef) return true;
+    return (graph.nodes || []).some(function (child) {
+      if (!["objective_talk", "objective_deliver", "objective_reach"].includes(child.type)
+        || normalizeCanonicalId(child.values?.targetRef, "") !== targetRef) return false;
+      const stepEdge = (graph.edges || []).find(function (edge) {
+        return edge.fromNodeId === child.id && edge.toPort === "objectives";
+      });
+      return stepEdge && (graph.edges || []).some(function (edge) {
+        return edge.fromNodeId === stepEdge.toNodeId && edge.toNodeId === node.id && edge.toPort === "steps";
+      });
+    });
+  }) : [];
   return {
     model,
     object,
@@ -16179,7 +16230,16 @@ function workbenchContext(graph = state.graph) {
     entries,
     resourceComponent,
     resourceRef,
-    resource: resource?.type === "resource_definition" ? resource : null
+    resource: resource?.type === "resource_definition" ? resource : null,
+    npcComponent,
+    npcRef,
+    npc: npc?.type === "npc_archetype" ? npc : null,
+    vendorComponent,
+    vendorRef,
+    vendorCatalog: vendorCatalog?.type === "vendor_catalog" ? vendorCatalog : null,
+    targetRef,
+    dialogues,
+    quests
   };
 }
 
@@ -16300,7 +16360,8 @@ function workbenchOpenEnemyCreate(context) {
 // Starts the existing Visual Builder for one role (enemy/resource) at step 2.
 function workbenchOpenRoleCreate(context, role) {
   const currentRole = visualBuilderRoleForContext(context?.object);
-  if (currentRole && ![role, "decoration"].includes(currentRole)) {
+  const npcVendorCombination = [role, currentRole].includes("npc") && [role, currentRole].includes("vendor");
+  if (currentRole && ![role, "decoration"].includes(currentRole) && !npcVendorCombination) {
     setStatus("Dit object heeft al de wereldrol " + objectFunctionKindLabel(currentRole) + ". Wijzig die rol eerst via de bestaande Visual Builder.", "error");
     return;
   }
@@ -16311,7 +16372,12 @@ function workbenchOpenRoleCreate(context, role) {
   visualBuilderBegin(context.object, { role });
   if (state.visualBuilderDraft) {
     state.visualBuilderDraft.step = 2;
+    // The Workbench never shows the Visual Builder offer rows or quest step:
+    // offers live in the Vendor Catalog and Quest Targets, dialogues and quests
+    // have their own Workbench actions. A Workbench role edit therefore only
+    // links the definition and leaves offers, quest links and bindings as is.
     state.visualBuilderDraft.values.questMode = "none";
+    state.visualBuilderDraft.workbenchRoleEdit = true;
   }
   state.workbenchEnemyEditNodeId = null;
   state.workbenchEnemyDraft = null;
@@ -16445,6 +16511,105 @@ function workbenchRenderResourceCreate(context) {
   const actions = document.createElement("div");
   actions.className = "workbenchActions";
   actions.appendChild(workbenchMiniButton("Resource maken", function () { void visualBuilderCommit(context.object, draft); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () {
+    state.visualBuilderDraft = null;
+    renderWorkbench();
+  }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
+function workbenchVendorOfferCount(catalogRef) {
+  const catalog = catalogRef ? visualBuilderVendorCatalogByRef(state.graph, catalogRef) : null;
+  return catalog ? visualBuilderVendorOfferNodes(state.graph, catalog).length : 0;
+}
+
+function workbenchRenderNpcVendorCreate(context) {
+  const draft = visualBuilderDraftForContext(context.object);
+  if (!draft || !["npc", "vendor"].includes(draft.role)) return null;
+  const existing = draft.role === "npc" ? context.npcComponent : context.vendorComponent;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = (existing ? "Bewerk " : "Maak ") + (draft.role === "npc" ? "NPC" : "Vendor");
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields";
+  const definitionType = draft.role === "npc" ? "npc_archetype" : "vendor_catalog";
+  const fakeNode = { type: definitionType, values: {} };
+  // Text inputs do not re-render the panel (focus would be lost), so the save
+  // button state is refreshed in place with the same Visual Builder validation.
+  let save = null;
+  const refreshSave = function () {
+    if (save) save.disabled = ![1, 2, 3, 4].every(function (step) { return visualBuilderStepValid(draft, step); });
+  };
+  if (draft.role === "npc") {
+    fields.appendChild(workbenchField(fakeNode, "displayName", "Definitie", workbenchSelect(draft.definitionMode, [
+      { value: "existing", label: "Gebruik bestaande NPC-definitie" },
+      { value: "new", label: "Maak inline een NPC-definitie" }
+    ], function (value) {
+      draft.definitionMode = value === "new" ? "new" : "existing";
+      renderWorkbench();
+    })));
+    if (draft.definitionMode === "new") {
+      fields.appendChild(workbenchField(fakeNode, "displayName", "Naam nieuwe NPC-definitie", workbenchTextInput(draft.definitionName, function (value) {
+        draft.definitionName = value;
+        refreshSave();
+      }, { placeholder: "Bijv. Smid Bram" })));
+    } else {
+      fields.appendChild(workbenchField(fakeNode, "npcId", "NPC-definitie", workbenchSelect(draft.definitionRef, workbenchDefinitionOptions(definitionType, "Kies een NPC"), function (value) {
+        draft.definitionRef = value;
+        renderWorkbench();
+      })));
+    }
+    fields.appendChild(workbenchField({ type: "npc_component", values: {} }, "level", "Level", workbenchTextInput(draft.values?.level ?? 1, function (value) {
+      draft.values.level = Math.max(1, Math.floor(Number(value) || 1));
+    }, { type: "number", min: 1, max: 1000, step: 1 })));
+    fields.appendChild(workbenchField({ type: "npc_component", values: {} }, "persistenceScope", "Persistence", workbenchSelect(draft.values?.persistenceScope || "zone", [
+      { value: "disposable", label: "Verdwijnt bij reset" },
+      { value: "zone", label: "Blijft in deze zone" },
+      { value: "world", label: "Blijft in de wereld" }
+    ], function (value) { draft.values.persistenceScope = value; })));
+  } else {
+    fields.appendChild(workbenchField(fakeNode, "vendorCatalogId", "Vendor Catalog", workbenchSelect(draft.definitionRef, workbenchDefinitionOptions(definitionType, "Kies een Vendor Catalog"), function (value) {
+      draft.definitionMode = "existing";
+      draft.definitionRef = value;
+      draft.values.vendorOffers = visualBuilderVendorDraftRows(state.graph, value);
+      renderWorkbench();
+    })));
+    fields.appendChild(workbenchField({ type: "vendor_component", values: {} }, "interactionPrompt", "Interactietekst", workbenchTextInput(draft.values?.prompt || "Trade", function (value) {
+      draft.values.prompt = value;
+    })));
+    fields.appendChild(workbenchField({ type: "vendor_component", values: {} }, "range", "Interactieafstand", workbenchTextInput(draft.values?.range ?? 5, function (value) {
+      draft.values.range = Math.max(1, Number(value) || 5);
+    }, { type: "number", min: 1, max: 1000, step: 0.1 })));
+  }
+  fields.appendChild(workbenchField(context.model, "label", "Naam in de wereld", workbenchTextInput(draft.values?.name, function (value) {
+    draft.values.name = value;
+    refreshSave();
+  }, { placeholder: nodeDisplayTitle(context.model) })));
+  card.appendChild(fields);
+  const note = document.createElement("div");
+  note.className = "workbenchMeta";
+  note.textContent = draft.role === "npc"
+    ? "De bestaande model_entity blijft de enige mesh en transformeigenaar. Alleen npc_component.npcRef wordt toegevoegd of bijgewerkt."
+    : "De Vendor komt als vendor_component op dezelfde assembly. Een bestaande NPC op dit model blijft behouden; linkedEntityId wordt uit de assembly afgeleid.";
+  card.appendChild(note);
+  if (draft.role === "vendor" && draft.definitionRef && !workbenchVendorOfferCount(draft.definitionRef)) {
+    card.appendChild(workbenchWarning("Deze Vendor Catalog heeft nog geen offer. Open de catalog en voeg eerst bewust een offer met item, currency en prijs toe."));
+  }
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  save = workbenchMiniButton(existing ? "Wijzigingen opslaan" : (draft.role === "npc" ? "NPC maken" : "Vendor maken"), function () {
+    void visualBuilderCommit(context.object, draft);
+  }, "primary");
+  refreshSave();
+  actions.appendChild(save);
+  if (draft.role === "vendor" && draft.definitionRef) actions.appendChild(workbenchMiniButton("Open Vendor Catalog", function () {
+    const node = visualBuilderVendorCatalogByRef(state.graph, draft.definitionRef);
+    if (node) workbenchSelectDefinition(node.id, { showOverview: false });
+  }, "ghost"));
   actions.appendChild(workbenchMiniButton("Annuleren", function () {
     state.visualBuilderDraft = null;
     renderWorkbench();
@@ -16827,6 +16992,70 @@ function workbenchSelectionRelation(labelText, valueText, onClick) {
   return card;
 }
 
+function workbenchRenderQuestTargetDraft(context) {
+  const draft = objectFunctionDraftForContext(context.object);
+  if (!draft || draft.kind !== "quest") return null;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = context.object?.questBinding ? "Quest Target beheren" : "Maak Quest Target";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields";
+  fields.appendChild(workbenchField({ type: "quest_target_binding", values: draft.values }, "label", "Menselijke naam", objectFunctionDraftTextInput(draft, "label", { placeholder: nodeDisplayTitle(context.model) })));
+  fields.appendChild(workbenchField({ type: "quest_target_binding", values: draft.values }, "targetKind", "Soort target", objectFunctionDraftSelectInput(draft, "targetKind", { options: [
+    { value: "npc", label: "NPC" }, { value: "area", label: "Gebied" }, { value: "resource", label: "Resource" },
+    { value: "zone_link", label: "Zoneverbinding" }, { value: "marker", label: "Locatie / marker" }, { value: "custom", label: "Anders" }
+  ] })));
+  fields.appendChild(workbenchField({ type: "quest_target_binding", values: draft.values }, "prompt", "Interactietekst", objectFunctionDraftTextInput(draft, "prompt", { placeholder: "Praat" })));
+  fields.appendChild(workbenchField({ type: "quest_target_binding", values: draft.values }, "radius", "Bereik", objectFunctionDraftNumberInput(draft, "radius", { min: 0.1, max: 1000, step: 0.1 })));
+  fields.appendChild(workbenchField({ type: "quest_target_binding", values: draft.values }, "visibleInGame", "Zichtbaar in game", objectFunctionDraftCheckboxInput(draft, "visibleInGame")));
+  card.appendChild(fields);
+  const note = document.createElement("div");
+  note.className = "workbenchMeta";
+  note.textContent = "Zone, entity en positie worden uit de geselecteerde model_entity en haar assembly afgeleid; het technische target-id blijft intern.";
+  card.appendChild(note);
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton("Opslaan", function () { void objectFunctionCommitDraft(context.object); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () { objectFunctionClearDraft(); }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
+function workbenchCampaignCollections() {
+  return (state.graph.nodes || []).filter(isCampaignGroupNode).sort(function (left, right) {
+    return nodeDisplayTitle(left).localeCompare(nodeDisplayTitle(right), "nl", { sensitivity: "base" });
+  });
+}
+
+function workbenchStartStoryForTarget(type, context) {
+  workbenchBeginCreate(type);
+  const draft = state.workbenchCreateDraft;
+  if (!draft) return;
+  if (type === "quest_definition") draft.values.turnInTargetRef = context.targetRef || "";
+  if (type === "dialogue_definition") draft.values.targetRef = context.targetRef || "";
+  renderWorkbench();
+}
+
+function workbenchLinkExistingStoryToTarget(type, context) {
+  if (!context.targetRef) {
+    setStatus("Maak deze NPC eerst een Quest Target.", "error");
+    return;
+  }
+  const entries = workbenchContentIndex().definitions.filter(function (entry) { return entry.type === type; });
+  if (!entries.length) {
+    setStatus(type === "quest_definition" ? "Er zijn nog geen bestaande quests." : "Er zijn nog geen bestaande dialogen.", "error");
+    return;
+  }
+  const answer = window.prompt("Kies bestaande content:\n" + entries.map(function (entry, index) { return (index + 1) + ". " + entry.name; }).join("\n"), "1");
+  const selected = entries[Math.floor(Number(answer)) - 1];
+  if (!selected) return;
+  const patch = type === "dialogue_definition" ? { targetRef: context.targetRef } : { turnInTargetRef: context.targetRef };
+  void workbenchPatchNode(selected.node, patch, (type === "dialogue_definition" ? "Dialoog" : "Quest") + " aan NPC gekoppeld");
+}
+
 function renderWorkbenchSelection(context) {
   const root = el.workbenchSelectionPanel;
   if (!root) return;
@@ -16859,12 +17088,16 @@ function renderWorkbenchSelection(context) {
   name.textContent = nodeDisplayTitle(context.model);
   const meta = document.createElement("div");
   meta.className = "workbenchMeta";
-  meta.textContent = context.enemyComponent ? "Geplaatst model · Enemy" : context.resourceComponent ? "Geplaatst model · Resource" : "Geplaatst 3D-model";
+  const worldRoles = [context.npcComponent && "NPC", context.vendorComponent && "Vendor", context.enemyComponent && "Enemy", context.resourceComponent && "Resource"].filter(Boolean);
+  meta.textContent = "Geplaatst model" + (worldRoles.length ? " · " + worldRoles.join(" + ") : "");
   const badges = document.createElement("div");
   badges.className = "workbenchBadgeRow";
   badges.appendChild(workbenchBadge(modelAsset ? modelAsset.name : "3D-model ontbreekt", modelAsset ? "linked" : "warning"));
   if (context.enemyComponent) badges.appendChild(workbenchBadge("Enemy gekoppeld", "linked"));
   if (context.resourceComponent) badges.appendChild(workbenchBadge("Resource gekoppeld", "linked"));
+  if (context.npcComponent) badges.appendChild(workbenchBadge("NPC gekoppeld", "linked"));
+  if (context.vendorComponent) badges.appendChild(workbenchBadge("Vendor gekoppeld", "linked"));
+  if (context.object?.questBinding) badges.appendChild(workbenchBadge("Quest Target", "linked"));
   body.append(name, meta, badges);
   hero.appendChild(body);
   root.appendChild(hero);
@@ -16875,6 +17108,21 @@ function renderWorkbenchSelection(context) {
   const relations = document.createElement("div");
   relations.className = "workbenchRelationList";
   relations.appendChild(workbenchSelectionRelation("3D-model", modelAsset?.name || "Ontbrekende modelasset"));
+  if (context.npcComponent) {
+    const npcEntry = context.npc ? workbenchContentIndex().byNodeId.get(context.npc.id) : null;
+    relations.appendChild(workbenchSelectionRelation("NPC-definitie", npcEntry?.name || (context.npcRef ? "Ontbrekende NPC-reference" : "Niet gekoppeld"), npcEntry ? function () { workbenchSelectDefinition(npcEntry.id, { showOverview: false }); } : null));
+    relations.appendChild(workbenchSelectionRelation("NPC-model", workbenchAsset(context.npc?.values?.modelAssetId)?.name || "Geen optioneel definitiemodel"));
+    relations.appendChild(workbenchSelectionRelation("NPC-icoon", workbenchAsset(context.npc?.values?.iconAssetId)?.name || "Geen icoon"));
+    relations.appendChild(workbenchSelectionRelation("Level en persistence", "Level " + (context.npcComponent.values?.level || 1) + " · " + (context.npcComponent.values?.persistenceScope || "disposable")));
+    relations.appendChild(workbenchSelectionRelation("Interactie", context.object?.interactionComponent ? ((context.object.interactionComponent.values?.prompt || "Gebruik") + " · bereik " + formatNumber(context.object.interactionComponent.values?.radius || 2)) : "Geen apart Interaction Component nodig"));
+    relations.appendChild(workbenchSelectionRelation("Dialoog", context.dialogues.length ? context.dialogues.map(nodeDisplayTitle).join(", ") : "Geen dialoog gekoppeld"));
+    relations.appendChild(workbenchSelectionRelation("Quests", context.quests.length ? context.quests.map(nodeDisplayTitle).join(", ") : "Geen quest gekoppeld"));
+  }
+  if (context.vendorComponent) {
+    const vendorEntry = context.vendorCatalog ? workbenchContentIndex().byNodeId.get(context.vendorCatalog.id) : null;
+    relations.appendChild(workbenchSelectionRelation("Vendor Catalog", vendorEntry?.name || (context.vendorRef ? "Ontbrekende Vendor Catalog" : "Niet gekoppeld"), vendorEntry ? function () { workbenchSelectDefinition(vendorEntry.id, { showOverview: false }); } : null));
+    relations.appendChild(workbenchSelectionRelation("Vendor-interactie", (context.vendorComponent.values?.interactionPrompt || "Trade") + " · bereik " + formatNumber(context.vendorComponent.values?.range || 5)));
+  }
   if (context.enemy) {
     const enemyModelAsset = assetById(context.enemy.values?.modelAssetId);
     const iconAsset = assetById(context.enemy.values?.iconAssetId);
@@ -16898,11 +17146,30 @@ function renderWorkbenchSelection(context) {
   if (context.enemyRef && !context.enemy) root.appendChild(workbenchWarning("De Enemy-component verwijst naar een definitie die niet meer bestaat."));
   if (context.lootRef && !context.lootTable) root.appendChild(workbenchWarning("De Enemy-definitie verwijst naar een Loot Table die niet meer bestaat."));
   const existingRole = visualBuilderRoleForContext(context.object);
-  if (!context.enemyComponent && !context.resourceComponent && existingRole && existingRole !== "decoration") {
+  if (!context.enemyComponent && !context.resourceComponent && existingRole && !["decoration", "npc", "vendor"].includes(existingRole)) {
     root.appendChild(workbenchWarning("Dit model heeft al de wereldrol " + objectFunctionKindLabel(existingRole) + ". De Werkbank vervangt die rol niet stil; gebruik daarvoor de bestaande Visual Builder."));
   }
   const actions = document.createElement("div");
   actions.className = "workbenchActions";
+  const canNpc = !context.object?.enemyComponent;
+  const npcButton = workbenchMiniButton(context.npcComponent ? "NPC beheren" : "Maak NPC", function () { workbenchOpenRoleCreate(context, "npc"); }, context.npcComponent ? "ghost" : "primary");
+  npcButton.disabled = !canNpc;
+  actions.appendChild(npcButton);
+  const vendorButton = workbenchMiniButton(context.vendorComponent ? "Vendor beheren" : "Maak Vendor", function () { workbenchOpenRoleCreate(context, "vendor"); }, context.vendorComponent ? "ghost" : "primary");
+  vendorButton.disabled = Boolean(context.object?.enemyComponent || context.resourceComponent);
+  actions.appendChild(vendorButton);
+  if (context.vendorCatalog) actions.appendChild(workbenchMiniButton("Open Vendor Catalog", function () { workbenchSelectDefinition(context.vendorCatalog.id, { showOverview: false }); }, "ghost"));
+  const targetButton = workbenchMiniButton(context.object?.questBinding ? "Quest Target beheren" : "Maak Quest Target", function () {
+    objectFunctionBeginDraft("quest", context.object);
+  }, "ghost");
+  targetButton.disabled = !objectFunctionCanCreateKind(context.object, "quest");
+  actions.appendChild(targetButton);
+  if (context.object?.questBinding) {
+    actions.appendChild(workbenchMiniButton("Nieuwe quest", function () { workbenchStartStoryForTarget("quest_definition", context); }, "ghost"));
+    actions.appendChild(workbenchMiniButton("Nieuwe dialoog", function () { workbenchStartStoryForTarget("dialogue_definition", context); }, "ghost"));
+    actions.appendChild(workbenchMiniButton("Koppel bestaande quest", function () { workbenchLinkExistingStoryToTarget("quest_definition", context); }, "ghost"));
+    actions.appendChild(workbenchMiniButton("Koppel bestaande dialoog", function () { workbenchLinkExistingStoryToTarget("dialogue_definition", context); }, "ghost"));
+  }
   if (context.resourceComponent) {
     if (context.resource) {
       actions.appendChild(workbenchMiniButton("Open Resource", function () { workbenchSelectDefinition(context.resource.id, { showOverview: false }); }, "primary"));
@@ -16948,7 +17215,7 @@ function renderWorkbenchSelection(context) {
   root.appendChild(actions);
   const placedModelPicker = workbenchRenderPlacedModelPicker(context);
   if (placedModelPicker) root.appendChild(placedModelPicker);
-  const createCard = workbenchRenderEnemyCreate(context) || workbenchRenderResourceCreate(context);
+  const createCard = workbenchRenderNpcVendorCreate(context) || workbenchRenderEnemyCreate(context) || workbenchRenderResourceCreate(context) || workbenchRenderQuestTargetDraft(context);
   if (createCard) root.appendChild(createCard);
   const editCard = workbenchRenderEnemyEditor(context);
   if (editCard) root.appendChild(editCard);
@@ -17014,6 +17281,25 @@ function renderWorkbenchLibraryCard(entry, context, options = {}) {
     link.disabled = current;
     actions.appendChild(link);
   }
+  if (!focused && entry.type === "npc_archetype" && context.model && !context.npcComponent && !context.object?.enemyComponent) {
+    actions.appendChild(workbenchMiniButton("Gebruik voor model", function () {
+      workbenchOpenRoleCreate(context, "npc");
+      const draft = visualBuilderDraftForContext(context.object);
+      if (draft) { draft.definitionMode = "existing"; draft.definitionRef = entry.ref; renderWorkbench(); }
+    }));
+  }
+  if (!focused && entry.type === "vendor_catalog" && context.model && !context.vendorComponent && !context.object?.enemyComponent && !context.resourceComponent) {
+    actions.appendChild(workbenchMiniButton("Gebruik voor model", function () {
+      workbenchOpenRoleCreate(context, "vendor");
+      const draft = visualBuilderDraftForContext(context.object);
+      if (draft) {
+        draft.definitionMode = "existing";
+        draft.definitionRef = entry.ref;
+        draft.values.vendorOffers = visualBuilderVendorDraftRows(state.graph, entry.ref);
+        renderWorkbench();
+      }
+    }));
+  }
   if (actions.childElementCount) card.appendChild(actions);
   card.addEventListener("click", function (event) {
     if (event.target.closest("button")) return;
@@ -17066,10 +17352,10 @@ function renderWorkbenchLibrary(context) {
     if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
   });
   controls.appendChild(search);
-  const type = workbenchCategoryType(state.workbenchLibraryType);
+  const categoryTypes = workbenchCategoryTypes(state.workbenchLibraryType);
   const query = normalizeEditorKey(state.workbenchSearch);
   const all = index.definitions.filter(function (entry) {
-    if (type && entry.type !== type) return false;
+    if (categoryTypes.length && !categoryTypes.includes(entry.type)) return false;
     return !query || normalizeEditorKey(entry.name).includes(query);
   }).sort(function (left, right) {
     return left.name.localeCompare(right.name, "nl", { sensitivity: "base" });
@@ -17123,6 +17409,10 @@ function renderWorkbenchRelationStrip(context) {
   root.innerHTML = "";
   if (!context.model) {
     root.appendChild(workbenchWarning("Selecteer een geplaatst model om de relatie Wereldobject → Enemy-definitie → Loot Table → Loot-regels te zien."));
+    return;
+  }
+  if (context.npcComponent || context.vendorComponent) {
+    renderWorkbenchNpcVendorObjectStrip(context, root);
     return;
   }
   if (context.resourceComponent) {
@@ -17245,15 +17535,19 @@ let workbenchOverviewRenderTimer = 0;
 let workbenchOverviewResizeObserver = null;
 let workbenchOverviewIndexStamp = null;
 
-const WORKBENCH_CREATE_TYPES = ["item_definition", "currency_definition", "resource_definition", "recipe_definition", "vendor_catalog", "loot_table", "enemy_archetype", "npc_archetype", "ability_definition", "stat_definition"];
-const WORKBENCH_INLINE_FIELD_TYPES = new Set(["text", "tokenText", "number", "boolean", "select", "reference", "referenceList", "tagList"]);
+const WORKBENCH_CREATE_TYPES = ["item_definition", "currency_definition", "resource_definition", "recipe_definition", "vendor_catalog", "loot_table", "enemy_archetype", "npc_archetype", "ability_definition", "stat_definition", "stat_block", "quest_definition", "dialogue_definition"];
+const WORKBENCH_INLINE_FIELD_TYPES = new Set(["text", "tokenText", "number", "boolean", "select", "reference", "referenceList", "tagList", "formula"]);
 const WORKBENCH_FIELD_LABELS = {
   displayName: "Naam", role: "Rol", statBlockRef: "Stat Block", lootTableRef: "Loot Table", scale: "Schaal",
   yieldItemRefs: "Opbrengst-items", yieldLootTableRef: "Oogst-loot", requiredAbilityRef: "Vereiste ability",
   category: "Categorie", stackable: "Stapelbaar", rarity: "Zeldzaamheid", craftDurationMs: "Crafttijd (ms)",
   unlockMode: "Beschikbaarheid", abilityType: "Type", range: "Bereik", cooldownMs: "Cooldown (ms)",
   valueType: "Waardetype", minimum: "Minimum", maximum: "Maximum", defaultValue: "Startwaarde",
-  showInPrimaryWallet: "Zichtbaar in wallet", sortOrder: "Volgorde in wallet"
+  showInPrimaryWallet: "Zichtbaar in wallet", sortOrder: "Volgorde in wallet", overrideMode: "Samenvoegen of vervangen",
+  summary: "Samenvatting", description: "Beschrijving", questType: "Questtype", minimumLevel: "Minimumlevel",
+  recommendedZoneRef: "Aanbevolen zone", startStepRef: "Startstap", turnInTargetRef: "Inlever-target",
+  prerequisiteQuestRefs: "Vereiste quests", nextQuestRefs: "Volgende quests", autoTrack: "Automatisch volgen", repeatMode: "Herhaling",
+  targetRef: "NPC / wereldtarget", startEntryRef: "Startregel"
 };
 
 function workbenchContentIndex() {
@@ -17297,7 +17591,13 @@ function workbenchFieldLabel(type, key) {
 }
 
 function workbenchCategoryType(categoryId) {
-  return WORKBENCH_CATEGORIES.find(function (category) { return category.id === categoryId; })?.type || "";
+  const category = WORKBENCH_CATEGORIES.find(function (entry) { return entry.id === categoryId; });
+  return category?.type || category?.types?.[0] || "";
+}
+
+function workbenchCategoryTypes(categoryId) {
+  const category = WORKBENCH_CATEGORIES.find(function (entry) { return entry.id === categoryId; });
+  return category?.types || (category?.type ? [category.type] : []);
 }
 
 function workbenchMiniButton(label, onClick, className = "mini") {
@@ -17374,6 +17674,13 @@ function workbenchCatalogGroupFor(node) {
   return group?.type === "group" && normalizeEditorKey(group.values?.groupKind) === "catalog" ? group : null;
 }
 
+function workbenchOwningGroupFor(node) {
+  const group = node?.parentId ? graphNodeByIdInGraph(state.graph, node.parentId) : null;
+  if (group?.type !== "group") return null;
+  const kind = normalizeEditorKey(group.values?.groupKind);
+  return ["catalog", "campaign"].includes(kind) ? group : null;
+}
+
 function workbenchSelectedDefinition() {
   const id = state.workbenchDefinitionId;
   if (!id) return null;
@@ -17394,8 +17701,17 @@ function workbenchSelectDefinition(nodeId, options = {}) {
     state.workbenchDeleteNodeId = null;
     state.workbenchAssetSlotPicker = "";
     state.workbenchUsageOpen = false;
+    state.workbenchStatRuleDraft = null;
   }
   state.workbenchDefinitionId = next;
+  const selectedEntry = next ? workbenchContentIndex().byNodeId.get(next) : null;
+  if (selectedEntry?.type === "quest_definition") {
+    state.questTimelineSelectedQuestId = next;
+    const steps = questTimelineStepsForQuest(selectedEntry.node, state.graph);
+    if (!steps.some(function (step) { return step.id === state.questTimelineSelectedStepId; })) state.questTimelineSelectedStepId = steps[0]?.id || null;
+  } else if (selectedEntry?.type === "dialogue_definition") {
+    state.questTimelineSelectedDialogueId = next;
+  }
   storeWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY, next || "");
   if (next) state.workbenchCreateDraft = null;
   if (next && options.showOverview !== false && state.workbenchStage !== "overview") setWorkbenchStage("overview", { render: false });
@@ -17502,7 +17818,7 @@ function workbenchShowDefinitionNodes(entry) {
   if (!entry) return;
   const ids = [entry.id].concat(entry.children.map(function (child) { return child.id; }));
   const output = (state.graph.nodes || []).find(function (node) {
-    return node.type === "catalog_output" && (node.parentId || null) === (entry.node.parentId || null)
+    return ["catalog_output", "campaign_output"].includes(node.type) && (node.parentId || null) === (entry.node.parentId || null)
       && (state.graph.edges || []).some(function (edge) { return edge.fromNodeId === entry.id && edge.toNodeId === node.id; });
   });
   if (output) ids.push(output.id);
@@ -17785,6 +18101,10 @@ function renderWorkbenchDeleteWarning(entry) {
       setStatus("Deze definitie staat buiten een Group; verwijder haar via Nodes.", "error");
       return;
     }
+    if (["quest_definition", "dialogue_definition"].includes(entry.type)) {
+      void workbenchDeleteStoryDefinition(entry);
+      return;
+    }
     void deleteManagedNode("catalog", group, entry.node, {
       preserveEditorContext: true,
       afterApply: function () {
@@ -17802,11 +18122,30 @@ function renderWorkbenchDeleteWarning(entry) {
   return card;
 }
 
+async function workbenchDeleteStoryDefinition(entry) {
+  const removeIds = new Set([entry.id].concat(entry.children.map(function (child) { return child.id; })));
+  const nextGraph = cloneGraphForRestore(state.graph);
+  nextGraph.nodes = (nextGraph.nodes || []).filter(function (node) { return !removeIds.has(node.id); });
+  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
+    return !removeIds.has(edge.fromNodeId) && !removeIds.has(edge.toNodeId);
+  });
+  await restoreGraphObject(nextGraph, {
+    historyLabel: workbenchTypeLabel(entry.type) + " verwijderd",
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () {
+      state.workbenchDeleteNodeId = null;
+      workbenchSelectDefinition(null, { render: false, showOverview: false });
+      setStatus(workbenchTypeLabel(entry.type) + " en eigen onderdelen verwijderd.", "success");
+    }
+  });
+}
+
 function renderWorkbenchDefinitionPanel(entry, context) {
   const root = el.workbenchSelectionPanel;
   if (!root) return;
   root.innerHTML = "";
-  const group = workbenchCatalogGroupFor(entry.node);
+  const group = workbenchOwningGroupFor(entry.node);
   root.appendChild(workbenchLeftHeader());
   const nav = document.createElement("div");
   nav.className = "workbenchActions workbenchNavRow";
@@ -17842,8 +18181,10 @@ function renderWorkbenchDefinitionPanel(entry, context) {
   for (const warning of workbenchEntryWarnings(entry)) {
     if (warning.endsWith("ontbreekt")) root.appendChild(workbenchWarning(warning + ": de gekoppelde asset staat niet meer in de Asset Library."));
   }
-  if (!entry.packaged) root.appendChild(workbenchWarning("Niet gekoppeld aan een Catalog Output: deze definitie wordt niet gepubliceerd. Gebruik in de Catalogus 'Package bijwerken'."));
-  if (!group) root.appendChild(workbenchWarning("Deze definitie staat niet in een Collectie. Regels en verwijderen gaan dan via Nodes."));
+  if (!entry.packaged) root.appendChild(workbenchWarning(entry.type === "quest_definition" || entry.type === "dialogue_definition"
+    ? "Niet gekoppeld aan een Campaign Output: deze content wordt niet gepubliceerd."
+    : "Niet gekoppeld aan een Catalog Output: deze definitie wordt niet gepubliceerd. Gebruik in de Catalogus 'Package bijwerken'."));
+  if (!group) root.appendChild(workbenchWarning("Deze content staat niet in een geldige Collectie. Regels en verwijderen gaan dan via Nodes."));
 
   const actions = document.createElement("div");
   actions.className = "workbenchActions";
@@ -17860,6 +18201,11 @@ function renderWorkbenchDefinitionPanel(entry, context) {
     renderWorkbench();
   }, "ghost"));
   actions.appendChild(workbenchMiniButton("Toon in nodes", function () { workbenchShowDefinitionNodes(entry); }, "ghost"));
+  const worldRows = workbenchWorldRows(entry);
+  const showWorld = workbenchMiniButton("Toon in wereld", function () { workbenchChooseWorldPlacement(entry); }, "ghost");
+  showWorld.disabled = !worldRows.length;
+  showWorld.title = worldRows.length ? "Selecteer en focus een echte authored model_entity." : "Dit is een herbruikbare definitie zonder wereldobject.";
+  actions.appendChild(showWorld);
   actions.appendChild(workbenchMiniButton(state.workbenchUsageOpen ? "Sluit gebruik" : "Waar gebruikt", function () {
     state.workbenchUsageOpen = !state.workbenchUsageOpen;
     if (state.workbenchUsageOpen) state.workbenchRelationScope = "used";
@@ -17975,6 +18321,34 @@ function workbenchDraftFieldControl(type, key, field, draft) {
     });
   }
   if (field.type === "referenceList") return workbenchReferenceListControl(type, key, field, draft);
+  if (field.type === "formula") {
+    // Same structured { operator, operands } shape as the existing formula
+    // editor. The game (formulaValue) only reads add/multiply over numbers.
+    const current = value && typeof value === "object" ? clonePlain(value) : { operator: "add", operands: [] };
+    const latest = function () {
+      const live = draft.values[key];
+      return live && typeof live === "object" ? live : current;
+    };
+    const wrap = document.createElement("div");
+    wrap.className = "formulaEditor";
+    const operatorLabels = { add: "Optellen", multiply: "Vermenigvuldigen" };
+    const operator = workbenchSelect(String(current.operator || "add"), ["add", "multiply", "subtract", "divide", "min", "max", "value"].map(function (option) {
+      return { value: option, label: operatorLabels[option] || (option + " (Nog niet actief in de game)") };
+    }), function (next) { draft.values[key] = Object.assign({}, latest(), { operator: next }); });
+    const operands = workbenchTextInput(Array.isArray(current.operands) ? current.operands.join(", ") : "", function (raw) {
+      const nextOperands = raw.split(",").map(function (part) {
+        const trimmed = part.trim();
+        const number = Number(trimmed);
+        return Number.isFinite(number) && trimmed !== "" ? number : trimmed;
+      }).filter(function (part) { return part !== ""; });
+      draft.values[key] = Object.assign({}, latest(), { operator: operator.value, operands: nextOperands });
+    }, { placeholder: "Bijv. 10, 5" });
+    const hint = document.createElement("div");
+    hint.className = "workbenchMeta";
+    hint.textContent = "De game leest alleen getallen met Optellen of Vermenigvuldigen.";
+    wrap.append(operator, operands, hint);
+    return wrap;
+  }
   if (field.type === "tagList") return workbenchTextInput(normalizeTagList(value).join(", "), set, { placeholder: "tag.een, tag.twee" });
   if (field.type === "tokenText") {
     const textarea = document.createElement("textarea");
@@ -18190,19 +18564,89 @@ function renderWorkbenchAssetPicker(assetTypes, currentId, onPick) {
 
 // ---- Nieuwe definitie ----
 
+// Schema defaults, except where a default would silently author content: a new
+// Stat Block starts without the schema's example rule (stat.health = 100).
+function workbenchCreateDefaults(type) {
+  return Object.assign(managedDefaultValuesForDraft(type), type === "dialogue_definition" ? { firstText: "" } : type === "stat_block" ? { entries: [] } : {});
+}
+
 function workbenchBeginCreate(type) {
   const nextType = CONTENT_TYPE_SPECS[type] ? type : "item_definition";
-  const collections = workbenchCollections();
+  const story = ["quest_definition", "dialogue_definition"].includes(nextType);
+  const collections = story ? workbenchCampaignCollections() : workbenchCollections();
   const remembered = loadStoredWorkbenchValue(WORKBENCH_COLLECTION_STORAGE_KEY);
   state.workbenchCreateDraft = {
     type: nextType,
     name: "",
-    values: managedDefaultValuesForDraft(nextType),
+    values: workbenchCreateDefaults(nextType),
     collectionId: collections.length === 1 ? collections[0].id : (collections.some(function (group) { return group.id === remembered; }) ? remembered : "")
   };
   state.workbenchAssetSlotPicker = "";
   renderWorkbench();
   requestAnimationFrame(function () { el.workbenchSelectionPanel?.querySelector(".workbenchCreateName")?.focus(); });
+}
+
+function renderWorkbenchStoryCreatePanel(root, draft) {
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const typeTitle = document.createElement("div");
+  typeTitle.className = "workbenchSectionTitle";
+  typeTitle.textContent = draft.type === "quest_definition" ? "Nieuwe Quest" : "Nieuwe Dialoog";
+  card.appendChild(typeTitle);
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields";
+  const fakeNode = { type: draft.type, values: draft.values };
+  const name = workbenchTextInput(draft.name, function (value) { draft.name = value; }, { placeholder: draft.type === "quest_definition" ? "Bijv. De verdwenen voorraad" : "Bijv. Bram - Intro" });
+  name.classList.add("workbenchCreateName");
+  fields.appendChild(workbenchField(fakeNode, "displayName", "Menselijke naam", name));
+  if (draft.type === "quest_definition") {
+    fields.appendChild(workbenchField(fakeNode, "summary", "Samenvatting", workbenchTextInput(draft.values.summary || "", function (value) { draft.values.summary = value; }, { placeholder: "Wat moet de speler doen?" })));
+    fields.appendChild(workbenchLabeledField(draft.type, "questType", "Questtype", workbenchDraftFieldControl(draft.type, "questType", state.nodeTypes.quest_definition.fields.questType, draft), fakeNode));
+    fields.appendChild(workbenchLabeledField(draft.type, "minimumLevel", "Minimumlevel", workbenchDraftFieldControl(draft.type, "minimumLevel", state.nodeTypes.quest_definition.fields.minimumLevel, draft), fakeNode));
+    fields.appendChild(workbenchLabeledField(draft.type, "turnInTargetRef", "Start-/inlever-target (optioneel)", workbenchDraftFieldControl(draft.type, "turnInTargetRef", state.nodeTypes.quest_definition.fields.turnInTargetRef, draft), fakeNode));
+  } else {
+    fields.appendChild(workbenchLabeledField(draft.type, "targetRef", "Spreker / Quest Target", workbenchDraftFieldControl(draft.type, "targetRef", state.nodeTypes.dialogue_definition.fields.targetRef, draft), fakeNode));
+    fields.appendChild(workbenchField({ type: "dialogue_entry", values: {} }, "text", "Eerste tekstregel", workbenchTextInput(draft.values.firstText || "", function (value) { draft.values.firstText = value; }, { placeholder: "Wat zegt de spreker?" })));
+  }
+  card.appendChild(fields);
+  const collectionTitle = document.createElement("div");
+  collectionTitle.className = "workbenchSectionTitle";
+  collectionTitle.textContent = "Campagne / Questcollectie";
+  card.appendChild(collectionTitle);
+  const collections = workbenchCampaignCollections();
+  if (collections.length === 1) draft.collectionId = collections[0].id;
+  if (!collections.length) {
+    card.appendChild(workbenchWarning("Er is nog geen Campagne. Maak eerst één echte Campaign Group; package en output worden automatisch verbonden."));
+    card.appendChild(workbenchMiniButton("Maak Campagne", function () {
+      void createRootManagedGroup("campaign", nextManagedGroupTitle("campaign", "Campagne")).then(function () { renderWorkbench(); });
+    }));
+  } else {
+    card.appendChild(workbenchField(fakeNode, "displayName", "Questcollectie", workbenchSelect(draft.collectionId, [{ value: "", label: "Kies een Campagne" }].concat(collections.map(function (group) {
+      return { value: group.id, label: nodeDisplayTitle(group) };
+    })), function (value) { draft.collectionId = value; })));
+  }
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  actions.appendChild(workbenchMiniButton("Aanmaken", function () { void workbenchCommitCreate(); }, "primary"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () { state.workbenchCreateDraft = null; renderWorkbench(); }, "ghost"));
+  card.appendChild(actions);
+  root.appendChild(card);
+}
+
+async function workbenchCommitStoryCreate(draft, name) {
+  const group = draft.collectionId ? graphNodeByIdInGraph(state.graph, draft.collectionId) : null;
+  if (!group || !isCampaignGroupNode(group)) {
+    setStatus("Kies eerst een Campagne / Questcollectie.", "error");
+    return;
+  }
+  if (workbenchDuplicateName(draft.type, name, group.id)) {
+    setStatus("Er bestaat al content met deze naam in deze Questcollectie.", "error");
+    return;
+  }
+  draft.values.displayName = name;
+  draft.workbench = true;
+  if (draft.type === "quest_definition") await questTimelineCommitCreateQuest(group, draft);
+  else await questTimelineCommitCreateDialogue(group, draft);
 }
 
 function renderWorkbenchCreatePanel(context) {
@@ -18211,6 +18655,10 @@ function renderWorkbenchCreatePanel(context) {
   root.innerHTML = "";
   const draft = state.workbenchCreateDraft;
   root.appendChild(workbenchLeftHeader({ hideCreate: true }));
+  if (["quest_definition", "dialogue_definition"].includes(draft.type)) {
+    renderWorkbenchStoryCreatePanel(root, draft);
+    return;
+  }
   const card = document.createElement("div");
   card.className = "workbenchEditorCard";
   const typeLabel = document.createElement("div");
@@ -18226,8 +18674,16 @@ function renderWorkbenchCreatePanel(context) {
     button.textContent = workbenchTypeLabel(type);
     button.addEventListener("click", function () {
       if (draft.type === type) return;
+      if (["quest_definition", "dialogue_definition"].includes(type)) {
+        // Quests and dialogues live in a Campaign, not in a Catalog Collectie.
+        const name = draft.name;
+        workbenchBeginCreate(type);
+        if (state.workbenchCreateDraft) state.workbenchCreateDraft.name = name;
+        renderWorkbench();
+        return;
+      }
       draft.type = type;
-      draft.values = managedDefaultValuesForDraft(type);
+      draft.values = workbenchCreateDefaults(type);
       state.workbenchAssetSlotPicker = "";
       renderWorkbench();
     });
@@ -18331,6 +18787,10 @@ async function workbenchCommitCreate() {
   const name = String(draft.name || "").trim();
   if (!name) {
     setStatus("Vul een menselijke naam in.", "error");
+    return;
+  }
+  if (["quest_definition", "dialogue_definition"].includes(draft.type)) {
+    await workbenchCommitStoryCreate(draft, name);
     return;
   }
   const group = draft.collectionId ? graphNodeByIdInGraph(state.graph, draft.collectionId) : null;
@@ -19042,11 +19502,134 @@ function workbenchRelationRows(entry, relations, side) {
   return rows;
 }
 
+function workbenchStatBlockRows(entry) {
+  const index = workbenchContentIndex();
+  return (Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : []).map(function (rule, ruleIndex) {
+    const statNode = index.resolve(rule?.statRef);
+    const statEntry = statNode ? index.byNodeId.get(statNode.id) : null;
+    return {
+      entryId: statEntry?.id || "",
+      name: statEntry?.name || (rule?.statRef ? "Ontbrekende Stat" : "Geen Stat gekozen"),
+      detail: "Basiswaarde " + formatNumber(rule?.baseValue ?? 0),
+      warning: statEntry ? "" : "kies opnieuw",
+      actions: [
+        { label: "Bewerk", onClick: function () { workbenchBeginStatRule(entry, ruleIndex); } },
+        { label: "×", className: "mini deleteNode", onClick: function () { void workbenchDeleteStatRule(entry, ruleIndex); } }
+      ]
+    };
+  });
+}
+
+function workbenchBeginStatRule(entry, ruleIndex = -1, statRef = "") {
+  const entries = Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : [];
+  const existing = ruleIndex >= 0 ? entries[ruleIndex] : null;
+  state.workbenchStatRuleDraft = {
+    nodeId: entry.id,
+    ruleIndex,
+    statRef: normalizeCanonicalId(existing?.statRef || statRef, ""),
+    baseValue: Number(existing?.baseValue ?? 0)
+  };
+  renderWorkbench();
+}
+
+function renderWorkbenchStatRuleForm(entry) {
+  const draft = state.workbenchStatRuleDraft;
+  if (!draft || draft.nodeId !== entry.id) return null;
+  const card = document.createElement("div");
+  card.className = "workbenchEditorCard";
+  const title = document.createElement("div");
+  title.className = "workbenchName";
+  title.textContent = draft.ruleIndex >= 0 ? "Statregel bewerken" : "Statregel toevoegen";
+  card.appendChild(title);
+  const fields = document.createElement("div");
+  fields.className = "workbenchFields";
+  const statField = { label: "Stat", type: "reference", referenceKinds: ["stat"], allowNull: false, required: true };
+  fields.appendChild(workbenchLabeledField("stat_block", "entries", "Stat", buildReferencePickerField({ id: "workbench-stat-rule", type: "stat_block", values: {} }, "statRef", statField, draft.statRef || null, {
+    onChange: function (value) { draft.statRef = value || ""; renderWorkbench(); },
+    onFocusNode: workbenchFocusReferenceNode,
+    hideAdvanced: true,
+    hideRawId: true,
+    rerender: false
+  })));
+  fields.appendChild(workbenchLabeledField("stat_block", "entries", "Basiswaarde", workbenchTextInput(draft.baseValue, function (value) { draft.baseValue = Number(value); }, { type: "number", step: 0.01 })));
+  card.appendChild(fields);
+  const entries = Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : [];
+  const duplicateIndex = entries.findIndex(function (rule, index) {
+    return index !== draft.ruleIndex && normalizeCanonicalId(rule?.statRef, "") === normalizeCanonicalId(draft.statRef, "");
+  });
+  if (duplicateIndex >= 0) card.appendChild(workbenchWarning("Deze Stat staat al in dit block. Bewerk de bestaande regel in plaats van een dubbele regel te maken."));
+  const actions = document.createElement("div");
+  actions.className = "workbenchActions";
+  const save = workbenchMiniButton("Opslaan", function () { void workbenchSaveStatRule(entry); }, "primary");
+  save.disabled = !draft.statRef || duplicateIndex >= 0 || !Number.isFinite(Number(draft.baseValue));
+  actions.appendChild(save);
+  if (duplicateIndex >= 0) actions.appendChild(workbenchMiniButton("Bestaande regel bewerken", function () { workbenchBeginStatRule(entry, duplicateIndex); }, "ghost"));
+  actions.appendChild(workbenchMiniButton("Annuleren", function () { state.workbenchStatRuleDraft = null; renderWorkbench(); }, "ghost"));
+  card.appendChild(actions);
+  return card;
+}
+
+async function workbenchSaveStatRule(entry) {
+  const draft = state.workbenchStatRuleDraft;
+  if (!draft || draft.nodeId !== entry.id) return;
+  const entries = clonePlain(Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : []);
+  if (!draft.statRef || !Number.isFinite(Number(draft.baseValue))) {
+    setStatus("Kies een Stat en vul een geldige basiswaarde in.", "error");
+    return;
+  }
+  if (entries.some(function (rule, index) { return index !== draft.ruleIndex && normalizeCanonicalId(rule?.statRef, "") === normalizeCanonicalId(draft.statRef, ""); })) {
+    setStatus("Deze Stat staat al in dit Stat Block.", "error");
+    return;
+  }
+  const rule = { statRef: normalizeCanonicalId(draft.statRef, ""), baseValue: Number(draft.baseValue) };
+  if (draft.ruleIndex >= 0) entries[draft.ruleIndex] = Object.assign({}, entries[draft.ruleIndex] || {}, rule);
+  else entries.push(rule);
+  await workbenchPatchNode(entry.node, { entries }, draft.ruleIndex >= 0 ? "Statregel gewijzigd" : "Statregel toegevoegd", {
+    afterApply: function () { state.workbenchStatRuleDraft = null; }
+  });
+}
+
+async function workbenchDeleteStatRule(entry, ruleIndex) {
+  const entries = clonePlain(Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : []);
+  if (ruleIndex < 0 || ruleIndex >= entries.length) return;
+  entries.splice(ruleIndex, 1);
+  await workbenchPatchNode(entry.node, { entries }, "Statregel verwijderd");
+}
+
 function workbenchWorldRows(entry) {
-  return workbenchUsageRows(entry).filter(function (row) { return row.worldNodeId; }).map(function (row) {
+  const rows = workbenchUsageRows(entry).filter(function (row) { return row.worldNodeId; }).map(function (row) {
     const node = graphNodeByIdInGraph(state.graph, row.worldNodeId);
     return { name: row.label, detail: row.meta, asset: workbenchAsset(node?.values?.modelAssetId), onOpen: function () { workbenchShowWorldNode(row.worldNodeId); } };
   });
+  if (["quest_definition", "dialogue_definition"].includes(entry.type)) {
+    const index = workbenchContentIndex();
+    for (const relation of entry.out.filter(function (candidate) { return ["quest_npc", "dialogue_npc"].includes(candidate.kind); })) {
+      const npc = index.byNodeId.get(relation.to);
+      if (npc) rows.push.apply(rows, workbenchWorldRows(npc));
+    }
+  }
+  const seen = new Set();
+  return rows.filter(function (row) {
+    const key = row.name + "|" + row.detail;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function workbenchChooseWorldPlacement(entry) {
+  const rows = workbenchWorldRows(entry);
+  if (!rows.length) {
+    setStatus("Deze herbruikbare definitie heeft geen authored wereldobject.", "");
+    return;
+  }
+  if (rows.length === 1) {
+    rows[0].onOpen();
+    return;
+  }
+  const answer = window.prompt("Kies een plaatsing:\n" + rows.map(function (row, index) { return (index + 1) + ". " + row.name; }).join("\n"), "1");
+  const index = Math.floor(Number(answer)) - 1;
+  if (index >= 0 && index < rows.length) rows[index].onOpen();
 }
 
 // Opbrengst of a Resource definition: yield items and harvest loot, with drop.
@@ -19098,6 +19681,257 @@ function renderWorkbenchResourceObjectStrip(context, root) {
   root.appendChild(flow);
 }
 
+function renderWorkbenchNpcVendorObjectStrip(context, root) {
+  const index = workbenchContentIndex();
+  const npcEntry = context.npc ? index.byNodeId.get(context.npc.id) : null;
+  const vendorEntry = context.vendorCatalog ? index.byNodeId.get(context.vendorCatalog.id) : null;
+  const flow = document.createElement("div");
+  flow.className = "workbenchRelationFlow workbenchFlowBoard";
+  flow.appendChild(workbenchFlowZone({
+    title: "Wereldobject",
+    rows: [{ name: nodeDisplayTitle(context.model), detail: "Eén model_entity, één mesh en transform", asset: workbenchAsset(context.model.values?.modelAssetId), onOpen: function () { workbenchShowWorld(context.model); } }],
+    drop: { accepts: function (payload) { return payload?.type === "vendor_catalog"; }, onDrop: function (payload) {
+      const catalog = index.byNodeId.get(payload.nodeId);
+      if (!catalog) return;
+      workbenchOpenRoleCreate(context, "vendor");
+      const draft = visualBuilderDraftForContext(context.object);
+      if (!draft) return;
+      draft.definitionMode = "existing";
+      draft.definitionRef = catalog.ref;
+      draft.values.vendorOffers = visualBuilderVendorDraftRows(state.graph, catalog.ref);
+      renderWorkbench();
+    } }
+  }));
+  flow.appendChild(workbenchFlowArrow());
+  flow.appendChild(workbenchFlowZone({ title: "NPC-definitie", rows: npcEntry ? [{ entryId: npcEntry.id, detail: "Level " + (context.npcComponent?.values?.level || 1), onOpen: function () { workbenchSelectDefinition(npcEntry.id, { showOverview: false }); } }] : [], empty: "Geen NPC-component." }));
+  flow.appendChild(workbenchFlowArrow());
+  flow.appendChild(workbenchFlowZone({
+    title: "Dialoog en quests",
+    note: context.targetRef ? "Sleep een Dialoog om deze NPC als spreker te koppelen, of een Quest om haar als inlever-target te gebruiken." : "Maak eerst een Quest Target; zonder echte targetreference verandert slepen niets.",
+    rows: context.dialogues.map(function (dialogue) { return { entryId: dialogue.id, detail: "Dialoog" }; }).concat(context.quests.map(function (quest) { return { entryId: quest.id, detail: "Quest" }; })),
+    empty: "Nog geen dialoog of quest gekoppeld.",
+    drop: { accepts: function (payload) { return Boolean(context.targetRef) && ["dialogue_definition", "quest_definition"].includes(payload?.type); }, onDrop: function (payload) {
+      const content = index.byNodeId.get(payload.nodeId);
+      if (!content || !context.targetRef) return;
+      if (content.type === "dialogue_definition") void workbenchPatchNode(content.node, { targetRef: context.targetRef }, "Dialoog aan NPC gekoppeld");
+      else void workbenchPatchNode(content.node, { turnInTargetRef: context.targetRef }, "Quest aan NPC gekoppeld");
+    } }
+  }));
+  if (context.vendorComponent || context.npcComponent) {
+    flow.appendChild(workbenchFlowArrow());
+    flow.appendChild(workbenchFlowZone({ title: "Vendorrol", rows: vendorEntry ? [{ entryId: vendorEntry.id, detail: (context.vendorComponent.values?.interactionPrompt || "Trade") + " · bereik " + formatNumber(context.vendorComponent.values?.range || 5) }] : [], empty: "Geen Vendor Catalog gekoppeld. Sleep een catalog op het wereldobject." }));
+  }
+  root.appendChild(flow);
+}
+
+function workbenchQuestTargetRefsForNpc(npcEntry) {
+  if (!npcEntry) return [];
+  const refs = [];
+  for (const usage of npcEntry.usage || []) {
+    if (!usage.modelId) continue;
+    const model = graphNodeByIdInGraph(state.graph, usage.modelId);
+    const object = model ? objectFunctionContextForModel(model, state.graph) : null;
+    const ref = normalizeCanonicalId(object?.questBinding?.values?.targetId, "");
+    if (ref && !refs.includes(ref)) refs.push(ref);
+  }
+  return refs;
+}
+
+function workbenchOpenQuestChildDraft(anchor, category, type, preset = {}) {
+  const fields = state.nodeTypes?.[type]?.fields || {};
+  const values = {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field || field.type === "identity") continue;
+    values[key] = field.default !== undefined ? clonePlain(field.default) : null;
+  }
+  Object.assign(values, preset);
+  state.questTimelineChildDraft = { anchorId: anchor.id, category, type, values };
+  renderWorkbench();
+}
+
+function workbenchQuestDropZone(title, note, accepts, onDrop, action) {
+  return workbenchFlowZone({
+    title,
+    note,
+    rows: [],
+    empty: "Sleep passende content hierheen of gebruik de knop.",
+    actions: action ? [{ label: action.label, onClick: action.onClick }] : [],
+    drop: { accepts, onDrop }
+  });
+}
+
+async function workbenchLinkStartDialogue(questEntry, dialogueEntry) {
+  const nextGraph = cloneGraphForRestore(state.graph);
+  const quest = graphNodeByIdInGraph(nextGraph, questEntry.id);
+  const dialogue = graphNodeByIdInGraph(nextGraph, dialogueEntry.id);
+  if (!quest || !dialogue) return;
+  if ((quest.parentId || null) !== (dialogue.parentId || null)) {
+    setStatus("Deze dialoog staat in een andere Campagne dan de quest. Kies een dialoog uit dezelfde Campagne.", "error");
+    return;
+  }
+  const alreadyLinked = (nextGraph.edges || []).some(function (edge) {
+    return edge.fromNodeId === dialogue.id && edge.fromPort === "dialogueDef" && edge.toNodeId === quest.id && edge.toPort === "startDialogue";
+  });
+  if (alreadyLinked) {
+    setStatus("Deze dialoog is al de startdialoog van deze quest.", "");
+    return;
+  }
+  nextGraph.edges = (nextGraph.edges || []).filter(function (edge) {
+    return !(edge.toNodeId === quest.id && edge.toPort === "startDialogue");
+  });
+  questTimelineEnsureSingleEdge(nextGraph, dialogue.id, "dialogueDef", quest.id, "startDialogue");
+  await restoreGraphObject(nextGraph, {
+    historyLabel: "Startdialoog aan quest gekoppeld",
+    refreshViewport: false,
+    refreshValidation: true,
+    afterApply: function () { setStatus("Startdialoog aan quest gekoppeld.", "success"); }
+  });
+}
+
+// Summary zones show each related card once, even when several steps,
+// objectives or actions reference the same NPC/Item/Currency/Ability.
+function workbenchStoryRelations(entry, kinds) {
+  const seen = new Set();
+  return entry.out.filter(function (relation) {
+    if (!kinds.includes(relation.kind)) return false;
+    const key = relation.kind + "|" + relation.to;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function renderWorkbenchQuestStoryboard(entry) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineSection";
+  const targetRows = workbenchRelationRows(entry, workbenchStoryRelations(entry, ["quest_npc"]), "to");
+  const dialogueRows = workbenchRelationRows(entry, workbenchStoryRelations(entry, ["quest_dialogue"]), "to");
+  const rewards = workbenchRelationRows(entry, workbenchStoryRelations(entry, ["quest_currency", "quest_ability", "quest_item"]), "to");
+  const summary = document.createElement("div");
+  summary.className = "workbenchRelationFlow workbenchFlowBoard";
+  summary.appendChild(workbenchFlowZone({
+    title: "NPC / start en inleveren",
+    note: "Sleep een NPC hierheen om haar Quest Target als start-/inlever-target te gebruiken.",
+    rows: targetRows,
+    empty: "Geen NPC-target gekoppeld.",
+    drop: { accepts: function (payload) { return payload?.type === "npc_archetype"; }, onDrop: function (payload) {
+      const refs = workbenchQuestTargetRefsForNpc(workbenchContentIndex().byNodeId.get(payload.nodeId));
+      if (refs.length !== 1) {
+        setStatus(refs.length ? "Deze NPC heeft meerdere Quest Targets; kies het inlever-target via Bewerk." : "Maak de geplaatste NPC eerst een Quest Target.", "error");
+        return;
+      }
+      if (normalizeCanonicalId(entry.node.values?.turnInTargetRef, "") === refs[0]) {
+        setStatus("Deze NPC is al het start-/inlever-target van deze quest.", "");
+        return;
+      }
+      void workbenchPatchNode(entry.node, { turnInTargetRef: refs[0] }, "Start-/inlever-NPC aan quest gekoppeld");
+    } }
+  }));
+  summary.appendChild(workbenchFlowArrow());
+  summary.appendChild(workbenchFlowZone({
+    title: "Dialoog",
+    rows: dialogueRows,
+    empty: "Geen startdialoog gekoppeld.",
+    drop: { accepts: function (payload) { return payload?.type === "dialogue_definition"; }, onDrop: function (payload) {
+      const dialogue = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (dialogue) void workbenchLinkStartDialogue(entry, dialogue);
+    } }
+  }));
+  summary.appendChild(workbenchFlowArrow());
+  summary.appendChild(workbenchCenterCard(entry));
+  summary.appendChild(workbenchFlowArrow());
+  summary.appendChild(workbenchFlowZone({ title: "Rewards en gebruikte content", rows: rewards, empty: "Nog geen Item-, Currency- of Ability-relaties." }));
+  wrap.appendChild(summary);
+  wrap.appendChild(renderQuestTimelineIssues(entry.node));
+  wrap.appendChild(renderQuestStepTimeline(entry.node));
+  const steps = questTimelineStepsForQuest(entry.node, state.graph);
+  const step = steps.find(function (candidate) { return candidate.id === state.questTimelineSelectedStepId; }) || steps[0] || null;
+  // Runtime facts (node04): accepting skips a Talk start step; only the last
+  // Deliver/Reach step completes the quest and only then are its step rewards
+  // plus the quest rewards executed. Intermediate step rewards never run.
+  if (steps.length > 1 && String(steps[0].values?.stepType || "") === "talk") {
+    wrap.appendChild(workbenchWarning("De eerste stap is Talk: in de game telt het accepteren van de quest als dit gesprek, dus deze stap wordt overgeslagen. Zet een Talk-doel liever op een latere stap."));
+  }
+  if (step && steps.length && steps[steps.length - 1].id !== step.id) {
+    wrap.appendChild(workbenchWarning("Dit is een tussenstap. De game voert beloningen en Remove Item alleen uit op de laatste stap (Deliver of Reach) en bij Beloningen bij afronden van de quest. Een Deliver-tussenstap controleert alleen of de speler de items heeft."));
+  }
+  if (step) {
+    wrap.appendChild(renderQuestStepDetail(entry.node, step));
+    const drops = document.createElement("div");
+    drops.className = "workbenchRelationFlow workbenchFlowBoard";
+    drops.appendChild(workbenchQuestDropZone("Collect", "Item → Collect; aantal wordt vóór opslaan gevraagd.", function (payload) { return payload?.type === "item_definition"; }, function (payload) {
+      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (source) workbenchOpenQuestChildDraft(step, "objectives", "objective_collect", { itemRef: source.ref });
+    }, { label: "+ Collect", onClick: function () { workbenchOpenQuestChildDraft(step, "objectives", "objective_collect"); } }));
+    drops.appendChild(workbenchQuestDropZone("Deliver", "Item → Deliver; kies daarna hoeveelheid en target.", function (payload) { return payload?.type === "item_definition"; }, function (payload) {
+      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (source) workbenchOpenQuestChildDraft(step, "objectives", "objective_deliver", { itemRef: source.ref });
+    }, { label: "+ Deliver", onClick: function () { workbenchOpenQuestChildDraft(step, "objectives", "objective_deliver"); } }));
+    drops.appendChild(workbenchQuestDropZone("Talk", "NPC → Talk wanneer die NPC precies één authored Quest Target heeft. Let op: de game telt Talk nu direct als voltooid (nog geen gesprekscontrole).", function (payload) { return payload?.type === "npc_archetype"; }, function (payload) {
+      const npc = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      const refs = workbenchQuestTargetRefsForNpc(npc);
+      if (refs.length !== 1) { setStatus(refs.length ? "Deze NPC heeft meerdere plaatsingen; kies het target menselijk in het formulier." : "Maak de geplaatste NPC eerst een Quest Target.", "error"); workbenchOpenQuestChildDraft(step, "objectives", "objective_talk"); return; }
+      workbenchOpenQuestChildDraft(step, "objectives", "objective_talk", { targetRef: refs[0] });
+    }, { label: "+ Talk", onClick: function () { workbenchOpenQuestChildDraft(step, "objectives", "objective_talk"); } }));
+    drops.appendChild(workbenchQuestDropZone("Reach", "NPC → Reach gebruikt haar Quest Target; voor een gebied kies je het target in het formulier.", function (payload) { return payload?.type === "npc_archetype"; }, function (payload) {
+      const refs = workbenchQuestTargetRefsForNpc(workbenchContentIndex().byNodeId.get(payload.nodeId));
+      if (refs.length !== 1) { setStatus(refs.length ? "Deze NPC heeft meerdere plaatsingen; kies het target menselijk in het formulier." : "Maak de geplaatste NPC eerst een Quest Target.", "error"); workbenchOpenQuestChildDraft(step, "objectives", "objective_reach"); return; }
+      workbenchOpenQuestChildDraft(step, "objectives", "objective_reach", { targetRef: refs[0] });
+    }, { label: "+ Reach", onClick: function () { workbenchOpenQuestChildDraft(step, "objectives", "objective_reach"); } }));
+    drops.appendChild(workbenchQuestDropZone("Currency reward", "Currency → reward; bedrag wordt vóór opslaan gevraagd.", function (payload) { return payload?.type === "currency_definition"; }, function (payload) {
+      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (source) workbenchOpenQuestChildDraft(step, "actions", "action_give_currency", { currencyRef: source.ref });
+    }, { label: "+ Currency", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_give_currency"); } }));
+    drops.appendChild(workbenchFlowZone({
+      title: "XP reward",
+      rows: [],
+      empty: "XP heeft geen bibliotheekkaart; vul de hoeveelheid in het formulier in.",
+      actions: [{ label: "+ XP", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_give_xp"); } }]
+    }));
+    drops.appendChild(workbenchQuestDropZone("Ability reward", "Ability → reward; rank en hotbarslot blijven expliciete velden.", function (payload) { return payload?.type === "ability_definition"; }, function (payload) {
+      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (source) workbenchOpenQuestChildDraft(step, "actions", "action_unlock_ability", { abilityRef: source.ref });
+    }, { label: "+ Ability", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_unlock_ability"); } }));
+    drops.appendChild(workbenchQuestDropZone("Item inleveren / verbruiken", "Item → Remove Item; dit is geen positieve beloning.", function (payload) { return payload?.type === "item_definition"; }, function (payload) {
+      const source = workbenchContentIndex().byNodeId.get(payload.nodeId);
+      if (source) workbenchOpenQuestChildDraft(step, "actions", "action_remove_item", { itemRef: source.ref });
+    }, { label: "+ Remove Item", onClick: function () { workbenchOpenQuestChildDraft(step, "actions", "action_remove_item"); } }));
+    wrap.appendChild(drops);
+    const unsupported = document.createElement("div");
+    unsupported.className = "workbenchMeta";
+    unsupported.textContent = "Niet aangeboden: Defeat/kill, branch, join, parallel en fail. Daarvoor bestaat nog geen volledige compiler/runtime-keten.";
+    wrap.appendChild(unsupported);
+  }
+  // quest_definition.conditions is compiled but not read by the quest runtime
+  // (only step and dialogue-choice conditions are), so it is not offered here.
+  const questConditions = questTimelineDirectSources(state.graph, entry.node, "conditions");
+  if (questConditions.length) {
+    wrap.appendChild(workbenchWarning("Deze quest heeft " + questConditions.length + " voorwaarde(n) op questniveau. Die zijn Nog niet actief in de game; zet Player Level of Has Item op een stap."));
+  }
+  // Same existing section, anchored on the quest: quest_definition.rewards are
+  // the completion rewards the runtime grants together with the step rewards.
+  const questRewards = renderQuestStepRewardsSection(entry.node);
+  const questRewardsHeading = questRewards.querySelector(".objectFunctionMeta");
+  if (questRewardsHeading) questRewardsHeading.textContent = "Beloningen bij afronden van de quest";
+  wrap.appendChild(questRewards);
+  return wrap;
+}
+
+function renderWorkbenchDialogueStoryboard(entry) {
+  const wrap = document.createElement("div");
+  wrap.className = "questTimelineSection";
+  const flow = document.createElement("div");
+  flow.className = "workbenchRelationFlow workbenchFlowBoard";
+  flow.appendChild(workbenchFlowZone({ title: "NPC / wereldtarget", rows: workbenchRelationRows(entry, workbenchStoryRelations(entry, ["dialogue_npc"]), "to"), empty: "Geen spreker/target gekoppeld." }));
+  flow.appendChild(workbenchFlowArrow());
+  flow.appendChild(workbenchCenterCard(entry));
+  flow.appendChild(workbenchFlowArrow());
+  flow.appendChild(workbenchFlowZone({ title: "Questacties", rows: workbenchRelationRows(entry, workbenchStoryRelations(entry, ["dialogue_quest"]), "to"), empty: "Geen questactie in keuzes." }));
+  wrap.appendChild(flow);
+  wrap.appendChild(renderDialogueEntryChain(entry.node));
+  return wrap;
+}
+
 function renderWorkbenchDefinitionFlow(entry, context) {
   const root = el.workbenchRelationStrip;
   if (!root) return;
@@ -19116,6 +19950,14 @@ function renderWorkbenchDefinitionFlow(entry, context) {
   const offerMode = function (relation) { return String(index.nodeById.get(relation.via)?.values?.mode || "both"); };
   const add = function (element) { flow.appendChild(element); };
   const editable = Boolean(workbenchCatalogGroupFor(entry.node));
+  if (entry.type === "quest_definition") {
+    root.appendChild(renderWorkbenchQuestStoryboard(entry));
+    return;
+  }
+  if (entry.type === "dialogue_definition") {
+    root.appendChild(renderWorkbenchDialogueStoryboard(entry));
+    return;
+  }
   if (entry.type === "recipe_definition") {
     add(workbenchFlowZone({
       title: "Ingrediënten",
@@ -19217,7 +20059,17 @@ function renderWorkbenchDefinitionFlow(entry, context) {
       empty: "Geen Loot Table.",
       drop: { accepts: workbenchZoneAccepts("enemyLoot", entry), onDrop: function (payload) { workbenchDropOnZone(entry, "enemyLoot", payload); } }
     }));
-    add(workbenchFlowZone({ title: "Stats via Stat Block", rows: workbenchRelationRows(entry, outOf("enemy_stats"), "to"), empty: "Geen Stat Block of geen stat-regels." }));
+    const statVia = entry.vias.find(function (via) { return via.type === "stat_block"; });
+    add(workbenchFlowZone({
+      title: "Stats via Stat Block",
+      note: "Sleep een Stat Block hierheen. Waarden blijven uitsluitend eigendom van dat block.",
+      rows: statVia ? [{ name: statVia.name, detail: outOf("enemy_stats").map(function (relation) { return index.byNodeId.get(relation.to)?.name + " " + relation.detail; }).filter(Boolean).join(" · "), onOpen: function () { workbenchSelectDefinition(statVia.nodeId, { showOverview: false }); } }] : [],
+      empty: "Geen Stat Block gekoppeld.",
+      drop: { accepts: function (payload) { return payload?.type === "stat_block"; }, onDrop: function (payload) {
+        const block = index.byNodeId.get(payload.nodeId);
+        if (block) void workbenchPatchNode(entry.node, { statBlockRef: block.ref }, "Stat Block aan Enemy gekoppeld");
+      } }
+    }));
     const abilities = outOf("enemy_ability");
     if (abilities.length || entry.vias.some(function (via) { return via.type === "combat_profile"; })) {
       add(workbenchFlowZone({ title: "Abilities via Combat Profile", inactive: true, rows: workbenchRelationRows(entry, abilities, "to"), empty: "Combat Profile zonder abilities." }));
@@ -19242,6 +20094,28 @@ function renderWorkbenchDefinitionFlow(entry, context) {
     add(workbenchCenterCard(entry));
     add(workbenchFlowArrow());
     add(workbenchFlowZone({ title: "Kosten-stat", inactive: true, rows: workbenchRelationRows(entry, outOf("ability_cost"), "to"), empty: "Geen kosten-stat." }));
+  } else if (entry.type === "stat_block") {
+    add(workbenchFlowZone({ title: "Gebruikt door", rows: workbenchUsageRows(entry).map(function (row) {
+      return { name: row.label, detail: row.meta, onOpen: row.worldNodeId ? function () { workbenchShowWorldNode(row.worldNodeId); } : function () { workbenchShowNode(row.nodeId); } };
+    }), empty: "Nog niet gekoppeld aan een Enemy of combatant." }));
+    add(workbenchFlowArrow());
+    add(workbenchCenterCard(entry));
+    add(workbenchFlowArrow());
+    add(workbenchFlowZone({
+      title: "Statregels",
+      note: "Kies iedere Stat op naam en vul haar echte base value in. Dezelfde Stat kan niet tweemaal in één block.",
+      rows: workbenchStatBlockRows(entry),
+      empty: "Nog geen statregels.",
+      actions: editable ? [{ label: "+ Statregel", onClick: function () { workbenchBeginStatRule(entry); } }] : [],
+      extras: [renderWorkbenchStatRuleForm(entry)],
+      drop: editable ? { accepts: function (payload) { return payload?.type === "stat_definition"; }, onDrop: function (payload) {
+        const duplicateIndex = (Array.isArray(entry.node.values?.entries) ? entry.node.values.entries : []).findIndex(function (rule) {
+          return normalizeCanonicalId(rule?.statRef, "") === normalizeCanonicalId(index.byNodeId.get(payload.nodeId)?.ref, "");
+        });
+        workbenchBeginStatRule(entry, duplicateIndex, index.byNodeId.get(payload.nodeId)?.ref || "");
+        if (duplicateIndex >= 0) setStatus("Deze Stat bestaat al; de bestaande regel is geopend.", "");
+      } } : null
+    }));
   } else if (entry.type === "stat_definition") {
     add(workbenchFlowZone({ title: "Waarden via Stat Blocks", rows: workbenchRelationRows(entry, inOf("enemy_stats"), "from"), empty: "Nog geen Enemy krijgt deze stat via een Stat Block." }));
     add(workbenchFlowZone({ title: "Overig gebruik", rows: workbenchRelationRows(entry, inOf("resource_skill", "ability_cost"), "from").concat(workbenchUsageRows(entry).filter(function (row) { return !row.definitionId; }).map(function (row) { return { name: row.label, detail: row.meta, onOpen: function () { workbenchShowNode(row.nodeId); } }; })), empty: "Geen ander gebruik." }));

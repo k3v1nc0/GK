@@ -7,10 +7,11 @@ import {
   OVERVIEW_BANDS,
   WORKBENCH_CATEGORIES,
   buildContentIndex,
+  fieldRuntimeStatus,
   relationScope
 } from "../apps/web/public/editor/content-workbench.js";
 
-// Read-only W2 contract check: every relation the Workbench draws must be a
+// Read-only W3 contract check: every relation the Workbench draws must be a
 // real typed schema field or child-node port. Expected kinds are hand-written
 // here, independent from the module under test.
 const KIND_FOR_TARGET = {
@@ -28,7 +29,7 @@ function referenceKinds(field) {
 }
 
 test("Workbench spec only uses real catalog definition types and fields", function () {
-  const categoryTypes = WORKBENCH_CATEGORIES.map(function (category) { return category.type; }).filter(Boolean);
+  const categoryTypes = WORKBENCH_CATEGORIES.flatMap(function (category) { return category.types || (category.type ? [category.type] : []); });
   assert.deepEqual(categoryTypes.slice().sort(), Object.keys(CONTENT_TYPE_SPECS).sort());
   for (const band of OVERVIEW_BANDS) {
     for (const column of band.columns) {
@@ -38,7 +39,9 @@ test("Workbench spec only uses real catalog definition types and fields", functi
   for (const [type, spec] of Object.entries(CONTENT_TYPE_SPECS)) {
     const def = NODE_TYPES[type];
     assert.ok(def, type + " exists");
-    assert.ok(def.outputs?.catalogDefinition, type + " publishes through a Catalog Output");
+    if (type === "quest_definition") assert.ok(def.outputs?.questDef, type + " publishes through a Campaign Output");
+    else if (type === "dialogue_definition") assert.ok(def.outputs?.dialogueDef, type + " publishes through a Campaign Output");
+    else assert.ok(def.outputs?.catalogDefinition, type + " publishes through a Catalog Output");
     for (const key of spec.keyFields.concat(spec.createFields)) assert.ok(def.fields?.[key], type + "." + key + " exists");
     for (const key of spec.thumbAssets) assert.equal(def.fields?.[key]?.type, "asset", type + "." + key + " is an asset field");
     if (spec.children) {
@@ -110,4 +113,55 @@ test("derived index follows child edges and typed references, never names", func
   assert.ok(index.byNodeId.get("n_iron").usage.some(function (usage) { return usage.sourceId === "n_recipe" && usage.field === "outputItems"; }), "JSON output counts as usage");
   const scope = relationScope(index, "n_iron", "used");
   assert.deepEqual(Array.from(scope.related.keys()).sort(), ["n_loot", "n_recipe"]);
+});
+
+test("W3 story and Stat Block relations follow real ownership edges", function () {
+  const node = function (id, type, values, parentId) { return { id, type, title: values.displayName || values.label || type, x: 0, y: 0, parentId: parentId || null, values }; };
+  const graph = {
+    nodes: [
+      node("npc", "npc_archetype", { npcId: "npc.bram", displayName: "Bram" }, "catalog"),
+      node("item", "item_definition", { itemId: "item.ore", displayName: "Ore" }, "catalog"),
+      node("gold", "currency_definition", { currencyId: "currency.gold", displayName: "Gold" }, "catalog"),
+      node("ability", "ability_definition", { abilityId: "ability.dash", displayName: "Dash" }, "catalog"),
+      node("stat", "stat_definition", { statId: "stat.health", displayName: "Health" }, "catalog"),
+      node("block", "stat_block", { statBlockId: "stat_block.enemy", displayName: "Enemy", entries: [{ statRef: "stat.health", baseValue: 125 }] }, "catalog"),
+      node("model", "model_entity", { entityId: "model.bram", label: "Bram" }, "zone"),
+      node("assembly", "entity_assembly", { entityId: "entity.bram", label: "Bram" }, "zone"),
+      node("npc_component", "npc_component", { componentId: "component.npc.bram", npcRef: "npc.bram" }, "zone"),
+      node("binding", "quest_target_binding", { targetId: "target.bram", label: "Bram" }, "zone"),
+      node("quest", "quest_definition", { questId: "quest.ore", displayName: "Ore Quest", turnInTargetRef: "target.bram" }, "campaign"),
+      node("step", "quest_step", { stepId: "quest_step.ore.1", displayName: "Collect", sequenceIndex: 10 }, "campaign"),
+      node("objective", "objective_collect", { objectiveId: "objective.ore", itemRef: "item.ore", requiredAmount: 2 }, "campaign"),
+      node("currency_action", "action_give_currency", { actionId: "action.gold", currencyRef: "currency.gold", amountMinor: 10 }, "campaign"),
+      node("ability_action", "action_unlock_ability", { actionId: "action.dash", abilityRef: "ability.dash", rank: 1 }, "campaign"),
+      node("dialogue", "dialogue_definition", { dialogueId: "dialogue.bram", displayName: "Bram Intro", targetRef: "target.bram" }, "campaign")
+    ],
+    edges: [
+      { id: "e1", fromNodeId: "model", fromPort: "entity", toNodeId: "assembly", toPort: "model" },
+      { id: "e2", fromNodeId: "npc_component", fromPort: "component", toNodeId: "assembly", toPort: "components" },
+      { id: "e3", fromNodeId: "assembly", fromPort: "entity", toNodeId: "binding", toPort: "entity" },
+      { id: "e4", fromNodeId: "step", fromPort: "questStep", toNodeId: "quest", toPort: "steps" },
+      { id: "e5", fromNodeId: "objective", fromPort: "objective", toNodeId: "step", toPort: "objectives" },
+      { id: "e6", fromNodeId: "currency_action", fromPort: "rewardEntry", toNodeId: "step", toPort: "rewards" },
+      { id: "e7", fromNodeId: "ability_action", fromPort: "rewardEntry", toNodeId: "step", toPort: "rewards" },
+      { id: "e8", fromNodeId: "dialogue", fromPort: "dialogueDef", toNodeId: "quest", toPort: "startDialogue" }
+    ]
+  };
+  const index = buildContentIndex(graph, NODE_TYPES);
+  const kinds = new Set(index.byNodeId.get("quest").out.map(function (relation) { return relation.kind + ":" + relation.to; }));
+  assert.ok(kinds.has("quest_npc:npc"));
+  assert.ok(kinds.has("quest_item:item"));
+  assert.ok(kinds.has("quest_currency:gold"));
+  assert.ok(kinds.has("quest_ability:ability"));
+  assert.ok(kinds.has("quest_dialogue:dialogue"));
+  assert.ok(index.byNodeId.get("dialogue").out.some(function (relation) { return relation.kind === "dialogue_npc" && relation.to === "npc"; }));
+  assert.ok(index.byNodeId.get("block").out.some(function (relation) { return relation.kind === "stat_block_stat" && relation.to === "stat" && relation.detail === "125"; }));
+});
+
+test("W3 runtime labels match the audited quest/ability consumers", function () {
+  // Hand-written from the node03/node04 audit: only these are read by the game.
+  for (const key of ["range", "damageFormula"]) assert.equal(fieldRuntimeStatus("ability_definition", key), "active", "ability " + key);
+  for (const key of ["cooldownMs", "castTimeMs", "resourceCostFormula"]) assert.equal(fieldRuntimeStatus("ability_definition", key), "inactive", "ability " + key);
+  for (const key of ["prerequisiteQuestRefs", "nextQuestRefs", "autoTrack", "repeatMode", "turnInTargetRef"]) assert.equal(fieldRuntimeStatus("quest_definition", key), "active", "quest " + key);
+  for (const key of ["minimumLevel", "recommendedZoneRef", "questType"]) assert.equal(fieldRuntimeStatus("quest_definition", key), "inactive", "quest " + key);
 });
