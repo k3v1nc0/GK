@@ -1,6 +1,6 @@
 # Fase 02 - Speelbare verticale slice
 
-> Status: voorstel voor implementatie, **niet** gerealiseerd op de geauditeerde `main`-baseline. De implementatietaken zijn nog niet uitgevoerd; deze documentatiecommit verandert geen gamecode of database.
+> Status: **in uitvoering** sinds 2026-10-24. Serverbouwstenen staan in commit "Fase 02"; voortgang en het CLI-deel staan in `README/fases/evidence/MMORPG-v2/F2/VOORTGANG.md` en `CLI-PROMPT.md`.
 
 **Doel:** Twee accounts spelen samen een kleine bestaande wereld met serverbesliste beweging, gevecht, loot en quest, met meetbare reconnect en crashherstel.
 

@@ -1,6 +1,6 @@
 # Start hier: GK MMORPG-basis v2.3
 
-Dit is de **enige actieve ingang** voor Codex of Claude. Lees daarnaast [00-MASTERPLAN](00-MASTERPLAN.md), de relevante [Fase 01](FASE-01-veiligheid-en-bewijsbasis.md) en de ADR's die de fase raken. De vijf oude documenten onder `README/fases/MMORPG-basis/` zijn historisch, niet normatief. Kevin geeft één opdracht per fase; de agent beheert de taakkaarten intern.
+Dit is de **enige actieve ingang** voor Codex of Claude. Lees daarnaast [00-MASTERPLAN](00-MASTERPLAN.md), de relevante [Fase 01](FASE-01-veiligheid-en-bewijsbasis.md) en de ADR's die de fase raken. De vijf oude `MMORPG-basis/`-documenten bestaan alleen nog in de git-historie (commit `8a976e3`) en zijn historisch, niet normatief. Kevin geeft één opdracht per fase; de agent beheert de taakkaarten intern.
 
 ## Voor Kevin: opstart in drie handelingen
 
@@ -17,7 +17,7 @@ Codex en Claude zijn uitwisselbaar als uitvoerder. Laat ze **niet tegelijk in de
 ## Kopieerbare Fase 01-opdracht aan Codex of Claude
 
 ```text
-Voer Fase 01 van de GK MMORPG-basis volledig uit. Lees eerst AGENTS.md, README/fases/MMORPG-basis-v2/START-HIER.md, 00-MASTERPLAN.md, FASE-01-veiligheid-en-bewijsbasis.md en de relevante ADR's. De oude vijf fases zijn historisch en niet normatief. Werk op een aparte branch en behoud alle bestaande wijzigingen. Maak of commit geen root .gitignore.
+Voer Fase 01 van de GK MMORPG-basis volledig uit. Lees eerst .claude/CLAUDE.md, README/fases/MMORPG-basis-v2/START-HIER.md, 00-MASTERPLAN.md, FASE-01-veiligheid-en-bewijsbasis.md en de relevante ADR's. De oude vijf fases zijn historisch en niet normatief. Werk direct op main (geen branches of PR's) en behoud alle bestaande wijzigingen. Maak of commit geen root .gitignore.
 
 Beheer de taakkaarten zelf in hun afhankelijkheidsvolgorde; vraag mij niet voor elke kaart om een nieuwe prompt. Begin met F1-E0-T02: isoleer tests, smoke en browserchecks op tijdelijke DB, assets en poort. Draai vóór bewezen isolatie geen volledige testsuite; bewijs de grens eerst met een sentinel in een wegwerpcheckout. Voer daarna de securitykaarten, backup/restore, migratiecontrole, tweespelerstest en nulmeting uit. F1-E2-T00 moet vóór F1-E2-T02 klaar zijn. Gebruik nooit mijn normale storage of productiegegevens voor tests.
 

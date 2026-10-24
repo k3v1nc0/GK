@@ -1,14 +1,21 @@
 import crypto from "node:crypto";
-import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/world-runtime.js";
+import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
+import { createWorldClock } from "./runtime/world-clock.js";
+import { CharacterService } from "./character-service.js";
+import { JoinTickets } from "./runtime/join-tickets.js";
+import { createPositionCheckpointer } from "./persistence/position-checkpoint.js";
+import { setOperationMetricsSink } from "./persistence/operation-contract.js";
+import { createSampleRing, summarizeSamples } from "./runtime/world-clock.js";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { createInterestIndex, dueForTier, shouldDisconnect, TIER } from "./runtime/interest.js";
+import { AUTH_TIMEOUT_MS, CLOSE_CODES, PROTOCOL_NAME, PROTOCOL_VERSION as PROTOCOL_V1, validateClientMessage } from "../../apps/web/public/shared/protocol-v1.js";
 
 const HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_WS_HEARTBEAT_INTERVAL_MS || 15000));
 const HEARTBEAT_TIMEOUT_MS = Math.max(5000, Number(process.env.GAME_WS_HEARTBEAT_TIMEOUT_MS || 30000));
-const PERSIST_DEBOUNCE_MS = Math.max(250, Number(process.env.GAME_POSITION_PERSIST_DEBOUNCE_MS || 750));
-// FIX: terwijl een speler beweegt werd de debounce-timer elke tick gereset,
-// waardoor er soms minutenlang niets werd weggeschreven. Deze cap forceert
-// periodiek een write zonder de event loop per tick te belasten.
-const PERSIST_MAX_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_POSITION_PERSIST_MAX_INTERVAL_MS || 5000));
+// F2-E2-T05: posities worden in de tick alleen gemarkeerd en op deze timer weggeschreven (RPO <= interval).
+const POSITION_FLUSH_INTERVAL_MS = Math.min(5000, Math.max(250, Number(process.env.GAME_POSITION_FLUSH_INTERVAL_MS || 1000)));
+const POSITION_MAX_PENDING = Math.max(100, Number(process.env.GAME_POSITION_MAX_PENDING || 10000));
 const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_PER_SECOND || 120));
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
@@ -34,6 +41,8 @@ const INPUT_HOLD_MS = Math.max(0, Number(process.env.GAME_INPUT_HOLD_MS || 0));
 const EVENT_LOG_THROTTLE_MS = Math.max(0, Number(process.env.GAME_EVENT_LOG_THROTTLE_MS || 10000));
 const ANIMATION_STATES = new Set(["idle", "walk", "run"]);
 const PROTOCOL_VERSION = 3;
+// F2-E2-T03: AOI per ontvanger; standaard uit tot de browser- en botproef op :3001 groen is.
+const AOI_ENABLED = process.env.GAME_AOI_ENABLED === "1";
 
 function normalizeAnimationState(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -761,6 +770,11 @@ export class MmoService {
     this.db = db;
     this.authService = authService;
     this.repository = repository;
+    this.characterService = new CharacterService(db);
+    this.joinTickets = new JoinTickets();
+    this.interestIndex = createInterestIndex();
+    this.aoiPendingByConnectionId = new Map();
+    this.aoiSentAtByKey = new Map();
     this.wss = null;
     this.worldCache = null;
     this.connectionsById = new Map();
@@ -772,8 +786,22 @@ export class MmoService {
     this.playerStateCache = new Map();
     this.playerIdsByWorldId = new Map();
     this.primaryPresenceByPlayerId = new Map();
-    this.persistTimers = new Map();
-    this.lastPersistAtMsByKey = new Map();
+    this.positionCheckpoint = createPositionCheckpointer({
+      write: (rows) => this.writePositionRows(rows),
+      getRow: (key) => this.playerStateCache.get(key) || null,
+      maxPending: POSITION_MAX_PENDING
+    });
+    this.positionFlushTimer = null;
+    this.startPositionFlushTimer();
+    // F2-E2-T04: schrijfkosten per label (positie-checkpoint, node03/04/05-operaties) en eventloopvertraging.
+    this.dbWriteSamplesByLabel = new Map();
+    this.onDbWrite = (label, durationMs) => {
+      if (!this.dbWriteSamplesByLabel.has(label)) this.dbWriteSamplesByLabel.set(label, createSampleRing(2048));
+      this.dbWriteSamplesByLabel.get(label).push(durationMs);
+    };
+    setOperationMetricsSink(this.onDbWrite);
+    this.eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+    this.eventLoopDelay.enable();
     this.latestInputByPlayerId = new Map();
     // Ticks zonder voortgang naar een looppunt (tegen een obstakel): daarna stopt de server zelf.
     this.pointerStallTicksByPlayerId = new Map();
@@ -796,7 +824,7 @@ export class MmoService {
     this.serverTick = 0;
     this.snapshotSeq = 0;
     this.worldTickTimer = null;
-    this.worldTickNextAtMs = nowMs() + WORLD_TICK_MS;
+    this.worldClock = createWorldClock({ tickMs: WORLD_TICK_MS, maxCatchUpTicks: 3, maxLagMs: 1000, overrunLimit: 5 });
     this.startWorldTickLoop();
     this.serverSeq = 0;
     this.heartbeatTimer = setInterval(() => this.tickHeartbeats(), HEARTBEAT_INTERVAL_MS);
@@ -820,7 +848,10 @@ export class MmoService {
     this.latestInputByPlayerId.clear();
     this.dirtyPlayerIdsByWorldId.clear();
     this.lastWorldSnapshotAtMsByWorldId.clear();
-    this.lastPersistAtMsByKey.clear();
+    if (this.positionFlushTimer) clearInterval(this.positionFlushTimer);
+    this.positionFlushTimer = null;
+    if (this.eventLoopDelay) this.eventLoopDelay.disable();
+    try { this.positionCheckpoint.flushDue(); } catch {}
     for (const connection of this.connectionsById.values()) {
       closeSocket(connection.ws, 1001, "Server shutdown");
     }
@@ -837,9 +868,9 @@ export class MmoService {
 
   startWorldTickLoop() {
     if (this.worldTickTimer) return;
-    const tickMs = this.currentWorldTickMs();
-    this.worldTickNextAtMs = nowMs() + tickMs;
-    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), tickMs);
+    this.worldClock.setTickMs(this.currentWorldTickMs());
+    this.worldClock.start(nowMs());
+    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), this.worldClock.tickMs);
     if (typeof this.worldTickTimer.unref === "function") this.worldTickTimer.unref();
   }
 
@@ -870,41 +901,32 @@ export class MmoService {
     this.lastWorldSnapshotAtMsByWorldId.set(key, nowMsValue);
   }
 
+  // Een muterende loop per proces: alleen deze timer roept tickWorld aan (F2-E1-T04).
+  // De klok (src/server/runtime/world-clock.js) bepaalt welke ticks draaien; max 3 per ronde,
+  // een achterstand wordt de volgende ronde direct verder ingehaald, >1 s achter = reset.
   runWorldTickLoop() {
     this.stopWorldTickLoop();
     const currentAt = nowMs();
-    const tickMs = this.currentWorldTickMs();
-    const lateMs = Number.isFinite(this.worldTickNextAtMs) && this.worldTickNextAtMs > 0 ? Math.max(0, currentAt - this.worldTickNextAtMs) : 0;
-    if (!Number.isFinite(this.worldTickNextAtMs) || this.worldTickNextAtMs <= 0) {
-      this.worldTickNextAtMs = currentAt + tickMs;
-    }
-    let processedTicks = 0;
-    const maxCatchUpTicks = Math.max(1, Math.ceil(1000 / tickMs));
-    while (this.worldTickNextAtMs <= currentAt && processedTicks < maxCatchUpTicks) {
-      this.tickWorld(this.worldTickNextAtMs, tickMs);
-      this.worldTickNextAtMs += tickMs;
-      processedTicks += 1;
-    }
-    if (processedTicks === 0) {
-      this.worldTickNextAtMs = currentAt + tickMs;
-    } else if (this.worldTickNextAtMs <= nowMs() - 1000) {
-      // FIX: als de server meer dan 1s achterloopt (event loop was geblokkeerd),
-      // niet eindeloos inhalen maar de klok resetten. Anders verschuift de
-      // simulatie t.o.v. de echte tijd en lopen remote spelers steeds verder achter.
+    this.worldClock.setTickMs(this.currentWorldTickMs());
+    const plan = this.worldClock.plan(currentAt);
+    if (plan.reset) {
       this.tickPerf.resets += 1;
-      this.tickPerf.lostMs += Math.max(0, nowMs() - this.worldTickNextAtMs);
-      this.worldTickNextAtMs = nowMs() + tickMs;
+      this.tickPerf.lostMs = this.worldClock.snapshot().lostMs;
     }
-    if (processedTicks > 0) {
+    for (const step of plan.ticks) {
+      const startedAt = performance.now();
+      this.tickWorld(step.atMs, step.deltaMs);
+      this.worldClock.recordTickDuration(performance.now() - startedAt, nowMs());
+      this.tickPerf.maxLateMs = Math.max(this.tickPerf.maxLateMs, step.lateMs);
+    }
+    if (plan.ticks.length > 0) {
       const loopMs = nowMs() - currentAt;
       this.tickPerf.loops += 1;
-      this.tickPerf.ticks += processedTicks;
+      this.tickPerf.ticks += plan.ticks.length;
       this.tickPerf.maxLoopMs = Math.max(this.tickPerf.maxLoopMs, loopMs);
       this.tickPerf.avgLoopMs = this.tickPerf.avgLoopMs > 0 ? this.tickPerf.avgLoopMs * 0.95 + loopMs * 0.05 : loopMs;
-      this.tickPerf.maxLateMs = Math.max(this.tickPerf.maxLateMs, lateMs);
     }
-    const delayMs = Math.max(0, this.worldTickNextAtMs - nowMs());
-    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), delayMs);
+    this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), plan.delayMs);
     if (typeof this.worldTickTimer.unref === "function") this.worldTickTimer.unref();
   }
 
@@ -1245,6 +1267,17 @@ export class MmoService {
     return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(profileId);
   }
 
+  // F2-E1-T02: een character per profiel; een nieuwe sessie neemt de lease over (epoch +1).
+  // Bestaand gedrag (meerdere apparaten, controller-overname) blijft; de lease is nu alleen registratie.
+  acquireCharacterLease(profile, session) {
+    try {
+      this.characterService.ensureCharacter(profile);
+      return this.characterService.acquireLease(profile.id, session?.id || null);
+    } catch {
+      return null;
+    }
+  }
+
   // FIX: op het hot path (elk input-bericht, elke tick) geen SELECT meer doen.
   // Het profiel hangt al aan de verbinding; alleen bij een wereldwissel of
   // ontbrekend profiel valt dit terug op de databaseroute.
@@ -1387,7 +1420,16 @@ export class MmoService {
       maxLateMs: Math.round(perf.maxLateMs || 0),
       resets: perf.resets || 0,
       lostMs: Math.round(perf.lostMs || 0),
-      sinceMs: Date.now() - (perf.since || Date.now())
+      sinceMs: Date.now() - (perf.since || Date.now()),
+      clock: this.worldClock ? this.worldClock.snapshot() : null,
+      positions: this.positionCheckpoint ? this.positionCheckpoint.snapshot() : null,
+      dbWritesMs: Object.fromEntries(Array.from(this.dbWriteSamplesByLabel || []).map(([label, ring]) => [label, summarizeSamples(ring.toArray())])),
+      eventLoopDelayMs: this.eventLoopDelay ? {
+        p50: Math.round(this.eventLoopDelay.percentile(50) / 1e4) / 100,
+        p95: Math.round(this.eventLoopDelay.percentile(95) / 1e4) / 100,
+        p99: Math.round(this.eventLoopDelay.percentile(99) / 1e4) / 100,
+        max: Math.round(this.eventLoopDelay.max / 1e4) / 100
+      } : null
     };
   }
 
@@ -1758,12 +1800,60 @@ export class MmoService {
 
   broadcastWorldSnapshot(worldId, playerStates, options = {}) {
     if (!worldId) return null;
+    if (AOI_ENABLED) return this.broadcastWorldSnapshotWithInterest(worldId, playerStates, options);
     const payload = this.buildWorldSnapshotPayload(worldId, playerStates, options);
     if (!Array.isArray(payload.players) || !payload.players.length) return payload;
     this.broadcastToWorld(worldId, eventMessage("mmo:snapshot", payload, this.stampServerPayload(worldId, payload)), {
       excludeUserId: options.excludeUserId || null
     });
     return payload;
+  }
+
+  // F2-E2-T03 (achter GAME_AOI_ENABLED=1): per ontvanger alleen spelers binnen de AOI, self 20 Hz,
+  // near 10 Hz, far 2 Hz. Overgeslagen updates blijven per ontvanger staan (laatste stand wint), zodat
+  // een stilstaande speler toch zijn eindpositie krijgt. Trage sockets (> 512 KiB) worden gesloten.
+  broadcastWorldSnapshotWithInterest(worldId, playerStates, options = {}) {
+    const nowMsValue = Number.isFinite(Number(options.serverTimeMs)) ? Number(options.serverTimeMs) : nowMs();
+    for (const state of playerStates || []) {
+      if (state?.player_id) this.interestIndex.update(state.player_id, num(state.x, 0), num(state.z, 0));
+    }
+    let lastPayload = null;
+    for (const connectionId of Array.from(this.connectionsByWorldId.get(worldId) || [])) {
+      const connection = this.connectionsById.get(connectionId);
+      if (!connection || connection.closed || !connection.ws) continue;
+      if (options.excludeUserId && connection.user?.id === options.excludeUserId) continue;
+      if (shouldDisconnect(connection.ws.bufferedAmount)) {
+        closeSocket(connection.ws, 1013, "slow_client");
+        continue;
+      }
+      const viewerId = connection.player?.id;
+      if (!viewerId) continue;
+      let pending = this.aoiPendingByConnectionId.get(connectionId);
+      if (!pending) {
+        pending = new Map();
+        this.aoiPendingByConnectionId.set(connectionId, pending);
+      }
+      for (const state of playerStates || []) {
+        const actorId = state?.player_id;
+        if (!actorId) continue;
+        if (this.interestIndex.tierBetween(viewerId, actorId) === TIER.NONE) pending.delete(actorId);
+        else pending.set(actorId, state);
+      }
+      const due = [];
+      for (const [actorId, state] of pending) {
+        const tier = this.interestIndex.tierBetween(viewerId, actorId);
+        const key = connectionId + "|" + actorId;
+        if (!dueForTier(tier, nowMsValue, this.aoiSentAtByKey.get(key))) continue;
+        this.aoiSentAtByKey.set(key, nowMsValue);
+        due.push(state);
+        pending.delete(actorId);
+      }
+      if (!due.length) continue;
+      const payload = this.buildWorldSnapshotPayload(worldId, due, options);
+      lastPayload = payload;
+      send(connection.ws, eventMessage("mmo:snapshot", payload, this.stampServerPayload(worldId, payload)));
+    }
+    return lastPayload;
   }
 
   sendWorldSnapshot(connection, playerStates = null, options = {}) {
@@ -2755,8 +2845,16 @@ export class MmoService {
       closeSocket(ws, 4401, "Unauthorized");
       return;
     }
+    if (!this.positionCheckpoint.isHealthy()) {
+      // Posities konden niet worden weggeschreven: geen nieuwe spelers tot dat hersteld is (geen stil verlies).
+      const payload = { code: "persistence_unhealthy", message: "Server kan voortgang nu niet bewaren; probeer het zo opnieuw." };
+      send(ws, eventMessage("error", payload, this.stampServerPayload(null, payload)));
+      closeSocket(ws, 1013, "persistence_unhealthy");
+      return;
+    }
     const worldContext = this.getPublishedWorldContext();
     const profile = this.ensurePlayerProfile(sessionContext.user, worldContext);
+    const characterLease = this.acquireCharacterLease(profile, sessionContext.session);
     const position = this.ensurePlayerPosition(profile, worldContext, sessionContext);
     const playerWasPresent = this.countConnectedPlayerSessions(profile.id) > 0;
     const connectionId = "conn_" + (++this.connectionSeq);
@@ -2776,7 +2874,9 @@ export class MmoService {
       pendingPositionKey: positionKey(profile.id, worldContext.worldId),
       sourceDevice: sessionContext.session.device_label || null,
       lastInputEventLogAtMs: 0,
-      lastIgnoredEventLogAtMs: 0
+      lastIgnoredEventLogAtMs: 0,
+      characterLease,
+      protocol: ws._gkProtocol || "legacy"
     };
     this.connectionsById.set(connectionId, connection);
     this.ensureConnectionSet(this.connectionsByWorldId, worldContext.worldId).add(connectionId);
@@ -2797,6 +2897,13 @@ export class MmoService {
     this.broadcastPresence(sessionContext.user.id, sessionContext.session.id, true);
 
     ws.on("message", (data) => {
+      if (connection.protocol === PROTOCOL_NAME) {
+        const checked = validateClientMessage(data);
+        if (!checked.ok) {
+          closeSocket(ws, checked.code, checked.reason);
+          return;
+        }
+      }
       this.handleMessage(connection, data);
     });
     ws.on("close", () => {
@@ -3029,55 +3136,59 @@ export class MmoService {
     return this.applyInputState(connection, inputPayload, transport);
   }
 
+  // F2-E2-T05: in de tick alleen markeren; wegschrijven gebeurt op een eigen timer (positionFlushTimer),
+  // in een transactie per ronde. immediate (zonewissel, logout, spawn) schrijft direct, buiten de tick.
   schedulePersist(positionRow, connection, immediate = false) {
     const key = positionKey(positionRow.player_id, positionRow.world_id);
-    const existingTimer = this.persistTimers.get(key);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      this.persistTimers.delete(key);
+    if (!this.playerStateCache.has(key)) this.playerStateCache.set(key, positionRow);
+    this.positionCheckpoint.markDirty(key);
+    // Tijdens een lopende transactie niet direct schrijven (een rollback zou de positie stil weggooien);
+    // de flushtimer pakt hem binnen POSITION_FLUSH_INTERVAL_MS op.
+    if (immediate && this.db.isTransaction !== true) this.positionCheckpoint.flushKey(key);
+  }
+
+  writePositionRows(rows) {
+    const statement = this.db.prepare(
+      "INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(player_id, world_id) DO UPDATE SET current_zone_id = excluded.current_zone_id, current_spawn_id = excluded.current_spawn_id, active_checkpoint_id = excluded.active_checkpoint_id, x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
+    );
+    const startedAt = performance.now();
+    // Binnen een lopende transactie (bijv. een node03-actie) geen eigen BEGIN: schrijft dan mee met die commit.
+    const ownTransaction = this.db.isTransaction !== true;
+    if (ownTransaction) this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const current of rows) {
+        statement.run(current.player_id, current.world_id, current.current_zone_id || null, current.current_spawn_id || null, current.active_checkpoint_id || null, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
+      }
+      if (ownTransaction) this.db.exec("COMMIT");
+    } catch (error) {
+      if (ownTransaction) {
+        try { this.db.exec("ROLLBACK"); } catch {}
+      }
+      throw error;
     }
-    const flush = () => {
-      this.persistTimers.delete(key);
-      this.lastPersistAtMsByKey.set(key, nowMs());
-      const current = this.playerStateCache.get(key) || positionRow;
-      this.db.prepare(
-        "INSERT INTO player_positions (player_id, world_id, current_zone_id, current_spawn_id, active_checkpoint_id, x, y, z, rotation_y, revision, last_update_source_session_id, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-        "ON CONFLICT(player_id, world_id) DO UPDATE SET current_zone_id = excluded.current_zone_id, current_spawn_id = excluded.current_spawn_id, active_checkpoint_id = excluded.active_checkpoint_id, x = excluded.x, y = excluded.y, z = excluded.z, rotation_y = excluded.rotation_y, revision = excluded.revision, last_update_source_session_id = excluded.last_update_source_session_id, updated_at = excluded.updated_at"
-      ).run(current.player_id, current.world_id, current.current_zone_id || null, current.current_spawn_id || null, current.active_checkpoint_id || null, current.x, current.y, current.z, current.rotation_y, current.revision, current.last_update_source_session_id, current.updated_at);
-    };
-    // FIX: tijdens continu bewegen werd de debounce-timer elke tick gereset
-    // waardoor de positie pas na het stoppen werd opgeslagen. Nu schrijven we
-    // sowieso elke PERSIST_MAX_INTERVAL_MS een keer weg.
-    const lastPersistAt = Number(this.lastPersistAtMsByKey.get(key) || 0);
-    if (lastPersistAt === 0) {
-      this.lastPersistAtMsByKey.set(key, nowMs());
-    }
-    const overdue = lastPersistAt > 0 && (nowMs() - lastPersistAt) >= PERSIST_MAX_INTERVAL_MS;
-    if (immediate || overdue) {
-      flush();
-      return;
-    }
-    const timer = setTimeout(flush, PERSIST_DEBOUNCE_MS);
-    if (typeof timer.unref === "function") timer.unref();
-    this.persistTimers.set(key, timer);
+    if (typeof this.onDbWrite === "function") this.onDbWrite("position_checkpoint", performance.now() - startedAt, rows.length);
+  }
+
+  startPositionFlushTimer() {
+    if (this.positionFlushTimer) return;
+    this.positionFlushTimer = setInterval(() => this.positionCheckpoint.flushDue(), POSITION_FLUSH_INTERVAL_MS);
+    if (typeof this.positionFlushTimer.unref === "function") this.positionFlushTimer.unref();
   }
 
   flushPlayerPosition(playerId, worldId) {
     const key = positionKey(playerId, worldId);
-    const timer = this.persistTimers.get(key);
-    if (timer) {
-      clearTimeout(timer);
-      this.persistTimers.delete(key);
-    }
-    const state = this.playerStateCache.get(key);
-    if (!state) return;
-    this.schedulePersist(state, null, true);
+    if (!this.playerStateCache.has(key)) return;
+    this.positionCheckpoint.markDirty(key);
+    this.positionCheckpoint.flushKey(key);
   }
 
   closeConnection(connection, code = 1000, reason = "closed") {
     if (!connection || connection.closed) return;
     connection.closed = true;
+    this.aoiPendingByConnectionId.delete(connection.id);
+    for (const key of this.aoiSentAtByKey.keys()) if (key.startsWith(connection.id + "|")) this.aoiSentAtByKey.delete(key);
     const ws = connection.ws;
     const userId = connection.user?.id || null;
     const sessionId = connection.session?.id || null;
@@ -3218,6 +3329,57 @@ export class MmoService {
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       ws._gkSessionContext = sessionContext;
       this.wss.emit("connection", ws, req);
+    });
+  }
+
+  // F2-E2-T01: eenmalig join-ticket (5 s) voor /ws/game.
+  issueJoinTicket(req) {
+    const sessionContext = this.getSessionContextFromRequest(req);
+    const issued = this.joinTickets.issue(sessionContext.session.id);
+    return { ok: true, protocol: PROTOCOL_NAME, version: PROTOCOL_V1, ticket: issued.ticket, expiresAt: issued.expiresAt };
+  }
+
+  // F2-E2-T01: upgrade voor /ws/game. Cookie (sessie) en Origin zijn al vereist; daarna moet binnen 5 s een
+  // AUTH-bericht met een geldig, eenmalig ticket van dezelfde sessie komen. Pas dan wordt de speler gejoind.
+  handleUpgradeV1(wssV1, req, socket, head) {
+    let sessionContext = null;
+    try {
+      sessionContext = this.getSessionContextFromRequest(req);
+    } catch (error) {
+      try { socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + error.message); } catch {}
+      try { socket.destroy(); } catch {}
+      return;
+    }
+    wssV1.handleUpgrade(req, socket, head, (ws) => {
+      if (ws.protocol !== PROTOCOL_NAME) {
+        closeSocket(ws, CLOSE_CODES.UNSUPPORTED_VERSION, "unsupported_version");
+        return;
+      }
+      const timer = setTimeout(() => closeSocket(ws, CLOSE_CODES.AUTH_TIMEOUT, "auth_timeout"), AUTH_TIMEOUT_MS);
+      if (typeof timer.unref === "function") timer.unref();
+      ws.once("message", (data) => {
+        clearTimeout(timer);
+        const checked = validateClientMessage(data);
+        if (!checked.ok) {
+          closeSocket(ws, checked.code, checked.reason);
+          return;
+        }
+        if (checked.message.type !== "auth" || !this.joinTickets.consume(checked.message.ticket, sessionContext.session.id)) {
+          closeSocket(ws, CLOSE_CODES.UNAUTHORIZED, "invalid_ticket");
+          return;
+        }
+        try {
+          // Sessie opnieuw controleren: kan net zijn uitgelogd.
+          this.getSessionContextFromRequest(req);
+        } catch {
+          closeSocket(ws, CLOSE_CODES.UNAUTHORIZED, "session_expired");
+          return;
+        }
+        ws._gkSessionContext = sessionContext;
+        ws._gkProtocol = PROTOCOL_NAME;
+        send(ws, { type: "auth_ok", protocol: PROTOCOL_NAME, version: PROTOCOL_V1 });
+        this.attachConnection(ws, req);
+      });
     });
   }
 

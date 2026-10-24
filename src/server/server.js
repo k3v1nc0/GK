@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { JOIN_TICKET_PATH, WS_PATH } from "../../apps/web/public/shared/protocol-v1.js";
 import { loadEnvFile } from "./env.js";
 import { openDatabase } from "./db.js";
 import { AuthService } from "./auth-service.js";
@@ -53,6 +54,13 @@ const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, 
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
 const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES, perMessageDeflate: false });
 mmoService.bindWebSocketServer(wss);
+// Kiest een aangeboden gk-mmo-*-subprotocol; een onbekende versie wordt daarna met 4406 gesloten.
+const wssV1 = new WebSocketServer({
+  noServer: true,
+  maxPayload: WS_MAX_PAYLOAD_BYTES,
+  perMessageDeflate: false,
+  handleProtocols: (protocols) => Array.from(protocols).find((name) => name.startsWith("gk-mmo-")) || false
+});
 const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
@@ -502,6 +510,9 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/game/node03/state") {
       const snapshot = node03RuntimeService.snapshotForRequest(req);
       return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === JOIN_TICKET_PATH) {
+      return sendJson(res, 200, mmoService.issueJoinTicket(req));
     }
     if (req.method === "POST" && url.pathname === "/api/game/node03/action") {
       const body = await readJson(req);
@@ -997,6 +1008,15 @@ server.on("upgrade", function (req, socket, head) {
   } catch {
     try { socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); } catch {}
     socket.destroy();
+    return;
+  }
+  if (upgradeUrl.pathname === WS_PATH) {
+    // F2-E2-T01: protocol gk-mmo-v1 (join-ticket + AUTH binnen 5 s). Legacyroute hieronder blijft tot F6.
+    try {
+      mmoService.handleUpgradeV1(wssV1, req, socket, head);
+    } catch {
+      socket.destroy();
+    }
     return;
   }
   if (upgradeUrl.pathname !== "/api/game/live") {

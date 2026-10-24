@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
-import { ActionCooldowns, assertDeveloperActionAllowed, assertIdempotencyMatch, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
+import { ActionCooldowns, assertDeveloperActionAllowed, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
+import { runOperation } from "./persistence/operation-contract.js";
+import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -403,61 +405,42 @@ export class Node03RuntimeService {
     return this.buildSnapshot(ctx);
   }
 
-  actionForRequest(req, payload = {}) {
+  actionForRequest(req, rawPayload = {}) {
     const ctx = this.getRequestContext(req);
-    const action = safeString(payload.action, "").toLowerCase();
+    const action = safeString(rawPayload.action, "").toLowerCase();
+    // F2-E3-T01: attack/gather/pickup alleen als intentie (actie + doel); vervalste uitkomstvelden -> 400.
+    const payload = isCombatIntent(action) ? sanitizeCombatIntent(action, rawPayload) : rawPayload;
     const operationId = operationIdFromPayload(payload) || randomId("node03_operation");
     const hash = normalizedActionPayloadHash(action, payload);
     if (["reset_demo", "reset", "debug_inventory_add", "inventory_add", "debug_inventory_remove", "inventory_remove", "debug_inventory_cleanup", "inventory_cleanup", "debug_level_reset", "level_reset", "debug_currency_add", "currency_add", "debug_currency_remove", "currency_remove"].includes(action)) {
       assertDeveloperActionAllowed(ctx);
     }
-    const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
-    if (existing) {
-      assertIdempotencyMatch(existing, hash);
-      if (existing.status === "completed") {
-        return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
-      }
-      const error = new Error("Deze NODE-03 actie is al in verwerking.");
-      error.status = 409;
-      throw error;
-    }
-    if (action === "attack" || action === "gather") {
-      const defaultCooldown = action === "attack" ? 250 : 500;
-      const configured = Number(process.env[action === "attack" ? "GAME_ATTACK_COOLDOWN_MS" : "GAME_GATHER_COOLDOWN_MS"] || defaultCooldown);
-      this.actionCooldowns.consume(ctx.profile.id + ":" + action, configured);
-    }
-
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const stamp = now();
-      this.db.prepare(`
-        INSERT INTO operation_idempotency (operation_id, player_id, operation_type, request_hash, status, created_at)
-        VALUES (?, ?, ?, ?, 'started', ?)
-      `).run(operationId, ctx.profile.id, action || "unknown", hash, stamp);
-      this.ensurePlayerRuntime(ctx);
-      this.ensureActionEntityState(ctx, payload.targetId);
-      const result = this.performAction(ctx, action, payload, operationId);
-      this.ensureSnapshotEntityState(ctx);
-      const response = Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) });
-      this.db.prepare(`
-        UPDATE operation_idempotency
-        SET status = 'completed', result_json = ?, completed_at = ?
-        WHERE operation_id = ?
-      `).run(stableJson(response), now(), operationId);
-      this.db.exec("COMMIT");
-      if (WORLD_ENTITY_ACTIONS.has(action)) this.notifyEntitiesChanged(ctx, payload.targetId, action);
-      return response;
-    } catch (error) {
-      try {
-        this.db.prepare(`
-          UPDATE operation_idempotency
-          SET status = 'failed', result_json = ?, completed_at = ?
-          WHERE operation_id = ?
-        `).run(stableJson({ ok: false, message: error.message }), now(), operationId);
-      } catch {}
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    // F2-E2-T07: loot, grant, death en receipt in een transactie; ACK pas na COMMIT.
+    const response = runOperation(this.db, {
+      operationId,
+      playerId: ctx.profile.id,
+      operationType: action || "unknown",
+      requestHash: hash,
+      label: "Deze NODE-03 actie",
+      faultHook: this.operationFaultHook || null,
+      beforeCommit: () => {
+        if (action === "attack" || action === "gather") {
+          const defaultCooldown = action === "attack" ? 250 : 500;
+          const configured = Number(process.env[action === "attack" ? "GAME_ATTACK_COOLDOWN_MS" : "GAME_GATHER_COOLDOWN_MS"] || defaultCooldown);
+          this.actionCooldowns.consume(ctx.profile.id + ":" + action, configured);
+        }
+      },
+      perform: () => {
+        this.ensurePlayerRuntime(ctx);
+        this.ensureActionEntityState(ctx, payload.targetId);
+        const result = this.performAction(ctx, action, payload, operationId);
+        this.ensureSnapshotEntityState(ctx);
+        return result;
+      },
+      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) })
+    });
+    if (!response.idempotent && WORLD_ENTITY_ACTIONS.has(action)) this.notifyEntitiesChanged(ctx, payload.targetId, action);
+    return response;
   }
 
   // Laat andere spelers direct weten dat een gedeeld object veranderde (verzameld, opgepakt, geraakt), zodat

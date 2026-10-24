@@ -18,7 +18,9 @@
     "perf:world-copy": "sh scripts/run-node24.sh scripts/profile-world-copy.js",
     "feel:world-copy": "sh scripts/run-node24.sh scripts/feel-world-copy.js",
     "perf:server": "sh scripts/run-node24.sh scripts/perf-server.js",
-    "game:browser-check": "sh scripts/run-node24.sh scripts/game-browser-check.js"
+    "game:browser-check": "sh scripts/run-node24.sh scripts/game-browser-check.js",
+    "bots": "sh scripts/run-node24.sh scripts/load-bots.js",
+    "perf:db-writes": "sh scripts/run-node24.sh scripts/load-bots.js --ladder=1,10,25 --minutes=2"
   },
   "dependencies": {
     "@shopify/screenshot-glb": "^4.1.0",
