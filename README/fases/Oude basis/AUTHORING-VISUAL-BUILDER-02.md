@@ -1,6 +1,6 @@
 # AUTHORING VISUAL BUILDER - Microfase 2
 
-**Status:** implemented, awaiting Kevin acceptance  
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen  
 **Datum:** 2026-10-07
 
 ## Contextwerkbank
@@ -68,4 +68,4 @@ package en output.
 Er is geen proof-content gemaakt, geen database gewijzigd en geen server, npm
 test/check, smoke, Playwright of performancecheck gestart.
 
-**Microfase 2 implemented, awaiting Kevin acceptance**
+**gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen**
