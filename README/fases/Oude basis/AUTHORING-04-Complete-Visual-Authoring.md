@@ -1,7 +1,7 @@
 # AUTHORING-04 - Complete visuele authoring voor alle vijf hoofdroutes
 
 **Documenttype:** eindrapport voor Kevin  
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 Vervolgstatus 2026-10-06: de viewport-first Visual Builder Fase 1 is
 geïmplementeerd en wacht op Kevins live acceptatie. Zie
@@ -9,7 +9,7 @@ geïmplementeerd en wacht op Kevins live acceptatie. Zie
 
 ## AUTHORING-04-FIX-04 - Nieuwe Catalog-, Player Rules- en UI-groepen
 
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 Blokker: zodra één Catalog, Player Rules of UI Group bestond, verdween in de
 normale authoringroute de aanmaakactie. Een extra economycatalogus of benoemde
@@ -42,7 +42,7 @@ smoke, Playwright, npm-test of performancecheck.
 
 ## AUTHORING-04-FIX-01 - Zone Canvas packagepoort
 
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 **Basiscommit fix:** `7ac2edb999a3a3bf3a0570d187025f9f74956b9a`
 
@@ -64,7 +64,7 @@ Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playw
 
 ## AUTHORING-04-FIX-02 - Geslugde Group Interface-poortnamen
 
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 Oorzaak vervolg: `normalizeGroupInterface` slaat Group Interface-poortnamen op als lowercase/slugs. Daardoor wordt een nieuwe poortnaam zoals `zonePackage` in de restore-validatie feitelijk `zonepackage`. Een snapshot-edge met `toPort: "zonePackage"` bleef daarom ongeldig voor `Group Output`, ook na de eerste fix.
 
@@ -82,7 +82,7 @@ Er is geen database-reset, graphopschoning, demo-zone, serverstart, smoke, Playw
 
 ## AUTHORING-04-FIX-03 - Authoring convergence entity/component ownership
 
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 Gerichte auditketen voor de demoquest:
 
@@ -149,7 +149,7 @@ Gewijzigde bestanden in deze fix:
 
 ## AUTHORING-MIRROR-DEMO microfase 1 - Catalog Coverage
 
-**Status:** implemented, awaiting Kevin acceptance
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen
 
 Doel: de normale Catalog-route breed genoeg maken om de definities voor een onafhankelijke Authoring Proof Demo te kunnen maken, zonder wereldplaatsingen, demo-hardcode, raw nodes of handgeschreven IDs.
 
@@ -390,4 +390,4 @@ Er zijn geen tests, smokechecks, Playwright-checks, performancechecks, serversta
 11. Controleer alleen bestaand ondersteund gedrag.
 12. Verwacht geen branch/join/fail-questgedrag en geen gefakete UI-preview.
 
-Kevin zet AUTHORING-04 pas zelf op accepted/closed na live acceptatie.
+AUTHORING-04 is gesloten als legacy (2026-10-24).

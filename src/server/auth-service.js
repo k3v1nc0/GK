@@ -8,8 +8,13 @@ function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
-function hashPassword(password, salt) {
-  return crypto.pbkdf2Sync(password, salt, 210000, 64, "sha512").toString("hex");
+export function hashPassword(password, salt) {
+  return new Promise(function (resolve, reject) {
+    crypto.pbkdf2(String(password || ""), salt, 210000, 64, "sha512", function (error, derivedKey) {
+      if (error) reject(error);
+      else resolve(derivedKey.toString("hex"));
+    });
+  });
 }
 
 function hashSessionToken(token) {
@@ -90,7 +95,7 @@ export class AuthService {
     this.lastSessionTouchAt = new Map();
   }
 
-  ensureAdmin() {
+  async ensureAdmin() {
     const username = String(process.env.ADMIN_USERNAME || "kevin").trim();
     const password = String(process.env.ADMIN_PASSWORD || "");
     if (!password) {
@@ -98,7 +103,7 @@ export class AuthService {
     }
     const existing = this.db.prepare("SELECT id FROM users WHERE username = ?").get(normalizeUsername(username));
     const salt = crypto.randomBytes(24).toString("hex");
-    const passwordHash = hashPassword(password, salt);
+    const passwordHash = await hashPassword(password, salt);
     if (existing) {
       this.db.prepare("UPDATE users SET password_hash = ?, password_salt = ?, role = 'admin', updated_at = ? WHERE username = ?")
         .run(passwordHash, salt, now(), normalizeUsername(username));
@@ -124,7 +129,7 @@ export class AuthService {
     return { sessionId, sessionToken, createdAt, expiresAt, deviceLabel: normalizedDeviceLabel };
   }
 
-  register(identifier, password, deviceLabel) {
+  async register(identifier, password, deviceLabel) {
     const identity = resolveRegistrationIdentity(identifier);
     const passwordText = String(password || "");
     if (passwordText.length < 8) {
@@ -140,7 +145,7 @@ export class AuthService {
       throw error;
     }
     const salt = crypto.randomBytes(24).toString("hex");
-    const passwordHash = hashPassword(passwordText, salt);
+    const passwordHash = await hashPassword(passwordText, salt);
     const userId = "user_" + crypto.randomUUID();
     const createdAt = now();
     this.db.prepare("INSERT INTO users (id, username, email, password_hash, password_salt, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'player', ?, ?)")
@@ -150,13 +155,15 @@ export class AuthService {
     return { user: this.publicUser(user), sessionId: session.sessionId, sessionToken: session.sessionToken, session };
   }
 
-  login(identifier, password, deviceLabel) {
+  async login(identifier, password, deviceLabel) {
     const loginValue = normalizeLoginValue(identifier);
     if (!loginValue) return null;
     const user = this.db.prepare("SELECT * FROM users WHERE username = ? OR email = ? LIMIT 1").get(loginValue, loginValue);
     if (!user) return null;
-    const expected = hashPassword(String(password || ""), user.password_salt);
-    if (!crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(user.password_hash, "hex"))) return null;
+    const expected = await hashPassword(String(password || ""), user.password_salt);
+    const expectedBuffer = Buffer.from(expected, "hex");
+    const storedBuffer = Buffer.from(String(user.password_hash || ""), "hex");
+    if (expectedBuffer.length !== storedBuffer.length || !crypto.timingSafeEqual(expectedBuffer, storedBuffer)) return null;
     const session = this.createSession(user.id, deviceLabel);
     return { sessionId: session.sessionId, sessionToken: session.sessionToken, user: this.publicUser(user), session };
   }
@@ -183,10 +190,6 @@ export class AuthService {
     const nowIso = now();
     let session = this.db.prepare("SELECT * FROM sessions WHERE session_token_hash = ? AND expires_at >= ? LIMIT 1")
       .get(hashSessionToken(token), nowIso);
-    if (!session) {
-      session = this.db.prepare("SELECT * FROM sessions WHERE session_token_hash IS NULL AND id = ? AND expires_at >= ? LIMIT 1")
-        .get(token, nowIso);
-    }
     if (!session) return null;
     const user = this.db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").get(session.user_id);
     if (!user) return null;
@@ -202,6 +205,31 @@ export class AuthService {
   currentUser(req) {
     const current = this.currentSession(req);
     return current ? this.publicUser(current.user) : null;
+  }
+
+  csrfTokenForSessionId(sessionId) {
+    const row = this.db.prepare("SELECT session_token_hash FROM sessions WHERE id = ? LIMIT 1").get(sessionId);
+    if (!row?.session_token_hash) return "";
+    return crypto.createHash("sha256").update("gk-csrf-v1:" + row.session_token_hash).digest("base64url");
+  }
+
+  csrfTokenForRequest(req) {
+    const current = this.currentSession(req);
+    return current ? this.csrfTokenForSessionId(current.session.id) : "";
+  }
+
+  assertCsrf(req) {
+    const expected = this.csrfTokenForRequest(req);
+    const supplied = String(req.headers["x-gk-csrf"] || "");
+    const left = Buffer.from(expected);
+    const right = Buffer.from(supplied);
+    if (!expected || left.length !== right.length || !crypto.timingSafeEqual(left, right)) {
+      const error = new Error("CSRF-token ontbreekt of is ongeldig.");
+      error.status = 403;
+      error.code = "CSRF_FORBIDDEN";
+      throw error;
+    }
+    return true;
   }
 
   requireEditor(req) {
@@ -235,11 +263,12 @@ export class AuthService {
   }
 
   sessionCookie(sessionToken) {
-    const secure = String(process.env.COOKIE_SECURE || "false") === "true";
+    const secure = String(process.env.COOKIE_SECURE || "false") === "true" || String(process.env.NODE_ENV || "").toLowerCase() === "production";
     return this.cookieName + "=" + encodeURIComponent(sessionToken) + "; Path=/; HttpOnly; SameSite=Lax" + (secure ? "; Secure" : "");
   }
 
   clearCookie() {
-    return this.cookieName + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    const secure = String(process.env.COOKIE_SECURE || "false") === "true" || String(process.env.NODE_ENV || "").toLowerCase() === "production";
+    return this.cookieName + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" + (secure ? "; Secure" : "");
   }
 }

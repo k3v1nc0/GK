@@ -33,7 +33,7 @@ export const DATA_TYPE_COLORS = {
   entity: "#b000ff",
   interactable: "#ec4899",
   chunkLoading: "#06b6d4",
-  mmoNetwork: "#22c55e",
+  mmoNetwork: "#16a34a",
   keybind: "#f43f5e",
   ui: "#f8fafc",
   minimap: "#00ff66",
@@ -2533,7 +2533,40 @@ const EXTRA_DATA_TYPE_COLORS = {
   gameProject: "#f59e0b"
 };
 
-Object.assign(DATA_TYPE_COLORS, EXTRA_DATA_TYPE_COLORS);
+function hslChannelToHex(value) {
+  return Math.round(Math.max(0, Math.min(255, value))).toString(16).padStart(2, "0");
+}
+
+function generatedDataTypeColor(key, attempt) {
+  let hash = 2166136261;
+  for (const character of String(key)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = ((hash >>> 0) + attempt * 137) % 360;
+  const saturation = [62, 72, 82][attempt % 3] / 100;
+  const lightness = [42, 52, 62][Math.floor(attempt / 3) % 3] / 100;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const segment = hue / 60;
+  const secondary = chroma * (1 - Math.abs((segment % 2) - 1));
+  const [red, green, blue] = segment < 1 ? [chroma, secondary, 0]
+    : segment < 2 ? [secondary, chroma, 0]
+      : segment < 3 ? [0, chroma, secondary]
+        : segment < 4 ? [0, secondary, chroma]
+          : segment < 5 ? [secondary, 0, chroma]
+            : [chroma, 0, secondary];
+  const offset = lightness - chroma / 2;
+  return "#" + hslChannelToHex((red + offset) * 255) + hslChannelToHex((green + offset) * 255) + hslChannelToHex((blue + offset) * 255);
+}
+
+const usedDataTypeColors = new Set(Object.values(DATA_TYPE_COLORS));
+for (const [dataType, requestedColor] of Object.entries(EXTRA_DATA_TYPE_COLORS)) {
+  let color = requestedColor;
+  let attempt = 0;
+  while (usedDataTypeColors.has(color)) color = generatedDataTypeColor(dataType, attempt++);
+  DATA_TYPE_COLORS[dataType] = color;
+  usedDataTypeColors.add(color);
+}
 for (const dataType of Object.keys(EXTRA_DATA_TYPE_COLORS)) {
   if (!DATA_TYPE_OPTIONS.includes(dataType)) DATA_TYPE_OPTIONS.push(dataType);
 }

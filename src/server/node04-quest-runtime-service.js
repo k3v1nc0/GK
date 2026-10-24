@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { QUEST_STATUS, OBJECTIVE_STATUS, OBJECTIVE_TYPES } from "../shared/quest-contract.js";
+import { assertDeveloperActionAllowed, assertIdempotencyMatch, normalizedActionPayloadHash } from "./action-security.js";
 
 const DEFAULT_LOADOUT_ID = "loadout.main";
 
@@ -242,14 +243,29 @@ export class Node04QuestRuntimeService {
   actionForRequest(req, payload = {}) {
     const ctx = this.getRequestContext(req);
     const action = safeString(payload.action, "").toLowerCase();
-    if (action === "start_dialogue") return this.startDialogue(ctx, payload);
-
     const operationId = safeString(payload.operationId || payload.operation_id, "") || randomId("node04_operation");
+    const hash = normalizedActionPayloadHash(action, payload);
+    if (action === "reset_quest" || action === "reset_node04") assertDeveloperActionAllowed(ctx);
+    const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
+    if (existing) {
+      assertIdempotencyMatch(existing, hash);
+      if (existing.status === "completed") {
+        return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
+      }
+      const error = new Error("Deze NODE-04 actie is al in verwerking.");
+      error.status = 409;
+      throw error;
+    }
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.db.prepare(`
+        INSERT INTO operation_idempotency (operation_id, player_id, operation_type, request_hash, status, created_at)
+        VALUES (?, ?, ?, ?, 'started', ?)
+      `).run(operationId, ctx.profile.id, action || "unknown", hash, now());
       this.ensureRuntime(ctx);
       let result;
-      if (action === "choose_dialogue") result = this.chooseDialogue(ctx, payload, operationId);
+      if (action === "start_dialogue") result = this.startDialogue(ctx, payload);
+      else if (action === "choose_dialogue") result = this.chooseDialogue(ctx, payload, operationId);
       else if (action === "accept_quest") result = this.acceptQuest(ctx, safeString(payload.questId || payload.quest_id), operationId, "player_accept");
       else if (action === "turn_in") result = this.turnInQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
       else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
@@ -262,8 +278,11 @@ export class Node04QuestRuntimeService {
         error.status = 400;
         throw error;
       }
+      const response = Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) });
+      this.db.prepare("UPDATE operation_idempotency SET status = 'completed', result_json = ?, completed_at = ? WHERE operation_id = ?")
+        .run(stableJson(response), now(), operationId);
       this.db.exec("COMMIT");
-      return Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) });
+      return response;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
       throw error;

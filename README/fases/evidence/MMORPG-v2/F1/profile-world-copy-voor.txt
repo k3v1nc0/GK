@@ -1,0 +1,28 @@
+Wereldtabellen gekopieerd: {"editor_nodes":468,"editor_node_edges":502,"asset_library":18,"published_world_state":1,"editor_graph_meta":1,"content_id_aliases":2,"game_hud_layout_defaults":2}
+Game-loop timings (maximum tijdens lopen): {"remoteSyncMs":0.8,"remoteSyncAvgMs":0.33,"movementStepMs":47.7,"movementStepAvgMs":47.7,"minimapDrawMs":30.4,"minimapDrawAvgMs":17.346}
+CPU-profiel tijdens lopen, totaal 17068 ms. Zwaarste functies (eigen tijd):
+    13936 ms   81.6%  (program) @ (native):0
+      384 ms    2.2%  normalizeGameMinimapMarkerCategory @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:9316
+      254 ms    1.5%  (idle) @ (native):0
+      211 ms    1.2%  node03TargetWithClientRange @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:6747
+      139 ms    0.8%  (anoniem) @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:6790
+      134 ms    0.8%  drawSmoothMinimapFogCells @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:10652
+      114 ms    0.7%  texSubImage2D @ (native):0
+       91 ms    0.5%  getProgramInfoLog @ (native):0
+       89 ms    0.5%  node03RuntimeTargetsForScene @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:6769
+       85 ms    0.5%  getBoundingClientRect @ (native):0
+       83 ms    0.5%  markRuntimeTargetTree @ http://127.0.0.1:37247/shared/world-runtime.js?v=20261016-scatter-pattern2:16191
+       61 ms    0.4%  setItem @ (native):0
+       60 ms    0.4%  (garbage collector) @ (native):0
+       59 ms    0.3%  addMarker @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:10006
+       59 ms    0.3%  updateRuntimeTargetRoot @ http://127.0.0.1:37247/shared/world-runtime.js?v=20261016-scatter-pattern2:16829
+       50 ms    0.3%  (anoniem) @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:6761
+       40 ms    0.2%  fetch @ (native):0
+       31 ms    0.2%  gameMinimapMarkerCategories @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:9353
+       31 ms    0.2%  captureGameHudFrameScroll @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:2770
+       30 ms    0.2%  gameMinimapCategoryForMarker @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:10141
+       29 ms    0.2%  updateNode03RangeDom @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:6820
+       27 ms    0.2%  node04TargetWithClientRange @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:7558
+       24 ms    0.1%  minimapPhysicalMarkerKey @ http://127.0.0.1:37247/shared/minimap-utils.js?v=20261008-minimap-roles1:122
+       24 ms    0.1%  (anoniem) @ http://127.0.0.1:37247/game/game.js?v=20261016-scatter-pattern2:8153
+       24 ms    0.1%  (anoniem) @ http://127.0.0.1:37247/shared/world-runtime.js?v=20261016-scatter-pattern2:414

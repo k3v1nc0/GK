@@ -1,0 +1,28 @@
+Wereldtabellen gekopieerd: {"editor_nodes":468,"editor_node_edges":502,"asset_library":18,"published_world_state":1,"editor_graph_meta":1,"content_id_aliases":2,"game_hud_layout_defaults":2}
+Game-loop timings (maximum tijdens lopen): {"remoteSyncMs":0.3,"remoteSyncAvgMs":0.164,"movementStepMs":18.6,"movementStepAvgMs":18.6,"minimapDrawMs":49.9,"minimapDrawAvgMs":15.178}
+CPU-profiel tijdens lopen, totaal 16823 ms. Zwaarste functies (eigen tijd):
+    14001 ms   83.2%  (program) @ (native):0
+      270 ms    1.6%  (idle) @ (native):0
+      197 ms    1.2%  texSubImage2D @ (native):0
+      197 ms    1.2%  (anoniem) @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:6798
+      167 ms    1.0%  node03TargetWithClientRange @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:6755
+       91 ms    0.5%  updateRuntimeTargetRoot @ http://127.0.0.1:37937/shared/world-runtime.js?v=20261016-scatter-pattern2:16829
+       90 ms    0.5%  getBoundingClientRect @ (native):0
+       90 ms    0.5%  getProgramInfoLog @ (native):0
+       88 ms    0.5%  setItem @ (native):0
+       73 ms    0.4%  drawSmoothMinimapFogCells @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:10676
+       69 ms    0.4%  (anoniem) @ http://127.0.0.1:37937/shared/world-runtime.js?v=20261016-scatter-pattern2:414
+       54 ms    0.3%  addMarker @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:10029
+       48 ms    0.3%  (anoniem) @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:6769
+       43 ms    0.3%  drawGameMinimapFogOverlay @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:10736
+       42 ms    0.2%  (garbage collector) @ (native):0
+       41 ms    0.2%  fetch @ (native):0
+       40 ms    0.2%  send @ (native):0
+       37 ms    0.2%  cloneDefaultValue @ http://127.0.0.1:37937/shared/node-types.js?v=20260730-stop-resync1:70
+       37 ms    0.2%  (anoniem) @ http://127.0.0.1:37937/shared/world-runtime.js?v=20261016-scatter-pattern2:7619
+       34 ms    0.2%  markRuntimeTargetTree @ http://127.0.0.1:37937/shared/world-runtime.js?v=20261016-scatter-pattern2:16191
+       32 ms    0.2%  gameHudScrollElementKey @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:2755
+       31 ms    0.2%  updateMatrixWorld @ http://127.0.0.1:37937/vendor/three/build/three.core.js:12853
+       30 ms    0.2%  traverse @ http://127.0.0.1:37937/vendor/three/build/three.core.js:12758
+       30 ms    0.2%  querySelectorAll @ (native):0
+       29 ms    0.2%  node03RuntimeTargetsForScene @ http://127.0.0.1:37937/game/game.js?v=20261016-scatter-pattern2:6777

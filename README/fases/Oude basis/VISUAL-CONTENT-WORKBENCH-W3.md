@@ -1,6 +1,6 @@
 # Visual Content Workbench W3
 
-**Status:** implemented, awaiting Kevin acceptance  
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen  
 **Datum:** 2026-10-22  
 **Basis:** W2 (`4d0a27ca39e248a879c3204ebf6280c960eb822b`, partially accepted by Kevin)
 

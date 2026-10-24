@@ -1,6 +1,6 @@
 # AUTHORING VISUAL BUILDER - Fase 1 van 3
 
-**Status:** Fase 1 implemented, awaiting Kevin acceptance  
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen  
 **Datum:** 2026-10-07
 
 ## Scope
@@ -93,4 +93,4 @@ en een eigen Portal-link op en behoudt gedeelde definities.
 Er zijn geen database-reset, proof-content, serverstart, npm-test/check, smoke,
 Playwright- of performancechecks uitgevoerd. Kevin voert de live acceptatie uit.
 
-**Fase 1 implemented, awaiting Kevin acceptance**
+**gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen**

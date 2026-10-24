@@ -6,6 +6,7 @@ const currentSessionText = document.querySelector("#currentSessionText");
 const continueLink = document.querySelector("#continueLink");
 const logoutButton = document.querySelector("#logoutButton");
 const nextTarget = resolveNextTarget();
+let csrfToken = "";
 
 function resolveNextTarget() {
   const search = new URLSearchParams(window.location.search);
@@ -54,7 +55,9 @@ async function requestAuthMe() {
       setStatus("Sessie kon niet worden geladen.");
       return;
     }
-    renderSession(await response.json());
+    const result = await response.json();
+    csrfToken = result.csrfToken || csrfToken;
+    renderSession(result);
   } catch {
     setStatus("Netwerkfout tijdens het lezen van de sessie.");
   }
@@ -82,6 +85,7 @@ async function submitAccount(event) {
     setStatus(result.message || (action === "register" ? "Registratie mislukt." : "Login mislukt."));
     return;
   }
+  csrfToken = result.csrfToken || csrfToken;
   setStatus(action === "register" ? "Registratie gelukt." : "Login gelukt.", "success");
   if (action === "register") {
     window.location.href = "/game/";
@@ -94,7 +98,7 @@ async function submitAccount(event) {
 async function logout() {
   logoutButton.disabled = true;
   try {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch("/api/auth/logout", { method: "POST", headers: { "X-GK-CSRF": csrfToken } });
   } catch {
     // Logout blijft client-side bruikbaar, ook als de network call faalt.
   } finally {

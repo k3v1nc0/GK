@@ -71,10 +71,10 @@ function assetSlugForName(name) {
     .replace(/^-+|-+$/g, "");
 }
 
-function assetPathForStem(rootDir, baseDirName, stem, ext) {
+function assetPathForStem(assetsDir, baseDirName, stem, ext) {
   return {
     path: "/" + ["assets", baseDirName, stem + ext].join("/"),
-    filePath: path.join(rootDir, "assets", baseDirName, stem + ext)
+    filePath: path.join(assetsDir, baseDirName, stem + ext)
   };
 }
 
@@ -144,10 +144,10 @@ function renameFileIfNeeded(fromPath, toPath) {
 }
 
 export class AssetService {
-  constructor(db, rootDir) {
+  constructor(db, rootDir, options = {}) {
     this.db = db;
     this.rootDir = rootDir;
-    this.assetsDir = path.join(rootDir, "assets");
+    this.assetsDir = path.resolve(options.assetsDir || path.join(rootDir, "assets"));
     this.uploadsDir = path.join(this.assetsDir, "uploads");
     this.thumbnailsDir = path.join(this.assetsDir, "thumbnails");
     this.glbThumbnailScript = path.join(rootDir, "scripts", "generate-glb-thumbnail.sh");
@@ -176,7 +176,7 @@ export class AssetService {
       const metadata = normalizeAssetMetadata(row);
       const extraRound = metadata.thumbnailStatus === "failed" && metadata.thumbnailExtraRoundDone !== true;
       if (metadata.thumbnailStatus !== "pending" && metadata.thumbnailStatus !== "processing" && !extraRound) continue;
-      const sourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
+      const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
       if (!sourceFilePath || !fs.existsSync(sourceFilePath)) continue;
       if (extraRound) this.startThumbnailExtraRound(row.id);
       else this.enqueueThumbnailJob({ assetId: row.id });
@@ -255,7 +255,7 @@ export class AssetService {
       error.status = 400;
       throw error;
     }
-    const sourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
+    const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
     if (!sourceFilePath || !fs.existsSync(sourceFilePath)) {
       const error = new Error("Assetbronbestand ontbreekt.");
       error.status = 500;
@@ -281,7 +281,7 @@ export class AssetService {
       if (!row) return;
       const asset = toAsset(row);
       if (asset.assetType !== "model") return;
-      const sourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
+      const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
       const startedAt = performance.now();
       const startedAtIso = now();
       if (!sourceFilePath || !fs.existsSync(sourceFilePath)) {
@@ -300,7 +300,7 @@ export class AssetService {
         workingDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-thumbnail-"));
         const workingSourceFilePath = path.join(workingDir, path.basename(sourceFilePath));
         const initialStem = path.basename(row.source_path || assetId, path.extname(row.source_path || ""));
-        const initialThumbnailAssetPath = assetPathForStem(this.rootDir, "thumbnails", initialStem, ".png");
+        const initialThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", initialStem, ".png");
         const initialThumbnailFilePath = initialThumbnailAssetPath.filePath;
         const strict = isTruthyEnv(process.env.GLB_THUMBNAIL_STRICT);
         fs.copyFileSync(sourceFilePath, workingSourceFilePath);
@@ -313,6 +313,7 @@ export class AssetService {
         });
         const result = await generateGlbThumbnail({
           rootDir: this.rootDir,
+          assetsDir: this.assetsDir,
           scriptPath: this.glbThumbnailScript,
           thumbnailStem: initialStem,
           sourceFilePath: workingSourceFilePath,
@@ -326,7 +327,7 @@ export class AssetService {
           return;
         }
         const latestSourceStem = path.basename(latestRow.source_path || assetId, path.extname(latestRow.source_path || ""));
-        const nextThumbnailAssetPath = assetPathForStem(this.rootDir, "thumbnails", latestSourceStem, ".png");
+        const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", latestSourceStem, ".png");
         const durationMs = timingNumber(startedAt);
         const finishedAtIso = now();
         if (result.status === "ready" && result.thumbnailPath) {
@@ -435,8 +436,8 @@ export class AssetService {
       error.status = 409;
       throw error;
     }
-    const currentSourceFilePath = safeUploadFilePath(this.rootDir, row.source_path);
-    const currentThumbnailFilePath = safeUploadFilePath(this.rootDir, row.thumbnail_path);
+    const currentSourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
+    const currentThumbnailFilePath = safeUploadFilePath(this.assetsDir, row.thumbnail_path);
     if (!currentSourceFilePath || !fs.existsSync(currentSourceFilePath)) {
       const error = new Error("Assetbronbestand ontbreekt.");
       error.status = 500;
@@ -451,12 +452,12 @@ export class AssetService {
       ext: sourceExt,
       currentFilePath: currentSourceFilePath
     }) || preferredSourceStem;
-    const nextSourceAssetPath = assetPathForStem(this.rootDir, "uploads", sourceStem, sourceExt);
+    const nextSourceAssetPath = assetPathForStem(this.assetsDir, "uploads", sourceStem, sourceExt);
     const nextSourceFilePath = nextSourceAssetPath.filePath;
     const nextSourcePath = nextSourceAssetPath.path;
     const thumbnailIsSource = row.thumbnail_path && row.thumbnail_path === row.source_path;
     const thumbnailExists = Boolean(currentThumbnailFilePath && fs.existsSync(currentThumbnailFilePath));
-    const nextThumbnailAssetPath = assetPathForStem(this.rootDir, "thumbnails", sourceStem, ".png");
+    const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", sourceStem, ".png");
     const nextThumbnailFilePath = thumbnailIsSource
       ? nextSourceFilePath
       : (thumbnailExists ? nextThumbnailAssetPath.filePath : null);
@@ -531,7 +532,7 @@ export class AssetService {
         ext: ext,
         currentFilePath: null
       }) || preferredSourceStem;
-      const sourceAssetPath = assetPathForStem(this.rootDir, "uploads", sourceStem, ext);
+      const sourceAssetPath = assetPathForStem(this.assetsDir, "uploads", sourceStem, ext);
       const sourceFilePath = sourceAssetPath.filePath;
       fs.writeFileSync(sourceFilePath, file.data);
       const sourcePath = sourceAssetPath.path;
@@ -563,7 +564,7 @@ export class AssetService {
           this.enqueueThumbnailJob({ assetId: id });
         }
       } catch (error) {
-        removeAssetFiles(this.rootDir, {
+        removeAssetFiles(this.assetsDir, {
           source_path: sourcePath,
           thumbnail_path: resolvedThumbnailPath
         });
@@ -632,7 +633,7 @@ export class AssetService {
       ext: ext,
       currentFilePath: null
     });
-    const bakeAssetPath = assetPathForStem(this.rootDir, "minimap-bakes", stem, ext);
+    const bakeAssetPath = assetPathForStem(this.assetsDir, "minimap-bakes", stem, ext);
     fs.writeFileSync(bakeAssetPath.filePath, file.data);
     const width = Math.max(1, Math.min(8192, Math.round(Number(input.width) || Number(input.resolution) || 0)));
     const height = Math.max(1, Math.min(8192, Math.round(Number(input.height) || Number(input.resolution) || width)));
@@ -691,7 +692,7 @@ export class AssetService {
       error.status = 404;
       throw error;
     }
-    removeAssetFiles(this.rootDir, row);
+    removeAssetFiles(this.assetsDir, row);
     return this.list();
   }
 
@@ -867,10 +868,10 @@ function collectAssetUsage(graph, assetId) {
   return usage;
 }
 
-function removeAssetFiles(rootDir, row) {
+function removeAssetFiles(assetsDir, row) {
   const candidates = new Set([row?.source_path, row?.thumbnail_path]);
   for (const assetPath of candidates) {
-    const filePath = safeUploadFilePath(rootDir, assetPath);
+    const filePath = safeUploadFilePath(assetsDir, assetPath);
     if (!filePath) continue;
     try {
       fs.unlinkSync(filePath);
@@ -878,18 +879,17 @@ function removeAssetFiles(rootDir, row) {
   }
 }
 
-function safeUploadFilePath(rootDir, assetPath) {
+function safeUploadFilePath(assetsDir, assetPath) {
   if (typeof assetPath !== "string" || !assetPath.startsWith("/assets/")) return null;
-  const assetsDir = path.join(rootDir, "assets");
-  const filePath = path.resolve(rootDir, assetPath.slice(1));
+  const filePath = path.resolve(assetsDir, assetPath.slice("/assets/".length));
   const relative = path.relative(assetsDir, filePath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return filePath;
 }
 
-async function generateGlbThumbnail({ rootDir, scriptPath, thumbnailStem, sourceFilePath, strict }) {
+async function generateGlbThumbnail({ rootDir, assetsDir, scriptPath, thumbnailStem, sourceFilePath, strict }) {
   const startedAt = performance.now();
-  const thumbnailsDir = path.join(rootDir, "assets", "thumbnails");
+  const thumbnailsDir = path.join(assetsDir, "thumbnails");
   const resolvedStem = String(thumbnailStem || "").trim();
   const thumbnailPath = "/assets/thumbnails/" + resolvedStem + ".png";
   const finalFilePath = path.join(thumbnailsDir, resolvedStem + ".png");

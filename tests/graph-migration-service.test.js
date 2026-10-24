@@ -41,8 +41,8 @@ test("foundation migration preview stays read-only and apply writes the plan", f
 
   const preview = service.preview();
   assert.equal(preview.alreadyApplied, false);
-  assert.equal(preview.nodesToCreate.length, 15);
-  assert.equal(preview.edgesToCreate.length, 10);
+  assert.equal(preview.nodesToCreate.length, 19);
+  assert.equal(preview.edgesToCreate.length, 16);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM graph_migration_runs").get().total, 0);
 
   const result = service.apply({
@@ -51,8 +51,8 @@ test("foundation migration preview stays read-only and apply writes the plan", f
   }, "user_1");
 
   assert.equal(result.alreadyApplied, false);
-  assert.equal(result.nodesCreated, 15);
-  assert.equal(result.edgesCreated, 10);
+  assert.equal(result.nodesCreated, 19);
+  assert.equal(result.edgesCreated, 16);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM graph_migration_runs").get().total, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM editor_nodes WHERE id = ?").get("foundation.world_assembly").total, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS total FROM editor_node_edges WHERE id = ?").get("foundation.edge.assembly_to_game_output").total, 1);

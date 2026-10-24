@@ -18,22 +18,27 @@ import { PublishService } from "./publish-service.js";
 import { SymbolIndexService } from "./symbol-index-service.js";
 import { TokenResolver } from "./token-resolver.js";
 import { GameProjectCompiler } from "./game-project-compiler.js";
+import { assertIsolatedNetwork, resolveAssetsPath } from "./storage-policy.js";
+import { assertSecureCookieConfiguration, LoginAttemptLimiter } from "./auth-security.js";
+import { assertAllowedOrigin, isDeniedPublicPath, isMutationRequest, WS_MAX_PAYLOAD_BYTES } from "./request-boundary.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "../..");
 loadEnvFile(rootDir);
+assertSecureCookieConfiguration();
 
 const port = Number(process.env.PORT || 3001);
 const publicRoot = path.join(rootDir, "apps/web/public");
-const assetsRoot = path.join(rootDir, "assets");
+const assetsRoot = resolveAssetsPath(rootDir);
 const vendorRoot = path.join(rootDir, "node_modules/three");
 
-const db = openDatabase(rootDir);
+const db = await openDatabase(rootDir);
 const authService = new AuthService(db);
-authService.ensureAdmin();
+await authService.ensureAdmin();
 authService.cleanupExpiredSessions();
-const assetService = new AssetService(db, rootDir);
+const loginAttemptLimiter = new LoginAttemptLimiter({ limit: 5, windowMs: 60000 });
+const assetService = new AssetService(db, rootDir, { assetsDir: assetsRoot });
 assetService.resumePendingThumbnailJobs();
 const symbolIndexService = new SymbolIndexService();
 const tokenResolver = new TokenResolver({ symbolIndexService });
@@ -46,9 +51,10 @@ const mmoService = new MmoService(db, authService, repository);
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES, perMessageDeflate: false });
 mmoService.bindWebSocketServer(wss);
 const host = process.env.HOST || "127.0.0.1";
+assertIsolatedNetwork({ host, port });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
 
 function timingMs(startedAt) {
@@ -220,15 +226,37 @@ function safePath(baseDir, urlPath) {
   return filePath;
 }
 
-function serveFile(res, filePath, cache) {
-  if (!filePath || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) return sendText(res, 404, "Niet gevonden");
+// Statische bestanden met ETag/Last-Modified: de browser vraagt "nog hetzelfde?" en krijgt dan een lege 304
+// in plaats van het hele bestand opnieuw (scripts en modellen werden bij elke login volledig gedownload).
+function serveFile(res, filePath, cache, req = null) {
+  if (!filePath || !fs.existsSync(filePath)) return sendText(res, 404, "Niet gevonden");
+  const stat = fs.statSync(filePath);
+  if (stat.isDirectory()) return sendText(res, 404, "Niet gevonden");
   const ext = path.extname(filePath).toLowerCase();
-  res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream", "Cache-Control": cache || "public, max-age=300" });
-  fs.createReadStream(filePath).pipe(res);
+  const etag = 'W/"' + stat.size.toString(16) + "-" + Math.floor(stat.mtimeMs).toString(16) + '"';
+  const headers = {
+    "Content-Type": mimeTypes[ext] || "application/octet-stream",
+    "Cache-Control": cache || "public, max-age=300",
+    ETag: etag,
+    "Last-Modified": stat.mtime.toUTCString()
+  };
+  const ifNoneMatch = String(req?.headers?.["if-none-match"] || "");
+  if (ifNoneMatch && ifNoneMatch.split(",").map(function (value) { return value.trim(); }).includes(etag)) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  const stream = fs.createReadStream(filePath);
+  stream.once("error", function () {
+    if (!res.headersSent) sendText(res, 500, "Bestand kon niet worden gelezen.");
+    else res.destroy();
+  });
+  res.writeHead(200, Object.assign({ "Content-Length": stat.size }, headers));
+  stream.pipe(res);
 }
 
 function serveStatic(req, res, url) {
   let pathname = url.pathname;
+  if (isDeniedPublicPath(pathname)) return sendText(res, 404, "Niet gevonden");
   if (pathname === "/") return sendRedirect(res, "/editor/");
   if (pathname === "/editor") return sendRedirect(res, "/editor/");
   if (pathname === "/game") {
@@ -239,16 +267,17 @@ function serveStatic(req, res, url) {
   if (pathname === "/login") return sendRedirect(res, "/login/");
   if (pathname.startsWith("/editor/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/editor/"));
   if (pathname.startsWith("/game/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/game/"));
-  if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300");
+  if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300", req);
   if (pathname.startsWith("/vendor/three/")) {
     if (!fs.existsSync(vendorRoot)) return sendText(res, 503, "Three.js dependency ontbreekt. Run npm install.");
-    return serveFile(res, safePath(vendorRoot, pathname.slice("/vendor/three/".length)), "public, max-age=3600");
+    return serveFile(res, safePath(vendorRoot, pathname.slice("/vendor/three/".length)), "public, max-age=86400", req);
   }
-  if (pathname === "/favicon.ico") return serveFile(res, path.join(rootDir, "favicon.ico"), "public, max-age=86400");
+  if (pathname === "/favicon.ico") return serveFile(res, path.join(rootDir, "favicon.ico"), "public, max-age=86400", req);
   if (pathname.endsWith("/")) pathname += "index.html";
   const ext = path.extname(pathname);
-  const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-store" : "public, max-age=300";
-  return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache);
+  // Code altijd verversen na een update ("no-cache" = eerst vragen), maar ongewijzigd = 304 zonder download.
+  const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-cache" : "public, max-age=300";
+  return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache, req);
 }
 
 const GAME_HUD_DEFAULT_PROFILE_IDS = new Set(["default_desktop", "default_mob"]);
@@ -407,21 +436,30 @@ function saveGameHudLayoutDefault(req, body = {}) {
 async function handleApi(req, res, url) {
   const importResponseStartedAt = req.method === "POST" && url.pathname === "/api/assets/import" ? performance.now() : null;
   try {
+    if (isMutationRequest(req)) {
+      assertAllowedOrigin(req);
+      const csrfExempt = (url.pathname === "/api/auth/login" || url.pathname === "/api/auth/register");
+      if (!csrfExempt) authService.assertCsrf(req);
+    }
     if (req.method === "GET" && url.pathname === "/api/health") {
       return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: Boolean(repository.getPublishedWorld()) });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/register") {
       const body = await readJson(req);
-      const result = authService.register(body.identifier || body.username || body.email, body.password, body.deviceLabel || req.headers["user-agent"] || null);
-      return sendJson(res, 201, { ok: true, registered: true, user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
+      const result = await authService.register(body.identifier || body.username || body.email, body.password, body.deviceLabel || req.headers["user-agent"] || null);
+      return sendJson(res, 201, { ok: true, registered: true, csrfToken: authService.csrfTokenForSessionId(result.sessionId), user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
         "Set-Cookie": authService.sessionCookie(result.sessionToken)
       });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/login") {
       const body = await readJson(req);
-      const result = authService.login(body.identifier || body.username || body.email, body.password, body.deviceLabel || req.headers["user-agent"] || null);
+      const identifier = body.identifier || body.username || body.email;
+      loginAttemptLimiter.consume(req.socket?.remoteAddress || "unknown", identifier);
+      const previousSession = authService.currentSession(req);
+      const result = await authService.login(identifier, body.password, body.deviceLabel || req.headers["user-agent"] || null);
       if (!result) return sendJson(res, 401, { ok: false, message: "Login mislukt." });
-      return sendJson(res, 200, { ok: true, user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
+      if (previousSession && previousSession.session.id !== result.sessionId) authService.logout(previousSession.session.id);
+      return sendJson(res, 200, { ok: true, csrfToken: authService.csrfTokenForSessionId(result.sessionId), user: result.user, session: { deviceLabel: result.session?.deviceLabel || null, expiresAt: result.session?.expiresAt || null } }, {
         "Set-Cookie": authService.sessionCookie(result.sessionToken)
       });
     }
@@ -921,6 +959,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 404, { ok: false, message: "API route niet gevonden." });
   } catch (error) {
     const payload = { ok: false, message: error.message };
+    if (error.code) payload.code = error.code;
+    if (error.retryAfterMs) payload.retryAfterMs = error.retryAfterMs;
     if (error.usage) payload.usage = error.usage;
     if (error.details) payload.details = error.details;
     return sendJson(res, error.status || 500, payload);
@@ -932,13 +972,33 @@ async function handleApi(req, res, url) {
 }
 
 const server = http.createServer(async function (req, res) {
-  const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
-  if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
-  return serveStatic(req, res, url);
+  try {
+    const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+    // Malformed percent-encoding (e.g. /%FF) throws URIError here and becomes a 400 below.
+    decodeURIComponent(url.pathname);
+    if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
+    return serveStatic(req, res, url);
+  } catch (error) {
+    if (!res.headersSent) return sendJson(res, error instanceof URIError ? 400 : (error.status || 500), { ok: false, message: error instanceof URIError ? "Ongeldige URL." : "Verzoek mislukt." });
+    res.destroy();
+  }
 });
 
+// Apache hergebruikt idle backendverbindingen (ttl=4 in de vhost). Houd ze aan Node-kant langer open dan dat,
+// anders sloot Node een verbinding die Apache net wilde hergebruiken ("connection reset", mislukte aanvraag).
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 server.on("upgrade", function (req, socket, head) {
-  const upgradeUrl = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+  let upgradeUrl;
+  try {
+    upgradeUrl = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+    assertAllowedOrigin(req);
+  } catch {
+    try { socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); } catch {}
+    socket.destroy();
+    return;
+  }
   if (upgradeUrl.pathname !== "/api/game/live") {
     socket.destroy();
     return;

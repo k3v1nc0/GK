@@ -693,6 +693,8 @@ function editorConnectionRequestFinished() {
   updateConnectionStatusFromState();
 }
 
+let editorCsrfToken = "";
+
 async function fetchEditorApi(path, options, method) {
   const requestOptions = Object.assign({}, options || {});
   const timeoutMs = Number.isFinite(Number(requestOptions.timeoutMs)) ? Number(requestOptions.timeoutMs) : EDITOR_API_TIMEOUT_MS;
@@ -701,6 +703,9 @@ async function fetchEditorApi(path, options, method) {
   requestOptions.headers = formBody
     ? Object.assign({}, requestOptions.headers || {})
     : Object.assign({ "Content-Type": "application/json" }, requestOptions.headers || {});
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "GET").toUpperCase()) && editorCsrfToken) {
+    requestOptions.headers["X-GK-CSRF"] = editorCsrfToken;
+  }
   editorConnectionRequestStarted();
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== "function") {
     try {
@@ -763,6 +768,7 @@ async function api(path, options) {
     throw new Error("Niet ingelogd.");
   }
   const data = await response.json().catch(function () { return {}; });
+  if (data.csrfToken) editorCsrfToken = data.csrfToken;
   if (!response.ok) {
     const error = new Error(data.message || "Verzoek mislukt.");
     error.status = response.status;
@@ -24890,7 +24896,7 @@ function flushEditorLayoutServerSave() {
   }
   void window.fetch("/api/editor/layout", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-GK-CSRF": editorCsrfToken },
     body: JSON.stringify({ layout: currentEditorLayoutPayload() }),
     keepalive: true
   }).catch(function () {});

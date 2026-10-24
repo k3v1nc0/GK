@@ -47,6 +47,48 @@ function normalizeDegrees(value) {
   return round(normalized);
 }
 
+// Meet de GPU-tijd van een frame (EXT_disjoint_timer_query_webgl2), om te zien of de videokaart de rem is.
+// Eén meting tegelijk, ongeveer elke zesde frame; zonder extensie blijft de waarde onbekend (null).
+function createGpuFrameTimer(gl) {
+  try {
+    const ext = gl && typeof gl.getExtension === "function" ? gl.getExtension("EXT_disjoint_timer_query_webgl2") : null;
+    if (!ext || typeof gl.createQuery !== "function") return null;
+    const query = gl.createQuery();
+    let active = false;
+    let pending = false;
+    let frame = 0;
+    const timer = { emaMs: null, lastMs: null };
+    timer.begin = function () {
+      if (pending) {
+        const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
+        if (!available) return;
+        const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+        if (!disjoint) {
+          const ms = Number(gl.getQueryParameter(query, gl.QUERY_RESULT)) / 1e6;
+          if (Number.isFinite(ms) && ms >= 0) {
+            timer.lastMs = ms;
+            timer.emaMs = timer.emaMs === null ? ms : timer.emaMs * 0.7 + ms * 0.3;
+          }
+        }
+        pending = false;
+      }
+      frame += 1;
+      if (frame % 6 !== 0) return;
+      gl.beginQuery(ext.TIME_ELAPSED_EXT, query);
+      active = true;
+    };
+    timer.end = function () {
+      if (!active) return;
+      gl.endQuery(ext.TIME_ELAPSED_EXT);
+      active = false;
+      pending = true;
+    };
+    return timer;
+  } catch {
+    return null;
+  }
+}
+
 function detectRendererProfile(renderer) {
   try {
     const gl = renderer?.getContext?.();
@@ -4689,6 +4731,37 @@ function walkableSurfaceHeightAt(index, x, z, fallbackY = 0, inflate = 0) {
   return num(walkable.y, fallbackY);
 }
 
+// Obstakels (solid entiteiten, ook scatter-items met "items blokkeren speler") voor beweging. Gedeeld door
+// server (autoritatieve simulatie) en client (voorspelling), zodat beide precies dezelfde lijst gebruiken.
+// Kevin-handtest 2026-10-24: de client botste alleen tegen obstakels in actieve render-chunks
+// (residentiebudget), de server tegen alle; de client liep door een bos waar de server vastliep.
+// Oorspronkelijke toelichting: keep the authoritative simulation on the same collision set as the browser.
+// Static model entities are registered as circular `activeSolids` by the world
+// runtime, but the server previously passed no solids to resolveMovement. That
+// let the server walk straight through tents, signs and other solid props while
+// the local player remained blocked against them. On key-up the next snapshot
+// could consequently move the player hundreds of units away.
+export function solidCollisionEntriesForWorld(world) {
+  const entries = [];
+  for (const entity of Array.isArray(world?.entities) ? world.entities : []) {
+    if (!entity || entity.solid !== true || entity.walkable === true) continue;
+    const position = entity.transform?.position || {};
+    const x = Number(position.x);
+    const z = Number(position.z);
+    const radius = Number(entity.collisionRadius);
+    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius <= 0) continue;
+    entries.push({
+      id: String(entity.id || entity.entityId || entity.nodeId || "entity") + "::solid",
+      entityId: entity.id || entity.entityId || entity.nodeId || null,
+      x: x,
+      z: z,
+      radius: radius,
+      enabled: true
+    });
+  }
+  return entries;
+}
+
 export function buildWalkabilityIndex(worldData) {
   activeWalkabilityIndex = createWalkabilityIndex(worldData);
   return activeWalkabilityIndex;
@@ -5294,6 +5367,34 @@ export function createGkWorldRuntime(canvas, options = {}) {
     renderer.shadowMap.enabled = false;
     renderer.setPixelRatio(effectivePixelRatio(mode === "editor" ? worldPerformance.editor : worldPerformance.game));
   }
+  const gpuFrameTimer = mode === "game" ? createGpuFrameTimer(renderer.getContext()) : null;
+  let renderCpuEmaMs = 0;
+  // Automatische resolutie (game): zakt de framerate omdat de videokaart het niet bijhoudt, dan rendert de game
+  // tijdelijk met minder pixels (tot pixelRatioMin) en gaat weer omhoog zodra er ruimte is.
+  const adaptiveResolution = { lastCheckAt: 0, raiseBlockedUntil: 0, slowSince: 0, fastSince: 0 };
+  function maybeAdaptPixelRatio(now) {
+    if (mode !== "game" || worldPerformance.game?.adaptiveResolution === false) return;
+    if (now - adaptiveResolution.lastCheckAt < 500) return;
+    adaptiveResolution.lastCheckAt = now;
+    const maxRatio = effectivePixelRatio(worldPerformance.game);
+    const minRatio = Math.min(maxRatio, Math.max(0.5, num(worldPerformance.game?.pixelRatioMin, 0.5), maxRatio * 0.6));
+    const current = renderer.getPixelRatio();
+    const gpuMs = gpuFrameTimer ? gpuFrameTimer.emaMs : null;
+    const slow = perfHudFrameMs > 21 && (gpuMs === null || gpuMs > 12);
+    const fast = perfHudFrameMs < 18 && (gpuMs === null || gpuMs < 8);
+    adaptiveResolution.slowSince = slow ? (adaptiveResolution.slowSince || now) : 0;
+    adaptiveResolution.fastSince = fast ? (adaptiveResolution.fastSince || now) : 0;
+    if (slow && now - adaptiveResolution.slowSince >= 1500 && current > minRatio + 0.01) {
+      renderer.setPixelRatio(Math.max(minRatio, Math.round((current - 0.1) * 100) / 100));
+      adaptiveResolution.slowSince = now;
+      adaptiveResolution.raiseBlockedUntil = now + 15000;
+      requestRender("adaptive-resolution");
+    } else if (fast && now - adaptiveResolution.fastSince >= 6000 && now >= adaptiveResolution.raiseBlockedUntil && current < maxRatio - 0.01) {
+      renderer.setPixelRatio(Math.min(maxRatio, Math.round((current + 0.1) * 100) / 100));
+      adaptiveResolution.fastSince = now;
+      requestRender("adaptive-resolution");
+    }
+  }
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
@@ -5660,6 +5761,9 @@ export function createGkWorldRuntime(canvas, options = {}) {
     lastUpdateReason: "init"
   };
   const activeSolids = [];
+  // Voorspelling van de eigen speler (game): de volledige obstakellijst, net als de server, los van welke
+  // chunks er geladen of zichtbaar zijn. activeSolids volgt de render-residentie en is daar niet geschikt voor.
+  let predictionSolids = [];
   let runtimeCollisionBaseCount = 0;
   const frameProfileWaiters = [];
 
@@ -9309,7 +9413,7 @@ function resolveChunkDebugCenter(policy) {
     sectionStart = performance.now();
     if (selectionHelper?.visible) selectionHelper.update();
     if (transformGuide?.visible) updateTransformGuide();
-    if (mode === "game") updatePlayer(delta);
+    if (mode === "game") updatePlayer(delta, Math.min(0.25, rawDelta));
     if (shouldFlyCamera) updateFlyCamera(delta);
     frameTiming.updatePlayerMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
@@ -9333,8 +9437,12 @@ function resolveChunkDebugCenter(policy) {
     }
     frameTiming.syncChunkMs = round(performance.now() - sectionStart);
     sectionStart = performance.now();
+    if (gpuFrameTimer) gpuFrameTimer.begin();
     renderer.render(scene, camera);
+    if (gpuFrameTimer) gpuFrameTimer.end();
     frameTiming.renderMs = round(performance.now() - sectionStart);
+    renderCpuEmaMs = renderCpuEmaMs > 0 ? renderCpuEmaMs * 0.9 + frameTiming.renderMs * 0.1 : frameTiming.renderMs;
+    maybeAdaptPixelRatio(time);
     try {
       onRenderFrame({ timing: frameTiming });
     } catch {}
@@ -16134,6 +16242,10 @@ function resolveChunkDebugCenter(policy) {
     }
     if (suppressed) runtimeTargetSuppressedEntityIds.add(id);
     else runtimeTargetSuppressedEntityIds.delete(id);
+    // Zelfde regel als de server (setWorldEntityColliderEnabled): een verborgen target (bijv. verzameld) botst niet.
+    for (const solid of predictionSolids) {
+      if (String(solid?.entityId || "") === id) solid.enabled = !suppressed;
+    }
     for (const solid of solids) {
       if (String(solid?.entityId || "") !== id) continue;
       solid.runtimeTargetSuppressed = suppressed;
@@ -17143,7 +17255,7 @@ function resolveChunkDebugCenter(policy) {
     collisionPerfState.checksLastFrame += 1;
     resolveMovementInto(target, player.pos, target, {
       radius: player.radius,
-      solids: activeSolids
+      solids: mode === "game" ? predictionSolids : activeSolids
     });
     collisionPerfState.lastResolveMs = round(collisionPerfState.lastResolveMs + (performance.now() - startedAt));
     return target;
@@ -17188,7 +17300,7 @@ function resolveChunkDebugCenter(policy) {
     };
     const movementOptions = {
       radius: radius,
-      solids: Array.isArray(options.solids) ? options.solids : activeSolids
+      solids: Array.isArray(options.solids) ? options.solids : (mode === "game" ? predictionSolids : activeSolids)
     };
     if (options.ground) movementOptions.ground = options.ground;
     const resolved = resolveMovement(start, desired, movementOptions);
@@ -17270,14 +17382,17 @@ function resolveChunkDebugCenter(policy) {
     cameraRight.set(-cameraForward.z, 0, cameraForward.x);
   }
 
-  function updatePlayer(delta) {
+  function updatePlayer(delta, realDelta = delta) {
     if (mode !== "game" || !player.root) return;
     if (externalPlayerAuthority) {
       if (player.reconcileActive) {
-        const smoothing = clamp(1 - Math.exp(-(delta * 1000) / Math.max(1, player.reconcileDurationMs)), 0, 1);
+        // Echte frametijd: met de begrensde delta (max 50 ms) duurde een correctie bij lage fps vele seconden,
+        // zichtbaar als een karakter dat vanzelf wegdrijft.
+        const reconcileDelta = Number.isFinite(realDelta) && realDelta > 0 ? realDelta : delta;
+        const smoothing = clamp(1 - Math.exp(-(reconcileDelta * 1000) / Math.max(1, player.reconcileDurationMs)), 0, 1);
         player.pos.lerp(player.reconcileTarget, smoothing);
         player.facing = lerpAngleTowards(player.facing, player.reconcileTargetFacing, smoothing);
-        player.reconcileElapsedMs += delta * 1000;
+        player.reconcileElapsedMs += reconcileDelta * 1000;
         const positionSettled = player.pos.distanceToSquared(player.reconcileTarget) < 0.0004;
         const facingGap = Math.abs(((player.reconcileTargetFacing - player.facing + Math.PI) % (Math.PI * 2)) - Math.PI);
         if (positionSettled && facingGap < 0.002 && player.reconcileElapsedMs >= player.reconcileDurationMs) {
@@ -17570,6 +17685,10 @@ function resolveChunkDebugCenter(policy) {
     if (metrics.showRemoteSyncMs !== false) addRow("remoteSyncMs", "Remote sync");
     if (metrics.showMovementStepMs !== false) addRow("movementStepMs", "Movement");
     if (metrics.showMinimapDrawMs !== false) addRow("minimapDrawMs", "Minimap");
+    if (metrics.showGpuMs !== false) addRow("gpuMs", "GPU");
+    if (metrics.showRenderCpuMs !== false) addRow("renderCpuMs", "Render");
+    // Zonder hardwareversnelling is de game traag, wat je verder ook instelt: altijd tonen.
+    if (rendererProfile.software === true) addRow("softwareRenderer", "Let op");
     if (metrics.showRenderer !== false) addRow("renderer", "Renderer");
     if (metrics.showDrawCalls !== false) addRow("drawCalls", "Draw");
     if (metrics.showTriangles !== false) addRow("triangles", "Tris");
@@ -17698,6 +17817,11 @@ function resolveChunkDebugCenter(policy) {
       renderer: rendererLabel,
       drawCalls: Number(renderInfo.calls) || 0,
       triangles: Number(renderInfo.triangles) || 0,
+      gpuMs: gpuFrameTimer && gpuFrameTimer.emaMs !== null ? gpuFrameTimer.emaMs : null,
+      renderCpuMs: renderCpuEmaMs,
+      pixelRatio: renderer.getPixelRatio(),
+      gpuName: rendererProfile.name,
+      softwareRenderer: rendererProfile.software === true,
       geometries: Number(memoryInfo.geometries) || 0,
       textures: Number(memoryInfo.textures) || 0,
       sceneChildren: scene.children.length,
@@ -18304,6 +18428,16 @@ function resolveChunkDebugCenter(policy) {
     if (metrics.showRenderer !== false && entry.rows.renderer) {
       setPerformanceRowValue(entry.rows.renderer, snapshot.renderer, "neutral");
     }
+    if (entry.rows.gpuMs) {
+      const gpuText = snapshot.gpuMs === null ? "n.v.t." : snapshot.gpuMs.toFixed(1) + "ms";
+      setPerformanceRowValue(entry.rows.gpuMs, gpuText + " · x" + Number(snapshot.pixelRatio || 1).toFixed(2), snapshot.gpuMs === null ? "neutral" : toneLowerIsBetter(snapshot.gpuMs, 10, 16));
+    }
+    if (entry.rows.renderCpuMs) {
+      setPerformanceRowValue(entry.rows.renderCpuMs, Number(snapshot.renderCpuMs || 0).toFixed(1) + "ms · " + snapshot.drawCalls + " draws", toneLowerIsBetter(snapshot.renderCpuMs, 6, 12));
+    }
+    if (entry.rows.softwareRenderer) {
+      setPerformanceRowValue(entry.rows.softwareRenderer, "geen GPU: zet hardwareversnelling aan", "danger");
+    }
       if (metrics.showDrawCalls !== false && entry.rows.drawCalls) {
         setPerformanceRowValue(entry.rows.drawCalls, formatBudgetedCount(snapshot.drawCalls, thresholds.drawCallsWarn), toneLowerIsBetter(snapshot.drawCalls, thresholds.drawCallsWarn, thresholds.drawCallsDanger));
       }
@@ -18424,6 +18558,11 @@ function resolveChunkDebugCenter(policy) {
     const residentStreamingEnabled = isChunkCullingRuntimeEnabled(resolveChunkPolicy(world, mode));
     if (!useChunkedGround) addGround(world);
     const nextWalkabilityIndex = buildWalkabilityIndex(world);
+    predictionSolids = mode === "game"
+      ? solidCollisionEntriesForWorld(world).map(function (solid) {
+        return Object.assign(solid, { enabled: !runtimeTargetSuppressedEntityIds.has(String(solid.entityId || "")) });
+      })
+      : [];
     runtimeCollisionBaseCount = (nextWalkabilityIndex.surfaceBlockers?.length || 0)
       + (nextWalkabilityIndex.blockers?.length || 0)
       + (nextWalkabilityIndex.walkables?.length || 0);
@@ -18857,6 +18996,13 @@ function resolveChunkDebugCenter(policy) {
     setRemotePlayerState: setRemotePlayerState,
     clearRemotePlayers: clearRemotePlayers,
     getRemotePlayerDebugState: getRemotePlayerDebugState,
+    // Testhaak: hoeveel obstakels de bewegingsvoorspelling gebruikt tegenover de render-residentie.
+    getCollisionDebug: function () {
+      return {
+        predictionSolids: predictionSolids.filter(function (solid) { return solid.enabled !== false; }).length,
+        activeSolids: activeSolids.length
+      };
+    },
     setRuntimeTargets: setRuntimeTargets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,

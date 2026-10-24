@@ -60,6 +60,32 @@ export function foundationGraph() {
         }
       },
       {
+        id: "node_game_camera",
+        type: "game_camera",
+        title: "Game Camera",
+        parentId: null,
+        x: 380,
+        y: 260,
+        values: {
+          cameraId: "main_camera", pitch: 55, yaw: 0, startDistance: 24, distance: 24,
+          minDistance: 10, maxDistance: 48, fov: 50, targetHeightOffset: 1.6,
+          follow: true, rotateSpeed: 90
+        }
+      },
+      {
+        id: "node_editor_camera",
+        type: "editor_camera",
+        title: "Editor Camera",
+        parentId: null,
+        x: 500,
+        y: 260,
+        values: {
+          cameraId: "editor_camera", targetX: 0, targetY: 0, targetZ: 0,
+          pitch: 55, yaw: 0, distance: 24, minDistance: 10, maxDistance: 48,
+          fov: 50, rotateSpeed: 90
+        }
+      },
+      {
         id: "node_world_assembly",
         type: "world_assembly",
         title: "World Assembly",
@@ -110,6 +136,20 @@ export function foundationGraph() {
         fromPort: "chunkGrid",
         toNodeId: "node_world_assembly",
         toPort: "chunkGrid"
+      },
+      {
+        id: "edge_game_camera",
+        fromNodeId: "node_game_camera",
+        fromPort: "camera",
+        toNodeId: "node_world_assembly",
+        toPort: "camera"
+      },
+      {
+        id: "edge_editor_camera",
+        fromNodeId: "node_editor_camera",
+        fromPort: "camera",
+        toNodeId: "node_world_assembly",
+        toPort: "camera"
       },
       {
         id: "edge_game_project",

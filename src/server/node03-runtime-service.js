@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ActionCooldowns, assertDeveloperActionAllowed, assertIdempotencyMatch, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -71,10 +72,6 @@ function safeJsonParse(text, fallback = null) {
 
 function stableJson(value) {
   return JSON.stringify(value);
-}
-
-function requestHash(value) {
-  return crypto.createHash("sha256").update(stableJson(value)).digest("hex");
 }
 
 function operationIdFromPayload(payload) {
@@ -313,11 +310,14 @@ function respawnDelayMs(catalogs, respawnPolicyRef) {
   return Math.max(0, Math.round((min + max) / 2));
 }
 
+const WORLD_ENTITY_ACTIONS = new Set(["attack", "gather", "pickup", "reset_demo", "reset"]);
+
 export class Node03RuntimeService {
   constructor(db, repository, mmoService) {
     this.db = db;
     this.repository = repository;
     this.mmoService = mmoService;
+    this.actionCooldowns = new ActionCooldowns();
   }
 
   getRequestContext(req) {
@@ -407,15 +407,24 @@ export class Node03RuntimeService {
     const ctx = this.getRequestContext(req);
     const action = safeString(payload.action, "").toLowerCase();
     const operationId = operationIdFromPayload(payload) || randomId("node03_operation");
-    const hash = requestHash({ action, targetId: payload.targetId || null });
+    const hash = normalizedActionPayloadHash(action, payload);
+    if (["reset_demo", "reset", "debug_inventory_add", "inventory_add", "debug_inventory_remove", "inventory_remove", "debug_inventory_cleanup", "inventory_cleanup", "debug_level_reset", "level_reset", "debug_currency_add", "currency_add", "debug_currency_remove", "currency_remove"].includes(action)) {
+      assertDeveloperActionAllowed(ctx);
+    }
     const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
     if (existing) {
+      assertIdempotencyMatch(existing, hash);
       if (existing.status === "completed") {
         return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
       }
       const error = new Error("Deze NODE-03 actie is al in verwerking.");
       error.status = 409;
       throw error;
+    }
+    if (action === "attack" || action === "gather") {
+      const defaultCooldown = action === "attack" ? 250 : 500;
+      const configured = Number(process.env[action === "attack" ? "GAME_ATTACK_COOLDOWN_MS" : "GAME_GATHER_COOLDOWN_MS"] || defaultCooldown);
+      this.actionCooldowns.consume(ctx.profile.id + ":" + action, configured);
     }
 
     this.db.exec("BEGIN IMMEDIATE");
@@ -436,6 +445,7 @@ export class Node03RuntimeService {
         WHERE operation_id = ?
       `).run(stableJson(response), now(), operationId);
       this.db.exec("COMMIT");
+      if (WORLD_ENTITY_ACTIONS.has(action)) this.notifyEntitiesChanged(ctx, payload.targetId, action);
       return response;
     } catch (error) {
       try {
@@ -448,6 +458,21 @@ export class Node03RuntimeService {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  // Laat andere spelers direct weten dat een gedeeld object veranderde (verzameld, opgepakt, geraakt), zodat
+  // het bij hen meteen verdwijnt in plaats van pas bij de volgende poll (2,5 s).
+  notifyEntitiesChanged(ctx, targetId, action) {
+    try {
+      if (!this.mmoService || typeof this.mmoService.broadcastToWorld !== "function") return;
+      this.mmoService.broadcastToWorld(ctx.worldId, {
+        type: "node03:entities_changed",
+        worldId: ctx.worldId,
+        zoneId: node03InstanceZoneId(targetId) || ctx.zoneId || null,
+        targetId: safeString(targetId, "") || null,
+        action: action
+      });
+    } catch {}
   }
 
   ensurePlayerRuntime(ctx) {
@@ -1708,6 +1733,7 @@ export class Node03RuntimeService {
     return {
       ok: true,
       schemaVersion: "node03-runtime-v1",
+      debugActionsAllowed: developerActionsAllowed(ctx),
       worldId: ctx.worldId,
       zoneId: ctx.zoneId,
       zoneName: ctx.zonePackage?.zone?.displayName || ctx.zoneId,

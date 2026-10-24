@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { buildWalkabilityIndex, resolveMovement } from "../../apps/web/public/shared/world-runtime.js";
+import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/world-runtime.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 
 const HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_WS_HEARTBEAT_INTERVAL_MS || 15000));
@@ -12,6 +12,16 @@ const PERSIST_MAX_INTERVAL_MS = Math.max(1000, Number(process.env.GAME_POSITION_
 const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_PER_SECOND || 120));
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
+const POINTER_STALL_MIN_STEP = 0.01;
+// Padvolgen: de client stuurt bij elke beweging zijn positie als tussenpunt; de server loopt die punten af
+// (normale snelheid, met botsingen) in plaats van alleen de richting of het eindpunt te volgen.
+const PATH_POINT_REACHED = 0.05;
+const PATH_POINT_MIN_SPACING = 0.1;
+const PATH_STALL_TICKS = 3;
+const PATH_POINT_SKIP_RADIUS = 0.6;
+const PATH_QUEUE_MAX = 400;
+const DIRECTION_INPUT_TIMEOUT_MS = Math.max(200, Number(process.env.GAME_DIRECTION_INPUT_TIMEOUT_MS || 750));
+const POINTER_STALL_STOP_TICKS = 6;
 const WORLD_SNAPSHOT_HZ = Math.max(1, Number(process.env.GAME_WORLD_SNAPSHOT_HZ || 20));
 const HEALTH_STAT_ID = "stat.health";
 const DEFEATED_INPUT_CACHE_MS = 500;
@@ -455,31 +465,35 @@ function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
   return worldContext.crossZoneWalkabilityIndex;
 }
 
-// Keep the authoritative simulation on the same collision set as the browser.
-// Static model entities are registered as circular `activeSolids` by the world
-// runtime, but the server previously passed no solids to resolveMovement. That
-// let the server walk straight through tents, signs and other solid props while
-// the local player remained blocked against them. On key-up the next snapshot
-// could consequently move the player hundreds of units away.
-export function solidCollisionEntriesForWorld(world) {
-  const entries = [];
-  for (const entity of Array.isArray(world?.entities) ? world.entities : []) {
-    if (!entity || entity.solid !== true || entity.walkable === true) continue;
-    const position = entity.transform?.position || {};
-    const x = Number(position.x);
-    const z = Number(position.z);
-    const radius = Number(entity.collisionRadius);
-    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius <= 0) continue;
-    entries.push({
-      id: String(entity.id || entity.entityId || entity.nodeId || "entity") + "::solid",
-      entityId: entity.id || entity.entityId || entity.nodeId || null,
-      x: x,
-      z: z,
-      radius: radius,
-      enabled: true
+// De obstakellijst (solids) komt uit de gedeelde runtime: client-voorspelling en server gebruiken zo exact
+// dezelfde functie en dezelfde lijst (zie world-runtime.js).
+export { solidCollisionEntriesForWorld };
+
+export function portalArrivalPointFor(worldContext, target) {
+  const model = target.model || {};
+  const center = { x: num(model.x, 0), y: num(model.y, 0), z: num(model.z, 0) };
+  const portalRadius = Math.max(0, num(model.collisionRadius, 0));
+  const playerRadius = Math.max(0.05, num(worldContext.world?.player?.collisionRadius, 0.5));
+  const facing = num(model.facing ?? model.rotationY, 0);
+  if (portalRadius <= 0) return Object.assign({}, center, { facing });
+  const spawn = defaultSpawnForZone(target.zonePackage);
+  let angle = Math.atan2(num(spawn?.x, center.x) - center.x, num(spawn?.z, center.z) - center.z);
+  if (!spawn || Math.hypot(num(spawn.x, center.x) - center.x, num(spawn.z, center.z) - center.z) < 0.5) angle = facing * Math.PI / 180;
+  // Buiten het bereik van de terugportal: een klik naast je karakter mag je niet direct terugsturen.
+  const portalRange = Math.max(0, num(target.portal?.range, 1));
+  const distance = portalRadius + playerRadius + Math.max(2.5, portalRange + 1);
+  const solids = Array.isArray(worldContext.solidColliders) ? worldContext.solidColliders : [];
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const tryAngle = angle + (attempt % 2 === 0 ? 1 : -1) * Math.ceil(attempt / 2) * (Math.PI / 4);
+    const candidate = { x: center.x + Math.sin(tryAngle) * distance, y: center.y, z: center.z + Math.cos(tryAngle) * distance };
+    const blocked = solids.some(function (solid) {
+      if (!solid || solid.enabled === false) return false;
+      if (Math.hypot(num(solid.x, 0) - center.x, num(solid.z, 0) - center.z) < 0.01) return false;
+      return Math.hypot(num(solid.x, 0) - candidate.x, num(solid.z, 0) - candidate.z) < num(solid.radius, 0) + playerRadius;
     });
+    if (!blocked) return Object.assign(candidate, { facing: tryAngle * 180 / Math.PI });
   }
-  return entries;
+  return Object.assign({ x: center.x + Math.sin(angle) * distance, y: center.y, z: center.z + Math.cos(angle) * distance }, { facing: angle * 180 / Math.PI });
 }
 
 function defaultSpawnForZone(zonePackage) {
@@ -570,13 +584,11 @@ function publicPlayer(profile) {
   };
 }
 
-function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId) {
+export function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId) {
   if (!profile || !position) return null;
   return {
     playerId: profile.id,
-    userId: profile.user_id,
     displayName: profile.display_name,
-    selectedCharacterId: profile.selected_character_id || null,
     position: {
       x: round(position.x),
       y: round(position.y),
@@ -595,9 +607,7 @@ function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, wo
     serverSentAtMs: position.server_sent_at_ms || position.serverSentAtMs || null,
     serverTimeMs: position.server_time_ms || position.serverTimeMs || null,
     serverSeq: Number(position.server_seq || position.serverSeq || 0) || 0,
-    clientSentAt: position.client_sent_at || position.clientSentAt || null,
     lastProcessedInputSeq: Number(position.last_processed_input_seq || position.lastProcessedInputSeq || position.client_input_seq || position.clientInputSeq || 0) || 0,
-    activeControllerSessionId: position.active_controller_session_id || position.activeControllerSessionId || null,
     controllerEpoch: Number(position.controller_epoch || position.controllerEpoch || 0) || 0,
     teleport: position.teleport === true
   };
@@ -613,7 +623,6 @@ function publicRemotePlayerLeft(profile, worldId) {
   if (!profile) return null;
   return {
     playerId: profile.id,
-    userId: profile.user_id,
     worldId: worldId || profile.current_world_id || null,
     connectedSessionCount: 0,
     isSelfAccount: false
@@ -649,11 +658,9 @@ function publicPosition(position, session, worldId) {
   };
 }
 
-function publicRemoteStateChange(position, session, worldId, sourceDeviceOverride = null) {
-  const sourceDevice = sourceDeviceOverride || session?.device_label || null;
+export function publicRemoteStateChange(position, session, worldId) {
   return {
     playerId: position.player_id,
-    userId: session?.user_id || null,
     worldId: position.world_id || worldId,
     zoneId: position.current_zone_id || null,
     position: {
@@ -666,15 +673,11 @@ function publicRemoteStateChange(position, session, worldId, sourceDeviceOverrid
     updatedAt: position.updated_at,
     animationState: normalizeAnimationState(position.animation_state) || "idle",
     moving: position.moving === true,
-    sourceSessionId: position.last_update_source_session_id || null,
-    sourceDevice: sourceDevice,
-    clientSentAt: position.client_sent_at || position.clientSentAt || null,
     serverReceivedAt: position.server_received_at || position.serverReceivedAt || null,
     serverSentAtMs: position.server_sent_at_ms || position.serverSentAtMs || null,
     serverTimeMs: position.server_time_ms || position.serverTimeMs || null,
     serverSeq: Number(position.server_seq || position.serverSeq || 0) || 0,
     lastProcessedInputSeq: Number(position.last_processed_input_seq || position.client_input_seq || 0) || 0,
-    activeControllerSessionId: position.active_controller_session_id || null,
     controllerEpoch: Number(position.controller_epoch || 0) || 0,
     teleport: position.teleport === true
   };
@@ -702,6 +705,8 @@ function extractInputState(payload) {
   const pointerTarget = normalizePointerTarget(inputRaw.pointerTarget ?? inputRaw.pointer_target ?? null);
   const sprint = inputRaw.sprint === true || inputRaw.run === true;
   const stop = inputRaw.stop === true;
+  const settle = inputRaw.settle === true && Boolean(pointerTarget);
+  const pathPoint = normalizePointerTarget(inputRaw.pathPoint ?? inputRaw.path_point ?? null);
   const clientPredictedPosition = normalizeClientPredictedPosition(
     raw.clientPredictedPosition
       ?? raw.client_predicted_position
@@ -715,7 +720,9 @@ function extractInputState(payload) {
       moveZ: moveZ,
       sprint: sprint,
       pointerTarget: pointerTarget,
-      stop: stop
+      stop: stop,
+      settle: settle,
+      pathPoint: pathPoint
     },
     sourceDevice: typeof raw.sourceDevice === "string" && raw.sourceDevice.trim() ? raw.sourceDevice.trim().slice(0, 120) : null,
     teleport: raw.teleport === true,
@@ -725,6 +732,20 @@ function extractInputState(payload) {
     controllerEpoch: controllerEpoch,
     clientPredictedPosition: clientPredictedPosition
   };
+}
+
+export function assertClientMovementIntent(payload) {
+  const raw = payload && typeof payload === "object" ? payload : {};
+  const forbidden = raw.teleport === true
+    || (raw.position && typeof raw.position === "object")
+    || (raw.absolute && typeof raw.absolute === "object")
+    || (raw.clientPredictedPosition && typeof raw.clientPredictedPosition === "object")
+    || (raw.client_predicted_position && typeof raw.client_predicted_position === "object");
+  if (!forbidden) return true;
+  const error = new Error("Absolute positie of teleport is geen geldige clientintentie.");
+  error.status = 400;
+  error.code = "INPUT_REJECTED";
+  throw error;
 }
 
 function buildClientIntentId(clientSessionId, clientInputSeq) {
@@ -754,6 +775,12 @@ export class MmoService {
     this.persistTimers = new Map();
     this.lastPersistAtMsByKey = new Map();
     this.latestInputByPlayerId = new Map();
+    // Ticks zonder voortgang naar een looppunt (tegen een obstakel): daarna stopt de server zelf.
+    this.pointerStallTicksByPlayerId = new Map();
+    // Per speler de rij tussenpunten van de route die de client liep (zie updatePathQueue).
+    this.pathQueueByPlayerId = new Map();
+    // Ticktijden, zichtbaar voor de speler via /api/game/player (serverPerf).
+    this.tickPerf = { loops: 0, ticks: 0, maxLoopMs: 0, avgLoopMs: 0, maxLateMs: 0, resets: 0, lostMs: 0, since: Date.now() };
     this.playerDefeatStateByPlayerId = new Map();
     this.dirtyPlayerIdsByWorldId = new Map();
     this.lastWorldSnapshotAtMsByWorldId = new Map();
@@ -847,6 +874,7 @@ export class MmoService {
     this.stopWorldTickLoop();
     const currentAt = nowMs();
     const tickMs = this.currentWorldTickMs();
+    const lateMs = Number.isFinite(this.worldTickNextAtMs) && this.worldTickNextAtMs > 0 ? Math.max(0, currentAt - this.worldTickNextAtMs) : 0;
     if (!Number.isFinite(this.worldTickNextAtMs) || this.worldTickNextAtMs <= 0) {
       this.worldTickNextAtMs = currentAt + tickMs;
     }
@@ -863,7 +891,17 @@ export class MmoService {
       // FIX: als de server meer dan 1s achterloopt (event loop was geblokkeerd),
       // niet eindeloos inhalen maar de klok resetten. Anders verschuift de
       // simulatie t.o.v. de echte tijd en lopen remote spelers steeds verder achter.
+      this.tickPerf.resets += 1;
+      this.tickPerf.lostMs += Math.max(0, nowMs() - this.worldTickNextAtMs);
       this.worldTickNextAtMs = nowMs() + tickMs;
+    }
+    if (processedTicks > 0) {
+      const loopMs = nowMs() - currentAt;
+      this.tickPerf.loops += 1;
+      this.tickPerf.ticks += processedTicks;
+      this.tickPerf.maxLoopMs = Math.max(this.tickPerf.maxLoopMs, loopMs);
+      this.tickPerf.avgLoopMs = this.tickPerf.avgLoopMs > 0 ? this.tickPerf.avgLoopMs * 0.95 + loopMs * 0.05 : loopMs;
+      this.tickPerf.maxLateMs = Math.max(this.tickPerf.maxLateMs, lateMs);
     }
     const delayMs = Math.max(0, this.worldTickNextAtMs - nowMs());
     this.worldTickTimer = setTimeout(() => this.runWorldTickLoop(), delayMs);
@@ -1339,6 +1377,20 @@ export class MmoService {
     };
   }
 
+  serverPerfSnapshot() {
+    const perf = this.tickPerf || {};
+    return {
+      tickMs: this.currentWorldTickMs(),
+      ticks: perf.ticks || 0,
+      avgLoopMs: Math.round((perf.avgLoopMs || 0) * 10) / 10,
+      maxLoopMs: Math.round(perf.maxLoopMs || 0),
+      maxLateMs: Math.round(perf.maxLateMs || 0),
+      resets: perf.resets || 0,
+      lostMs: Math.round(perf.lostMs || 0),
+      sinceMs: Date.now() - (perf.since || Date.now())
+    };
+  }
+
   getPlayerSnapshot(req, options = {}) {
     const sessionContext = this.getSessionContextFromRequest(req);
     this.authService.touchSession(sessionContext.session.id, false);
@@ -1350,6 +1402,7 @@ export class MmoService {
     const connectedSessionCount = this.countConnectedSessions(sessionContext.user.id);
     return {
       ok: true,
+      csrfToken: this.authService.csrfTokenForSessionId(sessionContext.session.id),
       user: this.authService.publicUser(sessionContext.user),
       session: publicSession(sessionContext.session),
       activeSessionCount: activeSessionCount,
@@ -1360,7 +1413,8 @@ export class MmoService {
       gameWorld: gameWorld,
       worldId: worldContext.worldId,
       worldPublishedAt: worldContext.publishedAt,
-      createdProfile: Boolean(options.createdProfile)
+      createdProfile: Boolean(options.createdProfile),
+      serverPerf: this.serverPerfSnapshot()
     };
   }
 
@@ -1738,15 +1792,18 @@ export class MmoService {
       inputSeq: normalizeInputSeq(intent.inputSeq),
       controllerEpoch: normalizeControllerEpoch(intent.controllerEpoch),
       clientSentAt: intent.clientSentAt || null,
-      sourceDevice: intent.sourceDevice || connection.sourceDevice || connection.session?.device_label || null,
-      teleport: intent.teleport === true,
-      clientPredictedPosition: intent.clientPredictedPosition || null,
+      sourceDevice: connection.session?.device_label || null,
+      teleport: false,
       input: {
         moveX: clamp(num(rawInput.moveX, 0), -1, 1),
         moveZ: clamp(num(rawInput.moveZ, 0), -1, 1),
         sprint: rawInput.sprint === true,
         pointerTarget: normalizePointerTarget(rawInput.pointerTarget || null),
-        stop: rawInput.stop === true
+        stop: rawInput.stop === true,
+        // "Loop naar dit punt en stop" (de client stopte daar). Telt voor de besturing als stop: alleen het
+        // actieve apparaat mag het uitvoeren, een ander apparaat neemt er nooit de besturing mee over.
+        settle: rawInput.settle === true && Boolean(normalizePointerTarget(rawInput.pointerTarget || null)),
+        pathPoint: normalizePointerTarget(rawInput.pathPoint || null)
       }
     };
   }
@@ -1779,8 +1836,50 @@ export class MmoService {
     return defeated;
   }
 
+  // Zet het tussenpunt van een geaccepteerde input in de rij. Een stop maakt de rij leeg; een stoppunt
+  // (settle) is het laatste punt, waarna de server stilstaat zodra de rij leeg is.
+  updatePathQueue(playerId, input = {}) {
+    const key = String(playerId || "");
+    if (!key) return;
+    let queue = this.pathQueueByPlayerId.get(key) || null;
+    if (input.stop === true) {
+      if (queue) this.clearPathQueue(key);
+      return;
+    }
+    const point = normalizePointerTarget(input.pathPoint || null);
+    const settlePoint = input.settle === true ? normalizePointerTarget(input.pointerTarget || null) : null;
+    if (!point && !settlePoint) {
+      if (queue) queue.active = false;
+      return;
+    }
+    if (!queue) {
+      queue = { points: [], active: false, stalls: 0 };
+      this.pathQueueByPlayerId.set(key, queue);
+    }
+    const push = function (next) {
+      const last = queue.points[queue.points.length - 1];
+      if (last && Math.hypot(last.x - next.x, last.z - next.z) < PATH_POINT_MIN_SPACING) {
+        last.x = next.x;
+        last.z = next.z;
+        return;
+      }
+      queue.points.push({ x: next.x, z: next.z });
+    };
+    if (point) push(point);
+    if (settlePoint) push(settlePoint);
+    queue.active = !settlePoint;
+    if (queue.points.length > PATH_QUEUE_MAX) queue.points.splice(0, queue.points.length - PATH_QUEUE_MAX);
+  }
+
+  clearPathQueue(playerId) {
+    const key = String(playerId || "");
+    if (!key) return;
+    this.pathQueueByPlayerId.delete(key);
+  }
+
   writeStoppedLatestInput(playerId, worldId, inputState = {}, options = {}) {
     if (!playerId || !worldId) return;
+    this.clearPathQueue(playerId);
     this.latestInputByPlayerId.set(playerId, {
       playerId: playerId,
       worldId: worldId,
@@ -2022,6 +2121,7 @@ export class MmoService {
       teleport: true
     });
     this.playerStateCache.set(cacheKey, nextState);
+    this.clearPathQueue(profile.id);
     this.updatePrimaryPresenceFromState(nextState, connection);
     this.markPlayerDirty(worldId, profile.id);
     this.schedulePersist(nextState, connection);
@@ -2075,6 +2175,13 @@ export class MmoService {
       return candidate && candidate.spawnId === spawnId;
     }) || null;
     return spawn ? { zonePackage, spawn } : null;
+  }
+
+  // Aankomen in het middelpunt van een (solid) doelportal zette de speler ín het botsobject; client en server
+  // duwden hem er daarna elk anders uit. Kom daarom vlak naast de portal uit, richting het startpunt van de zone,
+  // op een plek die niet in een ander obstakel valt.
+  portalArrivalPoint(worldContext, target) {
+    return portalArrivalPointFor(worldContext, target);
   }
 
   findZonePortal(world, zoneId, portalRef) {
@@ -2152,7 +2259,9 @@ export class MmoService {
       error.status = 400;
       throw error;
     }
-    const arrival = target.model || target.spawn;
+    const arrival = target.model
+      ? this.portalArrivalPoint(worldContext, target)
+      : target.spawn;
     const arrivalRef = link.toPortalRef || link.toSpawnRef;
     const connection = { user: sessionContext.user, session: sessionContext.session, player: profile, worldId: worldContext.worldId };
     const nextState = this.applyTeleportState(connection, {
@@ -2213,24 +2322,102 @@ export class MmoService {
       directionZ /= magnitude;
     }
     const speed = baseSpeed * (input?.sprint === true ? sprintMultiplier : 1);
-    const desired = {
-      x: currentPosition.x + (directionX * speed * dtSeconds),
-      y: currentPosition.y,
-      z: currentPosition.z + (directionZ * speed * dtSeconds)
-    };
-    const movementIndex = movementIndexForPlayerInput(worldContext, state, pointerTarget);
-    const resolved = moving
-      ? resolveMovement(currentPosition, desired, {
-        radius: radius,
-        index: movementIndex,
-        solids: Array.isArray(worldContext?.solidColliders) ? worldContext.solidColliders : []
-      })
-      : currentPosition;
+    const solids = Array.isArray(worldContext?.solidColliders) ? worldContext.solidColliders : [];
+    const pathQueue = this.pathQueueByPlayerId ? this.pathQueueByPlayerId.get(String(state.player_id || "")) || null : null;
+    const pathMode = Boolean(pathQueue && (pathQueue.points.length > 0 || pathQueue.active));
+    let resolved;
+    if (pathMode) {
+      // Padvolgen: loop de tussenpunten van de client af, zonder bochten af te snijden. Per tick hooguit
+      // de normale loopafstand; botsingen gelden gewoon. Een punt dat 6 ticks onbereikbaar is, wordt overgeslagen.
+      const points = pathQueue.points;
+      let remaining = speed * dtSeconds;
+      let position = { x: currentPosition.x, y: currentPosition.y, z: currentPosition.z };
+      let blocked = false;
+      let guard = 0;
+      directionX = 0;
+      directionZ = 0;
+      while (remaining > 0.000001 && points.length && guard < 64) {
+        guard += 1;
+        const target = points[0];
+        const toX = target.x - position.x;
+        const toZ = target.z - position.z;
+        const toDistance = Math.hypot(toX, toZ);
+        if (toDistance <= PATH_POINT_REACHED) {
+          points.shift();
+          continue;
+        }
+        const step = Math.min(toDistance, remaining);
+        const desiredStep = { x: position.x + (toX / toDistance) * step, y: position.y, z: position.z + (toZ / toDistance) * step };
+        const stepResult = resolveMovement(position, desiredStep, {
+          radius: radius,
+          index: movementIndexForPlayerInput(worldContext, state, target),
+          solids: solids
+        });
+        const moved = Math.hypot(stepResult.x - position.x, stepResult.z - position.z);
+        directionX = toX / toDistance;
+        directionZ = toZ / toDistance;
+        position = { x: stepResult.x, y: stepResult.y, z: stepResult.z };
+        remaining -= step;
+        if (moved < step * 0.1) {
+          // Vast. Ligt het punt binnen botsingsafstand (de client gleed er net iets anders langs), sla het
+          // dan meteen over en loop door; anders na een paar ticks. Zo bouwt glijden langs bomen geen achterstand op.
+          if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_SKIP_RADIUS) {
+            points.shift();
+            continue;
+          }
+          blocked = true;
+          break;
+        }
+        if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_REACHED) points.shift();
+      }
+      if (blocked) {
+        pathQueue.stalls = (Number(pathQueue.stalls) || 0) + 1;
+        if (pathQueue.stalls >= PATH_STALL_TICKS) {
+          points.shift();
+          pathQueue.stalls = 0;
+        }
+      } else {
+        pathQueue.stalls = 0;
+      }
+      resolved = position;
+      moving = points.length > 0 || (pathQueue.active === true && input.stop !== true);
+      if (!points.length && pathQueue.active !== true) this.clearPathQueue(state.player_id);
+    } else {
+      const desired = {
+        x: currentPosition.x + (directionX * speed * dtSeconds),
+        y: currentPosition.y,
+        z: currentPosition.z + (directionZ * speed * dtSeconds)
+      };
+      const movementIndex = movementIndexForPlayerInput(worldContext, state, pointerTarget);
+      resolved = moving
+        ? resolveMovement(currentPosition, desired, {
+          radius: radius,
+          index: movementIndex,
+          solids: solids
+        })
+        : currentPosition;
+    }
     const deltaX = resolved.x - currentPosition.x;
     const deltaZ = resolved.z - currentPosition.z;
     const velocityX = dtSeconds > 0 ? deltaX / dtSeconds : 0;
     const velocityZ = dtSeconds > 0 ? deltaZ / dtSeconds : 0;
     const distance = Math.hypot(deltaX, deltaZ);
+    // Loopt de speler naar een punt dat hij niet kan bereiken (obstakel), dan stopt de server zelf na een
+    // paar ticks zonder voortgang. De client hoeft daardoor geen stop op tijd te gokken.
+    const stallKey = String(state.player_id || "");
+    let pointerStalled = false;
+    if (!pathMode && pointerTarget && moving) {
+      const stalls = distance < POINTER_STALL_MIN_STEP ? (this.pointerStallTicksByPlayerId.get(stallKey) || 0) + 1 : 0;
+      if (stalls >= POINTER_STALL_STOP_TICKS) {
+        pointerStalled = true;
+        moving = false;
+        this.pointerStallTicksByPlayerId.delete(stallKey);
+      } else {
+        this.pointerStallTicksByPlayerId.set(stallKey, stalls);
+      }
+    } else if (this.pointerStallTicksByPlayerId.has(stallKey)) {
+      this.pointerStallTicksByPlayerId.delete(stallKey);
+    }
     const nextRotation = moving && Math.hypot(directionX, directionZ) > 0.0001
       ? Math.atan2(directionX, directionZ) * 180 / Math.PI
       : state.rotation_y;
@@ -2255,6 +2442,7 @@ export class MmoService {
       server_received_at: tickInfo.serverReceivedAt || state.server_received_at || null,
       last_input_received_at_ms: state.last_input_received_at_ms || 0
     });
+    if (pointerStalled) this.writeStoppedLatestInput(state.player_id, state.world_id, inputState || {});
     const nextZonePackage = zonePackageForPosition(worldContext.world, nextState, state.current_zone_id || activeZoneIdForWorld(worldContext.world));
     if (nextZonePackage?.zoneId && nextZonePackage.zoneId !== state.current_zone_id) {
       nextState.current_zone_id = nextZonePackage.zoneId;
@@ -2267,6 +2455,7 @@ export class MmoService {
 
   applyInputState(connection, payload, transport = "ws") {
     if (!connection || !connection.player || !connection.worldId) return null;
+    assertClientMovementIntent(payload);
     const worldContext = this.getPublishedWorldContext();
     // FIX: geen ensurePlayerProfile (DB SELECT) meer op elk input-bericht.
     const profile = this.resolveConnectionProfile(connection, worldContext);
@@ -2291,7 +2480,7 @@ export class MmoService {
     connection.sourceDevice = inputState.sourceDevice || connection.sourceDevice || connection.session?.device_label || null;
     const lastAcceptedSeq = Number(this.lastInputSeqByClientSessionId.get(clientSessionId) || 0);
     const isCurrentController = currentControllerSessionId && currentControllerSessionId === connection.session.id;
-    const hasActiveInput = Boolean(!input.stop && (Math.hypot(num(input.moveX, 0), num(input.moveZ, 0)) > 0.0001 || Boolean(input.pointerTarget)));
+    const hasActiveInput = Boolean(!input.stop && !input.settle && (Math.hypot(num(input.moveX, 0), num(input.moveZ, 0)) > 0.0001 || Boolean(input.pointerTarget)));
     const inputEpoch = normalizeControllerEpoch(inputState.controllerEpoch || 0);
     const wantsTakeover = Boolean(hasActiveInput && (!currentControllerSessionId || currentControllerSessionId !== connection.session.id));
     const takeoverByDifferentSession = Boolean(wantsTakeover && currentControllerSessionId && currentControllerSessionId !== connection.session.id);
@@ -2359,63 +2548,6 @@ export class MmoService {
       transport: transport
     });
 
-    const stopPredicted = input.stop === true ? inputState.clientPredictedPosition : null;
-    const stopResyncAllowedForController = Boolean(isCurrentController || !currentControllerSessionId || currentControllerSessionId === connection.session.id);
-    if (!inputState.teleport && stopPredicted && stopResyncAllowedForController) {
-      const network = mmoNetworkSettingsForWorldContext(worldContext);
-      const fallbackStopResyncMaxUnits = Math.max(0, num(network.ownHardCorrectionThreshold, 10) * 4 || 40);
-      const stopResyncMaxUnits = clamp(num(network.ownStopResyncMaxUnits, fallbackStopResyncMaxUnits), 0, 200);
-      const drift = Math.hypot(stopPredicted.x - num(current.x, 0), stopPredicted.z - num(current.z, 0));
-      if (stopResyncMaxUnits > 0 && Number.isFinite(drift) && drift <= stopResyncMaxUnits) {
-        nextState.x = round(stopPredicted.x);
-        nextState.y = stopPredicted.y !== null ? round(stopPredicted.y) : nextState.y;
-        nextState.z = round(stopPredicted.z);
-        if (stopPredicted.rotationY !== null) nextState.rotation_y = round(stopPredicted.rotationY);
-        nextState.velocity_x = 0;
-        nextState.velocity_z = 0;
-        nextState.moving = false;
-        nextState.animation_state = "idle";
-        nextState.revision = (Number(current.revision) || 0) + 1;
-        nextState.updated_at = now();
-        nextState.updated_at_ms = receivedAtMs;
-        nextState.stop_resynced = true;
-      }
-    }
-
-    if (inputState.teleport === true) {
-      const teleported = this.applyTeleportState(connection, payload, { transport: transport });
-      teleported.server_received_at = receivedAtMs;
-      teleported.transport = transport;
-      this.lastInputSeqByClientSessionId.set(clientSessionId, inputSeq || lastAcceptedSeq);
-      this.lastControllerEpochByClientSessionId.set(clientSessionId, nextControllerEpoch);
-      this.lastControllerByUserId.set(connection.user.id, {
-        sessionId: teleported.active_controller_session_id || null,
-        clientSessionId: clientSessionId,
-        controllerEpoch: nextControllerEpoch,
-        lastInputAt: receivedAtMs
-      });
-      this.latestInputByPlayerId.set(profile.id, {
-        playerId: profile.id,
-        worldId: worldId,
-        clientSessionId: clientSessionId,
-        inputSeq: inputSeq,
-        controllerEpoch: nextControllerEpoch,
-        input: {
-          moveX: 0,
-          moveZ: 0,
-          sprint: false,
-          pointerTarget: null,
-          stop: true
-        },
-        clientSentAt: inputState.clientSentAt || null,
-        sourceDevice: inputState.sourceDevice || null,
-        receivedAtMs: receivedAtMs,
-        activeControllerSessionId: teleported.active_controller_session_id || connection.session.id,
-        teleport: true
-      });
-      return teleported;
-    }
-
     if (inputSeq > 0) {
       this.lastInputSeqByClientSessionId.set(clientSessionId, inputSeq);
     }
@@ -2432,6 +2564,9 @@ export class MmoService {
     if (nextState.stop_resynced === true) {
       this.schedulePersist(nextState, connection);
     }
+    // Neemt een ander apparaat van dit account de besturing over, dan geldt de route van het vorige niet meer.
+    if (takeoverByDifferentSession) this.clearPathQueue(profile.id);
+    this.updatePathQueue(profile.id, input);
     this.latestInputByPlayerId.set(profile.id, {
       playerId: profile.id,
       worldId: worldId,
@@ -2501,7 +2636,14 @@ export class MmoService {
         // Bij disconnect stopt closeConnection de beweging al netjes.
         const lastInputAtMs = Number(state.last_input_received_at_ms || 0) || 0;
         const holdExpired = INPUT_HOLD_MS > 0 && lastInputAtMs > 0 && (nowMsValue - lastInputAtMs) > INPUT_HOLD_MS;
-        const staleInput = !inputState || !liveConnection || holdExpired;
+        // Dodemansknop voor lopen op richting (toets of muis ingedrukt): de client stuurt dan elke ~33 ms input.
+        // Blijft dat uit (client hapert, bijv. tijdens een wereld-herbouw), dan niet blind doorlopen: de server
+        // liep zo tot 18 eenheden voor en de client sprong daarna. Looppunten (klik/stoppunt) lopen wel door.
+        const directionInput = inputState?.input && inputState.input.stop !== true && !inputState.input.pointerTarget
+          && Math.hypot(num(inputState.input.moveX, 0), num(inputState.input.moveZ, 0)) > 0.0001;
+        const directionExpired = Boolean(directionInput)
+          && (nowMsValue - (Number(inputState.receivedAtMs || 0) || lastInputAtMs)) > DIRECTION_INPUT_TIMEOUT_MS;
+        const staleInput = !inputState || !liveConnection || holdExpired || directionExpired;
         const currentInput = staleInput ? {
           playerId: playerId,
           worldId: worldId,
@@ -2867,28 +3009,7 @@ export class MmoService {
 
   applyPositionIntent(connection, payload, transport = "ws") {
     const raw = payload && typeof payload === "object" ? payload : {};
-    const positionLike = raw.position && typeof raw.position === "object" ? raw.position : raw.absolute && typeof raw.absolute === "object" ? raw.absolute : null;
-    if (raw.teleport === true || positionLike) {
-      const teleportPayload = {
-        clientSessionId: raw.clientSessionId || raw.client_session_id || connection.session?.id || connection.id || null,
-        inputSeq: raw.clientInputSeq || raw.inputSeq || raw.client_input_seq || 0,
-        controllerEpoch: raw.controllerEpoch || raw.controller_epoch || 0,
-        clientSentAt: raw.clientSentAt || raw.client_sent_at || null,
-        clientIntentId: raw.clientIntentId || raw.client_intent_id || null,
-        sourceDevice: raw.sourceDevice || raw.source_device || connection.sourceDevice || connection.session?.device_label || null,
-        teleport: true,
-        input: {
-          moveX: 0,
-          moveZ: 0,
-          sprint: false,
-          pointerTarget: null,
-          stop: true
-        }
-      };
-      return this.applyTeleportState(connection, Object.assign({}, teleportPayload, {
-        position: positionLike || raw.position || raw.absolute || raw
-      }), { transport: transport });
-    }
+    assertClientMovementIntent(raw);
     const inputPayload = {
       clientSessionId: raw.clientSessionId || raw.client_session_id || connection.session?.id || connection.id || null,
       inputSeq: raw.clientInputSeq || raw.inputSeq || raw.client_input_seq || 0,
@@ -3143,6 +3264,7 @@ export class MmoService {
     }
     return {
       ok: true,
+      csrfToken: this.authService.csrfTokenForSessionId(sessionContext.session.id),
       user: this.authService.publicUser(sessionContext.user),
       session: publicSession(sessionContext.session),
       activeSessionCount: this.authService.countActiveSessions(sessionContext.user.id),

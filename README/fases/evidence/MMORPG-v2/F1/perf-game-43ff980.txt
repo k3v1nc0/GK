@@ -1,0 +1,23 @@
+# perf:game — code-SHA 43ff980b3dbbc811edcab99f5f9a42331465053f — start 2026-10-24T08:41:02+02:00
+$ GK_TEST_ISOLATED=1 PERF_GAME_RESULT_FILE=README/fases/evidence/MMORPG-v2/F1/baseline-browser-43ff980.json npm run perf:game
+
+> gk-real-node-editor@2.0.0 perf:game
+> sh scripts/run-node24.sh scripts/perf-game.js
+
+[browser] Failed to load resource: the server responded with a status of 404 (Not Found)
+WARNING: browser gebruikt een software renderer tijdens baseline-current; stabiele shadow-check valt terug op no-shadow assertions.
+  ok - baseline-current-software-fallback: no-shadow snapshot heeft shadowSystem
+  ok - baseline-current-software-fallback: no-shadow preset is geen_schaduw
+  ok - baseline-current-software-fallback: no-shadow zet shadows uit
+  ok - baseline-current-software-fallback: renderer shadowMap is uit
+  ok - baseline-current-software-fallback: no-shadow mapSize is 0
+  ok - baseline-current-software-fallback: no-shadow cameraSize is 0
+  ok - baseline-current-software-fallback: no-shadow cameraFar is 0
+  ok - baseline-current-software-fallback: no-shadow heeft geen shadow resident chunks
+  ok - baseline-current-software-fallback: no-shadow heeft geen shadow casters
+  ok - baseline-current-software-fallback: no-shadow heeft geen shadow receivers
+  ok - baseline-current-software-fallback: no-shadow heeft geen helper casters
+  ok - baseline-current-software-fallback: no-shadow heeft geen proxy casters
+  ok - baseline-current-software-fallback: no-shadow heeft geen instanced casters
+WARNING: browser gebruikt een software renderer (ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) / Google Inc. (Google)). De metingen zijn niet representatief voor Kevins echte GPU.
+Perf-run wordt in deze omgeving als best-effort overgeslagen.

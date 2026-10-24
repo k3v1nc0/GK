@@ -1,7 +1,7 @@
 # NODE-02 — Zones, Areas, Entity Composition, Spawns, Checkpoints, Travel en Per-Zone Minimap
 
 **Documenttype:** uitvoeringscontract voor Codex  
-**Status:** implementeren nadat NODE-01 volledig is geaccepteerd  
+**Status:** gesloten — legacy (Oude basis), vervangen door MMORPG-basis v2; niet meer accepteren of verder bouwen  
 **Repository:** `k3v1nc0/GK`  
 **Baseline:** eind-HEAD van NODE-01  
 **Afhankelijkheden:** NODE-01 fundering, symbolindex, packages, registries en World Assembly  

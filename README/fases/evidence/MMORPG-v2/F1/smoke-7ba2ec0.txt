@@ -1,0 +1,985 @@
+# smoke — code-SHA 7ba2ec09ad1e15b27500b084186e33368194ec99 — start 2026-10-24T09:34:30+02:00
+
+> gk-real-node-editor@2.0.0 smoke
+> sh scripts/run-node24.sh scripts/smoke-test.js
+
+  ok - buildSurfaceStripGeometry: 2 punten geeft geometry
+  ok - 2-punt geometry heeft 4 vertices
+  ok - 2-punt geometry heeft uv attribute
+  ok - 2-punt geometry heeft 6 indices (2 triangles)
+  ok - buildSurfaceStripGeometry: 4 punten met bocht geeft geometry
+  ok - 4-punt geometry heeft 8 vertices
+  ok - 4-punt geometry heeft 18 indices (6 triangles)
+  ok - UV V loopt door langs het pad (laatste vertex V > 0)
+  ok - UV V begint bij 0 voor het eerste punt
+  ok - linker vertex heeft U=0
+  ok - rechter vertex heeft U=1
+  ok - lege puntenlijst geeft null
+  ok - één punt geeft null
+  ok - width=0 geeft null
+  ok - null options geeft null (geen crash)
+  ok - shadow policy defaults aan in de editor
+  ok - shadow policy default preset is middel_schaduw
+  ok - middel schaduw gebruikt 1024 mapSize
+  ok - middel schaduw gebruikt editor camera size 100
+  ok - middel schaduw gebruikt editor camera far 450
+  ok - middel schaduw gebruikt snapWorldUnits 10
+  ok - middel schaduw gebruikt resident margin 1
+  ok - game preset wordt uit shadow block gelezen
+  ok - lichte schaduw zet shadows aan
+  ok - lichte schaduw gebruikt 512 mapSize
+  ok - lichte schaduw gebruikt game camera size 70
+  ok - lichte schaduw gebruikt far 300
+  ok - lichte schaduw laat scatter shadows casten
+  ok - lichte schaduw zet static-prop shadows uit
+  ok - editor preset blijft los van game preset
+  ok - hoog schaduw gebruikt 2048 mapSize
+  ok - hoog schaduw gebruikt editor camera size 120
+  ok - editor shadows blijven aan met hoog_schaduw
+  ok - shadow preset blijft hoog in de editor policy
+  ok - hoog schaduw gebruikt 2048 mapSize
+  ok - shadow bias wordt gelezen
+  ok - shadow normal bias wordt gelezen
+  ok - shadow camera size wordt gelezen (expliciete override wint)
+  ok - shadow distance wordt gelezen (expliciete override wint)
+  ok - geen_schaduw schakelt editor shadows uit
+  ok - geen_schaduw rapporteert mapSize 0
+  ok - extreem schaduw gebruikt 4096 mapSize in de policy
+  ok - extreem schaduw gebruikt editor camera size 140
+  ok - editor shadow snap gebruikt 10 world units
+  ok - game shadow snap gebruikt 10 world units
+  ok - editor shadow radius is minstens game radius
+  ok - shadow focus snapt op de verwachte cel
+  ok - kleine camerabeweging verandert de shadow snap niet
+  ok - shadow focus verandert pas na de snap threshold
+  ok - camera orbit rond dezelfde target verandert de shadow focus niet
+  ok - game shadow snap blijft stabiel bij kleine spelerbeweging
+  ok - shadow resident bevat visible chunks
+  ok - shadow resident bevat preload chunks
+  ok - shadow resident bevat forward chunks
+  ok - shadow resident is een superset van render resident
+  ok - camera-child plane wordt gedetecteerd
+  ok - ghost plane verschijnt in suspiciousPlanes
+[ghost-plane] removed 1 suspicious object(s) during smoke-ghost-plane.
+  ok - ghost plane wordt verwijderd
+  ok - ghost plane is na cleanup niet meer suspicious
+  ok - cameraChildPlanes is na cleanup 0
+  ok - ghost plane is uit de camera subtree verwijderd
+  ok - debug overlay plane wordt als suspicious gezien als debug uit staat
+[ghost-plane] removed 1 suspicious object(s) during smoke-overlay-plane.
+  ok - debug overlay plane wordt verwijderd als debug uit staat
+  ok - overlay plane is verwijderd
+  ok - overlay plane cast/receive shadow is uit
+  ok - helper caster wordt vóór saneren geteld
+  ok - CircleGeometry helper caster wordt geteld
+  ok - helper shadow caster is gesaneerd
+  ok - helperCasterCount is na saneren 0
+  ok - circleOrPlaneCasterCount is na saneren 0
+  ok - helper mesh cast/receive shadow is uit
+  ok - scatter shadow proxy wordt geactiveerd
+  ok - scatter root is shadowProxy
+  ok - scatter shadow proxy schrijft geen kleur
+  ok - scatter shadow proxy cast nog steeds schaduw
+  ok - scatter shadow proxy ontvangt geen schaduw
+  ok - scatter shadow proxy gebruikt geen circle/plane geometry
+  ok - scatter shadow proxy wordt geteld als scatterShadowProxy
+  ok - scatter shadow proxy veroorzaakt geen circleOrPlaneCaster
+  ok - static prop shadow proxy wordt geactiveerd
+  ok - static prop shadow proxy schrijft geen kleur
+  ok - static prop shadow caster blijft beschikbaar
+  ok - static prop audit telt geen helper caster
+  ok - static prop audit telt geen circle/plane caster
+  ok - resolveWorldContentCenter gebruikt de ground center
+  ok - geselecteerd object bepaalt de editor shadow focus
+  ok - editor shadow focus volgt de geselecteerde world position
+  ok - editor shadow focus blijft stabiel als de camera orbit target verandert
+  ok - editor shadow jumpDetected blijft false
+  ok - editor shadow snap blijft stabiel
+  ok - resident streaming houdt de volgende chunk tijdig desired
+  ok - shadow resident blijft een superset van render resident
+  ok - save/reload bootstrap houdt preload chunk in shadow resident
+  ok - editor preset patch zet preset zichtbaar
+  ok - game preset patch zet preset zichtbaar
+  ok - shared worldId publiceert
+  ok - lege world_settings gebruikt geen legacy fallback
+  ok - editor default preset blijft middel_schaduw
+  ok - editor default debugChunkOverlayVisible blijft uit
+  ok - editor default debugWarningsVisible blijft aan
+  ok - editor shadow block gebruikt middel_schaduw
+  ok - editor default shadow mapSize blijft 1024
+  ok - editor default shadow cameraSize blijft 100
+  ok - editor default staticPropsCast blijft aan
+  ok - game default preset blijft middel_schaduw
+  ok - game default debugChunkOverlayVisible blijft uit
+  ok - game default debugWarningsVisible blijft uit
+  ok - game shadow block gebruikt middel_schaduw
+  ok - game default shadow mapSize is 512 (middel_schaduw sinds NODE-02)
+  ok - game default shadow cameraSize is 70 (middel_schaduw sinds NODE-02)
+  ok - game default staticPropsCast staat uit (middel_schaduw sinds NODE-02)
+  ok - legacy-only world meldt gebruik van de oude fallback
+  ok - legacy-only world meldt migratie van legacy shadow velden
+  ok - legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor editor
+  ok - legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor game
+  ok - legacy low quality valt terug naar 512 mapSize
+  ok - legacy editor shadowCameraSize volgt de lichte preset
+  ok - legacy editor shadowCameraFar 700 blijft als expliciete waarde behouden
+  ok - legacy game shadowCameraSize 90 blijft als expliciete waarde behouden
+  ok - legacy game shadowCameraFar 700 blijft als expliciete waarde behouden
+  ok - legacy game staticPropsCast volgt de lichte preset
+  ok - nieuwe editor/game nodes winnen van legacy world_settings
+  ok - editor preset is zichtbaar
+  ok - game preset is zichtbaar
+  ok - editor shadow mapSize komt uit hoog preset
+  ok - game shadow mapSize komt uit lichte preset
+  ok - editor shadow cameraSize komt uit hoog preset
+  ok - game shadow cameraSize komt uit lichte preset
+  ok - surface (river) met blocksPlayer=true blokkeert
+  ok - surface (river) met blocksPlayer=false blokkeert niet
+  ok - surface met blocksPlayer=true blokkeert
+  ok - surface met blocksPlayer=false blokkeert niet
+  ok - surface blocksPlayer telt mee als terrain collision
+  ok - blocker polygon blokkeert
+  ok - walkable surface override werkt
+  ok - geroteerde walkable surface wordt herkend
+  ok - polygon walkable surface wordt herkend
+  ok - polygon walkable surface volgt eigen vorm
+  ok - walkable surface houdt rekening met collision radius langs rand
+  ok - walkable surface wint boven blokkerende surface
+  ok - walkable surface voorkomt jitter op polygon-rand
+  ok - walkable surface laat brugpassage toe
+  ok - walkable surface interpoleert punt-hoogte
+  ok - walkable surface beweegt soepel langs schuine rand
+  ok - walkable surface houdt randhoogte stabiel tijdens randbeweging
+  ok - bewegingsfallback schuift soepel langs blokkerende surface-rand
+  ok - bewegingsfallback eindigt buiten terrain collision
+  ok - buildWalkabilityIndex activeert runtime collision
+  ok - clearWalkabilityIndex wist de actieve collision index
+  ok - resolveChunkPolicy leest editor chunk policy
+  ok - resolveChunkPolicy leest game chunk policy
+  ok - editor overlay-flags worden gelezen
+  ok - game overlay gebruikt game policy en grid default
+  ok - chunkCoordForPosition gebruikt floor voor negatieve coordinaten
+  ok - chunkCoordForPosition houdt 0,0 in center chunk
+  ok - chunkKey volgt de berekende chunkcoord
+  ok - active radius 1 levert 9 active chunks
+  ok - preload margin vergroot het chunk window
+  ok - loaded window bevat active plus preload chunks zonder clipping
+  ok - maxLoadedChunks clipt het game window
+  ok - buildChunkWindow markeert clipping door maxLoadedChunks
+  ok - maxLoadedChunks clipping blijft deterministisch
+  ok - editor policy laadt meer chunks dan game policy
+  ok - enabled=false schakelt runtime chunk proof uit
+  ok - isChunkActive herkent center chunk
+  ok - isChunkPreload herkent preload ring
+  ok - isChunkLoaded weigert chunk buiten loaded window
+  ok - entity binnen loaded chunks blijft zichtbaar en actief
+  ok - entity buiten loaded chunks wordt geculled
+  ok - interactable buiten loaded chunks wordt inactief
+  ok - solid buiten loaded chunks wordt inactief
+  ok - hiddenObjects telt verborgen visuals
+  ok - culledEntities telt verborgen entities
+  ok - inactiveInteractables telt uitgeschakelde interactables
+  ok - inactiveSolids telt uitgeschakelde solids
+  ok - uncullableObjects telt objecten zonder position
+  ok - moving center chunk verandert de loaded set
+  ok - terug in loaded set maakt entity weer zichtbaar en actief
+  ok - chunkWorldSize berekent chunk world size incl. tileSize
+  ok - chunkKeyForPosition floort negatieve coordinaten
+  ok - chunkCoordForPosition blijft consistent met chunkKeyForPosition
+  ok - terrainVisualChunkingEnabled staat standaard uit
+  ok - terrainVisualChunkingEnabled kan expliciet aan
+  ok - midpointForSegment pakt het midden van een segment
+  ok - chunkKeyForSegment volgt het midpoint
+  ok - segmentLineByMaxLength splitst een lijn in vaste stappen
+  ok - segmentLineByMaxLength bewaart startpunt
+  ok - segmentLineByMaxLength bewaart eindpunt
+  ok - segmentPolylineForChunks splitst een lange lijn over meerdere stukken
+  ok - segmentPolylineForChunks houdt chunkKeys per stuk bij
+  ok - segmentPolylineForChunks bewaart chunkKeys over chunkgrenzen
+  ok - groundChunkTilesForBounds splitst grote ground in chunk tiles
+  ok - eerste ground tile wordt goed gesneden
+  ok - laatste ground tile wordt goed gesneden
+  ok - terrain ground blijft zichtbaar in loaded chunk
+  ok - terrain layer zonder chunking blijft zichtbaar
+  ok - terrain surface zonder chunk info blijft uncullable zichtbaar
+  ok - terrain visuals worden meegeteld
+  ok - terrain visuals zichtbaar tellen mee
+  ok - terrain visuals verborgen tellen mee
+  ok - ground tile visibility wordt geteld
+  ok - terrain layer zichtbaarheid wordt geteld
+  ok - terrain surface visibility wordt geteld
+  ok - uncullable terrain visuals worden geteld
+  ok - terrain layer chunking kan verborgen tile cullen
+  ok - terrain layer chunking houdt loaded tile zichtbaar
+  ok - effectiveGroundBounds houdt centerSize symmetrisch
+  ok - effectiveGroundBounds respecteert explicitBounds
+  ok - effectiveGroundBounds berekent explicitBounds width/depth
+  ok - worldSpaceGroundUv blijft world-space op X
+  ok - worldSpaceGroundUv blijft world-space op Z
+  ok - game chunk loading schakelt ground naar chunked mode
+  ok - shouldUseChunkedGround volgt game chunk loading
+  ok - editor chunk loading kan ook chunked ground gebruiken
+  ok - uitgeschakelde game chunk loading houdt full mode
+  ok - shouldUseChunkedGround geeft false als chunk loading uit staat
+  ok - groundBlueprintSignature berekent een geldige signature
+  ok - groundChunkTilesForBounds splitst explicitBounds in 4 tiles
+  ok - eerste ground tile respecteert explicit bounds
+  ok - laatste ground tile respecteert explicit bounds
+  ok - buildGroundChunkPlan kiest chunked mode voor game chunk loading
+  ok - chunked ground plan schakelt de full plane uit
+  ok - chunked ground plan heeft geen full-plane naam
+  ok - chunked plan houdt alleen resident ground chunk keys over
+  ok - eerste ground plan start zonder vorige resident tiles
+  ok - applyGroundChunkPlan bouwt de verwachte resident ground tiles
+  ok - groundChunkState bewaart resident tiles
+  ok - verlatende ground tiles worden bepaald bij window-shift
+  ok - verlatende ground tiles worden gedeactiveerd
+  ok - groundChunkState laat alleen de loaded tile resident
+  ok - uitgeschakelde chunk loading levert full ground mode op
+  ok - full plan verwacht een actieve full ground plane
+  ok - full plan bewaart de legacy plane naam
+  ok - full plan heeft geen resident chunk tiles
+  ok - full plan ruimt de laatste resident chunk tile op
+  ok - full plan laat geen resident ground tiles achter
+  ok - terrain streaming snapshot bewaart loadedChunks
+  ok - terrain streaming snapshot bewaart activeChunks
+  ok - terrain streaming snapshot bewaart preloadChunks
+  ok - terrain streaming snapshot telt resident pieces
+  ok - terrain streaming snapshot telt unieke resident chunks
+  ok - terrain streaming snapshot sorteert resident chunk keys
+  ok - terrain streaming snapshot telt texture refcounts
+  ok - terrain streaming snapshot telt unieke resident asset ids
+  ok - terrain streaming snapshot telt surface material records
+  ok - terrain streaming snapshot bewaart update reason
+  ok - forward lookahead bevat de volgende chunk vóórdat de speler de grens oversteekt
+  ok - desired resident set bevat forward chunk vóór grensoversteek (geen center-only bug)
+  ok - chunk 1,0 is nog geen active chunk (test bewijst dat forward-bias het gat dicht, niet activeRadius)
+  ok - volgende chunk wordt desired vóór de grens, niet pas nadat speler al voorbij het midden is
+  ok - speler-chunk blijft visible ook als de (gelerpte) camTarget nog in de vorige chunk hangt
+  ok - resident content voor de speler-chunk blijft desired ondanks camera-lag
+  ok - verafliggende camTarget trekt geen tweede visible chunk mee
+  ok - verafliggende camTarget trekt geen tweede resident chunk mee
+  ok - coverage signature gebruikt primary~secondary vorm
+  ok - coverage signature verandert ook als alleen de secundaire chunk wijzigt
+  ok - active chunk staat vooraan de build queue
+  ok - visible chunk bouwt vóór verre preload chunks
+  ok - forward chunk bouwt vóór overige preload chunks
+  ok - preload chunks blijven onderling op afstand gesorteerd
+  ok - verste preload chunk dringt niet voor active/visible/forward chunks
+  ok - reeds resident chunks worden niet opnieuw in de build queue gezet
+  ok - unload-marge houdt chunks buiten active/preload toch resident-safe
+  ok - center chunk blijft altijd unload-safe
+  ok - nieuwere revision wordt toegepast
+  ok - gelijke revision wordt toegepast
+  ok - oudere (stale) revision wordt genegeerd
+  ok - eerste server revision na cold state wordt toegepast
+  ok - ontbrekende huidige revision blokkeert de eerste update niet
+Server draait.
+  ok - malformed URL wordt met 400 afgewezen
+  ok - server blijft leven na malformed URL
+  ok - geheim pad /.env geeft 403/404 (kreeg 404)
+  ok - geheim pad /.git/config geeft 403/404 (kreeg 404)
+  ok - geheim pad /storage/gk-real-node-editor.sqlite geeft 403/404 (kreeg 404)
+  ok - geheim pad /assets/..%2f.env geeft 403/404 (kreeg 404)
+  ok - mutatie met verkeerde Origin wordt afgewezen
+  ok - game wereld is 404 voor publish (geen sample data)
+  ok - login werkt
+  ok - sessiemutatie zonder CSRF-token wordt afgewezen
+  ok - CSRF-afwijzing laat de geldige sessie intact
+  ok - lege asset database start leeg
+  ok - GLB upload werkt
+  ok - GLB upload response bevat timings
+  ok - GLB upload response wacht niet op thumbnail timing
+  ok - GLB upload response komt snel terug
+  ok - GLB metadata telt 3 animaties
+  ok - GLB metadata kiest Idle als default
+  ok - GLB metadata bevat animatielijst
+  ok - GLB metadata bevat Idle, Walk en Run
+  ok - GLB thumbnail start async als pending/processing
+  ok - GLB upload response wacht niet op thumbnailPath
+  ok - GET /api/assets werkt direct na upload
+  ok - GET /api/assets toont pending thumbnail status
+  ok - GLB sourcePath gebruikt asset slug
+  ok - duplicate assetnaam wordt geweigerd
+  ok - Tree upload werkt
+  ok - Tree sourcePath gebruikt asset slug
+  ok - Tree thumbnail start async
+  ok - Tree upload response wacht niet op thumbnailPath
+  ok - Tree status blijft pending/processing in /api/assets
+  ok - rename naar bestaande naam wordt geweigerd
+  ok - rename naar unieke naam werkt
+  ok - rename past sourcePath aan naar slug
+  ok - oude sourcePath is niet meer de primaire DB path
+  ok - surface main texture upload werkt
+  ok - surface secondary texture upload werkt
+  ok - surface edge noise upload werkt
+  ok - node ambient_light aangemaakt
+  ok - graph restore werkt
+  ok - restore verwijdert tijdelijke node
+  ok - draft world rebuildt na restore
+  ok - foundation migration preview werkt
+  ok - foundation migration maakt de nieuwe projectbasis
+  ok - foundation world assembly bestaat
+  ok - foundation zone registry bestaat
+  ok - foundation ui output bestaat
+  ok - foundation project settings bestaan
+  ok - foundation verbindt World Assembly met Game Output.gameProject
+  ok - node zone_definition aangemaakt
+  ok - zone definition aangemaakt
+  ok - node zone_environment_settings aangemaakt
+  ok - zone environment aangemaakt
+  ok - node zone_output aangemaakt
+  ok - zone output aangemaakt
+  ok - node values geupdate voor foundation.game_project_settings
+  ok - node editor_world_settings aangemaakt
+  ok - node game_world_settings aangemaakt
+  ok - node ground_surface aangemaakt
+  ok - foundation game camera bestaat
+  ok - node values geupdate voor foundation.game_camera
+  ok - foundation editor camera bestaat
+  ok - node values geupdate voor foundation.editor_camera
+  ok - node ambient_light aangemaakt
+  ok - node directional_light aangemaakt
+  ok - node player_character aangemaakt
+  ok - player_character bewaart animationClip
+  ok - player_character bewaart idleAnimation
+  ok - player_character bewaart walkAnimation
+  ok - player_character bewaart runAnimation
+  ok - player_character toont naam boven character standaard aan
+  ok - node spawn_point aangemaakt
+  ok - zone default spawn aangemaakt
+  ok - node model_entity aangemaakt
+  ok - model entity aangemaakt
+  ok - model_entity bewaart animationClip
+  ok - model_entity bewaart idleAnimation
+  ok - model_entity bewaart walkAnimation
+  ok - model_entity bewaart runAnimation
+  ok - model_entity bewaart rotationX/Y/Z
+  ok - node model_entity aangemaakt
+  ok - tweede model_entity aangemaakt
+  ok - tweede drop krijgt unieke entityId
+  ok - model_entity dupliceren werkt
+  ok - gedupliceerde model_entity aangemaakt
+  ok - duplicaat is model_entity
+  ok - duplicaat krijgt unieke entityId
+  ok - walkable checkbox defaultt false
+  ok - duplicaat maakt geen legacy Game Output entities verbinding
+  ok - node values geupdate voor node_model_entity_074de230
+  ok - node values geupdate voor node_model_entity_3bef698d
+  ok - node values geupdate voor node_model_entity_24699074
+  ok - eerste model_entity blijft bestaan
+  ok - tweede model_entity blijft bestaan
+  ok - gedupliceerde model_entity blijft bestaan
+  ok - eerste instance bewaart eigen transform
+  ok - tweede drop bewaart eigen transform
+  ok - duplicate bewaart eigen transform
+  ok - walkable checkbox bewaart true
+  ok - node bounded_area_scatter aangemaakt
+  ok - bounded area scatter aangemaakt
+  ok - scatter bewaart source assets
+  ok - scatter bewaart gekozen assets
+  ok - node keybind aangemaakt
+  ok - directe keybind aangemaakt
+  ok - node keybind aangemaakt
+  ok - group keybind aangemaakt
+  ok - node group aangemaakt
+  ok - group node aangemaakt
+  ok - group heeft typed input/output ports
+  ok - group input bestaat
+  ok - group output bestaat
+  ok - game output bestaat
+  ok - eerste model_entity heeft geen legacy Game Output entities verbinding
+  ok - tweede model_entity heeft geen legacy Game Output entities verbinding
+  ok - gedupliceerde model_entity heeft geen legacy Game Output entities verbinding
+  ok - node ui_hud_text aangemaakt
+  ok - hud text aangemaakt
+  ok - node debug_performance_hud aangemaakt
+  ok - performance hud aangemaakt
+  ok - node debug_performance_hud aangemaakt
+  ok - disabled performance hud aangemaakt
+  ok - node debug_performance_hud aangemaakt
+  ok - ongekoppelde performance hud aangemaakt
+  ok - node debug_mmo_hud aangemaakt
+  ok - debug mmo hud node aangemaakt
+  ok - node debug_mmo_hud aangemaakt
+  ok - ongekoppelde debug mmo hud aangemaakt
+  ok - node minimap_bake aangemaakt
+  ok - minimap bake node aangemaakt
+  ok - node game_minimap_hud aangemaakt
+  ok - game minimap hud node aangemaakt
+  ok - game minimap default debugMode is uit en legacy liteMode aan
+  ok - node editor_minimap_hud aangemaakt
+  ok - editor minimap node aangemaakt
+  ok - node minimap_bake aangemaakt
+  ok - ongekoppelde minimap bake aangemaakt
+  ok - node schema kent minimap_bake met dataType minimap
+  ok - node schema kent game_minimap_hud met dataType minimap
+  ok - node schema kent game_minimap_hud debugMode checkbox
+  ok - legacy game_minimap_hud liteMode blijft verborgen
+  ok - node schema kent editor_minimap_hud met dataType minimap
+  ok - Game Output heeft optionele, multiple minimap input
+  ok - bounded_area_scatter heeft edgeDensity slider metadata
+  ok - edgeDensity gebruikt 0-100 defaults
+  ok - bounded_area_scatter heeft sizeInwardInfluence slider metadata
+  ok - sizeInwardInfluence gebruikt 0-100 defaults
+  ok - bounded_area_scatter heeft sizeCurve default
+  ok - sizeCurve biedt linear, smooth, steep en instant
+  ok - bounded_area_scatter heeft per-object scale multipliers
+  ok - sourceScaleMultipliers default is leeg
+  ok - foundation editor chunk loading bestaat
+  ok - node values geupdate voor foundation.editor_chunk_loading
+  ok - foundation game chunk loading bestaat
+  ok - node values geupdate voor foundation.game_chunk_loading
+  ok - edge keybind -> keybinds
+  ok - edge keybind -> keybinds_in
+  ok - edge keybinds_in -> keybinds_out
+  ok - legacy group snapshot
+  ok - legacy group snapshot met ontbrekende input wordt hersteld
+  ok - gerepareerde group aanwezig
+  ok - legacy input keybinds_in is hersteld
+  ok - node group aangemaakt
+  ok - nested group aangemaakt
+  ok - nested group input bestaat
+  ok - nested group output bestaat
+  ok - nested group input hoort bij Group 2
+  ok - node keybind aangemaakt
+  ok - nested keybind aangemaakt
+  ok - nested group output hoort bij Group 2
+  ok - cross-boundary edge wordt geweigerd
+  ok - illegal edge wordt niet opgeslagen
+  ok - edge keybind -> keybinds_out
+  ok - edge keybinds_out -> keybinds_out
+  ok - edge keybinds_out -> keybinds
+  ok - node terrain_layer aangemaakt
+  ok - terrain layer aangemaakt
+  ok - node surface_layer aangemaakt
+  ok - surface layer aangemaakt
+  ok - node blocker_area aangemaakt
+  ok - blocker area aangemaakt
+  ok - node walkable_surface aangemaakt
+  ok - walkable surface aangemaakt
+  ok - edge editorWorldSettings -> editorWorldSettings
+  ok - edge gameWorldSettings -> gameWorldSettings
+  ok - edge light -> lights
+  ok - edge light -> lights
+  ok - edge ui -> ui
+  ok - edge ui -> ui
+  ok - edge ui -> ui
+  ok - edge ui -> ui
+  ok - edge minimap -> minimap
+  ok - edge minimap -> minimap
+  ok - edge zone -> zone
+  ok - edge environment -> environment
+  ok - edge ground -> ground
+  ok - edge player -> player
+  ok - edge spawnPoint -> spawns
+  ok - edge entity -> entities
+  ok - edge entity -> entities
+  ok - edge entity -> entities
+  ok - edge entity -> entities
+  ok - edge terrain -> terrain
+  ok - edge terrain -> terrain
+  ok - edge collision -> collision
+  ok - edge collision -> collision
+  ok - edge minimap -> minimap
+  ok - edge zonePackage -> zonePackage
+  ok - validatie is groen
+  ok - kleine chunk size is sinds fase 9 een runtime-debugmelding, geen publish-waarschuwing
+  ok - validatie waarschuwt dat Game Minimap HUD nog geen gebakken image heeft
+  ok - scatter-item collision geeft geen verouderde boundary-gap waarschuwing
+  ok - anti-overlap scatter publiceert instances
+  ok - anti-overlap houdt minSpacing aan of meldt fallback
+  ok - edgeDensity 100 scatter publiceert instances
+  ok - edgeDensity 100 houdt bomen op de boundary
+  ok - edgeDensity 100 gebruikt meerdere boundary segmenten
+  ok - dense_fill heeft gemiddeld betere coverage dan random (3.16 < 3.68)
+  ok - onmogelijke spacing geeft een duidelijke warning
+  ok - onmogelijke spacing plaatst alleen wat past
+  ok - draft opslaan werkt
+  ok - draft world is beschikbaar
+  ok - draft world bewaart camera node
+  ok - game camera blijft node-driven na save-draft
+  ok - draft world bewaart editor camera node
+  ok - editor camera publiceert target
+  ok - draft world publiceert de startzone
+  ok - draft world publiceert zone displayName
+  ok - draft world publiceert zone backgroundColor
+  ok - draft world publiceert zone fogColor
+  ok - draft world publiceert zone fogDensity
+  ok - draft world publiceert zone smoothShading
+  ok - draft world gebruikt de nieuwe editor/game nodes, geen legacy fallback
+  ok - draft world publiceert editor preset
+  ok - draft world publiceert editor debugWarningsVisible
+  ok - draft world publiceert editor shadow block
+  ok - draft world zet editor shadows aan
+  ok - draft world publiceert editor shadow mapSize
+  ok - draft world publiceert editor shadow cameraSize
+  ok - draft world publiceert editor shadowCameraFar
+  ok - draft world publiceert editor static prop cast
+  ok - draft world publiceert editor scatter cast
+  ok - draft world publiceert editor shadow resident margin
+  ok - draft world publiceert game preset
+  ok - draft world publiceert game debugWarningsVisible
+  ok - draft world publiceert game preset pixelRatioCap
+  ok - draft world publiceert game antialias uit (NODE-02 default)
+  ok - draft world publiceert game shadow block
+  ok - draft world zet game shadows aan
+  ok - draft world publiceert game shadow mapSize
+  ok - draft world publiceert game shadow cameraSize
+  ok - draft world publiceert game shadowCameraFar
+  ok - draft world publiceert game static prop cast uit
+  ok - draft world publiceert game scatter cast
+  ok - draft world publiceert game shadow resident margin
+  ok - draft world publiceert chunkLoading read-model
+  ok - draft world scheidt editor en game chunk loading
+  ok - editor chunk width is 100
+  ok - game chunk width is 15
+  ok - editor radius is groter dan game radius
+  ok - game chunkLoading cameraOnly staat aan
+  ok - game chunkLoading strict unload staat aan
+  ok - game chunkLoading publiceert residentEntityBudget
+  ok - game chunkLoading publiceert residentObjectBudget
+  ok - game chunkLoading publiceert residentScatterInstanceBudget
+  ok - game chunkLoading publiceert residentChunkBuildBudgetPerFrame
+  ok - draft world publiceert walkable polygon points
+  ok - draft world bewaart walkable point hoogte
+  ok - draft world publiceert één scatter area
+  ok - scatter area publiceert polygon points
+  ok - scatter area publiceert boundary flag
+  ok - scatter area publiceert per-item collision radius
+  ok - scatter area publiceert ground cover kleur en edge fade
+  ok - scatter publiceert preview instances in draft world
+  ok - draft world publiceert 6 scatter instances
+  ok - draft world publiceert alle model instances
+  ok - walkable publiceert naar draft world
+  ok - scatter area bewaart bron assets
+  ok - scatter area bewaart instellingen
+  ok - draft world publiceert 1 minimap bake
+  ok - draft world minimap bake heeft geldige bounds
+  ok - draft world minimap bake heeft nog geen bakedImageUrl
+  ok - draft world publiceert minimap.game met debugMode uit
+  ok - draft world publiceert minimap.editor (editor-only preview)
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt na seed wijziging
+  ok - draft world blijft beschikbaar na seed wijziging
+  ok - scatter verandert bij andere seed
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt na seed herstel
+  ok - draft world blijft beschikbaar na seed herstel
+  ok - scatter is deterministisch per seed
+  ok - publiceren werkt
+  ok - draft world behoudt editor camera na publish
+  ok - game wereld is 200 na publish
+  ok - camera is top-down
+  ok - game camera publiceert nodewaarden
+  ok - editor camera publiceert niet naar /game/
+  ok - game world publiceert de startzone
+  ok - game world publiceert zone displayName
+  ok - game world publiceert zone backgroundColor
+  ok - game world publiceert zone fogColor
+  ok - game world publiceert zone fogDensity
+  ok - game world publiceert zone smoothShading
+  ok - game world gebruikt de nieuwe editor/game nodes, geen legacy fallback
+  ok - game world publiceert editor preset
+  ok - game world publiceert editor debugWarningsVisible
+  ok - game world publiceert editor preset pixelRatioCap
+  ok - game world publiceert editor shadow block
+  ok - game world zet editor shadows aan
+  ok - game world publiceert editor shadow mapSize
+  ok - game world publiceert editor shadowCameraSize
+  ok - game world publiceert editor shadow distance
+  ok - game world publiceert editor static prop cast
+  ok - game world publiceert editor scatter cast
+  ok - game world publiceert editor shadow resident margin
+  ok - game world publiceert game preset
+  ok - game world publiceert game debugWarningsVisible
+  ok - game world publiceert game preset pixelRatioCap
+  ok - game world publiceert game shadow block
+  ok - game world zet game shadows aan
+  ok - game world publiceert game shadow mapSize
+  ok - game world publiceert game shadow cameraSize
+  ok - game world publiceert game shadow distance
+  ok - game world publiceert game static prop cast uit
+  ok - game world publiceert game scatter cast
+  ok - game world publiceert game shadow resident margin
+  ok - game world behoudt editor fog toggle in draft data
+  ok - game world publiceert chunkLoading
+  ok - game world scheidt editor en game chunk loading
+  ok - editor chunk profile is gepubliceerd
+  ok - game chunk profile is gepubliceerd
+  ok - game chunk width is 15 na publish
+  ok - game chunkLoading publiceert residentEntityBudget na publish
+  ok - game chunkLoading publiceert residentObjectBudget na publish
+  ok - game chunkLoading publiceert residentScatterInstanceBudget na publish
+  ok - game chunkLoading publiceert residentChunkBuildBudgetPerFrame na publish
+  ok - runtime helper kiest de editor chunk policy uit published world
+  ok - runtime helper kiest de game chunk policy uit published world
+  ok - published editor policy blijft ruimer dan game policy
+  ok - editor shadow policy volgt editor toggle
+  ok - editor shadow policy gebruikt hoog_schaduw
+  ok - editor shadow policy gebruikt hoog mapSize
+  ok - game shadow policy volgt game toggle
+  ok - game shadow policy gebruikt lichte_schaduw
+  ok - game shadow policy gebruikt lichte mapSize
+  ok - speler verwijst naar geuploade model
+  ok - speler publiceert gekozen animationClip
+  ok - speler publiceert idleAnimation
+  ok - speler publiceert walkAnimation
+  ok - speler publiceert runAnimation
+  ok - spawn aanwezig
+  ok - entities publiceren canonieke animaties (idle als startclip sinds fase 9)
+  ok - alle model instances zijn gepubliceerd
+  ok - elk gepubliceerde model krijgt een unieke runtime id
+  ok - eerste entity publiceert idleAnimation
+  ok - eerste entity publiceert walkAnimation
+  ok - eerste entity publiceert runAnimation
+  ok - eerste entity publiceert rotationX/Y/Z
+  ok - tweede drop publiceert eigen rotation
+  ok - duplicate publiceert eigen rotation
+  ok - walkable publiceert naar game runtime
+  ok - scatter publiceert count instances
+  ok - scatter blijft deterministisch in game runtime
+  ok - scatter area publiceert metadata
+  ok - scatter area publiceert instellingen
+  ok - scatter area publiceert boundary flag
+  ok - scatter area publiceert bron assets
+  ok - scatter area publiceert polygon punten
+  ok - scatter boundary blokkeert speler binnen polygon
+  ok - scatter boundary blokkeert speler buiten polygon niet
+  ok - keybinds uit root en beide groups zijn mee gepubliceerd
+  ok - directe keybind is gepubliceerd
+  ok - Group 1 keybind is gepubliceerd
+  ok - Group 2 keybind is gepubliceerd
+  ok - asset manifest bevat model
+  ok - asset manifest bevat surface main texture
+  ok - asset manifest bevat surface secondary texture
+  ok - asset manifest bevat surface edge noise texture
+  ok - terrain layers zijn gepubliceerd
+  ok - terrain layer publiceert metadata
+  ok - terrain layer publiceert lege points array
+  ok - surface layers zijn gepubliceerd
+  ok - surface layer publiceert id
+  ok - surface layer publiceert surfaceKind
+  ok - surface layer publiceert fallbackColor
+  ok - surface layer publiceert width
+  ok - surface layer publiceert yOffset
+  ok - surface layer publiceert textureAssetId
+  ok - surface layer publiceert textureScale
+  ok - surface layer publiceert textureScaleX
+  ok - surface layer publiceert textureScaleY (negatief = flip)
+  ok - surface layer publiceert secondaryTextureAssetId
+  ok - surface layer publiceert secondaryTextureScale (backwards compat)
+  ok - surface layer publiceert secondaryTextureScaleX
+  ok - surface layer publiceert secondaryTextureScaleY
+  ok - surface layer publiceert secondaryTextureStrength
+  ok - surface layer publiceert edgeFadeWidth
+  ok - surface layer publiceert edgeFadeNoiseAssetId
+  ok - surface layer publiceert edgeFadeNoiseScale (backwards compat)
+  ok - surface layer publiceert edgeFadeNoiseScaleX
+  ok - surface layer publiceert edgeFadeNoiseScaleY
+  ok - surface layer publiceert edgeFadeNoiseStrength
+  ok - surface layer publiceert animated
+  ok - surface layer publiceert flowSpeed
+  ok - surface layer publiceert flowDirection
+  ok - surface layer publiceert flowTextureLayer
+  ok - surface layer publiceert blocksPlayer
+  ok - surface layer publiceert points
+  ok - surface layer publiceert textureAssetId
+  ok - expliciete area- en scatter-boundary blockers zijn gepubliceerd
+  ok - blocker area publiceert polygon points
+  ok - blocker area publiceert reason
+  ok - scatter boundary blijft als aparte keuze gepubliceerd
+  ok - ieder scatter-product publiceert een eigen collider
+  ok - scatter-product colliders hebben een geldige radius
+  ok - beweging stopt bij het individuele scatter-product
+  ok - walkable surfaces zijn gepubliceerd
+  ok - walkable surface publiceert afmetingen
+  ok - walkable surface publiceert polygon points
+  ok - walkable surface publiceert point hoogte
+  ok - gepubliceerde walkable surface gebruikt polygon vorm
+  ok - gepubliceerde walkable surface zet speler op geinterpoleerde hoogte
+  ok - ui_hud_text blijft gepubliceerd
+  ok - debug_performance_hud publiceert read-model
+  ok - debug_performance_hud publiceert metrics
+  ok - debug_performance_hud publiceert showScatterInstances
+  ok - debug_performance_hud publiceert thresholds
+  ok - disabled performance HUD publiceert disabled config
+  ok - ongekoppelde performance HUD wordt niet gepubliceerd
+  ok - debug_mmo_hud publiceert read-model
+  ok - debug_mmo_hud publiceert anchor/compact/startCollapsed
+  ok - debug_mmo_hud publiceert per-veld show-flags
+  ok - debug_mmo_hud publiceert seq-velden
+  ok - debug_mmo_hud publiceert verborgen extra velden
+  ok - ongekoppelde debug_mmo_hud wordt niet gepubliceerd
+  ok - published world publiceert minimap bakes
+  ok - published minimap bake heeft juiste minimapId
+  ok - published world publiceert minimap.game met debugMode uit
+  ok - published world bevat geen minimap.editor (editor-only config)
+  ok - ongekoppelde minimap bake wordt niet gepubliceerd
+  ok - node values geupdate voor node_minimap_bake_e4e1fd47
+  ok - publiceren werkt na fake bake patch
+  ok - warning voor ongebakken minimap verdwijnt zodra bakedImageUrl gezet is
+  ok - fake bakedImageUrl blijft intact door draft/publish
+  ok - baked afmetingen blijven intact door draft/publish
+  ok - node minimap_bake aangemaakt
+  ok - duplicate minimap bake aangemaakt
+  ok - node aanmaken uniquificeert minimapId automatisch (main_minimap_2)
+  ok - edge minimap -> minimap
+  ok - node values geupdate voor node_minimap_bake_f6467890
+  ok - duplicate enabled minimapId geeft een harde validatiefout
+  ok - node values geupdate voor node_minimap_bake_f6467890
+  ok - validatie is weer groen nadat de duplicate minimap bake is uitgeschakeld
+  ok - POST /api/editor/minimap-bakes zonder sessie wordt geweigerd (CSRF-grens vóór auth, Fase 01)
+  ok - POST /api/editor/minimap-bakes met geldige auth en PNG slaat het bestand op
+  ok - response bevat bakedImageUrl onder /assets/minimap-bakes/
+  ok - minimap bake node na echte upload
+  ok - node values worden gepatcht met de echte bakedImageUrl
+  ok - node values bevatten de echte baked afmetingen
+  ok - de gebakken minimap image wordt publiek geserveerd via /assets/
+  ok - minimap bake upload groter dan 48MB wordt geweigerd
+  ok - minimap bake upload met verkeerd bestandstype wordt geweigerd
+  ok - node editor_chunk_loading aangemaakt
+  ok - ongekoppelde editor chunk loading aangemaakt
+  ok - publiceren werkt met losse editor chunk loading node
+  ok - game world blijft beschikbaar met losse chunk loading node
+  ok - losse editor chunk loading node wordt niet gepubliceerd
+  ok - originele editor chunk loading blijft leidend
+  ok - node game_chunk_loading aangemaakt
+  ok - tweede game chunk loading aangemaakt
+  ok - edge chunkLoading -> chunkLoading
+  ok - publiceren werkt met meerdere game chunk loading nodes
+  ok - validatie waarschuwt voor meerdere game chunk loading nodes
+  ok - game world blijft beschikbaar met meerdere chunk loading nodes
+  ok - eerste game chunk loading node wordt gebruikt
+  ok - eerste game chunk loading waarden blijven leidend
+  ok - eerste game chunk loading chunk width blijft 15
+  ok - asset metadata patch werkt
+  ok - PATCH /api/assets/:id geeft bijgewerkte naam en categorie
+  ok - renamed sourcePath gebruikt nieuwe slug
+  ok - oude Wizard sourcePath is niet meer primair
+  ok - GET /api/assets toont gewijzigde naam en categorie
+  ok - GET /api/assets toont nieuwe sourcePath
+  ok - ongebruikte data asset upload werkt
+  ok - ongebruikte asset kan veilig verwijderd worden
+  ok - verwijderde ongebruikte asset verdwijnt uit lijst
+  ok - usage endpoint werkt voor gebruikte asset
+  ok - usage lijst bevat player_character en model_entity
+  ok - gebruikte asset wordt geblokkeerd bij delete
+  ok - replacement model upload werkt
+  ok - replacement sourcePath gebruikt asset slug
+  ok - replacement thumbnail start async
+  ok - replacement upload response wacht niet op thumbnailPath
+  ok - replacement status blijft pending/processing in /api/assets
+  ok - asset replace werkt
+  ok - replace response bevat vervangingen
+  ok - player node na replace
+  ok - model entity na replace
+  ok - player_character verwijst na replace naar nieuwe asset
+  ok - model_entity verwijst na replace naar nieuwe asset
+  ok - oude asset heeft na replace geen usage meer
+  ok - oude asset kan na replace verwijderd worden
+  ok - oude asset verdwijnt uit lijst na delete
+  ok - node group aangemaakt
+  ok - mismatch group aangemaakt
+  ok - node values geupdate voor node_group_66cbd777
+  ok - mismatch group gepatcht
+  ok - type mismatch group->group wordt geweigerd
+  ok - node group aangemaakt
+  ok - cycle group A aangemaakt
+  ok - cycle A output bestaat
+  ok - node keybind aangemaakt
+  ok - cycle A keybind aangemaakt
+  ok - edge keybind -> keybinds_out
+  ok - node group aangemaakt
+  ok - cycle group B aangemaakt
+  ok - cycle B output bestaat
+  ok - node keybind aangemaakt
+  ok - cycle B keybind aangemaakt
+  ok - edge keybind -> keybinds_out
+  ok - edge keybinds_out -> keybinds_in
+  ok - edge keybinds_out -> keybinds_in
+  ok - edge keybinds_out -> keybinds
+  ok - group cycle faalt validatie
+  ok - admin mag debugactie alleen met de expliciete dev-flag uitvoeren
+  ok - identieke retry met hetzelfde operation-ID is idempotent
+  ok - zelfde operation-ID met andere payload wordt geweigerd
+  ok - MMO register maakt nieuw account aan en logt direct in
+  ok - register response lekt geen password_hash
+  ok - duplicate register wordt netjes geweigerd
+  ok - login op tweede device werkt
+  ok - verkeerde credentials falen netjes
+  ok - /api/auth/me geeft huidige user zonder password_hash
+  ok - game/player vereist login
+  ok - WebSocket weigert anonieme verbinding
+  ok - eerste game start maakt/laadt player profile en positie
+  ok - player position hoort bij het player profile
+  ok - eerste player positie krijgt revision 1
+  ok - eerste player positie bewaart sourceSessionId van de sessie
+  ok - twee actieve sessies zijn toegestaan voor hetzelfde account
+  ok - tweede sessie leest dezelfde player state
+  ok - beide sessies delen hetzelfde player profile
+  ok - beide sessies delen dezelfde player entity
+  ok - beide sessies starten op dezelfde serverpositie
+  ok - tweede login verwijdert eerste sessie niet
+  ok - clientteleport wordt door de echte HTTP-route geweigerd
+  ok - stop-resync met clientpositie wordt geweigerd
+  ok - afgewezen cheats wijzigen de server-x niet
+  ok - afgewezen cheats wijzigen de server-z niet
+  ok - dev-flag geeft een gewone speler geen debugrechten
+  ok - WebSocket-handshake met verkeerde Origin wordt geweigerd
+  ok - WebSocket sluit een payload van 70 KiB met code 1009
+  ok - WebSocket auth gebruikt de huidige sessiecookie
+  ok - WebSocket krijgt server-side playerId
+  ok - connection:ready publiceert dezelfde player position
+  ok - player:state gebruikt server-side sourceSessionId
+  ok - eerste WebSocket telt als één connected session
+  ok - tweede WebSocket gebruikt eigen sessie
+  ok - tweede WebSocket deelt dezelfde player
+  ok - beide sessions zijn tegelijk connected
+  ok - tweede WebSocket ziet dezelfde player entity
+  ok - presence meldt de tweede sessie
+  ok - remote account kan registreren en inloggen
+  ok - remote account kan /api/game/player laden
+  ok - remote account landt in dezelfde world
+  ok - remote account krijgt een ander player id
+  ok - remote connection:ready is world-scoped
+  ok - remote connection:ready gebruikt het remote player id
+  ok - remote player:state is world-scoped
+  ok - presence snapshot is world-scoped
+  ok - remote presence snapshot toont precies één andere avatar
+  ok - remote presence snapshot bevat account A
+  ok - remote presence snapshot dedupliceert A tot één avatar met twee sessies
+  ok - remote presence snapshot markeert A als niet-self
+  ok - presence snapshot is worldId-scoped
+  ok - presence snapshot bevat geen eigen player als remote avatar
+  ok - presence snapshot bevat geen dubbele player ids
+  ok - A ziet B via remote_player:joined
+  ok - tweede A-sessie ziet B ook via remote_player:joined
+  ok - remote_player:joined is world-scoped
+  ok - remote_player:joined meldt één connected session
+  ok - remote_player:joined markeert isSelfAccount=false
+  ok - remote_player:joined bevat geen verboden secret-velden
+  ok - remote_player:joined (tweede sessie) bevat geen verboden secret-velden
+  ok - world:presence_snapshot bevat geen verboden secret-velden
+  ok - normale movement gebruikt protocolVersion 3 snapshots
+  ok - mmo:snapshot is world-scoped
+  ok - normale movement verstuurt alleen changed players
+  ok - mmo:snapshot bevat het gedeelde player id
+  ok - pc is de actieve controller na input_state
+  ok - controllerEpoch reist mee in de snapshot
+  ok - lastProcessedInputSeq ack't de eerste input
+  ok - normale movement zet moving=true in de snapshot
+  ok - normale movement zet walk/run in de snapshot
+  ok - normale movement is geen teleport
+  ok - mobile ontvangt dezelfde authoritative snapshot
+  ok - remote observer ontvangt dezelfde authoritative snapshot
+  ok - normale movement loopt via mmo:snapshot
+  ok - tweede session ontvangt dezelfde mmo:snapshot
+  ok - remote observer ontvangt dezelfde mmo:snapshot
+  ok - stale input echo't clientSessionId
+  ok - stale input echo't clientInputSeq
+  ok - stale input echo't controllerEpoch
+  ok - stale input meldt transport=ws
+  ok - takeover snapshot bevat de gedeelde player
+  ok - laatste actieve controller wint op mobile
+  ok - controllerEpoch neemt over op mobile
+  ok - mobile takeover houdt beweging actief
+  ok - mobile takeover zet walk/run in de snapshot
+  ok - remote observer ziet mobile als actieve controller
+  ok - mobile ziet zijn eigen takeover snapshot
+  ok - oude stop laat minstens één snapshot achter
+  ok - oude idle input van een vorig device zet de actieve controller niet terug
+  ok - oude idle input stopt de actieve controller niet
+  ok - stop snapshot bevat de gedeelde player
+  ok - stop snapshot blijft op de nieuwe actieve controller
+  ok - stop snapshot zet moving=false
+  ok - stop snapshot zet animationState idle
+  ok - player position wordt server-side in de database bewaard
+  ok - database bevat de laatste officiële x-positie
+  ok - refresh op pc houdt de laatste serverpositie vast
+  ok - refresh op mobile houdt de laatste serverpositie vast
+  ok - refresh levert dezelfde player entity terug
+  ok - logout van remote account werkt
+  ok - logout van remote account wist alleen die cookie
+  ok - logout van remote account sluit de websocket (actual=4001)
+  ok - remote left meldt connectedSessionCount=0
+  ok - remote left is world-scoped
+  ok - tweede sessie ziet remote left ook
+  ok - remote_player:left bevat geen verboden secret-velden
+  ok - remote logout invalideert alleen de remote sessie
+  ok - logout invalideert alleen de huidige sessie
+  ok - logout verwijdert de cookie voor alleen de huidige sessie
+  ok - logout sluit de websocket van de uitgelogde sessie (actual=4001)
+  ok - logout op mobile laat pc ingelogd
+  ok - logout verwijdert alleen de huidige sessie
+  ok - presence event meldt dat de mobile sessie offline ging
+  ok - rate-limit test account kan registreren
+  ok - rate-limit test krijgt player state
+  ok - WebSocket rate limiting wordt afgedwongen per connection
+  ok - heartbeat test account kan registreren
+  ok - heartbeat test krijgt player state
+  ok - server stuurt ping heartbeats
+  ok - zombie connection cleanup sluit inactieve websocket na heartbeat timeout
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt voor scatter edge-density test
+  ok - draft world laadt voor scatter edge-density test
+  ok - scatter area publiceert edge en size defaults
+  ok - edgeDensity 0 publiceert alle scatter instances in de area
+  ok - edgeDensity 0 houdt bomen binnen de area
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt voor edgeDensity 100
+  ok - draft world blijft beschikbaar voor edgeDensity 100
+  ok - scatter area publiceert edgeDensity 100
+  ok - edgeDensity 100 zet alle bomen op de rand (max 0.0000, n=24)
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt voor size influence
+  ok - draft world blijft beschikbaar voor size influence
+  ok - scatter area publiceert size influence linear
+  ok - sizeInfluence test publiceert alle scatter instances
+  ok - sizeInwardInfluence 100 maakt binnenpunten groter dan randpunten
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt voor instant curve
+  ok - draft world blijft beschikbaar voor instant curve
+  ok - scatter area publiceert instant curve
+  ok - instant curve behoudt de instance count
+  ok - instant curve houdt randbomen klein
+  ok - instant curve maakt binnenpunten direct hoog
+  ok - node values geupdate voor node_bounded_area_scatter_e797d8b7
+  ok - save-draft werkt voor per-object scale
+  ok - draft world blijft beschikbaar voor per-object scale
+  ok - scatter area publiceert per-object scale multipliers
+  ok - per-object scale test publiceert beide sources (gevonden: ["asset_01eaf229-a32b-4fac-83a5-f3a3af426b7e","asset_93a706fb-2b58-4561-8c9f-58bccd6a2f7e"], verwacht: ["asset_93a706fb-2b58-4561-8c9f-58bccd6a2f7e","asset_01eaf229-a32b-4fac-83a5-f3a3af426b7e"])
+  ok - eerste bron krijgt eigen scale
+  ok - tweede bron krijgt eigen scale
+  ok - cycle-testgroups worden opgeruimd vóór de zone-link publish
+  ok - node zone_definition aangemaakt
+  ok - tweede zone aangemaakt
+  ok - node zone_output aangemaakt
+  ok - tweede zone output aangemaakt
+  ok - node spawn_point aangemaakt
+  ok - aankomst-spawn aangemaakt
+  ok - edge zone -> zone
+  ok - edge spawnPoint -> spawns
+  ok - edge zonePackage -> zonePackage
+  ok - node zone_link aangemaakt
+  ok - zone link aangemaakt
+  ok - edge zoneLink -> links
+  ok - node model_entity aangemaakt
+  ok - portal model aangemaakt
+  ok - node portal_component aangemaakt
+  ok - portal component aangemaakt
+  ok - node entity_assembly aangemaakt
+  ok - portal entity assembly aangemaakt
+  ok - edge entity -> model
+  ok - edge component -> components
+  ok - edge entity -> entities
+  ok - publiceren werkt met een tweede zone en een Zone Link
+  ok - zone-link testaccount kan registreren
+  ok - zone-link testspeler start in de startzone
+  ok - servereigen zone-reis via Zone Link werkt
+  ok - zone-reis zet de speler op de aankomst-spawn
+  ok - dezelfde portal werkt niet vanuit een andere zone
+
+SMOKE TEST GESLAAGD
+exit=0
+# einde 2026-10-24T09:34:49+02:00

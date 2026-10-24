@@ -8,10 +8,11 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import WebSocket from "ws";
+import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { applyGroundChunkPlan, auditSceneObjectsForGhostPlanes, auditSceneObjectsForShadowCasters, buildChunkWindow, buildCoverageCenterSignatureKey, buildGroundChunkPlan, buildWalkabilityIndex, buildSurfaceStripGeometry, chunkCoordForPosition, chunkKey, chunkKeyForPosition, chunkKeyForSegment, chunkWorldSize, clearWalkabilityIndex, collectChunkCullingStats, collectTerrainStreamingSnapshot, computeStreamingCoverage, createGroundChunkState, createWalkabilityIndex, effectiveGroundBounds, groundBlueprintSignature, groundChunkTilesForBounds, isChunkActive, isChunkLoaded, isChunkPreload, isPointBlockedByBlocker, isPointBlockedBySurface, isPointBlockedByTerrain, isPointOnWalkableSurface, midpointForSegment, prioritizeResidentChunkBuildQueue, removeGhostChunkPlanes, resolveChunkPolicy, resolveEditorShadowFocus, resolveGroundRenderMode, resolveMovement, resolveShadowPolicy, resolveStableShadowChunkWindows, resolveStableShadowFocus, resolveWorldContentCenter, resolveWorldPerformanceForRenderer, sanitizeNonWorldShadowCasters, segmentLineByMaxLength, segmentPolylineForChunks, setShadowProxyState, shadowResidentRadiusChunksForPolicy, shadowSnapWorldUnitsForPolicy, shouldUseChunkedGround, worldSpaceGroundUv } from "../apps/web/public/shared/world-runtime.js";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
-import { buildWorldFromGraph } from "../src/server/publish-service.js";
+import { buildWorldFromGraph, PublishService } from "../src/server/publish-service.js";
 import { shouldApplyServerPosition } from "../apps/web/public/shared/revision-guard.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,12 +23,19 @@ const ADMIN_PASSWORD = "k1k2k3k4k5";
 const EXPECT_GLB_THUMBNAILS = String(process.env.EXPECT_GLB_THUMBNAILS || "").trim() === "1";
 
 let cookie = "";
+let csrfToken = "";
 const defaultCookieJar = {
   get value() {
     return cookie;
   },
   set value(nextValue) {
     cookie = nextValue;
+  },
+  get csrfToken() {
+    return csrfToken;
+  },
+  set csrfToken(nextValue) {
+    csrfToken = nextValue;
   }
 };
 let BASE = "";
@@ -42,8 +50,9 @@ function setCookieFrom(response, jar = defaultCookieJar) {
 }
 
 async function call(method, pathname, body, isForm, jar = defaultCookieJar) {
-  const headers = {};
+  const headers = { Origin: BASE };
   if (jar.value) headers.Cookie = jar.value;
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && jar.csrfToken) headers["X-GK-CSRF"] = jar.csrfToken;
   let payload = body;
   if (body && !isForm) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
   let response;
@@ -57,6 +66,7 @@ async function call(method, pathname, body, isForm, jar = defaultCookieJar) {
   const text = await response.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (json?.csrfToken) jar.csrfToken = json.csrfToken;
   return { status: response.status, json: json, text: text };
 }
 
@@ -262,12 +272,12 @@ function sleep(ms) {
 }
 
 function createCookieJar(initialValue = "") {
-  return { value: initialValue };
+  return { value: initialValue, csrfToken: "" };
 }
 
 function createGameSocketClient(jar, label, options = {}) {
   const url = BASE.replace(/^http/, "ws") + "/api/game/live";
-  const headers = {};
+  const headers = { Origin: BASE };
   if (jar && jar.value) headers.Cookie = jar.value;
   const autoPong = options.autoPong !== false;
   const ws = new WebSocket(url, Object.keys(headers).length ? { headers: headers } : undefined);
@@ -493,6 +503,55 @@ function probeUnauthenticatedGameSocket() {
     ws.on("error", function (error) {
       clearTimeout(timer);
       resolve({ kind: "error", message: error.message || String(error) });
+    });
+  });
+}
+
+function probeRejectedGameSocket(jar, origin) {
+  return new Promise(function (resolve) {
+    const url = BASE.replace(/^http/, "ws") + "/api/game/live";
+    const headers = { Origin: origin };
+    if (jar && jar.value) headers.Cookie = jar.value;
+    const ws = new WebSocket(url, { headers: headers });
+    const timer = setTimeout(function () {
+      try { ws.terminate(); } catch {}
+      resolve({ kind: "timeout" });
+    }, 5000);
+    ws.on("unexpected-response", function (request, response) {
+      clearTimeout(timer);
+      resolve({ kind: "unexpected-response", statusCode: response.statusCode });
+    });
+    ws.on("open", function () {
+      clearTimeout(timer);
+      resolve({ kind: "open" });
+      try { ws.close(); } catch {}
+    });
+    ws.on("error", function (error) {
+      clearTimeout(timer);
+      resolve({ kind: "error", message: error.message || String(error) });
+    });
+  });
+}
+
+function probeOversizedGameSocket(jar) {
+  return new Promise(function (resolve, reject) {
+    const url = BASE.replace(/^http/, "ws") + "/api/game/live";
+    const headers = { Origin: BASE };
+    if (jar && jar.value) headers.Cookie = jar.value;
+    const ws = new WebSocket(url, { headers: headers });
+    const timer = setTimeout(function () {
+      try { ws.terminate(); } catch {}
+      reject(new Error("WebSocket met te grote payload sloot niet binnen de timeout."));
+    }, 8000);
+    ws.on("open", function () {
+      ws.send(Buffer.alloc(70 * 1024, 0x61));
+    });
+    ws.on("close", function (code, reason) {
+      clearTimeout(timer);
+      resolve({ code: code, reason: String(reason || "") });
+    });
+    ws.on("error", function () {
+      // De close-code is het bewijs; ws kan daarnaast een transportfout emitteren.
     });
   });
 }
@@ -755,7 +814,11 @@ function buildScatterWorld(baseGraph, scatterNodeId, scatterValues) {
   });
   if (!scatterNode) throw new Error("Scatter node niet gevonden in test graph.");
   scatterNode.values = Object.assign({}, scatterNode.values, scatterValues || {});
-  return buildWorldFromGraph(graph, { assetService: mockScatterAssetService() }, { includeEditorCamera: true });
+  // Bouw de wereld zoals de server: legacy-basis plus de actieve zone (NODE-02 Zone Output).
+  const publishService = new PublishService(null, { assetService: mockScatterAssetService() });
+  const world = publishService.buildLegacyWorld(graph, true);
+  const compilation = publishService.compileGameProject(graph, { legacyWorldOptions: { includeEditorCamera: true } });
+  return publishService.mergeWorldWithGameProject(world, compilation, null, graph);
 }
 
 function closestPointOnSegment2D(px, pz, ax, az, bx, bz) {
@@ -872,10 +935,10 @@ function runShadowPolicyChecks() {
   assert(lightGamePolicy.preset === "lichte_schaduw", "game preset wordt uit shadow block gelezen");
   assert(lightGamePolicy.enabled === true, "lichte schaduw zet shadows aan");
   assert(lightGamePolicy.mapSize === 512, "lichte schaduw gebruikt 512 mapSize");
-  assert(lightGamePolicy.cameraSize === 75, "lichte schaduw gebruikt game camera size 75");
-  assert(lightGamePolicy.cameraFar === 350, "lichte schaduw gebruikt far 350");
-  assert(lightGamePolicy.scatterCast === false, "lichte schaduw zet scatter shadows uit");
-  assert(lightGamePolicy.staticPropsCast === true, "lichte schaduw laat static props casten");
+  assert(lightGamePolicy.cameraSize === 70, "lichte schaduw gebruikt game camera size 70");
+  assert(lightGamePolicy.cameraFar === 300, "lichte schaduw gebruikt far 300");
+  assert(lightGamePolicy.scatterCast === true, "lichte schaduw laat scatter shadows casten");
+  assert(lightGamePolicy.staticPropsCast === false, "lichte schaduw zet static-prop shadows uit");
 
   const sameWorldEditorPolicy = resolveShadowPolicy({
     world: {
@@ -1323,9 +1386,9 @@ function runWorldSettingsSplitChecks() {
   assert(freshWorld.world.performance.game.debugChunkOverlayVisible === false, "game default debugChunkOverlayVisible blijft uit");
   assert(freshWorld.world.performance.game.debugWarningsVisible === false, "game default debugWarningsVisible blijft uit");
   assert(freshWorld.world.performance.game.shadow.preset === "middel_schaduw", "game shadow block gebruikt middel_schaduw");
-  assert(freshWorld.world.performance.game.shadow.mapSize === 1024, "game default shadow mapSize blijft 1024");
-  assert(freshWorld.world.performance.game.shadow.cameraSize === 85, "game default shadow cameraSize blijft 85");
-  assert(freshWorld.world.performance.game.shadow.staticPropsCast === true, "game default staticPropsCast blijft aan");
+  assert(freshWorld.world.performance.game.shadow.mapSize === 512, "game default shadow mapSize is 512 (middel_schaduw sinds NODE-02)");
+  assert(freshWorld.world.performance.game.shadow.cameraSize === 70, "game default shadow cameraSize is 70 (middel_schaduw sinds NODE-02)");
+  assert(freshWorld.world.performance.game.shadow.staticPropsCast === false, "game default staticPropsCast staat uit (middel_schaduw sinds NODE-02)");
 
   const legacyWorld = buildWorldFromGraph(worldSettingsGraph({
     worldValues: {
@@ -1345,10 +1408,10 @@ function runWorldSettingsSplitChecks() {
   assert(legacyWorld.world.performance.game.shadow.preset === "lichte_schaduw", "legacy shadowQuality wordt gemigreerd naar lichte_schaduw voor game");
   assert(legacyWorld.world.performance.editor.shadow.mapSize === 512, "legacy low quality valt terug naar 512 mapSize");
   assert(legacyWorld.world.performance.editor.shadow.cameraSize === 90, "legacy editor shadowCameraSize volgt de lichte preset");
-  assert(legacyWorld.world.performance.editor.shadow.cameraFar === 350, "legacy editor shadowCameraFar volgt de lichte preset");
-  assert(legacyWorld.world.performance.game.shadow.cameraSize === 75, "legacy game shadowCameraSize volgt de lichte preset");
-  assert(legacyWorld.world.performance.game.shadow.cameraFar === 350, "legacy game shadowCameraFar volgt de lichte preset");
-  assert(legacyWorld.world.performance.game.shadow.staticPropsCast === true, "legacy game staticPropsCast volgt de lichte preset");
+  assert(legacyWorld.world.performance.editor.shadow.cameraFar === 700, "legacy editor shadowCameraFar 700 blijft als expliciete waarde behouden");
+  assert(legacyWorld.world.performance.game.shadow.cameraSize === 90, "legacy game shadowCameraSize 90 blijft als expliciete waarde behouden");
+  assert(legacyWorld.world.performance.game.shadow.cameraFar === 700, "legacy game shadowCameraFar 700 blijft als expliciete waarde behouden");
+  assert(legacyWorld.world.performance.game.shadow.staticPropsCast === false, "legacy game staticPropsCast volgt de lichte preset");
 
   const splitWorld = buildWorldFromGraph(worldSettingsGraph({
     worldValues: { worldId: "split" },
@@ -1361,7 +1424,7 @@ function runWorldSettingsSplitChecks() {
   assert(splitWorld.world.performance.editor.shadow.mapSize === 2048, "editor shadow mapSize komt uit hoog preset");
   assert(splitWorld.world.performance.game.shadow.mapSize === 512, "game shadow mapSize komt uit lichte preset");
   assert(splitWorld.world.performance.editor.shadow.cameraSize === 120, "editor shadow cameraSize komt uit hoog preset");
-  assert(splitWorld.world.performance.game.shadow.cameraSize === 75, "game shadow cameraSize komt uit lichte preset");
+  assert(splitWorld.world.performance.game.shadow.cameraSize === 70, "game shadow cameraSize komt uit lichte preset");
 }
 
 function runWalkabilityChecks() {
@@ -2172,15 +2235,14 @@ function runRevisionGuardChecks() {
 
 async function main() {
   let child = null;
-  let tmpDir = "";
+  let isolatedRuntime = null;
   let dbPath = "";
   let failed = false;
   try {
-    const PORT = process.env.SMOKE_PORT || await reservePort();
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-smoke-"));
-    dbPath = path.join(tmpDir, "smoke.sqlite");
-    cleanupStaleGeneratedAssets();
-    removeSmokeFixtureAssets();
+    requireIsolatedMode();
+    isolatedRuntime = await createIsolatedRuntime(rootDir, "smoke");
+    const PORT = isolatedRuntime.port;
+    dbPath = isolatedRuntime.databasePath;
     runSurfaceGeometryChecks();
     runShadowPolicyChecks();
     runStableShadowControllerChecks();
@@ -2196,11 +2258,10 @@ async function main() {
     runRevisionGuardChecks();
     child = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
-      env: Object.assign({}, process.env, {
-        PORT: PORT,
-        DATABASE_PATH: dbPath,
+      env: isolatedRuntime.env({
         ADMIN_PASSWORD: ADMIN_PASSWORD,
         ADMIN_USERNAME: "kevin",
+        DEV_GAME_ACTIONS: "1",
         GAME_WS_HEARTBEAT_INTERVAL_MS: "1000",
         GAME_WS_HEARTBEAT_TIMEOUT_MS: "2500",
         GAME_POSITION_PERSIST_DEBOUNCE_MS: "150",
@@ -2214,11 +2275,42 @@ async function main() {
 
     console.log("Server draait.");
 
+    const malformedUrl = await fetch(BASE + "/%FF");
+    assert(malformedUrl.status === 400, "malformed URL wordt met 400 afgewezen");
+    const healthAfterMalformedUrl = await fetch(BASE + "/api/health");
+    assert(healthAfterMalformedUrl.status === 200, "server blijft leven na malformed URL");
+    // Inloggen moet licht zijn: ongewijzigde scripts komen als 304 terug in plaats van opnieuw volledig.
+    const runtimeScript = await fetch(BASE + "/shared/world-runtime.js");
+    const runtimeEtag = runtimeScript.headers.get("etag");
+    await runtimeScript.arrayBuffer();
+    assert(runtimeScript.status === 200 && Boolean(runtimeEtag) && /no-cache/.test(runtimeScript.headers.get("cache-control") || ""), "scripts hebben een ETag en Cache-Control no-cache");
+    const runtimeScriptAgain = await fetch(BASE + "/shared/world-runtime.js", { headers: { "If-None-Match": runtimeEtag || "" } });
+    assert(runtimeScriptAgain.status === 304, "ongewijzigd script met If-None-Match geeft 304 (kreeg " + runtimeScriptAgain.status + ")");
+    for (const secretPath of ["/.env", "/.git/config", "/storage/gk-real-node-editor.sqlite", "/assets/..%2f.env"]) {
+      const secretProbe = await fetch(BASE + secretPath);
+      assert(secretProbe.status === 403 || secretProbe.status === 404, "geheim pad " + secretPath + " geeft 403/404 (kreeg " + secretProbe.status + ")");
+    }
+
+    const wrongOriginLogin = await fetch(BASE + "/api/auth/login", {
+      method: "POST",
+      headers: { Origin: "https://aanvaller.invalid", "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "kevin", password: ADMIN_PASSWORD })
+    });
+    assert(wrongOriginLogin.status === 403, "mutatie met verkeerde Origin wordt afgewezen");
+
     const before = await call("GET", "/api/game/world");
     assert(before.status === 404, "game wereld is 404 voor publish (geen sample data)");
 
     const login = await call("POST", "/api/auth/login", { username: "kevin", password: ADMIN_PASSWORD });
     assert(login.status === 200 && login.json.ok, "login werkt");
+
+    const missingCsrfLogout = await fetch(BASE + "/api/auth/logout", {
+      method: "POST",
+      headers: { Origin: BASE, Cookie: defaultCookieJar.value }
+    });
+    assert(missingCsrfLogout.status === 403, "sessiemutatie zonder CSRF-token wordt afgewezen");
+    const sessionAfterMissingCsrf = await call("GET", "/api/auth/me");
+    assert(sessionAfterMissingCsrf.status === 200 && sessionAfterMissingCsrf.json.user, "CSRF-afwijzing laat de geldige sessie intact");
 
     const emptyAssets = await call("GET", "/api/assets");
     assert(emptyAssets.status === 200 && emptyAssets.json && Array.isArray(emptyAssets.json.assets) && emptyAssets.json.assets.length === 0, "lege asset database start leeg");
@@ -2348,25 +2440,67 @@ async function main() {
     const draftAfterRestore = await call("GET", "/api/editor/draft-world");
     assert(draftAfterRestore.status === 200, "draft world rebuildt na restore");
 
-    let graph = (await createNode("world_settings", {
-      worldId: "demo_world",
+    // NODE-01: een nieuw project start met de foundation (World Assembly -> Game Output.gameProject).
+    // De testwereld hangt daarna via World Assembly, UI Output en een Zone Output aan die basis.
+    const foundationPreview = await call("GET", "/api/editor/migrations/node-system-foundation-v1/preview");
+    assert(foundationPreview.status === 200 && foundationPreview.json.previewId, "foundation migration preview werkt");
+    const graphBeforeFoundation = await call("GET", "/api/editor/graph");
+    const foundationApply = await call("POST", "/api/editor/migrations/node-system-foundation-v1/apply", {
+      previewId: foundationPreview.json.previewId,
+      expectedGraphRevision: graphBeforeFoundation.json.graphRevision
+    });
+    assert(foundationApply.status === 200 && foundationApply.json.nodesCreated > 0, "foundation migration maakt de nieuwe projectbasis");
+    let graph = (await call("GET", "/api/editor/graph")).json;
+    const worldAssemblyNode = findNode(graph, function (n) { return n.type === "world_assembly"; }, "foundation world assembly bestaat");
+    const zoneRegistryNode = findNode(graph, function (n) { return n.type === "zone_registry"; }, "foundation zone registry bestaat");
+    const uiOutputNode = findNode(graph, function (n) { return n.type === "ui_output"; }, "foundation ui output bestaat");
+    const projectSettingsNode = findNode(graph, function (n) { return n.type === "game_project_settings"; }, "foundation project settings bestaan");
+    assert(graph.edges.some(function (edge) { return edge.fromNodeId === worldAssemblyNode.id && edge.fromPort === "gameProject" && edge.toPort === "gameProject"; }), "foundation verbindt World Assembly met Game Output.gameProject");
+
+    graph = (await createNode("zone_definition", {
+      zoneId: "zone.demo",
       displayName: "Demo",
+      zoneType: "outdoor_normal",
+      originX: -250,
+      originY: 0,
+      originZ: -250,
+      width: 500,
+      depth: 500,
+      minY: -100,
+      maxY: 500,
+      recommendedLevelMin: 1,
+      recommendedLevelMax: 10,
+      biomeTags: [],
+      zoneTags: [],
+      allowFastTravel: true,
+      allowRespawn: true,
+      activeByDefault: true
+    })).graph;
+    const zoneDefinitionNode = findNode(graph, function (n) { return n.type === "zone_definition" && n.values.zoneId === "zone.demo"; }, "zone definition aangemaakt");
+    graph = (await createNode("zone_environment_settings", {
+      environmentId: "environment.demo",
       backgroundColor: "#0b1622",
       fogColor: "#1a2b3c",
       fogDensity: 0.18,
-      smoothShading: true
+      smoothShading: true,
+      timeOfDayOffset: 0,
+      shadowPresetOverride: "inherit"
     })).graph;
-    const worldNode = graph.nodes.find(function (n) { return n.type === "world_settings"; });
+    const zoneEnvironmentNode = findNode(graph, function (n) { return n.type === "zone_environment_settings" && n.values.environmentId === "environment.demo"; }, "zone environment aangemaakt");
+    graph = (await createNode("zone_output", { packageId: "zone.demo.package", packageVersion: 1, includeEditorOnlyData: false })).graph;
+    const zoneOutputNode = findNode(graph, function (n) { return n.type === "zone_output" && n.values.packageId === "zone.demo.package"; }, "zone output aangemaakt");
+    graph = await patchNodeValues(projectSettingsNode.id, { startZoneRef: "zone.demo", startSpawnRef: "spawn.demo.default" });
     graph = (await createNode("editor_world_settings", worldSettingsPresetNodePatch("editor", "hoog_schaduw"))).graph;
     const editorWorldSettingsNode = graph.nodes.find(function (n) { return n.type === "editor_world_settings"; });
     graph = (await createNode("game_world_settings", worldSettingsPresetNodePatch("game", "lichte_schaduw"))).graph;
     const gameWorldSettingsNode = graph.nodes.find(function (n) { return n.type === "game_world_settings"; });
     graph = (await createNode("ground_surface", { groundId: "demo_ground", width: 40, depth: 40, y: 0, materialColor: "#3f6b3f" })).graph;
     const groundNode = graph.nodes.find(function (n) { return n.type === "ground_surface"; });
-    graph = (await createNode("game_camera", { cameraId: "main_cam", pitch: 60, yaw: 0, startDistance: 26, distance: 20, minDistance: 8, maxDistance: 40, fov: 55, follow: true, rotateSpeed: 90 })).graph;
-    const cameraNode = graph.nodes.find(function (n) { return n.type === "game_camera"; });
-    graph = (await createNode("editor_camera", { cameraId: "editor_cam", targetX: 12, targetY: 3, targetZ: -5, pitch: 48, yaw: 22, distance: 18, minDistance: 4, maxDistance: 64, fov: 60, rotateSpeed: 75 })).graph;
-    const editorCameraNode = graph.nodes.find(function (n) { return n.type === "editor_camera"; });
+    // De foundation levert al een game- en editor camera; de test stelt die in zoals een gebruiker zou doen.
+    const cameraNode = findNode(graph, function (n) { return n.type === "game_camera"; }, "foundation game camera bestaat");
+    graph = await patchNodeValues(cameraNode.id, { cameraId: "main_cam", pitch: 60, yaw: 0, startDistance: 26, distance: 20, minDistance: 8, maxDistance: 40, fov: 55, follow: true, rotateSpeed: 90 });
+    const editorCameraNode = findNode(graph, function (n) { return n.type === "editor_camera"; }, "foundation editor camera bestaat");
+    graph = await patchNodeValues(editorCameraNode.id, { cameraId: "editor_cam", targetX: 12, targetY: 3, targetZ: -5, pitch: 48, yaw: 22, distance: 18, minDistance: 4, maxDistance: 64, fov: 60, rotateSpeed: 75 });
     graph = (await createNode("ambient_light", { lightId: "amb", color: "#ffffff", intensity: 0.8 })).graph;
     const ambientNode = graph.nodes.find(function (n) { return n.type === "ambient_light"; });
     graph = (await createNode("directional_light", { lightId: "sun", color: "#ffffff", intensity: 1.2, x: 10, y: 20, z: 10 })).graph;
@@ -2378,8 +2512,22 @@ async function main() {
     assert(playerNode.values.walkAnimation === "Walk", "player_character bewaart walkAnimation");
     assert(playerNode.values.runAnimation === "Run", "player_character bewaart runAnimation");
     assert(playerNode.values.showNameplate === true, "player_character toont naam boven character standaard aan");
-    graph = (await createNode("player_spawn", { spawnId: "spawn", x: 0, z: 0, facing: 0 })).graph;
-    const spawnNode = graph.nodes.find(function (n) { return n.type === "player_spawn"; });
+    graph = (await createNode("spawn_point", {
+      spawnId: "spawn.demo.default",
+      role: "zone_default",
+      zoneRef: "zone.demo",
+      label: "Demo Spawn",
+      x: 0,
+      y: 0,
+      z: 0,
+      facing: 0,
+      safeRadius: 1.25,
+      snapToGround: true,
+      validateCollision: true,
+      activationConditionRef: null,
+      priority: 0
+    })).graph;
+    const spawnNode = findNode(graph, function (n) { return n.type === "spawn_point" && n.values.spawnId === "spawn.demo.default"; }, "zone default spawn aangemaakt");
     graph = (await createNode("model_entity", { entityId: "entity_walk", label: "Walker", modelAssetId: modelId, animationClip: "Walk", idleAnimation: "Idle", walkAnimation: "Walk", runAnimation: "Run", x: 5, y: 0, z: 0, rotationX: 10, rotationY: 20, rotationZ: 30, scaleX: 1, scaleY: 1, scaleZ: 1, solid: false, collisionRadius: 1 })).graph;
     const modelEntityNode = findNode(graph, function (n) { return n.type === "model_entity" && n.values.entityId === "entity_walk"; }, "model entity aangemaakt");
     assert(modelEntityNode.values.animationClip === "Walk", "model_entity bewaart animationClip");
@@ -2627,10 +2775,12 @@ async function main() {
     assert(scatterNodeSchema.fields.sourceScaleMultipliers && scatterNodeSchema.fields.sourceScaleMultipliers.hidden === true && scatterNodeSchema.fields.sourceScaleMultipliers.type === "json", "bounded_area_scatter heeft per-object scale multipliers");
     assert(scatterNodeSchema.fields.sourceScaleMultipliers.default && Object.keys(scatterNodeSchema.fields.sourceScaleMultipliers.default).length === 0, "sourceScaleMultipliers default is leeg");
 
-    graph = (await createNode("editor_chunk_loading", {})).graph;
-    const editorChunkLoadingNode = findNode(graph, function (n) { return n.type === "editor_chunk_loading"; }, "editor chunk loading aangemaakt");
+    // De foundation levert editor/game chunk loading al aan World Assembly; de test stelt die in.
+    const editorChunkLoadingNode = findNode(graph, function (n) { return n.type === "editor_chunk_loading"; }, "foundation editor chunk loading bestaat");
+    graph = await patchNodeValues(editorChunkLoadingNode.id, { chunkWidth: 100, chunkDepth: 100 });
 
-    graph = (await createNode("game_chunk_loading", {
+    const gameChunkLoadingNode = findNode(graph, function (n) { return n.type === "game_chunk_loading"; }, "foundation game chunk loading bestaat");
+    graph = await patchNodeValues(gameChunkLoadingNode.id, {
       chunkProfileId: "game_chunks",
       enabled: true,
       chunkWidth: 15,
@@ -2652,10 +2802,9 @@ async function main() {
       residentEntityBudget: 200,
       residentObjectBudget: 300,
       residentScatterInstanceBudget: 500
-    })).graph;
-    const gameChunkLoadingNode = findNode(graph, function (n) { return n.type === "game_chunk_loading"; }, "game chunk loading aangemaakt");
+    });
 
-    graph = await connect(graph, keybindDirect.id, "keybind", gameOutputNode.id, "keybinds");
+    graph = await connect(graph, keybindDirect.id, "keybind", worldAssemblyNode.id, "keybinds");
     graph = await connect(graph, keybindGroup1.id, "keybind", groupNode.id, "keybinds_in");
 
     graph = await connect(graph, groupInputNode.id, "keybinds_in", groupOutputNode.id, "keybinds_out");
@@ -2680,17 +2829,17 @@ async function main() {
 
     assert(group2OutputNode.parentId === group2Node.id, "nested group output hoort bij Group 2");
     const illegalCrossBoundaryEdge = await call("POST", "/api/editor/edges", {
-      edge: { fromNodeId: group2OutputNode.id, fromPort: "keybinds_out", toNodeId: gameOutputNode.id, toPort: "keybinds" }
+      edge: { fromNodeId: group2OutputNode.id, fromPort: "keybinds_out", toNodeId: worldAssemblyNode.id, toPort: "keybinds" }
     });
     assert(illegalCrossBoundaryEdge.status === 400, "cross-boundary edge wordt geweigerd");
     const graphAfterIllegalEdge = await call("GET", "/api/editor/graph");
     assert(!graphAfterIllegalEdge.json.edges.some(function (edge) {
-      return edge.fromNodeId === group2OutputNode.id && edge.toNodeId === gameOutputNode.id;
+      return edge.fromNodeId === group2OutputNode.id && edge.toNodeId === worldAssemblyNode.id;
     }), "illegal edge wordt niet opgeslagen");
 
     graph = await connect(graph, keybindGroup2.id, "keybind", group2OutputNode.id, "keybinds_out");
     graph = await connect(graph, group2Node.id, "keybinds_out", groupOutputNode.id, "keybinds_out");
-    graph = await connect(graph, groupNode.id, "keybinds_out", gameOutputNode.id, "keybinds");
+    graph = await connect(graph, groupNode.id, "keybinds_out", worldAssemblyNode.id, "keybinds");
 
     graph = (await createNode("terrain_layer", {
       layerId: "village_grass",
@@ -2780,36 +2929,40 @@ async function main() {
     })).graph;
     const walkableSurfaceNode = findNode(graph, function (n) { return n.type === "walkable_surface" && n.values.surfaceId === "bridge_walk_01"; }, "walkable surface aangemaakt");
 
-    graph = await connect(graph, worldNode.id, "world", gameOutputNode.id, "world");
-    graph = await connect(graph, editorWorldSettingsNode.id, "editorWorldSettings", gameOutputNode.id, "editorWorldSettings");
-    graph = await connect(graph, gameWorldSettingsNode.id, "gameWorldSettings", gameOutputNode.id, "gameWorldSettings");
-    graph = await connect(graph, groundNode.id, "ground", gameOutputNode.id, "ground");
-    graph = await connect(graph, cameraNode.id, "camera", gameOutputNode.id, "camera");
-    graph = await connect(graph, ambientNode.id, "light", gameOutputNode.id, "lights");
-    graph = await connect(graph, dirNode.id, "light", gameOutputNode.id, "lights");
-    graph = await connect(graph, playerNode.id, "player", gameOutputNode.id, "player");
-    graph = await connect(graph, spawnNode.id, "spawn", gameOutputNode.id, "spawn");
-    graph = await connect(graph, scatterNode.id, "entity", gameOutputNode.id, "entities");
-    graph = await connect(graph, terrainLayerNode.id, "terrain", gameOutputNode.id, "terrain");
-    graph = await connect(graph, surfaceLayerNode.id, "terrain", gameOutputNode.id, "terrain");
-    graph = await connect(graph, blockerAreaNode.id, "collision", gameOutputNode.id, "collision");
-    graph = await connect(graph, walkableSurfaceNode.id, "collision", gameOutputNode.id, "collision");
-    graph = await connect(graph, hudTextNode.id, "ui", gameOutputNode.id, "ui");
-    graph = await connect(graph, perfHudNode.id, "ui", gameOutputNode.id, "ui");
-    graph = await connect(graph, disabledPerfHudNode.id, "ui", gameOutputNode.id, "ui");
-    graph = await connect(graph, mmoDebugHudNode.id, "ui", gameOutputNode.id, "ui");
-    graph = await connect(graph, editorChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
-    graph = await connect(graph, gameChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
-    graph = await connect(graph, minimapBakeNode.id, "minimap", gameOutputNode.id, "minimap");
-    graph = await connect(graph, gameMinimapHudNode.id, "minimap", gameOutputNode.id, "minimap");
-    graph = await connect(graph, editorMinimapHudNode.id, "minimap", gameOutputNode.id, "minimap");
+    // Normale authoringroute (NODE-01/02): projectbrede instellingen naar World Assembly,
+    // UI naar UI Output, wereldinhoud naar de Zone Output van de startzone.
+    graph = await connect(graph, editorWorldSettingsNode.id, "editorWorldSettings", worldAssemblyNode.id, "editorWorldSettings");
+    graph = await connect(graph, gameWorldSettingsNode.id, "gameWorldSettings", worldAssemblyNode.id, "gameWorldSettings");
+    graph = await connect(graph, ambientNode.id, "light", worldAssemblyNode.id, "lights");
+    graph = await connect(graph, dirNode.id, "light", worldAssemblyNode.id, "lights");
+    graph = await connect(graph, hudTextNode.id, "ui", uiOutputNode.id, "ui");
+    graph = await connect(graph, perfHudNode.id, "ui", uiOutputNode.id, "ui");
+    graph = await connect(graph, disabledPerfHudNode.id, "ui", uiOutputNode.id, "ui");
+    graph = await connect(graph, mmoDebugHudNode.id, "ui", uiOutputNode.id, "ui");
+    graph = await connect(graph, gameMinimapHudNode.id, "minimap", uiOutputNode.id, "minimap");
+    graph = await connect(graph, editorMinimapHudNode.id, "minimap", uiOutputNode.id, "minimap");
+    graph = await connect(graph, zoneDefinitionNode.id, "zone", zoneOutputNode.id, "zone");
+    graph = await connect(graph, zoneEnvironmentNode.id, "environment", zoneOutputNode.id, "environment");
+    graph = await connect(graph, groundNode.id, "ground", zoneOutputNode.id, "ground");
+    graph = await connect(graph, playerNode.id, "player", zoneOutputNode.id, "player");
+    graph = await connect(graph, spawnNode.id, "spawnPoint", zoneOutputNode.id, "spawns");
+    graph = await connect(graph, scatterNode.id, "entity", zoneOutputNode.id, "entities");
+    graph = await connect(graph, modelEntityNode.id, "entity", zoneOutputNode.id, "entities");
+    graph = await connect(graph, secondModelEntityNode.id, "entity", zoneOutputNode.id, "entities");
+    graph = await connect(graph, duplicatedModelEntityNode.id, "entity", zoneOutputNode.id, "entities");
+    graph = await connect(graph, terrainLayerNode.id, "terrain", zoneOutputNode.id, "terrain");
+    graph = await connect(graph, surfaceLayerNode.id, "terrain", zoneOutputNode.id, "terrain");
+    graph = await connect(graph, blockerAreaNode.id, "collision", zoneOutputNode.id, "collision");
+    graph = await connect(graph, walkableSurfaceNode.id, "collision", zoneOutputNode.id, "collision");
+    graph = await connect(graph, minimapBakeNode.id, "minimap", zoneOutputNode.id, "minimap");
+    graph = await connect(graph, zoneOutputNode.id, "zonePackage", zoneRegistryNode.id, "zonePackage");
 
     const validate = await call("GET", "/api/editor/validate");
     if (!validate.json.ok) console.error("VALIDATE ERRORS", validate.json.errors);
     assert(validate.status === 200 && validate.json.ok, "validatie is groen");
-    assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
+    assert(Array.isArray(validate.json.warnings) && !validate.json.warnings.some(function (message) {
       return String(message || "").includes("chunk size is very small");
-    }), "kleine chunk size geeft een waarschuwing");
+    }), "kleine chunk size is sinds fase 9 een runtime-debugmelding, geen publish-waarschuwing");
     assert(Array.isArray(validate.json.warnings) && validate.json.warnings.some(function (message) {
       return String(message || "").includes("nog geen minimap image gebakken");
     }), "validatie waarschuwt dat Game Minimap HUD nog geen gebakken image heeft");
@@ -2860,7 +3013,17 @@ async function main() {
     }), "edgeDensity 100 houdt bomen op de boundary");
     assert(usedBoundarySegments.size >= 3, "edgeDensity 100 gebruikt meerdere boundary segmenten");
 
-    const randomCoverageWorld = buildScatterWorld(graph, scatterNode.id, {
+    // Asset-id's (en dus de scatter-seed) verschillen per run: vergelijk het gemiddelde over vaste seeds,
+    // zodat de uitkomst niet van één toevallige steekproef afhangt.
+    const coverageSeeds = ["coverage_seed_a", "coverage_seed_b", "coverage_seed_c", "coverage_seed_d", "coverage_seed_e"];
+    const averageScatterCoverage = function (scatterValues) {
+      const scores = coverageSeeds.map(function (seed) {
+        const world = buildScatterWorld(graph, scatterNode.id, Object.assign({ seed: seed }, scatterValues));
+        return scatterCoverageScore(world, scatterNode.id, scatterBasePoints, 10);
+      });
+      return scores.reduce(function (sum, score) { return sum + score; }, 0) / scores.length;
+    };
+    const randomCoverage = averageScatterCoverage({
       count: 36,
       minSpacing: 0,
       spacingStrength: 0,
@@ -2868,7 +3031,7 @@ async function main() {
       edgeDensity: 0,
       edgeSpacing: 0
     });
-    const denseFillWorld = buildScatterWorld(graph, scatterNode.id, {
+    const denseFillCoverage = averageScatterCoverage({
       count: 36,
       minSpacing: 1.5,
       spacingStrength: 100,
@@ -2877,9 +3040,7 @@ async function main() {
       edgeSpacing: 0,
       edgeJitter: 20
     });
-    const randomCoverage = scatterCoverageScore(randomCoverageWorld, scatterNode.id, scatterBasePoints, 10);
-    const denseFillCoverage = scatterCoverageScore(denseFillWorld, scatterNode.id, scatterBasePoints, 10);
-    assert(denseFillCoverage < randomCoverage, "dense_fill heeft betere coverage dan random");
+    assert(denseFillCoverage < randomCoverage, "dense_fill heeft gemiddeld betere coverage dan random (" + denseFillCoverage.toFixed(2) + " < " + randomCoverage.toFixed(2) + ")");
 
     const impossibleWorld = buildScatterWorld(graph, scatterNode.id, {
       count: 40,
@@ -2902,14 +3063,14 @@ async function main() {
     assert(draftWorld.json.camera && draftWorld.json.camera.pitch === 60 && draftWorld.json.camera.yaw === 0 && draftWorld.json.camera.startDistance === 26 && draftWorld.json.camera.distance === 20 && draftWorld.json.camera.fov === 55, "game camera blijft node-driven na save-draft");
     assert(draftWorld.json.editorCamera && draftWorld.json.editorCamera.id === "editor_cam", "draft world bewaart editor camera node");
     assert(draftWorld.json.editorCamera && draftWorld.json.editorCamera.target && draftWorld.json.editorCamera.target.x === 12 && draftWorld.json.editorCamera.target.y === 3 && draftWorld.json.editorCamera.target.z === -5, "editor camera publiceert target");
-    assert(draftWorld.json.world && draftWorld.json.world.fogColor === "#1a2b3c", "draft world publiceert fogColor");
-    assert(draftWorld.json.world && draftWorld.json.world.fogDensity === 0.18, "draft world publiceert fogDensity");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.worldId === "demo_world", "draft world publiceert shared worldId");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.displayName === "Demo", "draft world publiceert shared displayName");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.backgroundColor === "#0b1622", "draft world publiceert shared backgroundColor");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.fogColor === "#1a2b3c", "draft world publiceert shared fogColor");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.fogDensity === 0.18, "draft world publiceert shared fogDensity");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.shared.smoothShading === true, "draft world publiceert shared smoothShading");
+    // NODE-02: zone-identiteit en omgeving komen uit de startzone (Zone Definition + Zone Environment).
+    const draftWorldZonePackage = draftWorld.json.zonePackage || {};
+    assert(draftWorld.json.activeZoneId === "zone.demo" && draftWorldZonePackage.zoneId === "zone.demo", "draft world publiceert de startzone");
+    assert(draftWorldZonePackage.zone && draftWorldZonePackage.zone.displayName === "Demo", "draft world publiceert zone displayName");
+    assert(draftWorldZonePackage.environment && draftWorldZonePackage.environment.backgroundColor === "#0b1622", "draft world publiceert zone backgroundColor");
+    assert(draftWorldZonePackage.environment && draftWorldZonePackage.environment.fogColor === "#1a2b3c", "draft world publiceert zone fogColor");
+    assert(draftWorldZonePackage.environment && draftWorldZonePackage.environment.fogDensity === 0.18, "draft world publiceert zone fogDensity");
+    assert(draftWorldZonePackage.environment && draftWorldZonePackage.environment.smoothShading === true, "draft world publiceert zone smoothShading");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "draft world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.preset === "hoog_schaduw", "draft world publiceert editor preset");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.editor.debugWarningsVisible === true, "draft world publiceert editor debugWarningsVisible");
@@ -2924,14 +3085,14 @@ async function main() {
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.preset === "lichte_schaduw", "draft world publiceert game preset");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.debugWarningsVisible === false, "draft world publiceert game debugWarningsVisible");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.pixelRatioCap === 1, "draft world publiceert game preset pixelRatioCap");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.antialias === true, "draft world publiceert game preset antialias");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.antialias === false, "draft world publiceert game antialias uit (NODE-02 default)");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow && draftWorld.json.world.performance.game.shadow.preset === "lichte_schaduw", "draft world publiceert game shadow block");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.enabled === true, "draft world zet game shadows aan");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.mapSize === 512, "draft world publiceert game shadow mapSize");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraSize === 75, "draft world publiceert game shadow cameraSize");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraFar === 350, "draft world publiceert game shadowCameraFar");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.staticPropsCast === true, "draft world publiceert game static prop cast");
-    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.scatterCast === false, "draft world publiceert game scatter cast uit");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraSize === 70, "draft world publiceert game shadow cameraSize");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.cameraFar === 300, "draft world publiceert game shadowCameraFar");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.staticPropsCast === false, "draft world publiceert game static prop cast uit");
+    assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.scatterCast === true, "draft world publiceert game scatter cast");
     assert(draftWorld.json.world && draftWorld.json.world.performance && draftWorld.json.world.performance.game.shadow.shadowResidentMarginChunks === 0, "draft world publiceert game shadow resident margin");
     assert(draftWorld.json.chunkLoading && draftWorld.json.chunkLoading.editor && draftWorld.json.chunkLoading.game, "draft world publiceert chunkLoading read-model");
     assert(draftWorld.json.chunkLoading.editor.type === "editor" && draftWorld.json.chunkLoading.game.type === "game", "draft world scheidt editor en game chunk loading");
@@ -2993,14 +3154,14 @@ async function main() {
     assert(after.json.camera && after.json.camera.mode === "top-down", "camera is top-down");
     assert(after.json.camera && after.json.camera.id === "main_cam" && after.json.camera.pitch === 60 && after.json.camera.yaw === 0 && after.json.camera.startDistance === 26 && after.json.camera.distance === 20 && after.json.camera.fov === 55, "game camera publiceert nodewaarden");
     assert(!after.json.editorCamera, "editor camera publiceert niet naar /game/");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.worldId === "demo_world", "game world publiceert shared worldId");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.displayName === "Demo", "game world publiceert shared displayName");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.backgroundColor === "#0b1622", "game world publiceert shared backgroundColor");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.fogColor === "#1a2b3c", "game world publiceert shared fogColor");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.fogDensity === 0.18, "game world publiceert shared fogDensity");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.shared.smoothShading === true, "game world publiceert shared smoothShading");
-    assert(after.json.world && after.json.world.fogColor === "#1a2b3c", "game world publiceert fogColor");
-    assert(after.json.world && after.json.world.fogDensity === 0.18, "game world publiceert fogDensity");
+    // NODE-02: zone-identiteit en omgeving komen uit de startzone (Zone Definition + Zone Environment).
+    const afterZonePackage = after.json.zonePackage || {};
+    assert(after.json.activeZoneId === "zone.demo" && afterZonePackage.zoneId === "zone.demo", "game world publiceert de startzone");
+    assert(afterZonePackage.zone && afterZonePackage.zone.displayName === "Demo", "game world publiceert zone displayName");
+    assert(afterZonePackage.environment && afterZonePackage.environment.backgroundColor === "#0b1622", "game world publiceert zone backgroundColor");
+    assert(afterZonePackage.environment && afterZonePackage.environment.fogColor === "#1a2b3c", "game world publiceert zone fogColor");
+    assert(afterZonePackage.environment && afterZonePackage.environment.fogDensity === 0.18, "game world publiceert zone fogDensity");
+    assert(afterZonePackage.environment && afterZonePackage.environment.smoothShading === true, "game world publiceert zone smoothShading");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.compatibility.usedLegacyWorldSettingsPerformanceFields === false, "game world gebruikt de nieuwe editor/game nodes, geen legacy fallback");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.preset === "hoog_schaduw", "game world publiceert editor preset");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor.debugWarningsVisible === true, "game world publiceert editor debugWarningsVisible");
@@ -3019,10 +3180,10 @@ async function main() {
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow && after.json.world.performance.game.shadow.preset === "lichte_schaduw", "game world publiceert game shadow block");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.enabled === true, "game world zet game shadows aan");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.mapSize === 512, "game world publiceert game shadow mapSize");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraSize === 75, "game world publiceert game shadow cameraSize");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraFar === 350, "game world publiceert game shadow distance");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.staticPropsCast === true, "game world publiceert game static prop cast");
-    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.scatterCast === false, "game world publiceert game scatter cast uit");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraSize === 70, "game world publiceert game shadow cameraSize");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.cameraFar === 300, "game world publiceert game shadow distance");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.staticPropsCast === false, "game world publiceert game static prop cast uit");
+    assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.scatterCast === true, "game world publiceert game scatter cast");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.game.shadow.shadowResidentMarginChunks === 0, "game world publiceert game shadow resident margin");
     assert(after.json.world && after.json.world.performance && after.json.world.performance.editor && after.json.world.performance.editor.fogEnabled === false, "game world behoudt editor fog toggle in draft data");
     assert(after.json.chunkLoading && after.json.chunkLoading.editor && after.json.chunkLoading.game, "game world publiceert chunkLoading");
@@ -3055,7 +3216,7 @@ async function main() {
     assert(after.json.player && after.json.player.walkAnimation === "Walk", "speler publiceert walkAnimation");
     assert(after.json.player && after.json.player.runAnimation === "Run", "speler publiceert runAnimation");
     assert(after.json.spawn && after.json.spawn.x === 0, "spawn aanwezig");
-    assert(Array.isArray(after.json.entities) && after.json.entities.some(function (entity) { return entity.animationClip === "Walk"; }), "entities publiceren gekozen animationClip");
+    assert(Array.isArray(after.json.entities) && after.json.entities.some(function (entity) { return entity.modelAssetId === modelId && entity.animationClip === "Idle" && entity.walkAnimation === "Walk"; }), "entities publiceren canonieke animaties (idle als startclip sinds fase 9)");
     const publishedOriginalModelEntity = Array.isArray(after.json.entities)
       ? after.json.entities.find(function (entity) { return entity.nodeId === modelEntityNode.id; })
       : null;
@@ -3218,7 +3379,7 @@ async function main() {
     })).graph;
     const duplicateMinimapBakeNode = findNode(graph, function (n) { return n.type === "minimap_bake" && n.values.label === "Duplicate Minimap"; }, "duplicate minimap bake aangemaakt");
     assert(duplicateMinimapBakeNode.values.minimapId !== "main_minimap", "node aanmaken uniquificeert minimapId automatisch (main_minimap_2)");
-    graph = await connect(graph, duplicateMinimapBakeNode.id, "minimap", gameOutputNode.id, "minimap");
+    graph = await connect(graph, duplicateMinimapBakeNode.id, "minimap", zoneOutputNode.id, "minimap");
     // PATCH omzeilt de create-time auto-uniquify, zodat we de echte duplicate-id-bij-publish situatie
     // kunnen testen (bv. iemand typt het minimapId veld in de inspector handmatig terug naar "main_minimap").
     graph = await patchNodeValues(duplicateMinimapBakeNode.id, { minimapId: "main_minimap" });
@@ -3236,7 +3397,7 @@ async function main() {
     minimapBakeNoAuthForm.append("resolution", "64");
     minimapBakeNoAuthForm.append("file", buildTinyPngBlob(10, 20, 30, 255), "minimap.png");
     const minimapBakeNoAuth = await call("POST", "/api/editor/minimap-bakes", minimapBakeNoAuthForm, true, createCookieJar());
-    assert(minimapBakeNoAuth.status === 401, "POST /api/editor/minimap-bakes zonder auth faalt");
+    assert(minimapBakeNoAuth.status === 403 && minimapBakeNoAuth.json && minimapBakeNoAuth.json.code === "CSRF_FORBIDDEN", "POST /api/editor/minimap-bakes zonder sessie wordt geweigerd (CSRF-grens vóór auth, Fase 01)");
 
     const minimapBakeForm = new FormData();
     minimapBakeForm.append("nodeId", minimapBakeNode.id);
@@ -3319,7 +3480,7 @@ async function main() {
     const secondGameChunkLoadingNode = findNode(graph, function (n) {
       return n.type === "game_chunk_loading" && n.values.chunkProfileId === "game_chunks_alt";
     }, "tweede game chunk loading aangemaakt");
-    graph = await connect(graph, secondGameChunkLoadingNode.id, "chunkLoading", gameOutputNode.id, "chunkLoading");
+    graph = await connect(graph, secondGameChunkLoadingNode.id, "chunkLoading", worldAssemblyNode.id, "chunkLoading");
     const publishWithTwoChunkLoadingNodes = await call("POST", "/api/editor/publish");
     assert(publishWithTwoChunkLoadingNodes.status === 200 && publishWithTwoChunkLoadingNodes.json.ok, "publiceren werkt met meerdere game chunk loading nodes");
     assert(Array.isArray(publishWithTwoChunkLoadingNodes.json.validation.warnings) && publishWithTwoChunkLoadingNodes.json.validation.warnings.some(function (message) {
@@ -3450,12 +3611,32 @@ async function main() {
     graph = await connect(graph, cycleBKeybind.id, "keybind", cycleBOutputNode.id, "keybinds_out");
     graph = await connect(graph, cycleAGroupNode.id, "keybinds_out", cycleBGroupNode.id, "keybinds_in");
     graph = await connect(graph, cycleBGroupNode.id, "keybinds_out", cycleAGroupNode.id, "keybinds_in");
-    graph = await connect(graph, cycleAGroupNode.id, "keybinds_out", gameOutputNode.id, "keybinds");
+    graph = await connect(graph, cycleAGroupNode.id, "keybinds_out", worldAssemblyNode.id, "keybinds");
 
     const cycleValidation = await call("GET", "/api/editor/validate");
     assert(cycleValidation.status === 200 && !cycleValidation.json.ok && cycleValidation.json.errors.some(function (message) {
       return message.includes("Group connection cycle detected");
     }), "group cycle faalt validatie");
+
+    const debugOperationId = "smoke-debug-reset-idempotency";
+    const debugReset = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: debugOperationId
+    });
+    assert(debugReset.status === 200 && debugReset.json.ok === true, "admin mag debugactie alleen met de expliciete dev-flag uitvoeren");
+    const adminNode03State = await call("GET", "/api/game/node03/state");
+    assert(adminNode03State.status === 200 && adminNode03State.json.debugActionsAllowed === true, "node03-state meldt de admin met dev-flag dat debugacties beschikbaar zijn");
+    const debugResetRetry = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: debugOperationId
+    });
+    assert(debugResetRetry.status === 200 && debugResetRetry.json.idempotent === true, "identieke retry met hetzelfde operation-ID is idempotent");
+    const debugResetMismatch = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: debugOperationId,
+      changedPayload: true
+    });
+    assert(debugResetMismatch.status === 409 && debugResetMismatch.json.code === "OPERATION_PAYLOAD_MISMATCH", "zelfde operation-ID met andere payload wordt geweigerd");
 
     // MMO-01 regressieproof: account, multi-sessie, auth, WebSocket sync en persistence.
     const mmoUsername = "test_mmo_01";
@@ -3516,6 +3697,47 @@ async function main() {
     assert(playerLoadMobile.json.position.playerId === playerLoadPc.json.player.id, "beide sessies delen dezelfde player entity");
     assert(playerLoadMobile.json.position.x === playerLoadPc.json.position.x && playerLoadMobile.json.position.z === playerLoadPc.json.position.z, "beide sessies starten op dezelfde serverpositie");
     assert(playerLoadMobile.json.activeSessionCount === 2, "tweede login verwijdert eerste sessie niet");
+
+    const authoritativePositionBeforeCheat = await call("GET", "/api/game/player", null, false, pcJar);
+    const teleportCheat = await call("PATCH", "/api/game/player/position", {
+      teleport: true,
+      position: { x: 999999, y: 999999, z: 999999 }
+    }, false, pcJar);
+    assert(teleportCheat.status === 400 && teleportCheat.json.code === "INPUT_REJECTED", "clientteleport wordt door de echte HTTP-route geweigerd");
+    const stopResyncCheat = await call("PATCH", "/api/game/player/position", {
+      clientSessionId: "forged-stop-resync",
+      inputSeq: 1,
+      stop: true,
+      clientPredictedPosition: { x: -999999, y: 0, z: -999999 }
+    }, false, pcJar);
+    assert(stopResyncCheat.status === 400 && stopResyncCheat.json.code === "INPUT_REJECTED", "stop-resync met clientpositie wordt geweigerd");
+    const authoritativePositionAfterCheat = await call("GET", "/api/game/player", null, false, pcJar);
+    assertNear(authoritativePositionAfterCheat.json.position.x, authoritativePositionBeforeCheat.json.position.x, 0.0001, "afgewezen cheats wijzigen de server-x niet");
+    assertNear(authoritativePositionAfterCheat.json.position.z, authoritativePositionBeforeCheat.json.position.z, 0.0001, "afgewezen cheats wijzigen de server-z niet");
+
+    const playerDebugDenied = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: "smoke-player-debug-denied"
+    }, false, pcJar);
+    assert(playerDebugDenied.status === 403 && playerDebugDenied.json.code === "DEBUG_ACTION_FORBIDDEN", "dev-flag geeft een gewone speler geen debugrechten");
+    const playerNode03State = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    assert(playerNode03State.status === 200 && playerNode03State.json.debugActionsAllowed === false, "node03-state meldt een gewone speler dat debugacties uit staan (knoppen uitgeschakeld)");
+    // Een andere speler krijgt direct een seintje als gedeelde objecten veranderen (Kevin-handtest: kaas bleef staan).
+    const entityWatcher = createGameSocketClient(pcJar, "entity-watcher");
+    await entityWatcher.opened;
+    await entityWatcher.waitForMessage(function (message) { return message.type === "connection:ready"; });
+    const entityBroadcastReset = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: "smoke-entity-broadcast"
+    });
+    const entitiesChanged = await entityWatcher.waitForMessage(function (message) { return message.type === "node03:entities_changed"; }, 5000).catch(function () { return null; });
+    assert(entityBroadcastReset.status === 200 && Boolean(entitiesChanged) && entitiesChanged.action === "reset_demo", "andere spelers krijgen direct node03:entities_changed na een actie op gedeelde objecten");
+    entityWatcher.close();
+
+    const wrongOriginSocket = await probeRejectedGameSocket(pcJar, "https://aanvaller.invalid");
+    assert(wrongOriginSocket.kind !== "open" && (wrongOriginSocket.statusCode === 403 || wrongOriginSocket.kind === "error"), "WebSocket-handshake met verkeerde Origin wordt geweigerd");
+    const oversizedSocket = await probeOversizedGameSocket(pcJar);
+    assert(oversizedSocket.code === 1009, "WebSocket sluit een payload van 70 KiB met code 1009");
 
     const wsPc = createGameSocketClient(pcJar, "mmo-pc");
     await wsPc.opened;
@@ -3907,8 +4129,10 @@ async function main() {
     assert(scatterDefaultsEntities.length === 24, "edgeDensity 0 publiceert alle scatter instances in de area");
     assert(scatterDefaultsDistances.some(function (distance) { return distance > 0.0001; }), "edgeDensity 0 houdt bomen binnen de area");
 
+    // Sinds fase 9 schuift edgeJitter (default 20%) randbomen een paar cm naar binnen; zonder jitter moeten ze exact op de rand staan.
     graph = await patchNodeValues(scatterNode.id, {
-      edgeDensity: 100
+      edgeDensity: 100,
+      edgeJitter: 0
     });
     const scatterEdgeDraft = await call("POST", "/api/editor/save-draft");
     assert(scatterEdgeDraft.status === 200 && scatterEdgeDraft.json.ok, "save-draft werkt voor edgeDensity 100");
@@ -3924,7 +4148,7 @@ async function main() {
     const scatterEdgeDistances = scatterEdgeEntities.map(function (entity) {
       return scatterBoundaryDistance(entity, scatterEdgePoints);
     });
-    assert(scatterEdgeDistances.every(function (distance) { return distance <= 0.001; }), "edgeDensity 100 zet alle bomen op de rand");
+    assert(scatterEdgeDistances.every(function (distance) { return distance <= 0.001; }), "edgeDensity 100 zet alle bomen op de rand (max " + Math.max.apply(null, scatterEdgeDistances.concat([0])).toFixed(4) + ", n=" + scatterEdgeDistances.length + ")");
 
     graph = await patchNodeValues(scatterNode.id, {
       edgeDensity: 0,
@@ -3992,8 +4216,10 @@ async function main() {
       sizeCurve: "linear",
       scaleMin: 1,
       scaleMax: 1,
+      // modelId is eerder in deze run vervangen en verwijderd; gebruik de twee assets die nu bestaan.
+      sourceAssetIds: [replacementAssetId, treeAssetId],
       sourceScaleMultipliers: {
-        [modelId]: 0.5,
+        [replacementAssetId]: 0.5,
         [treeAssetId]: 1.75
       }
     });
@@ -4002,13 +4228,13 @@ async function main() {
     const scatterScaleWorld = await call("GET", "/api/editor/draft-world");
     assert(scatterScaleWorld.status === 200, "draft world blijft beschikbaar voor per-object scale");
     const scatterScaleArea = (scatterScaleWorld.json.scatterAreas || []).find(function (area) { return area.id === scatterNode.id; }) || null;
-    assert(scatterScaleArea && scatterScaleArea.sourceScaleMultipliers && scatterScaleArea.sourceScaleMultipliers[modelId] === 0.5 && scatterScaleArea.sourceScaleMultipliers[treeAssetId] === 1.75, "scatter area publiceert per-object scale multipliers");
+    assert(scatterScaleArea && scatterScaleArea.sourceScaleMultipliers && scatterScaleArea.sourceScaleMultipliers[replacementAssetId] === 0.5 && scatterScaleArea.sourceScaleMultipliers[treeAssetId] === 1.75, "scatter area publiceert per-object scale multipliers");
     const scatterScaleEntities = (Array.isArray(scatterScaleWorld.json.entities) ? scatterScaleWorld.json.entities : [])
       .filter(function (entity) { return entity && entity.nodeId === scatterNode.id; })
       .slice()
       .sort(function (left, right) { return String(left.id || "").localeCompare(String(right.id || "")); });
     const modelScaleVectors = scatterScaleEntities.filter(function (entity) {
-      return entity && entity.sourceAssetId === modelId;
+      return entity && entity.sourceAssetId === replacementAssetId;
     }).map(function (entity) {
       const scale = entity.transform && entity.transform.scale ? entity.transform.scale : {};
       return [Number(scale.x || 0), Number(scale.y || 0), Number(scale.z || 0)];
@@ -4019,9 +4245,91 @@ async function main() {
       const scale = entity.transform && entity.transform.scale ? entity.transform.scale : {};
       return [Number(scale.x || 0), Number(scale.y || 0), Number(scale.z || 0)];
     });
-    assert(modelScaleVectors.length > 0 && treeScaleVectors.length > 0, "per-object scale test publiceert beide sources");
+    assert(modelScaleVectors.length > 0 && treeScaleVectors.length > 0, "per-object scale test publiceert beide sources (gevonden: " + JSON.stringify(Array.from(new Set(scatterScaleEntities.map(function (entity) { return entity.sourceAssetId; })))) + ", verwacht: " + JSON.stringify([replacementAssetId, treeAssetId]) + ")");
     assert(modelScaleVectors.every(function (scale) { return Math.abs(scale[0] - 0.5) < 0.0001 && Math.abs(scale[1] - 0.5) < 0.0001 && Math.abs(scale[2] - 0.5) < 0.0001; }), "eerste bron krijgt eigen scale");
     assert(treeScaleVectors.every(function (scale) { return Math.abs(scale[0] - 1.75) < 0.0001 && Math.abs(scale[1] - 1.75) < 0.0001 && Math.abs(scale[2] - 1.75) < 0.0001; }), "tweede bron krijgt eigen scale");
+
+    // F1-E1-T01: servereigen zone-reis via een Zone Link blijft werken nu clientteleports geweigerd worden.
+    // Eerst de bewuste group-cycle uit de cycle-validatietest opruimen; die blokkeert publiceren.
+    const removeCycleGroups = await call("POST", "/api/editor/graph/delete-selection", { nodeIds: [cycleAGroupNode.id, cycleBGroupNode.id] });
+    assert(removeCycleGroups.status === 200, "cycle-testgroups worden opgeruimd vóór de zone-link publish");
+    graph = (await createNode("zone_definition", {
+      zoneId: "zone.demo_two",
+      displayName: "Demo Two",
+      zoneType: "outdoor_normal",
+      originX: 250,
+      originY: 0,
+      originZ: -250,
+      width: 500,
+      depth: 500,
+      minY: -100,
+      maxY: 500,
+      recommendedLevelMin: 1,
+      recommendedLevelMax: 10,
+      biomeTags: [],
+      zoneTags: [],
+      allowFastTravel: true,
+      allowRespawn: true,
+      activeByDefault: true
+    })).graph;
+    const secondZoneDefinitionNode = findNode(graph, function (n) { return n.type === "zone_definition" && n.values.zoneId === "zone.demo_two"; }, "tweede zone aangemaakt");
+    graph = (await createNode("zone_output", { packageId: "zone.demo_two.package", packageVersion: 1, includeEditorOnlyData: false })).graph;
+    const secondZoneOutputNode = findNode(graph, function (n) { return n.type === "zone_output" && n.values.packageId === "zone.demo_two.package"; }, "tweede zone output aangemaakt");
+    graph = (await createNode("spawn_point", {
+      spawnId: "spawn.demo_two.arrival",
+      role: "zone_default",
+      zoneRef: "zone.demo_two",
+      label: "Demo Two Arrival",
+      x: 300,
+      y: 0,
+      z: 0,
+      facing: 90,
+      safeRadius: 1.25,
+      snapToGround: true,
+      validateCollision: true,
+      activationConditionRef: null,
+      priority: 0
+    })).graph;
+    const arrivalSpawnNode = findNode(graph, function (n) { return n.type === "spawn_point" && n.values.spawnId === "spawn.demo_two.arrival"; }, "aankomst-spawn aangemaakt");
+    graph = await connect(graph, secondZoneDefinitionNode.id, "zone", secondZoneOutputNode.id, "zone");
+    graph = await connect(graph, arrivalSpawnNode.id, "spawnPoint", secondZoneOutputNode.id, "spawns");
+    graph = await connect(graph, secondZoneOutputNode.id, "zonePackage", zoneRegistryNode.id, "zonePackage");
+    graph = (await createNode("zone_link", {
+      linkId: "zone_link.demo_to_two",
+      fromZoneRef: "zone.demo",
+      toZoneRef: "zone.demo_two",
+      toSpawnRef: "spawn.demo_two.arrival",
+      mode: "portal",
+      bidirectional: false,
+      transitionVisual: "fade",
+      preloadDistance: 30,
+      interactionRequired: true
+    })).graph;
+    const zoneLinkNode = findNode(graph, function (n) { return n.type === "zone_link" && n.values.linkId === "zone_link.demo_to_two"; }, "zone link aangemaakt");
+    graph = await connect(graph, zoneLinkNode.id, "zoneLink", zoneOutputNode.id, "links");
+    graph = (await createNode("model_entity", { entityId: "entity.portal_model", label: "Portal Model", modelAssetId: treeAssetId, x: 2, y: 0, z: -2, solid: false, collisionRadius: 1 })).graph;
+    const portalModelNode = findNode(graph, function (n) { return n.type === "model_entity" && n.values.label === "Portal Model"; }, "portal model aangemaakt");
+    graph = (await createNode("portal_component", { componentId: "portal.demo_to_two", zoneLinkRef: "zone_link.demo_to_two", range: 4, autoActivate: false })).graph;
+    const portalComponentNode = findNode(graph, function (n) { return n.type === "portal_component" && n.values.componentId === "portal.demo_to_two"; }, "portal component aangemaakt");
+    graph = (await createNode("entity_assembly", { entityId: "entity.portal_demo", label: "Portal Demo" })).graph;
+    const portalAssemblyNode = findNode(graph, function (n) { return n.type === "entity_assembly" && n.values.entityId === "entity.portal_demo"; }, "portal entity assembly aangemaakt");
+    graph = await connect(graph, portalModelNode.id, "entity", portalAssemblyNode.id, "model");
+    graph = await connect(graph, portalComponentNode.id, "component", portalAssemblyNode.id, "components");
+    graph = await connect(graph, portalAssemblyNode.id, "entity", zoneOutputNode.id, "entities");
+    const publishWithZoneLink = await call("POST", "/api/editor/publish");
+    if (!publishWithZoneLink.json || !publishWithZoneLink.json.ok) console.error("ZONE LINK PUBLISH", JSON.stringify(publishWithZoneLink.json && (publishWithZoneLink.json.validation || publishWithZoneLink.json)).slice(0, 1500));
+    assert(publishWithZoneLink.status === 200 && publishWithZoneLink.json.ok, "publiceren werkt met een tweede zone en een Zone Link");
+    const travelJar = createCookieJar();
+    const travelRegister = await call("POST", "/api/auth/register", { identifier: "test_zone_link", password: "zone_link_password", deviceLabel: "travel" }, false, travelJar);
+    assert(travelRegister.status === 201, "zone-link testaccount kan registreren");
+    const travelStart = await call("GET", "/api/game/player", null, false, travelJar);
+    assert(travelStart.status === 200 && travelStart.json.position, "zone-link testspeler start in de startzone");
+    const travel = await call("POST", "/api/game/travel/zone-link", { linkId: "zone_link.demo_to_two" }, false, travelJar);
+    if (travel.status !== 200) console.error("ZONE LINK TRAVEL", travel.status, JSON.stringify(travel.json).slice(0, 600));
+    assert(travel.status === 200 && travel.json.ok === true && travel.json.zoneId === "zone.demo_two", "servereigen zone-reis via Zone Link werkt");
+    assertNear(Number(travel.json.position && travel.json.position.x), 300, 0.5, "zone-reis zet de speler op de aankomst-spawn");
+    const travelAgain = await call("POST", "/api/game/travel/zone-link", { linkId: "zone_link.demo_to_two" }, false, travelJar);
+    assert(travelAgain.status === 409, "dezelfde portal werkt niet vanuit een andere zone");
 
     console.log("\nSMOKE TEST GESLAAGD");
   } catch (error) {
@@ -4032,9 +4340,7 @@ async function main() {
       child.kill("SIGTERM");
       try { await new Promise(function (resolve) { child.once("exit", resolve); }); } catch {}
     }
-    cleanupGeneratedAssets();
-    restoreSmokeFixtureAssets();
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    if (isolatedRuntime) isolatedRuntime.cleanup();
   }
   process.exit(failed ? 1 : 0);
 }

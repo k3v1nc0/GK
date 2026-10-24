@@ -1,0 +1,7 @@
+# ADR-005 - Canonical content, immutable builds, domeincutover
+
+**Status:** voorgesteld. **Context:** `src/server/graph-repository.js` schrijft nodes/edges en draft/published JSON, `src/server/publish-service.js` en `game-project-compiler.js` lezen graph. `README/PROJECT_CONTRACT.md` noemt nodes leidend; oud F1 wil canonical documenten.
+
+**Besluit:** F2 bevries runtime-inputvorm; F3 introduceert getypeerde versioned documents, commandrevisions en references voor project/item/pickup. Per domein: legacy -> shadow -> parity -> canonical; nooit dual-write, graphwriter geblokkeerd na finalize. Import behoudt runtimeKeys en markeert onopgeloste refs blocking. Compiler produceert immutable bestanden met contenthash, audience split, provenance en atomaire releasepointer; een actieve sessie blijft op join-build. Compatibility mirror mag blijven tot de laatste oude consumer weg is, niet tot een arbitraire datum. Fysieke nodeverwijdering krijgt later een afzonderlijke gate na 186/186 inventory en echte usage/parity.
+
+**Alternatieven:** nodegraph blijven uitbreiden (architectuurdrift), big-bang 186-kind migratie (contentverlies), permanente dual-write (conflicten). **Gevolgen:** tijdelijke adapter en opslagkosten; elke feature heeft schema + editor + compiler + consumer + tests nodig. Geen authored script/eval. **Toets:** F3-E2-T01..T03, F3-E3-T01..T03; F7-E3-T03 voor volledige inventory. **Herzien als:** golden master semantische verschillen toont die niet gemigreerd kunnen worden; geen geforceerde finalize.

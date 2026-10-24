@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { assertDeveloperActionAllowed, assertIdempotencyMatch, normalizedActionPayloadHash } from "./action-security.js";
 
 function now() {
   return new Date().toISOString();
@@ -49,10 +50,6 @@ function safeJsonParse(text, fallback = null) {
 
 function randomId(prefix) {
   return prefix + "_" + crypto.randomUUID();
-}
-
-function requestHash(value) {
-  return crypto.createHash("sha256").update(stableJson(value)).digest("hex");
 }
 
 function catalogSection(catalogs, key) {
@@ -219,19 +216,11 @@ export class Node05EconomyRuntimeService {
     const ctx = this.getRequestContext(req);
     const action = safeString(payload.action, "").toLowerCase();
     const operationId = operationIdFromPayload(payload) || randomId("node05_operation");
-    const hash = requestHash({
-      action,
-      stationId: payload.stationId || payload.station_id || null,
-      recipeId: payload.recipeId || payload.recipe_id || null,
-      vendorId: payload.vendorId || payload.vendor_id || null,
-      offerId: payload.offerId || payload.offer_id || null,
-      orderId: payload.orderId || payload.order_id || null,
-      mailId: payload.mailId || payload.mail_id || null,
-      quantity: payload.quantity || payload.amount || null,
-      targetPlayerId: payload.targetPlayerId || payload.playerId || null
-    });
+    const hash = normalizedActionPayloadHash(action, payload);
+    if (action === "reset_node05") assertDeveloperActionAllowed(ctx);
     const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
     if (existing) {
+      assertIdempotencyMatch(existing, hash);
       if (existing.status === "completed") {
         return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
       }

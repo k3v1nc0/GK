@@ -109,8 +109,11 @@ function isInternalEdge(fromNode, fromPort, toNode, toPort, nodeMap) {
 }
 
 function identityFieldKeys(definition) {
-  return Object.entries(definition?.fields || {}).filter(function ([, field]) {
-    return field && field.type === "text" && field.pattern === "^[a-z0-9_:-]+$";
+  return Object.entries(definition?.fields || {}).filter(function ([key, field]) {
+    if (!field) return false;
+    if (field.type === "text" && field.pattern === "^[a-z0-9_:-]+$") return true;
+    // Canonical entityId is the node's own id. Other identity-typed fields may be shared values or references.
+    return field.type === "identity" && key === "entityId";
   }).map(function ([key]) {
     return key;
   });

@@ -1,0 +1,35 @@
+# smoke — code-SHA 7a569cdfa746f3b3af50c3db4187ebd6f5171f06 — start 2026-10-23T22:39:11+02:00
+$ GK_TEST_ISOLATED=1 npm run smoke
+
+> gk-real-node-editor@2.0.0 smoke
+> sh scripts/run-node24.sh scripts/smoke-test.js
+
+  ok - buildSurfaceStripGeometry: 2 punten geeft geometry
+  ok - 2-punt geometry heeft 4 vertices
+  ok - 2-punt geometry heeft uv attribute
+  ok - 2-punt geometry heeft 6 indices (2 triangles)
+  ok - buildSurfaceStripGeometry: 4 punten met bocht geeft geometry
+  ok - 4-punt geometry heeft 8 vertices
+  ok - 4-punt geometry heeft 18 indices (6 triangles)
+  ok - UV V loopt door langs het pad (laatste vertex V > 0)
+  ok - UV V begint bij 0 voor het eerste punt
+  ok - linker vertex heeft U=0
+  ok - rechter vertex heeft U=1
+  ok - lege puntenlijst geeft null
+  ok - één punt geeft null
+  ok - width=0 geeft null
+  ok - null options geeft null (geen crash)
+  ok - shadow policy defaults aan in de editor
+  ok - shadow policy default preset is middel_schaduw
+  ok - middel schaduw gebruikt 1024 mapSize
+  ok - middel schaduw gebruikt editor camera size 100
+  ok - middel schaduw gebruikt editor camera far 450
+  ok - middel schaduw gebruikt snapWorldUnits 10
+  ok - middel schaduw gebruikt resident margin 1
+  ok - game preset wordt uit shadow block gelezen
+  ok - lichte schaduw zet shadows aan
+  ok - lichte schaduw gebruikt 512 mapSize
+
+SMOKE TEST MISLUKT: ASSERT: lichte schaduw gebruikt game camera size 75
+exit=1
+# einde 2026-10-23T22:39:12+02:00

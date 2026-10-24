@@ -88,12 +88,21 @@ const DEFAULT_MMO_NETWORK_SETTINGS = {
   clientPingIntervalMs: CLIENT_PING_INTERVAL_MS
 };
 const CLICK_MOVE_START_RADIUS = 0.04;
-const CLICK_MOVE_ARRIVAL_RADIUS = 0.06;
+// Zelfde aankomstregel als de server (simulatePlayerTick): binnen 0,15 van het klikpunt is aangekomen.
+// Client en server eindigen zo op hetzelfde punt en er is na een klik niets te corrigeren.
+const CLICK_MOVE_ARRIVAL_RADIUS = 0.15;
+const PORTAL_SERVER_RANGE_WAIT_MS = 4000;
+// De server telt een looppunt als bereikt binnen 0,15. Een actie op afstand start daarom pas als de client
+// duidelijk binnen bereik is, zodat ook de server (die naar dezelfde plek loopt) binnen bereik eindigt.
+const PENDING_ACTION_RANGE_MARGIN = 0.4;
+const IDLE_SETTLE_RECONCILE_MS = 120;
 const CLICK_MOVE_SELF_RADIUS_MULTIPLIER = 1.35;
 const CLICK_MOVE_BLOCKED_RADIUS = 0.015;
 const CLICK_MOVE_BLOCKED_TIMEOUT_MS = 420;
 const LOCAL_COLLISION_STOP_DELAY_MS = 120;
-const MAX_MOVEMENT_FRAME_DELTA_SECONDS = 0.25;
+// Langere pauzes (tab op de achtergrond) worden apart afgehandeld; tot 1 s rekent de client de tijd volledig in.
+const MAX_MOVEMENT_FRAME_DELTA_SECONDS = 1;
+const WS_CONNECT_TIMEOUT_MS = 4000;
 const DEBUG_HUD_COLLAPSED_REFRESH_MS = 100;
 const DEBUG_HUD_EXPANDED_REFRESH_MS = 250;
 const NODE03_PENDING_TARGET_ACTION_TTL_MS = 15000;
@@ -273,6 +282,15 @@ function persistNetState() {
 
 const persistedNetState = loadPersistedNetState();
 
+function gameFetch(input, options = {}) {
+  const requestOptions = Object.assign({}, options);
+  const method = String(requestOptions.method || "GET").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    requestOptions.headers = Object.assign({}, requestOptions.headers || {}, { "X-GK-CSRF": state.csrfToken });
+  }
+  return fetch(input, requestOptions);
+}
+
 const state = {
   runtime: null,
   runtimeAntialias: null,
@@ -287,6 +305,7 @@ const state = {
   gameWorld: null,
   user: null,
   session: null,
+  csrfToken: "",
   player: null,
   position: null,
   spawn: null,
@@ -332,6 +351,8 @@ const state = {
   remote: {
     players: new Map(),
     tombstones: new Map(),
+    // Laatste bericht per medespeler (ook uit andere zones), om na een zonewissel direct te tonen wie er staat.
+    lastPacketByPlayerId: new Map(),
     interpolationDelayMs: REMOTE_INTERPOLATION_BASE_DELAY_MS,
     remoteRenderDelayMs: REMOTE_INTERPOLATION_BASE_DELAY_MS,
     lastPacketAt: 0,
@@ -617,6 +638,30 @@ window.__GK_GAME_CLIENT_DEBUG = {
   clearMovement: function (reason = "debug-clear") {
     clearMovementInput(reason);
     return true;
+  },
+  // Testhaak: laat de lokale voorspelling afwijken zonder de server te informeren (desync nabootsen).
+  desyncPredictionForTest: function (dx = 0, dz = 0) {
+    if (!state.predictedPosition) return false;
+    const next = Object.assign(clonePosition(state.predictedPosition), {
+      x: num(state.predictedPosition.x, 0) + num(dx, 0),
+      z: num(state.predictedPosition.z, 0) + num(dz, 0)
+    });
+    state.predictedPosition = clonePosition(next);
+    applyRuntimePosition(next, { immediate: true, animationState: "idle" });
+    return true;
+  },
+  getPositions: function () {
+    return {
+      predicted: state.predictedPosition ? clonePosition(state.predictedPosition) : null,
+      authoritative: state.authoritativePosition ? clonePosition(state.authoritativePosition) : null,
+      zoneId: activeGameWorldZoneId() || null,
+      playerId: state.player?.id || null,
+      worldRebuilds: Number(state.debug.worldRebuilds) || 0
+    };
+  },
+  getInteractionTargets: function () {
+    const targets = Array.isArray(state.node03.snapshot?.interactionTargets) ? state.node03.snapshot.interactionTargets : [];
+    return targets.map(function (target) { return { instanceId: target.instanceId, action: target.action, x: target.x, z: target.z, range: target.range, radius: target.radius }; });
   },
   closeSocket: function (code = 4006, reason = "debug-close") {
     if (!state.ws) return false;
@@ -1190,7 +1235,7 @@ async function loadGameHudDefaultProfiles(options = {}) {
   }
   state.hudLayout.defaultProfilesLoading = true;
   try {
-    const response = await fetch("/api/game/hud-layout/defaults?projectId=" + encodeURIComponent(projectId), {
+    const response = await gameFetch("/api/game/hud-layout/defaults?projectId=" + encodeURIComponent(projectId), {
       headers: { Accept: "application/json" }
     });
     if (!response.ok) return false;
@@ -1227,7 +1272,7 @@ async function flushGameHudDefaultProfileSaves() {
   state.hudLayout.defaultProfileSaveInFlight = true;
   try {
     for (const [profileId, layout] of entries) {
-      const response = await fetch("/api/game/hud-layout/defaults", {
+      const response = await gameFetch("/api/game/hud-layout/defaults", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -1587,8 +1632,16 @@ function setGameHudPanelOpacity(value) {
 function notifyGameHudPanelSizesChanged() {
   if (!state.minimapHud.elements) return;
   state.minimapHud.dirty = true;
+  if (state.minimapHud.sizeNotifyQueued) return;
+  state.minimapHud.sizeNotifyQueued = true;
   window.requestAnimationFrame(function () {
-    drawGameMinimapIfDue(performance.now());
+    state.minimapHud.sizeNotifyQueued = false;
+    if (!state.minimapHud.elements) return;
+    // HUD-panelen worden tijdens het spelen vaak herschikt; alleen een echt ander minimapformaat
+    // (canvas gewist) rechtvaardigt een directe tekenbeurt, anders volgt hij de gewone interval.
+    const previousSize = Number(state.minimapHud.fitSize) || 0;
+    syncGameMinimapFitSize(resolveGameMinimapConfig());
+    drawGameMinimapIfDue(performance.now(), { force: previousSize !== (Number(state.minimapHud.fitSize) || 0) });
   });
 }
 
@@ -4395,11 +4448,53 @@ function remoteSampleIsStale(entry, sample, options = {}) {
   return false;
 }
 
+function remotePacketZoneId(payload) {
+  return String(payload?.zoneId || payload?.position?.zoneId || payload?.current_zone_id || "").trim();
+}
+
+// Medespelers in een andere zone horen niet in jouw wereld (zones liggen op andere coördinaten; ze bleven
+// anders op hun oude plek staan of zweefden tussen twee portals). Het laatste bericht blijft bewaard.
+function remotePlayerInOtherZone(payload) {
+  const remoteZone = remotePacketZoneId(payload);
+  const localZone = activeGameWorldZoneId();
+  return Boolean(remoteZone && localZone && remoteZone !== localZone);
+}
+
+function hideRemotePlayerEntry(playerId) {
+  const entry = state.remote.players.get(playerId) || null;
+  if (!entry) return;
+  removeRemoteEntryRuntime(entry);
+  state.remote.players.delete(playerId);
+  state.remote.remotePlayerIds = Array.from(state.remote.players.keys());
+}
+
+// Na een zonewissel: toon direct de medespelers die in de nieuwe zone staan (ook als ze stilstaan).
+function restoreRemotePlayersForZone() {
+  for (const [playerId, packet] of Array.from(state.remote.lastPacketByPlayerId.entries())) {
+    if (state.player && String(playerId) === String(state.player.id)) continue;
+    if (remotePlayerInOtherZone(packet)) {
+      hideRemotePlayerEntry(playerId);
+      continue;
+    }
+    if (!state.remote.players.has(playerId)) upsertRemotePlayerEntry(packet, { reset: true, type: "zone-restore" });
+  }
+}
+
 function upsertRemotePlayerEntry(payload, options = {}) {
   const sample = normalizeRemotePlayerPayload(payload);
   if (!sample.playerId || !sample.worldId) return null;
+  // Je eigen speler is nooit een medespeler. Via "joined"/"state_changed" (bijv. van een tweede sessie van
+  // hetzelfde account) ontstond anders een spookkopie zonder naam die achter je aan liep.
+  if (state.player && String(sample.playerId) === String(state.player.id)) return null;
   if (!remoteWorldMatches(sample.worldId)) {
     state.remote.droppedStaleUpdates += 1;
+    return null;
+  }
+  if (!state.remote.tombstones.has(sample.playerId) || options.reset === true || options.type === "world:presence_snapshot" || options.type === "remote_player:joined") {
+    state.remote.lastPacketByPlayerId.set(sample.playerId, Object.assign({}, payload));
+  }
+  if (remotePlayerInOtherZone(payload)) {
+    hideRemotePlayerEntry(sample.playerId);
     return null;
   }
   const now = performance.now();
@@ -4624,6 +4719,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
 function removeRemotePlayerEntry(playerId, reason = "left", payload = null) {
   const key = String(playerId || "").trim();
   if (!key) return false;
+  state.remote.lastPacketByPlayerId.delete(key);
   state.remote.tombstones.set(key, {
     revision: Number(payload?.revision ?? 0) || 0,
     updatedAt: payload?.updatedAt || null,
@@ -6875,9 +6971,18 @@ function maybeRunPendingNode03TargetAction(reason = "range") {
     return false;
   }
   if (target.inRange === false) return false;
+  if (hasMovementInput() && Number.isFinite(Number(target.distance))) {
+    const reach = Math.max(0, num(target.range, 0)) + (node04Action ? 0 : Math.max(0, num(target.radius, 0)));
+    const margin = Math.min(PENDING_ACTION_RANGE_MARGIN, reach * 0.5);
+    if (num(target.distance, 0) > reach - margin) return false;
+  }
   const attempt = Math.max(0, Number(pending.attempts || 0) || 0) + 1;
   clearNode03PendingTargetAction(pending.targetId);
-  if (hasMovementInput()) clearMovementInput("node03-target-action");
+  if (hasMovementInput()) {
+    // Binnen bereik op het scherm betekent nog niet binnen bereik op de server (die loopt iets achter).
+    // Stuur daarom de huidige plek als laatste doel; de stop volgt pas als vangnet.
+    clearMovementInput("node03-target-action", { finalPointerTarget: localStopPointForServer() });
+  }
   window.setTimeout(function () {
     runNode03Action(pending.action, pending.targetId, {
       skipMoveToTarget: true,
@@ -6972,7 +7077,7 @@ function renderNode03Interactions(module, snapshot) {
   title.className = "node03Title";
   title.textContent = module.title || "Targets";
   head.appendChild(title);
-  if (module.allowDemoReset === true) {
+  if (module.allowDemoReset === true && debugActionsAllowed()) {
     const reset = document.createElement("button");
     reset.type = "button";
     reset.className = "node03MiniButton";
@@ -7035,10 +7140,29 @@ function renderNode03Module(module, snapshot) {
   return null;
 }
 
+const DEBUG_ACTIONS_DISABLED_HINT = "Alleen voor een admin-account, met DEV_GAME_ACTIONS=1 op de server.";
+
+function debugActionsAllowed() {
+  return state.node03.snapshot?.debugActionsAllowed === true;
+}
+
+// Debugknoppen alleen bruikbaar als de server ze toestaat (Fase 01); anders uitgeschakeld met uitleg
+// in plaats van een foutmelding na het klikken.
+function syncDebugActionButtons() {
+  const allowed = debugActionsAllowed();
+  for (const id of ["cleanInventoryButton", "resetLevelButton"]) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.disabled = !allowed;
+    button.title = allowed ? "" : DEBUG_ACTIONS_DISABLED_HINT;
+  }
+}
+
 function renderNode03Hud() {
   const modules = node03Modules();
   const snapshot = state.node03.snapshot;
   refreshGameDefeatState();
+  syncDebugActionButtons();
   if (!modules.length || !snapshot) {
     removeNode03Hud();
     return;
@@ -7068,6 +7192,19 @@ function renderNode03Hud() {
     appendGameHudPanel("node03", module, node, defaultNode03Anchor(module.nodeType));
   }
   endGameHudFamilyRender("node03");
+}
+
+// Een medespeler veranderde een gedeeld object: ververs de targets direct (licht gebundeld).
+function scheduleNode03ImmediateRefresh() {
+  if (state.node03.immediateRefreshTimerId) return;
+  state.node03.immediateRefreshTimerId = window.setTimeout(function () {
+    state.node03.immediateRefreshTimerId = 0;
+    if (state.node03.loadInFlight) {
+      state.node03.reloadQueued = true;
+      return;
+    }
+    loadNode03State({ silent: true, force: true });
+  }, 60);
 }
 
 function scheduleNode03Poll() {
@@ -7111,7 +7248,7 @@ async function loadNode03State(options = {}) {
   }
   state.node03.loadInFlight = true;
   try {
-    const response = await fetch("/api/game/node03/state", { headers: { Accept: "application/json" } });
+    const response = await gameFetch("/api/game/node03/state", { headers: { Accept: "application/json" } });
     if (response.status === 401) {
       window.location.href = "/login/?next=%2Fgame%2F";
       return false;
@@ -7152,6 +7289,18 @@ async function loadNode03State(options = {}) {
   }
 }
 
+async function waitForServerPositionInRange(target, timeoutMs) {
+  if (!target || !Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.z))) return false;
+  const reach = Math.max(0, num(target.range, 0)) + Math.max(0, num(target.radius, 0));
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const position = state.authoritativePosition;
+    if (position && Math.hypot(num(position.x, 0) - num(target.x, 0), num(position.z, 0) - num(target.z, 0)) <= reach) return true;
+    await new Promise(function (resolve) { setTimeout(resolve, 100); });
+  }
+  return false;
+}
+
 async function runNode03Action(action, targetId, extra = {}) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
   const isTravel = normalizedAction === "travel";
@@ -7184,9 +7333,11 @@ async function runNode03Action(action, targetId, extra = {}) {
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
   renderNode03Hud();
+  // De server beslist of je bij het portal bent; wacht tot de serverpositie (niet alleen je scherm) in bereik is.
+  if (isTravel) await waitForServerPositionInRange(currentTarget, PORTAL_SERVER_RANGE_WAIT_MS);
   if (isTravel) beginPortalTravel(currentTarget);
   try {
-    const response = await fetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
+    const response = await gameFetch(isTravel ? "/api/game/travel/zone-link" : "/api/game/node03/action", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -7262,7 +7413,8 @@ async function runNode03Action(action, targetId, extra = {}) {
 
 function isNode03Defeated(snapshot = state.node03.snapshot) {
   const health = snapshot?.stats?.health || {};
-  return Boolean(snapshot && num(health.current, 1) <= 0);
+  // Zonder ingestelde gezondheid (max 0) is de speler niet verslagen; zelfde regel als de server.
+  return Boolean(snapshot && num(health.max, 0) > 0 && num(health.current, 1) <= 0);
 }
 
 function hasRawGameplayMovementState() {
@@ -7827,7 +7979,7 @@ async function loadNode04State(options = {}) {
   if (state.node04.loadInFlight) return false;
   state.node04.loadInFlight = true;
   try {
-    const response = await fetch("/api/game/node04/state", { headers: { Accept: "application/json" } });
+    const response = await gameFetch("/api/game/node04/state", { headers: { Accept: "application/json" } });
     if (response.status === 401) {
       window.location.href = "/login/?next=%2Fgame%2F";
       return false;
@@ -7896,7 +8048,7 @@ async function runNode04Action(action, targetId, extra = {}) {
   state.node04.lastError = "";
   renderNode04Hud();
   try {
-    const response = await fetch("/api/game/node04/action", {
+    const response = await gameFetch("/api/game/node04/action", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -8623,7 +8775,7 @@ async function loadNode05State(options = {}) {
   if (state.node05.loadInFlight) return false;
   state.node05.loadInFlight = true;
   try {
-    const response = await fetch("/api/game/node05/state", { headers: { Accept: "application/json" } });
+    const response = await gameFetch("/api/game/node05/state", { headers: { Accept: "application/json" } });
     if (response.status === 401) {
       window.location.href = "/login/?next=%2Fgame%2F";
       return false;
@@ -8708,7 +8860,7 @@ async function runNode05Action(action, payload = {}) {
   state.node05.lastError = "";
   renderNode05Hud();
   try {
-    const response = await fetch("/api/game/node05/action", {
+    const response = await gameFetch("/api/game/node05/action", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -8832,7 +8984,7 @@ function resetMmoDebugRuntimeState() {
 
 async function resetPersistedMinimapFogDiscovery() {
   try {
-    const response = await fetch("/api/game/fog/discovery", {
+    const response = await gameFetch("/api/game/fog/discovery", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -9083,7 +9235,7 @@ async function loadMinimapFogDiscovery(config = resolveGameMinimapConfig()) {
   state.minimapFog.loadInFlight = true;
   const loadGeneration = Number(state.minimapFog.resetGeneration || 0) || 0;
   try {
-    const response = await fetch("/api/game/fog/discovery", { headers: { Accept: "application/json" } });
+    const response = await gameFetch("/api/game/fog/discovery", { headers: { Accept: "application/json" } });
     if (response.status === 401) {
       window.location.href = "/login/?next=%2Fgame%2F";
       return;
@@ -9110,7 +9262,7 @@ async function flushMinimapFogDiscovery(reason = "movement", options = {}) {
   state.minimapFog.saveInFlight = true;
   state.minimapFog.lastSaveAt = performance.now();
   try {
-    const response = await fetch("/api/game/fog/discovery", {
+    const response = await gameFetch("/api/game/fog/discovery", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -9301,7 +9453,22 @@ function legacyGameMinimapMarkerCategories(config) {
   ];
 }
 
+// De categorielijst hangt alleen van het (onveranderlijke) minimapconfig-object af, maar werd per marker
+// opnieuw genormaliseerd: honderden keren per tekenbeurt. Onthoud hem per config-object.
+const gameMinimapMarkerCategoryCache = new WeakMap();
+
 function gameMinimapMarkerCategories(config = resolveGameMinimapConfig()) {
+  const cacheable = Boolean(config && typeof config === "object");
+  if (cacheable) {
+    const cached = gameMinimapMarkerCategoryCache.get(config);
+    if (cached && cached.source === config.markerCategories) return cached.categories;
+  }
+  const categories = buildGameMinimapMarkerCategories(config);
+  if (cacheable) gameMinimapMarkerCategoryCache.set(config, { source: config.markerCategories, categories: categories });
+  return categories;
+}
+
+function buildGameMinimapMarkerCategories(config) {
   const raw = Array.isArray(config?.markerCategories) && config.markerCategories.length
     ? config.markerCategories
     : legacyGameMinimapMarkerCategories(config || {});
@@ -10438,7 +10605,8 @@ function observeGameMinimapHudSize(elements) {
       syncGameMinimapFitSize(resolveGameMinimapConfig());
       if (previousSize === state.minimapHud.fitSize) return;
       state.minimapHud.dirty = true;
-      drawGameMinimapIfDue(performance.now());
+      // Een nieuw canvasformaat wist de inhoud: direct tekenen, niet wachten op de interval.
+      drawGameMinimapIfDue(performance.now(), { force: true });
     });
   });
   observer.observe(elements.frame);
@@ -10767,7 +10935,7 @@ function drawGameMinimap(config, bake, view, performanceMode) {
   drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now(), categorizedMarkers);
 }
 
-function drawGameMinimapIfDue(now) {
+function drawGameMinimapIfDue(now, options = {}) {
   const hudState = state.minimapHud;
   if (!hudState.elements) return;
 
@@ -10777,7 +10945,10 @@ function drawGameMinimapIfDue(now) {
   const performanceMode = resolveGameMinimapPerformanceMode(config, now);
   const intervalMs = gameMinimapRefreshInterval(config, performanceMode);
   const fogDirty = state.minimapFog.dirty === true;
-  if (!hudState.dirty && !fogDirty && now - hudState.lastDrawAt < intervalMs) {
+  // Ook een gewijzigde minimap tekent hooguit één keer per interval. Lopen markeerde hem elk frame
+  // als gewijzigd, waardoor hij elk frame volledig opnieuw werd getekend (grootste FPS-kostenpost).
+  // De markering blijft staan; de beweeglus tekent hem bij de eerstvolgende beurt.
+  if (options.force !== true && now - hudState.lastDrawAt < intervalMs) {
     return;
   }
   const bake = resolveGameMinimapBake(config);
@@ -11040,7 +11211,7 @@ function clickMoveSelfRadius() {
 }
 
 function clickMoveArrivalRadius() {
-  return Math.max(CLICK_MOVE_ARRIVAL_RADIUS, currentCollisionRadius() * 0.9);
+  return CLICK_MOVE_ARRIVAL_RADIUS;
 }
 
 function hasMovementInput() {
@@ -11147,7 +11318,7 @@ function currentMoveVector() {
         if (pointerHeld && state.pointer.lastHoldVector) {
           return { x: state.pointer.lastHoldVector.x, z: state.pointer.lastHoldVector.z };
         }
-        clearMovementInput("click-target-arrived");
+        clearMovementInput("click-target-arrived", { finalPointerTarget: localStopPointForServer() });
         maybeRunPendingNode03TargetAction("arrived");
         return { x: 0, z: 0 };
       }
@@ -11225,6 +11396,12 @@ function maybeRefreshWorldForPositionZone(position) {
   const currentZoneId = activeGameWorldZoneId();
   const node03ZoneId = String(state.node03.snapshot?.zoneId || "").trim();
   if ((!currentZoneId || currentZoneId === nextZoneId) && (!node03ZoneId || node03ZoneId === nextZoneId)) return;
+  if ((!currentZoneId || currentZoneId === nextZoneId) && node03ZoneId && node03ZoneId !== nextZoneId) {
+    // De wereld klopt al; alleen de targets lopen achter. Herlaad die, niet de hele wereld (dat gaf een
+    // tweede herbouw met een wit scherm en een hapering, telkens opnieuw zolang de targets achterliepen).
+    if (!state.node03.loadInFlight) loadNode03State({ silent: true });
+    return;
+  }
   if (state.sync.zoneRefreshInFlight && state.sync.pendingZoneId === nextZoneId) return;
   state.sync.zoneRefreshInFlight = true;
   state.sync.pendingZoneId = nextZoneId;
@@ -11263,6 +11440,7 @@ function primeHttpSnapshotState(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
   state.user = snapshot.user || state.user;
   state.session = snapshot.session || state.session;
+  state.csrfToken = snapshot.csrfToken || state.csrfToken;
   state.player = snapshot.player || state.player;
   state.spawn = clonePosition(snapshot.spawn || state.spawn);
   state.activeSessionCount = snapshot.activeSessionCount || 0;
@@ -11296,11 +11474,17 @@ function applySnapshotToRuntime(snapshot, options = {}) {
     const nextWorldKey = snapshotWorldKey(snapshot);
     if (!state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey || options.forceWorld === true) {
       clearRemotePlayers("world-reset");
+      const keepLocalPosition = options.keepPrediction === true && state.predictedPosition && incomingPosition?.teleport !== true;
       runtime.setWorld(state.gameWorld, {
-        playerState: incomingPosition,
-        progressiveChunkBootstrap: incomingPosition?.teleport === true
+        // Bij een zonewissel te voet blijft de speler op zijn voorspelde plek (geen frame terug naar de server).
+        playerState: keepLocalPosition ? Object.assign({}, incomingPosition, clonePosition(state.predictedPosition)) : incomingPosition,
+        // Ook bij een zonewissel te voet eerst de chunks rond de speler opbouwen en de rest spreiden, in plaats
+        // van alles in één frame (dat gaf een seconde stilstand op de grens).
+        progressiveChunkBootstrap: incomingPosition?.teleport === true || options.reason === "zone-change"
       });
       state.runtimeWorldKey = nextWorldKey;
+      state.debug.worldRebuilds = (Number(state.debug.worldRebuilds) || 0) + 1;
+      restoreRemotePlayersForZone();
     }
     syncLocalPlayerNameplate();
     syncRuntimeTargets();
@@ -11481,12 +11665,22 @@ function openWebSocket() {
   const socket = new WebSocket(buildGameWsUrl());
   socket._gkConnectionAttemptId = attemptId;
   state.ws = socket;
+  // Een verbindingspoging die blijft hangen (proxy of server antwoordt niet) gaf minutenlang "waiting_for_socket":
+  // de browser heeft geen eigen time-out en er kwam geen nieuwe poging. Na een paar seconden opnieuw proberen.
+  socket._gkConnectTimer = window.setTimeout(function () {
+    if (socket.readyState !== WebSocket.CONNECTING || socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
+    state.debug.lastError = "WS connect timeout";
+    try { socket.close(); } catch {}
+    if (state.ws === socket) state.ws = null;
+    scheduleReconnect();
+  }, WS_CONNECT_TIMEOUT_MS);
   updateWsStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? "reconnecting" : "connecting", {
     attemptId: attemptId,
     immediate: state.wsConnectedOnce !== true
   });
 
   socket.addEventListener("open", function () {
+    window.clearTimeout(socket._gkConnectTimer);
     if (socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
     state.reconnectAttempt = 0;
     state.net.lastWsOpenAt = performance.now();
@@ -11537,6 +11731,7 @@ function closeWebSocket(intentional = true) {
 }
 
 function handleSocketClose(socket, event) {
+  if (socket) window.clearTimeout(socket._gkConnectTimer);
   if (!socket || socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
   if (state.ws === socket) state.ws = null;
   stopPingLoop();
@@ -11681,6 +11876,12 @@ function handleSocketMessage(raw) {
     markWsConnected();
     return;
   }
+  if (message.type === "node03:entities_changed") {
+    const changedZoneId = String(message.zoneId || "").trim();
+    const localZoneId = activeGameWorldZoneId();
+    if (!changedZoneId || !localZoneId || changedZoneId === localZoneId) scheduleNode03ImmediateRefresh();
+    return;
+  }
   if (message.type === "mmo:snapshot") {
     if (!remoteWorldMatches(message.worldId)) {
       state.remote.droppedStaleUpdates += 1;
@@ -11772,7 +11973,7 @@ async function loadSessionState(options = {}) {
   if (showLoading) {
     resetMmoReadiness(options.reason || (options.forceWorld ? "world-change" : "load"));
   }
-  const response = await fetch("/api/game/player", { headers: { Accept: "application/json" } });
+  const response = await gameFetch("/api/game/player", { headers: { Accept: "application/json" } });
   if (response.status === 401) {
     clearMmoReadyTimeout();
     window.location.href = "/login/?next=%2Fgame%2F";
@@ -11810,7 +12011,7 @@ async function loadSessionState(options = {}) {
   } else if (state.ws.readyState === WebSocket.OPEN) {
     state.ws.send(JSON.stringify({ type: "player:request_state" }));
   }
-  applySnapshotToRuntime(snapshot, { forceWorld: worldChanged, keepPrediction: Boolean(options.keepPrediction) });
+  applySnapshotToRuntime(snapshot, { forceWorld: worldChanged, keepPrediction: Boolean(options.keepPrediction), reason: options.reason || null });
   loadNode03State({ silent: true, force: options.forceWorld === true });
   loadNode04State({ silent: true });
   loadNode05State({ silent: true });
@@ -11943,7 +12144,7 @@ async function sendInputStateViaHttp(inputStatePayload) {
   if (state.httpFallbackInFlight) return;
   state.httpFallbackInFlight = true;
   try {
-    const response = await fetch("/api/game/player/position", {
+    const response = await gameFetch("/api/game/player/position", {
       method: "PATCH",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -11994,12 +12195,21 @@ function buildCurrentInputState(options = {}) {
       : shouldSendPointerTargetToServer()
         ? normalizePointerTarget(state.pointer.target)
         : null;
+  const stopNow = stop || (!hasMovementInput() && options.force !== true);
+  // Padvolgen: de huidige (voorspelde) positie gaat mee als tussenpunt. De server loopt deze punten af en
+  // volgt zo exact de route van de speler, in plaats van bochten af te snijden naar richting of eindpunt.
+  // Alleen bij echte beweging (geen kunstmatige override uit tests) en bij een stoppunt.
+  const pathPoint = !stopNow && state.predictedPosition && (!override || (override.settle === true && pointerTarget))
+    ? normalizePointerTarget(override?.settle === true && pointerTarget ? pointerTarget : state.predictedPosition)
+    : null;
   return {
     moveX: clamp(currentVector.x, -1, 1),
     moveZ: clamp(currentVector.z, -1, 1),
     sprint: sprint === true,
     pointerTarget: pointerTarget,
-    stop: stop || (!hasMovementInput() && options.force !== true)
+    settle: override?.settle === true && Boolean(pointerTarget),
+    pathPoint: pathPoint,
+    stop: stopNow
   };
 }
 
@@ -12035,17 +12245,13 @@ function sendInputState(options = {}) {
     inputSeq: seq,
     clientSentAt: nowWall,
     controllerEpoch: controllerEpoch,
-    clientPredictedPosition: input.stop === true && state.predictedPosition ? {
-      x: state.predictedPosition.x,
-      y: state.predictedPosition.y,
-      z: state.predictedPosition.z,
-      rotationY: state.predictedPosition.rotationY
-    } : null,
     input: {
       moveX: input.moveX,
       moveZ: input.moveZ,
       sprint: input.sprint === true,
       pointerTarget: input.pointerTarget ? { x: input.pointerTarget.x, z: input.pointerTarget.z } : null,
+      settle: input.settle === true,
+      pathPoint: input.pathPoint ? { x: round(input.pathPoint.x), z: round(input.pathPoint.z) } : null,
       stop: input.stop === true
     },
     sourceDevice: sourceDevice
@@ -12122,8 +12328,23 @@ function setMovementAnimationState(nextState) {
 // direction key and pressing the opposite one) - resetting sprint there dropped it even
 // though Shift was still held. Only the true can't-trust-key-state resets (blur, ws drop,
 // logout) opt back in via resetSprint.
+// Waar de client stopte, als laatste punt van de route voor de server. Een directe stop liet de server (die
+// iets achterloopt) te vroeg stoppen, waarna de client terugschoof. De server loopt de route af via de
+// tussenpunten (padvolgen), dus ook een groot verschil is veilig: hij volgt alleen waar de speler echt liep.
+function localStopPointForServer() {
+  const predicted = state.predictedPosition;
+  if (!predicted) return null;
+  return { x: num(predicted.x, 0), z: num(predicted.z, 0) };
+}
+
 function clearMovementInput(reason, options = {}) {
   const sendFinalIntent = shouldSendLocalFinalIntent(reason);
+  // Met een eindpunt loopt de server zelf naar de plek waar de client stopte en stopt daar (aankomst binnen
+  // 0,15, of geen voortgang meer). Een losse stop zou hem te vroeg laten stoppen omdat hij iets achterloopt.
+  const settleTarget = sendFinalIntent && options.finalPointerTarget ? options.finalPointerTarget : null;
+  if (settleTarget) {
+    sendInputState({ force: true, inputOverride: { moveX: 0, moveZ: 0, pointerTarget: settleTarget, settle: true } });
+  }
   if (sendFinalIntent && options.resetSprint !== true) startPostInputPredictionHold(reason);
   state.ownCorrection = null;
   state.input.move_forward = false;
@@ -12137,11 +12358,44 @@ function clearMovementInput(reason, options = {}) {
   state.control.collisionStopSent = false;
   clearPointerTarget(false);
   setMovementAnimationState("idle");
-  if (sendFinalIntent) {
+  if (sendFinalIntent && !settleTarget) {
     sendInputState({ force: true, stop: true, reason: reason });
   }
   syncNetDebugState();
   updateHud();
+}
+
+// Server-authority (Fase 01): de server neemt bij stilstaan geen clientpositie meer over. Het laatste
+// serverbericht kan binnen de post-input-hold vallen en is dan genegeerd, en de server stuurt daarna niets
+// meer. Schuif daarom na de hold zelf naar de laatst bekende serverpositie; anders blijven client en server
+// (portals, medespelers) blijvend uit elkaar liggen.
+function settleOnAuthoritativePositionWhenIdle() {
+  const netSettings = mmoNetworkSettings();
+  if (netSettings.predictionEnabled === false || netSettings.reconciliationEnabled === false) return false;
+  if (postInputPredictionHoldActive()) return false;
+  const authoritative = state.authoritativePosition;
+  const predicted = state.predictedPosition;
+  if (!authoritative || !predicted) return false;
+  // Loopt de server nog naar ons stoppunt, dan niet meebewegen: anders volgde de client een kort doorschieten
+  // van de server en schoof hij daarna weer terug. Corrigeer pas als de server zelf stilstaat.
+  if (authoritative.moving === true && state.control.isLocalController) return false;
+  const distance = Math.hypot(num(authoritative.x, 0) - num(predicted.x, 0), num(authoritative.z, 0) - num(predicted.z, 0));
+  if (distance <= num(netSettings.ownPredictionDeadzone, 0.05)) return false;
+  // Altijd een korte vloeiende overgang (geen sprong in één frame); alleen bij een enorme afwijking direct.
+  const hardCorrection = distance > num(netSettings.ownHardCorrectionThreshold, 5);
+  state.ownCorrection = null;
+  state.predictedPosition = clonePosition(authoritative);
+  state.position = clonePosition(authoritative);
+  state.net.lastIgnoredReason = "idle_settled_to_server";
+  applyRuntimePosition(authoritative, {
+    immediate: hardCorrection,
+    reconcile: !hardCorrection,
+    // Kort houden: een lange blend in stilstand ziet eruit als een karakter dat vanzelf wegloopt.
+    reconcileDurationMs: Math.min(IDLE_SETTLE_RECONCILE_MS, num(netSettings.ownCorrectionBlendMs, OWN_RECONCILE_MS)),
+    animationState: "idle"
+  });
+  syncNetDebugState();
+  return true;
 }
 
 function stepMovement(now) {
@@ -12166,11 +12420,15 @@ function stepMovement(now) {
     return;
   }
 
+  if (state.minimapHud.elements && (state.minimapHud.dirty || state.minimapFog.dirty === true)) {
+    drawGameMinimapIfDue(now);
+  }
   if (!hasMovementInput()) {
     if (maybeRunPendingNode03TargetAction("idle")) return;
     if (state.lastAnimationState !== "idle") {
       clearMovementInput("movement-settled");
     }
+    settleOnAuthoritativePositionWhenIdle();
     return;
   }
   if (!state.control.isLocalController) {
@@ -12209,19 +12467,46 @@ function stepMovement(now) {
   const nx = vector.x / length;
   const nz = vector.z / length;
   const speed = currentSpeed();
-  const desiredPosition = {
-    x: state.predictedPosition.x + nx * speed * dt,
-    y: state.predictedPosition.y,
-    z: state.predictedPosition.z + nz * speed * dt
-  };
-  const resolved = state.runtime && typeof state.runtime.resolvePlayerMovementIntent === "function"
-    ? state.runtime.resolvePlayerMovementIntent(state.predictedPosition, desiredPosition, { radius: currentCollisionRadius() })
-    : desiredPosition;
+  // Zelfde stapgrootte als de server (één servertick per stap) en geen verloren tijd bij een trage frame.
+  // Zo lopen client en server ook langs obstakels dezelfde route en even snel; anders liep de server voor of
+  // een andere kant om en volgde er een correctie.
+  const tickSeconds = 1 / clamp(num(netSettings.serverTickRateHz, 30), 10, 60);
+  const clickTarget = state.pointer.active && state.pointer.mode === "click_to_move" && state.pointer.target ? state.pointer.target : null;
+  const radius = currentCollisionRadius();
+  let stepPosition = { x: state.predictedPosition.x, y: state.predictedPosition.y, z: state.predictedPosition.z };
+  let resolved = { x: stepPosition.x, y: stepPosition.y, z: stepPosition.z, collided: false };
+  let facingX = nx;
+  let facingZ = nz;
+  let remainingDt = dt;
+  while (remainingDt > 0.000001) {
+    const stepDt = Math.min(tickSeconds, remainingDt);
+    remainingDt -= stepDt;
+    let dirX = nx;
+    let dirZ = nz;
+    let stepDistance = speed * stepDt;
+    if (clickTarget) {
+      // Nooit voorbij het klikpunt schieten: bij een trage frame liep de speler eroverheen en weer terug.
+      const toX = clickTarget.x - stepPosition.x;
+      const toZ = clickTarget.z - stepPosition.z;
+      const remaining = Math.hypot(toX, toZ);
+      if (remaining <= 0.0001) break;
+      dirX = toX / remaining;
+      dirZ = toZ / remaining;
+      stepDistance = Math.min(stepDistance, remaining);
+    }
+    const desiredStep = { x: stepPosition.x + dirX * stepDistance, y: stepPosition.y, z: stepPosition.z + dirZ * stepDistance };
+    resolved = state.runtime && typeof state.runtime.resolvePlayerMovementIntent === "function"
+      ? state.runtime.resolvePlayerMovementIntent(stepPosition, desiredStep, { radius: radius })
+      : Object.assign({ collided: false }, desiredStep);
+    stepPosition = { x: resolved.x, y: Number.isFinite(resolved.y) ? resolved.y : stepPosition.y, z: resolved.z };
+    facingX = dirX;
+    facingZ = dirZ;
+  }
   const nextPosition = {
-    x: resolved.x,
-    y: Number.isFinite(resolved.y) ? resolved.y : state.predictedPosition.y,
-    z: resolved.z,
-    rotationY: Math.atan2(nx, nz) * 180 / Math.PI
+    x: stepPosition.x,
+    y: stepPosition.y,
+    z: stepPosition.z,
+    rotationY: Math.atan2(facingX, facingZ) * 180 / Math.PI
   };
   const movedDistance = Math.hypot(nextPosition.x - state.predictedPosition.x, nextPosition.z - state.predictedPosition.z);
   const collisionBlocked = resolved.collided === true && movedDistance <= CLICK_MOVE_BLOCKED_RADIUS;
@@ -12257,10 +12542,7 @@ function stepMovement(now) {
   if (netSettings.predictionEnabled !== false) {
     applyRuntimePosition(nextPosition, { immediate: true, animationState: state.lastAnimationState });
   }
-  if (state.minimapHud.elements) {
-    state.minimapHud.dirty = true;
-    drawGameMinimapIfDue(now);
-  }
+  if (state.minimapHud.elements) state.minimapHud.dirty = true;
   refreshGameplayClientRanges(now);
   // A held keyboard direction against a local solid must never keep the server
   // walking through that object. Send one authoritative stop at the visible
@@ -12272,7 +12554,9 @@ function stepMovement(now) {
     && now - state.control.collisionBlockedSince >= LOCAL_COLLISION_STOP_DELAY_MS
   ) {
     state.control.collisionStopSent = true;
-    sendInputState({ force: true, stop: true, reason: "local-collision-blocked" });
+    // Tegen een obstakel: de server loopt de route af tot dit punt en stopt daar (geen directe stop, die liet
+    // de server iets achter de client stoppen).
+    sendInputState({ force: true, inputOverride: { moveX: 0, moveZ: 0, pointerTarget: { x: state.predictedPosition.x, z: state.predictedPosition.z }, settle: true } });
   } else if (!collisionBlocked && now - state.lastSendAt >= netSettings.moveSendIntervalMs) {
     sendInputState({ force: true });
   }
@@ -12318,6 +12602,9 @@ function bindKeyboardControls() {
     if (!event.repeat && !hasKeyboardMovementInput()) {
       noteLocalControlStart(false, "keyboard");
     }
+    // Vanaf stilstand telt de beweging vanaf het moment van indrukken, niet vanaf de vorige frame (de server
+    // begint ook pas bij dit bericht); anders liep de client een frame voor.
+    if (!event.repeat && !hasMovementInput()) state.lastFrameAt = performance.now();
     if (event.code === "KeyW" || event.code === "ArrowUp") { setInput("move_forward", true); clearPointerTarget(false); }
     if (event.code === "KeyS" || event.code === "ArrowDown") { setInput("move_back", true); clearPointerTarget(false); }
     if (event.code === "KeyA" || event.code === "ArrowLeft") { setInput("move_left", true); clearPointerTarget(false); }
@@ -12343,6 +12630,9 @@ function bindKeyboardControls() {
       if (hasMovementInput()) sendInputState({ force: true });
       return;
     }
+    // Reken de beweging eerst door tot dit moment: de server loopt ook tot hij dit bericht krijgt. Anders
+    // eindigde de client tot een frame te vroeg en liep de server voorbij het stoppunt (en weer terug).
+    if (movementKey && hasKeyboardMovementInput() && !state.pointer.active) stepMovement(performance.now());
     let handled = true;
     if (event.code === "KeyW" || event.code === "ArrowUp") setInput("move_forward", false);
     else if (event.code === "KeyS" || event.code === "ArrowDown") setInput("move_back", false);
@@ -12350,7 +12640,7 @@ function bindKeyboardControls() {
     else if (event.code === "KeyD" || event.code === "ArrowRight") setInput("move_right", false);
     else handled = false;
     if (handled && !hasKeyboardMovementInput() && !state.pointer.active) {
-      clearMovementInput("keyup");
+      clearMovementInput("keyup", { finalPointerTarget: localStopPointForServer() });
     } else if (handled) {
       sendInputState({ force: true });
     }
@@ -12499,11 +12789,12 @@ function releaseGamePointer(event) {
     state.pointer.lastHoldVector = null;
     return;
   }
+  if (hasMovementInput()) stepMovement(performance.now());
   clearPointerTarget(false);
   if (hadKeyboardMovement) {
     sendInputState({ force: true });
   } else {
-    clearMovementInput("pointer-release");
+    clearMovementInput("pointer-release", { finalPointerTarget: localStopPointForServer() });
   }
 }
 
@@ -12565,23 +12856,37 @@ async function silentResync(reason) {
   }
 }
 
+// De WebSocket houdt de staat actueel. Een volledige sessie-herlaad (wereld van ~2 MB) is alleen nodig als het
+// tabblad echt een tijd weg was of de verbinding niet open is. Voorheen gebeurde dat bij elke vensterwissel,
+// tientallen keren per minuut met twee vensters naast elkaar.
+const RESYNC_AFTER_HIDDEN_MS = 5000;
+
+function shouldResyncAfterReturn() {
+  const socketOpen = Boolean(state.ws && state.ws.readyState === WebSocket.OPEN);
+  const hiddenFor = state.sync.hiddenAt ? performance.now() - state.sync.hiddenAt : 0;
+  return !socketOpen || hiddenFor >= RESYNC_AFTER_HIDDEN_MS;
+}
+
 function handleVisibilityChange() {
   if (document.hidden) {
+    state.sync.hiddenAt = performance.now();
     handleInputCancel("visibility-hidden");
     return;
   }
   state.lastFrameAt = 0;
-  silentResync("visibility-visible");
+  if (shouldResyncAfterReturn()) silentResync("visibility-visible");
+  state.sync.hiddenAt = 0;
+  if (!state.ws || state.ws.readyState === WebSocket.CLOSED) openWebSocket();
 }
 
 function handleWindowFocus() {
   state.lastFrameAt = 0;
-  silentResync("window-focus");
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) silentResync("window-focus");
 }
 
-function handlePageShow() {
+function handlePageShow(event) {
   state.lastFrameAt = 0;
-  silentResync("pageshow");
+  if (event?.persisted || shouldResyncAfterReturn()) silentResync("pageshow");
 }
 
 async function logout() {
@@ -12604,7 +12909,7 @@ async function logout() {
   closeWebSocket(true);
   clearRemotePlayers("logout");
   try {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await gameFetch("/api/auth/logout", { method: "POST" });
   } catch {
     // Logout blijft veilig: de cookie verdwijnt in de browser zodra de redirect volgt.
   }
@@ -12613,7 +12918,7 @@ async function logout() {
 
 async function pollVersion() {
   try {
-    const response = await fetch("/api/game/version", { headers: { Accept: "application/json" } });
+    const response = await gameFetch("/api/game/version", { headers: { Accept: "application/json" } });
     if (response.status === 404) {
       if (state.lastPublishedAt !== null) {
         state.lastPublishedAt = null;
