@@ -401,8 +401,20 @@ function shadowLegacyField(source, prefix, key) {
 
 function hasLegacyShadowFields(source, prefix) {
   return SHADOW_LEGACY_FIELD_KEYS.some(function (key) {
-    return shadowLegacyField(source, prefix, key) !== undefined;
+    return isActiveLegacyShadowValue(key, shadowLegacyField(source, prefix, key));
   });
+}
+
+// Editor/game world settings nodes carry flat shadow fields with sentinel defaults
+// (0, or -1 for the resident margin) that mean "use the preset". Only values that
+// would actually override the preset count as legacy shadow configuration.
+const SHADOW_POSITIVE_OVERRIDE_KEYS = new Set(["shadowMapSize", "shadowCameraSize", "shadowCameraNear", "shadowCameraFar", "shadowSnapWorldUnits"]);
+function isActiveLegacyShadowValue(key, value) {
+  if (value === undefined || value === null || String(value).trim() === "") return false;
+  const number = Number(value);
+  if (key === "shadowResidentMarginChunks" && Number.isFinite(number)) return number >= 0;
+  if (SHADOW_POSITIVE_OVERRIDE_KEYS.has(key) && Number.isFinite(number)) return number > 0;
+  return true;
 }
 
 function normalizeShadowMapTypeName(value, fallback = "pcf_soft") {
@@ -2811,14 +2823,30 @@ export function validateGraphForPublish(graph, services = {}) {
       }
     }
 
+    // Like keybinds: chunk loading and minimaps authored the supported way arrive via
+    // World Assembly, its UI Output and wired Zone Outputs, not as direct Game Output edges.
     const chunkLoadingNodes = collectResolutionError(errors, function () {
-      return incomingNodes(graph, output, "chunkLoading", nodeMap);
+      const direct = incomingNodes(graph, output, "chunkLoading", nodeMap);
+      const viaAssembly = assemblyNode ? incomingNodes(graph, assemblyNode, "chunkLoading", nodeMap) : [];
+      return uniqueNodes(direct.concat(viaAssembly));
     }) || [];
     const chunkLoading = collectChunkLoadingReadModel(chunkLoadingNodes, warnings, graph, nodeMap);
     validateChunkLoadingReadModel(chunkLoading, warnings);
 
     const minimapNodes = collectResolutionError(errors, function () {
-      return incomingNodes(graph, output, "minimap", nodeMap);
+      const direct = incomingNodes(graph, output, "minimap", nodeMap);
+      const uiOutputNodes = assemblyNode ? directIncomingEdges(graph, assemblyNode, "ui").map(function (edge) {
+        return nodeMap.get(edge.fromNodeId);
+      }).filter(function (node) { return node && node.type === "ui_output"; }) : [];
+      const wiredZoneOutputNodes = graph.nodes.filter(function (node) {
+        return node.type === "zone_output" && (graph.edges || []).some(function (edge) {
+          return edge.fromNodeId === node.id && edge.fromPort === "zonePackage";
+        });
+      });
+      const viaOutputs = uiOutputNodes.concat(wiredZoneOutputNodes).flatMap(function (node) {
+        return incomingNodes(graph, node, "minimap", nodeMap);
+      });
+      return uniqueNodes(direct.concat(viaOutputs));
     }) || [];
     const minimapBakeNodes = minimapNodes.filter(function (node) { return node.type === "minimap_bake"; });
     const gameMinimapNodes = minimapNodes.filter(function (node) { return node.type === "game_minimap_hud"; });
@@ -3533,15 +3561,14 @@ export class PublishService {
     }
     const graphGameMinimapHud = graph ? firstGameMinimapHudReadModelFromGraph(graph) : null;
     const baseGameMinimapHud = graphGameMinimapHud || world.minimap?.game || {};
-    const zoneMinimap = resolvedActiveMinimap ? {
+    const zoneMinimap = resolvedActiveMinimap ? Object.assign({
       bakes: uniqueById([resolvedActiveMinimap].concat(Array.isArray(world.minimap?.bakes) ? world.minimap.bakes : [])),
       game: Object.assign({}, world.minimap?.game || {}, graphGameMinimapHud || {}, {
         enabled: baseGameMinimapHud.enabled !== false,
         sourceMode: "active_zone_registry",
         sourceMinimapId: resolvedActiveMinimap.minimapId || resolvedActiveMinimap.id || "zone_minimap"
-      }),
-      editor: world.minimap?.editor || null
-    } : null;
+      })
+    }, world.minimap?.editor ? { editor: world.minimap.editor } : {}) : null;
     const globalMinimap = graphGameMinimapHud ? Object.assign({}, world.minimap || {}, {
       game: Object.assign({}, world.minimap?.game || {}, graphGameMinimapHud)
     }) : world.minimap;

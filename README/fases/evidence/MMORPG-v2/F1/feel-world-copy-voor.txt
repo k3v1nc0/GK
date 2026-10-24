@@ -1,0 +1,21 @@
+Wereldtabellen gekopieerd: {"editor_nodes":468,"editor_node_edges":502,"asset_library":18,"published_world_state":1,"editor_graph_meta":1,"content_id_aliases":2,"game_hud_layout_defaults":2}
+Portal zone_link.object.3: {"x":2.04,"z":-37.864}
+
+== Speler A (lokaal) ==
+  klik kort 1.5: eind 0.17 van doel, terugbewegingen 2 (3.00), drift na aankomst 2.50, grootste framesprong 2.50 in 277 ms, client-server 0.02, 4.1 fps
+  klik 3: eind 0.00 van doel, terugbewegingen 11 (6.80), drift na aankomst 2.33, grootste framesprong 2.50 in 296 ms, client-server 0.03, 4.4 fps
+  klik 6: eind 0.00 van doel, terugbewegingen 2 (2.00), drift na aankomst 2.50, grootste framesprong 2.50 in 248 ms, client-server 0.06, 4.4 fps
+  klik 12: eind 0.33 van doel, terugbewegingen 3 (3.33), drift na aankomst 2.50, grootste framesprong 2.50 in 327 ms, client-server 0.12, 4.1 fps
+  klik kort 1 terug: eind 0.17 van doel, terugbewegingen 11 (7.13), drift na aankomst 2.50, grootste framesprong 2.50 in 298 ms, client-server 0.05, 4.2 fps
+  toets W: na loslaten nog 0.00 verschoven, waarvan terug 0.00, grootste framesprong 2.50, client-server 0.04
+  portal A: GEEN reis (zone bleef zone.node02.live_demo), afstand tot portal 5.41, terugbewegingen 30
+== Speler B (lokaal) ==
+  portal B: GEEN reis (zone bleef zone.node02.live_demo), afstand tot portal 5.07, terugbewegingen 29
+== Medespeler-weergave ==
+  B ziet A, klik kort 1.5 (medespeler gezien door de ander): 15 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 3 (medespeler gezien door de ander): 34 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 6 (medespeler gezien door de ander): 17 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 12 (medespeler gezien door de ander): 23 frames zichtbaar, 1 frames sneller dan 25/s (max sprong 5.94), harde teleports 0
+  B ziet A, klik kort 1 terug (medespeler gezien door de ander): 32 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, portal A (medespeler gezien door de ander): 100 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  A ziet B, portal B (medespeler gezien door de ander): 128 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0

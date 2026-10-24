@@ -1,0 +1,7 @@
+# ADR-007 - Account, character, sessie en vertrouwensgrenzen
+
+**Status:** voorgesteld. **Context:** `db/migrations/003_mmo_accounts_sessions_players.sql` kent een profiel per user; `mmo-service.js:573-681` stuurt user-/sessieafgeleide velden naar remote spelers; `auth-service.js` gebruikt cookies en PBKDF2Sync.
+
+**Besluit:** account/user is loginidentiteit, character is gameplayowner, sessie en join-ticket zijn geheim; op het netwerk zien andere spelers alleen characterId of connection-local entityId en publieke displayName. F2 migreert 1:1 profiles naar characters en gebruikt 30 s fenced lease; F6 voegt meerdere characters toe. Mutaties vereisen server-side role/ownership, exacte Origin, sessiegebonden CSRF voor HTTP, cookie Secure op productie en bounded rates; WS vraagt cookie plus single-use ticket. Een clientwaarde is nooit autoriteit. Productie-secrets buiten repo, rotatie bij vastgesteld lek.
+
+**Alternatieven:** profileId als characterId blijvend (multi-character onmogelijk), sessie-ID voor presence (privacy/security), clienttoken in localStorage (XSS-risico). **Gevolgen:** bestaande profile-FK-tabellen krijgen additieve charactermigratie; legacy `selected_character_id` behoudt zijn bestaande catalogbetekenis en F6 gebruikt een nieuw `active_player_character_id` voor de actieve speler. **Toets:** F1-E1-T03/T04, F2-E1-T02, F6-E1-T01/T11, F7-E1-T03. **Herzien als:** andere account- of leeftijdsstructuur wordt gekozen.

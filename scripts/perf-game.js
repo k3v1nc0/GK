@@ -2,9 +2,11 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
+import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
+import { applyFoundation, createStartZone, createTestWorldApi, ROUTES } from "./lib/test-world.js";
 
 let puppeteerModule = null;
 try {
@@ -32,33 +34,32 @@ const STABILITY_TIMEOUT_MS = Math.max(30000, Number(process.env.PERF_GAME_STABIL
 const cleanupPaths = new Set();
 let BASE = "";
 let cookie = "";
+let csrfToken = "";
 
 function assert(condition, message) {
   if (!condition) throw new Error("ASSERT: " + message);
   console.log("  ok - " + message);
 }
 
-const AUTO_CONNECTIONS = {
-  world_settings: [{ fromPort: "world", toPort: "world" }],
-  editor_world_settings: [{ fromPort: "editorWorldSettings", toPort: "editorWorldSettings" }],
-  game_world_settings: [{ fromPort: "gameWorldSettings", toPort: "gameWorldSettings" }],
-  ground_surface: [{ fromPort: "ground", toPort: "ground" }],
-  game_camera: [{ fromPort: "camera", toPort: "camera" }],
-  player_character: [{ fromPort: "player", toPort: "player" }],
-  player_spawn: [{ fromPort: "spawn", toPort: "spawn" }],
-  ambient_light: [{ fromPort: "light", toPort: "lights" }],
-  directional_light: [{ fromPort: "light", toPort: "lights" }],
-  model_entity: [{ fromPort: "entity", toPort: "entities" }],
-  bounded_area_scatter: [{ fromPort: "entity", toPort: "entities" }],
-  terrain_layer: [{ fromPort: "terrain", toPort: "terrain" }],
-  surface_layer: [{ fromPort: "terrain", toPort: "terrain" }],
-  blocker_area: [{ fromPort: "collision", toPort: "collision" }],
-  walkable_surface: [{ fromPort: "collision", toPort: "collision" }],
-  game_chunk_loading: [{ fromPort: "chunkLoading", toPort: "chunkLoading" }],
-  debug_performance_hud: [{ fromPort: "ui", toPort: "ui" }],
-  ui_hud_text: [{ fromPort: "ui", toPort: "ui" }],
-  keybind: [{ fromPort: "keybind", toPort: "keybinds" }]
+// Route per nodetype in de normale authoringroute (NODE-01/02); zie scripts/lib/test-world.js.
+const TYPE_ROUTES = {
+  editor_world_settings: ROUTES.editorWorldSettings,
+  game_world_settings: ROUTES.gameWorldSettings,
+  ground_surface: ROUTES.ground,
+  player_character: ROUTES.player,
+  ambient_light: ROUTES.light,
+  directional_light: ROUTES.light,
+  model_entity: ROUTES.entity,
+  bounded_area_scatter: ROUTES.entity,
+  terrain_layer: ROUTES.terrain,
+  surface_layer: ROUTES.terrain,
+  blocker_area: ROUTES.collision,
+  walkable_surface: ROUTES.collision,
+  debug_performance_hud: ROUTES.ui,
+  ui_hud_text: ROUTES.ui,
+  keybind: ROUTES.keybind
 };
+let benchmarkWorldContext = null;
 
 main().catch(function (error) {
   console.error(error && error.stack ? error.stack : String(error));
@@ -66,20 +67,19 @@ main().catch(function (error) {
 });
 
 async function main() {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-perf-"));
-  const dbPath = path.join(tmpDir, "perf.sqlite");
+  requireIsolatedMode();
+  const isolatedRuntime = await createIsolatedRuntime(rootDir, "perf-game");
+  const dbPath = isolatedRuntime.databasePath;
   let server = null;
   let browser = null;
   let baselinePage = null;
   let laptopPage = null;
   try {
-    const port = await reservePort();
+    const port = isolatedRuntime.port;
     BASE = "http://127.0.0.1:" + port;
     server = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
-      env: Object.assign({}, process.env, {
-        PORT: port,
-        DATABASE_PATH: dbPath,
+      env: isolatedRuntime.env({
         ADMIN_PASSWORD,
         ADMIN_USERNAME
       }),
@@ -105,7 +105,9 @@ async function main() {
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-setuid-sandbox",
-        "--no-zygote"
+        "--no-zygote",
+        // Zonder GPU geeft nieuwe Chromium alleen WebGL via SwiftShader met deze vlag (zelfde als de browsertest).
+        "--enable-unsafe-swiftshader"
       ]
     });
 
@@ -115,6 +117,12 @@ async function main() {
     if (baselineReady.software) {
       console.log("WARNING: browser gebruikt een software renderer (" + baselineReady.rendererName + " / " + baselineReady.rendererVendor + "). De metingen zijn niet representatief voor Kevins echte GPU.");
       console.log("Perf-run wordt in deze omgeving als best-effort overgeslagen.");
+      // Leg wel één gelabelde baseline vast (niet representatief), zodat browser/resolutie/frametime herleidbaar zijn.
+      if (process.env.PERF_GAME_RESULT_FILE) {
+        const softwareBaseline = await profilePerformanceScenario(baselinePage, "baseline-software-renderer");
+        softwareBaseline.renderer = { name: baselineReady.rendererName, vendor: baselineReady.rendererVendor, software: true, representative: false };
+        await writePerfResultFile(browser, baselinePage, [softwareBaseline], benchmarkWorld);
+      }
       return;
     }
 
@@ -130,7 +138,8 @@ async function main() {
     assert(startSnapshot.residentWorldItems <= 300, "resident world items blijven binnen budget");
     assert(startSnapshot.fullGroundPlane === false, "full ground plane blijft uit in chunked game mode");
 
-    const farSnapshot = await teleportAndSnapshot(baselinePage, 3000, 3000, "resident-streaming-far");
+    // Binnen de 500 x 500 zone, ver van alle bossen (>13 chunks van het startpunt).
+    const farSnapshot = await teleportAndSnapshot(baselinePage, 200, -200, "resident-streaming-far");
     const backSnapshot = await teleportAndSnapshot(baselinePage, 0, 0, "resident-streaming-back");
     assert(farSnapshot.residentChunks <= farSnapshot.maxLoadedChunks, "resident chunks blijven bounded na verplaatsen");
     assert(farSnapshot.residentScatterInstances < farSnapshot.blueprintScatterInstances, "resident scatter blijft bounded na verplaatsen");
@@ -163,6 +172,7 @@ async function main() {
     results.push(buildSoftwareCheckRow(results[0]));
 
     printMatrix(results);
+    await writePerfResultFile(browser, laptopPage || baselinePage, results, benchmarkWorld);
     console.log("");
     console.log("Benchmark wereld: " + benchmarkWorld.summary);
     console.log("Console-profiler:");
@@ -172,11 +182,48 @@ async function main() {
     if (baselinePage) await baselinePage.close().catch(function () {});
     if (browser) await browser.close().catch(function () {});
     await stopServer(server);
-    cleanupGeneratedAssets();
-    if (tmpDir) {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-    }
+    isolatedRuntime.cleanup();
   }
+}
+
+// Optioneel: machineleesbare meting (PERF_GAME_RESULT_FILE=<pad>), naast de console-tabel.
+async function writePerfResultFile(browser, page, results, benchmarkWorld) {
+  const target = process.env.PERF_GAME_RESULT_FILE;
+  if (!target) return;
+  const userAgent = page ? await page.evaluate(function () { return navigator.userAgent; }).catch(function () { return null; }) : null;
+  let commitSha = null;
+  try { commitSha = execSync("git rev-parse HEAD", { cwd: rootDir }).toString().trim(); } catch { commitSha = null; }
+  const cpus = os.cpus();
+  const payload = {
+    schemaVersion: 1,
+    measuredAt: new Date().toISOString(),
+    commitSha: commitSha,
+    machine: {
+      platform: os.platform(),
+      release: os.release(),
+      architecture: os.arch(),
+      cpuModel: cpus[0] ? cpus[0].model : null,
+      cpuCount: cpus.length,
+      memoryBytes: os.totalmem(),
+      node: process.version
+    },
+    browser: {
+      name: "Chromium via Puppeteer (headless)",
+      version: await browser.version(),
+      userAgent: userAgent,
+      width: BROWSER_WIDTH,
+      height: BROWSER_HEIGHT
+    },
+    scene: benchmarkWorld.summary,
+    samplesPerScenario: SAMPLE_FRAMES,
+    warmupFrames: WARMUP_FRAMES,
+    results: results,
+    capacityClaim: "none: headless Chromium op de server, geen spelersapparaat"
+  };
+  const resolved = path.resolve(target);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, JSON.stringify(payload, null, 2));
+  console.log("Perf-resultaat geschreven: " + resolved);
 }
 
 async function login() {
@@ -200,20 +247,18 @@ async function buildBenchmarkWorld() {
     category: "environment"
   });
 
-  let graph = (await call("GET", "/api/editor/graph")).json;
-  const gameOutputNode = findNode(graph, function (node) { return node.type === "game_output"; }, "game output bestaat");
-
-  graph = (await createNode("world_settings", {
-    worldId: "perf_world",
+  // Normale authoringroute (NODE-01/02): foundation + startzone, zie scripts/lib/test-world.js.
+  const testWorld = createTestWorldApi(call);
+  const foundation = await applyFoundation(testWorld);
+  const zone = await createStartZone(testWorld, foundation, {
+    zoneId: "zone.perf",
     displayName: "Perf World",
-    backgroundColor: "#09131d",
-    fogColor: "#1b2a38",
-    fogDensity: 0.06,
-    smoothShading: true
-  })).graph;
-  graph = await ensureAutoConnections(graph, findNode(graph, function (node) {
-    return node.type === "world_settings" && node.values.worldId === "perf_world";
-  }, "world settings bestaat"), gameOutputNode);
+    environment: { backgroundColor: "#09131d", fogColor: "#1b2a38", fogDensity: 0.06 },
+    spawn: { spawnId: "spawn.perf.default", x: 0, z: 0, facing: 0 }
+  });
+  benchmarkWorldContext = { testWorld, foundation, zone };
+  let graph = await testWorld.graph();
+  const gameOutputNode = findNode(graph, function (node) { return node.type === "game_output"; }, "game output bestaat");
 
   graph = (await createNode("editor_world_settings", worldSettingsPresetNodePatch("editor", "middel_schaduw"))).graph;
   graph = await ensureAutoConnections(graph, findNode(graph, function (node) {
@@ -227,8 +272,9 @@ async function buildBenchmarkWorld() {
 
   graph = (await createNode("ground_surface", {
     groundId: "perf_ground",
-    width: 10000,
-    depth: 10000,
+    // Eén outdoor-zone is in de NODE-02-route precies 500 x 500; de ground volgt de zone.
+    width: 500,
+    depth: 500,
     y: 0,
     boundsMode: "centerSize",
     materialColor: "#3f6b3f"
@@ -237,7 +283,8 @@ async function buildBenchmarkWorld() {
     return node.type === "ground_surface" && node.values.groundId === "perf_ground";
   }, "ground surface bestaat"), gameOutputNode);
 
-  graph = (await createNode("game_camera", {
+  // De foundation levert de game camera; de spawn staat in de startzone.
+  graph = await testWorld.patchValues(foundation.gameCamera.id, {
     cameraId: "perf_camera",
     pitch: 60,
     yaw: 0,
@@ -248,20 +295,7 @@ async function buildBenchmarkWorld() {
     fov: 55,
     follow: true,
     rotateSpeed: 90
-  })).graph;
-  graph = await ensureAutoConnections(graph, findNode(graph, function (node) {
-    return node.type === "game_camera" && node.values.cameraId === "perf_camera";
-  }, "game camera bestaat"), gameOutputNode);
-
-  graph = (await createNode("player_spawn", {
-    spawnId: "perf_spawn",
-    x: 0,
-    z: 0,
-    facing: 0
-  })).graph;
-  graph = await ensureAutoConnections(graph, findNode(graph, function (node) {
-    return node.type === "player_spawn" && node.values.spawnId === "perf_spawn";
-  }, "player spawn bestaat"), gameOutputNode);
+  });
 
   graph = (await createNode("player_character", {
     playerId: "perf_player",
@@ -301,7 +335,7 @@ async function buildBenchmarkWorld() {
     return node.type === "directional_light" && node.values.lightId === "perf_sun";
   }, "directional light bestaat"), gameOutputNode);
 
-  graph = (await createNode("game_chunk_loading", {
+  graph = await testWorld.patchValues(foundation.gameChunkLoading.id, {
     chunkProfileId: "game_chunks",
     enabled: true,
     chunkWidth: 15,
@@ -323,10 +357,7 @@ async function buildBenchmarkWorld() {
     residentEntityBudget: 200,
     residentObjectBudget: 300,
     residentScatterInstanceBudget: 500
-  })).graph;
-  graph = await ensureAutoConnections(graph, findNode(graph, function (node) {
-    return node.type === "game_chunk_loading";
-  }, "game chunk loading bestaat"), gameOutputNode);
+  });
 
   graph = (await createNode("debug_performance_hud", {
     hudId: "perf_hud_main",
@@ -477,8 +508,8 @@ async function buildBenchmarkWorld() {
 
   const forestClusters = [
     { scatterId: "perf_forest_center", centerX: 0, centerZ: 0, seed: "perf_forest_center_seed" },
-    { scatterId: "perf_forest_east", centerX: 2400, centerZ: 2400, seed: "perf_forest_east_seed" },
-    { scatterId: "perf_forest_west", centerX: -2400, centerZ: -2400, seed: "perf_forest_west_seed" }
+    { scatterId: "perf_forest_east", centerX: 175, centerZ: 175, seed: "perf_forest_east_seed" },
+    { scatterId: "perf_forest_west", centerX: -175, centerZ: -175, seed: "perf_forest_west_seed" }
   ];
   for (const forest of forestClusters) {
     const halfSize = 60;
@@ -623,11 +654,28 @@ async function openGamePage(browser, baseUrl, profile) {
     height: BROWSER_HEIGHT,
     deviceScaleFactor: 1
   });
+  // De game vereist sinds MMO-01 een sessie: geef de browser dezelfde sessiecookie als de ingelogde testclient.
+  if (cookie) {
+    const separator = cookie.indexOf("=");
+    await page.setCookie({ name: cookie.slice(0, separator), value: cookie.slice(separator + 1), url: baseUrl });
+  }
   const query = profile ? "?gamePerformanceProfile=" + encodeURIComponent(profile) : "";
   await page.goto(baseUrl + "/game/" + query, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(function () {
-    return Boolean(window.__GK_GAME_RUNTIME && typeof window.__GK_GAME_RUNTIME.debugState === "function");
-  }, { timeout: PROFILE_TIMEOUT_MS });
+  try {
+    await page.waitForFunction(function () {
+      return Boolean(window.__GK_GAME_RUNTIME && typeof window.__GK_GAME_RUNTIME.debugState === "function");
+    }, { timeout: PROFILE_TIMEOUT_MS });
+  } catch (error) {
+    // Bij een fout: screenshot en zichtbare paginatekst, zodat een hangende start uitlegbaar is.
+    const evidenceDir = process.env.PERF_GAME_RESULT_FILE ? path.dirname(path.resolve(process.env.PERF_GAME_RESULT_FILE)) : os.tmpdir();
+    const shot = path.join(evidenceDir, "perf-game-failure-" + (profile || "baseline") + ".png");
+    await page.screenshot({ path: shot, fullPage: true }).catch(function () {});
+    const pageState = await page.evaluate(function () {
+      return { url: location.href, text: String(document.body ? document.body.innerText : "").replace(/\s+/g, " ").slice(0, 400) };
+    }).catch(function (stateError) { return { error: stateError.message }; });
+    console.error("Game-runtime start niet: " + JSON.stringify(pageState) + " (screenshot: " + shot + ")");
+    throw error;
+  }
   return page;
 }
 
@@ -1105,23 +1153,21 @@ async function connect(graph, fromNodeId, fromPort, toNodeId, toPort) {
   return nextGraph;
 }
 
-async function ensureAutoConnections(graph, node, gameOutputNode) {
-  const specs = AUTO_CONNECTIONS[node.type] || [];
-  let nextGraph = graph;
-  for (const spec of specs) {
-    const exists = Array.isArray(nextGraph.edges) && nextGraph.edges.some(function (edge) {
-      return edge.fromNodeId === node.id && edge.fromPort === spec.fromPort && edge.toNodeId === gameOutputNode.id && edge.toPort === spec.toPort;
-    });
-    if (!exists) {
-      nextGraph = await connect(nextGraph, node.id, spec.fromPort, gameOutputNode.id, spec.toPort);
-    }
-  }
-  return nextGraph;
+async function ensureAutoConnections(graph, node) {
+  const route = TYPE_ROUTES[node.type];
+  if (!route || !benchmarkWorldContext) return graph;
+  const alreadyWired = Array.isArray(graph.edges) && graph.edges.some(function (edge) {
+    return edge.fromNodeId === node.id && edge.fromPort === route.fromPort;
+  });
+  if (alreadyWired) return graph;
+  const { testWorld, foundation, zone } = benchmarkWorldContext;
+  return testWorld.wire(node.id, route, foundation, zone);
 }
 
 async function call(method, pathname, body, isForm) {
-  const headers = {};
+  const headers = { Origin: BASE };
   if (cookie) headers.Cookie = cookie;
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && csrfToken) headers["X-GK-CSRF"] = csrfToken;
   let payload = body;
   if (body && !isForm) {
     headers["Content-Type"] = "application/json";
@@ -1140,6 +1186,7 @@ async function call(method, pathname, body, isForm) {
   } catch {
     json = null;
   }
+  if (json?.csrfToken) csrfToken = json.csrfToken;
   return { status: response.status, json: json, text: text };
 }
 

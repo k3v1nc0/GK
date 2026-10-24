@@ -5,6 +5,8 @@ import path from "node:path";
 import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
+import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
+import { addZoneLinkPortal, applyFoundation, createStartZone, createTestWorldApi, ROUTES } from "./lib/test-world.js";
 
 let puppeteerModule = null;
 try {
@@ -31,7 +33,11 @@ const NAV_TIMEOUT_MS = 90000;
 
 let BASE = "";
 let cookie = "";
+let csrfToken = "";
 let failures = 0;
+let evidenceDir = "";
+let browserCheckPortal = null;
+const visibleScenarioEvents = [];
 const uploadedAssetCleanupPaths = new Set();
 
 function assert(condition, message) {
@@ -94,19 +100,22 @@ main().catch(function (error) {
 });
 
 async function main() {
+  requireIsolatedMode();
   cleanupOrphanedChromes();
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-game-browser-"));
-  const dbPath = path.join(tmpDir, "game-browser.sqlite");
+  const isolatedRuntime = await createIsolatedRuntime(rootDir, "game-browser");
+  const dbPath = isolatedRuntime.databasePath;
+  evidenceDir = process.env.GK_BROWSER_EVIDENCE_DIR
+    ? path.resolve(process.env.GK_BROWSER_EVIDENCE_DIR)
+    : path.join(isolatedRuntime.rootDir, "browser-evidence");
+  fs.mkdirSync(evidenceDir, { recursive: true });
   let server = null;
   let browser = null;
   try {
-    const port = await reservePort();
+    const port = isolatedRuntime.port;
     BASE = "http://127.0.0.1:" + port;
     server = spawn(process.execPath, ["src/server/server.js"], {
       cwd: rootDir,
-      env: Object.assign({}, process.env, {
-        PORT: port,
-        DATABASE_PATH: dbPath,
+      env: isolatedRuntime.env({
         ADMIN_PASSWORD,
         ADMIN_USERNAME
       }),
@@ -139,7 +148,7 @@ async function main() {
     const contextA = await browser.createBrowserContext();
     let pageA = await preparePage(contextA);
     await registerViaLoginForm(pageA, PLAYER_A_IDENTIFIER, PLAYER_A_PASSWORD);
-    await waitForMmoOnlineReady(pageA);
+    await waitForMmoOnlineReady(pageA, NAV_TIMEOUT_MS, { measureLogin: true });
     assert(pageA.url().endsWith("/game/"), "registreren logt direct in en stuurt naar /game/");
 
     console.log("");
@@ -207,9 +216,6 @@ async function main() {
     console.log("== Performance HUD anchor (top-right) ==");
     await assertPerfHudTopRight(pageA);
 
-    console.log("");
-    console.log("== Collision: Bounded Area Scatter per item ==");
-    await assertScatterItemsBlockMovement(pageA);
 
     console.log("");
     console.log("== WASD is camera-relatief (niet hardcoded wereldas) ==");
@@ -220,8 +226,15 @@ async function main() {
     await assertIdleAfterRelease(pageA);
 
     console.log("");
+    console.log("== Stilstand: client schuift naar de serverpositie (server-authority, Fase 01) ==");
+    await assertIdleSettlesToServerPosition(pageA);
+
+    console.log("");
     console.log("== Object/chunk residency bij grensoscillatie ==");
     const residencyRestore = await getPlayerState(pageA);
+    // Herken de flicker-scatter aan zijn node-id: zijn chunk hangt af van de scatter-seed, en die volgt de per run wisselende asset-id's.
+    const flickerScatterNodeId = await scatterNodeIdForScatterId(pageA, "browser_check_flicker_scatter");
+    assert(Boolean(flickerScatterNodeId), "flicker-scatter staat in de gepubliceerde scatterAreas");
     const residencySamples = await sampleResidencyBoundary(pageA, [
       { x: 52, z: 0 },
       { x: 51, z: 0 },
@@ -237,11 +250,12 @@ async function main() {
       const objectEntries = Array.isArray(sample.objectResidency?.entries) ? sample.objectResidency.entries : [];
       const chunkEntries = Array.isArray(sample.chunkResidency?.entries) ? sample.chunkResidency.entries : [];
       const targetObject = objectEntries.find(function (entry) {
-        return String(entry.id || "").includes("browser_check_flicker_scatter") || (entry.type === "scatter" && entry.chunkKey === "4,0");
+        const id = String(entry.id || "");
+        return (flickerScatterNodeId && id.includes(flickerScatterNodeId)) || id.includes("browser_check_flicker_scatter");
       }) || null;
-      const targetChunk = chunkEntries.find(function (entry) {
-        return entry.chunkKey === "4,0";
-      }) || null;
+      const targetChunk = targetObject ? chunkEntries.find(function (entry) {
+        return entry.chunkKey === targetObject.chunkKey;
+      }) || null : null;
       return {
         index: index,
         target: sample.target,
@@ -269,11 +283,17 @@ async function main() {
         activeChunkKeys: Array.isArray(sample.chunkLoading?.streamingCoverage?.activeChunkKeys) ? sample.chunkLoading.streamingCoverage.activeChunkKeys.slice() : []
       };
     });
-    assert(residencyTrace.every(function (step) { return step.object !== null; }), "de scatter-residency-entry is aanwezig in elke sample");
-    assert(residencyTrace.every(function (step) { return step.chunk !== null; }), "de chunk-residency-entry is aanwezig in elke sample");
+    const firstResidencySample = residencySamples[0] || {};
+    const residencyDiagnostics = " [objecten: " + JSON.stringify((Array.isArray(firstResidencySample.objectResidency?.entries) ? firstResidencySample.objectResidency.entries : []).slice(0, 8).map(function (entry) {
+      return [entry.id, entry.type, entry.chunkKey].join("|");
+    })) + " chunks: " + JSON.stringify((Array.isArray(firstResidencySample.chunkResidency?.entries) ? firstResidencySample.chunkResidency.entries : []).slice(0, 12).map(function (entry) {
+      return entry.chunkKey;
+    })) + "]";
+    assert(residencyTrace.every(function (step) { return step.object !== null; }), "de scatter-residency-entry is aanwezig in elke sample" + (residencyTrace.every(function (step) { return step.object !== null; }) ? "" : residencyDiagnostics));
+    assert(residencyTrace.every(function (step) { return step.chunk !== null; }), "de chunk-residency-entry is aanwezig in elke sample" + (residencyTrace.every(function (step) { return step.chunk !== null; }) ? "" : residencyDiagnostics));
     const residencyTraceLine = residencyTrace.map(function (step) {
-      const object = step.object;
-      const chunk = step.chunk;
+      const object = step.object || {};
+      const chunk = step.chunk || {};
       return [
         "#" + step.index,
         "target=" + step.target.x + "," + step.target.z,
@@ -286,6 +306,18 @@ async function main() {
       ].join(" ");
     }).join(" | ");
     console.log("Residency trace: " + residencyTraceLine);
+    const flickerEntries = (Array.isArray(firstResidencySample.objectResidency?.entries) ? firstResidencySample.objectResidency.entries : []).filter(function (entry) {
+      return flickerScatterNodeId && String(entry.id || "").includes(flickerScatterNodeId);
+    }).map(function (entry) { return [entry.type, entry.chunkKey, entry.loaded ? "loaded" : "-", entry.visible ? "visible" : "-"].join("|"); });
+    console.log("Residency flicker-entries: " + JSON.stringify(flickerEntries) + " | geladen #0: " + JSON.stringify(residencyTrace[0] ? residencyTrace[0].loadedChunkKeys : []) + " | actief #0: " + JSON.stringify(residencyTrace[0] ? residencyTrace[0].activeChunkKeys : []) + " | geladen #4: " + JSON.stringify(residencyTrace[4] ? residencyTrace[4].loadedChunkKeys : []));
+
+    // Na de residency-test: de collision-check teleporteert naar een verre boom en zou chunkbudget/hysteresis anders beïnvloeden.
+    console.log("");
+    console.log("== Collision: Bounded Area Scatter per item ==");
+    await assertScatterItemsBlockMovement(pageA);
+    // Residency- en collisionchecks verplaatsen de speler alleen lokaal (debug); laat de client eerst
+    // terugschuiven naar de serverpositie, zodat volgende bewegingsmetingen niet die correctie meten.
+    await waitForClientSettledOnServer(pageA);
     const maxVisibilityToggleCount = Math.max.apply(Math, residencyTrace.map(function (step) {
       return Number(step.object?.visibilityToggleCount || 0) || 0;
     }));
@@ -304,20 +336,34 @@ async function main() {
     await pageA.evaluate(function (state) {
       const runtime = window.__GK_GAME_RUNTIME;
       if (!runtime || typeof runtime.debugTeleportPlayer !== "function") return false;
-      runtime.debugTeleportPlayer(state.x, state.z);
+      // Zet het poppetje terug op de echte (voorspelde = server)positie; de residency-stappen waren alleen lokaal.
+      const positions = window.__GK_GAME_CLIENT_DEBUG && typeof window.__GK_GAME_CLIENT_DEBUG.getPositions === "function"
+        ? window.__GK_GAME_CLIENT_DEBUG.getPositions()
+        : null;
+      const target = positions && positions.predicted ? positions.predicted : state;
+      runtime.debugTeleportPlayer(target.x, target.z);
       return true;
     }, residencyRestore ? { x: residencyRestore.x, z: residencyRestore.z } : { x: 0, z: 0 });
     await sleep(250);
 
+    // De restore hierboven is een lokale debug-teleport; wacht tot de client weer op de serverpositie staat.
+    await waitForClientSettledOnServer(pageA);
     console.log("");
     console.log("== Klik dicht bij karakter: blijft stil ==");
     const nearClickBefore = await getPlayerState(pageA);
+    const nearClickPositionsBefore = await pageA.evaluate(function () { return window.__GK_GAME_CLIENT_DEBUG.getPositions(); });
     await clickNearPlayer(pageA, 0.08);
     await sleep(600);
     const nearClickAfter = await getPlayerState(pageA);
+    const nearClickPositionsAfter = await pageA.evaluate(function () { return window.__GK_GAME_CLIENT_DEBUG.getPositions(); });
     const nearClickDelta = Math.hypot(nearClickAfter.x - nearClickBefore.x, nearClickAfter.z - nearClickBefore.z);
-    assert(nearClickDelta < 0.2, "klik dicht bij het karakter start geen beweging (delta=" + nearClickDelta.toFixed(2) + ")");
+    const fmt = function (p) { return p ? Number(p.x).toFixed(2) + "," + Number(p.z).toFixed(2) : "-"; };
+    assert(nearClickDelta < 0.2, "klik dicht bij het karakter start geen beweging (delta=" + nearClickDelta.toFixed(2) + (nearClickDelta < 0.2 ? "" : "; runtime " + fmt(nearClickBefore) + "->" + fmt(nearClickAfter) + ", voorspeld " + fmt(nearClickPositionsBefore.predicted) + "->" + fmt(nearClickPositionsAfter.predicted) + ", server " + fmt(nearClickPositionsBefore.authoritative) + "->" + fmt(nearClickPositionsAfter.authoritative)) + ")");
     assert(nearClickAfter.animationState === "idle", "klik dicht bij het karakter houdt de animatie idle");
+
+    console.log("");
+    console.log("== Korte klik: client en server eindigen gelijk, zonder heen-en-weer ==");
+    await assertShortClickSettlesWithoutOscillation(pageA);
 
     console.log("");
     console.log("== Muis slepen over deadzone: blijft lopen zolang knop ingedrukt is ==");
@@ -490,7 +536,8 @@ async function main() {
     console.log("");
     console.log("== Refresh behoudt laatste serverpositie ==");
     await sleep(300);
-    const beforeRefresh = snapshotAfter.position;
+    // De server volgt de gelopen route tot het stoppunt (padvolgen); neem de positie pas als hij stilstaat.
+    const beforeRefresh = (await waitForServerRestingPosition(pageA)) || snapshotAfter.position;
     await pageA.reload({ waitUntil: "domcontentloaded" });
     await waitForMmoOnlineReady(pageA);
     const afterRefresh = await getPlayerState(pageA);
@@ -558,7 +605,7 @@ async function main() {
     let pageB = await preparePage(contextB);
     await pageB.goto(BASE + "/login/?next=%2Fgame%2F", { waitUntil: "domcontentloaded" });
     await registerViaLoginForm(pageB, PLAYER_B_IDENTIFIER, PLAYER_B_PASSWORD);
-    await waitForMmoOnlineReady(pageB);
+    await waitForMmoOnlineReady(pageB, NAV_TIMEOUT_MS, { measureLogin: true });
     const playerSnapshotA = await fetchCurrentPlayerSnapshot(pageA);
     const playerSnapshotB = await fetchCurrentPlayerSnapshot(pageB);
     const playerIdA = playerSnapshotA?.player?.id || null;
@@ -570,20 +617,20 @@ async function main() {
     console.log("");
     console.log("== MMO-02 directe presence ==");
     const directPresenceStart = Date.now();
-    await waitForHudTextValue(pageA, "#hudRemotePlayers", "1", 5000);
-    await waitForHudTextValue(pageB, "#hudRemotePlayers", "1", 5000);
+    await waitForHudTextValue(pageA, "#hudRemotePlayers", "1", 2000);
+    await waitForHudTextValue(pageB, "#hudRemotePlayers", "1", 2000);
     await pageA.waitForFunction(function (selector, wantedId) {
       const el = document.querySelector(selector);
       return Boolean(el && el.textContent && el.textContent.indexOf(wantedId) !== -1);
-    }, { timeout: 5000 }, "#hudRemoteIds", playerIdB);
+    }, { timeout: 2000 }, "#hudRemoteIds", playerIdB);
     await pageB.waitForFunction(function (selector, wantedId) {
       const el = document.querySelector(selector);
       return Boolean(el && el.textContent && el.textContent.indexOf(wantedId) !== -1);
-    }, { timeout: 5000 }, "#hudRemoteIds", playerIdA);
+    }, { timeout: 2000 }, "#hudRemoteIds", playerIdA);
     await waitForRemotePlayerVisible(pageA, playerIdB, 15000);
     await waitForRemotePlayerVisible(pageB, playerIdA, 15000);
     const directPresenceElapsed = Date.now() - directPresenceStart;
-    assert(directPresenceElapsed <= 5000, "A en B zien elkaar binnen 5s zonder beweging (elapsed=" + directPresenceElapsed + "ms)");
+    assert(directPresenceElapsed <= 2000, "A en B zien elkaar binnen 2s zonder beweging (elapsed=" + directPresenceElapsed + "ms)");
     const directDebugA = await getRemotePlayerDebugState(pageA);
     const directDebugB = await getRemotePlayerDebugState(pageB);
     const directRemoteOnA = directDebugA && Array.isArray(directDebugA.players) ? directDebugA.players.find(function (player) { return player.playerId === playerIdB; }) || null : null;
@@ -592,6 +639,17 @@ async function main() {
     assert(directDebugB && directDebugB.count === 1, "B ziet precies één remote player zonder beweging");
     assert(directRemoteOnA && directRemoteOnA.displayName === PLAYER_B_IDENTIFIER, "A ziet B direct in de scene");
     assert(directRemoteOnB && directRemoteOnB.displayName === PLAYER_A_IDENTIFIER, "B ziet A direct in de scene");
+    visibleScenarioEvents.push({
+      type: "two_players_visible",
+      at: new Date().toISOString(),
+      worldId: playerSnapshotA.worldId,
+      players: [
+        { observer: PLAYER_A_IDENTIFIER, remotePlayerId: playerIdB, displayName: directRemoteOnA?.displayName || null },
+        { observer: PLAYER_B_IDENTIFIER, remotePlayerId: playerIdA, displayName: directRemoteOnB?.displayName || null }
+      ]
+    });
+    await captureEvidenceScreenshot(pageA, "two-players-page-a.png");
+    await captureEvidenceScreenshot(pageB, "two-players-page-b.png");
 
     await pageA.keyboard.down("KeyA");
     await pageB.waitForFunction(function (wantedId) {
@@ -609,6 +667,20 @@ async function main() {
     if (remoteAOnBPlayer && remoteAOnBPlayer.position) {
       assertNear(remoteAOnBPlayer.position.x, aAfterMove.x, 8.0, "device B ziet de beweging van device A live (zonder refresh)");
     }
+    visibleScenarioEvents.push({
+      type: "remote_movement_visible",
+      at: new Date().toISOString(),
+      actorPlayerId: playerIdA,
+      observerPlayerId: playerIdB,
+      authoritativePosition: aAfterMove,
+      observedRemotePosition: remoteAOnBPlayer?.position || null,
+      animationState: remoteAOnBPlayer?.animationState || null
+    });
+    fs.writeFileSync(path.join(evidenceDir, "two-player-events.json"), JSON.stringify({
+      schemaVersion: "gk-f1-two-player-evidence-v1",
+      baseUrl: BASE,
+      events: visibleScenarioEvents
+    }, null, 2) + "\n");
     assert(remoteAOnBPlayer && remoteAOnBPlayer.snapshotSeq > 0, "device B ziet de beweging via snapshots met snapshotSeq");
     const remoteMotionProtocolB = await getClientDebugState(pageB);
     assert(remoteMotionProtocolB && remoteMotionProtocolB.movementProtocol === "mmo:snapshot", "normale remote movement op device B loopt via mmo:snapshot");
@@ -1058,21 +1130,78 @@ async function main() {
     console.log("  normal movement via mmo:snapshot: " + (smoothMovementProtocol && smoothMovementProtocol.movementProtocol === "mmo:snapshot" && smoothMovementProtocol.normalMovementUsesSnapshot === true ? "yes" : "no"));
     console.log("  old route demoted: remote_player:state_changed is legacy/teleport-only; normal movement no longer uses it");
 
+    console.log("");
+    console.log("== Portal: ernaartoe klikken en reizen (server-authority) ==");
+    await assertPortalTravelAfterWalking(pageA);
+
     if (failures === 0) {
       console.log("ALLE BROWSER-CHECKS GESLAAGD (" + PLAYER_A_IDENTIFIER + " / " + PLAYER_B_IDENTIFIER + ")");
     } else {
       console.log(failures + " BROWSER-CHECK(S) GEFAALD");
     }
+  } catch (error) {
+    await captureFailureEvidence(browser).catch(function (captureError) {
+      console.error("Fout-evidence vastleggen mislukt: " + captureError.message);
+    });
+    throw error;
   } finally {
     if (browser) await browser.close().catch(function () {});
     await stopServer(server);
     killLeakedThumbnailProcesses();
-    cleanupUploadedAssetFiles();
-    if (tmpDir) {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-    }
+    isolatedRuntime.cleanup();
   }
   if (failures > 0) process.exit(1);
+}
+
+// Bewijs-screenshot zonder dat het (opengeklapte) debugpaneel spelers bedekt; daarna weer open voor de HUD-checks.
+async function captureEvidenceScreenshot(page, fileName) {
+  const collapsed = await page.evaluate(function () {
+    const toggle = document.querySelector("#mmoDebugToggle");
+    if (!toggle || toggle.getAttribute("aria-expanded") !== "true") return false;
+    toggle.click();
+    return true;
+  });
+  await sleep(250);
+  await page.screenshot({ path: path.join(evidenceDir, fileName), fullPage: true });
+  if (collapsed) {
+    await page.evaluate(function () {
+      const toggle = document.querySelector("#mmoDebugToggle");
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+    });
+    await sleep(150);
+  }
+}
+
+// Bij een fout: per open pagina een screenshot en de belangrijkste clientstaat, zodat een rode run uitlegbaar is.
+async function captureFailureEvidence(browser) {
+  if (!browser || !evidenceDir) return;
+  let index = 0;
+  for (const context of browser.browserContexts()) {
+    for (const page of await context.pages()) {
+      index += 1;
+      const prefix = path.join(evidenceDir, "failure-page-" + index);
+      await page.screenshot({ path: prefix + ".png", fullPage: true }).catch(function () {});
+      const state = await page.evaluate(function () {
+        const text = function (selector) {
+          const element = document.querySelector(selector);
+          return element ? element.textContent : null;
+        };
+        const debug = window.__GK_GAME_CLIENT_DEBUG;
+        let clientState = null;
+        try { clientState = debug && typeof debug.getState === "function" ? debug.getState() : null; } catch { clientState = null; }
+        return {
+          url: location.href,
+          hudUser: text("#hudUser"),
+          hudPlayer: text("#hudPlayer"),
+          wsPill: text("#wsPill"),
+          clientStateKeys: clientState ? Object.keys(clientState).slice(0, 40) : null,
+          ui: clientState && Array.isArray(clientState.ui) ? clientState.ui : null
+        };
+      }).catch(function (error) { return { error: error.message }; });
+      fs.writeFileSync(prefix + ".json", JSON.stringify(state, null, 2));
+      console.error("Fout-evidence " + prefix + ": " + JSON.stringify(state).slice(0, 600));
+    }
+  }
 }
 
 function assertNear(actual, expected, tolerance, message) {
@@ -1167,7 +1296,10 @@ async function waitForRuntimeReady(page) {
   }
 }
 
-async function waitForMmoOnlineReady(page, timeoutMs = NAV_TIMEOUT_MS) {
+// Ruim, want headless rendert in software (een paar fps); een hangende verbinding duurde minuten.
+const LOGIN_READY_BUDGET_MS = 20000;
+
+async function waitForMmoOnlineReady(page, timeoutMs = NAV_TIMEOUT_MS, options = {}) {
   const result = await page.evaluate(async function (maxDurationMs) {
     const deadline = performance.now() + maxDurationMs;
     const sleep = function (ms) {
@@ -1207,7 +1339,8 @@ async function waitForMmoOnlineReady(page, timeoutMs = NAV_TIMEOUT_MS) {
         bootstrapOrTrio
       );
       if (ready) {
-        return Object.assign({ ok: true }, current);
+        // performance.now() telt vanaf het laden van de pagina: dit is de inlogtijd die de speler voelt.
+        return Object.assign({ ok: true, readyAtMs: Math.round(performance.now()) }, current);
       }
       await sleep(100);
     }
@@ -1218,6 +1351,10 @@ async function waitForMmoOnlineReady(page, timeoutMs = NAV_TIMEOUT_MS) {
   assert(result.wsVisibleState === "connected", "WS zichtbaar connected is voordat online-ready wordt verklaard");
   assert(result.overlayHidden === true, "overlay is verborgen zodra MMO online-ready is");
   assert(result.mmoReady && result.mmoReady.presenceSnapshotReceived === true, "presence snapshot is ontvangen voordat online-ready is");
+  // Kevin-handtest 2026-10-24: inloggen bleef soms minuten op "waiting_for_socket" of "waiting_for_http_snapshot" staan.
+  if (options.measureLogin === true && Number.isFinite(result.readyAtMs)) {
+    assert(result.readyAtMs <= LOGIN_READY_BUDGET_MS, "MMO online binnen " + (LOGIN_READY_BUDGET_MS / 1000) + " s na het laden van de pagina (" + result.readyAtMs + " ms)");
+  }
   return result;
 }
 
@@ -1812,7 +1949,7 @@ async function assertPerfHudTopRight(page) {
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
     return {
-      hasAnchorClass: el.className.indexOf("anchor-top-right") !== -1,
+      inHudLayout: Boolean(el.closest(".gameHudPanelFrame, .gameHudDock")),
       right: rect.right,
       left: rect.left,
       viewportWidth: window.innerWidth,
@@ -1822,9 +1959,174 @@ async function assertPerfHudTopRight(page) {
   });
   assert(Boolean(info), "performance HUD element (.perf-hud) staat in de DOM");
   if (!info) return;
-  assert(info.hasAnchorClass, "performance HUD element heeft class anchor-top-right");
+  assert(info.inHudLayout, "performance HUD hangt in het HUD-layoutsysteem (gameHud panel/dock, sinds NODE-03-04-05)");
   assert(info.right > info.viewportWidth - 300, "performance HUD zit tegen de rechterkant van het scherm (right=" + info.right.toFixed(0) + ", viewport=" + info.viewportWidth + ")");
   assert(info.left > info.viewportWidth / 2, "performance HUD staat niet meer linksboven (left=" + info.left.toFixed(0) + ")");
+}
+
+// Wacht tot de serverpositie twee keer achter elkaar gelijk is (de server heeft de route afgelopen).
+async function waitForServerRestingPosition(page, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  let previous = await serverPlayerPosition(page);
+  while (Date.now() < deadline) {
+    await sleep(250);
+    const current = await serverPlayerPosition(page);
+    if (current && previous && Math.hypot(current.x - previous.x, current.z - previous.z) < 0.001) return current;
+    previous = current;
+  }
+  return previous;
+}
+
+async function serverPlayerPosition(page) {
+  return await page.evaluate(function () {
+    return fetch("/api/game/player", { headers: { Accept: "application/json" } }).then(function (response) { return response.json(); }).then(function (json) { return json.position || null; });
+  });
+}
+
+async function waitForRuntimeIdle(page, timeoutMs) {
+  await page.waitForFunction(function () {
+    const runtime = window.__GK_GAME_RUNTIME;
+    return Boolean(runtime && typeof runtime.getPlayerState === "function" && runtime.getPlayerState().animationState === "idle");
+  }, { timeout: timeoutMs }).catch(function () {});
+}
+
+// Kevin-handtest 2026-10-24: een korte klik liet de speler heen en weer lopen; de server stond stil.
+async function assertShortClickSettlesWithoutOscillation(page) {
+  await waitForClientSettledOnServer(page);
+  const point = await screenPointFromPlayer(page, 1.2);
+  assert(Boolean(point), "kan een kort klikdoel berekenen");
+  if (!point) return;
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await sleep(60);
+  await page.mouse.up();
+  await sleep(1800);
+  const samples = [];
+  for (let index = 0; index < 20; index += 1) {
+    samples.push(await page.evaluate(function () {
+      const player = window.__GK_GAME_RUNTIME.getPlayerState();
+      const positions = window.__GK_GAME_CLIENT_DEBUG.getPositions();
+      return { x: player.x, z: player.z, ax: positions.authoritative ? positions.authoritative.x : null, az: positions.authoritative ? positions.authoritative.z : null };
+    }));
+    await sleep(100);
+  }
+  const last = samples[samples.length - 1];
+  const drift = samples.reduce(function (max, sample) { return Math.max(max, Math.hypot(sample.x - last.x, sample.z - last.z)); }, 0);
+  const gap = last.ax === null ? Infinity : Math.hypot(last.x - last.ax, last.z - last.az);
+  assert(drift < 0.3, "na een korte klik blijft de speler stil zonder heen-en-weer (drift=" + drift.toFixed(2) + ")");
+  assert(gap < 0.3, "na een korte klik staan client en server op dezelfde plek (verschil=" + (Number.isFinite(gap) ? gap.toFixed(2) : "onbekend") + ")");
+}
+
+// Kevin-handtest 2026-10-24: "Je bent te ver weg van deze portal" terwijl je erop staat.
+// Kevin-handtest 2026-10-24: op het portal klikken gaf "te ver weg" terwijl je er op je scherm bovenop stond.
+// Speel het echte spelerspad na: klik het portalmodel aan, de client loopt erheen en reist zelf.
+async function assertPortalTravelAfterWalking(page) {
+  assert(Boolean(browserCheckPortal), "testwereld heeft een portal");
+  if (!browserCheckPortal) return;
+  await waitForClientSettledOnServer(page);
+  const portal = browserCheckPortal.portal;
+  const portalScreenPoint = function () {
+    return page.evaluate(function (target, linkId) {
+      const runtime = window.__GK_GAME_RUNTIME;
+      const player = runtime.getPlayerState();
+      for (const height of [1.5, 1, 2.5, 0.5]) {
+        const screen = runtime.worldToScreen({ x: target.x, y: player.y + height, z: target.z });
+        if (!screen || screen.x < 20 || screen.y < 20 || screen.x > window.innerWidth - 20 || screen.y > window.innerHeight - 20) continue;
+        const picked = typeof runtime.pickRuntimeTargetAt === "function" ? runtime.pickRuntimeTargetAt(screen.x, screen.y) : null;
+        if (picked && String(picked.instanceId) === linkId) return { x: screen.x, y: screen.y };
+      }
+      return null;
+    }, portal, browserCheckPortal.linkId);
+  };
+  // Staat het portal (nog) niet aanklikbaar in beeld: loop er met grondklikken naartoe tot het dat wel is.
+  let point = await portalScreenPoint();
+  for (let attempt = 0; !point && attempt < 8; attempt += 1) {
+    const ground = await page.evaluate(function (target) {
+      const runtime = window.__GK_GAME_RUNTIME;
+      const player = runtime.getPlayerState();
+      const dx = target.x - player.x;
+      const dz = target.z - player.z;
+      const length = Math.hypot(dx, dz) || 1;
+      const step = Math.min(8, Math.max(0, length - 8));
+      const screen = runtime.worldToScreen({ x: player.x + (dx / length) * step, y: player.y, z: player.z + (dz / length) * step });
+      return screen ? { x: screen.x, y: screen.y } : null;
+    }, portal);
+    if (!ground) break;
+    await page.mouse.click(ground.x, ground.y);
+    await sleep(400);
+    await waitForRuntimeIdle(page, 8000);
+    await sleep(600);
+    point = await portalScreenPoint();
+  }
+  assert(Boolean(point), "het portal is aanklikbaar in beeld");
+  if (!point) return;
+  const travelErrors = [];
+  const onResponse = function (response) {
+    if (response.url().includes("/api/game/travel/zone-link") && response.status() !== 200) travelErrors.push(response.status());
+  };
+  page.on("response", onResponse);
+  await page.mouse.click(point.x, point.y);
+  let server = null;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await sleep(500);
+    server = await serverPlayerPosition(page);
+    if (server && server.zoneId === browserCheckPortal.targetZoneId) break;
+  }
+  page.off("response", onResponse);
+  assert(Boolean(server) && server.zoneId === browserCheckPortal.targetZoneId, "klik op het portal: lopen en reizen naar de doelzone lukt (zone=" + (server ? server.zoneId : "onbekend") + ")");
+  assert(travelErrors.length === 0, "geen \"te ver weg\"-fout onderweg naar het portal (fouten: " + (travelErrors.join(",") || "geen") + ")");
+}
+
+async function waitForClientSettledOnServer(page, timeoutMs = 6000) {
+  await clearLocalMovement(page, "settle-before-next-check");
+  const settled = await page.waitForFunction(function () {
+    const positions = window.__GK_GAME_CLIENT_DEBUG.getPositions();
+    if (!positions.predicted || !positions.authoritative) return false;
+    return Math.hypot(positions.predicted.x - positions.authoritative.x, positions.predicted.z - positions.authoritative.z) < 0.1;
+  }, { timeout: timeoutMs }).then(function () { return true; }).catch(function () { return false; });
+  await sleep(400);
+  return settled;
+}
+
+// Sinds Fase 01 neemt de server bij stilstaan geen clientpositie meer over. Een afwijkende lokale voorspelling
+// moet daarom bij stilstand naar de serverpositie schuiven (portals en medespelers gebruiken de serverpositie).
+async function assertIdleSettlesToServerPosition(page) {
+  await clearLocalMovement(page, "idle-settle-check");
+  await page.waitForFunction(function () {
+    const runtime = window.__GK_GAME_RUNTIME;
+    return Boolean(runtime && typeof runtime.getPlayerState === "function" && runtime.getPlayerState().animationState === "idle");
+  }, { timeout: NAV_TIMEOUT_MS });
+  await sleep(1200);
+  const serverBefore = await page.evaluate(function () {
+    return fetch("/api/game/player", { headers: { Accept: "application/json" } }).then(function (response) { return response.json(); }).then(function (json) { return json.position || null; });
+  });
+  const desynced = await page.evaluate(function () {
+    return window.__GK_GAME_CLIENT_DEBUG.desyncPredictionForTest(3, 0);
+  });
+  assert(desynced === true, "lokale voorspelling kan voor de test afwijken");
+  const settled = await page.waitForFunction(function () {
+    const positions = window.__GK_GAME_CLIENT_DEBUG.getPositions();
+    if (!positions.predicted || !positions.authoritative) return false;
+    return Math.hypot(positions.predicted.x - positions.authoritative.x, positions.predicted.z - positions.authoritative.z) < 0.1;
+  }, { timeout: 5000 }).then(function () { return true; }).catch(function () { return false; });
+  const positions = await page.evaluate(function () { return window.__GK_GAME_CLIENT_DEBUG.getPositions(); });
+  assert(settled, "bij stilstand schuift de client terug naar de serverpositie (" + JSON.stringify(positions) + ")");
+  const serverAfter = await page.evaluate(function () {
+    return fetch("/api/game/player", { headers: { Accept: "application/json" } }).then(function (response) { return response.json(); }).then(function (json) { return json.position || null; });
+  });
+  assert(serverBefore && serverAfter && Math.hypot(serverAfter.x - serverBefore.x, serverAfter.z - serverBefore.z) < 0.01, "de serverpositie verschuift niet door de lokale afwijking");
+}
+
+async function scatterNodeIdForScatterId(page, scatterId) {
+  return await page.evaluate(function (wantedScatterId) {
+    return fetch("/api/game/world", { headers: { Accept: "application/json" } }).then(function (response) {
+      return response.json();
+    }).then(function (world) {
+      const area = (world.scatterAreas || []).find(function (candidate) { return candidate && candidate.scatterId === wantedScatterId; });
+      return area ? area.id : null;
+    });
+  }, scatterId);
 }
 
 async function assertScatterItemsBlockMovement(page) {
@@ -1839,26 +2141,39 @@ async function assertScatterItemsBlockMovement(page) {
       if (!entity) return { missing: true };
       const position = entity.transform.position;
       const collisionRadius = Number(entity.collisionRadius) || 0.6;
-      const movement = runtime.resolvePlayerMovementIntent(
-        { x: position.x - collisionRadius - 3, y: 0, z: position.z },
-        { x: position.x, y: 0, z: position.z },
-        { radius: 0.5 }
-      );
+      const start = { x: position.x - collisionRadius - 3, y: 0, z: position.z };
+      const target = { x: position.x, y: 0, z: position.z };
+      // Obstakels zijn sinds microfase 2 alleen actief in chunks rond de speler: zet de speler eerst naast de boom.
+      const before = runtime.getPlayerState();
+      runtime.debugTeleportPlayer(start.x, start.z);
+      const wait = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+      const attempt = function (remaining) {
+        const movement = runtime.resolvePlayerMovementIntent(start, target, { radius: 0.5 });
+        if (movement.blocked === true || remaining <= 0) return Promise.resolve(movement);
+        return wait(200).then(function () { return attempt(remaining - 1); });
+      };
+      return wait(200).then(function () { return attempt(10); }).then(function (movement) {
+      const debug = typeof runtime.debugState === "function" ? runtime.debugState() : null;
+      if (before) runtime.debugTeleportPlayer(before.x, before.z);
       return {
         missing: false,
         movement: movement,
         target: position,
         collisionRadius: collisionRadius,
+        activeSolids: debug?.world?.collisionPerformance?.activeSolids ?? null,
+        collisionResidentChunkKeys: Array.isArray(debug?.world?.chunkLoading?.collisionResidentChunkKeys) ? debug.world.chunkLoading.collisionResidentChunkKeys.slice(0, 12) : null,
         hasBoundaryBlocker: (world.collision?.blockers || []).some(function (blocker) {
           return blocker?.reason === "browser_check_scatter";
         })
       };
+      });
     });
   });
   assert(result.missing !== true, "gepubliceerde scatter bevat individuele solid instances");
   if (result.missing) return;
   assert(result.hasBoundaryBlocker === false, "scatter publiceert geen collider over de volledige boundary");
-  assert(result.movement.blocked === true, "resolvePlayerMovementIntent meldt blocked=true bij een scatter-item");
+  const collisionDiagnostics = " [boom op " + Number(result.target.x).toFixed(1) + "," + Number(result.target.z).toFixed(1) + ", actieve solids=" + result.activeSolids + ", collision-chunks=" + JSON.stringify(result.collisionResidentChunkKeys) + "]";
+  assert(result.movement.blocked === true, "resolvePlayerMovementIntent meldt blocked=true bij een scatter-item" + (result.movement.blocked === true ? "" : collisionDiagnostics));
   const remainingDistance = Math.hypot(result.movement.x - result.target.x, result.movement.z - result.target.z);
   assert(remainingDistance >= result.collisionRadius + 0.49, "beweging stopt vóór de individuele scatter collider (afstand=" + remainingDistance.toFixed(2) + ")");
 }
@@ -1881,6 +2196,18 @@ async function assertCameraRelativeWasd(page) {
 
   await prepareForDirection("wasd reset before W");
   const deltaFor = await measureKeyDelta(page, "KeyW", 500);
+  if (Math.hypot(deltaFor.x || 0, deltaFor.z || 0) < 0.01) {
+    const diagnostic = await page.evaluate(function () {
+      const debug = window.__GK_GAME_CLIENT_DEBUG && window.__GK_GAME_CLIENT_DEBUG.getState ? window.__GK_GAME_CLIENT_DEBUG.getState() : {};
+      const picked = {};
+      for (const key of Object.keys(debug || {})) {
+        const value = debug[key];
+        if (value === null || ["string", "number", "boolean"].includes(typeof value)) picked[key] = value;
+      }
+      return picked;
+    });
+    console.log("WASD-diagnose: " + JSON.stringify(diagnostic).slice(0, 2500));
+  }
   await prepareForDirection("wasd reset before S");
   const deltaBack = await measureKeyDelta(page, "KeyS", 500);
   await prepareForDirection("wasd reset before A");
@@ -2086,27 +2413,22 @@ async function buildAndPublishWorld() {
     category: "environment"
   });
 
-  let graph = (await call("GET", "/api/editor/graph")).json;
-  const gameOutputNode = findNode(graph, function (node) { return node.type === "game_output"; }, "game output bestaat");
-
-  const autoConnect = async function (type, values, matcher, port) {
-    graph = (await createNode(type, values)).graph;
-    const node = findNode(graph, matcher, "node " + type + " aangemaakt");
-    graph = await connect(graph, node.id, port.from, gameOutputNode.id, port.to);
-    return node;
+  // Normale authoringroute (NODE-01/02): foundation + startzone, zie scripts/lib/test-world.js.
+  const world = createTestWorldApi(call);
+  const foundation = await applyFoundation(world);
+  const zone = await createStartZone(world, foundation, {
+    zoneId: "zone.browser_check",
+    displayName: "Browser Check World",
+    environment: { backgroundColor: "#0b1622", fogColor: "#0b1622", fogDensity: 0 },
+    spawn: { spawnId: "spawn.browser_check.default", x: 0, z: 0, facing: 0 }
+  });
+  const add = function (type, values, route) {
+    return world.add(type, values, route, foundation, zone);
   };
 
-  await autoConnect("world_settings", {
-    worldId: "browser_check_world",
-    displayName: "Browser Check World",
-    backgroundColor: "#0b1622",
-    fogColor: "#0b1622",
-    fogDensity: 0
-  }, function (n) { return n.type === "world_settings"; }, { from: "world", to: "world" });
-
-  await autoConnect("editor_world_settings", worldSettingsPresetNodePatch("editor", "geen_schaduw"), function (n) { return n.type === "editor_world_settings"; }, { from: "editorWorldSettings", to: "editorWorldSettings" });
-  await autoConnect("game_world_settings", worldSettingsPresetNodePatch("game", "geen_schaduw"), function (n) { return n.type === "game_world_settings"; }, { from: "gameWorldSettings", to: "gameWorldSettings" });
-  await autoConnect("game_chunk_loading", {
+  await add("editor_world_settings", worldSettingsPresetNodePatch("editor", "geen_schaduw"), ROUTES.editorWorldSettings);
+  await add("game_world_settings", worldSettingsPresetNodePatch("game", "geen_schaduw"), ROUTES.gameWorldSettings);
+  await world.patchValues(foundation.gameChunkLoading.id, {
     chunkProfileId: "game_chunks",
     enabled: true,
     chunkWidth: 25,
@@ -2128,18 +2450,19 @@ async function buildAndPublishWorld() {
     residentEntityBudget: 200,
     residentObjectBudget: 300,
     residentScatterInstanceBudget: 500
-  }, function (n) { return n.type === "game_chunk_loading"; }, { from: "chunkLoading", to: "chunkLoading" });
+  });
 
-  await autoConnect("ground_surface", {
+  await add("ground_surface", {
     groundId: "browser_check_ground",
     width: 600,
     depth: 600,
     y: 0,
     boundsMode: "centerSize",
     materialColor: "#3f6b3f"
-  }, function (n) { return n.type === "ground_surface"; }, { from: "ground", to: "ground" });
+  }, ROUTES.ground);
 
-  await autoConnect("game_camera", {
+  // De foundation levert de game camera al; stel die in zoals een gebruiker zou doen.
+  await world.patchValues(foundation.gameCamera.id, {
     cameraId: "browser_check_camera",
     pitch: 55,
     yaw: 15,
@@ -2150,16 +2473,9 @@ async function buildAndPublishWorld() {
     fov: 55,
     follow: true,
     rotateSpeed: 90
-  }, function (n) { return n.type === "game_camera"; }, { from: "camera", to: "camera" });
+  });
 
-  await autoConnect("player_spawn", {
-    spawnId: "browser_check_spawn",
-    x: 0,
-    z: 0,
-    facing: 0
-  }, function (n) { return n.type === "player_spawn"; }, { from: "spawn", to: "spawn" });
-
-  await autoConnect("player_character", {
+  await add("player_character", {
     playerId: "browser_check_player",
     modelAssetId: wizardAsset.asset.id,
     animationClip: "Idle",
@@ -2171,15 +2487,15 @@ async function buildAndPublishWorld() {
     turnSpeed: 600,
     collisionRadius: 0.5,
     scale: 1
-  }, function (n) { return n.type === "player_character"; }, { from: "player", to: "player" });
+  }, ROUTES.player);
 
-  await autoConnect("ambient_light", {
+  await add("ambient_light", {
     lightId: "browser_check_ambient",
     color: "#ffffff",
     intensity: 0.9
-  }, function (n) { return n.type === "ambient_light"; }, { from: "light", to: "lights" });
+  }, ROUTES.light);
 
-  await autoConnect("bounded_area_scatter", {
+  await add("bounded_area_scatter", {
     scatterId: "browser_check_scatter",
     enabled: true,
     areaCenterX: 100,
@@ -2207,13 +2523,16 @@ async function buildAndPublishWorld() {
       { x: 130, z: 230 },
       { x: 70, z: 230 }
     ]
-  }, function (n) { return n.type === "bounded_area_scatter"; }, { from: "entity", to: "entities" });
+  }, ROUTES.entity);
 
-  await autoConnect("bounded_area_scatter", {
+  await add("bounded_area_scatter", {
     scatterId: "browser_check_flicker_scatter",
     enabled: true,
-    areaCenterX: 112,
-    areaCenterZ: 0,
+    areaCenterX: 87,
+    // Volledig binnen chunk "3,-1": gemeten randchunk van de laadzone bij oscillatie rond x=50 (geladen bij x=52,
+    // niet bij x=48; cameraOffsetZChunks -1 houdt rij -1 geladen). Binnen één chunk kan de per run wisselende seed
+    // de batch niet over een chunkgrens schuiven.
+    areaCenterZ: -7,
     areaWidth: 12,
     areaDepth: 12,
     areaRotationY: 0,
@@ -2227,19 +2546,20 @@ async function buildAndPublishWorld() {
     rotationYMin: 0,
     rotationYMax: 360,
     points: [
-      { x: 106, z: -6 },
-      { x: 118, z: -6 },
-      { x: 118, z: 6 },
-      { x: 106, z: 6 }
+      { x: 81, z: -13 },
+      { x: 93, z: -13 },
+      { x: 93, z: -1 },
+      { x: 81, z: -1 }
     ]
-  }, function (n) { return n.type === "bounded_area_scatter" && n.values.scatterId === "browser_check_flicker_scatter"; }, { from: "entity", to: "entities" });
+  }, ROUTES.entity);
 
-  await autoConnect("debug_mmo_hud", {
+  await add("debug_mmo_hud", {
     hudId: "browser_check_mmo_debug_hud",
     enabled: true,
     anchor: "top-left",
     compact: true,
-    startCollapsed: true,
+    // Sinds microfase 2 vult een ingeklapte debug-HUD zijn details niet meer; deze test leest die details.
+    startCollapsed: false,
     showWsStatus: true,
     showUser: true,
     showPlayer: true,
@@ -2258,9 +2578,9 @@ async function buildAndPublishWorld() {
     showLastReceived: true,
     showLastSource: true,
     showLastError: true
-  }, function (n) { return n.type === "debug_mmo_hud"; }, { from: "ui", to: "ui" });
+  }, ROUTES.ui);
 
-  await autoConnect("debug_performance_hud", {
+  await add("debug_performance_hud", {
     hudId: "browser_check_perf_hud",
     label: "Performance HUD",
     enabled: true,
@@ -2281,7 +2601,10 @@ async function buildAndPublishWorld() {
     showCollisionShapes: true,
     showWorldSize: false,
     showChunkCulling: false
-  }, function (n) { return n.type === "debug_performance_hud"; }, { from: "ui", to: "ui" });
+  }, ROUTES.ui);
+
+  // Portal naar een tweede zone, ver van de andere bewegingstests (alleen gebruikt door de portaltest aan het eind).
+  browserCheckPortal = await addZoneLinkPortal(world, foundation, zone, { modelAssetId: treeAsset.asset.id, portal: { x: -20, z: 15 } });
 
   const publish = await call("POST", "/api/editor/publish");
   if (publish.status !== 200 || !publish.json || !publish.json.ok) {
@@ -2352,8 +2675,9 @@ function findNode(graph, predicate, label) {
 }
 
 async function call(method, pathname, body, isForm) {
-  const headers = {};
+  const headers = { Origin: BASE };
   if (cookie) headers.Cookie = cookie;
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method) && csrfToken) headers["X-GK-CSRF"] = csrfToken;
   let payload = body;
   if (body && !isForm) {
     headers["Content-Type"] = "application/json";
@@ -2364,6 +2688,7 @@ async function call(method, pathname, body, isForm) {
   const text = await response.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (json?.csrfToken) csrfToken = json.csrfToken;
   return { status: response.status, json, text };
 }
 

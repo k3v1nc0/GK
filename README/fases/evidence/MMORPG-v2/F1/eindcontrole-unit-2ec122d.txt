@@ -1,0 +1,152 @@
+# Eindcontrole Fase 01 — code-SHA 2ec122d4df72df2777a88226eed5ab580ecfaf39
+# Datum: 2026-10-23T21:57:04+02:00 | node v24.18.0
+
+$ npm run check
+
+> gk-real-node-editor@2.0.0 check
+> sh scripts/run-node24.sh scripts/check.js
+
+ok   src/server/action-security.js
+ok   src/server/asset-service.js
+ok   src/server/auth-security.js
+ok   src/server/auth-service.js
+ok   src/server/backup-service.js
+ok   src/server/campaign-compiler.js
+ok   src/server/catalog-compiler.js
+ok   src/server/db.js
+ok   src/server/env.js
+ok   src/server/field-validation.js
+ok   src/server/game-project-compiler.js
+ok   src/server/graph-migration-service.js
+ok   src/server/graph-repository.js
+ok   src/server/mmo-service.js
+ok   src/server/node03-runtime-service.js
+ok   src/server/node04-quest-runtime-service.js
+ok   src/server/node05-economy-runtime-service.js
+ok   src/server/publish-service.js
+ok   src/server/request-boundary.js
+ok   src/server/restore-service.js
+ok   src/server/server.js
+ok   src/server/storage-policy.js
+ok   src/server/symbol-index-service.js
+ok   src/server/token-resolver.js
+ok   src/shared/catalog-contract.js
+ok   src/shared/combat-contract.js
+ok   src/shared/dialogue-contract.js
+ok   src/shared/gameplay-event-contract.js
+ok   src/shared/node-contract.js
+ok   src/shared/node-types.js
+ok   src/shared/player-state-contract.js
+ok   src/shared/quest-contract.js
+ok   src/shared/reference-utils.js
+ok   src/shared/token-contract.js
+ok   src/shared/token-preview.js
+ok   apps/web/public/editor/authoring-contract.js
+ok   apps/web/public/editor/content-workbench.js
+ok   apps/web/public/editor/editor.js
+ok   apps/web/public/editor/semantic-field-help.js
+ok   apps/web/public/editor/visual-object-relations.js
+ok   apps/web/public/game/game.js
+ok   apps/web/public/login/login.js
+ok   apps/web/public/shared/catalog-contract.js
+ok   apps/web/public/shared/combat-contract.js
+ok   apps/web/public/shared/dialogue-contract.js
+ok   apps/web/public/shared/gameplay-event-contract.js
+ok   apps/web/public/shared/minimap-utils.js
+ok   apps/web/public/shared/node-contract.js
+ok   apps/web/public/shared/node-types.js
+ok   apps/web/public/shared/player-state-contract.js
+ok   apps/web/public/shared/quest-contract.js
+ok   apps/web/public/shared/reference-utils.js
+ok   apps/web/public/shared/revision-guard.js
+ok   apps/web/public/shared/token-contract.js
+ok   apps/web/public/shared/token-preview.js
+ok   apps/web/public/shared/world-runtime.js
+ok   scripts/apply-node03-desert-demo.js
+ok   scripts/apply-node04-campaign-quest-slice.js
+ok   scripts/apply-node05-economy-slice.js
+ok   scripts/backup-db.js
+ok   scripts/check-semantic-field-help.js
+ok   scripts/check.js
+ok   scripts/game-browser-check.js
+ok   scripts/inspect-world-chunks.js
+ok   scripts/lib/test-isolation.js
+ok   scripts/maintain-publish-history.js
+ok   scripts/perf-game.js
+ok   scripts/perf-server.js
+ok   scripts/restore-db.js
+ok   scripts/run-isolated-tests.js
+ok   scripts/run-node24.js
+ok   scripts/smoke-test.js
+
+72/72 bestanden syntactisch ok.
+exit=0
+
+$ GK_TEST_ISOLATED=1 npm test
+
+> gk-real-node-editor@2.0.0 test
+> sh scripts/run-node24.sh scripts/run-isolated-tests.js
+
+✔ zesde loginpoging binnen een minuut geeft 429 (25.147504ms)
+✔ sessiecookie is nooit de fallback database-ID en logout maakt token ongeldig (437.471063ms)
+✔ nieuwe login roteert de sessie en productie vereist Secure-cookie (473.815185ms)
+✔ absolute HTTP/WS positie en teleport worden geweigerd (14.707297ms)
+✔ remote snapshots bevatten geen account-, sessie- of device-identiteit (0.925523ms)
+✔ online backup is integer, hash-verifieerbaar en bevat assets (57.229124ms)
+✔ publiek backupdoel wordt geweigerd (36.817347ms)
+✔ falende backup laat bron en doel ongemoeid (35.162668ms)
+RESTORE_PROOF {"integrity":"ok","counts":{"editor_nodes":1,"player_positions":2,"player_profiles":2,"users":2},"publishedHash":"sha256:published","assets":1,"sourceSha":"restore-sha"}
+✔ backup herstelt DB en assets met gelijke tellingen en published hash (92.29481ms)
+✔ restore weigert niet-lege/publieke doelen en webgrens weert secrets (1.901345ms)
+✔ Workbench spec only uses real catalog definition types and fields (3.822292ms)
+✔ derived index follows child edges and typed references, never names (6.188187ms)
+✔ W3 story and Stat Block relations follow real ownership edges (4.638598ms)
+✔ W3 runtime labels match the audited quest/ability consumers (0.376038ms)
+✔ game project compiler produces a connected manifest (14.138504ms)
+✔ game project compiler carries the UI proof chain package (5.32698ms)
+✔ game project compiler publishes node02 zone package with default spawn and minimap (6.326697ms)
+✔ foundation migration preview stays read-only and apply writes the plan (9.999256ms)
+✔ foundation migration reroutes legacy Game Output edges to internal adapter (4.169849ms)
+✔ root model placement does not create legacy Game Output entity edges (14.054499ms)
+✔ model placement inside a zone canvas connects to Zone Output atomically (7.958088ms)
+✔ node position updates reject invalid coordinates and persist valid coordinates (3.677023ms)
+✔ restore rejects snapshots with broken layout coordinates (3.312995ms)
+✔ restore preserves existing internal migration edges while moving visible nodes (5.325734ms)
+✔ publish history retention keeps existing rows when the limit is reached exactly (3.2941ms)
+✔ publish history retention keeps the newest 50 rows and cascades dependent rows (3.303276ms)
+✔ failed publish rolls back published world and leaves valid history intact (3.5582ms)
+✔ Origin-allowlist is exact en mutaties zijn herkenbaar (4.745164ms)
+✔ CSRF-token is sessiegebonden en ontbrekende/verkeerde tokens geven 403 (3.004316ms)
+✔ WebSocket payloadgrens is exact 64 KiB en fout-URL is afvangbaar (0.428508ms)
+✔ echte migraties accepteren alleen de historische dubbele 006 en maken verifieerbare backups (672.756202ms)
+✔ gewijzigde checksum en nieuwe dubbele prefix blokkeren startup (50.228665ms)
+✔ ontbrekende backup blokkeert migratie en falende SQL rolt volledig terug (36.956817ms)
+✔ authoritative movement uses published solid model colliders (5.719824ms)
+✔ canonical ids and tag queries normalize consistently (4.737895ms)
+✔ Game Output exposes only gameProject as the normal authoring input (0.627024ms)
+✔ all node data types have visually distinct colors (0.793881ms)
+✔ bounded scatter keeps boundary and per-item collision as separate compatible choices (17.271191ms)
+✔ bounded scatter mixes a straight or brick pattern into the existing random placement (13.824316ms)
+✔ chunk loading node size fields override connected chunk grid defaults (3.241255ms)
+✔ mmo network settings publish game-dev netcode fields (1.711234ms)
+✔ mmo network extreme low bandwidth preset favors smoothing over latency (0.492371ms)
+✔ mmo network smooth MMO preset holds local prediction during input (0.421836ms)
+✔ debug/reset vereist admin en expliciete dev-flag (2.825253ms)
+✔ dezelfde operation-ID met andere volledige payload geeft 409 (1.482072ms)
+✔ tien aanvallen in een seconde blijven binnen servercooldown (0.655664ms)
+✔ symbol index resolves aliases and reference kinds (5.501037ms)
+✔ testmodus is fail-closed (2.505358ms)
+✔ normale storage en publieke host worden geweigerd (1.172169ms)
+✔ sentinels in normale checkoutopslag blijven byte-identiek (29.004982ms)
+✔ tijdelijke root wordt ook na een testfout opgeruimd (5.730021ms)
+✔ token resolver previews static tokens from the graph (7.698383ms)
+✔ token resolver maps project gameName to global.game_name without a global value node (1.222614ms)
+ℹ tests 53
+ℹ suites 0
+ℹ pass 53
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5648.988209
+exit=0

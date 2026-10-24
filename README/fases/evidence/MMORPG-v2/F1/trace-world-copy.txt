@@ -1,0 +1,28 @@
+Wereldtabellen gekopieerd: {"editor_nodes":468,"editor_node_edges":502,"asset_library":18,"published_world_state":1,"editor_graph_meta":1,"content_id_aliases":2,"game_hud_layout_defaults":2}
+Trace hoofdthread, 16629 ms, DrawFrame-events: 0 (~0.0 fps)
+    16333 ms  x2146   max  701.2 ms  RunTask
+    12791 ms  x57     max  617.9 ms  Commit
+    12673 ms  x73     max  615.7 ms  ImplementationBase::WaitForCmd
+    12672 ms  x73     max  615.7 ms  CommandBufferHelper::Finish
+    12625 ms  x57     max  616.2 ms  GLES2::ReadPixels
+    12524 ms  x73     max  615.6 ms  CommandBufferProxyImpl::WaitForGetOffset
+     2700 ms  x647    max  107.8 ms  FunctionCall
+     2161 ms  x338    max  107.9 ms  AsyncTask Run
+     2054 ms  x58     max  207.9 ms  WebFrameWidgetImpl::BeginMainFrame
+     2054 ms  x58     max  207.9 ms  Blink.Animate.UpdateTime
+     2053 ms  x58     max  207.9 ms  PageAnimator::serviceScriptedAnimations
+     2052 ms  x58     max  207.8 ms  FrameRequestCallbackCollection::ExecuteFrameCallbacks
+     2051 ms  x279    max  107.9 ms  FireAnimationFrame
+      228 ms  x269    max   33.0 ms  CommandBufferHelper::Flush
+      226 ms  x269    max   32.9 ms  CommandBufferProxyImpl::Flush
+      225 ms  x7148   max   11.9 ms  Document::UpdateStyleAndLayout
+      217 ms  x7206   max   11.9 ms  LocalFrameView::UpdateStyleAndLayout
+      197 ms  x7148   max   11.9 ms  Blink.ForcedStyleAndLayout.UpdateTime
+      146 ms  x58     max    8.0 ms  WebFrameWidgetImpl::UpdateLifecycle
+      142 ms  x152    max   11.6 ms  Blink.Layout.UpdateTime
+      137 ms  x152    max   11.6 ms  LocalFrameView::layout
+      136 ms  x152    max   11.6 ms  Layout
+      132 ms  x152    max   11.6 ms  LocalFrameView::performLayout
+      115 ms  x85     max   16.0 ms  TimerBase::run
+      115 ms  x59     max   16.0 ms  TimerFire
+Game-loop timings na lopen: {"remoteSyncMs":0.1,"remoteSyncAvgMs":0.163,"remoteSyncCalls":117,"remoteSyncLastAt":31988,"movementStepMs":5.5,"movementStepAvgMs":7.839,"movementStepCalls":49,"movementStepLastAt":28171.6,"minimapDrawMs":7.8,"minimapDrawAvgMs":9.366,"minimapDrawCalls":61,"minimapDrawLastAt":31694.9}

@@ -1,0 +1,314 @@
+# browsertest — code-SHA 7ba2ec09ad1e15b27500b084186e33368194ec99 — start 2026-10-24T09:34:51+02:00
+
+> gk-real-node-editor@2.0.0 game:browser-check
+> sh scripts/run-node24.sh scripts/game-browser-check.js
+
+
+== Login / register flow ==
+[http 401] http://127.0.0.1:37381/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+[http 404] http://127.0.0.1:37381/favicon.svg
+[browser:error] Failed to load resource: the server responded with a status of 404 (Not Found)
+[browser:warn] [.WebGL-0x14a400146000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0x14a400146000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0x14a400146000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0x14a400146000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - registreren logt direct in en stuurt naar /game/
+
+== HUD zichtbaarheid ==
+  ok   - Player id is zichtbaar in de HUD: mmo02_fix2_player_a · player_7
+  ok   - WS pill toont connected
+
+== WebSocket status stability ==
+  ok   - WS visible status blijft connected tijdens normale sessie (samples=34)
+  ok   - overlay blijft verborgen tijdens normale sessie
+  ok   - pingMs is gevuld na de stabiliteitsperiode
+  ok   - avgPingMs is gevuld na de stabiliteitsperiode
+  ok   - jitterMs is gevuld na de stabiliteitsperiode
+  ok   - remoteBufferDelayMs is gevuld na de stabiliteitsperiode
+  ok   - lastPongAgeMs is gevuld na de stabiliteitsperiode
+  ok   - WS raw/visible state blijven connected
+  ok   - showSession=false verbergt de session-rij
+  ok   - showSessions=false verbergt de sessions-rij
+  ok   - showLastSource=true toont de source-rij
+
+== Publish refresh blijft live ==
+  ok   - opnieuw publiceren werkt
+  ok   - game blijft op /game/ na publish-refresh
+  ok   - overlay blijft verborgen na publish-refresh
+  ok   - WS blijft connected na publish-refresh
+  ok   - MMO blijft online-ready na publish-refresh
+
+== Performance HUD anchor (top-right) ==
+  ok   - performance HUD element (.perf-hud) staat in de DOM
+  ok   - performance HUD hangt in het HUD-layoutsysteem (gameHud panel/dock, sinds NODE-03-04-05)
+  ok   - performance HUD zit tegen de rechterkant van het scherm (right=1268, viewport=1280)
+  ok   - performance HUD staat niet meer linksboven (left=1087)
+
+== WASD is camera-relatief (niet hardcoded wereldas) ==
+  ok   - getCameraGroundBasis() geeft een forward vector terug
+  ok   - getCameraGroundBasis() geeft een right vector terug
+  ok   - W verplaatst de speler merkbaar (delta=3.73)
+  ok   - S verplaatst de speler merkbaar (delta=3.62)
+  ok   - A verplaatst de speler merkbaar (delta=3.50)
+  ok   - D verplaatst de speler merkbaar (delta=3.73)
+  ok   - W beweegt in dezelfde richting als camera-forward (cos=1.00)
+  ok   - S beweegt tegenovergesteld aan camera-forward (cos=-1.00)
+  ok   - D beweegt in dezelfde richting als camera-right (cos=1.00)
+  ok   - A beweegt tegenovergesteld aan camera-right (cos=-1.00)
+  ok   - W en D staan ongeveer loodrecht op elkaar, zoals bij camera-relatieve besturing (cos=0.00)
+
+== Idle/walk animatie bij stilstaan ==
+  ok   - animatie tijdens bewegen is walk/run (actual=walk)
+  ok   - animatie na loslaten van W is idle (actual=idle)
+
+== Object/chunk residency bij grensoscillatie ==
+  ok   - flicker-scatter staat in de gepubliceerde scatterAreas
+  ok   - de scatter-residency-entry is aanwezig in elke sample
+  ok   - de chunk-residency-entry is aanwezig in elke sample
+Residency trace: #0 target=52,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #1 target=51,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #2 target=50,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #3 target=49,0 visible=1 held=1 pending=1 toggles=1 prevented=1 chunk=pendingUnload | #4 target=48,0 visible=0 held=0 pending=0 toggles=2 prevented=1 chunk=unloaded | #5 target=49,0 visible=0 held=0 pending=0 toggles=2 prevented=1 chunk=unloaded | #6 target=50,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active | #7 target=51,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active | #8 target=52,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active
+Residency flicker-entries: ["scatter|3,-1|loaded|visible"] | geladen #0: ["1,-2","1,-1","1,0","2,-2","2,-1","2,0","3,-2","3,-1","3,0"] | actief #0: ["1,-2","1,-1","1,0","2,-2","2,-1","2,0","3,-2","3,-1","3,0"] | geladen #4: ["0,-2","0,-1","0,0","1,-2","1,-1","1,0","2,-2","2,-1","2,0"]
+
+== Collision: Bounded Area Scatter per item ==
+  ok   - gepubliceerde scatter bevat individuele solid instances
+  ok   - scatter publiceert geen collider over de volledige boundary
+  ok   - resolvePlayerMovementIntent meldt blocked=true bij een scatter-item
+  ok   - beweging stopt vóór de individuele scatter collider (afstand=1.26)
+  FAIL - grensoscillatie veroorzaakt geen herhaald flikkeren (toggles=3)
+  ok   - hysteresis houdt de scatter minstens eenmaal vast tijdens het verlaten van de load-zone
+  FAIL - er zijn geen herhaalde visibility-toggle warnings tijdens de grensoscillatie
+  ok   - de scatter komt in held/pendingUnload tijdens de grensoscillatie
+
+== Klik dicht bij karakter: blijft stil ==
+  ok   - kan een klikpunt dicht bij de speler berekenen
+  ok   - klik dicht bij het karakter start geen beweging (delta=0.00)
+  ok   - klik dicht bij het karakter houdt de animatie idle
+
+== Muis slepen over deadzone: blijft lopen zolang knop ingedrukt is ==
+  ok   - kan een sleepstartpunt berekenen
+  ok   - kan een deadzone-punt berekenen
+  ok   - tijdens slepen over de deadzone werd de pointer-drag verwerkt (delta=5.72)
+
+== Muis vasthouden: blijft lopen zolang knop ingedrukt is ==
+  ok   - kan een hold-punt berekenen
+  ok   - tijdens ingedrukt houden blijft de speler bewegen (eerste delta=4.67)
+  ok   - tijdens ingedrukt houden blijft de speler doorbewegen (tweede delta=4.55)
+  ok   - na loslaten van de muis komt de animatie terug op idle
+
+== Muis: klik/vasthouden beweegt speler, loslaten stopt ==
+  ok   - muis-klik-en-vasthouden verplaatst de speler (delta=4.32)
+  ok   - na loslaten van de muis komt de animatie terug op idle
+
+== Muisklik: loopt door na loslaten ==
+  ok   - kan een muisklik-punt berekenen
+  ok   - na mouseup loopt de speler door naar het doel (delta=1.40)
+  ok   - de muisklik start ook echt de verplaatsing
+
+== Minimapa: overgeslagen (geen game minimap HUD in deze testwereld) ==
+
+== Lost pointer capture stopt beweging ==
+  ok   - lostpointercapture laat de speler niet doorlopen (delta=0.00)
+  ok   - lostpointercapture start ook echt een verplaatsing
+
+== Touch (synthetische pointerType=touch): beweegt speler ==
+  ok   - touch-drag verplaatst de speler (delta=4.55)
+  ok   - na loslaten van touch komt de animatie terug op idle
+
+== Database: serverpositie/revision veranderen na beweging ==
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - player snapshot bestaat voor en na beweging
+  ok   - revision loopt op na beweging (332 -> 357, ws=ws-pill ws-pill--connected / connected)
+  ok   - x/z veranderen in de server snapshot na beweging (ws=ws-pill ws-pill--connected / connected)
+  ok   - HUD revision loopt niet achter op de server snapshot revision (hud=357, server=357)
+  ok   - HUD toont een player state event (actual=mmo:snapshot · 0.2s geleden)
+  ok   - normale movement gebruikt mmo:snapshot
+  ok   - client markeert snapshot als hoofdpad voor normale movement
+  ok   - HUD toont de laatst verzonden input seq
+  ok   - HUD toont de laatst geackte input seq
+  ok   - HUD toont het pending-input aantal
+  ok   - HUD toont local controller status
+  ok   - HUD toont het laatste transport
+  ok   - HUD toont de server input seq
+
+== Refresh behoudt laatste serverpositie ==
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - refresh behoudt x-positie (actual=15.912, expected=15.912)
+  ok   - refresh behoudt z-positie (actual=-9.285, expected=-9.285)
+
+== Silent resync toont geen overlay ==
+  ok   - focus-triggered silent resync toont geen laadoverlay
+
+== Logout/login behoudt laatste serverpositie ==
+[http 401] http://127.0.0.1:37381/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  ok   - logout stuurt terug naar /login/
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - opnieuw inloggen behoudt x-positie (actual=15.912, expected=15.912)
+  ok   - opnieuw inloggen behoudt z-positie (actual=-9.285, expected=-9.285)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+
+== Twee accounts: directe presence + live sync ==
+[http 401] http://127.0.0.1:37381/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - A en B hebben verschillende player ids
+  ok   - tweede sessie is ook WS connected
+
+== MMO-02 directe presence ==
+  ok   - A en B zien elkaar binnen 2s zonder beweging (elapsed=941ms)
+  ok   - A ziet precies één remote player zonder beweging
+  ok   - B ziet precies één remote player zonder beweging
+  ok   - A ziet B direct in de scene
+  ok   - B ziet A direct in de scene
+  ok   - device B ziet de remote beweging als walk/run (actual=walk)
+  ok   - device B heeft een remote position voor A
+  ok   - device B ziet de beweging van device A live (zonder refresh) (actual=15.777, expected=14.222)
+  ok   - device B ziet de beweging via snapshots met snapshotSeq
+  ok   - normale remote movement op device B loopt via mmo:snapshot
+  ok   - device B markeert snapshot als hoofdpad
+  ok   - device B keert terug naar idle na stoppen (actual=idle)
+
+== MMO-02 snapshot smoothness ==
+  ok   - na smoothness cleanup keert de lokale speler terug naar idle (actual=idle)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - 30s snapshot-smoothness wordt op render-FPS gesampled (492 samples)
+  ok   - normale movement loopt via mmo:snapshot
+  ok   - client markeert snapshot als hoofdpad
+  ok   - snapshotSeq blijft monotonic tijdens remote movement
+  ok   - snapshot buffer blijft bounded (max=32)
+  ok   - snapshot buffer bounded flag blijft waar
+  ok   - gemiddelde snapshot interval blijft rond 20Hz (avg=61.6ms)
+  ok   - max snapshot interval blijft bounded (max=207.4ms)
+  ok   - visual freeze blijft onder 150ms (max=25.0ms)
+  ok   - observer lag blijft onder 300ms (max=261.8ms)
+  ok   - render delay blijft onder 300ms (max=261.8ms)
+  ok   - latest snapshot age blijft onder 300ms (max=998.2ms)
+  ok   - interpolation backlog blijft bounded (max=759.9ms)
+  ok   - frame-to-frame jumps blijven binnen de normale speed + marge (max=1.172, limiet=8.000)
+  ok   - remote animatie heeft geen structurele idle-streaks terwijl de speler beweegt (idleStreak=2, idleFrames=34)
+  ok   - frame deltas zijn gesampled
+  ok   - observer delay loopt niet structureel op (280.0 -> 237.0)
+  ok   - render delay loopt niet structureel op (280.0 -> 237.0)
+
+== MMO-02 end-to-end lag ==
+  ok   - end-to-end lag wordt op render-FPS gesampled (144 samples)
+  ok   - observer A blijft snapshot movement gebruiken
+  ok   - driver B blijft snapshot movement gebruiken
+  ok   - render delay blijft onder 300ms (max=280.0ms)
+  ok   - observer lag blijft onder 300ms (max=280.0ms)
+  ok   - visual freeze blijft onder 150ms (max=0.0ms)
+  ok   - snapshotSeq blijft monotonic tijdens lag-metingen
+  ok   - lag buffer blijft bounded (max=32)
+  ok   - lag test ziet geen grote frame jumps (max=0.481)
+  ok   - device A heeft een remote position voor B
+  ok   - device A blijft qua remote render in de buurt van device B (actual=6.44, expected=6.44)
+  ok   - device B toont een sourceSessionId voor de laatste update
+
+== MMO-02 same-account takeover ==
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - beide schermen delen dezelfde player entity
+  ok   - beide schermen hebben een unieke sessie
+  ok   - twee actieve sessies blijven open voor hetzelfde account (actual=2)
+[http 401] http://127.0.0.1:37381/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - remote account opent dezelfde world
+  ok   - remote account krijgt een ander player id
+  ok   - remote /api/game/player snapshot bevat geen verboden secret-velden
+  ok   - C ziet precies één avatar voor het gedeelde account
+  ok   - A ziet precies één remote avatar
+  ok   - B ziet precies één remote avatar
+  ok   - gedeelde avatar op C draagt de displayName van account A
+  ok   - gedeelde avatar op C dedupliceert A tot één avatar met twee sessies
+  ok   - gedeelde avatar op C wordt via snapshots opgebouwd
+  ok   - laatste actieve controller wint op device B
+  ok   - oude stop-input van A stopt de actieve controller niet
+  ok   - takeover wordt op render-FPS gesampled (111 samples)
+  ok   - snapshotSeq blijft monotonic tijdens takeover
+  ok   - C ziet controller input van device A
+  ok   - C ziet controller input van device B
+  ok   - controllerEpoch wordt in snapshots meegenomen
+  ok   - takeover blijft vloeiend zonder grote jumps (maxJump=0.000)
+  ok   - takeover geeft geen visuele freeze boven 150ms (max=0.0ms)
+  ok   - takeover houdt observer lag bounded (max=280.0ms)
+  ok   - takeover houdt render delay bounded (max=280.0ms)
+  ok   - laatste actieve controller blijft op device B
+  ok   - gedeelde avatar blijft precies één avatar voor twee sessies
+  ok   - finale snapshot blijft op de controllerEpoch van device B (actual=30, expected=30, samples=29,30, active=session_834115fd-8ded-45c0-8675-f8aedd8fcfd4)
+  ok   - A ziet na takeover precies één remote avatar
+  ok   - B ziet na takeover precies één remote avatar
+  ok   - A ziet C nog steeds als remote avatar
+  ok   - B ziet C nog steeds als remote avatar
+  ok   - C blijft precies één avatar zien voor het gedeelde account
+
+== Reconnect guard ==
+  ok   - kan de huidige WebSocket geforceerd sluiten voor reconnect-test
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - oude socket close wordt geregistreerd
+  ok   - reconnect komt terug naar connected
+  ok   - na reconnect blijft precies één remote avatar zichtbaar
+  ok   - na reconnect blijft dezelfde remote avatar aanwezig
+[http 401] http://127.0.0.1:37381/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+  ok   - na logout verdwijnen de remote avatars uit de HUD van A
+  ok   - na logout verdwijnen de remote avatars uit de HUD van B
+  ok   - remote ids zijn leeg voor C in A na logout
+  ok   - remote ids zijn leeg voor C in B na logout
+
+== MMO-02 metrics ==
+  snapshot interval avg: 61.6ms
+  snapshot interval max: 207.4ms
+  visual freeze max: 25.0ms
+  observer lag max: 280.0ms
+  remote jump max: 1.172
+  normal movement via mmo:snapshot: yes
+  old route demoted: remote_player:state_changed is legacy/teleport-only; normal movement no longer uses it
+2 BROWSER-CHECK(S) GEFAALD
+exit=1
+# einde 2026-10-24T09:37:00+02:00

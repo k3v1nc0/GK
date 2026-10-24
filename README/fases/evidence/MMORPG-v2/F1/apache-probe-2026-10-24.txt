@@ -1,0 +1,17 @@
+# F1-E2-T03 Apache-probe — geheime paden via de echte Apache-config (gk-k3v1nc0.duckdns.org, lokaal via --resolve 127.0.0.1:443)
+# Verwachting: 403 of 404. Datum: 2026-10-24T21:56:05+02:00
+/.env                                      403
+/.env.example                              403
+/.git/config                               403
+/.git/HEAD                                 403
+/storage/gk-real-node-editor.sqlite        403
+/storage/                                  403
+/assets/..%2f.env                          404
+/README/../.env                            403
+/README/..%2f.env                          404
+/src/server/server.js                      403
+/scripts/backup-db.js                      403
+/package.json                              403
+/node_modules/                             403
+/.claude/CLAUDE.md                         403
+/api/../.env                               403

@@ -1,0 +1,74 @@
+# Eindcontrole unit + check — code-SHA 43ff980b3dbbc811edcab99f5f9a42331465053f — 2026-10-24T08:37:13+02:00
+$ npm run check
+
+73/73 bestanden syntactisch ok.
+exit=0
+$ GK_TEST_ISOLATED=1 npm test
+
+> gk-real-node-editor@2.0.0 test
+> sh scripts/run-node24.sh scripts/run-isolated-tests.js
+
+✔ zesde loginpoging binnen een minuut geeft 429 (3.34809ms)
+✔ sessiecookie is nooit de fallback database-ID en logout maakt token ongeldig (241.195748ms)
+✔ nieuwe login roteert de sessie en productie vereist Secure-cookie (440.161033ms)
+✔ absolute HTTP/WS positie en teleport worden geweigerd (2.194118ms)
+✔ remote snapshots bevatten geen account-, sessie- of device-identiteit (0.680214ms)
+✔ online backup is integer, hash-verifieerbaar en bevat assets (52.165685ms)
+✔ publiek backupdoel wordt geweigerd (34.950052ms)
+✔ falende backup laat bron en doel ongemoeid (41.313901ms)
+RESTORE_PROOF {"integrity":"ok","counts":{"editor_nodes":1,"player_positions":2,"player_profiles":2,"users":2},"publishedHash":"sha256:published","assets":1,"sourceSha":"restore-sha"}
+✔ backup herstelt DB en assets met gelijke tellingen en published hash (103.402888ms)
+✔ restore weigert niet-lege/publieke doelen en webgrens weert secrets (3.788935ms)
+✔ Workbench spec only uses real catalog definition types and fields (3.808149ms)
+✔ derived index follows child edges and typed references, never names (5.963958ms)
+✔ W3 story and Stat Block relations follow real ownership edges (3.953478ms)
+✔ W3 runtime labels match the audited quest/ability consumers (0.378898ms)
+✔ game project compiler produces a connected manifest (15.316937ms)
+✔ game project compiler carries the UI proof chain package (5.33343ms)
+✔ game project compiler publishes node02 zone package with default spawn and minimap (6.117133ms)
+✔ foundation migration preview stays read-only and apply writes the plan (10.79057ms)
+✔ foundation migration reroutes legacy Game Output edges to internal adapter (4.384016ms)
+✔ root model placement does not create legacy Game Output entity edges (9.120664ms)
+✔ model placement inside a zone canvas connects to Zone Output atomically (4.709425ms)
+✔ node position updates reject invalid coordinates and persist valid coordinates (2.338665ms)
+✔ restore rejects snapshots with broken layout coordinates (1.498459ms)
+✔ restore preserves existing internal migration edges while moving visible nodes (3.493241ms)
+✔ publish history retention keeps existing rows when the limit is reached exactly (2.205907ms)
+✔ publish history retention keeps the newest 50 rows and cascades dependent rows (2.412774ms)
+✔ failed publish rolls back published world and leaves valid history intact (2.466363ms)
+✔ Origin-allowlist is exact en mutaties zijn herkenbaar (3.205459ms)
+✔ CSRF-token is sessiegebonden en ontbrekende/verkeerde tokens geven 403 (2.127171ms)
+✔ WebSocket payloadgrens is exact 64 KiB en fout-URL is afvangbaar (0.328566ms)
+✔ echte migraties accepteren alleen de historische dubbele 006 en maken verifieerbare backups (221.586426ms)
+✔ gewijzigde checksum en nieuwe dubbele prefix blokkeren startup (44.366023ms)
+✔ ontbrekende backup blokkeert migratie en falende SQL rolt volledig terug (27.030159ms)
+✔ authoritative movement uses published solid model colliders (3.83693ms)
+✔ canonical ids and tag queries normalize consistently (4.458364ms)
+✔ Game Output exposes only gameProject as the normal authoring input (0.522201ms)
+✔ all node data types have visually distinct colors (0.882067ms)
+✔ bounded scatter keeps boundary and per-item collision as separate compatible choices (11.86253ms)
+✔ bounded scatter mixes a straight or brick pattern into the existing random placement (16.616307ms)
+✔ chunk loading node size fields override connected chunk grid defaults (3.372169ms)
+✔ mmo network settings publish game-dev netcode fields (1.453466ms)
+✔ mmo network extreme low bandwidth preset favors smoothing over latency (0.481749ms)
+✔ mmo network smooth MMO preset holds local prediction during input (0.322948ms)
+✔ debug/reset vereist admin en expliciete dev-flag (2.514483ms)
+✔ dezelfde operation-ID met andere volledige payload geeft 409 (1.362808ms)
+✔ tien aanvallen in een seconde blijven binnen servercooldown (0.641272ms)
+✔ symbol index resolves aliases and reference kinds (7.976799ms)
+✔ testmodus is fail-closed (2.492074ms)
+✔ normale storage en publieke host worden geweigerd (1.307561ms)
+✔ sentinels in normale checkoutopslag blijven byte-identiek (30.349208ms)
+✔ tijdelijke root wordt ook na een testfout opgeruimd (7.264852ms)
+✔ geïsoleerde server laadt de .env van de checkout niet (1.739142ms)
+✔ token resolver previews static tokens from the graph (7.325671ms)
+✔ token resolver maps project gameName to global.game_name without a global value node (1.3297ms)
+ℹ tests 54
+ℹ suites 0
+ℹ pass 54
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3889.003988
+exit=0

@@ -1,0 +1,35 @@
+Wereldtabellen gekopieerd: {"editor_nodes":464,"editor_node_edges":496,"asset_library":18,"published_world_state":1,"editor_graph_meta":1,"content_id_aliases":2,"game_hud_layout_defaults":2}
+Renderkosten start: draw calls 69, driehoeken 24043, meshes 259, objecten 930, chunks 36, render-CPU gem 10.3 ms, schaduw null
+Portal zone_link.object.3: {"x":2.04,"z":-37.864}
+Renderkosten na grens: draw calls 60, driehoeken 2978, meshes 228, objecten 941, chunks 36, render-CPU gem 7.9 ms, schaduw null
+
+== Speler A (lokaal) ==
+  klik kort 1.5: eind 0.00 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.00, grootste framesprong 1.50 in 290 ms, client-server 0.00, 4.1 fps
+  klik 3: eind 0.00 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.00, grootste framesprong 1.83 in 227 ms, client-server 0.03, 4.9 fps
+  klik 6: eind 0.00 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.00, grootste framesprong 2.50 in 238 ms, client-server 0.00, 4.7 fps
+  klik 12: eind 0.00 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.33, grootste framesprong 5.50 in 509 ms, client-server 0.00, 4.0 fps
+  klik kort 1 terug: eind 0.00 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.00, grootste framesprong 1.00 in 237 ms, client-server 0.01, 4.3 fps
+  toets W: na loslaten nog 9.67 verschoven, waarvan terug 9.67, grootste framesprong 10.00, client-server 0.00
+  portal A: zone.node02.live_demo -> zone.canvas.x0.zm1, afstand tot portal bij vertrek 1.50, terugbewegingen onderweg 0, grootste framesprong onderweg 2.83, na aankomst max 0.00 verschoven, client-server na 4 s 0.00
+  weg van portal: eind 11.31 van doel, terugbewegingen 0 (0.00), drift na aankomst 0.00, grootste framesprong 0.00 in 0 ms, client-server 0.00, 4.3 fps
+  grens A: zonewissels 1, wereld herbouwd 1x, grootste framesprong 6.00 in 392 ms, eindzone zone.node02.live_demo, client-server 0.49 ({"ok":true,"fromZone":"zone.canvas.x0.zm1","toZone":"zone.node02.live_demo"})
+== Speler C (bosroute) ==
+  bos C: eind (530.0, 90.0), server wijkt max 0.25 af van de gelopen route, achterstand onderweg max 9.33, na stoppen 0.04, grootste framesprong 7.65
+  obstakels voor beweging 112, actief in de renderer 103
+== Speler B (lokaal) ==
+  portal B: zone.node02.live_demo -> zone.canvas.x0.zm1, afstand tot portal bij vertrek 1.55, terugbewegingen onderweg 0, grootste framesprong onderweg 2.71, na aankomst max 0.00 verschoven, client-server na 4 s 0.00
+== Medespeler-weergave ==
+  B ziet A, klik kort 1.5 (medespeler gezien door de ander): 15 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 3 (medespeler gezien door de ander): 17 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 6 (medespeler gezien door de ander): 14 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik 12 (medespeler gezien door de ander): 19 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, klik kort 1 terug (medespeler gezien door de ander): 15 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, portal A (medespeler gezien door de ander): 26 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  A ziet B, portal B (medespeler gezien door de ander): 29 frames zichtbaar, 0 frames sneller dan 25/s (max sprong 0.00), harde teleports 0
+  B ziet A, grens A (medespeler gezien door de ander): 139 frames zichtbaar, 1 frames sneller dan 25/s (max sprong 6.97), harde teleports 0
+== Vertraging medespeler (preset van de wereld) ==
+  B ziet A, klik 12: medespeler loopt 1831 ms achter (p90 1831 ms, 1 frames)
+  B ziet A, grens A: medespeler loopt 1295 ms achter (p90 1731 ms, 50 frames)
+== Server ==
+  ticks: {"tickMs":33,"ticks":3610,"avgLoopMs":0.9,"maxLoopMs":29,"maxLateMs":176,"resets":0,"lostMs":0,"sinceMs":122707}
+exit=0

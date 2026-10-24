@@ -83,6 +83,30 @@ function buildNodeDescriptors() {
       }
     }),
     normalizeNodeDescriptor({
+      id: "foundation.game_camera",
+      type: "game_camera",
+      title: "Game Camera",
+      x: 640,
+      y: 120,
+      values: {
+        cameraId: "main_camera", pitch: 55, yaw: 0, startDistance: 24, distance: 24,
+        minDistance: 10, maxDistance: 48, fov: 50, targetHeightOffset: 1.6,
+        follow: true, rotateSpeed: 90
+      }
+    }),
+    normalizeNodeDescriptor({
+      id: "foundation.editor_camera",
+      type: "editor_camera",
+      title: "Editor Camera",
+      x: 900,
+      y: 120,
+      values: {
+        cameraId: "editor_camera", targetX: 0, targetY: 0, targetZ: 0,
+        pitch: 55, yaw: 0, distance: 24, minDistance: 10, maxDistance: 48,
+        fov: 50, rotateSpeed: 90
+      }
+    }),
+    normalizeNodeDescriptor({
       id: "foundation.group.catalog",
       type: "group",
       title: "Catalog",
@@ -278,6 +302,8 @@ function buildEdgeDescriptors() {
   return [
     { id: "foundation.edge.project_settings_to_assembly", fromNodeId: "foundation.game_project_settings", fromPort: "projectSettings", toNodeId: "foundation.world_assembly", toPort: "projectSettings" },
     { id: "foundation.edge.chunk_grid_to_assembly", fromNodeId: "foundation.chunk_grid_definition", fromPort: "chunkGrid", toNodeId: "foundation.world_assembly", toPort: "chunkGrid" },
+    { id: "foundation.edge.game_camera_to_assembly", fromNodeId: "foundation.game_camera", fromPort: "camera", toNodeId: "foundation.world_assembly", toPort: "camera" },
+    { id: "foundation.edge.editor_camera_to_assembly", fromNodeId: "foundation.editor_camera", fromPort: "camera", toNodeId: "foundation.world_assembly", toPort: "camera" },
     { id: "foundation.edge.chunk_grid_to_editor_chunks", fromNodeId: "foundation.chunk_grid_definition", fromPort: "chunkGrid", toNodeId: "foundation.editor_chunk_loading", toPort: "chunkGrid" },
     { id: "foundation.edge.chunk_grid_to_game_chunks", fromNodeId: "foundation.chunk_grid_definition", fromPort: "chunkGrid", toNodeId: "foundation.game_chunk_loading", toPort: "chunkGrid" },
     { id: "foundation.edge.editor_chunks_to_assembly", fromNodeId: "foundation.editor_chunk_loading", fromPort: "chunkLoading", toNodeId: "foundation.world_assembly", toPort: "chunkLoading" },

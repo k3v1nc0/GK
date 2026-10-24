@@ -7,7 +7,7 @@ import { openDatabase, resolveDatabasePath } from "../src/server/db.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dbPath = resolveDatabasePath(rootDir);
-const db = openDatabase(rootDir);
+const db = await openDatabase(rootDir);
 
 const IDS = Object.freeze({
   desertGroup: "node_zone_canvas_55fbbba0",

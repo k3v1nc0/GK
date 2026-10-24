@@ -2,6 +2,12 @@
 
 Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm, maar een werkafspraak voor Codex-runs: wat mag wel, wat mag niet, wat moet Kevin zelf controleren, en wanneer GK Code Regisseur de fase moet afkeuren.
 
+## Actieve MMORPG-basis
+
+Voor de MMORPG-basis is [v2.3: Start hier](./fases/MMORPG-basis-v2/START-HIER.md) de actieve ingang. Kevin geeft één faseopdracht; de codeeragent doorloopt de taakkaarten intern in afhankelijkheidsvolgorde. De vijf documenten in `MMORPG-basis/` zijn historische bronnen, geen aanvullende opdracht of acceptatiecriteria.
+
+Bij een expliciete MMORPG-basis-v2-opdracht gelden het v2-masterplan, de fasekaart en de bijbehorende ADR's boven tegenstrijdige algemene regie-regels hieronder. Dat omvat de tests die de fase als bewijs vereist. Andere fasecontracten worden hierdoor niet gewijzigd.
+
 ## Beschikbare fasecontracten / backlog
 
 Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn niet automatisch actief.
@@ -48,7 +54,7 @@ Deze fasecontracten bestaan als context, backlog of latere richting. Ze zijn nie
 4. Houd visuals en gameplay-regels gescheiden.
 5. Laat `/game/` alleen published world data lezen.
 6. Voeg geen zware runtime systemen toe zonder fase-opdracht.
-7. Draai geen tests of checks, tenzij Kevin dat in de concrete taak expliciet vraagt. Kevin test en accepteert zelf.
+7. Volg de testafspraak in [TESTEN.md](./TESTEN.md): werk smoke- en browsertest bij bij elke gedragswijziging en draai ze geïsoleerd bij grote wijzigingen en vóór een fase-oplevering. Kevin test en accepteert zelf.
 8. Lever altijd een duidelijke Kevin-testlijst op: wat Kevin moet openen, wijzigen, publiceren en controleren.
 9. Voor NODE-01 en later geldt: geen legacy-plus-new authoring workflow. Legacycompatibiliteit mag alleen intern, hidden en migration-only bestaan.
 
