@@ -45,6 +45,13 @@ async function itemForm(ctx, doc, signal, onDone) {
   tags.value = (body.tags || []).join(", ");
   const value = el("input", { type: "number", min: 0, step: 1 });
   value.value = body.vendorValue ?? "";
+  // Fase 05: uitrusting (slot uit de gepubliceerde wereld) en bonussen.
+  const slots = ctx.workspace.equipmentSlots || [];
+  const equipSlot = selectFrom(slots.map((slot) => ({ value: slot.id, label: slot.label + " (" + slot.id + ")" })), body.equipSlot || "", "(geen uitrusting)");
+  const attackBonus = el("input", { type: "number", min: 0, max: 1000000, step: 1 });
+  attackBonus.value = body.attackPowerBonus ?? "";
+  const armorBonus = el("input", { type: "number", min: 0, max: 1000000, step: 1 });
+  armorBonus.value = body.armorBonus ?? "";
   const idPreview = el("p", { class: "cwHint" });
   const updatePreview = () => { idPreview.textContent = "ID: " + (doc ? body.itemId : "item." + slug(name.value)); };
   updatePreview();
@@ -67,6 +74,9 @@ async function itemForm(ctx, doc, signal, onDone) {
     row(fields.worldModelAssetId.label, model),
     row(fields.tags.label + " (komma's ertussen)", tags),
     row(fields.vendorValue.label + " (alleen server)", value),
+    row(fields.equipSlot.label + " (zet Stapelbaar uit)", equipSlot),
+    row(fields.attackPowerBonus.label, attackBonus),
+    row(fields.armorBonus.label, armorBonus),
     idPreview,
     el("div", { class: "cwRow" }, [save, cancel])
   ]);
@@ -91,6 +101,9 @@ async function itemForm(ctx, doc, signal, onDone) {
       .filter(Boolean)));
     next.tags = tagList;
     if (value.value !== "") next.vendorValue = Number(value.value);
+    if (equipSlot.value) next.equipSlot = equipSlot.value;
+    if (attackBonus.value !== "" && Number(attackBonus.value) > 0) next.attackPowerBonus = Number(attackBonus.value);
+    if (armorBonus.value !== "" && Number(armorBonus.value) > 0) next.armorBonus = Number(armorBonus.value);
     save.disabled = true;
     try {
       const result = doc

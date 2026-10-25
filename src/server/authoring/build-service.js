@@ -6,6 +6,7 @@ import { kindSpec, splitByAudience } from "../../shared/authoring/kinds.js";
 import { parsePickupLegacyRef } from "./runtime-overlay.js";
 import { DocumentRepository } from "./document-repository.js";
 import { compileWorldSection } from "./world-compiler.js";
+import { compileActorSection } from "./actor-compiler.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 
 export const AUTHORING_COMPILER_VERSION = "gk-canonical-compiler-1";
@@ -51,6 +52,12 @@ export function compileCanonical(documents, options = {}) {
   const knownRespawn = options.knownRespawnPolicyIds ? new Set(options.knownRespawnPolicyIds) : null;
   const assetTypes = options.assetTypes || null;
   const itemKeys = new Set(items.filter((doc) => !doc.archived).map((doc) => doc.docKey));
+  // Fase 05: een uitrustingsslot moet in de gepubliceerde wereld bestaan (anders kan niemand het item dragen).
+  const knownSlots = options.knownEquipmentSlotIds ? new Set(options.knownEquipmentSlotIds) : null;
+  for (const item of items) {
+    if (item.archived || !item.body.equipSlot || !knownSlots || knownSlots.has(item.body.equipSlot)) continue;
+    errors.push({ code: "EQUIP_SLOT_UNKNOWN", docKey: item.docKey, message: "Item " + item.body.itemId + " gebruikt onbekend uitrustingsslot " + item.body.equipSlot });
+  }
   for (const item of items) {
     if (item.archived) continue;
     for (const [field, expected] of [["iconAssetId", ["image", "texture"]], ["worldModelAssetId", ["model"]]]) {
@@ -99,6 +106,13 @@ export function compileCanonical(documents, options = {}) {
     errors.push(...world.errors);
     client.world = world.client;
     server.world = world.server;
+  }
+  // Fase 05: vijanden, aanvallen, loot en grondstoffen. Zonder zulke documenten ontbreekt de sleutel (bytegelijk).
+  const actors = compileActorSection(known, options);
+  if (actors) {
+    errors.push(...actors.errors);
+    client.actors = actors.client;
+    server.actors = actors.server;
   }
   const texts = { "client.json": stableStringify(client), "server.json": stableStringify(server) };
   const files = {};

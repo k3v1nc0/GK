@@ -4,6 +4,7 @@ import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/we
 import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
+import { ActorRuntime } from "./runtime/actor-runtime.js";
 import { CharacterService } from "./character-service.js";
 import { JoinTickets } from "./runtime/join-tickets.js";
 import { createPositionCheckpointer } from "./persistence/position-checkpoint.js";
@@ -845,6 +846,19 @@ export class MmoService {
     this.serverTick = 0;
     this.snapshotSeq = 0;
     this.worldTickTimer = null;
+    // Fase 05: canonieke vijanden/grondstoffen draaien in dezelfde worldtick (één muterende loop).
+    this.actorRuntime = new ActorRuntime({
+      db: this.db,
+      canonicalBuild: () => (this.canonicalBuildProvider ? this.canonicalBuildProvider() : null),
+      worldContext: () => this.getPublishedWorldContext(),
+      spatial: () => this.spatialIndex(),
+      playerStates: (worldId) => this.getWorldPlayerStates(worldId),
+      isOnline: (playerId, worldId) => Boolean(this.getConnectionForPlayer(playerId, worldId)),
+      isDefeated: (playerId) => this.isPlayerDefeatedForMovement(playerId),
+      connections: (worldId) => Array.from(this.connectionsByWorldId.get(worldId) || [])
+        .map((id) => this.connectionsById.get(id)).filter((connection) => connection && !connection.closed),
+      send: (connection, payload) => send(connection.ws, payload)
+    });
     this.worldClock = createWorldClock({ tickMs: WORLD_TICK_MS, maxCatchUpTicks: 3, maxLagMs: 1000, overrunLimit: 5 });
     this.startWorldTickLoop();
     this.serverSeq = 0;
@@ -1526,7 +1540,8 @@ export class MmoService {
       clock: this.worldClock ? this.worldClock.snapshot() : null,
       positions: this.positionCheckpoint ? this.positionCheckpoint.snapshot() : null,
       dbWritesMs: Object.fromEntries(Array.from(this.dbWriteSamplesByLabel || []).map(([label, ring]) => [label, summarizeSamples(ring.toArray())])),
-      eventLoopDelayMs: this.eventLoopDelay ? eventLoopDelaySummary(this.eventLoopDelay, this.perfWindowStartedAt) : null
+      eventLoopDelayMs: this.eventLoopDelay ? eventLoopDelaySummary(this.eventLoopDelay, this.perfWindowStartedAt) : null,
+      actors: this.actorRuntime ? this.actorRuntime.snapshotForDebug() : null
     };
   }
 
@@ -2906,7 +2921,21 @@ export class MmoService {
         this.markWorldSnapshotBroadcast(worldId, nowMsValue);
         this.clearWorldDirtyPlayers(worldId);
       }
+      try {
+        this.actorRuntime.tick(worldId, nowMsValue, tickDeltaMs);
+      } catch (error) {
+        console.error("[actors] tick mislukt:", error.message);
+      }
     }
+  }
+
+  // Fase 05: een vijand versloeg de speler; zelfde stop als bij legacy-vergelding.
+  stopPlayerForDefeat(playerId, worldId) {
+    this.setPlayerDefeatedForMovement(playerId, true);
+    const current = this.playerStateCache.get(this.getPlayerStateCacheKey(playerId, worldId));
+    if (!current) return null;
+    const connection = this.getConnectionForPlayer(playerId, worldId);
+    return this.stopPlayerMovementState(connection, { id: playerId }, worldId, current, {}, { forceRevision: true });
   }
 
   closeSessionConnections(sessionId, code = 4001, reason = "logout") {

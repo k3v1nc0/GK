@@ -349,10 +349,15 @@ export async function mountWorldBuilderView(host, ctx, signal) {
         shapeCollect = () => ({ pointsMm: body.pointsMm });
       }
       if (isArea) fields.push(el("label", {}, [el("span", { text: "Prioriteit bij overlap (hoger wint)" }), priority]));
+      // Fase 05: in een veilig gebied vecht niemand (vijanden laten je los, aanvallen wordt geweigerd).
+      const safe = el("input", { type: "checkbox", "data-cw": "area-safe" });
+      safe.checked = body.safe === true;
+      if (isArea) fields.push(el("label", { class: "cwCheck" }, [safe, el("span", { text: "Veilig gebied (geen gevechten)" })]));
       collect = () => Object.assign(isArea ? {
         areaId: body.areaId, displayName: name.value.trim(), regionRef: region.value, shape: body.shape,
         priority: Math.max(0, Math.min(100, Math.floor(Number(priority.value) || 0))) || undefined,
-        musicAssetId: music.value || undefined
+        musicAssetId: music.value || undefined,
+        safe: safe.checked || undefined
       } : { colliderId: body.colliderId, displayName: name.value.trim(), regionRef: region.value, shape: body.shape }, shapeCollect());
     }
     save.addEventListener("click", () => saveDoc(doc, collect()), { signal });

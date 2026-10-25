@@ -48,8 +48,11 @@ function colorOrDefault(value, fallback) {
   return /^#[0-9a-fA-F]{6}$/.test(String(value || "")) ? value : fallback;
 }
 
+// Fase 05: assets die alleen in de canonieke build staan (modellen van vijanden/grondstoffen).
+const extraRuntimeAssets = new Map();
+
 function assetById(world, id) {
-  return (world?.assets || []).find(function (asset) { return asset.id === id; }) || null;
+  return (world?.assets || []).find(function (asset) { return asset.id === id; }) || extraRuntimeAssets.get(id) || null;
 }
 
 function num(value, fallback) {
@@ -14240,6 +14243,10 @@ function resolveChunkDebugCenter(policy) {
     const state = String(stateName || "").trim().toLowerCase();
     const data = root?.userData || {};
     if (!Array.isArray(clips) || !clips.length) return null;
+    // Fase 05: vijanden noemen hun animaties zelf (idle/walk/attack/death); onbekend -> gewone regels.
+    const explicitClip = data.actorClips && data.actorClips[state] ? findClipName(clips, data.actorClips[state]) : null;
+    if (explicitClip) return explicitClip;
+    if (state === "attack" || state === "death") return resolveClipNameForState(root, clips, "idle", assetMetadata);
     const defaultName = String(assetMetadata?.defaultAnimation || "").trim();
     const firstName = String(clips[0]?.name || "").trim() || null;
     const pick = function (preferredName, desiredState = state) {
@@ -14327,8 +14334,9 @@ function resolveChunkDebugCenter(policy) {
     const previousAction = record.currentAction;
     nextAction.reset();
     nextAction.enabled = true;
-    nextAction.setLoop(THREE.LoopRepeat, Infinity);
-    nextAction.clampWhenFinished = false;
+    const playOnce = String(stateName || "").toLowerCase() === "death";
+    nextAction.setLoop(playOnce ? THREE.LoopOnce : THREE.LoopRepeat, playOnce ? 1 : Infinity);
+    nextAction.clampWhenFinished = playOnce;
     if (previousAction && previousAction !== nextAction) {
       if (fadeSeconds > 0) {
         previousAction.fadeOut(fadeSeconds);
@@ -16104,7 +16112,9 @@ function resolveChunkDebugCenter(policy) {
       group.userData.runtimeTarget = true;
       group.userData.runtimeTargetId = target?.instanceId || null;
       group.userData.runtimeTargetPayload = Object.assign({}, target);
+      if (target?.actorClips) group.userData.actorClips = Object.assign({}, target.actorClips);
       loadModelInto(group, assetId, world, function () {
+        if (group.userData.actorAnimation) playAnimationState(group, group.userData.actorAnimation, 0);
         markRuntimeTargetTree(group, target);
       }, {
         castShadow: false,
@@ -16184,6 +16194,7 @@ function resolveChunkDebugCenter(policy) {
     root.userData.runtimeTargetId = target?.instanceId || null;
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
+    root.userData.runtimeTargetFresh = true;
     if (editorSelectableId) {
       root.userData.entityId = editorSelectableId;
       root.userData.editorRuntimeSelectableId = editorSelectableId;
@@ -16242,18 +16253,81 @@ function resolveChunkDebugCenter(policy) {
       renderBody: target.renderBody !== false
     });
     if (root.userData.runtimeTargetSignature !== signature) {
+      // Alleen het lichaam (model) opnieuw maken als dat echt verandert; levenspunten/selectie/bereik
+      // vervangen alleen ring, klikvlak en naambord. Zo laadt een geraakte vijand zijn model niet opnieuw.
+      const bodySignature = JSON.stringify({
+        kind: target.entityKind || target.targetKind || "",
+        available: target.available !== false,
+        modelAssetId: target.modelAssetId || "",
+        scale: [target.modelScale ?? null, target.modelScaleX ?? null, target.modelScaleY ?? null, target.modelScaleZ ?? null],
+        rotation: [target.modelRotationX ?? null, target.modelRotationY ?? null, target.modelRotationZ ?? null],
+        renderBody: target.renderBody !== false
+      });
+      const keepBody = root.userData.runtimeTargetBodySignature === bodySignature
+        || (root.userData.runtimeTargetBodySignature === undefined && root.userData.runtimeTargetFresh === true);
+      root.userData.runtimeTargetFresh = false;
       for (const child of Array.from(root.children)) {
+        if (keepBody && (child.name === "node03-runtime-target-model" || child.name === "node03-runtime-target-body")) continue;
         root.remove(child);
+        releaseAnimationMixersIn(child);
         disposeObject(child);
       }
       root.add(createRuntimeTargetRangeRing(target));
-      if (target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
+      if (!keepBody && target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
       root.add(createRuntimeTargetHitProxy(target));
       const nameplate = createRuntimeTargetNameplate(target);
       if (nameplate) root.add(nameplate);
       root.userData.runtimeTargetSignature = signature;
+      root.userData.runtimeTargetBodySignature = bodySignature;
     }
     markRuntimeTargetTree(root, target);
+  }
+
+  // Mixers hangen aan de modelgroep binnen een target; bij weghalen ook de mixer opruimen (anders lekt hij).
+  function releaseAnimationMixersIn(object) {
+    if (!object || !animationMixers.size) return;
+    object.traverse(function (child) {
+      const record = animationMixers.get(child);
+      if (!record) return;
+      try { record.mixer.stopAllAction(); } catch {}
+      try { record.mixer.uncacheRoot(record.root); } catch {}
+      animationMixers.delete(child);
+    });
+  }
+
+  function runtimeTargetModelGroup(root) {
+    return root ? root.children.find(function (child) { return child.name === "node03-runtime-target-model"; }) || null : null;
+  }
+
+  // Fase 05: positie/richting per frame (vloeiend tussen serverupdates), zonder de target opnieuw op te bouwen.
+  function setRuntimeTargetPose(instanceId, x, y, z, rotationY) {
+    const root = runtimeTargetRoots.get(String(instanceId || ""));
+    if (!root) return false;
+    if (Number.isFinite(x) && Number.isFinite(z)) root.position.set(x, Number.isFinite(y) ? y : root.position.y, z);
+    if (Number.isFinite(rotationY)) {
+      for (const child of root.children) {
+        if (child.name === "node03-runtime-target-model" || child.name === "node03-runtime-target-body") child.rotation.y = rotationY;
+      }
+    }
+    return true;
+  }
+
+  function setRuntimeTargetAnimation(instanceId, stateName) {
+    const group = runtimeTargetModelGroup(runtimeTargetRoots.get(String(instanceId || "")));
+    if (!group) return null;
+    const next = String(stateName || "idle");
+    if (group.userData.actorAnimation === next) return next;
+    group.userData.actorAnimation = next;
+    return playAnimationState(group, next, 0.15);
+  }
+
+  function registerRuntimeAssets(assets) {
+    for (const asset of Array.isArray(assets) ? assets : []) {
+      const id = String(asset?.id || "").trim();
+      if (!id || !asset.sourcePath) continue;
+      extraRuntimeAssets.set(id, Object.assign({ metadata: {} }, asset, { id }));
+    }
+    return extraRuntimeAssets.size;
   }
 
   function updateAttachedRuntimeTargetRoots(entityId) {
@@ -16278,6 +16352,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const counts = countObjectTree(root);
     if (root.parent) root.parent.remove(root);
+    releaseAnimationMixersIn(root);
     disposeObject(root);
     runtimeTargetRoots.delete(id);
     if (attachedEntityId) syncRuntimeTargetAttachedEntitySuppression(attachedEntityId);
@@ -18263,6 +18338,9 @@ function resolveChunkDebugCenter(policy) {
       };
     },
     setRuntimeTargets: setRuntimeTargets,
+    setRuntimeTargetPose: setRuntimeTargetPose,
+    setRuntimeTargetAnimation: setRuntimeTargetAnimation,
+    registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,
     clearRuntimeTargets: clearRuntimeTargets,

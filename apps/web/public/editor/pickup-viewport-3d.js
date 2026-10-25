@@ -1,6 +1,6 @@
 // F3-E3-T06: 3D-weergave voor pickupplaatsing. Gebruikt dezelfde world-runtime als de editor en de game
 // (createGkWorldRuntime), met de gepubliceerde wereld. Wordt alleen geladen als je op "3D-weergave tonen" klikt.
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261016-scatter-pattern2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261025-f5-actors1";
 
 const CLICK_TOLERANCE_PX = 5;
 

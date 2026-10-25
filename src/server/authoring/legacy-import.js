@@ -71,6 +71,8 @@ function itemBodyFromLegacy(itemId, legacy) {
   if (legacy.worldModelAssetId) body.worldModelAssetId = String(legacy.worldModelAssetId);
   if (Array.isArray(legacy.tags)) body.tags = legacy.tags.slice();
   if (Number.isInteger(legacy.vendorBaseValueMinor) && legacy.vendorBaseValueMinor >= 0) body.vendorValue = legacy.vendorBaseValueMinor;
+  // Fase 05: een legacy-uitrustingsslot gaat mee (alleen voor niet-stapelbare items, zoals de regel vraagt).
+  if (legacy.stackable === false && typeof legacy.equipmentSlotRef === "string" && /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/.test(legacy.equipmentSlotRef)) body.equipSlot = legacy.equipmentSlotRef;
   return body;
 }
 

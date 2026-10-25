@@ -3,8 +3,11 @@ import { docKeyFor, kindSpec, validateDocument } from "../../shared/authoring/ki
 import { DocumentRepository } from "./document-repository.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 import { spatialIssuesFor } from "./world-compiler.js";
+import { actorSpawnIssues, lootGraphIssues } from "./actor-compiler.js";
 
 const SPATIAL_KINDS = new Set(["region", "area", "collider"]);
+// Fase 05: vijand- en grondstofplekken moeten (met patrouille) binnen hun Region blijven.
+const SPAWN_KINDS = new Set(["region", "actor_spawn", "resource_spawn"]);
 
 const COMMANDS = new Set(["create", "update", "archive", "restore"]);
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_.:-]{8,120}$/;
@@ -83,10 +86,23 @@ export class CommandService {
 
   // F4-E1-T02: overlap en "Area buiten Region" blokkeren meteen, met de wereld zoals die na dit command zou zijn.
   checkSpatial(kind, docKey, body) {
-    if (!SPATIAL_KINDS.has(kind)) return;
-    const others = this.documents.activeDocuments().filter((doc) => SPATIAL_KINDS.has(doc.kind) && doc.docKey !== docKey);
-    const issues = spatialIssuesFor(docKey, others.concat([{ docKey, kind, body, archived: false }]));
-    if (issues.length) throw authoringError(422, issues[0].code, issues[0].message, { issues });
+    if (SPATIAL_KINDS.has(kind)) {
+      const others = this.documents.activeDocuments().filter((doc) => SPATIAL_KINDS.has(doc.kind) && doc.docKey !== docKey);
+      const issues = spatialIssuesFor(docKey, others.concat([{ docKey, kind, body, archived: false }]));
+      if (issues.length) throw authoringError(422, issues[0].code, issues[0].message, { issues });
+    }
+    if (SPAWN_KINDS.has(kind)) {
+      const others = this.documents.activeDocuments().filter((doc) => SPAWN_KINDS.has(doc.kind) && doc.docKey !== docKey);
+      const issues = actorSpawnIssues(others.concat([{ docKey, kind, body, archived: false }]))
+        .filter((issue) => issue.docKey === docKey || issue.otherDocKey === docKey);
+      if (issues.length) throw authoringError(422, issues[0].code, issues[0].message, { issues });
+    }
+    if (kind === "loot_table") {
+      const tables = new Map(this.documents.activeDocuments().filter((doc) => doc.kind === "loot_table").map((doc) => [doc.docKey, doc]));
+      tables.set(docKey, { docKey, kind, body, archived: false });
+      const issues = lootGraphIssues(tables);
+      if (issues.length) throw authoringError(422, issues[0].code, issues[0].message, { issues });
+    }
   }
 
   validated(kind, body) {

@@ -6,7 +6,7 @@ import { BuildService } from "./build-service.js";
 import { DocumentRepository } from "./document-repository.js";
 import { CutoverGuard } from "./cutover-guard.js";
 import { CUTOVER_DOMAINS, cutoverRows, finalizeDomain, legacyInventory, planDomain } from "./legacy-import.js";
-import { knownRespawnPolicyIds, knownZoneIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
+import { equipmentSlotSummaries, knownEquipmentSlotIds, knownRespawnPolicyIds, knownZoneIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
 import { previewMembership } from "../preview/preview-service.js";
 
 function ifMatchRevision(req) {
@@ -94,12 +94,37 @@ export class AuthoringRoutes {
     }
   }
 
+  // Fase 05: type, URL en animatienamen per asset (voor modellen/geluid van vijanden en grondstoffen).
+  assetInfo() {
+    if (!this.assetService || typeof this.assetService.list !== "function") return null;
+    try {
+      return new Map(this.assetService.list().map((asset) => [String(asset.id), {
+        assetType: String(asset.assetType || asset.type || ""),
+        sourcePath: asset.sourcePath ? String(asset.sourcePath) : null,
+        animations: Array.isArray(asset.metadata?.animations) ? asset.metadata.animations.map((clip) => String(clip?.name || "")).filter(Boolean) : null
+      }]));
+    } catch {
+      return null;
+    }
+  }
+
+  // Voor de editor: kiezen van modellen/geluid met animatienamen (alleen metadata, geen bestanden).
+  assetSummaries() {
+    const info = this.assetInfo();
+    if (!info) return [];
+    return Array.from(info.entries()).filter(([, asset]) => asset.assetType === "model" || asset.assetType === "audio")
+      .map(([id, asset]) => ({ id, assetType: asset.assetType, animations: asset.animations || [] }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
   publishOptions(world) {
     return {
       knownZoneIds: world ? knownZoneIds(world) : null,
       knownRespawnPolicyIds: world ? knownRespawnPolicyIds(world) : null,
+      knownEquipmentSlotIds: world ? knownEquipmentSlotIds(world) : null,
       assetTypes: this.assetTypes(),
       assetPaths: this.assetPaths(),
+      assetInfo: this.assetInfo(),
       legacyPublishedAt: world?.publishedAt || null
     };
   }
@@ -161,6 +186,8 @@ export class AuthoringRoutes {
         }),
         zones: zoneSummaries(world),
         respawnPolicies: respawnPolicySummaries(world),
+        equipmentSlots: equipmentSlotSummaries(world),
+        assets: this.assetSummaries(),
         cutover: cutoverRows(this.db),
         release: this.builds.release(),
         builds: this.builds.listBuilds(10),

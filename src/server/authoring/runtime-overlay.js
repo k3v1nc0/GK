@@ -35,6 +35,12 @@ export function runtimeItemFromCanonical(item, legacy = null) {
     else runtime[key] = Array.isArray(item[field]) ? item[field].slice() : item[field];
   }
   runtime.id = item.itemId;
+  // Fase 05: uitrusting. Het slot alleen overschrijven als Canoniek er een zet (oude imports houden het legacy-slot).
+  if (item.equipSlot) runtime.equipmentSlotRef = item.equipSlot;
+  for (const field of ["attackPowerBonus", "armorBonus"]) {
+    if (Number.isInteger(item[field]) && item[field] > 0) runtime[field] = item[field];
+    else delete runtime[field];
+  }
   // Alleen een helemaal nieuw item krijgt de basisvelden die de legacy-compiler altijd zette.
   if (!legacy) {
     runtime.enabled = true;
@@ -159,6 +165,16 @@ export function zoneSummaries(world) {
 export function respawnPolicySummaries(world) {
   const policies = world?.gameProject?.catalogs?.respawnPolicies || {};
   return Object.entries(policies).map(([id, policy]) => ({ id, label: policy?.displayName || id })).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// Fase 05: uitrustingsslots uit de gepubliceerde catalogus (de editor kiest er een; publish controleert).
+export function equipmentSlotSummaries(world) {
+  const slots = world?.gameProject?.catalogs?.equipmentSlots || {};
+  return Object.entries(slots).map(([id, slot]) => ({ id, label: slot?.displayName || id })).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function knownEquipmentSlotIds(world) {
+  return Object.keys(world?.gameProject?.catalogs?.equipmentSlots || {});
 }
 
 export function knownRespawnPolicyIds(world) {

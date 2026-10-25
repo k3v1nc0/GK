@@ -1,7 +1,11 @@
 // F3-E1-T01: canonieke kinds. Alleen data: geen code, geen expressies, geen stille defaults bij read.
 // Elk veld heeft een audience: "client" komt in het clientpakket, "server" alleen in het serverpakket.
 // Fase 04: region en area (ruimte in integer mm, zie apps/web/public/shared/spatial.js).
+// Fase 05: actors, aanvallen, loot en grondstoffen (kinds/actor.js, kinds/combat.js, kinds/loot.js).
 import { AREA_SHAPES, MAX_WORLD_MM, polygonProblem } from "../../../apps/web/public/shared/spatial.js";
+import { ACTOR_KINDS } from "./kinds/actor.js";
+import { COMBAT_KINDS } from "./kinds/combat.js";
+import { LOOT_ENTRY_KEYS, LOOT_KINDS } from "./kinds/loot.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
 const ASSET_PATTERN = /^[A-Za-z0-9_.:-]+$/;
@@ -19,7 +23,9 @@ export const CANONICAL_KINDS = {
     domain: "project",
     fields: {
       gameName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam van de game" },
-      motd: { type: "text", required: false, maxLength: 200, audience: "client", label: "Welkomsttekst" }
+      motd: { type: "text", required: false, maxLength: 200, audience: "client", label: "Welkomsttekst" },
+      // Fase 05: de aanval die een speler gebruikt tegen canonieke vijanden (geen hardcoded ability.basic_attack).
+      playerAbilityRef: { type: "ref", refKind: "ability", required: false, audience: "client", label: "Aanval van de speler" }
     }
   },
   item_definition: {
@@ -40,7 +46,11 @@ export const CANONICAL_KINDS = {
       iconAssetId: { type: "asset", assetType: "image", required: false, maxLength: 160, audience: "client", label: "Icoon" },
       worldModelAssetId: { type: "asset", assetType: "model", required: false, maxLength: 160, audience: "client", label: "Model in de wereld" },
       tags: { type: "tagList", required: false, maxItems: 32, audience: "client", label: "Tags" },
-      vendorValue: { type: "integer", required: false, min: 0, max: 100000000000, audience: "server", label: "Verkoopwaarde" }
+      vendorValue: { type: "integer", required: false, min: 0, max: 100000000000, audience: "server", label: "Verkoopwaarde" },
+      // Fase 05 (F5-E2-T04): uitrusting. Het slot komt uit de bestaande slotlijst (Nodes); bonussen tellen mee in gevechten.
+      equipSlot: { type: "id", required: false, maxLength: 120, audience: "client", label: "Uitrustingsslot" },
+      attackPowerBonus: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Extra aanvalskracht" },
+      armorBonus: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Extra pantser" }
     }
   },
   pickup: {
@@ -98,7 +108,9 @@ export const CANONICAL_KINDS = {
       pointsMm: { type: "pointList", required: false, minItems: 3, maxItems: 64, min: MM.min, max: MM.max, audience: "client", label: "Punten (mm)" },
       // Alleen de server kiest de Area bij overlap; de client hoeft de prioriteit niet te kennen.
       priority: { type: "integer", required: false, min: 0, max: 100, audience: "server", label: "Prioriteit" },
-      musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek" }
+      musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek" },
+      // Fase 05: veilig gebied. Hier weigert de server elke aanval (van en op spelers) en jagen vijanden niet.
+      safe: { type: "boolean", required: false, audience: "client", label: "Veilig gebied (geen gevechten)" }
     }
   },
   // F4-E1-T03: statische collider (obstakel) binnen een Region. Server-movement én client-prediction lezen exact
@@ -122,7 +134,10 @@ export const CANONICAL_KINDS = {
       radiusMm: { type: "integer", required: false, min: 100, max: MAX_WORLD_MM, audience: "client", label: "Straal (mm)" },
       pointsMm: { type: "pointList", required: false, minItems: 3, maxItems: 64, min: MM.min, max: MM.max, audience: "client", label: "Punten (mm)" }
     }
-  }
+  },
+  ...COMBAT_KINDS,
+  ...LOOT_KINDS,
+  ...ACTOR_KINDS
 };
 
 // Velden per Area-vorm. Een veld van een andere vorm is een fout (geen half-ingevulde vormen).
@@ -193,6 +208,10 @@ export function validateDocument(kind, body) {
       if (new Set(value).size !== value.length) issues.push(issue(key, "FIELD_DUPLICATE", field.label + " bevat dubbele waarden."));
       continue;
     }
+    if (field.type === "lootEntries") {
+      lootEntryIssues(key, field, value, issues, refs);
+      continue;
+    }
     if (field.type === "pointList") {
       if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
       if (value.length < field.minItems || value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": " + field.minItems + " tot " + field.maxItems + " punten."));
@@ -207,11 +226,51 @@ export function validateDocument(kind, body) {
     }
   }
   if (!issues.length) shapeIssues(kind, body, issues);
-  return { ok: issues.length === 0, issues, refs };
+  return { ok: issues.length === 0, issues, refs: Array.from(new Set(refs)) };
+}
+
+// Fase 05: een loottabelregel wijst naar een item óf een andere loottabel, met kans (basispunten) en aantallen.
+function lootEntryIssues(key, field, value, issues, refs) {
+  if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); return; }
+  if (value.length < field.minItems || value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": " + field.minItems + " tot " + field.maxItems + " regels."));
+  value.forEach((entry, index) => {
+    const where = "Regel " + (index + 1);
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) { issues.push(issue(key, "LOOT_ENTRY", where + " is ongeldig.")); return; }
+    const unknown = Object.keys(entry).filter((name) => !LOOT_ENTRY_KEYS.includes(name));
+    if (unknown.length) issues.push(issue(key, "FIELD_UNKNOWN", where + ": onbekend veld " + unknown.join(", ")));
+    const hasItem = typeof entry.itemRef === "string" && entry.itemRef !== "";
+    const hasTable = typeof entry.tableRef === "string" && entry.tableRef !== "";
+    if (hasItem === hasTable) issues.push(issue(key, "LOOT_ENTRY_TARGET", where + ": kies een item óf een loottabel."));
+    if (hasItem) {
+      if (!entry.itemRef.startsWith("item_definition:")) issues.push(issue(key, "REF_KIND", where + ": item moet naar een item_definition wijzen."));
+      else refs.push(entry.itemRef);
+    }
+    if (hasTable) {
+      if (!entry.tableRef.startsWith("loot_table:")) issues.push(issue(key, "REF_KIND", where + ": tabel moet naar een loot_table wijzen."));
+      else refs.push(entry.tableRef);
+    }
+    const intIn = (name, min, max) => Number.isInteger(entry[name]) && entry[name] >= min && entry[name] <= max;
+    if (!intIn("chanceBp", 1, 10000)) issues.push(issue(key, "LOOT_CHANCE", where + ": kans moet 1 tot 10000 basispunten zijn (10000 = altijd)."));
+    if (!intIn("minQty", 1, 9999) || !intIn("maxQty", 1, 9999)) issues.push(issue(key, "LOOT_QTY", where + ": aantal moet 1 tot 9999 zijn."));
+    else if (entry.minQty > entry.maxQty) issues.push(issue(key, "LOOT_QTY", where + ": minimum is groter dan maximum."));
+  });
 }
 
 // Vormregels die over meerdere velden gaan (alleen als de losse velden al kloppen).
 function shapeIssues(kind, body, issues) {
+  if (kind === "actor_archetype") {
+    if (body.leashRangeMm < body.aggroRangeMm) issues.push(issue("leashRangeMm", "LEASH_TOO_SMALL", "Max. afstand van huis moet minstens zo groot zijn als de afstand waarop de vijand je ziet."));
+    return;
+  }
+  if (kind === "loot_table") {
+    const own = "loot_table:" + body.lootTableId;
+    if (body.entries.some((entry) => entry.tableRef === own)) issues.push(issue("entries", "LOOT_CYCLE", "Een loottabel kan niet naar zichzelf wijzen."));
+    return;
+  }
+  if (kind === "item_definition") {
+    if (body.equipSlot && body.stackable !== false) issues.push(issue("stackable", "EQUIP_STACKABLE", "Uitrusting kan niet stapelbaar zijn: zet Stapelbaar uit."));
+    return;
+  }
   if (kind === "region") {
     if (body.minXMm >= body.maxXMm || body.minZMm >= body.maxZMm) issues.push(issue("maxXMm", "REGION_EMPTY", "Een Region moet breedte en diepte hebben (min < max)."));
     return;

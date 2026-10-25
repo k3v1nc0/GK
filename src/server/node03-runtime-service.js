@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { ActionCooldowns, assertDeveloperActionAllowed, developerActionsAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
 import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
+import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
+import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime.js";
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -320,6 +322,12 @@ export class Node03RuntimeService {
     this.repository = repository;
     this.mmoService = mmoService;
     this.actionCooldowns = new ActionCooldowns();
+    // Fase 05: canonieke vijanden slaan spelers via deze service (enige schrijver van player_stats).
+    if (mmoService?.actorRuntime && typeof mmoService.actorRuntime.setCombatBridge === "function") mmoService.actorRuntime.setCombatBridge(this);
+  }
+
+  actorRuntime() {
+    return this.mmoService?.actorRuntime || null;
   }
 
   getRequestContext(req) {
@@ -416,7 +424,9 @@ export class Node03RuntimeService {
       assertDeveloperActionAllowed(ctx);
     }
     // F2-E2-T07: loot, grant, death en receipt in een transactie; ACK pas na COMMIT.
-    const response = runOperation(this.db, {
+    let response;
+    try {
+    response = runOperation(this.db, {
       operationId,
       playerId: ctx.profile.id,
       operationType: action || "unknown",
@@ -439,7 +449,17 @@ export class Node03RuntimeService {
       },
       buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) })
     });
-    if (!response.idempotent && WORLD_ENTITY_ACTIONS.has(action)) this.notifyEntitiesChanged(ctx, payload.targetId, action);
+    } catch (error) {
+      this.actorRuntime()?.dropPending(operationId);
+      throw error;
+    }
+    // Fase 05: een canonieke vijand/grondstof verandert pas in het geheugen na COMMIT (en nooit bij een replay).
+    const canonicalTarget = isActorInstanceId(payload.targetId) || isResourceInstanceId(payload.targetId);
+    if (canonicalTarget) {
+      if (response.idempotent) this.actorRuntime()?.dropPending(operationId);
+      else this.actorRuntime()?.applyPending(operationId);
+    }
+    if (!response.idempotent && !canonicalTarget && WORLD_ENTITY_ACTIONS.has(action)) this.notifyEntitiesChanged(ctx, payload.targetId, action);
     return response;
   }
 
@@ -598,6 +618,39 @@ export class Node03RuntimeService {
       `).run(ctx.profile.id, slotId, instance.id, stamp);
       existingSlots.add(slotId);
     }
+  }
+
+  // Fase 05 (F5-E2-T04): uitrusten via de bestaande (legacy) tabellen; dit is de enige schrijver.
+  // Het oude item in hetzelfde slot gaat terug naar de tas. Zelfde operationId = zelfde uitkomst (runOperation).
+  equipItem(ctx, payload, operationId) {
+    const instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
+    const fail = (status, message) => { const error = new Error(message); error.status = status; return error; };
+    const instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(instanceId, ctx.profile.id);
+    if (!instance) throw fail(404, "Item niet gevonden in je tas.");
+    if (instance.location_type !== "inventory") throw fail(409, "Dit item zit niet (meer) in je tas.");
+    const item = catalogSection(ctx.catalogs, "items")[instance.item_id] || {};
+    const slotId = safeString(item.equipmentSlotRef, "");
+    if (!slotId || !catalogSection(ctx.catalogs, "equipmentSlots")[slotId]) throw fail(409, (item.displayName || instance.item_id) + " kun je niet dragen.");
+    const stamp = now();
+    const current = this.db.prepare("SELECT * FROM player_equipment WHERE player_id = ? AND slot_id = ? LIMIT 1").get(ctx.profile.id, slotId);
+    if (current) {
+      this.db.prepare("UPDATE player_item_instances SET location_type = 'inventory', location_ref = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND player_id = ?")
+        .run(stamp, current.item_instance_id, ctx.profile.id);
+      this.db.prepare("UPDATE player_equipment SET item_instance_id = ?, equipped_at = ?, revision = revision + 1 WHERE player_id = ? AND slot_id = ?")
+        .run(instance.id, stamp, ctx.profile.id, slotId);
+    } else {
+      this.db.prepare("INSERT INTO player_equipment (player_id, slot_id, item_instance_id, equipped_at, revision) VALUES (?, ?, ?, ?, 1)")
+        .run(ctx.profile.id, slotId, instance.id, stamp);
+    }
+    this.db.prepare("UPDATE player_item_instances SET location_type = 'equipment', location_ref = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
+      .run(slotId, stamp, instance.id);
+    this.recordGameplayEvent(ctx, "item_equipped", "player", instance.id, { slotId, itemId: instance.item_id, replaced: current?.item_instance_id || null });
+    return {
+      action: "equip",
+      message: (item.displayName || instance.item_id) + " aangedaan.",
+      events: [{ type: "equipped", slotId, itemInstanceId: instance.id }],
+      grants: []
+    };
   }
 
   runtimeEntityIsAvailable(entity) {
@@ -984,6 +1037,7 @@ export class Node03RuntimeService {
     if (action === "attack") return this.attackTarget(ctx, payload.targetId, operationId);
     if (action === "gather") return this.gatherTarget(ctx, payload.targetId, operationId);
     if (action === "pickup") return this.pickupTarget(ctx, payload.targetId, operationId);
+    if (action === "equip") return this.equipItem(ctx, payload, operationId);
     const error = new Error("Onbekende NODE-03 actie: " + (action || "-"));
     error.status = 400;
     throw error;
@@ -1165,6 +1219,7 @@ export class Node03RuntimeService {
   }
 
   attackTarget(ctx, targetId, operationId) {
+    if (isActorInstanceId(targetId)) return this.attackActor(ctx, safeString(targetId, ""), operationId);
     const target = this.getEntityState(ctx, safeString(targetId, ""));
     if (!target || target.state.entityKind !== "enemy") {
       const error = new Error("Enemy target niet gevonden.");
@@ -1246,6 +1301,7 @@ export class Node03RuntimeService {
   }
 
   gatherTarget(ctx, targetId, operationId) {
+    if (isResourceInstanceId(targetId)) return this.gatherResource(ctx, safeString(targetId, ""), operationId);
     const target = this.getEntityState(ctx, safeString(targetId, ""));
     if (!target || target.state.entityKind !== "resource") {
       const error = new Error("Resource target niet gevonden.");
@@ -1671,11 +1727,17 @@ export class Node03RuntimeService {
   grantXpForEnemy(ctx, enemy, operationId) {
     const policy = policiesOfType(ctx.project, "xp_source_rule")[0] || {};
     const amount = Math.max(0, Math.round(formulaValue(policy.amountFormula, 35)));
+    return this.grantXpAmount(ctx, amount, "enemy_defeated", enemy.instanceId, operationId);
+  }
+
+  grantXpAmount(ctx, amount, reason, sourceRef, operationId) {
     if (amount <= 0) return null;
+    const policy = policiesOfType(ctx.project, "xp_source_rule")[0] || {};
     const progressionPolicy = policiesOfType(ctx.project, "player_progression_rules")[0] || {};
     const curveRef = policy.curveRef || progressionPolicy.xpCurveRef || "stat_curve.player_xp";
     const maxLevel = progressionPolicy.maxLevel || 10;
     const row = this.db.prepare("SELECT * FROM player_progression WHERE player_id = ? LIMIT 1").get(ctx.profile.id);
+    if (!row) return null;
     const beforeXp = safeInteger(row?.xp, 0);
     const beforeLevel = safeInteger(row?.level, 1);
     const afterXp = beforeXp + amount;
@@ -1686,8 +1748,151 @@ export class Node03RuntimeService {
       SET xp = ?, level = ?, skill_points = skill_points + ?, revision = revision + 1, updated_at = ?
       WHERE player_id = ?
     `).run(afterXp, afterLevel, skillGain, now(), ctx.profile.id);
-    this.recordLedger(operationId, ctx.profile.id, "xp", "xp", amount, beforeXp, afterXp, "enemy_defeated", enemy.instanceId);
+    this.recordLedger(operationId, ctx.profile.id, "xp", "xp", amount, beforeXp, afterXp, reason, sourceRef);
     return { kind: "xp", amount, beforeXp, afterXp, beforeLevel, afterLevel };
+  }
+
+  // ---- Fase 05: canonieke vijanden en grondstoffen (plan in actor-runtime, schrijven hier, in de operatie) ----
+
+  // Bonus van gedragen uitrusting (canonieke items: attackPowerBonus / armorBonus).
+  equipmentBonusesForPlayer(playerId, catalogs) {
+    const items = catalogSection(catalogs, "items");
+    const bonus = { attackPower: 0, armor: 0 };
+    const rows = this.db.prepare(`
+      SELECT i.item_id FROM player_equipment e JOIN player_item_instances i ON i.id = e.item_instance_id WHERE e.player_id = ?
+    `).all(playerId);
+    for (const row of rows) {
+      const item = items[row.item_id] || {};
+      bonus.attackPower += Math.max(0, safeInteger(item.attackPowerBonus, 0));
+      bonus.armor += Math.max(0, safeInteger(item.armorBonus, 0));
+    }
+    return bonus;
+  }
+
+  positionIsSafe(ctx) {
+    return Boolean(this.actorRuntime()?.areaIsSafe(ctx.position?.current_area_id || null));
+  }
+
+  claimActorReward(ctx, claimKey, instanceId, playerId, operationId, buildId) {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO actor_loot_claims (claim_key, world_id, instance_id, player_id, operation_id, build_id, grants_json, claimed_at)
+      VALUES (?, ?, ?, ?, ?, ?, '[]', ?)
+    `).run(claimKey, ctx.worldId, instanceId, playerId, operationId, buildId || null, now());
+    return Number(result.changes) === 1;
+  }
+
+  saveActorSpawnState(ctx, spawnKey, occurrence, state, respawnAtMs, buildId) {
+    this.db.prepare(`
+      INSERT INTO actor_spawn_state (world_id, spawn_key, occurrence, state, respawn_at_ms, build_id, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(world_id, spawn_key) DO UPDATE SET occurrence = excluded.occurrence, state = excluded.state,
+        respawn_at_ms = excluded.respawn_at_ms, build_id = excluded.build_id, updated_at = excluded.updated_at
+    `).run(ctx.worldId, spawnKey, occurrence, state, respawnAtMs, buildId || null, now());
+  }
+
+  attackActor(ctx, targetId, operationId) {
+    const runtime = this.actorRuntime();
+    if (!runtime) {
+      const error = new Error("Vijand niet gevonden.");
+      error.status = 404;
+      throw error;
+    }
+    const stats = this.loadPlayerStats(ctx.profile.id);
+    const attackPower = statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower;
+    const planned = runtime.planPlayerAttack({
+      playerId: ctx.profile.id, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
+      safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId
+    });
+    if (planned.result) return planned.result;
+    const plan = planned.plan;
+    const events = [{ type: "damage", amount: plan.damage, targetId: plan.instanceId, label: plan.label }];
+    let grants = [];
+    if (plan.killed) {
+      events.push({ type: "defeated", targetId: plan.instanceId, label: plan.label });
+      // Persoonlijke loot voor iedereen die meevocht: één claim per vijand-leven per speler (UNIQUE claim_key).
+      for (const reward of plan.rewards) {
+        const rewardCtx = reward.playerId === ctx.profile.id ? ctx : Object.assign({}, ctx, { profile: { id: reward.playerId } });
+        if (!this.claimActorReward(ctx, reward.claimKey, plan.instanceId, reward.playerId, operationId, plan.buildId)) continue;
+        const given = [];
+        for (const item of reward.items) given.push(...this.grantItem(rewardCtx, item.itemId, item.quantity, "actor_defeated", plan.instanceId, operationId));
+        const xp = reward.xp > 0 ? this.grantXpAmount(rewardCtx, reward.xp, "actor_defeated", plan.instanceId, operationId) : null;
+        if (xp) given.push(xp);
+        this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
+        if (reward.playerId === ctx.profile.id) grants = given;
+      }
+      this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
+      this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
+    } else {
+      this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
+    }
+    return {
+      action: "attack",
+      targetId: plan.instanceId,
+      message: plan.killed ? plan.label + " verslagen." : plan.label + " geraakt voor " + plan.damage + ".",
+      events,
+      grants
+    };
+  }
+
+  gatherResource(ctx, targetId, operationId) {
+    const runtime = this.actorRuntime();
+    if (!runtime) {
+      const error = new Error("Grondstof niet gevonden.");
+      error.status = 404;
+      throw error;
+    }
+    const planned = runtime.planGather({ playerId: ctx.profile.id, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0), nowMs: Date.now(), operationId });
+    if (planned.result) return planned.result;
+    const plan = planned.plan;
+    // Gedeelde grondstof: wie het eerst verzamelt, krijgt het (claim per grondstof-leven).
+    if (!this.claimActorReward(ctx, plan.claimKey, plan.instanceId, ctx.profile.id, operationId, plan.buildId)) {
+      plan.claimed = false;
+      return { action: "gather", targetId: plan.instanceId, message: plan.label + " is al verzameld.", events: [] };
+    }
+    const grants = [];
+    for (const item of plan.items) grants.push(...this.grantItem(ctx, item.itemId, item.quantity, "resource_gathered", plan.instanceId, operationId));
+    this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
+    this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
+    this.recordGameplayEvent(ctx, "resource_gathered", "player", plan.instanceId, { grants });
+    return {
+      action: "gather",
+      targetId: plan.instanceId,
+      message: plan.label + " verzameld.",
+      events: [{ type: "gathered", targetId: plan.instanceId, label: plan.label }],
+      grants
+    };
+  }
+
+  // Een vijand raakt een speler (aangeroepen vanuit de worldtick). Eigen kleine transactie; schade met dezelfde rekenregel.
+  applyActorHit({ worldId, playerId, actorId, label, ability, attackPower }) {
+    const stats = this.loadPlayerStats(playerId);
+    if (!stats.byId[HEALTH_STAT_ID]) return null;
+    const before = statValue(stats.byId, HEALTH_STAT_ID, 1);
+    if (before <= 0) return { damage: 0, remainingHealth: 0, defeated: true };
+    let catalogs = {};
+    try { catalogs = resolveCatalogs(this.mmoService.getPublishedWorldContext().world); } catch {}
+    const armor = statValue(stats.byId, ARMOR_STAT_ID, 0) + this.equipmentBonusesForPlayer(playerId, catalogs).armor;
+    const damage = computeDamage(ability, attackPower, armor);
+    const after = Math.max(0, before - damage);
+    const operationId = randomId("actor_hit");
+    const ctx = { worldId, zoneId: null, profile: { id: playerId } };
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
+        UPDATE player_stats SET current_value = ?, revision = revision + 1, updated_at = ?
+        WHERE player_id = ? AND stat_id = ?
+      `).run(after, now(), playerId, HEALTH_STAT_ID);
+      this.recordLedger(operationId, playerId, "stat", HEALTH_STAT_ID, -damage, before, after, "actor_attack", actorId);
+      if (after <= 0) this.recordGameplayEvent(ctx, "player_defeated", actorId, "player", { damage, label });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+    if (after <= 0 && this.mmoService && typeof this.mmoService.stopPlayerForDefeat === "function") {
+      this.mmoService.stopPlayerForDefeat(playerId, worldId);
+    }
+    return { damage, remainingHealth: after, defeated: after <= 0 };
   }
 
   recordLedger(operationId, playerId, assetKind, assetId, delta, before, after, reason, sourceRef) {

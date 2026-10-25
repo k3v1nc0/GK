@@ -8,12 +8,17 @@ export function mountProjectSettingsView(host, ctx, signal) {
   const motd = el("input", { type: "text", maxlength: fields.motd.maxLength });
   name.value = doc?.body.gameName || "";
   motd.value = doc?.body.motd || "";
+  // Fase 05: welke aanval de speler gebruikt (leeg = de oude standaardaanval).
+  const ability = el("select", { "data-cw": "player-ability" }, [el("option", { value: "", text: "(standaard: oude aanval)" })]
+    .concat(ctx.docs("ability").filter((item) => !item.archived).map((item) => el("option", { value: item.docKey, text: item.body.displayName + " (" + item.body.abilityId + ")" }))));
+  ability.value = doc?.body.playerAbilityRef || "";
   const save = el("button", { type: "submit", "data-cw": "save-project", text: "Opslaan", disabled: true });
   const info = el("p", { class: "cwHint", text: doc ? "Revisie " + doc.revision + " · laatst gewijzigd " + new Date(doc.updatedAt).toLocaleString() : "Nog geen projectinstellingen. Vul ze in en sla op." });
   const form = el("form", { class: "cwForm" }, [
     el("h2", { text: "Projectinstellingen" }),
     el("label", {}, [el("span", { text: fields.gameName.label }), name]),
     el("label", {}, [el("span", { text: fields.motd.label + " (optioneel)" }), motd]),
+    el("label", {}, [el("span", { text: fields.playerAbilityRef.label + " (maak aanvallen in de tab Vijanden)" }), ability]),
     el("div", { class: "cwRow" }, [save]),
     info
   ]);
@@ -22,10 +27,12 @@ export function mountProjectSettingsView(host, ctx, signal) {
   const markDirty = () => { save.disabled = false; ctx.setStatus("Niet opgeslagen wijzigingen.", "dirty"); };
   name.addEventListener("input", markDirty, { signal });
   motd.addEventListener("input", markDirty, { signal });
+  ability.addEventListener("change", markDirty, { signal });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const body = { gameName: name.value.trim() };
     if (motd.value.trim()) body.motd = motd.value.trim();
+    if (ability.value) body.playerAbilityRef = ability.value;
     save.disabled = true;
     try {
       const result = doc

@@ -1,9 +1,10 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261016-scatter-pattern2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261025-f5-actors1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261025-f4-music1";
+import { createActorPresentation } from "./actor-presentation.js?v=20261025-f5-actors1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -284,6 +285,35 @@ function persistNetState() {
 }
 
 const persistedNetState = loadPersistedNetState();
+
+// Fase 05: vijanden en grondstoffen uit de canonieke build (server stuurt actor:snapshot / actor:event).
+const actorPresentation = createActorPresentation({
+  fetchJson: async function (url) {
+    const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.json();
+  },
+  onDefinitions: function () { syncRuntimeTargets(); }
+});
+let actorHitRefreshAt = 0;
+
+function handleActorMessage(message) {
+  if (message.type === "actor:snapshot") {
+    if (actorPresentation.applySnapshot(message)) syncRuntimeTargets();
+    return true;
+  }
+  if (message.type !== "actor:event") return false;
+  if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
+  if (message.e === "attack" && message.target && message.target === state.player?.id) {
+    if (Number.isFinite(Number(message.amount))) showGameHudDialogueNotice("Je wordt geraakt: -" + message.amount + (message.defeated ? " (verslagen)" : ""), { title: "Gevecht" });
+    const nowAt = performance.now();
+    if (message.defeated || nowAt - actorHitRefreshAt > 400) {
+      actorHitRefreshAt = nowAt;
+      scheduleNode03ImmediateRefresh();
+    }
+  }
+  return true;
+}
 
 function gameFetch(input, options = {}) {
   const requestOptions = Object.assign({}, options);
@@ -5059,6 +5089,7 @@ function startRemoteFrameLoop() {
     if (!state.remote.rafId) return;
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
+    if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -6846,6 +6877,7 @@ function node03TargetById(targetId) {
   const targets = Array.isArray(state.node03.snapshot?.interactionTargets) ? state.node03.snapshot.interactionTargets : [];
   return targets.find(function (target) { return String(target?.instanceId || "") === id; })
     || node03RuntimeTargetsForScene().find(function (target) { return String(target?.instanceId || "") === id; })
+    || actorPresentation.targetById(id)
     || null;
 }
 
@@ -7756,6 +7788,10 @@ function syncRuntimeTargets() {
   // NODE-03 owns physical interaction targets. Quest/service modules may point
   // at the same target, but must not replace its model attachment and hit area.
   if (state.node03.snapshot) addTargets(node03RuntimeTargetsForScene());
+  addTargets(actorPresentation.targets(state.runtime).map(function (target) {
+    const decorated = node03TargetWithClientRange(target);
+    return Object.assign({}, decorated, { selected: String(target.instanceId) === String(state.node03.selectedTargetId || "") });
+  }));
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
   if (!byId.size) {
@@ -12036,6 +12072,10 @@ function handleSocketMessage(raw) {
   if (message.type === "hud_layout:defaults_updated") {
     loadGameHudDefaultProfiles({ force: true, rerender: true });
     markWsConnected();
+    return;
+  }
+  if (message.type === "actor:snapshot" || message.type === "actor:event") {
+    handleActorMessage(message);
     return;
   }
   if (message.type === "node03:entities_changed") {
