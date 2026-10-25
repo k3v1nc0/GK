@@ -1,6 +1,8 @@
 import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261016-scatter-pattern2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
+import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
+import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -407,6 +409,8 @@ const state = {
     lastErrorAt: 0
   },
   ws: null,
+  wsTicketInFlight: false,
+  wsUseLegacy: false,
   wsConnectionAttemptId: 0,
   wsStateRaw: "disconnected",
   wsStateRawText: "disconnected",
@@ -855,7 +859,7 @@ function resetMmoConnectionReadiness(reason = "reset") {
 }
 
 function primeConnectedSocketReadiness() {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.ws._gkAuthenticated !== true) return false;
   state.mmoReady.socketOpen = true;
   markWsConnected();
   return true;
@@ -926,6 +930,15 @@ function isMmoGameplayReady() {
 }
 
 function buildGameWsUrl() {
+  const url = new URL(window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = WS_PATH;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function buildLegacyGameWsUrl() {
   const url = new URL(window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/api/game/live";
@@ -4243,29 +4256,18 @@ function pruneRemoteInterpolationBuffer(entry, now = performance.now()) {
     : Array.isArray(entry.interpolationBuffer)
       ? entry.interpolationBuffer
       : [];
-  const buffer = sourceBuffer.filter(function (sample) {
-    return sample && sample.position;
-  }).sort(function (left, right) {
-    return remoteSampleTimelineMs(left) - remoteSampleTimelineMs(right);
-  });
+  const buffer = sourceBuffer.filter(function (sample) { return sample && sample.position; });
   if (!buffer.length) {
     entry.snapshots = [];
     entry.interpolationBuffer = entry.snapshots;
     return entry.snapshots;
   }
-  const cutoff = Math.max(0, epochNow(Number(now) || performance.now()) - REMOTE_INTERPOLATION_SAMPLE_TTL_MS);
-  const next = [];
-  for (let index = 0; index < buffer.length; index += 1) {
-    const sample = buffer[index];
-    const isLastSample = index === buffer.length - 1;
-    const sampleAgeEpoch = remoteSampleArrivalEpochMs(sample);
-    if (isLastSample || sampleAgeEpoch >= cutoff) {
-      next.push(sample);
-    }
-  }
-  const limited = next.length > REMOTE_INTERPOLATION_BUFFER_LIMIT
-    ? next.slice(-REMOTE_INTERPOLATION_BUFFER_LIMIT)
-    : next;
+  const limited = boundRemoteInterpolationSamples(buffer, {
+    nowEpoch: epochNow(Number(now) || performance.now()),
+    ttlMs: REMOTE_INTERPOLATION_SAMPLE_TTL_MS,
+    limit: REMOTE_INTERPOLATION_BUFFER_LIMIT,
+    timeline: remoteSampleArrivalEpochMs
+  });
   const dropped = Math.max(0, buffer.length - limited.length);
   if (dropped > 0) {
     entry.droppedRemoteSamples = (entry.droppedRemoteSamples || 0) + dropped;
@@ -5578,22 +5580,11 @@ function syncNetDebugState() {
 }
 
 function trimPendingInputs(now = Date.now()) {
-  const cutoff = now - 2000;
-  const next = [];
-  for (const item of state.net.pendingInputs) {
-    if (!item || !Number.isFinite(Number(item.seq)) || Number(item.seq) < 1) continue;
-    if (Number(item.sentAt) < cutoff) continue;
-    next.push(item);
-  }
-  if (next.length > 60) {
-    state.net.pendingInputs = next.slice(-60);
-  } else {
-    state.net.pendingInputs = next;
-  }
+  state.net.pendingInputs = appendBufferedInput(state.net.pendingInputs, null, { now: now, ttlMs: 2000, limit: 60 });
 }
 
 function queuePendingInput(entry) {
-  state.net.pendingInputs.push({
+  state.net.pendingInputs = appendBufferedInput(state.net.pendingInputs, {
     seq: normalizeInputSeq(entry.seq),
     position: clonePosition(entry.position),
     input: entry.input && typeof entry.input === "object" ? {
@@ -5603,6 +5594,10 @@ function queuePendingInput(entry) {
       pointerTarget: entry.input.pointerTarget && Number.isFinite(Number(entry.input.pointerTarget.x)) && Number.isFinite(Number(entry.input.pointerTarget.z))
         ? { x: num(entry.input.pointerTarget.x, 0), z: num(entry.input.pointerTarget.z, 0) }
         : null,
+      pathPoint: entry.input.pathPoint && Number.isFinite(Number(entry.input.pathPoint.x)) && Number.isFinite(Number(entry.input.pathPoint.z))
+        ? { x: num(entry.input.pathPoint.x, 0), z: num(entry.input.pathPoint.z, 0) }
+        : null,
+      settle: entry.input.settle === true,
       stop: entry.input.stop === true
     } : null,
     moving: Boolean(entry.moving),
@@ -5611,8 +5606,7 @@ function queuePendingInput(entry) {
     controllerEpoch: normalizeControllerEpoch(entry.controllerEpoch),
     clientSessionId: entry.clientSessionId || null,
     clientIntentId: entry.clientIntentId || null
-  });
-  trimPendingInputs();
+  }, { now: Date.now(), ttlMs: 2000, limit: 60 });
   persistNetState();
 }
 
@@ -5627,9 +5621,7 @@ function hasNewerPendingInputThanAck(clientInputSeq) {
 function removeAckedInputs(clientInputSeq) {
   const ackSeq = normalizeInputSeq(clientInputSeq);
   if (!ackSeq) return false;
-  state.net.pendingInputs = state.net.pendingInputs.filter(function (item) {
-    return Number(item.seq) > ackSeq;
-  });
+  state.net.pendingInputs = acknowledgeBufferedInputs(state.net.pendingInputs, ackSeq);
   state.net.lastAckedInputSeq = Math.max(state.net.lastAckedInputSeq || 0, ackSeq);
   syncNetDebugState();
   persistNetState();
@@ -5862,6 +5854,17 @@ function applyAuthoritativeUpdate(update, options = {}) {
     const referencePosition = hasAckedReferencePosition
       ? ackedPendingEntry.position
       : previousPosition;
+    const replayedPrediction = hasAckedReferencePosition && clientInputSeq > 0 && isLocalControllerSnapshot
+      ? replayBufferedInputs(nextPosition, ackedPendingEntry, state.net.pendingInputs.filter(function (item) {
+          return Number(item.seq) > clientInputSeq;
+        }), {
+          resolve: function (start, desired) {
+            return state.runtime && typeof state.runtime.resolvePlayerMovementIntent === "function"
+              ? state.runtime.resolvePlayerMovementIntent(start, desired, { radius: currentCollisionRadius() })
+              : desired;
+          }
+        })
+      : null;
     if (clientInputSeq > 0 && isLocalControllerSnapshot) removeAckedInputs(clientInputSeq);
     state.authoritativePosition = clonePosition(nextPosition);
     if (localPredictionHoldActive && state.predictedPosition) {
@@ -5901,8 +5904,19 @@ function applyAuthoritativeUpdate(update, options = {}) {
     }
 
     if (shouldKeepPrediction) {
-      state.ownCorrection = null;
-      state.net.lastIgnoredReason = postInputHoldActive ? "post_input_kept_prediction" : "active_input_kept_prediction";
+      const replayError = replayedPrediction && state.predictedPosition
+        ? Math.hypot(replayedPrediction.x - state.predictedPosition.x, replayedPrediction.z - state.predictedPosition.z)
+        : 0;
+      if (replayError > netSettings.ownPredictionDeadzone) {
+        queueOwnCorrection(
+          replayedPrediction.x - state.predictedPosition.x,
+          replayedPrediction.z - state.predictedPosition.z,
+          netSettings
+        );
+        state.net.lastIgnoredReason = "active_input_replayed";
+      } else {
+        state.net.lastIgnoredReason = postInputHoldActive ? "post_input_kept_prediction" : "active_input_kept_prediction";
+      }
       syncNetDebugState();
       scheduleMinimapFogDiscovery(nextPosition.teleport === true ? "teleport" : "movement", { force: nextPosition.teleport === true });
       return nextPosition;
@@ -6396,7 +6410,8 @@ function node03ModuleCard(module, className) {
 
 function renderNode03Bar(module, snapshot) {
   const stat = node03StatByRef(snapshot, module.sourceStatRef);
-  const card = node03ModuleCard(module, "node03Module--bar");
+  const showCombatSummary = module.showCombatSummary === true;
+  const card = node03ModuleCard(module, "node03Module--bar" + (showCombatSummary ? " node03Module--combatSummary" : ""));
   const track = document.createElement("div");
   track.className = "node03BarTrack";
   track.style.height = Math.max(8, Math.min(40, num(module.heightPx, 18))) + "px";
@@ -6418,6 +6433,35 @@ function renderNode03Bar(module, snapshot) {
   }
   track.append(fill, overlay);
   card.appendChild(track);
+  if (showCombatSummary) {
+    const target = node03DecoratedInteractionTargets().find(function (candidate) {
+      return candidate.entityKind === "enemy" && candidate.available !== false;
+    }) || null;
+    const inventoryItems = Array.isArray(snapshot?.inventory?.items) ? snapshot.inventory.items : [];
+    const lootCount = inventoryItems.reduce(function (total, item) {
+      return total + Math.max(0, num(item.quantity, 0));
+    }, 0);
+    const quest = state.node04.snapshot?.trackedQuest
+      || state.node04.snapshot?.quests?.active?.[0]
+      || state.node04.snapshot?.quests?.completed?.[0]
+      || state.node04.snapshot?.quests?.available?.[0]
+      || null;
+    const summary = document.createElement("div");
+    summary.className = "node03CombatSummary";
+    summary.dataset.combatSummary = "1";
+    const parts = [
+      "HP " + node03FormatNumber(stat.current) + "/" + node03FormatNumber(stat.max),
+      "Target " + (target ? (target.displayName || target.instanceId) + " " + node03FormatNumber(target.healthCurrent) + "/" + node03FormatNumber(target.healthMax) : "—"),
+      "Loot " + node03FormatNumber(lootCount),
+      "Quest " + (quest ? (quest.displayName || quest.questId) + " · " + String(quest.status || "active").replaceAll("_", " ") : "—")
+    ];
+    for (const text of parts) {
+      const part = document.createElement("span");
+      part.textContent = text;
+      summary.appendChild(part);
+    }
+    card.appendChild(summary);
+  }
   return card;
 }
 
@@ -6825,7 +6869,9 @@ function node03TargetWithClientRange(target) {
 
 function node03DecoratedInteractionTargets() {
   const targets = Array.isArray(state.node03.snapshot?.interactionTargets) ? state.node03.snapshot.interactionTargets : [];
-  return targets.map(function (target) {
+  return targets.filter(function (target) {
+    return target && target.available !== false;
+  }).map(function (target) {
     const decorated = node03TargetWithClientRange(target);
     return Object.assign({}, decorated, {
       selected: String(decorated?.instanceId || "") === String(state.node03.selectedTargetId || "")
@@ -6854,7 +6900,12 @@ function node03RuntimeTargetsForScene() {
     if (!target || !target.instanceId) continue;
     byId.set(target.instanceId, Object.assign({}, byId.get(target.instanceId) || {}, target));
   }
-  return Array.from(byId.values()).map(function (target) {
+  // Keep unavailable targets in the scene sync. The world runtime hides their
+  // runtime root and, for authored entities, keeps the linked world mesh
+  // suppressed until the target actually respawns. Dropping them here removed
+  // that suppression and made defeated enemies and claimed pickups reappear as
+  // a non-interactive mesh.
+  return Array.from(byId.values()).filter(Boolean).map(function (target) {
     const decorated = node03TargetWithClientRange(target);
     return Object.assign({}, decorated, {
       selected: String(decorated?.instanceId || "") === String(state.node03.selectedTargetId || "")
@@ -7821,7 +7872,7 @@ function renderNode04QuestTracker(module, snapshot) {
     const label = target.inRange === false ? "Move" : (target.prompt || (action === "travel" ? "Travel" : "Use"));
     appendNode04ActionButton(actions, label, action, target, target.questId || quest.questId, { dialogueId: target.dialogueId || null });
   }
-  if (quest.status === "active" && step?.canTurnIn) {
+  if ((quest.status === "active" || quest.status === "ready_to_turn_in") && step?.canTurnIn) {
     appendNode04ActionButton(actions, "Turn in", "node04:turn_in", null, quest.questId);
   }
   if (quest.status === "active" && step?.canReach) {
@@ -11652,8 +11703,27 @@ function applyRemotePlayerLeft(payload) {
   updateHud();
 }
 
-function openWebSocket() {
+function applyRemotePlayerDespawn(payload) {
+  const playerId = String(payload?.playerId || "").trim();
+  if (!playerId) return;
+  hideRemotePlayerEntry(playerId);
+  state.remote.lastRemoteEventType = "remote_player:despawn";
+  updateHud();
+}
+
+function applyRemotePlayerSpawn(payload) {
+  const playerId = String(payload?.playerId || "").trim();
+  if (!playerId) return;
+  const remembered = state.remote.lastPacketByPlayerId.get(playerId) || {};
+  upsertRemotePlayerEntry(Object.assign({}, remembered, payload), { reset: true, type: "remote_player:spawn" });
+  state.remote.lastRemoteEventType = "remote_player:spawn";
+  updateHud();
+  syncRemotePlayers(performance.now());
+}
+
+async function openWebSocket() {
   if (!state.session || !state.wantReconnect) return;
+  if (state.wsTicketInFlight) return;
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
   if (state.reconnectTimer) {
     clearTimeout(state.reconnectTimer);
@@ -11662,37 +11732,88 @@ function openWebSocket() {
   resetMmoConnectionReadiness("open");
   const attemptId = state.wsConnectionAttemptId + 1;
   state.wsConnectionAttemptId = attemptId;
-  const socket = new WebSocket(buildGameWsUrl());
+  state.wsTicketInFlight = true;
+  updateWsStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? "reconnecting" : "connecting", {
+    attemptId: attemptId,
+    immediate: state.wsConnectedOnce !== true
+  });
+  let ticket = "";
+  let useLegacySocket = state.wsUseLegacy === true;
+  if (!useLegacySocket) {
+    try {
+      const response = await gameFetch(JOIN_TICKET_PATH, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" }
+      });
+      if (response.status === 401) {
+        state.wsTicketInFlight = false;
+        state.wantReconnect = false;
+        window.location.href = "/login/?next=%2Fgame%2F";
+        return;
+      }
+      const payload = await response.json().catch(function () { return null; });
+      if (!response.ok || !payload?.ticket) throw new Error(payload?.message || "Join-ticket kon niet worden opgehaald.");
+      ticket = payload.ticket;
+    } catch (error) {
+      if (attemptId !== state.wsConnectionAttemptId) {
+        state.wsTicketInFlight = false;
+        return;
+      }
+      // Rolling deploy/proxy-compatibiliteit: de server houdt deze route tot F6 beschikbaar.
+      // Eén mislukte v1-bootstrap mag de speler niet permanent op waiting_for_socket laten staan.
+      state.wsUseLegacy = true;
+      useLegacySocket = true;
+      state.debug.lastError = "Protocol-v1 bootstrap mislukt; legacy WebSocket wordt gebruikt: " + String(error?.message || error || "join-ticket mislukt");
+    }
+  }
+  state.wsTicketInFlight = false;
+  if (!state.wantReconnect || attemptId !== state.wsConnectionAttemptId) return;
+  let socket;
+  try {
+    socket = useLegacySocket
+      ? new WebSocket(buildLegacyGameWsUrl())
+      : new WebSocket(buildGameWsUrl(), PROTOCOL_NAME);
+  } catch (error) {
+    state.wsUseLegacy = true;
+    state.debug.lastError = String(error?.message || error || "WebSocket openen mislukt.");
+    scheduleReconnect();
+    return;
+  }
   socket._gkConnectionAttemptId = attemptId;
+  socket._gkLegacy = useLegacySocket;
+  socket._gkAuthenticated = useLegacySocket;
+  socket._gkJoinTicket = ticket;
   state.ws = socket;
   // Een verbindingspoging die blijft hangen (proxy of server antwoordt niet) gaf minutenlang "waiting_for_socket":
   // de browser heeft geen eigen time-out en er kwam geen nieuwe poging. Na een paar seconden opnieuw proberen.
   socket._gkConnectTimer = window.setTimeout(function () {
     if (socket.readyState !== WebSocket.CONNECTING || socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
     state.debug.lastError = "WS connect timeout";
+    if (!socket._gkLegacy) state.wsUseLegacy = true;
     try { socket.close(); } catch {}
     if (state.ws === socket) state.ws = null;
     scheduleReconnect();
   }, WS_CONNECT_TIMEOUT_MS);
-  updateWsStatus(state.wsConnectedOnce ? "reconnecting" : "connecting", state.wsConnectedOnce ? "reconnecting" : "connecting", {
-    attemptId: attemptId,
-    immediate: state.wsConnectedOnce !== true
-  });
-
   socket.addEventListener("open", function () {
-    window.clearTimeout(socket._gkConnectTimer);
     if (socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
-    state.reconnectAttempt = 0;
-    state.net.lastWsOpenAt = performance.now();
-    state.mmoReady.socketOpen = true;
-    markWsConnected();
-    startPingLoop(socket, attemptId);
-    try {
-      socket.send(JSON.stringify({ type: "player:request_state" }));
-    } catch (error) {
-      state.debug.lastError = String(error?.message || error || "socket open send failed");
+    if (socket._gkLegacy) {
+      window.clearTimeout(socket._gkConnectTimer);
+      state.reconnectAttempt = 0;
+      state.net.lastWsOpenAt = performance.now();
+      state.mmoReady.socketOpen = true;
+      markWsConnected();
+      startPingLoop(socket, socket._gkConnectionAttemptId);
+      try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+      maybeMarkMmoOnlineReady("legacy_open");
+      return;
     }
-    maybeMarkMmoOnlineReady("socket_open");
+    try {
+      socket.send(JSON.stringify({ type: "auth", v: PROTOCOL_VERSION, ticket: socket._gkJoinTicket }));
+      socket._gkJoinTicket = "";
+    } catch (error) {
+      state.debug.lastError = String(error?.message || error || "socket auth send failed");
+    }
   });
 
   socket.addEventListener("message", function (event) {
@@ -11701,6 +11822,9 @@ function openWebSocket() {
   });
 
   socket.addEventListener("close", function (event) {
+    if (!socket._gkLegacy && !socket._gkAuthenticated && !socket._gkIntentionalClose) {
+      state.wsUseLegacy = true;
+    }
     handleSocketClose(socket, event);
   });
 
@@ -11792,6 +11916,21 @@ function handleSocketMessage(raw) {
     return;
   }
   if (!message || typeof message.type !== "string") return;
+
+  if (message.type === "auth_ok") {
+    const socket = state.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    window.clearTimeout(socket._gkConnectTimer);
+    socket._gkAuthenticated = true;
+    state.reconnectAttempt = 0;
+    state.net.lastWsOpenAt = performance.now();
+    state.mmoReady.socketOpen = true;
+    markWsConnected();
+    startPingLoop(socket, socket._gkConnectionAttemptId);
+    try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+    maybeMarkMmoOnlineReady("auth_ok");
+    return;
+  }
 
   const packetAt = performance.now();
   state.net.lastServerPacketAt = packetAt;
@@ -11953,6 +12092,16 @@ function handleSocketMessage(raw) {
   }
   if (message.type === "remote_player:left") {
     applyRemotePlayerLeft(message);
+    markWsConnected();
+    return;
+  }
+  if (message.type === "remote_player:despawn") {
+    applyRemotePlayerDespawn(message);
+    markWsConnected();
+    return;
+  }
+  if (message.type === "remote_player:spawn") {
+    applyRemotePlayerSpawn(message);
     markWsConnected();
     return;
   }
@@ -12265,6 +12414,8 @@ function sendInputState(options = {}) {
         moveZ: input.moveZ,
         sprint: input.sprint === true,
         pointerTarget: input.pointerTarget ? { x: input.pointerTarget.x, z: input.pointerTarget.z } : null,
+        pathPoint: input.pathPoint ? { x: input.pathPoint.x, z: input.pathPoint.z } : null,
+        settle: input.settle === true,
         stop: input.stop === true
       },
       moving: moving,

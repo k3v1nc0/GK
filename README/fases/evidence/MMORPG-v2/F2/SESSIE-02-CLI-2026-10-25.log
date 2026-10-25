@@ -1,0 +1,60 @@
+Fase 02 - CLI-bewijs 2026-10-25 (beknopte ruwe uitvoer)
+
+$ GK_TEST_ISOLATED=1 npm test
+...
+107 tests
+107 passed
+0 failed
+
+$ npm run check
+...
+88/88 bestanden syntactisch ok.
+
+$ GK_TEST_ISOLATED=1 GLB_THUMBNAIL_TIMEOUT=5000 npm run smoke
+...
+ok - speler A doodt de golden-path vijand
+ok - de kill kent het gegarandeerde questloot eenmaal toe
+ok - dezelfde kill-operationId is idempotent zonder tweede grant
+ok - dezelfde operationId van speler B wordt geweigerd met OPERATION_OTHER_PLAYER
+ok - de quest gaat na de kill naar klaar voor inleveren
+ok - turn-in geeft de gepubliceerde XP-beloning
+ok - A en B tegelijk de laatste klap geeft over beide inventories één grant
+ok - inventory, XP en queststatus zijn na serverherstart exact gelijk
+ok - gk-mmo-v1 met eenmalig ticket geeft auth_ok
+ok - hergebruik van een ticket sluit met 4401
+ok - zonder auth sluit de server na 5 s met 4410
+ok - gk-mmo-v2 sluit met 4406
+ok - verkeerde Origin geeft 403
+ok - frame groter dan 64 KiB sluit met 1009
+SMOKE TEST GESLAAGD
+
+$ GK_TEST_ISOLATED=1 GK_BROWSER_EVIDENCE_DIR=README/fases/evidence/MMORPG-v2/F2/browser-final npm run game:browser-check
+...
+ok - A en B zien dezelfde authored vijand-HP
+ok - authored compacte HUD toont health, target, loot en quest
+ok - A doodt de vijand en ontvangt de servergrant
+ok - beide pagina's zien de verslagen vijand verdwijnen
+ok - de browserquest staat na de kill klaar voor inleveren
+ok - browser-turn-in kent de authored beloning toe
+ok - A houdt loot, XP, quest en vijandstatus exact gelijk na refresh 1
+ok - B ziet de vijand na refresh 1 nog steeds verdwenen
+ok - A houdt loot, XP, quest en vijandstatus exact gelijk na refresh 2
+ok - B ziet de vijand na refresh 2 nog steeds verdwenen
+ok - prediction convergeert binnen 2 s tot <= 0,2 m (afstand=0.000)
+FAIL - grensoscillatie veroorzaakt geen herhaald flikkeren (toggles=3)
+
+$ GK_TEST_ISOLATED=1 GAME_AOI_ENABLED=1 GK_BROWSER_EVIDENCE_DIR=README/fases/evidence/MMORPG-v2/F2/browser-aoi npm run game:browser-check
+...
+ok - prediction convergeert binnen 2 s tot <= 0,2 m (afstand=0.000)
+== F2 AOI despawn + terugkeer ==
+ok - speler buiten de AOI wordt op de andere pagina gedespawned
+ok - speler verschijnt na terugkeer in de AOI opnieuw
+
+AOI-opmerking: de algemene smoothnesssectie liep daarna nog in de 2-Hz far-tier.
+AOI blijft daarom achter GAME_AOI_ENABLED=1; standaard is niet omgezet.
+
+Niet uitgevoerd in deze sessie:
+- feel:world-copy (Kevin-toestemming vereist)
+- perf:db-writes
+- 25 bots / 30 minuten
+- SIGKILL-crashproef tijdens bots

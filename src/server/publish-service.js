@@ -1562,7 +1562,8 @@ function buildScatterInstances(node, sourceAssets, groundY) {
     const cellDepth = Math.max(SCATTER_EDGE_EPSILON, bounds.depth / rows);
     const totalCells = cols * rows;
     const cellOffset = deterministicShuffleOrOffset(random) % Math.max(1, totalCells);
-    for (let cellAttempt = 0; cellAttempt < totalCells && denseFillCandidates.length < settings.count; cellAttempt += 1) {
+    const validDenseCells = [];
+    for (let cellAttempt = 0; cellAttempt < totalCells; cellAttempt += 1) {
       const cellIndex = (cellAttempt + cellOffset) % totalCells;
       const col = cellIndex % cols;
       const row = Math.floor(cellIndex / cols);
@@ -1570,7 +1571,11 @@ function buildScatterInstances(node, sourceAssets, groundY) {
         x: bounds.minX + (cellWidth * col) + (cellWidth * random()),
         z: bounds.minZ + (cellDepth * row) + (cellDepth * random())
       };
-      if (pointInPolygon2D(candidate.x, candidate.z, points)) denseFillCandidates.push(candidate);
+      if (pointInPolygon2D(candidate.x, candidate.z, points)) validDenseCells.push(candidate);
+    }
+    const denseCount = Math.min(settings.count, validDenseCells.length);
+    for (let index = 0; index < denseCount; index += 1) {
+      denseFillCandidates.push(validDenseCells[Math.floor((index * validDenseCells.length) / denseCount)]);
     }
   }
 

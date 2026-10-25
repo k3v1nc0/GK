@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { assertDeveloperActionAllowed, assertIdempotencyMatch, normalizedActionPayloadHash } from "./action-security.js";
+import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
+import { runOperation } from "./persistence/operation-contract.js";
 
 function now() {
   return new Date().toISOString();
@@ -218,44 +219,19 @@ export class Node05EconomyRuntimeService {
     const operationId = operationIdFromPayload(payload) || randomId("node05_operation");
     const hash = normalizedActionPayloadHash(action, payload);
     if (action === "reset_node05") assertDeveloperActionAllowed(ctx);
-    const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
-    if (existing) {
-      assertIdempotencyMatch(existing, hash);
-      if (existing.status === "completed") {
-        return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
-      }
-      const error = new Error("Deze NODE-05 actie is al in verwerking.");
-      error.status = 409;
-      throw error;
-    }
-
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      this.db.prepare(`
-        INSERT INTO operation_idempotency (operation_id, player_id, operation_type, request_hash, status, created_at)
-        VALUES (?, ?, ?, ?, 'started', ?)
-      `).run(operationId, ctx.profile.id, action || "unknown", hash, now());
-      this.ensureRuntime(ctx);
-      const result = this.performAction(ctx, action, payload, operationId);
-      const response = Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) });
-      this.db.prepare(`
-        UPDATE operation_idempotency
-        SET status = 'completed', result_json = ?, completed_at = ?
-        WHERE operation_id = ?
-      `).run(stableJson(response), now(), operationId);
-      this.db.exec("COMMIT");
-      return response;
-    } catch (error) {
-      try {
-        this.db.prepare(`
-          UPDATE operation_idempotency
-          SET status = 'failed', result_json = ?, completed_at = ?
-          WHERE operation_id = ?
-        `).run(stableJson({ ok: false, message: error.message }), now(), operationId);
-      } catch {}
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    return runOperation(this.db, {
+      operationId,
+      playerId: ctx.profile.id,
+      operationType: action || "unknown",
+      requestHash: hash,
+      label: "Deze NODE-05 actie",
+      faultHook: this.operationFaultHook || null,
+      perform: () => {
+        this.ensureRuntime(ctx);
+        return this.performAction(ctx, action, payload, operationId);
+      },
+      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.buildSnapshot(ctx) })
+    });
   }
 
   performAction(ctx, action, payload, operationId) {

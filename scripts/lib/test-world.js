@@ -22,7 +22,9 @@ export const ROUTES = Object.freeze({
   terrain: { target: "zone", fromPort: "terrain", toPort: "terrain" },
   collision: { target: "zone", fromPort: "collision", toPort: "collision" },
   minimap: { target: "zone", fromPort: "minimap", toPort: "minimap" },
-  spawnPoint: { target: "zone", fromPort: "spawnPoint", toPort: "spawns" }
+  spawnPoint: { target: "zone", fromPort: "spawnPoint", toPort: "spawns" },
+  questTarget: { target: "zone", fromPort: "questTarget", toPort: "questTargets" },
+  spawnController: { target: "zone", fromPort: "spawnController", toPort: "spawnControllers" }
 });
 
 export function createTestWorldApi(call) {
@@ -92,7 +94,270 @@ export async function applyFoundation(api) {
     gameCamera: requireNode(graph, "game_camera"),
     editorCamera: requireNode(graph, "editor_camera"),
     editorChunkLoading: requireNode(graph, "editor_chunk_loading"),
-    gameChunkLoading: requireNode(graph, "game_chunk_loading")
+    gameChunkLoading: requireNode(graph, "game_chunk_loading"),
+    catalogRegistry: requireNode(graph, "catalog_registry"),
+    campaignRegistry: requireNode(graph, "campaign_registry"),
+    playerRulesOutput: requireNode(graph, "player_rules_output")
+  };
+}
+
+// Fase-02 golden path via uitsluitend de normale authoring-API:
+// vijand -> gegarandeerd bewijsitem -> deliver/turn-in -> XP-beloning.
+// Alle canonieke ids zijn van deze fixture; er wordt niets uit Kevins wereld verondersteld.
+export async function addGoldenPathSlice(api, foundation, zone, options = {}) {
+  const prefix = String(options.prefix || "f2_golden").replace(/[^a-z0-9_]+/gi, "_").toLowerCase();
+  const canonical = prefix.replace(/_/g, ".");
+  const itemId = "item." + canonical + ".proof";
+  const pickupItemId = "item." + canonical + ".pickup";
+  const lootTableId = "loot_table." + canonical + ".enemy";
+  const enemyId = "enemy." + canonical + ".sentinel";
+  const questId = "quest." + canonical + ".defeat";
+  const questStepId = "quest_step." + canonical + ".turn_in";
+  const targetId = "target." + canonical + ".turn_in";
+  const abilityId = "ability.basic_attack";
+  const playerStatBlockId = "stat_block." + canonical + ".player";
+  const enemyStatBlockId = "stat_block." + canonical + ".enemy";
+  const respawnPolicyId = "respawn_policy." + canonical + ".slow";
+  const modelAssetId = options.modelAssetId || null;
+  const enemyPosition = Object.assign({ x: 2, y: 0, z: 0 }, options.enemyPosition || {});
+  const pickupPosition = Object.assign({ x: 0, y: 0, z: 2 }, options.pickupPosition || {});
+  const turnInPosition = Object.assign({ x: 0, y: 0, z: 0 }, options.turnInPosition || {});
+
+  async function addNode(type, values) {
+    const created = await api.createNode(type, values);
+    if (!created.nodeId) throw new Error("golden-path node " + type + " gaf geen nodeId terug");
+    return created.nodeId;
+  }
+
+  const catalogOutput = await addNode("catalog_output", {
+    catalogId: "catalog." + canonical,
+    catalogVersion: "1.0.0",
+    namespaceOwnership: [prefix, "f2", "test"]
+  });
+  await api.connect(catalogOutput, "catalogPackage", foundation.catalogRegistry.id, "catalogPackage");
+
+  const catalogDefinitions = [];
+  async function addCatalog(type, values) {
+    const id = await addNode(type, values);
+    catalogDefinitions.push(id);
+    return id;
+  }
+
+  const healthStat = await addCatalog("stat_definition", {
+    statId: "stat.health", displayName: "Health", definitionVersion: 1, tags: ["stat", "vital"],
+    valueType: "integer", minimum: 0, maximum: 1000, defaultValue: 100,
+    persistCurrentValue: true, replicateMode: "nearby", uiFormat: "number"
+  });
+  const armorStat = await addCatalog("stat_definition", {
+    statId: "stat.armor", displayName: "Armor", definitionVersion: 1, tags: ["stat", "defense"],
+    valueType: "integer", minimum: 0, maximum: 500, defaultValue: 0,
+    persistCurrentValue: false, replicateMode: "nearby", uiFormat: "number"
+  });
+  const attackStat = await addCatalog("stat_definition", {
+    statId: "stat.attack_power", displayName: "Attack Power", definitionVersion: 1, tags: ["stat", "offense"],
+    valueType: "integer", minimum: 0, maximum: 500, defaultValue: 20,
+    persistCurrentValue: false, replicateMode: "nearby", uiFormat: "number"
+  });
+  const playerStats = await addCatalog("stat_block", {
+    statBlockId: playerStatBlockId, displayName: "Golden Player Stats", definitionVersion: 1,
+    tags: ["stat_block", "player", prefix],
+    entries: [
+      { statRef: "stat.health", baseValue: 120 },
+      { statRef: "stat.armor", baseValue: 4 },
+      { statRef: "stat.attack_power", baseValue: 40 }
+    ],
+    overrideMode: "merge"
+  });
+  const enemyStats = await addCatalog("stat_block", {
+    statBlockId: enemyStatBlockId, displayName: "Golden Enemy Stats", definitionVersion: 1,
+    tags: ["stat_block", "enemy", prefix],
+    entries: [
+      { statRef: "stat.health", baseValue: 100 },
+      { statRef: "stat.armor", baseValue: 0 },
+      { statRef: "stat.attack_power", baseValue: 1 }
+    ],
+    overrideMode: "merge"
+  });
+  const ability = await addCatalog("ability_definition", {
+    abilityId, displayName: "Basic Attack", definitionVersion: 1, tags: ["ability", "combat"],
+    abilityType: "melee", cooldownMs: 50, castTimeMs: 0, globalCooldownMs: 0, range: 4,
+    minimumRange: 0, areaShape: "single", areaRadius: 0, coneAngle: 0, targetMode: "enemy",
+    requiresLineOfSight: false, requiresWeaponTagQuery: { all: [], any: [], none: [] },
+    damageFormula: { operator: "add", operands: [30] }, damageTypeRef: null, statusEffectRefs: [],
+    animationRole: "basicAttack", interruptible: true, movementAllowedDuringCast: false,
+    serverPredictionMode: "local_animation_only"
+  });
+  const proofItem = await addCatalog("item_definition", {
+    itemId, displayName: "Sentinel Proof", definitionVersion: 1,
+    tags: ["item", "loot", "quest", prefix], category: "quest", rarity: "quest",
+    stackable: true, stackLimit: 99, weight: 0, vendorBaseValueMinor: 0,
+    bindPolicy: "quest_bound", questItem: true, inventoryTags: ["quest", prefix],
+    worldModelAssetId: modelAssetId
+  });
+  await addCatalog("item_definition", {
+    itemId: pickupItemId, displayName: "Golden Pickup", definitionVersion: 1,
+    tags: ["item", "pickup", prefix], category: "material", rarity: "common",
+    stackable: true, stackLimit: 99, weight: 0, vendorBaseValueMinor: 0,
+    bindPolicy: "unbound", questItem: false, inventoryTags: ["pickup", prefix],
+    worldModelAssetId: modelAssetId
+  });
+  const lootEntry = await addNode("loot_item_entry", {
+    entryId: "loot_entry." + canonical + ".proof", itemRef: itemId, chance: 1, weight: 1,
+    minQuantity: 1, maxQuantity: 1, guaranteed: true, qualityMode: "definition",
+    modifierPoolRefs: [], conditionTagQuery: { all: [], any: [], none: [] }
+  });
+  const lootTable = await addCatalog("loot_table", {
+    lootTableId, displayName: "Sentinel Proof Loot", definitionVersion: 1,
+    tags: ["loot", "enemy", "quest", prefix], rollMode: "all", rollCount: 1,
+    allowDuplicates: false, ownershipMode: "personal", pityPolicy: "none", pityCount: 0
+  });
+  await api.connect(lootEntry, "lootEntry", lootTable, "entries");
+  const respawnPolicy = await addCatalog("respawn_policy_definition", {
+    respawnPolicyId, displayName: "Golden Slow Respawn", definitionVersion: 1,
+    tags: ["respawn", prefix], minDelayMs: 3600000, maxDelayMs: 3600000,
+    jitterMode: "none", maxAliveDefault: 1, corpseDurationMs: 0,
+    despawnDistance: 500, resetEncounterOnWipe: false, oneTimeSpawn: false
+  });
+  const enemy = await addCatalog("enemy_archetype", {
+    enemyId, displayName: "Golden Sentinel", definitionVersion: 1,
+    tags: ["enemy", "combat", prefix], species: "sentinel", role: "normal",
+    modelAssetId, statBlockRef: enemyStatBlockId, lootTableRef: lootTableId,
+    baseLevel: 1, minimumLevel: 1, maximumLevel: 1, scale: 1, collisionRadius: 0.55,
+    networkProfile: "normal", corpseDurationMs: 0, defaultRespawnPolicyRef: respawnPolicyId,
+    nameplateMode: "always", bestiaryCategory: "Test"
+  });
+  const playable = await addCatalog("playable_character_definition", {
+    characterId: "player." + canonical, displayName: "Golden Tester", definitionVersion: 1,
+    tags: ["player", prefix], modelAssetId, classTags: ["tester"], baseMoveSpeed: 7,
+    sprintMultiplier: 1.6, turnSpeed: 540, collisionRadius: 0.5, scale: 1,
+    statBlockRef: playerStatBlockId, startingAbilityRefs: [abilityId],
+    startingItemGrants: [], startingCurrencyGrants: [], defaultLoadoutId: "loadout.main"
+  });
+  for (const definition of catalogDefinitions) {
+    await api.connect(definition, "catalogDefinition", catalogOutput, "definitions");
+  }
+  await api.connect(enemyStats, "statBlock", enemy, "statBlock");
+  await api.connect(lootTable, "lootTable", enemy, "lootTable");
+  await api.connect(playerStats, "statBlock", playable, "statBlock");
+
+  const progressionPolicy = await addNode("player_progression_rules", {
+    rulesId: "player_rules.progression." + canonical, maxLevel: 10,
+    baseStatBlockRef: playerStatBlockId, healthStatRef: "stat.health",
+    armorStatRef: "stat.armor", levelUpHealPolicy: "full"
+  });
+  const inventoryPolicy = await addNode("inventory_rules", {
+    rulesId: "player_rules.inventory." + canonical, slotCapacity: 24, weightCapacity: 100,
+    capacityMode: "both", stackMergePolicy: "exact_item_and_bind", pickupOverflow: "reject",
+    allowDestroy: true, allowDrop: true
+  });
+  await api.connect(progressionPolicy, "policy", foundation.playerRulesOutput.id, "policy");
+  await api.connect(inventoryPolicy, "policy", foundation.playerRulesOutput.id, "policy");
+
+  const enemySpawn = await addNode("enemy_spawn_area", {
+    spawnEntryId: "spawn." + canonical + ".enemy", enemyRef: enemyId,
+    countMin: 1, countMax: 1, distribution: "random", minimumSpacing: 0,
+    levelMode: "fixed", fixedLevel: 1, x: enemyPosition.x, y: enemyPosition.y, z: enemyPosition.z,
+    radius: 0, respawnPolicyRef: respawnPolicyId, maxAlive: 1, activationRadius: 100,
+    playerExclusionRadius: 0
+  });
+  const pickupSpawn = await addNode("pickup_spawn", {
+    spawnEntryId: "spawn." + canonical + ".pickup", pickupKind: "item", itemRef: pickupItemId,
+    amount: 1, minAmount: 1, maxAmount: 1,
+    x: pickupPosition.x, y: pickupPosition.y, z: pickupPosition.z,
+    respawnPolicyRef: respawnPolicyId, ownershipMode: "shared"
+  });
+  const spawnSet = await addNode("spawn_set", {
+    spawnSetId: "spawn_set." + canonical, activationMode: "zone_loaded", maxAliveTotal: 2,
+    randomSeedMode: "deterministic_build", sharedRespawnPolicyRef: respawnPolicyId
+  });
+  const spawnController = await addNode("spawn_controller", {
+    spawnControllerId: "spawn_controller." + canonical, scope: "zone",
+    sleepOutsideInterest: false, interestRadius: 120, preloadRadius: 160,
+    buildBudgetPerTick: 4, maxActiveInstances: 10, persistenceScope: "zone"
+  });
+  await api.connect(enemySpawn, "spawnEntry", spawnSet, "spawns");
+  await api.connect(pickupSpawn, "spawnEntry", spawnSet, "spawns");
+  await api.connect(spawnSet, "spawnSet", spawnController, "spawnSets");
+  await api.wire(spawnController, ROUTES.spawnController, foundation, zone);
+
+  const questTarget = await addNode("quest_target_binding", {
+    targetId, label: "Golden Turn-in", targetTags: ["quest", prefix], targetKind: "marker",
+    zoneRef: zone.zoneId, entityRef: null, action: "node04:turn_in", prompt: "Turn in",
+    x: turnInPosition.x, y: turnInPosition.y, z: turnInPosition.z, radius: 5, visibleInGame: true
+  });
+  await api.wire(questTarget, ROUTES.questTarget, foundation, zone);
+
+  const campaignOutput = await addNode("campaign_output", {
+    packageId: "campaign_package." + canonical, packageVersion: "1.0.0",
+    namespaceOwnership: [prefix, "f2", "test"]
+  });
+  const campaign = await addNode("campaign_definition", {
+    campaignId: "campaign." + canonical, displayName: "Golden Campaign",
+    summary: "Fase 02 golden path", startQuestRef: questId, priority: 1, tags: [prefix]
+  });
+  const chapter = await addNode("chapter_definition", {
+    chapterId: "chapter." + canonical, displayName: "Golden Chapter",
+    campaignRef: "campaign." + canonical, order: 1, startQuestRef: questId, tags: [prefix]
+  });
+  const quest = await addNode("quest_definition", {
+    questId, displayName: "Defeat the Golden Sentinel",
+    summary: "Defeat the enemy and turn in its proof.",
+    description: "Defeat the Golden Sentinel, collect its proof, and turn it in.",
+    questType: "main", startStepRef: questStepId, turnInTargetRef: targetId,
+    recommendedZoneRef: zone.zoneId, prerequisiteQuestRefs: [], nextQuestRefs: [],
+    autoTrack: true, abandonable: false, repeatMode: "once_per_character",
+    resetOnContentChange: false, minimumLevel: 1, tags: [prefix, "enemy", "turn_in"]
+  });
+  const questStep = await addNode("quest_step", {
+    stepId: questStepId, displayName: "Defeat and return",
+    instruction: "Defeat the Golden Sentinel and turn in its proof.",
+    stepType: "deliver", sequenceIndex: 1, targetRef: targetId, zoneRef: zone.zoneId,
+    nextStepRef: null, autoAdvance: false, optional: false
+  });
+  const objective = await addNode("objective_deliver", {
+    objectiveId: "objective." + canonical + ".proof", instruction: "Sentinel Proof",
+    targetRef: targetId, itemRef: itemId, requiredAmount: 1, zoneRef: zone.zoneId
+  });
+  const rewardXp = await addNode("action_give_xp", {
+    actionId: "action." + canonical + ".reward_xp", amount: 75, reason: "quest_reward"
+  });
+  await api.connect(campaignOutput, "campaignPackage", foundation.campaignRegistry.id, "campaignPackage");
+  await api.connect(campaign, "campaignDef", campaignOutput, "campaigns");
+  await api.connect(chapter, "chapterDef", campaign, "chapters");
+  await api.connect(quest, "questDef", chapter, "quests");
+  await api.connect(questStep, "questStep", quest, "steps");
+  await api.connect(objective, "objective", questStep, "objectives");
+  await api.connect(rewardXp, "rewardEntry", quest, "rewards");
+
+  const healthHud = await addNode("hud_bar", {
+    moduleId: "hud." + canonical + ".health", anchor: "bottom-left",
+    sourceStatRef: "stat.health", label: "Health", widthPx: 220, heightPx: 18,
+    showNumbers: true, showPercent: false, showCombatSummary: true
+  });
+  const interactionHud = await addNode("interaction_hud", {
+    moduleId: "hud." + canonical + ".target", anchor: "bottom-center", layout: "compact",
+    targetKinds: ["enemy", "pickup"], maxTargets: 4, showDistance: true, showHealth: true,
+    showLootPreview: true, allowDemoReset: false, rangeMode: "ability_range",
+    runtimeTargetScope: "current_zone"
+  });
+  const inventoryHud = await addNode("inventory_hud", {
+    moduleId: "hud." + canonical + ".loot", anchor: "bottom-right",
+    columns: 4, layout: "grid", showWeight: false, showFilters: false,
+    allowStackSplit: false, allowDestroy: false
+  });
+  const questHud = await addNode("quest_tracker_hud", {
+    moduleId: "hud." + canonical + ".quest", anchor: "top-right", maxQuests: 1,
+    showCompleted: true, showMarkers: true, allowQuestReset: false
+  });
+  for (const hud of [healthHud, interactionHud, inventoryHud, questHud]) {
+    await api.connect(hud, "uiModule", foundation.uiOutput.id, "uiModules");
+  }
+
+  return {
+    prefix, itemId, pickupItemId, lootTableId, enemyId, questId, targetId, abilityId,
+    enemySpawnId: "spawn." + canonical + ".enemy",
+    pickupSpawnId: "spawn." + canonical + ".pickup",
+    enemyPosition, pickupPosition, turnInPosition
   };
 }
 

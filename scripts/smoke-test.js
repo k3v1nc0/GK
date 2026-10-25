@@ -14,6 +14,8 @@ import { applyGroundChunkPlan, auditSceneObjectsForGhostPlanes, auditSceneObject
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
 import { buildWorldFromGraph, PublishService } from "../src/server/publish-service.js";
 import { shouldApplyServerPosition } from "../apps/web/public/shared/revision-guard.js";
+import { addGoldenPathSlice, createTestWorldApi } from "./lib/test-world.js";
+import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../apps/web/public/shared/protocol-v1.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -276,11 +278,13 @@ function createCookieJar(initialValue = "") {
 }
 
 function createGameSocketClient(jar, label, options = {}) {
-  const url = BASE.replace(/^http/, "ws") + "/api/game/live";
-  const headers = { Origin: BASE };
+  const url = BASE.replace(/^http/, "ws") + (options.path || "/api/game/live");
+  const headers = { Origin: options.origin || BASE };
   if (jar && jar.value) headers.Cookie = jar.value;
   const autoPong = options.autoPong !== false;
-  const ws = new WebSocket(url, Object.keys(headers).length ? { headers: headers } : undefined);
+  const ws = options.protocol
+    ? new WebSocket(url, options.protocol, { headers: headers })
+    : new WebSocket(url, { headers: headers });
   const messages = [];
   const waiters = [];
   let openResolve = null;
@@ -314,6 +318,9 @@ function createGameSocketClient(jar, label, options = {}) {
 
   ws.on("open", function () {
     openSettled = true;
+    if (options.sendAuth !== false && options.ticket !== undefined) {
+      ws.send(JSON.stringify({ type: "auth", v: PROTOCOL_VERSION, ticket: options.ticket }));
+    }
     if (openResolve) openResolve(client);
   });
   ws.on("unexpected-response", function (request, response) {
@@ -507,12 +514,14 @@ function probeUnauthenticatedGameSocket() {
   });
 }
 
-function probeRejectedGameSocket(jar, origin) {
+function probeRejectedGameSocket(jar, origin, options = {}) {
   return new Promise(function (resolve) {
-    const url = BASE.replace(/^http/, "ws") + "/api/game/live";
+    const url = BASE.replace(/^http/, "ws") + (options.path || "/api/game/live");
     const headers = { Origin: origin };
     if (jar && jar.value) headers.Cookie = jar.value;
-    const ws = new WebSocket(url, { headers: headers });
+    const ws = options.protocol
+      ? new WebSocket(url, options.protocol, { headers: headers })
+      : new WebSocket(url, { headers: headers });
     const timer = setTimeout(function () {
       try { ws.terminate(); } catch {}
       resolve({ kind: "timeout" });
@@ -531,6 +540,34 @@ function probeRejectedGameSocket(jar, origin) {
       resolve({ kind: "error", message: error.message || String(error) });
     });
   });
+}
+
+async function issueGameJoinTicket(jar) {
+  const response = await call("POST", JOIN_TICKET_PATH, {}, false, jar);
+  assert(response.status === 200 && typeof response.json?.ticket === "string", "join-ticket wordt via cookie + CSRF uitgegeven");
+  return response.json.ticket;
+}
+
+async function connectProtocolGameSocket(jar, ticket, label, options = {}) {
+  const client = createGameSocketClient(jar, label, {
+    path: WS_PATH,
+    protocol: options.protocol || PROTOCOL_NAME,
+    ticket: ticket,
+    sendAuth: options.sendAuth !== false,
+    autoPong: options.autoPong
+  });
+  await client.opened;
+  if (options.expectAuth !== false) {
+    await client.waitForMessage(function (message) { return message.type === "auth_ok"; }, 8000);
+  }
+  return client;
+}
+
+async function probeOversizedProtocolSocket(jar) {
+  const ticket = await issueGameJoinTicket(jar);
+  const client = await connectProtocolGameSocket(jar, ticket, "protocol-oversized");
+  client.ws.send(Buffer.alloc(70 * 1024, 0x61));
+  return await waitForSocketClose(client, 8000);
 }
 
 function probeOversizedGameSocket(jar) {
@@ -2256,9 +2293,7 @@ async function main() {
     runTerrainStreamingSnapshotChecks();
     runStreamingCorrectnessChecks();
     runRevisionGuardChecks();
-    child = spawn(process.execPath, ["src/server/server.js"], {
-      cwd: rootDir,
-      env: isolatedRuntime.env({
+    const serverEnvironment = isolatedRuntime.env({
         ADMIN_PASSWORD: ADMIN_PASSWORD,
         ADMIN_USERNAME: "kevin",
         DEV_GAME_ACTIONS: "1",
@@ -2266,10 +2301,17 @@ async function main() {
         GAME_WS_HEARTBEAT_TIMEOUT_MS: "2500",
         GAME_POSITION_PERSIST_DEBOUNCE_MS: "150",
         GAME_WS_RATE_LIMIT_PER_SECOND: "20"
-      }),
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    child.stderr.on("data", function (data) { process.stderr.write("[server] " + data); });
+      });
+    const startSmokeServer = function () {
+      const processChild = spawn(process.execPath, ["src/server/server.js"], {
+        cwd: rootDir,
+        env: serverEnvironment,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      processChild.stderr.on("data", function (data) { process.stderr.write("[server] " + data); });
+      return processChild;
+    };
+    child = startSmokeServer();
     BASE = "http://127.0.0.1:" + PORT;
     await waitForHealth(30000);
 
@@ -3055,6 +3097,26 @@ async function main() {
     assert(impossibleScatterArea && Array.isArray(impossibleScatterArea.placementWarnings) && impossibleScatterArea.placementWarnings.length > 0, "onmogelijke spacing geeft een duidelijke warning");
     assert(impossibleScatterArea && Number(impossibleScatterArea.placedCount) < 40, "onmogelijke spacing plaatst alleen wat past");
 
+    const smokeWorldApi = createTestWorldApi(function (method, pathname, body) {
+      return call(method, pathname, body);
+    });
+    const goldenPathFixture = await addGoldenPathSlice(smokeWorldApi, {
+      worldAssembly: worldAssemblyNode,
+      zoneRegistry: zoneRegistryNode,
+      uiOutput: uiOutputNode,
+      projectSettings: projectSettingsNode,
+      catalogRegistry: findNode(graph, function (n) { return n.type === "catalog_registry"; }, "foundation catalog registry bestaat"),
+      campaignRegistry: findNode(graph, function (n) { return n.type === "campaign_registry"; }, "foundation campaign registry bestaat"),
+      playerRulesOutput: findNode(graph, function (n) { return n.type === "player_rules_output"; }, "foundation player rules output bestaat")
+    }, {
+      zoneId: "zone.demo",
+      zoneOutput: { id: zoneOutputNode.id }
+    }, {
+      prefix: "f2_smoke",
+      modelAssetId: modelId
+    });
+    assert(Boolean(goldenPathFixture.questId), "F2 golden-path fixture is via de normale authoringroute opgebouwd");
+
     const draft = await call("POST", "/api/editor/save-draft");
     assert(draft.status === 200 && draft.json.ok, "draft opslaan werkt");
     const draftWorld = await call("GET", "/api/editor/draft-world");
@@ -3722,6 +3784,235 @@ async function main() {
     assert(playerDebugDenied.status === 403 && playerDebugDenied.json.code === "DEBUG_ACTION_FORBIDDEN", "dev-flag geeft een gewone speler geen debugrechten");
     const playerNode03State = await call("GET", "/api/game/node03/state", null, false, pcJar);
     assert(playerNode03State.status === 200 && playerNode03State.json.debugActionsAllowed === false, "node03-state meldt een gewone speler dat debugacties uit staan (knoppen uitgeschakeld)");
+
+    // F2 golden path: echte gepubliceerde content, alleen intenties vanuit de client en exacte receipts.
+    const goldenBJar = createCookieJar();
+    const goldenBRegister = await call("POST", "/api/auth/register", {
+      identifier: "test_f2_golden_b",
+      password: "f2_golden_password_b",
+      deviceLabel: "golden-b"
+    }, false, goldenBJar);
+    assert(goldenBRegister.status === 201, "golden-path speler B kan registreren");
+    const goldenBPlayer = await call("GET", "/api/game/player", null, false, goldenBJar);
+    assert(goldenBPlayer.status === 200 && goldenBPlayer.json.player, "golden-path speler B krijgt een serverplayer");
+
+    const goldenQuestBefore = await call("GET", "/api/game/node04/state", null, false, pcJar);
+    const goldenAvailableQuest = goldenQuestBefore.json?.quests?.available?.find(function (quest) {
+      return quest.questId === goldenPathFixture.questId;
+    });
+    assert(goldenQuestBefore.status === 200 && Boolean(goldenAvailableQuest), "golden-path quest komt uit de gepubliceerde fixture");
+    const goldenAccept = await call("POST", "/api/game/node04/action", {
+      action: "accept_quest",
+      questId: goldenPathFixture.questId,
+      operationId: "smoke-f2-accept-a"
+    }, false, pcJar);
+    assert(goldenAccept.status === 200 && goldenAccept.json.ok === true, "speler A accepteert de defeat/turn-in quest");
+
+    const goldenStateBefore = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const goldenEnemy = goldenStateBefore.json?.interactionTargets?.find(function (target) {
+      return target.entityKind === "enemy" && String(target.instanceId || "").includes(goldenPathFixture.enemySpawnId);
+    });
+    const goldenPickup = goldenStateBefore.json?.interactionTargets?.find(function (target) {
+      return target.entityKind === "pickup" && String(target.instanceId || "").includes(goldenPathFixture.pickupSpawnId);
+    });
+    assert(Boolean(goldenEnemy) && Boolean(goldenPickup), "golden-path zone bevat een vijand en een losse pickup (targets=" + JSON.stringify(goldenStateBefore.json?.interactionTargets || []) + ")");
+    const pickupResult = await call("POST", "/api/game/node03/action", {
+      action: "pickup",
+      targetId: goldenPickup.instanceId,
+      operationId: "smoke-f2-pickup-a"
+    }, false, pcJar);
+    assert(pickupResult.status === 200 && pickupResult.json.grants?.length === 1, "pickup komt via de server in de inventory");
+
+    const forgedAttack = await call("POST", "/api/game/node03/action", {
+      action: "attack",
+      targetId: goldenEnemy.instanceId,
+      operationId: "smoke-f2-forged-attack",
+      damage: 999999,
+      x: 999999,
+      itemId: goldenPathFixture.itemId
+    }, false, pcJar);
+    assert(forgedAttack.status === 400 && forgedAttack.json.code === "CLIENT_AUTHORITY_FIELD", "attack met damage/x/itemId wordt als client-authority afgewezen");
+
+    const openingAttack = await call("POST", "/api/game/node03/action", {
+      action: "attack",
+      targetId: goldenEnemy.instanceId,
+      operationId: "smoke-f2-attack-a-1"
+    }, false, pcJar);
+    const woundedGoldenEnemy = openingAttack.json?.snapshot?.interactionTargets?.find(function (target) {
+      return target.instanceId === goldenEnemy.instanceId;
+    });
+    assert(
+      openingAttack.status === 200
+        && woundedGoldenEnemy?.healthCurrent > 0
+        && woundedGoldenEnemy.healthCurrent < woundedGoldenEnemy.healthMax
+        && !openingAttack.json?.grants?.length,
+      "speler A verwondt de golden-path vijand eerst zonder grant"
+    );
+    let killOperationId = "";
+    let killResult = null;
+    for (let attackIndex = 2; attackIndex <= 6; attackIndex += 1) {
+      await sleep(300);
+      killOperationId = "smoke-f2-attack-a-" + attackIndex;
+      killResult = await call("POST", "/api/game/node03/action", {
+        action: "attack",
+        targetId: goldenEnemy.instanceId,
+        operationId: killOperationId
+      }, false, pcJar);
+      if (killResult.json?.events?.some(function (event) { return event.type === "defeated"; })) break;
+    }
+    assert(killResult.status === 200 && killResult.json.events?.some(function (event) { return event.type === "defeated"; }), "speler A doodt de golden-path vijand");
+    assert(killResult.json.grants?.some(function (grant) { return grant.itemId === goldenPathFixture.itemId; }), "de kill kent het gegarandeerde questloot eenmaal toe");
+    const inventoryAfterKill = killResult.json.snapshot?.inventory;
+    const proofCountAfterKill = (inventoryAfterKill?.items || []).filter(function (row) {
+      return row.itemId === goldenPathFixture.itemId;
+    }).reduce(function (total, row) { return total + Number(row.quantity || 0); }, 0);
+    assert(proofCountAfterKill === 1, "questloot staat exact eenmaal in de inventory");
+
+    const killRetry = await call("POST", "/api/game/node03/action", {
+      action: "attack",
+      targetId: goldenEnemy.instanceId,
+      operationId: killOperationId
+    }, false, pcJar);
+    const retryProofCount = (killRetry.json?.snapshot?.inventory?.items || []).filter(function (row) {
+      return row.itemId === goldenPathFixture.itemId;
+    }).reduce(function (total, row) { return total + Number(row.quantity || 0); }, 0);
+    assert(killRetry.status === 200 && killRetry.json.idempotent === true && retryProofCount === 1, "dezelfde kill-operationId is idempotent zonder tweede grant");
+
+    const crossPlayerOperation = await call("POST", "/api/game/node03/action", {
+      action: "attack",
+      targetId: goldenEnemy.instanceId,
+      operationId: killOperationId
+    }, false, goldenBJar);
+    assert(crossPlayerOperation.status === 409 && crossPlayerOperation.json.code === "OPERATION_OTHER_PLAYER", "dezelfde operationId door speler B geeft OPERATION_OTHER_PLAYER");
+
+    const questReady = await call("GET", "/api/game/node04/state", null, false, pcJar);
+    const readyQuest = questReady.json?.quests?.active?.find(function (quest) { return quest.questId === goldenPathFixture.questId; });
+    assert(readyQuest?.status === "ready_to_turn_in" && readyQuest.activeStep?.canTurnIn === true, "de quest gaat na de kill naar klaar voor inleveren");
+    const xpBeforeTurnIn = Number(questReady.json?.progression?.xp || 0);
+    const turnInOperationId = "smoke-f2-turn-in-a";
+    const turnIn = await call("POST", "/api/game/node04/action", {
+      action: "turn_in",
+      questId: goldenPathFixture.questId,
+      operationId: turnInOperationId
+    }, false, pcJar);
+    assert(turnIn.status === 200 && turnIn.json.grants?.some(function (grant) { return grant.kind === "xp"; }), "turn-in geeft de gepubliceerde XP-beloning");
+    const turnInRetry = await call("POST", "/api/game/node04/action", {
+      action: "turn_in",
+      questId: goldenPathFixture.questId,
+      operationId: turnInOperationId
+    }, false, pcJar);
+    assert(turnInRetry.status === 200 && turnInRetry.json.idempotent === true, "dezelfde turn-in-operationId is idempotent");
+    const questAfterTurnIn = await call("GET", "/api/game/node04/state", null, false, pcJar);
+    const completedGoldenQuest = questAfterTurnIn.json?.quests?.completed?.find(function (quest) { return quest.questId === goldenPathFixture.questId; });
+    assert(Boolean(completedGoldenQuest) && Number(questAfterTurnIn.json?.progression?.xp || 0) === xpBeforeTurnIn + 75, "quest is voltooid en XP is exact eenmaal toegekend");
+
+    const resetForRace = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: "smoke-f2-race-reset"
+    });
+    assert(resetForRace.status === 200, "golden-path vijand is voor de gelijktijdige kill hersteld");
+    await sleep(300);
+    const raceStateA = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const raceEnemy = raceStateA.json?.interactionTargets?.find(function (target) {
+      return target.entityKind === "enemy" && String(target.instanceId || "").includes(goldenPathFixture.enemySpawnId);
+    });
+    const raceSetupHit = await call("POST", "/api/game/node03/action", {
+      action: "attack",
+      targetId: raceEnemy.instanceId,
+      operationId: "smoke-f2-race-setup"
+    }, false, pcJar);
+    let raceSetupEnemy = raceSetupHit.json?.snapshot?.interactionTargets?.find(function (target) {
+      return target.instanceId === raceEnemy.instanceId;
+    });
+    assert(
+      raceSetupHit.status === 200
+        && raceSetupEnemy?.healthCurrent > 0
+        && raceSetupEnemy.healthCurrent < raceSetupEnemy.healthMax
+        && !raceSetupHit.json?.grants?.length,
+      "golden-path vijand krijgt een niet-dodelijke race-setup-hit"
+    );
+    const raceDamage = raceSetupEnemy.healthMax - raceSetupEnemy.healthCurrent;
+    let raceSetupIndex = 2;
+    while (raceSetupEnemy.healthCurrent > raceDamage && raceSetupIndex <= 6) {
+      await sleep(300);
+      const setupResult = await call("POST", "/api/game/node03/action", {
+        action: "attack",
+        targetId: raceEnemy.instanceId,
+        operationId: "smoke-f2-race-setup-" + raceSetupIndex
+      }, false, pcJar);
+      raceSetupEnemy = setupResult.json?.snapshot?.interactionTargets?.find(function (target) {
+        return target.instanceId === raceEnemy.instanceId;
+      });
+      raceSetupIndex += 1;
+    }
+    assert(raceSetupEnemy?.healthCurrent > 0 && raceSetupEnemy.healthCurrent <= raceDamage, "golden-path vijand staat voor A/B op exact één laatste klap");
+    await sleep(300);
+    const totalProofs = function (snapshot) {
+      return (snapshot?.inventory?.items || []).filter(function (row) {
+        return row.itemId === goldenPathFixture.itemId;
+      }).reduce(function (total, row) { return total + Number(row.quantity || 0); }, 0);
+    };
+    const raceBeforeA = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const raceBeforeB = await call("GET", "/api/game/node03/state", null, false, goldenBJar);
+    const proofTotalBeforeRace = totalProofs(raceBeforeA.json) + totalProofs(raceBeforeB.json);
+    const raceResults = await Promise.all([
+      call("POST", "/api/game/node03/action", { action: "attack", targetId: raceEnemy.instanceId, operationId: "smoke-f2-race-a" }, false, pcJar),
+      call("POST", "/api/game/node03/action", { action: "attack", targetId: raceEnemy.instanceId, operationId: "smoke-f2-race-b" }, false, goldenBJar)
+    ]);
+    const raceAfterA = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const raceAfterB = await call("GET", "/api/game/node03/state", null, false, goldenBJar);
+    const proofTotalAfterRace = totalProofs(raceAfterA.json) + totalProofs(raceAfterB.json);
+    assert(raceResults.every(function (result) { return result.status === 200; }) && proofTotalAfterRace === proofTotalBeforeRace + 1, "A en B tegelijk de laatste klap geeft over beide inventories één grant");
+
+    const persistedBeforeRestart = {
+      inventory: raceAfterA.json.inventory,
+      xp: raceAfterA.json.progression.xp,
+      quests: questAfterTurnIn.json.quests
+    };
+    child.kill("SIGTERM");
+    await new Promise(function (resolve) { child.once("exit", resolve); });
+    child = startSmokeServer();
+    await waitForHealth(30000);
+    const node03AfterRestart = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const node04AfterRestart = await call("GET", "/api/game/node04/state", null, false, pcJar);
+    assert(JSON.stringify(node03AfterRestart.json.inventory) === JSON.stringify(persistedBeforeRestart.inventory), "inventory is exact gelijk na serverrestart");
+    assert(node03AfterRestart.json.progression.xp === persistedBeforeRestart.xp, "XP is exact gelijk na serverrestart");
+    assert(JSON.stringify(node04AfterRestart.json.quests) === JSON.stringify(persistedBeforeRestart.quests), "queststatus is exact gelijk na serverrestart");
+
+    const validTicket = await issueGameJoinTicket(pcJar);
+    const protocolClient = await connectProtocolGameSocket(pcJar, validTicket, "protocol-v1-valid");
+    assert(protocolClient.messages.some(function (message) { return message.type === "auth_ok"; }), "gk-mmo-v1 geeft auth_ok na een geldig eenmalig ticket");
+    protocolClient.close();
+    await waitForSocketClose(protocolClient);
+
+    const reusedTicketClient = await connectProtocolGameSocket(pcJar, validTicket, "protocol-v1-reused", { expectAuth: false });
+    const reusedTicketClose = await waitForSocketClose(reusedTicketClient);
+    assert(reusedTicketClose.code === 4401 && !reusedTicketClient.messages.some(function (message) { return message.type === "auth_ok"; }), "een join-ticket is maar één keer bruikbaar (4401)");
+
+    const missingTicketClient = await connectProtocolGameSocket(pcJar, "", "protocol-v1-no-ticket", { expectAuth: false });
+    const missingTicketClose = await waitForSocketClose(missingTicketClient);
+    assert(missingTicketClose.code === 4401 && !missingTicketClient.messages.some(function (message) { return message.type === "auth_ok"; }), "AUTH zonder ticket sluit met 4401 en zonder auth_ok");
+
+    const timeoutTicket = await issueGameJoinTicket(pcJar);
+    const authTimeoutClient = await connectProtocolGameSocket(pcJar, timeoutTicket, "protocol-v1-timeout", { sendAuth: false, expectAuth: false });
+    const authTimeoutClose = await waitForSocketClose(authTimeoutClient, 8000);
+    assert(authTimeoutClose.code === 4410 && !authTimeoutClient.messages.some(function (message) { return message.type === "auth_ok"; }), "geen AUTH binnen 5 s sluit met 4410 en zonder auth_ok");
+
+    const unsupportedClient = createGameSocketClient(pcJar, "protocol-v2-unsupported", {
+      path: WS_PATH,
+      protocol: "gk-mmo-v2",
+      ticket: "not-used-but-long-enough",
+      sendAuth: true
+    });
+    await unsupportedClient.opened;
+    const unsupportedClose = await waitForSocketClose(unsupportedClient);
+    assert(unsupportedClose.code === 4406, "gk-mmo-v2 sluit met 4406");
+
+    const wrongOriginProtocol = await probeRejectedGameSocket(pcJar, "https://aanvaller.invalid", { path: WS_PATH, protocol: PROTOCOL_NAME });
+    assert(wrongOriginProtocol.kind !== "open" && wrongOriginProtocol.statusCode === 403, "/ws/game met verkeerde Origin geeft 403");
+    const oversizedProtocol = await probeOversizedProtocolSocket(pcJar);
+    assert(oversizedProtocol.code === 1009, "/ws/game sluit een payload boven 64 KiB met 1009");
+
     // Een andere speler krijgt direct een seintje als gedeelde objecten veranderen (Kevin-handtest: kaas bleef staan).
     const entityWatcher = createGameSocketClient(pcJar, "entity-watcher");
     await entityWatcher.opened;

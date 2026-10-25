@@ -1,0 +1,2900 @@
+{
+  "createdAt": "2026-10-25T12:50:07.781Z",
+  "host": {
+    "hostname": "vm",
+    "cpus": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cpuCount": 4,
+    "totalMemMb": 16091,
+    "platform": "linux",
+    "node": "v24.22.1"
+  },
+  "target": "isolated",
+  "gates": {
+    "tickP95": 25,
+    "tickP99": 40,
+    "eventLoopP99": 20
+  },
+  "steps": [
+    {
+      "users": 1,
+      "minutes": 2,
+      "warmupMs": 15000,
+      "perfReset": {
+        "ok": true,
+        "at": "2026-10-25T12:43:29.846Z"
+      },
+      "stats": {
+        "users": 1,
+        "messages": 2266,
+        "bytes": 1307410,
+        "inputs": 4051,
+        "attacks": 1,
+        "attackErrors": {},
+        "unexpectedCloses": [],
+        "startErrors": []
+      },
+      "gates": {
+        "tickP95": {
+          "value": 0.682185000001482,
+          "max": 25,
+          "ok": true
+        },
+        "tickP99": {
+          "value": 1.2343499999988126,
+          "max": 40,
+          "ok": true
+        },
+        "eventLoopP99": {
+          "value": 2.07,
+          "max": 20,
+          "ok": true
+        },
+        "duplicateReceipts": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        },
+        "allBotsConnected": {
+          "value": 1,
+          "max": 1,
+          "ok": true
+        },
+        "noUnexpectedCloses": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        }
+      },
+      "receipts": {
+        "checked": true,
+        "duplicateLedgerRows": 0,
+        "unfinishedOperations": 0,
+        "examples": []
+      },
+      "crash": null,
+      "finalPerf": {
+        "tickMs": 20,
+        "ticks": 6881,
+        "avgLoopMs": 0.4,
+        "maxLoopMs": 9,
+        "maxLateMs": 75,
+        "resets": 0,
+        "lostMs": 0,
+        "sinceMs": 137628,
+        "clock": {
+          "tickMs": 20,
+          "tick": 6881,
+          "status": "NORMAL",
+          "ticks": 6881,
+          "rounds": 6876,
+          "resets": 0,
+          "lostMs": 0,
+          "overruns": 0,
+          "tickDurationMs": {
+            "count": 2048,
+            "p50": 0.3213790000008885,
+            "p95": 0.6483009999938076,
+            "p99": 0.9120789999724366,
+            "max": 4.433309999993071
+          },
+          "tickLateMs": {
+            "count": 2048,
+            "p50": 1,
+            "p95": 2,
+            "p99": 3,
+            "max": 12
+          }
+        },
+        "positions": {
+          "pending": 1,
+          "oldestDirtyAgeMs": 570,
+          "flushes": 135,
+          "rows": 135,
+          "errors": 0,
+          "lastError": null,
+          "lastFlushAt": 1792932329280,
+          "maxPendingSeen": 1,
+          "healthy": true
+        },
+        "dbWritesMs": {
+          "position_checkpoint": {
+            "count": 120,
+            "p50": 0.11881600000197068,
+            "p95": 0.19668900000033318,
+            "p99": 0.334034999992582,
+            "max": 11.30240300000878
+          }
+        },
+        "eventLoopDelayMs": {
+          "p50": 0.23,
+          "p95": 1.02,
+          "p99": 2.07,
+          "max": 29.85,
+          "resolutionMs": 10,
+          "windowStartedAt": "2026-10-25T12:43:29.846Z"
+        }
+      },
+      "samples": [
+        {
+          "atMs": 10014,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 1381,
+            "avgLoopMs": 0.5,
+            "maxLoopMs": 5,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 27630,
+            "clock": {
+              "tickMs": 20,
+              "tick": 1381,
+              "status": "NORMAL",
+              "ticks": 1381,
+              "rounds": 1377,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 1381,
+                "p50": 0.30437800000072457,
+                "p95": 0.682185000001482,
+                "p99": 1.2343499999988126,
+                "max": 3.743678999999247
+              },
+              "tickLateMs": {
+                "count": 1381,
+                "p50": 1,
+                "p95": 4,
+                "p99": 13,
+                "max": 75
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 609,
+              "flushes": 25,
+              "rows": 25,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932219235,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 10,
+                "p50": 0.12018499999976484,
+                "p95": 0.19992899999851943,
+                "p99": 0.19992899999851943,
+                "max": 0.19992899999851943
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 0.99,
+              "p99": 1.63,
+              "max": 6.26,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 20027,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 1881,
+            "avgLoopMs": 0.8,
+            "maxLoopMs": 5,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 37643,
+            "clock": {
+              "tickMs": 20,
+              "tick": 1881,
+              "status": "NORMAL",
+              "ticks": 1881,
+              "rounds": 1877,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 1881,
+                "p50": 0.3212920000005397,
+                "p95": 0.682185000001482,
+                "p99": 1.0958600000012666,
+                "max": 3.743678999999247
+              },
+              "tickLateMs": {
+                "count": 1881,
+                "p50": 1,
+                "p95": 3,
+                "p99": 11,
+                "max": 75
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 626,
+              "flushes": 35,
+              "rows": 35,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932229239,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 20,
+                "p50": 0.12658200000078068,
+                "p95": 0.1968059999999241,
+                "p99": 0.19992899999851943,
+                "max": 0.19992899999851943
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 0.99,
+              "p99": 1.54,
+              "max": 11.95,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 30037,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 2382,
+            "avgLoopMs": 0.5,
+            "maxLoopMs": 5,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 47655,
+            "clock": {
+              "tickMs": 20,
+              "tick": 2382,
+              "status": "NORMAL",
+              "ticks": 2382,
+              "rounds": 2378,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.3333070000007865,
+                "p95": 0.6626879999967059,
+                "p99": 1.0648959999998624,
+                "max": 3.743678999999247
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 3,
+                "max": 16
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 616,
+              "flushes": 45,
+              "rows": 45,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932239242,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 30,
+                "p50": 0.12658200000078068,
+                "p95": 0.1968059999999241,
+                "p99": 0.19992899999851943,
+                "max": 0.19992899999851943
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 0.99,
+              "p99": 1.54,
+              "max": 11.95,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 40050,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 2883,
+            "avgLoopMs": 0.5,
+            "maxLoopMs": 5,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 57665,
+            "clock": {
+              "tickMs": 20,
+              "tick": 2883,
+              "status": "NORMAL",
+              "ticks": 2883,
+              "rounds": 2878,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.32862999999997555,
+                "p95": 0.6548840000032214,
+                "p99": 0.899226000001363,
+                "max": 3.743678999999247
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 3,
+                "max": 23
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 628,
+              "flushes": 55,
+              "rows": 55,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932249249,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 40,
+                "p50": 0.1270169999988866,
+                "p95": 0.19668900000033318,
+                "p99": 0.19992899999851943,
+                "max": 0.19992899999851943
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.22,
+              "p95": 0.97,
+              "p99": 1.53,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 50062,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 3383,
+            "avgLoopMs": 0.7,
+            "maxLoopMs": 5,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 67679,
+            "clock": {
+              "tickMs": 20,
+              "tick": 3383,
+              "status": "NORMAL",
+              "ticks": 3383,
+              "rounds": 3378,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.33839099999750033,
+                "p95": 0.6535689999946044,
+                "p99": 0.9257980000038515,
+                "max": 2.8548200000004726
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 3,
+                "max": 23
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 641,
+              "flushes": 65,
+              "rows": 65,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932259254,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 50,
+                "p50": 0.1270169999988866,
+                "p95": 0.1968059999999241,
+                "p99": 0.2063390000112122,
+                "max": 0.2063390000112122
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.22,
+              "p95": 0.98,
+              "p99": 1.6,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 60074,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 3884,
+            "avgLoopMs": 0.6,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 77691,
+            "clock": {
+              "tickMs": 20,
+              "tick": 3884,
+              "status": "NORMAL",
+              "ticks": 3884,
+              "rounds": 3879,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.33240200000000186,
+                "p95": 0.6423409999988507,
+                "p99": 0.9391879999966477,
+                "max": 2.9873999999981606
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 4,
+                "max": 23
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 645,
+              "flushes": 75,
+              "rows": 75,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932269270,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 60,
+                "p50": 0.128458999999566,
+                "p95": 0.19992899999851943,
+                "p99": 11.30240300000878,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1,
+              "p99": 1.76,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 70085,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 4384,
+            "avgLoopMs": 0.6,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 87702,
+            "clock": {
+              "tickMs": 20,
+              "tick": 4384,
+              "status": "NORMAL",
+              "ticks": 4384,
+              "rounds": 4379,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.3313800000032643,
+                "p95": 0.6250250000011874,
+                "p99": 0.9755429999931948,
+                "max": 3.454809999995632
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 4,
+                "max": 23
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 663,
+              "flushes": 85,
+              "rows": 85,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932279263,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 70,
+                "p50": 0.1270169999988866,
+                "p95": 0.19992899999851943,
+                "p99": 11.30240300000878,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1,
+              "p99": 1.8,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 80095,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 4885,
+            "avgLoopMs": 0.7,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 97713,
+            "clock": {
+              "tickMs": 20,
+              "tick": 4885,
+              "status": "NORMAL",
+              "ticks": 4885,
+              "rounds": 4880,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.33299699999042787,
+                "p95": 0.630511999996088,
+                "p99": 1.067598999994516,
+                "max": 3.8893090000055963
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 4,
+                "max": 15
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 654,
+              "flushes": 95,
+              "rows": 95,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932289267,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 80,
+                "p50": 0.12417999999888707,
+                "p95": 0.19992899999851943,
+                "p99": 11.30240300000878,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1,
+              "p99": 1.86,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 90111,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 5386,
+            "avgLoopMs": 0.7,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 107726,
+            "clock": {
+              "tickMs": 20,
+              "tick": 5386,
+              "status": "NORMAL",
+              "ticks": 5386,
+              "rounds": 5381,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.33787600000505336,
+                "p95": 0.6306789999944158,
+                "p99": 1.002410000000964,
+                "max": 4.433309999993071
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 4,
+                "max": 15
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 669,
+              "flushes": 105,
+              "rows": 105,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932299272,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 90,
+                "p50": 0.12194100000488106,
+                "p95": 0.19992899999851943,
+                "p99": 11.30240300000878,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1.01,
+              "p99": 2.03,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 100121,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 5886,
+            "avgLoopMs": 0.5,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 117739,
+            "clock": {
+              "tickMs": 20,
+              "tick": 5886,
+              "status": "NORMAL",
+              "ticks": 5886,
+              "rounds": 5881,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.33360899999388494,
+                "p95": 0.6483009999938076,
+                "p99": 0.9791569999943022,
+                "max": 4.433309999993071
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 4,
+                "max": 15
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 681,
+              "flushes": 115,
+              "rows": 115,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932309273,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 100,
+                "p50": 0.12175099999876693,
+                "p95": 0.1968059999999241,
+                "p99": 0.334034999992582,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1.01,
+              "p99": 2.05,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 110136,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 6387,
+            "avgLoopMs": 0.6,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 127750,
+            "clock": {
+              "tickMs": 20,
+              "tick": 6387,
+              "status": "NORMAL",
+              "ticks": 6387,
+              "rounds": 6382,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.32916299998760223,
+                "p95": 0.6564039999939268,
+                "p99": 1.0615969999926165,
+                "max": 4.433309999993071
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 3,
+                "max": 10
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 692,
+              "flushes": 125,
+              "rows": 125,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932319279,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 110,
+                "p50": 0.1190679999999702,
+                "p95": 0.1968059999999241,
+                "p99": 0.334034999992582,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1.02,
+              "p99": 2.12,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        },
+        {
+          "atMs": 120011,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 6881,
+            "avgLoopMs": 0.4,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 137628,
+            "clock": {
+              "tickMs": 20,
+              "tick": 6881,
+              "status": "NORMAL",
+              "ticks": 6881,
+              "rounds": 6876,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.3213790000008885,
+                "p95": 0.6483009999938076,
+                "p99": 0.9120789999724366,
+                "max": 4.433309999993071
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 2,
+                "p99": 3,
+                "max": 12
+              }
+            },
+            "positions": {
+              "pending": 1,
+              "oldestDirtyAgeMs": 570,
+              "flushes": 135,
+              "rows": 135,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932329280,
+              "maxPendingSeen": 1,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 120,
+                "p50": 0.11881600000197068,
+                "p95": 0.19668900000033318,
+                "p99": 0.334034999992582,
+                "max": 11.30240300000878
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.23,
+              "p95": 1.02,
+              "p99": 2.07,
+              "max": 29.85,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:43:29.846Z"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "users": 10,
+      "minutes": 2,
+      "warmupMs": 15000,
+      "perfReset": {
+        "ok": true,
+        "at": "2026-10-25T12:45:46.958Z"
+      },
+      "stats": {
+        "users": 10,
+        "messages": 22973,
+        "bytes": 90056463,
+        "inputs": 40674,
+        "attacks": 15,
+        "attackErrors": {},
+        "unexpectedCloses": [],
+        "startErrors": []
+      },
+      "gates": {
+        "tickP95": {
+          "value": 1.8626990000193473,
+          "max": 25,
+          "ok": true
+        },
+        "tickP99": {
+          "value": 3.1816340000077616,
+          "max": 40,
+          "ok": true
+        },
+        "eventLoopP99": {
+          "value": 2.88,
+          "max": 20,
+          "ok": true
+        },
+        "duplicateReceipts": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        },
+        "allBotsConnected": {
+          "value": 10,
+          "max": 10,
+          "ok": true
+        },
+        "noUnexpectedCloses": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        }
+      },
+      "receipts": {
+        "checked": true,
+        "duplicateLedgerRows": 0,
+        "unfinishedOperations": 0,
+        "examples": []
+      },
+      "crash": null,
+      "finalPerf": {
+        "tickMs": 20,
+        "ticks": 13736,
+        "avgLoopMs": 1.1,
+        "maxLoopMs": 13,
+        "maxLateMs": 212,
+        "resets": 0,
+        "lostMs": 0,
+        "sinceMs": 274742,
+        "clock": {
+          "tickMs": 20,
+          "tick": 13736,
+          "status": "NORMAL",
+          "ticks": 13736,
+          "rounds": 13716,
+          "resets": 0,
+          "lostMs": 0,
+          "overruns": 0,
+          "tickDurationMs": {
+            "count": 2048,
+            "p50": 0.9904119999846444,
+            "p95": 1.7095459999982268,
+            "p99": 2.31162600000971,
+            "max": 4.666105999960564
+          },
+          "tickLateMs": {
+            "count": 2048,
+            "p50": 1,
+            "p95": 3,
+            "p99": 4,
+            "max": 26
+          }
+        },
+        "positions": {
+          "pending": 10,
+          "oldestDirtyAgeMs": 623,
+          "flushes": 273,
+          "rows": 1493,
+          "errors": 0,
+          "lastError": null,
+          "lastFlushAt": 1792932466331,
+          "maxPendingSeen": 10,
+          "healthy": true
+        },
+        "dbWritesMs": {
+          "position_checkpoint": {
+            "count": 120,
+            "p50": 0.1657930000219494,
+            "p95": 0.2659680000215303,
+            "p99": 0.4983889999857638,
+            "max": 0.5720260000089183
+          },
+          "operation:attack": {
+            "count": 3,
+            "p50": 1.6080390000133775,
+            "p95": 2.3808809999900404,
+            "p99": 2.3808809999900404,
+            "max": 2.3808809999900404
+          }
+        },
+        "eventLoopDelayMs": {
+          "p50": 0.26,
+          "p95": 1.27,
+          "p99": 2.88,
+          "max": 137.59,
+          "resolutionMs": 10,
+          "windowStartedAt": "2026-10-25T12:45:46.958Z"
+        }
+      },
+      "samples": [
+        {
+          "atMs": 10012,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 8236,
+            "avgLoopMs": 1.1,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 164742,
+            "clock": {
+              "tickMs": 20,
+              "tick": 8236,
+              "status": "NORMAL",
+              "ticks": 8236,
+              "rounds": 8229,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.690816000016639,
+                "p95": 1.7503369999758434,
+                "p99": 2.1146889999799896,
+                "max": 5.456796000013128
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 4,
+                "max": 43
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 664,
+              "flushes": 163,
+              "rows": 393,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932356287,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 10,
+                "p50": 0.12924500001827255,
+                "p95": 0.1723960000090301,
+                "p99": 0.1723960000090301,
+                "max": 0.1723960000090301
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.25,
+              "p95": 1.2,
+              "p99": 2.3,
+              "max": 5.72,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 20024,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 8737,
+            "avgLoopMs": 1.1,
+            "maxLoopMs": 9,
+            "maxLateMs": 75,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 174756,
+            "clock": {
+              "tickMs": 20,
+              "tick": 8737,
+              "status": "NORMAL",
+              "ticks": 8737,
+              "rounds": 8730,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9577120000030845,
+                "p95": 1.8479370000131894,
+                "p99": 2.187816000019666,
+                "max": 5.456796000013128
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 4,
+                "max": 43
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 675,
+              "flushes": 173,
+              "rows": 493,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932366290,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 20,
+                "p50": 0.14201400001184084,
+                "p95": 0.19175699999323115,
+                "p99": 0.24833000000216998,
+                "max": 0.24833000000216998
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.24,
+              "p95": 1.35,
+              "p99": 2.68,
+              "max": 14.08,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 30037,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 9238,
+            "avgLoopMs": 1.2,
+            "maxLoopMs": 9,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 184765,
+            "clock": {
+              "tickMs": 20,
+              "tick": 9238,
+              "status": "NORMAL",
+              "ticks": 9238,
+              "rounds": 9221,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 1.0258059999905527,
+                "p95": 1.8626990000193473,
+                "p99": 2.1798990000097547,
+                "max": 3.9554490000009537
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 7,
+                "max": 212
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 689,
+              "flushes": 183,
+              "rows": 593,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932376292,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 30,
+                "p50": 0.14805500002694316,
+                "p95": 0.22479999999632128,
+                "p99": 0.24833000000216998,
+                "max": 0.24833000000216998
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.25,
+              "p95": 1.22,
+              "p99": 2.68,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 40052,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 9738,
+            "avgLoopMs": 1.2,
+            "maxLoopMs": 9,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 194779,
+            "clock": {
+              "tickMs": 20,
+              "tick": 9738,
+              "status": "NORMAL",
+              "ticks": 9738,
+              "rounds": 9721,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 1.0217170000250917,
+                "p95": 1.8548159999772906,
+                "p99": 2.181539999990491,
+                "max": 3.9623560000036377
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 7,
+                "max": 212
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 703,
+              "flushes": 193,
+              "rows": 693,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932386295,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 40,
+                "p50": 0.15119599999161437,
+                "p95": 0.2487810000020545,
+                "p99": 0.36785799998324364,
+                "max": 0.36785799998324364
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.25,
+              "p95": 1.25,
+              "p99": 2.68,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 50066,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 10239,
+            "avgLoopMs": 1.2,
+            "maxLoopMs": 9,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 204795,
+            "clock": {
+              "tickMs": 20,
+              "tick": 10239,
+              "status": "NORMAL",
+              "ticks": 10239,
+              "rounds": 10220,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 1.0061220000206959,
+                "p95": 1.8248580000072252,
+                "p99": 2.3477249999996275,
+                "max": 4.240373000007821
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 11,
+                "max": 212
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 718,
+              "flushes": 203,
+              "rows": 793,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932396296,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 50,
+                "p50": 0.1678560000145808,
+                "p95": 0.2659680000215303,
+                "p99": 0.5720260000089183,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.25,
+              "p95": 1.27,
+              "p99": 2.72,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 60077,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 10740,
+            "avgLoopMs": 1.1,
+            "maxLoopMs": 9,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 214808,
+            "clock": {
+              "tickMs": 20,
+              "tick": 10740,
+              "status": "NORMAL",
+              "ticks": 10740,
+              "rounds": 10721,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9960749999736436,
+                "p95": 1.7801009999820963,
+                "p99": 2.876011999993352,
+                "max": 4.669766999984859
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 9,
+                "max": 212
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 728,
+              "flushes": 213,
+              "rows": 893,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932406300,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 60,
+                "p50": 0.1678560000145808,
+                "p95": 0.2577910000109114,
+                "p99": 0.5720260000089183,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.28,
+              "p99": 2.69,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 70086,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 11240,
+            "avgLoopMs": 1.3,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 224819,
+            "clock": {
+              "tickMs": 20,
+              "tick": 11240,
+              "status": "NORMAL",
+              "ticks": 11240,
+              "rounds": 11221,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9925419999926817,
+                "p95": 1.7936610000033397,
+                "p99": 3.1816340000077616,
+                "max": 12.735444999998435
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 5,
+                "max": 53
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 719,
+              "flushes": 223,
+              "rows": 993,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932416309,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 70,
+                "p50": 0.1678560000145808,
+                "p95": 0.34103300000424497,
+                "p99": 0.5720260000089183,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.32,
+              "p99": 2.93,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 80099,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 11741,
+            "avgLoopMs": 1.4,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 234828,
+            "clock": {
+              "tickMs": 20,
+              "tick": 11741,
+              "status": "NORMAL",
+              "ticks": 11741,
+              "rounds": 11722,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9712009999784641,
+                "p95": 1.7481060000136495,
+                "p99": 3.180712000001222,
+                "max": 12.735444999998435
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 5,
+                "max": 53
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 731,
+              "flushes": 233,
+              "rows": 1093,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932426316,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 80,
+                "p50": 0.1678560000145808,
+                "p95": 0.2742939999734517,
+                "p99": 0.5720260000089183,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.5311510000028647,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.32,
+              "p99": 2.97,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 90112,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 12241,
+            "avgLoopMs": 1.2,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 244841,
+            "clock": {
+              "tickMs": 20,
+              "tick": 12241,
+              "status": "NORMAL",
+              "ticks": 12241,
+              "rounds": 12221,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9714180000009947,
+                "p95": 1.7209049999946728,
+                "p99": 2.894423999998253,
+                "max": 12.735444999998435
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 5,
+                "max": 26
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 740,
+              "flushes": 243,
+              "rows": 1193,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932436319,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 90,
+                "p50": 0.15815199998905882,
+                "p95": 0.2742939999734517,
+                "p99": 0.5720260000089183,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 3,
+                "p50": 1.6080390000133775,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.3,
+              "p99": 2.89,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 100125,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 12742,
+            "avgLoopMs": 1.4,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 254854,
+            "clock": {
+              "tickMs": 20,
+              "tick": 12742,
+              "status": "NORMAL",
+              "ticks": 12742,
+              "rounds": 12722,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9779229999985546,
+                "p95": 1.7209049999946728,
+                "p99": 2.3992090000247117,
+                "max": 12.735444999998435
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 5,
+                "max": 26
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 756,
+              "flushes": 253,
+              "rows": 1293,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932446323,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 100,
+                "p50": 0.15815199998905882,
+                "p95": 0.2659680000215303,
+                "p99": 0.4983889999857638,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 3,
+                "p50": 1.6080390000133775,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.3,
+              "p99": 2.9,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 110134,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 13243,
+            "avgLoopMs": 1.1,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 264867,
+            "clock": {
+              "tickMs": 20,
+              "tick": 13243,
+              "status": "NORMAL",
+              "ticks": 13243,
+              "rounds": 13223,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9739300000073854,
+                "p95": 1.675982999993721,
+                "p99": 2.339209999976447,
+                "max": 9.828264999989187
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 4,
+                "max": 26
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 746,
+              "flushes": 263,
+              "rows": 1393,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932456328,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 110,
+                "p50": 0.15993399999570101,
+                "p95": 0.2742939999734517,
+                "p99": 0.4983889999857638,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 3,
+                "p50": 1.6080390000133775,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.28,
+              "p99": 2.97,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        },
+        {
+          "atMs": 120011,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 13736,
+            "avgLoopMs": 1.1,
+            "maxLoopMs": 13,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 274742,
+            "clock": {
+              "tickMs": 20,
+              "tick": 13736,
+              "status": "NORMAL",
+              "ticks": 13736,
+              "rounds": 13716,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 0,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 0.9904119999846444,
+                "p95": 1.7095459999982268,
+                "p99": 2.31162600000971,
+                "max": 4.666105999960564
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 1,
+                "p95": 3,
+                "p99": 4,
+                "max": 26
+              }
+            },
+            "positions": {
+              "pending": 10,
+              "oldestDirtyAgeMs": 623,
+              "flushes": 273,
+              "rows": 1493,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932466331,
+              "maxPendingSeen": 10,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 120,
+                "p50": 0.1657930000219494,
+                "p95": 0.2659680000215303,
+                "p99": 0.4983889999857638,
+                "max": 0.5720260000089183
+              },
+              "operation:attack": {
+                "count": 3,
+                "p50": 1.6080390000133775,
+                "p95": 2.3808809999900404,
+                "p99": 2.3808809999900404,
+                "max": 2.3808809999900404
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.26,
+              "p95": 1.27,
+              "p99": 2.88,
+              "max": 137.59,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:45:46.958Z"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "users": 25,
+      "minutes": 2,
+      "warmupMs": 15000,
+      "perfReset": {
+        "ok": true,
+        "at": "2026-10-25T12:48:07.763Z"
+      },
+      "stats": {
+        "users": 25,
+        "messages": 58601,
+        "bytes": 550308406,
+        "inputs": 103081,
+        "attacks": 32,
+        "attackErrors": {},
+        "unexpectedCloses": [],
+        "startErrors": []
+      },
+      "gates": {
+        "tickP95": {
+          "value": 4.436733999988064,
+          "max": 25,
+          "ok": true
+        },
+        "tickP99": {
+          "value": 9.741447999957018,
+          "max": 40,
+          "ok": true
+        },
+        "eventLoopP99": {
+          "value": 6.03,
+          "max": 20,
+          "ok": true
+        },
+        "duplicateReceipts": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        },
+        "allBotsConnected": {
+          "value": 25,
+          "max": 25,
+          "ok": true
+        },
+        "noUnexpectedCloses": {
+          "value": 0,
+          "max": 0,
+          "ok": true
+        }
+      },
+      "receipts": {
+        "checked": true,
+        "duplicateLedgerRows": 0,
+        "unfinishedOperations": 0,
+        "examples": []
+      },
+      "crash": null,
+      "finalPerf": {
+        "tickMs": 20,
+        "ticks": 20776,
+        "avgLoopMs": 2.9,
+        "maxLoopMs": 28,
+        "maxLateMs": 212,
+        "resets": 0,
+        "lostMs": 0,
+        "sinceMs": 415544,
+        "clock": {
+          "tickMs": 20,
+          "tick": 20776,
+          "status": "NORMAL",
+          "ticks": 20776,
+          "rounds": 20746,
+          "resets": 0,
+          "lostMs": 0,
+          "overruns": 2,
+          "tickDurationMs": {
+            "count": 2048,
+            "p50": 2.5120260000112467,
+            "p95": 4.414301000011619,
+            "p99": 9.741447999957018,
+            "max": 20.995316999964416
+          },
+          "tickLateMs": {
+            "count": 2048,
+            "p50": 3,
+            "p95": 6,
+            "p99": 11,
+            "max": 28
+          }
+        },
+        "positions": {
+          "pending": 25,
+          "oldestDirtyAgeMs": 341,
+          "flushes": 424,
+          "rows": 4949,
+          "errors": 0,
+          "lastError": null,
+          "lastFlushAt": 1792932607414,
+          "maxPendingSeen": 25,
+          "healthy": true
+        },
+        "dbWritesMs": {
+          "position_checkpoint": {
+            "count": 120,
+            "p50": 0.2811169999768026,
+            "p95": 0.4053280000225641,
+            "p99": 13.480793000024278,
+            "max": 17.024748000025284
+          },
+          "operation:attack": {
+            "count": 2,
+            "p50": 1.97032299998682,
+            "p95": 2.122736999997869,
+            "p99": 2.122736999997869,
+            "max": 2.122736999997869
+          }
+        },
+        "eventLoopDelayMs": {
+          "p50": 0.29,
+          "p95": 2.98,
+          "p99": 6.03,
+          "max": 69.36,
+          "resolutionMs": 10,
+          "windowStartedAt": "2026-10-25T12:48:07.763Z"
+        }
+      },
+      "samples": [
+        {
+          "atMs": 10014,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 15277,
+            "avgLoopMs": 2.8,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 305546,
+            "clock": {
+              "tickMs": 20,
+              "tick": 15277,
+              "status": "NORMAL",
+              "ticks": 15277,
+              "rounds": 15253,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 1.8402209999621846,
+                "p95": 4.175273999979254,
+                "p99": 5.4204269999754615,
+                "max": 28.51055800000904
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 2,
+                "p95": 5,
+                "p99": 8,
+                "max": 48
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 425,
+              "flushes": 314,
+              "rows": 2199,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932497343,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 10,
+                "p50": 0.2883119999896735,
+                "p95": 0.42816700000548735,
+                "p99": 0.42816700000548735,
+                "max": 0.42816700000548735
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.31,
+              "p95": 3.24,
+              "p99": 5.5,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 20026,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 15777,
+            "avgLoopMs": 2.3,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 315558,
+            "clock": {
+              "tickMs": 20,
+              "tick": 15777,
+              "status": "NORMAL",
+              "ticks": 15777,
+              "rounds": 15753,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.4458319999976084,
+                "p95": 4.346933999971952,
+                "p99": 5.7747830000007525,
+                "max": 28.51055800000904
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 48
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 438,
+              "flushes": 324,
+              "rows": 2449,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932507343,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 20,
+                "p50": 0.28075600002193823,
+                "p95": 0.33242400002200156,
+                "p99": 0.42816700000548735,
+                "max": 0.42816700000548735
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.28,
+              "p95": 2.91,
+              "p99": 4.89,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 30039,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 16278,
+            "avgLoopMs": 2.4,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 325570,
+            "clock": {
+              "tickMs": 20,
+              "tick": 16278,
+              "status": "NORMAL",
+              "ticks": 16278,
+              "rounds": 16254,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.513760000001639,
+                "p95": 4.436733999988064,
+                "p99": 6.3974509999970905,
+                "max": 28.51055800000904
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 9,
+                "max": 28
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 429,
+              "flushes": 334,
+              "rows": 2699,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932517351,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 30,
+                "p50": 0.28075600002193823,
+                "p95": 0.42816700000548735,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 3.1,
+              "p99": 5.76,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 40051,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 16778,
+            "avgLoopMs": 2.5,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 335583,
+            "clock": {
+              "tickMs": 20,
+              "tick": 16778,
+              "status": "NORMAL",
+              "ticks": 16778,
+              "rounds": 16754,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.4865149999968708,
+                "p95": 4.33056899998337,
+                "p99": 6.2025809999904595,
+                "max": 28.51055800000904
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 9,
+                "max": 28
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 441,
+              "flushes": 344,
+              "rows": 2949,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932527356,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 40,
+                "p50": 0.2883119999896735,
+                "p95": 0.4053280000225641,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.28,
+              "p95": 2.92,
+              "p99": 5.29,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 50064,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 17279,
+            "avgLoopMs": 3.2,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 345595,
+            "clock": {
+              "tickMs": 20,
+              "tick": 17279,
+              "status": "NORMAL",
+              "ticks": 17279,
+              "rounds": 17255,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.513760000001639,
+                "p95": 4.376637000008486,
+                "p99": 6.2025809999904595,
+                "max": 14.428671000001486
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 17
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 436,
+              "flushes": 354,
+              "rows": 3199,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932537372,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 50,
+                "p50": 0.28331400000024587,
+                "p95": 0.4053280000225641,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.28,
+              "p95": 2.96,
+              "p99": 5.5,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 60079,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 17780,
+            "avgLoopMs": 2.5,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 355608,
+            "clock": {
+              "tickMs": 20,
+              "tick": 17780,
+              "status": "NORMAL",
+              "ticks": 17780,
+              "rounds": 17756,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.5026799999759533,
+                "p95": 4.29275400005281,
+                "p99": 6.158067999989726,
+                "max": 14.428671000001486
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 17
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 446,
+              "flushes": 364,
+              "rows": 3449,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932547377,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 60,
+                "p50": 0.28331400000024587,
+                "p95": 0.4053280000225641,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.8,
+              "p99": 5.29,
+              "max": 29.91,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 70094,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 18280,
+            "avgLoopMs": 2.5,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 365623,
+            "clock": {
+              "tickMs": 20,
+              "tick": 18280,
+              "status": "NORMAL",
+              "ticks": 18280,
+              "rounds": 18252,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.46828099997947,
+                "p95": 4.213901999988593,
+                "p99": 5.212417999980971,
+                "max": 8.431761000014376
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 7,
+                "max": 69
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 462,
+              "flushes": 374,
+              "rows": 3699,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932557382,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 70,
+                "p50": 0.2782850000075996,
+                "p95": 0.4053280000225641,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 1,
+                "p50": 2.122736999997869,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.78,
+              "p99": 5.25,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 80111,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 18781,
+            "avgLoopMs": 2.5,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 375641,
+            "clock": {
+              "tickMs": 20,
+              "tick": 18781,
+              "status": "NORMAL",
+              "ticks": 18781,
+              "rounds": 18753,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.460959999996703,
+                "p95": 4.275267000019085,
+                "p99": 5.662540999997873,
+                "max": 9.475830999959726
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 69
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 460,
+              "flushes": 384,
+              "rows": 3949,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932567392,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 80,
+                "p50": 0.26964099996257573,
+                "p95": 0.39005200000246987,
+                "p99": 13.480793000024278,
+                "max": 13.480793000024278
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.97032299998682,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.9,
+              "p99": 5.42,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 90124,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 19282,
+            "avgLoopMs": 2.6,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 385655,
+            "clock": {
+              "tickMs": 20,
+              "tick": 19282,
+              "status": "NORMAL",
+              "ticks": 19282,
+              "rounds": 19253,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 1,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.4383939999970607,
+                "p95": 4.249737999984063,
+                "p99": 5.691265000030398,
+                "max": 18.938120000006165
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 69
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 476,
+              "flushes": 394,
+              "rows": 4199,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932577400,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 90,
+                "p50": 0.28331400000024587,
+                "p95": 0.41864700004225597,
+                "p99": 17.024748000025284,
+                "max": 17.024748000025284
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.97032299998682,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.89,
+              "p99": 5.54,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 100148,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 19783,
+            "avgLoopMs": 3,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 395670,
+            "clock": {
+              "tickMs": 20,
+              "tick": 19783,
+              "status": "NORMAL",
+              "ticks": 19783,
+              "rounds": 19753,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 2,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.4499610000057146,
+                "p95": 4.275774999987334,
+                "p99": 5.741597999993246,
+                "max": 20.995316999964416
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 69
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 495,
+              "flushes": 404,
+              "rows": 4449,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932587406,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 100,
+                "p50": 0.28331400000024587,
+                "p95": 0.4186290000216104,
+                "p99": 13.480793000024278,
+                "max": 17.024748000025284
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.97032299998682,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.89,
+              "p99": 5.57,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 110160,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 20284,
+            "avgLoopMs": 2.8,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 405691,
+            "clock": {
+              "tickMs": 20,
+              "tick": 20284,
+              "status": "NORMAL",
+              "ticks": 20284,
+              "rounds": 20254,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 2,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.50231700000586,
+                "p95": 4.2322759999660775,
+                "p99": 5.918945999990683,
+                "max": 20.995316999964416
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 5,
+                "p99": 8,
+                "max": 28
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 488,
+              "flushes": 414,
+              "rows": 4699,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932597414,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 110,
+                "p50": 0.2857509999885224,
+                "p95": 0.4186290000216104,
+                "p99": 13.480793000024278,
+                "max": 17.024748000025284
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.97032299998682,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.85,
+              "p99": 5.56,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        },
+        {
+          "atMs": 120014,
+          "perf": {
+            "tickMs": 20,
+            "ticks": 20776,
+            "avgLoopMs": 2.9,
+            "maxLoopMs": 28,
+            "maxLateMs": 212,
+            "resets": 0,
+            "lostMs": 0,
+            "sinceMs": 415544,
+            "clock": {
+              "tickMs": 20,
+              "tick": 20776,
+              "status": "NORMAL",
+              "ticks": 20776,
+              "rounds": 20746,
+              "resets": 0,
+              "lostMs": 0,
+              "overruns": 2,
+              "tickDurationMs": {
+                "count": 2048,
+                "p50": 2.5120260000112467,
+                "p95": 4.414301000011619,
+                "p99": 9.741447999957018,
+                "max": 20.995316999964416
+              },
+              "tickLateMs": {
+                "count": 2048,
+                "p50": 3,
+                "p95": 6,
+                "p99": 11,
+                "max": 28
+              }
+            },
+            "positions": {
+              "pending": 25,
+              "oldestDirtyAgeMs": 341,
+              "flushes": 424,
+              "rows": 4949,
+              "errors": 0,
+              "lastError": null,
+              "lastFlushAt": 1792932607414,
+              "maxPendingSeen": 25,
+              "healthy": true
+            },
+            "dbWritesMs": {
+              "position_checkpoint": {
+                "count": 120,
+                "p50": 0.2811169999768026,
+                "p95": 0.4053280000225641,
+                "p99": 13.480793000024278,
+                "max": 17.024748000025284
+              },
+              "operation:attack": {
+                "count": 2,
+                "p50": 1.97032299998682,
+                "p95": 2.122736999997869,
+                "p99": 2.122736999997869,
+                "max": 2.122736999997869
+              }
+            },
+            "eventLoopDelayMs": {
+              "p50": 0.29,
+              "p95": 2.98,
+              "p99": 6.03,
+              "max": 69.36,
+              "resolutionMs": 10,
+              "windowStartedAt": "2026-10-25T12:48:07.763Z"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

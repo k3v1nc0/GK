@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { QUEST_STATUS, OBJECTIVE_STATUS, OBJECTIVE_TYPES } from "../shared/quest-contract.js";
-import { assertDeveloperActionAllowed, assertIdempotencyMatch, normalizedActionPayloadHash } from "./action-security.js";
+import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
+import { runOperation } from "./persistence/operation-contract.js";
 
 const DEFAULT_LOADOUT_ID = "loadout.main";
 
@@ -246,47 +247,35 @@ export class Node04QuestRuntimeService {
     const operationId = safeString(payload.operationId || payload.operation_id, "") || randomId("node04_operation");
     const hash = normalizedActionPayloadHash(action, payload);
     if (action === "reset_quest" || action === "reset_node04") assertDeveloperActionAllowed(ctx);
-    const existing = this.db.prepare("SELECT * FROM operation_idempotency WHERE operation_id = ? LIMIT 1").get(operationId);
-    if (existing) {
-      assertIdempotencyMatch(existing, hash);
-      if (existing.status === "completed") {
-        return Object.assign({ idempotent: true }, safeJsonParse(existing.result_json, { ok: true, operationId }));
-      }
-      const error = new Error("Deze NODE-04 actie is al in verwerking.");
-      error.status = 409;
-      throw error;
-    }
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      this.db.prepare(`
-        INSERT INTO operation_idempotency (operation_id, player_id, operation_type, request_hash, status, created_at)
-        VALUES (?, ?, ?, ?, 'started', ?)
-      `).run(operationId, ctx.profile.id, action || "unknown", hash, now());
-      this.ensureRuntime(ctx);
-      let result;
-      if (action === "start_dialogue") result = this.startDialogue(ctx, payload);
-      else if (action === "choose_dialogue") result = this.chooseDialogue(ctx, payload, operationId);
-      else if (action === "accept_quest") result = this.acceptQuest(ctx, safeString(payload.questId || payload.quest_id), operationId, "player_accept");
-      else if (action === "turn_in") result = this.turnInQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
-      else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
-      else if (action === "track") result = this.trackQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
-      else if (action === "abandon") result = this.abandonQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
-      else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
-      else if (action === "reset_node04") result = this.resetNode04(ctx);
-      else {
-        const error = new Error("Onbekende NODE-04 actie.");
-        error.status = 400;
-        throw error;
-      }
-      const response = Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) });
-      this.db.prepare("UPDATE operation_idempotency SET status = 'completed', result_json = ?, completed_at = ? WHERE operation_id = ?")
-        .run(stableJson(response), now(), operationId);
-      this.db.exec("COMMIT");
-      return response;
-    } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch {}
-      throw error;
-    }
+    // F2-E2-T08: queststatus, beloning en receipt in een transactie; ACK pas na COMMIT.
+    return runOperation(this.db, {
+      operationId,
+      playerId: ctx.profile.id,
+      operationType: action || "unknown",
+      requestHash: hash,
+      label: "Deze NODE-04 actie",
+      faultHook: this.operationFaultHook || null,
+      perform: () => {
+        this.ensureRuntime(ctx);
+        let result;
+        if (action === "start_dialogue") result = this.startDialogue(ctx, payload);
+        else if (action === "choose_dialogue") result = this.chooseDialogue(ctx, payload, operationId);
+        else if (action === "accept_quest") result = this.acceptQuest(ctx, safeString(payload.questId || payload.quest_id), operationId, "player_accept");
+        else if (action === "turn_in") result = this.turnInQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "track") result = this.trackQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "abandon") result = this.abandonQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "reset_node04") result = this.resetNode04(ctx);
+        else {
+          const error = new Error("Onbekende NODE-04 actie.");
+          error.status = 400;
+          throw error;
+        }
+        return result;
+      },
+      buildResponse: (result) => Object.assign({ ok: true, operationId }, result, { snapshot: this.snapshotForRequestFromContext(ctx) })
+    });
   }
 
   snapshotForRequestFromContext(ctx) {
@@ -396,8 +385,12 @@ export class Node04QuestRuntimeService {
       if (!quest || !step) continue;
       const progress = this.evaluateStepProgress(ctx, quest, step);
       this.persistObjectiveProgress(ctx, quest, step, progress);
+      const next = progress.complete ? nextStepFor(quest, step) : null;
+      if (progress.complete && step.stepType === OBJECTIVE_TYPES.DELIVER && !next) {
+        this.updateQuestState(ctx, quest.id, QUEST_STATUS.READY_TO_TURN_IN, step.id, row.status, row.active_step_id, "ready_to_turn_in");
+        continue;
+      }
       if (step.autoAdvance !== false && progress.complete) {
-        const next = nextStepFor(quest, step);
         if (next) {
           this.updateQuestState(ctx, quest.id, QUEST_STATUS.ACTIVE, next.id, row.status, row.active_step_id, "auto_advance");
         }
@@ -529,7 +522,7 @@ export class Node04QuestRuntimeService {
     const quest = questById(ctx.project, questId);
     const row = this.loadQuestState(ctx.profile.id, questId);
     const step = stepById(quest, row?.active_step_id);
-    if (!quest || !row || row.status !== QUEST_STATUS.ACTIVE || !step) {
+    if (!quest || !row || ![QUEST_STATUS.ACTIVE, QUEST_STATUS.READY_TO_TURN_IN].includes(row.status) || !step) {
       const error = new Error("Quest is niet actief.");
       error.status = 400;
       throw error;
@@ -1075,7 +1068,7 @@ export class Node04QuestRuntimeService {
 
   buildRuntimeQuestTargets(ctx, trackedQuest, availableQuests) {
     const targets = [];
-    if (trackedQuest?.status === QUEST_STATUS.ACTIVE && trackedQuest.activeStep) {
+    if ([QUEST_STATUS.ACTIVE, QUEST_STATUS.READY_TO_TURN_IN].includes(trackedQuest?.status) && trackedQuest.activeStep) {
       const target = this.targetForActiveStep(ctx, trackedQuest);
       if (target) targets.push(target);
     }

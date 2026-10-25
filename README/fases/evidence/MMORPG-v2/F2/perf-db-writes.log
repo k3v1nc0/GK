@@ -1,0 +1,8 @@
+nohup: ignoring input
+
+> gk-real-node-editor@2.0.0 perf:db-writes
+> sh scripts/run-node24.sh scripts/load-bots.js --ladder=1,10,25 --minutes=2
+
+Error: Server werd niet gezond binnen 90000 ms
+    at waitForHealth (file:///var/www/gk/scripts/load-bots.js:83:9)
+    at async main (file:///var/www/gk/scripts/load-bots.js:511:7)

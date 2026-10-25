@@ -4645,6 +4645,7 @@ const NODE03_RUNTIME_NODE_DEFS = {
       heightPx: numberField("Height px", 18, 4, 120, 1),
       showNumbers: { label: "Show numbers", type: "boolean", default: true, required: true },
       showPercent: { label: "Show percent", type: "boolean", default: false, required: true },
+      showCombatSummary: { label: "Show health / target / loot / quest summary", type: "boolean", default: false, required: true },
       frameAssetId: { label: "Frame asset", type: "asset", assetTypes: ["image"], default: null, required: false },
       fillAssetId: { label: "Fill asset", type: "asset", assetTypes: ["image"], default: null, required: false }
     }

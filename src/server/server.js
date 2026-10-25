@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { JOIN_TICKET_PATH, WS_PATH } from "../../apps/web/public/shared/protocol-v1.js";
 import { loadEnvFile } from "./env.js";
 import { openDatabase } from "./db.js";
 import { AuthService } from "./auth-service.js";
@@ -38,7 +39,10 @@ const authService = new AuthService(db);
 await authService.ensureAdmin();
 authService.cleanupExpiredSessions();
 const loginAttemptLimiter = new LoginAttemptLimiter({ limit: 5, windowMs: 60000 });
-const assetService = new AssetService(db, rootDir, { assetsDir: assetsRoot });
+const assetService = new AssetService(db, rootDir, {
+  assetsDir: assetsRoot,
+  skipModelThumbnails: process.env.GK_TEST_ISOLATED === "1" && process.env.GK_SKIP_MODEL_THUMBNAILS === "1"
+});
 assetService.resumePendingThumbnailJobs();
 const symbolIndexService = new SymbolIndexService();
 const tokenResolver = new TokenResolver({ symbolIndexService });
@@ -53,6 +57,13 @@ const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, 
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
 const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES, perMessageDeflate: false });
 mmoService.bindWebSocketServer(wss);
+// Kiest een aangeboden gk-mmo-*-subprotocol; een onbekende versie wordt daarna met 4406 gesloten.
+const wssV1 = new WebSocketServer({
+  noServer: true,
+  maxPayload: WS_MAX_PAYLOAD_BYTES,
+  perMessageDeflate: false,
+  handleProtocols: (protocols) => Array.from(protocols).find((name) => name.startsWith("gk-mmo-")) || false
+});
 const host = process.env.HOST || "127.0.0.1";
 assertIsolatedNetwork({ host, port });
 const RESTORE_GRAPH_ROUTE = "/api/editor/graph/restore";
@@ -499,9 +510,17 @@ async function handleApi(req, res, url) {
       const snapshot = mmoService.getPlayerSnapshot(req);
       return sendJson(res, 200, snapshot);
     }
+    if (req.method === "POST" && url.pathname === "/api/game/perf/reset") {
+      const user = authService.requireEditor(req);
+      if (user.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen admin." });
+      return sendJson(res, 200, mmoService.resetPerfWindow());
+    }
     if (req.method === "GET" && url.pathname === "/api/game/node03/state") {
       const snapshot = node03RuntimeService.snapshotForRequest(req);
       return sendJson(res, 200, snapshot);
+    }
+    if (req.method === "POST" && url.pathname === JOIN_TICKET_PATH) {
+      return sendJson(res, 200, mmoService.issueJoinTicket(req));
     }
     if (req.method === "POST" && url.pathname === "/api/game/node03/action") {
       const body = await readJson(req);
@@ -997,6 +1016,15 @@ server.on("upgrade", function (req, socket, head) {
   } catch {
     try { socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); } catch {}
     socket.destroy();
+    return;
+  }
+  if (upgradeUrl.pathname === WS_PATH) {
+    // F2-E2-T01: protocol gk-mmo-v1 (join-ticket + AUTH binnen 5 s). Legacyroute hieronder blijft tot F6.
+    try {
+      mmoService.handleUpgradeV1(wssV1, req, socket, head);
+    } catch {
+      socket.destroy();
+    }
     return;
   }
   if (upgradeUrl.pathname !== "/api/game/live") {

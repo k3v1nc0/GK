@@ -6,7 +6,7 @@ import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
 import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
-import { addZoneLinkPortal, applyFoundation, createStartZone, createTestWorldApi, ROUTES } from "./lib/test-world.js";
+import { addGoldenPathSlice, addZoneLinkPortal, applyFoundation, createStartZone, createTestWorldApi, ROUTES } from "./lib/test-world.js";
 
 let puppeteerModule = null;
 try {
@@ -31,12 +31,24 @@ const PLAYER_C_IDENTIFIER = "mmo02_fix2_player_c";
 const PLAYER_C_PASSWORD = "mmo02_fix2_password_c";
 const NAV_TIMEOUT_MS = 90000;
 
+function findInstalledHeadlessShell() {
+  const baseDir = path.join(os.homedir(), ".cache", "puppeteer", "chrome-headless-shell");
+  if (!fs.existsSync(baseDir)) return null;
+  const versions = fs.readdirSync(baseDir).sort().reverse();
+  for (const version of versions) {
+    const candidate = path.join(baseDir, version, "chrome-headless-shell-linux64", "chrome-headless-shell");
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 let BASE = "";
 let cookie = "";
 let csrfToken = "";
 let failures = 0;
 let evidenceDir = "";
 let browserCheckPortal = null;
+let goldenPathFixture = null;
 const visibleScenarioEvents = [];
 const uploadedAssetCleanupPaths = new Set();
 
@@ -110,6 +122,8 @@ async function main() {
   fs.mkdirSync(evidenceDir, { recursive: true });
   let server = null;
   let browser = null;
+  let reservedContextB = null;
+  let reservedPageB = null;
   try {
     const port = isolatedRuntime.port;
     BASE = "http://127.0.0.1:" + port;
@@ -117,7 +131,10 @@ async function main() {
       cwd: rootDir,
       env: isolatedRuntime.env({
         ADMIN_PASSWORD,
-        ADMIN_USERNAME
+        ADMIN_USERNAME,
+        DEV_GAME_ACTIONS: "1",
+        GK_SKIP_MODEL_THUMBNAILS: "1",
+        GAME_AOI_CELL_SIZE: process.env.GAME_AOI_ENABLED === "1" ? "8" : (process.env.GAME_AOI_CELL_SIZE || "64")
       }),
       stdio: ["ignore", "ignore", "pipe"]
     });
@@ -130,6 +147,7 @@ async function main() {
 
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: findInstalledHeadlessShell() || puppeteer.executablePath(),
       protocolTimeout: 300000,
       args: [
         "--no-sandbox",
@@ -142,6 +160,10 @@ async function main() {
         "--disable-renderer-backgrounding"
       ]
     });
+    // Reserveer de tweede renderer voordat de WebGL-wereld geheugen inneemt.
+    // Op de 4-GB testhost kan een late contextcreatie anders in Chromium blijven wachten.
+    reservedContextB = await browser.createBrowserContext();
+    reservedPageB = await reservedContextB.newPage();
 
     console.log("");
     console.log("== Login / register flow ==");
@@ -388,11 +410,9 @@ async function main() {
 
     console.log("");
     console.log("== Muis vasthouden: blijft lopen zolang knop ingedrukt is ==");
-    const holdAnchor = await screenPointFromPlayer(pageA, 5.0);
+    const holdAnchor = await mouseDownOnCanvas(pageA, 0.65, 0.4);
     assert(holdAnchor, "kan een hold-punt berekenen");
     const holdBefore = await getPlayerState(pageA);
-    await pageA.mouse.move(holdAnchor.x, holdAnchor.y);
-    await pageA.mouse.down();
     await sleep(650);
     const holdMid = await getPlayerState(pageA);
     await sleep(650);
@@ -601,9 +621,8 @@ async function main() {
 
     console.log("");
     console.log("== Twee accounts: directe presence + live sync ==");
-    const contextB = await browser.createBrowserContext();
-    let pageB = await preparePage(contextB);
-    await pageB.goto(BASE + "/login/?next=%2Fgame%2F", { waitUntil: "domcontentloaded" });
+    const contextB = reservedContextB;
+    let pageB = await prepareExistingPage(reservedPageB);
     await registerViaLoginForm(pageB, PLAYER_B_IDENTIFIER, PLAYER_B_PASSWORD);
     await waitForMmoOnlineReady(pageB, NAV_TIMEOUT_MS, { measureLogin: true });
     const playerSnapshotA = await fetchCurrentPlayerSnapshot(pageA);
@@ -650,6 +669,130 @@ async function main() {
     });
     await captureEvidenceScreenshot(pageA, "two-players-page-a.png");
     await captureEvidenceScreenshot(pageB, "two-players-page-b.png");
+
+    console.log("");
+    console.log("== F2 golden path: gedeelde vijand + refreshpersistentie ==");
+    const goldenReset = await call("POST", "/api/game/node03/action", {
+      action: "reset_demo",
+      operationId: "browser-f2-reset-before-golden"
+    });
+    assert(goldenReset.status === 200 && goldenReset.json?.ok === true, "golden scenario start via de normale reset-actie met een levende vijand");
+    const goldenBeforeA = await fetchGoldenPathSnapshot(pageA);
+    const goldenBeforeB = await fetchGoldenPathSnapshot(pageB);
+    assert(
+      goldenBeforeA.enemy && goldenBeforeB.enemy
+        && goldenBeforeA.enemy.healthCurrent === goldenBeforeB.enemy.healthCurrent
+        && goldenBeforeA.enemy.healthMax === goldenBeforeB.enemy.healthMax,
+      "A en B zien dezelfde authored vijand-HP"
+    );
+    await drivePlayerNearWorldPoint(pageA, goldenBeforeA.enemy.x, goldenBeforeA.enemy.z, 2.5);
+    const combatSummary = await pageA.$eval('[data-combat-summary="1"]', function (element) {
+      return element.textContent || "";
+    });
+    assert(["HP", "Target", "Loot", "Quest"].every(function (label) { return combatSummary.includes(label); }), "authored compacte HUD toont health, target, loot en quest");
+    await goldenPathApi(pageA, "POST", "/api/game/node04/action", {
+      action: "accept_quest",
+      questId: goldenPathFixture.questId,
+      operationId: "browser-f2-accept-a"
+    });
+    await captureEvidenceScreenshot(pageA, "golden-path-before-kill.png");
+    let browserKill = null;
+    for (let attackIndex = 1; attackIndex <= 12; attackIndex += 1) {
+      if (attackIndex > 1) await sleep(300);
+      const attack = await goldenPathApi(pageA, "POST", "/api/game/node03/action", {
+        action: "attack",
+        targetId: goldenBeforeA.enemy.instanceId,
+        operationId: "browser-f2-attack-a-" + attackIndex
+      });
+      assert(attack.status === 200 && attack.json?.ok === true, "A-aanval " + attackIndex + " loopt via de browsercontext");
+      if (attack.json?.events?.some(function (event) { return event.type === "defeated"; })) {
+        browserKill = attack;
+        break;
+      }
+    }
+    assert(browserKill?.json?.grants?.some(function (grant) { return grant.itemId === goldenPathFixture.itemId; }), "A doodt de vijand en ontvangt de servergrant");
+    await waitForGoldenEnemyGone(pageA);
+    await waitForGoldenEnemyGone(pageB);
+    assert(true, "beide pagina's zien de verslagen vijand verdwijnen");
+    const readySnapshot = await fetchGoldenPathSnapshot(pageA);
+    assert(readySnapshot.questStatus === "ready_to_turn_in", "de browserquest staat na de kill klaar voor inleveren");
+    const turnIn = await goldenPathApi(pageA, "POST", "/api/game/node04/action", {
+      action: "turn_in",
+      questId: goldenPathFixture.questId,
+      operationId: "browser-f2-turn-in-a"
+    });
+    assert(turnIn.status === 200 && turnIn.json?.ok === true, "browser-turn-in kent de authored beloning toe");
+    const persistedGolden = await fetchGoldenPathSnapshot(pageA);
+    await captureEvidenceScreenshot(pageA, "golden-path-after-kill-a.png");
+    await captureEvidenceScreenshot(pageB, "golden-path-after-kill-b.png");
+    for (let refreshIndex = 1; refreshIndex <= 2; refreshIndex += 1) {
+      await pageA.reload({ waitUntil: "domcontentloaded" });
+      await waitForMmoOnlineReady(pageA);
+      await pageB.reload({ waitUntil: "domcontentloaded" });
+      await waitForMmoOnlineReady(pageB);
+      const afterRefreshA = await fetchGoldenPathSnapshot(pageA);
+      const afterRefreshB = await fetchGoldenPathSnapshot(pageB);
+      assert(JSON.stringify(afterRefreshA) === JSON.stringify(persistedGolden), "A houdt loot, XP, quest en vijandstatus exact gelijk na refresh " + refreshIndex);
+      assert(afterRefreshB.enemy === null, "B ziet de vijand na refresh " + refreshIndex + " nog steeds verdwenen");
+    }
+
+    console.log("");
+    console.log("== F2 prediction/reconcile onder 150ms + 5% verlies ==");
+    const networkSession = await pageA.createCDPSession();
+    await networkSession.send("Network.enable");
+    await networkSession.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 150,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      packetLoss: 5
+    });
+    await pressKey(pageA, "KeyD", 1400);
+    await networkSession.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      packetLoss: 0
+    });
+    const reconcileStartedAt = Date.now();
+    await pageA.waitForFunction(function () {
+      const positions = window.__GK_GAME_CLIENT_DEBUG?.getPositions?.();
+      if (!positions?.predicted || !positions?.authoritative) return false;
+      return Math.hypot(
+        Number(positions.predicted.x || 0) - Number(positions.authoritative.x || 0),
+        Number(positions.predicted.z || 0) - Number(positions.authoritative.z || 0)
+      ) <= 0.2;
+    }, { timeout: 2000, polling: 50 });
+    const reconciledPositions = await pageA.evaluate(function () { return window.__GK_GAME_CLIENT_DEBUG.getPositions(); });
+    const reconciledDistance = Math.hypot(
+      reconciledPositions.predicted.x - reconciledPositions.authoritative.x,
+      reconciledPositions.predicted.z - reconciledPositions.authoritative.z
+    );
+    assert(reconciledDistance <= 0.2 && Date.now() - reconcileStartedAt <= 2000, "prediction convergeert binnen 2 s tot <= 0,2 m (afstand=" + reconciledDistance.toFixed(3) + ")");
+    await networkSession.detach();
+
+    if (process.env.GAME_AOI_ENABLED === "1") {
+      console.log("");
+      console.log("== F2 AOI despawn + terugkeer ==");
+      const aoiStartA = await getPlayerState(pageA);
+      await drivePlayerNearWorldPoint(pageB, aoiStartA.x, aoiStartA.z, 2.5);
+      await waitForRemotePlayerVisible(pageA, playerIdB, 8000);
+      const aoiStartB = await getPlayerState(pageB);
+      const awayX = aoiStartB.x >= aoiStartA.x ? 1 : -1;
+      await driveInputVector(pageB, awayX, 0, 4500);
+      await pageA.waitForFunction(function (wantedId) {
+        const debug = window.__GK_GAME_RUNTIME?.getRemotePlayerDebugState?.();
+        return !debug?.players?.some(function (player) { return player.playerId === wantedId; });
+      }, { timeout: 8000 }, playerIdB);
+      assert(true, "speler buiten de AOI wordt op de andere pagina gedespawned");
+      await driveInputVector(pageB, -awayX, 0, 4500);
+      await waitForRemotePlayerVisible(pageA, playerIdB, 8000);
+      assert(true, "speler verschijnt na terugkeer in de AOI opnieuw");
+      const aoiReturnA = await getPlayerState(pageA);
+      await drivePlayerNearWorldPoint(pageB, aoiReturnA.x, aoiReturnA.z, 2.5);
+      await waitForRemotePlayerVisible(pageA, playerIdB, 8000);
+    }
 
     await pageA.keyboard.down("KeyA");
     await pageB.waitForFunction(function (wantedId) {
@@ -911,8 +1054,9 @@ async function main() {
 
     const remoteIdentifier = PLAYER_C_IDENTIFIER;
     const remotePassword = PLAYER_C_PASSWORD;
-    const remoteContext = await browser.createBrowserContext();
-    const pageRemote = await preparePage(remoteContext);
+    const sparePage = (await browser.pages()).find(function (candidate) { return candidate.url() === "about:blank"; }) || null;
+    const remoteContext = sparePage ? null : await browser.createBrowserContext();
+    const pageRemote = sparePage ? await prepareExistingPage(sparePage) : await preparePage(remoteContext);
     await registerViaLoginForm(pageRemote, remoteIdentifier, remotePassword);
     await waitForMmoOnlineReady(pageRemote);
     const remoteSnapshot = await fetchCurrentPlayerSnapshot(pageRemote);
@@ -1091,7 +1235,7 @@ async function main() {
     assert(remoteIdsAfterLogoutA && remoteIdsAfterLogoutA.indexOf(remotePlayerId) === -1, "remote ids zijn leeg voor C in A na logout");
     assert(remoteIdsAfterLogoutB && remoteIdsAfterLogoutB.indexOf(remotePlayerId) === -1, "remote ids zijn leeg voor C in B na logout");
     await pageRemote.close();
-    await remoteContext.close();
+    if (remoteContext) await remoteContext.close();
 
     await pageB.close();
     await contextB.close();
@@ -1204,12 +1348,86 @@ async function captureFailureEvidence(browser) {
   }
 }
 
+async function goldenPathApi(page, method, pathname, body = null) {
+  return await page.evaluate(async function (request) {
+    const authResponse = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+    const auth = await authResponse.json().catch(function () { return null; });
+    const headers = { Accept: "application/json" };
+    if (request.body !== null) headers["Content-Type"] = "application/json";
+    if (auth?.csrfToken) headers["X-GK-CSRF"] = auth.csrfToken;
+    const response = await fetch(request.pathname, {
+      method: request.method,
+      credentials: "same-origin",
+      headers: headers,
+      body: request.body === null ? undefined : JSON.stringify(request.body)
+    });
+    const json = await response.json().catch(function () { return null; });
+    return { status: response.status, json: json };
+  }, { method, pathname, body });
+}
+
+async function fetchGoldenPathSnapshot(page) {
+  const fixture = goldenPathFixture;
+  return await page.evaluate(async function (expected) {
+    const [node03Response, node04Response] = await Promise.all([
+      fetch("/api/game/node03/state", { headers: { Accept: "application/json" } }),
+      fetch("/api/game/node04/state", { headers: { Accept: "application/json" } })
+    ]);
+    const node03 = await node03Response.json();
+    const node04 = await node04Response.json();
+    const enemy = (node03.interactionTargets || []).find(function (target) {
+      return target.available !== false && target.entityKind === "enemy" && String(target.instanceId || "").includes(expected.enemySpawnId);
+    }) || null;
+    const inventory = (node03.inventory?.items || []).filter(function (row) {
+      return row.itemId === expected.itemId || row.itemId === expected.pickupItemId;
+    }).map(function (row) {
+      return { itemId: row.itemId, quantity: Number(row.quantity || 0) };
+    }).sort(function (left, right) { return left.itemId.localeCompare(right.itemId); });
+    const questLists = [node04.quests?.available, node04.quests?.active, node04.quests?.completed];
+    let quest = null;
+    for (const list of questLists) {
+      quest = (list || []).find(function (candidate) { return candidate.questId === expected.questId; }) || quest;
+    }
+    return {
+      enemy: enemy ? {
+        instanceId: enemy.instanceId,
+        x: Number(enemy.x || 0),
+        z: Number(enemy.z || 0),
+        healthCurrent: Number(enemy.healthCurrent || 0),
+        healthMax: Number(enemy.healthMax || 0),
+        status: enemy.status || null
+      } : null,
+      inventory: inventory,
+      xp: Number(node04.progression?.xp || node03.progression?.xp || 0),
+      questStatus: quest?.status || null
+    };
+  }, {
+    enemySpawnId: fixture.enemySpawnId,
+    itemId: fixture.itemId,
+    pickupItemId: fixture.pickupItemId,
+    questId: fixture.questId
+  });
+}
+
+async function waitForGoldenEnemyGone(page) {
+  await page.waitForFunction(function (enemySpawnId) {
+    const rows = Array.from(document.querySelectorAll("[data-node03-target-row]"));
+    return !rows.some(function (row) {
+      return String(row.dataset.node03TargetRow || "").includes(enemySpawnId);
+    });
+  }, { timeout: 10000 }, goldenPathFixture.enemySpawnId);
+}
+
 function assertNear(actual, expected, tolerance, message) {
   assert(Math.abs(Number(actual) - Number(expected)) <= tolerance, message + " (actual=" + actual + ", expected=" + expected + ")");
 }
 
 async function preparePage(context) {
   const page = await context.newPage();
+  return await prepareExistingPage(page);
+}
+
+async function prepareExistingPage(page) {
   page.on("pageerror", function (error) {
     console.error("[pageerror] " + (error && error.stack ? error.stack : String(error)));
   });
@@ -1812,6 +2030,55 @@ async function driveContinuousKeyboardPath(page, durationMs, segmentMs = null, k
   } finally {
     await sendVector({ moveX: 0, moveZ: 0 }, true);
   }
+}
+
+async function driveInputVector(page, moveX, moveZ, durationMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < durationMs) {
+    await page.evaluate(function (vector) {
+      return window.__GK_GAME_CLIENT_DEBUG?.sendInputState?.({
+        force: true,
+        inputOverride: { moveX: vector.moveX, moveZ: vector.moveZ, sprint: false, stop: false }
+      });
+    }, { moveX, moveZ });
+    await sleep(50);
+  }
+  await page.evaluate(function () {
+    return window.__GK_GAME_CLIENT_DEBUG?.sendInputState?.({
+      force: true,
+      inputOverride: { moveX: 0, moveZ: 0, sprint: false, stop: true }
+    });
+  });
+  await sleep(350);
+}
+
+async function drivePlayerNearWorldPoint(page, targetX, targetZ, tolerance = 2.5) {
+  const deadline = Date.now() + 15000;
+  let distance = Infinity;
+  while (Date.now() < deadline) {
+    const player = await getPlayerState(page);
+    const dx = Number(targetX) - Number(player.x);
+    const dz = Number(targetZ) - Number(player.z);
+    distance = Math.hypot(dx, dz);
+    if (distance <= tolerance) break;
+    await page.evaluate(function (vector) {
+      return window.__GK_GAME_CLIENT_DEBUG?.sendInputState?.({
+        force: true,
+        inputOverride: { moveX: vector.x, moveZ: vector.z, sprint: false, pointerTarget: null, stop: false }
+      });
+    }, { x: dx / distance, z: dz / distance });
+    await sleep(50);
+  }
+  await page.evaluate(function () {
+    return window.__GK_GAME_CLIENT_DEBUG?.sendInputState?.({
+      force: true,
+      inputOverride: { moveX: 0, moveZ: 0, sprint: false, pointerTarget: null, stop: true }
+    });
+  });
+  await sleep(350);
+  const settled = await getPlayerState(page);
+  distance = Math.hypot(Number(targetX) - Number(settled.x), Number(targetZ) - Number(settled.z));
+  assert(distance <= tolerance + 0.25, "speler loopt via normale input binnen het gevraagde bereik (afstand=" + distance.toFixed(2) + ")");
 }
 
 function maxFrameJump(samples) {
@@ -2602,6 +2869,14 @@ async function buildAndPublishWorld() {
     showWorldSize: false,
     showChunkCulling: false
   }, ROUTES.ui);
+
+  goldenPathFixture = await addGoldenPathSlice(world, foundation, zone, {
+    prefix: "f2_browser",
+    modelAssetId: treeAsset.asset.id,
+    enemyPosition: { x: 30, y: 0, z: 30 },
+    pickupPosition: { x: 27, y: 0, z: 30 },
+    turnInPosition: { x: 30, y: 0, z: 30 }
+  });
 
   // Portal naar een tweede zone, ver van de andere bewegingstests (alleen gebruikt door de portaltest aan het eind).
   browserCheckPortal = await addZoneLinkPortal(world, foundation, zone, { modelAssetId: treeAsset.asset.id, portal: { x: -20, z: 15 } });

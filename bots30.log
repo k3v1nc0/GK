@@ -1,0 +1,21 @@
+nohup: ignoring input
+
+> gk-real-node-editor@2.0.0 bots
+> sh scripts/run-node24.sh scripts/load-bots.js --users=25 --minutes=30
+
+[bots] geïsoleerde server: BASE=http://127.0.0.1:41303 HOST=127.0.0.1 PORT=41303
+[server:stdout] GK Real Node Editor draait op http://localhost:41303
+[server:stdout] Login:  http://localhost:41303/login/
+[server:stdout] Editor: http://localhost:41303/editor/
+[server:stdout] Game:   http://localhost:41303/game/
+[server:stdout] [timing] server response PATCH /api/editor/nodes/foundation.game_project_settings/values 3.1ms returnGraph=true
+[bots] 25 bots verbonden (0 fouten), 30 min
+[bots] rapport: README/fases/evidence/MMORPG-v2/F2/bots-25x30min-2026-10-25T17-47-54-569Z.json
+[bots] 25 bots  ok    tickP95 = 6.2041320000007545 (max 25)
+[bots] 25 bots  ok    tickP99 = 10.664100000001781 (max 40)
+[bots] 25 bots  ok    eventLoopP99 = 7.58 (max 20)
+[bots] 25 bots  ok    duplicateReceipts = 0 (max 0)
+[bots] 25 bots  ok    allBotsConnected = 25 (max 25)
+[bots] 25 bots  ok    noUnexpectedCloses = 0 (max 0)
+[bots] 25 bots  DB-writes ms: {"position_checkpoint":{"count":1799,"p50":0.2694079999346286,"p95":0.3714990000007674,"p99":0.9655769999953918,"max":39.59695799998008},"operation:attack":{"count":14,"p50":2.5894100000004983,"p95":10.684833999956027,"p99":10.684833999956027,"max":10.684833999956027}}
+[bots] GO: alle gates gehaald

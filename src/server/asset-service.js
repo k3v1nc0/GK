@@ -151,6 +151,7 @@ export class AssetService {
     this.uploadsDir = path.join(this.assetsDir, "uploads");
     this.thumbnailsDir = path.join(this.assetsDir, "thumbnails");
     this.glbThumbnailScript = path.join(rootDir, "scripts", "generate-glb-thumbnail.sh");
+    this.skipModelThumbnails = options.skipModelThumbnails === true;
     this.thumbnailQueue = [];
     this.thumbnailQueuedAssetIds = new Set();
     this.thumbnailWorkerRunning = false;
@@ -548,9 +549,13 @@ export class AssetService {
       };
       let resolvedThumbnailPath = null;
       try {
-        if (assetType === "model") {
+        if (assetType === "model" && !this.skipModelThumbnails) {
           Object.assign(metadata, metadataFromGlb(file.data), {
             thumbnailStatus: "pending"
+          });
+        } else if (assetType === "model") {
+          Object.assign(metadata, metadataFromGlb(file.data), {
+            thumbnailStatus: "skipped"
           });
         } else if (assetType === "image" || assetType === "texture") {
           resolvedThumbnailPath = sourcePath;
@@ -560,7 +565,7 @@ export class AssetService {
         }
         this.db.prepare("INSERT INTO asset_library (id, name, category, asset_type, source_path, thumbnail_path, original_filename, mime_type, size_bytes, sha256, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(id, name, category, assetType, sourcePath, resolvedThumbnailPath, originalFileName, file.contentType || "", file.data.length, metadata.sha256, JSON.stringify(metadata), now(), now());
-        if (assetType === "model") {
+        if (assetType === "model" && !this.skipModelThumbnails) {
           this.enqueueThumbnailJob({ assetId: id });
         }
       } catch (error) {

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "gk-f1-two-player-evidence-v1",
+  "baseUrl": "http://127.0.0.1:38048",
+  "events": [
+    {
+      "type": "two_players_visible",
+      "at": "2026-10-24T21:49:21.287Z",
+      "worldId": "main_world",
+      "players": [
+        {
+          "observer": "mmo02_fix2_player_a",
+          "remotePlayerId": "player_351bdb35-af2f-4f9a-8de4-4cbb73ab59d8",
+          "displayName": "mmo02_fix2_player_b"
+        },
+        {
+          "observer": "mmo02_fix2_player_b",
+          "remotePlayerId": "player_193dbcbc-db37-4e88-b0c3-6b7dcfaee1af",
+          "displayName": "mmo02_fix2_player_a"
+        }
+      ]
+    },
+    {
+      "type": "remote_movement_visible",
+      "at": "2026-10-24T21:49:22.952Z",
+      "actorPlayerId": "player_193dbcbc-db37-4e88-b0c3-6b7dcfaee1af",
+      "observerPlayerId": "player_351bdb35-af2f-4f9a-8de4-4cbb73ab59d8",
+      "authoritativePosition": {
+        "x": 20.245,
+        "y": 0,
+        "z": -7.742,
+        "radius": 0.5,
+        "rotationY": -75,
+        "animationState": "walk",
+        "animationClipName": "Walk",
+        "animationClipDuration": 1.067,
+        "animationPlaybackScale": 1,
+        "animationActionTime": 0.117,
+        "reconcileActive": false
+      },
+      "observedRemotePosition": {
+        "x": 20.808,
+        "y": 0,
+        "z": -7.893,
+        "rotationY": 105.148
+      },
+      "animationState": "walk"
+    }
+  ]
+}

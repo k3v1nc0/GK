@@ -1,0 +1,30 @@
+
+> gk-real-node-editor@2.0.0 bots:crash
+> sh scripts/run-node24.sh scripts/load-bots.js --users=25 --minutes=10 --crash-after-min=5 --out=/tmp/claude-0/runs
+
+[bots] geïsoleerde server: BASE=http://127.0.0.1:35157 HOST=127.0.0.1 PORT=35157
+[server:stdout] GK Real Node Editor draait op http://localhost:35157
+[server:stdout] Login:  http://localhost:35157/login/
+Editor: http://localhost:35157/editor/
+Game:   http://localhost:35157/game/
+[server:stdout] [timing] server response PATCH /api/editor/nodes/foundation.game_project_settings/values 4.4ms returnGraph=true
+[bots] 25 bots verbonden (0 fouten), 10 min
+[bots] SIGKILL na 5 min; DB-controle en herstart
+[bots] geïsoleerde server: BASE=http://127.0.0.1:35157 HOST=127.0.0.1 PORT=35157
+[server:stdout] GK Real Node Editor draait op http://localhost:35157
+[server:stdout] Login:  http://localhost:35157/login/
+Editor: http://localhost:35157/editor/
+Game:   http://localhost:35157/game/
+[bots] rapport: ../../../tmp/claude-0/runs/bots-25x10min-2026-10-25T13-31-09-435Z.json
+[bots] 25 bots  ok    tickP95 = 3.627999999999929 (max 25)
+[bots] 25 bots  ok    tickP99 = 4.597971000001053 (max 40)
+[bots] 25 bots  ok    eventLoopP99 = 4.51 (max 20)
+[bots] 25 bots  ok    duplicateReceipts = 0 (max 0)
+[bots] 25 bots  ok    allBotsConnected = 25 (max 25)
+[bots] 25 bots  ok    noUnexpectedCloses = 0 (max 0)
+[bots] 25 bots  ok    lostAcknowledgedOperations = 0 (max 0)
+[bots] 25 bots  ok    positionRpoMs = 137 (max 5000)
+[bots] 25 bots  ok    restartOk = true (vereist true)
+[bots] 25 bots  ok    allBotsReconnected = 25 (vereist 25)
+[bots] 25 bots  DB-writes ms: {"position_checkpoint":{"count":284,"p50":0.23285399997257628,"p95":0.3808209999988321,"p99":0.5035849999985658,"max":1.5994319999881554},"operation:attack":{"count":4,"p50":2.569411000004038,"p95":2.7824970000001485,"p99":2.7824970000001485,"max":2.7824970000001485}}
+[bots] GO: alle gates gehaald

@@ -1,0 +1,36 @@
+
+> gk-real-node-editor@2.0.0 perf:db-writes
+> sh scripts/run-node24.sh scripts/load-bots.js --ladder=1,10,25 --minutes=2 --out=/tmp/claude-0/runs
+
+[bots] geïsoleerde server: BASE=http://127.0.0.1:37293 HOST=127.0.0.1 PORT=37293
+[server:stdout] GK Real Node Editor draait op http://localhost:37293
+[server:stdout] Login:  http://localhost:37293/login/
+Editor: http://localhost:37293/editor/
+Game:   http://localhost:37293/game/
+[server:stdout] [timing] server response PATCH /api/editor/nodes/foundation.game_project_settings/values 3.1ms returnGraph=true
+[bots] 1 bots verbonden (0 fouten), 2 min
+[bots] 10 bots verbonden (0 fouten), 2 min
+[bots] 25 bots verbonden (0 fouten), 2 min
+[bots] rapport: ../../../tmp/claude-0/runs/bots-1-10-25x2min-2026-10-25T12-50-07-782Z.json
+[bots] 1 bots  ok    tickP95 = 0.682185000001482 (max 25)
+[bots] 1 bots  ok    tickP99 = 1.2343499999988126 (max 40)
+[bots] 1 bots  ok    eventLoopP99 = 2.07 (max 20)
+[bots] 1 bots  ok    duplicateReceipts = 0 (max 0)
+[bots] 1 bots  ok    allBotsConnected = 1 (max 1)
+[bots] 1 bots  ok    noUnexpectedCloses = 0 (max 0)
+[bots] 1 bots  DB-writes ms: {"position_checkpoint":{"count":120,"p50":0.11881600000197068,"p95":0.19668900000033318,"p99":0.334034999992582,"max":11.30240300000878}}
+[bots] 10 bots  ok    tickP95 = 1.8626990000193473 (max 25)
+[bots] 10 bots  ok    tickP99 = 3.1816340000077616 (max 40)
+[bots] 10 bots  ok    eventLoopP99 = 2.88 (max 20)
+[bots] 10 bots  ok    duplicateReceipts = 0 (max 0)
+[bots] 10 bots  ok    allBotsConnected = 10 (max 10)
+[bots] 10 bots  ok    noUnexpectedCloses = 0 (max 0)
+[bots] 10 bots  DB-writes ms: {"position_checkpoint":{"count":120,"p50":0.1657930000219494,"p95":0.2659680000215303,"p99":0.4983889999857638,"max":0.5720260000089183},"operation:attack":{"count":3,"p50":1.6080390000133775,"p95":2.3808809999900404,"p99":2.3808809999900404,"max":2.3808809999900404}}
+[bots] 25 bots  ok    tickP95 = 4.436733999988064 (max 25)
+[bots] 25 bots  ok    tickP99 = 9.741447999957018 (max 40)
+[bots] 25 bots  ok    eventLoopP99 = 6.03 (max 20)
+[bots] 25 bots  ok    duplicateReceipts = 0 (max 0)
+[bots] 25 bots  ok    allBotsConnected = 25 (max 25)
+[bots] 25 bots  ok    noUnexpectedCloses = 0 (max 0)
+[bots] 25 bots  DB-writes ms: {"position_checkpoint":{"count":120,"p50":0.2811169999768026,"p95":0.4053280000225641,"p99":13.480793000024278,"max":17.024748000025284},"operation:attack":{"count":2,"p50":1.97032299998682,"p95":2.122736999997869,"p99":2.122736999997869,"max":2.122736999997869}}
+[bots] GO: alle gates gehaald
