@@ -42,6 +42,11 @@ function currentPublishedBuild(db) {
   return db.prepare("SELECT " + selections.join(", ") + " FROM published_world_state WHERE id = 1").get() || null;
 }
 
+function currentCanonicalRelease(db) {
+  if (!tableExists(db, "authoring_release")) return null;
+  return db.prepare("SELECT active_build_id, revision FROM authoring_release WHERE id = 1").get() || null;
+}
+
 function assertBackupTarget(rootDir, assetsPath, targetDir) {
   const resolved = path.resolve(targetDir);
   const publicRoot = path.join(path.resolve(rootDir), "apps", "web", "public");
@@ -71,6 +76,9 @@ export async function createDatabaseBackup(options) {
   const stagingDir = fs.mkdtempSync(path.join(targetParent, ".gk-backup-staging-"));
   const databaseFile = path.join(stagingDir, "database.sqlite");
   const assetsTarget = path.join(stagingDir, "assets");
+  // Fase 03: immutable canonieke builds horen bij de DB (releasepointer wijst ernaar) en gaan mee.
+  const buildsPath = path.resolve(options.buildsPath || path.join(path.dirname(sourceDatabasePath), "builds"));
+  const buildsTarget = path.join(stagingDir, "builds");
   const sourceHashBefore = sha256File(sourceDatabasePath);
   const backupImpl = options.backupImpl || backup;
 
@@ -93,6 +101,17 @@ export async function createDatabaseBackup(options) {
         sha256: sha256File(filePath)
       };
     });
+    let builds = [];
+    if (fs.existsSync(buildsPath)) {
+      fs.cpSync(buildsPath, buildsTarget, {
+        recursive: true,
+        errorOnExist: true,
+        filter: (source) => !path.basename(source).startsWith(".tmp-")
+      });
+      builds = listFiles(buildsTarget).map(function (filePath) {
+        return { path: path.relative(buildsTarget, filePath).split(path.sep).join("/"), bytes: fs.statSync(filePath).size, sha256: sha256File(filePath) };
+      });
+    }
     const manifest = {
       schemaVersion: "gk-backup-v1",
       createdAt: new Date().toISOString(),
@@ -104,7 +123,9 @@ export async function createDatabaseBackup(options) {
         migrationHead: currentMigrationHead(sourceDb)
       },
       publishedBuild: currentPublishedBuild(sourceDb),
-      assets
+      canonicalRelease: currentCanonicalRelease(sourceDb),
+      assets,
+      builds
     };
     fs.writeFileSync(path.join(stagingDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { flag: "wx" });
     if (sha256File(sourceDatabasePath) !== sourceHashBefore) {
@@ -137,6 +158,25 @@ export function verifyBackup(backupDir) {
       error.code = "BACKUP_ASSET_MISMATCH";
       throw error;
     }
+  }
+  for (const build of manifest.builds || []) {
+    const filePath = path.resolve(resolved, "builds", build.path);
+    if (!fs.existsSync(filePath)) {
+      const error = new Error("Backup mist buildbestand: " + build.path);
+      error.code = "BACKUP_BUILD_MISSING";
+      throw error;
+    }
+    if (!isPathInside(path.join(resolved, "builds"), filePath) || sha256File(filePath) !== build.sha256) {
+      const error = new Error("Backup-build hash wijkt af: " + build.path);
+      error.code = "BACKUP_BUILD_MISMATCH";
+      throw error;
+    }
+  }
+  const activeBuildId = manifest?.canonicalRelease?.active_build_id || null;
+  if (activeBuildId && !(manifest.builds || []).some((build) => build.path.startsWith(activeBuildId + "/"))) {
+    const error = new Error("Backup mist de actieve canonieke build: " + activeBuildId);
+    error.code = "BACKUP_BUILD_MISSING";
+    throw error;
   }
   const db = new DatabaseSync(databasePath, { readOnly: true });
   const integrity = db.prepare("PRAGMA integrity_check").get()?.integrity_check;

@@ -3979,6 +3979,79 @@ async function main() {
     assert(node03AfterRestart.json.progression.xp === persistedBeforeRestart.xp, "XP is exact gelijk na serverrestart");
     assert(JSON.stringify(node04AfterRestart.json.quests) === JSON.stringify(persistedBeforeRestart.quests), "queststatus is exact gelijk na serverrestart");
 
+    // F3: canonieke route. Werkbank -> immutable build -> pickup in de game -> exact eenmaal claimen -> rollback.
+    const f3GraphHash = function (graphResponse) {
+      const nodes = (graphResponse.json?.nodes || []).map(function (node) { return [node.id, node.type, JSON.stringify(node.values || {})]; }).sort();
+      const edges = (graphResponse.json?.edges || []).map(function (edge) { return edge.id; }).sort();
+      return JSON.stringify([nodes, edges]);
+    };
+    const f3GraphBefore = f3GraphHash(await call("GET", "/api/editor/graph"));
+    const f3Workspace = await call("GET", "/api/authoring/workspace");
+    assert(f3Workspace.status === 200 && f3Workspace.json.zones.some(function (zone) { return zone.zoneId === "zone.demo"; }), "F3: werkbank laadt met de gepubliceerde zones");
+    const f3PlayerWorkspace = await call("GET", "/api/authoring/workspace", null, false, goldenBJar);
+    assert(f3PlayerWorkspace.status === 401, "F3: een speler zonder editorrol komt niet in de werkbank");
+    const f3NoCsrf = await fetch(BASE + "/api/authoring/command", { method: "POST", headers: { Origin: BASE, Cookie: defaultCookieJar.value, "Content-Type": "application/json" }, body: "{}" });
+    assert(f3NoCsrf.status === 403, "F3: command zonder CSRF-token wordt geweigerd");
+    const f3Command = function (input, revision) {
+      return fetch(BASE + "/api/authoring/command", {
+        method: "POST",
+        headers: Object.assign({ Origin: BASE, Cookie: defaultCookieJar.value, "Content-Type": "application/json", "X-GK-CSRF": defaultCookieJar.csrfToken }, revision === undefined ? {} : { "If-Match": '"' + revision + '"' }),
+        body: JSON.stringify(Object.assign({ requestId: "smoke-f3-" + Math.random().toString(36).slice(2, 12) }, input))
+      }).then(async function (response) { return { status: response.status, json: await response.json().catch(function () { return null; }) }; });
+    };
+    const f3Project = await f3Command({ command: "create", kind: "project_settings", body: { gameName: "GK F3 smoke", motd: "Welkom" } });
+    assert(f3Project.status === 201, "F3: projectinstellingen aangemaakt zonder Nodes");
+    const f3Item = await f3Command({ command: "create", kind: "item_definition", body: { itemId: "item.f3_smoke", displayName: "F3 Steen", category: "material", rarity: "common", stackable: true, stackLimit: 99, tags: [] } });
+    assert(f3Item.status === 201, "F3: item aangemaakt zonder Nodes");
+    const f3PickupBody = { pickupId: "pickup.f3_smoke_1", itemRef: "item_definition:item.f3_smoke", zoneRef: "zone.demo", x: goldenPathFixture.pickupPosition.x, y: goldenPathFixture.pickupPosition.y, z: goldenPathFixture.pickupPosition.z, amount: 2 };
+    const f3Pickup = await f3Command({ command: "create", kind: "pickup", body: f3PickupBody });
+    assert(f3Pickup.status === 201, "F3: pickup geplaatst zonder Nodes");
+    const f3Stale = await f3Command({ command: "update", docKey: "item_definition:item.f3_smoke", body: { itemId: "item.f3_smoke", displayName: "Oud", category: "material", rarity: "common", stackable: true, stackLimit: 99, tags: [] } }, 0);
+    assert(f3Stale.status === 409 && f3Stale.json?.code === "STALE_REVISION", "F3: stale revision geeft 409 zonder overschrijven");
+    const f3Release0 = (await call("GET", "/api/authoring/workspace")).json.release;
+    const f3Fault = await call("POST", "/api/authoring/publish", { fault: "after_files" });
+    const f3ReleaseAfterFault = (await call("GET", "/api/authoring/workspace")).json.release;
+    assert(f3Fault.status === 500 && f3Fault.json?.code === "FAULT_INJECTED" && f3ReleaseAfterFault.activeBuildId === f3Release0.activeBuildId, "F3: mislukte publish laat de releasepointer staan");
+    const f3Publish1 = await call("POST", "/api/authoring/publish", {});
+    assert(f3Publish1.status === 200 && /^b_[0-9a-f]{24}$/.test(f3Publish1.json?.buildId || ""), "F3: publish maakt een immutable build");
+    const f3Republish = await call("POST", "/api/authoring/publish", {});
+    assert(f3Republish.json?.rootSha256 === f3Publish1.json.rootSha256, "F3: zelfde inhoud geeft dezelfde root-hash");
+    const f3Client = await call("GET", "/api/authoring/active/client.json", null, false, goldenBJar);
+    assert(f3Client.status === 200 && f3Client.json.client.items.some(function (item) { return item.displayName === "F3 Steen"; }) && !f3Client.text.includes("\"amount\""), "F3: speler krijgt alleen het clientpakket");
+    const f3ServerFile = await call("GET", "/api/authoring/builds/" + f3Publish1.json.buildId + "/server.json");
+    assert(f3ServerFile.status === 404, "F3: server.json is niet via HTTP bereikbaar");
+    const f3StateA = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    const f3Target = (f3StateA.json?.interactionTargets || []).find(function (target) { return String(target.instanceId || "").includes("canonical.pickup.f3_smoke_1"); });
+    assert(Boolean(f3Target), "F3: de gepubliceerde pickup staat in de game (targets=" + JSON.stringify((f3StateA.json?.interactionTargets || []).map(function (t) { return t.instanceId; })) + ")");
+    const f3Claim = await call("POST", "/api/game/node03/action", { action: "pickup", targetId: f3Target.instanceId, operationId: "smoke-f3-claim-a" }, false, pcJar);
+    assert(f3Claim.status === 200 && f3Claim.json.grants?.length === 1, "F3: speler A pakt de canonieke pickup op");
+    const f3ClaimAgain = await call("POST", "/api/game/node03/action", { action: "pickup", targetId: f3Target.instanceId, operationId: "smoke-f3-claim-a-2" }, false, pcJar);
+    const f3ClaimB = await call("POST", "/api/game/node03/action", { action: "pickup", targetId: f3Target.instanceId, operationId: "smoke-f3-claim-b" }, false, goldenBJar);
+    assert(!(f3ClaimAgain.json?.grants || []).length && !(f3ClaimB.json?.grants || []).length, "F3: de pickup is exact eenmaal te claimen");
+    const f3Count = function (snapshot) {
+      return (snapshot?.inventory?.items || []).filter(function (row) { return row.itemId === "item.f3_smoke"; }).reduce(function (total, row) { return total + Number(row.quantity || 0); }, 0);
+    };
+    const f3InventoryA = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    assert(f3Count(f3InventoryA.json) === 2 && (f3InventoryA.json.inventory.items || []).some(function (row) { return row.displayName === "F3 Steen"; }), "F3: inventory heeft 2x F3 Steen met de canonieke naam");
+    const f3Rename = await f3Command({ command: "update", docKey: "project_settings", body: { gameName: "GK F3 smoke v2" } }, 1);
+    assert(f3Rename.status === 200, "F3: projectnaam gewijzigd");
+    const f3Publish2 = await call("POST", "/api/authoring/publish", {});
+    assert(f3Publish2.status === 200 && f3Publish2.json.buildId !== f3Publish1.json.buildId, "F3: tweede build");
+    const f3Release2 = (await call("GET", "/api/authoring/workspace")).json.release;
+    const f3RollbackNoMatch = await call("POST", "/api/authoring/rollback", { buildId: f3Publish1.json.buildId, reason: "smoke" });
+    assert(f3RollbackNoMatch.status === 428, "F3: rollback zonder If-Match wordt geweigerd");
+    const f3RollbackStartedAt = Date.now();
+    const f3Rollback = await fetch(BASE + "/api/authoring/rollback", {
+      method: "POST",
+      headers: { Origin: BASE, Cookie: defaultCookieJar.value, "Content-Type": "application/json", "X-GK-CSRF": defaultCookieJar.csrfToken, "If-Match": '"' + f3Release2.revision + '"' },
+      body: JSON.stringify({ buildId: f3Publish1.json.buildId, reason: "smoke rollback-proef" })
+    });
+    const f3Active = await call("GET", "/api/authoring/active", null, false, goldenBJar);
+    assert(f3Rollback.status === 200 && f3Active.json?.buildId === f3Publish1.json.buildId && Date.now() - f3RollbackStartedAt < 5 * 60 * 1000, "F3: rollback zet de vorige build terug");
+    const f3InventoryAfterRollback = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    assert(f3Count(f3InventoryAfterRollback.json) === 2, "F3: rollback raakt de inventory niet");
+    assert(f3GraphHash(await call("GET", "/api/editor/graph")) === f3GraphBefore, "F3: de canonieke route schrijft niets in de nodegraph");
+
     const validTicket = await issueGameJoinTicket(pcJar);
     const protocolClient = await connectProtocolGameSocket(pcJar, validTicket, "protocol-v1-valid");
     assert(protocolClient.messages.some(function (message) { return message.type === "auth_ok"; }), "gk-mmo-v1 geeft auth_ok na een geldig eenmalig ticket");
@@ -4621,6 +4694,37 @@ async function main() {
     assertNear(Number(travel.json.position && travel.json.position.x), 300, 0.5, "zone-reis zet de speler op de aankomst-spawn");
     const travelAgain = await call("POST", "/api/game/travel/zone-link", { linkId: "zone_link.demo_to_two" }, false, travelJar);
     assert(travelAgain.status === 409, "dezelfde portal werkt niet vanuit een andere zone");
+
+    // F3: verhuizen uit Nodes (helemaal aan het eind: daarna zijn items en item-pickups alleen-lezen in Nodes).
+    const f3Cutover = await call("GET", "/api/authoring/cutover");
+    assert(f3Cutover.status === 200 && f3Cutover.json.plans.length === 3, "F3: verhuisrapport voor project, items en pickups");
+    const f3ItemsPlan = f3Cutover.json.plans.find(function (plan) { return plan.domain === "items"; });
+    if (!f3ItemsPlan.ok) console.error("F3 ITEMS PLAN", JSON.stringify({ blocking: f3ItemsPlan.blocking, diffs: f3ItemsPlan.parity.filter(function (entry) { return entry.diffs.length; }) }).slice(0, 2000));
+    assert(f3ItemsPlan.ok && f3ItemsPlan.comparedObjects >= 2, "F3: items-parity is GO");
+    const f3Finalize = function (domain, graphRevision) {
+      return fetch(BASE + "/api/authoring/cutover/finalize", {
+        method: "POST",
+        headers: { Origin: BASE, Cookie: defaultCookieJar.value, "Content-Type": "application/json", "X-GK-CSRF": defaultCookieJar.csrfToken, "If-Match": '"' + graphRevision + '"' },
+        body: JSON.stringify({ domain })
+      }).then(async function (response) { return { status: response.status, json: await response.json().catch(function () { return null; }) }; });
+    };
+    const f3StaleFinalize = await f3Finalize("items", f3Cutover.json.graphRevision - 1);
+    assert(f3StaleFinalize.status === 409 && f3StaleFinalize.json?.code === "GRAPH_REVISION_CHANGED", "F3: finalize met oude graphrevisie wordt geweigerd");
+    const f3ItemsDone = await f3Finalize("items", f3Cutover.json.graphRevision);
+    assert(f3ItemsDone.status === 200, "F3: items verhuisd naar Canoniek");
+    const f3PickupReport = await call("GET", "/api/authoring/cutover?domain=pickups");
+    const f3PickupPlan = f3PickupReport.json.plans[0];
+    if (!f3PickupPlan.ok) console.error("F3 PICKUPS PLAN", JSON.stringify({ blocking: f3PickupPlan.blocking, diffs: f3PickupPlan.parity.filter(function (entry) { return entry.diffs.length; }) }).slice(0, 2000));
+    assert(f3PickupPlan.ok && f3ItemsPlan.comparedObjects + f3PickupPlan.comparedObjects >= 3, "F3: pickup-parity is GO; samen minstens 3 echte legacy-objecten vergeleken");
+    const f3PickupsDone = await f3Finalize("pickups", f3PickupReport.json.graphRevision);
+    assert(f3PickupsDone.status === 200, "F3: item-pickups verhuisd naar Canoniek");
+    const f3LegacyItemNode = findNode((await call("GET", "/api/editor/graph")).json, function (n) { return n.type === "item_definition" && n.values.itemId === goldenPathFixture.pickupItemId; }, "golden pickup-item node bestaat");
+    const f3BlockedPatch = await call("PATCH", "/api/editor/nodes/" + f3LegacyItemNode.id + "/values", { values: { displayName: "Mag niet" }, returnGraph: false });
+    assert(f3BlockedPatch.status === 409 && f3BlockedPatch.json?.code === "CANONICAL_OWNED", "F3: verhuisd item is alleen-lezen in Nodes");
+    const f3PublishAfterCutover = await call("POST", "/api/authoring/publish", {});
+    assert(f3PublishAfterCutover.status === 200, "F3: publish na verhuizen");
+    const f3StateAfterCutover = await call("GET", "/api/game/node03/state", null, false, pcJar);
+    assert(f3StateAfterCutover.status === 200 && !(f3StateAfterCutover.json?.interactionTargets || []).some(function (target) { return String(target.instanceId || "").includes("canonical.legacy."); }), "F3: overgenomen legacy-pickups krijgen geen tweede spawn (instance-ID blijft gelijk)");
 
     console.log("\nSMOKE TEST GESLAAGD");
   } catch (error) {

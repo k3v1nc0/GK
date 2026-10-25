@@ -13093,6 +13093,49 @@ async function pollVersion() {
   }
 }
 
+// Fase 03: clientpakket van de canonieke build. Deze tab houdt de build waarmee hij startte (sessie-pin);
+// komt er een nieuwe build, dan meldt de tab dat je kunt verversen in plaats van midden in het spel te wisselen.
+let canonicalClientBuildId = null;
+function showCanonicalBanner(text, sticky) {
+  let banner = document.getElementById("canonicalProjectBanner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "canonicalProjectBanner";
+    banner.setAttribute("role", "status");
+    banner.style.cssText = "position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:50;padding:6px 14px;border-radius:8px;background:rgba(15,23,42,.85);color:#f8fafc;font:600 13px system-ui,sans-serif;pointer-events:none;transition:opacity .6s;text-align:center;max-width:90vw";
+    document.body.appendChild(banner);
+  }
+  banner.textContent = text;
+  banner.style.opacity = "1";
+  if (!sticky) window.setTimeout(function () { banner.style.opacity = "0"; }, 8000);
+}
+
+async function loadCanonicalClientBuild() {
+  try {
+    const response = await fetch("/api/authoring/active/client.json", { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (!data?.buildId) return;
+    canonicalClientBuildId = data.buildId;
+    const project = data.client?.project || null;
+    if (project?.gameName) document.title = project.gameName;
+    if (project?.gameName || project?.motd) showCanonicalBanner((project.gameName || "") + (project.motd ? " · " + project.motd : ""), false);
+  } catch {
+    // Geen canonieke build of netwerkfout: de game draait gewoon op de legacy-inhoud.
+  }
+}
+
+async function checkCanonicalBuild() {
+  try {
+    const response = await fetch("/api/authoring/active", { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data?.buildId && data.buildId !== canonicalClientBuildId) {
+      showCanonicalBanner("Nieuwe inhoud gepubliceerd. Ververs de pagina om alles te laden.", true);
+    }
+  } catch {}
+}
+
 async function start() {
   stepMovement(performance.now());
   startMovementFrameLoop();
@@ -13114,6 +13157,8 @@ async function start() {
     updateHud();
   }
   window.setInterval(pollVersion, 2500);
+  await loadCanonicalClientBuild();
+  window.setInterval(checkCanonicalBuild, 30000);
 }
 
 start();

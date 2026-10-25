@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { applyCanonicalBuild } from "./authoring/runtime-overlay.js";
 import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
@@ -949,6 +950,11 @@ export class MmoService {
     if (typeof this.worldTickTimer.unref === "function") this.worldTickTimer.unref();
   }
 
+  setCanonicalBuildProvider(provider) {
+    this.canonicalBuildProvider = typeof provider === "function" ? provider : null;
+    this.worldCache = null;
+  }
+
   getPublishedWorldContext() {
     // This runs on every world tick (50x/sec by default), including when nobody is
     // connected. Check the cheap published_at column first so the common case (no
@@ -961,17 +967,35 @@ export class MmoService {
       error.status = 404;
       throw error;
     }
-    if (this.worldCache && this.worldCache.publishedAt === publishedAt) return this.worldCache;
-    const world = this.repository.getPublishedWorld();
-    if (!world) {
+    // Fase 03: de actieve canonieke build (in geheugen) is een laag over de gepubliceerde wereld.
+    const canonical = this.canonicalBuildProvider ? this.canonicalBuildProvider() : null;
+    const canonicalBuildId = canonical?.buildId || "";
+    if (this.worldCache && this.worldCache.publishedAt === publishedAt && this.worldCache.canonicalBuildId === canonicalBuildId) return this.worldCache;
+    const publishedWorld = this.repository.getPublishedWorld();
+    if (!publishedWorld) {
       const error = new Error("Nog geen gepubliceerde wereld.");
       error.status = 404;
       throw error;
     }
+    const world = canonical ? applyCanonicalBuild(publishedWorld, canonical) : publishedWorld;
     const worldId = worldIdFor(world);
     const walkabilityIndex = buildWalkabilityIndex(world);
+    // Publish/rollback replaces the compiled world, but not the live state of an
+    // authored entity. Keep runtime-disabled colliders (dead/claimed/depleted)
+    // disabled until Node03 rehydrates that same state against the new cache.
+    const previousColliderEnabledByEntityId = new Map(
+      (Array.isArray(this.worldCache?.solidColliders) ? this.worldCache.solidColliders : [])
+        .filter((collider) => collider?.entityId)
+        .map((collider) => [String(collider.entityId), collider.enabled !== false])
+    );
     const solidColliders = solidCollisionEntriesForWorld(world);
-    this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, walkabilityIndex: walkabilityIndex, solidColliders: solidColliders };
+    for (const collider of solidColliders) {
+      const entityId = String(collider?.entityId || "");
+      if (entityId && previousColliderEnabledByEntityId.has(entityId)) {
+        collider.enabled = previousColliderEnabledByEntityId.get(entityId);
+      }
+    }
+    this.worldCache = { world: world, worldId: worldId, publishedAt: publishedAt, canonicalBuildId: canonicalBuildId, walkabilityIndex: walkabilityIndex, solidColliders: solidColliders };
     this.lastWorldBuildAt = nowMs();
     return this.worldCache;
   }

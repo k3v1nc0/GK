@@ -1,0 +1,106 @@
+
+> gk-real-node-editor@2.0.0 game:browser-check
+> sh scripts/run-node24.sh scripts/game-browser-check.js
+
+
+== Login / register flow ==
+[http 401] http://127.0.0.1:46278/api/auth/me
+[browser:error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+[browser:warn] [.WebGL-0xc8400117800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0xc8400117800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0xc8400117800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[browser:warn] [.WebGL-0xc8400117800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+  ok   - MMO online-ready wordt gehaald zonder overlay-leak of hang (reason=ok)
+  ok   - runtime is ready
+  ok   - WS zichtbaar connected is voordat online-ready wordt verklaard
+  ok   - overlay is verborgen zodra MMO online-ready is
+  ok   - presence snapshot is ontvangen voordat online-ready is
+  ok   - MMO online binnen 20 s na het laden van de pagina (1725 ms)
+  ok   - registreren logt direct in en stuurt naar /game/
+
+== HUD zichtbaarheid ==
+  ok   - Player id is zichtbaar in de HUD: mmo02_fix2_player_a · player_3
+  ok   - WS pill toont connected
+
+== WebSocket status stability ==
+  ok   - WS visible status blijft connected tijdens normale sessie (samples=37)
+  ok   - overlay blijft verborgen tijdens normale sessie
+  ok   - pingMs is gevuld na de stabiliteitsperiode
+  ok   - avgPingMs is gevuld na de stabiliteitsperiode
+  ok   - jitterMs is gevuld na de stabiliteitsperiode
+  ok   - remoteBufferDelayMs is gevuld na de stabiliteitsperiode
+  ok   - lastPongAgeMs is gevuld na de stabiliteitsperiode
+  ok   - WS raw/visible state blijven connected
+  ok   - showSession=false verbergt de session-rij
+  ok   - showSessions=false verbergt de sessions-rij
+  ok   - showLastSource=true toont de source-rij
+
+== Publish refresh blijft live ==
+  ok   - opnieuw publiceren werkt
+  ok   - game blijft op /game/ na publish-refresh
+  ok   - overlay blijft verborgen na publish-refresh
+  ok   - WS blijft connected na publish-refresh
+  ok   - MMO blijft online-ready na publish-refresh
+
+== Performance HUD anchor (top-right) ==
+  ok   - performance HUD element (.perf-hud) staat in de DOM
+  ok   - performance HUD hangt in het HUD-layoutsysteem (gameHud panel/dock, sinds NODE-03-04-05)
+  ok   - performance HUD zit tegen de rechterkant van het scherm (right=1268, viewport=1280)
+  ok   - performance HUD staat niet meer linksboven (left=1087)
+
+== WASD is camera-relatief (niet hardcoded wereldas) ==
+  ok   - getCameraGroundBasis() geeft een forward vector terug
+  ok   - getCameraGroundBasis() geeft een right vector terug
+  ok   - W verplaatst de speler merkbaar (delta=3.55)
+  ok   - S verplaatst de speler merkbaar (delta=3.54)
+  ok   - A verplaatst de speler merkbaar (delta=3.57)
+  ok   - D verplaatst de speler merkbaar (delta=3.67)
+  ok   - W beweegt in dezelfde richting als camera-forward (cos=1.00)
+  ok   - S beweegt tegenovergesteld aan camera-forward (cos=-1.00)
+  ok   - D beweegt in dezelfde richting als camera-right (cos=1.00)
+  ok   - A beweegt tegenovergesteld aan camera-right (cos=-1.00)
+  ok   - W en D staan ongeveer loodrecht op elkaar, zoals bij camera-relatieve besturing (cos=-0.00)
+
+== Idle/walk animatie bij stilstaan ==
+  ok   - animatie tijdens bewegen is walk/run (actual=walk)
+  ok   - animatie na loslaten van W is idle (actual=idle)
+
+== Stilstand: client schuift naar de serverpositie (server-authority, Fase 01) ==
+  ok   - lokale voorspelling kan voor de test afwijken
+  ok   - bij stilstand schuift de client terug naar de serverpositie ({"predicted":{"playerId":"player_38c0ced5-fab2-4709-ba23-e9c123a5bb75","worldId":"main_world","zoneId":"zone.browser_check","spawnId":"spawn.browser_check.default","x":-0.549,"y":0,"z":-2.194,"rotationY":-165.034,"revision":128,"updatedAt":null,"sourceSessionId":null,"sourceDevice":null,"clientSessionId":null,"clientInputSeq":0,"clientIntentId":null,"clientSentAt":null,"serverReceivedAt":23229.19999999553,"serverSentAtMs":1792955887342,"serverTimeMs":1792955887342,"serverSeq":0,"snapshotSeq":55,"serverTick":1436,"lastProcessedInputSeq":58,"controllerEpoch":0,"activeControllerSessionId":"session_f187c82b-2c49-493c-9778-1b723c07b397","transport":"ws","animationState":"idle","moving":false,"teleport":false,"velocityX":0,"velocityZ":0},"authoritative":{"playerId":"player_38c0ced5-fab2-4709-ba23-e9c123a5bb75","worldId":"main_world","zoneId":"zone.browser_check","spawnId":"spawn.browser_check.default","x":-0.549,"y":0,"z":-2.194,"rotationY":-165.034,"revision":128,"updatedAt":null,"sourceSessionId":null,"sourceDevice":null,"clientSessionId":null,"clientInputSeq":0,"clientIntentId":null,"clientSentAt":null,"serverReceivedAt":23229.19999999553,"serverSentAtMs":1792955887342,"serverTimeMs":1792955887342,"serverSeq":0,"snapshotSeq":55,"serverTick":1436,"lastProcessedInputSeq":58,"controllerEpoch":0,"activeControllerSessionId":"session_f187c82b-2c49-493c-9778-1b723c07b397","transport":"ws","animationState":"idle","moving":false,"teleport":false,"velocityX":0,"velocityZ":0},"zoneId":"zone.browser_check","playerId":"player_38c0ced5-fab2-4709-ba23-e9c123a5bb75","worldRebuilds":2})
+  ok   - de serverpositie verschuift niet door de lokale afwijking
+
+== Object/chunk residency bij grensoscillatie ==
+  ok   - flicker-scatter staat in de gepubliceerde scatterAreas
+  ok   - de scatter-residency-entry is aanwezig in elke sample
+  ok   - de chunk-residency-entry is aanwezig in elke sample
+Residency trace: #0 target=52,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #1 target=51,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #2 target=50,0 visible=1 held=0 pending=0 toggles=1 prevented=0 chunk=active | #3 target=49,0 visible=1 held=1 pending=1 toggles=1 prevented=1 chunk=pendingUnload | #4 target=48,0 visible=1 held=1 pending=1 toggles=1 prevented=1 chunk=pendingUnload | #5 target=49,0 visible=0 held=0 pending=0 toggles=2 prevented=1 chunk=unloaded | #6 target=50,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active | #7 target=51,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active | #8 target=52,0 visible=1 held=0 pending=0 toggles=3 prevented=1 chunk=active
+Residency flicker-entries: ["scatter|3,-1|loaded|visible"] | geladen #0: ["1,-2","1,-1","1,0","2,-2","2,-1","2,0","3,-2","3,-1","3,0"] | actief #0: ["1,-2","1,-1","1,0","2,-2","2,-1","2,0","3,-2","3,-1","3,0"] | geladen #4: ["0,-2","0,-1","0,0","1,-2","1,-1","1,0","2,-2","2,-1","2,0"]
+
+== Collision: Bounded Area Scatter per item ==
+  ok   - gepubliceerde scatter bevat individuele solid instances
+  ok   - scatter publiceert geen collider over de volledige boundary
+  ok   - resolvePlayerMovementIntent meldt blocked=true bij een scatter-item
+  ok   - beweging stopt vóór de individuele scatter collider (afstand=1.14)
+  FAIL - grensoscillatie veroorzaakt geen herhaald flikkeren (toggles=3)
+  ok   - hysteresis houdt de scatter minstens eenmaal vast tijdens het verlaten van de load-zone
+  FAIL - er zijn geen herhaalde visibility-toggle warnings tijdens de grensoscillatie
+  ok   - de scatter komt in held/pendingUnload tijdens de grensoscillatie
+
+== Klik dicht bij karakter: blijft stil ==
+  ok   - kan een klikpunt dicht bij de speler berekenen
+  ok   - klik dicht bij het karakter start geen beweging (delta=0.00)
+  ok   - klik dicht bij het karakter houdt de animatie idle
+
+== Korte klik: client en server eindigen gelijk, zonder heen-en-weer ==
+  ok   - kan een kort klikdoel berekenen
+  ok   - na een korte klik blijft de speler stil zonder heen-en-weer (drift=0.00)
+  ok   - na een korte klik staan client en server op dezelfde plek (verschil=0.05)
+
+== Muis slepen over deadzone: blijft lopen zolang knop ingedrukt is ==
+  ok   - kan een sleepstartpunt berekenen
+  ok   - kan een deadzone-punt berekenen
+  ok   - tijdens slepen over de deadzone werd de pointer-drag verwerkt (delta=5.95)
+
+== Muis vasthouden: blijft lopen zolang knop ingedrukt is ==
+  ok   - kan een hold-punt berekenen

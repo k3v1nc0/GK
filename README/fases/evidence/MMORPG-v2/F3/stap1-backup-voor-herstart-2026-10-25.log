@@ -1,0 +1,275 @@
+{
+  "ok": true,
+  "targetDir": "/root/gk-backups/f3-pre-restart-2026-10-25",
+  "integrity": "ok",
+  "manifest": {
+    "schemaVersion": "gk-backup-v1",
+    "createdAt": "2026-10-25T19:41:37.849Z",
+    "sourceSha": "7740f0516005430fc039c8d83ef92045ef8d9881",
+    "database": {
+      "file": "database.sqlite",
+      "sha256": "afbdb5d60eadc3a6fcae85c8e47084af5f92d1e3e38ab2f0cc300af5f1c6caf3",
+      "sourceSha256Before": "4c7694555a45813516f79070765d113e234d9a7a6420ca78b8886c2d31c6458d",
+      "migrationHead": [
+        "001_initial_schema.sql",
+        "002_camera_split.sql",
+        "003_mmo_accounts_sessions_players.sql",
+        "004_node_system_foundation.sql",
+        "005_node02_zone_player_state.sql",
+        "006_catalog_player_state_combat_loot.sql",
+        "006_minimap_fog_discovery.sql",
+        "007_campaign_quest_dialogue_progress.sql",
+        "008_economy_trade_market_crafting_party_mail.sql",
+        "009_game_hud_layout_defaults.sql",
+        "010_editor_user_layouts.sql",
+        "011_player_characters.sql"
+      ]
+    },
+    "publishedBuild": {
+      "id": 1,
+      "build_id": "gk-51bc2239dd3e",
+      "schema_version": "gk-game-project-v3",
+      "content_hash": "sha256:51bc2239dd3e625513b320c585a3950266b829287f9e8d8ff3126e226ba49daf",
+      "published_at": "2026-10-25T19:31:11.973Z"
+    },
+    "canonicalRelease": null,
+    "assets": [
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1791459642594.webp",
+        "bytes": 15878,
+        "sha256": "a143e09d4693b4fa6c0d8ee3cbcdf0ee4c9603773f8d539f08bcbc780dbb78f2"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1791884538149.webp",
+        "bytes": 111928,
+        "sha256": "eaa877530c871512297d71a1808de6fcc655f90ebe6043723d913bcbbdf0bf26"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792001009501.webp",
+        "bytes": 115508,
+        "sha256": "ced3dfb655195304cb335f742108a3c1183e8ecd6316d033ab6eb8bc14ac88d5"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792001158897.webp",
+        "bytes": 115508,
+        "sha256": "ced3dfb655195304cb335f742108a3c1183e8ecd6316d033ab6eb8bc14ac88d5"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792009308031.webp",
+        "bytes": 124306,
+        "sha256": "e4686d7d862f58c1f583030f5ad5ce6c49407cb90ef1bf738aa8259382ff0ada"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792009383186.webp",
+        "bytes": 124114,
+        "sha256": "f56be5da0efb5eddf466378424eed6943252495ed7a8e6c557fe854226b5319a"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792091751160.webp",
+        "bytes": 121824,
+        "sha256": "f6eaeaef868136e4bc5882d7f577538ca8dd1a18311a1c084df8ba2d3bf6481b"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792092227815.webp",
+        "bytes": 121824,
+        "sha256": "f6eaeaef868136e4bc5882d7f577538ca8dd1a18311a1c084df8ba2d3bf6481b"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792092459191.webp",
+        "bytes": 502250,
+        "sha256": "ade1478dbc90f73c50e7de7aa915e67b34892f80b33324b7345230c2a222e717"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792092482421.webp",
+        "bytes": 353018,
+        "sha256": "e76351c197c5b374916670758efabd2e566f2adc6fa8b1381a7bc0fc589edd6b"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792092540983.webp",
+        "bytes": 577408,
+        "sha256": "206219e53ec955035b37b4111934897d5f3d6d48584fed00da8c387190cc8207"
+      },
+      {
+        "path": "minimap-bakes/main-minimap-2-f87b3321-1792092591331.webp",
+        "bytes": 12097758,
+        "sha256": "765f98de4c37bef9fec34ea730bfadfbd589ea5380194295d3a30e4112d22993"
+      },
+      {
+        "path": "minimap-bakes/minimap-node02-live-demo-accd236b-1790320978836.webp",
+        "bytes": 2639204,
+        "sha256": "ea780cf98601353b035f36d14cc5ce42711c1c6d6ebdcf05bd6001f0d1129ed7"
+      },
+      {
+        "path": "minimap-bakes/minimap-node02-live-demo-accd236b-1791496145381.webp",
+        "bytes": 2589438,
+        "sha256": "510c6b37547a6f370545c47a49d7a9780bb5f640f6ca39545b8a2a0a053b07c2"
+      },
+      {
+        "path": "minimap-bakes/minimap-node02-live-demo-accd236b-1791884244841.webp",
+        "bytes": 2805934,
+        "sha256": "f1175a867702e7a8ee06c04455094a4e15468e03720da551730dd96b6a58f320"
+      },
+      {
+        "path": "thumbnails/alchemy-lab.png",
+        "bytes": 262411,
+        "sha256": "f5411b148cb8c36ae76dbbed564dfa62984cb45edaf3b075a00555c327dad92c"
+      },
+      {
+        "path": "thumbnails/archer.png",
+        "bytes": 298773,
+        "sha256": "f24b9dc15c83639538632f99d5238707342f06d20ce9bfc827c0cc40722fb4ab"
+      },
+      {
+        "path": "thumbnails/blacksmit-forge.png",
+        "bytes": 246698,
+        "sha256": "cfde0e35249a6cd1ba91ee673dcd589cf4ef5fb6fcfd901c97cba4de9a0fed44"
+      },
+      {
+        "path": "thumbnails/blacksmit.png",
+        "bytes": 321089,
+        "sha256": "8f9e85deac0b12c62368c2207edb8c0a979ca7fae5a5632d7af5b7f932e24efe"
+      },
+      {
+        "path": "thumbnails/bread.png",
+        "bytes": 293618,
+        "sha256": "ce69c727788be721b2c9bef896caf3a86b8bbf72c169c446dadeb07f4c314386"
+      },
+      {
+        "path": "thumbnails/chees.png",
+        "bytes": 223571,
+        "sha256": "66f1d068c04716e69d117f73fb735bf0f3f752e06adcab6d0dac8e76f45846ba"
+      },
+      {
+        "path": "thumbnails/meat.png",
+        "bytes": 235637,
+        "sha256": "d0fd5e886698f39b1e1bff80bb959941a3c5a3cea519fdea847c603420fc7c6c"
+      },
+      {
+        "path": "thumbnails/monumental-portal.png",
+        "bytes": 87667,
+        "sha256": "feddf0a257759e7d0f3aadca0beb43b43995e730fff2c6b3a100fa112d5d2260"
+      },
+      {
+        "path": "thumbnails/stone-bridge1.png",
+        "bytes": 128171,
+        "sha256": "ca8ed22cd89b47d95e698e9c2885e2037dd1d48b67160c1b6412060b5c0bd93f"
+      },
+      {
+        "path": "thumbnails/stylize-tree-lowpoly.png",
+        "bytes": 65525,
+        "sha256": "a83f16d86d6ed860632a0758561323216220af26f823d4fb64e322cf56ce6a33"
+      },
+      {
+        "path": "thumbnails/taverne.png",
+        "bytes": 317644,
+        "sha256": "f4767f4aa773f0fa83fe6fd72e3ce4c9bedb79986c3c3983e1c111e7c0839617"
+      },
+      {
+        "path": "thumbnails/toastie.png",
+        "bytes": 261666,
+        "sha256": "fde22adf6f796e2ef34799ecf19664d791965c5bbf71abc9d4745fcb90679817"
+      },
+      {
+        "path": "thumbnails/wizard.png",
+        "bytes": 239253,
+        "sha256": "19756e8024f6a3c4acdb3a7d9c632d30f59476ec285f54feded7a2ad2679b9be"
+      },
+      {
+        "path": "thumbnails/woodpile-game-ready-asset.png",
+        "bytes": 352819,
+        "sha256": "d6cbddbe11d602c215f4dcc259f4131de749c59f853802beb02ea778687af2e4"
+      },
+      {
+        "path": "uploads/alchemy-lab.glb",
+        "bytes": 890884,
+        "sha256": "b93c426eb1f904519195791901acaa29e1f0a4cc88a65ad50d59fc54fea14895"
+      },
+      {
+        "path": "uploads/archer.glb",
+        "bytes": 844592,
+        "sha256": "883ea5b15d65e3027f7045174762ba37f7df1e564bd3644ccc6234cb51a25b60"
+      },
+      {
+        "path": "uploads/blacksmit-forge.glb",
+        "bytes": 743252,
+        "sha256": "b2d5c5d8b7abf07112ca54a86f62a20829b1ab1661769b3bf57c8aedc576231f"
+      },
+      {
+        "path": "uploads/blacksmit.glb",
+        "bytes": 810856,
+        "sha256": "9a54d4ac82feb96eea31f5c459c8d82481a33c79a8d5ec747fec798327b33eeb"
+      },
+      {
+        "path": "uploads/bread.glb",
+        "bytes": 250084,
+        "sha256": "bfaddc4137dda51c9dde5d4e12cb4901709943ab0dc5696e0e73ffac057cc762"
+      },
+      {
+        "path": "uploads/chatgpt-image-23-jun-2026-23-52-14.png",
+        "bytes": 2434098,
+        "sha256": "c5fdd361c06aedde3d285125f22e549e1678bf2896833224731c725d79578217"
+      },
+      {
+        "path": "uploads/chees.glb",
+        "bytes": 345552,
+        "sha256": "a0c0ae41817cec0c666abdbfefdf6d3450d853a92cc1ce1d20a912f3740faf83"
+      },
+      {
+        "path": "uploads/forest-ground-04-diff-1k.jpg",
+        "bytes": 1113899,
+        "sha256": "50a4dda30875020c64385261aa7e00e2155b592302fa6794165f58fae73cbd2c"
+      },
+      {
+        "path": "uploads/light-river-seamless-texture.png",
+        "bytes": 1363768,
+        "sha256": "0ff0ae31af35953a22c27b0982f8298b80b6b0817203bd134289b5d7cf9f163b"
+      },
+      {
+        "path": "uploads/meat.glb",
+        "bytes": 174752,
+        "sha256": "11013753767c4682f0f851cd24c5cce49f0994b7265e52a54bd24b50a34363a5"
+      },
+      {
+        "path": "uploads/monumental-portal.glb",
+        "bytes": 2357688,
+        "sha256": "bec1a6a7d30bc291fe911980765f4f40238f6a0dbe8117f900c0bdc52eefc48c"
+      },
+      {
+        "path": "uploads/poliigon-grasspatchyground-4585-basecolor.jpg",
+        "bytes": 1080205,
+        "sha256": "2bfbf5fc6069cfaaf092ca4f4c00d33350766225c1601f07679b92aa6e2a5e33"
+      },
+      {
+        "path": "uploads/stone-bridge1.glb",
+        "bytes": 3707436,
+        "sha256": "24e7673717b42ba1f1790b00a22da39b6fe7e55753a143c502e2c395aa3b3e95"
+      },
+      {
+        "path": "uploads/stylize-tree-lowpoly.glb",
+        "bytes": 146568,
+        "sha256": "280a43dfe39e0b09fdb4f879d28b2bac856ac18fc54c3875484aa642d1f3b902"
+      },
+      {
+        "path": "uploads/taverne.glb",
+        "bytes": 750656,
+        "sha256": "5a06e48495e4fa0df2bbec072ef7806beba759d6bf89b68f489181c8b76d445a"
+      },
+      {
+        "path": "uploads/toastie.glb",
+        "bytes": 350384,
+        "sha256": "6d49aa25159d068503fa0fe10f325d40ec9fa66af4052c3f2edf0277e531b7b8"
+      },
+      {
+        "path": "uploads/wizard.glb",
+        "bytes": 494884,
+        "sha256": "9a1cafbf80ed6f43dbd5e0465636a5262a8aeab9884c06265cdb29fbf0527030"
+      },
+      {
+        "path": "uploads/woodpile-game-ready-asset.glb",
+        "bytes": 4143248,
+        "sha256": "38dfc2cd71f118db2c1bca5d79e25a62e5ed1ffabae125468e886226a52407b7"
+      }
+    ],
+    "builds": []
+  }
+}

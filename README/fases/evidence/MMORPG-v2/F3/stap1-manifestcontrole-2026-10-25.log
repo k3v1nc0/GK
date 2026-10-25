@@ -1,0 +1,10 @@
+{
+  "manifest": "/root/gk-backups/f3-post-migrations-2026-10-25/manifest.json",
+  "hasBuilds": true,
+  "buildsCount": 0,
+  "hasCanonicalRelease": true,
+  "canonicalRelease": {
+    "active_build_id": null,
+    "revision": 0
+  }
+}

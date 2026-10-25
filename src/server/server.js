@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { JOIN_TICKET_PATH, WS_PATH } from "../../apps/web/public/shared/protocol-v1.js";
 import { loadEnvFile } from "./env.js";
-import { openDatabase } from "./db.js";
+import { openDatabase, resolveDatabasePath } from "./db.js";
 import { AuthService } from "./auth-service.js";
 import { AssetService } from "./asset-service.js";
 import { GraphRepository } from "./graph-repository.js";
@@ -19,6 +19,7 @@ import { PublishService } from "./publish-service.js";
 import { SymbolIndexService } from "./symbol-index-service.js";
 import { TokenResolver } from "./token-resolver.js";
 import { GameProjectCompiler } from "./game-project-compiler.js";
+import { AuthoringRoutes } from "./authoring/routes.js";
 import { assertIsolatedNetwork, resolveAssetsPath } from "./storage-policy.js";
 import { assertSecureCookieConfiguration, LoginAttemptLimiter } from "./auth-security.js";
 import { assertAllowedOrigin, isDeniedPublicPath, isMutationRequest, WS_MAX_PAYLOAD_BYTES } from "./request-boundary.js";
@@ -55,6 +56,16 @@ const mmoService = new MmoService(db, authService, repository);
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
+// Fase 03: canonieke builds staan naast de database, in storage/builds (of naast DATABASE_PATH).
+const authoringBuildsRoot = process.env.AUTHORING_BUILDS_PATH || path.join(path.dirname(resolveDatabasePath(rootDir)), "builds");
+const authoringRoutes = new AuthoringRoutes({
+  db, authService, repository, mmoService, assetService, buildsRoot: authoringBuildsRoot, sendJson, readJson,
+  // Verhuizen leest de huidige graph (draft), niet de laatst gepubliceerde wereld.
+  currentGraphWorld: function () {
+    const draftWorld = repository.getDraftWorld();
+    return publishService.isDraftWorldCacheCurrent(draftWorld) ? draftWorld : publishService.saveDraft();
+  }
+});
 const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES, perMessageDeflate: false });
 mmoService.bindWebSocketServer(wss);
 // Kiest een aangeboden gk-mmo-*-subprotocol; een onbekende versie wordt daarna met 4406 gesloten.
@@ -451,6 +462,9 @@ async function handleApi(req, res, url) {
       assertAllowedOrigin(req);
       const csrfExempt = (url.pathname === "/api/auth/login" || url.pathname === "/api/auth/register");
       if (!csrfExempt) authService.assertCsrf(req);
+    }
+    if (url.pathname.startsWith("/api/authoring/")) {
+      return authoringRoutes.handle(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/health") {
       return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: Boolean(repository.getPublishedWorld()) });

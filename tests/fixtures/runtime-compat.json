@@ -1,0 +1,105 @@
+{
+  "_note": "Fase 03: bevroren F2-runtimevorm, nagebouwd naar de golden-path slice (scripts/lib/test-world.js). De echte check gebeurt met GET /api/authoring/import-plan op de VPS.",
+  "publishedAt": "2026-10-25T12:00:00.000Z",
+  "gameProject": {
+    "schemaVersion": "gk-game-project-v1",
+    "project": {
+      "id": "project.gk",
+      "gameName": "GK Golden",
+      "defaultLanguage": "nl"
+    },
+    "catalogs": {
+      "items": {
+        "item.golden.proof": {
+          "id": "item.golden.proof",
+          "displayName": "Golden Proof",
+          "category": "quest",
+          "rarity": "common",
+          "stackLimit": 1,
+          "stackable": false,
+          "vendorBaseValueMinor": 0,
+          "tags": [
+            "item",
+            "golden"
+          ]
+        },
+        "item.golden.pickup": {
+          "id": "item.golden.pickup",
+          "displayName": "Golden Pickup",
+          "category": "material",
+          "rarity": "common",
+          "stackLimit": 99,
+          "stackable": true,
+          "vendorBaseValueMinor": 5,
+          "tags": [
+            "item",
+            "pickup",
+            "golden"
+          ],
+          "bindPolicy": "unbound",
+          "iconAssetId": null
+        }
+      },
+      "respawnPolicies": {
+        "respawn_policy.quick": {
+          "id": "respawn_policy.quick",
+          "displayName": "Snel",
+          "minDelayMs": 30000,
+          "maxDelayMs": 30000
+        }
+      }
+    },
+    "zones": {
+      "packages": [
+        {
+          "zoneId": "zone.golden",
+          "zone": {
+            "zoneId": "zone.golden",
+            "bounds": {
+              "minX": 0,
+              "maxX": 100,
+              "minZ": 0,
+              "maxZ": 100
+            }
+          },
+          "spawnControllers": [
+            {
+              "spawnControllerId": "spawn_controller.golden",
+              "spawnSets": [
+                {
+                  "spawnSetId": "spawn_set.golden",
+                  "spawns": [
+                    {
+                      "nodeType": "pickup_spawn",
+                      "spawnEntryId": "spawn.golden.pickup",
+                      "pickupKind": "item",
+                      "itemRef": "item.golden.pickup",
+                      "amount": 1,
+                      "x": 0,
+                      "y": 0,
+                      "z": 2,
+                      "respawnPolicyRef": "respawn_policy.quick",
+                      "ownershipMode": "shared"
+                    },
+                    {
+                      "nodeType": "pickup_spawn",
+                      "spawnEntryId": "spawn.golden.coins",
+                      "pickupKind": "currency",
+                      "currencyRef": "currency.gold",
+                      "minAmount": 2,
+                      "maxAmount": 4,
+                      "x": 5,
+                      "y": 0,
+                      "z": 5
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "byId": {}
+    }
+  }
+}

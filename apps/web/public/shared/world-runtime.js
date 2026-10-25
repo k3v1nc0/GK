@@ -1245,7 +1245,9 @@ export function resolveWorldPerformanceForRenderer(worldData, rendererProfile = 
   };
 }
 
-const OBJECT_VISIBILITY_HOLD_MS = 350;
+// Cover a short boundary reversal (three ~140 ms streaming samples plus slow-frame overhead)
+// so an object is not hidden and rebuilt while the player is already moving back.
+const OBJECT_VISIBILITY_HOLD_MS = 750;
 const OBJECT_VISIBILITY_EXIT_MARGIN_CHUNKS = 1;
 
 const CHUNK_POLICY_DEFAULTS = {

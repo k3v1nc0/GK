@@ -1,0 +1,9 @@
+file:///var/www/gk/[eval1]:17
+if (!login.ok) throw new Error("Adminlogin mislukt: HTTP " + login.status + " " + String(loginBody.message || ""));
+                     ^
+
+Error: Adminlogin mislukt: HTTP 403 Origin is niet toegestaan.
+    at file:///var/www/gk/[eval1]:17:22
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+Node.js v24.18.0

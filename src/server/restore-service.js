@@ -52,6 +52,9 @@ export function restoreDatabaseBackup(options) {
   try {
     fs.copyFileSync(path.join(backupDir, "database.sqlite"), restoredDatabasePath, fs.constants.COPYFILE_EXCL);
     fs.cpSync(path.join(backupDir, "assets"), restoredAssetsPath, { recursive: true, errorOnExist: true });
+    // Fase 03: canonieke builds terugzetten naast de DB (verifyBackup heeft hashes en actieve build al gecontroleerd).
+    const restoredBuildsPath = path.join(targetDir, "builds");
+    if (fs.existsSync(path.join(backupDir, "builds"))) fs.cpSync(path.join(backupDir, "builds"), restoredBuildsPath, { recursive: true, errorOnExist: true });
     const sourceDb = new DatabaseSync(path.join(backupDir, "database.sqlite"), { readOnly: true });
     const restoredDb = new DatabaseSync(restoredDatabasePath, { readOnly: true });
     try {
@@ -70,6 +73,7 @@ export function restoreDatabaseBackup(options) {
         targetDir,
         databasePath: restoredDatabasePath,
         assetsPath: restoredAssetsPath,
+        buildsPath: path.join(targetDir, "builds"),
         integrity,
         counts: restoredCounts,
         publishedHash: restoredPublishedHash,

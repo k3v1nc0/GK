@@ -1,0 +1,69 @@
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 2 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+curl: (7) Failed to connect to 127.0.0.1 port 3001 after 0 ms: Couldn't connect to server
+{"ok":true,"service":"gk-real-node-editor","hasPublishedWorld":true}● gk-real-node-editor.service - GK Real Node Editor
+     Loaded: loaded (/etc/systemd/system/gk-real-node-editor.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2026-10-25 20:42:07 CET; 31s ago
+   Main PID: 1105668 (MainThread)
+      Tasks: 11 (limit: 308811)
+     Memory: 634.9M ()
+     CGroup: /system.slice/gk-real-node-editor.service
+             └─1105668 /usr/bin/node /var/www/gk/src/server/server.js
+
+Oct 25 09:52:56 vps.server.com systemd[1]: gk-real-node-editor.service: Deactivated successfully.
+Oct 25 09:52:56 vps.server.com systemd[1]: Stopped gk-real-node-editor.service - GK Real Node Editor.
+Oct 25 09:53:08 vps.server.com systemd[1]: Started gk-real-node-editor.service - GK Real Node Editor.
+Oct 25 09:53:09 vps.server.com sh[2036861]: GK Real Node Editor draait op http://localhost:3001
+Oct 25 09:53:09 vps.server.com sh[2036861]: Login:  http://localhost:3001/login/
+Oct 25 09:53:09 vps.server.com sh[2036861]: Editor: http://localhost:3001/editor/
+Oct 25 09:53:09 vps.server.com sh[2036861]: Game:   http://localhost:3001/game/
+Oct 25 10:12:32 vps.server.com systemd[1]: Stopping gk-real-node-editor.service - GK Real Node Editor...
+Oct 25 10:12:33 vps.server.com systemd[1]: gk-real-node-editor.service: Deactivated successfully.
+Oct 25 10:12:33 vps.server.com systemd[1]: Stopped gk-real-node-editor.service - GK Real Node Editor.
+2026-10-25T20:42:07+01:00 vps.server.com systemd[1]: Stopping gk-real-node-editor.service - GK Real Node Editor...
+2026-10-25T20:42:07+01:00 vps.server.com systemd[1]: gk-real-node-editor.service: Deactivated successfully.
+2026-10-25T20:42:07+01:00 vps.server.com systemd[1]: Stopped gk-real-node-editor.service - GK Real Node Editor.
+2026-10-25T20:42:07+01:00 vps.server.com systemd[1]: Started gk-real-node-editor.service - GK Real Node Editor.
+2026-10-25T20:42:38+01:00 vps.server.com sh[1105668]: GK Real Node Editor draait op http://localhost:3001
+2026-10-25T20:42:38+01:00 vps.server.com sh[1105668]: Login:  http://localhost:3001/login/
+2026-10-25T20:42:38+01:00 vps.server.com sh[1105668]: Editor: http://localhost:3001/editor/
+2026-10-25T20:42:38+01:00 vps.server.com sh[1105668]: Game:   http://localhost:3001/game/
+{
+  "migrationCount": 14,
+  "fase03": [
+    {
+      "id": "012_authoring_core.sql",
+      "applied_at": "2026-10-25T19:42:26.425Z"
+    },
+    {
+      "id": "013_builds.sql",
+      "applied_at": "2026-10-25T19:42:37.898Z"
+    }
+  ]
+}

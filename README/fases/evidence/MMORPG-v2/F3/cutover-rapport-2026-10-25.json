@@ -1,0 +1,1108 @@
+{
+  "ok": true,
+  "graphRevision": 26495,
+  "inventory": {
+    "project": {
+      "gameName": "StarStrike1"
+    },
+    "items": 21,
+    "pickups": {
+      "itemPickups": 3,
+      "currencyPickups": 2,
+      "pickupComponents": 0
+    }
+  },
+  "plans": [
+    {
+      "domain": "project",
+      "kind": "project_settings",
+      "writer": "legacy",
+      "ok": true,
+      "create": [
+        {
+          "docKey": "project_settings",
+          "legacyRef": "project:gk.project",
+          "body": {
+            "gameName": "StarStrike1"
+          }
+        }
+      ],
+      "keep": [],
+      "blocking": [],
+      "parity": [
+        {
+          "legacyRef": "project",
+          "diffs": []
+        }
+      ],
+      "comparedObjects": 1,
+      "diffCount": 0
+    },
+    {
+      "domain": "items",
+      "kind": "item_definition",
+      "writer": "legacy",
+      "ok": true,
+      "create": [
+        {
+          "docKey": "item_definition:item.bread",
+          "legacyRef": "items:item.bread",
+          "body": {
+            "itemId": "item.bread",
+            "displayName": "Bread",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_7e1c25ae-71ad-4b3f-aa5a-bf81b54fe6bf",
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.chees",
+          "legacyRef": "items:item.chees",
+          "body": {
+            "itemId": "item.chees",
+            "displayName": "Chees",
+            "category": "consumable",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_2d98c74d-6c06-4fdc-9dd3-7188b46d2a4c",
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.desert_repair_kit",
+          "legacyRef": "items:item.desert_repair_kit",
+          "body": {
+            "itemId": "item.desert_repair_kit",
+            "displayName": "Desert Repair Kit",
+            "category": "consumable",
+            "rarity": "uncommon",
+            "stackable": true,
+            "stackLimit": 20,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "crafted",
+              "utility",
+              "node05"
+            ],
+            "vendorValue": 12
+          }
+        },
+        {
+          "docKey": "item_definition:item.desert_sword",
+          "legacyRef": "items:item.desert_sword",
+          "body": {
+            "itemId": "item.desert_sword",
+            "displayName": "Desert Sword",
+            "category": "equipment",
+            "rarity": "rare",
+            "stackable": false,
+            "stackLimit": 1,
+            "bindPolicy": "bind_on_equip",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_ac271a8c-da70-471e-8a72-3d7ece0b40a3",
+            "tags": [
+              "item",
+              "equipment",
+              "weapon",
+              "desert"
+            ],
+            "vendorValue": 125
+          }
+        },
+        {
+          "docKey": "item_definition:item.f2.handtest.pickup",
+          "legacyRef": "items:item.f2.handtest.pickup",
+          "body": {
+            "itemId": "item.f2.handtest.pickup",
+            "displayName": "Golden Pickup",
+            "category": "material",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_855c702a-9edc-4ada-a7c1-f33d0000a928",
+            "tags": [
+              "item",
+              "pickup",
+              "f2_handtest"
+            ],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.f2.handtest.proof",
+          "legacyRef": "items:item.f2.handtest.proof",
+          "body": {
+            "itemId": "item.f2.handtest.proof",
+            "displayName": "Sentinel Proof",
+            "category": "quest",
+            "rarity": "quest",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "quest_bound",
+            "tradable": true,
+            "questItem": true,
+            "worldModelAssetId": "asset_855c702a-9edc-4ada-a7c1-f33d0000a928",
+            "tags": [
+              "item",
+              "loot",
+              "quest",
+              "f2_handtest"
+            ],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.hout",
+          "legacyRef": "items:item.hout",
+          "body": {
+            "itemId": "item.hout",
+            "displayName": "hout",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.iron_ore",
+          "legacyRef": "items:item.iron_ore",
+          "body": {
+            "itemId": "item.iron_ore",
+            "displayName": "Iron Ore",
+            "category": "material",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "material",
+              "ore",
+              "node05"
+            ],
+            "vendorValue": 3
+          }
+        },
+        {
+          "docKey": "item_definition:item.iron_ore.2",
+          "legacyRef": "items:item.iron_ore.2",
+          "body": {
+            "itemId": "item.iron_ore.2",
+            "displayName": "Iron Ore",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.meat",
+          "legacyRef": "items:item.meat",
+          "body": {
+            "itemId": "item.meat",
+            "displayName": "Meat",
+            "category": "consumable",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_e170d363-b5b8-4ac0-9eae-e5675b3bdd79",
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.plank",
+          "legacyRef": "items:item.plank",
+          "body": {
+            "itemId": "item.plank",
+            "displayName": "Plank",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.raider_token",
+          "legacyRef": "items:item.raider_token",
+          "body": {
+            "itemId": "item.raider_token",
+            "displayName": "Raider Token",
+            "category": "material",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 50,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "loot",
+              "desert"
+            ],
+            "vendorValue": 2
+          }
+        },
+        {
+          "docKey": "item_definition:item.repair_kit",
+          "legacyRef": "items:item.repair_kit",
+          "body": {
+            "itemId": "item.repair_kit",
+            "displayName": "Repair Kit",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.sun_crystal",
+          "legacyRef": "items:item.sun_crystal",
+          "body": {
+            "itemId": "item.sun_crystal",
+            "displayName": "Sun Crystal",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.sun_shard",
+          "legacyRef": "items:item.sun_shard",
+          "body": {
+            "itemId": "item.sun_shard",
+            "displayName": "Sun Shard",
+            "category": "material",
+            "rarity": "uncommon",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "resource",
+              "desert"
+            ],
+            "vendorValue": 4
+          }
+        },
+        {
+          "docKey": "item_definition:item.sword",
+          "legacyRef": "items:item.sword",
+          "body": {
+            "itemId": "item.sword",
+            "displayName": "Sword",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.toastie",
+          "legacyRef": "items:item.toastie",
+          "body": {
+            "itemId": "item.toastie",
+            "displayName": "Toastie",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "worldModelAssetId": "asset_10106c32-ac4f-47d8-b2c2-41ff69d9b16c",
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.water_flask",
+          "legacyRef": "items:item.water_flask",
+          "body": {
+            "itemId": "item.water_flask",
+            "displayName": "Water Flask",
+            "category": "consumable",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 20,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "consumable",
+              "vendor",
+              "node05"
+            ],
+            "vendorValue": 2
+          }
+        },
+        {
+          "docKey": "item_definition:item.water_flask.2",
+          "legacyRef": "items:item.water_flask.2",
+          "body": {
+            "itemId": "item.water_flask.2",
+            "displayName": "Water Flask",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        },
+        {
+          "docKey": "item_definition:item.wood",
+          "legacyRef": "items:item.wood",
+          "body": {
+            "itemId": "item.wood",
+            "displayName": "Wood",
+            "category": "material",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [
+              "item",
+              "material",
+              "wood",
+              "quest"
+            ],
+            "vendorValue": 1
+          }
+        },
+        {
+          "docKey": "item_definition:item.wood.2",
+          "legacyRef": "items:item.wood.2",
+          "body": {
+            "itemId": "item.wood.2",
+            "displayName": "Wood",
+            "category": "misc",
+            "rarity": "common",
+            "stackable": true,
+            "stackLimit": 99,
+            "bindPolicy": "unbound",
+            "tradable": true,
+            "questItem": false,
+            "tags": [],
+            "vendorValue": 0
+          }
+        }
+      ],
+      "keep": [],
+      "blocking": [],
+      "parity": [
+        {
+          "legacyRef": "items:item.bread",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.chees",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.desert_repair_kit",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.desert_sword",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.f2.handtest.pickup",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.f2.handtest.proof",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.hout",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.iron_ore",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.iron_ore.2",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.meat",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.plank",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.raider_token",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.repair_kit",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.sun_crystal",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.sun_shard",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.sword",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.toastie",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.water_flask",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.water_flask.2",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.wood",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        },
+        {
+          "legacyRef": "items:item.wood.2",
+          "diffs": [],
+          "frozenLegacyKeys": [
+            "contentHash",
+            "definitionVersion",
+            "description",
+            "destroyable",
+            "droppable",
+            "durabilityMax",
+            "enabled",
+            "equipmentSlotRef",
+            "internalLabel",
+            "inventoryTags",
+            "itemId",
+            "marketEligible",
+            "nodeId",
+            "nodeType",
+            "pickupAnimationRef",
+            "pickupAudioRef",
+            "pickupVfxRef",
+            "statModifierRefs",
+            "subcategory",
+            "useActionRefs",
+            "vendorCurrencyRef",
+            "weight"
+          ]
+        }
+      ],
+      "comparedObjects": 21,
+      "diffCount": 0
+    },
+    {
+      "domain": "pickups",
+      "kind": "pickup",
+      "writer": "legacy",
+      "ok": false,
+      "create": [
+        {
+          "docKey": "pickup:legacy.spawn.pickup.node03_desert_sword",
+          "legacyRef": "pickups:zone.canvas.x0.zm1:spawn.pickup.node03_desert_sword",
+          "body": {
+            "pickupId": "legacy.spawn.pickup.node03_desert_sword",
+            "itemRef": "item_definition:item.desert_sword",
+            "zoneRef": "zone.canvas.x0.zm1",
+            "x": -10,
+            "y": 0,
+            "z": 475,
+            "amount": 1,
+            "respawnPolicyRef": "respawn_policy.node03_quick"
+          }
+        },
+        {
+          "docKey": "pickup:legacy.spawn.f2.handtest.pickup",
+          "legacyRef": "pickups:zone.canvas.x1.z0:spawn.f2.handtest.pickup",
+          "body": {
+            "pickupId": "legacy.spawn.f2.handtest.pickup",
+            "itemRef": "item_definition:item.f2.handtest.pickup",
+            "zoneRef": "zone.canvas.x1.z0",
+            "x": 525.7,
+            "y": 0,
+            "z": 85.4,
+            "amount": 1,
+            "respawnPolicyRef": "respawn_policy.f2.handtest.slow"
+          }
+        }
+      ],
+      "keep": [],
+      "blocking": [
+        {
+          "legacyRef": "pickups",
+          "reason": "Zet eerst Items over: pickups verwijzen naar canonieke items."
+        },
+        {
+          "legacyRef": "pickups:zone.node02.live_demo:spawn.sword-itempickup",
+          "reason": "Respawnbeleid mag alleen a-z, 0-9, _ en . bevatten."
+        },
+        {
+          "legacyRef": "pickups:zone.canvas.x0.zm1:spawn.pickup.node03_desert_sword",
+          "reason": "Item item_definition:item.desert_sword bestaat niet (actief) in Canoniek."
+        },
+        {
+          "legacyRef": "pickups:zone.canvas.x1.z0:spawn.f2.handtest.pickup",
+          "reason": "Item item_definition:item.f2.handtest.pickup bestaat niet (actief) in Canoniek."
+        }
+      ],
+      "parity": [],
+      "comparedObjects": 0,
+      "diffCount": 0
+    }
+  ]
+}

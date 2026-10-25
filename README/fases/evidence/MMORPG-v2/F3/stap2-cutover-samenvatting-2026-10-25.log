@@ -1,0 +1,52 @@
+{
+  "loginStatus": 200,
+  "cutoverStatus": 200,
+  "reportPath": "README/fases/evidence/MMORPG-v2/F3/cutover-rapport-2026-10-25.json",
+  "graphRevision": 26495,
+  "domains": [
+    {
+      "domain": "project",
+      "result": "GO",
+      "writer": "legacy",
+      "comparedObjects": 1,
+      "diffCount": 0,
+      "blockingCount": 0,
+      "blocking": []
+    },
+    {
+      "domain": "items",
+      "result": "GO",
+      "writer": "legacy",
+      "comparedObjects": 21,
+      "diffCount": 0,
+      "blockingCount": 0,
+      "blocking": []
+    },
+    {
+      "domain": "pickups",
+      "result": "NO-GO",
+      "writer": "legacy",
+      "comparedObjects": 0,
+      "diffCount": 0,
+      "blockingCount": 4,
+      "blocking": [
+        {
+          "legacyRef": "pickups",
+          "reason": "Zet eerst Items over: pickups verwijzen naar canonieke items."
+        },
+        {
+          "legacyRef": "pickups:zone.node02.live_demo:spawn.sword-itempickup",
+          "reason": "Respawnbeleid mag alleen a-z, 0-9, _ en . bevatten."
+        },
+        {
+          "legacyRef": "pickups:zone.canvas.x0.zm1:spawn.pickup.node03_desert_sword",
+          "reason": "Item item_definition:item.desert_sword bestaat niet (actief) in Canoniek."
+        },
+        {
+          "legacyRef": "pickups:zone.canvas.x1.z0:spawn.f2.handtest.pickup",
+          "reason": "Item item_definition:item.f2.handtest.pickup bestaat niet (actief) in Canoniek."
+        }
+      ]
+    }
+  ]
+}

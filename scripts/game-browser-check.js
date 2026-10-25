@@ -737,6 +737,10 @@ async function main() {
     }
 
     console.log("");
+    console.log("== F3 werkbank: in de browser maken, publiceren, eenmaal claimen, rollback ==");
+    const canonicalWorkbench = await runCanonicalWorkbenchFlow(browser, pageA, pageB);
+
+    console.log("");
     console.log("== F2 prediction/reconcile onder 150ms + 5% verlies ==");
     const networkSession = await pageA.createCDPSession();
     await networkSession.send("Network.enable");
@@ -1240,6 +1244,11 @@ async function main() {
     await pageB.close();
     await contextB.close();
 
+    // 3D pas nu: pagina B is dicht, dus er draaien niet drie WebGL-werelden tegelijk op de testhost.
+    console.log("");
+    console.log("== F3 werkbank: 3D-weergave voor pickups ==");
+    await checkCanonicalWorkbench3d(canonicalWorkbench);
+
     console.log("");
     const smoothSnapshotStats = smoothMovementSamples.length ? smoothMovementSamples[smoothMovementSamples.length - 1] : null;
     const lagSnapshotStats = lagSamples.length ? lagSamples[lagSamples.length - 1] : null;
@@ -1295,6 +1304,192 @@ async function main() {
     isolatedRuntime.cleanup();
   }
   if (failures > 0) process.exit(1);
+}
+
+// F3: de canonieke werkbank zoals Kevin hem gebruikt (losse pagina, geen Nodes), met A en B in de game.
+async function runCanonicalWorkbenchFlow(browser, pageA, pageB) {
+  const adminContext = await browser.createBrowserContext();
+  const adminPage = await adminContext.newPage();
+  const pageErrors = [];
+  adminPage.on("pageerror", function (error) { pageErrors.push(String(error && error.message ? error.message : error)); });
+  await prepareExistingPage(adminPage);
+  const login = await adminPage.evaluate(async function (credentials) {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(credentials)
+    });
+    return response.status;
+  }, { username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
+  assert(login === 200, "F3: admin logt in voor de werkbank");
+  await adminPage.goto(BASE + "/editor/canoniek.html", { waitUntil: "domcontentloaded" });
+
+  const ui = canonicalUi(adminPage);
+  const itemDocKey = "item_definition:item.f3_browser_steen";
+  const targetPart = "canonical.pickup.f3_browser_steen_1";
+
+  // Projectnaam via het formulier.
+  await ui.tab("project", '[data-cw="game-name"]');
+  await ui.typeInto('[data-cw="game-name"]', "GK F3 Browser");
+  await adminPage.click('[data-cw="save-project"]');
+  await ui.status("Opgeslagen (revisie 1)");
+  assert(true, "F3: projectnaam opgeslagen via het formulier");
+
+  // Item maken: alleen een naam typen, de ID maakt de werkbank zelf.
+  await ui.tab("items", '[data-cw="new-item"]');
+  await adminPage.click('[data-cw="new-item"]');
+  await adminPage.waitForSelector('[data-cw="item-name"]');
+  await ui.typeInto('[data-cw="item-name"]', "F3 Browser Steen");
+  await adminPage.evaluate(function () { document.querySelector('[data-cw="item-name"]').form.requestSubmit(); });
+  await ui.status("Item opgeslagen");
+  assert(true, "F3: item gemaakt zonder een ID te typen");
+
+  // Pickup: klik op de kaart, daarna exact op de plek van speler A zetten via het detailpaneel.
+  const spot = await getPlayerState(pageA);
+  const spotX = Math.round(Number(spot.x) * 100) / 100;
+  const spotZ = Math.round(Number(spot.z) * 100) / 100;
+  await ui.tab("pickups", '[data-cw="zone"]');
+  await adminPage.select('[data-cw="zone"]', "zone.browser_check");
+  await adminPage.select('[data-cw="item"]', itemDocKey);
+  const map = await (await adminPage.$("canvas.cwMap")).boundingBox();
+  await adminPage.mouse.click(map.x + map.width * 0.5, map.y + map.height * 0.5);
+  await ui.status("Pickup geplaatst");
+  await adminPage.waitForSelector('[data-cw="x"]');
+  await adminPage.evaluate(function (position) {
+    document.querySelector('[data-cw="x"]').value = String(position.x);
+    document.querySelector('[data-cw="z"]').value = String(position.z);
+  }, { x: spotX, z: spotZ });
+  await adminPage.click('[data-cw="save-pickup"]');
+  await ui.status("Pickup opgeslagen");
+  const workspace = await goldenPathApi(adminPage, "GET", "/api/authoring/workspace");
+  const pickupDoc = (workspace.json?.documents || []).find(function (doc) { return doc.docKey === "pickup:pickup.f3_browser_steen_1"; });
+  assert(pickupDoc && pickupDoc.body.itemRef === itemDocKey && pickupDoc.body.zoneRef === "zone.browser_check"
+    && pickupDoc.body.x === spotX && pickupDoc.body.z === spotZ && pickupDoc.revision === 2,
+    "F3: pickup geplaatst en verplaatst naar speler A (" + JSON.stringify(pickupDoc && pickupDoc.body) + ")");
+  await captureEvidenceScreenshot(adminPage, "f3-werkbank-pickups.png");
+
+  // Publiceren via de knop.
+  const buildOne = await ui.publish();
+  assert(/^b_[0-9a-f]{24}$/.test(buildOne || ""), "F3: publiceren via de knop maakt build " + buildOne);
+
+  // Open game-tabs merken de nieuwe build (poll elke 30s).
+  await pageA.waitForFunction(function () {
+    return (document.querySelector("#canonicalProjectBanner")?.textContent || "").includes("Nieuwe inhoud");
+  }, { timeout: 45000 });
+  assert(true, "F3: open game-tab van A meldt dat er nieuwe inhoud is");
+  await captureEvidenceScreenshot(pageA, "f3-game-banner-a.png");
+
+  // Beide spelers zien dezelfde serverpickup; A pakt hem, B daarna niet meer.
+  await drivePlayerNearWorldPoint(pageB, spotX, spotZ, 2.5);
+  const targetOn = async function (page) {
+    const state = await goldenPathApi(page, "GET", "/api/game/node03/state");
+    return (state.json?.interactionTargets || []).find(function (target) { return String(target.instanceId || "").includes(targetPart); }) || null;
+  };
+  const targetA = await targetOn(pageA);
+  const targetB = await targetOn(pageB);
+  assert(targetA && targetB && targetA.instanceId === targetB.instanceId, "F3: A en B zien dezelfde gepubliceerde pickup (" + (targetA && targetA.instanceId) + ")");
+  const claim = function (page, operationId) {
+    return goldenPathApi(page, "POST", "/api/game/node03/action", { action: "pickup", targetId: targetA ? targetA.instanceId : targetPart, operationId: operationId });
+  };
+  const claimA = await claim(pageA, "browser-f3-claim-a");
+  assert(claimA.status === 200 && (claimA.json?.grants || []).length === 1, "F3: A pakt de pickup op (" + claimA.status + ")");
+  const claimB = await claim(pageB, "browser-f3-claim-b");
+  assert(!(claimB.json?.grants || []).length, "F3: B krijgt de al gepakte pickup niet");
+  const countOnA = async function () {
+    const state = await goldenPathApi(pageA, "GET", "/api/game/node03/state");
+    const rows = (state.json?.inventory?.items || []).filter(function (row) { return row.itemId === "item.f3_browser_steen"; });
+    return {
+      quantity: rows.reduce(function (total, row) { return total + Number(row.quantity || 0); }, 0),
+      named: rows.some(function (row) { return row.displayName === "F3 Browser Steen"; })
+    };
+  };
+  const inventoryA = await countOnA();
+  assert(inventoryA.quantity === 1 && inventoryA.named, "F3: A heeft 1x F3 Browser Steen met de naam uit de werkbank");
+
+  // Tweede build (andere projectnaam), daarna terugzetten via de knop.
+  await ui.tab("project", '[data-cw="game-name"]');
+  await ui.typeInto('[data-cw="game-name"]', "GK F3 Browser v2");
+  await adminPage.click('[data-cw="save-project"]');
+  await ui.status("Opgeslagen (revisie 2)");
+  const buildTwo = await ui.publish();
+  assert(buildTwo && buildTwo !== buildOne, "F3: tweede build " + buildTwo);
+  const rollbackStartedAt = Date.now();
+  adminPage.once("dialog", function (dialog) { dialog.accept("Rollback-proef browser").catch(function () {}); });
+  await adminPage.click('[data-cw="rollback"][data-build="' + buildOne + '"]');
+  await ui.status("is weer actief");
+  const active = await goldenPathApi(adminPage, "GET", "/api/authoring/active");
+  assert(active.json?.buildId === buildOne && Date.now() - rollbackStartedAt < 5 * 60 * 1000, "F3: rollback via de knop zet build 1 terug binnen 5 minuten");
+  const inventoryAfter = await countOnA();
+  assert(inventoryAfter.quantity === 1, "F3: rollback laat de inventory van A met rust");
+  const claimAfter = await claim(pageB, "browser-f3-claim-b-after-rollback");
+  assert(!(claimAfter.json?.grants || []).length, "F3: na rollback is de gepakte pickup niet opnieuw te krijgen");
+  await captureEvidenceScreenshot(adminPage, "f3-werkbank-publiceren.png");
+  assert(pageErrors.length === 0, "F3: geen JavaScript-fouten in de werkbank (" + pageErrors.join(" | ").slice(0, 300) + ")");
+  return { adminContext, adminPage, pageErrors };
+}
+
+async function checkCanonicalWorkbench3d(workbench) {
+  const { adminContext, adminPage, pageErrors } = workbench;
+  const ui = canonicalUi(adminPage);
+  await ui.tab("pickups", '[data-cw="toggle3d"]');
+  await adminPage.select('[data-cw="zone"]', "zone.browser_check");
+  await adminPage.click('[data-cw="toggle3d"]');
+  await adminPage.waitForFunction(function () {
+    const text = document.querySelector(".cwStatus")?.textContent || "";
+    return text.includes("3D: klik op de grond") || text.includes("kon niet laden");
+  }, { timeout: 90000 });
+  const loadedText = await textContent(adminPage, ".cwStatus");
+  assert(!loadedText.includes("kon niet laden") && Boolean(await adminPage.$("canvas.cw3d")), "F3: 3D-weergave laadt de gepubliceerde wereld (" + loadedText + ")");
+  await sleep(1500);
+  const canvasBox = await (await adminPage.$("canvas.cw3d")).boundingBox();
+  await adminPage.mouse.click(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + canvasBox.height * 0.5);
+  await ui.status("Pickup geplaatst", 20000);
+  const workspace = await goldenPathApi(adminPage, "GET", "/api/authoring/workspace");
+  const placed = (workspace.json?.documents || []).find(function (doc) { return doc.docKey === "pickup:pickup.f3_browser_steen_2"; });
+  assert(placed && Number.isFinite(placed.body.x) && Number.isFinite(placed.body.z) && placed.body.zoneRef === "zone.browser_check", "F3: klik op de grond in 3D plaatst een pickup (" + JSON.stringify(placed && placed.body) + ")");
+  await captureEvidenceScreenshot(adminPage, "f3-werkbank-3d.png");
+  await adminPage.click('[data-cw="toggle3d"]');
+  await adminPage.waitForFunction(function () { return !document.querySelector("canvas.cw3d"); }, { timeout: 10000 });
+  assert(true, "F3: 3D-weergave sluit netjes");
+  assert(pageErrors.length === 0, "F3: geen JavaScript-fouten in de 3D-weergave (" + pageErrors.join(" | ").slice(0, 300) + ")");
+  await adminPage.close().catch(function () {});
+  await adminContext.close().catch(function () {});
+}
+
+function canonicalUi(page) {
+  const status = async function (wanted, timeout = 15000) {
+    try {
+      await page.waitForFunction(function (text) {
+        return (document.querySelector(".cwStatus")?.textContent || "").includes(text);
+      }, { timeout: timeout }, wanted);
+    } catch (error) {
+      throw new Error("Werkbank-status bleef weg (verwacht: " + wanted + ", kreeg: " + await textContent(page, ".cwStatus") + ")");
+    }
+  };
+  return {
+    status,
+    async tab(name, readySelector) {
+      await page.click('nav.cwTabs button[data-view="' + name + '"]');
+      await page.waitForFunction(function (view) {
+        return document.querySelector('nav.cwTabs button[data-view="' + view + '"]')?.getAttribute("aria-pressed") === "true";
+      }, {}, name);
+      await page.waitForSelector(readySelector);
+      await sleep(100);
+    },
+    async typeInto(selector, text) {
+      await page.click(selector, { clickCount: 3 });
+      await page.keyboard.press("Backspace");
+      await page.type(selector, text, { delay: 5 });
+    },
+    async publish() {
+      await this.tab("release", '[data-cw="publish"]');
+      await page.click('[data-cw="publish"]');
+      await status("is nu actief");
+      const active = await goldenPathApi(page, "GET", "/api/authoring/active");
+      return active.json?.buildId || null;
+    }
+  };
 }
 
 // Bewijs-screenshot zonder dat het (opengeklapte) debugpaneel spelers bedekt; daarna weer open voor de HUD-checks.

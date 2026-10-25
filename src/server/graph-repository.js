@@ -508,6 +508,15 @@ export class GraphRepository {
     this.services = services;
   }
 
+  // Fase 03: optionele guard die weigert om objecten te wijzigen die de canonieke werkbank beheert.
+  setWriteGuard(guard) {
+    this.writeGuard = guard && typeof guard.assertNodeWrite === "function" ? guard : null;
+  }
+
+  guardNodeWrite(type, currentValues, nextValues) {
+    if (this.writeGuard) this.writeGuard.assertNodeWrite(type, currentValues, nextValues);
+  }
+
   getGraphMeta() {
     const row = this.db.prepare("SELECT graph_revision, content_schema_version, last_mutation_at FROM editor_graph_meta WHERE id = 1").get();
     return row ? {
@@ -742,6 +751,7 @@ export class GraphRepository {
         throw error;
       }
     }
+    this.guardNodeWrite(type, null, values || {});
     const count = this.db.prepare("SELECT COUNT(*) AS total FROM editor_nodes WHERE type = ?").get(type).total;
     const id = "node_" + type + "_" + crypto.randomUUID().slice(0, 8);
     const title = definition.label + " " + String(count + 1).padStart(2, "0");
@@ -777,7 +787,7 @@ export class GraphRepository {
   }
 
   deleteNode(nodeId) {
-    const row = this.db.prepare("SELECT type FROM editor_nodes WHERE id = ?").get(nodeId);
+    const row = this.db.prepare("SELECT type, values_json FROM editor_nodes WHERE id = ?").get(nodeId);
     if (!row) {
       const error = new Error("Node bestaat niet: " + nodeId);
       error.status = 404;
@@ -793,6 +803,7 @@ export class GraphRepository {
       error.status = 400;
       throw error;
     }
+    this.guardNodeWrite(row.type, parseJson(row.values_json, {}), null);
     this.db.prepare("DELETE FROM editor_nodes WHERE id = ?").run(nodeId);
     this.touchGraphRevision(this.db);
     this.clearDraftWorld();
@@ -827,6 +838,7 @@ export class GraphRepository {
       return row;
     });
 
+    for (const row of rows) this.guardNodeWrite(row.type, parseJson(row.values_json, {}), null);
     const updateNode = this.db.prepare("UPDATE editor_nodes SET values_json = ?, updated_at = ? WHERE id = ?");
     const deleteEdge = this.db.prepare("DELETE FROM editor_node_edges WHERE id = ?");
     const deleteNode = this.db.prepare("DELETE FROM editor_nodes WHERE id = ?");
@@ -845,6 +857,7 @@ export class GraphRepository {
         if (row.type === "group") throw graphError("Group interface wijzigingen gaan niet via verwijderen.");
         const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
         const cleanValues = cleanValuesForType(row.type, patch.values || {}, currentValues, NODE_TYPES);
+        this.guardNodeWrite(row.type, currentValues, cleanValues);
         updateNode.run(JSON.stringify(cleanValues), now(), nodeId);
       }
       for (const edgeId of edgeIds) deleteEdge.run(edgeId);
@@ -933,6 +946,7 @@ export class GraphRepository {
     }
     const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
     const cleanValues = cleanValuesForType(row.type, nextValues || {}, currentValues, NODE_TYPES);
+    this.guardNodeWrite(row.type, currentValues, cleanValues);
     const definition = NODE_TYPES[row.type];
     const identityFields = Object.entries(definition?.fields || {}).filter(function ([, field]) {
       return field && field.type === "identity";
@@ -987,6 +1001,7 @@ export class GraphRepository {
         }
         const currentValues = parseJson(row.values_json, defaultValuesForType(row.type));
         const cleanValues = cleanValuesForType(row.type, patch.values || {}, currentValues, NODE_TYPES);
+        this.guardNodeWrite(row.type, currentValues, cleanValues);
         const definition = NODE_TYPES[row.type];
         const identityFields = Object.entries(definition?.fields || {}).filter(function ([, field]) {
           return field && field.type === "identity";
