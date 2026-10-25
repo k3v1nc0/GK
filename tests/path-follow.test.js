@@ -16,6 +16,9 @@ function fakeService() {
   };
   service.updatePathQueue = MmoService.prototype.updatePathQueue.bind(service);
   service.clearPathQueue = MmoService.prototype.clearPathQueue.bind(service);
+  // Fase 04: de tick zet ook Region/Area op de state (de echte code; zonder build blijft dat null).
+  service.spatialIndex = MmoService.prototype.spatialIndex.bind(service);
+  service.assignSpatialMembership = MmoService.prototype.assignSpatialMembership.bind(service);
   return service;
 }
 

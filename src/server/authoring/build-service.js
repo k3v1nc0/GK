@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { kindSpec, splitByAudience } from "../../shared/authoring/kinds.js";
 import { parsePickupLegacyRef } from "./runtime-overlay.js";
 import { DocumentRepository } from "./document-repository.js";
+import { compileWorldSection } from "./world-compiler.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 
 export const AUTHORING_COMPILER_VERSION = "gk-canonical-compiler-1";
@@ -92,6 +93,13 @@ export function compileCanonical(documents, options = {}) {
     pickups: pickups.map(serverPickup),
     removedLegacyPickups
   };
+  // Fase 04: Regions/Areas/Cells. Zonder wereld-documenten ontbreekt de sleutel, zodat F3-builds bytegelijk blijven.
+  const world = compileWorldSection(known, options);
+  if (world) {
+    errors.push(...world.errors);
+    client.world = world.client;
+    server.world = world.server;
+  }
   const texts = { "client.json": stableStringify(client), "server.json": stableStringify(server) };
   const files = {};
   for (const [name, text] of Object.entries(texts)) {

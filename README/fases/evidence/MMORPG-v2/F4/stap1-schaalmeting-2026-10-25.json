@@ -1,0 +1,128 @@
+{
+  "publishedAt": "2026-10-25T19:31:11.973Z",
+  "buildId": "gk-51bc2239dd3e",
+  "player": {
+    "id": "player_node02_live_demo",
+    "modelAssetId": "asset_855c702a-9edc-4ada-a7c1-f33d0000a928",
+    "collisionRadius": 0.5,
+    "scale": 1,
+    "moveSpeed": 10,
+    "sprintMultiplier": 2,
+    "otherSizeKeys": [
+      "collisionRadius",
+      "scale"
+    ]
+  },
+  "playerModel": {
+    "name": "Wizard",
+    "sourcePath": "/assets/uploads/wizard.glb",
+    "file": "assets/uploads/wizard.glb",
+    "rawBounds": {
+      "width": 1.4943687319755554,
+      "height": 1.750000009778887,
+      "depth": 0.6539782285690308
+    },
+    "scaledBounds": {
+      "width": 1.4943687319755554,
+      "height": 1.750000009778887,
+      "depth": 0.6539782285690308
+    }
+  },
+  "zones": [
+    {
+      "zoneId": "zone.canvas.x0.zm1",
+      "label": "Desert",
+      "bounds": {
+        "originX": -250,
+        "originY": 0,
+        "originZ": 250,
+        "width": 500,
+        "depth": 500,
+        "minX": -250,
+        "minZ": 250,
+        "maxX": 250,
+        "maxZ": 750,
+        "minY": -100,
+        "maxY": 500
+      },
+      "size": {
+        "x": 500,
+        "z": 500
+      }
+    },
+    {
+      "zoneId": "zone.canvas.x0.zm1.2",
+      "label": "Peaks",
+      "bounds": {
+        "originX": -750,
+        "originY": 0,
+        "originZ": 250,
+        "width": 500,
+        "depth": 500,
+        "minX": -750,
+        "minZ": 250,
+        "maxX": -250,
+        "maxZ": 750,
+        "minY": -100,
+        "maxY": 500
+      },
+      "size": {
+        "x": 500,
+        "z": 500
+      }
+    },
+    {
+      "zoneId": "zone.canvas.x1.z0",
+      "label": "test",
+      "bounds": {
+        "originX": 250,
+        "originY": 0,
+        "originZ": -250,
+        "width": 500,
+        "depth": 500,
+        "minX": 250,
+        "minZ": -250,
+        "maxX": 750,
+        "maxZ": 250,
+        "minY": -100,
+        "maxY": 500
+      },
+      "size": {
+        "x": 500,
+        "z": 500
+      }
+    },
+    {
+      "zoneId": "zone.node02.live_demo",
+      "label": "Sunny Meadow1",
+      "bounds": {
+        "originX": -250,
+        "originY": 0,
+        "originZ": -250,
+        "width": 500,
+        "depth": 500,
+        "minX": -250,
+        "minZ": -250,
+        "maxX": 250,
+        "maxZ": 250,
+        "minY": -100,
+        "maxY": 500
+      },
+      "size": {
+        "x": 500,
+        "z": 500
+      }
+    }
+  ],
+  "spawn": {
+    "spawnId": "spawn.node02.live_demo_default",
+    "role": "zone_default",
+    "zoneRef": "zone.node02.live_demo",
+    "x": 0,
+    "y": 0,
+    "z": 0,
+    "facing": 90
+  },
+  "ground": {
+    "y": 0,
+    "width": 500,

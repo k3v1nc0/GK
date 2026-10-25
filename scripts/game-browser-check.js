@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, execSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { worldSettingsPresetNodePatch } from "../src/shared/node-types.js";
 import { createIsolatedRuntime, requireIsolatedMode } from "./lib/test-isolation.js";
@@ -1249,6 +1250,11 @@ async function main() {
     console.log("== F3 werkbank: 3D-weergave voor pickups ==");
     await checkCanonicalWorkbench3d(canonicalWorkbench);
 
+    // F4 na F3 en nadat B dicht is: alleen A speelt mee (minder geheugen). Zet aan het eind de build van vóór F4 terug.
+    console.log("");
+    console.log("== F4 wereld: Regions, Areas, muziek, obstakel en draft-preview ==");
+    await runWorldBuilderFlow(browser, pageA, dbPath);
+
     console.log("");
     const smoothSnapshotStats = smoothMovementSamples.length ? smoothMovementSamples[smoothMovementSamples.length - 1] : null;
     const lagSnapshotStats = lagSamples.length ? lagSamples[lagSamples.length - 1] : null;
@@ -1455,6 +1461,424 @@ async function checkCanonicalWorkbench3d(workbench) {
   assert(pageErrors.length === 0, "F3: geen JavaScript-fouten in de 3D-weergave (" + pageErrors.join(" | ").slice(0, 300) + ")");
   await adminPage.close().catch(function () {});
   await adminContext.close().catch(function () {});
+}
+
+// F4: de World Builder zoals Kevin hem gebruikt. Rond de spawn (0,0) twee Regions met een gedeelde rand op x = 0,
+// drie Areas, een muziek-Area, een obstakel en de draft-preview. Alles met de muis op de kaart; A loopt in de game.
+const F4_MAP = { width: 880, height: 560, viewKey: "gk.canonical.worldView" };
+const F4_PREVIEW_GUARD_TABLES = ["player_positions", "authoring_builds", "authoring_release", "authoring_release_audit"];
+
+async function runWorldBuilderFlow(browser, pageA, dbPath) {
+  const adminContext = await browser.createBrowserContext();
+  const adminPage = await adminContext.newPage();
+  const adminErrors = [];
+  adminPage.on("pageerror", function (error) { adminErrors.push(String(error && error.message ? error.message : error)); });
+  const gameErrors = [];
+  const onGameConsole = function (message) { if (message.type() === "error") gameErrors.push(message.text()); };
+  const onGamePageError = function (error) { gameErrors.push(String(error && error.message ? error.message : error)); };
+  pageA.on("console", onGameConsole);
+  pageA.on("pageerror", onGamePageError);
+  try {
+    await prepareExistingPage(adminPage);
+    // Hoger venster: de hele kaart (560 px) moet zichtbaar zijn om erop te kunnen tekenen.
+    await adminPage.setViewport({ width: 1280, height: 1200, deviceScaleFactor: 1 });
+    const login = await adminPage.evaluate(async function (credentials) {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(credentials)
+      });
+      return response.status;
+    }, { username: ADMIN_USERNAME, password: ADMIN_PASSWORD });
+    assert(login === 200, "F4: admin logt in voor de werkbank");
+    await adminPage.goto(BASE + "/editor/canoniek.html", { waitUntil: "domcontentloaded" });
+    const ui = canonicalUi(adminPage);
+    const preF4Build = (await goldenPathApi(adminPage, "GET", "/api/authoring/active")).json?.buildId || null;
+    const homeA = await waitForServerRestingPosition(pageA);
+
+    // ---- kaarthulpjes: wereldmeters -> schermpunt via het opgeslagen kaartbeeld ----
+    const readView = async function () {
+      return await adminPage.evaluate(function (key) {
+        try { return JSON.parse(window.localStorage.getItem(key) || "null"); } catch { return null; }
+      }, F4_MAP.viewKey);
+    };
+    const mapBox = async function () {
+      const handle = await adminPage.$('canvas[data-cw="world-map"]');
+      await handle.evaluate(function (canvas) { canvas.scrollIntoView({ block: "center" }); });
+      await sleep(50);
+      return await handle.boundingBox();
+    };
+    const toScreen = function (box, view, x, z) {
+      return {
+        x: box.x + ((x - view.cx) * view.scale + F4_MAP.width / 2) * box.width / F4_MAP.width,
+        y: box.y + ((z - view.cz) * view.scale + F4_MAP.height / 2) * box.height / F4_MAP.height
+      };
+    };
+    const mapPoints = async function (points) {
+      const box = await mapBox();
+      const view = await readView();
+      return points.map(function (point) { return toScreen(box, view, point[0], point[1]); });
+    };
+    const dragOnMap = async function (from, to) {
+      const [a, b] = await mapPoints([from, to]);
+      await adminPage.mouse.move(a.x, a.y);
+      await adminPage.mouse.down();
+      await adminPage.mouse.move(b.x, b.y, { steps: 8 });
+      await adminPage.mouse.up();
+    };
+    const clickOnMap = async function (point) {
+      const [a] = await mapPoints([point]);
+      await adminPage.mouse.click(a.x, a.y);
+      await sleep(120);
+    };
+    const drawShape = async function (tool, name, draw) {
+      await adminPage.click('[data-cw="tool-' + tool + '"]');
+      await ui.typeInto('[data-cw="shape-name"]', name);
+      await draw();
+    };
+    const waitForShapeCounts = async function (regions, areas, colliders, message) {
+      const expected = "Regions (" + regions + "), Areas (" + areas + ") en obstakels (" + colliders + ")";
+      const ok = await adminPage.waitForFunction(function (text) {
+        return Array.from(document.querySelectorAll("h3")).some(function (node) { return node.textContent === text; });
+      }, { timeout: 15000 }, expected).then(function () { return true; }).catch(function () { return false; });
+      assert(ok, message + (ok ? "" : " (verwacht " + expected + "; status: " + await textContent(adminPage, ".cwStatus") + ")"));
+    };
+    const selectShape = async function (docKey, heading) {
+      await adminPage.click('a[data-key="' + docKey + '"]');
+      await adminPage.waitForFunction(function (text) {
+        return Array.from(document.querySelectorAll("h3")).some(function (node) { return node.textContent.includes(text); });
+      }, { timeout: 10000 }, heading);
+    };
+
+    console.log("-- F4 stap 1: tekenen in tab Wereld --");
+    await ui.tab("world", '[data-cw="world-map"]');
+    // Inzoomen met het muiswiel op de spawn (0,0) en die naar het midden slepen.
+    let box = await mapBox();
+    await adminPage.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await adminPage.mouse.wheel({ deltaY: -100 });
+    await sleep(60);
+    const [spawnOnMap] = await mapPoints([[0, 0]]);
+    await adminPage.mouse.move(spawnOnMap.x, spawnOnMap.y);
+    for (let step = 0; step < 11; step += 1) {
+      await adminPage.mouse.wheel({ deltaY: -100 });
+      await sleep(40);
+    }
+    await adminPage.click('[data-cw="tool-select"]');
+    const [spawnZoomed] = await mapPoints([[0, 0]]);
+    box = await mapBox();
+    await adminPage.mouse.move(spawnZoomed.x, spawnZoomed.y);
+    await adminPage.mouse.down();
+    await adminPage.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 6 });
+    await adminPage.mouse.up();
+    const zoomedView = await readView();
+    assert(zoomedView && Math.abs(zoomedView.cx) < 1 && Math.abs(zoomedView.cz) < 1 && zoomedView.scale > 3 && zoomedView.scale < 11,
+      "F4: kaart met wiel en slepen ingezoomd op de spawn (" + JSON.stringify(zoomedView) + ")");
+
+    // Speler A alvast naar de westkant van de gedeelde rand, op een vrij looppad (z = -12).
+    // A kan na de eerdere checks ruim 100 m verderop staan: daarom een ruimer tijdsbudget dan de standaard 15 s.
+    await drivePlayerNearWorldPoint(pageA, -5, -12, 2, 45000);
+
+    await drawShape("region", "F4 West", function () { return dragOnMap([-30, -25], [0, 25]); });
+    await waitForShapeCounts(1, 0, 0, "F4: Region F4 West getekend met de muis");
+    await drawShape("region", "F4 Oost", function () { return dragOnMap([0, -25], [30, 25]); });
+    await waitForShapeCounts(2, 0, 0, "F4: Region F4 Oost getekend; raakt F4 West op x = 0 en bevat de spawn");
+    await drawShape("box", "F4 Rechthoek", function () { return dragOnMap([8, -17], [16, -7]); });
+    await waitForShapeCounts(2, 1, 0, "F4: Area-rechthoek getekend");
+    await drawShape("cylinder", "F4 Cirkel", function () { return dragOnMap([-18, -15], [-13, -15]); });
+    await waitForShapeCounts(2, 2, 0, "F4: Area-cirkel getekend (midden klikken, straal slepen)");
+    await drawShape("polygon", "F4 Polygoon", async function () {
+      for (const point of [[18, 8], [28, 8], [23, 18], [18, 8]]) await clickOnMap(point);
+    });
+    await waitForShapeCounts(2, 3, 0, "F4: Area-polygoon getekend (gesloten door op het eerste punt te klikken)");
+
+    await drawShape("region", "F4 Overlap", function () { return dragOnMap([20, -10], [40, 10]); });
+    await ui.status("overlapt");
+    const afterOverlap = await goldenPathApi(adminPage, "GET", "/api/authoring/workspace");
+    const liveRegions = (afterOverlap.json?.documents || []).filter(function (doc) { return doc.kind === "region" && !doc.archived; });
+    assert(liveRegions.length === 2 && !liveRegions.some(function (doc) { return doc.body.displayName === "F4 Overlap"; }),
+      "F4: overlappende Region geeft een melding en er wordt niets opgeslagen (" + await textContent(adminPage, ".cwStatus") + ")");
+    await waitForShapeCounts(2, 3, 0, "F4: lijst na de geweigerde Region ongewijzigd");
+    await captureEvidenceScreenshot(adminPage, "f4-wereld.png");
+
+    // Verversen: vormen, selectie en kaartbeeld blijven staan.
+    const mapState = async function () {
+      return await adminPage.evaluate(function (key) {
+        const canvas = document.querySelector('canvas[data-cw="world-map"]');
+        return {
+          image: canvas ? canvas.toDataURL("image/png") : "",
+          headings: Array.from(document.querySelectorAll("h3")).map(function (node) { return node.textContent; }),
+          view: window.localStorage.getItem(key)
+        };
+      }, F4_MAP.viewKey);
+    };
+    const beforeRefresh = await mapState();
+    await adminPage.reload({ waitUntil: "domcontentloaded" });
+    await adminPage.waitForSelector('canvas[data-cw="world-map"]');
+    await waitForShapeCounts(2, 3, 0, "F4: na verversen staan alle vormen er nog");
+    const afterRefresh = await mapState();
+    assert(afterRefresh.view === beforeRefresh.view, "F4: kaartbeeld (zoom en positie) blijft na verversen (" + afterRefresh.view + ")");
+    assert(JSON.stringify(afterRefresh.headings) === JSON.stringify(beforeRefresh.headings) && afterRefresh.headings.some(function (text) { return text.includes("F4 Polygoon"); }),
+      "F4: selectie blijft na verversen (" + afterRefresh.headings.join(" | ").slice(0, 200) + ")");
+    // Pixel-exact is te streng (randjes/tekst kunnen per tekenbeurt een fractie verschillen); vormen, zoom of
+    // selectie die wegvallen veranderen een groot deel van de kaart.
+    const imageDiff = await adminPage.evaluate(async function (images) {
+      const load = function (src) { return new Promise(function (resolve, reject) { const img = new Image(); img.onload = function () { resolve(img); }; img.onerror = reject; img.src = src; }); };
+      const pixels = async function (src) {
+        const img = await load(src);
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width; canvas.height = img.height;
+        const g = canvas.getContext("2d");
+        g.drawImage(img, 0, 0);
+        return g.getImageData(0, 0, img.width, img.height).data;
+      };
+      const a = await pixels(images[0]);
+      const b = await pixels(images[1]);
+      if (a.length !== b.length) return 1;
+      let differing = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 48) differing += 1;
+      }
+      return differing / (a.length / 4);
+    }, [beforeRefresh.image, afterRefresh.image]);
+    assert(afterRefresh.image.length > 1000 && imageDiff < 0.01, "F4: de kaart tekent na verversen hetzelfde beeld (" + (imageDiff * 100).toFixed(3) + "% pixels anders, grens 1%)");
+
+    console.log("-- F4 stap 2: publiceren, A ziet de Region --");
+    const buildRegions = await ui.publish();
+    assert(/^b_[0-9a-f]{24}$/.test(buildRegions || "") && buildRegions !== preF4Build, "F4: publiceren via tab Publiceren maakt build " + buildRegions);
+    await pageA.reload({ waitUntil: "domcontentloaded" });
+    await waitForMmoOnlineReady(pageA);
+    assert(await waitForWorldRegionLabel(pageA, "F4 West"), "F4: #worldRegionLabel toont F4 West na verversen (" + await worldRegionLabelInfo(pageA) + ")");
+
+    console.log("-- F4 stap 3: over de gedeelde rand lopen --");
+    const basis = await pageA.evaluate(function () { return window.__GK_GAME_RUNTIME.getCameraGroundBasis(); });
+    const eastKey = [
+      ["KeyD", basis.right.x, basis.right.z], ["KeyA", -basis.right.x, -basis.right.z],
+      ["KeyW", basis.forward.x, basis.forward.z], ["KeyS", -basis.forward.x, -basis.forward.z]
+    ].map(function ([code, x, z]) { return { code, cos: x / (Math.hypot(x, z) || 1) }; })
+      .sort(function (a, b) { return b.cos - a.cos; })[0];
+    assert(eastKey.cos > 0.9, "F4: toets " + eastKey.code + " loopt (bijna) recht naar +x (cos=" + eastKey.cos.toFixed(2) + ")");
+    const rebuildsBefore = await worldRebuildCount(pageA);
+    const errorsBeforeBorder = gameErrors.length;
+    await pageA.bringToFront();
+    const beforeBorder = await getPlayerState(pageA);
+    // Toets vasthouden tot de server de nieuwe Region meldt (max 5 s), dan loslaten: A blijft net over de rand.
+    await pageA.keyboard.down(eastKey.code);
+    const crossed = await pageA.waitForFunction(function () {
+      return document.getElementById("worldRegionLabel")?.textContent === "F4 Oost";
+    }, { timeout: 5000 }).then(function () { return true; }).catch(function () { return false; });
+    await pageA.keyboard.up(eastKey.code);
+    const afterBorder = await getPlayerState(pageA);
+    console.log("  F4 grens: van (" + Number(beforeBorder?.x).toFixed(2) + ", " + Number(beforeBorder?.z).toFixed(2) + ") naar (" + Number(afterBorder?.x).toFixed(2) + ", " + Number(afterBorder?.z).toFixed(2) + ")");
+    assert(crossed, "F4: label wisselt naar F4 Oost na de rand (" + await worldRegionLabelInfo(pageA) + ")");
+    const bannerShown = await pageA.waitForFunction(function () {
+      return (document.getElementById("canonicalProjectBanner")?.textContent || "").includes("Je bent nu in F4 Oost");
+    }, { timeout: 5000 }).then(function () { return true; }).catch(function () { return false; });
+    assert(bannerShown, "F4: banner 'Je bent nu in F4 Oost' (" + await textContent(pageA, "#canonicalProjectBanner") + ")");
+    await waitForRuntimeIdle(pageA, 5000);
+    const rebuildsAfter = await worldRebuildCount(pageA);
+    assert(rebuildsAfter === rebuildsBefore, "F4: grens zonder world-rebuild (worldRebuilds " + rebuildsBefore + " -> " + rebuildsAfter + ")");
+    assert(gameErrors.length === errorsBeforeBorder, "F4: geen console-errors bij de grens (" + gameErrors.slice(errorsBeforeBorder).join(" | ").slice(0, 300) + ")");
+    await captureEvidenceScreenshot(pageA, "f4-grens.png");
+    await captureElementScreenshot(pageA, ".gameMinimapCanvas", "f4-minimap.png");
+
+    console.log("-- F4 stap 4: muziek in een Area, audio_locked zonder klik --");
+    const oggBase64 = fs.readFileSync(path.join(rootDir, "tests/fixtures/f4-muziek.ogg")).toString("base64");
+    const upload = await adminPage.evaluate(async function (payload) {
+      const auth = await fetch("/api/auth/me", { headers: { Accept: "application/json" } }).then(function (response) { return response.json(); }).catch(function () { return null; });
+      const bytes = Uint8Array.from(atob(payload.data), function (ch) { return ch.charCodeAt(0); });
+      const form = new FormData();
+      form.append("name", "F4 Muziek");
+      form.append("category", "music");
+      form.append("assetType", "audio");
+      form.append("file", new Blob([bytes], { type: "audio/ogg" }), "f4-muziek.ogg");
+      const headers = { Accept: "application/json" };
+      if (auth?.csrfToken) headers["X-GK-CSRF"] = auth.csrfToken;
+      const response = await fetch("/api/assets/import", { method: "POST", credentials: "same-origin", headers: headers, body: form });
+      const json = await response.json().catch(function () { return null; });
+      return { status: response.status, asset: json?.asset || null, error: json?.error || null };
+    }, { data: oggBase64 });
+    assert(upload.status === 201 && upload.asset?.id && upload.asset.assetType === "audio", "F4: korte .ogg geüpload als audio-asset (" + upload.status + " " + (upload.error || "") + ")");
+    await ui.tab("world", '[data-cw="world-map"]');
+    await selectShape("area:area.f4_rechthoek", "F4 Rechthoek");
+    await adminPage.select('[data-cw="music"]', upload.asset?.id || "");
+    await adminPage.click('[data-cw="save-shape"]');
+    await ui.status("Opgeslagen");
+    const buildMusic = await ui.publish();
+    assert(buildMusic && buildMusic !== buildRegions, "F4: build met muziek " + buildMusic);
+    // Chrome onthoudt per tabblad dat er eerder een toets of klik was, ook na verversen: dan mag geluid meteen.
+    // Daarom een vers tabblad voor A (zelfde login) zonder enige input. A loopt daarin via de input-route van de
+    // client (geen klik, geen toets) de Area in, zoals een speler die net binnenkomt en nog niets heeft aangeraakt.
+    const audioPage = await pageA.browserContext().newPage();
+    // Headless Chromium speelt geluid ook zonder gebaar af (ook met --autoplay-policy, en navigator.userActivation
+    // staat er al op actief). Daarom bootst de test de regel van gewone Chrome na: play() weigert tot er in dit
+    // tabblad een echte (isTrusted) klik of toets was.
+    await audioPage.evaluateOnNewDocument(function () {
+      let gesture = false;
+      const markGesture = function (event) { if (event.isTrusted) gesture = true; };
+      window.addEventListener("pointerdown", markGesture, true);
+      window.addEventListener("keydown", markGesture, true);
+      const originalPlay = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function () {
+        if (!gesture) {
+          return Promise.reject(new DOMException("play() vraagt eerst een klik of toets (autoplayregel)", "NotAllowedError"));
+        }
+        return originalPlay.apply(this, arguments);
+      };
+    });
+    audioPage.on("console", onGameConsole);
+    audioPage.on("pageerror", onGamePageError);
+    await audioPage.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    await audioPage.goto(BASE + "/game/", { waitUntil: "domcontentloaded" });
+    await waitForMmoOnlineReady(audioPage);
+    const outsideMusic = await audioPage.waitForFunction(function () {
+      const label = document.getElementById("worldRegionLabel");
+      return Boolean(label && label.textContent === "F4 Oost");
+    }, { timeout: 20000 }).then(function () { return true; }).catch(function () { return false; });
+    assert(outsideMusic, "F4: nieuw tabblad van A staat in F4 Oost, buiten de muziek-Area (" + await worldRegionLabelInfo(audioPage) + ")");
+    const errorsBeforeAudio = gameErrors.length;
+    await drivePlayerNearWorldPoint(audioPage, 12, -12, 2.5);
+    const audioLocked = await audioPage.waitForFunction(function () {
+      const label = document.getElementById("worldRegionLabel");
+      return Boolean(label && label.dataset.audio === "audio_locked" && label.textContent.includes("klik of druk een toets voor muziek"));
+    }, { timeout: 15000 }).then(function () { return true; }).catch(function () { return false; });
+    assert(audioLocked, "F4: in de muziek-Area zonder klik meldt het label 'klik of druk een toets voor muziek' (" + await worldRegionLabelInfo(audioPage) + ")");
+    assert(gameErrors.length === errorsBeforeAudio, "F4: audio_locked zonder crash of console-error (" + gameErrors.slice(errorsBeforeAudio).join(" | ").slice(0, 300) + ")");
+    await clickNearPlayer(audioPage, 0.08);
+    const audioPlaying = await audioPage.waitForFunction(function () {
+      return document.getElementById("worldRegionLabel")?.dataset.audio === "playing";
+    }, { timeout: 15000 }).then(function () { return true; }).catch(function () { return false; });
+    assert(audioPlaying, "F4: na een klik speelt de muziek (" + await worldRegionLabelInfo(audioPage) + ")");
+    audioPage.off("console", onGameConsole);
+    audioPage.off("pageerror", onGamePageError);
+    await audioPage.close().catch(function () {});
+
+    console.log("-- F4 stap 5: obstakel op het looppad --");
+    await ui.tab("world", '[data-cw="world-map"]');
+    await drawShape("colliderBox", "F4 Obstakel", function () { return dragOnMap([22, -24], [24, 0]); });
+    // Lange muur (z -24..0): de looptoets staat niet exact op +x, dus A glijdt na het raken een stukje langs de muur.
+    await waitForShapeCounts(2, 3, 1, "F4: Obstakel-rechthoek getekend op het looppad van A");
+    const buildObstacle = await ui.publish();
+    assert(buildObstacle && buildObstacle !== buildMusic, "F4: build met obstakel " + buildObstacle);
+    await pageA.reload({ waitUntil: "domcontentloaded" });
+    await waitForMmoOnlineReady(pageA);
+    await waitForServerRestingPosition(pageA);
+    let furthestShownX = -Infinity;
+    await pageA.keyboard.down(eastKey.code);
+    const walkStartedAt = Date.now();
+    while (Date.now() - walkStartedAt < 2600) {
+      const shown = await getPlayerState(pageA);
+      if (Number.isFinite(Number(shown?.x))) furthestShownX = Math.max(furthestShownX, Number(shown.x));
+      await sleep(80);
+    }
+    await pageA.keyboard.up(eastKey.code);
+    // Kevin: meten als de speler stilstaat.
+    await waitForRuntimeIdle(pageA, 6000);
+    const serverAtWall = await waitForServerRestingPosition(pageA);
+    await sleep(800);
+    const shownAtWall = await getPlayerState(pageA);
+    const wallStopX = 22 - 0.5; // obstakelvlak op x = 22, spelerradius 0,5
+    const wallGap = serverAtWall && shownAtWall ? Math.hypot(Number(shownAtWall.x) - Number(serverAtWall.x), Number(shownAtWall.z) - Number(serverAtWall.z)) : Infinity;
+    console.log("  F4 obstakel: server (" + Number(serverAtWall?.x).toFixed(3) + ", " + Number(serverAtWall?.z).toFixed(3) + "), getoond ("
+      + Number(shownAtWall?.x).toFixed(3) + ", " + Number(shownAtWall?.z).toFixed(3) + "), verschil " + wallGap.toFixed(3) + " m, verste getoonde x tijdens lopen " + furthestShownX.toFixed(3));
+    assert(serverAtWall && Number(serverAtWall.x) <= wallStopX + 0.05 && Number(serverAtWall.x) >= wallStopX - 0.5,
+      "F4: A stopt vóór het obstakel (server x=" + Number(serverAtWall?.x).toFixed(3) + ", stoplijn " + wallStopX + ")");
+    assert(wallGap < 0.1, "F4: stilstaand bij het obstakel verschillen server en scherm minder dan 0,1 m (" + wallGap.toFixed(3) + " m)");
+    assert(furthestShownX <= wallStopX + 0.15, "F4: het scherm loopt niet het obstakel in, dus geen rubberband (verste x=" + furthestShownX.toFixed(3) + ")");
+    await captureEvidenceScreenshot(pageA, "f4-obstakel.png");
+
+    console.log("-- F4 stap 6: draft-preview schrijft niets --");
+    await ui.tab("world", '[data-cw="world-map"]');
+    await selectShape("area:area.f4_cirkel", "F4 Cirkel");
+    await ui.typeInto('[data-cw="detail-name"]', "F4 Cirkel verplaatst");
+    await adminPage.evaluate(function () {
+      document.querySelector('[data-cw="centerXMm"]').value = "-12";
+      document.querySelector('[data-cw="centerZMm"]').value = "12";
+    });
+    await adminPage.click('[data-cw="save-shape"]');
+    await ui.status("Opgeslagen");
+    const draftCircle = ((await goldenPathApi(adminPage, "GET", "/api/authoring/workspace")).json?.documents || []).find(function (doc) { return doc.docKey === "area:area.f4_cirkel"; });
+    assert(draftCircle && draftCircle.body.displayName === "F4 Cirkel verplaatst" && draftCircle.body.centerXMm === -12000 && draftCircle.body.centerZMm === 12000,
+      "F4: Area gewijzigd en opgeslagen, niet gepubliceerd (" + JSON.stringify(draftCircle && draftCircle.body) + ")");
+    const rowsBefore = countRows(dbPath, F4_PREVIEW_GUARD_TABLES);
+    await adminPage.click('[data-cw="tool-preview"]');
+    await adminPage.waitForSelector('[data-cw="preview-result"]:not([hidden])');
+    // Eerst één klik: het resultaatvak boven de kaart groeit dan, waardoor de kaart iets zakt. Daarna pas slepen.
+    await clickOnMap([-25, 0]);
+    await adminPage.waitForFunction(function () {
+      return (document.querySelector('[data-cw="preview-where"]')?.textContent || "").includes("Region: F4 West");
+    }, { timeout: 15000 }).catch(function () {});
+    await dragOnMap([-25, 0], [-12, 12]);
+    const previewShowsDraft = await adminPage.waitForFunction(function () {
+      return (document.querySelector('[data-cw="preview-where"]')?.textContent || "").includes("Area: F4 Cirkel verplaatst");
+    }, { timeout: 15000 }).then(function () { return true; }).catch(function () { return false; });
+    assert(previewShowsDraft, "F4: Preview (draft) toont de gewijzigde Area (" + await textContent(adminPage, '[data-cw="preview-where"]') + ")");
+    await captureEvidenceScreenshot(adminPage, "f4-preview.png");
+    const rowsAfter = countRows(dbPath, F4_PREVIEW_GUARD_TABLES);
+    assert(JSON.stringify(rowsAfter) === JSON.stringify(rowsBefore), "F4: preview schrijft geen rijen (voor " + JSON.stringify(rowsBefore) + ", na " + JSON.stringify(rowsAfter) + ")");
+    const stillActive = (await goldenPathApi(adminPage, "GET", "/api/authoring/active")).json?.buildId || null;
+    assert(stillActive === buildObstacle, "F4: preview publiceert niets (actief blijft " + stillActive + ")");
+
+    // Opruimen: build van vóór F4 terug, zodat de checks hierna niet tegen het obstakel of de Regions aanlopen.
+    if (preF4Build) {
+      await ui.tab("release", '[data-cw="publish"]');
+      adminPage.once("dialog", function (dialog) { dialog.accept("F4 browsercheck: build van voor F4 terug").catch(function () {}); });
+      await adminPage.click('[data-cw="rollback"][data-build="' + preF4Build + '"]');
+      await ui.status("is weer actief");
+    }
+    await pageA.reload({ waitUntil: "domcontentloaded" });
+    await waitForMmoOnlineReady(pageA);
+    if (homeA && Number.isFinite(Number(homeA.x)) && Number.isFinite(Number(homeA.z))) await drivePlayerNearWorldPoint(pageA, Number(homeA.x), Number(homeA.z), 2, 45000);
+    assert(adminErrors.length === 0, "F4: geen JavaScript-fouten in de werkbank (" + adminErrors.join(" | ").slice(0, 300) + ")");
+  } finally {
+    pageA.off("console", onGameConsole);
+    pageA.off("pageerror", onGamePageError);
+    await adminPage.close().catch(function () {});
+    await adminContext.close().catch(function () {});
+  }
+}
+
+async function waitForWorldRegionLabel(page, expected, timeoutMs = 20000) {
+  return await page.waitForFunction(function (text) {
+    const label = document.getElementById("worldRegionLabel");
+    return Boolean(label && label.style.display !== "none" && label.textContent.includes(text));
+  }, { timeout: timeoutMs }, expected).then(function () { return true; }).catch(function () { return false; });
+}
+
+async function worldRegionLabelInfo(page) {
+  return await page.evaluate(function () {
+    const label = document.getElementById("worldRegionLabel");
+    return label ? "label='" + label.textContent + "', data-audio=" + label.dataset.audio : "geen #worldRegionLabel";
+  });
+}
+
+async function worldRebuildCount(page) {
+  return await page.evaluate(function () {
+    return window.__GK_GAME_CLIENT_DEBUG?.getPositions?.()?.worldRebuilds ?? null;
+  });
+}
+
+async function captureElementScreenshot(page, selector, fileName) {
+  const handle = await page.$(selector);
+  if (handle) {
+    try {
+      await handle.screenshot({ path: path.join(evidenceDir, fileName) });
+      return;
+    } catch {}
+  }
+  await captureEvidenceScreenshot(page, fileName);
+}
+
+// Alleen lezen: telt rijen in de geïsoleerde testdatabase (de server schrijft gewoon door, WAL).
+function countRows(dbPath, tables) {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const counts = {};
+    for (const table of tables) counts[table] = Number(db.prepare("SELECT COUNT(*) AS n FROM " + table).get().n);
+    return counts;
+  } finally {
+    db.close();
+  }
 }
 
 function canonicalUi(page) {
@@ -2247,8 +2671,8 @@ async function driveInputVector(page, moveX, moveZ, durationMs) {
   await sleep(350);
 }
 
-async function drivePlayerNearWorldPoint(page, targetX, targetZ, tolerance = 2.5) {
-  const deadline = Date.now() + 15000;
+async function drivePlayerNearWorldPoint(page, targetX, targetZ, tolerance = 2.5, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
   let distance = Infinity;
   while (Date.now() < deadline) {
     const player = await getPlayerState(page);

@@ -1,5 +1,6 @@
 // F3-E2-T01/E3-T07: de actieve canonieke build wordt een laag over de gepubliceerde (legacy) wereld.
 // Canonical wint per object-ID; de gepubliceerde wereld zelf wordt niet gewijzigd (we klonen wat we aanraken).
+import { colliderToBlocker } from "./world-compiler.js";
 
 export const CANONICAL_SPAWN_PREFIX = "canonical.";
 
@@ -124,6 +125,15 @@ export function applyCanonicalBuild(world, serverBuild) {
     canonicalBuildId: serverBuild.buildId || null
   });
   const next = Object.assign({}, world, { gameProject: nextProject });
+  // Fase 04: canonieke obstakels komen bij de gewone blockers. Server-movement en de game (prediction) bouwen hun
+  // walkability-index uit precies deze lijst, dus beide botsen op dezelfde plek.
+  const colliders = Array.isArray(data.world?.colliders) ? data.world.colliders : [];
+  if (colliders.length) {
+    const collision = world.collision || {};
+    next.collision = Object.assign({}, collision, {
+      blockers: (Array.isArray(collision.blockers) ? collision.blockers : []).concat(colliders.map(colliderToBlocker))
+    });
+  }
   if (world.zonePackage?.zoneId) next.zonePackage = withCanonicalPickups(world.zonePackage, pickups, removedLegacy);
   return next;
 }

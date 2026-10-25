@@ -1,11 +1,16 @@
 // F3-E1-T01: canonieke kinds. Alleen data: geen code, geen expressies, geen stille defaults bij read.
 // Elk veld heeft een audience: "client" komt in het clientpakket, "server" alleen in het serverpakket.
+// Fase 04: region en area (ruimte in integer mm, zie apps/web/public/shared/spatial.js).
+import { AREA_SHAPES, MAX_WORLD_MM, polygonProblem } from "../../../apps/web/public/shared/spatial.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
 const ASSET_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9_.:-]{0,63}$/;
 
 export const KIND_SCHEMA_VERSION = 1;
+
+const MM = { min: -MAX_WORLD_MM, max: MAX_WORLD_MM };
+const mmField = (label, required) => ({ type: "integer", required, min: MM.min, max: MM.max, audience: "client", label });
 
 export const CANONICAL_KINDS = {
   project_settings: {
@@ -21,6 +26,7 @@ export const CANONICAL_KINDS = {
     label: "Item",
     singleton: false,
     domain: "items",
+    idField: "itemId",
     fields: {
       itemId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Item-ID" },
       displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam" },
@@ -41,6 +47,7 @@ export const CANONICAL_KINDS = {
     label: "Pickup",
     singleton: false,
     domain: "pickups",
+    idField: "pickupId",
     fields: {
       pickupId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Pickup-ID" },
       itemRef: { type: "ref", refKind: "item_definition", required: true, audience: "client", label: "Item" },
@@ -51,8 +58,79 @@ export const CANONICAL_KINDS = {
       amount: { type: "integer", required: true, min: 1, max: 9999, audience: "server", label: "Aantal" },
       respawnPolicyRef: { type: "id", required: false, maxLength: 120, audience: "server", label: "Respawnbeleid" }
     }
+  },
+  // F4-E1-T02: een Region is een exclusieve rechthoek in world-mm. Regions overlappen nooit (half-open grenzen).
+  region: {
+    label: "Region",
+    singleton: false,
+    domain: "world",
+    idField: "regionId",
+    fields: {
+      regionId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Region-ID" },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam" },
+      minXMm: mmField("Min X (mm)", true),
+      maxXMm: mmField("Max X (mm)", true),
+      minZMm: mmField("Min Z (mm)", true),
+      maxZMm: mmField("Max Z (mm)", true),
+      musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek" },
+      // F4-E3-T03: expliciete koppeling met een oude zone uit Nodes (alleen voor het parityrapport).
+      legacyZoneRef: { type: "text", required: false, maxLength: 120, audience: "server", label: "Oude zone" }
+    }
+  },
+  // F4-E1-T02: een Area is een betekenisvorm binnen precies één Region: box, cylinder of polygon. Areas mogen overlappen.
+  area: {
+    label: "Area",
+    singleton: false,
+    domain: "world",
+    idField: "areaId",
+    fields: {
+      areaId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Area-ID" },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam" },
+      regionRef: { type: "ref", refKind: "region", required: true, audience: "client", label: "Region" },
+      shape: { type: "select", required: true, options: AREA_SHAPES.slice(), audience: "client", label: "Vorm" },
+      minXMm: mmField("Min X (mm)", false),
+      maxXMm: mmField("Max X (mm)", false),
+      minZMm: mmField("Min Z (mm)", false),
+      maxZMm: mmField("Max Z (mm)", false),
+      centerXMm: mmField("Midden X (mm)", false),
+      centerZMm: mmField("Midden Z (mm)", false),
+      radiusMm: { type: "integer", required: false, min: 1000, max: MAX_WORLD_MM, audience: "client", label: "Straal (mm)" },
+      pointsMm: { type: "pointList", required: false, minItems: 3, maxItems: 64, min: MM.min, max: MM.max, audience: "client", label: "Punten (mm)" },
+      // Alleen de server kiest de Area bij overlap; de client hoeft de prioriteit niet te kennen.
+      priority: { type: "integer", required: false, min: 0, max: 100, audience: "server", label: "Prioriteit" },
+      musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek" }
+    }
+  },
+  // F4-E1-T03: statische collider (obstakel) binnen een Region. Server-movement én client-prediction lezen exact
+  // deze vorm (via world.collision.blockers), en de latere navtile-bake leest dezelfde mm-geometrie uit de build.
+  collider: {
+    label: "Obstakel",
+    singleton: false,
+    domain: "world",
+    idField: "colliderId",
+    fields: {
+      colliderId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Obstakel-ID" },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam" },
+      regionRef: { type: "ref", refKind: "region", required: true, audience: "client", label: "Region" },
+      shape: { type: "select", required: true, options: AREA_SHAPES.slice(), audience: "client", label: "Vorm" },
+      minXMm: mmField("Min X (mm)", false),
+      maxXMm: mmField("Max X (mm)", false),
+      minZMm: mmField("Min Z (mm)", false),
+      maxZMm: mmField("Max Z (mm)", false),
+      centerXMm: mmField("Midden X (mm)", false),
+      centerZMm: mmField("Midden Z (mm)", false),
+      radiusMm: { type: "integer", required: false, min: 100, max: MAX_WORLD_MM, audience: "client", label: "Straal (mm)" },
+      pointsMm: { type: "pointList", required: false, minItems: 3, maxItems: 64, min: MM.min, max: MM.max, audience: "client", label: "Punten (mm)" }
+    }
   }
 };
+
+// Velden per Area-vorm. Een veld van een andere vorm is een fout (geen half-ingevulde vormen).
+export const AREA_SHAPE_FIELDS = Object.freeze({
+  box: ["minXMm", "maxXMm", "minZMm", "maxZMm"],
+  cylinder: ["centerXMm", "centerZMm", "radiusMm"],
+  polygon: ["pointsMm"]
+});
 
 export function kindSpec(kind) {
   return Object.prototype.hasOwnProperty.call(CANONICAL_KINDS, kind) ? CANONICAL_KINDS[kind] : null;
@@ -63,8 +141,7 @@ export function docKeyFor(kind, body) {
   const spec = kindSpec(kind);
   if (!spec) return null;
   if (spec.singleton) return kind;
-  const idField = kind === "item_definition" ? "itemId" : "pickupId";
-  return kind + ":" + String(body?.[idField] || "");
+  return kind + ":" + String(body?.[spec.idField] || "");
 }
 
 function issue(field, code, message) {
@@ -116,13 +193,44 @@ export function validateDocument(kind, body) {
       if (new Set(value).size !== value.length) issues.push(issue(key, "FIELD_DUPLICATE", field.label + " bevat dubbele waarden."));
       continue;
     }
+    if (field.type === "pointList") {
+      if (!Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een lijst zijn.")); continue; }
+      if (value.length < field.minItems || value.length > field.maxItems) issues.push(issue(key, "FIELD_RANGE", field.label + ": " + field.minItems + " tot " + field.maxItems + " punten."));
+      const bad = value.some((point) => !Array.isArray(point) || point.length !== 2 || point.some((n) => !Number.isInteger(n) || n < field.min || n > field.max));
+      if (bad) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is [x, z] in hele mm."));
+      continue;
+    }
     if (field.type === "number" || field.type === "integer") {
       if (typeof value !== "number" || !Number.isFinite(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een getal zijn.")); continue; }
       if (field.type === "integer" && !Number.isInteger(value)) issues.push(issue(key, "FIELD_INTEGER", field.label + " moet een heel getal zijn."));
       if (value < field.min || value > field.max) issues.push(issue(key, "FIELD_RANGE", field.label + " moet tussen " + field.min + " en " + field.max + " liggen."));
     }
   }
+  if (!issues.length) shapeIssues(kind, body, issues);
   return { ok: issues.length === 0, issues, refs };
+}
+
+// Vormregels die over meerdere velden gaan (alleen als de losse velden al kloppen).
+function shapeIssues(kind, body, issues) {
+  if (kind === "region") {
+    if (body.minXMm >= body.maxXMm || body.minZMm >= body.maxZMm) issues.push(issue("maxXMm", "REGION_EMPTY", "Een Region moet breedte en diepte hebben (min < max)."));
+    return;
+  }
+  if (kind !== "area" && kind !== "collider") return;
+  const own = AREA_SHAPE_FIELDS[body.shape];
+  for (const [shape, fields] of Object.entries(AREA_SHAPE_FIELDS)) {
+    for (const field of fields) {
+      const present = body[field] !== undefined && body[field] !== null && body[field] !== "";
+      if (shape === body.shape && !present) issues.push(issue(field, "FIELD_REQUIRED", "Vorm " + body.shape + " vraagt " + field + "."));
+      if (shape !== body.shape && !own.includes(field) && present) issues.push(issue(field, "SHAPE_FIELD", field + " hoort niet bij vorm " + body.shape + "."));
+    }
+  }
+  if (issues.length) return;
+  if (body.shape === "box" && (body.minXMm >= body.maxXMm || body.minZMm >= body.maxZMm)) issues.push(issue("maxXMm", "AREA_EMPTY", "Een rechthoek moet breedte en diepte hebben (min < max)."));
+  if (body.shape === "polygon") {
+    const problem = polygonProblem(body.pointsMm);
+    if (problem) issues.push(issue("pointsMm", problem, "De polygoon is ongeldig (" + problem + ")."));
+  }
 }
 
 // Splitst een gevalideerde body per audience.

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { applyCanonicalBuild } from "./authoring/runtime-overlay.js";
+import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
 import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
@@ -953,6 +954,64 @@ export class MmoService {
   setCanonicalBuildProvider(provider) {
     this.canonicalBuildProvider = typeof provider === "function" ? provider : null;
     this.worldCache = null;
+    this.spatialCache = null;
+  }
+
+  // Fase 04: Region/Area-index uit de actieve canonieke build (in geheugen, één keer per build opgebouwd).
+  spatialIndex() {
+    const canonical = this.canonicalBuildProvider ? this.canonicalBuildProvider() : null;
+    const buildId = canonical?.buildId || "";
+    if (this.spatialCache && this.spatialCache.buildId === buildId) return this.spatialCache;
+    const world = canonical?.data?.world || null;
+    this.spatialCache = { buildId, world, index: world ? createSpatialIndex(world) : null };
+    return this.spatialCache;
+  }
+
+  // Server-authoritative membership: zet current_region_id/current_area_id op de (in-memory) state.
+  // Wordt niet in player_positions opgeslagen; na een herstart rekent de eerste tick het opnieuw uit.
+  assignSpatialMembership(nextState, previousState = null) {
+    const spatial = this.spatialIndex();
+    if (!spatial.index) {
+      nextState.current_region_id = null;
+      nextState.current_area_id = null;
+      nextState.spatial_build_id = spatial.buildId || null;
+      return nextState;
+    }
+    const xMm = metersToMm(nextState.x);
+    const zMm = metersToMm(nextState.z);
+    if (!Number.isFinite(xMm) || !Number.isFinite(zMm)) return nextState;
+    const sameBuild = previousState?.spatial_build_id === spatial.buildId;
+    const previous = sameBuild ? { regionId: previousState.current_region_id || null, areaId: previousState.current_area_id || null } : null;
+    const membership = resolveMembership(spatial.index, xMm, zMm, previous);
+    nextState.current_region_id = membership.regionId;
+    nextState.current_area_id = membership.areaId;
+    nextState.spatial_build_id = spatial.buildId;
+    return nextState;
+  }
+
+  spatialMembershipPayload(state) {
+    const spatial = this.spatialIndex();
+    const region = state?.current_region_id && spatial.index ? spatial.index.regions.get(state.current_region_id) : null;
+    const area = state?.current_area_id && spatial.index ? spatial.index.areas.get(state.current_area_id) : null;
+    const musicAssetId = area?.musicAssetId || region?.musicAssetId || null;
+    return {
+      ok: true,
+      playerId: state?.player_id || null,
+      buildId: spatial.buildId || null,
+      regionId: region?.regionId || null,
+      regionName: region?.displayName || null,
+      areaId: area?.areaId || null,
+      areaName: area?.displayName || null,
+      musicAssetId,
+      musicUrl: musicAssetId ? (spatial.world?.audio?.[musicAssetId] || null) : null
+    };
+  }
+
+  sendSpatialMembership(connection, state, worldId, toUser = false) {
+    const payload = this.spatialMembershipPayload(state);
+    const message = eventMessage("world:membership", payload, this.stampServerPayload(worldId, payload));
+    if (toUser && connection?.player?.user_id) this.broadcastToUser(connection.player.user_id, message);
+    else if (connection?.ws) send(connection.ws, message);
   }
 
   getPublishedWorldContext() {
@@ -2151,6 +2210,8 @@ export class MmoService {
       previous.z !== nextState.z ||
       previous.rotation_y !== nextState.rotation_y ||
       previous.current_zone_id !== nextState.current_zone_id ||
+      (previous.current_region_id || null) !== (nextState.current_region_id || null) ||
+      (previous.current_area_id || null) !== (nextState.current_area_id || null) ||
       previous.current_spawn_id !== nextState.current_spawn_id ||
       previous.moving !== nextState.moving ||
       previous.animation_state !== nextState.animation_state ||
@@ -2171,6 +2232,9 @@ export class MmoService {
     this.playerStateCache.set(this.getPlayerStateCacheKey(state.player_id, state.world_id), state);
     if (previous.current_zone_id !== state.current_zone_id && connection?.player) {
       this.syncPlayerProfileZone(connection.player, state.world_id, state.current_zone_id);
+    }
+    if ((previous.current_region_id || null) !== (state.current_region_id || null) || (previous.current_area_id || null) !== (state.current_area_id || null)) {
+      this.sendSpatialMembership(connection, state, state.world_id, true);
     }
     this.updatePrimaryPresenceFromState(state, connection);
     this.markPlayerDirty(state.world_id, state.player_id);
@@ -2605,6 +2669,7 @@ export class MmoService {
       nextState.current_zone_id = nextZonePackage.zoneId;
       nextState.current_spawn_id = null;
     }
+    this.assignSpatialMembership(nextState, state);
     return this.updatePlayerStateFromTick(state, nextState, tickInfo.connection || null, inputState || input, Object.assign({}, tickInfo, {
       worldContext: worldContext
     }));
@@ -3015,6 +3080,8 @@ export class MmoService {
       type: "player:state"
     };
     send(connection.ws, eventMessage("player:state", playerState, this.stampServerPayload(worldContext.worldId, playerState)));
+    // Fase 04: meteen de huidige Region/Area, ook als de speler stilstaat (verversen, nieuwe tab).
+    this.sendSpatialMembership(connection, this.assignSpatialMembership(position, position), worldContext.worldId);
     connection.lastSeenAt = nowMs();
   }
 

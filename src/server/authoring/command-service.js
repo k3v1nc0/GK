@@ -2,6 +2,9 @@
 import { docKeyFor, kindSpec, validateDocument } from "../../shared/authoring/kinds.js";
 import { DocumentRepository } from "./document-repository.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
+import { spatialIssuesFor } from "./world-compiler.js";
+
+const SPATIAL_KINDS = new Set(["region", "area", "collider"]);
 
 const COMMANDS = new Set(["create", "update", "archive", "restore"]);
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_.:-]{8,120}$/;
@@ -78,6 +81,14 @@ export class CommandService {
     if (missing.length) throw authoringError(422, "REF_MISSING", "Verwijst naar iets dat niet (meer) bestaat: " + missing.join(", "), { missing });
   }
 
+  // F4-E1-T02: overlap en "Area buiten Region" blokkeren meteen, met de wereld zoals die na dit command zou zijn.
+  checkSpatial(kind, docKey, body) {
+    if (!SPATIAL_KINDS.has(kind)) return;
+    const others = this.documents.activeDocuments().filter((doc) => SPATIAL_KINDS.has(doc.kind) && doc.docKey !== docKey);
+    const issues = spatialIssuesFor(docKey, others.concat([{ docKey, kind, body, archived: false }]));
+    if (issues.length) throw authoringError(422, issues[0].code, issues[0].message, { issues });
+  }
+
   validated(kind, body) {
     const result = validateDocument(kind, body);
     if (!result.ok) throw authoringError(422, "VALIDATION_FAILED", result.issues[0].message, { issues: result.issues });
@@ -91,6 +102,7 @@ export class CommandService {
     const docKey = docKeyFor(kind, payload.body);
     if (this.documents.get(docKey)) throw authoringError(409, "DOC_EXISTS", "Dit bestaat al: " + docKey);
     this.checkRefs(refs);
+    this.checkSpatial(kind, docKey, payload.body);
     this.documents.insert({ docKey, kind, body: payload.body, legacyRef: null }, actor, stamp);
     this.documents.replaceRefs(docKey, refs);
     return { ok: true, docKey, kind, revision: 1 };
@@ -101,6 +113,7 @@ export class CommandService {
     const { refs } = this.validated(current.kind, payload.body);
     if (docKeyFor(current.kind, payload.body) !== current.docKey) throw authoringError(422, "ID_IMMUTABLE", "De ID kan niet worden gewijzigd.");
     this.checkRefs(refs);
+    this.checkSpatial(current.kind, current.docKey, payload.body);
     if (this.documents.updateIfRevision(current.docKey, current.revision, { body: payload.body }, actor, stamp) !== 1) {
       throw authoringError(409, "STALE_REVISION", "Iemand anders heeft dit al gewijzigd.");
     }
@@ -115,6 +128,7 @@ export class CommandService {
       if (backlinks.length) throw authoringError(409, "REF_IN_USE", "Nog in gebruik door: " + backlinks.join(", "), { backlinks });
     } else {
       this.checkRefs(this.db.prepare("SELECT to_doc_key FROM authoring_refs WHERE from_doc_key = ?").all(current.docKey).map((row) => row.to_doc_key));
+      this.checkSpatial(current.kind, current.docKey, current.body);
     }
     if (this.documents.updateIfRevision(current.docKey, current.revision, { archived }, actor, stamp) !== 1) {
       throw authoringError(409, "STALE_REVISION", "Iemand anders heeft dit al gewijzigd.");

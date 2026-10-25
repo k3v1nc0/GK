@@ -4,6 +4,7 @@ import { mountProjectSettingsView } from "./project-settings-view.js";
 import { mountItemDefinitionView } from "./item-definition-view.js";
 import { mountPickupPlacementView } from "./pickup-placement-view.js";
 import { mountReleaseView } from "./release-view.js";
+import { mountWorldBuilderView } from "./world-builder-view.js";
 
 import { api, el, friendlyError } from "./canonical-api.js";
 
@@ -11,6 +12,7 @@ const VIEWS = {
   project: { label: "Project", mount: mountProjectSettingsView },
   items: { label: "Items", mount: mountItemDefinitionView },
   pickups: { label: "Pickups", mount: mountPickupPlacementView },
+  world: { label: "Wereld", mount: mountWorldBuilderView },
   release: { label: "Publiceren", mount: mountReleaseView }
 };
 

@@ -3,6 +3,7 @@ import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPres
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
+import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261025-f4-music1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -10980,10 +10981,27 @@ function drawGameMinimap(config, bake, view, performanceMode) {
     ctx.fillText("Minimap laden", size / 2, size / 2);
   }
   ctx.globalAlpha = 1;
+  drawGameMinimapWorldRegions(ctx, viewBounds, size);
   const categorizedMarkers = gameMinimapCategorizedMarkers(config);
   drawGameMinimapCategorizedMarkers(ctx, config, viewBounds, size, false, performanceMode, performance.now(), categorizedMarkers);
   drawGameMinimapFogOverlay(config, activeView, size, dpr, gameMinimapHasThroughFogMarkers(config), performanceMode);
   drawGameMinimapFogCategoryMarkers(config, activeView, size, dpr, performanceMode, performance.now(), categorizedMarkers);
+}
+
+// Fase 04: Region-randen uit de canonieke build op de minimap (licht: alleen rechthoeken). De huidige Region is feller.
+function drawGameMinimapWorldRegions(ctx, viewBounds, size) {
+  const regions = canonicalClientWorld?.regions;
+  if (!Array.isArray(regions) || !regions.length) return;
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (const region of regions) {
+    const a = worldToMinimapPoint(region.minXMm / 1000, region.minZMm / 1000, viewBounds, size, size);
+    const b = worldToMinimapPoint(region.maxXMm / 1000, region.maxZMm / 1000, viewBounds, size, size);
+    const current = region.regionId === worldSpatial.regionId;
+    ctx.strokeStyle = current ? "rgba(250,204,21,0.9)" : "rgba(226,232,240,0.35)";
+    ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  }
+  ctx.restore();
 }
 
 function drawGameMinimapIfDue(now, options = {}) {
@@ -12003,6 +12021,11 @@ function handleSocketMessage(raw) {
     if (localStillActive) state.control.passiveSince = 0;
     syncNetDebugState();
     updateHud();
+    return;
+  }
+  if (message.type === "world:membership") {
+    applyWorldMembership(message);
+    markWsConnected();
     return;
   }
   if (message.type === "fog:discovery") {
@@ -13096,6 +13119,7 @@ async function pollVersion() {
 // Fase 03: clientpakket van de canonieke build. Deze tab houdt de build waarmee hij startte (sessie-pin);
 // komt er een nieuwe build, dan meldt de tab dat je kunt verversen in plaats van midden in het spel te wisselen.
 let canonicalClientBuildId = null;
+let canonicalClientWorld = null;
 function showCanonicalBanner(text, sticky) {
   let banner = document.getElementById("canonicalProjectBanner");
   if (!banner) {
@@ -13117,12 +13141,61 @@ async function loadCanonicalClientBuild() {
     const data = await response.json();
     if (!data?.buildId) return;
     canonicalClientBuildId = data.buildId;
+    canonicalClientWorld = data.client?.world || null;
     const project = data.client?.project || null;
     if (project?.gameName) document.title = project.gameName;
     if (project?.gameName || project?.motd) showCanonicalBanner((project.gameName || "") + (project.motd ? " · " + project.motd : ""), false);
   } catch {
     // Geen canonieke build of netwerkfout: de game draait gewoon op de legacy-inhoud.
   }
+}
+
+// Fase 04: de server bepaalt in welke Region/Area de speler staat en stuurt dat bij elke wissel.
+// De game toont de naam en wisselt de muziek; geen setWorld en geen herlaad bij een Region- of Area-grens.
+const worldSpatial = { regionId: null, areaId: null, label: "", music: null, unlockBound: false };
+function worldRegionLabelElement() {
+  let label = document.getElementById("worldRegionLabel");
+  if (!label) {
+    label = document.createElement("div");
+    label.id = "worldRegionLabel";
+    label.setAttribute("aria-live", "polite");
+    label.style.cssText = "position:fixed;top:40px;left:50%;transform:translateX(-50%);z-index:49;padding:2px 10px;border-radius:6px;background:rgba(15,23,42,.6);color:#e2e8f0;font:12px system-ui,sans-serif;pointer-events:none;display:none";
+    document.body.appendChild(label);
+  }
+  return label;
+}
+function refreshWorldRegionLabel() {
+  const label = worldRegionLabelElement();
+  const locked = worldSpatial.music && worldSpatial.music.state() === MUSIC_STATES.LOCKED;
+  label.textContent = worldSpatial.label + (locked ? " · klik of druk een toets voor muziek" : "");
+  label.dataset.audio = worldSpatial.music ? worldSpatial.music.state() : "idle";
+  label.style.display = worldSpatial.label ? "block" : "none";
+}
+function ensureWorldMusic() {
+  if (!worldSpatial.music) worldSpatial.music = createWorldMusic({ onStateChange: refreshWorldRegionLabel });
+  if (!worldSpatial.unlockBound) {
+    worldSpatial.unlockBound = true;
+    const unlock = function () { if (worldSpatial.music) worldSpatial.music.unlock(); };
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock, { passive: true });
+  }
+  return worldSpatial.music;
+}
+function applyWorldMembership(message) {
+  if (message.playerId && state.player?.id && message.playerId !== state.player.id) return;
+  const regionId = message.regionId || null;
+  const areaId = message.areaId || null;
+  const changed = regionId !== worldSpatial.regionId || areaId !== worldSpatial.areaId;
+  const hadRegion = Boolean(worldSpatial.regionId);
+  worldSpatial.regionId = regionId;
+  worldSpatial.areaId = areaId;
+  worldSpatial.label = [message.regionName, message.areaName].filter(Boolean).join(" · ");
+  state.debug.worldRegionId = regionId;
+  state.debug.worldAreaId = areaId;
+  if (message.musicUrl || worldSpatial.music) ensureWorldMusic().setTrack(message.musicUrl || null);
+  refreshWorldRegionLabel();
+  if (changed && state.minimapHud) state.minimapHud.dirty = true;
+  if (changed && worldSpatial.label && (hadRegion || message.areaName)) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
 }
 
 async function checkCanonicalBuild() {

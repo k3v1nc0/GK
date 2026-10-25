@@ -11,7 +11,10 @@ function fakeService() {
     service: {
       pointerStallTicksByPlayerId: new Map(),
       writeStoppedLatestInput(playerId) { stopped.push(playerId); },
-      updatePlayerStateFromTick(previous, next) { return next; }
+      updatePlayerStateFromTick(previous, next) { return next; },
+      // Fase 04: de tick zet ook Region/Area op de state (de echte code; zonder build blijft dat null).
+      spatialIndex: MmoService.prototype.spatialIndex,
+      assignSpatialMembership: MmoService.prototype.assignSpatialMembership
     }
   };
 }

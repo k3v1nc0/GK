@@ -7,6 +7,7 @@ import { DocumentRepository } from "./document-repository.js";
 import { CutoverGuard } from "./cutover-guard.js";
 import { CUTOVER_DOMAINS, cutoverRows, finalizeDomain, legacyInventory, planDomain } from "./legacy-import.js";
 import { knownRespawnPolicyIds, knownZoneIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
+import { previewMembership } from "../preview/preview-service.js";
 
 function ifMatchRevision(req) {
   const raw = String(req.headers["if-match"] || "").replace(/^W\//, "").replace(/"/g, "").trim();
@@ -83,11 +84,22 @@ export class AuthoringRoutes {
     }
   }
 
+  // Fase 04: URL per audio-asset, zodat de game muziek kan afspelen zonder de assetlijst te kennen.
+  assetPaths() {
+    if (!this.assetService || typeof this.assetService.list !== "function") return null;
+    try {
+      return new Map(this.assetService.list().filter((asset) => asset.assetType === "audio" && asset.sourcePath).map((asset) => [String(asset.id), String(asset.sourcePath)]));
+    } catch {
+      return null;
+    }
+  }
+
   publishOptions(world) {
     return {
       knownZoneIds: world ? knownZoneIds(world) : null,
       knownRespawnPolicyIds: world ? knownRespawnPolicyIds(world) : null,
       assetTypes: this.assetTypes(),
+      assetPaths: this.assetPaths(),
       legacyPublishedAt: world?.publishedAt || null
     };
   }
@@ -177,6 +189,13 @@ export class AuthoringRoutes {
         expectedReleaseRevision: ifMatchRevision(req),
         fault: allowFault && body.fault === "after_files" ? "after_files" : undefined
       }));
+      return this.sendJson(res, 200, result);
+    }
+
+    // Fase 04: draft-preview. Alleen lezen; schrijft geen build, pointer of spelerstate.
+    if (method === "POST" && path === "/api/authoring/preview/membership") {
+      const body = await this.readJson(req);
+      const result = previewMembership(this.documents.allDocuments(), body.points, Object.assign(this.publishOptions(this.validationWorld()), { previous: body.previous || null }));
       return this.sendJson(res, 200, result);
     }
 

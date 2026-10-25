@@ -46,6 +46,7 @@ de tabel `authoring_cutover` en is zichtbaar in de werkbank onder Publiceren ("W
 | Projectnaam en welkomsttekst | Nodes (`game_project_settings.gameName`); nieuwe tekst kan al in de werkbank | Alleen werkbank; `gameName` in Nodes is alleen-lezen, andere projectvelden blijven in Nodes |
 | Items (`item_definition`) | Nodes; nieuwe items kunnen al in de werkbank | Alleen werkbank; elk item-node is alleen-lezen, nieuwe item-nodes worden geweigerd |
 | Item-pickups (`pickup_spawn` met `pickupKind: item`) | Nodes; nieuwe pickups kunnen al in de werkbank | Alleen werkbank; die nodes zijn alleen-lezen, nieuwe item-pickups in Nodes worden geweigerd |
+| Regions en Areas (Fase 04, nieuw: bestaan niet in Nodes) | Alleen werkbank (tab Wereld) | Alleen werkbank. Oude zones blijven in Nodes; een Region kan er met `legacyZoneRef` naar verwijzen |
 | Geld-pickups, `pickup_component`, alle andere domeinen | Nodes | Nodes (niet in Fase 03) |
 
 - Een object dat de werkbank al beheert (ook vóór finalize, bijvoorbeeld een item met dezelfde ID) is in Nodes

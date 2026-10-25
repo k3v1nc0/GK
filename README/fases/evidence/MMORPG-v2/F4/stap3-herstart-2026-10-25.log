@@ -1,0 +1,10 @@
+2026-10-25T21:50:40+01:00
+restart exit 0
+health 200 na 2s
+     Active: active (running) since Sun 2026-10-25 21:50:40 CET; 1s ago
+   Main PID: 1220805 (MainThread)
+/editor/canoniek.html 302
+/editor/world-builder-view.js 302
+/game/world-audio.js 302
+/shared/spatial.js 200
+/api/authoring/workspace 401
