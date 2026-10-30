@@ -2,7 +2,7 @@
 // Gedeeld door de server (src/server/mmo-service.js) en de browser (via world-runtime.js).
 // Fase 02 (F2-E1-T01): uit world-runtime.js gehaald; gedrag is ongewijzigd (zie tests/movement-parity.test.js).
 import earcut from "./earcut.js";
-import { createHeightfield, decodeTerrainChunk, terrainHeightAt, TERRAIN_MAX_SLOPE_DEG } from "./terrain.js";
+import { createHeightfield, decodeTerrainChunk, normalizeTerrainWater, terrainHeightAt, terrainWaterAt, TERRAIN_MAX_SLOPE_DEG, WATER_BLOCK_DEPTH } from "./terrain.js";
 
 // Zelfde stappen als THREE.ShapeUtils.triangulateShape(contour, []): dubbel eindpunt weg, dan earcut.
 function triangulateContourXZ(points) {
@@ -188,8 +188,18 @@ export function createEmptyWalkabilityIndex() {
     walkables: [],
     // Wereld tekenen (ronde 1): hoogte van de grond (terrain.js) en hoe steil je nog omhoog mag lopen.
     heightfield: null,
-    maxSlopeTan: Math.tan(TERRAIN_MAX_SLOPE_DEG * DEG_TO_RAD)
+    maxSlopeTan: Math.tan(TERRAIN_MAX_SLOPE_DEG * DEG_TO_RAD),
+    // Ronde 3: watervlakken (Niet in / Doorheen / IJs), zie terrain.js.
+    waters: []
   };
+}
+
+// Ronde 3: water op x, z. Geeft { water, bottom } of null; bottom = terreinhoogte (zonder ground.y).
+function waterUnder(index, x, z) {
+  if (!index?.waters?.length) return null;
+  const water = terrainWaterAt(index.waters, x, z);
+  if (!water) return null;
+  return { water, bottom: index.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0 };
 }
 
 export function terrainSlopeTan(degrees) {
@@ -220,7 +230,10 @@ export function groundHeightAt(source, x, z, fallbackY = 0, inflate = 0) {
   const base = num(index?.ground?.y, fallbackY);
   const walkableY = walkableSurfaceHeightAt(index, x, z, base, inflate);
   if (walkableY !== null) return walkableY;
-  return base + (index?.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0);
+  const ground = base + (index?.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0);
+  const wet = waterUnder(index, x, z);
+  if (wet && wet.water.behavior === "ice") return Math.max(ground, base + wet.water.height);
+  return ground;
 }
 
 
@@ -528,6 +541,7 @@ export function createWalkabilityIndex(worldData, options = {}) {
   index.ground = worldGroundForCollision(worldData);
   index.heightfield = heightfieldForWorld(worldData, options);
   index.maxSlopeTan = terrainSlopeTan(worldData?.terrain?.heightfield?.maxSlopeDeg);
+  index.waters = (Array.isArray(worldData?.terrain?.water) ? worldData.terrain.water : []).map(normalizeTerrainWater).filter(Boolean);
 
   const terrain = worldData?.terrain || {};
   const collision = worldData?.collision || {};
@@ -842,6 +856,17 @@ export function resolveMovementCandidateInto(output, startX, startY, startZ, can
   const walkableY = walkableSurfaceHeightAt(index, output.x, output.z, num(ground?.y, startY), radius);
   if (walkableY !== null) {
     output.y = walkableY;
+    return true;
+  }
+  // Water: "Niet in" houdt je tegen waar het diep is; op "IJs" loop je bovenop; "Doorheen" = gewoon de bodem.
+  const wet = waterUnder(index, output.x, output.z);
+  if (wet && wet.water.behavior === "block" && wet.bottom < wet.water.height - WATER_BLOCK_DEPTH) {
+    // Wie al in diep water staat (bijv. water over de speler heen getekend), mag er nog uit lopen.
+    const from = waterUnder(index, startX, startZ);
+    if (!(from && from.water.behavior === "block" && from.bottom < from.water.height - WATER_BLOCK_DEPTH)) return false;
+  }
+  if (wet && wet.water.behavior === "ice") {
+    output.y = num(ground?.y, 0) + Math.max(wet.bottom, wet.water.height);
     return true;
   }
   // Terrein: op de hoogte van de grond lopen; te steil omhoog = een muur (omlaag mag altijd).

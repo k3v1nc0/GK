@@ -254,7 +254,8 @@ export const CANONICAL_KINDS = {
         ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID("dit obstakel") },
       displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
         ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("dit obstakel") },
-      regionRef,
+      // Ronde 3: gebieden zijn weg; een obstakel staat gewoon in de wereld (oude kaarten mogen het veld nog hebben).
+      regionRef: Object.assign({}, regionRef, { required: false }),
       shape: shapeSelect("Vorm"),
       minXMm: mmField("Links", false, "⬅️"),
       maxXMm: mmField("Rechts", false, "➡️"),
@@ -484,7 +485,6 @@ function shapeIssues(kind, body, issues) {
   if (kind === "area" && areaSoort(body) !== "deelgebied") { areaShapeIssues(body, issues); return; }
   if (kind === "area") {
     if (body.settings) issues.push(issue("settings", "SOORT_FIELD", "Een deelgebied heeft geen instellingen."));
-    if (!body.regionRef) issues.push(issue("regionRef", "FIELD_REQUIRED", "Een deelgebied hoort bij een gebied."));
     if (!body.shape) issues.push(issue("shape", "FIELD_REQUIRED", "Vorm is verplicht."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.some((point) => point.length !== 2)) issues.push(issue("pointsMm", "FIELD_POINT", "Alleen een loopvlak heeft een hoogte per punt."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.length < 3) issues.push(issue("pointsMm", "FIELD_RANGE", "Een deelgebied heeft minstens 3 punten."));

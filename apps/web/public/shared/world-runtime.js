@@ -26,6 +26,7 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
+import { createWaterLayer } from "./water-render.js";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -4669,6 +4670,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
   // Wereld tekenen (ronde 1): de grond met hoogtes, in vakken rond de speler/camera (terrain-render.js).
   const terrainLayer = createTerrainLayer({ scene, mode, requestRender: function (reason) { requestRender(reason); } });
+  // Ronde 3: watervlakken (los, plat) uit world.terrain.water; de editor-tab Terrein zet ze ook live.
+  const waterLayer = createWaterLayer({ scene, requestRender: function (reason) { requestRender(reason); } });
   const content = new THREE.Group();
   scene.add(content);
 
@@ -8679,6 +8682,7 @@ function resolveChunkDebugCenter(policy) {
     const delta = Math.min(0.05, rawDelta);
     const animationDelta = rawDelta;
     lastTime = time;
+    waterLayer.update(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
     collisionPerfState.checksLastFrame = 0;
@@ -13257,6 +13261,7 @@ function resolveChunkDebugCenter(policy) {
     const material = sameLook ? terrainLayer.material : createGroundPlaneMaterial(ground, bounds, null);
     material.userData.terrainLookKey = terrainLookKey(worldData);
     terrainLayer.setWorld(worldData, { material, textureSize: groundTextureWorldSize(ground), receiveShadow: Boolean(groundShadowOptions().receiveShadow) });
+    waterLayer.setWater(worldData?.terrain?.water, num(ground.y, 0));
     const textureAsset = assetById(worldData, ground.textureAssetId);
     if (!sameLook && textureAsset?.sourcePath) {
       retainTerrainTexture(textureAsset, function (texture) {
@@ -18344,6 +18349,7 @@ function resolveChunkDebugCenter(policy) {
   function destroy() {
     disposed = true;
     terrainLayer.dispose();
+    waterLayer.dispose();
     rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
@@ -18821,6 +18827,9 @@ function resolveChunkDebugCenter(policy) {
     terrainActive: function () { return terrainLayer.active; },
     terrainHeightfield: function () { return terrainLayer.heightfield; },
     terrainHeightAt: terrainLift,
+    // Ronde 3: water live zetten vanuit de editor (lijst zoals world.terrain.water) en de huidige lijst lezen.
+    terrainSetWater: function (list) { waterLayer.setWater(list, num(world?.ground?.y, 0)); },
+    terrainWaterList: function () { return waterLayer.list(); },
     terrainBounds: function () { return terrainLayer.bounds; },
     terrainRaycastScreen: terrainRaycastScreen,
     terrainBeginEdit: terrainBeginEdit,

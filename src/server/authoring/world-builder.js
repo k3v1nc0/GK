@@ -10,7 +10,7 @@ import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { settingsValues } from "./game-compiler.js";
 import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
 import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
-import { terrainHeightAt, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
+import { normalizeTerrainWater, terrainHeightAt, terrainSlopeDegAt, terrainUnderWater, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
 
 export const WORLD_FORMAT_VERSION = "gk-game-project-v3";
 export const WORLD_ID = "world.main";
@@ -111,7 +111,33 @@ function terrainHeightfieldConfig(data) {
   const chunks = values.chunks && typeof values.chunks === "object" && !Array.isArray(values.chunks) ? values.chunks : {};
   return { chunkSize: TERRAIN_CHUNK_METERS, baseUrl: "/assets/terrain/", chunks: Object.assign({}, chunks),
     maxSlopeDeg: Number(values.maxSlopeDeg), triBudget: Number(values.triBudget), chunkTriBudget: Number(values.chunkTriBudget),
-    paint: terrainPaintConfig(data, values) };
+    scatterSlopeDeg: Number(values.scatterSlopeDeg), paint: terrainPaintConfig(data, values) };
+}
+
+// Ronde 3: watervlakken uit de kaarten "Water" (los, plat vlak met één hoogte).
+function terrainWaterList(data) {
+  return (Array.isArray(data?.terrainWater) ? data.terrainWater : [])
+    .map((doc) => normalizeTerrainWater(Object.assign({}, doc, { id: doc?.waterId })))
+    .filter(Boolean)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// Ronde 3: begroeiing (bomen, stenen, gras) niet op te steile hellingen en niet onder water. Kopie, niets aangepast.
+export function dropScatterOffTerrain(world, heightfield) {
+  const waters = world?.terrain?.water || [];
+  const maxSlope = Number(world?.terrain?.heightfield?.scatterSlopeDeg);
+  const hasHeights = Boolean(heightfield && heightfield.chunks && heightfield.chunks.size);
+  if (!waters.length && !hasHeights) return world;
+  const entities = world.entities || [];
+  const kept = entities.filter((entity) => {
+    if (entity?.type !== "scatter") return true;
+    const position = entity.transform?.position || {};
+    const x = Number(position.x) || 0;
+    const z = Number(position.z) || 0;
+    if (waters.length && terrainUnderWater(heightfield, waters, x, z)) return false;
+    return !(hasHeights && Number.isFinite(maxSlope) && terrainSlopeDegAt(heightfield, x, z) > maxSlope);
+  });
+  return kept.length === entities.length ? world : Object.assign({}, world, { entities: kept });
 }
 
 // Alles wat in de kaarten op de grond staat (y = hoogte boven de grond) komt op de hoogte van het terrein.
@@ -248,7 +274,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     mmo: { network: null },
     // Wereld tekenen: heightfield = de hoogte van de grond (vakken in assets/terrain); de game en de editor
     // tekenen de grond hiermee (ook als hij nog plat is).
-    terrain: { layers: [], surfaces: [], heightfield },
+    terrain: { layers: [], surfaces: [], heightfield, water: terrainWaterList(data) },
     collision: { blockers: [], walkableSurfaces: [] },
     scatterAreas: [],
     chunkLoading: clone(CHUNK_LOADING),
@@ -291,7 +317,7 @@ export function buildRuntimeWorld(data = {}, options = {}) {
   const heightfield = assetService && typeof assetService.readTerrainChunk === "function"
     ? heightfieldForWorld(full, { readTerrainChunk: (sha1) => assetService.readTerrainChunk(sha1) })
     : null;
-  return liftWorldOntoTerrain(full, heightfield);
+  return liftWorldOntoTerrain(dropScatterOffTerrain(full, heightfield), heightfield);
 }
 
 // ---------------------------------------------------------------------------------------------------------

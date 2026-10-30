@@ -1,5 +1,5 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein4";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein4";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein5";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein5";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -10,10 +10,10 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein4";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein5";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
-import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261028-instances1";
+import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein5";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -1092,16 +1092,6 @@ async function createAreaDoc(soort) {
   });
   const stamp = Date.now().toString(36);
   const body = { areaId: soort + ".vlak_" + stamp, displayName: def.label + " " + (docBench.docs("area").length + 1), soort: soort, shape: "polygon", pointsMm: pointsMm };
-  if (soort === "deelgebied") {
-    const region = docBench.docs("region").find(function (entry) {
-      return pointsMm[0][0] >= entry.body.minXMm && pointsMm[0][0] < entry.body.maxXMm && pointsMm[0][1] >= entry.body.minZMm && pointsMm[0][1] < entry.body.maxZMm;
-    });
-    if (!region) {
-      setStatus("Een deelgebied ligt altijd in een gebied. Er is hier nog geen gebied (maak ze via Instellingen → Builds).", "error");
-      return;
-    }
-    body.regionRef = region.docKey;
-  }
   try {
     const result = await docBench.saveDoc("area", null, body, def.label + " gemaakt");
     selectAreaDoc(result.docKey);

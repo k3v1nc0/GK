@@ -3,10 +3,9 @@
 // met icoon en Ⓘ-hulp. Alles schrijft naar documenten (/api/authoring/command), nooit naar de node-graph.
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
 import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261028-picker1";
-import { convertShape } from "./werkbank-world.js?v=20261028-instances1";
+import { convertShape } from "./werkbank-world.js?v=20261030-terrein5";
 import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { metersToMm } from "../shared/spatial.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 
 const DOC_MIME = "application/x-gk-doc";
@@ -644,7 +643,7 @@ export function createDocBench(options = {}) {
       const onChange = async (next) => {
         // Ombouw stap 2: soort wisselen houdt de punten; de instellingen van de oude soort gaan weg.
         if (kind === "area" && key === "soort") {
-          const converted = convertAreaSoort(body, next || "deelgebied", bench.docs("region"));
+          const converted = convertAreaSoort(body, next || "deelgebied");
           for (const old of Object.keys(body)) delete body[old];
           Object.assign(body, converted);
           if (isNew) { rerender(); return; }
@@ -663,7 +662,7 @@ export function createDocBench(options = {}) {
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
             currency: "currency", npc: "npc", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
-            terrain_texture: "tex", terrain_stamp: "stamp" }[kind];
+            terrain_texture: "tex", terrain_stamp: "stamp", terrain_water: "water" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }
         if (isNew && !spec.singleton) { rerender(); return; }
@@ -902,36 +901,39 @@ export function createDocBench(options = {}) {
         el("ul", {}, audit.map((row) => el("li", { text: new Date(row.created_at).toLocaleString() + " · " + (row.action === "publish" ? "🚀 gepubliceerd" : "↩︎ teruggezet") + (row.reason ? " · " + row.reason : "") })))]));
     }
     host.append(renderCutover(rerender));
-    host.append(renderZoneImport(rerender));
+    host.append(renderRegionCleanup(rerender));
   }
 
-  // F4-E3-T03 (uit de oude World Builder): oude zones uit Nodes als Gebied overnemen, met koppeling voor het verhuisrapport.
-  function renderZoneImport(rerender) {
-    const zones = bench.workspace.zones || [];
-    const mapped = new Set(bench.docs("region").filter((doc) => doc.body.legacyZoneRef).map((doc) => doc.body.legacyZoneRef));
-    const todo = zones.filter((zone) => !mapped.has(zone.zoneId) && zone.bounds && zone.bounds.maxX > zone.bounds.minX && zone.bounds.maxZ > zone.bounds.minZ);
-    const box = el("details", { class: "wbdDetails" }, [el("summary", { text: "🗺️ Oude zones als gebied overnemen (" + todo.length + " open)" })]);
-    const list = el("ul", {}, zones.map((zone) => el("li", { text: (mapped.has(zone.zoneId) ? "✅ " : "⚪ ") + (zone.label || zone.zoneId) })));
-    const go = el("button", { type: "button", class: "wbdPrimary", "data-wbd": "import-zones", text: "Neem " + todo.length + " zone(s) over", disabled: !todo.length });
+  // Ronde 3: de oude gebieden (zoals Sunny Meadow1) gaan weg. Deelgebieden, obstakels en vijand- of grondstofplekken
+  // die erbij hoorden blijven gewoon staan, los in de wereld. Elke stap is een gewone opslag (↶ zet het terug).
+  function renderRegionCleanup(rerender) {
+    const regions = bench.docs("region");
+    const box = el("details", { class: "wbdDetails" }, [el("summary", { text: "🗺️ Oude gebieden weghalen (" + regions.length + ")" })]);
+    if (!regions.length) {
+      box.append(el("div", { class: "wbdNote", text: "Er zijn geen oude gebieden meer. Deelgebieden staan los in de wereld." }));
+      return box;
+    }
+    const keys = new Set(regions.map((doc) => doc.docKey));
+    const linked = ["area", "collider", "actor_spawn", "resource_spawn"].flatMap((kind) => bench.docs(kind)).filter((doc) => keys.has(doc.body?.regionRef));
+    const list = el("ul", {}, regions.map((doc) => el("li", { text: "🗺️ " + docName(doc) })));
+    const go = el("button", { type: "button", class: "wbdPrimary", "data-wbd": "remove-regions",
+      text: "Haal " + regions.length + " gebied(en) weg (" + linked.length + " kaart(en) blijven staan)" });
     go.addEventListener("click", async () => {
       go.disabled = true;
-      const done = [];
       const failed = [];
-      for (const zone of todo) {
-        const taken = new Set(bench.docs("region", true).map((doc) => doc.body.regionId));
-        let regionId = "region." + (slug(zone.zoneId) || "zone");
-        for (let n = 2; taken.has(regionId); n += 1) regionId = "region." + (slug(zone.zoneId) || "zone") + "_" + n;
-        const body = {
-          regionId, displayName: String(zone.label || zone.zoneId).slice(0, 80), legacyZoneRef: zone.zoneId,
-          minXMm: metersToMm(zone.bounds.minX), maxXMm: metersToMm(zone.bounds.maxX), minZMm: metersToMm(zone.bounds.minZ), maxZMm: metersToMm(zone.bounds.maxZ)
-        };
-        try { await saveDoc("region", null, body, "Gebied overgenomen"); done.push(zone.label || zone.zoneId); }
-        catch (error) { failed.push((zone.label || zone.zoneId) + ": " + friendlyError(error)); }
+      for (const doc of linked) {
+        const body = Object.assign({}, doc.body);
+        delete body.regionRef;
+        try { await saveDoc(doc.kind, bench.doc(doc.docKey) || doc, body, docName(doc) + " los van gebied"); }
+        catch (error) { failed.push(docName(doc) + ": " + friendlyError(error)); }
       }
-      setStatus("Overgenomen: " + (done.join(", ") || "geen") + (failed.length ? ". Niet gelukt: " + failed.join("; ") : "."), failed.length ? "error" : "success");
+      for (const doc of regions) {
+        if (!(await bench.archiveDoc(doc.docKey, "Gebied " + docName(doc) + " weggehaald"))) failed.push(docName(doc));
+      }
+      setStatus(failed.length ? "Niet alles gelukt: " + failed.join("; ") : "Oude gebieden weggehaald. Druk SAVE TO GAME.", failed.length ? "error" : "success");
       rerender();
     });
-    box.append(el("div", { class: "wbdNote", text: "Maakt per oude zone een gebied met dezelfde grenzen. Daarna kun je het in de 3D-view verslepen en groter of kleiner maken." }), list, go);
+    box.append(el("div", { class: "wbdNote", text: "Een gebied was een onzichtbare doos om deelgebieden heen. Die is niet meer nodig: deelgebieden staan los in de wereld." }), list, go);
     return box;
   }
 

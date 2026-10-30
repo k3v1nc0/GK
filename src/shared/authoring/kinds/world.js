@@ -89,6 +89,9 @@ export const WORLD_KINDS = {
       rockSlopeDeg: tnum("Rots vanaf helling", "📐", 40, 10, 80, 1, "°",
         help("Vanaf deze helling komt de rotstextuur over de grond.", "35-45 graden.", "Te veel rots → hoger. Bergen nog groen → lager."),
         { range: [20, 70] }),
+      scatterSlopeDeg: tnum("Begroeiing tot helling", "🌳", 40, 5, 89, 1, "°",
+        help("Bomen, stenen en gras uit Begroeiing komen niet op hellingen die steiler zijn dan dit (en nooit onder water).", "30-45 graden.", "Bomen op de rotswand → lager. Te kale heuvels → hoger."),
+        { range: [10, 80] }),
       triBudget: tnum("Driehoeken grond (budget)", "🔺", 60000, 5000, 500000, 1000, "",
         help("Hoeveel driehoeken de grond in beeld mag hebben. De teller in Terrein wordt oranje vanaf 80 % en rood erboven.", "30.000-80.000 voor een oude laptop.", "Game hapert op de laptop → lager zetten en bergen gladder maken."),
         { range: [10000, 200000], more: true }),
@@ -146,6 +149,46 @@ export const WORLD_KINDS = {
       height: tnum("Hoogte", "↕️", 20, -300, 300, 0.5, "m",
         help("Hoe hoog wit wordt (negatief = een kuil of dal).", "5-40 m voor heuvels en bergen.", "Te steil om op te lopen → lager of groter maken."),
         { range: [-50, 100] })
+    }
+  },
+  // Ronde 3: water is een los, plat vlak met één hoogte. Trekken en verslepen doe je in Terrein > Water.
+  terrain_water: {
+    label: "Water",
+    plural: "Water",
+    icon: "🌊",
+    place: "terrein",
+    domain: "project",
+    idField: "waterId",
+    fields: {
+      waterId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Water-ID",
+        ui: ui("🔖", "id", "terrein", { more: true }), default: null, help: HELP_ID("dit water") },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
+        ui: ui("🏷️", "text", "terrein"), default: "", help: HELP_NAME("dit water") },
+      behavior: { type: "select", required: false, options: ["block", "wade", "ice"], audience: "client", label: "Gedrag",
+        optionIcons: { block: "🚫", wade: "🚶", ice: "🧊" }, optionLabels: { block: "Niet in", wade: "Doorheen", ice: "IJs" },
+        ui: ui("🌊", "select", "terrein"), default: "block",
+        help: help("Wat spelers met dit water doen. Niet in: diep water houdt je tegen (de oever kun je op). Doorheen: je loopt over de bodem. IJs: je loopt bovenop.",
+          "Niet in voor meren en zee, Doorheen voor een beekje, IJs voor een bevroren vijver.", "Speler loopt door het meer → kies Niet in en zet het water hoger dan de bodem.") },
+      height: tnum("Hoogte van het water", "↕️", 0, -300, 300, 0.1, "m",
+        help("Hoe hoog het wateroppervlak ligt. Waar de grond hoger is, zie je oever.", "Net onder de rand van je kuil of dal.", "Water staat over de oever → lager. Bodem droog → hoger."),
+        { range: [-20, 40] }),
+      x: tnum("Midden X", "📍", 0, -2000, 2000, 0.5, "m",
+        help("Waar het midden van het water ligt (links-rechts).", "Sleep het water in Terrein > Water.", "Water op de verkeerde plek → sleep het of verander dit getal."), { range: [-250, 250], more: true }),
+      z: tnum("Midden Z", "📍", 0, -2000, 2000, 0.5, "m",
+        help("Waar het midden van het water ligt (voor-achter).", "Sleep het water in Terrein > Water.", "Water op de verkeerde plek → sleep het of verander dit getal."), { range: [-250, 250], more: true }),
+      width: tnum("Breedte", "↔️", 10, 0.5, 2000, 0.5, "m",
+        help("Hoe breed het watervlak is.", "Trek het vlak iets groter dan je kuil; de oever ontstaat vanzelf.", "Water steekt buiten de kuil → kleiner of lager."), { range: [1, 200] }),
+      depth: tnum("Diepte (lengte)", "↕️", 10, 0.5, 2000, 0.5, "m",
+        help("Hoe lang het watervlak is (voor-achter).", "Trek het vlak iets groter dan je kuil.", "Water steekt buiten de kuil → kleiner of lager."), { range: [1, 200] }),
+      rotation: tnum("Draaien", "🔄", 0, 0, 359, 1, "°",
+        help("Draai het watervlak.", "0 = recht.", "Water staat scheef → zet op 0."), { more: true }),
+      color: color("Kleur", "🎨", "#2f6f9f",
+        help("De kleur van het water.", "Blauw voor een meer, groenig voor een moeras.", "Water te fel → kies een donkerdere kleur."), { place: "terrein" }),
+      opacity: tnum("Doorzichtig", "👻", 0.7, 0.1, 1, 0.05, "",
+        help("Hoe goed je de bodem ziet (1 = helemaal niet doorzichtig).", "0.6 tot 0.8.", "Bodem niet te zien → lager."), { range: [0.1, 1], more: true }),
+      waves: { type: "boolean", required: false, audience: "client", label: "Golfjes",
+        ui: ui("〰️", "toggle", "terrein"), default: true,
+        help: help("Kleine golfjes op het water. Uit = alleen een kleur (lichter voor een oude laptop).", "Aan voor meren, uit voor een plas.", "Game hapert bij het water → zet uit.") }
     }
   }
 };

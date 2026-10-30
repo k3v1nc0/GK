@@ -5,9 +5,11 @@
 // Ctrl+Z / Ctrl+Y werken zolang je in Terrein bent. Opslaan = de veranderde vakken (hoogte .bin, verf .png) naar de
 // server en de kaart "Terrein" bijwerken; de tab verlaten slaat ook op. De streken zelf worden niet bewaard.
 import {
-  applyTerrainBrush, applyTerrainPaint, applyTerrainStamp, clonePaintChunk, encodeTerrainChunk, sampleTerrainRegion,
-  terrainChunkIsFlat, terrainPaintIsEmpty, terrainStampFootprint, tidyPaintChunk, TERRAIN_PAINT_VERTS
+  applyTerrainBrush, applyTerrainPaint, applyTerrainPaintPath, applyTerrainStamp, clonePaintChunk, encodeTerrainChunk, normalizeTerrainWater,
+  sampleTerrainRegion, terrainChunkIsFlat, terrainPaintIsEmpty, terrainStampFootprint, tidyPaintChunk, waterContains, waterCorners, TERRAIN_PAINT_VERTS
 } from "../shared/terrain.js";
+import { smoothPolyline } from "../shared/movement-kernel.js";
+import { areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 import { decodePng, encodePng, pngToHeights } from "../shared/png.js";
 import { slug } from "./canonical-api.js";
 
@@ -22,6 +24,7 @@ const TOOLS = [
   { id: "height", icon: "⛰️", label: "Hoogte" },
   { id: "stamp", icon: "🗻", label: "Stempel" },
   { id: "paint", icon: "🖌️", label: "Verf" },
+  { id: "water", icon: "🌊", label: "Water" },
   { id: "ground", icon: "🌍", label: "Grond" }
 ];
 const BLENDS = [
@@ -62,6 +65,9 @@ let counterTimer = null;
 let busy = false;
 let tintRuntime = null;
 let libraryDetail = null;
+// Ronde 3: water. selectedWater = doc-sleutel van het gekozen water; waterDrag = trekken, verslepen of een hoek.
+let selectedWater = null;
+let waterDrag = null;
 const undoStack = [];
 const redoStack = [];
 const stampImages = new Map();
@@ -379,6 +385,12 @@ function cursorFor(hit, color) {
     return;
   }
   if (settings.tool === "ground") { rt.terrainSetCursor(null); return; }
+  if (settings.tool === "water") {
+    const water = waterDrag?.water || waterDrag?.base || waterOf(selectedWater);
+    if (water) rt.terrainSetCursor({ shape: "rect", x: water.x, z: water.z, width: water.width, depth: water.depth, rotation: water.rotation, color: "#4fd1ff" });
+    else rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: 1, softness: 0, color: "#4fd1ff" });
+    return;
+  }
   const hard = (settings.brush === "edge" && settings.tool === "height")
     || (settings.tool === "paint" && settings.eraseMode === "hard" && paintErasing(stroke ? stroke.shift : shiftDown));
   rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: settings.radius, softness: hard ? 0 : settings.softness / 100, color: color || "#ffffff" });
@@ -540,6 +552,18 @@ async function finishCut() {
 function applySnapshot(entry, which) {
   const rt = runtime();
   if (!rt) return;
+  if (entry.kind === "group") {
+    const parts = which === "after" ? entry.parts : entry.parts.slice().reverse();
+    for (const part of parts) applySnapshot(part, which);
+    return;
+  }
+  if (entry.kind === "doc") {
+    // Water en paden zijn kaarten: terugzetten gaat via dezelfde weg als Ctrl+Z in de Werkbank.
+    void bench()?.applyHistory(entry.history, which === "after" ? "redo" : "undo").catch(function (error) {
+      status("Terugzetten mislukt: " + (error?.message || error) + ".", "error");
+    });
+    return;
+  }
   const map = which === "after" ? entry.after : entry.before;
   if (entry.kind === "paint") {
     const chunks = rt.terrainPaintfield().chunks;
@@ -603,6 +627,10 @@ window.addEventListener("pointerdown", function (event) {
     void placeStamp(event);
     return;
   }
+  if (settings.tool === "water") {
+    startWaterDrag(event);
+    return;
+  }
   startStroke(event);
 }, true);
 
@@ -613,6 +641,11 @@ window.addEventListener("pointermove", function (event) {
     lastPointer = { x: event.clientX, y: event.clientY };
     stroke.shift = event.shiftKey;
     event.stopImmediatePropagation();
+    return;
+  }
+  if (waterDrag && event.pointerId === waterDrag.pointerId) {
+    event.stopImmediatePropagation();
+    moveWaterDrag(event);
     return;
   }
   if (cutting?.start && event.pointerId === cutting.pointerId) {
@@ -629,6 +662,13 @@ window.addEventListener("pointermove", function (event) {
 
 for (const type of ["pointerup", "pointercancel"]) {
   window.addEventListener(type, function (event) {
+    if (waterDrag && event.pointerId === waterDrag.pointerId) {
+      event.stopImmediatePropagation();
+      try { canvas()?.releasePointerCapture(event.pointerId); } catch {}
+      suppressClickUntil = Date.now() + 400;
+      void endWaterDrag(type === "pointerup");
+      return;
+    }
     if (cutting?.start && event.pointerId === cutting.pointerId) {
       event.stopImmediatePropagation();
       try { canvas()?.releasePointerCapture(event.pointerId); } catch {}
@@ -685,9 +725,253 @@ window.addEventListener("keydown", function (event) {
     if (lastPointer) hover(lastPointer.x, lastPointer.y);
     return;
   }
+  if (settings.tool === "water" && selectedWater && (key === "delete" || key === "backspace")) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void removeSelectedWater();
+    return;
+  }
   // In Terrein doen de sneltoetsen van de Werkbank (G, R, T, F, X, Del) niets. WASD/QE blijft de camera.
   if (!event.ctrlKey && !event.metaKey && !event.altKey && WORKBENCH_KEYS.has(key)) event.stopImmediatePropagation();
 }, true);
+
+// ---------- Ronde 3: water (los, plat vlak) ----------
+
+function waterOf(docKey) {
+  const doc = docKey ? bench()?.doc(docKey) : null;
+  return doc && !doc.archived && doc.kind === "terrain_water" ? normalizeTerrainWater(Object.assign({}, doc.body, { id: doc.docKey })) : null;
+}
+
+// De 3D-view toont de waterkaarten meteen (en tijdens slepen de nieuwe vorm), ook vóór SAVE TO GAME.
+function pushWater(preview = null) {
+  const rt = runtime();
+  if (!rt || typeof rt.terrainSetWater !== "function" || !bench()?.workspace) return;
+  const list = docsOf("terrain_water").map(function (doc) { return preview && doc.docKey === preview.id ? preview : waterOf(doc.docKey); }).filter(Boolean);
+  if (preview && !preview.id) list.push(preview);
+  rt.terrainSetWater(list);
+}
+
+function waterAt(x, z) {
+  let best = null;
+  for (const doc of docsOf("terrain_water")) {
+    const water = waterOf(doc.docKey);
+    if (water && waterContains(water, x, z) && (!best || water.height > best.height)) best = water;
+  }
+  return best;
+}
+
+// Welke hoek van het gekozen water onder de muis ligt (-1 = geen).
+function waterCornerAt(water, x, z) {
+  const reach = Math.max(1.2, Math.min(water.width, water.depth) * 0.15);
+  return waterCorners(water).findIndex(function (corner) { return Math.hypot(corner.x - x, corner.z - z) <= reach; });
+}
+
+function round(value, step) {
+  return Math.round(value / step) * step;
+}
+
+function waterDocBody(water) {
+  const out = Object.assign({}, water);
+  delete out.id;
+  return {
+    behavior: out.behavior, height: round(out.height, 0.1), x: round(out.x, 0.5), z: round(out.z, 0.5),
+    width: Math.max(0.5, round(out.width, 0.5)), depth: Math.max(0.5, round(out.depth, 0.5)), rotation: Math.round(out.rotation) % 360,
+    color: out.color, opacity: out.opacity, waves: out.waves
+  };
+}
+
+function startWaterDrag(event) {
+  const rt = runtime();
+  const hit = rt?.terrainRaycastScreen(event.clientX, event.clientY);
+  if (!hit) return;
+  try { event.target.setPointerCapture(event.pointerId); } catch {}
+  const chosen = waterOf(selectedWater);
+  const corner = chosen ? waterCornerAt(chosen, hit.x, hit.z) : -1;
+  if (chosen && corner >= 0) {
+    const anchor = waterCorners(chosen)[(corner + 2) % 4];
+    waterDrag = { pointerId: event.pointerId, mode: "resize", base: chosen, water: null, anchor };
+    return;
+  }
+  const under = waterAt(hit.x, hit.z);
+  if (under) {
+    selectedWater = under.id;
+    waterDrag = { pointerId: event.pointerId, mode: "move", base: under, water: null, dx: under.x - hit.x, dz: under.z - hit.z };
+    renderTools();
+    return;
+  }
+  // Nieuw water: net onder de grond waar je begint, zodat vlakke grond in het vak droog blijft.
+  selectedWater = null;
+  waterDrag = { pointerId: event.pointerId, mode: "new", start: hit, height: rt.terrainHeightAt(hit.x, hit.z) - 0.2, water: null };
+  renderTools();
+}
+
+function moveWaterDrag(event) {
+  const hit = runtime()?.terrainRaycastScreen(event.clientX, event.clientY);
+  if (!hit || !waterDrag) return;
+  const drag = waterDrag;
+  if (drag.mode === "new") {
+    drag.water = normalizeTerrainWater({ id: "", x: (drag.start.x + hit.x) / 2, z: (drag.start.z + hit.z) / 2,
+      width: Math.max(0.5, Math.abs(hit.x - drag.start.x)), depth: Math.max(0.5, Math.abs(hit.z - drag.start.z)), height: drag.height });
+  } else if (drag.mode === "move") {
+    drag.water = Object.assign({}, drag.base, { x: hit.x + drag.dx, z: hit.z + drag.dz });
+  } else {
+    // Hoek slepen: de overkant blijft staan; breedte en lengte in de richting van het water.
+    const angle = -drag.base.rotation * Math.PI / 180;
+    const dx = hit.x - drag.anchor.x;
+    const dz = hit.z - drag.anchor.z;
+    const localX = dx * Math.cos(angle) - dz * Math.sin(angle);
+    const localZ = dx * Math.sin(angle) + dz * Math.cos(angle);
+    drag.water = Object.assign({}, drag.base, { x: (drag.anchor.x + hit.x) / 2, z: (drag.anchor.z + hit.z) / 2,
+      width: Math.max(1, Math.abs(localX)), depth: Math.max(1, Math.abs(localZ)) });
+  }
+  pushWater(drag.water);
+  cursorFor(hit, "#4fd1ff");
+}
+
+async function endWaterDrag(commit) {
+  const drag = waterDrag;
+  waterDrag = null;
+  const b = bench();
+  if (!drag || !b) return;
+  if (!commit || !drag.water) { pushWater(); renderTools(); return; }
+  try {
+    if (drag.mode === "new") {
+      if (drag.water.width < 1 || drag.water.depth < 1) {
+        pushWater();
+        status("Trek een groter vak voor water (minstens 1 x 1 m).", "error");
+        return;
+      }
+      const name = "Water " + (b.docs("terrain_water", true).length + 1);
+      const body = Object.assign({ waterId: uniqueId("water", name, "terrain_water"), displayName: name }, waterDocBody(drag.water));
+      const result = await b.saveDoc("terrain_water", null, body, "Water gemaakt");
+      selectedWater = result?.docKey || "terrain_water:" + body.waterId;
+      pushUndo({ kind: "doc", history: { docKey: selectedWater, before: null, after: body } });
+      status("Water gemaakt. Kies links Niet in, Doorheen of IJs en schuif de hoogte.", "success");
+    } else {
+      const doc = b.doc(drag.base.id);
+      if (!doc) return;
+      const body = Object.assign({}, doc.body, waterDocBody(drag.water));
+      if (JSON.stringify(body) === JSON.stringify(doc.body)) { pushWater(); return; }
+      const before = JSON.parse(JSON.stringify(doc.body));
+      await b.saveDoc("terrain_water", doc, body, drag.mode === "move" ? "Water verplaatst" : "Water groter of kleiner");
+      pushUndo({ kind: "doc", history: { docKey: doc.docKey, before, after: body } });
+    }
+  } catch (error) {
+    pushWater();
+    status("Water niet opgeslagen: " + (error?.message || error) + ".", "error");
+  }
+  renderAll();
+}
+
+async function removeSelectedWater() {
+  const docKey = selectedWater;
+  const doc = docKey ? bench()?.doc(docKey) : null;
+  if (!doc) return;
+  if (await bench().archiveDoc(docKey, "Water " + docName(doc) + " weggehaald")) {
+    pushUndo({ kind: "doc", history: { docKey, archive: true } });
+    selectedWater = null;
+    renderAll();
+  }
+}
+
+function waterBody() {
+  const b = bench();
+  if (!b?.workspace) return [el("div", { class: "terreinTip", text: "Laden..." })];
+  const labels = { block: "Niet in", wade: "Doorheen", ice: "IJs" };
+  const list = el("div", { class: "terreinWaterList" });
+  for (const doc of docsOf("terrain_water")) {
+    const water = waterOf(doc.docKey);
+    if (!water) continue;
+    const button = el("button", { type: "button", class: "terreinBrush" + (doc.docKey === selectedWater ? " active" : "") },
+      [el("span", { text: "🌊" }), el("span", { text: docName(doc) + " · " + Math.round(water.width) + " x " + Math.round(water.depth) + " m · " + labels[water.behavior] })]);
+    button.addEventListener("click", function () { selectedWater = doc.docKey; renderTools(); if (lastPointer?.x !== undefined) hover(lastPointer.x, lastPointer.y); });
+    list.append(button);
+  }
+  const parts = [
+    el("div", { class: "terreinTip", text: "Trek met de linkermuis een vak op de grond = nieuw water. Klik op water = kiezen, slepen = verplaatsen, een hoek slepen = groter of kleiner. Del = weghalen." }),
+    list.childElementCount ? list : el("div", { class: "terreinTip", text: "Nog geen water. Graaf eerst een kuil (Hoogte > Verlagen) en trek er dan een vak overheen." })
+  ];
+  const chosen = selectedWater ? b.doc(selectedWater) : null;
+  if (chosen && !chosen.archived) {
+    const form = el("div", { class: "terreinForm" });
+    b.renderForm(form, { kind: "terrain_water", docKey: chosen.docKey, place: "terrein", title: "🌊 " + docName(chosen) });
+    const remove = el("button", { type: "button", class: "terreinWide", text: "🗑️ Dit water weghalen" });
+    remove.addEventListener("click", function () { void removeSelectedWater(); });
+    parts.push(form, remove);
+  } else {
+    selectedWater = null;
+  }
+  return parts;
+}
+
+// ---------- Ronde 3: paden in de verf ----------
+
+// Paden uit de Area tool (geen water/lava, niet blokkerend) worden verf op de grond: één systeem, het pad volgt
+// heuvels vanzelf. De losse padkaart gaat daarna weg; ↶ zet verf en pad samen terug.
+function bakeablePaths() {
+  return docsOf("area").filter(function (doc) {
+    if (areaSoort(doc.body) !== "pad") return false;
+    const values = areaNodeValues(doc.body, doc.docKey);
+    return Boolean(values.textureAssetId) && values.animated !== true && values.blocksPlayer !== true && (values.points || []).length >= 2;
+  });
+}
+
+function pathsButton() {
+  const count = bench()?.workspace ? bakeablePaths().length : 0;
+  const button = el("button", { type: "button", class: "terreinWide", disabled: !count || busy,
+    text: count ? "🛤️ " + count + " pad(en) in de verf zetten" : "🛤️ Geen paden om te verven",
+    title: "Paden met een textuur worden verf op de grond. Paden met water of lava, of die blokkeren, blijven een pad." });
+  button.addEventListener("click", function () { void bakePaths(); });
+  return button;
+}
+
+async function textureForAsset(assetId, label, width) {
+  const existing = docsOf("terrain_texture").find(function (doc) { return doc.body.textureAssetId === assetId; });
+  if (existing) return existing.docKey;
+  const name = ("Pad " + label).slice(0, 60);
+  const body = { textureId: uniqueId("tex", name, "terrain_texture"), displayName: name, textureAssetId: assetId,
+    tileSize: Math.max(1, Math.min(30, Math.round(Number(width) || 4))) };
+  const result = await bench().saveDoc("terrain_texture", null, body, "Terreintextuur " + name);
+  return result?.docKey || "terrain_texture:" + body.textureId;
+}
+
+async function bakePaths() {
+  const rt = runtime();
+  const paths = bakeablePaths();
+  if (!rt || !paths.length || busy) return;
+  if (!window.confirm(paths.length + " pad(en) worden verf op de grond. De losse paden gaan daarna weg (↶ zet alles terug). Doorgaan?")) return;
+  busy = true;
+  const touched = new Set();
+  const before = new Map();
+  const full = new Set();
+  const docParts = [];
+  try {
+    for (const doc of paths) {
+      const values = areaNodeValues(doc.body, doc.docKey);
+      const asset = assetById(values.textureAssetId);
+      const texture = await textureForAsset(values.textureAssetId, asset?.name || docName(doc), values.width);
+      defineTextures();
+      const raw = (values.points || []).map(function (point) { return { x: Number(point.x), z: Number(point.z) }; });
+      const points = raw.length >= 3 ? smoothPolyline(raw, 8) : raw;
+      const result = applyTerrainPaintPath(rt.terrainPaintfield(), { texture, points, width: values.width, fade: values.edgeFadeWidth,
+        bounds: rt.terrainBounds(), touched, beforeTouch: function (key, chunk) { before.set(key, chunk); } });
+      if (result.changed.size) rt.terrainPaintChanged(result.changed);
+      for (const key of result.full) full.add(key);
+    }
+    const paint = { kind: "paint", before, after: snapshotAfter("paint", touched) };
+    for (const doc of paths) {
+      if (await bench().archiveDoc(doc.docKey, "Pad " + docName(doc) + " is verf geworden")) docParts.push({ kind: "doc", history: { docKey: doc.docKey, archive: true } });
+    }
+    if (touched.size || docParts.length) pushUndo({ kind: "group", parts: [paint].concat(docParts) });
+    status(paths.length + " pad(en) zijn verf geworden. Druk 💾 Opslaan (of verlaat Terrein) om de verf te bewaren."
+      + (full.size ? " Let op: " + full.size + " vak(ken) hadden al 4 texturen; daar kwam geen verf." : ""), full.size ? "error" : "success");
+  } catch (error) {
+    status("Paden verven mislukt: " + (error?.message || error) + ".", "error");
+  } finally {
+    busy = false;
+    renderAll();
+  }
+}
 
 // ---------- paneel links ----------
 
@@ -779,7 +1063,8 @@ function paintBody() {
     chosen,
     ...brushSliders(),
     choiceRow(ERASE_MODES, settings.eraseMode, function (id) { settings.eraseMode = id; remember(); renderTools(); }, "terreinBlends"),
-    el("div", { class: "terreinTip", text: "Kies rechts een textuur. Linkermuis = verven, Shift = gummen. Gum helemaal weg = alle verf binnen de cirkel is in één keer weg; zacht = langzaam terug naar de grond. Per vak van 64 m passen 4 texturen: de grond + 3 eigen." })
+    el("div", { class: "terreinTip", text: "Kies rechts een textuur. Linkermuis = verven, Shift = gummen. Gum helemaal weg = alle verf binnen de cirkel is in één keer weg; zacht = langzaam terug naar de grond. Per vak van 64 m passen 4 texturen: de grond + 3 eigen." }),
+    pathsButton()
   ];
 }
 
@@ -816,7 +1101,8 @@ function renderTools() {
     tabs.append(button);
   }
   const body = el("div", { class: "terreinBody" });
-  const parts = settings.tool === "stamp" ? stampBody() : settings.tool === "paint" ? paintBody() : settings.tool === "ground" ? groundBody() : heightBody();
+  const parts = settings.tool === "stamp" ? stampBody() : settings.tool === "paint" ? paintBody() : settings.tool === "ground" ? groundBody()
+    : settings.tool === "water" ? waterBody() : heightBody();
   body.append(...parts);
   const tint = el("input", { type: "checkbox" });
   tint.checked = settings.heavyTint !== false;
@@ -984,6 +1270,7 @@ function setupDrop(host) {
 
 function renderAll() {
   if (!api) return;
+  if (!waterDrag) pushWater();
   renderTools();
   renderLibrary();
 }
@@ -1106,6 +1393,7 @@ function deactivate() {
   if (!open) return;
   if (stroke) endStroke();
   cutting = null;
+  waterDrag = null;
   open = false;
   document.body.classList.remove("terreinMode");
   clearInterval(counterTimer);

@@ -401,41 +401,22 @@ export function terrainPaintAt(pf, x, z) {
   return out;
 }
 
-// Verfpenseel: texture = doc-sleutel van een terreintextuur ("" = de grond zelf, gum). Zelfde radius, sterkte
-// en zachte rand als het hoogtepenseel. Geeft { changed, full } terug: full = vakken die al 4 texturen hebben.
-export function applyTerrainPaint(pf, brush = {}) {
+// Verf op de punten ix0..ix1 x iz0..iz1 (verfraster, 0,5 m). amountAt(ix, iz) = hoeveel (0..1) van de textuur erbij;
+// erase = alle verf weg waar amountAt > 0. Gedeeld door het penseel en "pad in de verf".
+function paintRaster(pf, { texture, erase, ix0, ix1, iz0, iz1, bounds, touched, beforeTouch }, amountAt) {
   const changed = new Set();
   const full = new Set();
-  const texture = String(brush.texture || "");
-  const x = Number(brush.x);
-  const z = Number(brush.z);
-  const radius = Math.max(0.5, Math.min(128, Number(brush.radius) || 8));
-  const strength = Math.max(0, Math.min(1, Number(brush.strength)));
-  const softness = Math.max(0, Math.min(1, Number(brush.softness)));
-  const dt = Math.max(0, Math.min(0.25, Number(brush.dt) || 0));
-  // erase: echte gum, alle verf binnen de cirkel is in één keer weg (zachte rand en kracht tellen niet).
-  const erase = brush.erase === true;
-  if (!pf || !Number.isFinite(x) || !Number.isFinite(z) || (!erase && (strength <= 0 || dt <= 0))) return { changed, full };
-  let ix0 = Math.ceil((x - radius) / PAINT_STEP);
-  let ix1 = Math.floor((x + radius) / PAINT_STEP);
-  let iz0 = Math.ceil((z - radius) / PAINT_STEP);
-  let iz1 = Math.floor((z + radius) / PAINT_STEP);
-  const bounds = brush.bounds || null;
   if (bounds) {
     ix0 = Math.max(ix0, Math.floor(bounds.minX / PAINT_STEP));
     ix1 = Math.min(ix1, Math.ceil(bounds.maxX / PAINT_STEP));
     iz0 = Math.max(iz0, Math.floor(bounds.minZ / PAINT_STEP));
     iz1 = Math.min(iz1, Math.ceil(bounds.maxZ / PAINT_STEP));
   }
-  const touched = brush.touched || null;
   const slots = new Map();
-  const rate = TERRAIN_PAINT_SPEED * strength * dt;
   for (let iz = iz0; iz <= iz1; iz += 1) {
     for (let ix = ix0; ix <= ix1; ix += 1) {
-      const distance = Math.hypot(ix * PAINT_STEP - x, iz * PAINT_STEP - z);
-      const weight = erase ? (distance <= radius ? 1 : 0) : terrainBrushWeight(distance, radius, softness);
-      if (weight <= 0) continue;
-      const amount = Math.min(1, weight * rate);
+      const amount = Math.min(1, amountAt(ix, iz));
+      if (!(amount > 0)) continue;
       const noise = dither(ix, iz, pf.revision);
       const cx0 = Math.floor(ix / TERRAIN_PAINT_CELLS);
       const cz0 = Math.floor(iz / TERRAIN_PAINT_CELLS);
@@ -452,7 +433,7 @@ export function applyTerrainPaint(pf, brush = {}) {
           if (!chunk && (erase || !texture)) continue;
           if (touched && !touched.has(key)) {
             touched.add(key);
-            if (typeof brush.beforeTouch === "function") brush.beforeTouch(key, clonePaintChunk(chunk));
+            if (typeof beforeTouch === "function") beforeTouch(key, clonePaintChunk(chunk));
           }
           if (!chunk) {
             chunk = createPaintChunk();
@@ -492,6 +473,148 @@ export function applyTerrainPaint(pf, brush = {}) {
   }
   if (changed.size) pf.revision += 1;
   return { changed, full };
+}
+
+// Verfpenseel: texture = doc-sleutel van een terreintextuur ("" = de grond zelf, gum). Zelfde radius, sterkte
+// en zachte rand als het hoogtepenseel. Geeft { changed, full } terug: full = vakken die al 4 texturen hebben.
+export function applyTerrainPaint(pf, brush = {}) {
+  const texture = String(brush.texture || "");
+  const x = Number(brush.x);
+  const z = Number(brush.z);
+  const radius = Math.max(0.5, Math.min(128, Number(brush.radius) || 8));
+  const strength = Math.max(0, Math.min(1, Number(brush.strength)));
+  const softness = Math.max(0, Math.min(1, Number(brush.softness)));
+  const dt = Math.max(0, Math.min(0.25, Number(brush.dt) || 0));
+  // erase: echte gum, alle verf binnen de cirkel is in één keer weg (zachte rand en kracht tellen niet).
+  const erase = brush.erase === true;
+  if (!pf || !Number.isFinite(x) || !Number.isFinite(z) || (!erase && (strength <= 0 || dt <= 0))) return { changed: new Set(), full: new Set() };
+  const rate = TERRAIN_PAINT_SPEED * strength * dt;
+  return paintRaster(pf, {
+    texture, erase, bounds: brush.bounds || null, touched: brush.touched || null, beforeTouch: brush.beforeTouch,
+    ix0: Math.ceil((x - radius) / PAINT_STEP), ix1: Math.floor((x + radius) / PAINT_STEP),
+    iz0: Math.ceil((z - radius) / PAINT_STEP), iz1: Math.floor((z + radius) / PAINT_STEP)
+  }, function (ix, iz) {
+    const distance = Math.hypot(ix * PAINT_STEP - x, iz * PAINT_STEP - z);
+    if (erase) return distance <= radius ? 1 : 0;
+    return terrainBrushWeight(distance, radius, softness) * rate;
+  });
+}
+
+function distanceToPolyline(px, pz, points) {
+  let best = Infinity;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const ax = points[i].x;
+    const az = points[i].z;
+    const dx = points[i + 1].x - ax;
+    const dz = points[i + 1].z - az;
+    const length = dx * dx + dz * dz;
+    const t = length > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / length)) : 0;
+    best = Math.min(best, Math.hypot(px - (ax + dx * t), pz - (az + dz * t)));
+  }
+  return best;
+}
+
+// Ronde 3: een pad (lijn van punten in meters, al glad gemaakt) in één keer in de verf. width = breedte in meters,
+// fade = zachte rand in meters aan elke kant. Zelfde { changed, full } als het penseel.
+export function applyTerrainPaintPath(pf, path = {}) {
+  const texture = String(path.texture || "");
+  const points = (Array.isArray(path.points) ? path.points : [])
+    .map((point) => ({ x: Number(point?.x), z: Number(point?.z) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z));
+  const half = Math.max(0.25, Math.min(64, (Number(path.width) || 3) / 2));
+  const fade = Math.max(0, Math.min(half, Number(path.fade) || 0));
+  if (!pf || !texture || points.length < 2) return { changed: new Set(), full: new Set() };
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+  return paintRaster(pf, {
+    texture, erase: false, bounds: path.bounds || null, touched: path.touched || null, beforeTouch: path.beforeTouch,
+    ix0: Math.floor((minX - half) / PAINT_STEP), ix1: Math.ceil((maxX + half) / PAINT_STEP),
+    iz0: Math.floor((minZ - half) / PAINT_STEP), iz1: Math.ceil((maxZ + half) / PAINT_STEP)
+  }, function (ix, iz) {
+    const distance = distanceToPolyline(ix * PAINT_STEP, iz * PAINT_STEP, points);
+    if (distance > half) return 0;
+    if (fade <= 0 || distance <= half - fade) return 1;
+    return (half - distance) / fade;
+  });
+}
+
+// ---------- Ronde 3: water (los, plat vlak) en helling ----------
+// Een watervlak: midden x/z, breedte (x) en diepte (z) in meters, draaiing in graden (zelfde draairichting als de
+// loopvlakken in de movement-kernel), height = hoogte van het wateroppervlak boven de basisgrond.
+// behavior: "block" = Niet in (diep water houdt je tegen), "wade" = Doorheen (je loopt over de bodem),
+// "ice" = IJs (je loopt bovenop).
+export const WATER_BEHAVIORS = Object.freeze(["block", "wade", "ice"]);
+// Bij "Niet in" houdt het water je pas tegen waar het dieper is dan dit (de oever blijft beloopbaar).
+export const WATER_BLOCK_DEPTH = 0.3;
+
+export function normalizeTerrainWater(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const x = Number(entry.x);
+  const z = Number(entry.z);
+  const width = Number(entry.width);
+  const depth = Number(entry.depth);
+  if (![x, z, width, depth].every(Number.isFinite) || width <= 0 || depth <= 0) return null;
+  const behavior = WATER_BEHAVIORS.includes(entry.behavior) ? entry.behavior : "block";
+  return {
+    id: String(entry.id || entry.waterId || ""), x, z, width, depth,
+    rotation: Number(entry.rotation) || 0, height: Number(entry.height) || 0, behavior,
+    color: typeof entry.color === "string" && /^#[0-9a-fA-F]{6}$/.test(entry.color) ? entry.color : "#2f6f9f",
+    opacity: Math.max(0.1, Math.min(1, Number.isFinite(Number(entry.opacity)) ? Number(entry.opacity) : 0.7)),
+    waves: entry.waves !== false
+  };
+}
+
+// Ligt x, z in het watervlak? (rechthoek met draaiing, zelfde rekensom als pointInRotatedRectangle)
+export function waterContains(water, x, z, inflate = 0) {
+  if (!water) return false;
+  const angle = -(Number(water.rotation) || 0) * Math.PI / 180;
+  const dx = x - water.x;
+  const dz = z - water.z;
+  const localX = dx * Math.cos(angle) - dz * Math.sin(angle);
+  const localZ = dx * Math.sin(angle) + dz * Math.cos(angle);
+  return Math.abs(localX) <= water.width / 2 + inflate && Math.abs(localZ) <= water.depth / 2 + inflate;
+}
+
+// De vier hoeken (meters), voor tekenen en slepen in de editor.
+export function waterCorners(water) {
+  const angle = (Number(water?.rotation) || 0) * Math.PI / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => {
+    const lx = (u * water.width) / 2;
+    const lz = (v * water.depth) / 2;
+    return { x: water.x + lx * cos - lz * sin, z: water.z + lx * sin + lz * cos };
+  });
+}
+
+// Het hoogste watervlak op x, z (of null).
+export function terrainWaterAt(waters, x, z) {
+  let best = null;
+  for (const water of Array.isArray(waters) ? waters : []) {
+    if (water && waterContains(water, x, z) && (!best || water.height > best.height)) best = water;
+  }
+  return best;
+}
+
+// Ligt dit punt onder water? (terreinhoogte onder het wateroppervlak)
+export function terrainUnderWater(hf, waters, x, z, margin = 0) {
+  const water = terrainWaterAt(waters, x, z);
+  return Boolean(water && terrainHeightAt(hf, x, z) < water.height - margin);
+}
+
+// Helling in graden op x, z (verschil over 1 m in beide richtingen).
+export function terrainSlopeDegAt(hf, x, z) {
+  const dx = (terrainHeightAt(hf, x + 1, z) - terrainHeightAt(hf, x - 1, z)) / 2;
+  const dz = (terrainHeightAt(hf, x, z + 1) - terrainHeightAt(hf, x, z - 1)) / 2;
+  return Math.atan(Math.hypot(dx, dz)) * 180 / Math.PI;
 }
 
 // Een gelezen PNG (zie png.js) als verf van één vak: RGB, 129 x 129, 8-bit. null = past niet.
