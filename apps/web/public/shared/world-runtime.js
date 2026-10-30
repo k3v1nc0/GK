@@ -8551,8 +8551,16 @@ function resolveChunkDebugCenter(policy) {
     if (rafId === null) startRenderLoop(reason);
   }
 
+  // Editor-tab Game: de editor-view tekent niets zolang hij gepauzeerd is (maar één 3D-wereld tegelijk).
+  let renderPaused = false;
+  function setRenderPaused(paused) {
+    renderPaused = paused === true;
+    if (renderPaused) stopRenderLoop("paused");
+    else requestRender("resume");
+  }
+
   function startRenderLoop(reason) {
-    if (disposed || rafId !== null) return;
+    if (disposed || renderPaused || rafId !== null) return;
     running = true;
     loopGeneration += 1;
     updateDebugLoopState();
@@ -15087,7 +15095,9 @@ function resolveChunkDebugCenter(policy) {
     const scale = num(remotePlayer?.scale, num(worldData?.player?.scale, 1));
     root.scale.set(scale, scale, scale);
     updateRemotePlayerNameplate(root, remotePlayer?.displayName || remotePlayer?.playerId || "Player");
-    const modelAssetId = worldData?.player?.modelAssetId || null;
+    // Klassen: elke speler zijn eigen uiterlijk; anders het standaard-spelermodel van de wereld.
+    const fallbackModel = worldData?.player?.defaultModelAssetId !== undefined ? worldData.player.defaultModelAssetId : (worldData?.player?.modelAssetId || null);
+    const modelAssetId = remotePlayer?.modelAssetId || fallbackModel || null;
     if (modelAssetId && assetById(worldData, modelAssetId)?.sourcePath) {
       loadModelInto(root, modelAssetId, worldData, null, {
         castShadow: true,
@@ -18315,6 +18325,7 @@ function resolveChunkDebugCenter(policy) {
   return {
     setWorld: setWorld,
     render: requestRender,
+    setRenderPaused: setRenderPaused,
     destroy: destroy,
     dispose: destroy,
     screenToGround: screenToGround,

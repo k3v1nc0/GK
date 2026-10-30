@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261022-compact-workbench-relations">
+    <link rel="stylesheet" href="./styles.css?v=20261028-gametab1">
+    <link rel="stylesheet" href="./werkbank-docs.css?v=20261029-klassen2">
+    <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
       {
         "imports": {
@@ -19,9 +21,15 @@
     <header class="topbar">
       <div class="brand"><span class="logo">GK</span><span class="brandName">GAME EDITOR</span></div>
       <nav class="editorModeTabs" aria-label="Editorweergave">
-        <button id="nodesModeButton" type="button" class="editorModeTab active" aria-pressed="true">Nodes</button>
-        <button id="workbenchModeButton" type="button" class="editorModeTab" aria-pressed="false">Werkbank</button>
-        <a href="./canoniek.html" class="editorModeTab" title="Fase 03: project, items en pickups zonder Nodes">Canoniek</a>
+        <button id="settingsModeButton" type="button" class="editorModeTab" aria-pressed="false">Instellingen</button>
+        <button id="workbenchModeButton" type="button" class="editorModeTab active" aria-pressed="true">Werkbank</button>
+        <button id="gameModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Speel de game hier, zonder apart tabblad">Game</button>
+        <details class="oldModeMenu" id="oldModeMenu" style="display:none" aria-hidden="true">
+          <summary title="Oude schermen (verdwijnen in Fase 5)">oud</summary>
+          <div class="oldModeMenuBody">
+            <button id="nodesModeButton" type="button" class="editorModeTab" aria-pressed="false">Nodes</button>
+          </div>
+        </details>
       </nav>
       <div class="topbarRight">
         <button id="connectionButton" type="button" class="connectionButton connectionButton--standby" title="Serverstatus: standby. Klik om opnieuw te verbinden." aria-label="Serverstatus: standby. Klik om opnieuw te verbinden.">
@@ -30,17 +38,18 @@
         <button id="undoButton" type="button" class="ghost iconButton" title="Ongedaan maken (Ctrl+Z)" aria-label="Ongedaan maken">&#8630;</button>
         <button id="redoButton" type="button" class="ghost iconButton" title="Opnieuw doen (Ctrl+Shift+Z)" aria-label="Opnieuw doen">&#8631;</button>
         <span id="unsavedBadge" class="unsaved">0 actions unsaved</span>
-        <button id="saveDraftButton" type="button" class="ghost">SAVE DRAFT</button>
+        <button id="saveDraftButton" type="button" class="ghost" style="display:none">SAVE DRAFT</button>
         <button id="publishButton" type="button" class="primary">SAVE TO GAME</button>
         <button id="logoutButton" type="button" class="ghost">LOGOUT</button>
         <button id="fullscreenButton" type="button" class="ghost" aria-pressed="false">FULLSCREEN</button>
       </div>
     </header>
+    <section id="gameTabPanel" class="gameTabPanel" hidden aria-label="Game"></section>
 
     <div class="mobilePanelTabs" id="mobilePanelTabs" aria-label="Editor panelen">
       <button type="button" class="active" data-mobile-panel="all">All</button>
       <button type="button" data-mobile-panel="tools">Tools</button>
-      <button type="button" data-mobile-panel="graph">Nodes</button>
+      <button type="button" data-mobile-panel="graph" style="display:none">Nodes</button>
       <button type="button" data-mobile-panel="inspector">Inspector</button>
       <button type="button" data-mobile-panel="viewport">3D</button>
       <button type="button" data-mobile-panel="assets">Assets</button>
@@ -49,7 +58,7 @@
     <main class="layout">
       <aside class="tools">
         <section id="workbenchSelectionPanel" class="workbenchPanel workbenchSelectionPanel" aria-label="Werkbank selectie"></section>
-        <div id="authoringSection" class="panel authoringSection">
+        <div id="authoringSection" class="panel authoringSection" style="display:none">
           <div class="authoringHeader">
             <button id="authoringButton" type="button" class="primary authoringButton">+ Maken</button>
             <div id="authoringRouteChip" class="authoringRouteChip" hidden></div>
@@ -266,9 +275,12 @@
           </div>
       </aside>
 
+      <aside id="settingsMenuPanel" class="settingsMenuColumn wbdPanel" aria-label="Instellingen menu"></aside>
+      <section id="settingsCardPanel" class="settingsCardColumn wbdPanel" aria-label="Instellingen"></section>
+
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261022-workbench-w3"></script>
+    <script type="module" src="./editor.js?v=20261029-klassen3"></script>
   </body>
 </html>

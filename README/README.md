@@ -4,7 +4,7 @@ Deze map bevat fasecontracten voor GK. Een fasecontract is geen losse brainstorm
 
 ## Actieve MMORPG-basis
 
-Voor de MMORPG-basis is [v2.3: Start hier](./fases/MMORPG-basis-v2/START-HIER.md) de actieve ingang. Kevin geeft één faseopdracht; de codeeragent doorloopt de taakkaarten intern in afhankelijkheidsvolgorde. De vijf oude `MMORPG-basis/`-documenten bestaan alleen nog in de git-historie (commit `8a976e3`) en zijn historische bronnen, geen aanvullende opdracht of acceptatiecriteria.
+**Actief plan (sinds 26-10-2026):** [Werkbank-plan](./fases/Werkbank-plan/WERKBANK-PLAN.md). Dit is de enige ingang voor Codex en Claude. Het eerdere v2.3-plan in `fases/MMORPG-basis-v2/` is gesloten en dient alleen als naslag.
 
 Bij een expliciete MMORPG-basis-v2-opdracht gelden het v2-masterplan, de fasekaart en de bijbehorende ADR's boven tegenstrijdige algemene regie-regels hieronder. Dat omvat de tests die de fase als bewijs vereist. Andere fasecontracten worden hierdoor niet gewijzigd.
 

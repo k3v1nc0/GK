@@ -7,11 +7,50 @@ import test from "node:test";
 import { CommandService } from "../src/server/authoring/command-service.js";
 import { BuildService, compileCanonical } from "../src/server/authoring/build-service.js";
 import { applyCanonicalBuild } from "../src/server/authoring/runtime-overlay.js";
+import { buildRuntimeWorld } from "../src/server/authoring/world-builder.js";
 import { authoringDb, graphHash } from "./authoring-helpers.js";
 
 const fixtureWorld = JSON.parse(fs.readFileSync("tests/fixtures/runtime-compat.json", "utf8"));
 let seq = 100;
 const rid = () => "req-" + String(seq++).padStart(8, "0");
+
+test("losse modellen (kaart Model) gaan via SAVE TO GAME mee als vaste snapshot met hun asset en transform", () => {
+  const db = authoringDb();
+  const buildsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gk-model-build-"));
+  const commands = new CommandService(db);
+  const builds = new BuildService(db, { buildsRoot });
+  const options = { assetInfo: new Map([["asset_bread", { assetType: "model", sourcePath: "/assets/bread.glb" }]]) };
+  const asset = { id: "asset_bread", assetType: "model", sourcePath: "/assets/bread.glb" };
+  const runtimeOptions = { assetService: { manifestForIds: (ids) => ids.includes(asset.id) ? [asset] : [] } };
+  const placed = (data) => buildRuntimeWorld(data, runtimeOptions).entities.filter((entity) => entity.id.startsWith("placed."));
+  try {
+    commands.execute({ requestId: rid(), command: "create", kind: "project_settings", body: { gameName: "Modeltest" } }, "kevin");
+    const created = commands.execute({ requestId: rid(), command: "create", kind: "placed_model", body: { placedModelId: "model.brood_1", displayName: "Brood", modelAssetId: "asset_bread", x: 3, y: 1, z: -8, rotationY: 45, scale: 2 } }, "kevin");
+    const first = builds.publish("kevin", options);
+    const world = buildRuntimeWorld(builds.activeServerBuild().data, runtimeOptions);
+    const entity = world.entities.find((entry) => entry.id === "placed.model.brood_1");
+    assert.deepEqual(entity.transform, { position: { x: 3, y: 1, z: -8 }, rotation: { x: 0, y: 45, z: 0 }, scale: { x: 2, y: 2, z: 2 } });
+    assert.ok(world.assets.some((entry) => entry.id === asset.id), "de game krijgt het GLB-bestand mee");
+    const preview = compileCanonical(builds.documents.activeDocuments(), options);
+    const editorWorld = buildRuntimeWorld(JSON.parse(preview.files["server.json"].text), Object.assign({ editor: true }, runtimeOptions));
+    assert.ok(editorWorld.entities.some((entry) => entry.id === "doc:placed_model:model.brood_1"), "in de editor wijst het model naar zijn kaart");
+    commands.execute({ requestId: rid(), command: "update", docKey: "placed_model:model.brood_1", expectedRevision: created.revision || 1, body: { placedModelId: "model.brood_1", displayName: "Brood", modelAssetId: "asset_bread", x: 10, y: 1, z: -8, rotationY: 45, scale: 2 } }, "kevin");
+    assert.equal(placed(builds.activeServerBuild().data)[0].transform.position.x, 3, "conceptwijzigingen lekken niet naar de game");
+    const moved = builds.publish("kevin", options);
+    assert.notEqual(moved.buildId, first.buildId);
+    assert.equal(placed(builds.activeServerBuild().data)[0].transform.position.x, 10);
+    assert.throws(() => builds.publish("kevin", { assetInfo: new Map() }), { code: "BUILD_BLOCKED" }, "onbekend asset houdt publiceren tegen");
+    assert.equal(builds.release().activeBuildId, moved.buildId);
+    commands.execute({ requestId: rid(), command: "archive", docKey: "placed_model:model.brood_1", expectedRevision: (created.revision || 1) + 1 }, "kevin");
+    builds.publish("kevin", options);
+    assert.deepEqual(placed(builds.activeServerBuild().data), [], "ook het laatste model weghalen wordt gepubliceerd");
+    builds.rollback(first.buildId, builds.release().revision, "test", "kevin");
+    assert.deepEqual(placed(builds.activeServerBuild().data), [entity]);
+  } finally {
+    db.close();
+    fs.rmSync(buildsRoot, { recursive: true, force: true });
+  }
+});
 
 function setup() {
   const db = authoringDb();

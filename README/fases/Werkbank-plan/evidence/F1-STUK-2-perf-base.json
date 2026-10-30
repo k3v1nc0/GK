@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-26T21:02:25.043Z",
+  "commitSha": "ed60d9d65d1310a192b17051be8f0f883032c67b",
+  "machine": {
+    "platform": "linux",
+    "release": "4.15.0",
+    "architecture": "x64",
+    "cpuModel": "Intel(R) Xeon(R) CPU E5-2699 v3 @ 2.30GHz",
+    "cpuCount": 2,
+    "memoryBytes": 4294967296,
+    "node": "v24.18.0"
+  },
+  "browser": {
+    "name": "Chromium via Puppeteer (headless)",
+    "version": "Chrome/148.0.7778.97",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/148.0.0.0 Safari/537.36",
+    "width": 1366,
+    "height": 768
+  },
+  "scene": "ground=500x500 scatterInstances=1500 entityBlueprints=1 scatterAreas=3 ui=2 keybinds=6 chunks=15x15 maxLoaded=9",
+  "samplesPerScenario": 120,
+  "warmupFrames": 60,
+  "results": [
+    {
+      "scenario": "baseline-software-renderer",
+      "kind": "profile",
+      "result": {
+        "label": "baseline-software-renderer",
+        "mode": "game",
+        "renderer": {
+          "api": "WebGL2",
+          "name": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+          "vendor": "Google Inc. (Google)",
+          "software": true
+        },
+        "averages": {
+          "frameMs": 238.462,
+          "renderMs": 3.124,
+          "syncChunkMs": 0.318,
+          "updatePlayerMs": 0.074,
+          "animationMs": 0.212,
+          "hudMs": 0.11
+        },
+        "p95": {
+          "frameMs": 300.1,
+          "renderMs": 9.8,
+          "syncChunkMs": 0.7,
+          "updatePlayerMs": 0.1,
+          "animationMs": 0.2,
+          "hudMs": 0.3
+        },
+        "counts": {
+          "drawCalls": 43,
+          "triangles": 72662,
+          "geometries": 36,
+          "textures": 6,
+          "sceneObjects": 83,
+          "runtimeObjects": 83,
+          "meshes": 37,
+          "remotePlayers": 0,
+          "terrainResident": 27,
+          "groundTilesResident": 9,
+          "hiddenObjects": 1148,
+          "loadedChunks": 9
+        },
+        "gameLoopTimings": {
+          "remoteSyncMs": 0,
+          "remoteSyncAvgMs": 0.027,
+          "remoteSyncCalls": 201,
+          "remoteSyncLastAt": 58191.6,
+          "movementStepMs": 0,
+          "movementStepAvgMs": 0,
+          "movementStepCalls": 0,
+          "movementStepLastAt": 0,
+          "minimapDrawMs": 0,
+          "minimapDrawAvgMs": 0,
+          "minimapDrawCalls": 0,
+          "minimapDrawLastAt": 0
+        },
+        "settings": {
+          "pixelRatio": 0.5,
+          "shadowsEnabled": false,
+          "shadowQuality": "off",
+          "antialias": false,
+          "performanceHudEnabled": true,
+          "chunkDebugOverlay": false,
+          "chunkLoadingEnabled": true,
+          "groundChunkingEnabled": true
+        }
+      },
+      "renderer": {
+        "name": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "vendor": "Google Inc. (Google)",
+        "software": true,
+        "representative": false
+      }
+    }
+  ],
+  "capacityClaim": "none: headless Chromium op de server, geen spelersapparaat"
+}

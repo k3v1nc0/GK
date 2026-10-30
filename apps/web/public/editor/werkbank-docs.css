@@ -1,0 +1,161 @@
+/* Werkbank Fase 1: panelen die zichzelf uit het schema tekenen (Werkbank-paneel, Instellingen, Bibliotheek-kaarten).
+   Kleuren zoals de ontwerpplaatjes: donkerblauw, oranje accent, grote iconen, weinig tekst. */
+:root {
+  --wbd-bg: #0f1722;
+  --wbd-card: #141f2c;
+  --wbd-line: #24313f;
+  --wbd-text: #e8edf1;
+  --wbd-muted: #8fa0ad;
+  --wbd-accent: #ffb454;
+  --wbd-accent-ink: #251707;
+  --wbd-ok: #3ccf6e;
+}
+
+/* Tot de vensterindeling ze ophaalt staan de Instellingen-panelen niet in beeld. */
+.layout > .settingsMenuColumn,
+.layout > .settingsCardColumn { display: none; }
+.settingsMenuColumn, .settingsCardColumn { height: 100%; overflow: auto; background: var(--wbd-bg); padding: 12px; }
+
+/* Bovenbalk: kleine "oud"-knop voor Nodes en Canoniek (verdwijnt in Fase 5). */
+.oldModeMenu { position: relative; }
+.oldModeMenu > summary { list-style: none; cursor: pointer; color: #5f6f7c; font-size: 11px; padding: 6px 8px; border-radius: 6px; }
+.oldModeMenu > summary::-webkit-details-marker { display: none; }
+.oldModeMenu > summary:hover, .oldModeMenu.active > summary { color: #e5edf3; background: #151f29; }
+.oldModeMenuBody { position: absolute; top: 100%; left: 0; z-index: 50; display: grid; gap: 4px; padding: 6px; margin-top: 4px; background: #111a23; border: 1px solid var(--wbd-line); border-radius: 8px; min-width: 120px; }
+.oldModeMenuBody .editorModeTab { text-align: left; text-decoration: none; display: flex; align-items: center; }
+#publishButton[data-pending]:not([data-pending=""])::after {
+  content: attr(data-pending);
+  display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--wbd-accent-ink); color: var(--wbd-accent); font-size: 11px; line-height: 18px; text-align: center;
+}
+.workbenchDocTab { border-color: #3a4b5d; }
+
+/* ---------- Paneel / formulier ---------- */
+.wbdPanel { color: var(--wbd-text); font-size: 13px; }
+.wbdForm { display: grid; gap: 10px; padding: 4px 2px 12px; }
+.wbdHead { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--wbd-line); }
+.wbdHeadIcon { font-size: 26px; line-height: 1; }
+.wbdHeadText { min-width: 0; flex: 1; }
+.wbdHeadKind { color: var(--wbd-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.wbdHeadName { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbdBadge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #3b2a12; color: var(--wbd-accent); }
+.wbdFields { display: grid; gap: 8px; }
+.wbdField { display: grid; grid-template-columns: minmax(96px, 34%) minmax(0, 1fr) 22px; align-items: center; gap: 8px; }
+.wbdFieldWide { grid-template-columns: 1fr 22px; }
+.wbdFieldWide .wbdLabel { grid-column: 1 / -1; }
+.wbdLabel { display: flex; align-items: center; gap: 6px; color: #c9d4dc; min-width: 0; }
+.wbdLabel span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbdIcon { font-size: 16px; width: 20px; text-align: center; flex: 0 0 auto; }
+.wbdControl { min-width: 0; }
+.wbdHelp { grid-column: 1 / -1; display: grid; gap: 3px; padding: 8px 10px; background: #0b121b; border: 1px solid var(--wbd-line); border-radius: 8px; color: #c9d4dc; font-size: 12px; }
+.wbdHelp b { color: var(--wbd-accent); font-weight: 600; }
+.wbdInfo { width: 22px; height: 22px; border-radius: 50%; border: 1px solid #3a4b5d; background: #12202e; color: #6fb6ff; font: italic 700 12px Georgia, serif; cursor: pointer; padding: 0; }
+.wbdInfo:hover { background: #1b3048; }
+
+.wbdText, .wbdSelect, .wbdNumber, .wbdQty {
+  width: 100%; min-height: 32px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--wbd-line);
+  background: #0b121b; color: var(--wbd-text); font: inherit;
+}
+.wbdText:disabled { opacity: .55; }
+.wbdText:focus, .wbdSelect:focus, .wbdNumber:focus, .wbdQty:focus { outline: none; border-color: var(--wbd-accent); }
+
+.wbdSliderRow { display: grid; grid-template-columns: minmax(60px, 1fr) 92px; gap: 8px; align-items: center; }
+.wbdSlider { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--wbd-accent) var(--wbd-fill, 50%), #2a3644 var(--wbd-fill, 50%)); }
+.wbdSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff2dc; border: 3px solid var(--wbd-accent); cursor: pointer; }
+.wbdSlider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff2dc; border: 3px solid var(--wbd-accent); cursor: pointer; }
+.wbdNumberWrap { display: flex; align-items: center; gap: 4px; }
+.wbdNumberWrap .wbdNumber { min-width: 0; padding-right: 4px; }
+.wbdUnit { color: var(--wbd-muted); font-size: 11px; min-width: 18px; }
+
+.wbdToggle { -webkit-appearance: none; appearance: none; width: 26px; height: 26px; border-radius: 6px; border: 2px solid #3a4b5d; background: #0b121b; cursor: pointer; display: grid; place-items: center; margin: 0; }
+.wbdToggle:checked { background: var(--wbd-accent); border-color: var(--wbd-accent); }
+.wbdToggle:checked::after { content: "✓"; color: var(--wbd-accent-ink); font-weight: 900; font-size: 16px; }
+
+.wbdChoices { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; }
+.wbdChoice { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--wbd-line); background: var(--wbd-card); color: var(--wbd-text); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.wbdChoice:hover { border-color: #4a5a6a; }
+.wbdChoice.active { border-color: var(--wbd-accent); box-shadow: inset 0 0 0 1px var(--wbd-accent); background: #2a1f10; }
+.wbdChoiceIcon { font-size: 18px; }
+
+.wbdSlot { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 30px 4px 4px; border: 2px dashed #3a4b5d; border-radius: 9px; background: #0b121b; }
+.wbdSlot.filled { border-style: solid; border-color: #2f4256; background: var(--wbd-card); }
+.wbdSlot.over { border-color: var(--wbd-accent); background: #2a1f10; }
+.wbdSlotFace { width: 36px; height: 36px; border-radius: 7px; background: #0f1a26; display: grid; place-items: center; overflow: hidden; flex: 0 0 auto; }
+.wbdSlotFace img { width: 100%; height: 100%; object-fit: cover; }
+.wbdSlotIcon { font-size: 20px; }
+.wbdSlotName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c9d4dc; font-size: 12px; }
+.wbdSlot:not(.filled) .wbdSlotName { color: var(--wbd-muted); font-style: italic; }
+.wbdSlotPicker { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 22px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: #1a2735; color: var(--wbd-muted); cursor: pointer; appearance: none; text-align: center; }
+.wbdSlotClear { position: absolute; right: 28px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border: 0; border-radius: 50%; background: #2a3644; color: #c9d4dc; cursor: pointer; font-size: 11px; padding: 0; }
+.wbdSlotAdd { margin-top: 2px; }
+
+.wbdLoot { display: grid; gap: 6px; }
+.wbdLootRow { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.4fr) auto 24px; gap: 6px; align-items: center; }
+.wbdLootChance, .wbdLootQty { display: flex; align-items: center; gap: 4px; }
+.wbdLootChance .wbdSliderRow { flex: 1; grid-template-columns: minmax(40px, 1fr) 76px; }
+.wbdQty { width: 52px; padding: 4px; }
+.wbdMini { width: 24px; height: 24px; border: 0; border-radius: 6px; background: #2a3644; color: #c9d4dc; cursor: pointer; }
+
+.wbdMoreToggle { justify-self: start; border: 1px solid var(--wbd-line); background: transparent; color: var(--wbd-muted); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.wbdMoreToggle:hover, .wbdMoreToggle[aria-expanded="true"] { color: var(--wbd-text); border-color: #4a5a6a; }
+.wbdMore { padding-top: 4px; border-top: 1px dashed var(--wbd-line); }
+.wbdNote { color: var(--wbd-muted); font-size: 12px; }
+.wbdEmpty { color: var(--wbd-muted); padding: 12px; text-align: center; }
+.wbdMuted { color: var(--wbd-muted); font-size: 11px; }
+.wbdActions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.wbdPrimary { border: 0; border-radius: 8px; padding: 8px 14px; background: var(--wbd-accent); color: var(--wbd-accent-ink); font: inherit; font-weight: 700; cursor: pointer; }
+.wbdPrimary:disabled { opacity: .5; cursor: default; }
+.wbdGhost { border: 1px solid var(--wbd-line); border-radius: 8px; padding: 7px 12px; background: transparent; color: var(--wbd-text); font: inherit; cursor: pointer; }
+.wbdGhost:disabled { opacity: .5; cursor: default; }
+.wbdCheck { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+
+/* ---------- Bibliotheek-kaarten ---------- */
+.wbdLibrary { padding: 6px 2px; }
+.wbdTiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.wbdTile { position: relative; display: grid; gap: 4px; justify-items: center; padding: 6px; border: 1px solid var(--wbd-line); border-radius: 10px; background: var(--wbd-card); color: var(--wbd-text); font: inherit; cursor: grab; }
+.wbdTile:hover { border-color: #4a5a6a; }
+.wbdTile.active { border-color: var(--wbd-accent); box-shadow: 0 0 0 1px var(--wbd-accent); }
+.wbdTileNew { border-style: dashed; cursor: pointer; }
+.wbdThumb { width: 100%; aspect-ratio: 1; border-radius: 8px; background: #0b121b; display: grid; place-items: center; overflow: hidden; }
+.wbdThumb img { width: 100%; height: 100%; object-fit: cover; }
+.wbdThumbIcon { font-size: 30px; }
+.wbdTileName { width: 100%; font-size: 11px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbdTileKind { position: absolute; top: 4px; right: 6px; font-size: 12px; }
+
+/* ---------- Instellingen ---------- */
+.wbdMenuItem { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--wbd-line); border-radius: 10px; background: var(--wbd-card); color: var(--wbd-text); font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+.wbdMenuItem:hover { border-color: #4a5a6a; }
+.wbdMenuItem.active { border-color: var(--wbd-accent); box-shadow: inset 0 0 0 1px var(--wbd-accent); background: #1d1810; }
+.wbdMenuIcon { font-size: 22px; width: 28px; text-align: center; }
+.settingsCardColumn .wbdField { grid-template-columns: minmax(110px, 36%) minmax(0, 1fr) 22px; }
+.wbdBuilds { display: grid; gap: 6px; }
+.wbdBuild { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--wbd-line); border-radius: 9px; background: var(--wbd-card); }
+.wbdBuild.active { border-color: #2f6b45; }
+.wbdBuildText { min-width: 0; }
+.wbdDetails { border: 1px solid var(--wbd-line); border-radius: 9px; padding: 8px 10px; }
+.wbdDetails > summary { cursor: pointer; color: #c9d4dc; }
+.wbdDetails ul { margin: 6px 0 0; padding-left: 18px; color: var(--wbd-muted); font-size: 12px; }
+.wbdCutover { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--wbd-line); }
+.wbdCutoverHead { display: flex; justify-content: space-between; gap: 8px; }
+.wbdReport { max-height: 240px; overflow: auto; background: #0b121b; padding: 8px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; }
+
+@media (max-width: 700px) {
+  .wbdField { grid-template-columns: 1fr 22px; }
+  .wbdField .wbdLabel { grid-column: 1 / -1; }
+  .wbdLootRow { grid-template-columns: 1fr 1fr; }
+}
+
+.wbdMoveBanner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
+
+/* Ombouw stap 2: Area tool (knoppen per soort) en de instellingen van een vlak. */
+.wbdAreaTool { margin: 0 0 8px; align-items: center; }
+.wbdAreaSettings { gap: 6px; }
+.wbdAssetList { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbdAssetListItem { display: grid; gap: 6px; flex: 1 1 220px; min-width: 0; }
+.wbdColor { width: 48px; height: 28px; padding: 0; border: none; background: none; }
+.wbdUserActions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Instellingen > Klassen (meerdere kaarten in Instellingen). */
+.wbdChildList { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbdChildList .wbdGhost.active { border-color: #2f6b45; background: rgba(47, 107, 69, 0.18); }
+.wbdChildForm { padding: 8px; border: 1px solid var(--wbd-line); border-radius: 9px; background: var(--wbd-card); }

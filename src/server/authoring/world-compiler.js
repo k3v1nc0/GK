@@ -4,6 +4,10 @@ import {
   CELL_SIZE_MM, areaBoundsMm, cellKeysForRect, rectInside, rectsOverlap
 } from "../../../apps/web/public/shared/spatial.js";
 import { splitByAudience } from "../../shared/authoring/kinds.js";
+import { areaSoort } from "../../shared/authoring/kinds/area.js";
+
+// Ombouw stap 2: alleen deelgebieden doen mee aan Regions/Cells; andere vlakken (pad, bos, ...) gaan via areaShapes.
+const isDeelgebied = (doc) => doc.kind !== "area" || areaSoort(doc.body) === "deelgebied";
 
 export const WORLD_SECTION_VERSION = "gk-world-1";
 
@@ -13,7 +17,7 @@ const regionIdFromRef = (ref) => String(ref || "").replace(/^region:/, "");
 export function spatialIssues(docs) {
   const regions = docs.filter((doc) => doc.kind === "region" && !doc.archived);
   // Areas en obstakels (colliders) moeten allebei helemaal binnen hun Region liggen.
-  const areas = docs.filter((doc) => (doc.kind === "area" || doc.kind === "collider") && !doc.archived);
+  const areas = docs.filter((doc) => (doc.kind === "area" || doc.kind === "collider") && !doc.archived && isDeelgebied(doc));
   const issues = [];
   for (let i = 0; i < regions.length; i += 1) {
     for (let k = i + 1; k < regions.length; k += 1) {
@@ -68,7 +72,7 @@ export function colliderToBlocker(collider) {
 }
 
 export function compileWorldSection(documents, options = {}) {
-  const active = documents.filter((doc) => !doc.archived && (doc.kind === "region" || doc.kind === "area" || doc.kind === "collider"))
+  const active = documents.filter((doc) => !doc.archived && (doc.kind === "region" || doc.kind === "area" || doc.kind === "collider") && isDeelgebied(doc))
     .sort((a, b) => a.docKey.localeCompare(b.docKey));
   if (!active.length) return null;
   const errors = spatialIssues(active).map((issue) => ({ code: issue.code, docKey: issue.docKey, message: issue.message }));

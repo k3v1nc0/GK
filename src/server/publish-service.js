@@ -3686,3 +3686,36 @@ export class PublishService {
     return { world: mergedPublishedWorld, validation };
   }
 }
+
+// Ombouw stap 2: vlakken uit de Area tool (documenten) krijgen exact dezelfde read-models als de oude nodes.
+// records: [{ id, nodeType, values }] met waarden zoals de node ze had (meters).
+export function areaShapeReadModels(records, { assetService = null, groundY = 0 } = {}) {
+  const out = { surfaces: [], blockers: [], walkableSurfaces: [], scatterAreas: [], entities: [], assets: [] };
+  const assetIds = new Set();
+  for (const record of records || []) {
+    const node = { id: record.id, type: record.nodeType, values: record.values };
+    if (record.nodeType === "surface_layer") {
+      const model = buildSurfaceLayerReadModel(node);
+      for (const key of ["textureAssetId", "secondaryTextureAssetId", "edgeFadeNoiseAssetId"]) if (model[key]) assetIds.add(model[key]);
+      out.surfaces.push(model);
+    } else if (record.nodeType === "blocker_area") {
+      out.blockers.push(buildBlockerAreaReadModel(node));
+    } else if (record.nodeType === "walkable_surface") {
+      out.walkableSurfaces.push(buildWalkableSurfaceReadModel(node));
+    } else if (record.nodeType === "bounded_area_scatter") {
+      const resolved = resolveScatterSources(node, new Map(), { assetService }, [], "Scatter '" + record.id + "'");
+      for (const assetId of resolved.sourceAssetIds) assetIds.add(assetId);
+      const settings = normalizeScatterSettings(node);
+      const instances = buildScatterInstances(node, resolved.sourceAssets, groundY);
+      out.entities.push.apply(out.entities, instances);
+      out.scatterAreas.push(buildScatterAreaReadModel(node, resolved, {
+        placedCount: instances.placedCount ?? instances.length,
+        placementWarnings: instances.placementWarnings || [],
+        groundY: groundY
+      }));
+      if (settings.boundaryBlocksPlayer) out.blockers.push(buildScatterBoundaryBlockerReadModel(node, settings));
+    }
+  }
+  out.assets = assetService && assetIds.size ? assetService.manifestForIds(Array.from(assetIds)) : [];
+  return out;
+}

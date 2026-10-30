@@ -12,9 +12,15 @@ import { Node03RuntimeService } from "../node03-runtime-service.js";
 import { compileCanonical } from "./build-service.js";
 import { applyCanonicalBuild, CANONICAL_ITEM_RUNTIME_KEYS } from "./runtime-overlay.js";
 import { authoringError, stableStringify } from "./stable-json.js";
+import { AREA_SETTING_SPECS, AREA_SOORTEN, areaPointsMm } from "../../shared/authoring/kinds/area.js";
 
-export const CUTOVER_DOMAINS = ["project", "items", "pickups"];
-const DOMAIN_KIND = { project: "project_settings", items: "item_definition", pickups: "pickup" };
+export const CUTOVER_DOMAINS = ["project", "items", "pickups", "areas"];
+const DOMAIN_KIND = { project: "project_settings", items: "item_definition", pickups: "pickup", areas: "area" };
+
+// Ombouw stap 2: welke oude nodes de Area tool overneemt, en welk veld hun ID in de wereld is.
+const AREA_NODE_SOORT = { bounded_area_scatter: "begroeiing", surface_layer: "pad", blocker_area: "blokkade", walkable_surface: "loopvlak" };
+export const AREA_NODE_TYPES = Object.keys(AREA_NODE_SOORT);
+const areaRuntimeIdOf = (node) => String(node.type === "bounded_area_scatter" ? node.id : (node.type === "blocker_area" ? node.values?.blockerId : node.values?.surfaceId) || node.id);
 
 function canonicalId(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9_.]+/g, "_").replace(/\.{2,}/g, ".").replace(/^[^a-z]+/, "").replace(/[._]+$/, "").slice(0, 120);
@@ -51,8 +57,96 @@ export function legacyInventory(world) {
   return {
     project: { gameName: world?.gameProject?.project?.gameName || null },
     items: Object.keys(world?.gameProject?.catalogs?.items || {}).length,
-    pickups: counts
+    pickups: counts,
+    areas: (world?.terrain?.surfaces || []).length + (world?.collision?.walkableSurfaces || []).length + (world?.scatterAreas || []).length
+      + (world?.collision?.blockers || []).filter((blocker) => !String(blocker?.id || "").includes("::") && blocker?.reason !== "canonical_collider").length
   };
+}
+
+// Een rechthoek (midden, maat, draaiing in graden) als 4 punten.
+function rectanglePoints(x, z, width, depth, rotationDeg, y) {
+  const rad = (Number(rotationDeg) || 0) * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) => {
+    const ox = sx * (Number(width) || 0) / 2;
+    const oz = sz * (Number(depth) || 0) / 2;
+    const point = { x: (Number(x) || 0) + ox * cos - oz * sin, z: (Number(z) || 0) + ox * sin + oz * cos };
+    if (y !== undefined) point.y = y;
+    return point;
+  });
+}
+
+// De punten van een oude node; zonder punten de vorm die de node zelf beschreef.
+function legacyAreaPoints(node) {
+  const values = node.values || {};
+  const points = (Array.isArray(values.points) ? values.points : []).filter((point) => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.z)));
+  const soort = AREA_NODE_SOORT[node.type];
+  if (points.length >= AREA_SOORTEN[soort].minPoints) return points;
+  if (node.type === "bounded_area_scatter") return rectanglePoints(values.areaCenterX, values.areaCenterZ, values.areaWidth, values.areaDepth, values.areaRotationY);
+  if (node.type === "walkable_surface") return rectanglePoints(values.x, values.z, values.width, values.depth, values.rotationY, Number(values.y) || 0);
+  if (node.type === "blocker_area" && values.shapeType === "circle") {
+    const radius = Number(values.radius) || 1;
+    return Array.from({ length: 16 }, (_, index) => ({ x: (Number(values.x) || 0) + radius * Math.cos(index * Math.PI / 8), z: (Number(values.z) || 0) + radius * Math.sin(index * Math.PI / 8) }));
+  }
+  if (node.type === "blocker_area") return rectanglePoints(values.x, values.z, values.width, values.depth, 0);
+  return points;
+}
+
+// Alleen instellingen die afwijken van de standaard gaan mee (de build vult de standaard zelf aan).
+function legacyAreaSettings(soort, values) {
+  const specs = AREA_SETTING_SPECS[soort].fields;
+  const settings = {};
+  for (const [key, spec] of Object.entries(specs)) {
+    const value = values?.[key];
+    if (value === undefined || value === null) continue;
+    if (stableStringify(value) === stableStringify(spec.default)) continue;
+    settings[key] = JSON.parse(JSON.stringify(value));
+  }
+  return Object.keys(settings).length ? settings : undefined;
+}
+
+function worldAreaIds(world) {
+  return {
+    surface_layer: new Set((world?.terrain?.surfaces || []).map((entry) => String(entry.id))),
+    blocker_area: new Set((world?.collision?.blockers || []).map((entry) => String(entry.id))),
+    walkable_surface: new Set((world?.collision?.walkableSurfaces || []).map((entry) => String(entry.id))),
+    bounded_area_scatter: new Set((world?.scatterAreas || []).map((entry) => String(entry.id)))
+  };
+}
+
+// Elke oude vlak-node wordt een document. Wat niet in de wereld staat (niet aangesloten) komt gearchiveerd mee,
+// zodat er niets verloren gaat.
+function plannedAreaDocuments(world, graph, blocking) {
+  const docs = [];
+  const inWorld = worldAreaIds(world);
+  const usedIds = new Set();
+  const usedRefs = new Set();
+  for (const node of (graph?.nodes || []).filter((entry) => AREA_NODE_SOORT[entry.type]).sort((a, b) => String(a.id).localeCompare(String(b.id)))) {
+    const soort = AREA_NODE_SOORT[node.type];
+    const runtimeId = areaRuntimeIdOf(node);
+    const legacyRef = "areas:" + node.type + ":" + runtimeId;
+    let areaId = canonicalId(soort + "." + runtimeId) || soort + ".vlak";
+    while (usedIds.has(areaId)) areaId += "_2";
+    usedIds.add(areaId);
+    const points = legacyAreaPoints(node);
+    const body = {
+      areaId,
+      displayName: String(node.values?.label || node.values?.scatterId || node.title || runtimeId).slice(0, 80) || areaId,
+      soort,
+      shape: "polygon",
+      pointsMm: areaPointsMm(points, soort === "loopvlak")
+    };
+    const settings = legacyAreaSettings(soort, node.values);
+    if (settings) body.settings = settings;
+    const validation = validateDocument("area", body);
+    if (!validation.ok) { blocking.push({ legacyRef, reason: (body.displayName) + ": " + validation.issues.map((entry) => entry.message).join(" ") }); continue; }
+    // Twee nodes met dezelfde ID: de wereld toont alleen de eerste; de tweede komt gearchiveerd mee.
+    const archived = !inWorld[node.type].has(runtimeId) || usedRefs.has(legacyRef);
+    usedRefs.add(legacyRef);
+    docs.push({ kind: "area", legacyRef, body, archived });
+  }
+  return docs;
 }
 
 function itemBodyFromLegacy(itemId, legacy) {
@@ -76,8 +170,9 @@ function itemBodyFromLegacy(itemId, legacy) {
   return body;
 }
 
-function plannedDocuments(world, domain, blocking) {
+function plannedDocuments(world, domain, blocking, context = {}) {
   const docs = [];
+  if (domain === "areas") docs.push(...plannedAreaDocuments(world, context.graph, blocking));
   if (domain === "project") {
     const project = world?.gameProject?.project || {};
     if (!project.gameName) blocking.push({ legacyRef: "project", reason: "De graph heeft geen gameName om over te nemen." });
@@ -141,9 +236,51 @@ function pickupRuntimeStates(world) {
   return states;
 }
 
-function parityReport(world, domain, finalDocs) {
+// Afronden op 1 mm: een verhuisd vlak bewaart zijn punten in hele mm.
+function roundedForParity(value) {
+  if (typeof value === "number") return Math.round(value * 1000) / 1000;
+  if (Array.isArray(value)) return value.map(roundedForParity);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, roundedForParity(entry)]));
+  return value;
+}
+
+// Verschil tussen oude en nieuwe vorm van een vlak, zonder wat niets uitmaakt in de game:
+// - getallen tot 1 cm (punten worden in hele mm bewaard; midden/maat schuiven dan een fractie);
+// - scatterId/reason zijn alleen namen (labels), geen gedrag;
+// - radius doet niets bij een vorm uit punten.
+const AREA_PARITY_TOLERANCE = 0.01;
+function sameForParity(left, right) {
+  if (typeof left === "number" && typeof right === "number") return Math.abs(left - right) <= AREA_PARITY_TOLERANCE;
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((entry, index) => sameForParity(entry, right[index]));
+  if (left && right && typeof left === "object" && typeof right === "object") {
+    const keys = new Set(Object.keys(left).concat(Object.keys(right)));
+    return Array.from(keys).every((key) => sameForParity(left[key] ?? null, right[key] ?? null));
+  }
+  return stableStringify(left ?? null) === stableStringify(right ?? null);
+}
+
+function areaDiffs(legacy, canonical) {
+  const ignore = new Set(["scatterId", "reason"]);
+  if (legacy.shapeType === "polygon" && canonical.shapeType === "polygon") ignore.add("radius");
+  const keys = Array.from(new Set(Object.keys(legacy).concat(Object.keys(canonical)))).filter((key) => !ignore.has(key)).sort();
+  return keys.filter((key) => !sameForParity(legacy[key] ?? null, canonical[key] ?? null))
+    .map((key) => ({ key, legacy: legacy[key] ?? null, canonical: canonical[key] ?? null }));
+}
+
+function areaWorldEntries(world) {
+  const entries = new Map();
+  const add = (group, list) => { for (const entry of list || []) if (entry?.id) entries.set(group + ":" + entry.id, roundedForParity(entry)); };
+  add("surface", world?.terrain?.surfaces);
+  add("blocker", (world?.collision?.blockers || []).filter((blocker) => blocker?.reason !== "canonical_collider"));
+  add("walkable", world?.collision?.walkableSurfaces);
+  add("scatter", world?.scatterAreas);
+  add("scatterEntity", (world?.entities || []).filter((entity) => entity?.type === "scatter"));
+  return entries;
+}
+
+function parityReport(world, domain, finalDocs, context = {}) {
   const compiled = compileCanonical(finalDocs);
-  const overlaid = applyCanonicalBuild(world, { buildId: "parity", data: JSON.parse(compiled.files["server.json"].text) });
+  const overlaid = applyCanonicalBuild(world, { buildId: "parity", data: JSON.parse(compiled.files["server.json"].text) }, { assetService: context.assetService || null });
   const parity = [];
   if (domain === "project") {
     const before = world?.gameProject?.project || {};
@@ -172,18 +309,29 @@ function parityReport(world, domain, finalDocs) {
       if (!before.has(instanceId) && String(state.spawnEntryId || "").startsWith("canonical.legacy.")) parity.push({ legacyRef: instanceId, instanceId, diffs: [{ key: "instance", legacy: null, canonical: instanceId }] });
     }
   }
+  if (domain === "areas") {
+    const before = areaWorldEntries(world);
+    const after = areaWorldEntries(overlaid);
+    for (const key of Array.from(new Set(Array.from(before.keys()).concat(Array.from(after.keys())))).sort()) {
+      const legacy = before.get(key) ?? null;
+      const canonical = after.get(key) ?? null;
+      if (key.startsWith("scatterEntity:") && legacy && canonical && !areaDiffs(legacy, canonical).length) continue;
+      parity.push({ legacyRef: key, diffs: legacy && canonical ? areaDiffs(legacy, canonical) : [{ key: "object", legacy: legacy ? key : null, canonical: canonical ? key : null }] });
+    }
+  }
   return compiled.errors.length
     ? parity.concat(compiled.errors.map((error) => ({ legacyRef: error.docKey, diffs: [{ key: error.code, legacy: null, canonical: error.message }] })))
     : parity;
 }
 
 // Dry-run. existingDocs = alle canonieke documenten die er nu al zijn.
-export function planDomain(world, domain, existingDocs, cutoverRows = {}) {
+export function planDomain(world, domain, existingDocs, cutoverRows = {}, context = {}) {
   if (!CUTOVER_DOMAINS.includes(domain)) throw authoringError(400, "DOMAIN_UNKNOWN", "Onbekend domein: " + domain);
   const blocking = [];
   if (!world?.gameProject) blocking.push({ legacyRef: domain, reason: "De graph heeft geen gecompileerd gameProject. Los eerst de validatiefouten in Nodes op." });
   if (domain === "pickups" && cutoverRows.items?.writer !== "canonical") blocking.push({ legacyRef: "pickups", reason: "Zet eerst Items over: pickups verwijzen naar canonieke items." });
-  const planned = world?.gameProject ? plannedDocuments(world, domain, blocking) : [];
+  if (domain === "areas" && !context.graph) blocking.push({ legacyRef: "areas", reason: "De graph is niet leesbaar; vlakken kunnen niet verhuizen." });
+  const planned = world?.gameProject ? plannedDocuments(world, domain, blocking, context) : [];
   const existing = new Map(existingDocs.map((doc) => [doc.docKey, doc]));
   const create = [];
   const keep = [];
@@ -197,15 +345,15 @@ export function planDomain(world, domain, existingDocs, cutoverRows = {}) {
     const itemKeys = new Set(existingDocs.filter((doc) => doc.kind === "item_definition" && !doc.archived).map((doc) => doc.docKey));
     for (const doc of create) if (!itemKeys.has(doc.body.itemRef)) blocking.push({ legacyRef: doc.legacyRef, reason: "Item " + doc.body.itemRef + " bestaat niet (actief) in Canoniek." });
   }
-  const finalDocs = existingDocs.concat(create.map((doc) => ({ docKey: doc.docKey, kind: doc.kind, body: doc.body, legacyRef: doc.legacyRef, archived: false, revision: 1 })));
-  const parity = world?.gameProject && !blocking.length ? parityReport(world, domain, finalDocs) : [];
+  const finalDocs = existingDocs.concat(create.map((doc) => ({ docKey: doc.docKey, kind: doc.kind, body: doc.body, legacyRef: doc.legacyRef, archived: doc.archived === true, revision: 1 })));
+  const parity = world?.gameProject && !blocking.length ? parityReport(world, domain, finalDocs, context) : [];
   const diffCount = parity.filter((entry) => entry.diffs.length > 0).length;
   return {
     domain,
     kind: DOMAIN_KIND[domain],
     writer: cutoverRows[domain]?.writer || "legacy",
     ok: blocking.length === 0 && diffCount === 0,
-    create: create.map((doc) => ({ docKey: doc.docKey, legacyRef: doc.legacyRef, body: doc.body })),
+    create: create.map((doc) => ({ docKey: doc.docKey, legacyRef: doc.legacyRef, body: doc.body, archived: doc.archived === true })),
     keep,
     blocking,
     parity,
@@ -223,12 +371,12 @@ export function cutoverRows(db) {
 }
 
 // Finaliseert een domein. world moet gebouwd zijn uit de graph op expectedGraphRevision.
-export function finalizeDomain(db, { world, domain, expectedGraphRevision, worldGraphRevision, acceptDiffs = false, existingDocs, actor }) {
+export function finalizeDomain(db, { world, domain, expectedGraphRevision, worldGraphRevision, acceptDiffs = false, existingDocs, actor, context = {} }) {
   const rows = cutoverRows(db);
   if (rows[domain]?.writer === "canonical") throw authoringError(409, "ALREADY_CANONICAL", "Dit domein is al overgezet.");
   if (!Number.isInteger(expectedGraphRevision)) throw authoringError(428, "IF_MATCH_REQUIRED", "If-Match (graphrevisie) is verplicht.");
   if (worldGraphRevision !== expectedGraphRevision) throw authoringError(409, "GRAPH_REVISION_CHANGED", "De graph is intussen gewijzigd. Bekijk het rapport opnieuw.");
-  const plan = planDomain(world, domain, existingDocs, rows);
+  const plan = planDomain(world, domain, existingDocs, rows, context);
   if (plan.blocking.length) throw authoringError(409, "CUTOVER_BLOCKED", plan.blocking[0].reason, { blocking: plan.blocking });
   if (plan.diffCount > 0 && acceptDiffs !== true) throw authoringError(409, "PARITY_DIFF", plan.diffCount + " objecten wijken af. Bekijk het rapport en accepteer expliciet, of los het op in Nodes.", { diffCount: plan.diffCount });
   const stamp = new Date().toISOString();
@@ -238,11 +386,11 @@ export function finalizeDomain(db, { world, domain, expectedGraphRevision, world
     if (Number(meta?.graph_revision || 0) !== expectedGraphRevision) throw authoringError(409, "GRAPH_REVISION_CHANGED", "De graph is intussen gewijzigd. Bekijk het rapport opnieuw.");
     const insert = db.prepare(`
       INSERT INTO authoring_documents (doc_key, kind, revision, body_json, archived, legacy_ref, created_at, updated_at, updated_by)
-      VALUES (?, ?, 1, ?, 0, ?, ?, ?, ?)
+      VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
     `);
     const insertRef = db.prepare("INSERT OR IGNORE INTO authoring_refs (from_doc_key, to_doc_key) VALUES (?, ?)");
     for (const doc of plan.create) {
-      insert.run(doc.docKey, plan.kind, JSON.stringify(doc.body), doc.legacyRef, stamp, stamp, actor || null);
+      insert.run(doc.docKey, plan.kind, JSON.stringify(doc.body), doc.archived ? 1 : 0, doc.legacyRef, stamp, stamp, actor || null);
       for (const ref of validateDocument(plan.kind, doc.body).refs) insertRef.run(doc.docKey, ref);
     }
     const report = { createdCount: plan.create.length, kept: plan.keep, comparedObjects: plan.comparedObjects, diffCount: plan.diffCount, acceptedDiffs: plan.diffCount > 0, parity: plan.parity.filter((entry) => entry.diffs.length) };

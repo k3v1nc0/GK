@@ -41,7 +41,8 @@ function doc(kind, body, docKey) {
 
 function demoDocs() {
   return [
-    doc("project_settings", { gameName: "GK", playerAbilityRef: "ability:player.hit" }, "project_settings"),
+    doc("project_settings", { gameName: "GK" }, "project_settings"),
+    doc("player_class", { classId: "class.held", displayName: "Held", abilityRef: "ability:player.hit" }, "player_class:class.held"),
     doc("item_definition", { itemId: "pelt", displayName: "Vacht", category: "material", rarity: "common", stackable: true, stackLimit: 99 }, "item_definition:pelt"),
     doc("region", { regionId: "r1", displayName: "Vlakte", minXMm: 0, maxXMm: 64000, minZMm: 0, maxZMm: 64000 }, "region:r1"),
     doc("ability", { abilityId: "player.hit", displayName: "Slag", baseDamage: 16, powerScalingBp: 5000, armorFactorBp: 3500, rangeMm: 2800, cooldownMs: 250 }, "ability:player.hit"),
@@ -64,7 +65,7 @@ test("kinds: alle demo-documenten zijn geldig", function () {
 test("actor-compiler: sectie, fouten en bytegelijk zonder actor-documenten", function () {
   const section = compileActorSection(demoDocs());
   assert.deepEqual(section.errors, []);
-  assert.equal(section.server.playerAbilityId, "player.hit");
+  assert.equal(section.server.classAbilityIds["class.held"], "player.hit");
   assert.equal(section.server.archetypes.wolf.abilityId, "wolf.bite");
   assert.equal(section.server.lootTables.wolf.entries[0].itemId, "pelt");
   assert.equal(section.client.archetypes.wolf.attackPower, undefined, "aanvalskracht blijft op de server");

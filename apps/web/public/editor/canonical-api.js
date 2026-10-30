@@ -1,5 +1,5 @@
 // Fase 03: kleine API-client en DOM-hulpjes voor de canonieke werkbank.
-let csrfToken = "";
+import { csrfFetch, rememberCsrfToken } from "./csrf-fetch.js";
 
 export function newRequestId() {
   const random = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()).replace(/[^A-Za-z0-9-]/g, "");
@@ -9,15 +9,14 @@ export function newRequestId() {
 export async function api(path, { method = "GET", body, revision } = {}) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET" && csrfToken) headers["X-GK-CSRF"] = csrfToken;
   if (revision !== undefined && revision !== null) headers["If-Match"] = '"' + revision + '"';
-  const response = await fetch(path, { method, headers, credentials: "same-origin", body: body === undefined ? undefined : JSON.stringify(body) });
+  const response = await csrfFetch(path, { method, headers, credentials: "same-origin", body: body === undefined ? undefined : JSON.stringify(body) });
   if (response.status === 401) {
-    window.location.href = "/login/?next=" + encodeURIComponent("/editor/canoniek.html");
+    window.location.href = "/login/?next=" + encodeURIComponent("/editor/");
     throw new Error("Niet ingelogd.");
   }
   const data = await response.json().catch(() => ({}));
-  if (data.csrfToken) csrfToken = data.csrfToken;
+  rememberCsrfToken(data);
   if (!response.ok) {
     const error = new Error(data.message || "Verzoek mislukt.");
     error.status = response.status;

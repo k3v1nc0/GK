@@ -1,12 +1,13 @@
 // F3-E1-T03 + F3-E2-T03: authoring- en release-API. CSRF en Origin worden al in server.js gecontroleerd voor
 // elke mutatie; actor en project komen altijd uit de sessie, nooit uit de requestbody.
-import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
+import { CANONICAL_KINDS, validateDocument } from "../../shared/authoring/kinds.js";
 import { CommandService } from "./command-service.js";
-import { BuildService } from "./build-service.js";
 import { DocumentRepository } from "./document-repository.js";
 import { CutoverGuard } from "./cutover-guard.js";
 import { CUTOVER_DOMAINS, cutoverRows, finalizeDomain, legacyInventory, planDomain } from "./legacy-import.js";
-import { equipmentSlotSummaries, knownEquipmentSlotIds, knownRespawnPolicyIds, knownZoneIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
+import { BuildService, compileCanonical } from "./build-service.js";
+import { equipmentSlotSummaries, knownEquipmentSlotIds, knownRespawnPolicyIds, respawnPolicySummaries, zoneSummaries } from "./runtime-overlay.js";
+import { baseRuntimeWorld, buildRuntimeWorld } from "./world-builder.js";
 import { previewMembership } from "../preview/preview-service.js";
 
 function ifMatchRevision(req) {
@@ -41,9 +42,59 @@ export class AuthoringRoutes {
     this.refreshActive();
     // Nodes mag een object dat Canoniek beheert niet meer wijzigen (nooit twee writers).
     if (repository && typeof repository.setWriteGuard === "function") repository.setWriteGuard(new CutoverGuard(db));
+    // Ombouw stap 2: begroeiing en modellen hebben de assetlijst nodig (eerst zetten, dan pas de build koppelen).
+    if (mmoService) mmoService.canonicalOverlayOptions = { assetService };
     if (mmoService && typeof mmoService.setCanonicalBuildProvider === "function") {
       mmoService.setCanonicalBuildProvider(() => this.active);
     }
+    this.importNodeModels();
+  }
+
+  // Terugbouw zonder nodes: losse modellen die nog als node bestaan, worden één keer een Model-kaart
+  // (legacyRef "model_entity:<nodeId>"). Daarna leest de build alleen nog kaarten. Een gearchiveerde kaart komt niet terug.
+  importNodeModels() {
+    let nodes = [];
+    try { nodes = this.repository && typeof this.repository.getGraph === "function" ? this.repository.getGraph().nodes || [] : []; } catch { return 0; }
+    const models = nodes.filter((node) => node?.type === "model_entity" && node.values?.modelAssetId).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    if (!models.length) return 0;
+    const docs = this.documents.allDocuments();
+    const imported = new Set(docs.map((doc) => doc.legacyRef).filter(Boolean));
+    const taken = new Set(docs.filter((doc) => doc.kind === "placed_model").map((doc) => doc.body.placedModelId));
+    const num = (value, fallback) => (value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : fallback);
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    const stamp = new Date().toISOString();
+    let count = 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const node of models) {
+        const legacyRef = "model_entity:" + node.id;
+        if (imported.has(legacyRef)) continue;
+        const values = node.values;
+        const name = String(values.label || node.title || "Model").slice(0, 80) || "Model";
+        const base = "model." + (name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "model");
+        let placedModelId = base;
+        for (let n = 2; taken.has(placedModelId); n += 1) placedModelId = base + "_" + n;
+        const body = {
+          placedModelId, displayName: name, modelAssetId: String(values.modelAssetId),
+          scale: clamp(num(values.scaleX, 1), 0.01, 100), rotationY: ((Math.round(num(values.rotationY, 0)) % 360) + 360) % 360,
+          solid: values.solid === true, collisionRadius: clamp(num(values.collisionRadius, 1), 0.1, 50),
+          x: num(values.x, 0), y: num(values.y, 0), z: num(values.z, 0)
+        };
+        const clip = values.idleAnimation || values.animationClip;
+        if (typeof clip === "string" && clip && clip.length <= 120) body.idleClip = clip;
+        if (!validateDocument("placed_model", body).ok) continue;
+        this.documents.insert({ docKey: "placed_model:" + placedModelId, kind: "placed_model", body, legacyRef }, "import:nodes", stamp);
+        taken.add(placedModelId);
+        count += 1;
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      console.error("[authoring] losse modellen niet overgezet:", error.message);
+      return 0;
+    }
+    if (count) console.log("[authoring] " + count + " losse model(len) uit Nodes overgezet naar Model-kaarten.");
+    return count;
   }
 
   // Houdt de actieve serverbuild in het geheugen, zodat de worldtick geen DB-read per tick doet.
@@ -70,9 +121,17 @@ export class AuthoringRoutes {
     return this.currentGraphWorld();
   }
 
-  // Wereld waartegen we valideren: de gepubliceerde, anders de graph.
+  // Ombouw stap 2: vlakken verhuizen vanuit de node-waarden (graph) en tonen begroeiing met modellen.
+  cutoverContext() {
+    let graph = null;
+    try { graph = this.repository && typeof this.repository.getGraph === "function" ? this.repository.getGraph() : null; } catch { graph = null; }
+    return { graph, assetService: this.assetService };
+  }
+
+  // Doelbeeld: kaarten worden gecontroleerd tegen de vaste systemen (terugkomen, uitrustingsplekken, één wereld),
+  // niet tegen een oude node-wereld.
   validationWorld() {
-    return this.publishedWorld() || this.graphWorld();
+    return baseRuntimeWorld({});
   }
 
   assetTypes() {
@@ -117,9 +176,25 @@ export class AuthoringRoutes {
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  // Ombouw stap 1: de editor-view toont de opgeslagen documenten meteen (nog niet gepubliceerd), via dezelfde
+  // laag als de game. Zo staat een pickup in de editor met de mesh van zijn item, net als in het spel.
+  // De editor-view toont de opgeslagen kaarten meteen (nog niet gepubliceerd), met dezelfde wereldbouwer als de
+  // game. Zo is de editor precies de game, alleen met het concept in plaats van de actieve build.
+  editorDraftWorld() {
+    const options = { editor: true, assetService: this.assetService, buildId: "draft", publishedAt: "draft" };
+    try {
+      const compiled = compileCanonical(this.documents.allDocuments(), this.publishOptions(this.validationWorld()));
+      return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text), options);
+    } catch (error) {
+      console.warn("[authoring] editor-wereld zonder kaarten: " + (error?.message || error));
+      return buildRuntimeWorld({}, options);
+    }
+  }
+
   publishOptions(world) {
     return {
-      knownZoneIds: world ? knownZoneIds(world) : null,
+      // Eén wereld: de zone van een pickup doet niet meer mee (de wereldbouwer legt alles in de wereld).
+      knownZoneIds: null,
       knownRespawnPolicyIds: world ? knownRespawnPolicyIds(world) : null,
       knownEquipmentSlotIds: world ? knownEquipmentSlotIds(world) : null,
       assetTypes: this.assetTypes(),
@@ -183,7 +258,8 @@ export class AuthoringRoutes {
           includeArchived: url.searchParams.get("archived") === "1",
           limit: url.searchParams.get("limit") || 500,
           offset: url.searchParams.get("offset")
-        }),
+        // Kaarten van een soort die niet meer bestaat (bijv. de oude kaart Speler) blijven in de database, maar niet in beeld.
+        }).filter((doc) => Object.prototype.hasOwnProperty.call(CANONICAL_KINDS, doc.kind)),
         zones: zoneSummaries(world),
         respawnPolicies: respawnPolicySummaries(world),
         equipmentSlots: equipmentSlotSummaries(world),
@@ -245,7 +321,7 @@ export class AuthoringRoutes {
         ok: true,
         graphRevision,
         inventory: legacyInventory(world),
-        plans: domains.map((name) => planDomain(world, name, existing, rows))
+        plans: domains.map((name) => planDomain(world, name, existing, rows, this.cutoverContext()))
       }, { ETag: '"' + graphRevision + '"' });
     }
 
@@ -262,7 +338,8 @@ export class AuthoringRoutes {
         worldGraphRevision: before === this.graphRevision() ? before : null,
         acceptDiffs: body.acceptDiffs === true,
         existingDocs: this.documents.allDocuments(),
-        actor: admin.id
+        actor: admin.id,
+        context: this.cutoverContext()
       });
       return this.sendJson(res, 200, result);
     }

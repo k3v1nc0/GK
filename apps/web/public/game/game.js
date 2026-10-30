@@ -1,10 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261025-f5-actors1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261029-klassen2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261025-f4-music1";
-import { createActorPresentation } from "./actor-presentation.js?v=20261025-f5-actors1";
+import { createActorPresentation } from "./actor-presentation.js?v=20261029-klassen3";
+import { createCharactersWindow } from "./characters-window.js?v=20261029-klassen2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -288,6 +289,7 @@ const persistedNetState = loadPersistedNetState();
 
 // Fase 05: vijanden en grondstoffen uit de canonieke build (server stuurt actor:snapshot / actor:event).
 const actorPresentation = createActorPresentation({
+  classId: function () { return state.player?.selectedCharacterId || null; },
   fetchJson: async function (url) {
     const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("HTTP " + response.status);
@@ -3186,7 +3188,8 @@ function handleGameHudRuntimeClick(event) {
     runNode03Action(node03Button.dataset.node03Action, node03Button.dataset.node03TargetId || null, {
       itemId: node03Button.dataset.node03ItemId || selectedItemId || null,
       currencyId: node03Button.dataset.node03CurrencyId || null,
-      amount: node03Button.dataset.node03Amount || null
+      amount: node03Button.dataset.node03Amount || null,
+      itemInstanceId: node03Button.dataset.node03ItemInstanceId || null
     });
     return;
   }
@@ -4075,6 +4078,7 @@ function normalizeRemotePlayerPayload(payload) {
     : typeof raw.display_name === "string" && raw.display_name.trim()
       ? raw.display_name.trim()
       : null;
+  const modelAssetId = typeof raw.modelAssetId === "string" && raw.modelAssetId ? raw.modelAssetId : null;
   const selectedCharacterId = raw.selectedCharacterId !== undefined
     ? raw.selectedCharacterId
     : raw.selected_character_id !== undefined
@@ -4131,6 +4135,7 @@ function normalizeRemotePlayerPayload(payload) {
     worldId: worldId,
     displayName: displayName,
     selectedCharacterId: selectedCharacterId,
+    modelAssetId: modelAssetId,
     position: position,
     revision: revision,
     updatedAt: raw.updatedAt || raw.updated_at || position.updatedAt || null,
@@ -4321,6 +4326,7 @@ function snapshotRemoteEntry(entry) {
     worldId: entry.worldId,
     displayName: entry.displayName,
     selectedCharacterId: entry.selectedCharacterId || null,
+    modelAssetId: entry.modelAssetId || null,
     position: renderPosition ? cloneRemotePosition(renderPosition) : null,
     previousPosition: renderState?.previousPosition ? cloneRemotePosition(renderState.previousPosition) : (entry.previousPosition ? cloneRemotePosition(entry.previousPosition) : null),
     targetPosition: renderState?.targetPosition ? cloneRemotePosition(renderState.targetPosition) : (entry.targetPosition ? cloneRemotePosition(entry.targetPosition) : null),
@@ -4548,6 +4554,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
       worldId: sample.worldId,
       displayName: sample.displayName || sample.playerId,
       selectedCharacterId: sample.selectedCharacterId || null,
+      modelAssetId: sample.modelAssetId || null,
       position: null,
       previousPosition: null,
       targetPosition: null,
@@ -4611,6 +4618,7 @@ function upsertRemotePlayerEntry(payload, options = {}) {
     entry.displayName = sample.playerId;
   }
   entry.selectedCharacterId = sample.selectedCharacterId !== undefined ? sample.selectedCharacterId : entry.selectedCharacterId || null;
+  if (sample.modelAssetId) entry.modelAssetId = sample.modelAssetId;
   entry.connectedSessionCount = sample.connectedSessionCount || entry.connectedSessionCount || 0;
   entry.sourceSessionId = sample.sourceSessionId || entry.sourceSessionId || null;
   entry.sourceDevice = sample.sourceDevice || entry.sourceDevice || null;
@@ -6404,7 +6412,12 @@ function createNode03Root(modules) {
       ? event.target.closest("[data-node03-action]")
       : null;
     if (!button || button.disabled) return;
-    runNode03Action(button.dataset.node03Action, button.dataset.node03TargetId || null);
+    runNode03Action(button.dataset.node03Action, button.dataset.node03TargetId || null, {
+      itemId: button.dataset.node03ItemId || null,
+      currencyId: button.dataset.node03CurrencyId || null,
+      amount: button.dataset.node03Amount || null,
+      itemInstanceId: button.dataset.node03ItemInstanceId || null
+    });
   });
   return { root: root, anchors: anchors };
 }
@@ -6619,7 +6632,6 @@ function node03TrackedRefs(module, snapshot) {
   if (refs.length) return refs;
   refs.push("currency.gold");
   const owned = node03OwnedItemEntries(snapshot);
-  if (!refs.includes("item.wood")) refs.push("item.wood");
   for (const item of owned) {
     if (refs.length >= Math.max(2, num(module.maxEntries, 5))) break;
     if (item.itemId && !refs.includes(item.itemId)) refs.push(item.itemId);
@@ -6838,6 +6850,19 @@ function renderNode03Inventory(module, snapshot) {
     const qty = document.createElement("strong");
     qty.textContent = item.quantity > 0 ? "x" + item.quantity : "0";
     cell.append(name, qty);
+    // Terugbouw zonder nodes: wapens en kleding kun je hier aandoen.
+    if (item.equipSlot) {
+      const equip = document.createElement("button");
+      equip.type = "button";
+      equip.className = "node03AdjustButton";
+      equip.dataset.node03Action = "equip";
+      if (item.instanceId) equip.dataset.node03ItemInstanceId = item.instanceId;
+      else equip.dataset.node03ItemId = item.itemId;
+      equip.textContent = "Uitrusten";
+      equip.title = "Doe " + (item.displayName || item.itemId) + " aan";
+      equip.disabled = state.node03.actionInFlight;
+      cell.appendChild(equip);
+    }
     list.appendChild(cell);
   }
   card.appendChild(list);
@@ -7409,7 +7434,7 @@ async function runNode03Action(action, targetId, extra = {}) {
       state.node03.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || "target") + "."
         : (currentTarget.displayName || "Target") + " is buiten range.";
-      showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Message" });
+      showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
       renderNode03Hud();
       return;
     }
@@ -7433,6 +7458,7 @@ async function runNode03Action(action, targetId, extra = {}) {
         itemId: extra.itemId || null,
         currencyId: extra.currencyId || null,
         amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
+        itemInstanceId: extra.itemInstanceId || null,
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
     });
@@ -7463,7 +7489,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     }
     if (currentTarget?.instanceId) clearNode03PendingTargetAction(currentTarget.instanceId);
     state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
-    if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Message" });
+    if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
     if (isTravel) {
       applyInstantTravelResponse(data);
       await loadSessionState({
@@ -7576,9 +7602,27 @@ function hasGameHudDialoguePanelContent() {
   return Boolean(state.node04.dialogue || currentGameHudDialogueNotice() || state.hudLayout.editMode === true);
 }
 
+// Technische meldingen (lopen, gesprek gestart, keuze verwerkt) zijn geen spel-informatie: niet tonen.
+const GAME_NOTICE_NOISE = /^(Loop naar |Dialogue (gestart|keuze verwerkt)|Dialoog gestart|Move\.?$|Use\.?$)/i;
+const GAME_NOTICE_AUTO_CLOSE_MS = 3500;
+
 function showGameHudDialogueNotice(message, options = {}) {
   const text = String(message || "").trim();
   if (!text) return;
+  if (options.tone !== "error" && GAME_NOTICE_NOISE.test(text)) return;
+  // Gewone meldingen verdwijnen vanzelf; alleen fouten blijven staan tot je ze sluit.
+  if (options.tone !== "error" && !options.action) {
+    const createdAt = performance.now();
+    setTimeout(function () {
+      if (state.node04.dialogueNotice && state.node04.dialogueNotice.createdAt === createdAt) {
+        state.node04.dialogueNotice = null;
+        renderNode04Hud();
+      }
+    }, GAME_NOTICE_AUTO_CLOSE_MS);
+    state.node04.dialogueNotice = { title: options.title || "Melding", text: text, tone: options.tone || "info", action: "", actionLabel: "", dismissible: true, createdAt: createdAt };
+    renderNode04Hud();
+    return;
+  }
   state.node04.dialogueNotice = {
     title: options.title || "Message",
     text: text,
@@ -8122,7 +8166,7 @@ async function runNode04Action(action, targetId, extra = {}) {
     state.node04.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || "quest target") + "."
       : (currentTarget.displayName || "Quest target") + " is buiten range.";
-    showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Message" });
+    showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Melding" });
     renderNode04Hud();
     return;
   }
@@ -8161,7 +8205,7 @@ async function runNode04Action(action, targetId, extra = {}) {
       return;
     }
     state.node04.lastActionMessage = data.message || "";
-    if (state.node04.lastActionMessage) showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Message" });
+    if (state.node04.lastActionMessage) showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Melding" });
     if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
     if (data.snapshot) {
       state.node04.snapshot = data.snapshot;
@@ -8349,7 +8393,11 @@ function node05RuntimeTargetsForScene() {
       action: "node05:focus_service",
       displayName: target.label || target.id,
       prompt: target.inRange === false ? "Move" : (target.prompt || "Use"),
-      radius: 0
+      radius: 0,
+      // De NPC zelf is het klikdoel (praten); winkel en crafting staan in hun venster.
+      // Kleinste klikvlak: anders pakt een klik in de buurt van de NPC dit onzichtbare doel en loop je terug.
+      clickRadius: 0.4,
+      renderBody: false
     });
   });
 }
@@ -8929,7 +8977,7 @@ async function runNode05Action(action, payload = {}) {
       state.node05.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
         : (currentTarget.displayName || currentTarget.label || "Service") + " is al dichtbij.";
-      showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
+      showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Melding" });
       renderNode05Hud();
     }
     return;
@@ -8939,7 +8987,7 @@ async function runNode05Action(action, payload = {}) {
     state.node05.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
       : (currentTarget.displayName || currentTarget.label || "Service") + " is buiten range.";
-    showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
+    showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Melding" });
     renderNode05Hud();
     return;
   }
@@ -8981,7 +9029,7 @@ async function runNode05Action(action, payload = {}) {
       return;
     }
     state.node05.lastActionMessage = data.message || "";
-    if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Message" });
+    if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Melding" });
     if (data.snapshot) {
       state.node05.snapshot = data.snapshot;
       if (state.minimapHud.elements) state.minimapHud.dirty = true;
@@ -11541,6 +11589,15 @@ function applyRuntimePosition(position, options = {}) {
   });
 }
 
+// Klassen: je eigen character heeft zijn eigen uiterlijk. Het spelermodel van de wereld blijft de standaard
+// voor andere spelers zonder eigen model (player.defaultModelAssetId).
+function withOwnCharacterModel(gameWorld, player) {
+  const own = player?.modelAssetId || null;
+  if (!gameWorld?.player || !own || gameWorld.player.modelAssetId === own) return gameWorld;
+  const base = gameWorld.player.defaultModelAssetId !== undefined ? gameWorld.player.defaultModelAssetId : (gameWorld.player.modelAssetId || null);
+  return Object.assign({}, gameWorld, { player: Object.assign({}, gameWorld.player, { modelAssetId: own, defaultModelAssetId: base }) });
+}
+
 function primeHttpSnapshotState(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
   state.user = snapshot.user || state.user;
@@ -11551,7 +11608,7 @@ function primeHttpSnapshotState(snapshot) {
   state.activeSessionCount = snapshot.activeSessionCount || 0;
   state.connectedSessionCount = snapshot.connectedSessionCount || 0;
   state.worldId = snapshot.worldId || state.worldId;
-  state.gameWorld = snapshot.gameWorld || state.gameWorld;
+  state.gameWorld = withOwnCharacterModel(snapshot.gameWorld || state.gameWorld, state.player);
   state.gameProject = snapshot.gameProject || state.gameWorld?.gameProject || state.gameProject;
   state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
   state.remote.remoteRenderDelayMs = state.remote.interpolationDelayMs;
@@ -13270,6 +13327,24 @@ async function start() {
     updateHud();
   }
   window.setInterval(pollVersion, 2500);
+  // Klassen: venster 🧙 Characters (wisselen en uiterlijk kiezen). Na een wissel laadt de game opnieuw.
+  createCharactersWindow({
+    fetchJson: async function (url) {
+      const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+      const result = await response.json().catch(function () { return {}; });
+      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
+      return result;
+    },
+    postJson: async function (url, body) {
+      const response = await gameFetch(url, { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
+      const result = await response.json().catch(function () { return {}; });
+      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
+      return result;
+    },
+    assetById: function (assetId) { return (state.gameWorld?.assets || []).find(function (asset) { return asset.id === assetId; }) || null; },
+    onSwitched: function () { window.location.reload(); }
+  });
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);
 }

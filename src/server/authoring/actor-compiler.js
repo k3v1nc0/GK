@@ -45,12 +45,14 @@ export function lootGraphIssues(tables) {
 }
 
 // Plaatsingsregels (ook bij elk command): plek en patrouille binnen de eigen Region.
+// Zonder Region (terugbouw zonder nodes) staat de plek gewoon in de ene wereld: geen gebiedscontrole.
 export function actorSpawnIssues(docs) {
   const regions = new Map(docs.filter((doc) => doc.kind === "region" && !doc.archived).map((doc) => [doc.docKey, doc]));
   const issues = [];
   for (const doc of docs) {
     if (doc.archived || (doc.kind !== "actor_spawn" && doc.kind !== "resource_spawn")) continue;
     const label = (doc.kind === "actor_spawn" ? "Vijand-plek " + doc.body.spawnId : "Grondstof-plek " + doc.body.resourceSpawnId);
+    if (!doc.body.regionRef) continue;
     const region = regions.get(doc.body.regionRef);
     if (!region) {
       issues.push({ code: "SPAWN_REGION_MISSING", docKey: doc.docKey, otherDocKey: doc.body.regionRef, message: label + " hoort bij een Region die niet (meer) bestaat." });
@@ -88,9 +90,6 @@ export function compileActorSection(documents, options = {}) {
     return info;
   };
 
-  const project = active.find((doc) => doc.kind === "project_settings") || null;
-  const playerAbilityRef = project?.body?.playerAbilityRef || null;
-  const playerAbility = playerAbilityRef ? needRef(project, playerAbilityRef, "ability", "Aanval van de speler") : null;
 
   const abilities = { server: {}, client: {} };
   for (const doc of of("ability")) {
@@ -156,27 +155,32 @@ export function compileActorSection(documents, options = {}) {
   const spawns = [];
   for (const doc of of("actor_spawn")) {
     needRef(doc, doc.body.archetypeRef, "actor_archetype", "Vijand-plek " + doc.body.spawnId);
-    const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: idFromRef(doc.body.regionRef), xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
+    const spawn = { spawnId: doc.body.spawnId, actorId: idFromRef(doc.body.archetypeRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) };
     if (Array.isArray(doc.body.patrolPointsMm) && doc.body.patrolPointsMm.length) spawn.patrolPointsMm = doc.body.patrolPointsMm;
     spawns.push(spawn);
   }
   const resourceSpawns = [];
   for (const doc of of("resource_spawn")) {
     needRef(doc, doc.body.resourceRef, "resource_definition", "Grondstof-plek " + doc.body.resourceSpawnId);
-    resourceSpawns.push({ resourceSpawnId: doc.body.resourceSpawnId, resourceId: idFromRef(doc.body.resourceRef), regionId: idFromRef(doc.body.regionRef), xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) });
+    resourceSpawns.push({ resourceSpawnId: doc.body.resourceSpawnId, resourceId: idFromRef(doc.body.resourceRef), regionId: doc.body.regionRef ? idFromRef(doc.body.regionRef) : null, xMm: doc.body.xMm, zMm: doc.body.zMm, cellKey: cellKeyForPointMm(doc.body.xMm, doc.body.zMm) });
   }
 
-  const playerAbilityId = playerAbility ? playerAbility.body.abilityId : null;
+  // Klassen: per klasse een eigen aanval (klasse-ID -> ability-ID). Zonder aanval de ingebouwde standaardklap.
+  const classAbilityIds = {};
+  for (const doc of active.filter((candidate) => candidate.kind === "player_class").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
+    const ability = doc.body.abilityRef ? needRef(doc, doc.body.abilityRef, "ability", "Klasse " + doc.body.displayName + " (aanval)") : null;
+    if (ability) classAbilityIds[doc.body.classId] = ability.body.abilityId;
+  }
   return {
-    server: { schema: ACTOR_SECTION_VERSION, playerAbilityId, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
-    client: { schema: ACTOR_SECTION_VERSION, playerAbilityId, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets },
+    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
+    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets },
     errors
   };
 }
 
-// Runtime: welke aanval gebruikt de speler (uit de actieve build), met legacy-terugval.
-export function playerAbilityFromSection(section) {
-  const id = section?.playerAbilityId;
+// Runtime: welke aanval gebruikt de speler (die van zijn klasse), anders de ingebouwde standaardklap.
+export function playerAbilityFromSection(section, classId = null) {
+  const id = classId ? section?.classAbilityIds?.[classId] : null;
   const ability = id ? section.abilities?.[id] : null;
   return ability ? Object.assign({}, DEFAULT_PLAYER_ABILITY, ability) : DEFAULT_PLAYER_ABILITY;
 }

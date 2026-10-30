@@ -8,6 +8,7 @@ import { JOIN_TICKET_PATH, WS_PATH } from "../../apps/web/public/shared/protocol
 import { loadEnvFile } from "./env.js";
 import { openDatabase, resolveDatabasePath } from "./db.js";
 import { AuthService } from "./auth-service.js";
+import { UserAdminService } from "./user-admin-service.js";
 import { AssetService } from "./asset-service.js";
 import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
@@ -53,6 +54,7 @@ const gameProjectCompiler = new GameProjectCompiler({ symbolIndexService, tokenR
 const publishService = new PublishService(repository, { assetService, symbolIndexService, tokenResolver, gameProjectCompiler });
 const graphMigrationService = new GraphMigrationService(repository, { symbolIndexService });
 const mmoService = new MmoService(db, authService, repository);
+const userAdminService = new UserAdminService(db, { closeSessionConnections: (sessionId, code, reason) => mmoService.closeSessionConnections(sessionId, code, reason) });
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
 const node05EconomyRuntimeService = new Node05EconomyRuntimeService(db, repository, mmoService, node03RuntimeService);
@@ -145,7 +147,9 @@ async function readJson(req) {
 
 const editorLayoutViews = {
   nodes: new Set(["tools", "graph", "viewport", "assets"]),
-  workbench: new Set(["workbench", "viewport", "relations", "library"])
+  workbench: new Set(["workbench", "viewport", "relations", "library"]),
+  // Werkbank Fase 1: tab Instellingen (menu, kaart, 3D-preview).
+  settings: new Set(["settingsMenu", "settingsCard", "viewport"])
 };
 
 function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
@@ -169,10 +173,14 @@ function normalizeEditorUserLayout(value) {
   const nodes = normalizeEditorLayoutNode(value.layouts?.nodes, editorLayoutViews.nodes);
   const workbench = normalizeEditorLayoutNode(value.layouts?.workbench, editorLayoutViews.workbench);
   if (!nodes || !workbench) return null;
+  // Oude indelingen hebben nog geen Instellingen-tab; die krijgt dan de standaardindeling in de editor.
+  const settings = normalizeEditorLayoutNode(value.layouts?.settings, editorLayoutViews.settings);
+  const layouts = { nodes, workbench };
+  if (settings) layouts.settings = settings;
   return {
     version: 1,
-    editorMode: value.editorMode === "workbench" ? "workbench" : "nodes",
-    layouts: { nodes, workbench }
+    editorMode: ["workbench", "settings", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
+    layouts
   };
 }
 
@@ -320,7 +328,7 @@ function normalizeGameHudProjectId(value) {
   const direct = String(value || "").trim();
   if (direct) return direct.slice(0, 160);
   try {
-    const world = repository.getPublishedWorld();
+    const world = mmoService.getPublishedWorldContext().world;
     return String(
       world?.gameProject?.project?.id
       || world?.gameProject?.id
@@ -467,7 +475,7 @@ async function handleApi(req, res, url) {
       return authoringRoutes.handle(req, res, url);
     }
     if (req.method === "GET" && url.pathname === "/api/health") {
-      return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: Boolean(repository.getPublishedWorld()) });
+      return sendJson(res, 200, { ok: true, service: "gk-real-node-editor", hasPublishedWorld: true });
     }
     if (req.method === "POST" && url.pathname === "/api/auth/register") {
       const body = await readJson(req);
@@ -519,6 +527,31 @@ async function handleApi(req, res, url) {
         ON CONFLICT(user_id) DO UPDATE SET layout_json = excluded.layout_json, updated_at = excluded.updated_at
       `).run(user.id, JSON.stringify(layout), updatedAt);
       return sendJson(res, 200, { ok: true, layout, updatedAt });
+    }
+    // Instellingen > Gebruikers (alleen admin).
+    if (url.pathname === "/api/admin/users" || url.pathname.startsWith("/api/admin/users/")) {
+      const admin = authService.requireEditor(req);
+      if (admin.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen de admin kan gebruikers beheren." });
+      if (req.method === "GET" && url.pathname === "/api/admin/users") return sendJson(res, 200, { ok: true, users: userAdminService.list(), me: admin.id });
+      const match = /^\/api\/admin\/users\/([^/]+)(?:\/(name|password|reset))?$/.exec(url.pathname);
+      if (match) {
+        const userId = decodeURIComponent(match[1]);
+        if (req.method === "DELETE" && !match[2]) return sendJson(res, 200, Object.assign({ ok: true }, userAdminService.remove(userId, admin.id)));
+        if (req.method === "POST" && match[2]) {
+          const body = await readJson(req);
+          if (match[2] === "name") return sendJson(res, 200, Object.assign({ ok: true }, userAdminService.rename(userId, body.name)));
+          if (match[2] === "password") return sendJson(res, 200, Object.assign({ ok: true }, await userAdminService.setPassword(userId, body.password, admin.id)));
+          if (match[2] === "reset") return sendJson(res, 200, Object.assign({ ok: true }, userAdminService.resetProgress(userId)));
+        }
+      }
+      return sendJson(res, 404, { ok: false, message: "Onbekende gebruikersactie." });
+    }
+    // Klassen: per account een character per klasse; wisselen en uiterlijk kiezen in het Characters-venster.
+    if (req.method === "GET" && url.pathname === "/api/game/characters") {
+      return sendJson(res, 200, node03RuntimeService.charactersForRequest(req));
+    }
+    if (req.method === "POST" && url.pathname === "/api/game/characters/play") {
+      return sendJson(res, 200, node03RuntimeService.playCharacterForRequest(req, await readJson(req)));
     }
     if (req.method === "GET" && url.pathname === "/api/game/player") {
       const snapshot = mmoService.getPlayerSnapshot(req);
@@ -957,37 +990,33 @@ async function handleApi(req, res, url) {
       const body = await readJson(req);
       return sendJson(res, 200, graphMigrationService.apply(body, user.id));
     }
+    // Doelbeeld: kaarten slaan zichzelf meteen op; er is geen node-concept meer om te bewaren.
     if (req.method === "POST" && url.pathname === "/api/editor/save-draft") {
       authService.requireEditor(req);
-      publishService.saveDraft();
       return sendJson(res, 200, { ok: true });
     }
+    // De editor-view: dezelfde wereldbouwer als de game, met de opgeslagen kaarten (concept).
     if (req.method === "GET" && url.pathname === "/api/editor/draft-world") {
       authService.requireEditor(req);
       const startedAt = performance.now();
-      const draftWorld = repository.getDraftWorld();
-      const result = publishService.isDraftWorldCacheCurrent(draftWorld) ? draftWorld : publishService.saveDraft();
+      const world = authoringRoutes.editorDraftWorld();
       logTiming("server response /api/editor/draft-world", startedAt);
-      return sendJson(res, 200, result);
+      return sendJson(res, 200, world);
     }
+    // De oude node-publicatie bestaat niet meer: SAVE TO GAME maakt een build (/api/authoring/publish).
     if (req.method === "POST" && url.pathname === "/api/editor/publish") {
-      const user = authService.requireEditor(req);
-      const result = publishService.publish(user.id);
-      return sendJson(res, 200, { ok: true, publishedAt: result.world?.publishedAt || null, validation: result.validation });
+      authService.requireEditor(req);
+      return sendJson(res, 410, { ok: false, code: "NODE_PUBLISH_REMOVED", message: "Publiceren uit Nodes bestaat niet meer. Gebruik SAVE TO GAME (build)." });
     }
     if (req.method === "GET" && url.pathname === "/api/editor/publish-history") {
       authService.requireEditor(req);
       return sendJson(res, 200, { history: repository.publishHistory() });
     }
     if (req.method === "GET" && url.pathname === "/api/game/world") {
-      const published = repository.getPublishedWorld();
-      if (!published) return sendJson(res, 404, { ok: false, message: "Nog geen gepubliceerde wereld." });
-      return sendJson(res, 200, published);
+      return sendJson(res, 200, mmoService.getPublishedWorldContext().world);
     }
     if (req.method === "GET" && url.pathname === "/api/game/version") {
-      const published = repository.getPublishedWorld();
-      if (!published) return sendJson(res, 404, { ok: false });
-      return sendJson(res, 200, { ok: true, publishedAt: published.publishedAt });
+      return sendJson(res, 200, { ok: true, publishedAt: mmoService.getPublishedWorldContext().publishedAt });
     }
     return sendJson(res, 404, { ok: false, message: "API route niet gevonden." });
   } catch (error) {

@@ -1,5 +1,7 @@
 # Start hier: GK MMORPG-basis v2.3
 
+> **GESLOTEN op 26-10-2026.** Dit plan is vervangen door [Werkbank-plan](../Werkbank-plan/WERKBANK-PLAN.md). Hier niet verder bouwen; alleen nog naslag.
+
 Dit is de **enige actieve ingang** voor Codex of Claude. Lees daarnaast [00-MASTERPLAN](00-MASTERPLAN.md), de relevante [Fase 01](FASE-01-veiligheid-en-bewijsbasis.md) en de ADR's die de fase raken. De vijf oude `MMORPG-basis/`-documenten bestaan alleen nog in de git-historie (commit `8a976e3`) en zijn historisch, niet normatief. Kevin geeft één opdracht per fase; de agent beheert de taakkaarten intern.
 
 ## Voor Kevin: opstart in drie handelingen

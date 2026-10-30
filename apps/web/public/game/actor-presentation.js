@@ -149,7 +149,9 @@ export function createActorPresentation(options = {}) {
     }
     const def = defs.archetypes?.[record.d];
     if (!def) return null;
-    const ability = defs.abilities?.[defs.playerAbilityId] || null;
+    // Klassen: de aanval van je eigen klasse (zonder: standaardbereik).
+    const classId = typeof options.classId === "function" ? options.classId() : null;
+    const ability = (classId && defs.abilities?.[defs.classAbilityIds?.[classId]]) || null;
     return {
       instanceId: record.id, entityKind: "enemy", targetKind: "enemy", action: "attack", prompt: "Aanvallen",
       displayName: def.displayName, x: pose.x, y: pose.y, z: pose.z,

@@ -11,6 +11,7 @@ const MANA_STAT_ID = "stat.mana";
 const STAMINA_STAT_ID = "stat.stamina";
 const ARMOR_STAT_ID = "stat.armor";
 const ATTACK_POWER_STAT_ID = "stat.attack_power";
+const HEAL_POWER_STAT_ID = "stat.heal_power";
 const GOLD_CURRENCY_ID = "currency.gold";
 const DEFAULT_CHARACTER_ID = "player.desert_guardian";
 const DEFAULT_BIND_STATE = "unbound";
@@ -483,9 +484,82 @@ export class Node03RuntimeService {
     this.ensureProgression(ctx, character);
     this.ensureStats(ctx, character);
     this.ensureStartingAbilities(ctx, character);
-    this.ensureStartingInventoryAndCurrencies(ctx, character);
+    const startItemIds = this.ensureStartingInventoryAndCurrencies(ctx, character);
     this.ensureAbilityLoadout(ctx, character);
-    this.ensureStarterEquipment(ctx);
+    this.ensureStarterEquipment(ctx, startItemIds);
+  }
+
+  // Klassen: de keuzes uit de actieve build (leeg = geen klassen, dan speelt iedereen de standaardspeler).
+  playerClasses() {
+    let catalogs = {};
+    try { catalogs = resolveCatalogs(this.mmoService.getPublishedWorldContext().world); } catch {}
+    const items = catalogSection(catalogs, "items");
+    const currencies = catalogSection(catalogs, "currencies");
+    return Object.values(catalogSection(catalogs, "playableCharacters"))
+      .filter((character) => character?.classChoice === true)
+      .sort((a, b) => safeNumber(a.sortOrder, 0) - safeNumber(b.sortOrder, 0))
+      .map((character) => {
+        const stats = statBlockValues(catalogs, character.statBlockRef);
+        const start = []
+          .concat((character.startingItemGrants || []).map((grant) => grant.amount + "× " + (items[grant.itemRef]?.displayName || grant.itemRef)))
+          .concat((character.startingCurrencyGrants || []).map((grant) => grant.amountMinor + " " + (currencies[grant.currencyRef]?.displayName || grant.currencyRef)));
+        return { classId: character.id, displayName: character.displayName || character.id, description: character.description || "",
+          healthMax: stats[HEALTH_STAT_ID] || 0, attackPower: stats[ATTACK_POWER_STAT_ID] || 0, armor: stats[ARMOR_STAT_ID] || 0,
+          healPower: stats[HEAL_POWER_STAT_ID] || 0, start, models: Array.isArray(character.modelAssetIds) ? character.modelAssetIds.slice() : [] };
+      });
+  }
+
+  // Het character van dit account voor een klasse. Een oud character zonder (bestaande) klasse hoort bij de eerste klasse.
+  profileForClass(userId, classId, classes) {
+    const exact = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? AND selected_character_id = ? ORDER BY created_at, id LIMIT 1").get(userId, classId);
+    if (exact || classes[0]?.classId !== classId) return exact || null;
+    const known = new Set(classes.map((entry) => entry.classId));
+    return this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? ORDER BY created_at, id").all(userId)
+      .find((profile) => !known.has(profile.selected_character_id)) || null;
+  }
+
+  // Characters-venster: per klasse jouw character (level, uiterlijk) of nog niets.
+  charactersForRequest(req) {
+    const { user } = this.mmoService.getSessionContextFromRequest(req);
+    const classes = this.playerClasses();
+    const active = this.mmoService.activeProfileForUser(user.id);
+    const levelOf = this.db.prepare("SELECT level FROM player_progression WHERE player_id = ? LIMIT 1");
+    return {
+      ok: true,
+      classes: classes.map((entry) => {
+        const profile = this.profileForClass(user.id, entry.classId, classes);
+        if (!profile) return Object.assign({}, entry, { character: null });
+        const model = entry.models.includes(profile.model_asset_id) ? profile.model_asset_id : (entry.models[0] || null);
+        return Object.assign({}, entry, { character: { profileId: profile.id, level: safeInteger(levelOf.get(profile.id)?.level, 1),
+          modelAssetId: model, active: profile.id === active?.id } });
+      })
+    };
+  }
+
+  // Spelen met (of uiterlijk kiezen voor) de klasse. Nog geen character van die klasse = nieuw character dat opnieuw begint.
+  playCharacterForRequest(req, body = {}) {
+    const { user } = this.mmoService.getSessionContextFromRequest(req);
+    const classes = this.playerClasses();
+    const classId = safeString(body.classId, "");
+    const entry = classes.find((candidate) => candidate.classId === classId);
+    const fail = (message) => { const error = new Error(message); error.status = 400; return error; };
+    if (!entry) throw fail("Die klasse bestaat niet (meer).");
+    const modelAssetId = safeString(body.modelAssetId, "");
+    if (modelAssetId && !entry.models.includes(modelAssetId)) throw fail("Dat uiterlijk hoort niet bij deze klasse.");
+    const stamp = now();
+    let profile = this.profileForClass(user.id, classId, classes);
+    if (!profile) {
+      const worldId = this.mmoService.getPublishedWorldContext().worldId;
+      const profileId = randomId("player");
+      this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, current_zone_id, model_asset_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)")
+        .run(profileId, user.id, user.username || "player", classId, worldId, modelAssetId || null, stamp, stamp);
+      profile = { id: profileId };
+    } else {
+      this.db.prepare("UPDATE player_profiles SET selected_character_id = ?, model_asset_id = COALESCE(?, model_asset_id), updated_at = ? WHERE id = ?")
+        .run(classId, modelAssetId || null, stamp, profile.id);
+    }
+    this.db.prepare("UPDATE users SET active_profile_id = ? WHERE id = ?").run(profile.id, user.id);
+    return { ok: true, profileId: profile.id };
   }
 
   resolvePlayerCharacter(ctx) {
@@ -550,6 +624,7 @@ export class Node03RuntimeService {
   }
 
   ensureStartingInventoryAndCurrencies(ctx, character) {
+    const granted = [];
     for (const grant of Array.isArray(character?.startingCurrencyGrants) ? character.startingCurrencyGrants : []) {
       const currencyId = safeString(grant?.currencyRef, "");
       const amount = Math.max(0, safeInteger(grant?.amountMinor, 0));
@@ -563,7 +638,9 @@ export class Node03RuntimeService {
       const amount = Math.max(1, safeInteger(grant?.amount, 1));
       if (!itemId || this.ownedItemCount(ctx.profile.id, itemId) > 0 || this.startingItemWasGranted(ctx.profile.id, itemId)) continue;
       this.grantItem(ctx, itemId, amount, "starting_character", "character");
+      granted.push(itemId);
     }
+    return granted;
   }
 
   startingItemWasGranted(playerId, itemId) {
@@ -592,9 +669,13 @@ export class Node03RuntimeService {
     });
   }
 
-  ensureStarterEquipment(ctx) {
+  // Alleen net gegeven start-spullen gaan meteen aan (een start-zwaard zit dus in de hand).
+  // Gekochte of gevonden spullen blijven in de tas; daar kies je zelf Uitrusten.
+  ensureStarterEquipment(ctx, startItemIds = []) {
+    if (!startItemIds.length) return;
     const slots = catalogSection(ctx.catalogs, "equipmentSlots");
-    const items = catalogSection(ctx.catalogs, "items");
+    const allItems = catalogSection(ctx.catalogs, "items");
+    const items = Object.fromEntries(startItemIds.filter((id) => allItems[id]).map((id) => [id, allItems[id]]));
     const existingSlots = new Set(this.db.prepare("SELECT slot_id FROM player_equipment WHERE player_id = ?").all(ctx.profile.id).map(function (row) {
       return row.slot_id;
     }));
@@ -620,11 +701,33 @@ export class Node03RuntimeService {
     }
   }
 
+  instanceFromStackForEquip(ctx, itemId, operationId) {
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
+    const slotId = safeString(item.equipmentSlotRef, "");
+    if (!slotId || !catalogSection(ctx.catalogs, "equipmentSlots")[slotId]) return "";
+    const stack = this.db.prepare("SELECT * FROM player_inventory_stacks WHERE player_id = ? AND item_id = ? AND quantity > 0 ORDER BY updated_at ASC LIMIT 1").get(ctx.profile.id, itemId);
+    if (!stack) return "";
+    const before = safeInteger(stack.quantity, 0);
+    const stamp = now();
+    if (before <= 1) this.db.prepare("DELETE FROM player_inventory_stacks WHERE player_id = ? AND item_id = ? AND bind_state = ?").run(ctx.profile.id, itemId, stack.bind_state);
+    else this.db.prepare("UPDATE player_inventory_stacks SET quantity = quantity - 1, revision = revision + 1, updated_at = ? WHERE player_id = ? AND item_id = ? AND bind_state = ?").run(stamp, ctx.profile.id, itemId, stack.bind_state);
+    this.recordLedger(operationId, ctx.profile.id, "item_stack", itemId, -1, before, before - 1, "equip_split", "equip");
+    const id = "item_instance_" + crypto.randomUUID();
+    this.db.prepare(`
+      INSERT INTO player_item_instances (id, player_id, item_id, bind_state, quality, durability, max_durability, modifiers_json, location_type, location_ref, revision, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, '[]', 'inventory', NULL, 1, ?, ?)
+    `).run(id, ctx.profile.id, itemId, stack.bind_state || DEFAULT_BIND_STATE, item.rarity || null, item.durabilityMax || null, item.durabilityMax || null, stamp, stamp);
+    this.recordLedger(operationId, ctx.profile.id, "item_instance", itemId, 1, 0, 1, "equip_split", "equip");
+    return id;
+  }
+
   // Fase 05 (F5-E2-T04): uitrusten via de bestaande (legacy) tabellen; dit is de enige schrijver.
   // Het oude item in hetzelfde slot gaat terug naar de tas. Zelfde operationId = zelfde uitkomst (runOperation).
   equipItem(ctx, payload, operationId) {
-    const instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
+    let instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
     const fail = (status, message) => { const error = new Error(message); error.status = status; return error; };
+    // Een uitrustingsstuk dat (nog) op een stapel ligt: haal er één af en maak er een los stuk van.
+    if (!instanceId && payload.itemId) instanceId = this.instanceFromStackForEquip(ctx, safeString(payload.itemId, ""), operationId);
     const instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(instanceId, ctx.profile.id);
     if (!instance) throw fail(404, "Item niet gevonden in je tas.");
     if (instance.location_type !== "inventory") throw fail(409, "Dit item zit niet (meer) in je tas.");
@@ -1800,7 +1903,7 @@ export class Node03RuntimeService {
     const stats = this.loadPlayerStats(ctx.profile.id);
     const attackPower = statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower;
     const planned = runtime.planPlayerAttack({
-      playerId: ctx.profile.id, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
+      playerId: ctx.profile.id, classId: ctx.profile.selected_character_id || null, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
       safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId
     });
     if (planned.result) return planned.result;
@@ -2048,7 +2151,8 @@ export class Node03RuntimeService {
         quantity: safeInteger(row.quantity, 0),
         rarity: item.rarity || null,
         category: item.category || null,
-        bindState: row.bind_state
+        bindState: row.bind_state,
+        equipSlot: item.equipmentSlotRef && catalogSection(ctx.catalogs, "equipmentSlots")[item.equipmentSlotRef] ? item.equipmentSlotRef : null
       };
     });
     const instances = this.db.prepare("SELECT * FROM player_item_instances WHERE player_id = ? AND location_type = 'inventory' ORDER BY updated_at DESC").all(ctx.profile.id).map((row) => {
@@ -2063,7 +2167,9 @@ export class Node03RuntimeService {
         category: item.category || null,
         bindState: row.bind_state,
         durability: row.durability,
-        maxDurability: row.max_durability
+        maxDurability: row.max_durability,
+        // Terugbouw zonder nodes: de tas toont "Uitrusten" bij items met een uitrustingsplek.
+        equipSlot: item.equipmentSlotRef && catalogSection(ctx.catalogs, "equipmentSlots")[item.equipmentSlotRef] ? item.equipmentSlotRef : null
       };
     });
     return { items: stacks.concat(instances), stackCount: stacks.length, instanceCount: instances.length };

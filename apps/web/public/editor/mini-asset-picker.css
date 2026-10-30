@@ -1,0 +1,25 @@
+.miniAssetPicker { display: flex; align-items: center; width: 100%; min-width: 0; border: 1px dashed #405064; border-radius: 8px; background: #0b121b; color: #e8edf1; }
+.miniAssetPicker.filled { border-style: solid; }
+.miniAssetPicker:focus-within, .miniAssetPicker.over { border-color: #ffb454; box-shadow: 0 0 0 1px #ffb454; }
+.miniAssetPicker.over { background: #2a1f10; }
+.miniAssetPicker .miniAssetTrigger { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; width: 100%; min-height: 40px; padding: 4px 7px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.miniAssetDropIcon { color: #94a7ba; font-size: 18px; flex: 0 0 auto; }
+.miniAssetThumb { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; overflow: hidden; border-radius: 5px; background: #172230; color: #a9b8c6; }
+.miniAssetThumb img { width: 100%; height: 100%; object-fit: contain; }
+.miniAssetName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.miniAssetArrow { color: #ffb454; flex: 0 0 auto; }
+.miniAssetPicker .miniAssetClear { width: 26px; min-width: 26px; height: 28px; padding: 0; margin-right: 3px; border: 0; border-radius: 5px; background: transparent; color: #93a3b2; cursor: pointer; font-size: 18px; }
+.miniAssetPicker .miniAssetClear:hover { background: #293847; color: #fff; }
+.miniAssetPicker button:disabled { opacity: .5; cursor: default; }
+.miniAssetPopup { position: fixed; inset: auto; z-index: 100000; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px; box-sizing: border-box; overflow: hidden; border: 1px solid #405064; border-radius: 10px; background: #111b27; color: #e8edf1; font: 13px "Segoe UI", Arial, sans-serif; box-shadow: 0 12px 35px #0009; }
+.miniAssetPopup .miniAssetSearch { flex: 0 0 auto; width: 100%; min-width: 0; height: 34px; padding: 6px 9px; margin: 0; border: 1px solid #405064; border-radius: 6px; background: #0b121b; color: inherit; font: inherit; }
+.miniAssetSearch:focus { outline: 1px solid #ffb454; }
+.miniAssetCount { flex: 0 0 auto; color: #93a7b8; font-size: 11px; }
+.miniAssetResults { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.miniAssetGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.miniAssetPopup .miniAssetOption { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; padding: 6px; border: 1px solid #2d3c4d; border-radius: 7px; background: #182433; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.miniAssetOption .miniAssetThumb { width: 100%; height: 60px; }
+.miniAssetOption > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.miniAssetPopup .miniAssetOption:hover, .miniAssetPopup .miniAssetOption:focus-visible, .miniAssetPopup .miniAssetOption[aria-pressed="true"] { border-color: #ffb454; background: #2a261f; outline: none; }
+.miniAssetPopup .miniAssetMore { width: 100%; margin-top: 8px; padding: 8px; border: 1px solid #405064; border-radius: 6px; background: #1c2c3d; color: #e8edf1; cursor: pointer; }
+.miniAssetPicker [hidden], .miniAssetPopup [hidden] { display: none; }

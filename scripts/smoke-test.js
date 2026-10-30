@@ -4697,7 +4697,7 @@ async function main() {
 
     // F3: verhuizen uit Nodes (helemaal aan het eind: daarna zijn items en item-pickups alleen-lezen in Nodes).
     const f3Cutover = await call("GET", "/api/authoring/cutover");
-    assert(f3Cutover.status === 200 && f3Cutover.json.plans.length === 3, "F3: verhuisrapport voor project, items en pickups");
+    assert(f3Cutover.status === 200 && ["project", "items", "pickups", "areas"].every((domain) => f3Cutover.json.plans.some((plan) => plan.domain === domain)), "F3: verhuisrapport voor project, items, pickups en vlakken");
     const f3ItemsPlan = f3Cutover.json.plans.find(function (plan) { return plan.domain === "items"; });
     if (!f3ItemsPlan.ok) console.error("F3 ITEMS PLAN", JSON.stringify({ blocking: f3ItemsPlan.blocking, diffs: f3ItemsPlan.parity.filter(function (entry) { return entry.diffs.length; }) }).slice(0, 2000));
     assert(f3ItemsPlan.ok && f3ItemsPlan.comparedObjects >= 2, "F3: items-parity is GO");

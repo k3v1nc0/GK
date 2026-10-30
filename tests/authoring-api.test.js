@@ -63,7 +63,9 @@ test("API: rollen, actor uit sessie, If-Match, 413 en geen server.json via HTTP"
   assert.equal((await call("GET", "/api/authoring/active/client.json", { user: null })).status, 401);
   const workspace = await call("GET", "/api/authoring/workspace", { user: USERS.editor });
   assert.equal(workspace.status, 200);
-  assert.equal(workspace.data.zones[0].zoneId, "zone.golden");
+  // Fundament zonder nodes: de Werkbank kent één wereld (niet de zones van een oude gepubliceerde node-wereld).
+  assert.deepEqual(workspace.data.zones.map((zone) => zone.zoneId), ["zone.world"]);
+  assert.ok(workspace.data.respawnPolicies.some((policy) => policy.id === "respawn_policy.standard"), "vaste terugkomkeuzes uit de code");
 
   // Actor/project in de body worden genegeerd: updated_by komt uit de sessie.
   const created = await call("POST", "/api/authoring/command", { user: USERS.editor, body: {

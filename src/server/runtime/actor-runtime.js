@@ -499,7 +499,7 @@ export class ActorRuntime {
 
   // ---- spelersacties (aangeroepen door node03 binnen runOperation) ------------------------------------------
 
-  // ctx: { playerId, x, z (m), safe, attackPower, nowMs, operationId }. Puur: verandert het geheugen niet.
+  // ctx: { playerId, classId, x, z (m), safe, attackPower, nowMs, operationId }. Puur: verandert het geheugen niet.
   planPlayerAttack(ctx) {
     const section = this.ensureBuild(ctx.nowMs);
     const { entry: actor, stale } = this.findByInstanceId(ctx.targetId);
@@ -507,7 +507,7 @@ export class ActorRuntime {
     const label = actor.def.displayName;
     if (stale || actor.state === "dead") return { plan: null, result: { action: "attack", targetId: ctx.targetId, message: label + " is al verslagen.", events: [] } };
     if (ctx.safe || this.pointIsSafe(actor.x, actor.z)) throw httpError(409, "Hier kun je niet vechten (veilig gebied).", "SAFE_AREA");
-    const ability = playerAbilityFromSection(section);
+    const ability = playerAbilityFromSection(section, ctx.classId || null);
     const reachMm = ability.rangeMm + actor.def.radiusMm + RANGE_SLACK_MM;
     if (!withinRangeMm(mm(ctx.x), mm(ctx.z), mm(actor.x), mm(actor.z), reachMm)) {
       const error = httpError(400, "Target is te ver weg voor attack.", "TARGET_OUT_OF_RANGE");

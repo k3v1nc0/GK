@@ -626,6 +626,10 @@ export class Node04QuestRuntimeService {
       const grant = this.node03RuntimeService.grantCurrency(ctx, action.currencyRef, action.amountMinor, action.reason || "quest_reward", sourceRef, operationId);
       return grant ? [grant] : [];
     }
+    // Terugbouw zonder nodes: een item als questbeloning (Quest-kaart "Beloning").
+    if (action.actionKind === "item") {
+      return this.node03RuntimeService.grantItem(ctx, action.itemRef, Math.max(1, safeInteger(action.amount, 1)), action.reason || "quest_reward", sourceRef, operationId);
+    }
     if (action.actionKind === "xp") {
       const grant = this.grantXp(ctx, action.amount, operationId, sourceRef, action.reason || "quest_reward");
       return grant ? [grant] : [];
@@ -800,6 +804,11 @@ export class Node04QuestRuntimeService {
       const turnedIn = this.turnInQuest(ctx, choice.questRef, operationId);
       events.push.apply(events, turnedIn.events || []);
       message = turnedIn.message || message;
+    } else if (choice.action === "complete_quest" && choice.questRef) {
+      // Terugbouw zonder nodes: "Ga naar iemand" meld je klaar door met die NPC te praten.
+      const completed = this.completeReachQuest(ctx, choice.questRef, operationId);
+      events.push.apply(events, completed.events || []);
+      message = completed.message || message;
     }
     const nextDialogue = choice.closeAfterSelect || choice.action === "close"
       ? null
@@ -832,7 +841,7 @@ export class Node04QuestRuntimeService {
         action: choice.action || "none",
         questRef: choice.questRef || null,
         nextEntryRef: choice.nextEntryRef || null,
-        closeAfterSelect: choice.closeAfterSelect === true || choice.action === "accept_quest" || choice.action === "close"
+        closeAfterSelect: choice.closeAfterSelect === true || choice.action === "accept_quest" || choice.action === "close" || choice.action === "complete_quest"
       }))
     };
   }
@@ -880,6 +889,20 @@ export class Node04QuestRuntimeService {
         current: level,
         required: safeInteger(condition.level, 1)
       };
+    }
+    // Terugbouw zonder nodes: gesprekskeuzes per quest (aanbieden, inleveren, klaar melden).
+    if (condition.conditionType === "quest_available" || condition.conditionType === "quest_turn_in" || condition.conditionType === "quest_reach_ready") {
+      const quest = questById(ctx.project, condition.questRef);
+      const row = quest ? this.loadQuestState(ctx.profile.id, quest.id) : null;
+      let met = false;
+      if (quest && row && condition.conditionType === "quest_available") {
+        met = row.status === QUEST_STATUS.AVAILABLE || (row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest));
+      } else if (quest && row && [QUEST_STATUS.ACTIVE, QUEST_STATUS.READY_TO_TURN_IN].includes(row.status)) {
+        const step = stepById(quest, row.active_step_id) || defaultStepForAccept(quest);
+        const wanted = condition.conditionType === "quest_turn_in" ? OBJECTIVE_TYPES.DELIVER : OBJECTIVE_TYPES.REACH;
+        met = Boolean(step && step.stepType === wanted && this.evaluateStepProgress(ctx, quest, step).complete);
+      }
+      return { conditionType: condition.conditionType, questRef: condition.questRef || null, met, message: met ? "" : "" };
     }
     if (condition.conditionType === "has_item") {
       const amount = this.node03RuntimeService.ownedItemCount(ctx.profile.id, condition.itemRef);
@@ -961,7 +984,8 @@ export class Node04QuestRuntimeService {
     if (!target) return true;
     if (safeString(target.zoneRef || ctx.zoneId) !== safeString(ctx.zoneId)) return false;
     const distance = positionDistance(ctx.position, target);
-    return distance === null || distance <= Math.max(0.1, safeNumber(target.radius, 3));
+    // Kleine marge: de serverpositie loopt soms net achter op wat de speler ziet.
+    return distance === null || distance <= Math.max(0.1, safeNumber(target.radius, 3)) + 1.5;
   }
 
   resolveQuestTarget(project, targetRef) {
@@ -1268,6 +1292,10 @@ export class Node04QuestRuntimeService {
       zoneRef: target.zoneRef || ctx.zoneId,
       entityRef: entityRef || null,
       linkedEntity,
+      // Klikken op het model (bijv. een NPC) kiest dit doel.
+      visualEntityId: safeString(linkedEntity?.entityId || entityRef, "") || null,
+      // Klikvlak rond de NPC (los van de praat-afstand), zodat je ernaast gewoon kunt weglopen.
+      clickRadius: Number.isFinite(Number(target.clickRadius)) ? Number(target.clickRadius) : null,
       renderBody: !linkedEntity,
       visibleInGame: target.visibleInGame !== false,
       renderMarker: target.visibleInGame !== false

@@ -12,7 +12,7 @@
     "start": "sh scripts/run-node24.sh src/server/server.js",
     "check": "sh scripts/run-node24.sh scripts/check.js",
     "test": "sh scripts/run-node24.sh scripts/run-isolated-tests.js",
-    "smoke": "sh scripts/run-node24.sh scripts/smoke-test.js",
+    "smoke": "sh scripts/run-node24.sh scripts/smoke-fundament.js",
     "inspect:chunks": "sh scripts/run-node24.sh scripts/inspect-world-chunks.js",
     "perf:game": "sh scripts/run-node24.sh scripts/perf-game.js",
     "perf:world-copy": "sh scripts/run-node24.sh scripts/profile-world-copy.js",

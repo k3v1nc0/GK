@@ -3776,3 +3776,38 @@ body.workbenchMode .workbenchRelationResizer { display: none !important; }
 body.editorFullscreen {
   background: #05080c;
 }
+
+/* Tab Game: de game in de editor. De editor-3D pauzeert zolang deze open is. */
+.gameTabPanel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 900;
+  background: #0a0e13;
+}
+.gameTabPanel[hidden] { display: none; }
+.gameTabPanel iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+/* Paneel Relaties: horizontale stroom met iconen per soort. */
+.relFlow { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding: 6px 4px; }
+.relStage { display: flex; flex-direction: column; gap: 6px; min-width: 120px; }
+.relStageCenter { align-items: center; justify-content: flex-start; }
+.relStageTitle { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8fa1b1; text-align: center; }
+.relGroup { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid #263445; border-radius: 9px; background: #111a24; }
+.relGroupLabel { font-size: 12px; color: #c9d4dc; font-weight: 600; }
+.relTiles { display: flex; flex-wrap: wrap; gap: 6px; }
+.relTile { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 72px; padding: 5px 4px; border: 1px solid #2a3a4c; border-radius: 9px; background: #0d151e; color: #e8edf1; cursor: pointer; }
+.relTile:hover { border-color: #4f86b8; }
+.relTileSelected { width: 92px; border-color: #e0b84a; cursor: default; }
+.relTileIcon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 26px; border-radius: 7px; background: #172231; overflow: hidden; }
+.relTileSelected .relTileIcon { width: 60px; height: 60px; font-size: 34px; }
+.relTileIcon img { width: 100%; height: 100%; object-fit: cover; }
+.relTileName { font-size: 11px; line-height: 1.2; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relArrow { display: flex; align-items: center; font-size: 22px; color: #6f8aa3; padding: 0 2px; }
+.relEmpty { color: #8fa1b1; font-size: 12px; padding: 6px; text-align: center; }

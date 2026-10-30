@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { applyCanonicalBuild } from "./authoring/runtime-overlay.js";
+import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
 import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
@@ -597,13 +597,23 @@ function publicSession(session) {
   };
 }
 
-function publicPlayer(profile) {
+// Klassen: het gekozen uiterlijk van een character, alleen als het in de modellenlijst van zijn klasse staat.
+// Anders het eerste model van de klasse; zonder modellen null (dan het spelermodel van de kaart Wereld).
+export function characterModelFor(world, profile) {
+  if (!profile) return null;
+  const models = world?.gameProject?.catalogs?.playableCharacters?.[profile.selected_character_id]?.modelAssetIds;
+  const list = Array.isArray(models) ? models : [];
+  return list.includes(profile.model_asset_id) ? profile.model_asset_id : (list[0] || null);
+}
+
+function publicPlayer(profile, world = null) {
   if (!profile) return null;
   return {
     id: profile.id,
     userId: profile.user_id,
     displayName: profile.display_name,
     selectedCharacterId: profile.selected_character_id || null,
+    modelAssetId: characterModelFor(world, profile),
     currentWorldId: profile.current_world_id,
     createdAt: profile.created_at,
     updatedAt: profile.updated_at
@@ -977,7 +987,7 @@ export class MmoService {
     const buildId = canonical?.buildId || "";
     if (this.spatialCache && this.spatialCache.buildId === buildId) return this.spatialCache;
     const world = canonical?.data?.world || null;
-    this.spatialCache = { buildId, world, index: world ? createSpatialIndex(world) : null };
+    this.spatialCache = { buildId, world, index: world ? createSpatialIndex(world) : null, worldMusic: canonical?.data?.worldMusic || null };
     return this.spatialCache;
   }
 
@@ -1007,7 +1017,9 @@ export class MmoService {
     const spatial = this.spatialIndex();
     const region = state?.current_region_id && spatial.index ? spatial.index.regions.get(state.current_region_id) : null;
     const area = state?.current_area_id && spatial.index ? spatial.index.areas.get(state.current_area_id) : null;
-    const musicAssetId = area?.musicAssetId || region?.musicAssetId || null;
+    // Terugbouw zonder nodes: zonder eigen muziek van (deel)gebied speelt de muziek van de kaart Wereld.
+    const worldMusic = spatial.worldMusic || null;
+    const musicAssetId = area?.musicAssetId || region?.musicAssetId || worldMusic?.assetId || null;
     return {
       ok: true,
       playerId: state?.player_id || null,
@@ -1017,7 +1029,7 @@ export class MmoService {
       areaId: area?.areaId || null,
       areaName: area?.displayName || null,
       musicAssetId,
-      musicUrl: musicAssetId ? (spatial.world?.audio?.[musicAssetId] || null) : null
+      musicUrl: musicAssetId ? (spatial.world?.audio?.[musicAssetId] || (musicAssetId === worldMusic?.assetId ? worldMusic.url : null) || null) : null
     };
   }
 
@@ -1029,28 +1041,14 @@ export class MmoService {
   }
 
   getPublishedWorldContext() {
-    // This runs on every world tick (50x/sec by default), including when nobody is
-    // connected. Check the cheap published_at column first so the common case (no
-    // new publish since last tick) never touches the full world_json blob - reading
-    // and JSON.parse-ing that on every tick was pegging the server at ~50% CPU
-    // continuously once the published world grew to ~1MB.
-    const publishedAt = this.repository.getPublishedWorldPublishedAt() || "";
-    if (!publishedAt) {
-      const error = new Error("Nog geen gepubliceerde wereld.");
-      error.status = 404;
-      throw error;
-    }
-    // Fase 03: de actieve canonieke build (in geheugen) is een laag over de gepubliceerde wereld.
+    // Doelbeeld (fundament zonder nodes): de spelwereld komt alleen uit de actieve build. Er is geen oude
+    // gepubliceerde node-wereld en geen menglaag meer. Zonder build draait de basiswereld met standaardwaarden.
+    // Dit loopt elke worldtick: alleen bij een andere build wordt de wereld opnieuw opgebouwd.
     const canonical = this.canonicalBuildProvider ? this.canonicalBuildProvider() : null;
     const canonicalBuildId = canonical?.buildId || "";
-    if (this.worldCache && this.worldCache.publishedAt === publishedAt && this.worldCache.canonicalBuildId === canonicalBuildId) return this.worldCache;
-    const publishedWorld = this.repository.getPublishedWorld();
-    if (!publishedWorld) {
-      const error = new Error("Nog geen gepubliceerde wereld.");
-      error.status = 404;
-      throw error;
-    }
-    const world = canonical ? applyCanonicalBuild(publishedWorld, canonical) : publishedWorld;
+    const publishedAt = "build:" + (canonicalBuildId || "basis");
+    if (this.worldCache && this.worldCache.canonicalBuildId === canonicalBuildId) return this.worldCache;
+    const world = buildRuntimeWorld(canonical?.data || {}, Object.assign({}, this.canonicalOverlayOptions || {}, { buildId: canonicalBuildId || null, publishedAt }));
     const worldId = worldIdFor(world);
     const walkabilityIndex = buildWalkabilityIndex(world);
     // Publish/rollback replaces the compiled world, but not the live state of an
@@ -1359,8 +1357,18 @@ export class MmoService {
     return current;
   }
 
+  characterModel(profile) {
+    try { return characterModelFor(this.getPublishedWorldContext().world, profile); } catch { return null; }
+  }
+
+  // Klassen: een account heeft per klasse een character. users.active_profile_id = waarmee je nu speelt.
+  activeProfileForUser(userId) {
+    const active = this.db.prepare("SELECT p.* FROM users u JOIN player_profiles p ON p.id = u.active_profile_id AND p.user_id = u.id WHERE u.id = ? LIMIT 1").get(userId);
+    return active || this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? ORDER BY created_at, id LIMIT 1").get(userId) || null;
+  }
+
   ensurePlayerProfile(user, worldContext) {
-    const existing = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? LIMIT 1").get(user.id);
+    const existing = this.activeProfileForUser(user.id);
     const currentWorldId = worldContext.worldId;
     const defaultZoneId = activeZoneIdForWorld(worldContext.world);
     const displayName = String(existing?.display_name || user.username || "player").trim() || "player";
@@ -1380,6 +1388,7 @@ export class MmoService {
     const profileId = "player_" + crypto.randomUUID();
     this.db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, current_zone_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .run(profileId, user.id, displayName, null, currentWorldId, defaultZoneId, nowIso, nowIso);
+    this.db.prepare("UPDATE users SET active_profile_id = ? WHERE id = ?").run(profileId, user.id);
     return this.db.prepare("SELECT * FROM player_profiles WHERE id = ?").get(profileId);
   }
 
@@ -1570,7 +1579,7 @@ export class MmoService {
       session: publicSession(sessionContext.session),
       activeSessionCount: activeSessionCount,
       connectedSessionCount: connectedSessionCount,
-      player: publicPlayer(profile),
+      player: publicPlayer(profile, worldContext.world),
       position: this.publicPositionForPlayer(position, sessionContext.session, worldContext.worldId),
       spawn: spawnFromWorld(gameWorld),
       gameWorld: gameWorld,
@@ -1676,6 +1685,7 @@ export class MmoService {
       userId: profile.user_id,
       displayName: profile.display_name,
       selectedCharacterId: profile.selected_character_id || null,
+      modelAssetId: this.characterModel(profile),
       worldId: worldId,
       position: {
         x: round(position.x),
@@ -2285,6 +2295,7 @@ export class MmoService {
       userId: resolved ? resolved.user_id : fallbackRecord.userId,
       displayName: resolved ? resolved.display_name : fallbackRecord.displayName,
       selectedCharacterId: resolved ? (resolved.selected_character_id || null) : (fallbackRecord.selectedCharacterId || null),
+      modelAssetId: resolved ? this.characterModel(resolved) : (fallbackRecord.modelAssetId || null),
       worldId: worldId,
       position: {
         x: round(state.x),
@@ -2985,7 +2996,7 @@ export class MmoService {
         worldId: worldId
       },
       localPlayer: {
-        player: publicPlayer(connection.player),
+        player: publicPlayer(connection.player, this.worldCache?.world || null),
         position: this.publicPositionForPlayer(position, connection.session, worldId),
         connectedSessionCount: this.countConnectedPlayerSessions(connection.player.id),
         activeSessionCount: this.authService.countActiveSessions(connection.user.id)
@@ -3089,7 +3100,7 @@ export class MmoService {
       activeSessionCount: this.authService.countActiveSessions(connection.user.id),
       connectedSessionCount: this.countConnectedSessions(connection.user.id),
       session: publicSession(connection.session),
-      player: publicPlayer(connection.player),
+      player: publicPlayer(connection.player, this.worldCache?.world || null),
       position: this.publicPositionForPlayer(position, connection.session, worldContext.worldId),
       spawn: spawnFromWorld(worldContext.world),
       type: "connection:ready"
@@ -3103,7 +3114,7 @@ export class MmoService {
       worldId: worldContext.worldId,
       activeSessionCount: this.authService.countActiveSessions(connection.user.id),
       connectedSessionCount: this.countConnectedSessions(connection.user.id),
-      player: publicPlayer(connection.player),
+      player: publicPlayer(connection.player, this.worldCache?.world || null),
       position: this.publicPositionForPlayer(position, connection.session, worldContext.worldId),
       spawn: spawnFromWorld(worldContext.world),
       type: "player:state"
@@ -3270,7 +3281,7 @@ export class MmoService {
       worldId: worldContext.worldId,
       activeSessionCount: this.authService.countActiveSessions(connection.user.id),
       connectedSessionCount: this.countConnectedSessions(connection.user.id),
-      player: publicPlayer(profile),
+      player: publicPlayer(profile, this.worldCache?.world || null),
       position: this.publicPositionForPlayer(position, connection.session, worldContext.worldId),
       spawn: spawnFromWorld(worldContext.world),
       type: "player:state"
@@ -3569,7 +3580,7 @@ export class MmoService {
   getAuthMeSnapshot(req) {
     const sessionContext = this.getSessionContextFromRequest(req);
     this.authService.touchSession(sessionContext.session.id, false);
-    let profile = this.db.prepare("SELECT * FROM player_profiles WHERE user_id = ? LIMIT 1").get(sessionContext.user.id);
+    let profile = this.activeProfileForUser(sessionContext.user.id);
     let position = null;
     let worldId = null;
     let spawn = null;
@@ -3597,7 +3608,7 @@ export class MmoService {
       session: publicSession(sessionContext.session),
       activeSessionCount: this.authService.countActiveSessions(sessionContext.user.id),
       connectedSessionCount: this.countConnectedSessions(sessionContext.user.id),
-      player: publicPlayer(profile),
+      player: publicPlayer(profile, this.worldCache?.world || null),
       position: position ? this.publicPositionForPlayer(position, sessionContext.session, worldId || profile?.current_world_id || "main_world") : null,
       spawn: spawn,
       gameWorld: gameWorld,

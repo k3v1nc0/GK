@@ -1,4 +1,5 @@
 // F3-E2-T02/T03: canonieke documenten -> immutable buildmap op schijf -> atomische releasepointer in de DB.
+import { compileAreaShapes } from "./area-compiler.js";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -7,6 +8,7 @@ import { parsePickupLegacyRef } from "./runtime-overlay.js";
 import { DocumentRepository } from "./document-repository.js";
 import { compileWorldSection } from "./world-compiler.js";
 import { compileActorSection } from "./actor-compiler.js";
+import { compileGameSection } from "./game-compiler.js";
 import { authoringError, sha256, stableStringify } from "./stable-json.js";
 
 export const AUTHORING_COMPILER_VERSION = "gk-canonical-compiler-1";
@@ -113,6 +115,34 @@ export function compileCanonical(documents, options = {}) {
     errors.push(...actors.errors);
     client.actors = actors.client;
     server.actors = actors.server;
+  }
+  // Fundament zonder nodes: de kaart "Wereld" (grond, startplek, speler, camera, licht). Zonder kaart ontbreekt de
+  // sleutel en gebruikt de wereldbouwer de standaardwaarden.
+  const worldSettings = byKind("world_settings")[0] || null;
+  if (worldSettings) {
+    client.worldSettings = split(worldSettings).client;
+    server.worldSettings = split(worldSettings).server;
+  }
+  // Ombouw stap 2: vlakken uit de Area tool. Alleen de server leest ze (de game krijgt ze via de wereld).
+  const areaShapes = compileAreaShapes(known, options);
+  if (areaShapes) {
+    errors.push(...areaShapes.errors);
+    Object.assign(server, areaShapes.server);
+  }
+  // Terugbouw zonder nodes: valuta, speler, game-scherm, NPC's, quests, recepten en losse modellen.
+  const game = compileGameSection(known, options);
+  if (game) {
+    errors.push(...game.errors);
+    server.game = game.server;
+  }
+  // Muziek voor de hele wereld (kaart Wereld). De URL komt mee, zodat de game de assetlijst niet hoeft te kennen.
+  const worldMusicId = worldSettings?.body?.musicAssetId || null;
+  if (worldMusicId) {
+    const info = options.assetInfo ? options.assetInfo.get(worldMusicId) : null;
+    if (options.assetInfo && !info) errors.push({ code: "ASSET_UNKNOWN", docKey: worldSettings.docKey, message: "Wereld: onbekende muziek " + worldMusicId });
+    else if (info && info.assetType !== "audio") errors.push({ code: "ASSET_TYPE", docKey: worldSettings.docKey, message: "Wereld: " + worldMusicId + " is geen muziek (audio)." });
+    const url = options.assetPaths?.get(worldMusicId) || info?.sourcePath || null;
+    server.worldMusic = { assetId: worldMusicId, url };
   }
   const texts = { "client.json": stableStringify(client), "server.json": stableStringify(server) };
   const files = {};

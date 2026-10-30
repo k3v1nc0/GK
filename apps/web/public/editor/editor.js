@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261025-f5-actors1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261029-klassen2";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -9,6 +9,11 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261029-klassen3";
+import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
+import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
+import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261028-instances1";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
@@ -131,7 +136,13 @@ const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
 const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayouts.v2";
 const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
 const WORKBENCH_PANE_VIEWS = ["workbench", "viewport", "relations", "library"];
+// Werkbank Fase 1: tab Instellingen = Menu | Instellingen | 3D Preview (zelfde viewport als de Werkbank).
+const SETTINGS_PANE_VIEWS = ["settingsMenu", "settingsCard", "viewport"];
+// Fundament zonder nodes: de Nodes-weergave bestaat niet meer (setEditorMode("nodes") valt terug op de Werkbank).
+const EDITOR_MODES = ["workbench", "settings"];
 const ALL_PANE_LABELS = {
+  settingsMenu: "Menu",
+  settingsCard: "Instellingen",
   tools: "Tools",
   graph: "Nodes",
   viewport: "3D",
@@ -149,7 +160,6 @@ const WORKBENCH_DEFINITION_STORAGE_KEY = "gk.workbenchDefinition";
 const WORKBENCH_COLLECTION_STORAGE_KEY = "gk.workbenchCollection";
 const WORKBENCH_OVERVIEW_COLUMN_LIMIT = 24;
 const WORKBENCH_OVERVIEW_RELATION_LIMIT = 40;
-const WORKBENCH_ASSET_PICKER_LIMIT = 24;
 const MOBILE_LAYOUT_QUERY = window.matchMedia ? window.matchMedia("(max-width: 980px)") : null;
 const COARSE_POINTER_QUERY = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
 const GRAPH_ZOOM_FACTOR = 1.21;
@@ -408,8 +418,6 @@ const state = {
   workbenchDropNotice: null,
   workbenchUsageOpen: false,
   workbenchDeleteNodeId: null,
-  workbenchAssetSlotPicker: "",
-  workbenchAssetPickerQuery: "",
   workbenchStatRuleDraft: null
 };
 
@@ -493,6 +501,12 @@ const el = {
   allLayoutOverflow: document.querySelector("#allLayoutOverflow"),
   nodesModeButton: document.querySelector("#nodesModeButton"),
   workbenchModeButton: document.querySelector("#workbenchModeButton"),
+  gameModeButton: document.querySelector("#gameModeButton"),
+  gameTabPanel: document.querySelector("#gameTabPanel"),
+  settingsModeButton: document.querySelector("#settingsModeButton"),
+  oldModeMenu: document.querySelector("#oldModeMenu"),
+  settingsMenuPanel: document.querySelector("#settingsMenuPanel"),
+  settingsCardPanel: document.querySelector("#settingsCardPanel"),
   workbenchRelationResizer: document.querySelector("#workbenchRelationResizer"),
   workbenchSelectionPanel: document.querySelector("#workbenchSelectionPanel"),
   workbenchLibraryPanel: document.querySelector("#workbenchLibraryPanel"),
@@ -693,9 +707,11 @@ function editorConnectionRequestFinished() {
   updateConnectionStatusFromState();
 }
 
-let editorCsrfToken = "";
-
 async function fetchEditorApi(path, options, method) {
+  return csrfFetch(path, options, (url, requestOptions) => fetchEditorApiRequest(url, requestOptions, requestOptions?.method || "GET"));
+}
+
+async function fetchEditorApiRequest(path, options, method) {
   const requestOptions = Object.assign({}, options || {});
   const timeoutMs = Number.isFinite(Number(requestOptions.timeoutMs)) ? Number(requestOptions.timeoutMs) : EDITOR_API_TIMEOUT_MS;
   delete requestOptions.timeoutMs;
@@ -703,9 +719,6 @@ async function fetchEditorApi(path, options, method) {
   requestOptions.headers = formBody
     ? Object.assign({}, requestOptions.headers || {})
     : Object.assign({ "Content-Type": "application/json" }, requestOptions.headers || {});
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "GET").toUpperCase()) && editorCsrfToken) {
-    requestOptions.headers["X-GK-CSRF"] = editorCsrfToken;
-  }
   editorConnectionRequestStarted();
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== "function") {
     try {
@@ -768,7 +781,7 @@ async function api(path, options) {
     throw new Error("Niet ingelogd.");
   }
   const data = await response.json().catch(function () { return {}; });
-  if (data.csrfToken) editorCsrfToken = data.csrfToken;
+  rememberCsrfToken(data);
   if (!response.ok) {
     const error = new Error(data.message || "Verzoek mislukt.");
     error.status = response.status;
@@ -865,11 +878,207 @@ function loadStoredMobilePanel() {
   }
 }
 
+// Werkbank Fase 1: documenten (schema) voor Werkbank en Instellingen. Vroeg aangemaakt zodat elke render hem kent.
+const docBench = createDocBench({
+  getAssets: function () { return state.assets || []; },
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  onUndoable: function (entry) {
+    pushHistorySnapshot({ label: entry.label, doc: entry });
+    renderUnsaved();
+    updateDocPendingBadge();
+  },
+  onChanged: function () {
+    updateDocPendingBadge();
+    refreshViewportForDocs();
+    if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
+    if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
+  }
+});
+
+// Documenten met een plek (pickup, NPC, model, vijand- en grondstofplek) staan als echte mesh in de editorwereld.
+// Klikken opent de kaart; G verplaatst, R draait en S schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
+// Een kaart uit de Bibliotheek op de wereld laten vallen maakt een plek (zie werkbank-world.js).
+let docDrop = null;
+const PLACED_DOC_KINDS = new Set(Object.keys(PLACED_KINDS));
+
+function focusedPlacedDocKey() {
+  const doc = docBench.selectedDocKey ? docBench.doc(docBench.selectedDocKey) : null;
+  return doc && PLACED_DOC_KINDS.has(doc.kind) && !doc.archived ? doc.docKey : null;
+}
+
+function placedDocLabel(docKey) {
+  const doc = docKey ? docBench.doc(docKey) : null;
+  const spec = doc ? docBench.spec(doc.kind) : null;
+  return spec ? (spec.icon ? spec.icon + " " : "") + spec.label : "Plek";
+}
+
+function placedDocHint(kind) {
+  const can = PLACED_KINDS[kind] || { move: true };
+  return ["G = verplaatsen", can.rotate ? "R = draaien" : "", can.scale ? "S = groter/kleiner" : ""].filter(Boolean).join(", ");
+}
+
+// Na elke documentwijziging: de 3D-view opnieuw laden, zodat hij toont wat er is opgeslagen.
+function refreshViewportForDocs() {
+  state.viewportDirty = true;
+  scheduleViewportRefresh(false, 250);
+}
+
+function selectPlacedDoc(docKey) {
+  if (state.selectedNodeIds.length) clearSelection({ clearPendingEdge: true });
+  focusDoc(docKey);
+  syncRuntimeSelection();
+  const doc = docBench.doc(docKey);
+  setStatus(placedDocLabel(docKey) + " gekozen. " + placedDocHint(doc?.kind) + ".", "");
+}
+
+async function commitDocTransform(docKey, transform) {
+  const doc = docBench.doc(docKey);
+  if (!doc || !PLACED_DOC_KINDS.has(doc.kind)) {
+    state.lastTransformCommitError = "Transform niet opgeslagen: document niet gevonden (" + docKey + ").";
+    setStatus(state.lastTransformCommitError, "error");
+    return;
+  }
+  const round2 = function (value) { return Math.round(Number(value) * 100) / 100; };
+  const x = round2(Number(transform?.x) || 0);
+  const y = round2(Number(transform?.y) || 0);
+  const z = round2(Number(transform?.z) || 0);
+  const body = Object.assign({}, doc.body);
+  if (doc.kind === "actor_spawn" || doc.kind === "resource_spawn") {
+    // Vijand- en grondstofplekken staan in millimeters; het gebied volgt de nieuwe plek (of vervalt).
+    body.xMm = Math.round(x * 1000);
+    body.zMm = Math.round(z * 1000);
+    const regionRef = regionRefAt(docBench, body.xMm, body.zMm);
+    if (regionRef) body.regionRef = regionRef; else delete body.regionRef;
+  } else {
+    Object.assign(body, { x: x, y: y, z: z });
+  }
+  const can = PLACED_KINDS[doc.kind] || {};
+  if (can.rotate && Number.isFinite(Number(transform?.rotationY))) body.rotationY = Math.round(((Number(transform.rotationY) % 360) + 360) % 360) % 360;
+  if (can.scale && Number.isFinite(Number(transform?.scaleX)) && Number(transform.scaleX) > 0) body.scale = Math.min(100, Math.max(0.01, round2(transform.scaleX)));
+  try {
+    await docBench.saveDoc(doc.kind, doc, body, placedDocLabel(docKey) + " aangepast");
+  } catch {
+    refreshViewportForDocs();
+  }
+}
+
+// Ombouw stap 2: de Area tool. Een vlak-document (area) is voor het bestaande puntengereedschap een
+// "doc-node" met id "doc:area:<areaId>" en dezelfde waarden als de oude node. Elke wijziging van het
+// gereedschap gaat via patchValues naar het document (met Ctrl+Z); de 3D-view toont het opgeslagen document.
+const AREA_NODE_TYPES = new Set(Object.values(AREA_SOORTEN).map(function (def) { return def.nodeType; }));
+const AREA_LEGACY_NODE_TYPES = new Set(["bounded_area_scatter", "surface_layer", "blocker_area", "walkable_surface"]);
+const areaDocNodeCache = new Map();
+
+function isAreaDocNodeId(id) {
+  return typeof id === "string" && id.startsWith(AREA_EDITOR_PREFIX);
+}
+
+function areaDocNode(doc) {
+  if (!doc || doc.kind !== "area" || doc.archived) return null;
+  const id = AREA_EDITOR_PREFIX + doc.body.areaId;
+  const cached = areaDocNodeCache.get(id);
+  if (cached && cached.revision === doc.revision && cached.docKey === doc.docKey) return cached.node;
+  const def = AREA_SOORTEN[areaSoort(doc.body)];
+  const node = { id: id, type: def.nodeType, title: doc.body.displayName, values: areaNodeValues(doc.body, id), docKey: doc.docKey, areaDoc: true };
+  areaDocNodeCache.set(id, { revision: doc.revision, docKey: doc.docKey, node: node });
+  return node;
+}
+
+function areaDocNodes() {
+  if (!docBench.workspace) return [];
+  return docBench.docs("area").map(areaDocNode).filter(Boolean);
+}
+
+function areaDocNodeById(id) {
+  if (!isAreaDocNodeId(id) || !docBench.workspace) return null;
+  const areaId = String(id).slice(AREA_EDITOR_PREFIX.length).split("::")[0];
+  return areaDocNode(docBench.doc("area:" + areaId));
+}
+
+// Het gekozen vlak (als er geen node gekozen is).
+function selectedAreaDocNode() {
+  if (state.viewportMarqueeSelection || state.selectedNodeIds.length) return null;
+  const doc = docBench.selectedDocKey ? docBench.doc(docBench.selectedDocKey) : null;
+  return doc && doc.kind === "area" ? areaDocNode(doc) : null;
+}
+
+// Na het verhuizen van de vlakken bestaan de oude vlak-nodes niet meer in de editor.
+function areasMovedToDocs() {
+  return docBench.workspace?.cutover?.areas?.writer === "canonical";
+}
+
+function isRetiredAreaNode(node) {
+  return Boolean(node && !node.areaDoc && AREA_LEGACY_NODE_TYPES.has(node.type) && areasMovedToDocs());
+}
+
+function selectAreaDoc(docKey, options = {}) {
+  if (state.selectedNodeIds.length) clearSelection({ clearPendingEdge: true });
+  focusDoc(docKey);
+  renderViewportControls();
+  if (options.focus) focusTerrainOrSelected();
+  const doc = docBench.doc(docKey);
+  const def = doc ? AREA_SOORTEN[areaSoort(doc.body)] : null;
+  setStatus((def ? def.icon + " " + def.label : "Vlak") + " gekozen. Sleep punten; G/R/T = hele vlak; F = punt erbij; Del = punt weg.", "");
+}
+
+async function commitAreaDocPatch(nodeId, patch, options = {}) {
+  const node = areaDocNodeById(nodeId);
+  const doc = node ? docBench.doc(node.docKey) : null;
+  if (!doc) {
+    setStatus("Vlak niet gevonden.", "error");
+    return null;
+  }
+  const body = areaBodyFromNodePatch(doc.body, patch);
+  if (JSON.stringify(body) === JSON.stringify(doc.body)) return state.graph;
+  try {
+    await docBench.saveDoc("area", doc, body, options.historyLabel || "Vlak gewijzigd");
+  } catch {
+    refreshViewportForDocs();
+    return null;
+  }
+  return state.graph;
+}
+
+// Een nieuw vlak midden in beeld: 8 x 8 m (een pad: een lijn van 10 m).
+async function createAreaDoc(soort) {
+  if (!docBench.workspace) await docBench.load();
+  const def = AREA_SOORTEN[soort];
+  if (!def) return;
+  const center = editorCameraGroundPoint() || { x: 0, z: 0 };
+  const mm = function (value) { return Math.round(Number(value) * 1000); };
+  const cx = Number(center.x) || 0;
+  const cz = Number(center.z) || 0;
+  const groundY = terrainGroundY();
+  const corners = soort === "pad" ? [[-5, 0], [5, 0]] : [[-4, -4], [4, -4], [4, 4], [-4, 4]];
+  const pointsMm = corners.map(function (offset) {
+    const point = [mm(cx + offset[0]), mm(cz + offset[1])];
+    if (def.height) point.push(mm(groundY + 0.35));
+    return point;
+  });
+  const stamp = Date.now().toString(36);
+  const body = { areaId: soort + ".vlak_" + stamp, displayName: def.label + " " + (docBench.docs("area").length + 1), soort: soort, shape: "polygon", pointsMm: pointsMm };
+  if (soort === "deelgebied") {
+    const region = docBench.docs("region").find(function (entry) {
+      return pointsMm[0][0] >= entry.body.minXMm && pointsMm[0][0] < entry.body.maxXMm && pointsMm[0][1] >= entry.body.minZMm && pointsMm[0][1] < entry.body.maxZMm;
+    });
+    if (!region) {
+      setStatus("Een deelgebied ligt altijd in een gebied. Er is hier nog geen gebied (maak ze via Instellingen → Builds).", "error");
+      return;
+    }
+    body.regionRef = region.docKey;
+  }
+  try {
+    const result = await docBench.saveDoc("area", null, body, def.label + " gemaakt");
+    selectAreaDoc(result.docKey);
+  } catch {}
+}
+
 function loadStoredEditorMode() {
   try {
-    return window.localStorage.getItem(EDITOR_MODE_STORAGE_KEY) === "workbench" ? "workbench" : "nodes";
+    const stored = window.localStorage.getItem(EDITOR_MODE_STORAGE_KEY);
+    return EDITOR_MODES.includes(stored) ? stored : "workbench";
   } catch {
-    return "nodes";
+    return "workbench";
   }
 }
 
@@ -1432,6 +1641,8 @@ function isFileDragEvent(event) {
   const dataTransfer = event?.dataTransfer;
   if (!dataTransfer) return false;
   const types = Array.from(dataTransfer.types || []);
+  // Een assetkaart of werkbankkaart slepen is geen upload, ook al geeft de browser soms "Files" mee.
+  if (types.includes("text/gk-asset") || types.some(function (type) { return String(type).startsWith("application/x-gk"); })) return false;
   if (types.includes("Files")) return true;
   const items = Array.from(dataTransfer.items || []);
   return items.some(function (item) { return item && item.kind === "file"; });
@@ -1605,7 +1816,21 @@ function discardPendingUnsavedVisual() {
   if (state.unsaved <= 0) clearAutoSaveDraftTimer();
 }
 
+// Werkbank Fase 1: wat met SAVE DRAFT (of auto-save) is bewaard, staat nog niet live.
+// Die acties tellen mee op de teller van SAVE TO GAME tot er gepubliceerd is.
+const NOT_LIVE_STORAGE_KEY = "gk.editorNotLiveActions";
+
+function notLiveGraphActions() {
+  try { return Math.max(0, Number(window.localStorage.getItem(NOT_LIVE_STORAGE_KEY)) || 0); } catch { return 0; }
+}
+
+function setNotLiveGraphActions(count) {
+  try { window.localStorage.setItem(NOT_LIVE_STORAGE_KEY, String(Math.max(0, count))); } catch {}
+  updateDocPendingBadge();
+}
+
 function clearUnsaved() {
+  if (state.unsaved > 0) setNotLiveGraphActions(notLiveGraphActions() + state.unsaved);
   state.unsaved = 0;
   state.pendingUnsavedVisualCount = 0;
   clearAutoSaveDraftTimer();
@@ -1833,6 +2058,11 @@ function renderValidationIssue(kind, issue) {
 
 function assetById(assetId) {
   return state.assets.find(function (asset) { return asset.id === assetId; }) || null;
+}
+
+function editorAssetPicker(value, assetTypes, onChange, options = {}) {
+  return createAssetPicker(Object.assign({ getAssets: () => state.assets, value, assetTypes, onChange,
+    onError: (message) => setStatus(message, "error") }, options));
 }
 
 function runtimeNodeId(node) {
@@ -2325,25 +2555,12 @@ function renderAssetManageOverlay() {
     replaceLabel.className = "assetManageField";
     const replaceTitle = document.createElement("span");
     replaceTitle.textContent = "Vervang door";
-    const replaceSelect = document.createElement("select");
-    replaceSelect.disabled = state.assetManager.loadingUsage || !compatibleAssets.length;
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = compatibleAssets.length ? "(kies asset)" : "Geen compatibele vervangers";
-    replaceSelect.appendChild(blank);
-    for (const candidate of compatibleAssets) {
-      const option = document.createElement("option");
-      option.value = candidate.id;
-      option.textContent = candidate.name + " (" + candidate.assetType + ")";
-      if (candidate.id === state.assetManager.replacementAssetId) option.selected = true;
-      replaceSelect.appendChild(option);
-    }
-    replaceSelect.value = state.assetManager.replacementAssetId || "";
-    replaceSelect.addEventListener("change", function () {
+    const replaceSelect = editorAssetPicker(state.assetManager.replacementAssetId, [asset.assetType], function (value) {
       state.assetManager.error = "";
-      state.assetManager.replacementAssetId = replaceSelect.value;
+      state.assetManager.replacementAssetId = value || "";
       renderAssetManageOverlay();
-    });
+    }, { label: "Vervang door", getAssets: () => compatibleAssets,
+      disabled: state.assetManager.loadingUsage || !compatibleAssets.length });
     replaceLabel.append(replaceTitle, replaceSelect);
     replaceWrap.appendChild(replaceLabel);
     if (!compatibleAssets.length) {
@@ -2623,15 +2840,19 @@ function terrainTypeLabel(type) {
 }
 
 function selectedTerrainNode() {
+  const areaNode = selectedAreaDocNode();
+  if (areaNode) return TERRAIN_TOOL_NODE_TYPES.has(areaNode.type) ? areaNode : null;
   if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
-  return node && TERRAIN_TOOL_NODE_TYPES.has(node.type) ? node : null;
+  return node && TERRAIN_TOOL_NODE_TYPES.has(node.type) && !isRetiredAreaNode(node) ? node : null;
 }
 
 function selectedScatterNode() {
+  const areaNode = selectedAreaDocNode();
+  if (areaNode) return areaNode.type === "bounded_area_scatter" ? areaNode : null;
   if (state.viewportMarqueeSelection || state.selectedNodeIds.length !== 1) return null;
   const node = nodeById(state.selectedNodeId);
-  return node && node.type === "bounded_area_scatter" ? node : null;
+  return node && node.type === "bounded_area_scatter" && !isRetiredAreaNode(node) ? node : null;
 }
 
 function terrainNodeLabel(node) {
@@ -4124,10 +4345,11 @@ function terrainAllNodeMarkers() {
   // marker for every selected shape in that case.
   const selectedId = !state.viewportMarqueeSelection && state.selectedNodeIds.length === 1
     ? state.selectedNodeId
-    : null;
+    : (selectedAreaDocNode()?.id || null);
   const markers = [];
-  for (const node of state.graph.nodes || []) {
+  for (const node of (state.graph.nodes || []).concat(areaDocNodes())) {
     if (node.id === selectedId) continue;
+    if (isRetiredAreaNode(node)) continue;
     if (TERRAIN_TOOL_NODE_TYPES.has(node.type)) {
       const points = terrainNodePoints(node);
       const geometry = terrainWalkableSurfaceGeometry(node, points);
@@ -4295,6 +4517,12 @@ function setViewportSnap(mode, gridSize) {
 
 function syncRuntimeModelSelectionForTransform() {
   if (!runtime || runtimeTransformActive()) return selectedModelNode() || selectedWorldContentPositionNode();
+  // Een gekozen document (pickup) verplaats je met G, net als een model.
+  const placedDocKey = state.selectedNodeIds.length ? null : focusedPlacedDocKey();
+  if (placedDocKey) {
+    if (typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeIdForDocKey(placedDocKey));
+    return null;
+  }
   // A finished transform clears the runtime's transient selection, while the editor's
   // authored node selection intentionally remains. Rebuild the complete runtime set
   // before every new G/R/S action; selecting only the primary node here would silently
@@ -4334,6 +4562,11 @@ function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
   const groupTransform = hasMultiAuthoringTransformSelection();
   if (!selectedId && !groupTransform) {
     setStatus("No transformable mesh selected" + (selectedId ? " (" + selectedId + ")" : "") + ".", "error");
+    return false;
+  }
+  const placedKey = transformNode ? null : focusedPlacedDocKey();
+  if (placedKey && mode !== "move" && !(PLACED_KINDS[docBench.doc(placedKey)?.kind] || {})[mode]) {
+    setStatus(placedDocLabel(placedKey) + ": " + placedDocHint(docBench.doc(placedKey)?.kind) + ".", "error");
     return false;
   }
   if (transformNode && WORLD_CONTENT_SPAWN_TYPES.has(transformNode.type) && mode !== "move") {
@@ -5318,6 +5551,11 @@ function selectNodes(nodeIds, options = {}) {
 }
 
 function selectNode(nodeId, scroll, options = {}) {
+  if (isAreaDocNodeId(nodeId)) {
+    const areaNode = areaDocNodeById(nodeId);
+    if (areaNode) selectAreaDoc(areaNode.docKey);
+    return;
+  }
   if (nodeId === null || nodeId === undefined) {
     setSelection([], [], { clearPendingEdge: options.clearPendingEdge });
     return;
@@ -5387,6 +5625,8 @@ function syncRuntimeSelection() {
   const runtimeIds = state.selectedNodeIds
     .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
     .filter(Boolean);
+  const placedDocKey = state.selectedNodeIds.length ? null : focusedPlacedDocKey();
+  if (placedDocKey) runtimeIds.push(runtimeIdForDocKey(placedDocKey));
   if (typeof runtime.selectEntities === "function") {
     runtime.selectEntities(runtimeIds, {
       authoringIds: state.selectedNodeIds,
@@ -5573,6 +5813,19 @@ async function undoGraphMutation() {
     setStatus("Niets om ongedaan te maken.", "");
     return;
   }
+  if (state.history.undo[state.history.undo.length - 1]?.doc) {
+    const docSnapshot = state.history.undo.pop();
+    try {
+      await docBench.applyHistory(docSnapshot.doc, "undo");
+      state.history.redo.push(docSnapshot);
+      afterDocHistory();
+      setStatus("Ongedaan gemaakt: " + (docSnapshot.label || "laatste wijziging") + ".", "success");
+    } catch (error) {
+      state.history.undo.push(docSnapshot);
+      setStatus(friendlyError(error), "error");
+    }
+    return;
+  }
   const snapshot = state.history.undo.pop();
   state.history.redo.push(captureHistorySnapshot("Redo"));
   if (state.history.redo.length > 50) state.history.redo.shift();
@@ -5591,6 +5844,19 @@ async function undoGraphMutation() {
 async function redoGraphMutation() {
   if (!canRedo()) {
     setStatus("Niets om opnieuw te doen.", "");
+    return;
+  }
+  if (state.history.redo[state.history.redo.length - 1]?.doc) {
+    const docSnapshot = state.history.redo.pop();
+    try {
+      await docBench.applyHistory(docSnapshot.doc, "redo");
+      state.history.undo.push(docSnapshot);
+      afterDocHistory();
+      setStatus("Opnieuw gedaan: " + (docSnapshot.label || "laatste wijziging") + ".", "success");
+    } catch (error) {
+      state.history.redo.push(docSnapshot);
+      setStatus(friendlyError(error), "error");
+    }
     return;
   }
   const snapshot = state.history.redo.pop();
@@ -5622,6 +5888,12 @@ async function boot() {
     console.warn("Opgeslagen editorindeling kon niet worden geladen:", error?.message || error);
   }
   setEditorMode(state.editorMode, false);
+  updateDocPendingBadge();
+  docBench.load().then(function () {
+    updateDocPendingBadge();
+    if (state.editorMode === "workbench") renderWorkbench();
+    if (state.editorMode === "settings") void renderSettingsTab();
+  }).catch(function (error) { console.warn("Documenten konden niet laden:", error?.message || error); });
   runtime = createGkWorldRuntime(el.viewportCanvas, {
     mode: "editor",
     onModelLoadTiming: function (info) {
@@ -5633,6 +5905,16 @@ async function boot() {
     onSelectEntity: function (entityId) {
       if (!entityId) {
         deselectViewportClick();
+        return;
+      }
+      if (isAreaDocNodeId(entityId)) {
+        const areaNode = areaDocNodeById(entityId);
+        if (areaNode) selectAreaDoc(areaNode.docKey);
+        return;
+      }
+      const clickedDocKey = docKeyFromRuntimeId(entityId);
+      if (clickedDocKey) {
+        selectPlacedDoc(clickedDocKey);
         return;
       }
       const node = nodeByRuntimeId(entityId);
@@ -5716,6 +5998,12 @@ async function boot() {
     },
     onTransformCommit: function (entityIdOrPayload, transform) {
       state.lastTransformCommitError = "";
+      const movedDocKey = typeof entityIdOrPayload === "string" ? docKeyFromRuntimeId(entityIdOrPayload) : null;
+      if (movedDocKey) {
+        void commitDocTransform(movedDocKey, transform);
+        setViewportAxis(null);
+        return;
+      }
       if (entityIdOrPayload && typeof entityIdOrPayload === "object" && Array.isArray(entityIdOrPayload.commits)) {
         void commitGroupTransform(entityIdOrPayload);
         setViewportAxis(null, { render: false });
@@ -5784,6 +6072,13 @@ async function boot() {
     }
   });
   window.__GK_EDITOR_RUNTIME = runtime;
+  docDrop = createDocDrop({
+    bench: docBench,
+    getRuntime: function () { return runtime; },
+    getActiveZoneId: function () { return String(state.viewportWorld?.activeZoneId || state.viewportWorld?.zonePackage?.zoneId || ""); },
+    onSelect: function (docKey) { selectPlacedDoc(docKey); },
+    setStatus: function (message, kind) { setStatus(message, kind); }
+  });
   state.viewportHelpOpen = false;
   if (el.viewportHelpPanel) el.viewportHelpPanel.hidden = true;
   await reloadGraph();
@@ -15439,23 +15734,10 @@ function managedDraftFieldControl(scope, draft, fieldName, field) {
     }, { min: field.min, max: field.max, step: field.step });
   }
   if (field.type === "asset") {
-    const select = document.createElement("select");
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "(geen asset)";
-    select.appendChild(blank);
-    for (const asset of state.assets.filter(function (item) { return (field.assetTypes || []).includes(item.assetType); })) {
-      const opt = document.createElement("option");
-      opt.value = asset.id;
-      opt.textContent = asset.name;
-      select.appendChild(opt);
-    }
-    select.value = value || "";
-    select.addEventListener("change", function () {
-      setManagedDraftValue(scope, fieldName, select.value || null);
+    return editorAssetPicker(value, field.assetTypes || [], function (assetId) {
+      setManagedDraftValue(scope, fieldName, assetId || null);
       renderAuthoringHub();
-    });
-    return select;
+    }, { label: field.label });
   }
   return questTimelineTextInput(value ?? field.default ?? "", function (nextValue) {
     setManagedDraftValue(scope, fieldName, nextValue);
@@ -16146,10 +16428,220 @@ function renderCatalogChildEntryEditor(group, parent, spec) {
   return wrap;
 }
 
+// ---------- Werkbank Fase 1: documenten (schema) in Werkbank en Instellingen ----------
+
+function friendlyError(error) {
+  if (error?.code === "STALE_REVISION") return "Dit is intussen ergens anders gewijzigd. Probeer het nog eens.";
+  if (error?.code === "REF_IN_USE") return "Kan niet: nog in gebruik door " + (error.details?.backlinks || []).join(", ") + ".";
+  return error?.message || String(error);
+}
+
+function updateDocPendingBadge() {
+  if (!el.publishButton) return;
+  const cards = docBench.pendingCount();
+  const actions = notLiveGraphActions();
+  const pending = cards + actions;
+  el.publishButton.dataset.pending = pending ? String(pending) : "";
+  el.publishButton.title = pending
+    ? [actions ? actions + " bewaarde actie(s) uit de 3D-view" : "", cards ? cards + " kaart(en)" : ""].filter(Boolean).join(" + ") + " nog niet in de game"
+    : "Alles staat in de game";
+}
+
+function afterDocHistory() {
+  updateDocPendingBadge();
+  if (state.editorMode === "workbench") renderWorkbench();
+  if (state.editorMode === "settings") renderSettingsCardOnly();
+}
+
+function docFocusActive() {
+  if (!docBench.workspace || !(docBench.selectedDocKey || docBench.newKind)) return false;
+  // Een ander model in de 3D-view kiezen beëindigt de kaart-focus.
+  if (state.workbenchDocFocusModelId !== (state.workbenchSelectedModelId || null)) { clearDocFocus(); return false; }
+  return true;
+}
+
+function clearDocFocus() {
+  docBench.selectedDocKey = null;
+  docBench.newKind = null;
+  docBench.draft = null;
+}
+
+function focusDoc(docKey, newKind = null) {
+  docBench.selectedDocKey = docKey;
+  docBench.newKind = newKind;
+  if (!newKind) docBench.draft = null;
+  state.workbenchDocFocusModelId = state.workbenchSelectedModelId || null;
+  if (state.workbenchDefinitionId) workbenchSelectDefinition(null, { render: false, showOverview: false });
+  state.workbenchCreateDraft = null;
+  renderWorkbench();
+}
+
+function renderDocFocusPanel() {
+  const root = el.workbenchSelectionPanel;
+  root.innerHTML = "";
+  const host = document.createElement("div");
+  host.className = "wbdPanel wbdForm";
+  root.appendChild(host);
+  const kind = docBench.newKind || docBench.doc(docBench.selectedDocKey)?.kind;
+  docBench.renderForm(host, {
+    kind,
+    docKey: docBench.newKind ? null : docBench.selectedDocKey,
+    onDone: function (docKey) {
+      if (docKey) focusDoc(docKey); else { clearDocFocus(); renderWorkbench(); }
+    }
+  });
+}
+
+// Onderdelen die al op documenten draaien: hun oude nodesoort verschijnt niet meer in de Werkbank.
+const WORKBENCH_DOC_CATEGORIES = { item: "item_definition" };
+const WORKBENCH_DOC_NODE_TYPES = new Set(["item_definition"]);
+
+function normalizeWorkbenchLibraryType() {
+  const type = String(state.workbenchLibraryType || "");
+  if (WORKBENCH_DOC_CATEGORIES[type]) state.workbenchLibraryType = "doc:" + WORKBENCH_DOC_CATEGORIES[type];
+  else if (!type.startsWith("doc:") && type !== "assets") state.workbenchLibraryType = "assets";
+  else if (type.startsWith("doc:") && type !== "doc:area" && !(docBench.workspace ? docBench.libraryKinds() : Object.values(WORKBENCH_DOC_CATEGORIES)).includes(type.slice(4))) state.workbenchLibraryType = "assets";
+}
+
+// Staan er nog items in Nodes (nog niet verhuisd)? Dan één knop naar het verhuisrapport.
+function renderDocMoveBanner(root, kind) {
+  const domain = { item_definition: "items", area: "areas" }[kind];
+  if (!domain || docBench.workspace?.cutover?.[domain]?.writer === "canonical") return;
+  const nodeCount = (state.graph?.nodes || []).filter(function (node) { return kind === "area" ? AREA_LEGACY_NODE_TYPES.has(node.type) : node.type === kind; }).length;
+  if (!nodeCount) return;
+  const banner = document.createElement("div");
+  banner.className = "wbdNote wbdMoveBanner";
+  banner.textContent = kind === "area"
+    ? "📦 " + nodeCount + " vlakken en paden staan nog in Nodes. Verhuis ze één keer, dan bewerk je ze hier met de Area tool. "
+    : "📦 " + nodeCount + " items staan nog in Nodes. Verhuis ze één keer, dan staan ze hier (met hun pickups). ";
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "wbdPrimary";
+  go.dataset.wbd = "open-move";
+  go.textContent = "Naar verhuizen";
+  go.addEventListener("click", function () {
+    docBench.settingsView = "builds";
+    setEditorMode("settings");
+  });
+  banner.appendChild(go);
+  root.appendChild(banner);
+}
+
+function renderDocLibrary(root, controls, kind) {
+  const search = document.createElement("input");
+  search.className = "workbenchSearch";
+  search.type = "search";
+  search.placeholder = "Zoek op naam...";
+  search.value = state.workbenchSearch;
+  controls.appendChild(search);
+  renderDocMoveBanner(root, kind);
+  if (kind === "area") root.appendChild(renderAreaToolBar());
+  const host = document.createElement("div");
+  host.className = "wbdLibrary";
+  root.appendChild(host);
+  const draw = function () {
+    docBench.renderLibraryTiles(host, {
+      kinds: [kind],
+      query: state.workbenchSearch,
+      onSelect: function (docKey) {
+        if (kind === "area") selectAreaDoc(docKey, { focus: true });
+        else if (PLACED_DOC_KINDS.has(kind)) selectPlacedDoc(docKey);
+        else focusDoc(docKey);
+      },
+      onNew: kind === "area" ? null : function (newKind) { focusDoc(null, newKind); }
+    });
+  };
+  search.addEventListener("input", function () { state.workbenchSearch = search.value; draw(); });
+  draw();
+}
+
+// Area tool: één knop per soort. Klik = nieuw vlak midden in beeld, daarna punten slepen in 3D.
+function renderAreaToolBar() {
+  const bar = document.createElement("div");
+  bar.className = "wbdChoices wbdAreaTool";
+  bar.dataset.wbd = "area-tool";
+  const label = document.createElement("span");
+  label.className = "wbdNote";
+  label.textContent = "➕ Nieuw vlak:";
+  bar.appendChild(label);
+  for (const soort of AREA_SOORT_ORDER) {
+    const def = AREA_SOORTEN[soort];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "wbdChoice";
+    button.dataset.areaSoort = soort;
+    button.title = "Nieuw: " + def.label;
+    button.innerHTML = "";
+    const icon = document.createElement("span");
+    icon.className = "wbdChoiceIcon";
+    icon.textContent = def.icon;
+    const text = document.createElement("span");
+    text.textContent = def.label;
+    button.append(icon, text);
+    button.addEventListener("click", function () { void createAreaDoc(soort); });
+    bar.appendChild(button);
+  }
+  return bar;
+}
+
+async function renderSettingsTab() {
+  if (!el.settingsMenuPanel || !el.settingsCardPanel) return;
+  if (!docBench.workspace) {
+    el.settingsCardPanel.textContent = "Laden...";
+    try { await docBench.load(); } catch (error) { el.settingsCardPanel.textContent = friendlyError(error); return; }
+  }
+  docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
+  renderSettingsCardOnly();
+}
+
+function renderSettingsCardOnly() {
+  if (!el.settingsCardPanel || !docBench.workspace) return;
+  docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
+  docBench.renderSettingsCard(el.settingsCardPanel, renderSettingsCardOnly);
+}
+
 // ---------- Visual Content Workbench W1 ----------
 
+// Tab Game: de game in een frame boven de editor. Zolang hij open is tekent de editor-3D niets,
+// zodat er maar één 3D-wereld tegelijk draait (oude laptop). Na SAVE TO GAME laadt de game opnieuw.
+let gameTabNeedsReload = false;
+function setGameTabOpen(open) {
+  const panel = el.gameTabPanel;
+  if (!panel || !el.gameModeButton) return;
+  const wasOpen = !panel.hidden;
+  if (open === wasOpen) return;
+  if (open) {
+    const header = document.querySelector(".topbar");
+    panel.style.top = (header ? header.getBoundingClientRect().bottom : 0) + "px";
+    let frame = panel.querySelector("iframe");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.title = "Game";
+      frame.src = "/game/";
+      panel.appendChild(frame);
+    } else if (gameTabNeedsReload) {
+      frame.contentWindow?.location.reload();
+    }
+    gameTabNeedsReload = false;
+    panel.hidden = false;
+    if (runtime && typeof runtime.setRenderPaused === "function") runtime.setRenderPaused(true);
+    requestAnimationFrame(function () { frame.focus(); });
+  } else {
+    panel.hidden = true;
+    if (runtime && typeof runtime.setRenderPaused === "function") runtime.setRenderPaused(false);
+    requestAnimationFrame(function () { window.dispatchEvent(new Event("resize")); });
+  }
+  el.gameModeButton.classList.toggle("active", Boolean(open));
+  el.gameModeButton.setAttribute("aria-pressed", open ? "true" : "false");
+  for (const button of [el.workbenchModeButton, el.settingsModeButton]) {
+    if (!button) continue;
+    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench" : state.editorMode === "settings";
+    button.classList.toggle("active", !open && mine);
+  }
+}
+
 function setEditorMode(mode, persist = true) {
-  const nextMode = mode === "workbench" ? "workbench" : "nodes";
+  const nextMode = EDITOR_MODES.includes(mode) ? mode : "workbench";
   const previousMode = state.editorMode;
   if (!state.allLayoutTrees) state.allLayoutTrees = loadStoredAllLayoutTrees();
   if (state.allLayoutTree && previousMode) state.allLayoutTrees[previousMode] = state.allLayoutTree;
@@ -16167,6 +16659,12 @@ function setEditorMode(mode, persist = true) {
     }
   }
   document.body.classList.toggle("workbenchMode", state.editorMode === "workbench");
+  document.body.classList.toggle("settingsMode", state.editorMode === "settings");
+  if (el.settingsModeButton) {
+    el.settingsModeButton.classList.toggle("active", state.editorMode === "settings");
+    el.settingsModeButton.setAttribute("aria-pressed", state.editorMode === "settings" ? "true" : "false");
+  }
+  if (el.oldModeMenu) el.oldModeMenu.classList.toggle("active", state.editorMode === "nodes");
   if (el.nodesModeButton) {
     el.nodesModeButton.classList.toggle("active", state.editorMode === "nodes");
     el.nodesModeButton.setAttribute("aria-pressed", state.editorMode === "nodes" ? "true" : "false");
@@ -16181,6 +16679,7 @@ function setEditorMode(mode, persist = true) {
   }
   updateAllLayoutMode();
   renderWorkbench();
+  if (state.editorMode === "settings") void renderSettingsTab();
   requestAnimationFrame(function () {
     window.dispatchEvent(new Event("resize"));
     if (state.editorMode === "nodes") scheduleEdgeRender();
@@ -16635,53 +17134,17 @@ function workbenchBeginEnemyEdit(enemy) {
 function workbenchAssetField(enemy, draft, fieldName, assetTypes) {
   const wrap = document.createElement("div");
   wrap.className = "workbenchFields";
-  const assets = state.assets.filter(function (asset) { return assetTypes.includes(asset.assetType); });
-  const options = [{ value: "", label: "Geen asset" }].concat(assets.map(function (asset) {
-    return { value: asset.id, label: asset.name };
-  }));
-  const select = workbenchSelect(draft.values?.[fieldName] || "", options, function (value) {
+  const label = fieldName === "modelAssetId" ? "Model bij spawn-gebieden" : "Icoon";
+  const picker = editorAssetPicker(draft.values?.[fieldName], assetTypes, function (value) {
     draft.values[fieldName] = value || null;
     renderWorkbench();
-  });
-  wrap.appendChild(workbenchField(enemy, fieldName, fieldName === "modelAssetId" ? "Model bij spawn-gebieden" : "Icoon", select));
+  }, { label });
+  wrap.appendChild(workbenchField(enemy, fieldName, label, picker));
   if (fieldName === "modelAssetId") {
     const note = document.createElement("div");
     note.className = "workbenchMeta";
     note.textContent = "Alleen voor enemies uit een spawn-gebied. Het geplaatste object houdt zijn eigen model; dat wijzig je met 'Kies 3D-model'.";
     wrap.appendChild(note);
-  }
-  const choose = document.createElement("button");
-  choose.type = "button";
-  choose.className = "mini";
-  choose.textContent = state.workbenchAssetPickerField === fieldName ? "Sluit assetkeuze" : "Kies asset";
-  choose.addEventListener("click", function () {
-    state.workbenchAssetPickerField = state.workbenchAssetPickerField === fieldName ? "" : fieldName;
-    renderWorkbench();
-  });
-  wrap.appendChild(choose);
-  if (state.workbenchAssetPickerField === fieldName) {
-    const grid = document.createElement("div");
-    grid.className = "workbenchAssetPicker";
-    for (const asset of assets.slice(0, 24)) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "workbenchAssetChoice" + (draft.values?.[fieldName] === asset.id ? " selected" : "");
-      if (asset.thumbnailPath) {
-        const img = document.createElement("img");
-        img.src = asset.thumbnailPath;
-        img.alt = asset.name;
-        img.loading = "lazy";
-        button.appendChild(img);
-      }
-      button.appendChild(document.createTextNode(asset.name));
-      button.addEventListener("click", function () {
-        draft.values[fieldName] = asset.id;
-        state.workbenchAssetPickerField = "";
-        renderWorkbench();
-      });
-      grid.appendChild(button);
-    }
-    wrap.appendChild(grid);
   }
   return wrap;
 }
@@ -16690,44 +17153,14 @@ function workbenchRenderPlacedModelPicker(context) {
   if (state.workbenchAssetPickerField !== "model_entity" || !context.model) return null;
   const wrap = document.createElement("div");
   wrap.className = "workbenchEditorCard";
-  const allAssets = state.assets.filter(function (asset) { return asset.assetType === "model"; });
-  const select = workbenchSelect(context.model.values?.modelAssetId || "", [{ value: "", label: "Kies een 3D-model" }].concat(allAssets.map(function (asset) {
-    return { value: asset.id, label: asset.name };
-  })), function (assetId) {
+  const picker = editorAssetPicker(context.model.values?.modelAssetId, ["model"], function (assetId) {
     if (!assetId) return;
     state.workbenchAssetPickerField = "";
     void patchValues(context.model.id, { modelAssetId: assetId }, {
-      historyLabel: "3D-model gewijzigd",
-      refreshViewport: true,
-      refreshValidation: true
+      historyLabel: "3D-model gewijzigd", refreshViewport: true, refreshValidation: true
     });
-  });
-  wrap.appendChild(workbenchField(context.model, "modelAssetId", "Kies modelasset", select));
-  const grid = document.createElement("div");
-  grid.className = "workbenchAssetPicker";
-  for (const asset of allAssets.slice(0, 24)) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "workbenchAssetChoice" + (context.model.values?.modelAssetId === asset.id ? " selected" : "");
-    if (asset.thumbnailPath) {
-      const img = document.createElement("img");
-      img.src = asset.thumbnailPath;
-      img.alt = asset.name;
-      img.loading = "lazy";
-      button.appendChild(img);
-    }
-    button.appendChild(document.createTextNode(asset.name));
-    button.addEventListener("click", function () {
-      state.workbenchAssetPickerField = "";
-      void patchValues(context.model.id, { modelAssetId: asset.id }, {
-        historyLabel: "3D-model gewijzigd",
-        refreshViewport: true,
-        refreshValidation: true
-      });
-    });
-    grid.appendChild(button);
-  }
-  wrap.appendChild(grid);
+  }, { label: "Kies modelasset", allowClear: false });
+  wrap.appendChild(workbenchField(context.model, "modelAssetId", "Kies modelasset", picker));
   return wrap;
 }
 
@@ -17326,12 +17759,21 @@ function renderWorkbenchLibrary(context) {
   controls.className = "workbenchLibraryControls";
   const tabs = document.createElement("div");
   tabs.className = "workbenchLibraryTabs workbenchCategoryTabs";
-  const tabEntries = [{ id: "assets", label: "Assets" }].concat(WORKBENCH_CATEGORIES);
+  // Ombouw (plan §13): één rij tabs. Een omgezet onderdeel (nu: Items) toont zijn documenten op de plek van de oude tab.
+  normalizeWorkbenchLibraryType();
+  // Fundament zonder nodes: alleen tabs die op kaarten draaien. Node-tabs komen terug zodra hun onderdeel is omgebouwd.
+  // Zonder nodes: één tab per kaartsoort (Items, Valuta, Vijanden, NPC's, Quests, Recepten, Modellen, ...).
+  const tabEntries = [{ id: "assets", label: "📦 Assets" }, { id: "doc:area", label: "🧩 Vlakken", count: docBench.workspace ? docBench.docs("area").length : 0, doc: true, title: "Area tool: begroeiing, paden, blokkades, loopvlakken en deelgebieden" }]
+    .concat((docBench.workspace ? docBench.libraryKinds() : []).map(function (kind) {
+      const spec = docBench.spec(kind);
+      return { id: "doc:" + kind, label: (spec.icon ? spec.icon + " " : "") + (spec.plural || spec.label), count: docBench.docs(kind).length, doc: true };
+    }));
   for (const category of tabEntries) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "workbenchCategoryTab" + (state.workbenchLibraryType === category.id ? " active" : "");
-    button.textContent = category.label + (category.id === "assets" ? "" : " " + (index.counts[category.id] || 0));
+    button.className = "workbenchCategoryTab" + (category.doc ? " workbenchDocTab" : "") + (state.workbenchLibraryType === category.id ? " active" : "");
+    if (category.title) button.title = category.title;
+    button.textContent = category.label + (category.id === "assets" ? "" : " " + (category.doc ? category.count : (index.counts[category.id] || 0)));
     button.setAttribute("aria-pressed", state.workbenchLibraryType === category.id ? "true" : "false");
     button.addEventListener("click", function () {
       state.workbenchLibraryType = category.id;
@@ -17343,6 +17785,10 @@ function renderWorkbenchLibrary(context) {
   root.appendChild(controls);
   if (state.workbenchLibraryType === "assets") {
     renderAssets();
+    return;
+  }
+  if (String(state.workbenchLibraryType).startsWith("doc:")) {
+    renderDocLibrary(root, controls, state.workbenchLibraryType.slice(4));
     return;
   }
   const search = document.createElement("input");
@@ -17362,6 +17808,7 @@ function renderWorkbenchLibrary(context) {
   const query = normalizeEditorKey(state.workbenchSearch);
   const all = index.definitions.filter(function (entry) {
     if (categoryTypes.length && !categoryTypes.includes(entry.type)) return false;
+    if (WORKBENCH_DOC_NODE_TYPES.has(entry.type)) return false;
     return !query || normalizeEditorKey(entry.name).includes(query);
   }).sort(function (left, right) {
     return left.name.localeCompare(right.name, "nl", { sensitivity: "base" });
@@ -17509,19 +17956,214 @@ function renderWorkbench() {
   // Runs after every graph mutation: a drawing error must never cancel the
   // mutation's history entry, so it is reported instead of thrown.
   try {
+    // Zonder nodes: links de gekozen kaart (of uitleg), rechts de Bibliotheek, Contentoverzicht leest de kaarten.
     const context = workbenchContext();
-    const definition = workbenchSelectedDefinition();
-    if (state.workbenchCreateDraft) renderWorkbenchCreatePanel(context);
-    else if (definition) renderWorkbenchDefinitionPanel(definition, context);
-    else renderWorkbenchSelection(context);
+    if (docFocusActive()) renderDocFocusPanel();
+    else renderDocHintPanel();
     renderWorkbenchLibrary(context);
-    if (definition) renderWorkbenchDefinitionFlow(definition, context);
-    else renderWorkbenchRelationStrip(context);
-    if (state.workbenchStage === "overview") renderWorkbenchOverview(context, definition);
+    renderDocRelationStrip();
+    if (state.workbenchStage === "overview") renderDocOverview();
   } catch (error) {
     console.error("Werkbank render failed", error);
     setStatus("Werkbank kon niet volledig tekenen: " + (error?.message || error), "error");
   }
+}
+
+// Linkerpaneel als er geen kaart open is: korte uitleg in plaats van de oude node-selectie.
+function renderDocHintPanel() {
+  const root = el.workbenchSelectionPanel;
+  if (!root) return;
+  root.innerHTML = "";
+  root.appendChild(workbenchLeftHeader({ hideCreate: true }));
+  const hint = document.createElement("div");
+  hint.className = "workbenchEmpty";
+  hint.textContent = "Kies rechts een tab en klik een kaart om hem te bewerken, of maak er een met ➕. "
+    + "Sleep een item, vijand of grondstof uit zijn tab op de wereld; sleep een los 3D-model vanuit Assets. Iedere drop maakt een nieuwe plaatsing. "
+    + "Klik iets in de wereld: G = verplaatsen, R = draaien, S = groter/kleiner.";
+  root.appendChild(hint);
+}
+
+// Alle kaartverwijzingen in een kaart (ref-velden, lijsten en tabellen): "soort:id"-teksten die bestaan.
+function docRefKeys(doc) {
+  const keys = new Set();
+  const walk = function (value) {
+    if (typeof value === "string") { if (/^[a-z_]+:/.test(value) && value !== doc.docKey && docBench.doc(value)) keys.add(value); }
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object") Object.values(value).forEach(walk);
+  };
+  walk(doc.body);
+  return keys;
+}
+
+// Paneel Relaties: een horizontale stroom "wie gebruikt hem → gekozen kaart → wat hij gebruikt".
+// Per soort een vakje met de soortnaam erboven en plaatjes/iconen; pijlen ertussen. Klik = die kaart openen.
+function docRelationTile(doc, options = {}) {
+  const spec = docBench.spec(doc.kind);
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "relTile" + (options.selected ? " relTileSelected" : "");
+  tile.title = (spec?.label || doc.kind) + ": " + (doc.body.displayName || doc.docKey);
+  const picture = document.createElement("span");
+  picture.className = "relTileIcon";
+  const assetId = doc.body.iconAssetId || doc.body.modelAssetId || doc.body.worldModelAssetId || null;
+  const asset = assetId ? assetById(assetId) : null;
+  if (asset?.thumbnailPath) {
+    const img = document.createElement("img");
+    img.src = asset.thumbnailPath;
+    img.alt = "";
+    img.loading = "lazy";
+    picture.appendChild(img);
+  } else {
+    picture.textContent = spec?.icon || "📄";
+  }
+  const name = document.createElement("span");
+  name.className = "relTileName";
+  name.textContent = doc.body.displayName || doc.body[spec?.idField] || doc.docKey;
+  tile.append(picture, name);
+  if (!options.selected) tile.addEventListener("click", function () {
+    if (PLACED_DOC_KINDS.has(doc.kind)) selectPlacedDoc(doc.docKey); else focusDoc(doc.docKey);
+  });
+  return tile;
+}
+
+function docRelationStage(title, docs, emptyText) {
+  const stage = document.createElement("div");
+  stage.className = "relStage";
+  const head = document.createElement("div");
+  head.className = "relStageTitle";
+  head.textContent = title;
+  stage.appendChild(head);
+  const groups = new Map();
+  for (const doc of docs) {
+    if (!groups.has(doc.kind)) groups.set(doc.kind, []);
+    groups.get(doc.kind).push(doc);
+  }
+  if (!groups.size) {
+    const empty = document.createElement("div");
+    empty.className = "relEmpty";
+    empty.textContent = emptyText;
+    stage.appendChild(empty);
+  }
+  for (const [kind, list] of groups) {
+    const spec = docBench.spec(kind);
+    const group = document.createElement("div");
+    group.className = "relGroup";
+    const label = document.createElement("div");
+    label.className = "relGroupLabel";
+    label.textContent = (spec?.icon ? spec.icon + " " : "") + (spec?.plural || spec?.label || kind);
+    const tiles = document.createElement("div");
+    tiles.className = "relTiles";
+    for (const doc of list) tiles.appendChild(docRelationTile(doc));
+    group.append(label, tiles);
+    stage.appendChild(group);
+  }
+  return stage;
+}
+
+function renderDocRelationStrip() {
+  const root = el.workbenchRelationStrip;
+  if (!root) return;
+  root.innerHTML = "";
+  const selected = docBench.workspace && docBench.selectedDocKey ? docBench.doc(docBench.selectedDocKey) : null;
+  if (!selected) {
+    const hint = document.createElement("div");
+    hint.className = "relEmpty";
+    hint.textContent = "🔗 Kies een kaart: hier zie je wie hem gebruikt en wat hij gebruikt.";
+    root.appendChild(hint);
+    return;
+  }
+  const kinds = docBench.libraryKinds().concat(["pickup", "actor_spawn", "resource_spawn"]);
+  const all = kinds.flatMap(function (kind) { return docBench.spec(kind) ? docBench.docs(kind) : []; });
+  const usedBy = all.filter(function (doc) { return docRefKeys(doc).has(selected.docKey); });
+  const uses = Array.from(docRefKeys(selected)).map(function (key) { return docBench.doc(key); }).filter(Boolean);
+  const flow = document.createElement("div");
+  flow.className = "relFlow";
+  const arrow = function () {
+    const node = document.createElement("div");
+    node.className = "relArrow";
+    node.textContent = "➜";
+    return node;
+  };
+  const middle = document.createElement("div");
+  middle.className = "relStage relStageCenter";
+  const middleTitle = document.createElement("div");
+  middleTitle.className = "relStageTitle";
+  const spec = docBench.spec(selected.kind);
+  middleTitle.textContent = (spec?.icon ? spec.icon + " " : "") + (spec?.label || selected.kind);
+  middle.append(middleTitle, docRelationTile(selected, { selected: true }));
+  flow.append(docRelationStage("Gebruikt door", usedBy, "niemand"), arrow(), middle, arrow(), docRelationStage("Gebruikt", uses, "niets"));
+  root.appendChild(flow);
+}
+
+// Contentoverzicht op kaarten: een kolom per soort; de gekozen kaart licht op met waar hij naar wijst en wie hem gebruikt.
+function renderDocOverview() {
+  const root = el.workbenchOverviewPanel;
+  if (!root) return;
+  root.innerHTML = "";
+  if (!docBench.workspace) return;
+  const selected = docBench.selectedDocKey ? docBench.doc(docBench.selectedDocKey) : null;
+  const kinds = docBench.libraryKinds().concat(["pickup", "actor_spawn", "resource_spawn"]).filter(function (kind) { return docBench.spec(kind); });
+  const all = kinds.flatMap(function (kind) { return docBench.docs(kind); });
+  const uses = selected ? docRefKeys(selected) : new Set();
+  const usedBy = new Set(selected ? all.filter(function (doc) { return docRefKeys(doc).has(selected.docKey); }).map(function (doc) { return doc.docKey; }) : []);
+  const toolbar = document.createElement("div");
+  toolbar.className = "workbenchOverviewToolbar";
+  const title = document.createElement("div");
+  title.className = "workbenchHeader";
+  const titleText = document.createElement("div");
+  titleText.className = "workbenchTitle";
+  titleText.textContent = "Contentoverzicht";
+  const subtitle = document.createElement("div");
+  subtitle.className = "workbenchSubtitle";
+  subtitle.textContent = selected
+    ? "Gekozen: " + (selected.body.displayName || selected.docKey) + ". 🔗 = gebruikt deze kaart, ⬅️ = wordt erdoor gebruikt."
+    : "Klik een kaart: dan zie je waar hij mee verbonden is.";
+  title.append(titleText, subtitle);
+  toolbar.appendChild(title);
+  root.appendChild(toolbar);
+  const board = document.createElement("div");
+  board.className = "workbenchOverviewBoard";
+  const columns = document.createElement("div");
+  columns.className = "workbenchOverviewColumns";
+  const query = normalizeEditorKey(state.workbenchSearch);
+  for (const kind of kinds) {
+    const spec = docBench.spec(kind);
+    const docs = docBench.docs(kind).filter(function (doc) { return !query || normalizeEditorKey(doc.body.displayName || doc.docKey).includes(query); });
+    const column = document.createElement("div");
+    column.className = "workbenchOverviewColumn";
+    const header = document.createElement("div");
+    header.className = "workbenchOverviewColumnHeader";
+    header.textContent = (spec.icon ? spec.icon + " " : "") + (spec.plural || spec.label) + " " + docs.length;
+    column.appendChild(header);
+    const rank = function (doc) { return doc.docKey === selected?.docKey ? 0 : uses.has(doc.docKey) || usedBy.has(doc.docKey) ? 1 : 2; };
+    docs.sort(function (a, b) { return rank(a) - rank(b) || String(a.body.displayName || a.docKey).localeCompare(String(b.body.displayName || b.docKey), "nl"); });
+    for (const doc of docs) {
+      const related = uses.has(doc.docKey) || usedBy.has(doc.docKey);
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "workbenchOverviewCard" + (doc.docKey === selected?.docKey ? " selected" : "") + (related ? " related" : "") + (selected && doc.docKey !== selected.docKey && !related ? " dimmed" : "");
+      const body = document.createElement("div");
+      body.className = "workbenchOverviewCardBody";
+      const name = document.createElement("div");
+      name.className = "workbenchRelationValue";
+      name.textContent = (usedBy.has(doc.docKey) ? "🔗 " : uses.has(doc.docKey) ? "⬅️ " : "") + (doc.body.displayName || doc.body[spec.idField] || doc.docKey);
+      body.appendChild(name);
+      card.appendChild(body);
+      card.addEventListener("click", function () {
+        if (PLACED_DOC_KINDS.has(kind)) selectPlacedDoc(doc.docKey); else focusDoc(doc.docKey);
+      });
+      column.appendChild(card);
+    }
+    if (!docs.length) {
+      const empty = document.createElement("div");
+      empty.className = "workbenchFlowEmpty";
+      empty.textContent = "Nog niets";
+      column.appendChild(empty);
+    }
+    columns.appendChild(column);
+  }
+  board.appendChild(columns);
+  root.appendChild(board);
 }
 
 // ---------- Visual Content Workbench W2 ----------
@@ -17533,7 +18175,6 @@ function renderWorkbench() {
 let workbenchContentIndexCache = { graph: null, nodeCount: -1, edgeCount: -1, revision: null, nodeTypes: null, index: null };
 let workbenchAssetMapCache = { assets: null, length: -1, map: new Map() };
 let workbenchDragPayload = null;
-let workbenchDragAssetId = "";
 let workbenchOverviewSignature = "";
 let workbenchOverviewRelations = [];
 let workbenchOverviewLinkFrame = 0;
@@ -17700,12 +18341,12 @@ function workbenchSelectedDefinition() {
 
 function workbenchSelectDefinition(nodeId, options = {}) {
   const next = nodeId || null;
+  if (next) clearDocFocus();
   if (state.workbenchDefinitionId !== next) {
     state.workbenchDefinitionDraft = null;
     state.workbenchRowDraft = null;
     state.workbenchDropNotice = null;
     state.workbenchDeleteNodeId = null;
-    state.workbenchAssetSlotPicker = "";
     state.workbenchUsageOpen = false;
     state.workbenchStatRuleDraft = null;
   }
@@ -17791,32 +18432,6 @@ function workbenchAttachDrop(element, accepts, onDrop) {
     event.stopPropagation();
     workbenchDragPayload = null;
     onDrop(payload);
-  });
-}
-
-function workbenchAttachAssetDrop(element, assetTypes, onDrop) {
-  const fits = function () {
-    const asset = workbenchAsset(workbenchDragAssetId);
-    return Boolean(asset && assetTypes.includes(asset.assetType));
-  };
-  element.addEventListener("dragover", function (event) {
-    if (!Array.from(event.dataTransfer?.types || []).includes("text/gk-asset") || !fits()) return;
-    event.preventDefault();
-    event.stopPropagation();
-    element.classList.add("workbenchDropReady");
-  });
-  element.addEventListener("dragleave", function (event) {
-    if (event.relatedTarget && element.contains(event.relatedTarget)) return;
-    element.classList.remove("workbenchDropReady");
-  });
-  element.addEventListener("drop", function (event) {
-    element.classList.remove("workbenchDropReady");
-    const assetId = event.dataTransfer?.getData("text/gk-asset") || "";
-    const asset = workbenchAsset(assetId);
-    if (!asset || !assetTypes.includes(asset.assetType)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    onDrop(asset);
   });
 }
 
@@ -18471,100 +19086,27 @@ function renderWorkbenchAssetSlots(entry, draftValues = null) {
   heading.textContent = "Assets";
   wrap.appendChild(heading);
   for (const [key, field] of fields) {
-    const assetTypes = Array.isArray(field.assetTypes) ? field.assetTypes : [];
     const currentId = draftValues ? draftValues[key] : entry.node.values?.[key];
     const asset = workbenchAsset(currentId);
-    const commit = function (assetId) {
-      if (draftValues) {
-        draftValues[key] = assetId || null;
-        state.workbenchAssetSlotPicker = "";
-        renderWorkbench();
-        return;
-      }
-      state.workbenchAssetSlotPicker = "";
-      void workbenchPatchNode(entry.node, { [key]: assetId || null }, workbenchAssetRoleLabel(entry.type, key, field) + (assetId ? " gekoppeld" : " ontkoppeld"));
-    };
-    const slot = document.createElement("div");
-    slot.className = "workbenchAssetSlot";
-    slot.appendChild(workbenchThumbnail(asset, assetTypes.includes("model") ? "3D" : "IMG"));
-    const info = document.createElement("div");
-    info.className = "workbenchAssetSlotBody";
+    const role = workbenchAssetRoleLabel(entry.type, key, field);
+    const row = document.createElement("div");
+    row.className = "workbenchAssetSlotBody";
     const label = document.createElement("div");
     label.className = "workbenchRelationLabel";
-    label.textContent = workbenchAssetRoleLabel(entry.type, key, field);
+    label.textContent = role;
     if (workbenchFieldInactive(entry.type, key)) label.appendChild(workbenchInactiveBadge("Nog niet in game"));
-    const value = document.createElement("div");
-    value.className = "workbenchRelationValue";
-    value.textContent = asset ? asset.name : currentId ? "Ontbrekende asset" : "Geen asset — sleep er een op of kies";
-    const buttons = document.createElement("div");
-    buttons.className = "workbenchLibraryCardActions";
-    const pickerKey = (draftValues ? "create:" : entry.id + ":") + key;
-    buttons.appendChild(workbenchMiniButton(state.workbenchAssetSlotPicker === pickerKey ? "Sluit" : "Kies", function () {
-      state.workbenchAssetSlotPicker = state.workbenchAssetSlotPicker === pickerKey ? "" : pickerKey;
-      state.workbenchAssetPickerQuery = "";
-      renderWorkbench();
-    }));
-    if (currentId) buttons.appendChild(workbenchMiniButton("Ontkoppel", function () { commit(null); }));
-    if (asset) buttons.appendChild(workbenchMiniButton("Assetgebruik", function () {
+    const picker = editorAssetPicker(currentId, field.assetTypes || [], function (assetId) {
+      if (draftValues) { draftValues[key] = assetId || null; renderWorkbench(); return; }
+      void workbenchPatchNode(entry.node, { [key]: assetId || null }, role + (assetId ? " gekoppeld" : " ontkoppeld"));
+    }, { label: role });
+    row.append(label, picker);
+    if (asset) row.appendChild(workbenchMiniButton("Assetgebruik", function () {
       state.workbenchLibraryType = "assets";
       renderWorkbench();
       openAssetManageOverlay(asset.id);
     }));
-    info.append(label, value, buttons);
-    slot.appendChild(info);
-    workbenchAttachAssetDrop(slot, assetTypes, function (dropped) { commit(dropped.id); });
-    wrap.appendChild(slot);
-    if (state.workbenchAssetSlotPicker === pickerKey) wrap.appendChild(renderWorkbenchAssetPicker(assetTypes, currentId, commit));
+    wrap.appendChild(row);
   }
-  return wrap;
-}
-
-function renderWorkbenchAssetPicker(assetTypes, currentId, onPick) {
-  const wrap = document.createElement("div");
-  wrap.className = "workbenchEditorCard";
-  const search = workbenchTextInput(state.workbenchAssetPickerQuery, function (next) {
-    state.workbenchAssetPickerQuery = next;
-    const grid = wrap.querySelector(".workbenchAssetPicker");
-    if (grid) grid.replaceWith(buildGrid());
-  }, { placeholder: "Zoek asset..." });
-  search.type = "search";
-  wrap.appendChild(search);
-  function buildGrid() {
-    const query = normalizeEditorKey(state.workbenchAssetPickerQuery);
-    const assets = state.assets.filter(function (asset) {
-      return assetTypes.includes(asset.assetType) && (!query || normalizeEditorKey(asset.name + " " + asset.category).includes(query));
-    });
-    const grid = document.createElement("div");
-    grid.className = "workbenchAssetPicker";
-    for (const asset of assets.slice(0, WORKBENCH_ASSET_PICKER_LIMIT)) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "workbenchAssetChoice" + (currentId === asset.id ? " selected" : "");
-      if (asset.thumbnailPath) {
-        const img = document.createElement("img");
-        img.src = asset.thumbnailPath;
-        img.alt = asset.name;
-        img.loading = "lazy";
-        button.appendChild(img);
-      }
-      button.appendChild(document.createTextNode(asset.name));
-      button.addEventListener("click", function () { onPick(asset.id); });
-      grid.appendChild(button);
-    }
-    if (!assets.length) {
-      const empty = document.createElement("div");
-      empty.className = "workbenchMeta";
-      empty.textContent = "Geen passende assets. Importeer ze via de tab Assets.";
-      grid.appendChild(empty);
-    } else if (assets.length > WORKBENCH_ASSET_PICKER_LIMIT) {
-      const more = document.createElement("div");
-      more.className = "workbenchMeta";
-      more.textContent = "Toont " + WORKBENCH_ASSET_PICKER_LIMIT + " van " + assets.length + "; zoek verder.";
-      grid.appendChild(more);
-    }
-    return grid;
-  }
-  wrap.appendChild(buildGrid());
   return wrap;
 }
 
@@ -18587,7 +19129,6 @@ function workbenchBeginCreate(type) {
     values: workbenchCreateDefaults(nextType),
     collectionId: collections.length === 1 ? collections[0].id : (collections.some(function (group) { return group.id === remembered; }) ? remembered : "")
   };
-  state.workbenchAssetSlotPicker = "";
   renderWorkbench();
   requestAnimationFrame(function () { el.workbenchSelectionPanel?.querySelector(".workbenchCreateName")?.focus(); });
 }
@@ -18690,7 +19231,6 @@ function renderWorkbenchCreatePanel(context) {
       }
       draft.type = type;
       draft.values = workbenchCreateDefaults(type);
-      state.workbenchAssetSlotPicker = "";
       renderWorkbench();
     });
     types.appendChild(button);
@@ -18780,7 +19320,6 @@ function renderWorkbenchCreatePanel(context) {
   actions.appendChild(workbenchMiniButton("Aanmaken", function () { void workbenchCommitCreate(); }, "primary"));
   actions.appendChild(workbenchMiniButton("Annuleren", function () {
     state.workbenchCreateDraft = null;
-    state.workbenchAssetSlotPicker = "";
     renderWorkbench();
   }, "ghost"));
   card.appendChild(actions);
@@ -18814,7 +19353,6 @@ async function workbenchCommitCreate() {
     preserveEditorContext: true,
     afterApply: function (node) {
       state.workbenchCreateDraft = null;
-      state.workbenchAssetSlotPicker = "";
       state.workbenchLibraryType = CONTENT_TYPE_SPECS[draft.type]?.category || state.workbenchLibraryType;
       workbenchSelectDefinition(node.id, { render: false });
     }
@@ -20146,7 +20684,7 @@ function scheduleWorkbenchOverviewRender() {
   clearTimeout(workbenchOverviewRenderTimer);
   workbenchOverviewRenderTimer = setTimeout(function () {
     if (state.editorMode !== "workbench" || state.workbenchStage !== "overview") return;
-    renderWorkbenchOverview(workbenchContext(), workbenchSelectedDefinition());
+    renderDocOverview();
   }, 160);
 }
 
@@ -20381,18 +20919,11 @@ function drawWorkbenchOverviewLinks() {
 }
 
 function initWorkbenchW2() {
-  // The asset grid owns its own drag; we only remember which asset is in flight
-  // so Workbench asset slots can light up for matching asset types.
-  el.assetGrid?.addEventListener("dragstart", function (event) {
-    workbenchDragAssetId = event.target?.closest?.(".assetCard")?.dataset.assetId || "";
-  }, true);
   el.assetGrid?.addEventListener("dragend", function () {
-    workbenchDragAssetId = "";
     for (const element of document.querySelectorAll(".workbenchDropReady")) element.classList.remove("workbenchDropReady");
   }, true);
   document.addEventListener("dragend", function () {
     workbenchDragPayload = null;
-    workbenchDragAssetId = "";
   }, true);
   window.addEventListener("resize", function () {
     if (state.editorMode === "workbench" && state.workbenchStage === "overview") scheduleWorkbenchOverviewLinks();
@@ -20955,18 +21486,9 @@ function renderProjectFoundationWizard() {
     });
     playerDefinitionSelect.disabled = wizard.mode === "manage";
     fields.appendChild(objectFunctionDraftFieldRow("Spelerdefinitie", playerDefinitionSelect));
-    const assetOptions = [{ value: "", label: "Kies een modelasset" }].concat(state.assets.filter(function (asset) {
-      return asset.assetType === "model";
-    }).map(function (asset) {
-      return { value: asset.id, label: asset.name };
-    }));
-    if (values.playerAssetId && !assetOptions.some(function (option) { return option.value === values.playerAssetId; })) {
-      assetOptions.push({ value: values.playerAssetId, label: "Bestaand spelermodel" });
-    }
-    const playerAssetSelect = projectFoundationSelect(assetOptions, values.playerAssetId, function (value) {
+    const playerAssetSelect = editorAssetPicker(values.playerAssetId, ["model"], function (value) {
       values.playerAssetId = value;
-    });
-    playerAssetSelect.disabled = wizard.mode === "manage";
+    }, { label: "Spelermodel", disabled: wizard.mode === "manage" });
     fields.appendChild(objectFunctionDraftFieldRow("Spelermodel", playerAssetSelect));
     const hint = document.createElement("div");
     hint.className = "objectFunctionDraftHint";
@@ -23097,6 +23619,7 @@ function visibleNodes() {
 }
 
 function nodeById(id) {
+  if (isAreaDocNodeId(id)) return areaDocNodeById(id);
   return state.graph.nodes.find(function (n) { return n.id === id; });
 }
 
@@ -24792,10 +25315,21 @@ function beginWorkbenchRelationResize(event) {
 // ---------------------------------------------------------------------------
 
 function allPaneViews(mode = state.editorMode) {
+  if (mode === "settings") return SETTINGS_PANE_VIEWS;
   return mode === "workbench" ? WORKBENCH_PANE_VIEWS : NODE_PANE_VIEWS;
 }
 
 function defaultAllLayoutTree(mode = state.editorMode) {
+  if (mode === "settings") {
+    return {
+      dir: "row",
+      children: [
+        { size: 0.7, node: { view: "settingsMenu" } },
+        { size: 1.1, node: { view: "settingsCard" } },
+        { size: 2.2, node: { view: "viewport" } }
+      ]
+    };
+  }
   const leftTop = "viewport";
   const leftBottom = mode === "workbench" ? "library" : "assets";
   const rightTop = mode === "workbench" ? "workbench" : "tools";
@@ -24842,7 +25376,8 @@ function isValidAllLayoutNode(node, allowedViews = allPaneViews()) {
 function defaultAllLayoutTrees() {
   return {
     nodes: defaultAllLayoutTree("nodes"),
-    workbench: defaultAllLayoutTree("workbench")
+    workbench: defaultAllLayoutTree("workbench"),
+    settings: defaultAllLayoutTree("settings")
   };
 }
 
@@ -24852,12 +25387,18 @@ function isValidAllLayoutTrees(layouts) {
     && isValidAllLayoutNode(layouts.workbench, WORKBENCH_PANE_VIEWS));
 }
 
+// Oude opgeslagen indelingen hebben nog geen Instellingen-tab: die krijgt de standaardindeling.
+function withSettingsLayout(layouts) {
+  if (!isValidAllLayoutNode(layouts.settings, SETTINGS_PANE_VIEWS)) layouts.settings = defaultAllLayoutTree("settings");
+  return layouts;
+}
+
 function loadStoredAllLayoutTrees() {
   try {
     const raw = window.localStorage.getItem(ALL_LAYOUT_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (isValidAllLayoutTrees(parsed)) return parsed;
+      if (isValidAllLayoutTrees(parsed)) return withSettingsLayout(parsed);
     }
   } catch {}
   return defaultAllLayoutTrees();
@@ -24896,7 +25437,7 @@ function flushEditorLayoutServerSave() {
   }
   void window.fetch("/api/editor/layout", {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "X-GK-CSRF": editorCsrfToken },
+    headers: { "Content-Type": "application/json", "X-GK-CSRF": currentCsrfToken() },
     body: JSON.stringify({ layout: currentEditorLayoutPayload() }),
     keepalive: true
   }).catch(function () {});
@@ -24912,8 +25453,8 @@ async function loadEditorLayoutFromServer() {
   const result = await api("/api/editor/layout");
   const stored = result?.layout;
   if (stored && isValidAllLayoutTrees(stored.layouts)) {
-    state.allLayoutTrees = stored.layouts;
-    state.editorMode = stored.editorMode === "workbench" ? "workbench" : "nodes";
+    state.allLayoutTrees = withSettingsLayout(stored.layouts);
+    state.editorMode = EDITOR_MODES.includes(stored.editorMode) ? stored.editorMode : "workbench";
     state.allLayoutTree = state.allLayoutTrees[state.editorMode];
     try {
       window.localStorage.setItem(ALL_LAYOUT_STORAGE_KEY, JSON.stringify(state.allLayoutTrees));
@@ -24932,6 +25473,8 @@ function allPaneContentElement(view) {
   if (view === "workbench") return document.querySelector(".tools");
   if (view === "relations") return el.workbenchRelationStrip;
   if (view === "library") return document.querySelector(".assetColumn");
+  if (view === "settingsMenu") return el.settingsMenuPanel;
+  if (view === "settingsCard") return el.settingsCardPanel;
   return null;
 }
 
@@ -24976,7 +25519,7 @@ function renderAllLayout() {
   // querySelector calls in buildAllPane/allPaneContentElement would then
   // never find them again (they'd be silently lost, leaving empty panes).
   if (el.allLayoutOverflow) {
-    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
+    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS, SETTINGS_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
     for (const contentEl of contentElements) {
       el.allLayoutOverflow.appendChild(contentEl);
     }
@@ -25505,6 +26048,8 @@ function activeEditorControl() {
   if (el.viewportTransformPanel && el.viewportTransformPanel.contains(active)) return active;
   if (el.viewportHelpPanel && el.viewportHelpPanel.contains(active)) return active;
   if (el.assetColumn && el.assetColumn.contains(active)) return active;
+  if (el.settingsCardPanel && el.settingsCardPanel.contains(active)) return active;
+  if (el.workbenchSelectionPanel && el.workbenchSelectionPanel.contains(active)) return active;
   return null;
 }
 
@@ -25526,6 +26071,7 @@ async function flushPendingEditorWrites() {
   }
   if (runtime && typeof runtime.flushEditorCameraSave === "function") runtime.flushEditorCameraSave();
   await graphMutationQueue;
+  await docBench.flushPendingSaves();
 }
 
 // ---------- Groups + breadcrumb ----------
@@ -26359,21 +26905,7 @@ function uniqueMinimapCategoryId(categories, seed) {
 }
 
 function buildImageAssetSelect(value, onChange) {
-  const select = document.createElement("select");
-  const blank = document.createElement("option");
-  blank.value = "";
-  blank.textContent = "(kleur/vorm)";
-  select.appendChild(blank);
-  for (const asset of state.assets.filter(function (a) { return ["image", "texture"].includes(a.assetType); })) {
-    const opt = document.createElement("option");
-    opt.value = asset.id;
-    opt.textContent = asset.name + " (" + asset.assetType + ")";
-    if (asset.id === value) opt.selected = true;
-    select.appendChild(opt);
-  }
-  select.value = value || "";
-  select.addEventListener("change", function () { onChange(select.value || null); });
-  return select;
+  return editorAssetPicker(value, ["image", "texture"], onChange, { label: "Afbeelding", placeholder: "Kies afbeelding (leeg = kleur/vorm)" });
 }
 
 function buildMinimapMarkerCategoriesField(node, key, value, field) {
@@ -27317,24 +27849,10 @@ function buildField(node, key, field) {
       }
     }
   } else if (field.type === "asset") {
-    const select = document.createElement("select");
-    applyFieldHelp(select, help);
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "(kies asset)";
-    select.appendChild(blank);
-    for (const asset of state.assets.filter(function (a) { return field.assetTypes.includes(a.assetType); })) {
-      const opt = document.createElement("option");
-      opt.value = asset.id;
-      opt.textContent = asset.name + " (" + asset.assetType + ")";
-      if (asset.id === value) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.value = isBlankValue(value) ? "" : String(value);
-    select.addEventListener("change", function () {
-      const patch = makePatch(key, normalizeFieldInputValue(field, select.value));
+    const picker = editorAssetPicker(value, field.assetTypes || [], function (assetId) {
+      const patch = makePatch(key, normalizeFieldInputValue(field, assetId));
       if (key === "modelAssetId" && (node.type === "model_entity" || node.type === "player_character")) {
-        const selectedAsset = assetById(select.value);
+        const selectedAsset = assetById(assetId);
         const resolvedAnimationClip = resolveAnimationClipForAsset(selectedAsset, node.values.animationClip);
         const resolvedIdleAnimation = resolveIdleAnimationForAsset(selectedAsset, node.values.idleAnimation);
         const resolvedWalkAnimation = resolveOptionalAnimationForAsset(selectedAsset, node.values.walkAnimation);
@@ -27345,8 +27863,9 @@ function buildField(node, key, field) {
         if (resolvedRunAnimation !== node.values.runAnimation) patch.runAnimation = resolvedRunAnimation;
       }
       patchValues(node.id, patch, { historyLabel: field.label, refreshViewport: shouldRefreshViewportForNode(node.id), refreshValidation: true });
-    });
-    wrap.appendChild(select);
+    }, { label: field.label });
+    applyFieldHelp(picker, help);
+    wrap.appendChild(picker);
   } else if (field.type === "identity") {
     const input = document.createElement("input");
     input.type = "text";
@@ -27841,7 +28360,7 @@ function buildScatterSourcePicker(node, key, value) {
   header.className = "scatterSourcePickerHeader";
   const hint = document.createElement("div");
   hint.className = "inspectorHint";
-  hint.textContent = "Kies model-assets uit de assetkolom en stel per geselecteerd asset de scale in.";
+  hint.textContent = "Kies of zoek modellen en stel per model de schaal in.";
   const actions = document.createElement("div");
   actions.className = "scatterSourceActions";
   const clear = document.createElement("button");
@@ -27890,6 +28409,8 @@ function buildScatterSourcePicker(node, key, value) {
     });
     patchValues(node.id, {
       sourceAssetIds: nextIds,
+      sourceScaleMultipliers: scaleMultipliers,
+      sourceHeightMultipliers: {},
       sourceNodeIds: []
     }, {
       historyLabel: "Source assets",
@@ -27897,28 +28418,26 @@ function buildScatterSourcePicker(node, key, value) {
       refreshValidation: true
     });
   };
-  for (const source of sources) {
+  wrap.appendChild(editorAssetPicker(null, ["model"], function (assetId) {
+    if (!assetId) return;
+    selectedIds.add(assetId);
+    commit();
+  }, { label: "Model toevoegen", placeholder: "Kies of sleep een model…", allowClear: false,
+    getAssets: () => state.assets.filter((asset) => !selectedIds.has(asset.id)) }));
+  for (const source of sources.filter((asset) => selectedIds.has(asset.id))) {
     const item = document.createElement("div");
     item.className = "scatterSourceItem";
     item.style.display = "grid";
     item.style.gap = "6px";
-    const toggle = document.createElement("label");
-    toggle.style.display = "flex";
-    toggle.style.alignItems = "center";
-    toggle.style.gap = "8px";
-    toggle.style.minWidth = "0";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = selectedIds.has(source.id);
-    checkbox.addEventListener("change", function () {
-      if (checkbox.checked) selectedIds.add(source.id);
-      else selectedIds.delete(source.id);
+    item.appendChild(editorAssetPicker(source.id, ["model"], function (assetId) {
+      selectedIds.delete(source.id);
+      if (assetId) {
+        selectedIds.add(assetId);
+        scaleMultipliers[assetId] = scaleMultipliers[source.id] ?? 1;
+      }
+      if (assetId !== source.id) delete scaleMultipliers[source.id];
       commit();
-    });
-    const text = document.createElement("span");
-    text.textContent = source.name + " · " + source.assetType;
-    toggle.append(checkbox, text);
-    item.appendChild(toggle);
+    }, { label: "Model voor begroeiing", getAssets: () => state.assets.filter((asset) => asset.id === source.id || !selectedIds.has(asset.id)) }));
 
     if (selectedIds.has(source.id)) {
       const scaleWrap = document.createElement("div");
@@ -27977,6 +28496,7 @@ function makePatch(key, value) {
 }
 
 async function patchValues(nodeId, patch, options = {}) {
+  if (isAreaDocNodeId(nodeId)) return commitAreaDocPatch(nodeId, patch, options);
   const node = nodeById(nodeId);
   const cleanPatch = normalizeModelEntityTransformPatch(node, patch || {});
   if (node && Object.entries(cleanPatch || {}).every(function ([key, value]) { return node.values[key] === value; })) return state.graph;
@@ -28948,9 +29468,22 @@ function buildDeletionGraph(nodeIds, edgeIds) {
   return removeVisualObjects(state.graph, state.nodeTypes, nodeIds, edgeIds);
 }
 
+async function deleteFocusedDoc() {
+  const areaNode = selectedAreaDocNode();
+  const docKey = areaNode ? areaNode.docKey : focusedPlacedDocKey();
+  if (!docKey) return false;
+  const ok = await docBench.archiveDoc(docKey, areaNode ? "Vlak weggehaald" : placedDocLabel(docKey) + " weggehaald");
+  if (ok) { clearDocFocus(); renderWorkbench(); renderViewportControls(); }
+  return ok;
+}
+
 async function deleteSelectedNodes() {
   const nodeIds = Array.from(new Set(state.selectedNodeIds.filter(Boolean)));
   const edgeIds = Array.from(new Set(state.selectedEdgeIds.filter(Boolean)));
+  if (!nodeIds.length && !edgeIds.length && (selectedAreaDocNode() || focusedPlacedDocKey())) {
+    await deleteFocusedDoc();
+    return;
+  }
   if (!nodeIds.length && !edgeIds.length) {
     setStatus("Geen selectie om te verwijderen.", "");
     return;
@@ -29378,7 +29911,7 @@ function buildAssetCard(asset) {
   card.className = "assetCard";
   card.dataset.assetId = asset.id;
   if (state.mobileSelectedAssetId === asset.id) card.classList.add("selected");
-  card.draggable = asset.assetType === "model" || (state.editorMode === "workbench" && asset.assetType === "image");
+  card.draggable = ["model", "image", "audio", "texture"].includes(asset.assetType);
   const animationNames = animationClipsForAsset(asset).map(function (entry) { return entry.name; });
   const titleParts = [asset.name, asset.assetType, asset.category];
   if (asset.assetType === "model" && animationNames.length) titleParts.push(animationNames.join(", "));
@@ -29479,6 +30012,7 @@ function buildAssetCard(asset) {
     const img = document.createElement("img");
     img.src = asset.thumbnailPath;
     img.alt = asset.name;
+    img.draggable = false;
     thumb.appendChild(img);
   } else {
     const icon = document.createElement("span");
@@ -29550,41 +30084,25 @@ function editorCameraCenterModelPosition() {
   };
 }
 
+// Een model-asset op de wereld = een nieuwe, losse placed_model-instantie. De asset blijft
+// de herbruikbare bron; de instantie verschijnt bewust niet als kaart in de Bibliotheek.
 async function placeModel(assetId, position) {
   const startedAt = performance.now();
-  // Viewport placement owns the spatial choice: an open Nodes group may not silently
-  // assign a model in another visible zone to the wrong Zone Output.
-  const spatialZone = zoneCanvasGroupContainingPoint(position?.x, position?.z);
-  const requestedParentId = spatialZone?.id || state.currentGroupId || null;
-  let createdNodeId = null;
   try {
-    await applyGraphMutation(function () {
-      return api("/api/editor/place-model-asset", {
-        method: "POST",
-        body: JSON.stringify({ assetId: assetId, position: position, parentId: requestedParentId })
-      });
-    }, {
-      historyLabel: "Model geplaatst",
-      refreshViewport: true,
-      refreshValidation: true,
-      afterApply: function (_, result) {
-        createdNodeId = result?.nodeId || null;
-        if (createdNodeId) selectNode(createdNodeId, true);
-        setStatus("Model geplaatst.", "success");
-      }
-    });
-    if (createdNodeId && isZoneCanvasGroup(nodeById(requestedParentId))) {
-      await autoWireZoneCanvasNode(requestedParentId, createdNodeId);
-    }
-    if (createdNodeId) {
-      const placedModel = nodeById(createdNodeId);
-      const context = objectFunctionContextForModel(placedModel, state.graph);
-      if (context.model && context.zoneGroup && context.zoneOutput) {
-        state.authoringSelectedModelNodeId = createdNodeId;
-        visualBuilderBegin(context);
-        setStatus("Model geplaatst. Wat wil je hiervan maken?", "success");
-      }
-    }
+    if (!docBench.workspace) { setStatus("Werkbank laadt nog; probeer zo opnieuw.", "error"); return; }
+    const asset = assetById(assetId);
+    const name = String(asset?.name || assetId || "Model").slice(0, 80);
+    const slug = name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "model";
+    const taken = new Set(docBench.docs("placed_model", true).map(function (doc) { return doc.body.placedModelId; }));
+    let n = 1;
+    while (taken.has("model." + slug + "_" + n)) n += 1;
+    const round2 = function (value) { return Math.round(Number(value) * 100) / 100; };
+    const body = { placedModelId: "model." + slug + "_" + n, displayName: name, modelAssetId: assetId,
+      x: round2(Number(position?.x) || 0), y: round2(Number(position?.y) || 0), z: round2(Number(position?.z) || 0) };
+    const result = await docBench.saveDoc("placed_model", null, body, "Model geplaatst");
+    if (result?.docKey) selectPlacedDoc(result.docKey);
+  } catch {
+    // saveDoc meldt de fout in de statusregel.
   } finally {
     logTiming("placeModel", startedAt, "asset=" + assetId);
   }
@@ -29847,9 +30365,12 @@ if (el.assetColumn) {
   el.assetColumn.addEventListener("dragleave", function (event) {
     const nextTarget = event.relatedTarget;
     if (nextTarget && el.assetColumn.contains(nextTarget)) return;
-    assetColumnDropDepth = Math.max(0, assetColumnDropDepth - 1);
-    if (assetColumnDropDepth <= 0) hideAssetDropOverlay();
+    // Uit de kolom gesleept: overlay altijd weg (de teller liep scheef bij kind-elementen).
+    hideAssetDropOverlay();
   });
+  // Slepen ergens anders gestopt of losgelaten: overlay nooit laten hangen.
+  document.addEventListener("dragend", hideAssetDropOverlay, true);
+  document.addEventListener("drop", hideAssetDropOverlay, true);
   el.assetColumn.addEventListener("drop", function (event) {
     event.preventDefault();
     hideAssetDropOverlay();
@@ -29863,6 +30384,7 @@ if (el.assetColumn) {
   });
 }
 el.viewportCanvas.addEventListener("dragover", function (event) {
+  if (docDrop && docDrop.handleDragOver(event)) return;
   if (Array.from(event.dataTransfer.types).includes("text/gk-asset")) {
     event.preventDefault();
     el.viewportCanvas.classList.add("dropHint");
@@ -29872,6 +30394,7 @@ el.viewportCanvas.addEventListener("dragleave", function () { el.viewportCanvas.
 el.viewportCanvas.addEventListener("drop", function (event) {
   event.preventDefault();
   el.viewportCanvas.classList.remove("dropHint");
+  if (docDrop && Array.from(event.dataTransfer.types).includes(DOC_MIME)) { void docDrop.handleDrop(event); return; }
   const assetId = event.dataTransfer.getData("text/gk-asset");
   if (!assetId || !runtime) return;
   if (assetById(assetId)?.assetType !== "model") return;
@@ -29988,8 +30511,7 @@ async function refreshValidation() {
     for (const message of result.warnings || []) {
       el.validationPanel.appendChild(renderValidationIssue("warning", message));
     }
-    el.publishButton.disabled = !result.ok;
-    el.publishButton.style.opacity = result.ok ? "1" : "0.5";
+    // Dit is de oude nodecontrole. SAVE TO GAME valideert de documenten via de build-API.
   } catch (error) {
     setStatus(error.message, "error");
   }
@@ -30064,16 +30586,30 @@ async function saveDraft() {
 }
 
 async function publish() {
+  if (el.publishButton.disabled) return;
+  el.publishButton.disabled = true;
   clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
-    await apiOk("/api/editor/publish", { method: "POST" });
+    // Doelbeeld: één knop, één build. De game leest alleen de build; nodes doen niet meer mee.
+    const build = await docBench.publish();
     clearUnsaved();
+    setNotLiveGraphActions(0);
     state.viewportDirty = false;
     clearViewportRefreshTimer();
-    setStatus("Gepubliceerd naar de game.", "success");
+    updateDocPendingBadge();
+    const sameBuild = build && build.buildId === build.previousBuildId;
+    setStatus(!build ? "Alles staat al in de game."
+      : sameBuild ? "Gepubliceerd naar de game. De kaarten staan al zo in de game (zelfde build " + build.buildId.slice(0, 10) + ")."
+        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").", "success");
+    // De tab Game laadt de nieuwe build: meteen als hij open is, anders bij de volgende keer openen.
+    const gameFrame = el.gameTabPanel?.querySelector("iframe");
+    if (gameFrame && !el.gameTabPanel.hidden) gameFrame.contentWindow?.location.reload();
+    else if (gameFrame) gameTabNeedsReload = true;
   } catch (error) {
     setStatus(error.message, "error");
+  } finally {
+    el.publishButton.disabled = false;
   }
 }
 
@@ -31352,6 +31888,7 @@ function beginPointMarqueeSession(event, options) {
 
 function deselectViewportClick() {
   clearPointLongPress();
+  if (focusedPlacedDocKey() || selectedAreaDocNode()) { clearDocFocus(); renderWorkbench(); renderViewportControls(); }
   state.authoringRouteId = null;
   state.storedAuthoringRouteId = null;
   state.authoringMenuOpen = false;
@@ -32263,6 +32800,12 @@ function handleEditorKeyDown(event) {
       }
       // No point selected - fall through to the generic "delete selected node" handler
       // below instead of swallowing the key with nothing to delete.
+      // Ombouw stap 2: een gekozen vlak (document) gaat dan in zijn geheel weg.
+      if (selectedAreaDocNode()) {
+        consumeShortcutEvent(event);
+        void deleteFocusedDoc();
+        return;
+      }
     }
     if (event.code === "NumpadDecimal" || event.key === ".") {
       consumeShortcutEvent(event);
@@ -32426,6 +32969,12 @@ function handleEditorKeyDown(event) {
       }
       // No point selected - fall through to the generic "delete selected node" handler
       // below instead of swallowing the key with nothing to delete.
+      // Ombouw stap 2: een gekozen vlak (document) gaat dan in zijn geheel weg.
+      if (selectedAreaDocNode()) {
+        consumeShortcutEvent(event);
+        void deleteFocusedDoc();
+        return;
+      }
     }
     if (event.key === ".") {
       consumeShortcutEvent(event);
@@ -32486,6 +33035,11 @@ function handleEditorKeyDown(event) {
       deselectViewportClick();
       return;
     }
+    return;
+  }
+  if ((event.key === "Delete" || event.key === "Backspace") && !state.selectedNodeIds.length && !state.selectedEdgeIds.length && (selectedAreaDocNode() || focusedPlacedDocKey())) {
+    consumeShortcutEvent(event);
+    void deleteFocusedDoc();
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && (state.selectedNodeIds.length || state.selectedEdgeIds.length)) {
@@ -32571,8 +33125,10 @@ window.addEventListener("mouseup", handleTerrainMouseUpFallback, true);
 window.addEventListener("blur", clearViewportTouchEditState, true);
 window.addEventListener("pagehide", flushEditorLayoutServerSave);
 
-if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { setEditorMode("nodes"); });
-if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setEditorMode("workbench"); });
+if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
+if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });
+if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("settings"); });
+if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
 
 initMobileControls();
 setEditorMode(state.editorMode, false);

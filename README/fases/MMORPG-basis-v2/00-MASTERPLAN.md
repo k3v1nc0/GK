@@ -1,5 +1,7 @@
 # GK MMORPG-basis v2.3 - Actief masterplan
 
+> **GESLOTEN op 26-10-2026.** Dit plan is vervangen door [Werkbank-plan](../Werkbank-plan/WERKBANK-PLAN.md). Hier niet verder bouwen; alleen nog naslag.
+
 **Status:** Fase 01 voltooid op 24 oktober 2026 (Kevin-akkoord; zie `README/fases/evidence/MMORPG-v2/F1/VOORTGANG.md`). Fase 02 is de volgende. **Auditbasis:** GitHub `main` zoals geinspecteerd op 23 oktober 2026; de oorspronkelijke referentiecommit was `8a976e346fcadf2f2a9fbced13b8ed48269df4d2`. Controleer de actuele HEAD vóór elke codeopdracht. Deze documentatiecommit verandert geen gamecode of database.
 
 > **Eén actieve route:** begin bij [START-HIER](START-HIER.md) en geef een codeeragent één **faseopdracht**. De agent gebruikt de taakkaarten intern in afhankelijkheidsvolgorde en levert kleine, controleerbare wijzigingen; Kevin hoeft niet 87 opdrachten uit te sturen. De vijf documenten in `README/fases/MMORPG-basis/` en de eerdere auditregisters zijn **historische broninformatie, niet normatief voor agents**. Zij mogen geen scope, exitcriterium of technische verplichting toevoegen aan v2.3. Er worden geen oude repo-bestanden verwijderd; F1-E0-T03 markeert ze in de fase-index als historisch. Bij een inhoudelijk conflict: Kevins expliciete besluit -> actieve ADR -> dit masterplan -> actieve taakkaart. Een oude fase is nooit een fallback-contract.
