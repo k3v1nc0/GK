@@ -123,6 +123,12 @@ export function compileCanonical(documents, options = {}) {
     client.worldSettings = split(worldSettings).client;
     server.worldSettings = split(worldSettings).server;
   }
+  // Wereld tekenen (ronde 1): de kaart "Terrein" (hoogte van de grond per vak + helling + budget).
+  const terrainSettings = byKind("terrain_settings")[0] || null;
+  if (terrainSettings) {
+    client.terrain = split(terrainSettings).client;
+    server.terrain = split(terrainSettings).server;
+  }
   // Ombouw stap 2: vlakken uit de Area tool. Alleen de server leest ze (de game krijgt ze via de wereld).
   const areaShapes = compileAreaShapes(known, options);
   if (areaShapes) {

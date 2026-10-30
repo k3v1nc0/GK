@@ -1,7 +1,8 @@
 // Werkbank Fase 1 (bouwrecept §0b): hulpjes om de UI-beschrijving per veld kort te schrijven.
 // Alleen data: elk veld krijgt ui (icoon, bediening, plek, stap, eenheid), default en help (Ⓘ).
 //
-// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | color
+// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | color | terrain
+// terrain: de hoogte van de grond (vakken), alleen te tekenen met de knop Terrein in de 3D-view.
 // refList: een lijst regels { ref, ...getallen } (bijv. startitems: item of valuta + aantal). Velden: refKinds, columns.
 // ui.soorten: alleen tonen bij deze Area-soorten (Ombouw stap 2).
 // ui.place:   werkbank (paneel links) | instellingen (kaart) | viewport (slepen/tekenen in 3D) | relaties
@@ -14,7 +15,7 @@ export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain"]);
 export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "viewport", "relaties"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen"]);
 
@@ -34,7 +35,8 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   lootEntries: ["loot"],
   pointList: ["points"],
   areaSettings: ["areaSettings"],
-  color: ["color"]
+  color: ["color"],
+  terrainChunks: ["terrain"]
 });
 
 // Veelgebruikte hulpteksten.

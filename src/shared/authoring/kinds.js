@@ -370,6 +370,16 @@ export function validateDocument(kind, body) {
       if (bad) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is [x, z] in hele mm" + (field.allowHeight ? " (een loopvlak mag [x, z, hoogte])." : ".")));
       continue;
     }
+    if (field.type === "terrainChunks") {
+      // Wereld tekenen: { "cx:cz": sha1 } (vak → vingerafdruk van het bestand in assets/terrain).
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      if (entries.length > 16384) issues.push(issue(key, "FIELD_RANGE", field.label + ": te veel vakken."));
+      if (entries.some(([chunk, sha1]) => !/^-?\d{1,5}:-?\d{1,5}$/.test(chunk) || typeof sha1 !== "string" || !/^[0-9a-f]{40}$/.test(sha1))) {
+        issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met een vingerafdruk (40 tekens)."));
+      }
+      continue;
+    }
     if (field.type === "areaSettings") {
       if (typeof value !== "object" || Array.isArray(value)) issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn."));
       continue;

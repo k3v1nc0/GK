@@ -68,5 +68,28 @@ export const WORLD_KINDS = {
         ui: ui("🎵", "asset", "instellingen", { more: true }), default: null,
         help: help("De muziek die overal in de wereld speelt.", "Kies een rustig muziekstuk (mp3/ogg). Een gebied met eigen muziek gaat voor.", "Geen muziek → klik één keer in de game (browsers wachten daarop) of kies een ander bestand.") }
     }
+  },
+  // Wereld tekenen (ronde 1): de hoogte van de grond. De vakken zelf maak je in de editor met de knop Terrein
+  // (penselen); bij Sluiten komen ze hier als lijst "vak → vingerafdruk". Hier staan alleen de instellingen.
+  terrain_settings: {
+    label: "Terrein",
+    icon: "⛰️",
+    place: "instellingen",
+    singleton: true,
+    domain: "project",
+    fields: {
+      maxSlopeDeg: num("Te steil om te lopen", "🧗", 50, 10, 89, 1, "°",
+        help("Vanaf deze helling kunnen spelers en vijanden niet meer omhoog lopen (het is dan een muur). Omlaag mag altijd.", "40-55 graden. 50 is een goede start.", "Spelers lopen tegen bergen op → lager. Spelers blijven hangen op kleine heuvels → hoger."),
+        { range: [20, 80] }),
+      triBudget: num("Driehoeken grond (budget)", "🔺", 60000, 5000, 500000, 1000, "",
+        help("Hoeveel driehoeken de grond in beeld mag hebben. De teller in Terrein wordt oranje vanaf 80 % en rood erboven.", "30.000-80.000 voor een oude laptop.", "Game hapert op de laptop → lager zetten en bergen gladder maken."),
+        { range: [10000, 200000], more: true }),
+      chunkTriBudget: num("Driehoeken per vak (budget)", "🟥", 4000, 500, 9000, 100, "",
+        help("Hoeveel driehoeken één vak van 64 x 64 m dichtbij mag hebben. Te zware vakken kleuren rood in Terrein.", "2.000-5.000. Vlak = bijna niks, ruige bergen = veel.", "Veel rode vakken → gladstrijken of minder kleine hobbels maken."),
+        { range: [1000, 8000], more: true }),
+      chunks: { type: "terrainChunks", required: false, audience: "client", label: "Hoogte van de grond (vakken)",
+        ui: ui("🗺️", "terrain", "viewport"), default: {},
+        help: help("De opgeslagen hoogte van de grond, per vak van 64 x 64 meter.", "Maak je in de editor met de knop Terrein en dan Sluiten.", "Grond plat na opslaan → open Terrein, teken opnieuw en druk Sluiten.") }
+    }
   }
 };

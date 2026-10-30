@@ -9,6 +9,8 @@ import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { settingsValues } from "./game-compiler.js";
 import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
+import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
+import { terrainHeightAt, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
 
 export const WORLD_FORMAT_VERSION = "gk-game-project-v3";
 export const WORLD_ID = "world.main";
@@ -79,6 +81,73 @@ export function worldSettingsValues(body = null) {
     values[key] = value === undefined || value === null || value === "" ? field.default : value;
   }
   return values;
+}
+
+// Wereld tekenen (ronde 1): de kaart "Terrein" met standaardwaarden.
+export function terrainSettingsValues(body = null) {
+  const values = {};
+  for (const [key, field] of Object.entries(CANONICAL_KINDS.terrain_settings.fields)) {
+    const value = body ? body[key] : undefined;
+    values[key] = value === undefined || value === null || value === "" ? field.default : value;
+  }
+  return values;
+}
+
+function terrainHeightfieldConfig(data) {
+  const values = terrainSettingsValues(data?.terrain || null);
+  const chunks = values.chunks && typeof values.chunks === "object" && !Array.isArray(values.chunks) ? values.chunks : {};
+  return { chunkSize: TERRAIN_CHUNK_METERS, baseUrl: "/assets/terrain/", chunks: Object.assign({}, chunks),
+    maxSlopeDeg: Number(values.maxSlopeDeg), triBudget: Number(values.triBudget), chunkTriBudget: Number(values.chunkTriBudget) };
+}
+
+// Alles wat in de kaarten op de grond staat (y = hoogte boven de grond) komt op de hoogte van het terrein.
+// Kopieën, niets wordt aangepast: de builddata blijft zoals hij is.
+export function liftWorldOntoTerrain(world, heightfield) {
+  if (!heightfield || !heightfield.chunks || heightfield.chunks.size === 0) return world;
+  const groundY = Number(world?.ground?.y) || 0;
+  const lift = (x, z) => terrainHeightAt(heightfield, Number(x) || 0, Number(z) || 0);
+  const liftPoint = (point) => (point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.z))
+    ? Object.assign({}, point, { y: (Number(point.y) || 0) + lift(point.x, point.z) }) : point);
+  const liftEntity = (entity) => {
+    const position = entity?.transform?.position;
+    if (!position) return entity;
+    return Object.assign({}, entity, { transform: Object.assign({}, entity.transform, { position: liftPoint(position) }) });
+  };
+  const liftTarget = (target) => {
+    const next = liftPoint(target);
+    if (next && next.linkedEntity) next.linkedEntity = liftPoint(next.linkedEntity);
+    return next;
+  };
+  const liftController = (controller) => Object.assign({}, controller, {
+    spawnSets: (controller?.spawnSets || []).map((set) => Object.assign({}, set, { spawns: (set.spawns || []).map(liftPoint) }))
+  });
+  const memo = new Map();
+  const liftPackage = (pkg) => {
+    if (!pkg || typeof pkg !== "object") return pkg;
+    if (memo.has(pkg)) return memo.get(pkg);
+    const next = Object.assign({}, pkg);
+    if (Array.isArray(pkg.spawns)) next.spawns = pkg.spawns.map(liftPoint);
+    if (Array.isArray(pkg.entities)) next.entities = pkg.entities.map(liftPoint);
+    if (Array.isArray(pkg.questTargets)) next.questTargets = pkg.questTargets.map(liftTarget);
+    if (Array.isArray(pkg.spawnControllers)) next.spawnControllers = pkg.spawnControllers.map(liftController);
+    memo.set(pkg, next);
+    return next;
+  };
+  const liftZones = (zones) => (zones ? Object.assign({}, zones, {
+    packages: (zones.packages || []).map(liftPackage),
+    byId: Object.fromEntries(Object.entries(zones.byId || {}).map(([id, pkg]) => [id, liftPackage(pkg)]))
+  }) : zones);
+  const zones = liftZones(world.zones);
+  const projectZones = world.gameProject?.zones === world.zones ? zones : liftZones(world.gameProject?.zones);
+  const spawn = world.spawn ? Object.assign({}, world.spawn, { y: groundY + lift(world.spawn.x, world.spawn.z) }) : world.spawn;
+  return Object.assign({}, world, {
+    entities: (world.entities || []).map(liftEntity),
+    interactables: (world.interactables || []).map(liftPoint),
+    spawn,
+    zones,
+    zonePackage: liftPackage(world.zonePackage),
+    gameProject: world.gameProject ? Object.assign({}, world.gameProject, { zones: projectZones }) : world.gameProject
+  });
 }
 
 function catalogs() {
@@ -159,7 +228,9 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     entities: [], interactables: [], keybinds: [], ui: [],
     minimap: options.editor ? { bakes: [], game: null, editor: null } : { bakes: [], game: null },
     mmo: { network: null },
-    terrain: { layers: [], surfaces: [] },
+    // Wereld tekenen: heightfield = de hoogte van de grond (vakken in assets/terrain); de game en de editor
+    // tekenen de grond hiermee (ook als hij nog plat is).
+    terrain: { layers: [], surfaces: [], heightfield: terrainHeightfieldConfig(data) },
     collision: { blockers: [], walkableSurfaces: [] },
     scatterAreas: [],
     chunkLoading: clone(CHUNK_LOADING),
@@ -196,7 +267,13 @@ export function buildRuntimeWorld(data = {}, options = {}) {
     return next;
   });
   const world = applyCanonicalBuild(base, { buildId: options.buildId || null, data: Object.assign({}, source, { pickups, removedLegacyPickups: [] }) }, options);
-  return withGame(world, source, options);
+  const full = withGame(world, source, options);
+  // Wereld tekenen: zonder assetService (tests) of zonder vakken blijft alles op y zoals in de kaarten.
+  const assetService = options.assetService;
+  const heightfield = assetService && typeof assetService.readTerrainChunk === "function"
+    ? heightfieldForWorld(full, { readTerrainChunk: (sha1) => assetService.readTerrainChunk(sha1) })
+    : null;
+  return liftWorldOntoTerrain(full, heightfield);
 }
 
 // ---------------------------------------------------------------------------------------------------------

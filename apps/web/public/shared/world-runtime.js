@@ -24,6 +24,8 @@ import {
   createWalkabilityIndex,
   isPointBlockedBySurface
 } from "./movement-kernel.js";
+import { terrainHeightAt } from "./terrain.js";
+import { createTerrainLayer, seedTerrainChunk } from "./terrain-render.js";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -2948,6 +2950,8 @@ export function worldSpaceGroundUv(worldX, worldZ, ground, textureWorldSize = nu
 }
 
 export function resolveGroundRenderMode(worldData, runtimeMode = "editor") {
+  // Wereld tekenen: met een hoogtekaart tekent de terreinlaag de grond (eigen vakken van 64 m).
+  if (worldData?.terrain?.heightfield) return "full";
   const policy = resolveChunkPolicy(worldData, runtimeMode);
   const shouldChunk = policy.enabled === true && policy.groundChunkingEnabled !== false;
   return shouldChunk ? "chunked" : "full";
@@ -4660,6 +4664,8 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
+  // Wereld tekenen (ronde 1): de grond met hoogtes, in vakken rond de speler/camera (terrain-render.js).
+  const terrainLayer = createTerrainLayer({ scene, mode, requestRender: function (reason) { requestRender(reason); } });
   const content = new THREE.Group();
   scene.add(content);
 
@@ -8725,6 +8731,10 @@ function resolveChunkDebugCenter(policy) {
         || buildChunkFrameSyncSignature(chunkPolicy) !== chunkFrameDebugSignature;
     }
     if (shouldSyncChunkState) syncChunkDebugState("frame");
+    if (terrainLayer.active) {
+      const terrainCenter = mode === "game" && player.root ? player.pos : liveEditorCameraTarget();
+      if (terrainLayer.update(num(terrainCenter?.x, 0), num(terrainCenter?.z, 0))) requestRender("terrain-pending");
+    }
     if (residentContentState.pendingChunkKeys.length && residentContentState.pendingBuildBlockedByBudget !== true) {
       requestRender("resident-pending-drain");
     }
@@ -9727,7 +9737,7 @@ function resolveChunkDebugCenter(policy) {
         runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
       }
     });
-    if (plan.mode === "full" && !fullGroundPlane && worldData?.ground) {
+    if (plan.mode === "full" && !fullGroundPlane && worldData?.ground && !(worldData?.terrain?.heightfield && terrainLayer.active)) {
       addGround(worldData);
     }
     groundChunkState.mode = plan.mode;
@@ -11301,6 +11311,8 @@ function resolveChunkDebugCenter(policy) {
   }
 
   async function bakeMinimapImage(config = {}) {
+    // Wereld tekenen: eerst alle hoogtes binnen, anders staat er een platte grond op de kaart.
+    if (terrainLayer.active) await terrainLayer.whenLoaded();
     const bakeWorld = minimapBakeWorldForZone(config.zoneRef);
     const bounds = config.bounds;
     const minX = num(bounds?.minX, NaN);
@@ -11371,6 +11383,7 @@ function resolveChunkDebugCenter(policy) {
     clearGroundChunkState("minimap-bake-disable-chunks");
     clearTerrainRuntimeVisuals();
     if (bakeWorld?.ground) addGround(bakeWorld);
+    if (terrainLayer.active) terrainLayer.update(centerX, centerZ);
     buildTerrainRuntimeStreamingVisuals(bakeWorld);
     addZoneGrounds(bakeWorld);
     addScatterGroundCovers(bakeWorld);
@@ -12026,8 +12039,10 @@ function resolveChunkDebugCenter(policy) {
         if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
         if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
       }
+      // Wereld tekenen: bij verschuiven blijft het object even hoog boven de grond (gaat mee met heuvels).
+      next.y += terrainLift(next.x, next.z) - terrainLift(transform.startPosition.x, transform.startPosition.z);
       if (snapState.mode === "ground" && object.userData.snapToGround !== false) {
-        next.y = num(world?.ground?.y, 0);
+        next.y = num(world?.ground?.y, 0) + terrainLift(next.x, next.z);
       }
       if (!object.position.equals(next)) {
         object.position.copy(next);
@@ -12150,8 +12165,9 @@ function resolveChunkDebugCenter(policy) {
           if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
           if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
         }
+        next.y += terrainLift(next.x, next.z) - terrainLift(entry.startPosition.x, entry.startPosition.z);
         if (snapState.mode === "ground" && entry.object.userData.snapToGround !== false) {
-          next.y = num(world?.ground?.y, 0);
+          next.y = num(world?.ground?.y, 0) + terrainLift(next.x, next.z);
         }
         if (!entry.object.position.equals(next)) {
           entry.object.position.copy(next);
@@ -13216,8 +13232,110 @@ function resolveChunkDebugCenter(policy) {
   function addGround(worldData) {
     const ground = worldData?.ground;
     if (!ground?.width || !ground?.depth) return;
+    if (worldData?.terrain?.heightfield) {
+      addTerrainGround(worldData);
+      return;
+    }
     const mesh = addGroundPlaneMesh(worldData, ground, "published-ground");
     if (mesh) fullGroundPlane = mesh;
+  }
+
+  // Wereld tekenen: zelfde materiaal en textuur als de platte grond, maar met hoogtes (terreinlaag).
+  function addTerrainGround(worldData) {
+    const ground = worldData.ground;
+    const bounds = effectiveGroundBounds(ground);
+    if (!bounds) return;
+    terrainLayer.setBakeMode(minimapBakeChunkOverride === true);
+    const sameLook = terrainLayer.material && terrainLayer.material.userData.terrainLookKey === terrainLookKey(worldData);
+    const material = sameLook ? terrainLayer.material : createGroundPlaneMaterial(ground, bounds, null);
+    material.userData.terrainLookKey = terrainLookKey(worldData);
+    terrainLayer.setWorld(worldData, { material, textureSize: groundTextureWorldSize(ground), receiveShadow: Boolean(groundShadowOptions().receiveShadow) });
+    const textureAsset = assetById(worldData, ground.textureAssetId);
+    if (!sameLook && textureAsset?.sourcePath) {
+      retainTerrainTexture(textureAsset, function (texture) {
+        if (terrainLayer.material !== material) return;
+        const clone = texture.clone();
+        clone.colorSpace = THREE.SRGBColorSpace;
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.repeat.set(1, 1);
+        clone.needsUpdate = true;
+        material.map = clone;
+        material.needsUpdate = true;
+        terrainLayer.refreshMaterial();
+        requestRender("terrain-texture-loaded");
+      });
+    }
+  }
+
+  function terrainLookKey(worldData) {
+    const ground = worldData?.ground || {};
+    const asset = assetById(worldData, ground.textureAssetId);
+    return [ground.materialColor || "", asset?.sourcePath || "", sharedWorldPerformance().smoothShading === false ? "flat" : "smooth"].join("|");
+  }
+
+  // Hoogte van het terrein (zonder ground.y) op x, z; 0 zonder terrein.
+  function terrainLift(x, z) {
+    return terrainLayer.active ? terrainHeightAt(terrainLayer.heightfield, num(x, 0), num(z, 0)) : 0;
+  }
+
+  // Wereld tekenen (editor): objecten gaan tijdens het penselen mee omhoog en omlaag. Begin van een streek:
+  // onthoud per object de hoogte van de grond eronder; na elke penseelstap schuift het object het verschil.
+  // Begroeiing (scatter) gaat mee bij Sluiten (dan bouwt de server de wereld opnieuw op de nieuwe hoogte).
+  function terrainFollowRoots() {
+    const roots = new Set();
+    for (const root of entityRoots.values()) {
+      if (!root?.position || roots.has(root)) continue;
+      if (root.userData?.transformable !== true && root.userData?.snapToGround === false) continue;
+      roots.add(root);
+    }
+    return roots;
+  }
+
+  function terrainBeginEdit() {
+    for (const root of terrainFollowRoots()) root.userData.terrainFollowH = terrainLift(root.position.x, root.position.z);
+  }
+
+  function terrainFollowObjects(keys) {
+    const touched = new Set(keys || []);
+    if (!touched.size) return;
+    for (const root of terrainFollowRoots()) {
+      if (!Number.isFinite(root.userData.terrainFollowH)) continue;
+      const key = Math.floor(root.position.x / 64) + ":" + Math.floor(root.position.z / 64);
+      if (!touched.has(key)) continue;
+      const height = terrainLift(root.position.x, root.position.z);
+      const delta = height - root.userData.terrainFollowH;
+      if (Math.abs(delta) < 0.0001) continue;
+      root.position.y += delta;
+      root.userData.terrainFollowH = height;
+      root.updateMatrixWorld(true);
+    }
+  }
+
+  function terrainChanged(keys, options = {}) {
+    const list = Array.from(keys || []);
+    if (!list.length) return;
+    terrainLayer.markChanged(list, options);
+    terrainFollowObjects(list);
+    if (selectionHelper?.visible) selectionHelper.update();
+    requestRender("terrain-changed");
+  }
+
+  function terrainDiscardEdits() {
+    terrainBeginEdit();
+    const keys = terrainLayer.discardEdits();
+    terrainFollowObjects(keys);
+    requestRender("terrain-discard");
+    return keys;
+  }
+
+  function terrainRaycastScreen(clientX, clientY) {
+    if (!terrainLayer.active) return null;
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    return terrainLayer.raycast(raycaster.ray.origin, raycaster.ray.direction);
   }
 
   function groundsReferToSameZone(left, right) {
@@ -16730,6 +16848,12 @@ function resolveChunkDebugCenter(policy) {
     pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
     const groundY = num(world?.ground?.y, 0);
+    // Wereld tekenen: de muis raakt de heuvel, niet een plat vlak eronder. y blijft de basis van de grond
+    // (zoals altijd): plaatsen slaat de hoogte boven de grond op, de wereldbouwer telt het terrein erbij.
+    if (terrainLayer.active) {
+      const terrainHit = terrainLayer.raycast(raycaster.ray.origin, raycaster.ray.direction);
+      if (terrainHit) return { x: round(terrainHit.x), y: groundY, z: round(terrainHit.z), terrainY: terrainHit.y };
+    }
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
     const hit = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(plane, hit)) return null;
@@ -18075,8 +18199,9 @@ function resolveChunkDebugCenter(policy) {
     }
     const useChunkedGround = shouldUseChunkedGround(world, mode);
     const residentStreamingEnabled = isChunkCullingRuntimeEnabled(resolveChunkPolicy(world, mode));
+    if (!world?.terrain?.heightfield) terrainLayer.setWorld(null);
     if (!useChunkedGround) addGround(world);
-    const nextWalkabilityIndex = buildWalkabilityIndex(world);
+    const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: terrainLayer.active ? terrainLayer.heightfield : null });
     predictionSolids = mode === "game"
       ? solidCollisionEntriesForWorld(world).map(function (solid) {
         return Object.assign(solid, { enabled: !runtimeTargetSuppressedEntityIds.has(String(solid.entityId || "")) });
@@ -18211,6 +18336,7 @@ function resolveChunkDebugCenter(policy) {
 
   function destroy() {
     disposed = true;
+    terrainLayer.dispose();
     rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
@@ -18683,6 +18809,26 @@ function resolveChunkDebugCenter(policy) {
     getLoadErrors: function () { return loadErrors.slice(); },
     bakeMinimapImage: bakeMinimapImage,
     getMinimapBakeBounds: getMinimapBakeBounds,
-    getMinimapMarkerSnapshot: getMinimapMarkerSnapshot
+    getMinimapMarkerSnapshot: getMinimapMarkerSnapshot,
+    // Wereld tekenen (ronde 1): de terreinlaag voor de knop Terrein in de editor.
+    terrainActive: function () { return terrainLayer.active; },
+    terrainHeightfield: function () { return terrainLayer.heightfield; },
+    terrainHeightAt: terrainLift,
+    terrainBounds: function () { return terrainLayer.bounds; },
+    terrainRaycastScreen: terrainRaycastScreen,
+    terrainBeginEdit: terrainBeginEdit,
+    terrainChanged: terrainChanged,
+    terrainDiscardEdits: terrainDiscardEdits,
+    terrainDirtyChunks: function () { return terrainLayer.dirtyChunks(); },
+    terrainIsDirty: function () { return terrainLayer.isDirty(); },
+    terrainCommitSaved: function (refs, saved) { terrainLayer.commitSaved(refs, saved); },
+    terrainSeedChunk: seedTerrainChunk,
+    terrainStats: function () { return terrainLayer.stats(); },
+    terrainChunkInfoAt: function (x, z) { return terrainLayer.chunkInfoAt(x, z); },
+    terrainSetCursor: function (cursor) { terrainLayer.setCursor(cursor); },
+    terrainSetHeavyTint: function (on) { terrainLayer.setHeavyTint(on); },
+    renderInfo: function () {
+      return { triangles: renderer.info?.render?.triangles || 0, calls: renderer.info?.render?.calls || 0 };
+    }
   };
 }

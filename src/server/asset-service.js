@@ -6,6 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { cleanValuesForType } from "./field-validation.js";
 import { NODE_TYPES, defaultValuesForType } from "../shared/node-types.js";
+import { decodeTerrainChunk, parseTerrainChunkKey, TERRAIN_CHUNK_BYTES, TERRAIN_CHUNK_SHA_PATTERN } from "../../apps/web/public/shared/terrain.js";
 
 const now = function () {
   return new Date().toISOString();
@@ -753,6 +754,49 @@ export class AssetService {
       }
     }
     return { tiles: list.length, unique: used.size, removed, levels, bakedAt: manifest.bakedAt };
+  }
+
+  // Wereld tekenen (ronde 1): de hoogte van de grond in vakken van 64 x 64 m (8450 bytes per vak). Net als de
+  // kaarttegels heet elk vak naar zijn vingerafdruk (sha1): wat niet veranderd is, wordt niet opnieuw bewaard.
+  // Oude vakken blijven staan (een oudere build kan ze nog gebruiken). Upload: /api/editor/terrain-chunks.
+  saveTerrainChunks(files) {
+    const entries = Object.entries(files || {});
+    if (!entries.length) throw minimapError("Er zitten geen terreinvakken in de upload.");
+    if (entries.length > 4096) throw minimapError("Te veel terreinvakken in één upload.");
+    const dir = path.join(this.assetsDir, "terrain");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = {};
+    for (const [key, file] of entries) {
+      if (!parseTerrainChunkKey(key)) throw minimapError("Onbekend terreinvak: " + String(key).slice(0, 40) + ".");
+      const data = file?.data;
+      if (!data || data.length !== TERRAIN_CHUNK_BYTES) throw minimapError("Terreinvak " + key + " heeft niet de goede grootte.");
+      const sha1 = crypto.createHash("sha1").update(data).digest("hex");
+      const target = path.join(dir, sha1 + ".bin");
+      if (!fs.existsSync(target)) {
+        fs.writeFileSync(target + ".tmp", data);
+        fs.renameSync(target + ".tmp", target);
+      }
+      saved[key] = sha1;
+    }
+    return saved;
+  }
+
+  // Leest één vak (voor de server: lopen en objecten optillen). Vakken veranderen nooit, dus de cache blijft goed.
+  readTerrainChunk(sha1) {
+    const name = String(sha1 || "");
+    if (!TERRAIN_CHUNK_SHA_PATTERN.test(name)) return null;
+    if (!this.terrainChunkCache) this.terrainChunkCache = new Map();
+    if (this.terrainChunkCache.has(name)) return this.terrainChunkCache.get(name);
+    let chunk = null;
+    try { chunk = decodeTerrainChunk(fs.readFileSync(path.join(this.assetsDir, "terrain", name + ".bin"))); } catch { chunk = null; }
+    if (this.terrainChunkCache.size > 20000) this.terrainChunkCache.clear();
+    this.terrainChunkCache.set(name, chunk);
+    return chunk;
+  }
+
+  terrainChunkExists(sha1) {
+    const name = String(sha1 || "");
+    return TERRAIN_CHUNK_SHA_PATTERN.test(name) && fs.existsSync(path.join(this.assetsDir, "terrain", name + ".bin"));
   }
 
   minimapTiles() {

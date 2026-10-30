@@ -2,6 +2,7 @@
 // Gedeeld door de server (src/server/mmo-service.js) en de browser (via world-runtime.js).
 // Fase 02 (F2-E1-T01): uit world-runtime.js gehaald; gedrag is ongewijzigd (zie tests/movement-parity.test.js).
 import earcut from "./earcut.js";
+import { createHeightfield, decodeTerrainChunk, terrainHeightAt, TERRAIN_MAX_SLOPE_DEG } from "./terrain.js";
 
 // Zelfde stappen als THREE.ShapeUtils.triangulateShape(contour, []): dubbel eindpunt weg, dan earcut.
 function triangulateContourXZ(points) {
@@ -184,8 +185,42 @@ export function createEmptyWalkabilityIndex() {
     ground: null,
     surfaceBlockers: [],
     blockers: [],
-    walkables: []
+    walkables: [],
+    // Wereld tekenen (ronde 1): hoogte van de grond (terrain.js) en hoe steil je nog omhoog mag lopen.
+    heightfield: null,
+    maxSlopeTan: Math.tan(TERRAIN_MAX_SLOPE_DEG * DEG_TO_RAD)
   };
+}
+
+export function terrainSlopeTan(degrees) {
+  const value = Number(degrees);
+  const safe = Number.isFinite(value) ? clamp(value, 1, 89) : TERRAIN_MAX_SLOPE_DEG;
+  return Math.tan(safe * DEG_TO_RAD);
+}
+
+// De hoogtekaart voor een wereld. options.heightfield = een kant-en-klare (browser); anders leest
+// options.readTerrainChunk(sha1) de vakken (server, uit de assets). Zonder vakken: null (plat).
+export function heightfieldForWorld(worldData, options = {}) {
+  if (options.heightfield) return options.heightfield;
+  const config = worldData?.terrain?.heightfield || null;
+  const refs = config?.chunks && typeof config.chunks === "object" ? config.chunks : null;
+  if (!refs || typeof options.readTerrainChunk !== "function") return null;
+  const chunks = new Map();
+  for (const [key, sha1] of Object.entries(refs)) {
+    const data = options.readTerrainChunk(sha1);
+    const chunk = data instanceof Int16Array ? data : decodeTerrainChunk(data);
+    if (chunk) chunks.set(key, chunk);
+  }
+  return chunks.size ? createHeightfield(chunks) : null;
+}
+
+// Hoogte van de grond op x, z: basis (ground.y) + terrein. Loopvlakken (bruggen) gaan voor.
+export function groundHeightAt(source, x, z, fallbackY = 0, inflate = 0) {
+  const index = resolveWalkabilitySource(source);
+  const base = num(index?.ground?.y, fallbackY);
+  const walkableY = walkableSurfaceHeightAt(index, x, z, base, inflate);
+  if (walkableY !== null) return walkableY;
+  return base + (index?.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0);
 }
 
 
@@ -488,9 +523,11 @@ export function pointInRotatedRectangle(px, pz, rect, inflate = 0) {
 }
 
 
-export function createWalkabilityIndex(worldData) {
+export function createWalkabilityIndex(worldData, options = {}) {
   const index = createEmptyWalkabilityIndex();
   index.ground = worldGroundForCollision(worldData);
+  index.heightfield = heightfieldForWorld(worldData, options);
+  index.maxSlopeTan = terrainSlopeTan(worldData?.terrain?.heightfield?.maxSlopeDeg);
 
   const terrain = worldData?.terrain || {};
   const collision = worldData?.collision || {};
@@ -677,8 +714,8 @@ export function solidCollisionEntriesForWorld(world) {
 }
 
 
-export function buildWalkabilityIndex(worldData) {
-  activeWalkabilityIndex = createWalkabilityIndex(worldData);
+export function buildWalkabilityIndex(worldData, options = {}) {
+  activeWalkabilityIndex = createWalkabilityIndex(worldData, options);
   return activeWalkabilityIndex;
 }
 
@@ -803,7 +840,22 @@ export function resolveMovementCandidateInto(output, startX, startY, startZ, can
   clampPointToGround(output, ground, radius);
   if (isPointBlockedByTerrain(index, output.x, output.z, radius)) return false;
   const walkableY = walkableSurfaceHeightAt(index, output.x, output.z, num(ground?.y, startY), radius);
-  if (walkableY !== null) output.y = walkableY;
+  if (walkableY !== null) {
+    output.y = walkableY;
+    return true;
+  }
+  // Terrein: op de hoogte van de grond lopen; te steil omhoog = een muur (omlaag mag altijd).
+  const heightfield = index?.heightfield || null;
+  if (heightfield) {
+    const baseY = num(ground?.y, 0);
+    const endHeight = terrainHeightAt(heightfield, output.x, output.z);
+    const distance = Math.hypot(output.x - startX, output.z - startZ);
+    if (distance > COLLISION_EPSILON) {
+      const rise = endHeight - terrainHeightAt(heightfield, startX, startZ);
+      if (rise > 0 && rise / distance > num(index.maxSlopeTan, 1.19)) return false;
+    }
+    output.y = baseY + endHeight;
+  }
   return true;
 }
 

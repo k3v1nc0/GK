@@ -5,7 +5,7 @@
 // - Naar de game: actor:snapshot (alleen wat in de buurt is en veranderde) en actor:event.
 import { computeDamage, lootSeed, rollLoot, withinRangeMm } from "../../../apps/web/public/shared/combat-math.js";
 import { metersToMm, resolveMembership } from "../../../apps/web/public/shared/spatial.js";
-import { resolveMovement, walkableSurfaceHeightAt } from "../../../apps/web/public/shared/movement-kernel.js";
+import { groundHeightAt, resolveMovement } from "../../../apps/web/public/shared/movement-kernel.js";
 import { createNavigator } from "./navigation.js";
 import { playerAbilityFromSection } from "../authoring/actor-compiler.js";
 
@@ -95,7 +95,8 @@ export class ActorRuntime {
     const index = this.worldContextRef?.walkabilityIndex || null;
     const fallback = Number(index?.ground?.y) || 0;
     try {
-      const y = index ? walkableSurfaceHeightAt(index, x, z, fallback, 0) : null;
+      // Wereld tekenen: loopvlak (brug) of anders de hoogte van het terrein.
+      const y = index ? groundHeightAt(index, x, z, fallback, 0) : null;
       return Number.isFinite(y) ? y : fallback;
     } catch {
       return fallback;

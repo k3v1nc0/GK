@@ -1,4 +1,5 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-hud12";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein1";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein1";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -502,6 +503,7 @@ const el = {
   nodesModeButton: document.querySelector("#nodesModeButton"),
   workbenchModeButton: document.querySelector("#workbenchModeButton"),
   gameModeButton: document.querySelector("#gameModeButton"),
+  terrainModeButton: document.querySelector("#terrainModeButton"),
   gameTabPanel: document.querySelector("#gameTabPanel"),
   settingsModeButton: document.querySelector("#settingsModeButton"),
   oldModeMenu: document.querySelector("#oldModeMenu"),
@@ -895,6 +897,18 @@ const docBench = createDocBench({
   }
 });
 
+// Wereld tekenen (ronde 1): de knop Terrein (penselen op de 3D-view, opslaan bij Sluiten).
+const terrainEditor = createTerrainEditor({
+  getRuntime: function () { return runtime; },
+  fetchApi: function (path, options, method) { return fetchEditorApi(path, options, method); },
+  docBench,
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  showViewport: function () {
+    setGameTabOpen(false);
+    if (state.editorMode !== "workbench") setEditorMode("workbench");
+  }
+});
+
 // Documenten met een plek (pickup, NPC, model, vijand- en grondstofplek) staan als echte mesh in de editorwereld.
 // Klikken opent de kaart; G verplaatst, R draait en S schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
 // Een kaart uit de Bibliotheek op de wereld laten vallen maakt een plek (zie werkbank-world.js).
@@ -940,8 +954,10 @@ async function commitDocTransform(docKey, transform) {
   }
   const round2 = function (value) { return Math.round(Number(value) * 100) / 100; };
   const x = round2(Number(transform?.x) || 0);
-  const y = round2(Number(transform?.y) || 0);
   const z = round2(Number(transform?.z) || 0);
+  // Wereld tekenen: in de kaart staat de hoogte boven de grond; de wereldbouwer telt het terrein erbij.
+  const terrainY = runtime && typeof runtime.terrainHeightAt === "function" ? runtime.terrainHeightAt(x, z) : 0;
+  const y = round2((Number(transform?.y) || 0) - terrainY);
   const body = Object.assign({}, doc.body);
   if (doc.kind === "actor_spawn" || doc.kind === "resource_spawn") {
     // Vijand- en grondstofplekken staan in millimeters; het gebied volgt de nieuwe plek (of vervalt).
@@ -30665,6 +30681,8 @@ async function publish() {
   clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
+    // Wereld tekenen: niet opgeslagen terrein eerst bewaren (anders mist de game de nieuwe heuvels).
+    if (!(await terrainEditor.saveIfDirty())) throw new Error("Eerst het terrein opslaan lukte niet; probeer Sluiten in Terrein.");
     // Doelbeeld: één knop, één build. De game leest alleen de build; nodes doen niet meer mee.
     const build = await docBench.publish();
     clearUnsaved();
@@ -33204,9 +33222,10 @@ window.addEventListener("blur", clearViewportTouchEditState, true);
 window.addEventListener("pagehide", flushEditorLayoutServerSave);
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
-if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });
-if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("settings"); });
-if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
+if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(false); setEditorMode("workbench"); });
+if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(false); setEditorMode("settings"); });
+if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(true); });
+if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { terrainEditor.toggle(); });
 
 initMobileControls();
 setEditorMode(state.editorMode, false);

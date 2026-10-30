@@ -1050,7 +1050,11 @@ export class MmoService {
     if (this.worldCache && this.worldCache.canonicalBuildId === canonicalBuildId) return this.worldCache;
     const world = buildRuntimeWorld(canonical?.data || {}, Object.assign({}, this.canonicalOverlayOptions || {}, { buildId: canonicalBuildId || null, publishedAt }));
     const worldId = worldIdFor(world);
-    const walkabilityIndex = buildWalkabilityIndex(world);
+    // Wereld tekenen: de hoogte van de grond komt uit de vakken in de assets (zelfde als editor en game).
+    const assetService = this.canonicalOverlayOptions?.assetService || null;
+    const walkabilityIndex = buildWalkabilityIndex(world, {
+      readTerrainChunk: assetService && typeof assetService.readTerrainChunk === "function" ? (sha1) => assetService.readTerrainChunk(sha1) : null
+    });
     // Publish/rollback replaces the compiled world, but not the live state of an
     // authored entity. Keep runtime-disabled colliders (dead/claimed/depleted)
     // disabled until Node03 rehydrates that same state against the new cache.

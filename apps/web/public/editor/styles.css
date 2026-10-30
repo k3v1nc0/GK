@@ -3811,3 +3811,39 @@ body.editorFullscreen {
 .relTileName { font-size: 11px; line-height: 1.2; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .relArrow { display: flex; align-items: center; font-size: 22px; color: #6f8aa3; padding: 0 2px; }
 .relEmpty { color: #8fa1b1; font-size: 12px; padding: 6px; text-align: center; }
+
+/* Wereld tekenen (ronde 1): paneel Terrein boven de 3D-view. */
+.terreinPanel {
+  position: absolute; left: 10px; top: 52px; z-index: 30; width: 250px; padding: 10px;
+  background: rgba(13, 20, 28, 0.94); border: 1px solid #2c3a48; border-radius: 8px;
+  color: #dbe5ee; font-size: 12px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.terreinPanel[hidden] { display: none; }
+.terreinHead { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.terreinUndo { display: flex; gap: 4px; }
+.terreinSmall { width: 28px; height: 24px; border-radius: 5px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; }
+.terreinSmall:disabled { opacity: 0.35; cursor: default; }
+.terreinBrushes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.terreinBrush { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border-radius: 6px;
+  border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; font-size: 11px; }
+.terreinBrush span:first-child { font-size: 16px; }
+.terreinBrush.active { background: #ffb454; color: #251707; border-color: #ffb454; }
+.terreinSlider { display: grid; grid-template-columns: 70px 1fr 42px; align-items: center; gap: 6px; }
+.terreinSlider input { width: 100%; accent-color: #ffb454; }
+.terreinValue { text-align: right; font-variant-numeric: tabular-nums; }
+.terreinTip { color: #8ea3b5; font-size: 11px; line-height: 1.35; }
+.terreinCounter { display: flex; flex-direction: column; gap: 3px; padding: 6px; border-radius: 6px; background: #0a1017; border: 1px solid #22303d; }
+.terreinRow { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+.terreinRow b { font-weight: 600; }
+.terreinRow--ok b { color: #9fe08a; }
+.terreinRow--orange b { color: #ffad33; }
+.terreinRow--red b { color: #ff5252; }
+.terreinRow--muted { color: #8ea3b5; }
+.terreinCheck { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.terreinDirty { color: #8ea3b5; }
+.terreinDirty--warn { color: #ffad33; }
+.terreinActions { display: flex; gap: 6px; }
+.terreinSave { flex: 1; padding: 7px; border-radius: 6px; border: 0; background: #ffb454; color: #251707; font-weight: 700; cursor: pointer; }
+.terreinCancel { padding: 7px 10px; border-radius: 6px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; }
+body.terreinMode #viewportCanvas { cursor: crosshair; }
