@@ -60,7 +60,7 @@ export function compileGameSection(documents, options = {}) {
   const classValues = (body) => {
     const values = settingsValues("player_class", body);
     return { classId: values.classId, displayName: values.displayName, description: values.description || "",
-      healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower,
+      healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
       startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [] };
   };
   const classDocs = of("player_class").slice().sort((a, b) => String(a.body.displayName).localeCompare(String(b.body.displayName)) || a.docKey.localeCompare(b.docKey));

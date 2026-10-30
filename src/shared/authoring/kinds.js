@@ -111,6 +111,9 @@ export const CANONICAL_KINDS = {
       worldModelAssetId: { type: "asset", assetType: "model", required: false, maxLength: 160, audience: "client", label: "Model",
         ui: ui("🧊", "asset", "werkbank"), default: null,
         help: help("Het 3D-model als het item op de grond ligt (en het plaatje in de tas).", "Sleep een model uit de Bibliotheek op dit vak.", "Item onzichtbaar op de grond → sleep hier een model op.") },
+      modelScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Grootte op de grond",
+        ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], more: true }), default: 10000,
+        help: help("Hoe groot het item op de grond ligt.", "100 % = zoals het model is gemaakt. Een stuk vlees naast een speler van 1,5 m: ongeveer 20-30 cm.", "Item te klein of te groot → schuif naar rechts (groter) of links (kleiner).") },
       tags: { type: "tagList", required: false, maxItems: 32, audience: "client", label: "Labels",
         ui: ui("🏷️", "tags", "werkbank", { more: true }), default: null,
         help: help("Extra labels waar regels naar kunnen kijken (bijv. 'vis', 'ijzer').", "Kleine letters, kort. Een paar per item is genoeg.", "Label werkt niet → controleer de spelling (alleen a-z, 0-9, _ . : -).") },
@@ -126,7 +129,11 @@ export const CANONICAL_KINDS = {
         help: help("Hoeveel harder je slaat als je dit draagt.", "1-5 voor de eerste wapens.", "Wapen maakt geen verschil → hoger.") },
       armorBonus: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Extra pantser",
         ui: ui("🛡️", "slider", "werkbank", { step: 1, range: [0, 100], more: true }), default: 0,
-        help: help("Hoeveel minder schade je krijgt als je dit draagt.", "1-5 voor de eerste kleding.", "Spelers onkwetsbaar → lager.") }
+        help: help("Hoeveel minder schade je krijgt als je dit draagt.", "1-5 voor de eerste kleding.", "Spelers onkwetsbaar → lager.") },
+      // Stap 4 (HUD): eten en drinken. Met een waarde boven 0 krijgt het item in de tas de knop Gebruiken.
+      healAmount: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Geneest",
+        ui: ui("💚", "slider", "werkbank", { step: 1, range: [0, 200], more: true }), default: 0,
+        help: help("Hoeveel levens je terugkrijgt als je dit gebruikt. 0 = niet te gebruiken.", "10-30 voor brood en drankjes.", "Geen knop Gebruiken in de tas → zet hier meer dan 0.") }
     }
   },
   pickup: {

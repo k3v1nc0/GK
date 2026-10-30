@@ -1085,6 +1085,13 @@ export class Node04QuestRuntimeService {
         conditions: progress?.conditions || []
       } : null,
       nextQuestRefs: Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs.slice() : [],
+      // Stap 4 (HUD): de beloning in het questboek.
+      rewards: (Array.isArray(quest.rewards) ? quest.rewards : []).map(function (reward) {
+        if (reward?.actionKind === "xp") return { kind: "xp", amount: safeInteger(reward.amount, 0) };
+        if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
+        if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
+        return null;
+      }).filter(function (reward) { return reward && reward.amount > 0; }),
       acceptedAt: row.accepted_at || null,
       completedAt: row.completed_at || null
     };

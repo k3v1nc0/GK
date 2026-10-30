@@ -297,6 +297,10 @@ function serveStatic(req, res, url) {
   if (pathname === "/login") return sendRedirect(res, "/login/");
   if (pathname.startsWith("/editor/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/editor/"));
   if (pathname.startsWith("/game/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/game/"));
+  // Kaarttegels heten naar hun inhoud (sha1) en veranderen dus nooit: de browser mag ze voor altijd bewaren.
+  if (pathname.startsWith("/assets/minimap-tiles/") && /^[0-9a-f]{40}\.(webp|png)$/.test(pathname.slice("/assets/minimap-tiles/".length))) {
+    return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=31536000, immutable", req);
+  }
   if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300", req);
   if (pathname.startsWith("/vendor/three/")) {
     if (!fs.existsSync(vendorRoot)) return sendText(res, 503, "Three.js dependency ontbreekt. Run npm install.");
@@ -901,6 +905,16 @@ async function handleApi(req, res, url) {
       if (!asset) return sendJson(res, 404, { ok: false, message: "Asset bestaat niet." });
       return sendJson(res, 201, repository.createModelEntityFromAsset(asset, body.position || {}, body.parentId || null));
     }
+    if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      return sendJson(res, 201, { ok: true, tiles: assetService.saveMinimapTiles(multipart.files) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles/commit") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      return sendJson(res, 201, Object.assign({ ok: true }, assetService.commitMinimapTiles(body)));
+    }
     if (req.method === "POST" && url.pathname === "/api/editor/minimap-bakes") {
       authService.requireEditor(req);
       const multipart = await readMultipart(req);
@@ -1014,6 +1028,9 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "GET" && url.pathname === "/api/game/world") {
       return sendJson(res, 200, mmoService.getPublishedWorldContext().world);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/minimap") {
+      return sendJson(res, 200, { ok: true, tiles: assetService.minimapTiles() });
     }
     if (req.method === "GET" && url.pathname === "/api/game/version") {
       return sendJson(res, 200, { ok: true, publishedAt: mmoService.getPublishedWorldContext().publishedAt });

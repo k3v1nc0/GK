@@ -206,6 +206,8 @@ export const GAME_KINDS = {
         help("Hoeveel schade deze klasse tegenhoudt zonder uitrusting.", "Tank 10, de rest 0.", "Te sterk → lager.")),
       healPower: int("Heal-kracht", "💚", 5, 0, 1000000, "instellingen", { range: [0, 200] },
         help("Hoe goed deze klasse kan genezen (telt op bij een heal).", "5 voor de meeste klassen, 10 voor de Healer.", "Healer geneest te weinig → hoger.")),
+      manaMax: int("Mana", "🔵", 50, 0, 1000000, "instellingen", { range: [0, 1000], more: true },
+        help("Hoeveel mana deze klasse heeft (blauwe balk onder de levens).", "Healer 100, DPS 50, Tank 30. 0 = geen manabalk.", "Spreuken raken te snel op → hoger.")),
       startItems: refList("Start-spullen", "🎒", ["item_definition", "currency"], [AMOUNT], "instellingen",
         help("Wat een nieuw character van deze klasse één keer krijgt (onder ⚙️ meer).", "Bijv. een zwaard voor de DPS en een schild voor de Tank. Uitrusting wordt meteen aangedaan.", "Character krijgt niets → kies hier iets. Bestaande characters krijgen het niet nog eens."),
         { ui: ui("🎒", "refList", "instellingen", { more: true }) }),
@@ -221,15 +223,22 @@ export const GAME_KINDS = {
     singleton: true,
     domain: "project",
     fields: {
-      showHealth: toggle("Levensbalk", "❤️", true, "instellingen", help("Toont de levens van de speler bovenin.", "Meestal aan.", "Spelers zien niet dat ze doodgaan → zet aan.")),
-      showXp: toggle("XP-balk", "⭐", true, "instellingen", help("Toont level en ervaring onderin.", "Aan als je levels gebruikt.", "Scherm te vol → zet uit.")),
-      showHotbar: toggle("Actiebalk", "🎛️", true, "instellingen", help("De balk met aanvallen en knoppen onderin.", "Aan als spelers aanvallen hebben.", "Lege balk → zet uit.")),
-      showBag: toggle("Tas", "🎒", true, "instellingen", help("Het venster met wat de speler bij zich heeft (met de knop Uitrusten).", "Meestal aan.", "Spelers vinden hun spullen niet → zet aan.")),
-      showEquipment: toggle("Uitrusting", "🧥", true, "instellingen", help("Het venster met wat de speler draagt.", "Aan als je wapens of kleding hebt.", "Scherm te vol → zet uit.")),
-      showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Toont hoeveel geld (valuta) de speler heeft.", "Aan als je een winkel hebt.", "Scherm te vol → zet uit.")),
-      showQuests: toggle("Quests", "📜", true, "instellingen", help("Quest-lijst, praten met NPC's en meldingen.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
-      showInteractions: toggle("Dingen in de buurt", "👆", true, "instellingen", help("Lijst met vijanden, grondstoffen en pickups in de buurt, met knoppen.", "Aan; handig op een laptop zonder muis.", "Scherm te vol → zet uit."), { more: true }),
-      showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("De vensters voor kopen, verkopen en maken bij een NPC.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true })
+      showHealth: toggle("Levensbalk", "❤️", true, "instellingen", help("Toont de levens linksboven, naast het portret.", "Meestal aan.", "Spelers zien niet dat ze doodgaan → zet aan.")),
+      showXp: toggle("XP-balk", "⭐", true, "instellingen", help("Toont het level bij het portret en een dun XP-lijntje onder de levens.", "Aan als je levels gebruikt.", "Scherm te vol → zet uit.")),
+      showHotbar: toggle("Actiebalk", "🎛️", true, "instellingen", help("De ronde knoppen onderin: de aanval van je klasse en 🤝 doen.", "Aan als spelers aanvallen hebben.", "Spelers kunnen niet aanvallen met een tik → zet aan.")),
+      showBag: toggle("Tas", "🎒", true, "instellingen", help("Het tabblad 🎒 Tas in het paneel, met Uitrusten, Gebruiken en Weggooien.", "Meestal aan.", "Spelers vinden hun spullen niet → zet aan.")),
+      showEquipment: toggle("Uitrusting", "🧥", true, "instellingen", help("Het tabblad ⛑️ Uitrusting: wat de speler draagt, met Uitdoen.", "Aan als je wapens of kleding hebt.", "Geen wapens of kleding in je game → zet uit.")),
+      showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Het tabblad 🪙 Geld: hoeveel van elke valuta de speler heeft.", "Aan als je een winkel hebt.", "Geen geld in je game → zet uit.")),
+      showQuests: toggle("Quests", "📜", true, "instellingen", help("Het tabblad 📜 Quests, de quest-regel bij het portret en praten met NPC's.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
+      showInteractions: toggle("Doen-knop", "🤝", true, "instellingen", help("De knop 🤝 onderin: praten, oppakken of verzamelen bij wat het dichtstbij is.", "Aan; handig op een telefoon of laptop zonder muis.", "Spelers moeten precies op kleine dingen tikken → zet aan."), { more: true }),
+      showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("Kopen, verkopen en maken bij een NPC: het paneel splitst dan in waren en je tas.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true }),
+      fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
+      fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
+        help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
+      fogDarkness: int("Donkerte van de mist", "🌑", 100, 0, 100, "instellingen", { range: [0, 100], more: true },
+        help("Hoe donker de mist op de kaart is, in procent. 100 = helemaal dicht, je ziet er niets doorheen.", "90 tot 100.", "Je ziet de kaart door de mist heen → hoger.")),
+      fogFadeMeters: int("Zachte rand van de mist", "🌗", 8, 0, 64, "instellingen", { range: [0, 32], more: true },
+        help("Hoe breed de zachte overgang aan de rand van de mist is, in meters. 0 = een harde rand.", "4 tot 16 m.", "Je ziet te veel door de rand heen → lager. De rand is te hoekig → hoger."))
     }
   }
 };

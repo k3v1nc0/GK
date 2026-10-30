@@ -30,6 +30,8 @@ function pickupStates(world) {
       for (const spawn of set.spawns) {
         const state = Node03RuntimeService.prototype.desiredPickupForSpawn.call({}, { zoneId: pkg.zoneId, catalogs: world.gameProject.catalogs }, controller, set, spawn);
         delete state.updatedAt;
+        // Ronde 10: de grootte op de grond komt bewust uit Canoniek (standaard 100 %), niet meer vast 45 %.
+        delete state.modelScale;
         states[state.instanceId] = state;
       }
     }
@@ -106,7 +108,8 @@ test("verhuizen: rapport, volgorde, graphrevisie-race, parity per consumer en id
   const after = pickupStates(applyCanonicalBuild(world, ctx.builds.activeServerBuild()));
   assert.deepEqual(after, before);
   // null en "ontbreekt" betekenen voor de consumers hetzelfde (item.iconAssetId || null).
-  const withoutNulls = (items) => JSON.parse(JSON.stringify(items, (key, value) => (value === null ? undefined : value)));
+  // Ronde 10: worldModelScale komt bewust uit Canoniek (Grootte op de grond, standaard 100 %).
+  const withoutNulls = (items) => JSON.parse(JSON.stringify(items, (key, value) => (value === null || key === "worldModelScale" ? undefined : value)));
   assert.deepEqual(withoutNulls(applyCanonicalBuild(world, ctx.builds.activeServerBuild()).gameProject.catalogs.items), withoutNulls(world.gameProject.catalogs.items));
 });
 

@@ -10,7 +10,10 @@ export function createWorldMusic(options = {}) {
   const createAudio = options.createAudio || ((url) => new Audio(url));
   const fadeMs = Math.max(0, Number(options.fadeMs ?? 1500));
   const stepMs = 50;
-  const targetVolume = Math.max(0, Math.min(1, Number(options.volume ?? 0.45)));
+  const baseVolume = Math.max(0, Math.min(1, Number(options.volume ?? 0.45)));
+  // Stap 4 (HUD): muziek aan/uit in de speler-instellingen. Uit = zacht wegfaden, de track blijft lopen.
+  let muted = options.muted === true;
+  let targetVolume = muted ? 0 : baseVolume;
   const setTimer = options.setInterval || ((fn, ms) => setInterval(fn, ms));
   const clearTimer = options.clearInterval || ((id) => clearInterval(id));
   const onStateChange = typeof options.onStateChange === "function" ? options.onStateChange : () => {};
@@ -33,11 +36,14 @@ export function createWorldMusic(options = {}) {
   }
 
   function step() {
-    const delta = fadeMs > 0 ? (targetVolume * stepMs) / fadeMs : 1;
+    const delta = fadeMs > 0 ? (baseVolume * stepMs) / fadeMs : 1;
     let busy = false;
     if (current && current.started && current.audio.volume < targetVolume) {
       current.audio.volume = Math.min(targetVolume, current.audio.volume + delta);
       busy = busy || current.audio.volume < targetVolume;
+    } else if (current && current.started && current.audio.volume > targetVolume) {
+      current.audio.volume = Math.max(targetVolume, current.audio.volume - delta);
+      busy = busy || current.audio.volume > targetVolume;
     }
     for (const old of Array.from(fading)) {
       old.audio.volume = Math.max(0, old.audio.volume - delta);
@@ -105,6 +111,12 @@ export function createWorldMusic(options = {}) {
       if (state !== MUSIC_STATES.LOCKED || !current || current.started) return;
       start(current);
     },
+    setMuted(next) {
+      muted = next === true;
+      targetVolume = muted ? 0 : baseVolume;
+      ensureTimer();
+    },
+    muted() { return muted; },
     state() { return state; },
     wantedUrl() { return wantedUrl; },
     destroy() {

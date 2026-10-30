@@ -8578,6 +8578,28 @@ function resolveChunkDebugCenter(policy) {
     if (reason) DEBUG_RUNTIME.lastStopReason = reason;
   }
 
+  // Stap 4 (HUD): een open paneel bedekt een deel van het beeld. Het beeld schuift dan zo dat de speler midden in
+  // het vrije deel staat (zelfde zoom). Klikken, picking en worldToScreen rekenen met dezelfde camera mee.
+  let viewInsetX = 0;
+  let viewInsetY = 0;
+  function applyViewInset() {
+    const width = Math.max(1, lastResizeWidth || canvas.clientWidth || 1);
+    const height = Math.max(1, lastResizeHeight || canvas.clientHeight || 1);
+    if (!viewInsetX && !viewInsetY) camera.clearViewOffset();
+    else camera.setViewOffset(width, height, viewInsetX / 2, viewInsetY / 2, width, height);
+    camera.updateProjectionMatrix();
+    requestRender();
+  }
+
+  function setViewInset(right, bottom) {
+    const nextX = Math.max(0, Math.round(Number(right) || 0));
+    const nextY = Math.max(0, Math.round(Number(bottom) || 0));
+    if (nextX === viewInsetX && nextY === viewInsetY) return;
+    viewInsetX = nextX;
+    viewInsetY = nextY;
+    applyViewInset();
+  }
+
   function handleResize(reason) {
     if (disposed) return false;
     const rect = resizeTarget && typeof resizeTarget.getBoundingClientRect === "function"
@@ -8597,6 +8619,7 @@ function resolveChunkDebugCenter(policy) {
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    if (viewInsetX || viewInsetY) applyViewInset();
     DEBUG_RUNTIME.resizeCount += 1;
     if (DEBUG_RUNTIME.enabled && beforePosition) {
       const afterPosition = camera.position.clone();
@@ -11295,6 +11318,9 @@ function resolveChunkDebugCenter(policy) {
     // webp using the real scene's own background/fog, matching the live 3D world exactly.
     const format = "webp";
     const quality = Math.max(0.1, Math.min(1, num(config.quality, 0.78)));
+    // config.tiles = [{minX,maxX,minZ,maxZ}] + config.onTile(tile, blob, index): veel kleine foto's in één keer.
+    const tiled = Array.isArray(config.tiles) && config.tiles.length > 0 && typeof config.onTile === "function";
+    let tilesDone = 0;
     const backgroundColor = colorOrDefault(bakeWorld?.world?.backgroundColor, "#101a26");
     const transparentBackground = false;
     const centerX = (minX + maxX) / 2;
@@ -11318,6 +11344,12 @@ function resolveChunkDebugCenter(policy) {
     }
     if (config.hideTransformControls !== false) hideRoot(transformGuide);
     if (config.hideChunkDebugOverlay !== false) hideRoot(chunkDebugOverlay);
+    // Naambordjes en cirkels van NPC's, vijanden en items horen niet op de kaartfoto.
+    for (const targetRoot of runtimeTargetRoots.values()) {
+      targetRoot.traverse(function (child) {
+        if (child?.name === "node03-runtime-target-nameplate" || child?.name === "node03-runtime-target-ring") hideRoot(child);
+      });
+    }
     if (config.includeStaticModels === false) {
       for (const root of entityRoots.values()) hideRoot(root);
     }
@@ -11372,7 +11404,7 @@ function resolveChunkDebugCenter(policy) {
     // stays linear, which made the bake visibly darker than the live 3D world. An sRGB render
     // target makes the GPU encode on write so readRenderTargetPixels returns the same values the
     // screen shows.
-    const renderTarget = new THREE.WebGLRenderTarget(resolution, resolution, {
+    const renderTarget = new THREE.WebGLRenderTarget(tiled ? 1 : resolution, tiled ? 1 : resolution, {
       type: THREE.UnsignedByteType,
       colorSpace: THREE.SRGBColorSpace
     });
@@ -11406,6 +11438,53 @@ function resolveChunkDebugCenter(policy) {
         collisionResidentChunkKeys: []
       }, "minimap-bake-zone");
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+      if (tiled) {
+        // Kaarttegels: de wereld één keer klaarzetten en dan elk stukje apart fotograferen (zelfde licht en schaduw).
+        const tileRes = Math.max(64, Math.min(2048, maxTextureSize, Math.round(num(config.tileResolution, 512))));
+        const tileTarget = new THREE.WebGLRenderTarget(tileRes, tileRes, { type: THREE.UnsignedByteType, colorSpace: THREE.SRGBColorSpace });
+        const tileCamera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, bakeCamera.far);
+        tileCamera.up.set(0, 0, -1);
+        const tileCanvas = document.createElement("canvas");
+        tileCanvas.width = tileRes;
+        tileCanvas.height = tileRes;
+        const tileCtx = tileCanvas.getContext("2d");
+        const tilePixels = new Uint8Array(tileRes * tileRes * 4);
+        const tileImage = tileCtx.createImageData(tileRes, tileRes);
+        const tileRow = tileRes * 4;
+        try {
+          for (let index = 0; index < config.tiles.length; index += 1) {
+            const tile = config.tiles[index];
+            const tw = num(tile.maxX) - num(tile.minX);
+            const td = num(tile.maxZ) - num(tile.minZ);
+            const tcx = (num(tile.minX) + num(tile.maxX)) / 2;
+            const tcz = (num(tile.minZ) + num(tile.maxZ)) / 2;
+            tileCamera.left = -tw / 2;
+            tileCamera.right = tw / 2;
+            tileCamera.top = td / 2;
+            tileCamera.bottom = -td / 2;
+            tileCamera.position.set(tcx, highY, tcz);
+            tileCamera.lookAt(tcx, groundY, tcz);
+            tileCamera.updateProjectionMatrix();
+            renderer.setRenderTarget(tileTarget);
+            renderer.setClearColor(new THREE.Color(backgroundColor), 1);
+            renderer.autoClear = true;
+            renderer.clear(true, true, true);
+            renderer.render(scene, tileCamera);
+            renderer.readRenderTargetPixels(tileTarget, 0, 0, tileRes, tileRes, tilePixels);
+            for (let y = 0; y < tileRes; y += 1) {
+              const srcStart = (tileRes - y - 1) * tileRow;
+              tileImage.data.set(tilePixels.subarray(srcStart, srcStart + tileRow), y * tileRow);
+            }
+            tileCtx.putImageData(tileImage, 0, 0);
+            const blob = await new Promise(function (resolve) { tileCanvas.toBlob(resolve, "image/webp", quality); });
+            if (!blob) throw new Error("Kaarttegel kon niet worden opgeslagen.");
+            await config.onTile(tile, blob, index);
+          }
+        } finally {
+          tileTarget.dispose();
+        }
+        tilesDone = config.tiles.length;
+      } else {
       renderer.setRenderTarget(renderTarget);
       renderer.setClearColor(new THREE.Color(backgroundColor), transparentBackground ? 0 : 1);
       renderer.autoClear = true;
@@ -11426,6 +11505,7 @@ function resolveChunkDebugCenter(policy) {
         imageData.data.set(pixels.subarray(srcStart, srcStart + rowSize), y * rowSize);
       }
       ctx.putImageData(imageData, 0, 0);
+      }
     } catch (error) {
       bakeError = error;
     } finally {
@@ -11468,6 +11548,7 @@ function resolveChunkDebugCenter(policy) {
     if (bakeError) return Promise.reject(bakeError);
 
     const finalBounds = { minX, maxX, minZ, maxZ, width, depth };
+    if (tiled) return { tiles: tilesDone, bounds: finalBounds, format: "webp", quality: quality };
     return new Promise(function (resolve, reject) {
       outputCanvas.toBlob(function (resultBlob) {
         if (!resultBlob) {
@@ -14987,6 +15068,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const sprite = new THREE.Sprite(material);
     sprite.name = "remote-player-nameplate";
+    sprite.visible = runtimeTargetNameplatesVisible;
     sprite.position.set(0, 2.15, 0);
     sprite.scale.set(3.2, 0.8, 1);
     sprite.renderOrder = 4001;
@@ -15056,7 +15138,7 @@ function resolveChunkDebugCenter(policy) {
     }
     if (existing && existing.userData?.localPlayerLabelText === label) {
       updateLocalPlayerNameplateAnchor(existing, sourceObject || playerVisualObject(root));
-      existing.visible = true;
+      existing.visible = runtimeTargetNameplatesVisible;
       player.nameplateRoot = existing;
       return existing;
     }
@@ -15391,6 +15473,65 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function runtimeTargetNameplateY(target) {
+    const modelScaleY = Number.isFinite(Number(target?.modelScaleY))
+      ? Number(target.modelScaleY)
+      : (Number.isFinite(Number(target?.modelScale)) ? Number(target.modelScale) : 1);
+    return Number.isFinite(Number(target?.nameplateY))
+      ? Number(target.nameplateY)
+      : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
+  }
+
+  // Game (stap 4): de plek op het scherm net boven elk zichtbaar doel, voor de scherpe 2D-naamlabels van de HUD
+  // (in plaats van de 3D-bordjes). Dichtstbij eerst, hooguit maxCount.
+  // 2D-namen in de HUD: schermplek (pagina-pixels) van NPC's, vijanden, spullen en spelers.
+  // Afstand telt vanaf je eigen poppetje (niet de camera), zodat uitzoomen geen namen wegknipt.
+  function getRuntimeTargetLabelAnchors(maxDistance = 80, maxCount = 40) {
+    const list = [];
+    if (!camera || !canvas) return list;
+    const rect = canvas.getBoundingClientRect();
+    const point = new THREE.Vector3();
+    const origin = player.root ? player.root.position : player.pos;
+    const push = function (id, name, entityKind, extra) {
+      const distance = origin ? Math.hypot(point.x - origin.x, point.z - origin.z) : camera.position.distanceTo(point);
+      if (!(distance <= maxDistance)) return;
+      point.project(camera);
+      if (!(point.z >= -1 && point.z <= 1) || Math.abs(point.x) > 1.05 || Math.abs(point.y) > 1.05) return;
+      list.push(Object.assign({
+        id, name, entityKind, action: "", selected: false, available: true,
+        x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
+        distance
+      }, extra || null));
+    };
+    for (const [id, root] of runtimeTargetRoots) {
+      if (!root || root.visible === false) continue;
+      const target = root.userData?.runtimeTargetPayload || {};
+      const name = String(target.displayName || "").trim().slice(0, 34);
+      if (!name) continue;
+      point.set(root.position.x, root.position.y + Math.max(1.6, runtimeTargetNameplateY(target) - 0.45), root.position.z);
+      push(id, name, String(target.entityKind || target.targetKind || ""), {
+        action: String(target.action || ""), selected: target.selected === true, available: target.available !== false
+      });
+    }
+    // Spelers: de plek van hun (verborgen) 3D-naambordje.
+    const self = player.root?.userData?.localPlayerNameplateRoot || null;
+    if (self && player.displayName) {
+      self.getWorldPosition(point);
+      point.y -= 0.25;
+      push("self", String(player.displayName).trim().slice(0, 32), "self");
+    }
+    for (const [playerId, record] of remotePlayers) {
+      const plate = record?.root?.userData?.remotePlayerNameplateRoot || null;
+      if (!plate || record.root.visible === false || !record.root.parent) continue;
+      plate.getWorldPosition(point);
+      point.y -= 0.25;
+      push("player:" + playerId, String(record.displayName || "").trim().slice(0, 32) || "Speler", "player");
+    }
+    list.sort(function (a, b) { return a.distance - b.distance; });
+    return list.length > maxCount ? list.slice(0, maxCount) : list;
+  }
+
   function createRuntimeTargetNameplate(target) {
     const label = runtimeTargetLabel(target);
     const color = runtimeTargetColor(target);
@@ -15442,13 +15583,7 @@ function resolveChunkDebugCenter(policy) {
     const sprite = new THREE.Sprite(material);
     sprite.name = "node03-runtime-target-nameplate";
     sprite.visible = runtimeTargetNameplatesVisible;
-    const modelScaleY = Number.isFinite(Number(target?.modelScaleY))
-      ? Number(target.modelScaleY)
-      : (Number.isFinite(Number(target?.modelScale)) ? Number(target.modelScale) : 1);
-    const nameplateY = Number.isFinite(Number(target?.nameplateY))
-      ? Number(target.nameplateY)
-      : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
-    sprite.position.set(0, nameplateY, 0);
+    sprite.position.set(0, runtimeTargetNameplateY(target), 0);
     sprite.scale.set(4.2, 1.22, 1);
     sprite.renderOrder = 4100;
     sprite.frustumCulled = false;
@@ -16417,6 +16552,13 @@ function resolveChunkDebugCenter(policy) {
         if (child?.name === "node03-runtime-target-nameplate") child.visible = nextVisible;
       });
     }
+    // Spelersnamen (eigen en anderen) gaan mee: de game toont ze dan als 2D-namen in de HUD.
+    const selfPlate = player.root?.userData?.localPlayerNameplateRoot;
+    if (selfPlate) selfPlate.visible = nextVisible;
+    for (const record of remotePlayers.values()) {
+      const plate = record?.root?.userData?.remotePlayerNameplateRoot;
+      if (plate) plate.visible = nextVisible;
+    }
     requestRender("runtime-target-nameplates");
     return runtimeTargetNameplatesVisible;
   }
@@ -16976,11 +17118,12 @@ function resolveChunkDebugCenter(policy) {
   function clearHudModules() {
     for (const node of hudNodes.anchored.values()) node.remove();
     hudNodes.anchored.clear();
-    for (const entry of hudNodes.performance.values()) {
+    for (const [key, entry] of Array.from(hudNodes.performance.entries())) {
+      if (entry.keep) continue;
       if (typeof entry.dispose === "function") entry.dispose();
       else entry.root.remove();
+      hudNodes.performance.delete(key);
     }
-    hudNodes.performance.clear();
     perfHudNextUpdateAt = 0;
   }
 
@@ -17054,7 +17197,12 @@ function resolveChunkDebugCenter(policy) {
     if (metrics.showChunkCulling === true) addRow("terrainChunks", "T Chunks");
     let frame = null;
     let dispose = null;
-    if (hudPanelAdapter && typeof hudPanelAdapter.appendPanel === "function") {
+    if (mod.mount) {
+      root.className = "perf-hud perf-hud--compact";
+      mod.mount.appendChild(root);
+      frame = root;
+      dispose = function () { root.remove(); };
+    } else if (hudPanelAdapter && typeof hudPanelAdapter.appendPanel === "function") {
       const moduleId = mod.id || "perf_hud";
       const result = hudPanelAdapter.appendPanel({
         moduleId: moduleId,
@@ -17072,6 +17220,7 @@ function resolveChunkDebugCenter(policy) {
       hudElement.appendChild(root);
     }
     hudNodes.performance.set(mod.id || "perf_hud", {
+      keep: mod.keep === true,
       root: root,
       frame: frame,
       dispose: dispose,
@@ -17081,6 +17230,32 @@ function resolveChunkDebugCenter(policy) {
       updateIntervalMs: updateIntervalMs,
       nextUpdateAt: 0
     });
+  }
+
+  // Game (stap 4): prestatie-info (FPS, frame, GPU) in een eigen hoekje van de nieuwe HUD; null = weg.
+  function setPerformanceHud(mount) {
+    const existing = hudNodes.performance.get("gk_perf");
+    if (existing) {
+      if (typeof existing.dispose === "function") existing.dispose();
+      else existing.root.remove();
+      hudNodes.performance.delete("gk_perf");
+    }
+    if (!mount) return false;
+    buildPerformanceHudModule({
+      id: "gk_perf",
+      label: "Prestatie",
+      mount: mount,
+      keep: true,
+      updateIntervalMs: 500,
+      metrics: {
+        showFps: true, showFrameMs: true, showGpuMs: true, showRenderCpuMs: true, showRemoteSyncMs: true, showRenderer: true,
+        showDrawCalls: true, showTriangles: true, showMovementStepMs: false, showMinimapDrawMs: false, showGeometries: false,
+        showTextures: false, showSceneObjects: false, showEntities: false, showScatterInstances: false, showTerrainVisuals: false,
+        showCollisionShapes: false
+      }
+    });
+    perfHudNextUpdateAt = 0;
+    return true;
   }
 
   function setHudModules(modules) {
@@ -18330,6 +18505,7 @@ function resolveChunkDebugCenter(policy) {
     dispose: destroy,
     screenToGround: screenToGround,
     worldToScreen: worldToScreen,
+    setViewInset: setViewInset,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
     resolvePlayerMovementIntent: resolvePlayerMovementIntent,
@@ -18353,6 +18529,8 @@ function resolveChunkDebugCenter(policy) {
     setRuntimeTargetAnimation: setRuntimeTargetAnimation,
     registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
+    getRuntimeTargetLabelAnchors: getRuntimeTargetLabelAnchors,
+    setPerformanceHud: setPerformanceHud,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,
     clearRuntimeTargets: clearRuntimeTargets,
     pickRuntimeTargetAt: pickRuntimeTargetAt,

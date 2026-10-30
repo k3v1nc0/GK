@@ -8,6 +8,7 @@
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { settingsValues } from "./game-compiler.js";
+import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
 
 export const WORLD_FORMAT_VERSION = "gk-game-project-v3";
 export const WORLD_ID = "world.main";
@@ -207,8 +208,29 @@ export const PLAYER_STAT_BLOCK_ID = "stat_block.player";
 export const PLAYER_XP_CURVE_ID = "stat_curve.player_xp";
 export const CRAFTING_STATION_TYPE = "crafting.station";
 const NPC_TALK_RANGE = 2.5;
+const FOG_CELL_M = 8;
+
+// Ronde 10: namen van deelgebieden op de kaarten, midden in het gebied (meters).
+function areaLabels(section) {
+  const labels = [];
+  for (const area of Array.isArray(section?.areas) ? section.areas : []) {
+    const name = String(area?.displayName || "").trim();
+    if (!name) continue;
+    try {
+      const box = areaBoundsMm(area);
+      if (![box.minXMm, box.maxXMm, box.minZMm, box.maxZMm].every(Number.isFinite)) continue;
+      labels.push({ id: area.areaId || name, name: name.slice(0, 40), x: (box.minXMm + box.maxXMm) / 2000, z: (box.minZMm + box.maxZMm) / 2000 });
+    } catch { /* kapotte vorm: geen naam */ }
+  }
+  return labels;
+}
+// Getal uit Game-scherm (0 is ook een geldige keuze), anders de standaard; begrensd tot 0..max.
+function fogPercent(value, fallback, max = 100) {
+  const number = value === "" || value === null || value === undefined ? NaN : Number(value);
+  return Math.max(0, Math.min(max, Number.isFinite(number) ? number : fallback));
+}
 const talkRangeOf = (npc) => (Number(npc?.talkRange) > 0 ? Number(npc.talkRange) : NPC_TALK_RANGE);
-const STAT_IDS = { health: "stat.health", attackPower: "stat.attack_power", armor: "stat.armor", healPower: "stat.heal_power" };
+const STAT_IDS = { health: "stat.health", attackPower: "stat.attack_power", armor: "stat.armor", healPower: "stat.heal_power", mana: "stat.mana" };
 
 const npcEntityId = (npcId, editor) => (editor ? EDITOR_DOC_PREFIX + "npc:" + npcId : "npc_entity." + npcId);
 const npcTargetId = (npcId) => "target.npc." + npcId;
@@ -321,7 +343,7 @@ function withGame(world, source, options) {
   const player = game?.player || (() => {
     const values = settingsValues("player_class", null);
     const project = settingsValues("project_settings", null);
-    return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower,
+    return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
       xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
   })();
   const hud = game?.hud || settingsValues("hud_settings", null);
@@ -334,13 +356,15 @@ function withGame(world, source, options) {
     [STAT_IDS.health]: { id: STAT_IDS.health, statId: STAT_IDS.health, displayName: "Levens" },
     [STAT_IDS.attackPower]: { id: STAT_IDS.attackPower, statId: STAT_IDS.attackPower, displayName: "Kracht" },
     [STAT_IDS.armor]: { id: STAT_IDS.armor, statId: STAT_IDS.armor, displayName: "Pantser" },
-    [STAT_IDS.healPower]: { id: STAT_IDS.healPower, statId: STAT_IDS.healPower, displayName: "Heal-kracht" }
+    [STAT_IDS.healPower]: { id: STAT_IDS.healPower, statId: STAT_IDS.healPower, displayName: "Heal-kracht" },
+    [STAT_IDS.mana]: { id: STAT_IDS.mana, statId: STAT_IDS.mana, displayName: "Mana" }
   };
   const statBlock = (id, values) => ({ id, entries: [
     { statRef: STAT_IDS.health, baseValue: values.healthMax },
     { statRef: STAT_IDS.attackPower, baseValue: values.attackPower },
     { statRef: STAT_IDS.armor, baseValue: values.armor },
-    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5 }
+    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5 },
+    { statRef: STAT_IDS.mana, baseValue: Number.isFinite(values.manaMax) ? values.manaMax : 50 }
   ] });
   const character = (id, displayName, statBlockRef, values, extra = {}) => Object.assign({
     id, displayName, statBlockRef, startingAbilityRefs: [], defaultLoadoutId: "loadout.main",
@@ -452,6 +476,9 @@ function withGame(world, source, options) {
   // zodra die losse wereldplaatsing verdwijnt.
   const modelIds = Array.from(new Set(entities.map((entity) => entity.modelAssetId)
     .concat(Object.values(items).map((item) => item?.worldModelAssetId))
+    // Stap 4 (HUD): eigen iconen van items en valuta (plaatjes in de tas).
+    .concat(Object.values(items).map((item) => item?.iconAssetId))
+    .concat(currencyList.map((currency) => currency.iconAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   const missing = modelIds.filter((id) => !known.has(id));
@@ -463,6 +490,13 @@ function withGame(world, source, options) {
     zonePackage: patchZone(world.zonePackage),
     entities: (world.entities || []).concat(entities),
     assets: Array.from(known.values()),
-    worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null
+    worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null,
+    // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
+    minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
+      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
+      fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
+        fogColor: "#05070a", fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
+        revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }
+    }) })
   });
 }

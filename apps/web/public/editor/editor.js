@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261029-klassen2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-hud12";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -30585,6 +30585,80 @@ async function saveDraft() {
   }
 }
 
+// Stap 4 (HUD): de kaart voor de game als tegels (puzzelstukjes) van 512 px. Laag 0 heeft 32 m per tegel (16 pixels
+// per meter, scherp tot ver ingezoomd); elke laag erboven heeft tegels die twee keer zo groot zijn, tot de hele wereld
+// in 2x2 tegels past (voor uitzoomen). De server bewaart elke tegel op zijn vingerafdruk: wat niet veranderd is, blijft staan.
+const MINIMAP_TILE_PX = 512;
+const MINIMAP_TILE_METERS = 32;
+const MINIMAP_UPLOAD_BATCH = 40;
+
+function minimapTilePlan(bounds) {
+  const tiles = [];
+  let levels = 0;
+  for (let level = 0; level < 10; level += 1) {
+    const size = MINIMAP_TILE_METERS * Math.pow(2, level);
+    const x0 = Math.floor(bounds.minX / size);
+    const x1 = Math.floor((bounds.maxX - 0.001) / size);
+    const z0 = Math.floor(bounds.minZ / size);
+    const z1 = Math.floor((bounds.maxZ - 0.001) / size);
+    for (let tz = z0; tz <= z1; tz += 1) {
+      for (let tx = x0; tx <= x1; tx += 1) {
+        tiles.push({ key: level + ":" + tx + ":" + tz, minX: tx * size, maxX: (tx + 1) * size, minZ: tz * size, maxZ: (tz + 1) * size });
+      }
+    }
+    levels = level + 1;
+    if (x1 - x0 <= 1 && z1 - z0 <= 1) break;
+  }
+  return { tiles, levels };
+}
+
+async function bakeWorldMinimapForGame(buildId, onProgress) {
+  if (!runtime || typeof runtime.bakeMinimapImage !== "function" || typeof runtime.getMinimapBakeBounds !== "function") return "Minimap niet gemaakt (geen 3D-beeld).";
+  const bounds = runtime.getMinimapBakeBounds();
+  if (!bounds) return "Minimap niet gemaakt: de wereld heeft geen grond.";
+  const progress = typeof onProgress === "function" ? onProgress : function () {};
+  try {
+    const plan = minimapTilePlan(bounds);
+    const baked = [];
+    progress("Kaart maken: 0 van " + plan.tiles.length + " tegels...");
+    await runtime.bakeMinimapImage({
+      bounds,
+      tiles: plan.tiles,
+      tileResolution: MINIMAP_TILE_PX,
+      quality: 0.85,
+      hideEditorHelpers: true,
+      hideChunkDebugOverlay: true,
+      hideTransformControls: true,
+      includeStaticModels: true,
+      onTile: function (tile, blob, index) {
+        baked.push({ key: tile.key, blob });
+        if ((index + 1) % 10 === 0) progress("Kaart maken: " + (index + 1) + " van " + plan.tiles.length + " tegels...");
+      }
+    });
+    const names = {};
+    for (let i = 0; i < baked.length; i += MINIMAP_UPLOAD_BATCH) {
+      progress("Kaart uploaden: " + Math.min(baked.length, i + MINIMAP_UPLOAD_BATCH) + " van " + baked.length + " tegels...");
+      const formData = new FormData();
+      for (const entry of baked.slice(i, i + MINIMAP_UPLOAD_BATCH)) formData.append(entry.key, entry.blob, "tegel." + (entry.blob.type === "image/png" ? "png" : "webp"));
+      const response = await fetchEditorApi("/api/editor/world-minimap-tiles", { method: "POST", body: formData, timeoutMs: 120000 }, "POST");
+      const data = await response.json().catch(function () { return {}; });
+      if (!response.ok || !data.ok) throw new Error(data.message || "upload mislukt");
+      Object.assign(names, data.tiles || {});
+    }
+    const response = await fetchEditorApi("/api/editor/world-minimap-tiles/commit", {
+      method: "POST",
+      timeoutMs: 60000,
+      body: JSON.stringify({ tilePx: MINIMAP_TILE_PX, baseMeters: MINIMAP_TILE_METERS, levels: plan.levels, buildId: buildId || null,
+        bounds: { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ }, tiles: names })
+    }, "POST");
+    const data = await response.json().catch(function () { return {}; });
+    if (!response.ok || !data.ok) throw new Error(data.message || "opslaan mislukt");
+    return "Minimap bijgewerkt (" + plan.tiles.length + " tegels in " + plan.levels + " lagen).";
+  } catch (error) {
+    return "Minimap niet gemaakt: " + (error?.message || error) + ".";
+  }
+}
+
 async function publish() {
   if (el.publishButton.disabled) return;
   el.publishButton.disabled = true;
@@ -30599,9 +30673,13 @@ async function publish() {
     clearViewportRefreshTimer();
     updateDocPendingBadge();
     const sameBuild = build && build.buildId === build.previousBuildId;
-    setStatus(!build ? "Alles staat al in de game."
+    const publishedText = !build ? "Alles staat al in de game."
       : sameBuild ? "Gepubliceerd naar de game. De kaarten staan al zo in de game (zelfde build " + build.buildId.slice(0, 10) + ")."
-        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").", "success");
+        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").";
+    // De minimap in de game is een foto van bovenaf van deze wereld; die maken we hier vanzelf opnieuw.
+    setStatus(publishedText + " Minimap wordt gemaakt...", "");
+    const minimapText = await bakeWorldMinimapForGame(build?.buildId || null, function (text) { setStatus(publishedText + " " + text, ""); });
+    setStatus(publishedText + " " + minimapText, minimapText.startsWith("Minimap bijgewerkt") ? "success" : "error");
     // De tab Game laadt de nieuwe build: meteen als hij open is, anders bij de volgende keer openen.
     const gameFrame = el.gameTabPanel?.querySelector("iframe");
     if (gameFrame && !el.gameTabPanel.hidden) gameFrame.contentWindow?.location.reload();

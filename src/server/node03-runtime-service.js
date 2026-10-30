@@ -59,6 +59,12 @@ function rollLootAmount(minValue, maxValue, multiplier = 1) {
   return Math.max(0, Math.round(rolled * multiplier));
 }
 
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -756,6 +762,74 @@ export class Node03RuntimeService {
     };
   }
 
+  // Stap 4 (HUD): uitdoen. Het stuk gaat terug naar de tas; de bonus telt dan niet meer mee.
+  unequipItem(ctx, payload) {
+    const slotId = safeString(payload.slotId || payload.slot_id, "");
+    const row = slotId ? this.db.prepare("SELECT * FROM player_equipment WHERE player_id = ? AND slot_id = ? LIMIT 1").get(ctx.profile.id, slotId) : null;
+    if (!row) throw httpError(404, "Daar draag je niets.");
+    const instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(row.item_instance_id, ctx.profile.id);
+    const stamp = now();
+    this.db.prepare("DELETE FROM player_equipment WHERE player_id = ? AND slot_id = ?").run(ctx.profile.id, slotId);
+    if (instance) {
+      this.db.prepare("UPDATE player_item_instances SET location_type = 'inventory', location_ref = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND player_id = ?")
+        .run(stamp, instance.id, ctx.profile.id);
+    }
+    const itemId = instance?.item_id || null;
+    this.recordGameplayEvent(ctx, "item_unequipped", "player", row.item_instance_id, { slotId, itemId });
+    return {
+      action: "unequip",
+      message: (itemId ? displayForItem(ctx.catalogs, itemId) : "Item") + " uitgedaan.",
+      events: [{ type: "unequipped", slotId, itemInstanceId: row.item_instance_id }],
+      grants: []
+    };
+  }
+
+  // Stap 4 (HUD): eten of drinken. Alleen items met "Geneest" > 0; met volle levens gebeurt er niets.
+  useItem(ctx, payload, operationId) {
+    const itemId = safeString(payload.itemId || payload.item_id, "");
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+    if (!item) throw httpError(404, "Item niet gevonden.");
+    const name = displayForItem(ctx.catalogs, itemId);
+    const heal = safeInteger(item.healAmount, 0);
+    if (heal <= 0) throw httpError(409, name + " kun je niet gebruiken.");
+    const stats = this.loadPlayerStats(ctx.profile.id);
+    const max = effectiveMaxStat(stats.byId[HEALTH_STAT_ID], 0);
+    const before = statValue(stats.byId, HEALTH_STAT_ID, max);
+    if (max <= 0 || before >= max) throw httpError(409, "Je levens zijn al vol.");
+    if (!this.removeInventoryItem(ctx, itemId, 1, "item_used", "inventory_hud", operationId)) throw httpError(404, "Je hebt geen " + name + ".");
+    const after = Math.min(max, before + heal);
+    this.db.prepare("UPDATE player_stats SET current_value = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id = ?")
+      .run(after, now(), ctx.profile.id, HEALTH_STAT_ID);
+    this.recordLedger(operationId, ctx.profile.id, "stat", HEALTH_STAT_ID, after - before, before, after, "item_used", itemId);
+    return { action: "use", message: name + ": +" + Math.round(after - before) + " levens.", events: [{ type: "healed", itemId, amount: after - before }], grants: [] };
+  }
+
+  // Stap 4 (HUD): weggooien uit de tas. Questitems en wat je draagt blijven altijd.
+  destroyItem(ctx, payload, operationId) {
+    const instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
+    let itemId = safeString(payload.itemId || payload.item_id, "");
+    let instance = null;
+    if (instanceId) {
+      instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(instanceId, ctx.profile.id);
+      if (!instance || instance.location_type !== "inventory") throw httpError(404, "Item niet gevonden in je tas.");
+      itemId = instance.item_id;
+    }
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
+    const name = displayForItem(ctx.catalogs, itemId);
+    if (item.questItem === true || item.category === "quest") throw httpError(409, "Een questitem kun je niet weggooien.");
+    let removed = 0;
+    if (instance) {
+      this.db.prepare("UPDATE player_item_instances SET location_type = 'deleted', locked_by_operation_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
+        .run(operationId, now(), instance.id);
+      this.recordLedger(operationId, ctx.profile.id, "item_instance", itemId, -1, 1, 0, "item_destroyed", "inventory_hud");
+      removed = 1;
+    } else if (itemId) {
+      removed = this.removeInventoryItem(ctx, itemId, clamp(safeInteger(payload.amount || payload.quantity, 1), 1, 1000000), "item_destroyed", "inventory_hud", operationId);
+    }
+    if (!removed) throw httpError(404, "Item niet gevonden in je tas.");
+    return { action: "destroy", message: removed + "× " + name + " weggegooid.", events: [{ type: "destroyed", itemId, amount: removed }], grants: [] };
+  }
+
   runtimeEntityIsAvailable(entity) {
     if (entity?.entityKind === "enemy") return entity.alive !== false && entity.status !== "dead";
     return entity?.available !== false && !["depleted", "claimed"].includes(String(entity?.status || ""));
@@ -1141,6 +1215,9 @@ export class Node03RuntimeService {
     if (action === "gather") return this.gatherTarget(ctx, payload.targetId, operationId);
     if (action === "pickup") return this.pickupTarget(ctx, payload.targetId, operationId);
     if (action === "equip") return this.equipItem(ctx, payload, operationId);
+    if (action === "unequip") return this.unequipItem(ctx, payload);
+    if (action === "use") return this.useItem(ctx, payload, operationId);
+    if (action === "destroy") return this.destroyItem(ctx, payload, operationId);
     const error = new Error("Onbekende NODE-03 actie: " + (action || "-"));
     error.status = 400;
     throw error;
@@ -2025,6 +2102,8 @@ export class Node03RuntimeService {
       ok: true,
       schemaVersion: "node03-runtime-v1",
       debugActionsAllowed: developerActionsAllowed(ctx),
+      // Stap 4 (HUD): de prestatie/MMO-info is alleen voor een admin-account.
+      viewer: { isAdmin: ctx.sessionContext?.user?.role === "admin" },
       worldId: ctx.worldId,
       zoneId: ctx.zoneId,
       zoneName: ctx.zonePackage?.zone?.displayName || ctx.zoneId,
@@ -2109,6 +2188,7 @@ export class Node03RuntimeService {
   }
 
   loadHudCatalog(ctx) {
+    const slots = catalogSection(ctx.catalogs, "equipmentSlots");
     const items = Object.values(catalogSection(ctx.catalogs, "items")).map(function (item) {
       return {
         itemId: item.id,
@@ -2117,7 +2197,16 @@ export class Node03RuntimeService {
         rarity: item.rarity || null,
         stackable: item.stackable !== false,
         marketEligible: item.marketEligible === true,
-        tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : []
+        tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : [],
+        // Stap 4 (HUD): plaatje in de tas en de knoppen Uitrusten / Gebruiken / Weggooien.
+        iconAssetId: item.iconAssetId || null,
+        modelAssetId: item.worldModelAssetId || null,
+        equipSlot: item.equipmentSlotRef && slots[item.equipmentSlotRef] ? item.equipmentSlotRef : null,
+        healAmount: safeInteger(item.healAmount, 0),
+        attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
+        armorBonus: safeInteger(item.armorBonus, 0),
+        questItem: item.questItem === true || item.category === "quest",
+        vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
       };
     }).filter(function (item) {
       return Boolean(item.itemId);
@@ -2129,7 +2218,8 @@ export class Node03RuntimeService {
         currencyId: currency.id,
         displayName: currency.displayName || currency.id,
         showInPrimaryWallet: currency.showInPrimaryWallet !== false,
-        sortOrder: safeInteger(currency.sortOrder, 999)
+        sortOrder: safeInteger(currency.sortOrder, 999),
+        iconAssetId: currency.iconAssetId || null
       };
     }).filter(function (currency) {
       return Boolean(currency.currencyId);
@@ -2137,7 +2227,10 @@ export class Node03RuntimeService {
       return safeInteger(left.sortOrder, 999) - safeInteger(right.sortOrder, 999)
         || String(left.displayName || left.currencyId).localeCompare(String(right.displayName || right.currencyId));
     });
-    return { items, currencies };
+    const equipmentSlots = Object.values(slots).filter(function (slot) { return slot && slot.id; }).map(function (slot) {
+      return { slotId: slot.id, displayName: slot.displayName || slot.id, sortOrder: safeInteger(slot.uiOrder ?? slot.sortOrder, 999) };
+    }).sort(function (left, right) { return left.sortOrder - right.sortOrder || String(left.displayName).localeCompare(String(right.displayName)); });
+    return { items, currencies, equipmentSlots };
   }
 
   loadInventory(ctx) {

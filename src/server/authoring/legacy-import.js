@@ -293,7 +293,8 @@ function parityReport(world, domain, finalDocs, context = {}) {
     for (const itemId of Object.keys(before).sort()) {
       parity.push({
         legacyRef: "items:" + itemId,
-        diffs: diffObjects(before[itemId], after[itemId]),
+        // Ronde 10: de grootte op de grond is bewust nieuw (100 % i.p.v. de oude vaste 45 %), dus geen afwijking.
+        diffs: diffObjects(before[itemId], after[itemId], ["worldModelScale"]),
         frozenLegacyKeys: Object.keys(before[itemId] || {}).filter((key) => !CANONICAL_ITEM_RUNTIME_KEYS.includes(key)).sort()
       });
     }
@@ -303,7 +304,7 @@ function parityReport(world, domain, finalDocs, context = {}) {
     const after = pickupRuntimeStates(overlaid);
     for (const [instanceId, state] of before) {
       if (state.pickupKind !== "item") continue;
-      parity.push({ legacyRef: "pickups:" + state.zoneId + ":" + state.spawnEntryId, instanceId, diffs: after.has(instanceId) ? diffObjects(state, after.get(instanceId)) : [{ key: "instance", legacy: instanceId, canonical: null }] });
+      parity.push({ legacyRef: "pickups:" + state.zoneId + ":" + state.spawnEntryId, instanceId, diffs: after.has(instanceId) ? diffObjects(state, after.get(instanceId), ["modelScale"]) : [{ key: "instance", legacy: instanceId, canonical: null }] });
     }
     for (const [instanceId, state] of after) {
       if (!before.has(instanceId) && String(state.spawnEntryId || "").startsWith("canonical.legacy.")) parity.push({ legacyRef: instanceId, instanceId, diffs: [{ key: "instance", legacy: null, canonical: instanceId }] });

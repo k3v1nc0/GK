@@ -1,11 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261029-klassen2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261030-hud12";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
-import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261025-f4-music1";
+import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261029-klassen3";
-import { createCharactersWindow } from "./characters-window.js?v=20261029-klassen2";
+import { createGkHud } from "./hud/gk-hud.js?v=20261030-hud12";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -32,6 +32,10 @@ const gameRoot = document.querySelector("#gameRoot");
 const defeatOverlay = document.querySelector("#defeatOverlay");
 const overlay = document.querySelector("#gameOverlay");
 const overlayText = document.querySelector("#overlayText");
+// Stap 4: de nieuwe HUD (hud/gk-hud.js), zie ensureGkHud() onderaan.
+let gkHud = null;
+const gkHudDebug = { on: false, slot: null };
+const gkHudCache = { assets: null, assetMap: new Map(), modulesSource: null, modules: null, targetsAt: 0, targets: [] };
 
 // FIX-5 authoritative movement / rubberband prevention. See README/fases/MMO-01-FIX-5-*.md.
 const OWN_SMALL_CORRECTION_THRESHOLD = 1.0;
@@ -307,7 +311,11 @@ function handleActorMessage(message) {
   if (message.type !== "actor:event") return false;
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
   if (message.e === "attack" && message.target && message.target === state.player?.id) {
-    if (Number.isFinite(Number(message.amount))) showGameHudDialogueNotice("Je wordt geraakt: -" + message.amount + (message.defeated ? " (verslagen)" : ""), { title: "Gevecht" });
+    // Stap 4: een klap is geen tekstmelding meer maar een rode flits en een getal bij de levensbalk.
+    if (Number.isFinite(Number(message.amount))) {
+      if (gkHud) gkHud.playerHit(Number(message.amount));
+      else showGameHudDialogueNotice("Je wordt geraakt: -" + message.amount + (message.defeated ? " (verslagen)" : ""), { title: "Gevecht" });
+    }
     const nowAt = performance.now();
     if (message.defeated || nowAt - actorHitRefreshAt > 400) {
       actorHitRefreshAt = nowAt;
@@ -3107,6 +3115,7 @@ function mmoDebugHudModule(config) {
 }
 
 function syncMmoDebugHudLayout(config) {
+  if (gkHud) return;
   const frame = state.debugHud.elements?.frame || null;
   if (!frame || isGameHudLayoutInteractionActive()) return;
   syncGameHudLivePanelLayout(frame, mmoDebugHudModule(config).anchor);
@@ -5098,6 +5107,7 @@ function startRemoteFrameLoop() {
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
     if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
+    if (gkHud) gkHud.frame(now);
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -6070,6 +6080,8 @@ function isMmoDebugForced() {
 function resolveMmoDebugConfig() {
   const nodes = Array.isArray(state.gameWorld?.ui) ? state.gameWorld.ui : [];
   const node = nodes.find(function (item) { return item && item.type === "debug_mmo_hud"; });
+  // Nieuwe HUD: geen oud debugpaneel; de prestatie-info (FPS) komt via runtime.setPerformanceHud (zie setDebug).
+  if (gkHud) return null;
   if (node) return node;
   return isMmoDebugForced() ? defaultMmoDebugConfig() : null;
 }
@@ -6318,7 +6330,12 @@ function refreshMmoDebugHud() {
   removeMmoDebugHud();
   const elements = buildMmoDebugHudDom(config);
   const module = mmoDebugHudModule(config);
-  elements.frame = appendGameHudPanel("debug", module, elements.root, module.anchor);
+  if (gkHud && gkHudDebug.slot) {
+    gkHudDebug.slot.append(elements.root);
+    elements.frame = elements.root;
+  } else {
+    elements.frame = appendGameHudPanel("debug", module, elements.root, module.anchor);
+  }
   state.debugHud.elements = elements;
   state.debugHud.signature = signature;
   const expanded = wasExpanded !== null ? wasExpanded : (isMmoDebugForced() || config.startCollapsed === false);
@@ -7272,6 +7289,11 @@ function renderNode03Hud() {
   const snapshot = state.node03.snapshot;
   refreshGameDefeatState();
   syncDebugActionButtons();
+  // Stap 4: de nieuwe HUD tekent alles; de oude losse panelen komen niet meer.
+  if (gkHud) {
+    gkHud.render();
+    return;
+  }
   if (!modules.length || !snapshot) {
     removeNode03Hud();
     return;
@@ -7441,6 +7463,7 @@ async function runNode03Action(action, targetId, extra = {}) {
   }
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
+  if (normalizedAction === "attack" && gkHud) gkHud.combat();
   renderNode03Hud();
   // De server beslist of je bij het portal bent; wacht tot de serverpositie (niet alleen je scherm) in bereik is.
   if (isTravel) await waitForServerPositionInRange(currentTarget, PORTAL_SERVER_RANGE_WAIT_MS);
@@ -7459,6 +7482,7 @@ async function runNode03Action(action, targetId, extra = {}) {
         currencyId: extra.currencyId || null,
         amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
         itemInstanceId: extra.itemInstanceId || null,
+        slotId: extra.slotId || null,
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
     });
@@ -7489,6 +7513,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     }
     if (currentTarget?.instanceId) clearNode03PendingTargetAction(currentTarget.instanceId);
     state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
+    keepNewestActionMessage("node03");
     if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
     if (isTravel) {
       applyInstantTravelResponse(data);
@@ -7593,9 +7618,17 @@ function currentGameHudDialogueNotice() {
   if (state.node04.dialogueNotice?.text) return state.node04.dialogueNotice;
   const error = state.node04.lastError || state.node03.lastError || state.node05.lastError;
   if (error) return { title: "Error", text: error, tone: "error", dismissible: true };
-  const message = state.node04.lastActionMessage || state.node03.lastActionMessage || state.node05.lastActionMessage;
+  const message = [state.node04.lastActionMessage, state.node03.lastActionMessage, state.node05.lastActionMessage]
+    .find(function (text) { return text && !GAME_NOTICE_NOISE.test(String(text).trim()); });
   if (message) return { title: "Message", text: message, tone: "info", dismissible: true };
   return null;
+}
+
+// De laatste melding blijft staan (bijv. "Vijand verslagen"), niet een oudere van een ander onderdeel (zoals "Dialogue gestart").
+function keepNewestActionMessage(source) {
+  const text = String(state[source]?.lastActionMessage || "").trim();
+  if (!text || GAME_NOTICE_NOISE.test(text)) return;
+  for (const other of ["node03", "node04", "node05"]) if (other !== source) state[other].lastActionMessage = "";
 }
 
 function hasGameHudDialoguePanelContent() {
@@ -7819,8 +7852,40 @@ function node04RuntimeTargetsForScene() {
   return Array.from(byId.values());
 }
 
+// Een tik in de wereld en de HUD-knoppen (aanvallen, 🤝 doen) starten een doel op dezelfde manier.
+// Een NPC (gesprek of winkel/werkplaats) gaat via de HUD: daar komen gesprek, Handelen en Maken samen.
+function activateRuntimeTarget(target) {
+  const action = String(target?.action || "");
+  if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
+    gkHud.talkTo(target);
+    return;
+  }
+  activateRuntimeTargetDirect(target);
+}
+
+function activateRuntimeTargetDirect(target) {
+  if (!target?.instanceId || !target.action) return;
+  const action = String(target.action);
+  if (action.startsWith("node04:")) {
+    runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
+  } else if (action.startsWith("node05:")) {
+    runNode05Action(action, { targetId: target.instanceId });
+  } else {
+    runNode03Action(action, target.instanceId);
+  }
+}
+
 function syncRuntimeTargets() {
   if (!state.runtime || typeof state.runtime.setRuntimeTargets !== "function") return;
+  const list = collectRuntimeTargets();
+  if (!list.length) {
+    if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
+    return;
+  }
+  state.runtime.setRuntimeTargets(list);
+}
+
+function collectRuntimeTargets() {
   const byId = new Map();
   const addTargets = function (targets) {
     for (const target of targets) {
@@ -7838,11 +7903,7 @@ function syncRuntimeTargets() {
   }));
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
-  if (!byId.size) {
-    if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
-    return;
-  }
-  state.runtime.setRuntimeTargets(Array.from(byId.values()));
+  return Array.from(byId.values());
 }
 
 function refreshNode04ClientRanges(now = performance.now(), options = {}) {
@@ -8053,6 +8114,11 @@ function renderNode04Module(module, snapshot) {
 }
 
 function renderNode04Hud() {
+  if (gkHud) {
+    if (!state.node04.snapshot) syncRuntimeTargets();
+    gkHud.render();
+    return;
+  }
   const modules = node04Modules();
   const snapshot = state.node04.snapshot;
   const dialogueNotice = currentGameHudDialogueNotice();
@@ -8205,6 +8271,7 @@ async function runNode04Action(action, targetId, extra = {}) {
       return;
     }
     state.node04.lastActionMessage = data.message || "";
+    keepNewestActionMessage("node04");
     if (state.node04.lastActionMessage) showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Melding" });
     if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
     if (data.snapshot) {
@@ -8864,6 +8931,11 @@ function renderNode05Module(module, snapshot) {
 }
 
 function renderNode05Hud() {
+  if (gkHud) {
+    if (!state.node05.snapshot) syncRuntimeTargets();
+    gkHud.render();
+    return;
+  }
   const modules = node05Modules();
   const snapshot = state.node05.snapshot;
   if (!modules.length || !snapshot) {
@@ -9029,6 +9101,7 @@ async function runNode05Action(action, payload = {}) {
       return;
     }
     state.node05.lastActionMessage = data.message || "";
+    keepNewestActionMessage("node05");
     if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Melding" });
     if (data.snapshot) {
       state.node05.snapshot = data.snapshot;
@@ -10752,6 +10825,11 @@ function observeGameMinimapHudSize(elements) {
 }
 
 function refreshGameMinimapHud() {
+  // Stap 4: de nieuwe HUD heeft een eigen minimap zonder bake.
+  if (gkHud) {
+    removeGameMinimapHud();
+    return;
+  }
   const config = resolveGameMinimapConfig();
   if (!config) {
     removeGameMinimapHud();
@@ -11291,6 +11369,9 @@ function ensureRuntime(world) {
     });
     state.runtimeAntialias = desiredAntialias;
     window.__GK_GAME_RUNTIME = state.runtime;
+    // Nieuwe HUD: scherpe 2D-namen in plaats van de 3D-bordjes boven NPC's, vijanden en items.
+    if (typeof state.runtime.setRuntimeTargetNameplatesVisible === "function") state.runtime.setRuntimeTargetNameplatesVisible(false);
+    if (gkHudDebug.on && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.slot);
   }
   return state.runtime;
 }
@@ -12122,6 +12203,7 @@ function handleSocketMessage(raw) {
     return;
   }
   if (message.type === "fog:discovery") {
+    if (gkHud) gkHud.fogDiscovered(message);
     applyMinimapFogDiscoveryPayload(message, { replace: false });
     markWsConnected();
     return;
@@ -12844,6 +12926,10 @@ function setInput(action, pressed) {
 function bindKeyboardControls() {
   window.addEventListener("keydown", function (event) {
     if (isEditableTarget(event.target)) return;
+    if (gkHud && gkHud.handleKey(event)) {
+      event.preventDefault();
+      return;
+    }
     const hotbarSlot = node03HotbarSlotIndexForKey(event.code);
     const sprintKey = event.code === "ShiftLeft" || event.code === "ShiftRight";
     const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
@@ -12966,18 +13052,7 @@ function handleGamePointerDown(event, source = "pointer") {
     ? state.runtime.pickRuntimeTargetAt(event.clientX, event.clientY)
     : null;
   if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
-    if (String(pickedNode03Target.action).startsWith("node04:")) {
-      runNode04Action(pickedNode03Target.action, pickedNode03Target.instanceId, {
-        questId: pickedNode03Target.questId || null,
-        dialogueId: pickedNode03Target.dialogueId || null
-      });
-    } else if (String(pickedNode03Target.action).startsWith("node05:")) {
-      runNode05Action(pickedNode03Target.action, {
-        targetId: pickedNode03Target.instanceId
-      });
-    } else {
-      runNode03Action(pickedNode03Target.action, pickedNode03Target.instanceId);
-    }
+    activateRuntimeTarget(pickedNode03Target);
     return;
   }
   clearNode03PendingTargetAction();
@@ -13218,6 +13293,10 @@ async function pollVersion() {
 let canonicalClientBuildId = null;
 let canonicalClientWorld = null;
 function showCanonicalBanner(text, sticky) {
+  if (gkHud) {
+    gkHud.toast(text, { sticky: sticky === true, icon: sticky ? "info" : "compass", ms: 6000 });
+    return;
+  }
   let banner = document.getElementById("canonicalProjectBanner");
   if (!banner) {
     banner = document.createElement("div");
@@ -13269,7 +13348,7 @@ function refreshWorldRegionLabel() {
   label.style.display = worldSpatial.label ? "block" : "none";
 }
 function ensureWorldMusic() {
-  if (!worldSpatial.music) worldSpatial.music = createWorldMusic({ onStateChange: refreshWorldRegionLabel });
+  if (!worldSpatial.music) worldSpatial.music = createWorldMusic({ onStateChange: refreshWorldRegionLabel, muted: worldSpatial.musicMuted === true });
   if (!worldSpatial.unlockBound) {
     worldSpatial.unlockBound = true;
     const unlock = function () { if (worldSpatial.music) worldSpatial.music.unlock(); };
@@ -13283,16 +13362,17 @@ function applyWorldMembership(message) {
   const regionId = message.regionId || null;
   const areaId = message.areaId || null;
   const changed = regionId !== worldSpatial.regionId || areaId !== worldSpatial.areaId;
-  const hadRegion = Boolean(worldSpatial.regionId);
+  const areaChanged = areaId !== worldSpatial.areaId;
   worldSpatial.regionId = regionId;
   worldSpatial.areaId = areaId;
-  worldSpatial.label = [message.regionName, message.areaName].filter(Boolean).join(" · ");
+  // Ronde 10: alleen de naam van het deelgebied; het oude gebied (vroegere zone) toont geen naam meer.
+  worldSpatial.label = String(message.areaName || "").trim();
   state.debug.worldRegionId = regionId;
   state.debug.worldAreaId = areaId;
   if (message.musicUrl || worldSpatial.music) ensureWorldMusic().setTrack(message.musicUrl || null);
   refreshWorldRegionLabel();
   if (changed && state.minimapHud) state.minimapHud.dirty = true;
-  if (changed && worldSpatial.label && (hadRegion || message.areaName)) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
+  if (areaChanged && worldSpatial.label) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
 }
 
 async function checkCanonicalBuild() {
@@ -13306,7 +13386,166 @@ async function checkCanonicalBuild() {
   } catch {}
 }
 
+// ---- Stap 4: de nieuwe HUD (hud/gk-hud.js). Die tekent alleen; hier staan de data en de acties. ----
+
+async function gkHudJson(url, body) {
+  const options = body === undefined
+    ? { credentials: "same-origin", headers: { Accept: "application/json" } }
+    : { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) };
+  const response = await gameFetch(url, options);
+  const result = await response.json().catch(function () { return {}; });
+  if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
+  return result;
+}
+
+function gkHudAsset(assetId) {
+  const assets = state.gameWorld?.assets || [];
+  if (gkHudCache.assets !== assets) {
+    gkHudCache.assets = assets;
+    gkHudCache.assetMap = new Map(assets.map(function (asset) { return [asset.id, asset]; }));
+  }
+  return assetId ? gkHudCache.assetMap.get(assetId) || null : null;
+}
+
+// Een plaatje voor in de HUD: bij een model de thumbnail, bij een afbeelding het bestand zelf.
+function gkHudAssetUrl(assetId, preferThumb) {
+  const asset = gkHudAsset(assetId);
+  if (!asset) return null;
+  if (asset.assetType === "image") return asset.sourcePath || asset.thumbnailPath || null;
+  return asset.thumbnailPath || null;
+}
+
+function gkHudModules() {
+  const modules = (state.gameProject || state.gameWorld?.gameProject || null)?.ui?.modules;
+  if (!Array.isArray(modules)) return null;
+  if (gkHudCache.modulesSource !== modules) {
+    gkHudCache.modulesSource = modules;
+    gkHudCache.modules = new Set(modules.map(function (module) { return module?.nodeType; }).filter(Boolean));
+  }
+  return gkHudCache.modules;
+}
+
+function gkHudTargets() {
+  const now = performance.now();
+  if (now - gkHudCache.targetsAt > 90) {
+    gkHudCache.targetsAt = now;
+    gkHudCache.targets = collectRuntimeTargets();
+  }
+  return gkHudCache.targets;
+}
+
+function gkHudRemotes() {
+  const list = [];
+  for (const entry of state.remote.players.values()) {
+    if (entry?.isSelfAccount) continue;
+    const position = entry?.renderState || entry?.position;
+    if (position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z))) list.push({ x: Number(position.x), z: Number(position.z) });
+  }
+  return list;
+}
+
+function gkHudPlayer() {
+  const classId = state.player?.selectedCharacterId || state.node03.snapshot?.characterId || null;
+  const characters = (state.gameProject || state.gameWorld?.gameProject || null)?.catalogs?.playableCharacters || {};
+  const character = classId ? characters[classId] : null;
+  return {
+    displayName: state.player?.displayName || "",
+    className: character?.classChoice ? character.displayName : "",
+    modelAssetId: state.gameWorld?.player?.modelAssetId || null
+  };
+}
+
+function ensureGkHud() {
+  if (gkHud) return gkHud;
+  gkHud = createGkHud({
+    // Niet in #hud: de wereld-runtime maakt #hud leeg zodra de wereld geladen is.
+    mount: hud.parentElement || document.body,
+    data: function () {
+      return {
+        s03: state.node03.snapshot,
+        s04: state.node04.snapshot,
+        s05: state.node05.snapshot,
+        dialogue: state.node04.dialogue,
+        notice: currentGameHudDialogueNotice(),
+        defeated: isNode03Defeated(),
+        busy: { n03: state.node03.actionInFlight === true, n04: state.node04.actionInFlight === true, n05: state.node05.actionInFlight === true },
+        modules: gkHudModules(),
+        player: gkHudPlayer(),
+        isAdmin: state.node03.snapshot?.viewer?.isAdmin === true
+      };
+    },
+    live: function () {
+      const player = state.runtime && typeof state.runtime.getPlayerState === "function" ? state.runtime.getPlayerState() : null;
+      const basis = state.runtime && typeof state.runtime.getCameraGroundBasis === "function" ? state.runtime.getCameraGroundBasis() : null;
+      const position = player && Number.isFinite(Number(player.x)) ? { x: Number(player.x), z: Number(player.z) } : (state.position ? { x: num(state.position.x, 0), z: num(state.position.z, 0) } : null);
+      return {
+        position: position,
+        facingDeg: num(player?.rotationY, 0),
+        forward: basis?.forward || { x: 0, z: -1 },
+        targets: gkHudTargets(),
+        remotes: gkHudRemotes(),
+        world: state.gameWorld,
+        region: worldSpatial.label || "",
+        selectedTargetId: state.node03.selectedTargetId || ""
+      };
+    },
+    assetUrl: gkHudAssetUrl,
+    npcFaceUrl: function (targetRef) {
+      const npcId = String(targetRef || "").replace(/^target\.npc\./, "");
+      const entity = (state.gameWorld?.entities || []).find(function (candidate) { return candidate && candidate.id === "npc_entity." + npcId; });
+      return gkHudAssetUrl(entity?.modelAssetId, true);
+    },
+    vendor: function (vendorId) {
+      return vendorId ? node05Vendors().find(function (vendor) { return vendor.vendorId === vendorId; }) || null : null;
+    },
+    station: function (stationId) {
+      return stationId ? node05CraftingStations().find(function (station) { return station.stationId === stationId; }) || null : null;
+    },
+    run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
+    run04: function (action, targetId, extra) { return runNode04Action(action, targetId, extra || {}); },
+    run05: function (action, payload) { return runNode05Action(action, payload || {}); },
+    activate: activateRuntimeTargetDirect,
+    walkTo: function (x, z) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-talk"); },
+    textureUrl: function (assetId) { return gkHudAsset(assetId)?.sourcePath || null; },
+    closeDialogue: function () {
+      state.node04.dialogue = null;
+      renderNode04Hud();
+    },
+    dismissNotice: function () {
+      clearGameHudDialogueNotice();
+      renderNode04Hud();
+    },
+    fetchJson: function (url) { return gkHudJson(url); },
+    postJson: function (url, body) { return gkHudJson(url, body || {}); },
+    onSwitched: function () { window.location.reload(); },
+    logout: async function () {
+      try { await gameFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      window.location.href = "/login/?next=%2Fgame%2F";
+    },
+    setViewInset: function (right, bottom) {
+      if (state.runtime && typeof state.runtime.setViewInset === "function") state.runtime.setViewInset(right, bottom);
+    },
+    setMusic: function (on) {
+      worldSpatial.musicMuted = on === false;
+      if (worldSpatial.music && typeof worldSpatial.music.setMuted === "function") worldSpatial.music.setMuted(worldSpatial.musicMuted);
+    },
+    setDebug: function (on, slot) {
+      if (gkHudDebug.on === on && gkHudDebug.slot === slot) return;
+      gkHudDebug.on = on === true;
+      gkHudDebug.slot = slot || null;
+      if (state.runtime && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.on ? gkHudDebug.slot : null);
+      refreshMmoDebugHud();
+    },
+    // Schermplekken voor de 2D-naamlabels boven NPC's, vijanden en items.
+    labelAnchors: function () {
+      return state.runtime && typeof state.runtime.getRuntimeTargetLabelAnchors === "function" ? state.runtime.getRuntimeTargetLabelAnchors() : [];
+    }
+  });
+  return gkHud;
+}
+
 async function start() {
+  ensureGkHud();
   stepMovement(performance.now());
   startMovementFrameLoop();
   bindKeyboardControls();
@@ -13327,24 +13566,6 @@ async function start() {
     updateHud();
   }
   window.setInterval(pollVersion, 2500);
-  // Klassen: venster 🧙 Characters (wisselen en uiterlijk kiezen). Na een wissel laadt de game opnieuw.
-  createCharactersWindow({
-    fetchJson: async function (url) {
-      const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
-      const result = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
-      return result;
-    },
-    postJson: async function (url, body) {
-      const response = await gameFetch(url, { method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
-      const result = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
-      return result;
-    },
-    assetById: function (assetId) { return (state.gameWorld?.assets || []).find(function (asset) { return asset.id === assetId; }) || null; },
-    onSwitched: function () { window.location.reload(); }
-  });
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);
 }
