@@ -1,5 +1,5 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein3";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein4";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein4";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -10,7 +10,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein3";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein4";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261028-instances1";

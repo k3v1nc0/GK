@@ -95,6 +95,14 @@ test("verf: 3 eigen texturen + grond per vak, rand gedeeld, vol = waarschuwing, 
   assert.equal(paint("terrain_texture:tex.sneeuw", 40, 40).full.size, 0, "nu past sneeuw wel");
   assert.equal(terrainPaintIsEmpty(pf.chunks.get("0:0")), false);
   assert.equal(applyTerrainPaint(pf, { texture: "", x: 500, z: 500, radius: 3, strength: 1, dt: 0.1 }).changed.size, 0, "gummen waar geen verf is maakt niets aan");
+  // Echte gum: in één klik (dt 0, zachte rand) alles binnen de cirkel weg, net erbuiten blijft staan.
+  paint("terrain_texture:tex.zand", 10, 50, { radius: 6 });
+  const erased = applyTerrainPaint(pf, { erase: true, x: 10, z: 50, radius: 4, softness: 1, strength: 0, dt: 0 });
+  assert.ok(erased.changed.has("0:0"));
+  assert.equal(terrainPaintAt(pf, 10, 50)["terrain_texture:tex.zand"] || 0, 0, "midden helemaal weg");
+  assert.equal(terrainPaintAt(pf, 13.5, 50)["terrain_texture:tex.zand"] || 0, 0, "ook vlak bij de rand helemaal weg");
+  assert.ok(terrainPaintAt(pf, 15, 50)["terrain_texture:tex.zand"] > 0.5, "buiten de cirkel blijft de verf");
+  assert.equal(applyTerrainPaint(pf, { erase: true, x: 900, z: 900, radius: 4 }).changed.size, 0, "gum maakt geen vakken aan");
 });
 
 test("kaarten: terreintextuur, stempel en verflijst; alles van de grond in de tab Terrein", () => {

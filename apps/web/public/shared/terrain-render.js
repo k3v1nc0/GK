@@ -815,6 +815,8 @@ export function createTerrainLayer(options = {}) {
     if (next === bakeAll) return;
     bakeAll = next;
     needsUpdate = true;
+    // De penseel-cirkel hoort niet op de kaartplaatjes.
+    if (cursor?.line) cursor.line.visible = !next;
     syncAllMaterials();
   }
 
@@ -850,6 +852,7 @@ export function createTerrainLayer(options = {}) {
       const line = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: next.color || "#ffd34d", depthTest: false, transparent: true, opacity: 0.95 }));
       line.renderOrder = 999;
       line.frustumCulled = false;
+      line.visible = !bakeAll;
       group.add(line);
       cursor = { line };
     }

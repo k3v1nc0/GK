@@ -413,7 +413,9 @@ export function applyTerrainPaint(pf, brush = {}) {
   const strength = Math.max(0, Math.min(1, Number(brush.strength)));
   const softness = Math.max(0, Math.min(1, Number(brush.softness)));
   const dt = Math.max(0, Math.min(0.25, Number(brush.dt) || 0));
-  if (!pf || !Number.isFinite(x) || !Number.isFinite(z) || strength <= 0 || dt <= 0) return { changed, full };
+  // erase: echte gum, alle verf binnen de cirkel is in één keer weg (zachte rand en kracht tellen niet).
+  const erase = brush.erase === true;
+  if (!pf || !Number.isFinite(x) || !Number.isFinite(z) || (!erase && (strength <= 0 || dt <= 0))) return { changed, full };
   let ix0 = Math.ceil((x - radius) / PAINT_STEP);
   let ix1 = Math.floor((x + radius) / PAINT_STEP);
   let iz0 = Math.ceil((z - radius) / PAINT_STEP);
@@ -430,7 +432,8 @@ export function applyTerrainPaint(pf, brush = {}) {
   const rate = TERRAIN_PAINT_SPEED * strength * dt;
   for (let iz = iz0; iz <= iz1; iz += 1) {
     for (let ix = ix0; ix <= ix1; ix += 1) {
-      const weight = terrainBrushWeight(Math.hypot(ix * PAINT_STEP - x, iz * PAINT_STEP - z), radius, softness);
+      const distance = Math.hypot(ix * PAINT_STEP - x, iz * PAINT_STEP - z);
+      const weight = erase ? (distance <= radius ? 1 : 0) : terrainBrushWeight(distance, radius, softness);
       if (weight <= 0) continue;
       const amount = Math.min(1, weight * rate);
       const noise = dither(ix, iz, pf.revision);
@@ -446,7 +449,7 @@ export function applyTerrainPaint(pf, brush = {}) {
           const lz = b === 0 ? lz0 : TERRAIN_PAINT_CELLS;
           const key = cx + ":" + cz;
           let chunk = pf.chunks.get(key) || null;
-          if (!chunk && !texture) continue;
+          if (!chunk && (erase || !texture)) continue;
           if (touched && !touched.has(key)) {
             touched.add(key);
             if (typeof brush.beforeTouch === "function") brush.beforeTouch(key, clonePaintChunk(chunk));
@@ -454,6 +457,16 @@ export function applyTerrainPaint(pf, brush = {}) {
           if (!chunk) {
             chunk = createPaintChunk();
             pf.chunks.set(key, chunk);
+          }
+          const index = (lz * PAINT_VERTS + lx) * 3;
+          if (erase) {
+            for (let s = 0; s < TERRAIN_PAINT_LAYERS; s += 1) {
+              if (chunk.data[index + s] !== 0) {
+                chunk.data[index + s] = 0;
+                changed.add(key);
+              }
+            }
+            continue;
           }
           let slot = slots.get(key);
           if (slot === undefined) {
@@ -464,7 +477,6 @@ export function applyTerrainPaint(pf, brush = {}) {
             full.add(key);
             continue;
           }
-          const index = (lz * PAINT_VERTS + lx) * 3;
           for (let s = 0; s < TERRAIN_PAINT_LAYERS; s += 1) {
             const value = chunk.data[index + s] / 255;
             const next = s === slot - 1 ? value + (1 - value) * amount : value * (1 - amount);

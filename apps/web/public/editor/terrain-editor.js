@@ -29,6 +29,11 @@ const BLENDS = [
   { id: "max", label: "Hoogste" },
   { id: "replace", label: "Vervangen" }
 ];
+// Gum: "hard" = alles binnen de cirkel in één keer weg (standaard), "soft" = langzaam terug naar de grond.
+const ERASE_MODES = [
+  { id: "hard", label: "Gum: helemaal weg" },
+  { id: "soft", label: "Gum: zacht" }
+];
 const UNDO_LIMIT = 30;
 const UPLOAD_BATCH = 64;
 const PAINT_BATCH = 32;
@@ -39,10 +44,11 @@ const settings = {
   tool: "height", brush: "raise", radius: 10, strength: 40, softness: 60, heavyTint: true,
   flattenFixed: false, flattenHeight: 0, edgeStep: 3,
   stamp: "", stampSize: 64, stampHeight: 20, stampRotation: 0, stampBlend: "add", stampEdge: 15,
-  paintTexture: ""
+  paintTexture: "", eraseMode: "hard"
 };
 try { Object.assign(settings, JSON.parse(window.localStorage.getItem(STORE_KEY) || "{}")); } catch {}
 if (!TOOLS.some(function (tool) { return tool.id === settings.tool; })) settings.tool = "height";
+if (settings.eraseMode !== "soft") settings.eraseMode = "hard";
 if (!BRUSHES.some(function (brush) { return brush.id === settings.brush; })) settings.brush = "raise";
 
 let api = null;
@@ -50,6 +56,7 @@ let open = false;
 let stroke = null;
 let cutting = null;
 let lastPointer = null;
+let shiftDown = false;
 let suppressClickUntil = 0;
 let counterTimer = null;
 let busy = false;
@@ -351,6 +358,11 @@ function brushMode(shift) {
   return mode;
 }
 
+// Gummen = Shift ingedrukt, of de kaart "Grond (gum)" gekozen.
+function paintErasing(shift) {
+  return shift === true || !settings.paintTexture;
+}
+
 function cursorFor(hit, color) {
   const rt = runtime();
   if (!rt) return;
@@ -367,7 +379,9 @@ function cursorFor(hit, color) {
     return;
   }
   if (settings.tool === "ground") { rt.terrainSetCursor(null); return; }
-  rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: settings.radius, softness: settings.brush === "edge" && settings.tool === "height" ? 0 : settings.softness / 100, color: color || "#ffffff" });
+  const hard = (settings.brush === "edge" && settings.tool === "height")
+    || (settings.tool === "paint" && settings.eraseMode === "hard" && paintErasing(stroke ? stroke.shift : shiftDown));
+  rt.terrainSetCursor({ x: hit.x, z: hit.z, radius: settings.radius, softness: hard ? 0 : settings.softness / 100, color: color || "#ffffff" });
 }
 
 function startStroke(event) {
@@ -416,7 +430,9 @@ function paintStep() {
     const common = { x: hit.x, z: hit.z, radius: settings.radius, strength: settings.strength / 100, softness: settings.softness / 100,
       dt, bounds: rt.terrainBounds(), touched: stroke.touched, beforeTouch: stroke.beforeTouch };
     if (stroke.kind === "paint") {
-      const result = applyTerrainPaint(rt.terrainPaintfield(), Object.assign(common, { texture: stroke.shift ? "" : settings.paintTexture }));
+      const erasing = paintErasing(stroke.shift);
+      const result = applyTerrainPaint(rt.terrainPaintfield(), Object.assign(common, { texture: erasing ? "" : settings.paintTexture,
+        erase: erasing && settings.eraseMode === "hard" }));
       if (result.changed.size) rt.terrainPaintChanged(result.changed);
       for (const key of result.full) stroke.full.add(key);
     } else {
@@ -592,6 +608,7 @@ window.addEventListener("pointerdown", function (event) {
 
 window.addEventListener("pointermove", function (event) {
   if (!open) return;
+  shiftDown = event.shiftKey;
   if (stroke && event.pointerId === stroke.pointerId) {
     lastPointer = { x: event.clientX, y: event.clientY };
     stroke.shift = event.shiftKey;
@@ -761,7 +778,8 @@ function paintBody() {
   return [
     chosen,
     ...brushSliders(),
-    el("div", { class: "terreinTip", text: "Kies rechts een textuur. Linkermuis = verven, Shift = gummen. Per vak van 64 m passen 4 texturen: de grond + 3 eigen." })
+    choiceRow(ERASE_MODES, settings.eraseMode, function (id) { settings.eraseMode = id; remember(); renderTools(); }, "terreinBlends"),
+    el("div", { class: "terreinTip", text: "Kies rechts een textuur. Linkermuis = verven, Shift = gummen. Gum helemaal weg = alle verf binnen de cirkel is in één keer weg; zacht = langzaam terug naar de grond. Per vak van 64 m passen 4 texturen: de grond + 3 eigen." })
   ];
 }
 

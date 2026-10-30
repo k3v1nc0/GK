@@ -11336,7 +11336,8 @@ function resolveChunkDebugCenter(policy) {
     // config.tiles = [{minX,maxX,minZ,maxZ}] + config.onTile(tile, blob, index): veel kleine foto's in één keer.
     const tiled = Array.isArray(config.tiles) && config.tiles.length > 0 && typeof config.onTile === "function";
     let tilesDone = 0;
-    const backgroundColor = colorOrDefault(bakeWorld?.world?.backgroundColor, "#101a26");
+    // Buiten de grond is de kaart zwart (net als de mist), niet de lucht-kleur.
+    const backgroundColor = "#000000";
     const transparentBackground = false;
     const centerX = (minX + maxX) / 2;
     const centerZ = (minZ + maxZ) / 2;
@@ -11434,6 +11435,8 @@ function resolveChunkDebugCenter(policy) {
     // never looks. Temporarily disable it; ground/materials/lights/shadows stay identical.
     const previousFog = scene.fog;
     scene.fog = null;
+    const previousBackground = scene.background;
+    scene.background = null;
 
     let outputCanvas = null;
     let bakeError = null;
@@ -11529,6 +11532,7 @@ function resolveChunkDebugCenter(policy) {
       renderer.setClearColor(previousClearColor, previousClearAlpha);
       renderer.autoClear = previousAutoClear;
       scene.fog = previousFog;
+      scene.background = previousBackground;
       renderTarget.dispose();
       restoreResidentContentAfterMinimapBake(previousResidentWindowState);
       restoreTerrainVisualsAfterMinimapBake(previousTerrainVisualState);

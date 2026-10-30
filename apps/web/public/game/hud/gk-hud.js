@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261030-hud12";
-import { createHudMinimap } from "./gk-minimap.js?v=20261030-hud12";
+import { createHudMinimap } from "./gk-minimap.js?v=20261030-terrein4";
 
 const STORE_KEY = "gk:hud:v1";
 const SVG_NS = "http://www.w3.org/2000/svg";

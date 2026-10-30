@@ -506,6 +506,13 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
   function drawGround(g, rect, pxPerM, world, bounds) {
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = "high";
+    // Alleen binnen de grond tekenen: grote tegels steken buiten de wereld uit, daar blijft het zwart (mistkleur).
+    g.save();
+    if (bounds) {
+      g.beginPath();
+      g.rect(bounds.minX, bounds.minZ, bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
+      g.clip();
+    }
     if (tiles) drawTiles(g, rect, pxPerM);
     else {
       const layer = ensureBase(world);
@@ -518,6 +525,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
         if (sw > 0 && sh > 0) g.drawImage(layer.canvas, sx, sy, sw, sh, layer.minX + sx / s, layer.minZ + sy / s, sw / s, sh / s);
       }
     }
+    g.restore();
     const mist = fogFor(bounds);
     if (mist) {
       g.globalAlpha = mist.opacity;
