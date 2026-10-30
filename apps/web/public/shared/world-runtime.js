@@ -3104,7 +3104,9 @@ function groundBlueprintForWorld(worldData, runtimeMode) {
     bounds: bounds,
     textureSize: textureSize,
     tiles: tiles,
-    tilesByChunkKey: tilesByChunkKey
+    tilesByChunkKey: tilesByChunkKey,
+    // Wereld tekenen: met een hoogtekaart tekent de terreinlaag de grond, nooit ook nog platte tegels.
+    terrainHeightfield: Boolean(worldData?.terrain?.heightfield)
   };
 }
 
@@ -3136,6 +3138,7 @@ export function groundBlueprintSignature(worldData, runtimeMode) {
     policy.policyId || "",
     policy.enabled === true ? 1 : 0,
     policy.groundChunkingEnabled !== false ? 1 : 0,
+    worldData?.terrain?.heightfield ? "terrein" : "",
     bounds ? round(bounds.minX) : "",
     bounds ? round(bounds.maxX) : "",
     bounds ? round(bounds.minZ) : "",
@@ -3146,7 +3149,7 @@ export function groundBlueprintSignature(worldData, runtimeMode) {
 
 function buildGroundChunkPlanFromBlueprint(blueprint, runtimeMode = "editor", windowState = null, previousState = null) {
   const policy = blueprint.policy;
-  const renderMode = policy.enabled === true && policy.groundChunkingEnabled !== false && Boolean(blueprint.bounds)
+  const renderMode = policy.enabled === true && policy.groundChunkingEnabled !== false && Boolean(blueprint.bounds) && blueprint.terrainHeightfield !== true
     ? "chunked"
     : "full";
   const shouldChunk = renderMode === "chunked";
@@ -18821,7 +18824,14 @@ function resolveChunkDebugCenter(policy) {
     terrainDiscardEdits: terrainDiscardEdits,
     terrainDirtyChunks: function () { return terrainLayer.dirtyChunks(); },
     terrainIsDirty: function () { return terrainLayer.isDirty(); },
-    terrainCommitSaved: function (refs, saved) { terrainLayer.commitSaved(refs, saved); },
+    terrainCommitSaved: function (refs, saved) {
+      terrainLayer.commitSaved(refs, saved);
+      // De wereld in de editor kent nu ook de nieuwe vakken: opnieuw opbouwen (bijv. na de minimap bij
+      // SAVE TO GAME) zet dan niet de oude hoogtes terug.
+      if (world?.terrain?.heightfield) {
+        world.terrain = Object.assign({}, world.terrain, { heightfield: Object.assign({}, world.terrain.heightfield, { chunks: Object.assign({}, refs) }) });
+      }
+    },
     terrainSeedChunk: seedTerrainChunk,
     terrainStats: function () { return terrainLayer.stats(); },
     terrainChunkInfoAt: function (x, z) { return terrainLayer.chunkInfoAt(x, z); },

@@ -1,4 +1,4 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261030-terrein1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261030-terrein2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
@@ -6009,7 +6009,9 @@ function applyAuthoritativeUpdate(update, options = {}) {
       // server stuurt daarna niets meer (er verandert niets), en de
       // boekhouding dacht al dat het idle was.
       setMovementAnimationState(animationState);
-      if (distance <= netSettings.ownPredictionDeadzone) {
+      // Wereld tekenen: de server zet een stilstaande speler op nieuw terrein (heuvel/kuil); die hoogte overnemen.
+      const heightChange = previousPosition ? Math.abs((Number(previousPosition.y) || 0) - (Number(nextPosition.y) || 0)) : 0;
+      if (distance <= netSettings.ownPredictionDeadzone && heightChange <= 0.05) {
         // Positie laten staan; de animatie is hierboven al gesynct.
       } else if (distance > netSettings.ownSmallCorrectionThreshold) {
         state.predictedPosition = clonePosition(nextPosition);

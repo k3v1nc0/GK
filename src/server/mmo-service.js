@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
-import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
+import { buildWalkabilityIndex, groundHeightAt, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
 import { ActorRuntime } from "./runtime/actor-runtime.js";
@@ -476,6 +476,13 @@ function zonePackageForPosition(world, position, currentZoneId = null) {
   return packages.find(function (zonePackage) {
     return zonePackage?.zoneId && String(zonePackage.zoneId) !== String(currentZoneId || "") && pointInZonePackage(zonePackage, x, z, 0);
   }) || null;
+}
+
+// Wereld tekenen: wie stilstaat terwijl het terrein verandert (nieuwe build), komt weer met de voeten op de grond.
+function idleGroundPosition(position, index, radius) {
+  if (!index?.heightfield) return position;
+  const y = groundHeightAt(index, position.x, position.z, position.y, radius);
+  return Number.isFinite(y) && Math.abs(y - position.y) > 0.001 ? { x: position.x, y: y, z: position.z } : position;
 }
 
 function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
@@ -2646,7 +2653,7 @@ export class MmoService {
           index: movementIndex,
           solids: solids
         })
-        : currentPosition;
+        : idleGroundPosition(currentPosition, movementIndex, radius);
     }
     const deltaX = resolved.x - currentPosition.x;
     const deltaZ = resolved.z - currentPosition.z;
@@ -2672,7 +2679,7 @@ export class MmoService {
     const nextRotation = moving && Math.hypot(directionX, directionZ) > 0.0001
       ? Math.atan2(directionX, directionZ) * 180 / Math.PI
       : state.rotation_y;
-    const nextRevision = (Number(state.revision) || 0) + (distance > 0.0001 || state.moving !== moving || state.animation_state !== (moving ? (input?.sprint === true ? "run" : "walk") : "idle") ? 1 : 0);
+    const nextRevision = (Number(state.revision) || 0) + (distance > 0.0001 || Math.abs(resolved.y - currentPosition.y) > 0.001 || state.moving !== moving || state.animation_state !== (moving ? (input?.sprint === true ? "run" : "walk") : "idle") ? 1 : 0);
     const nextState = Object.assign({}, state, {
       x: round(resolved.x),
       y: round(resolved.y),
