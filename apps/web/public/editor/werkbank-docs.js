@@ -662,7 +662,8 @@ export function createDocBench(options = {}) {
         if (isNew && key === spec.idField) bench.draft.idTouched = true;
         if (key === "displayName" && isNew && spec.idField && !bench.draft.idTouched) {
           const prefix = { item_definition: "item", ability: "ability", loot_table: "loot", resource_definition: "resource", actor_archetype: "actor",
-            currency: "currency", npc: "npc", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class" }[kind];
+            currency: "currency", npc: "npc", quest: "quest", recipe: "recipe", placed_model: "model", player_class: "class",
+            terrain_texture: "tex", terrain_stamp: "stamp" }[kind];
           if (prefix && next) body[spec.idField] = prefix + "." + slug(next);
         }
         if (isNew && !spec.singleton) { rerender(); return; }

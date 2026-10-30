@@ -25,7 +25,7 @@ import {
   isPointBlockedBySurface
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
-import { createTerrainLayer, seedTerrainChunk } from "./terrain-render.js";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -18824,14 +18824,26 @@ function resolveChunkDebugCenter(policy) {
     terrainDiscardEdits: terrainDiscardEdits,
     terrainDirtyChunks: function () { return terrainLayer.dirtyChunks(); },
     terrainIsDirty: function () { return terrainLayer.isDirty(); },
-    terrainCommitSaved: function (refs, saved) {
+    terrainCommitSaved: function (refs, saved, paintRefs, savedPaint) {
       terrainLayer.commitSaved(refs, saved);
+      if (paintRefs) terrainLayer.commitPaintSaved(paintRefs, savedPaint);
       // De wereld in de editor kent nu ook de nieuwe vakken: opnieuw opbouwen (bijv. na de minimap bij
-      // SAVE TO GAME) zet dan niet de oude hoogtes terug.
+      // SAVE TO GAME) zet dan niet de oude hoogtes en verf terug.
       if (world?.terrain?.heightfield) {
-        world.terrain = Object.assign({}, world.terrain, { heightfield: Object.assign({}, world.terrain.heightfield, { chunks: Object.assign({}, refs) }) });
+        const heightfield = Object.assign({}, world.terrain.heightfield, { chunks: Object.assign({}, refs) });
+        if (paintRefs) heightfield.paint = Object.assign({}, heightfield.paint || {}, { chunks: JSON.parse(JSON.stringify(paintRefs)) });
+        world.terrain = Object.assign({}, world.terrain, { heightfield });
       }
     },
+    // Ronde 2: verf (penseel in Terrein).
+    terrainPaintfield: function () { return terrainLayer.paintfield; },
+    terrainPaintChanged: function (keys, options) {
+      terrainLayer.markPaintChanged(Array.from(keys || []), options || {});
+      requestRender("terrain-paint");
+    },
+    terrainPaintDirtyChunks: function () { return terrainLayer.paintDirtyChunks(); },
+    terrainDefinePaintTexture: function (docKey, info) { terrainLayer.definePaintTexture(docKey, info); },
+    terrainSeedPaint: seedTerrainPaint,
     terrainSeedChunk: seedTerrainChunk,
     terrainStats: function () { return terrainLayer.stats(); },
     terrainChunkInfoAt: function (x, z) { return terrainLayer.chunkInfoAt(x, z); },

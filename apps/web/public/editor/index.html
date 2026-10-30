@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GK Game Editor</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="./styles.css?v=20261030-terrein1">
+    <link rel="stylesheet" href="./styles.css?v=20261030-terrein3">
     <link rel="stylesheet" href="./werkbank-docs.css?v=20261029-klassen2">
     <link rel="stylesheet" href="./mini-asset-picker.css?v=20261028-picker1">
     <script type="importmap">
@@ -23,7 +23,7 @@
       <nav class="editorModeTabs" aria-label="Editorweergave">
         <button id="settingsModeButton" type="button" class="editorModeTab" aria-pressed="false">Instellingen</button>
         <button id="workbenchModeButton" type="button" class="editorModeTab active" aria-pressed="true">Werkbank</button>
-        <button id="terrainModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Grond tekenen: verhogen, verlagen en gladstrijken">Terrein</button>
+        <button id="terrainModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Alles van de grond: hoogte, stempels, verf en instellingen">Terrein</button>
         <button id="gameModeButton" type="button" class="editorModeTab" aria-pressed="false" title="Speel de game hier, zonder apart tabblad">Game</button>
         <details class="oldModeMenu" id="oldModeMenu" style="display:none" aria-hidden="true">
           <summary title="Oude schermen (verdwijnen in Fase 5)">oud</summary>
@@ -278,10 +278,12 @@
 
       <aside id="settingsMenuPanel" class="settingsMenuColumn wbdPanel" aria-label="Instellingen menu"></aside>
       <section id="settingsCardPanel" class="settingsCardColumn wbdPanel" aria-label="Instellingen"></section>
+      <aside id="terrainToolsPanel" class="terreinTools wbdPanel" aria-label="Terrein gereedschap"></aside>
+      <aside id="terrainLibraryPanel" class="terreinLibrary wbdPanel" aria-label="Terrein bibliotheek"></aside>
 
       <div id="allLayoutRoot" class="allLayoutRoot"></div>
       <div id="allLayoutOverflow" hidden></div>
     </main>
-    <script type="module" src="./editor.js?v=20261030-terrein2"></script>
+    <script type="module" src="./editor.js?v=20261030-terrein3"></script>
   </body>
 </html>

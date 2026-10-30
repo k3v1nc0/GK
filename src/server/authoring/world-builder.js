@@ -93,11 +93,25 @@ export function terrainSettingsValues(body = null) {
   return values;
 }
 
+// Ronde 2: verf en rots. textures = { doc-sleutel: { assetId, size, url } }; de url komt uit de assetlijst.
+function terrainPaintConfig(data, values) {
+  const textures = {};
+  for (const texture of Array.isArray(data?.terrainTextures) ? data.terrainTextures : []) {
+    if (!texture || texture.archived || !texture.textureAssetId) continue;
+    const docKey = texture.docKey || "terrain_texture:" + texture.textureId;
+    textures[docKey] = { assetId: texture.textureAssetId, size: Number(texture.tileSize) || 4, url: null, name: texture.displayName || "" };
+  }
+  const paint = values.paint && typeof values.paint === "object" && !Array.isArray(values.paint) ? values.paint : {};
+  const rock = values.rockTextureRef && textures[values.rockTextureRef] ? { texture: values.rockTextureRef, slopeDeg: Number(values.rockSlopeDeg) } : null;
+  return { chunks: JSON.parse(JSON.stringify(paint)), textures, rock };
+}
+
 function terrainHeightfieldConfig(data) {
   const values = terrainSettingsValues(data?.terrain || null);
   const chunks = values.chunks && typeof values.chunks === "object" && !Array.isArray(values.chunks) ? values.chunks : {};
   return { chunkSize: TERRAIN_CHUNK_METERS, baseUrl: "/assets/terrain/", chunks: Object.assign({}, chunks),
-    maxSlopeDeg: Number(values.maxSlopeDeg), triBudget: Number(values.triBudget), chunkTriBudget: Number(values.chunkTriBudget) };
+    maxSlopeDeg: Number(values.maxSlopeDeg), triBudget: Number(values.triBudget), chunkTriBudget: Number(values.chunkTriBudget),
+    paint: terrainPaintConfig(data, values) };
 }
 
 // Alles wat in de kaarten op de grond staat (y = hoogte boven de grond) komt op de hoogte van het terrein.
@@ -208,8 +222,12 @@ export function baseRuntimeWorld(data = {}, options = {}) {
   const project = { id: "gk.project", gameName, defaultLanguage: "nl", contentVersion: "0.1.0", startZoneRef: WORLD_ZONE_ID, startSpawnRef: WORLD_SPAWN_ID };
   if (data?.project?.motd) project.motd = data.project.motd;
 
-  const assetIds = [settings.groundTextureAssetId, settings.playerModelAssetId].filter(Boolean);
+  const heightfield = terrainHeightfieldConfig(data);
+  const paintTextures = Object.values(heightfield.paint.textures);
+  const assetIds = Array.from(new Set([settings.groundTextureAssetId, settings.playerModelAssetId].concat(paintTextures.map((texture) => texture.assetId)).filter(Boolean)));
   const assets = options.assetService && assetIds.length ? options.assetService.manifestForIds(assetIds) : [];
+  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+  for (const texture of paintTextures) texture.url = assetsById.get(texture.assetId)?.sourcePath || null;
 
   const world = {
     schemaVersion: WORLD_FORMAT_VERSION,
@@ -230,7 +248,7 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     mmo: { network: null },
     // Wereld tekenen: heightfield = de hoogte van de grond (vakken in assets/terrain); de game en de editor
     // tekenen de grond hiermee (ook als hij nog plat is).
-    terrain: { layers: [], surfaces: [], heightfield: terrainHeightfieldConfig(data) },
+    terrain: { layers: [], surfaces: [], heightfield },
     collision: { blockers: [], walkableSurfaces: [] },
     scatterAreas: [],
     chunkLoading: clone(CHUNK_LOADING),

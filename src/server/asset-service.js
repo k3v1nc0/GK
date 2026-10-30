@@ -6,7 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { cleanValuesForType } from "./field-validation.js";
 import { NODE_TYPES, defaultValuesForType } from "../shared/node-types.js";
-import { decodeTerrainChunk, parseTerrainChunkKey, TERRAIN_CHUNK_BYTES, TERRAIN_CHUNK_SHA_PATTERN } from "../../apps/web/public/shared/terrain.js";
+import { decodeTerrainChunk, parseTerrainChunkKey, TERRAIN_CHUNK_BYTES, TERRAIN_CHUNK_SHA_PATTERN, TERRAIN_PAINT_VERTS } from "../../apps/web/public/shared/terrain.js";
 
 const now = function () {
   return new Date().toISOString();
@@ -772,6 +772,32 @@ export class AssetService {
       if (!data || data.length !== TERRAIN_CHUNK_BYTES) throw minimapError("Terreinvak " + key + " heeft niet de goede grootte.");
       const sha1 = crypto.createHash("sha1").update(data).digest("hex");
       const target = path.join(dir, sha1 + ".bin");
+      if (!fs.existsSync(target)) {
+        fs.writeFileSync(target + ".tmp", data);
+        fs.renameSync(target + ".tmp", target);
+      }
+      saved[key] = sha1;
+    }
+    return saved;
+  }
+
+  // Ronde 2: de verf van de grond per vak, als PNG (RGB, 129 x 129, 8-bit). Ook naar vingerafdruk (sha1).
+  // De server leest de verf niet (lopen hangt er niet van af); hij controleert alleen dat het zo'n plaatje is.
+  saveTerrainPaint(files) {
+    const entries = Object.entries(files || {});
+    if (!entries.length) throw minimapError("Er zit geen verf in de upload.");
+    if (entries.length > 4096) throw minimapError("Te veel verfvakken in één upload.");
+    const dir = path.join(this.assetsDir, "terrain");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = {};
+    for (const [key, file] of entries) {
+      if (!parseTerrainChunkKey(key)) throw minimapError("Onbekend verfvak: " + String(key).slice(0, 40) + ".");
+      const data = file?.data;
+      const ok = data && data.length >= 33 && data.length <= 262144 && isPng(data) && data.slice(12, 16).toString("latin1") === "IHDR"
+        && data.readUInt32BE(16) === TERRAIN_PAINT_VERTS && data.readUInt32BE(20) === TERRAIN_PAINT_VERTS && data[24] === 8 && data[25] === 2;
+      if (!ok) throw minimapError("Verfvak " + key + " is geen goede verf-PNG (129 x 129, RGB).");
+      const sha1 = crypto.createHash("sha1").update(data).digest("hex");
+      const target = path.join(dir, sha1 + ".png");
       if (!fs.existsSync(target)) {
         fs.writeFileSync(target + ".tmp", data);
         fs.renameSync(target + ".tmp", target);

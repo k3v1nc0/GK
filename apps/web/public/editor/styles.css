@@ -3813,18 +3813,48 @@ body.editorFullscreen {
 .relEmpty { color: #8fa1b1; font-size: 12px; padding: 6px; text-align: center; }
 
 /* Wereld tekenen (ronde 1): paneel Terrein boven de 3D-view. */
-.terreinPanel {
-  position: absolute; left: 10px; top: 52px; z-index: 30; width: 250px; padding: 10px;
-  background: rgba(13, 20, 28, 0.94); border: 1px solid #2c3a48; border-radius: 8px;
-  color: #dbe5ee; font-size: 12px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-  display: flex; flex-direction: column; gap: 8px;
+/* Wereld tekenen ronde 2: de tab Terrein (gereedschap links, Bibliotheek rechts). */
+.layout > .terreinTools,
+.layout > .terreinLibrary { display: none; }
+.allPaneBody > .terreinTools,
+.allPaneBody > .terreinLibrary {
+  display: flex !important; flex-direction: column; gap: 8px; width: 100%; height: 100%; min-width: 0; min-height: 0;
+  overflow: auto; padding: 10px; background: #0d141c; color: #dbe5ee; font-size: 12px;
 }
-.terreinPanel[hidden] { display: none; }
+.terreinTabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.terreinTab { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border-radius: 6px;
+  border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; font-size: 11px; }
+.terreinTab span:first-child { font-size: 16px; }
+.terreinTab.active { border-color: #ffb454; box-shadow: inset 0 -2px 0 #ffb454; }
+.terreinBody { display: flex; flex-direction: column; gap: 8px; }
+.terreinFoot { display: flex; flex-direction: column; gap: 6px; margin-top: auto; padding-top: 8px; border-top: 1px solid #22303d; }
+.terreinBlends { grid-template-columns: repeat(3, 1fr); }
+.terreinNumber { width: 64px; padding: 2px 4px; border-radius: 4px; border: 1px solid #2c3a48; background: #0a1017; color: #dbe5ee; }
+.terreinChosen { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; background: #0a1017; border: 1px solid #22303d; }
+.terreinChosen img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; background: #000; }
+.terreinChosenIcon { width: 40px; text-align: center; font-size: 22px; }
+.terreinWide { padding: 7px; border-radius: 6px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; }
+.terreinWide.active { background: #7fd3ff; color: #08202c; border-color: #7fd3ff; }
+.terreinMouse { color: #8ea3b5; font-variant-numeric: tabular-nums; }
+.terreinForm { border-top: 1px solid #22303d; padding-top: 6px; }
+.terreinLibHead { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 13px; margin-top: 4px; }
+.terreinLibActions { display: flex; gap: 4px; }
+.terreinSmallText { padding: 3px 7px; border-radius: 5px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; font-size: 11px; }
+.terreinGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
+.terreinCard { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; border-radius: 6px;
+  border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; min-width: 0; }
+.terreinCard img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #000; }
+.terreinCardIcon { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.terreinCardName { width: 100%; font-size: 11px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terreinCard.active { border-color: #ffb454; background: #2a2114; }
+.terreinDetail:not(:empty) { border-top: 1px solid #22303d; padding-top: 8px; }
+.terreinLibrary.terreinDropping { outline: 2px dashed #ffb454; outline-offset: -4px; }
 .terreinHead { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
 .terreinUndo { display: flex; gap: 4px; }
 .terreinSmall { width: 28px; height: 24px; border-radius: 5px; border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; }
 .terreinSmall:disabled { opacity: 0.35; cursor: default; }
 .terreinBrushes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.terreinBrushes.terreinBlends .terreinBrush { padding: 5px 2px; }
 .terreinBrush { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border-radius: 6px;
   border: 1px solid #2c3a48; background: #151f29; color: #dbe5ee; cursor: pointer; font-size: 11px; }
 .terreinBrush span:first-child { font-size: 16px; }

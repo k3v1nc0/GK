@@ -1,5 +1,5 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein2";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein1";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein3";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein3";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -10,7 +10,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261029-klassen3";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein3";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261028-instances1";
@@ -139,8 +139,10 @@ const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
 const WORKBENCH_PANE_VIEWS = ["workbench", "viewport", "relations", "library"];
 // Werkbank Fase 1: tab Instellingen = Menu | Instellingen | 3D Preview (zelfde viewport als de Werkbank).
 const SETTINGS_PANE_VIEWS = ["settingsMenu", "settingsCard", "viewport"];
+// Wereld tekenen ronde 2: tab Terrein = Gereedschap | 3D | Terrein-bibliotheek (alles van de grond op één plek).
+const TERRAIN_PANE_VIEWS = ["terrainTools", "viewport", "terrainLibrary"];
 // Fundament zonder nodes: de Nodes-weergave bestaat niet meer (setEditorMode("nodes") valt terug op de Werkbank).
-const EDITOR_MODES = ["workbench", "settings"];
+const EDITOR_MODES = ["workbench", "settings", "terrain"];
 const ALL_PANE_LABELS = {
   settingsMenu: "Menu",
   settingsCard: "Instellingen",
@@ -150,7 +152,9 @@ const ALL_PANE_LABELS = {
   assets: "Assets",
   workbench: "Werkbank",
   relations: "Relaties",
-  library: "Bibliotheek"
+  library: "Bibliotheek",
+  terrainTools: "Terrein",
+  terrainLibrary: "Bibliotheek (terrein)"
 };
 const EDITOR_FLOATING_PANELS_STORAGE_KEY = "gk.editorFloatingPanels";
 const EDITOR_MODE_STORAGE_KEY = "gk.editorMode";
@@ -504,6 +508,8 @@ const el = {
   workbenchModeButton: document.querySelector("#workbenchModeButton"),
   gameModeButton: document.querySelector("#gameModeButton"),
   terrainModeButton: document.querySelector("#terrainModeButton"),
+  terrainToolsPanel: document.querySelector("#terrainToolsPanel"),
+  terrainLibraryPanel: document.querySelector("#terrainLibraryPanel"),
   gameTabPanel: document.querySelector("#gameTabPanel"),
   settingsModeButton: document.querySelector("#settingsModeButton"),
   oldModeMenu: document.querySelector("#oldModeMenu"),
@@ -894,20 +900,33 @@ const docBench = createDocBench({
     refreshViewportForDocs();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
+    if (state.editorMode === "terrain") terrainEditor.render();
   }
 });
 
-// Wereld tekenen (ronde 1): de knop Terrein (penselen op de 3D-view, opslaan bij Sluiten).
+// Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
 const terrainEditor = createTerrainEditor({
   getRuntime: function () { return runtime; },
   fetchApi: function (path, options, method) { return fetchEditorApi(path, options, method); },
   docBench,
   setStatus: function (message, kind) { setStatus(message, kind); },
-  showViewport: function () {
-    setGameTabOpen(false);
-    if (state.editorMode !== "workbench") setEditorMode("workbench");
-  }
+  getAssets: function () { return state.assets || []; },
+  importAsset: importAssetFile,
+  toolsHost: el.terrainToolsPanel,
+  libraryHost: el.terrainLibraryPanel
 });
+
+// Een bestand als asset uploaden (stempels uit Terrein). Geeft het nieuwe asset terug.
+async function importAssetFile(file, options = {}) {
+  const form = new FormData();
+  form.append("name", String(options.name || file.name || "Bestand").slice(0, 120));
+  form.append("category", String(options.category || "Terrein"));
+  form.append("assetType", String(options.assetType || "image"));
+  form.append("file", file, file.name || "bestand.png");
+  const result = await postAssetImport(form);
+  applyImportedAssetData(result.data);
+  return result.data.asset || null;
+}
 
 // Documenten met een plek (pickup, NPC, model, vijand- en grondstofplek) staan als echte mesh in de editorwereld.
 // Klikken opent de kaart; G verplaatst, R draait en S schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
@@ -16649,10 +16668,14 @@ function setGameTabOpen(open) {
   }
   el.gameModeButton.classList.toggle("active", Boolean(open));
   el.gameModeButton.setAttribute("aria-pressed", open ? "true" : "false");
-  for (const button of [el.workbenchModeButton, el.settingsModeButton]) {
+  for (const button of [el.workbenchModeButton, el.settingsModeButton, el.terrainModeButton]) {
     if (!button) continue;
-    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench" : state.editorMode === "settings";
+    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench"
+      : button === el.terrainModeButton ? state.editorMode === "terrain" : state.editorMode === "settings";
     button.classList.toggle("active", !open && mine);
+  }
+  if (state.editorMode === "terrain") {
+    if (open) terrainEditor.deactivate(); else terrainEditor.activate();
   }
 }
 
@@ -16689,6 +16712,12 @@ function setEditorMode(mode, persist = true) {
     el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench");
     el.workbenchModeButton.setAttribute("aria-pressed", state.editorMode === "workbench" ? "true" : "false");
   }
+  document.body.classList.toggle("terrainEditorMode", state.editorMode === "terrain");
+  if (el.terrainModeButton) {
+    el.terrainModeButton.classList.toggle("active", state.editorMode === "terrain");
+    el.terrainModeButton.setAttribute("aria-pressed", state.editorMode === "terrain" ? "true" : "false");
+  }
+  if (state.editorMode === "terrain") terrainEditor.activate(); else terrainEditor.deactivate();
   if (persist) {
     try { window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode); } catch {}
     persistAllLayoutTree();
@@ -25332,10 +25361,21 @@ function beginWorkbenchRelationResize(event) {
 
 function allPaneViews(mode = state.editorMode) {
   if (mode === "settings") return SETTINGS_PANE_VIEWS;
+  if (mode === "terrain") return TERRAIN_PANE_VIEWS;
   return mode === "workbench" ? WORKBENCH_PANE_VIEWS : NODE_PANE_VIEWS;
 }
 
 function defaultAllLayoutTree(mode = state.editorMode) {
+  if (mode === "terrain") {
+    return {
+      dir: "row",
+      children: [
+        { size: 0.75, node: { view: "terrainTools" } },
+        { size: 2.6, node: { view: "viewport" } },
+        { size: 0.85, node: { view: "terrainLibrary" } }
+      ]
+    };
+  }
   if (mode === "settings") {
     return {
       dir: "row",
@@ -25393,7 +25433,8 @@ function defaultAllLayoutTrees() {
   return {
     nodes: defaultAllLayoutTree("nodes"),
     workbench: defaultAllLayoutTree("workbench"),
-    settings: defaultAllLayoutTree("settings")
+    settings: defaultAllLayoutTree("settings"),
+    terrain: defaultAllLayoutTree("terrain")
   };
 }
 
@@ -25406,6 +25447,7 @@ function isValidAllLayoutTrees(layouts) {
 // Oude opgeslagen indelingen hebben nog geen Instellingen-tab: die krijgt de standaardindeling.
 function withSettingsLayout(layouts) {
   if (!isValidAllLayoutNode(layouts.settings, SETTINGS_PANE_VIEWS)) layouts.settings = defaultAllLayoutTree("settings");
+  if (!isValidAllLayoutNode(layouts.terrain, TERRAIN_PANE_VIEWS)) layouts.terrain = defaultAllLayoutTree("terrain");
   return layouts;
 }
 
@@ -25491,6 +25533,8 @@ function allPaneContentElement(view) {
   if (view === "library") return document.querySelector(".assetColumn");
   if (view === "settingsMenu") return el.settingsMenuPanel;
   if (view === "settingsCard") return el.settingsCardPanel;
+  if (view === "terrainTools") return el.terrainToolsPanel;
+  if (view === "terrainLibrary") return el.terrainLibraryPanel;
   return null;
 }
 
@@ -25535,7 +25579,7 @@ function renderAllLayout() {
   // querySelector calls in buildAllPane/allPaneContentElement would then
   // never find them again (they'd be silently lost, leaving empty panes).
   if (el.allLayoutOverflow) {
-    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS, SETTINGS_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
+    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS, SETTINGS_PANE_VIEWS, TERRAIN_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
     for (const contentEl of contentElements) {
       el.allLayoutOverflow.appendChild(contentEl);
     }
@@ -30682,7 +30726,7 @@ async function publish() {
   try {
     await flushPendingEditorWrites();
     // Wereld tekenen: niet opgeslagen terrein eerst bewaren (anders mist de game de nieuwe heuvels).
-    if (!(await terrainEditor.saveIfDirty())) throw new Error("Eerst het terrein opslaan lukte niet; probeer Sluiten in Terrein.");
+    if (!(await terrainEditor.saveIfDirty())) throw new Error("Eerst het terrein opslaan lukte niet; probeer Opslaan in Terrein.");
     // Doelbeeld: één knop, één build. De game leest alleen de build; nodes doen niet meer mee.
     const build = await docBench.publish();
     clearUnsaved();
@@ -33222,10 +33266,10 @@ window.addEventListener("blur", clearViewportTouchEditState, true);
 window.addEventListener("pagehide", flushEditorLayoutServerSave);
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
-if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(false); setEditorMode("workbench"); });
-if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(false); setEditorMode("settings"); });
-if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { terrainEditor.close(); setGameTabOpen(true); });
-if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { terrainEditor.toggle(); });
+if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });
+if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("settings"); });
+if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
+if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("terrain"); });
 
 initMobileControls();
 setEditorMode(state.editorMode, false);

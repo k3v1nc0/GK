@@ -147,13 +147,18 @@ export function terrainBrushWeight(distance, radius, softness) {
   return 0.5 + 0.5 * Math.cos(Math.PI * t);
 }
 
-// Penseel: mode "raise" | "lower" | "smooth". strength 0..1, softness 0..1 (zachte rand), dt in seconden.
-// Verhogen/verlagen: maximaal 6 m per seconde in het midden. Gladstrijken: trekt naar het gemiddelde van de buren.
+// Penseel: mode "raise" | "lower" | "smooth" | "flatten" | "edge". strength 0..1, softness 0..1 (zachte rand),
+// dt in seconden. Verhogen/verlagen: maximaal 6 m per seconde in het midden. Gladstrijken: trekt naar het
+// gemiddelde van de buren. Afvlakken (ronde 2): trekt naar target (meter). Scherpe rand: zet alles binnen de
+// cirkel snel op target, zonder zachte rand (een harde stap van 1 m breed).
 // Geeft de Set van vakken terug die echt veranderd zijn (om opnieuw te tekenen).
 export const TERRAIN_BRUSH_SPEED = 6;
+const BRUSH_MODES = new Set(["raise", "lower", "smooth", "flatten", "edge"]);
 export function applyTerrainBrush(hf, brush = {}) {
   const changed = new Set();
-  const mode = brush.mode === "lower" || brush.mode === "smooth" ? brush.mode : "raise";
+  const mode = BRUSH_MODES.has(brush.mode) ? brush.mode : "raise";
+  const targetCm = Math.round(Number(brush.target) * 100);
+  if ((mode === "flatten" || mode === "edge") && !Number.isFinite(targetCm)) return changed;
   const x = Number(brush.x);
   const z = Number(brush.z);
   const radius = Math.max(0.5, Math.min(128, Number(brush.radius) || 8));
@@ -180,12 +185,15 @@ export function applyTerrainBrush(hf, brush = {}) {
   const step = TERRAIN_BRUSH_SPEED * strength * dt * 100;
   for (let iz = z0; iz <= z1; iz += 1) {
     for (let ix = x0; ix <= x1; ix += 1) {
-      const weight = terrainBrushWeight(Math.hypot(ix - x, iz - z), radius, softness);
+      const distance = Math.hypot(ix - x, iz - z);
+      const weight = mode === "edge" ? (distance < radius ? 1 : 0) : terrainBrushWeight(distance, radius, softness);
       if (weight <= 0) continue;
       const current = terrainVertexCm(hf, ix, iz);
       let next = current;
       if (mode === "raise") next = current + step * weight;
       else if (mode === "lower") next = current - step * weight;
+      else if (mode === "flatten") next = current + (targetCm - current) * Math.min(1, weight * strength * dt * 8);
+      else if (mode === "edge") next = current + (targetCm - current) * Math.min(1, strength * dt * 20);
       else {
         let sum = 0;
         for (let dz = -1; dz <= 1; dz += 1) for (let dx = -1; dx <= 1; dx += 1) sum += terrainVertexCm(hf, ix + dx, iz + dz);
@@ -207,6 +215,284 @@ export function applyTerrainBrush(hf, brush = {}) {
   }
   if (changed.size) hf.revision += 1;
   return changed;
+}
+
+// ---------- stempels (ronde 2) ----------
+
+function sampleStampImage(image, s, t) {
+  const fx = Math.max(0, Math.min(1, s)) * (image.width - 1);
+  const fy = Math.max(0, Math.min(1, t)) * (image.height - 1);
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = Math.min(image.width - 1, x0 + 1);
+  const y1 = Math.min(image.height - 1, y0 + 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const row0 = y0 * image.width;
+  const row1 = y1 * image.width;
+  const top = image.data[row0 + x0] + (image.data[row0 + x1] - image.data[row0 + x0]) * tx;
+  const bottom = image.data[row1 + x0] + (image.data[row1 + x1] - image.data[row1 + x0]) * tx;
+  return top + (bottom - top) * ty;
+}
+
+// Waar een stempel ligt: rechthoek size x (size * hoogte/breedte van het plaatje), gedraaid om het midden.
+export function terrainStampFootprint(stamp = {}) {
+  const image = stamp.image || { width: 1, height: 1 };
+  const size = Math.max(1, Math.min(4096, Number(stamp.size) || 64));
+  const depth = size * (image.height / Math.max(1, image.width));
+  const rotation = ((Number(stamp.rotation) || 0) * Math.PI) / 180;
+  return { x: Number(stamp.x) || 0, z: Number(stamp.z) || 0, width: size, depth, rotation };
+}
+
+// Stempel: een hoogteplaatje (image.data 0..1, wit = hoog) op x, z. height in meter (negatief = kuil).
+// blend: "add" (optellen), "max" (hoogste houden) of "replace" (vervangen). edge 0..0.5 = zachte rand.
+// Geeft de Set van veranderde vakken terug.
+export function applyTerrainStamp(hf, stamp = {}) {
+  const changed = new Set();
+  const image = stamp.image;
+  if (!hf || !image || !(image.width > 1) || !(image.height > 1) || !image.data) return changed;
+  const foot = terrainStampFootprint(stamp);
+  const heightCm = (Number(stamp.height) || 0) * 100;
+  const blend = stamp.blend === "max" || stamp.blend === "replace" ? stamp.blend : "add";
+  const edge = Math.max(0, Math.min(0.5, stamp.edge === undefined ? 0.15 : Number(stamp.edge) || 0));
+  if (!Number.isFinite(foot.x) || !Number.isFinite(foot.z)) return changed;
+  const cos = Math.cos(foot.rotation);
+  const sin = Math.sin(foot.rotation);
+  const halfX = (Math.abs(cos) * foot.width + Math.abs(sin) * foot.depth) / 2;
+  const halfZ = (Math.abs(sin) * foot.width + Math.abs(cos) * foot.depth) / 2;
+  let x0 = Math.ceil(foot.x - halfX);
+  let x1 = Math.floor(foot.x + halfX);
+  let z0 = Math.ceil(foot.z - halfZ);
+  let z1 = Math.floor(foot.z + halfZ);
+  const bounds = stamp.bounds || null;
+  if (bounds) {
+    x0 = Math.max(x0, Math.floor(bounds.minX));
+    x1 = Math.min(x1, Math.ceil(bounds.maxX));
+    z0 = Math.max(z0, Math.floor(bounds.minZ));
+    z1 = Math.min(z1, Math.ceil(bounds.maxZ));
+  }
+  if (x1 < x0 || z1 < z0) return changed;
+  const ctx = { touched: stamp.touched || null, beforeTouch: stamp.beforeTouch || null, changed };
+  for (let iz = z0; iz <= z1; iz += 1) {
+    for (let ix = x0; ix <= x1; ix += 1) {
+      const dx = ix - foot.x;
+      const dz = iz - foot.z;
+      const s = (dx * cos + dz * sin) / foot.width + 0.5;
+      const t = (-dx * sin + dz * cos) / foot.depth + 0.5;
+      if (s < 0 || s > 1 || t < 0 || t > 1) continue;
+      let fade = 1;
+      if (edge > 0) {
+        const e = Math.min(1, Math.min(s, 1 - s, t, 1 - t) / edge);
+        fade = e * e * (3 - 2 * e);
+      }
+      if (fade <= 0) continue;
+      const target = sampleStampImage(image, s, t) * heightCm;
+      const current = terrainVertexCm(hf, ix, iz);
+      const next = blend === "add" ? current + target * fade
+        : blend === "max" ? current + (Math.max(current, target) - current) * fade
+          : current + (target - current) * fade;
+      writeVertexCm(hf, ix, iz, Math.floor(next + dither(ix, iz, hf.revision)), ctx);
+    }
+  }
+  if (changed.size) hf.revision += 1;
+  return changed;
+}
+
+// "Opslaan als stempel": de hoogtes (meter) in een rechthoek, 1 punt per meter.
+export function sampleTerrainRegion(hf, ax, az, bx, bz) {
+  const x0 = Math.ceil(Math.min(Number(ax), Number(bx)));
+  const x1 = Math.floor(Math.max(Number(ax), Number(bx)));
+  const z0 = Math.ceil(Math.min(Number(az), Number(bz)));
+  const z1 = Math.floor(Math.max(Number(az), Number(bz)));
+  if (!Number.isFinite(x0 + x1 + z0 + z1) || x1 - x0 < 2 || z1 - z0 < 2 || x1 - x0 > 2048 || z1 - z0 > 2048) return null;
+  const width = x1 - x0 + 1;
+  const depth = z1 - z0 + 1;
+  const data = new Float32Array(width * depth);
+  let min = Infinity;
+  let max = -Infinity;
+  for (let iz = z0; iz <= z1; iz += 1) {
+    for (let ix = x0; ix <= x1; ix += 1) {
+      const value = terrainVertexCm(hf, ix, iz) / 100;
+      data[(iz - z0) * width + (ix - x0)] = value;
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+  }
+  return { x0, z0, x1, z1, width, depth, data, min, max };
+}
+
+// ---------- verf (ronde 2) ----------
+// Per vak een gewichtsplaatje van 129 x 129 punten (0,5 m), RGB = de 3 eigen texturen van dat vak.
+// De grondtextuur (basis) is wat overblijft: 1 - (r + g + b). Dus maximaal 4 texturen per vak.
+// Net als de hoogte is de rand dubbel met het buurvak (geen naad). Opslag: PNG (RGB, 8-bit).
+
+export const TERRAIN_PAINT_CELLS = 128;
+export const TERRAIN_PAINT_VERTS = TERRAIN_PAINT_CELLS + 1;
+export const TERRAIN_PAINT_LAYERS = 3;
+export const TERRAIN_PAINT_BYTES = TERRAIN_PAINT_VERTS * TERRAIN_PAINT_VERTS * 3;
+export const TERRAIN_PAINT_SPEED = 3;
+const PAINT_STEP = SIZE / TERRAIN_PAINT_CELLS;
+const PAINT_VERTS = TERRAIN_PAINT_VERTS;
+
+export function createPaintfield() {
+  return { chunks: new Map(), revision: 0 };
+}
+
+export function createPaintChunk(layers = []) {
+  return { layers: [0, 1, 2].map((slot) => String(layers[slot] || "")), data: new Uint8Array(TERRAIN_PAINT_BYTES) };
+}
+
+export function clonePaintChunk(chunk) {
+  return chunk ? { layers: chunk.layers.slice(), data: chunk.data.slice() } : null;
+}
+
+export function terrainPaintIsEmpty(chunk) {
+  if (!chunk) return true;
+  for (let i = 0; i < chunk.data.length; i += 1) if (chunk.data[i] !== 0) return false;
+  return true;
+}
+
+function paintSlotIsEmpty(chunk, slot) {
+  for (let i = slot; i < chunk.data.length; i += 3) if (chunk.data[i] !== 0) return false;
+  return true;
+}
+
+// Lege plekken (geen gewicht meer) vrijgeven, zodat het vak weer een andere textuur kan krijgen.
+export function tidyPaintChunk(chunk) {
+  if (!chunk) return chunk;
+  for (let slot = 0; slot < TERRAIN_PAINT_LAYERS; slot += 1) if (chunk.layers[slot] && paintSlotIsEmpty(chunk, slot)) chunk.layers[slot] = "";
+  return chunk;
+}
+
+// Welke plek (0 = basis, 1..3) een textuur in dit vak heeft. assign = een vrije plek geven. -1 = vak vol.
+export function terrainPaintSlot(chunk, texture, assign = false) {
+  const key = String(texture || "");
+  if (!key) return 0;
+  const index = chunk.layers.indexOf(key);
+  if (index >= 0) return index + 1;
+  if (!assign) return -1;
+  for (let slot = 0; slot < TERRAIN_PAINT_LAYERS; slot += 1) {
+    if (!chunk.layers[slot] || paintSlotIsEmpty(chunk, slot)) {
+      for (let i = slot; i < chunk.data.length; i += 3) chunk.data[i] = 0;
+      chunk.layers[slot] = key;
+      return slot + 1;
+    }
+  }
+  return -1;
+}
+
+// Gewicht per textuur op het dichtstbijzijnde verfpunt: { "": basis, docKey: gewicht }.
+export function terrainPaintAt(pf, x, z) {
+  const ix = Math.round(Number(x) / PAINT_STEP);
+  const iz = Math.round(Number(z) / PAINT_STEP);
+  const cx = Math.floor(ix / TERRAIN_PAINT_CELLS);
+  const cz = Math.floor(iz / TERRAIN_PAINT_CELLS);
+  const chunk = pf?.chunks?.get(cx + ":" + cz);
+  if (!chunk) return { "": 1 };
+  const index = ((iz - cz * TERRAIN_PAINT_CELLS) * PAINT_VERTS + (ix - cx * TERRAIN_PAINT_CELLS)) * 3;
+  const out = {};
+  let rest = 1;
+  for (let slot = 0; slot < TERRAIN_PAINT_LAYERS; slot += 1) {
+    const weight = chunk.data[index + slot] / 255;
+    if (chunk.layers[slot] && weight > 0) out[chunk.layers[slot]] = (out[chunk.layers[slot]] || 0) + weight;
+    rest -= weight;
+  }
+  out[""] = Math.max(0, rest);
+  return out;
+}
+
+// Verfpenseel: texture = doc-sleutel van een terreintextuur ("" = de grond zelf, gum). Zelfde radius, sterkte
+// en zachte rand als het hoogtepenseel. Geeft { changed, full } terug: full = vakken die al 4 texturen hebben.
+export function applyTerrainPaint(pf, brush = {}) {
+  const changed = new Set();
+  const full = new Set();
+  const texture = String(brush.texture || "");
+  const x = Number(brush.x);
+  const z = Number(brush.z);
+  const radius = Math.max(0.5, Math.min(128, Number(brush.radius) || 8));
+  const strength = Math.max(0, Math.min(1, Number(brush.strength)));
+  const softness = Math.max(0, Math.min(1, Number(brush.softness)));
+  const dt = Math.max(0, Math.min(0.25, Number(brush.dt) || 0));
+  if (!pf || !Number.isFinite(x) || !Number.isFinite(z) || strength <= 0 || dt <= 0) return { changed, full };
+  let ix0 = Math.ceil((x - radius) / PAINT_STEP);
+  let ix1 = Math.floor((x + radius) / PAINT_STEP);
+  let iz0 = Math.ceil((z - radius) / PAINT_STEP);
+  let iz1 = Math.floor((z + radius) / PAINT_STEP);
+  const bounds = brush.bounds || null;
+  if (bounds) {
+    ix0 = Math.max(ix0, Math.floor(bounds.minX / PAINT_STEP));
+    ix1 = Math.min(ix1, Math.ceil(bounds.maxX / PAINT_STEP));
+    iz0 = Math.max(iz0, Math.floor(bounds.minZ / PAINT_STEP));
+    iz1 = Math.min(iz1, Math.ceil(bounds.maxZ / PAINT_STEP));
+  }
+  const touched = brush.touched || null;
+  const slots = new Map();
+  const rate = TERRAIN_PAINT_SPEED * strength * dt;
+  for (let iz = iz0; iz <= iz1; iz += 1) {
+    for (let ix = ix0; ix <= ix1; ix += 1) {
+      const weight = terrainBrushWeight(Math.hypot(ix * PAINT_STEP - x, iz * PAINT_STEP - z), radius, softness);
+      if (weight <= 0) continue;
+      const amount = Math.min(1, weight * rate);
+      const noise = dither(ix, iz, pf.revision);
+      const cx0 = Math.floor(ix / TERRAIN_PAINT_CELLS);
+      const cz0 = Math.floor(iz / TERRAIN_PAINT_CELLS);
+      const lx0 = ix - cx0 * TERRAIN_PAINT_CELLS;
+      const lz0 = iz - cz0 * TERRAIN_PAINT_CELLS;
+      for (let a = 0; a < (lx0 === 0 ? 2 : 1); a += 1) {
+        const cx = a === 0 ? cx0 : cx0 - 1;
+        const lx = a === 0 ? lx0 : TERRAIN_PAINT_CELLS;
+        for (let b = 0; b < (lz0 === 0 ? 2 : 1); b += 1) {
+          const cz = b === 0 ? cz0 : cz0 - 1;
+          const lz = b === 0 ? lz0 : TERRAIN_PAINT_CELLS;
+          const key = cx + ":" + cz;
+          let chunk = pf.chunks.get(key) || null;
+          if (!chunk && !texture) continue;
+          if (touched && !touched.has(key)) {
+            touched.add(key);
+            if (typeof brush.beforeTouch === "function") brush.beforeTouch(key, clonePaintChunk(chunk));
+          }
+          if (!chunk) {
+            chunk = createPaintChunk();
+            pf.chunks.set(key, chunk);
+          }
+          let slot = slots.get(key);
+          if (slot === undefined) {
+            slot = terrainPaintSlot(chunk, texture, true);
+            slots.set(key, slot);
+          }
+          if (slot < 0) {
+            full.add(key);
+            continue;
+          }
+          const index = (lz * PAINT_VERTS + lx) * 3;
+          for (let s = 0; s < TERRAIN_PAINT_LAYERS; s += 1) {
+            const value = chunk.data[index + s] / 255;
+            const next = s === slot - 1 ? value + (1 - value) * amount : value * (1 - amount);
+            const out = Math.max(0, Math.min(255, Math.floor(next * 255 + noise)));
+            if (out !== chunk.data[index + s]) {
+              chunk.data[index + s] = out;
+              changed.add(key);
+            }
+          }
+        }
+      }
+    }
+  }
+  if (changed.size) pf.revision += 1;
+  return { changed, full };
+}
+
+// Een gelezen PNG (zie png.js) als verf van één vak: RGB, 129 x 129, 8-bit. null = past niet.
+export function terrainPaintFromPng(png) {
+  if (!png || png.width !== PAINT_VERTS || png.height !== PAINT_VERTS || png.bitDepth !== 8 || png.channels < 3) return null;
+  if (png.channels === 3) return png.data;
+  const out = new Uint8Array(TERRAIN_PAINT_BYTES);
+  for (let i = 0; i < PAINT_VERTS * PAINT_VERTS; i += 1) {
+    out[i * 3] = png.data[i * png.channels];
+    out[i * 3 + 1] = png.data[i * png.channels + 1];
+    out[i * 3 + 2] = png.data[i * png.channels + 2];
+  }
+  return out;
 }
 
 // ---------- slimme mesh (RTIN): veel driehoeken waar het hobbelig is, weinig waar het vlak is ----------

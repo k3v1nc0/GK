@@ -380,6 +380,17 @@ export function validateDocument(kind, body) {
       }
       continue;
     }
+    if (field.type === "terrainPaint") {
+      // Ronde 2: { "cx:cz": { file: sha1 (PNG in assets/terrain), layers: [terreintextuur-sleutel of "", x3] } }.
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      if (entries.length > 16384) issues.push(issue(key, "FIELD_RANGE", field.label + ": te veel vakken."));
+      const badEntry = ([chunk, ref]) => !/^-?\d{1,5}:-?\d{1,5}$/.test(chunk) || !ref || typeof ref !== "object" || Array.isArray(ref)
+        || typeof ref.file !== "string" || !/^[0-9a-f]{40}$/.test(ref.file) || !Array.isArray(ref.layers) || ref.layers.length > 3
+        || ref.layers.some((layer) => typeof layer !== "string" || layer.length > 160 || (layer && !layer.startsWith("terrain_texture:")));
+      if (entries.some(badEntry)) issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met { file, layers }."));
+      continue;
+    }
     if (field.type === "areaSettings") {
       if (typeof value !== "object" || Array.isArray(value)) issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn."));
       continue;

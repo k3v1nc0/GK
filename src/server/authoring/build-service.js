@@ -129,6 +129,12 @@ export function compileCanonical(documents, options = {}) {
     client.terrain = split(terrainSettings).client;
     server.terrain = split(terrainSettings).server;
   }
+  // Ronde 2: terreintexturen (verf en rots). De wereldbouwer zet er de plaatjes bij.
+  const terrainTextures = byKind("terrain_texture");
+  if (terrainTextures.length) {
+    client.terrainTextures = terrainTextures.map((doc) => Object.assign({ docKey: doc.docKey }, split(doc).client));
+    server.terrainTextures = terrainTextures.map((doc) => Object.assign({ docKey: doc.docKey }, split(doc).server));
+  }
   // Ombouw stap 2: vlakken uit de Area tool. Alleen de server leest ze (de game krijgt ze via de wereld).
   const areaShapes = compileAreaShapes(known, options);
   if (areaShapes) {

@@ -149,7 +149,9 @@ const editorLayoutViews = {
   nodes: new Set(["tools", "graph", "viewport", "assets"]),
   workbench: new Set(["workbench", "viewport", "relations", "library"]),
   // Werkbank Fase 1: tab Instellingen (menu, kaart, 3D-preview).
-  settings: new Set(["settingsMenu", "settingsCard", "viewport"])
+  settings: new Set(["settingsMenu", "settingsCard", "viewport"]),
+  // Wereld tekenen ronde 2: tab Terrein (gereedschap, 3D, terrein-bibliotheek).
+  terrain: new Set(["terrainTools", "viewport", "terrainLibrary"])
 };
 
 function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
@@ -175,11 +177,13 @@ function normalizeEditorUserLayout(value) {
   if (!nodes || !workbench) return null;
   // Oude indelingen hebben nog geen Instellingen-tab; die krijgt dan de standaardindeling in de editor.
   const settings = normalizeEditorLayoutNode(value.layouts?.settings, editorLayoutViews.settings);
+  const terrain = normalizeEditorLayoutNode(value.layouts?.terrain, editorLayoutViews.terrain);
   const layouts = { nodes, workbench };
   if (settings) layouts.settings = settings;
+  if (terrain) layouts.terrain = terrain;
   return {
     version: 1,
-    editorMode: ["workbench", "settings", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
+    editorMode: ["workbench", "settings", "terrain", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
     layouts
   };
 }
@@ -301,8 +305,8 @@ function serveStatic(req, res, url) {
   if (pathname.startsWith("/assets/minimap-tiles/") && /^[0-9a-f]{40}\.(webp|png)$/.test(pathname.slice("/assets/minimap-tiles/".length))) {
     return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=31536000, immutable", req);
   }
-  // Wereld tekenen: terreinvakken heten ook naar hun inhoud (sha1).
-  if (pathname.startsWith("/assets/terrain/") && /^[0-9a-f]{40}\.bin$/.test(pathname.slice("/assets/terrain/".length))) {
+  // Wereld tekenen: terreinvakken (hoogte .bin, verf .png) heten ook naar hun inhoud (sha1).
+  if (pathname.startsWith("/assets/terrain/") && /^[0-9a-f]{40}\.(bin|png)$/.test(pathname.slice("/assets/terrain/".length))) {
     return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=31536000, immutable", req);
   }
   if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300", req);
@@ -918,6 +922,11 @@ async function handleApi(req, res, url) {
       authService.requireEditor(req);
       const multipart = await readMultipart(req);
       return sendJson(res, 201, { ok: true, chunks: assetService.saveTerrainChunks(multipart.files) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/terrain-paint") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      return sendJson(res, 201, { ok: true, paint: assetService.saveTerrainPaint(multipart.files) });
     }
     if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles/commit") {
       authService.requireEditor(req);
