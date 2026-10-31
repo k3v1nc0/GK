@@ -1,5 +1,5 @@
 import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein7";
-import { createTerrainEditor } from "./terrain-editor.js?v=20261030-terrein6";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261031-terrein8";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {

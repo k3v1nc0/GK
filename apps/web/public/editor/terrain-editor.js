@@ -324,28 +324,61 @@ const STARTSET = [
     shape: function (x, y) { return Math.exp(-Math.pow(Math.abs(y) * 2 / 0.35, 2)) * (1 - smooth(0.7, 1, Math.abs(x) * 2)); } }
 ];
 
+async function startsetImage(item) {
+  const side = 128;
+  const data = new Uint16Array(side * side);
+  for (let y = 0; y < side; y += 1) {
+    for (let x = 0; x < side; x += 1) {
+      const value = Math.max(0, Math.min(1, item.shape(x / (side - 1) - 0.5, y / (side - 1) - 0.5)));
+      data[y * side + x] = Math.round(value * 65535);
+    }
+  }
+  return encodePng({ width: side, height: side, channels: 1, bitDepth: 16, data });
+}
+
 async function makeStartset() {
   if (busy) return;
   busy = true;
   let made = 0;
+  let restored = 0;
+  let repaired = 0;
   let last = null;
   try {
     for (const item of STARTSET) {
-      if (bench().doc("terrain_stamp:stamp." + item.id)) continue;
-      status("Startset: " + item.name + " maken...", "");
-      const side = 128;
-      const data = new Uint16Array(side * side);
-      for (let y = 0; y < side; y += 1) {
-        for (let x = 0; x < side; x += 1) {
-          const value = Math.max(0, Math.min(1, item.shape(x / (side - 1) - 0.5, y / (side - 1) - 0.5)));
-          data[y * side + x] = Math.round(value * 65535);
-        }
+      const existing = bench().doc("terrain_stamp:stamp." + item.id);
+      const attachedAsset = assetById(existing?.body?.imageAssetId);
+      const hasAttachedImage = Boolean(attachedAsset?.sourcePath);
+      if (existing && !existing.archived && hasAttachedImage) continue;
+      if (existing?.archived) {
+        status("Startset: " + item.name + " terugzetten...", "");
+        await bench().applyHistory({ docKey: existing.docKey, archive: true }, "undo");
+        last = existing.docKey;
+        restored += 1;
+        if (hasAttachedImage) continue;
       }
-      const bytes = await encodePng({ width: side, height: side, channels: 1, bitDepth: 16, data });
-      last = await createStamp({ name: item.name, bytes, size: item.size, height: item.height, id: "stamp." + item.id });
-      made += 1;
+      const current = existing ? bench().doc(existing.docKey) : null;
+      let imageAsset = assets().find(function (asset) {
+        return asset.name === "Stempel " + item.name && asset.sourcePath;
+      }) || null;
+      if (!imageAsset) {
+        status("Startset: plaatje voor " + item.name + " maken...", "");
+        imageAsset = await uploadImage(await startsetImage(item), "Stempel " + item.name);
+      }
+      if (!imageAsset?.id) throw new Error("het plaatje van " + item.name + " is niet opgeslagen");
+      const body = Object.assign({}, current?.body || {}, {
+        stampId: "stamp." + item.id,
+        displayName: item.name,
+        imageAssetId: imageAsset.id,
+        size: item.size,
+        height: item.height
+      });
+      const result = await bench().saveDoc("terrain_stamp", current, body, "Stempel " + item.name);
+      last = result?.docKey || "terrain_stamp:stamp." + item.id;
+      if (!current) made += 1;
+      else if (!existing.archived) repaired += 1;
     }
-    status(made ? "Startset klaar: " + made + " stempels in de Bibliotheek." : "De startset staat al in de Bibliotheek.", "success");
+    const changed = made + restored + repaired;
+    status(changed ? "Startset klaar: " + changed + " stempels in de Bibliotheek." : "De startset staat al in de Bibliotheek.", "success");
   } catch (error) {
     status("Startset niet gemaakt: " + (error?.message || error) + ".", "error");
   } finally {
