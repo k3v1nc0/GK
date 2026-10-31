@@ -1,11 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261030-terrein7";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261031-beeld1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261029-klassen3";
-import { createGkHud } from "./hud/gk-hud.js?v=20261030-terrein6";
+import { createGkHud } from "./hud/gk-hud.js?v=20261031-beeld1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -34,6 +34,7 @@ const overlay = document.querySelector("#gameOverlay");
 const overlayText = document.querySelector("#overlayText");
 // Stap 4: de nieuwe HUD (hud/gk-hud.js), zie ensureGkHud() onderaan.
 let gkHud = null;
+let gkHudPixels = 1; // Instellingen > Scherpte (0.7 / 1 / 1.5 / 2)
 const gkHudDebug = { on: false, slot: null };
 const gkHudCache = { assets: null, assetMap: new Map(), modulesSource: null, modules: null, targetsAt: 0, targets: [] };
 
@@ -11374,6 +11375,7 @@ function ensureRuntime(world) {
     // Nieuwe HUD: scherpe 2D-namen in plaats van de 3D-bordjes boven NPC's, vijanden en items.
     if (typeof state.runtime.setRuntimeTargetNameplatesVisible === "function") state.runtime.setRuntimeTargetNameplatesVisible(false);
     if (gkHudDebug.on && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.slot);
+    if (typeof state.runtime.setPlayerPixelRatio === "function") state.runtime.setPlayerPixelRatio(gkHudPixels);
   }
   return state.runtime;
 }
@@ -13526,6 +13528,10 @@ function ensureGkHud() {
     },
     setViewInset: function (right, bottom) {
       if (state.runtime && typeof state.runtime.setViewInset === "function") state.runtime.setViewInset(right, bottom);
+    },
+    setPixels: function (value) {
+      gkHudPixels = Number(value) || 1;
+      if (state.runtime && typeof state.runtime.setPlayerPixelRatio === "function") state.runtime.setPlayerPixelRatio(gkHudPixels);
     },
     setMusic: function (on) {
       worldSpatial.musicMuted = on === false;

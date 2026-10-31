@@ -170,8 +170,13 @@ export const GAME_KINDS = {
         ui: ui("⭕", "slider", "werkbank", { step: 0.1, unit: "m", range: [0.1, 10], more: true }), default: 1,
         help: help("Hoe groot het stuk is waar je niet doorheen kunt.", "Ongeveer de halve breedte van het model.", "Je botst al ver ervoor → kleiner.") },
       idleClip: clipField("Animatie", "🎞️"),
+      // Brug-stand (31-10): met deze schakelaar zet de editor Hoogte zelf, zodat de onderkant op het hoogste grondpunt eronder ligt.
+      restOnHighest: toggle("Op hoogste grond eronder", "🌉", false, "werkbank",
+        help("Legt de onderkant van het model op het hoogste stuk grond eronder, dus bij een brug op de oevers.",
+          "Aan voor een brug over een rivier of een plank over een kuil. Na verplaatsen (G), draaien of groter maken zoekt hij opnieuw.",
+          "Wil je Hoogte zelf bijstellen → zet dit uit; het model blijft liggen waar het lag.")),
       x: pos("X", "↔️"),
-      y: height,
+      y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),
       z: pos("Z", "↕️")
     }
   },

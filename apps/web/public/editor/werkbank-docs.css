@@ -28,6 +28,11 @@
   display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--wbd-accent-ink); color: var(--wbd-accent); font-size: 11px; line-height: 18px; text-align: center;
 }
+/* Bake los van SAVE TO GAME: oranje stip als de kaart (minimap) niet meer bij de wereld in de game past. */
+#bakeButton[data-stale="1"]::after {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%;
+  background: #f0a030; vertical-align: middle;
+}
 .workbenchDocTab { border-color: #3a4b5d; }
 
 /* ---------- Paneel / formulier ---------- */

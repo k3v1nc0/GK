@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261030-terrein7";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261031-beeld1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261031-terrein8";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
@@ -10,7 +10,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261030-terrein6";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261031-beeld1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";
@@ -492,6 +492,7 @@ const el = {
   snapGridInput: document.querySelector("#snapGridInput"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
+  bakeButton: document.querySelector("#bakeButton"),
   connectionButton: document.querySelector("#connectionButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
@@ -894,6 +895,12 @@ const docBench = createDocBench({
     pushHistorySnapshot({ label: entry.label, doc: entry });
     renderUnsaved();
     updateDocPendingBadge();
+  },
+  // Brug-stand: model met "Op hoogste grond eronder" krijgt de Hoogte waarbij de onderkant op de hoogste grond eronder ligt.
+  beforeSave: function (kind, doc, body) {
+    if (kind !== "placed_model" || body?.restOnHighest !== true || !doc || typeof runtime?.restOnHighestGroundY !== "function") return body;
+    const y = runtime.restOnHighestGroundY(runtimeIdForDocKey(doc.docKey), { x: body.x, z: body.z, scale: body.scale });
+    return Number.isFinite(y) ? Object.assign({}, body, { y: Math.round(y * 100) / 100 }) : body;
   },
   onChanged: function () {
     updateDocPendingBadge();
@@ -30596,6 +30603,7 @@ async function reconnectEditor() {
 if (el.connectionButton) el.connectionButton.addEventListener("click", reconnectEditor);
 el.saveDraftButton.addEventListener("click", saveDraft);
 el.publishButton.addEventListener("click", publish);
+if (el.bakeButton) el.bakeButton.addEventListener("click", bakeMap);
 if (el.undoButton) el.undoButton.addEventListener("click", undoGraphMutation);
 if (el.redoButton) el.redoButton.addEventListener("click", redoGraphMutation);
 el.logoutButton.addEventListener("click", async function () {
@@ -30712,6 +30720,7 @@ async function bakeWorldMinimapForGame(buildId, onProgress) {
 async function publish() {
   if (el.publishButton.disabled) return;
   el.publishButton.disabled = true;
+  if (el.bakeButton) el.bakeButton.disabled = true;
   clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
@@ -30728,10 +30737,10 @@ async function publish() {
     const publishedText = !build ? "Alles staat al in de game."
       : sameBuild ? "Gepubliceerd naar de game. De kaarten staan al zo in de game (zelfde build " + build.buildId.slice(0, 10) + ")."
         : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").";
-    // De minimap in de game is een foto van bovenaf van deze wereld; die maken we hier vanzelf opnieuw.
-    setStatus(publishedText + " Minimap wordt gemaakt...", "");
-    const minimapText = await bakeWorldMinimapForGame(build?.buildId || null, function (text) { setStatus(publishedText + " " + text, ""); });
-    setStatus(publishedText + " " + minimapText, minimapText.startsWith("Minimap bijgewerkt") ? "success" : "error");
+    // De kaart (minimap) wordt niet meer hier gemaakt (duurde minuten bij een grote wereld); dat doet de knop BAKE.
+    const mapStatus = await refreshBakeStatus();
+    if (mapStatus && !mapStatus.upToDate) setStatus(publishedText + " Let op: de kaart (minimap) is verouderd. Klik BAKE als je klaar bent met de wereld.", "error");
+    else setStatus(publishedText + (mapStatus ? " De kaart is up-to-date." : ""), "success");
     // De tab Game laadt de nieuwe build: meteen als hij open is, anders bij de volgende keer openen.
     const gameFrame = el.gameTabPanel?.querySelector("iframe");
     if (gameFrame && !el.gameTabPanel.hidden) gameFrame.contentWindow?.location.reload();
@@ -30740,8 +30749,44 @@ async function publish() {
     setStatus(error.message, "error");
   } finally {
     el.publishButton.disabled = false;
+    if (el.bakeButton) el.bakeButton.disabled = false;
   }
 }
+
+// Bake los van SAVE TO GAME: de server zegt of de kaart nog past bij de wereld die nu in de game staat.
+async function refreshBakeStatus() {
+  try {
+    const response = await fetchEditorApi("/api/editor/minimap-status", { method: "GET", timeoutMs: 15000 }, "GET");
+    const data = await response.json().catch(function () { return {}; });
+    if (!response.ok || !data.ok) return null;
+    if (el.bakeButton) {
+      el.bakeButton.dataset.stale = data.upToDate ? "" : "1";
+      el.bakeButton.title = data.upToDate ? "De kaart (minimap) is up-to-date" : (data.hasMap ? "De kaart (minimap) is verouderd: klik om opnieuw te maken" : "Er is nog geen kaart (minimap): klik om te maken");
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function bakeMap() {
+  if (!el.bakeButton || el.bakeButton.disabled) return;
+  el.bakeButton.disabled = true;
+  el.publishButton.disabled = true;
+  try {
+    // De kaart is een foto van de 3D-view; staat er nog iets niet in de game, dan zie je dat al wel op de kaart.
+    const pending = docBench.pendingCount() + notLiveGraphActions();
+    const note = pending ? " (Let op: " + pending + " wijziging(en) staan nog niet in de game; doe ook SAVE TO GAME.)" : "";
+    setStatus("Kaart maken...", "");
+    const text = await bakeWorldMinimapForGame(null, function (progress) { setStatus(progress, ""); });
+    await refreshBakeStatus();
+    setStatus(text + note, text.startsWith("Minimap bijgewerkt") ? "success" : "error");
+  } finally {
+    el.bakeButton.disabled = false;
+    el.publishButton.disabled = false;
+  }
+}
+refreshBakeStatus();
 
 // ---------- Terrain tool ----------
 function terrainCanvasTarget(event) {

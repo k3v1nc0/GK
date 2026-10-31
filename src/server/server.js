@@ -10,6 +10,7 @@ import { openDatabase, resolveDatabasePath } from "./db.js";
 import { AuthService } from "./auth-service.js";
 import { UserAdminService } from "./user-admin-service.js";
 import { AssetService } from "./asset-service.js";
+import { worldMapHash } from "./world-map-hash.js";
 import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
@@ -931,7 +932,15 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles/commit") {
       authService.requireEditor(req);
       const body = await readJson(req);
+      body.mapHash = worldMapHash(mmoService.getPublishedWorldContext().world);
       return sendJson(res, 201, Object.assign({ ok: true }, assetService.commitMinimapTiles(body)));
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/minimap-status") {
+      authService.requireEditor(req);
+      const manifest = assetService.minimapTiles();
+      const current = worldMapHash(mmoService.getPublishedWorldContext().world);
+      return sendJson(res, 200, { ok: true, hasMap: Boolean(manifest), bakedAt: manifest?.bakedAt || null,
+        upToDate: Boolean(manifest && manifest.mapHash && manifest.mapHash === current) });
     }
     if (req.method === "POST" && url.pathname === "/api/editor/minimap-bakes") {
       authService.requireEditor(req);

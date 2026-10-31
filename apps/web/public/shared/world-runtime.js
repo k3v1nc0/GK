@@ -4587,7 +4587,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // The device profile picks an automatic ratio, but authored game settings own the
   // actual limits. This keeps low-power mobile defaults economical while allowing the
   // Game World Settings minimum to demand a sharper image when the project can afford it.
+  // Speler-instelling (game, Instellingen > Scherpte): vaste pixelverhouding 0.7 / 1 / 1.5 / 2. Staat die aan, dan
+  // telt alleen deze waarde en zakt de automatische resolutie niet meer (anders werd de telefoon onscherp).
+  let playerPixelRatio = null;
   const effectivePixelRatio = function (performance) {
+    if (mode === "game" && playerPixelRatio) return playerPixelRatio;
     const configuredMax = Math.max(0.5, num(performance?.pixelRatioCap, 1));
     const configuredMin = Math.min(configuredMax, Math.max(0.5, num(performance?.pixelRatioMin, 0.5)));
     const deviceRatio = Math.max(0.5, num(window.devicePixelRatio, 1));
@@ -4645,7 +4649,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // tijdelijk met minder pixels (tot pixelRatioMin) en gaat weer omhoog zodra er ruimte is.
   const adaptiveResolution = { lastCheckAt: 0, raiseBlockedUntil: 0, slowSince: 0, fastSince: 0 };
   function maybeAdaptPixelRatio(now) {
-    if (mode !== "game" || worldPerformance.game?.adaptiveResolution === false) return;
+    if (mode !== "game" || playerPixelRatio || worldPerformance.game?.adaptiveResolution === false) return;
     if (now - adaptiveResolution.lastCheckAt < 500) return;
     adaptiveResolution.lastCheckAt = now;
     const maxRatio = effectivePixelRatio(worldPerformance.game);
@@ -4670,6 +4674,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
+  let gameBaseFov = 50; // ingestelde kijkhoek van de game-camera (zie applyGameFov)
   // Wereld tekenen (ronde 1): de grond met hoogtes, in vakken rond de speler/camera (terrain-render.js).
   const terrainLayer = createTerrainLayer({ scene, mode, requestRender: function (reason) { requestRender(reason); } });
   // Ronde 3: watervlakken (los, plat) uit world.terrain.water; de editor-tab Terrein zet ze ook live.
@@ -8614,6 +8619,23 @@ function resolveChunkDebugCenter(policy) {
     applyViewInset();
   }
 
+  // Game: het poppetje is even groot, hoe je het scherm ook houdt (breed of hoog, telefoon of pc). De ingestelde
+  // kijkhoek geldt voor de korte kant van het scherm: liggend de hoogte, staand de breedte.
+  function applyGameFov() {
+    if (mode !== "game") return;
+    const aspect = camera.aspect > 0 ? camera.aspect : 1;
+    camera.fov = aspect >= 1 ? gameBaseFov
+      : 2 * Math.atan(Math.tan((gameBaseFov * DEG_TO_RAD) / 2) / aspect) / DEG_TO_RAD;
+  }
+
+  function setPlayerPixelRatio(value) {
+    const allowed = [0.7, 1, 1.5, 2];
+    const next = allowed.includes(Number(value)) ? Number(value) : null;
+    if (next === playerPixelRatio) return;
+    playerPixelRatio = next;
+    handleResize("player-pixel-ratio");
+  }
+
   function handleResize(reason) {
     if (disposed) return false;
     const rect = resizeTarget && typeof resizeTarget.getBoundingClientRect === "function"
@@ -8632,6 +8654,7 @@ function resolveChunkDebugCenter(policy) {
     renderer.setPixelRatio(ratio);
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
+    applyGameFov();
     camera.updateProjectionMatrix();
     if (viewInsetX || viewInsetY) applyViewInset();
     DEBUG_RUNTIME.resizeCount += 1;
@@ -8993,6 +9016,34 @@ function resolveChunkDebugCenter(policy) {
     if (entityRoots.has(entityId)) return entityRoots.get(entityId) || null;
     if (player.root?.userData?.playerId === entityId) return player.root;
     return null;
+  }
+
+  // Brug-stand: de Hoogte (boven de grond, zoals in de kaart) waarbij de onderkant van het model op het hoogste
+  // grondpunt onder het model ligt. target = { x, z, scale } zoals het straks opgeslagen wordt.
+  function restOnHighestGroundY(entityId, target = {}) {
+    const root = rootForSelectableId(entityId);
+    if (!root) return null;
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    if (box.isEmpty()) return null;
+    const pivot = new THREE.Vector3();
+    root.getWorldPosition(pivot);
+    const ratio = num(target.scale, 0) > 0 && root.scale.x > 0 ? num(target.scale, 1) / root.scale.x : 1;
+    const x = num(target.x, pivot.x);
+    const z = num(target.z, pivot.z);
+    const minX = x + (box.min.x - pivot.x) * ratio;
+    const maxX = x + (box.max.x - pivot.x) * ratio;
+    const minZ = z + (box.min.z - pivot.z) * ratio;
+    const maxZ = z + (box.max.z - pivot.z) * ratio;
+    const steps = 12;
+    let top = -Infinity;
+    for (let i = 0; i <= steps; i += 1) {
+      for (let j = 0; j <= steps; j += 1) {
+        top = Math.max(top, terrainLift(minX + (maxX - minX) * i / steps, minZ + (maxZ - minZ) * j / steps));
+      }
+    }
+    const bottom = (box.min.y - pivot.y) * ratio;
+    return top - bottom - terrainLift(x, z);
   }
 
   function rootsForGroupSelectableId(entityId) {
@@ -13169,7 +13220,9 @@ function resolveChunkDebugCenter(policy) {
     }
     const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
     if (shouldApplyToViewport) {
-      camera.fov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      gameBaseFov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      camera.fov = gameBaseFov;
+      applyGameFov();
       camera.updateProjectionMatrix();
       updateCameraPosition();
       if (orbitControls) {
@@ -18649,6 +18702,7 @@ function resolveChunkDebugCenter(policy) {
     screenToGround: screenToGround,
     worldToScreen: worldToScreen,
     setViewInset: setViewInset,
+    setPlayerPixelRatio: setPlayerPixelRatio,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
     resolvePlayerMovementIntent: resolvePlayerMovementIntent,
@@ -18831,6 +18885,7 @@ function resolveChunkDebugCenter(policy) {
     terrainActive: function () { return terrainLayer.active; },
     terrainHeightfield: function () { return terrainLayer.heightfield; },
     terrainHeightAt: terrainLift,
+    restOnHighestGroundY: restOnHighestGroundY,
     // Ronde 3: water live zetten vanuit de editor (lijst zoals world.terrain.water) en de huidige lijst lezen.
     terrainSetWater: function (list) { waterLayer.setWater(list, num(world?.ground?.y, 0)); },
     terrainWaterList: function () { return waterLayer.list(); },

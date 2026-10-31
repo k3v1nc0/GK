@@ -65,6 +65,8 @@ export function createDocBench(options = {}) {
   const onUndoable = options.onUndoable || (() => {});
   const setStatus = options.setStatus || (() => {});
   const onChanged = options.onChanged || (() => {});
+  // Mag de inhoud vlak voor opslaan aanvullen (bijv. Hoogte bij "Op hoogste grond eronder").
+  const beforeSave = options.beforeSave || null;
   const pendingSaves = new Set();
 
   const bench = {
@@ -146,6 +148,7 @@ export function createDocBench(options = {}) {
   // ---------- opslaan met Ctrl+Z ----------
 
   function saveDoc(kind, doc, body, label) {
+    if (beforeSave) body = beforeSave(kind, doc, body) || body;
     const saving = persistDoc(kind, doc, body, label);
     pendingSaves.add(saving);
     const done = () => pendingSaves.delete(saving);

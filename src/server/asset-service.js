@@ -676,7 +676,7 @@ export class AssetService {
   }
 
   // Stap 4 (HUD): de kaart van de wereld als tegels (puzzelstukjes) in lagen; laag 0 is het scherpst, elke laag
-  // erboven heeft tegels die twee keer zo groot zijn (voor uitzoomen). De editor maakt ze bij SAVE TO GAME.
+  // erboven heeft tegels die twee keer zo groot zijn (voor uitzoomen). De editor maakt ze met de knop BAKE.
   // Een tegel heet naar zijn vingerafdruk (sha1): een tegel die niet veranderd is, wordt niet opnieuw bewaard
   // en de browser hoeft hem niet opnieuw te laden. Upload: /api/editor/world-minimap-tiles (+ /commit);
   // de game leest de lijst via /api/game/minimap.
@@ -732,6 +732,9 @@ export class AssetService {
       bounds: { minX: Number(bounds.minX), maxX: Number(bounds.maxX), minZ: Number(bounds.minZ), maxZ: Number(bounds.maxZ) },
       tiles,
       buildId: String(input.buildId || "").slice(0, 120) || null,
+      // Vingerafdruk van de wereld (grond, terrein, water, modellen) toen de kaart gebakken werd; zo ziet de editor
+      // na SAVE TO GAME of de kaart verouderd is. De server vult hem in, niet de browser.
+      mapHash: /^[0-9a-f]{40}$/.test(String(input.mapHash || "")) ? String(input.mapHash) : null,
       bakedAt: now()
     };
     const file = path.join(dir, "manifest.json");

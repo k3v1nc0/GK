@@ -65,7 +65,10 @@ const COMBAT_MS = 6000;
 const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: null, quest: null, done: false,
   minimap: true, zoom: 1, size: "m", music: true, combatFold: true, debug: false, icoSize: "m", icoAnim: true, icoColor: "color", map: null,
   // Namen boven poppetjes (2D): NPC's/vijanden/spullen, andere spelers, jijzelf.
-  nameWorld: true, namePlayers: true, nameSelf: false };
+  nameWorld: true, namePlayers: true, nameSelf: false,
+  // Scherpte van de game: pixels per schermpunt (1 = standaard; hoger = scherper maar zwaarder).
+  pixels: 1 };
+const PIXEL_STEPS = [0.7, 1, 1.5, 2];
 // Kaarten: big/mini = wat je ziet per soort (ontbreekt = aan, dus een nieuwe soort staat vanzelf aan), span = meters in beeld
 // op de grote kaart, bigIcon/miniIcon = grootte van de kaarticonen, rotate = minimap draait mee, pin = je eigen pin {x, z}.
 // bigText/miniText = grootte van de gebiedsnamen (die zoomen ook mee met de kaart).
@@ -923,6 +926,10 @@ export function createGkHud(api) {
       toggle("music", store.music ? "musical-notes" : "speaker-off", "Muziek", null, store.music),
       toggle("combatFold", "crossed-swords", "Paneel klein tijdens gevecht", "Op een telefoon of smal venster: na het gevecht komt het terug.", store.combatFold),
       h("div", { class: "gkRow" }, [ico("resize"), h("span", null, ["Grootte van het scherm", h("small", { text: "Knoppen, kaart en paneel." })]), sizes]),
+      h("div", { class: "gkRow" }, [ico("sparkles"), h("span", null, ["Scherpte", h("small", { text: "1 = standaard. Hoger is scherper (fijn op een telefoon), maar zwaarder voor de computer." })]),
+        h("div", { class: "gkSeg" }, PIXEL_STEPS.map(function (step) {
+          return h("button", { type: "button", class: Number(store.pixels) === step ? "gkOn" : null, "data-act": "pixels", "data-id": String(step) }, [String(step)]);
+        }))]),
       h("div", { class: "gkRow" }, [ico("knapsack"), h("span", null, ["Grootte van de iconen", h("small", { text: "Alleen de plaatjes, niet de knoppen." })]),
         h("div", { class: "gkSeg" }, [["s", "S"], ["m", "M"], ["l", "L"]].map(function (pair) {
           return h("button", { type: "button", class: store.icoSize === pair[0] ? "gkOn" : null, "data-act": "icosize", "data-id": pair[0] }, [pair[1]]);
@@ -1030,7 +1037,7 @@ export function createGkHud(api) {
   }
 
   function syncSettings() {
-    const signature = JSON.stringify([store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.icoAnim, store.icoColor]);
+    const signature = JSON.stringify([store.pixels, store.music, store.debug && data().isAdmin, has("hotbar_hud"), has("interaction_hud"), store.icoSize, store.icoAnim, store.icoColor]);
     if (ui.sig.settings === signature) return;
     ui.sig.settings = signature;
     root.dataset.ico = store.icoSize || "m";
@@ -1038,6 +1045,7 @@ export function createGkHud(api) {
     root.dataset.icocolor = store.icoColor || "color";
     root.dataset.hotbar = has("hotbar_hud") ? "on" : "off";
     root.dataset.dobtn = has("interaction_hud") ? "on" : "off";
+    if (typeof api.setPixels === "function") api.setPixels(PIXEL_STEPS.includes(Number(store.pixels)) ? Number(store.pixels) : 1);
     api.setMusic(store.music);
     api.setDebug(Boolean(store.debug && data().isAdmin), debugSlot);
   }
@@ -1722,6 +1730,7 @@ export function createGkHud(api) {
         break;
       case "fullscreen": toggleFullscreen(); break;
       case "icosize": store.icoSize = id; save(); render(); break;
+      case "pixels": store.pixels = Number(id) || 1; save(); render(); break;
       case "icocolor": store.icoColor = id; save(); render(); break;
       case "respawn": api.run03("respawn", null, {}); break;
       case "attack": attack(); break;
