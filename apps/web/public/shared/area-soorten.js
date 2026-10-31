@@ -90,7 +90,8 @@ const T = {
   flowDirection: ["🧭", "Stroomrichting", "De richting van de stroming (graden).", "Dezelfde kant als de rivier.", "Stroomt verkeerd om → plus of min 180."],
   flowTextureLayer: ["🧩", "Wat stroomt", "Welke textuur stroomt.", "De eerste (main).", "Niets stroomt → kies beide."],
   reason: ["❓", "Waarom", "Wat voor blokkade dit is (berg, gat, muur).", "Kies wat het beste past; het werkt hetzelfde.", "Verkeerd label op de kaart → kies een andere reden."],
-  priority: ["🥇", "Voorrang", "Welk loopvlak wint als twee elkaar overlappen.", "10. Hoger voor een brug over een ander loopvlak.", "Speler zakt door de brug → hoger."]
+  priority: ["🥇", "Voorrang", "Welk loopvlak wint als twee elkaar overlappen.", "10. Hoger voor een brug over een ander loopvlak.", "Speler zakt door de brug → hoger."],
+  closedEdges: ["🚧", "Dichte randen", "Randen van het loopvlak waar je niet overheen kunt (onzichtbare muur).", "Bij een brug: de lange zijkanten dicht, de uiteinden open.", "Je valt van de brug → zet die rand dicht met de knop Randen."]
 };
 
 const OPTION_LABELS = {
@@ -177,9 +178,47 @@ export function areaSettingsIssues(soort, settings) {
     else if (spec.type === "asset" && (typeof value !== "string" || value.length > 160 || !ASSET.test(value))) issues.push(name + " is geen geldig asset.");
     else if (spec.type === "text" && (typeof value !== "string" || value.length > spec.maxLength)) issues.push(name + " is geen geldige tekst.");
     else if (spec.type === "assetList" && (!Array.isArray(value) || value.length > spec.maxItems || value.some((id) => typeof id !== "string" || !ASSET.test(id)))) issues.push(name + " moet een lijst modellen zijn.");
+    else if (key === "closedEdges") { if (!isEdgeList(value)) issues.push(name + " moet een lijst randnummers zijn."); }
     else if (spec.type === "json" && (typeof value !== "object" || Array.isArray(value))) issues.push(name + " is ongeldig.");
   }
   return issues;
+}
+
+// Dichte randen van een loopvlak: unieke hele getallen 0..511 (rand i = van punt i naar punt i+1).
+function isEdgeList(value) {
+  return Array.isArray(value) && value.length <= 512 && new Set(value).size === value.length
+    && value.every((edge) => Number.isInteger(edge) && edge >= 0 && edge < 512);
+}
+
+// Na punten erbij of eraf: de dichte randen schuiven mee. Punten die niet bewogen zijn (zelfde mm) wijzen de weg;
+// een nieuwe rand is dicht als hij (een stuk van) een oude dichte rand vervangt. Alleen gesleept = zelfde nummers.
+export function remapClosedEdges(oldPointsMm, newPointsMm, closedEdges) {
+  const closed = new Set(Array.isArray(closedEdges) ? closedEdges : []);
+  const oldCount = Array.isArray(oldPointsMm) ? oldPointsMm.length : 0;
+  const newCount = Array.isArray(newPointsMm) ? newPointsMm.length : 0;
+  if (!closed.size || newCount < 2) return [];
+  if (oldCount === newCount || oldCount < 2) return [...closed].filter((edge) => edge < newCount).sort((a, b) => a - b);
+  const key = (point) => point[0] + "," + point[1];
+  const oldIndex = new Map();
+  oldPointsMm.forEach((point, index) => { if (!oldIndex.has(key(point))) oldIndex.set(key(point), index); });
+  const mapped = newPointsMm.map((point) => (oldIndex.has(key(point)) ? oldIndex.get(key(point)) : null));
+  if (!mapped.some((index) => index !== null)) return [];
+  // Voor een nieuw punt: het vorige en volgende punt dat al bestond.
+  const prevOld = (j) => { for (let k = 0; k < newCount; k += 1) { const m = mapped[(j - k + newCount) % newCount]; if (m !== null) return m; } return null; };
+  const nextOld = (j) => { for (let k = 0; k < newCount; k += 1) { const m = mapped[(j + k) % newCount]; if (m !== null) return m; } return null; };
+  const out = [];
+  for (let j = 0; j < newCount; j += 1) {
+    const from = prevOld(j);
+    const to = nextOld((j + 1) % newCount);
+    if (from === null || to === null) continue;
+    // Alle oude randen van "from" tot "to" (vooruit); één ervan dicht = deze rand dicht.
+    let steps = (to - from + oldCount) % oldCount;
+    if (steps === 0) steps = mapped[j] === null || mapped[(j + 1) % newCount] === null ? 1 : 0;
+    for (let k = 0; k < steps; k += 1) {
+      if (closed.has((from + k) % oldCount)) { out.push(j); break; }
+    }
+  }
+  return out;
 }
 
 export function areaSoort(body) {
@@ -254,7 +293,15 @@ export function areaBodyFromNodePatch(body, patch) {
   const specs = AREA_SETTING_SPECS[soort].fields;
   for (const [key, value] of Object.entries(patch || {})) {
     if (key === "points") {
+      const before = Array.isArray(next.pointsMm) ? next.pointsMm : [];
       next.pointsMm = areaPointsMm(value, Boolean(def.height));
+      // Loopvlak: dichte randen schuiven mee als er punten bij of af gaan (tenzij de patch ze zelf zet).
+      if (soort === "loopvlak" && next.settings?.closedEdges && !("closedEdges" in patch)) {
+        const edges = remapClosedEdges(before, next.pointsMm, next.settings.closedEdges);
+        next.settings = Object.assign({}, next.settings);
+        if (edges.length) next.settings.closedEdges = edges; else delete next.settings.closedEdges;
+        if (!Object.keys(next.settings).length) delete next.settings;
+      }
       if (soort === "deelgebied") {
         next.shape = "polygon";
         for (const field of ["minXMm", "maxXMm", "minZMm", "maxZMm", "centerXMm", "centerZMm", "radiusMm"]) delete next[field];
@@ -263,8 +310,9 @@ export function areaBodyFromNodePatch(body, patch) {
     }
     if (!specs[key]) continue;
     next.settings = Object.assign({}, next.settings || {});
-    if (value === null || value === undefined) delete next.settings[key];
+    if (value === null || value === undefined || (key === "closedEdges" && Array.isArray(value) && !value.length)) delete next.settings[key];
     else next.settings[key] = value;
+    if (key === "closedEdges" && !Object.keys(next.settings).length) delete next.settings;
   }
   if (soort !== "deelgebied" && !next.shape) next.shape = "polygon";
   return next;

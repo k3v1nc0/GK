@@ -3364,7 +3364,9 @@ function terrainNodeCapabilities(node) {
     allowRotate: polygonEditable,
     allowGeoScale: polygonEditable,
     allowScale: nodeType === "surface_layer",
-    allowDelete: polygonEditable
+    allowDelete: polygonEditable,
+    // Loopvlak: randen dicht (onzichtbare muur) of open zetten.
+    allowEdges: walkableSurface
   };
 }
 
@@ -3377,6 +3379,7 @@ function terrainModeAllowed(mode, capabilities) {
   if (mode === "geoscale") return Boolean(capabilities.allowGeoScale);
   if (mode === "scale") return Boolean(capabilities.allowScale);
   if (mode === "delete") return Boolean(capabilities.allowDelete);
+  if (mode === "edges") return Boolean(capabilities.allowEdges);
   return false;
 }
 
@@ -3398,6 +3401,7 @@ function terrainSelectionText(node, capabilities) {
   if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
+  if (state.terrainTool.mode === "edges") return title + " - Randen: klik op een lijn. Rood = dicht (je kunt er niet af), groen = open.";
   return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
 
@@ -4319,7 +4323,8 @@ function terrainOverlayState() {
     draggingHandleRole: state.terrainTool.draggingHandleRole,
     points: points,
     groundY: groundY,
-    color: accentColorForNodeDef(state.nodeTypes[node.type])
+    color: accentColorForNodeDef(state.nodeTypes[node.type]),
+    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : []
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -5057,6 +5062,19 @@ function appendTerrainTransformActions(parent, node) {
       terrainFinishWithRender();
     }
   }));
+  if (capabilities.allowEdges) {
+    parent.appendChild(transformActionButton("🚧 Randen", {
+      active: state.terrainTool.mode === "edges",
+      title: "Klik op een lijn: rood = dicht (onzichtbare muur), groen = open",
+      onClick: function () {
+        terrainCancelActiveSession();
+        state.terrainTool.mode = state.terrainTool.mode === "edges" ? "select" : "edges";
+        state.terrainTool.axisConstraint = null;
+        setStatus(state.terrainTool.mode === "edges" ? "Randen: klik op een lijn tussen twee punten. Rood = dicht, groen = open." : "Randen uit.", "");
+        terrainFinishWithRender();
+      }
+    }));
+  }
   parent.appendChild(transformActionButton("Del (Del)", {
     className: "danger",
     onClick: function () {
@@ -31626,6 +31644,20 @@ async function terrainAddPoint(node, groundPoint) {
   return ok;
 }
 
+// Loopvlak: rand pointIndex -> pointIndex+1 dicht (onzichtbare muur, rood) of open (groen).
+async function terrainToggleClosedEdge(node, edgeIndex) {
+  const count = terrainNodePoints(node).length;
+  if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= count) return false;
+  const current = new Set(Array.isArray(node.values?.closedEdges) ? node.values.closedEdges : []);
+  const wasClosed = current.has(edgeIndex);
+  if (wasClosed) current.delete(edgeIndex); else current.add(edgeIndex);
+  const next = Array.from(current).filter(function (edge) { return edge < count; }).sort(function (a, b) { return a - b; });
+  const ok = await patchValues(node.id, { closedEdges: next }, { historyLabel: wasClosed ? "Rand open" : "Rand dicht" });
+  if (ok) setStatus(wasClosed ? "Rand open: hier kun je eraf." : "Rand dicht: hier kun je er niet af.", "success");
+  terrainFinishWithRender();
+  return Boolean(ok);
+}
+
 async function terrainDeletePoint(node, pointIndex) {
   const capabilities = terrainNodeCapabilities(node);
   if (!capabilities.allowDelete) return false;
@@ -32262,7 +32294,7 @@ function handleTerrainPointerDown(event) {
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.terrainTool.mode;
   const meshEntityId = runtimeEntityIdFromPointer(event);
-  const terrainInsertHit = mode === "extrude" && capabilities.allowExtrude
+  const terrainInsertHit = (mode === "extrude" && capabilities.allowExtrude) || (mode === "edges" && capabilities.allowEdges)
     ? terrainLineInsertHitFromEvent(node, event)
     : null;
   const shouldPlaceFirstPoints = mode === "select"
@@ -32274,7 +32306,7 @@ function handleTerrainPointerDown(event) {
     || shouldPlaceFirstPoints
     || mode === "extrude"
     || mode === "scale";
-  if (meshEntityId && !(hit && hit.nodeId === node.id) && mode !== "extrude") return;
+  if (meshEntityId && !(hit && hit.nodeId === node.id) && mode !== "extrude" && !(mode === "edges" && terrainInsertHit)) return;
   if (!shouldConsumeTerrainClick) {
     if (event.pointerType === "touch") {
       if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
@@ -32304,6 +32336,10 @@ function handleTerrainPointerDown(event) {
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   suppressNextViewportRuntimeClick();
 
+  if (mode === "edges" && capabilities.allowEdges && terrainInsertHit && !(hit && hit.nodeId === node.id && Number.isInteger(hit.pointIndex))) {
+    void terrainToggleClosedEdge(node, terrainInsertHit.pointIndex);
+    return;
+  }
   if (hit && hit.nodeId === node.id) {
     if ((event.ctrlKey || event.metaKey) && hit.handleRole === "center" && state.selectedNodeIds.includes(node.id)) {
       const nextIds = state.selectedNodeIds.filter(function (nodeId) { return nodeId !== node.id; });

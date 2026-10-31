@@ -552,8 +552,9 @@ export function applyTerrainPaintPath(pf, path = {}) {
 // behavior: "block" = Niet in (diep water houdt je tegen), "wade" = Doorheen (je loopt over de bodem),
 // "ice" = IJs (je loopt bovenop).
 export const WATER_BEHAVIORS = Object.freeze(["block", "wade", "ice"]);
-// Bij "Niet in" houdt het water je pas tegen waar het dieper is dan dit (de oever blijft beloopbaar).
-export const WATER_BLOCK_DEPTH = 0.3;
+// Bij "Niet in" houdt het water je tegen zodra een stuk van de speler dieper dan dit in het water komt
+// (vrijwel bij de waterlijn; een klein beetje speling zodat golfjes op de rand je niet stilzetten).
+export const WATER_BLOCK_DEPTH = 0.02;
 
 export function normalizeTerrainWater(entry) {
   if (!entry || typeof entry !== "object") return null;

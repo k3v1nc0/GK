@@ -190,8 +190,51 @@ export function createEmptyWalkabilityIndex() {
     heightfield: null,
     maxSlopeTan: Math.tan(TERRAIN_MAX_SLOPE_DEG * DEG_TO_RAD),
     // Ronde 3: watervlakken (Niet in / Doorheen / IJs), zie terrain.js.
-    waters: []
+    waters: [],
+    // Dichte randen van loopvlakken (onzichtbare muren), zie walkableWallBlocks.
+    walls: []
   };
+}
+
+// Een dichte rand werkt alleen voor wie ongeveer op die hoogte loopt (niet voor wie ver onder de brug loopt).
+const WALL_HEIGHT_REACH = 2;
+
+function closestOnWall(wall, x, z) {
+  const dx = wall.bx - wall.ax;
+  const dz = wall.bz - wall.az;
+  const lengthSq = dx * dx + dz * dz;
+  const t = lengthSq > 0 ? clamp(((x - wall.ax) * dx + (z - wall.az) * dz) / lengthSq, 0, 1) : 0;
+  const ox = x - (wall.ax + dx * t);
+  const oz = z - (wall.az + dz * t);
+  return { distSq: ox * ox + oz * oz, t };
+}
+
+function segmentsCross(ax, az, bx, bz, cx, cz, dx, dz) {
+  const d1 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx);
+  const d2 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx);
+  const d3 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+  const d4 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+// Loopvlak met dichte randen: je kunt er niet overheen en komt er niet dichter dan je straal bij.
+// Weglopen of erlangs glijden mag altijd (zo raak je nooit vast).
+export function walkableWallBlocks(index, startX, startY, startZ, x, z, radius) {
+  const walls = index?.walls;
+  if (!walls || !walls.length) return false;
+  const r = Math.max(0.05, num(radius, 0));
+  const minX = Math.min(startX, x) - r;
+  const maxX = Math.max(startX, x) + r;
+  const minZ = Math.min(startZ, z) - r;
+  const maxZ = Math.max(startZ, z) + r;
+  for (const wall of walls) {
+    if (maxX < wall.minX || minX > wall.maxX || maxZ < wall.minZ || minZ > wall.maxZ) continue;
+    const to = closestOnWall(wall, x, z);
+    if (Math.abs(num(startY, 0) - (wall.ay + (wall.by - wall.ay) * to.t)) > WALL_HEIGHT_REACH) continue;
+    if (segmentsCross(startX, startZ, x, z, wall.ax, wall.az, wall.bx, wall.bz)) return true;
+    if (to.distSq < r * r && to.distSq < closestOnWall(wall, startX, startZ).distSq - 1e-9) return true;
+  }
+  return false;
 }
 
 // Ronde 3: water op x, z. Geeft { water, bottom } of null; bottom = terreinhoogte (zonder ground.y).
@@ -200,6 +243,29 @@ function waterUnder(index, x, z) {
   const water = terrainWaterAt(index.waters, x, z);
   if (!water) return null;
   return { water, bottom: index.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0 };
+}
+
+// Water "Niet in": hoe diep sta je erin? Kijkt naar het midden en 8 punten op een cirkel om de speler (radius),
+// zodat je al bij de waterlijn wordt tegengehouden en soepel langs een ronde oever glijdt. 0 = droog,
+// anders { center } = diepte onder het midden van de speler.
+const WATER_RING = Array.from({ length: 8 }, (_, i) => [Math.cos(i * Math.PI / 4), Math.sin(i * Math.PI / 4)]);
+function blockWaterDepth(index, x, z, radius) {
+  if (!index?.waters?.length) return 0;
+  let deepest = 0;
+  let deepestWater = null;
+  const r = Math.max(0, num(radius, 0));
+  for (let i = -1; i < WATER_RING.length; i += 1) {
+    const px = i < 0 ? x : x + WATER_RING[i][0] * r;
+    const pz = i < 0 ? z : z + WATER_RING[i][1] * r;
+    const wet = waterUnder(index, px, pz);
+    if (!wet || wet.water.behavior !== "block") continue;
+    const depth = wet.water.height - wet.bottom;
+    if (depth > deepest) { deepest = depth; deepestWater = wet.water; }
+  }
+  if (deepest <= WATER_BLOCK_DEPTH) return 0;
+  // Wat telt bij eruit lopen: hoe diep het midden van de speler staat (kan negatief zijn: midden al droog).
+  const bottom = index.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0;
+  return { center: deepestWater.height - bottom };
 }
 
 export function terrainSlopeTan(degrees) {
@@ -616,6 +682,18 @@ export function createWalkabilityIndex(worldData, options = {}) {
       mode: mode,
       triangles: mode === "polygon" ? triangulateWalkableSurface(points) : []
     });
+    // Dichte randen: rand i loopt van punt i naar punt i+1 (de laatste terug naar het eerste).
+    if (mode === "polygon" && Array.isArray(walkable?.closedEdges)) {
+      for (const edge of walkable.closedEdges) {
+        if (!Number.isInteger(edge) || edge < 0 || edge >= points.length) continue;
+        const a = points[edge];
+        const b = points[(edge + 1) % points.length];
+        index.walls.push({
+          ax: a.x, az: a.z, ay: num(a.y, y), bx: b.x, bz: b.z, by: num(b.y, y),
+          minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z)
+        });
+      }
+    }
   }
 
   index.walkables.sort(function (left, right) {
@@ -853,18 +931,20 @@ export function resolveMovementCandidateInto(output, startX, startY, startZ, can
   pushAwayFromSolids(output, radius, solids);
   clampPointToGround(output, ground, radius);
   if (isPointBlockedByTerrain(index, output.x, output.z, radius)) return false;
+  if (walkableWallBlocks(index, startX, startY, startZ, output.x, output.z, radius)) return false;
   const walkableY = walkableSurfaceHeightAt(index, output.x, output.z, num(ground?.y, startY), radius);
   if (walkableY !== null) {
     output.y = walkableY;
     return true;
   }
-  // Water: "Niet in" houdt je tegen waar het diep is; op "IJs" loop je bovenop; "Doorheen" = gewoon de bodem.
-  const wet = waterUnder(index, output.x, output.z);
-  if (wet && wet.water.behavior === "block" && wet.bottom < wet.water.height - WATER_BLOCK_DEPTH) {
-    // Wie al in diep water staat (bijv. water over de speler heen getekend), mag er nog uit lopen.
-    const from = waterUnder(index, startX, startZ);
-    if (!(from && from.water.behavior === "block" && from.bottom < from.water.height - WATER_BLOCK_DEPTH)) return false;
+  // Water: "Niet in" houdt je al bij de waterlijn tegen (cirkel om de speler); op "IJs" loop je bovenop;
+  // "Doorheen" = gewoon de bodem. Wie toch in het water staat, mag altijd naar ondieper (ook een steile oever op).
+  const wetTo = blockWaterDepth(index, output.x, output.z, radius);
+  if (wetTo) {
+    const wetFrom = blockWaterDepth(index, startX, startZ, radius);
+    if (!(wetFrom && wetTo.center < wetFrom.center)) return false;
   }
+  const wet = waterUnder(index, output.x, output.z);
   if (wet && wet.water.behavior === "ice") {
     output.y = num(ground?.y, 0) + Math.max(wet.bottom, wet.water.height);
     return true;
@@ -877,7 +957,9 @@ export function resolveMovementCandidateInto(output, startX, startY, startZ, can
     const distance = Math.hypot(output.x - startX, output.z - startZ);
     if (distance > COLLISION_EPSILON) {
       const rise = endHeight - terrainHeightAt(heightfield, startX, startZ);
-      if (rise > 0 && rise / distance > num(index.maxSlopeTan, 1.19)) return false;
+      // Vlak bij "Niet in"-water (binnen 1 m) mag je een steile oever op: omlaag mag altijd, dus anders zit je
+      // aan de waterkant vast.
+      if (rise > 0 && rise / distance > num(index.maxSlopeTan, 1.19) && !blockWaterDepth(index, startX, startZ, radius + 1)) return false;
     }
     output.y = baseY + endHeight;
   }

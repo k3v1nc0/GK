@@ -49,13 +49,23 @@ test("lopen: Niet in houdt je tegen in diep water, Doorheen over de bodem, IJs b
   const base = { ground: { width: 200, depth: 200, y: 0, minX: -100, maxX: 100, minZ: -100, maxZ: 100, boundsMode: "centerSize" } };
   const world = (behavior) => Object.assign({}, base, { terrain: { heightfield: { maxSlopeDeg: 80 }, water: [{ id: "meer", x: 32, z: 32, width: 40, depth: 40, height: -0.5, behavior }] } });
   const walk = (behavior, from, to) => resolveMovement(from, to, { index: buildWalkabilityIndex(world(behavior), { heightfield: hf }), radius: 0.3 });
-  // Rand van de kom (diepte < 0,3 m onder het water) is oever: daar mag je staan.
+  // Waterlijn van de kom ligt op z = 14,5. Droge oever tot daar is beloopbaar.
   const shore = walk("block", { x: 32, y: 0, z: 10 }, { x: 32, y: 0, z: 13.5 });
   assert.ok(shore.z > 13, "oever is beloopbaar (" + JSON.stringify(shore) + ")");
+  // Je wordt al bij de waterlijn tegengehouden: de rand van de speler (0,3) komt niet in het water.
   const blocked = walk("block", { x: 32, y: 0, z: 14 }, { x: 32, y: 0, z: 17 });
-  assert.ok(blocked.z < 16, "diep water houdt je tegen (" + JSON.stringify(blocked) + ")");
+  assert.ok(blocked.z < 14.3, "water houdt je bij de waterlijn tegen (" + JSON.stringify(blocked) + ")");
+  // Schuin tegen de oever: je glijdt erlangs in plaats van stil te staan.
+  const slide = walk("block", { x: 32, y: 0, z: 14.1 }, { x: 33, y: 0, z: 15 });
+  assert.ok(slide.x > 32.2, "langs de oever glijden (" + JSON.stringify(slide) + ")");
   const out = walk("block", { x: 32, y: 0, z: 32 }, { x: 32, y: 0, z: 31 });
   assert.ok(out.z < 31.5, "wie al in diep water staat, mag eruit lopen");
+  const deeper = walk("block", { x: 32, y: 0, z: 20 }, { x: 32, y: 0, z: 21 });
+  assert.ok(deeper.z < 20.05, "in het water niet dieper in");
+  // Steile oever (max 5 graden): aan de waterkant mag je toch omhoog (omlaag mocht al), anders zit je vast.
+  const steep = Object.assign({}, base, { terrain: { heightfield: { maxSlopeDeg: 5 }, water: [{ id: "meer", x: 32, z: 32, width: 40, depth: 40, height: -0.5, behavior: "block" }] } });
+  const climb = resolveMovement({ x: 32, y: 0, z: 15 }, { x: 32, y: 0, z: 13 }, { index: buildWalkabilityIndex(steep, { heightfield: hf }), radius: 0.3 });
+  assert.ok(climb.z < 14, "niet vast aan de rand (" + JSON.stringify(climb) + ")");
   const wade = walk("wade", { x: 32, y: 0, z: 30.5 }, { x: 32, y: 0, z: 32 });
   assert.ok(wade.y < -3.5, "Doorheen: je loopt over de bodem (" + wade.y + ")");
   const ice = walk("ice", { x: 32, y: 0, z: 30.5 }, { x: 32, y: 0, z: 32 });

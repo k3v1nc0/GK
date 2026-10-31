@@ -640,7 +640,9 @@ function buildWalkableSurfaceReadModel(node) {
     depth: numberOrNull(node.values.depth),
     rotationY: numberOrNull(node.values.rotationY),
     priority: numberOrNull(node.values.priority),
-    points: normalizeWalkablePointList(node.values.points, node.values.y)
+    points: normalizeWalkablePointList(node.values.points, node.values.y),
+    // Dichte randen (onzichtbare muur), zie movement-kernel.
+    closedEdges: Array.isArray(node.values.closedEdges) ? node.values.closedEdges.filter((edge) => Number.isInteger(edge) && edge >= 0) : []
   };
 }
 

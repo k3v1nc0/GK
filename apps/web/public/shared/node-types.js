@@ -1654,7 +1654,9 @@ export const NODE_TYPES = {
       depth: { label: "Depth", type: "number", default: 2.5, min: 0.01, max: 10000, step: 0.01, required: true },
       rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
       priority: { label: "Priority", type: "number", default: 10, step: 1, required: true },
-      points: { label: "Points", type: "json", default: [], required: false, hidden: true }
+      points: { label: "Points", type: "json", default: [], required: false, hidden: true },
+      // Dichte randen: lijst randnummers (rand i = van punt i naar punt i+1). Daar kun je niet overheen lopen.
+      closedEdges: { label: "Closed edges", type: "json", default: [], required: false, hidden: true }
     }
   },
 

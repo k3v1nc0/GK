@@ -9391,6 +9391,29 @@ function resolveChunkDebugCenter(policy) {
     const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
     if (line) terrainEditorOverlay.add(line);
 
+    // Loopvlak: dichte randen (onzichtbare muur) in rood over de gewone lijn.
+    const closedEdges = nodeType === "walkable_surface" && !extrudePreviewPoint && Array.isArray(nextOverlay.closedEdges) ? nextOverlay.closedEdges : [];
+    if (closedEdges.length && points.length >= 3) {
+      const wallPositions = [];
+      for (const edge of closedEdges) {
+        if (!Number.isInteger(edge) || edge < 0 || edge >= points.length) continue;
+        wallPositions.push(points[edge], points[(edge + 1) % points.length]);
+      }
+      if (wallPositions.length) {
+        const wallLines = new THREE.LineSegments(
+          new THREE.BufferGeometry().setFromPoints(wallPositions),
+          new THREE.LineBasicMaterial({ color: 0xff3b30, depthTest: false, depthWrite: false, transparent: true, opacity: 1, toneMapped: false })
+        );
+        wallLines.renderOrder = 2001;
+        wallLines.frustumCulled = false;
+        wallLines.name = "GK terrain overlay closed edges";
+        wallLines.raycast = function () {};
+        wallLines.userData.debugOverlay = true;
+        wallLines.userData.debugOverlayKind = "terrain";
+        terrainEditorOverlay.add(wallLines);
+      }
+    }
+
     // Walkable Surface points form a ladder - point i always pairs with point
     // (n-1-i) as one "rung" across the surface (matches triangulateWalkableSurfaceLadder
     // in the collision code). Draw those pairings as faint cross-lines so the quad
