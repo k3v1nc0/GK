@@ -1796,6 +1796,8 @@ function collectGhostPlaneCandidateRecord(object, context = {}) {
     || object.userData?.interactableId
     || object.userData?.scatterInstance === true
     || object.userData?.surfaceLayerId
+    // Ronde 3c: watervlakken (water-render.js) zijn echte wereld, geen spookvlak; anders ruimt de opruimer ze op.
+    || object.userData?.gkWater
   );
   const suspiciousFlags = [];
   if (isCameraChild) suspiciousFlags.push("cameraChild");
