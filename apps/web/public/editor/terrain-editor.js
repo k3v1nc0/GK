@@ -894,7 +894,12 @@ function waterBody() {
   const chosen = selectedWater ? b.doc(selectedWater) : null;
   if (chosen && !chosen.archived) {
     const form = el("div", { class: "terreinForm" });
-    b.renderForm(form, { kind: "terrain_water", docKey: chosen.docKey, place: "terrein", title: "🌊 " + docName(chosen) });
+    b.renderForm(form, { kind: "terrain_water", docKey: chosen.docKey, place: "terrein", title: "🌊 " + docName(chosen),
+      // Ronde 3b: schuiven en kleur kiezen zie je meteen in de 3D-view; loslaten slaat op.
+      onPreview: function (next) {
+        const preview = normalizeTerrainWater(Object.assign({}, next, { id: chosen.docKey }));
+        if (preview) pushWater(preview);
+      } });
     const remove = el("button", { type: "button", class: "terreinWide", text: "🗑️ Dit water weghalen" });
     remove.addEventListener("click", function () { void removeSelectedWater(); });
     parts.push(form, remove);
@@ -922,7 +927,13 @@ function pathsButton() {
     text: count ? "🛤️ " + count + " pad(en) in de verf zetten" : "🛤️ Geen paden om te verven",
     title: "Paden met een textuur worden verf op de grond. Paden met water of lava, of die blokkeren, blijven een pad." });
   button.addEventListener("click", function () { void bakePaths(); });
-  return button;
+  if (count || !bench()?.workspace) return button;
+  // Grijs: zeg waarom, en wat je moet doen.
+  const pads = docsOf("area").filter(function (doc) { return areaSoort(doc.body) === "pad"; });
+  const why = !pads.length
+    ? "Er staat nog geen pad in de wereld. Deze knop is voor paden die je al met de Area tool hebt getekend (Werkbank > Area tool > soort Pad, met een textuur). Wil je nu een pad maken? Verf het dan gewoon hier met het penseel."
+    : "Je " + pads.length + " pad(en) kunnen niet: een pad heeft een textuur nodig en mag geen water/lava zijn of blokkeren. Pas dat aan in de Werkbank, of verf het pad hier met het penseel.";
+  return el("div", {}, [button, el("div", { class: "terreinTip", text: why })]);
 }
 
 async function textureForAsset(assetId, label, width) {

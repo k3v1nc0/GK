@@ -74,6 +74,9 @@ export function createWaterLayer({ scene, requestRender = () => {} }) {
   // waters: lijst uit world.terrain.water of uit de kaarten (editor). groundY = basishoogte van de grond.
   function setWater(waters, groundY = 0) {
     const list = (Array.isArray(waters) ? waters : []).map(normalizeTerrainWater).filter(Boolean);
+    // Ronde 3b: hangt de groep niet (meer) in de scene, dan terugzetten; anders zie je het water niet.
+    if (group.parent !== scene) scene.add(group);
+    group.visible = true;
     const nextKey = JSON.stringify([Number(groundY) || 0, list]);
     if (nextKey === key) return;
     key = nextKey;
@@ -96,6 +99,7 @@ export function createWaterLayer({ scene, requestRender = () => {} }) {
       // Zelfde draairichting als de loopregels (movement-kernel): Three draait de andere kant op.
       mesh.rotation.y = -water.rotation * Math.PI / 180;
       mesh.renderOrder = 2;
+      mesh.frustumCulled = false;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
       mesh.userData.gkWater = water.id;

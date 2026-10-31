@@ -26,7 +26,7 @@ import {
 } from "./movement-kernel.js";
 import { terrainHeightAt } from "./terrain.js";
 import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
-import { createWaterLayer } from "./water-render.js";
+import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -18213,6 +18213,8 @@ function resolveChunkDebugCenter(policy) {
     const residentStreamingEnabled = isChunkCullingRuntimeEnabled(resolveChunkPolicy(world, mode));
     if (!world?.terrain?.heightfield) terrainLayer.setWorld(null);
     if (!useChunkedGround) addGround(world);
+    // Ronde 3b: water altijd uit de wereld zetten, ook als de grond via een andere weg getekend wordt (game).
+    waterLayer.setWater(world?.terrain?.water, num(world?.ground?.y, 0));
     const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: terrainLayer.active ? terrainLayer.heightfield : null });
     predictionSolids = mode === "game"
       ? solidCollisionEntriesForWorld(world).map(function (solid) {

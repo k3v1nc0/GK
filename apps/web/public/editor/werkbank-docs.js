@@ -3,7 +3,7 @@
 // met icoon en Ⓘ-hulp. Alles schrijft naar documenten (/api/authoring/command), nooit naar de node-graph.
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
 import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261028-picker1";
-import { convertShape } from "./werkbank-world.js?v=20261030-terrein5";
+import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
@@ -262,7 +262,8 @@ export function createDocBench(options = {}) {
     if (emptyValue(value)) box.placeholder = String(shownNumber(start, field));
     const paint = () => slider.style.setProperty("--wbd-fill", ((Number(slider.value) - lo) / Math.max(1e-9, hi - lo) * 100) + "%");
     paint();
-    slider.addEventListener("input", () => { box.value = slider.value; paint(); });
+    // Ronde 3b: tijdens het schuiven al laten zien (alleen waar de pagina een voorbeeld kan tonen, bijv. water).
+    slider.addEventListener("input", () => { box.value = slider.value; paint(); if (onChange.preview) onChange.preview(storedNumber(slider.value, field)); });
     slider.addEventListener("change", () => onChange(storedNumber(slider.value, field)));
     box.addEventListener("change", () => {
       if (box.value === "") { onChange(null); return; }
@@ -585,6 +586,7 @@ export function createDocBench(options = {}) {
     if (type === "color") {
       const input = el("input", { type: "color", class: "wbdColor" });
       input.value = emptyValue(value) ? (field.default || "#888888") : value;
+      input.addEventListener("input", () => { if (onChange.preview) onChange.preview(input.value); });
       input.addEventListener("change", () => onChange(input.value));
       return input;
     }
@@ -612,7 +614,7 @@ export function createDocBench(options = {}) {
 
   // Tekent één document (of een nieuw document) uit het schema. Bestaande documenten slaan elke wijziging
   // meteen op (realtime, met Ctrl+Z); een nieuw document heeft een ✓ Maken-knop.
-  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null } = {}) {
+  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null } = {}) {
     const spec = bench.spec(kind);
     host.replaceChildren();
     if (!spec) { host.append(el("div", { class: "wbdEmpty", text: "Onbekende soort." })); return; }
@@ -669,6 +671,7 @@ export function createDocBench(options = {}) {
         try { await saveDoc(kind, doc, body, spec.label + " · " + field.label); } catch {}
         rerender();
       };
+      if (onPreview && !isNew) onChange.preview = (next) => onPreview(Object.assign({}, body, { [key]: next }));
       if (field.ui?.control === "areaSettings") {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);
