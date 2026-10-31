@@ -102,6 +102,8 @@ export function createWaterLayer({ scene, requestRender = () => {} }) {
       mesh.frustumCulled = false;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
+      // De opruimcode voor losse vlakken moet water als echt terrein herkennen.
+      mesh.userData.terrainRuntime = true;
       mesh.userData.gkWater = water.id;
       group.add(mesh);
       entries.push({ water, mesh });
