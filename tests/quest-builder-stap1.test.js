@@ -168,3 +168,22 @@ test("server: oude build (stap deliver) zonder versie werkt nog via de oude knop
   assert.equal(row("p1", "quest.oud").status, "completed");
   assert.equal(xp("p1"), 5);
 });
+
+test("server: quest verlaten en opnieuw aannemen; een stap die niet meer past wordt gemeld", () => {
+  const { db, node03, service, ctx, row } = setup();
+  const n4 = service();
+  const quest = () => ctx("p1").project.campaigns.quests.byId["quest.wolven"];
+  n4.acceptQuest(ctx("p1"), "quest.wolven", "op1");
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  n4.abandonQuest(ctx("p1"), "quest.wolven", "op2");
+  assert.equal(row("p1", "quest.wolven").status, "abandoned");
+  assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).status, "available", "weer te halen");
+  n4.acceptQuest(ctx("p1"), "quest.wolven", "op3");
+  assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).activeStep.objectives[0].currentValue, 0, "nieuwe run begint bij 0");
+  db.prepare("UPDATE player_quest_states SET active_step_id = 'weg' WHERE player_id = 'p1'").run();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).activeStep.broken, true);
+  } finally { console.warn = warn; }
+});

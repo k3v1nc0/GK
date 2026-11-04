@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,

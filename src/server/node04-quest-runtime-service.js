@@ -687,16 +687,15 @@ export class Node04QuestRuntimeService {
     return { message: "Quest tracked: " + (quest.displayName || quest.id), events: [{ type: "quest_tracked", questId: quest.id }] };
   }
 
+  // Verlaten: de run stopt en de voortgang gaat weg. Opnieuw aannemen = nieuwe run op de nieuwste versie.
   abandonQuest(ctx, questId, operationId) {
     const quest = questById(ctx.project, questId);
     const row = this.loadQuestState(ctx.profile.id, questId);
-    if (!quest || !row || row.status !== QUEST_STATUS.ACTIVE || quest.abandonable === false) {
-      const error = new Error("Deze quest kan niet verlaten worden.");
-      error.status = 400;
-      throw error;
-    }
+    if (!quest || !row || !isOpenStatus(row.status) || quest.abandonable === false) throw httpError(400, "Deze quest kan niet verlaten worden.");
+    this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.ABANDONED, row.active_step_id, row.status, row.active_step_id, "abandon", { operationId });
-    return { message: "Quest verlaten.", events: [{ type: "quest_abandoned", questId: quest.id }] };
+    return { message: "Quest verlaten. Je kunt hem opnieuw aannemen bij de NPC.", events: [{ type: "quest_abandoned", questId: quest.id }] };
   }
 
   // Oude knoppen "Turn in" / "Complete" (node04:turn_in, node04:reach): zoek het inlever- of praatdoel bij deze NPC.
@@ -1226,6 +1225,9 @@ export class Node04QuestRuntimeService {
     // Een lopende quest toont de versie waarop deze speler hem speelt.
     const definition = isActive ? this.questDefinition(ctx, quest.id, row) : normalizeQuest(quest);
     const step = isActive ? stepById(definition, row.active_step_id) : null;
+    // Past de lopende stap niet (meer) bij de versie van deze speler? Niet stilletjes terugzetten: zeggen wat er is.
+    const broken = isActive && !step;
+    if (broken) this.warnBrokenRun(ctx, quest, row, definition);
     const progress = step && step.kind !== "end" ? this.evaluateStepProgress(ctx, definition, step) : null;
     const objectives = (progress?.objectives || []).filter(function (objective) { return !objective.hidden; });
     const openNeeded = objectives.filter(function (objective) { return objective.needed && !objective.complete; });
@@ -1256,6 +1258,10 @@ export class Node04QuestRuntimeService {
         canReach: objectives.some((objective) => objective.objectiveType === "talk" && !objective.complete && inRange(objective)),
         objectives,
         conditions: progress?.conditions || []
+      } : broken ? {
+        stepId: null, broken: true, displayName: "Quest is aangepast", stepType: "custom", match: "all", targetRef: null, zoneRef: null,
+        instruction: "Deze quest is veranderd sinds je hem aannam. Verlaat hem en neem hem opnieuw aan.",
+        complete: false, conditionsMet: true, blockedReason: "", canTurnIn: false, canReach: false, objectives: [], conditions: []
       } : null,
       nextQuestRefs: Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs.slice() : [],
       // Stap 4 (HUD): de beloning in het questboek.
@@ -1268,6 +1274,16 @@ export class Node04QuestRuntimeService {
       acceptedAt: row.accepted_at || null,
       completedAt: row.completed_at || null
     };
+  }
+
+  // 1 regel in het serverlog per speler en quest, zodat we kunnen zien waarom een run niet past.
+  warnBrokenRun(ctx, quest, row, definition) {
+    this.brokenWarned = this.brokenWarned || new Set();
+    const key = ctx.profile.id + "|" + quest.id;
+    if (this.brokenWarned.has(key)) return;
+    this.brokenWarned.add(key);
+    console.warn("[quest] stap past niet:", JSON.stringify({ playerId: ctx.profile.id, questId: quest.id, status: row.status, activeStepId: row.active_step_id,
+      version: stateOf(row).version || null, currentVersion: normalizeQuest(quest)?.version || null, steps: (definition?.steps || []).map((step) => step.id) }));
   }
 
   buildRuntimeQuestTargets(ctx, trackedQuest, availableQuests) {

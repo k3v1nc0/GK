@@ -111,6 +111,9 @@ function fmt(value) {
   return number >= 10000 ? (Math.round(number / 100) / 10) + "k" : String(number);
 }
 
+// Doelen die tellen (versla, verzamel, pak op, in je tas, breng): altijd "0 / 1" erbij, ook bij 1.
+const COUNTED_GOALS = new Set(["defeat", "gather", "pickup", "collect", "deliver"]);
+
 function h(tag, attrs, children) {
   const el = document.createElement(tag);
   if (attrs) {
@@ -1957,16 +1960,15 @@ export function createGkHud(api) {
     ]);
     const text = step?.instruction || quest.summary || quest.description || "";
     if (text) card.append(h("p", { text }));
-    // Quest Builder stap 1: elk doel van de stap met een vinkje; tellers met een balk. Bonus/mag staat erbij.
-    const goals = step?.objectives || [];
-    for (const objective of goals) {
+    // Quest Builder stap 1: elk doel van de stap met een vinkje en (bij tellen) "0 / 2". Bonus/mag staat erbij.
+    for (const objective of step?.objectives || []) {
       const required = Math.max(1, num(objective.requiredValue, 1));
       const current = Math.min(required, num(objective.currentValue));
-      if (goals.length < 2 && required < 2) continue;
+      const counts = COUNTED_GOALS.has(objective.objectiveType) || required > 1;
       const extra = objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "";
       card.append(h("div", { class: "gkObjective" + (objective.complete ? " gkOk" : "") }, [
         h("span", { text: (objective.complete ? "✓ " : "") + (objective.instruction || objective.displayName || "") + extra }),
-        required > 1 ? h("b", { text: fmt(current) + " / " + fmt(required) }) : null]));
+        counts ? h("b", { text: fmt(current) + " / " + fmt(required) }) : null]));
       if (required > 1) card.append(h("div", { class: "gkProgress" }, [h("i", { style: "width:" + Math.round(current / required * 100) + "%" })]));
     }
     const rewards = (quest.rewards || []).map(function (reward) {
@@ -1979,6 +1981,12 @@ export function createGkHud(api) {
     const busy = data().busy?.n04;
     if (tracked && target) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-go", "data-id": target.instanceId, "data-quest": quest.questId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "Ga erheen"]));
     if (!tracked && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-track", "data-id": quest.questId, disabled: busy ? true : null }, [ico("compass", "plain"), "Volgen"]));
+    // Quest verlaten: je voortgang gaat weg; daarna kun je hem opnieuw aannemen bij de NPC (dan op de nieuwste versie).
+    if (quest.status === "active" || quest.status === "ready_to_turn_in") {
+      const sure = ui.sure === "quest-abandon:" + quest.questId;
+      buttons.push(h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "quest-abandon", "data-id": quest.questId, disabled: busy ? true : null },
+        [ico("cancel", "plain"), sure ? "Zeker? Tik nog eens" : "Verlaten"]));
+    }
     if (buttons.length) card.append(h("div", { class: "gkBtns" }, buttons));
     return card;
   }
@@ -2906,6 +2914,7 @@ export function createGkHud(api) {
       case "section": store.sectionFold[id] = !store.sectionFold[id]; save(); renderSheet(); break;
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
       case "quest-track": api.run04("node04:track", null, { questId: id }); break;
+      case "quest-abandon": if (confirmTwice("quest-abandon:" + id)) api.run04("node04:abandon", null, { questId: id }); break;
       case "choice": {
         const dialogue = data().dialogue;
         if (dialogue) api.run04("node04:choose_dialogue", null, { dialogueId: dialogue.dialogueId, entryId: dialogue.entryId, choiceId: id });
