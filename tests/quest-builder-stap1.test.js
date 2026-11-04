@@ -395,3 +395,20 @@ test("stap 2: quest-check voor Telt voor en Bij groep verlaten", () => {
   assert.equal(quest.partyLeave, "fail", "alleen een melding in de Quest Builder, SAVE TO GAME gaat door");
   assert.equal(world().campaigns.quests.byId["quest.wolven"].partyLeave, undefined, "standaard: niets extra in de quest (versie blijft gelijk)");
 });
+
+test("stap 2: team-doel al klaar blijft op zijn stand; een nieuw lid krijgt die oude kill niet", () => {
+  const { db, node03, ctx, row, setProject } = setup();
+  setProject(world(1, "team"));
+  const n4 = new Node04QuestRuntimeService(db, null, null, node03);
+  for (const id of ["p1", "p2"]) n4.acceptQuest(ctx(id), "quest.wolven", "acc" + id);
+  // p1 alleen (geen groep): 1 kill = 1/1 klaar.
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  // Zoals bij Kevin: p1 staat nog op deze stap (bijv. door een ander doel) en deelt daarna met p2.
+  db.prepare("UPDATE player_quest_states SET active_step_id = 'step.jacht', status = 'active' WHERE player_id = 'p1'").run();
+  party(db, ["p1", "p2"]);
+  const goal = (id) => n4.buildQuestSummary(ctx(id), ctx(id).project.campaigns.quests.byId["quest.wolven"], row(id, "quest.wolven")).activeStep.objectives[0];
+  assert.deepEqual([goal("p1").currentValue, goal("p1").requiredValue, goal("p1").complete], [1, 1, true], "geen 2/2 bij p1");
+  assert.deepEqual([goal("p2").currentValue, goal("p2").requiredValue], [0, 1], "p2 begint op 0, de kill van p1 telt niet voor hem");
+  node03.questEvents(ctx("p2"), ["p2"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:2", operationId: "b" });
+  assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug", "p2 haalt zijn eigen kill");
+});

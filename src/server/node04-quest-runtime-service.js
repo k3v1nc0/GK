@@ -599,7 +599,8 @@ export class Node04QuestRuntimeService {
 
   // Het team van deze speler voor dit doel: groepsleden die dezelfde quest (zelfde versie) op dezelfde stap hebben.
   // Geen groep = alleen jijzelf. De database is de bron (ook na reconnect of herstart).
-  teamMembers(playerId, questId, version, stepId) {
+  // objectiveId: wie dit doel al af heeft, telt niet meer mee (een nieuw lid krijgt geen oude kills).
+  teamMembers(playerId, questId, version, stepId, objectiveId = null) {
     const party = this.db.prepare(`
       SELECT pm.party_id FROM party_members pm JOIN parties p ON p.id = pm.party_id
       WHERE pm.player_id = ? AND pm.left_at IS NULL AND p.disbanded_at IS NULL LIMIT 1
@@ -610,16 +611,20 @@ export class Node04QuestRuntimeService {
       WHERE pm.party_id = ? AND pm.left_at IS NULL AND q.quest_id = ? AND q.active_step_id = ? AND q.status IN ('active', 'ready_to_turn_in')
     `).all(party.party_id, questId, stepId).filter(function (row) {
       return safeString(stateOf(row).version) === safeString(version);
-    }).map(function (row) { return row.player_id; });
+    }).map(function (row) { return row.player_id; }).filter((memberId) => {
+      if (!objectiveId || memberId === playerId) return true;
+      return this.loadObjectiveProgress(memberId, questId, stepId).get(objectiveId)?.status !== OBJECTIVE_STATUS.COMPLETED;
+    });
     if (!ids.includes(playerId)) ids.push(playerId);
     return { partyId: party.party_id, ids: ids.sort() };
   }
 
   finishTeamObjective(ctx, quest, step, objective, operationId) {
     const objectiveId = objective.objectiveId;
+    // Klaar = de teamstand van dat moment blijft staan (bijv. 2 / 2), ook als er later iemand bij komt.
+    const teamRequired = Math.max(1, safeInteger(objective.requiredValue, requiredOf(objective)));
     for (const memberId of objective.team.memberIds) {
-      const own = this.loadObjectiveProgress(memberId, quest.id, step.id).get(objectiveId);
-      this.writeObjectiveProgress(memberId, quest.id, step.id, objectiveId, safeInteger(own?.current_value, 0), requiredOf(objective), true);
+      this.writeObjectiveProgress(memberId, quest.id, step.id, objectiveId, teamRequired, teamRequired, true);
     }
     for (const memberId of objective.team.memberIds) {
       if (memberId === ctx.profile.id) continue;
@@ -729,7 +734,7 @@ export class Node04QuestRuntimeService {
           if (own?.status === OBJECTIVE_STATUS.COMPLETED) continue;
           if (objectiveIsTeam(objective)) {
             // Eén gebeurtenis = +1 voor het team, ook als meerdere teamleden meevochten.
-            const team = this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id);
+            const team = this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id, objectiveIdOf(objective));
             const teamKey = (team.partyId || ctx.profile.id) + "|" + quest.id + "|" + quest.version + "|" + step.id + "|" + objectiveIdOf(objective);
             if (teamTaken.has(teamKey)) continue;
             teamTaken.add(teamKey);
@@ -1353,9 +1358,14 @@ export class Node04QuestRuntimeService {
       complete = storedDone || this.objectiveInRange(ctx, objective, 0, false);
       current = complete ? 1 : 0;
       extra.reachedNow = complete && !storedDone;
+    } else if (objectiveIsTeam(objective) && scope?.questId && storedDone) {
+      // Team-doel al klaar: laat de stand van toen zien, niet opnieuw rekenen met het team van nu.
+      current = Math.max(1, safeInteger(stored?.required_value, required));
+      required = current;
+      complete = true;
     } else if (objectiveIsTeam(objective) && scope?.questId) {
       // Team samen: alle bijdragen van het team bij elkaar; doel = aantal × teamleden.
-      const team = this.teamMembers(ctx.profile.id, scope.questId, scope.version, scope.stepId);
+      const team = this.teamMembers(ctx.profile.id, scope.questId, scope.version, scope.stepId, objectiveIdOf(objective));
       const sum = team.ids.reduce((total, memberId) => {
         const row = memberId === ctx.profile.id ? stored : this.loadObjectiveProgress(memberId, scope.questId, scope.stepId).get(objectiveIdOf(objective));
         return total + safeInteger(row?.current_value, 0);
