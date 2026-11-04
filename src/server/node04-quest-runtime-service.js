@@ -1262,7 +1262,9 @@ export class Node04QuestRuntimeService {
     const byQuest = new Map(rows.map(function (row) { return [row.quest_id, row]; }));
     const questSummaries = allQuests(ctx.project).map((quest) => this.buildQuestSummary(ctx, quest, byQuest.get(quest.id) || null)).filter(Boolean);
     const active = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.ACTIVE || quest.status === QUEST_STATUS.READY_TO_TURN_IN; });
-    const available = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && !quest.abandoned; });
+    // Te halen = nog nooit gedaan; al eens gedaan en weer te doen = again (grijs met ↻).
+    const available = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && !quest.abandoned && !quest.doneBefore; });
+    const again = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && quest.doneBefore; });
     const completed = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.COMPLETED; });
     const trackedQuest = active.find(function (quest) { return quest.tracked; }) || active[0] || available[0] || null;
     const questTargets = this.buildRuntimeQuestTargets(ctx, trackedQuest, available);
@@ -1278,6 +1280,7 @@ export class Node04QuestRuntimeService {
         all: questSummaries,
         active,
         available,
+        again,
         completed
       },
       trackedQuest,
@@ -1316,8 +1319,12 @@ export class Node04QuestRuntimeService {
       status,
       // Verlaten: weg uit het questboek, de NPC biedt hem wel weer aan.
       abandoned: row.status === QUEST_STATUS.ABANDONED,
+      // Al eens ingeleverd: grijs in het questboek (met ↻ als hij nog een keer kan, anders in het Archief).
+      doneBefore: row.status === QUEST_STATUS.COMPLETED,
       repeatMode: questRepeatMode(quest),
       canRepeat,
+      // "Nog een keer": loop naar de Quest giver en praat (alleen in deze zone).
+      giverTargetId: canRepeat ? this.giverTargetId(ctx, quest) : null,
       tracked: row.tracked === 1,
       activeStepId: step?.id || null,
       activeStep: step ? {
@@ -1567,6 +1574,12 @@ export class Node04QuestRuntimeService {
       visibleInGame: target.visibleInGame !== false,
       renderMarker: target.visibleInGame !== false
     }, extra || {});
+  }
+
+  giverTargetId(ctx, quest) {
+    const dialogue = quest?.startDialogueRef ? dialogueById(ctx.project, quest.startDialogueRef) : null;
+    const target = this.resolveQuestTarget(ctx.project, dialogue?.targetRef || quest?.turnInTargetRef);
+    return target && target.zoneRef === ctx.zoneId ? "node04:" + target.targetId + ":dialogue" : null;
   }
 
   buildDialogueTargets(ctx) {

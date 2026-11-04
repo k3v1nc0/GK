@@ -1938,24 +1938,32 @@ export function createGkHud(api) {
     const active = quests.active || [];
     const available = quests.available || [];
     const completed = quests.completed || [];
-    if (!active.length && !available.length && !completed.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests. Praat met mensen in de wereld."));
+    // Behaald = al eens ingeleverd en kan (nu of later) nog een keer: grijs met ↻. Kan niet meer = Archief.
+    const again = (quests.again || []).concat(completed.filter(function (quest) { return quest.repeatMode === "daily" || quest.repeatMode === "weekly"; }));
+    const archive = completed.filter(function (quest) { return quest.repeatMode !== "daily" && quest.repeatMode !== "weekly"; });
+    if (!active.length && !available.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests. Praat met mensen in de wereld."));
     if (active.length) list.append(sectionGroup("quests-active", "Bezig", active.map(function (quest) {
       return questCard(quest, quest.questId === trackedId, targets.find(function (t) { return t.questId === quest.questId; }));
     })));
     if (available.length) list.append(sectionGroup("quests-available", "Te halen", available.map(function (quest) {
       return questCard(quest, false, null);
     })));
-    if (completed.length) {
-      list.append(h("button", { type: "button", class: "gkRow", "data-act": "quests-done" }, [ico("check-mark"), h("span", { text: "Voltooid (" + completed.length + ")" }), h("b", { text: store.done ? "▾" : "▸" })]));
-      if (store.done) for (const quest of completed) list.append(questCard(quest, false, null));
+    if (again.length) list.append(sectionGroup("quests-again", "Behaald", again.map(function (quest) {
+      return questCard(quest, false, null);
+    })));
+    if (archive.length) {
+      list.append(h("button", { type: "button", class: "gkRow", "data-act": "quests-done" }, [ico("check-mark"), h("span", { text: "Archief (" + archive.length + ")" }), h("b", { text: store.done ? "▾" : "▸" })]));
+      if (store.done) for (const quest of archive) list.append(questCard(quest, false, null));
     }
     body.append(list);
     return [head("scroll-unfurled", "Quests"), body];
   }
   function questCard(quest, tracked, target) {
     const step = quest.activeStep || null;
-    const status = quest.status === "completed" ? "Voltooid" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
-    const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") }, [
+    const later = quest.repeatMode === "weekly" ? "↻ Volgende week weer" : quest.repeatMode === "daily" ? "↻ Morgen weer" : "Behaald";
+    const status = quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
+    const grey = quest.doneBefore ? (quest.status === "completed" && later === "Behaald" ? " gkGrey gkArchive" : " gkGrey") : "";
+    const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") + grey }, [
       h("h3", null, [ico(quest.status === "completed" || step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: quest.displayName }), status ? h("small", { text: status }) : null])
     ]);
     const text = step?.instruction || quest.summary || quest.description || "";
@@ -1981,6 +1989,7 @@ export function createGkHud(api) {
     const busy = data().busy?.n04;
     if (tracked && target) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-go", "data-id": target.instanceId, "data-quest": quest.questId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "Ga erheen"]));
     if (!tracked && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-track", "data-id": quest.questId, disabled: busy ? true : null }, [ico("compass", "plain"), "Volgen"]));
+    if (quest.doneBefore && quest.status === "available" && quest.giverTargetId) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-again", "data-id": quest.giverTargetId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "↻ Ga"]));
     // Quest verlaten: je voortgang gaat weg; daarna kun je hem opnieuw aannemen bij de NPC (dan op de nieuwste versie).
     if (quest.status === "active" || quest.status === "ready_to_turn_in") {
       const sure = ui.sure === "quest-abandon:" + quest.questId;
@@ -2913,6 +2922,7 @@ export function createGkHud(api) {
       case "quests-done": store.done = !store.done; save(); renderSheet(); break;
       case "section": store.sectionFold[id] = !store.sectionFold[id]; save(); renderSheet(); break;
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
+      case "quest-again": api.run04("node04:start_dialogue", id); break;
       case "quest-track": api.run04("node04:track", null, { questId: id }); break;
       case "quest-abandon": if (confirmTwice("quest-abandon:" + id)) api.run04("node04:abandon", null, { questId: id }); break;
       case "choice": {

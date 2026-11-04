@@ -135,6 +135,13 @@ test("server: inleveren in het gesprek, beloning 1x per run", () => {
   const again = n4.completeQuestRun(ctx("p1"), quest, row("p1", "quest.wolven"), quest.stepsById.end, "op6");
   assert.deepEqual(again.grants, [], "zelfde run: geen tweede beloning");
   assert.equal(xp("p1"), 50);
+  const once = n4.buildQuestSummary(ctx("p1"), quest, row("p1", "quest.wolven"));
+  assert.equal(once.status, "completed", "1x per personage: naar het Archief");
+  assert.equal(once.doneBefore, true);
+  const repeat = n4.buildQuestSummary(ctx("p1"), Object.assign({}, quest, { repeatMode: "repeatable" }), row("p1", "quest.wolven"));
+  assert.equal(repeat.status, "available", "herhaalbaar: weer te doen");
+  assert.equal(repeat.doneBefore, true, "grijs met ↻, niet onder Te halen");
+  assert.equal(repeat.giverTargetId, "node04:" + dialogue.targetRef.replace(/^.*:/, "") + ":dialogue", "↻ Ga loopt naar de Quest giver");
 });
 
 test("server: lopende quest blijft op zijn eigen versie na een aanpassing", () => {

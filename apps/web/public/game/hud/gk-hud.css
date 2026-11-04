@@ -376,6 +376,8 @@
 /* lijsten (quests, geld, characters, instellingen) */
 .gkList { display: grid; gap: 8px; width: 100%; min-width: 0; }
 .gkCard { padding: 10px; border-radius: 12px; background: var(--gk-cell); border: 1px solid var(--gk-line); display: grid; gap: 6px; }
+.gkCard.gkGrey { filter: grayscale(0.9); opacity: 0.72; }
+.gkCard.gkGrey.gkArchive { filter: grayscale(1); opacity: 0.5; }
 .gkCard.gkOn { border-color: rgba(70, 163, 255, 0.85); box-shadow: inset 0 0 0 1px rgba(70, 163, 255, 0.4); }
 .gkCard h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 .gkCard h3 .gkIco { width: 20px; height: 20px; flex: none; }
