@@ -178,6 +178,7 @@ test("server: quest verlaten en opnieuw aannemen; een stap die niet meer past wo
   n4.abandonQuest(ctx("p1"), "quest.wolven", "op2");
   assert.equal(row("p1", "quest.wolven").status, "abandoned");
   assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).status, "available", "weer te halen");
+  assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).abandoned, true, "verlaten: niet in het questboek");
   n4.acceptQuest(ctx("p1"), "quest.wolven", "op3");
   assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).activeStep.objectives[0].currentValue, 0, "nieuwe run begint bij 0");
   db.prepare("UPDATE player_quest_states SET active_step_id = 'weg' WHERE player_id = 'p1'").run();

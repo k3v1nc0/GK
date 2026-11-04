@@ -1262,7 +1262,7 @@ export class Node04QuestRuntimeService {
     const byQuest = new Map(rows.map(function (row) { return [row.quest_id, row]; }));
     const questSummaries = allQuests(ctx.project).map((quest) => this.buildQuestSummary(ctx, quest, byQuest.get(quest.id) || null)).filter(Boolean);
     const active = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.ACTIVE || quest.status === QUEST_STATUS.READY_TO_TURN_IN; });
-    const available = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE; });
+    const available = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && !quest.abandoned; });
     const completed = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.COMPLETED; });
     const trackedQuest = active.find(function (quest) { return quest.tracked; }) || active[0] || available[0] || null;
     const questTargets = this.buildRuntimeQuestTargets(ctx, trackedQuest, available);
@@ -1314,6 +1314,8 @@ export class Node04QuestRuntimeService {
       summary: this.resolveTokenText(ctx, definition?.summary || quest.summary || ""),
       description: this.resolveTokenText(ctx, definition?.description || quest.description || ""),
       status,
+      // Verlaten: weg uit het questboek, de NPC biedt hem wel weer aan.
+      abandoned: row.status === QUEST_STATUS.ABANDONED,
       repeatMode: questRepeatMode(quest),
       canRepeat,
       tracked: row.tracked === 1,
