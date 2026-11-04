@@ -200,6 +200,7 @@
 .qbObjectiveBad { border-color: #6b4a1c; }
 .qbType { width: 150px; }
 .qbRole { width: 130px; }
+.qbShare { width: 160px; }
 .qbSlot { flex: 1 1 180px; min-width: 160px; }
 .qbTimes { display: flex; align-items: center; gap: 4px; color: var(--wbd-muted); }
 .qbAmount { width: 70px; }

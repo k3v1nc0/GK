@@ -13,10 +13,10 @@ import { questGraphIssues } from "../apps/web/public/shared/quest-graph.js";
 
 const doc = (kind, key, body) => ({ docKey: key, kind, body, archived: false, revision: 1, legacyRef: null });
 
-function wolvenSteps(wolves = 2) {
+function wolvenSteps(wolves = 2, share = null) {
   return [
     { stepId: "step.jacht", kind: "step", title: "Op jacht", match: "all", next: [{ to: "step.terug" }], objectives: [
-      { objectiveId: "obj.wolf", type: "defeat", ref: "actor_archetype:wolf", amount: wolves, role: "required" },
+      Object.assign({ objectiveId: "obj.wolf", type: "defeat", ref: "actor_archetype:wolf", amount: wolves, role: "required" }, share ? { share } : {}),
       { objectiveId: "obj.struik", type: "gather", ref: "resource_definition:bush", amount: 1, role: "bonus" }
     ] },
     { stepId: "step.terug", kind: "step", title: "", match: "all", next: [{ to: "end" }], objectives: [
@@ -26,7 +26,7 @@ function wolvenSteps(wolves = 2) {
   ];
 }
 
-function docs(wolves = 2, extra = []) {
+function docs(wolves = 2, extra = [], share = null) {
   return [
     doc("project_settings", "project_settings", { gameName: "GK" }),
     doc("player_class", "player_class:class.held", { classId: "class.held", displayName: "Held", abilityRef: "ability:player.hit" }),
@@ -43,13 +43,13 @@ function docs(wolves = 2, extra = []) {
     doc("npc", "npc:npc.boer", { npcId: "npc.boer", displayName: "Boer", x: -4, y: 0, z: 4 }),
     doc("npc", "npc:npc.smid", { npcId: "npc.smid", displayName: "Smid", x: 4, y: 0, z: 4 }),
     doc("quest", "quest:quest.wolven", { questId: "quest.wolven", displayName: "Wolven", giverRef: "npc:npc.boer", rewardXp: 50,
-      rewards: [{ ref: "item_definition:pelt", amount: 1 }], steps: wolvenSteps(wolves) }),
+      rewards: [{ ref: "item_definition:pelt", amount: 1 }], steps: wolvenSteps(wolves, share) }),
     doc("quest", "quest:quest.smid", { questId: "quest.smid", displayName: "Naar de smid", giverRef: "npc:npc.boer", goal: "visit", targetNpcRef: "npc:npc.smid", rewardXp: 10 })
   ].concat(extra);
 }
 
-function world(wolves = 2) {
-  const compiled = compileCanonical(docs(wolves), {});
+function world(wolves = 2, share = null) {
+  const compiled = compileCanonical(docs(wolves, [], share), {});
   assert.deepEqual(compiled.errors, []);
   return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text)).gameProject;
 }
@@ -187,3 +187,49 @@ test("server: quest verlaten en opnieuw aannemen; een stap die niet meer past wo
     assert.equal(n4.buildQuestSummary(ctx("p1"), quest(), row("p1", "quest.wolven")).activeStep.broken, true);
   } finally { console.warn = warn; }
 });
+
+test("stap 2: Team samen = één teller, doel × teamleden, één kill telt 1x, groep verlaten houdt je eigen bijdrage", () => {
+  const { db, node03, service, ctx, row, setProject } = setup();
+  setProject(world(2, "team"));
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO parties (id, leader_player_id, loot_policy_id, revision, created_at, updated_at) VALUES ('party1', 'p1', 'loot.free', 1, ?, ?)").run(stamp, stamp);
+  for (const id of ["p1", "p2"]) db.prepare("INSERT INTO party_members (party_id, player_id, role, joined_at) VALUES ('party1', ?, ?, ?)").run(id, id === "p1" ? "leader" : "member", stamp);
+  const n4 = service();
+  n4.acceptQuest(ctx("p1"), "quest.wolven", "op1");
+  n4.acceptQuest(ctx("p2"), "quest.wolven", "op2");
+  const goal = (playerId) => n4.buildQuestSummary(ctx(playerId), ctx(playerId).project.campaigns.quests.byId["quest.wolven"], row(playerId, "quest.wolven")).activeStep.objectives[0];
+  assert.deepEqual([goal("p1").currentValue, goal("p1").requiredValue, goal("p1").team.size], [0, 4, 2], "2 wolven × 2 teamleden");
+  assert.equal(goal("p1").team.memberIds, undefined, "ID's van teamleden gaan niet naar de speler");
+  const kill = (key, ids, by = "p1") => node03.questEvents(ctx(by), ids, { type: "defeat", refId: "wolf", eventKey: key, operationId: "op_" + key });
+  kill("defeat:w1:1", ["p1", "p2"]);
+  assert.equal(goal("p2").currentValue, 1, "samen geslagen = 1 voor het team, niet 2");
+  kill("defeat:w1:2", ["p1"]);
+  kill("defeat:w1:3", ["p1"]);
+  assert.equal(goal("p2").currentValue, 3, "p1 mag alles voor het team doen");
+  db.prepare("UPDATE party_members SET left_at = ? WHERE player_id = 'p2'").run(stamp);
+  assert.deepEqual([goal("p2").currentValue, goal("p2").requiredValue], [0, 2], "p2 alleen: eigen bijdrage (0) van 2");
+  n4.syncAutoProgress(ctx("p1"));
+  assert.equal(row("p1", "quest.wolven").active_step_id, "step.terug", "p1 alleen: 3 van 2 = klaar");
+  db.prepare("UPDATE party_members SET left_at = NULL WHERE player_id = 'p2'").run();
+  kill("defeat:w1:4", ["p2"], "p2");
+  n4.syncAutoProgress(ctx("p2"));
+  assert.equal(row("p2", "quest.wolven").active_step_id, "step.jacht", "p1 zit niet meer op die stap: p2 telt alleen voor zichzelf (1 van 2)");
+  kill("defeat:w1:5", ["p2"], "p2");
+  assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug");
+});
+
+test("stap 2: Team samen klaar = beide teamleden tegelijk door", () => {
+  const { db, node03, service, ctx, row, setProject } = setup();
+  setProject(world(1, "team"));
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO parties (id, leader_player_id, loot_policy_id, revision, created_at, updated_at) VALUES ('party1', 'p1', 'loot.free', 1, ?, ?)").run(stamp, stamp);
+  for (const id of ["p1", "p2"]) db.prepare("INSERT INTO party_members (party_id, player_id, role, joined_at) VALUES ('party1', ?, ?, ?)").run(id, id === "p1" ? "leader" : "member", stamp);
+  const n4 = service();
+  n4.acceptQuest(ctx("p1"), "quest.wolven", "op1");
+  n4.acceptQuest(ctx("p2"), "quest.wolven", "op2");
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "a", operationId: "a" });
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "b", operationId: "b" });
+  assert.equal(row("p1", "quest.wolven").active_step_id, "step.terug");
+  assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug", "p2 gaat mee door zonder zelf te slaan");
+});
+

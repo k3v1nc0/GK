@@ -156,7 +156,7 @@ export function compileGameSection(documents, options = {}) {
       objectives: (Array.isArray(step.objectives) ? step.objectives : []).map((objective) => ({
         objectiveId: objective.objectiveId, type: objective.type, targetId: objective.ref ? idFromRef(objective.ref) : null,
         npcId: objective.npcRef ? idFromRef(objective.npcRef) : null, amount: Number.isInteger(objective.amount) ? objective.amount : 1,
-        role: objective.role || "required"
+        role: objective.role || "required", share: objective.share === "team" ? "team" : "personal"
       }))
     }))
   }));

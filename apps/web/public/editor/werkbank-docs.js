@@ -7,8 +7,8 @@ import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
-import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest1";
-import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest1";
+import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest2";
+import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest2";
 
 const DOC_MIME = "application/x-gk-doc";
 

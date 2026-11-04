@@ -26,11 +26,17 @@ export const OBJECTIVE_ROLES = Object.freeze({
   optional: Object.freeze({ icon: "➕", label: "Mag", needed: false }),
   bonus: Object.freeze({ icon: "🎁", label: "Bonus", needed: false })
 });
+// Voor wie telt een doel (stap 2, samen questen). Team samen: één teller voor de groep; het doel wordt
+// aantal × teamleden met deze quest op deze stap. Wie de groep verlaat houdt zijn eigen bijdrage.
+export const OBJECTIVE_SHARES = Object.freeze({
+  personal: Object.freeze({ icon: "🧍", label: "Ieder voor zich" }),
+  team: Object.freeze({ icon: "👥", label: "Team samen" })
+});
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
 const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share"]);
 const NEXT_KEYS = new Set(["to"]);
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -121,6 +127,7 @@ export function questStepsShapeIssues(value) {
         issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");
       }
       if (objective.role !== undefined && objective.role !== null && !OBJECTIVE_ROLES[objective.role]) issues.push(at + ": ongeldige rol.");
+      if (objective.share !== undefined && objective.share !== null && !OBJECTIVE_SHARES[objective.share]) issues.push(at + ": ongeldige keuze bij Voor wie.");
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
@@ -150,6 +157,7 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
     for (const objective of objectives) {
       const spec = OBJECTIVE_KINDS[objective.type];
       if (!spec) continue;
+      if (objective.share === "team" && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Team samen kan alleen bij Versla, Verzamel en Pak op.");
       if (!objective.ref) add(step.stepId, objective.objectiveId, spec.label + ": kies wat (sleep een kaart op het vak).");
       else if (!refExists(objective.ref)) add(step.stepId, objective.objectiveId, refLabel(objective.ref) + " bestaat niet (meer) of is gearchiveerd.");
       if (spec.npc) {

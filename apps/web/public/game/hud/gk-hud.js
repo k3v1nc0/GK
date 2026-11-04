@@ -1965,7 +1965,7 @@ export function createGkHud(api) {
       const required = Math.max(1, num(objective.requiredValue, 1));
       const current = Math.min(required, num(objective.currentValue));
       const counts = COUNTED_GOALS.has(objective.objectiveType) || required > 1;
-      const extra = objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "";
+      const extra = (objective.team ? " 👥 team " + objective.team.size : "") + (objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "");
       card.append(h("div", { class: "gkObjective" + (objective.complete ? " gkOk" : "") }, [
         h("span", { text: (objective.complete ? "✓ " : "") + (objective.instruction || objective.displayName || "") + extra }),
         counts ? h("b", { text: fmt(current) + " / " + fmt(required) }) : null]));

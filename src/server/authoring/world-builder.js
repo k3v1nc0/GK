@@ -409,7 +409,7 @@ function hudModules(hud, { currencyIds, hasVendor, hasStation }) {
 function questObjective(objective, names) {
   const spec = OBJECTIVE_KINDS[objective.type] || {};
   const record = { id: objective.objectiveId, objectiveType: objective.type, role: objective.role || "required",
-    requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
+    share: spec.event && objective.share === "team" ? "team" : "personal", requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
   if (objective.type === "defeat") record.actorRef = objective.targetId;
   else if (objective.type === "gather") record.resourceRef = objective.targetId;
   else if (spec.refKind === "item_definition") record.itemRef = objective.targetId;

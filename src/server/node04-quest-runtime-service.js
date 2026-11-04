@@ -202,6 +202,11 @@ function objectiveIsNeeded(objective) {
   return objective?.role !== "optional" && objective?.role !== "bonus";
 }
 
+// Team samen (stap 2): alleen bij gebeurtenis-doelen (versla, verzamel, pak op).
+function objectiveIsTeam(objective) {
+  return objective?.share === "team" && EVENT_OBJECTIVES.has(objective?.objectiveType);
+}
+
 function objectiveEventRef(objective) {
   return objective?.actorRef || objective?.resourceRef || objective?.itemRef || null;
 }
@@ -508,7 +513,8 @@ export class Node04QuestRuntimeService {
     return new Map(rows.map(function (row) { return [row.objective_id, row]; }));
   }
 
-  writeObjectiveProgress(playerId, questId, stepId, objectiveId, current, required) {
+  // done: null = klaar als current >= required; true/false = zelf bepaald (team: pas klaar als het team klaar is).
+  writeObjectiveProgress(playerId, questId, stepId, objectiveId, current, required, done = null) {
     this.db.prepare(`
       INSERT INTO player_objective_progress (player_id, quest_id, step_id, objective_id, current_value, required_value, status, revision, progress_json, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 1, '{}', ?)
@@ -518,7 +524,7 @@ export class Node04QuestRuntimeService {
         status = excluded.status,
         revision = player_objective_progress.revision + 1,
         updated_at = excluded.updated_at
-    `).run(playerId, questId, stepId, objectiveId, current, required, current >= required ? OBJECTIVE_STATUS.COMPLETED : OBJECTIVE_STATUS.ACTIVE, now());
+    `).run(playerId, questId, stepId, objectiveId, current, required, (done === null ? current >= required : done) ? OBJECTIVE_STATUS.COMPLETED : OBJECTIVE_STATUS.ACTIVE, now());
   }
 
   // Stap klaar? Dan via de eerste overgang naar de volgende stap. Een einde: quest klaar + beloning (1x per run).
@@ -530,9 +536,13 @@ export class Node04QuestRuntimeService {
       for (let hop = 0; step && hop < MAX_STEP_HOPS; hop += 1) {
         if (step.kind === "end") return this.completeQuestRun(ctx, quest, current, step, operationId, events);
         const progress = this.evaluateStepProgress(ctx, quest, step);
+        const teamDone = [];
         for (const objective of progress.objectives) {
           if (objective.reachedNow) this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objective.objectiveId, 1, 1);
+          if (objective.teamReachedNow) teamDone.push(objective);
         }
+        // Team samen gehaald: voor alle teamleden tegelijk klaar (ieder zijn eigen bonnetje), daarna gaan zij ook door.
+        for (const objective of teamDone) this.finishTeamObjective(ctx, quest, step, objective, operationId);
         if (!progress.complete) break;
         const next = firstNextStep(quest, step);
         if (!next) return this.completeQuestRun(ctx, quest, current, null, operationId, events);
@@ -567,21 +577,57 @@ export class Node04QuestRuntimeService {
     return { completed: true, events, grants, message: "Quest voltooid: " + (quest.displayName || quest.id) };
   }
 
+  // Het team van deze speler voor dit doel: groepsleden die dezelfde quest (zelfde versie) op dezelfde stap hebben.
+  // Geen groep = alleen jijzelf. De database is de bron (ook na reconnect of herstart).
+  teamMembers(playerId, questId, version, stepId) {
+    const party = this.db.prepare(`
+      SELECT pm.party_id FROM party_members pm JOIN parties p ON p.id = pm.party_id
+      WHERE pm.player_id = ? AND pm.left_at IS NULL AND p.disbanded_at IS NULL LIMIT 1
+    `).get(playerId);
+    if (!party) return { partyId: null, ids: [playerId] };
+    const ids = this.db.prepare(`
+      SELECT q.player_id, q.state_json FROM party_members pm JOIN player_quest_states q ON q.player_id = pm.player_id
+      WHERE pm.party_id = ? AND pm.left_at IS NULL AND q.quest_id = ? AND q.active_step_id = ? AND q.status IN ('active', 'ready_to_turn_in')
+    `).all(party.party_id, questId, stepId).filter(function (row) {
+      return safeString(stateOf(row).version) === safeString(version);
+    }).map(function (row) { return row.player_id; });
+    if (!ids.includes(playerId)) ids.push(playerId);
+    return { partyId: party.party_id, ids: ids.sort() };
+  }
+
+  finishTeamObjective(ctx, quest, step, objective, operationId) {
+    const objectiveId = objective.objectiveId;
+    for (const memberId of objective.team.memberIds) {
+      const own = this.loadObjectiveProgress(memberId, quest.id, step.id).get(objectiveId);
+      this.writeObjectiveProgress(memberId, quest.id, step.id, objectiveId, safeInteger(own?.current_value, 0), requiredOf(objective), true);
+    }
+    for (const memberId of objective.team.memberIds) {
+      if (memberId === ctx.profile.id) continue;
+      const row = this.loadQuestState(memberId, quest.id);
+      if (!row || !isOpenStatus(row.status) || row.active_step_id !== step.id) continue;
+      this.advanceQuest(Object.assign({}, ctx, { profile: { id: memberId }, position: null }), quest, row, operationId);
+    }
+  }
+
   // Aangeroepen door node03 (versla, verzamel, pak op), binnen dezelfde transactie als de actie zelf.
-  // Een kill telt voor iedereen die meevocht. Een fout in een quest mag het gevecht nooit tegenhouden.
+  // Ieder voor zich: een kill telt voor iedereen die meevocht. Team samen: een kill telt 1x voor het team.
+  // Een fout in een quest mag het gevecht nooit tegenhouden.
   onQuestEvent(ctx, playerIds, event) {
-    const ids = Array.from(new Set((Array.isArray(playerIds) ? playerIds : []).filter(Boolean)));
+    const list = (Array.isArray(playerIds) ? playerIds : []).filter(Boolean);
+    // Wie de actie deed eerst: bij Team samen krijgt die de +1 voor het team.
+    const ids = Array.from(new Set(list.includes(ctx.profile?.id) ? [ctx.profile.id].concat(list) : list));
+    const teamTaken = new Set();
     for (const playerId of ids) {
       const pctx = playerId === ctx.profile?.id ? ctx : Object.assign({}, ctx, { profile: { id: playerId }, position: null });
       try {
-        this.applyQuestEvent(pctx, event);
+        this.applyQuestEvent(pctx, event, teamTaken);
       } catch (error) {
         console.warn("[quest] gebeurtenis niet verwerkt:", error?.message || error);
       }
     }
   }
 
-  applyQuestEvent(ctx, event) {
+  applyQuestEvent(ctx, event, teamTaken = new Set()) {
     const refId = safeString(event?.refId);
     const key = safeString(event?.eventKey);
     if (!EVENT_OBJECTIVES.has(event?.type) || !refId || !key) return;
@@ -599,7 +645,19 @@ export class Node04QuestRuntimeService {
         const stored = this.loadObjectiveProgress(ctx.profile.id, quest.id, step.id);
         for (const objective of matching) {
           const required = requiredOf(objective);
-          const before = safeInteger(stored.get(objectiveIdOf(objective))?.current_value, 0);
+          const own = stored.get(objectiveIdOf(objective));
+          const before = safeInteger(own?.current_value, 0);
+          if (own?.status === OBJECTIVE_STATUS.COMPLETED) continue;
+          if (objectiveIsTeam(objective)) {
+            // Eén gebeurtenis = +1 voor het team, ook als meerdere teamleden meevochten.
+            const team = this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id);
+            const teamKey = (team.partyId || ctx.profile.id) + "|" + quest.id + "|" + quest.version + "|" + step.id + "|" + objectiveIdOf(objective);
+            if (teamTaken.has(teamKey)) continue;
+            teamTaken.add(teamKey);
+            if (before >= required * team.ids.length) continue;
+            this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveIdOf(objective), before + 1, required, false);
+            continue;
+          }
           if (before >= required) continue;
           this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveIdOf(objective), before + 1, required);
         }
@@ -1090,7 +1148,8 @@ export class Node04QuestRuntimeService {
 
   evaluateStepProgress(ctx, quest, step) {
     const stored = this.loadObjectiveProgress(ctx.profile.id, quest?.id, step?.id);
-    const objectives = (Array.isArray(step?.objectives) ? step.objectives : []).map((objective) => this.evaluateObjective(ctx, objective, stored.get(objectiveIdOf(objective))));
+    const scope = { questId: quest?.id, version: quest?.version, stepId: step?.id };
+    const objectives = (Array.isArray(step?.objectives) ? step.objectives : []).map((objective) => this.evaluateObjective(ctx, objective, stored.get(objectiveIdOf(objective)), scope));
     const conditions = this.evaluateConditions(ctx, step?.conditions || []);
     const needed = objectives.filter(function (objective) { return objective.needed; });
     const isDone = function (objective) { return objective.complete; };
@@ -1108,9 +1167,9 @@ export class Node04QuestRuntimeService {
   }
 
   // stored = rij uit player_objective_progress. Tas-doelen kijken live naar je tas; gebeurtenis-doelen naar de teller.
-  evaluateObjective(ctx, objective, stored) {
+  evaluateObjective(ctx, objective, stored, scope = null) {
     const type = objective?.objectiveType || "custom";
-    const required = requiredOf(objective);
+    let required = requiredOf(objective);
     const storedDone = stored?.status === OBJECTIVE_STATUS.COMPLETED;
     const label = objective?.displayName || type;
     let current = 0;
@@ -1133,6 +1192,19 @@ export class Node04QuestRuntimeService {
       complete = storedDone || this.objectiveInRange(ctx, objective, 0, false);
       current = complete ? 1 : 0;
       extra.reachedNow = complete && !storedDone;
+    } else if (objectiveIsTeam(objective) && scope?.questId) {
+      // Team samen: alle bijdragen van het team bij elkaar; doel = aantal × teamleden.
+      const team = this.teamMembers(ctx.profile.id, scope.questId, scope.version, scope.stepId);
+      const sum = team.ids.reduce((total, memberId) => {
+        const row = memberId === ctx.profile.id ? stored : this.loadObjectiveProgress(memberId, scope.questId, scope.stepId).get(objectiveIdOf(objective));
+        return total + safeInteger(row?.current_value, 0);
+      }, 0);
+      const perMember = required;
+      required = perMember * team.ids.length;
+      complete = storedDone || sum >= required;
+      current = complete ? required : sum;
+      extra.team = { size: team.ids.length, mine: safeInteger(stored?.current_value, 0), perMember, memberIds: team.ids };
+      extra.teamReachedNow = !storedDone && sum >= required;
     } else if (EVENT_OBJECTIVES.has(type)) {
       current = Math.min(safeInteger(stored?.current_value, 0), required);
       complete = current >= required;
@@ -1229,7 +1301,11 @@ export class Node04QuestRuntimeService {
     const broken = isActive && !step;
     if (broken) this.warnBrokenRun(ctx, quest, row, definition);
     const progress = step && step.kind !== "end" ? this.evaluateStepProgress(ctx, definition, step) : null;
-    const objectives = (progress?.objectives || []).filter(function (objective) { return !objective.hidden; });
+    // Teamleden-ID's blijven op de server; de speler ziet alleen hoe groot het team is en zijn eigen bijdrage.
+    const objectives = (progress?.objectives || []).filter(function (objective) { return !objective.hidden; }).map(function (objective) {
+      if (!objective.team) return objective;
+      return Object.assign({}, objective, { team: { size: objective.team.size, mine: objective.team.mine, perMember: objective.team.perMember } });
+    });
     const openNeeded = objectives.filter(function (objective) { return objective.needed && !objective.complete; });
     const inRange = (objective) => this.objectiveInRange(ctx, objective, 1.5, true);
     return {
