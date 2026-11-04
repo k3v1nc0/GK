@@ -3,7 +3,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, stepsFromSimple } from "../shared/quest-graph.js?v=20261104-quest2";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, stepsFromSimple } from "../shared/quest-graph.js?v=20261104-quest5";
 
 const TABS = [["basis", "📋 Basis"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -57,7 +57,7 @@ function render(state) {
   const body = clone(doc.body || {});
   const { nameOf, refExists } = names(bench);
   const steps = hasOwnSteps(body) ? body.steps : null;
-  const issues = steps ? questGraphIssues(steps, { refExists, refLabel: nameOf }) : [];
+  const issues = steps ? questGraphIssues(steps, { refExists, refLabel: nameOf, partyLeave: body.partyLeave }) : [];
   const badge = !steps ? el("span", { class: "qbBadge", text: "Snelle quest" })
     : issues.length ? el("span", { class: "qbBadge qbBadgeBad", text: "⚠️ " + issues.length + (issues.length === 1 ? " melding" : " meldingen") })
       : el("span", { class: "qbBadge qbBadgeOk", text: "✅ Quest-check OK" });
@@ -273,6 +273,7 @@ function objectiveRow(state, objective, issues, change, remove) {
     target.type = type.value;
     if (!next.npc) delete target.npcRef;
     if (!next.event) delete target.share;
+    if (target.type !== "defeat") delete target.credit;
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
   }));
   const parts = [type, el("div", { class: "qbSlot" }, bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null,
@@ -292,8 +293,16 @@ function objectiveRow(state, objective, issues, change, remove) {
     const share = el("select", { class: "wbdSelect qbShare", title: "Ieder voor zich: iedereen zijn eigen aantal. Team samen: één teller voor de groep (aantal × teamleden)." },
       Object.entries(OBJECTIVE_SHARES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
     share.value = objective.share === "team" ? "team" : "personal";
-    share.addEventListener("change", () => change("voor wie", (target) => { if (share.value === "team") target.share = "team"; else delete target.share; }));
+    share.addEventListener("change", () => change("voor wie", (target) => { if (share.value === "team") { target.share = "team"; delete target.credit; } else delete target.share; }));
     parts.push(share);
+  }
+  // Versla, Ieder voor zich: telt de kill ook voor de groep in de buurt (standaard), alleen wie meevocht, of iedereen in de buurt?
+  if (objective.type === "defeat" && objective.share !== "team") {
+    const credit = el("select", { class: "wbdSelect qbShare", title: "Voor wie telt een kill. In de buurt = binnen " + QUEST_NEARBY_M + " meter van wie de vijand versloeg." },
+      Object.entries(OBJECTIVE_CREDITS).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+    credit.value = OBJECTIVE_CREDITS[objective.credit] ? objective.credit : "group";
+    credit.addEventListener("change", () => change("telt voor", (target) => { if (credit.value === "group") delete target.credit; else target.credit = credit.value; }));
+    parts.push(credit);
   }
   const role = el("select", { class: "wbdSelect qbRole", title: "Verplicht, verborgen, mag of bonus" }, Object.entries(OBJECTIVE_ROLES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   role.value = OBJECTIVE_ROLES[objective.role] ? objective.role : "required";

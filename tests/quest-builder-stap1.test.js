@@ -16,7 +16,7 @@ const doc = (kind, key, body) => ({ docKey: key, kind, body, archived: false, re
 function wolvenSteps(wolves = 2, share = null) {
   return [
     { stepId: "step.jacht", kind: "step", title: "Op jacht", match: "all", next: [{ to: "step.terug" }], objectives: [
-      Object.assign({ objectiveId: "obj.wolf", type: "defeat", ref: "actor_archetype:wolf", amount: wolves, role: "required" }, share ? { share } : {}),
+      Object.assign({ objectiveId: "obj.wolf", type: "defeat", ref: "actor_archetype:wolf", amount: wolves, role: "required" }, typeof share === "string" ? { share } : share || {}),
       { objectiveId: "obj.struik", type: "gather", ref: "resource_definition:bush", amount: 1, role: "bonus" }
     ] },
     { stepId: "step.terug", kind: "step", title: "", match: "all", next: [{ to: "end" }], objectives: [
@@ -26,7 +26,7 @@ function wolvenSteps(wolves = 2, share = null) {
   ];
 }
 
-function docs(wolves = 2, extra = [], share = null) {
+function docs(wolves = 2, extra = [], share = null, questExtra = {}) {
   return [
     doc("project_settings", "project_settings", { gameName: "GK" }),
     doc("player_class", "player_class:class.held", { classId: "class.held", displayName: "Held", abilityRef: "ability:player.hit" }),
@@ -43,13 +43,13 @@ function docs(wolves = 2, extra = [], share = null) {
     doc("npc", "npc:npc.boer", { npcId: "npc.boer", displayName: "Boer", x: -4, y: 0, z: 4 }),
     doc("npc", "npc:npc.smid", { npcId: "npc.smid", displayName: "Smid", x: 4, y: 0, z: 4 }),
     doc("quest", "quest:quest.wolven", { questId: "quest.wolven", displayName: "Wolven", giverRef: "npc:npc.boer", rewardXp: 50,
-      rewards: [{ ref: "item_definition:pelt", amount: 1 }], steps: wolvenSteps(wolves, share) }),
+      rewards: [{ ref: "item_definition:pelt", amount: 1 }], steps: wolvenSteps(wolves, share), ...questExtra }),
     doc("quest", "quest:quest.smid", { questId: "quest.smid", displayName: "Naar de smid", giverRef: "npc:npc.boer", goal: "visit", targetNpcRef: "npc:npc.smid", rewardXp: 10 })
   ].concat(extra);
 }
 
-function world(wolves = 2, share = null) {
-  const compiled = compileCanonical(docs(wolves, [], share), {});
+function world(wolves = 2, share = null, questExtra = {}) {
+  const compiled = compileCanonical(docs(wolves, [], share, questExtra), {});
   assert.deepEqual(compiled.errors, []);
   return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text)).gameProject;
 }
@@ -281,4 +281,117 @@ test("stap 2: Team samen klaar = beide teamleden tegelijk door", () => {
   node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "b", operationId: "b" });
   assert.equal(row("p1", "quest.wolven").active_step_id, "step.terug");
   assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug", "p2 gaat mee door zonder zelf te slaan");
+});
+
+
+// ---- Stap 2 (rest): groep in de buurt, delen, regel bij groep verlaten ----
+function party(db, ids) {
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO parties (id, leader_player_id, loot_policy_id, revision, created_at, updated_at) VALUES ('party1', ?, 'loot.free', 1, ?, ?)").run(ids[0], stamp, stamp);
+  for (const id of ids) db.prepare("INSERT INTO party_members (party_id, player_id, role, joined_at) VALUES ('party1', ?, ?, ?)").run(id, id === ids[0] ? "leader" : "member", stamp);
+}
+function addPlayer(db, n) {
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO users (id, username, password_hash, password_salt, role, created_at, updated_at) VALUES (?, ?, 'x', 'x', 'player', ?, ?)").run("u" + n, "speler" + n, stamp, stamp);
+  db.prepare("INSERT INTO player_profiles (id, user_id, display_name, selected_character_id, current_world_id, created_at, updated_at) VALUES (?, ?, ?, NULL, 'world.main', ?, ?)").run("p" + n, "u" + n, "speler" + n, stamp, stamp);
+}
+// Nep-MMO: posities (meters) van wie online is, en wat de server naar spelers stuurt.
+function mmo(positions) {
+  const sent = [];
+  return { sent, getWorldPlayerStates: () => Object.entries(positions).map(([player_id, x]) => ({ player_id, x, z: 0 })),
+    getConnectionForPlayer: (id) => (id in positions ? {} : null), sendToPlayer: (id, payload) => sent.push([id, payload.type]), partyRuntime: { notice: (ids, text) => sent.push([ids.join(","), text]) } };
+}
+
+test("stap 2: een kill telt ook voor de groep in de buurt; ver weg of buiten de groep niet", () => {
+  const { db, node03, ctx, row, setProject } = setup();
+  setProject(world(5));
+  addPlayer(db, 3);
+  party(db, ["p1", "p2"]);
+  const n4 = new Node04QuestRuntimeService(db, null, mmo({ p1: 0, p2: 10, p3: 5 }), node03);
+  for (const id of ["p1", "p2", "p3"]) n4.acceptQuest(ctx(id), "quest.wolven", "acc" + id);
+  const count = (id) => n4.buildQuestSummary(ctx(id), ctx(id).project.campaigns.quests.byId["quest.wolven"], row(id, "quest.wolven")).activeStep.objectives[0].currentValue;
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  assert.deepEqual([count("p1"), count("p2"), count("p3")], [1, 1, 0], "groepsgenoot op 10 m telt mee, vreemde niet");
+  const far = new Node04QuestRuntimeService(db, null, mmo({ p1: 0, p2: 80 }), node03);
+  node03.questEvents(ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:2", operationId: "b" });
+  assert.deepEqual([count("p1"), count("p2")], [2, 1], "groepsgenoot op 80 m telt niet mee");
+  assert.ok(far);
+  // Iedereen in de buurt / alleen wie meevocht
+  const { db: db2, node03: n03b, ctx: ctx2, row: row2 } = (() => { const t = setup(); t.setProject(world(5, { credit: "nearby" })); return t; })();
+  addPlayer(db2, 3);
+  party(db2, ["p1", "p2"]);
+  const nb = new Node04QuestRuntimeService(db2, null, mmo({ p1: 0, p2: 10, p3: 5 }), n03b);
+  for (const id of ["p1", "p2", "p3"]) nb.acceptQuest(ctx2(id), "quest.wolven", "acc" + id);
+  n03b.questEvents(ctx2("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  const count2 = (id) => nb.buildQuestSummary(ctx2(id), ctx2(id).project.campaigns.quests.byId["quest.wolven"], row2(id, "quest.wolven")).activeStep.objectives[0].currentValue;
+  assert.deepEqual([count2("p1"), count2("p2"), count2("p3")], [1, 1, 1], "iedereen in de buurt met deze stap");
+  const t3 = setup();
+  t3.setProject(world(5, { credit: "fighters" }));
+  party(t3.db, ["p1", "p2"]);
+  const nf = new Node04QuestRuntimeService(t3.db, null, mmo({ p1: 0, p2: 10 }), t3.node03);
+  for (const id of ["p1", "p2"]) nf.acceptQuest(t3.ctx(id), "quest.wolven", "acc" + id);
+  t3.node03.questEvents(t3.ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  const p2 = nf.buildQuestSummary(t3.ctx("p2"), t3.ctx("p2").project.campaigns.quests.byId["quest.wolven"], t3.row("p2", "quest.wolven")).activeStep.objectives[0].currentValue;
+  assert.equal(p2, 0, "alleen wie meevocht");
+});
+
+test("stap 2: quest delen met je groep (Aannemen / Nee), 1x per aanbod", () => {
+  const { db, node03, ctx, row } = setup();
+  party(db, ["p1", "p2"]);
+  const fake = mmo({ p1: 0, p2: 10 });
+  const n4 = new Node04QuestRuntimeService(db, null, fake, node03);
+  assert.throws(() => n4.shareQuest(ctx("p1"), "quest.wolven"), /zelf doet/);
+  n4.acceptQuest(ctx("p1"), "quest.wolven", "op1");
+  assert.match(n4.shareQuest(ctx("p1"), "quest.wolven").message, /1 groepslid/);
+  assert.equal(n4.shareOffersFor("p2").length, 1);
+  assert.ok(fake.sent.some(([id, text]) => id === "p2" && /deelt de quest/.test(text)), "melding voor p2");
+  n4.acceptSharedQuest(ctx("p2"), "quest.wolven", "op2");
+  assert.equal(row("p2", "quest.wolven").status, "active");
+  assert.throws(() => n4.acceptSharedQuest(ctx("p2"), "quest.wolven", "op3"), /verlopen/);
+  assert.match(n4.shareQuest(ctx("p1"), "quest.wolven").message, /Niemand/, "heeft hem al");
+});
+
+test("stap 2: regel bij groep verlaten: wachten (alleen telt niet) en mislukt (alleen voor wie vertrekt)", () => {
+  const wait = setup();
+  wait.setProject(world(1, "team", { partyLeave: "wait" }));
+  const n4 = new Node04QuestRuntimeService(wait.db, null, null, wait.node03);
+  n4.acceptQuest(wait.ctx("p1"), "quest.wolven", "op1");
+  wait.node03.questEvents(wait.ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  const goal = n4.buildQuestSummary(wait.ctx("p1"), wait.ctx("p1").project.campaigns.quests.byId["quest.wolven"], wait.row("p1", "quest.wolven")).activeStep.objectives[0];
+  assert.equal(goal.currentValue, 0, "alleen telt een team-doel niet");
+  assert.equal(goal.team.waiting, true);
+  party(wait.db, ["p1", "p2"]);
+  n4.acceptQuest(wait.ctx("p2"), "quest.wolven", "op2");
+  wait.node03.questEvents(wait.ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:2", operationId: "b" });
+  wait.node03.questEvents(wait.ctx("p2"), ["p2"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:3", operationId: "c" });
+  assert.equal(wait.row("p1", "quest.wolven").active_step_id, "step.terug", "in de groep wel: samen 2/2");
+
+  const fail = setup();
+  fail.setProject(world(2, "team", { partyLeave: "fail" }));
+  party(fail.db, ["p1", "p2"]);
+  const nf = new Node04QuestRuntimeService(fail.db, null, null, fail.node03);
+  for (const id of ["p1", "p2"]) nf.acceptQuest(fail.ctx(id), "quest.wolven", "acc" + id);
+  fail.node03.questEvents(fail.ctx("p1"), ["p1"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a" });
+  assert.deepEqual(fail.node03.questPartyLeaving(fail.ctx("p1"), "p1"), ["Wolven"]);
+  assert.equal(fail.row("p1", "quest.wolven").status, "abandoned", "wie vertrekt: mislukt");
+  assert.equal(fail.row("p2", "quest.wolven").status, "active", "wie blijft: gewoon verder");
+  const keep = setup();
+  keep.setProject(world(2, "team"));
+  party(keep.db, ["p1", "p2"]);
+  const nk = new Node04QuestRuntimeService(keep.db, null, null, keep.node03);
+  for (const id of ["p1", "p2"]) nk.acceptQuest(keep.ctx(id), "quest.wolven", "acc" + id);
+  assert.deepEqual(keep.node03.questPartyLeaving(keep.ctx("p1"), "p1"), [], "meenemen (standaard): niets mislukt");
+});
+
+test("stap 2: quest-check voor Telt voor en Bij groep verlaten", () => {
+  const steps = wolvenSteps(2);
+  const messages = (list, options) => questGraphIssues(list, options).map((issue) => issue.message).join(" | ");
+  assert.match(messages(steps, { partyLeave: "wait" }), /Bij groep verlaten doet niets/);
+  assert.doesNotMatch(messages(wolvenSteps(2, "team"), { partyLeave: "wait" }), /Bij groep verlaten/);
+  const wrong = steps.map((step) => step.stepId === "step.terug" ? Object.assign({}, step, { objectives: [Object.assign({}, step.objectives[0], { credit: "nearby" })] }) : step);
+  assert.match(messages(wrong), /Telt voor kan alleen bij Versla/);
+  const quest = world(2, { credit: "fighters" }, { partyLeave: "fail" }).campaigns.quests.byId["quest.wolven"];
+  assert.equal(quest.steps[0].objectives[0].credit, "fighters");
+  assert.equal(quest.partyLeave, "fail", "alleen een melding in de Quest Builder, SAVE TO GAME gaat door");
+  assert.equal(world().campaigns.quests.byId["quest.wolven"].partyLeave, undefined, "standaard: niets extra in de quest (versie blijft gelijk)");
 });

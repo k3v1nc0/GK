@@ -7,8 +7,8 @@ import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
-import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest2";
-import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest2";
+import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest5";
+import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest5";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -625,7 +625,7 @@ export function createDocBench(options = {}) {
     const own = hasOwnSteps(body);
     const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
     const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived; };
-    const issues = own ? questGraphIssues(body.steps, { refExists }).length : 0;
+    const issues = own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave }).length : 0;
     const text = !doc ? "Eerst ✓ Maken, dan kun je stappen bouwen."
       : own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (issues ? " · ⚠️ " + issues : " · ✅")
         : "Snelle quest (1 doel). Meer stappen? Open de Quest Builder.";

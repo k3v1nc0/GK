@@ -410,8 +410,11 @@ function questObjective(objective, names) {
   const spec = OBJECTIVE_KINDS[objective.type] || {};
   const record = { id: objective.objectiveId, objectiveType: objective.type, role: objective.role || "required",
     share: spec.event && objective.share === "team" ? "team" : "personal", requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
-  if (objective.type === "defeat") record.actorRef = objective.targetId;
-  else if (objective.type === "gather") record.resourceRef = objective.targetId;
+  if (objective.type === "defeat") {
+    record.actorRef = objective.targetId;
+    // Stap 2: alleen opslaan als het afwijkt van de standaard (wie meevocht + groep in de buurt), zo blijft de versie gelijk.
+    if (record.share === "personal" && (objective.credit === "fighters" || objective.credit === "nearby")) record.credit = objective.credit;
+  } else if (objective.type === "gather") record.resourceRef = objective.targetId;
   else if (spec.refKind === "item_definition") record.itemRef = objective.targetId;
   const npcId = spec.npc ? objective.npcId : spec.refKind === "npc" ? objective.targetId : null;
   if (npcId) {
@@ -449,6 +452,7 @@ function questRecord(quest, names) {
     prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
     autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
   };
+  if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
   record.version = sha256(stableStringify(record)).slice(0, 16);
   return record;
 }

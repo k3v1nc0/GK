@@ -149,6 +149,7 @@ export function compileGameSection(documents, options = {}) {
     rewards: grants(doc.body.rewards), rewardXp: Number.isInteger(doc.body.rewardXp) ? doc.body.rewardXp : 0,
     previousQuestId: doc.body.previousQuestRef ? idFromRef(doc.body.previousQuestRef) : null,
     repeatable: doc.body.repeatable === true,
+    partyLeave: doc.body.partyLeave === "wait" || doc.body.partyLeave === "fail" ? doc.body.partyLeave : "keep",
     // Quest Builder stap 1: de stappen (of de snelle quest omgezet naar 1 stap + einde), met ID's in plaats van verwijzingen.
     steps: questSteps(doc.body).map((step) => ({
       stepId: step.stepId, kind: step.kind, title: step.title || "", text: step.text || "", match: step.match === "any" ? "any" : "all",
@@ -156,7 +157,8 @@ export function compileGameSection(documents, options = {}) {
       objectives: (Array.isArray(step.objectives) ? step.objectives : []).map((objective) => ({
         objectiveId: objective.objectiveId, type: objective.type, targetId: objective.ref ? idFromRef(objective.ref) : null,
         npcId: objective.npcRef ? idFromRef(objective.npcRef) : null, amount: Number.isInteger(objective.amount) ? objective.amount : 1,
-        role: objective.role || "required", share: objective.share === "team" ? "team" : "personal"
+        role: objective.role || "required", share: objective.share === "team" ? "team" : "personal",
+        credit: objective.credit === "fighters" || objective.credit === "nearby" ? objective.credit : "group"
       }))
     }))
   }));

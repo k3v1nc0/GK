@@ -967,6 +967,8 @@ export class Node05EconomyRuntimeService {
     if (!party) return { action: "party_leave", message: "Je zit niet in een groep." };
     const stamp = now();
     const me = this.playerName(ctx.profile.id);
+    // Quest Builder stap 2: regel per quest bij groep verlaten (vóór het verlaten, dan is het team nog bekend).
+    this.node03RuntimeService.questPartyLeaving?.(ctx, ctx.profile.id);
     this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL")
       .run(stamp, party.partyId, ctx.profile.id);
     const remaining = this.partyMemberIds(party.partyId);
@@ -1010,6 +1012,7 @@ export class Node05EconomyRuntimeService {
     const name = this.playerName(targetPlayerId, "Die speler");
     if (!party.members.some((member) => member.playerId === targetPlayerId)) throw httpError(404, name + " zit niet in jouw groep.");
     const stamp = now();
+    this.node03RuntimeService.questPartyLeaving?.(ctx, targetPlayerId);
     this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL").run(stamp, party.partyId, targetPlayerId);
     const remaining = this.partyMemberIds(party.partyId);
     const runtime = this.partyRuntime();

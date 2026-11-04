@@ -1942,7 +1942,17 @@ export function createGkHud(api) {
     // Behaald = al eens ingeleverd en kan (nu of later) nog een keer: grijs met ↻. Kan niet meer = Archief.
     const again = (quests.again || []).concat(completed.filter(function (quest) { return quest.repeatMode === "daily" || quest.repeatMode === "weekly"; }));
     const archive = completed.filter(function (quest) { return quest.repeatMode !== "daily" && quest.repeatMode !== "weekly"; });
-    if (!active.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests aangenomen. Zoek een questgever op de kaart."));
+    // Stap 2: een groepslid deelt een quest met je.
+    const shares = d.s04?.questShares || [];
+    if (shares.length) list.append(sectionGroup("quests-shared", "Gedeeld met jou", shares.map(function (offer) {
+      const busy = d.busy?.n04;
+      return h("div", { class: "gkCard gkOn" }, [
+        h("h3", null, [ico("three-friends"), h("span", { text: offer.displayName }), h("small", { text: "van " + offer.fromName })]),
+        h("div", { class: "gkBtns" }, [
+          h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-share-accept", "data-id": offer.questId, disabled: busy ? true : null }, [ico("check-mark", "plain"), "Aannemen"]),
+          h("button", { type: "button", class: "gkBtn", "data-act": "quest-share-decline", "data-id": offer.questId, disabled: busy ? true : null }, [ico("cancel", "plain"), "Nee"])])]);
+    })));
+    if (!shares.length && !active.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests aangenomen. Zoek een questgever op de kaart."));
     if (active.length) list.append(sectionGroup("quests-active", "Bezig", active.map(function (quest) {
       return questCard(quest, quest.questId === trackedId, targets.find(function (t) { return t.questId === quest.questId; }));
     })));
@@ -1971,7 +1981,7 @@ export function createGkHud(api) {
       const required = Math.max(1, num(objective.requiredValue, 1));
       const current = Math.min(required, num(objective.currentValue));
       const counts = COUNTED_GOALS.has(objective.objectiveType) || required > 1;
-      const extra = (objective.team ? " 👥 team " + objective.team.size : "") + (objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "");
+      const extra = (objective.team ? " 👥 team " + objective.team.size + (objective.team.waiting ? " ⏸️ wacht op je groep" : "") : "") + (objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "");
       card.append(h("div", { class: "gkObjective" + (objective.complete ? " gkOk" : "") }, [
         h("span", { text: (objective.complete ? "✓ " : "") + (objective.instruction || objective.displayName || "") + extra }),
         counts ? h("b", { text: fmt(current) + " / " + fmt(required) }) : null]));
@@ -1988,6 +1998,9 @@ export function createGkHud(api) {
     if (tracked && target) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-go", "data-id": target.instanceId, "data-quest": quest.questId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "Ga erheen"]));
     if (!tracked && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-track", "data-id": quest.questId, disabled: busy ? true : null }, [ico("compass", "plain"), "Volgen"]));
     if (quest.doneBefore && quest.status === "available" && quest.giverTargetId) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-again", "data-id": quest.giverTargetId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "↻ Ga"]));
+    // Stap 2: deel je quest met je groep (alleen als je in een groep zit).
+    const inParty = (data().party?.members || []).length > 1;
+    if (inParty && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-share", "data-id": quest.questId, disabled: busy ? true : null }, [ico("three-friends", "plain"), "Delen"]));
     // Quest verlaten: je voortgang gaat weg; daarna kun je hem opnieuw aannemen bij de NPC (dan op de nieuwste versie).
     if (quest.status === "active" || quest.status === "ready_to_turn_in") {
       const sure = ui.sure === "quest-abandon:" + quest.questId;
@@ -2938,6 +2951,9 @@ export function createGkHud(api) {
       case "section": store.sectionFold[id] = !store.sectionFold[id]; save(); renderSheet(); break;
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
       case "quest-again": api.run04("node04:start_dialogue", id); break;
+      case "quest-share": api.run04("node04:share", null, { questId: id }); break;
+      case "quest-share-accept": api.run04("node04:accept_share", null, { questId: id }); break;
+      case "quest-share-decline": api.run04("node04:decline_share", null, { questId: id }); break;
       case "quest-track": api.run04("node04:track", null, { questId: id }); break;
       case "quest-abandon": if (confirmTwice("quest-abandon:" + id)) api.run04("node04:abandon", null, { questId: id }); break;
       case "choice": {

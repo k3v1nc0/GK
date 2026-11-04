@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { QUEST_STATUS, OBJECTIVE_STATUS, OBJECTIVE_TYPES } from "../shared/quest-contract.js";
 import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
+import { QUEST_NEARBY_M } from "../../apps/web/public/shared/quest-graph.js";
 
 const DEFAULT_LOADOUT_ID = "loadout.main";
 
@@ -180,6 +181,7 @@ function compareNumbers(left, comparison, right) {
 // ---- Quest Builder stap 1 (4-11): een quest is een netwerk van stappen met eindes ----------------------------
 // Doelen met een gebeurtenis (versla, verzamel, pak op) telt de server zelf, 1x per gebeurtenis per speler.
 const EVENT_OBJECTIVES = new Set(["defeat", "gather", "pickup"]);
+const SHARE_OFFER_MS = 2 * 60 * 1000;
 // Praat- en inleverkeuzes zet de quest-motor zelf in het NPC-gesprek: "quest.obj|<quest>|<stap>|<doel>".
 const QUEST_CHOICE_PREFIX = "quest.obj|";
 const MAX_STEP_HOPS = 16;
@@ -205,6 +207,17 @@ function objectiveIsNeeded(objective) {
 // Team samen (stap 2): alleen bij gebeurtenis-doelen (versla, verzamel, pak op).
 function objectiveIsTeam(objective) {
   return objective?.share === "team" && EVENT_OBJECTIVES.has(objective?.objectiveType);
+}
+
+// Stap 2: telt deze gebeurtenis voor dit doel? fighter = deed zelf mee (altijd). group = groepsgenoot in de buurt:
+// Ieder voor zich met "groep in de buurt" (standaard) of "iedereen", en Team samen. nearby = alleen bij "iedereen".
+function objectiveCredits(objective, via) {
+  if (via === "fighter") return true;
+  if (objective?.objectiveType !== "defeat") return false;
+  const credit = objective?.credit === "fighters" || objective?.credit === "nearby" ? objective.credit : "group";
+  if (via === "group") return objectiveIsTeam(objective) || credit !== "fighters";
+  if (via === "nearby") return !objectiveIsTeam(objective) && credit === "nearby";
+  return false;
 }
 
 function objectiveEventRef(objective) {
@@ -269,6 +282,10 @@ export class Node04QuestRuntimeService {
     this.savepointSeq = 0;
     // Quest Builder: versla / verzamel / pak op komen hier binnen (zelfde transactie als de actie).
     if (node03RuntimeService) node03RuntimeService.questEvents = (ctx, playerIds, event) => this.onQuestEvent(ctx, playerIds, event);
+    // Stap 2: groep verlaten (node05 roept dit aan vóór het verlaten, zodat het team nog bekend is).
+    if (node03RuntimeService) node03RuntimeService.questPartyLeaving = (ctx, playerId) => this.onPartyLeaving(ctx, playerId);
+    // Stap 2: quest delen met je groep. Kort geldig (2 minuten), alleen in het geheugen: na een herstart opnieuw delen.
+    this.shareOffers = new Map(); // playerId -> Map(questId -> { fromId, fromName, until })
   }
 
   getRequestContext(req) {
@@ -335,6 +352,9 @@ export class Node04QuestRuntimeService {
         else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "track") result = this.trackQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "abandon") result = this.abandonQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "share") result = this.shareQuest(ctx, safeString(payload.questId || payload.quest_id));
+        else if (action === "accept_share") result = this.acceptSharedQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
+        else if (action === "decline_share") result = this.declineSharedQuest(ctx, safeString(payload.questId || payload.quest_id));
         else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "reset_node04") result = this.resetNode04(ctx);
         else if (action === "dev_set_step") result = this.devSetStep(ctx, safeString(payload.questId || payload.quest_id), safeString(payload.stepId || payload.step_id), operationId);
@@ -616,28 +636,87 @@ export class Node04QuestRuntimeService {
     const list = (Array.isArray(playerIds) ? playerIds : []).filter(Boolean);
     // Wie de actie deed eerst: bij Team samen krijgt die de +1 voor het team.
     const ids = Array.from(new Set(list.includes(ctx.profile?.id) ? [ctx.profile.id].concat(list) : list));
+    // Versla: ook de groep in de buurt, en (als het doel dat zegt) iedereen in de buurt met deze stap.
+    const extra = event?.type === "defeat" ? this.nearbyCredit(ctx, ids) : { group: [], nearby: [] };
+    const recipients = ids.map((id) => [id, "fighter"])
+      .concat(extra.group.map((id) => [id, "group"]), extra.nearby.map((id) => [id, "nearby"]));
     const teamTaken = new Set();
-    for (const playerId of ids) {
+    const changed = new Set();
+    for (const [playerId, via] of recipients) {
       const pctx = playerId === ctx.profile?.id ? ctx : Object.assign({}, ctx, { profile: { id: playerId }, position: null });
       try {
-        this.applyQuestEvent(pctx, event, teamTaken);
+        for (const id of this.applyQuestEvent(pctx, event, teamTaken, via)) changed.add(id);
       } catch (error) {
         console.warn("[quest] gebeurtenis niet verwerkt:", error?.message || error);
       }
     }
+    // Teamgenoten zien de nieuwe teller meteen (niet pas bij de volgende ronde).
+    changed.delete(ctx.profile?.id);
+    this.pingQuest(Array.from(changed));
   }
 
-  applyQuestEvent(ctx, event, teamTaken = new Set()) {
+  // Groepsgenoten van deze spelers die online zijn en binnen QUEST_NEARBY_M van wie de kill maakte; en alle anderen in de buurt.
+  nearbyCredit(ctx, fighterIds) {
+    const result = { group: [], nearby: [] };
+    const mmo = this.mmoService;
+    if (!mmo || typeof mmo.getWorldPlayerStates !== "function") return result;
+    let states = [];
+    try { states = mmo.getWorldPlayerStates(ctx.worldId) || []; } catch { return result; }
+    const byId = new Map(states.filter((state) => state?.player_id).map((state) => [state.player_id, state]));
+    const killer = byId.get(ctx.profile?.id) || ctx.position || null;
+    if (!killer || !Number.isFinite(Number(killer.x)) || !Number.isFinite(Number(killer.z))) return result;
+    const zone = byId.get(ctx.profile?.id)?.current_zone_id || null;
+    const online = (id) => { try { return Boolean(mmo.getConnectionForPlayer(id, ctx.worldId)); } catch { return false; } };
+    const near = (state) => state && (!zone || !state.current_zone_id || state.current_zone_id === zone)
+      && Math.hypot(Number(state.x) - Number(killer.x), Number(state.z) - Number(killer.z)) <= QUEST_NEARBY_M;
+    const taken = new Set(fighterIds);
+    for (const fighterId of fighterIds) {
+      for (const mateId of this.partyMateIds(fighterId)) {
+        if (taken.has(mateId) || !near(byId.get(mateId)) || !online(mateId)) continue;
+        taken.add(mateId);
+        result.group.push(mateId);
+      }
+    }
+    for (const [playerId, state] of byId) {
+      if (taken.has(playerId) || !near(state) || !online(playerId)) continue;
+      taken.add(playerId);
+      result.nearby.push(playerId);
+    }
+    return result;
+  }
+
+  partyMateIds(playerId) {
+    return this.db.prepare(`
+      SELECT other.player_id FROM party_members me
+      JOIN parties p ON p.id = me.party_id AND p.disbanded_at IS NULL
+      JOIN party_members other ON other.party_id = me.party_id AND other.left_at IS NULL AND other.player_id <> me.player_id
+      WHERE me.player_id = ? AND me.left_at IS NULL
+    `).all(playerId).map((row) => row.player_id);
+  }
+
+  // Seintje naar de game: haal je queststand nu op. Na de transactie (setTimeout), anders zie je nog de oude stand.
+  pingQuest(playerIds) {
+    const ids = (playerIds || []).filter(Boolean);
+    if (!ids.length || typeof this.mmoService?.sendToPlayer !== "function") return;
+    setTimeout(() => {
+      for (const id of ids) { try { this.mmoService.sendToPlayer(id, { type: "quest:refresh" }); } catch {} }
+    }, 30);
+  }
+
+  // via: fighter (deed zelf mee), group (groepsgenoot in de buurt), nearby (iemand anders in de buurt).
+  // Geeft de spelers terug wier teller veranderde (voor het seintje).
+  applyQuestEvent(ctx, event, teamTaken = new Set(), via = "fighter") {
+    const changed = [];
     const refId = safeString(event?.refId);
     const key = safeString(event?.eventKey);
-    if (!EVENT_OBJECTIVES.has(event?.type) || !refId || !key) return;
+    if (!EVENT_OBJECTIVES.has(event?.type) || !refId || !key) return changed;
     for (const row of this.loadQuestStateRows(ctx)) {
       if (!isOpenStatus(row.status)) continue;
       const quest = this.questDefinition(ctx, row.quest_id, row);
       const step = stepById(quest, row.active_step_id);
       if (!step || step.kind === "end") continue;
       const matching = (Array.isArray(step.objectives) ? step.objectives : []).filter(function (objective) {
-        return objective.objectiveType === event.type && objectiveEventRef(objective) === refId;
+        return objective.objectiveType === event.type && objectiveEventRef(objective) === refId && objectiveCredits(objective, via);
       });
       if (!matching.length) continue;
       this.atomic(() => {
@@ -655,15 +734,97 @@ export class Node04QuestRuntimeService {
             if (teamTaken.has(teamKey)) continue;
             teamTaken.add(teamKey);
             if (before >= required * team.ids.length) continue;
+            // Regel "Wachten": alleen telt een team-doel niet.
+            if (quest.partyLeave === "wait" && team.ids.length < 2) continue;
             this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveIdOf(objective), before + 1, required, false);
+            changed.push(...team.ids);
             continue;
           }
           if (before >= required) continue;
           this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveIdOf(objective), before + 1, required);
+          changed.push(ctx.profile.id);
         }
         this.advanceQuest(ctx, quest, row, event.operationId || null);
       });
     }
+    return changed;
+  }
+
+  // Groep verlaten (of eruit gezet), vóórdat het in de database staat. Regel "Quest mislukt": quests waarvan
+  // je nu met een teamgenoot aan een Team samen-doel werkt, mislukken voor jou. Er wordt niets gekopieerd.
+  onPartyLeaving(ctx, playerId) {
+    const pctx = Object.assign({}, ctx, { profile: { id: playerId }, position: null });
+    const failed = [];
+    for (const row of this.loadQuestStateRows(pctx)) {
+      if (!isOpenStatus(row.status)) continue;
+      const quest = this.questDefinition(pctx, row.quest_id, row);
+      if (quest?.partyLeave !== "fail") continue;
+      const step = stepById(quest, row.active_step_id);
+      if (!step || !(step.objectives || []).some(objectiveIsTeam)) continue;
+      if (this.teamMembers(playerId, quest.id, quest.version, step.id).ids.length < 2) continue;
+      // Een fout in een quest mag groep verlaten nooit tegenhouden.
+      try {
+        this.atomic(() => this.abandonQuest(pctx, quest.id, null, "party_left_fail"));
+        failed.push(quest.displayName || quest.id);
+      } catch (error) {
+        console.warn("[quest] groep verlaten niet verwerkt:", error?.message || error);
+      }
+    }
+    if (failed.length) {
+      const text = "Quest mislukt: " + failed.join(", ") + " (je verliet de groep). Je kunt hem opnieuw aannemen bij de NPC.";
+      try { this.mmoService?.partyRuntime?.notice([playerId], text); } catch {}
+      this.pingQuest([playerId]);
+    }
+    return failed;
+  }
+
+  // Quest delen met je groep: elk groepslid dat hem nu kan aannemen krijgt een aanbod (Aannemen / Nee).
+  shareQuest(ctx, questId) {
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    const quest = questById(ctx.project, questId);
+    if (!quest || !row || !isOpenStatus(row.status)) throw httpError(400, "Je kunt alleen een quest delen die je zelf doet.");
+    const mates = this.partyMateIds(ctx.profile.id);
+    if (!mates.length) throw httpError(400, "Je zit niet in een groep.");
+    const fromName = this.db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(ctx.profile.id)?.display_name || "Iemand";
+    const until = Date.now() + SHARE_OFFER_MS;
+    const offered = [];
+    for (const mateId of mates) {
+      const mctx = Object.assign({}, ctx, { profile: { id: mateId }, position: null });
+      if (!this.canTakeQuest(mctx, quest)) continue;
+      if (!this.shareOffers.has(mateId)) this.shareOffers.set(mateId, new Map());
+      this.shareOffers.get(mateId).set(quest.id, { fromId: ctx.profile.id, fromName, until });
+      offered.push(mateId);
+    }
+    if (!offered.length) return { message: "Niemand in je groep kan deze quest nu aannemen.", events: [] };
+    try { this.mmoService?.partyRuntime?.notice(offered, fromName + " deelt de quest \"" + (quest.displayName || quest.id) + "\". Kijk in je questboek."); } catch {}
+    this.pingQuest(offered);
+    return { message: "Gedeeld met " + offered.length + (offered.length === 1 ? " groepslid." : " groepsleden."), events: [{ type: "quest_shared", questId: quest.id }] };
+  }
+
+  canTakeQuest(ctx, quest) {
+    const row = this.loadQuestState(ctx.profile.id, quest.id);
+    if (row && isOpenStatus(row.status)) return false;
+    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) return false;
+    return this.questPrerequisitesMet(ctx, normalizeQuest(quest));
+  }
+
+  shareOffersFor(playerId, nowMs = Date.now()) {
+    const offers = this.shareOffers.get(playerId);
+    if (!offers) return [];
+    for (const [questId, offer] of offers) if (offer.until <= nowMs) offers.delete(questId);
+    if (!offers.size) this.shareOffers.delete(playerId);
+    return Array.from(offers.entries()).map(([questId, offer]) => ({ questId, fromName: offer.fromName, leftMs: offer.until - nowMs }));
+  }
+
+  acceptSharedQuest(ctx, questId, operationId) {
+    if (!this.shareOffersFor(ctx.profile.id).some((offer) => offer.questId === questId)) throw httpError(400, "Dit aanbod is verlopen. Vraag of ze de quest nog eens delen.");
+    this.shareOffers.get(ctx.profile.id)?.delete(questId);
+    return this.acceptQuest(ctx, questId, operationId, "shared");
+  }
+
+  declineSharedQuest(ctx, questId) {
+    this.shareOffers.get(ctx.profile.id)?.delete(questId);
+    return { message: "Aanbod geweigerd.", events: [] };
   }
 
   updateQuestState(ctx, questId, status, activeStepId, fromStatus, fromStepId, reason, extra = {}) {
@@ -746,13 +907,13 @@ export class Node04QuestRuntimeService {
   }
 
   // Verlaten: de run stopt en de voortgang gaat weg. Opnieuw aannemen = nieuwe run op de nieuwste versie.
-  abandonQuest(ctx, questId, operationId) {
+  abandonQuest(ctx, questId, operationId, reason = "abandon") {
     const quest = questById(ctx.project, questId);
     const row = this.loadQuestState(ctx.profile.id, questId);
     if (!quest || !row || !isOpenStatus(row.status) || quest.abandonable === false) throw httpError(400, "Deze quest kan niet verlaten worden.");
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
     this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
-    this.updateQuestState(ctx, quest.id, QUEST_STATUS.ABANDONED, row.active_step_id, row.status, row.active_step_id, "abandon", { operationId });
+    this.updateQuestState(ctx, quest.id, QUEST_STATUS.ABANDONED, row.active_step_id, row.status, row.active_step_id, reason, { operationId });
     return { message: "Quest verlaten. Je kunt hem opnieuw aannemen bij de NPC.", events: [{ type: "quest_abandoned", questId: quest.id }] };
   }
 
@@ -1148,7 +1309,7 @@ export class Node04QuestRuntimeService {
 
   evaluateStepProgress(ctx, quest, step) {
     const stored = this.loadObjectiveProgress(ctx.profile.id, quest?.id, step?.id);
-    const scope = { questId: quest?.id, version: quest?.version, stepId: step?.id };
+    const scope = { questId: quest?.id, version: quest?.version, stepId: step?.id, waitAlone: quest?.partyLeave === "wait" };
     const objectives = (Array.isArray(step?.objectives) ? step.objectives : []).map((objective) => this.evaluateObjective(ctx, objective, stored.get(objectiveIdOf(objective)), scope));
     const conditions = this.evaluateConditions(ctx, step?.conditions || []);
     const needed = objectives.filter(function (objective) { return objective.needed; });
@@ -1201,10 +1362,12 @@ export class Node04QuestRuntimeService {
       }, 0);
       const perMember = required;
       required = perMember * team.ids.length;
-      complete = storedDone || sum >= required;
-      current = complete ? required : sum;
-      extra.team = { size: team.ids.length, mine: safeInteger(stored?.current_value, 0), perMember, memberIds: team.ids };
-      extra.teamReachedNow = !storedDone && sum >= required;
+      // Regel "Wachten": alleen (geen teamgenoot met deze stap) telt en sluit het team-doel niet.
+      const waiting = scope.waitAlone === true && team.ids.length < 2 && !storedDone;
+      complete = storedDone || (!waiting && sum >= required);
+      current = complete ? required : Math.min(sum, required);
+      extra.team = { size: team.ids.length, mine: safeInteger(stored?.current_value, 0), perMember, memberIds: team.ids, waiting };
+      extra.teamReachedNow = !storedDone && !waiting && sum >= required;
     } else if (EVENT_OBJECTIVES.has(type)) {
       current = Math.min(safeInteger(stored?.current_value, 0), required);
       complete = current >= required;
@@ -1286,6 +1449,11 @@ export class Node04QuestRuntimeService {
       trackedQuest,
       questTargets,
       questGivers: this.buildQuestGivers(ctx, questSummaries),
+      // Stap 2: quests die een groepslid met je deelde (Aannemen / Nee in het questboek).
+      questShares: this.shareOffersFor(ctx.profile.id).map((offer) => {
+        const quest = questById(ctx.project, offer.questId);
+        return quest ? Object.assign({ displayName: quest.displayName || quest.id }, offer) : null;
+      }).filter(Boolean),
       dialogueTargets: this.buildDialogueTargets(ctx),
       notifications: this.loadNotifications(ctx),
       node03,
@@ -1308,7 +1476,7 @@ export class Node04QuestRuntimeService {
     // Teamleden-ID's blijven op de server; de speler ziet alleen hoe groot het team is en zijn eigen bijdrage.
     const objectives = (progress?.objectives || []).filter(function (objective) { return !objective.hidden; }).map(function (objective) {
       if (!objective.team) return objective;
-      return Object.assign({}, objective, { team: { size: objective.team.size, mine: objective.team.mine, perMember: objective.team.perMember } });
+      return Object.assign({}, objective, { team: { size: objective.team.size, mine: objective.team.mine, perMember: objective.team.perMember, waiting: objective.team.waiting === true } });
     });
     const openNeeded = objectives.filter(function (objective) { return objective.needed && !objective.complete; });
     const inRange = (objective) => this.objectiveInRange(ctx, objective, 1.5, true);

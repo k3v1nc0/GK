@@ -32,11 +32,25 @@ export const OBJECTIVE_SHARES = Object.freeze({
   personal: Object.freeze({ icon: "🧍", label: "Ieder voor zich" }),
   team: Object.freeze({ icon: "👥", label: "Team samen" })
 });
+// Versla, Ieder voor zich: voor wie telt een kill. Standaard: wie meevocht plus de groep in de buurt.
+export const OBJECTIVE_CREDITS = Object.freeze({
+  group: Object.freeze({ icon: "👥", label: "Wie meevocht + groep in de buurt" }),
+  fighters: Object.freeze({ icon: "⚔️", label: "Alleen wie meevocht" }),
+  nearby: Object.freeze({ icon: "🌍", label: "Iedereen in de buurt met deze stap" })
+});
+// Hoe ver "in de buurt" is (meters), voor kills die meetellen voor de groep of voor iedereen.
+export const QUEST_NEARBY_M = 50;
+// Per quest: wat gebeurt er als je de groep verlaat (alleen bij Team samen-doelen). Niets wordt gekopieerd.
+export const PARTY_LEAVE_RULES = Object.freeze({
+  keep: Object.freeze({ icon: "🎒", label: "Meenemen: alleen verder" }),
+  wait: Object.freeze({ icon: "⏸️", label: "Wachten tot je weer in een groep zit" }),
+  fail: Object.freeze({ icon: "❌", label: "Quest mislukt" })
+});
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
 const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit"]);
 const NEXT_KEYS = new Set(["to"]);
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -128,6 +142,7 @@ export function questStepsShapeIssues(value) {
       }
       if (objective.role !== undefined && objective.role !== null && !OBJECTIVE_ROLES[objective.role]) issues.push(at + ": ongeldige rol.");
       if (objective.share !== undefined && objective.share !== null && !OBJECTIVE_SHARES[objective.share]) issues.push(at + ": ongeldige keuze bij Voor wie.");
+      if (objective.credit !== undefined && objective.credit !== null && !OBJECTIVE_CREDITS[objective.credit]) issues.push(at + ": ongeldige keuze bij Telt voor.");
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
@@ -135,7 +150,7 @@ export function questStepsShapeIssues(value) {
 
 // De quest-check: alles wat de quest onspeelbaar maakt. refExists(ref) -> bestaat die kaart (niet gearchiveerd)?
 // Elke melding: { stepId, objectiveId, message }. Dezelfde meldingen in de Quest Builder en bij SAVE TO GAME.
-export function questGraphIssues(steps, { refExists = () => true, refLabel = (ref) => ref } = {}) {
+export function questGraphIssues(steps, { refExists = () => true, refLabel = (ref) => ref, partyLeave = null } = {}) {
   const issues = [];
   const add = (stepId, objectiveId, message) => issues.push({ stepId: stepId || null, objectiveId: objectiveId || null, message });
   const list = Array.isArray(steps) ? steps.filter(isObject) : [];
@@ -158,6 +173,7 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
       const spec = OBJECTIVE_KINDS[objective.type];
       if (!spec) continue;
       if (objective.share === "team" && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Team samen kan alleen bij Versla, Verzamel en Pak op.");
+      if (objective.credit && objective.type !== "defeat") add(step.stepId, objective.objectiveId, spec.label + ": Telt voor kan alleen bij Versla.");
       if (!objective.ref) add(step.stepId, objective.objectiveId, spec.label + ": kies wat (sleep een kaart op het vak).");
       else if (!refExists(objective.ref)) add(step.stepId, objective.objectiveId, refLabel(objective.ref) + " bestaat niet (meer) of is gearchiveerd.");
       if (spec.npc) {
@@ -166,6 +182,9 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
       }
     }
   }
+  // Een regel voor groep verlaten zonder Team samen-doel doet niets: zeg het, dan schrikt niemand.
+  const hasTeam = list.some((step) => Array.isArray(step.objectives) && step.objectives.some((objective) => isObject(objective) && objective.share === "team"));
+  if (partyLeave && partyLeave !== "keep" && !hasTeam) add(null, null, "Bij groep verlaten doet niets: deze quest heeft geen doel met Team samen.");
   // Bereikbaar vanaf het begin, en vanaf elke bereikbare stap moet een einde te halen zijn.
   const nextOf = (step) => (step.kind === "step" && Array.isArray(step.next) ? step.next.map((link) => link?.to).filter((id) => byId.has(id)) : []);
   const reached = new Set([list[0].stepId]);

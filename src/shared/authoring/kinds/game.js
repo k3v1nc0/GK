@@ -130,6 +130,11 @@ export const GAME_KINDS = {
         help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { more: true, hideWhen: "steps" }),
       previousQuestRef: refField("Pas na quest", "⛓️", "quest", false,
         help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { more: true }),
+      // Quest Builder stap 2: wat er gebeurt als je de groep verlaat (alleen bij Team samen-doelen).
+      partyLeave: { type: "select", required: false, options: ["keep", "wait", "fail"], optionIcons: { keep: "🎒", wait: "⏸️", fail: "❌" },
+        optionLabels: { keep: "Meenemen: alleen verder", wait: "Wachten tot je weer in een groep zit", fail: "Quest mislukt" }, audience: "client", label: "Bij groep verlaten",
+        ui: ui("🚪", "select", "werkbank", { more: true }), default: "keep",
+        help: help("Wat er met Team samen-doelen gebeurt als iemand de groep verlaat. Je eigen bijdrage blijft altijd; er worden nooit vijanden of NPC's gekopieerd.", "Meenemen voor zijquests, Wachten voor groepsquests en bosses.", "Spelers verlaten de groep om sneller klaar te zijn → kies Wachten.") },
       repeatable: toggle("Herhaalbaar", "🔁", false, "werkbank",
         help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit."), { more: true })
     }
