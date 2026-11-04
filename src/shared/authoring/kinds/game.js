@@ -35,6 +35,9 @@ const clipField = (label, icon) => ({ type: "text", required: false, maxLength: 
   ui: ui(icon, "select", "werkbank", { optionsFrom: "clips:modelAssetId", more: true }), default: null,
   help: help("Welke animatie uit het model speelt als hij stilstaat.", "Kies uit de lijst; die komt uit het model dat je erop sleepte.", "Staat stijf → kies een andere animatie of controleer of het model animaties heeft.") });
 
+const CLASS_HEAL_GROUP = "💚 Terugkrijgen en genezen";
+export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
+
 export const QUEST_GOALS = Object.freeze(["deliver", "visit"]);
 
 export const GAME_KINDS = {
@@ -170,8 +173,13 @@ export const GAME_KINDS = {
         ui: ui("⭕", "slider", "werkbank", { step: 0.1, unit: "m", range: [0.1, 10], more: true }), default: 1,
         help: help("Hoe groot het stuk is waar je niet doorheen kunt.", "Ongeveer de halve breedte van het model.", "Je botst al ver ervoor → kleiner.") },
       idleClip: clipField("Animatie", "🎞️"),
+      // Brug-stand (31-10): met deze schakelaar zet de editor Hoogte zelf, zodat de onderkant op het hoogste grondpunt eronder ligt.
+      restOnHighest: toggle("Op hoogste grond eronder", "🌉", false, "werkbank",
+        help("Legt de onderkant van het model op het hoogste stuk grond eronder, dus bij een brug op de oevers.",
+          "Aan voor een brug over een rivier of een plank over een kuil. Na verplaatsen (G), draaien of groter maken zoekt hij opnieuw.",
+          "Wil je Hoogte zelf bijstellen → zet dit uit; het model blijft liggen waar het lag.")),
       x: pos("X", "↔️"),
-      y: height,
+      y: Object.assign({}, height, { ui: ui("↕️", "slider", "werkbank", { step: 0.1, unit: "m", range: [-20, 20] }) }),
       z: pos("Z", "↕️")
     }
   },
@@ -206,12 +214,48 @@ export const GAME_KINDS = {
         help("Hoeveel schade deze klasse tegenhoudt zonder uitrusting.", "Tank 10, de rest 0.", "Te sterk → lager.")),
       healPower: int("Heal-kracht", "💚", 5, 0, 1000000, "instellingen", { range: [0, 200] },
         help("Hoe goed deze klasse kan genezen (telt op bij een heal).", "5 voor de meeste klassen, 10 voor de Healer.", "Healer geneest te weinig → hoger.")),
+      // Healing (2-11): vanzelf levens en mana terugkrijgen (buiten gevecht) en een genees-spreuk, in een uitklapblok.
+      healthRegenBp: int("Levens terug", "❤️", 100, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
+        help("Hoeveel procent van je levens je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "0,5-2 %/s. Bij 1 %/s ben je in 100 seconden weer vol.", "Spelers moeten te lang wachten → hoger. Gevechten voelen zonder risico → lager.")),
+      manaRegenBp: int("Mana terug", "🔵", 200, 0, 10000, "instellingen", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: CLASS_HEAL_GROUP },
+        help("Hoeveel procent van je mana je per seconde vanzelf terugkrijgt, buiten een gevecht. 0 % = niets.", "1-3 %/s; meer voor de Healer.", "Mana is te lang op → hoger.")),
+      healAbilityRef: { type: "ref", refKind: "ability", required: false, audience: "client", label: "Genees-spreuk",
+        ui: ui("✨", "ref", "instellingen", { group: CLASS_HEAL_GROUP }), default: null,
+        help: help("De spreuk waarmee deze klasse geneest: jezelf of de meest gewonde speler in de buurt. Komt als 💚-knop (toets 2) in de game.", "Sleep een aanval met soort Genezen uit de Bibliotheek hierop; meestal alleen voor de Healer.", "Geen 💚-knop in de game → zet hier een spreuk op en kies bij de spreuk soort Genezen.") },
+      manaMax: int("Mana", "🔵", 50, 0, 1000000, "instellingen", { range: [0, 1000], more: true },
+        help("Hoeveel mana deze klasse heeft (blauwe balk onder de levens).", "Healer 100, DPS 50, Tank 30. 0 = geen manabalk.", "Spreuken raken te snel op → hoger.")),
       startItems: refList("Start-spullen", "🎒", ["item_definition", "currency"], [AMOUNT], "instellingen",
         help("Wat een nieuw character van deze klasse één keer krijgt (onder ⚙️ meer).", "Bijv. een zwaard voor de DPS en een schild voor de Tank. Uitrusting wordt meteen aangedaan.", "Character krijgt niets → kies hier iets. Bestaande characters krijgen het niet nog eens."),
         { ui: ui("🎒", "refList", "instellingen", { more: true }) }),
       models: { type: "assetList", assetType: "model", required: false, minItems: 0, maxItems: 40, maxLength: 160, audience: "client", label: "Uiterlijk",
         ui: ui("🧍", "assetList", "instellingen"), default: [],
         help: help("De modellen waaruit een speler van deze klasse zijn uiterlijk kiest.", "Sleep modellen uit de Bibliotheek hierop, bijv. 10 tovenaars voor DPS, elfen voor Healer, dwergen voor Tank. De eerste is de standaard.", "Speler ziet er standaard uit → sleep hier minstens één model op.") }
+    }
+  },
+  // Healing (2-11): de regels voor regeneratie, effecten, doodgaan en level omhoog. Gelden voor alle klassen.
+  combat_settings: {
+    label: "Genezen en effecten",
+    icon: "💚",
+    place: "instellingen",
+    singleton: true,
+    domain: "project",
+    fields: {
+      regenDelayS: int("Terugkrijgen start na", "⏱️", 5, 0, 600, "instellingen", { range: [0, 60], unit: "s" },
+        help("Hoeveel seconden na de laatste klap (geven of krijgen) je vanzelf levens en mana terugkrijgt. Effecten van eten en drinken werken altijd, ook in een gevecht.", "3-10 seconden.", "Tank is onsterfelijk door regeneratie → langer.")),
+      effectStacking: { type: "select", required: false, options: ["refresh", "extend", "block"], optionIcons: { refresh: "🔄", extend: "➕", block: "⛔" },
+        optionLabels: STACKING_LABELS, audience: "client", label: "Twee keer hetzelfde",
+        ui: ui("🥪", "select", "instellingen"), default: "refresh",
+        help: help("Wat gebeurt er als je hetzelfde broodje (of hetzelfde gif) nog eens krijgt terwijl het effect nog werkt?", "Opnieuw beginnen: de tijd begint opnieuw. Tijd erbij: de tijd telt op. Niet nog eens: kan pas als het op is (het item blijft dan in je tas).", "Spelers eten 10 broodjes voor 50 minuten kracht → kies Opnieuw beginnen of Niet nog eens.") },
+      maxEffects: int("Effecten tegelijk", "🔢", 8, 1, 30, "instellingen", { range: [1, 16], more: true },
+        help("Hoeveel effecten een speler tegelijk mag hebben.", "6 tot 10 effecten.", "Spelers stapelen te veel → lager.")),
+      clearBuffsOnDeath: toggle("Goede effecten weg bij doodgaan", "💀", true, "instellingen",
+        help("Gaan eten- en drankeffecten weg als je doodgaat? Slechte effecten (gif, bloeden) gaan altijd weg.", "Aan: doodgaan kost iets. Uit: lange effecten (5 uur) blijven.", "Spelers balen van een verloren drankje van 5 uur → zet dit uit.")),
+      respawnHealthPct: int("Levens na respawn", "❤️", 100, 1, 100, "instellingen", { unit: "%" },
+        help("Met hoeveel procent van je levens je terugkomt na doodgaan.", "50-100 %.", "Je gaat na respawn meteen weer dood → hoger.")),
+      respawnManaPct: int("Mana na respawn", "🔵", 100, 0, 100, "instellingen", { unit: "%" },
+        help("Met hoeveel procent van je mana je terugkomt na doodgaan.", "50-100 %.", "Healer kan na respawn niets → hoger.")),
+      levelUpRestore: toggle("Level omhoog = vol", "⭐", true, "instellingen",
+        help("Krijg je volle levens en mana als je een level omhoog gaat?", "Meestal aan: dat voelt als een beloning.", "Spelers misbruiken het midden in een gevecht → zet dit uit."))
     }
   },
   hud_settings: {
@@ -221,15 +265,25 @@ export const GAME_KINDS = {
     singleton: true,
     domain: "project",
     fields: {
-      showHealth: toggle("Levensbalk", "❤️", true, "instellingen", help("Toont de levens van de speler bovenin.", "Meestal aan.", "Spelers zien niet dat ze doodgaan → zet aan.")),
-      showXp: toggle("XP-balk", "⭐", true, "instellingen", help("Toont level en ervaring onderin.", "Aan als je levels gebruikt.", "Scherm te vol → zet uit.")),
-      showHotbar: toggle("Actiebalk", "🎛️", true, "instellingen", help("De balk met aanvallen en knoppen onderin.", "Aan als spelers aanvallen hebben.", "Lege balk → zet uit.")),
-      showBag: toggle("Tas", "🎒", true, "instellingen", help("Het venster met wat de speler bij zich heeft (met de knop Uitrusten).", "Meestal aan.", "Spelers vinden hun spullen niet → zet aan.")),
-      showEquipment: toggle("Uitrusting", "🧥", true, "instellingen", help("Het venster met wat de speler draagt.", "Aan als je wapens of kleding hebt.", "Scherm te vol → zet uit.")),
-      showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Toont hoeveel geld (valuta) de speler heeft.", "Aan als je een winkel hebt.", "Scherm te vol → zet uit.")),
-      showQuests: toggle("Quests", "📜", true, "instellingen", help("Quest-lijst, praten met NPC's en meldingen.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
-      showInteractions: toggle("Dingen in de buurt", "👆", true, "instellingen", help("Lijst met vijanden, grondstoffen en pickups in de buurt, met knoppen.", "Aan; handig op een laptop zonder muis.", "Scherm te vol → zet uit."), { more: true }),
-      showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("De vensters voor kopen, verkopen en maken bij een NPC.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true })
+      showHealth: toggle("Levensbalk", "❤️", true, "instellingen", help("Toont de levens linksboven, naast het portret.", "Meestal aan.", "Spelers zien niet dat ze doodgaan → zet aan.")),
+      showXp: toggle("XP-balk", "⭐", true, "instellingen", help("Toont het level bij het portret en een dun XP-lijntje onder de levens.", "Aan als je levels gebruikt.", "Scherm te vol → zet uit.")),
+      showHotbar: toggle("Actiebalk", "🎛️", true, "instellingen", help("De ronde knoppen onderin: de aanval van je klasse en 🤝 doen.", "Aan als spelers aanvallen hebben.", "Spelers kunnen niet aanvallen met een tik → zet aan.")),
+      showBag: toggle("Tas", "🎒", true, "instellingen", help("Het tabblad 🎒 Tas in het paneel, met Uitrusten, Gebruiken en Weggooien.", "Meestal aan.", "Spelers vinden hun spullen niet → zet aan.")),
+      showEquipment: toggle("Uitrusting", "🧥", true, "instellingen", help("Het tabblad ⛑️ Uitrusting: wat de speler draagt, met Uitdoen.", "Aan als je wapens of kleding hebt.", "Geen wapens of kleding in je game → zet uit.")),
+      showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Het tabblad 🪙 Geld: hoeveel van elke valuta de speler heeft.", "Aan als je een winkel hebt.", "Geen geld in je game → zet uit.")),
+      showQuests: toggle("Quests", "📜", true, "instellingen", help("Het tabblad 📜 Quests, de quest-regel bij het portret en praten met NPC's.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
+      showInteractions: toggle("Doen-knop", "🤝", true, "instellingen", help("De knop 🤝 onderin: praten, oppakken of verzamelen bij wat het dichtstbij is.", "Aan; handig op een telefoon of laptop zonder muis.", "Spelers moeten precies op kleine dingen tikken → zet aan."), { more: true }),
+      showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("Kopen, verkopen en maken bij een NPC: het paneel splitst dan in waren en je tas.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true }),
+      fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
+      fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
+        help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
+      fogDarkness: int("Donkerte van de mist", "🌑", 100, 0, 100, "instellingen", { range: [0, 100], more: true },
+        help("Hoe donker de mist op de kaart is, in procent. 100 = helemaal dicht, je ziet er niets doorheen.", "90 tot 100.", "Je ziet de kaart door de mist heen → hoger.")),
+      // Healing (2-11): effect-icoontjes bij het portret en kleine zwevende getallen (spelers kunnen ze in de game zelf uitzetten).
+      showEffects: toggle("Effecten", "✨", true, "instellingen", help("Toont de icoontjes van actieve effecten (eten, drankjes, gif) bij het portret, met hoe lang nog.", "Meestal aan.", "Spelers weten niet dat hun broodje nog werkt → zet dit aan."), { more: true }),
+      showFloatNumbers: toggle("Zwevende getallen", "🔢", true, "instellingen", help("Kleine getallen boven spelers en vijanden: rood schade, groen genezen, blauw mana. Spelers kunnen ze in de game zelf uitzetten (Instellingen).", "Meestal aan.", "Te druk in beeld → zet dit uit."), { more: true }),
+      fogFadeMeters: int("Zachte rand van de mist", "🌗", 8, 0, 64, "instellingen", { range: [0, 32], more: true },
+        help("Hoe breed de zachte overgang aan de rand van de mist is, in meters. 0 = een harde rand.", "4 tot 16 m.", "Je ziet te veel door de rand heen → lager. De rand is te hoekig → hoger."))
     }
   }
 };

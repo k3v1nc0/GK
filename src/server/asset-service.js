@@ -6,6 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { cleanValuesForType } from "./field-validation.js";
 import { NODE_TYPES, defaultValuesForType } from "../shared/node-types.js";
+import { decodeTerrainChunk, parseTerrainChunkKey, TERRAIN_CHUNK_BYTES, TERRAIN_CHUNK_SHA_PATTERN, TERRAIN_PAINT_VERTS } from "../../apps/web/public/shared/terrain.js";
 
 const now = function () {
   return new Date().toISOString();
@@ -69,6 +70,15 @@ function assetSlugForName(name) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+const MINIMAP_TILE_KEY = /^(\d{1,2}):(-?\d{1,6}):(-?\d{1,6})$/;
+const MINIMAP_TILE_NAME = /^[0-9a-f]{40}\.(webp|png)$/;
+
+function minimapError(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
 }
 
 function assetPathForStem(assetsDir, baseDirName, stem, ext) {
@@ -663,6 +673,168 @@ export class AssetService {
       bakedBounds: bakedBounds,
       graph: updatedGraph
     };
+  }
+
+  // Stap 4 (HUD): de kaart van de wereld als tegels (puzzelstukjes) in lagen; laag 0 is het scherpst, elke laag
+  // erboven heeft tegels die twee keer zo groot zijn (voor uitzoomen). De editor maakt ze met de knop BAKE.
+  // Een tegel heet naar zijn vingerafdruk (sha1): een tegel die niet veranderd is, wordt niet opnieuw bewaard
+  // en de browser hoeft hem niet opnieuw te laden. Upload: /api/editor/world-minimap-tiles (+ /commit);
+  // de game leest de lijst via /api/game/minimap.
+  saveMinimapTiles(files) {
+    const entries = Object.entries(files || {});
+    if (!entries.length) throw minimapError("Er zitten geen tegels in de upload.");
+    const dir = path.join(this.assetsDir, "minimap-tiles");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = {};
+    for (const [key, file] of entries) {
+      if (!MINIMAP_TILE_KEY.test(key)) throw minimapError("Onbekende tegel: " + key.slice(0, 40) + ".");
+      const data = file?.data;
+      if (!data?.length || data.length > 4 * 1024 * 1024) throw minimapError("Tegel " + key + " is leeg of groter dan 4MB.");
+      const ext = isWebp(data) ? ".webp" : (isPng(data) ? ".png" : null);
+      if (!ext) throw minimapError("Tegel " + key + " moet WEBP of PNG zijn.");
+      const name = crypto.createHash("sha1").update(data).digest("hex") + ext;
+      const target = path.join(dir, name);
+      if (!fs.existsSync(target)) fs.writeFileSync(target, data);
+      saved[key] = name;
+    }
+    return saved;
+  }
+
+  // Maakt de nieuwe tegels in één keer actief en ruimt tegels op die niet meer gebruikt worden (en de oude foto).
+  commitMinimapTiles(input) {
+    const tilePx = Math.round(Number(input?.tilePx));
+    const baseMeters = Number(input?.baseMeters);
+    const levels = Math.round(Number(input?.levels));
+    if (!(tilePx >= 64 && tilePx <= 2048)) throw minimapError("Tegelgrootte (tilePx) moet tussen 64 en 2048 liggen.");
+    if (!(baseMeters >= 1 && baseMeters <= 4096)) throw minimapError("Meters per tegel (baseMeters) moet tussen 1 en 4096 liggen.");
+    if (!(levels >= 1 && levels <= 10)) throw minimapError("Aantal lagen moet tussen 1 en 10 liggen.");
+    const bounds = input?.bounds && typeof input.bounds === "object" ? input.bounds : null;
+    const keys = ["minX", "maxX", "minZ", "maxZ"];
+    if (!bounds || keys.some(function (key) { return !Number.isFinite(Number(bounds[key])); }) || Number(bounds.maxX) <= Number(bounds.minX) || Number(bounds.maxZ) <= Number(bounds.minZ)) {
+      throw minimapError("De kaart mist geldige grenzen.");
+    }
+    const dir = path.join(this.assetsDir, "minimap-tiles");
+    const tiles = {};
+    const list = Object.entries(input?.tiles && typeof input.tiles === "object" ? input.tiles : {});
+    if (!list.length || list.length > 50000) throw minimapError("De kaart heeft geen of te veel tegels.");
+    for (const [key, name] of list) {
+      const match = MINIMAP_TILE_KEY.exec(key);
+      if (!match || Number(match[1]) >= levels) throw minimapError("Onbekende tegel: " + String(key).slice(0, 40) + ".");
+      if (!MINIMAP_TILE_NAME.test(String(name)) || !fs.existsSync(path.join(dir, String(name)))) throw minimapError("Tegel " + key + " is niet geüpload.");
+      tiles[key] = String(name);
+    }
+    const manifest = {
+      version: 1,
+      baseUrl: "/assets/minimap-tiles/",
+      tilePx,
+      baseMeters,
+      levels,
+      bounds: { minX: Number(bounds.minX), maxX: Number(bounds.maxX), minZ: Number(bounds.minZ), maxZ: Number(bounds.maxZ) },
+      tiles,
+      buildId: String(input.buildId || "").slice(0, 120) || null,
+      // Vingerafdruk van de wereld (grond, terrein, water, modellen) toen de kaart gebakken werd; zo ziet de editor
+      // na SAVE TO GAME of de kaart verouderd is. De server vult hem in, niet de browser.
+      mapHash: /^[0-9a-f]{40}$/.test(String(input.mapHash || "")) ? String(input.mapHash) : null,
+      bakedAt: now()
+    };
+    const file = path.join(dir, "manifest.json");
+    fs.writeFileSync(file + ".tmp", JSON.stringify(manifest));
+    fs.renameSync(file + ".tmp", file);
+    const used = new Set(Object.values(tiles));
+    let removed = 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (MINIMAP_TILE_NAME.test(name) && !used.has(name)) {
+        try { fs.unlinkSync(path.join(dir, name)); removed += 1; } catch {}
+      }
+    }
+    // De oude losse foto (ronde 3) is vervangen door de tegels.
+    const oldDir = path.join(this.assetsDir, "minimap-bakes");
+    if (fs.existsSync(oldDir)) {
+      for (const name of fs.readdirSync(oldDir)) {
+        if (/^world-\d+\.(webp|png)$/.test(name) || name === "world-minimap.json") {
+          try { fs.unlinkSync(path.join(oldDir, name)); } catch {}
+        }
+      }
+    }
+    return { tiles: list.length, unique: used.size, removed, levels, bakedAt: manifest.bakedAt };
+  }
+
+  // Wereld tekenen (ronde 1): de hoogte van de grond in vakken van 64 x 64 m (8450 bytes per vak). Net als de
+  // kaarttegels heet elk vak naar zijn vingerafdruk (sha1): wat niet veranderd is, wordt niet opnieuw bewaard.
+  // Oude vakken blijven staan (een oudere build kan ze nog gebruiken). Upload: /api/editor/terrain-chunks.
+  saveTerrainChunks(files) {
+    const entries = Object.entries(files || {});
+    if (!entries.length) throw minimapError("Er zitten geen terreinvakken in de upload.");
+    if (entries.length > 4096) throw minimapError("Te veel terreinvakken in één upload.");
+    const dir = path.join(this.assetsDir, "terrain");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = {};
+    for (const [key, file] of entries) {
+      if (!parseTerrainChunkKey(key)) throw minimapError("Onbekend terreinvak: " + String(key).slice(0, 40) + ".");
+      const data = file?.data;
+      if (!data || data.length !== TERRAIN_CHUNK_BYTES) throw minimapError("Terreinvak " + key + " heeft niet de goede grootte.");
+      const sha1 = crypto.createHash("sha1").update(data).digest("hex");
+      const target = path.join(dir, sha1 + ".bin");
+      if (!fs.existsSync(target)) {
+        fs.writeFileSync(target + ".tmp", data);
+        fs.renameSync(target + ".tmp", target);
+      }
+      saved[key] = sha1;
+    }
+    return saved;
+  }
+
+  // Ronde 2: de verf van de grond per vak, als PNG (RGB, 129 x 129, 8-bit). Ook naar vingerafdruk (sha1).
+  // De server leest de verf niet (lopen hangt er niet van af); hij controleert alleen dat het zo'n plaatje is.
+  saveTerrainPaint(files) {
+    const entries = Object.entries(files || {});
+    if (!entries.length) throw minimapError("Er zit geen verf in de upload.");
+    if (entries.length > 4096) throw minimapError("Te veel verfvakken in één upload.");
+    const dir = path.join(this.assetsDir, "terrain");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = {};
+    for (const [key, file] of entries) {
+      if (!parseTerrainChunkKey(key)) throw minimapError("Onbekend verfvak: " + String(key).slice(0, 40) + ".");
+      const data = file?.data;
+      const ok = data && data.length >= 33 && data.length <= 262144 && isPng(data) && data.slice(12, 16).toString("latin1") === "IHDR"
+        && data.readUInt32BE(16) === TERRAIN_PAINT_VERTS && data.readUInt32BE(20) === TERRAIN_PAINT_VERTS && data[24] === 8 && data[25] === 2;
+      if (!ok) throw minimapError("Verfvak " + key + " is geen goede verf-PNG (129 x 129, RGB).");
+      const sha1 = crypto.createHash("sha1").update(data).digest("hex");
+      const target = path.join(dir, sha1 + ".png");
+      if (!fs.existsSync(target)) {
+        fs.writeFileSync(target + ".tmp", data);
+        fs.renameSync(target + ".tmp", target);
+      }
+      saved[key] = sha1;
+    }
+    return saved;
+  }
+
+  // Leest één vak (voor de server: lopen en objecten optillen). Vakken veranderen nooit, dus de cache blijft goed.
+  readTerrainChunk(sha1) {
+    const name = String(sha1 || "");
+    if (!TERRAIN_CHUNK_SHA_PATTERN.test(name)) return null;
+    if (!this.terrainChunkCache) this.terrainChunkCache = new Map();
+    if (this.terrainChunkCache.has(name)) return this.terrainChunkCache.get(name);
+    let chunk = null;
+    try { chunk = decodeTerrainChunk(fs.readFileSync(path.join(this.assetsDir, "terrain", name + ".bin"))); } catch { chunk = null; }
+    if (this.terrainChunkCache.size > 20000) this.terrainChunkCache.clear();
+    this.terrainChunkCache.set(name, chunk);
+    return chunk;
+  }
+
+  terrainChunkExists(sha1) {
+    const name = String(sha1 || "");
+    return TERRAIN_CHUNK_SHA_PATTERN.test(name) && fs.existsSync(path.join(this.assetsDir, "terrain", name + ".bin"));
+  }
+
+  minimapTiles() {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(this.assetsDir, "minimap-tiles", "manifest.json"), "utf8"));
+      return manifest && manifest.tiles ? manifest : null;
+    } catch {
+      return null;
+    }
   }
 
   usageForAsset(id, graphRepository) {

@@ -123,6 +123,24 @@ export function compileCanonical(documents, options = {}) {
     client.worldSettings = split(worldSettings).client;
     server.worldSettings = split(worldSettings).server;
   }
+  // Wereld tekenen (ronde 1): de kaart "Terrein" (hoogte van de grond per vak + helling + budget).
+  const terrainSettings = byKind("terrain_settings")[0] || null;
+  if (terrainSettings) {
+    client.terrain = split(terrainSettings).client;
+    server.terrain = split(terrainSettings).server;
+  }
+  // Ronde 2: terreintexturen (verf en rots). De wereldbouwer zet er de plaatjes bij.
+  const terrainTextures = byKind("terrain_texture");
+  if (terrainTextures.length) {
+    client.terrainTextures = terrainTextures.map((doc) => Object.assign({ docKey: doc.docKey }, split(doc).client));
+    server.terrainTextures = terrainTextures.map((doc) => Object.assign({ docKey: doc.docKey }, split(doc).server));
+  }
+  // Ronde 3: watervlakken (los, plat). De wereldbouwer zet ze in world.terrain.water (tekenen en lopen).
+  const terrainWater = byKind("terrain_water");
+  if (terrainWater.length) {
+    client.terrainWater = terrainWater.map((doc) => split(doc).client);
+    server.terrainWater = terrainWater.map((doc) => split(doc).server);
+  }
   // Ombouw stap 2: vlakken uit de Area tool. Alleen de server leest ze (de game krijgt ze via de wereld).
   const areaShapes = compileAreaShapes(known, options);
   if (areaShapes) {

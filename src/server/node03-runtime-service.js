@@ -4,6 +4,9 @@ import { runOperation } from "./persistence/operation-contract.js";
 import { isCombatIntent, sanitizeCombatIntent } from "./runtime/combat-adapter.js";
 import { computeDamage } from "../../apps/web/public/shared/combat-math.js";
 import { isActorInstanceId, isResourceInstanceId } from "./runtime/actor-runtime.js";
+import { computeHeal, describeEffect, effectBonuses, effectFromSource } from "../../apps/web/public/shared/effect-math.js";
+import { applyEffect, clearEffectsForDeath, combatRulesFromProject, itemCooldowns, itemReadyInMs, loadActiveEffects, planEffect, publicEffects, setItemCooldown } from "./runtime/player-effects.js";
+import { playerAbilityFromSection, playerHealAbilityFromSection } from "./authoring/actor-compiler.js";
 
 const NODE03_INSTANCE_PREFIX = "node03:";
 const HEALTH_STAT_ID = "stat.health";
@@ -57,6 +60,12 @@ function rollLootAmount(minValue, maxValue, multiplier = 1) {
   const max = Math.max(min, safeInteger(maxValue, min));
   const rolled = min + Math.floor(Math.random() * (max - min + 1));
   return Math.max(0, Math.round(rolled * multiplier));
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 function clamp(value, min, max) {
@@ -331,6 +340,24 @@ export class Node03RuntimeService {
     return this.mmoService?.actorRuntime || null;
   }
 
+  // Healing (2-11): regeneratie en zwevende getallen (1x per seconde in de worldtick).
+  vitals() {
+    return this.mmoService?.vitalsRuntime || null;
+  }
+
+  combatRules(project = null) {
+    let source = project;
+    if (!source) { try { source = resolveProject(this.mmoService.getPublishedWorldContext().world); } catch { source = null; } }
+    return combatRulesFromProject(source);
+  }
+
+  // Zwevend getal boven een speler (genezen door een ander): naar iedereen in de buurt.
+  broadcastFx(worldId, payload) {
+    try {
+      if (this.mmoService && typeof this.mmoService.broadcastToWorld === "function") this.mmoService.broadcastToWorld(worldId, Object.assign({ type: "fx", serverTimeMs: Date.now() }, payload));
+    } catch {}
+  }
+
   getRequestContext(req) {
     const sessionContext = this.mmoService.getSessionContextFromRequest(req);
     this.mmoService.authService.touchSession(sessionContext.session.id, false);
@@ -342,7 +369,7 @@ export class Node03RuntimeService {
     const catalogs = resolveCatalogs(world);
     const zonePackage = this.resolveCurrentZonePackage(world, position);
     if (!zonePackage?.zoneId) {
-      const error = new Error("NODE-03 runtime zone niet gevonden. Publiceer de Desert demo opnieuw.");
+      const error = new Error("Spelgebied niet gevonden. Publiceer de wereld opnieuw.");
       error.status = 404;
       throw error;
     }
@@ -432,7 +459,7 @@ export class Node03RuntimeService {
       playerId: ctx.profile.id,
       operationType: action || "unknown",
       requestHash: hash,
-      label: "Deze NODE-03 actie",
+      label: "Deze spelactie",
       faultHook: this.operationFaultHook || null,
       beforeCommit: () => {
         if (action === "attack" || action === "gather") {
@@ -754,6 +781,96 @@ export class Node03RuntimeService {
       events: [{ type: "equipped", slotId, itemInstanceId: instance.id }],
       grants: []
     };
+  }
+
+  // Stap 4 (HUD): uitdoen. Het stuk gaat terug naar de tas; de bonus telt dan niet meer mee.
+  unequipItem(ctx, payload) {
+    const slotId = safeString(payload.slotId || payload.slot_id, "");
+    const row = slotId ? this.db.prepare("SELECT * FROM player_equipment WHERE player_id = ? AND slot_id = ? LIMIT 1").get(ctx.profile.id, slotId) : null;
+    if (!row) throw httpError(404, "Daar draag je niets.");
+    const instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(row.item_instance_id, ctx.profile.id);
+    const stamp = now();
+    this.db.prepare("DELETE FROM player_equipment WHERE player_id = ? AND slot_id = ?").run(ctx.profile.id, slotId);
+    if (instance) {
+      this.db.prepare("UPDATE player_item_instances SET location_type = 'inventory', location_ref = NULL, revision = revision + 1, updated_at = ? WHERE id = ? AND player_id = ?")
+        .run(stamp, instance.id, ctx.profile.id);
+    }
+    const itemId = instance?.item_id || null;
+    this.recordGameplayEvent(ctx, "item_unequipped", "player", row.item_instance_id, { slotId, itemId });
+    return {
+      action: "unequip",
+      message: (itemId ? displayForItem(ctx.catalogs, itemId) : "Item") + " uitgedaan.",
+      events: [{ type: "unequipped", slotId, itemInstanceId: row.item_instance_id }],
+      grants: []
+    };
+  }
+
+  // Stap 4 (HUD) + Healing (2-11): eten of drinken. Meteen genezen en/of een tijdelijk effect (5 min meer kracht).
+  // Het item gaat pas weg als er echt iets gebeurt; anders blijft het in je tas (een epic drankje raak je nooit zomaar kwijt).
+  useItem(ctx, payload, operationId) {
+    const itemId = safeString(payload.itemId || payload.item_id, "");
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || null;
+    if (!item) throw httpError(404, "Item niet gevonden.");
+    const name = displayForItem(ctx.catalogs, itemId);
+    const heal = safeInteger(item.healAmount, 0);
+    const effect = effectFromSource(item, name);
+    if (heal <= 0 && !effect) throw httpError(409, name + " kun je niet gebruiken.");
+    const nowMs = Date.now();
+    const waitMs = itemReadyInMs(this.db, ctx.profile.id, itemId, nowMs);
+    if (waitMs > 0) throw httpError(409, name + ": nog " + Math.ceil(waitMs / 1000) + " s wachten.");
+    const stats = this.loadPlayerStats(ctx.profile.id);
+    const max = effectiveMaxStat(stats.byId[HEALTH_STAT_ID], 0);
+    const before = statValue(stats.byId, HEALTH_STAT_ID, max);
+    const canHeal = heal > 0 && max > 0 && before < max;
+    const rules = this.combatRules(ctx.project);
+    const source = effect ? { sourceKind: "item", sourceId: itemId, effect } : null;
+    const effectPlan = source ? planEffect(this.db, ctx.profile.id, source, nowMs, rules) : null;
+    if (!canHeal && !effectPlan?.ok) throw httpError(409, effectPlan && !effectPlan.ok ? effectPlan.reason : "Je levens zijn al vol.");
+    if (!this.removeInventoryItem(ctx, itemId, 1, "item_used", "inventory_hud", operationId)) throw httpError(404, "Je hebt geen " + name + ".");
+    const parts = [];
+    const events = [];
+    if (canHeal) {
+      const after = Math.min(max, before + heal);
+      this.db.prepare("UPDATE player_stats SET current_value = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id = ?")
+        .run(after, now(), ctx.profile.id, HEALTH_STAT_ID);
+      this.recordLedger(operationId, ctx.profile.id, "stat", HEALTH_STAT_ID, after - before, before, after, "item_used", itemId);
+      parts.push("+" + Math.round(after - before) + " levens");
+      events.push({ type: "healed", itemId, amount: after - before });
+    }
+    if (effectPlan?.ok) {
+      applyEffect(this.db, ctx.profile.id, source, nowMs, rules);
+      parts.push(describeEffect(effect).join(", ") + " (" + Math.round(effect.durationMs / 60000 * 10) / 10 + " min)");
+      events.push({ type: "effect", itemId, name: effect.name, durationMs: effect.durationMs });
+    }
+    const cooldownS = safeInteger(item.useCooldownS, 0);
+    if (cooldownS > 0) setItemCooldown(this.db, ctx.profile.id, itemId, nowMs + cooldownS * 1000);
+    return { action: "use", message: name + ": " + parts.join(", ") + ".", events, grants: [] };
+  }
+
+  // Stap 4 (HUD): weggooien uit de tas. Questitems en wat je draagt blijven altijd.
+  destroyItem(ctx, payload, operationId) {
+    const instanceId = safeString(payload.itemInstanceId || payload.item_instance_id, "");
+    let itemId = safeString(payload.itemId || payload.item_id, "");
+    let instance = null;
+    if (instanceId) {
+      instance = this.db.prepare("SELECT * FROM player_item_instances WHERE id = ? AND player_id = ? LIMIT 1").get(instanceId, ctx.profile.id);
+      if (!instance || instance.location_type !== "inventory") throw httpError(404, "Item niet gevonden in je tas.");
+      itemId = instance.item_id;
+    }
+    const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
+    const name = displayForItem(ctx.catalogs, itemId);
+    if (item.questItem === true || item.category === "quest") throw httpError(409, "Een questitem kun je niet weggooien.");
+    let removed = 0;
+    if (instance) {
+      this.db.prepare("UPDATE player_item_instances SET location_type = 'deleted', locked_by_operation_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
+        .run(operationId, now(), instance.id);
+      this.recordLedger(operationId, ctx.profile.id, "item_instance", itemId, -1, 1, 0, "item_destroyed", "inventory_hud");
+      removed = 1;
+    } else if (itemId) {
+      removed = this.removeInventoryItem(ctx, itemId, clamp(safeInteger(payload.amount || payload.quantity, 1), 1, 1000000), "item_destroyed", "inventory_hud", operationId);
+    }
+    if (!removed) throw httpError(404, "Item niet gevonden in je tas.");
+    return { action: "destroy", message: removed + "× " + name + " weggegooid.", events: [{ type: "destroyed", itemId, amount: removed }], grants: [] };
   }
 
   runtimeEntityIsAvailable(entity) {
@@ -1137,11 +1254,16 @@ export class Node03RuntimeService {
       error.status = 409;
       throw error;
     }
+    if (action === "unstuck") return this.unstuckPlayer(ctx);
     if (action === "attack") return this.attackTarget(ctx, payload.targetId, operationId);
     if (action === "gather") return this.gatherTarget(ctx, payload.targetId, operationId);
     if (action === "pickup") return this.pickupTarget(ctx, payload.targetId, operationId);
     if (action === "equip") return this.equipItem(ctx, payload, operationId);
-    const error = new Error("Onbekende NODE-03 actie: " + (action || "-"));
+    if (action === "unequip") return this.unequipItem(ctx, payload);
+    if (action === "use") return this.useItem(ctx, payload, operationId);
+    if (action === "heal") return this.healTarget(ctx, payload, operationId);
+    if (action === "destroy") return this.destroyItem(ctx, payload, operationId);
+    const error = new Error("Onbekende spelactie: " + (action || "-"));
     error.status = 400;
     throw error;
   }
@@ -1524,6 +1646,42 @@ export class Node03RuntimeService {
     })[0] || null;
   }
 
+  unstuckPlayer(ctx) {
+    const spawnRef = ctx.position.current_spawn_id;
+    const zones = [ctx.zonePackage, ...projectZonePackages(ctx.project).filter((zone) => zone.zoneId !== ctx.zoneId)];
+    let target = null;
+    if (spawnRef) {
+      for (const zone of zones) {
+        target = this.mmoService.findZonePortal(ctx.world, zone.zoneId, spawnRef)
+          || this.mmoService.findZoneSpawn(ctx.world, zone.zoneId, spawnRef);
+        if (target) break;
+      }
+    }
+    const zonePackage = target?.zonePackage || ctx.zonePackage;
+    const arrival = target?.model
+      ? this.mmoService.portalArrivalPoint(ctx.worldContext, target)
+      : target?.spawn || zoneDefaultSpawn(zonePackage, ctx.world);
+    const arrivalRef = target ? spawnRef : arrival.spawnId;
+    const connection = { ...ctx.sessionContext, player: ctx.profile, worldId: ctx.worldId };
+    const position = this.mmoService.applyTeleportState(connection, {
+      zoneId: zonePackage.zoneId,
+      spawnId: arrivalRef,
+      position: { x: arrival.x, y: arrival.y, z: arrival.z, rotationY: arrival.facing ?? arrival.rotationY ?? 0 },
+      animationState: "idle"
+    }, { reason: "unstuck" });
+    this.mmoService.syncPlayerProfileZone(ctx.profile, ctx.worldId, zonePackage.zoneId);
+    this.mmoService.schedulePersist(position, connection, true);
+    ctx.position = position;
+    ctx.zonePackage = zonePackage;
+    ctx.zoneId = zonePackage.zoneId;
+    return {
+      action: "unstuck",
+      message: target ? "Je bent terug bij je laatste portal of respawnplek." : "Je bent terug bij de startplek van deze zone.",
+      position: this.mmoService.publicPositionForPlayer(position, ctx.sessionContext.session, ctx.worldId),
+      gameWorld: this.mmoService.gameWorldForZone(ctx.world, zonePackage.zoneId, target?.model ? null : arrivalRef)
+    };
+  }
+
   respawnPlayer(ctx, operationId) {
     if (!this.isPlayerDead(ctx)) {
       const error = new Error("Respawn is alleen beschikbaar wanneer je speler verslagen is.");
@@ -1543,6 +1701,7 @@ export class Node03RuntimeService {
       facing: safeNumber(fallbackSpawn.facing, 0),
       label: safeString(targetZonePackage?.zone?.displayName, "zone start")
     };
+    clearEffectsForDeath(this.db, ctx.profile.id, this.combatRules(ctx.project));
     const policy = policiesOfType(ctx.project, "death_respawn_rules")[0] || {};
     const restorePercentByStat = {
       [HEALTH_STAT_ID]: clamp(safeNumber(policy.healthRestorePercent, 1), 0, 1),
@@ -1681,7 +1840,7 @@ export class Node03RuntimeService {
     this.recordGameplayEvent(ctx, "node03_demo_reset", "player", null, { zoneId: ctx.zoneId });
     return {
       action: "reset_demo",
-      message: "NODE-03 demo reset.",
+      message: "Spelergegevens opnieuw ingesteld.",
       position: this.mmoService.publicPositionForPlayer(ctx.position, ctx.sessionContext.session, ctx.worldId),
       events: [{ type: "reset", zoneId: ctx.zoneId }],
       grants: []
@@ -1852,6 +2011,11 @@ export class Node03RuntimeService {
       WHERE player_id = ?
     `).run(afterXp, afterLevel, skillGain, now(), ctx.profile.id);
     this.recordLedger(operationId, ctx.profile.id, "xp", "xp", amount, beforeXp, afterXp, reason, sourceRef);
+    // Healing (2-11): level omhoog = levens en mana vol (Instellingen > Genezen en effecten).
+    if (afterLevel > beforeLevel && this.combatRules(ctx.project).levelUpRestore) {
+      this.db.prepare("UPDATE player_stats SET current_value = base_value + earned_value, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id IN (?, ?)")
+        .run(now(), ctx.profile.id, HEALTH_STAT_ID, MANA_STAT_ID);
+    }
     return { kind: "xp", amount, beforeXp, afterXp, beforeLevel, afterLevel };
   }
 
@@ -1901,14 +2065,24 @@ export class Node03RuntimeService {
       throw error;
     }
     const stats = this.loadPlayerStats(ctx.profile.id);
-    const attackPower = statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower;
+    const nowMs = Date.now();
+    const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
+    const attackPower = Math.max(0, statValue(stats.byId, ATTACK_POWER_STAT_ID, 10) + this.equipmentBonusesForPlayer(ctx.profile.id, ctx.catalogs).attackPower + bonus.attackPower);
+    // Healing (2-11): een aanval kan mana kosten.
+    const ability = playerAbilityFromSection(runtime.ensureBuild(nowMs), ctx.profile.selected_character_id || null);
+    const manaCost = Math.max(0, safeInteger(ability.manaCost, 0));
+    const manaBefore = statValue(stats.byId, MANA_STAT_ID, 0);
+    if (manaCost > 0 && manaBefore < manaCost) throw httpError(409, "Te weinig mana (" + Math.floor(manaBefore) + " / " + manaCost + ").");
+    this.vitals()?.markCombat(ctx.profile.id, nowMs);
     const planned = runtime.planPlayerAttack({
       playerId: ctx.profile.id, classId: ctx.profile.selected_character_id || null, targetId, x: safeNumber(ctx.position?.x, 0), z: safeNumber(ctx.position?.z, 0),
       safe: this.positionIsSafe(ctx), attackPower, nowMs: Date.now(), operationId
     });
     if (planned.result) return planned.result;
     const plan = planned.plan;
+    if (manaCost > 0) this.spendMana(ctx.profile.id, manaBefore, manaCost, operationId, "ability_used", ability.abilityId);
     const events = [{ type: "damage", amount: plan.damage, targetId: plan.instanceId, label: plan.label }];
+    if (manaCost > 0) events.push({ type: "mana", amount: -manaCost });
     let grants = [];
     if (plan.killed) {
       events.push({ type: "defeated", targetId: plan.instanceId, label: plan.label });
@@ -1966,6 +2140,104 @@ export class Node03RuntimeService {
     };
   }
 
+  spendMana(playerId, before, cost, operationId, reason, sourceRef) {
+    const after = Math.max(0, before - cost);
+    this.db.prepare("UPDATE player_stats SET current_value = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id = ?")
+      .run(after, now(), playerId, MANA_STAT_ID);
+    this.recordLedger(operationId, playerId, "stat", MANA_STAT_ID, after - before, before, after, reason, sourceRef || null);
+    return after;
+  }
+
+  // Healing (2-11): de genees-spreuk van je klasse (💚-knop). Zonder doel kiest de server de meest gewonde speler
+  // binnen het bereik (jij of een ander). Kost mana, heeft een wachttijd en kan een effect geven (genezing over tijd).
+  healTarget(ctx, payload, operationId) {
+    const runtime = this.actorRuntime();
+    const nowMs = Date.now();
+    const section = runtime ? runtime.ensureBuild(nowMs) : null;
+    const ability = playerHealAbilityFromSection(section, ctx.profile.selected_character_id || null);
+    if (!ability) throw httpError(409, "Je klasse heeft geen genees-spreuk.");
+    if (!this.healReadyAt) this.healReadyAt = new Map();
+    const waitMs = (this.healReadyAt.get(ctx.profile.id) || 0) - nowMs;
+    if (waitMs > 0) return { action: "heal", message: "Nog even wachten.", cooldownMs: waitMs, events: [] };
+    const stats = this.loadPlayerStats(ctx.profile.id);
+    const manaCost = Math.max(0, safeInteger(ability.manaCost, 0));
+    const manaBefore = statValue(stats.byId, MANA_STAT_ID, 0);
+    if (manaCost > 0 && manaBefore < manaCost) throw httpError(409, "Te weinig mana (" + Math.floor(manaBefore) + " / " + manaCost + ").");
+    // Wie staat er binnen bereik? Jij zelf altijd; anderen alleen online, in deze wereld en niet verslagen.
+    const rangeM = Math.max(0.5, safeNumber(ability.rangeMm, 2000) / 1000) + 0.8;
+    const myX = safeNumber(ctx.position?.x, 0);
+    const myZ = safeNumber(ctx.position?.z, 0);
+    const candidates = [{ id: ctx.profile.id, self: true }];
+    let states = [];
+    try { states = this.mmoService.getWorldPlayerStates(ctx.worldId) || []; } catch {}
+    for (const state of states) {
+      const id = state?.player_id;
+      if (!id || id === ctx.profile.id || candidates.some((entry) => entry.id === id)) continue;
+      if (typeof this.mmoService.getConnectionForPlayer === "function" && !this.mmoService.getConnectionForPlayer(id, ctx.worldId)) continue;
+      if (Math.hypot(safeNumber(state.x, 0) - myX, safeNumber(state.z, 0) - myZ) > rangeM) continue;
+      candidates.push({ id, self: false });
+    }
+    const healthOf = (id) => {
+      const rows = id === ctx.profile.id ? stats.byId : this.loadPlayerStats(id).byId;
+      const max = effectiveMaxStat(rows[HEALTH_STAT_ID], 0);
+      return { max, current: statValue(rows, HEALTH_STAT_ID, max) };
+    };
+    const wanted = safeString(payload.targetId, "").replace(/^player:/, "");
+    let target = null;
+    let targetHealth = null;
+    for (const candidate of candidates) {
+      const health = healthOf(candidate.id);
+      if (health.max <= 0 || health.current <= 0) continue;
+      if (wanted && candidate.id === wanted) { target = candidate; targetHealth = health; break; }
+      if (health.current >= health.max) continue;
+      const pct = health.current / health.max;
+      if (!target || pct < targetHealth.current / targetHealth.max || (pct === targetHealth.current / targetHealth.max && candidate.self)) {
+        target = candidate;
+        targetHealth = health;
+      }
+    }
+    // MMO (3-11): een gekozen teamlid (tik linksboven) dat te ver weg of verslagen is: zeggen, niet stilletjes iemand anders genezen.
+    if (wanted && wanted !== ctx.profile.id && target?.id !== wanted) {
+      let name = "Die speler";
+      try { name = this.db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(wanted)?.display_name || name; } catch {}
+      throw httpError(409, candidates.some((entry) => entry.id === wanted) ? name + " is verslagen." : name + " is te ver weg om te genezen.");
+    }
+    const effect = effectFromSource(ability, ability.displayName || "Genezing");
+    if (!target && effect) { target = candidates[0]; targetHealth = healthOf(ctx.profile.id); }
+    if (!target) throw httpError(409, "Iedereen in de buurt heeft volle levens.");
+    const bonus = effectBonuses(loadActiveEffects(this.db, ctx.profile.id, nowMs));
+    const amount = computeHeal(ability, statValue(stats.byId, HEAL_POWER_STAT_ID, 0) + bonus.healPower);
+    const after = Math.min(targetHealth.max, targetHealth.current + amount);
+    const healed = Math.round(after - targetHealth.current);
+    if (healed > 0) {
+      this.db.prepare("UPDATE player_stats SET current_value = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND stat_id = ?")
+        .run(after, now(), target.id, HEALTH_STAT_ID);
+      this.recordLedger(operationId, target.id, "stat", HEALTH_STAT_ID, healed, targetHealth.current, after, "healed_by_player", ctx.profile.id);
+    }
+    if (effect) applyEffect(this.db, target.id, { sourceKind: "ability", sourceId: ability.abilityId, effect }, nowMs, this.combatRules(ctx.project));
+    if (manaCost > 0) this.spendMana(ctx.profile.id, manaBefore, manaCost, operationId, "ability_used", ability.abilityId);
+    this.healReadyAt.set(ctx.profile.id, nowMs + Math.max(100, safeInteger(ability.cooldownMs, 1500)));
+    this.recordGameplayEvent(ctx, "player_healed", "player", target.id, { amount: healed, abilityId: ability.abilityId });
+    // Getallen: groen boven wie geneest wordt (iedereen in de buurt ziet het), blauw voor je eigen mana.
+    this.broadcastFx(ctx.worldId, { target: target.id, by: ctx.profile.id, amount: healed, tone: "heal", x: myX, z: myZ });
+    if (!target.self) {
+      const vitals = this.vitals();
+      if (vitals) setTimeout(() => { try { vitals.push(target.id, ctx.worldId, Date.now(), null, [], true); } catch {} }, 0);
+    }
+    let who = "jezelf";
+    if (!target.self) {
+      try { who = this.db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(target.id)?.display_name || "een andere speler"; } catch { who = "een andere speler"; }
+    }
+    return {
+      action: "heal",
+      targetId: target.id,
+      message: (ability.displayName || "Genezen") + ": " + who + " +" + healed + " levens" + (effect ? " (" + effect.name + ")" : "") + ".",
+      events: [{ type: "healed", targetId: target.id, amount: healed }].concat(manaCost > 0 ? [{ type: "mana", amount: -manaCost }] : []),
+      cooldownMs: Math.max(100, safeInteger(ability.cooldownMs, 1500)),
+      grants: []
+    };
+  }
+
   // Een vijand raakt een speler (aangeroepen vanuit de worldtick). Eigen kleine transactie; schade met dezelfde rekenregel.
   applyActorHit({ worldId, playerId, actorId, label, ability, attackPower }) {
     const stats = this.loadPlayerStats(playerId);
@@ -1974,8 +2246,13 @@ export class Node03RuntimeService {
     if (before <= 0) return { damage: 0, remainingHealth: 0, defeated: true };
     let catalogs = {};
     try { catalogs = resolveCatalogs(this.mmoService.getPublishedWorldContext().world); } catch {}
-    const armor = statValue(stats.byId, ARMOR_STAT_ID, 0) + this.equipmentBonusesForPlayer(playerId, catalogs).armor;
+    const nowMs = Date.now();
+    const bonus = effectBonuses(loadActiveEffects(this.db, playerId, nowMs));
+    const armor = Math.max(0, statValue(stats.byId, ARMOR_STAT_ID, 0) + this.equipmentBonusesForPlayer(playerId, catalogs).armor + bonus.armor);
     const damage = computeDamage(ability, attackPower, armor);
+    this.vitals()?.markCombat(playerId, nowMs);
+    let rules = null;
+    try { rules = this.combatRules(resolveProject(this.mmoService.getPublishedWorldContext().world)); } catch { rules = this.combatRules({}); }
     const after = Math.max(0, before - damage);
     const operationId = randomId("actor_hit");
     const ctx = { worldId, zoneId: null, profile: { id: playerId } };
@@ -1986,7 +2263,14 @@ export class Node03RuntimeService {
         WHERE player_id = ? AND stat_id = ?
       `).run(after, now(), playerId, HEALTH_STAT_ID);
       this.recordLedger(operationId, playerId, "stat", HEALTH_STAT_ID, -damage, before, after, "actor_attack", actorId);
-      if (after <= 0) this.recordGameplayEvent(ctx, "player_defeated", actorId, "player", { damage, label });
+      if (after <= 0) {
+        this.recordGameplayEvent(ctx, "player_defeated", actorId, "player", { damage, label });
+        clearEffectsForDeath(this.db, playerId, rules);
+      } else {
+        // Healing (2-11): gif of bloeden van de vijand-aanval komt op de speler.
+        const effect = effectFromSource(ability, ability?.displayName || label);
+        if (effect) applyEffect(this.db, playerId, { sourceKind: "ability", sourceId: ability.abilityId || label, effect }, nowMs, rules);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch {}
@@ -2025,6 +2309,8 @@ export class Node03RuntimeService {
       ok: true,
       schemaVersion: "node03-runtime-v1",
       debugActionsAllowed: developerActionsAllowed(ctx),
+      // Stap 4 (HUD): de prestatie/MMO-info is alleen voor een admin-account.
+      viewer: { isAdmin: ctx.sessionContext?.user?.role === "admin" },
       worldId: ctx.worldId,
       zoneId: ctx.zoneId,
       zoneName: ctx.zonePackage?.zone?.displayName || ctx.zoneId,
@@ -2038,6 +2324,10 @@ export class Node03RuntimeService {
       equipment,
       abilities,
       catalog: this.loadHudCatalog(ctx),
+      // Healing (2-11): actieve effecten, wachttijd per item en de genees-spreuk (💚-knop).
+      effects: publicEffects(loadActiveEffects(this.db, ctx.profile.id, Date.now()), Date.now()),
+      itemCooldowns: itemCooldowns(this.db, ctx.profile.id, Date.now()),
+      healSpell: this.healSpellForHud(ctx),
       entities,
       interactionTargets: this.buildInteractionTargets(ctx, entities),
       ui: {
@@ -2048,6 +2338,18 @@ export class Node03RuntimeService {
       },
       generatedAt: now()
     };
+  }
+
+  healSpellForHud(ctx) {
+    try {
+      const runtime = this.actorRuntime();
+      const ability = playerHealAbilityFromSection(runtime ? runtime.ensureBuild(Date.now()) : null, ctx.profile.selected_character_id || null);
+      if (!ability) return null;
+      return { abilityId: ability.abilityId, displayName: ability.displayName || "Genezen", manaCost: safeInteger(ability.manaCost, 0),
+        rangeM: safeNumber(ability.rangeMm, 2000) / 1000, cooldownMs: safeInteger(ability.cooldownMs, 1500) };
+    } catch {
+      return null;
+    }
   }
 
   loadProgression(ctx) {
@@ -2109,6 +2411,7 @@ export class Node03RuntimeService {
   }
 
   loadHudCatalog(ctx) {
+    const slots = catalogSection(ctx.catalogs, "equipmentSlots");
     const items = Object.values(catalogSection(ctx.catalogs, "items")).map(function (item) {
       return {
         itemId: item.id,
@@ -2117,7 +2420,21 @@ export class Node03RuntimeService {
         rarity: item.rarity || null,
         stackable: item.stackable !== false,
         marketEligible: item.marketEligible === true,
-        tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : []
+        tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : [],
+        // Stap 4 (HUD): plaatje in de tas en de knoppen Uitrusten / Gebruiken / Weggooien.
+        iconAssetId: item.iconAssetId || null,
+        modelAssetId: item.worldModelAssetId || null,
+        equipSlot: item.equipmentSlotRef && slots[item.equipmentSlotRef] ? item.equipmentSlotRef : null,
+        healAmount: safeInteger(item.healAmount, 0),
+        useCooldownS: safeInteger(item.useCooldownS, 0),
+        effect: (function () {
+          const effect = effectFromSource(item, item.displayName || item.id);
+          return effect ? { name: effect.name, iconAssetId: effect.iconAssetId, durationMs: effect.durationMs, lines: describeEffect(effect) } : null;
+        })(),
+        attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
+        armorBonus: safeInteger(item.armorBonus, 0),
+        questItem: item.questItem === true || item.category === "quest",
+        vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
       };
     }).filter(function (item) {
       return Boolean(item.itemId);
@@ -2129,7 +2446,8 @@ export class Node03RuntimeService {
         currencyId: currency.id,
         displayName: currency.displayName || currency.id,
         showInPrimaryWallet: currency.showInPrimaryWallet !== false,
-        sortOrder: safeInteger(currency.sortOrder, 999)
+        sortOrder: safeInteger(currency.sortOrder, 999),
+        iconAssetId: currency.iconAssetId || null
       };
     }).filter(function (currency) {
       return Boolean(currency.currencyId);
@@ -2137,7 +2455,10 @@ export class Node03RuntimeService {
       return safeInteger(left.sortOrder, 999) - safeInteger(right.sortOrder, 999)
         || String(left.displayName || left.currencyId).localeCompare(String(right.displayName || right.currencyId));
     });
-    return { items, currencies };
+    const equipmentSlots = Object.values(slots).filter(function (slot) { return slot && slot.id; }).map(function (slot) {
+      return { slotId: slot.id, displayName: slot.displayName || slot.id, sortOrder: safeInteger(slot.uiOrder ?? slot.sortOrder, 999) };
+    }).sort(function (left, right) { return left.sortOrder - right.sortOrder || String(left.displayName).localeCompare(String(right.displayName)); });
+    return { items, currencies, equipmentSlots };
   }
 
   loadInventory(ctx) {

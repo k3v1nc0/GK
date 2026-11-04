@@ -1,4 +1,6 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261029-klassen2";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261103-model1";
+import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
+import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261016-scatter-pattern2";
 import { AUTHORING_ROUTES, authoringLibraryGroupsForRoute, authoringRouteById, authoringWorkspacesForRoute, classifyAuthoringNodeType } from "./authoring-contract.js?v=20261006-portal-pair2";
 import {
@@ -9,10 +11,10 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261029-klassen3";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261103-water1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
-import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261028-instances1";
+import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
@@ -135,11 +137,14 @@ const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes.v2";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
 const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayouts.v2";
 const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
-const WORKBENCH_PANE_VIEWS = ["workbench", "viewport", "relations", "library"];
+// Game (3-11): de game als paneel; in elke tab te kiezen via de keuzelijst bovenin een venster.
+const WORKBENCH_PANE_VIEWS = ["workbench", "viewport", "relations", "library", "game"];
 // Werkbank Fase 1: tab Instellingen = Menu | Instellingen | 3D Preview (zelfde viewport als de Werkbank).
-const SETTINGS_PANE_VIEWS = ["settingsMenu", "settingsCard", "viewport"];
+const SETTINGS_PANE_VIEWS = ["settingsMenu", "settingsCard", "viewport", "game"];
+// Wereld tekenen ronde 2: tab Terrein = Gereedschap | 3D | Terrein-bibliotheek (alles van de grond op één plek).
+const TERRAIN_PANE_VIEWS = ["terrainTools", "viewport", "terrainLibrary", "game"];
 // Fundament zonder nodes: de Nodes-weergave bestaat niet meer (setEditorMode("nodes") valt terug op de Werkbank).
-const EDITOR_MODES = ["workbench", "settings"];
+const EDITOR_MODES = ["workbench", "settings", "terrain"];
 const ALL_PANE_LABELS = {
   settingsMenu: "Menu",
   settingsCard: "Instellingen",
@@ -149,7 +154,10 @@ const ALL_PANE_LABELS = {
   assets: "Assets",
   workbench: "Werkbank",
   relations: "Relaties",
-  library: "Bibliotheek"
+  library: "Bibliotheek",
+  terrainTools: "Terrein",
+  terrainLibrary: "Bibliotheek (terrein)",
+  game: "🎮 Game"
 };
 const EDITOR_FLOATING_PANELS_STORAGE_KEY = "gk.editorFloatingPanels";
 const EDITOR_MODE_STORAGE_KEY = "gk.editorMode";
@@ -318,6 +326,9 @@ const state = {
     activeNodeId: null,
     selectedPointIndex: null,
     selectedPointIndices: [],
+    selectedEdgeIndices: [],
+    edgeStartPointIndex: null,
+    edgeEditBusy: false,
     selectedHandleRole: null,
     multiSelect: false,
     activeChannel: "main",
@@ -487,6 +498,7 @@ const el = {
   snapGridInput: document.querySelector("#snapGridInput"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   publishButton: document.querySelector("#publishButton"),
+  bakeButton: document.querySelector("#bakeButton"),
   connectionButton: document.querySelector("#connectionButton"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
@@ -502,6 +514,10 @@ const el = {
   nodesModeButton: document.querySelector("#nodesModeButton"),
   workbenchModeButton: document.querySelector("#workbenchModeButton"),
   gameModeButton: document.querySelector("#gameModeButton"),
+  terrainModeButton: document.querySelector("#terrainModeButton"),
+  terrainToolsPanel: document.querySelector("#terrainToolsPanel"),
+  terrainLibraryPanel: document.querySelector("#terrainLibraryPanel"),
+  gamePanePanel: document.querySelector("#gamePanePanel"),
   gameTabPanel: document.querySelector("#gameTabPanel"),
   settingsModeButton: document.querySelector("#settingsModeButton"),
   oldModeMenu: document.querySelector("#oldModeMenu"),
@@ -887,13 +903,46 @@ const docBench = createDocBench({
     renderUnsaved();
     updateDocPendingBadge();
   },
+  // Brug-stand: model met "Op hoogste grond eronder" krijgt de Hoogte waarbij de onderkant op de hoogste grond eronder ligt.
+  beforeSave: function (kind, doc, body) {
+    if (kind === "network_settings") previewNetworkInGame(body);
+    if (kind !== "placed_model" || body?.restOnHighest !== true || !doc || typeof runtime?.restOnHighestGroundY !== "function") return body;
+    const y = runtime.restOnHighestGroundY(runtimeIdForDocKey(doc.docKey), { x: body.x, z: body.z, scale: body.scale });
+    return Number.isFinite(y) ? Object.assign({}, body, { y: Math.round(y * 100) / 100 }) : body;
+  },
+  settingsCardExtra: function (kind, host) { settingsCardExtra(kind, host); },
   onChanged: function () {
     updateDocPendingBadge();
     refreshViewportForDocs();
     if (state.editorMode === "workbench") renderWorkbenchLibrary(workbenchContext());
     if (state.editorMode === "settings" && el.settingsMenuPanel) docBench.renderSettingsMenu(el.settingsMenuPanel, renderSettingsCardOnly);
+    if (state.editorMode === "terrain") terrainEditor.render();
   }
 });
+
+// Wereld tekenen: de tab Terrein (hoogte, stempels, verf en grond; opslaan bij Opslaan of de tab verlaten).
+const terrainEditor = createTerrainEditor({
+  getRuntime: function () { return runtime; },
+  fetchApi: function (path, options, method) { return fetchEditorApi(path, options, method); },
+  docBench,
+  setStatus: function (message, kind) { setStatus(message, kind); },
+  getAssets: function () { return state.assets || []; },
+  importAsset: importAssetFile,
+  toolsHost: el.terrainToolsPanel,
+  libraryHost: el.terrainLibraryPanel
+});
+
+// Een bestand als asset uploaden (stempels uit Terrein). Geeft het nieuwe asset terug.
+async function importAssetFile(file, options = {}) {
+  const form = new FormData();
+  form.append("name", String(options.name || file.name || "Bestand").slice(0, 120));
+  form.append("category", String(options.category || "Terrein"));
+  form.append("assetType", String(options.assetType || "image"));
+  form.append("file", file, file.name || "bestand.png");
+  const result = await postAssetImport(form);
+  applyImportedAssetData(result.data);
+  return result.data.asset || null;
+}
 
 // Documenten met een plek (pickup, NPC, model, vijand- en grondstofplek) staan als echte mesh in de editorwereld.
 // Klikken opent de kaart; G verplaatst, R draait en S schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
@@ -940,8 +989,10 @@ async function commitDocTransform(docKey, transform) {
   }
   const round2 = function (value) { return Math.round(Number(value) * 100) / 100; };
   const x = round2(Number(transform?.x) || 0);
-  const y = round2(Number(transform?.y) || 0);
   const z = round2(Number(transform?.z) || 0);
+  // Wereld tekenen: in de kaart staat de hoogte boven de grond; de wereldbouwer telt het terrein erbij.
+  const terrainY = runtime && typeof runtime.terrainHeightAt === "function" ? runtime.terrainHeightAt(x, z) : 0;
+  const y = round2((Number(transform?.y) || 0) - terrainY);
   const body = Object.assign({}, doc.body);
   if (doc.kind === "actor_spawn" || doc.kind === "resource_spawn") {
     // Vijand- en grondstofplekken staan in millimeters; het gebied volgt de nieuwe plek (of vervalt).
@@ -1057,16 +1108,6 @@ async function createAreaDoc(soort) {
   });
   const stamp = Date.now().toString(36);
   const body = { areaId: soort + ".vlak_" + stamp, displayName: def.label + " " + (docBench.docs("area").length + 1), soort: soort, shape: "polygon", pointsMm: pointsMm };
-  if (soort === "deelgebied") {
-    const region = docBench.docs("region").find(function (entry) {
-      return pointsMm[0][0] >= entry.body.minXMm && pointsMm[0][0] < entry.body.maxXMm && pointsMm[0][1] >= entry.body.minZMm && pointsMm[0][1] < entry.body.maxZMm;
-    });
-    if (!region) {
-      setStatus("Een deelgebied ligt altijd in een gebied. Er is hier nog geen gebied (maak ze via Instellingen → Builds).", "error");
-      return;
-    }
-    body.regionRef = region.docKey;
-  }
   try {
     const result = await docBench.saveDoc("area", null, body, def.label + " gemaakt");
     selectAreaDoc(result.docKey);
@@ -3332,7 +3373,9 @@ function terrainNodeCapabilities(node) {
     allowRotate: polygonEditable,
     allowGeoScale: polygonEditable,
     allowScale: nodeType === "surface_layer",
-    allowDelete: polygonEditable
+    allowDelete: polygonEditable,
+    // Loopvlak: randen dicht (onzichtbare muur) of open zetten.
+    allowEdges: walkableSurface
   };
 }
 
@@ -3345,6 +3388,7 @@ function terrainModeAllowed(mode, capabilities) {
   if (mode === "geoscale") return Boolean(capabilities.allowGeoScale);
   if (mode === "scale") return Boolean(capabilities.allowScale);
   if (mode === "delete") return Boolean(capabilities.allowDelete);
+  if (mode === "edges") return Boolean(capabilities.allowEdges);
   return false;
 }
 
@@ -3366,6 +3410,7 @@ function terrainSelectionText(node, capabilities) {
   if (state.terrainTool.mode === "extrude") return title + " - Extruding point | " + shortcutSummary;
   if (state.terrainTool.mode === "scale") return title + " - Scaling " + channel + " texture | " + shortcutSummary;
   if (state.terrainTool.mode === "delete") return title + " - Delete selected points | " + shortcutSummary;
+  if (state.terrainTool.mode === "edges") return "Loopvlak - Randen: kies een lijn of twee aangrenzende punten. Multi = meerdere lijnen. Groen = open, rood = dicht. Gekozen: " + state.terrainTool.selectedEdgeIndices.length;
   return base + " | Select center to move/rotate/scale the whole shape" + (node.type === "walkable_surface" ? ", use Z for height" : "");
 }
 
@@ -3400,6 +3445,8 @@ function terrainClearDragState() {
 }
 
 function terrainSetSelection(pointIndex, handleRole) {
+  state.terrainTool.selectedEdgeIndices = [];
+  state.terrainTool.edgeStartPointIndex = null;
   state.terrainTool.selectedPointIndex = Number.isInteger(pointIndex) && pointIndex >= 0 ? pointIndex : null;
   state.terrainTool.selectedHandleRole = handleRole === "center" ? "center" : (state.terrainTool.selectedPointIndex !== null ? "point" : null);
   state.terrainTool.selectedPointIndices = state.terrainTool.selectedPointIndex !== null ? [state.terrainTool.selectedPointIndex] : [];
@@ -4283,11 +4330,13 @@ function terrainOverlayState() {
     activeChannel: terrainActiveChannel(),
     selectedPointIndex: state.terrainTool.selectedPointIndex,
     selectedPointIndices: state.terrainTool.selectedPointIndices.slice(),
+    selectedEdgeIndices: state.terrainTool.mode === "edges" ? state.terrainTool.selectedEdgeIndices.slice() : [],
     selectedHandleRole: state.terrainTool.selectedHandleRole,
     draggingHandleRole: state.terrainTool.draggingHandleRole,
     points: points,
     groundY: groundY,
-    color: accentColorForNodeDef(state.nodeTypes[node.type])
+    color: accentColorForNodeDef(state.nodeTypes[node.type]),
+    closedEdges: node.type === "walkable_surface" && Array.isArray(node.values?.closedEdges) ? node.values.closedEdges.slice() : []
   };
   if (state.terrainTool.draggingHandleRole === "point" && state.terrainTool.dragStartPoints) {
     previewPoints = terrainPreviewMovedPoints(
@@ -4974,9 +5023,10 @@ function appendTerrainTransformActions(parent, node) {
   parent.appendChild(transformActionButton("Multi", {
     active: state.terrainTool.multiSelect,
     onClick: function () {
+      const edgeMode = state.terrainTool.mode === "edges";
       terrainCancelActiveSession();
       state.terrainTool.multiSelect = !state.terrainTool.multiSelect;
-      state.terrainTool.mode = "select";
+      state.terrainTool.mode = edgeMode ? "edges" : "select";
       state.terrainTool.axisConstraint = null;
       setStatus(state.terrainTool.multiSelect ? "Multi-select aan." : "Multi-select uit.", "");
       terrainFinishWithRender();
@@ -5025,6 +5075,36 @@ function appendTerrainTransformActions(parent, node) {
       terrainFinishWithRender();
     }
   }));
+  if (capabilities.allowEdges) {
+    parent.appendChild(transformActionButton("Randen", {
+      active: state.terrainTool.mode === "edges",
+      title: "Kies lijnen of twee aangrenzende punten. Groen = open, rood = dicht",
+      onClick: function () {
+        const edgeMode = state.terrainTool.mode === "edges";
+        terrainCancelActiveSession();
+        state.terrainTool.mode = edgeMode ? "select" : "edges";
+        state.terrainTool.axisConstraint = null;
+        const points = state.terrainTool.selectedPointIndices;
+        const edge = points.length === 2 ? edgeBetweenPoints(terrainNodePoints(node).length, points[0], points[1]) : null;
+        state.terrainTool.selectedEdgeIndices = edge === null ? [] : [edge];
+        state.terrainTool.edgeStartPointIndex = null;
+        setStatus(state.terrainTool.mode === "edges" ? "Kies een lijn of twee aangrenzende punten. Multi kiest meerdere lijnen. Daarna Open, Dicht of Open + rest dicht." : "Randen uit.", "");
+        terrainFinishWithRender();
+      }
+    }));
+    if (state.terrainTool.mode === "edges") {
+      for (const choice of [
+        { label: "Open", action: "open", className: "ok", title: "Gekozen randen groen: hier kun je doorheen lopen" },
+        { label: "Dicht", action: "close", className: "danger", title: "Gekozen randen rood: hier kun je niet doorheen lopen" },
+        { label: "Open + rest dicht", action: "open-rest-closed", className: "terrainEdgeRest", title: "Gekozen randen open (groen), alle overige randen dicht (rood)" }
+      ]) parent.appendChild(transformActionButton(choice.label, {
+        title: choice.title,
+        className: choice.className,
+        disabled: state.terrainTool.edgeEditBusy || !state.terrainTool.selectedEdgeIndices.length,
+        onClick: function () { void terrainApplyEdges(node, choice.action); }
+      }));
+    }
+  }
   parent.appendChild(transformActionButton("Del (Del)", {
     className: "danger",
     onClick: function () {
@@ -16617,6 +16697,7 @@ function setGameTabOpen(open) {
     if (!frame) {
       frame = document.createElement("iframe");
       frame.title = "Game";
+      frame.addEventListener("load", function () { sendNetworkPreview(frame); });
       frame.src = "/game/";
       panel.appendChild(frame);
     } else if (gameTabNeedsReload) {
@@ -16633,11 +16714,17 @@ function setGameTabOpen(open) {
   }
   el.gameModeButton.classList.toggle("active", Boolean(open));
   el.gameModeButton.setAttribute("aria-pressed", open ? "true" : "false");
-  for (const button of [el.workbenchModeButton, el.settingsModeButton]) {
+  for (const button of [el.workbenchModeButton, el.settingsModeButton, el.terrainModeButton]) {
     if (!button) continue;
-    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench" : state.editorMode === "settings";
+    const mine = button === el.workbenchModeButton ? state.editorMode === "workbench"
+      : button === el.terrainModeButton ? state.editorMode === "terrain" : state.editorMode === "settings";
     button.classList.toggle("active", !open && mine);
   }
+  if (state.editorMode === "terrain") {
+    if (open) terrainEditor.deactivate(); else terrainEditor.activate();
+  }
+  // Tab open: het paneel Game stopt (één game tegelijk). Tab dicht: het paneel komt terug.
+  syncGamePane(collectUsedAllViews(state.allLayoutTree));
 }
 
 function setEditorMode(mode, persist = true) {
@@ -16673,6 +16760,12 @@ function setEditorMode(mode, persist = true) {
     el.workbenchModeButton.classList.toggle("active", state.editorMode === "workbench");
     el.workbenchModeButton.setAttribute("aria-pressed", state.editorMode === "workbench" ? "true" : "false");
   }
+  document.body.classList.toggle("terrainEditorMode", state.editorMode === "terrain");
+  if (el.terrainModeButton) {
+    el.terrainModeButton.classList.toggle("active", state.editorMode === "terrain");
+    el.terrainModeButton.setAttribute("aria-pressed", state.editorMode === "terrain" ? "true" : "false");
+  }
+  if (state.editorMode === "terrain") terrainEditor.activate(); else terrainEditor.deactivate();
   if (persist) {
     try { window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode); } catch {}
     persistAllLayoutTree();
@@ -25316,10 +25409,21 @@ function beginWorkbenchRelationResize(event) {
 
 function allPaneViews(mode = state.editorMode) {
   if (mode === "settings") return SETTINGS_PANE_VIEWS;
+  if (mode === "terrain") return TERRAIN_PANE_VIEWS;
   return mode === "workbench" ? WORKBENCH_PANE_VIEWS : NODE_PANE_VIEWS;
 }
 
 function defaultAllLayoutTree(mode = state.editorMode) {
+  if (mode === "terrain") {
+    return {
+      dir: "row",
+      children: [
+        { size: 0.75, node: { view: "terrainTools" } },
+        { size: 2.6, node: { view: "viewport" } },
+        { size: 0.85, node: { view: "terrainLibrary" } }
+      ]
+    };
+  }
   if (mode === "settings") {
     return {
       dir: "row",
@@ -25377,7 +25481,8 @@ function defaultAllLayoutTrees() {
   return {
     nodes: defaultAllLayoutTree("nodes"),
     workbench: defaultAllLayoutTree("workbench"),
-    settings: defaultAllLayoutTree("settings")
+    settings: defaultAllLayoutTree("settings"),
+    terrain: defaultAllLayoutTree("terrain")
   };
 }
 
@@ -25390,6 +25495,7 @@ function isValidAllLayoutTrees(layouts) {
 // Oude opgeslagen indelingen hebben nog geen Instellingen-tab: die krijgt de standaardindeling.
 function withSettingsLayout(layouts) {
   if (!isValidAllLayoutNode(layouts.settings, SETTINGS_PANE_VIEWS)) layouts.settings = defaultAllLayoutTree("settings");
+  if (!isValidAllLayoutNode(layouts.terrain, TERRAIN_PANE_VIEWS)) layouts.terrain = defaultAllLayoutTree("terrain");
   return layouts;
 }
 
@@ -25475,7 +25581,139 @@ function allPaneContentElement(view) {
   if (view === "library") return document.querySelector(".assetColumn");
   if (view === "settingsMenu") return el.settingsMenuPanel;
   if (view === "settingsCard") return el.settingsCardPanel;
+  if (view === "terrainTools") return el.terrainToolsPanel;
+  if (view === "terrainLibrary") return el.terrainLibraryPanel;
+  if (view === "game") return el.gamePanePanel;
   return null;
+}
+
+// ---------- Paneel Game (3-11) ----------
+// De game draait in één vast frame bovenop de editor dat precies over het paneel "🎮 Game" ligt. Zo laadt de game
+// niet opnieuw als je vensters verschuift of van tab wisselt (een iframe verplaatsen in de pagina laadt hem opnieuw).
+// Staat de 3D-view niet in beeld, dan tekent de editor-3D niets (oude laptop: maar één 3D-wereld tegelijk).
+let gamePaneHost = null;
+let gamePaneObserver = null;
+let gamePaneRenderPaused = false;
+function gamePaneFrame() {
+  if (!gamePaneHost) {
+    gamePaneHost = document.createElement("div");
+    gamePaneHost.className = "gamePaneHost";
+    gamePaneHost.hidden = true;
+    document.body.appendChild(gamePaneHost);
+  }
+  let frame = gamePaneHost.querySelector("iframe");
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.title = "Game";
+    frame.addEventListener("load", function () { sendNetworkPreview(frame); });
+    frame.src = "/game/";
+    gamePaneHost.appendChild(frame);
+  }
+  return frame;
+}
+function placeGamePane() {
+  if (!gamePaneHost) return;
+  const place = el.gamePanePanel;
+  const shown = Boolean(place && place.isConnected && !el.allLayoutOverflow?.contains(place) && (el.gameTabPanel?.hidden !== false));
+  const rect = shown ? place.getBoundingClientRect() : null;
+  if (!rect || rect.width < 2 || rect.height < 2) { gamePaneHost.hidden = true; return; }
+  gamePaneHost.hidden = false;
+  gamePaneHost.style.left = rect.left + "px";
+  gamePaneHost.style.top = rect.top + "px";
+  gamePaneHost.style.width = rect.width + "px";
+  gamePaneHost.style.height = rect.height + "px";
+}
+function syncGamePane(usedViews) {
+  const tabOpen = el.gameTabPanel?.hidden === false;
+  const wanted = usedViews.has("game") && !tabOpen;
+  if (wanted) {
+    gamePaneFrame();
+    if (!gamePaneObserver && typeof ResizeObserver === "function" && el.gamePanePanel) {
+      gamePaneObserver = new ResizeObserver(placeGamePane);
+      gamePaneObserver.observe(el.gamePanePanel);
+      window.addEventListener("resize", placeGamePane);
+    }
+    requestAnimationFrame(placeGamePane);
+  } else if (gamePaneHost) {
+    // Paneel weg: de game stopt (geen tweede verbinding die met de tab Game om de besturing vecht).
+    gamePaneHost.replaceChildren();
+    gamePaneHost.hidden = true;
+  }
+  // Tab Game open: die regelt het pauzeren zelf.
+  if (tabOpen) { gamePaneRenderPaused = false; return; }
+  const pause = wanted && !usedViews.has("viewport");
+  if (pause !== gamePaneRenderPaused && runtime && typeof runtime.setRenderPaused === "function") {
+    gamePaneRenderPaused = pause;
+    runtime.setRenderPaused(pause);
+  }
+}
+
+// ---------- Verbinding naast de game (3-11) ----------
+// Instellingen > Verbinding: de schuiven gaan meteen naar de game in het paneel (en de tab Game). Daar gelden ze
+// voor jouw kant (bijsturen, wachten, andere spelers). Server-ticks en updates per seconde pas na SAVE TO GAME.
+let networkPreviewBody = null;
+function sendNetworkPreview(onlyFrame) {
+  if (!networkPreviewBody) return;
+  const frames = onlyFrame ? [onlyFrame] : [gamePaneHost?.querySelector("iframe"), el.gameTabPanel?.querySelector("iframe")];
+  for (const frame of frames) {
+    try { frame?.contentWindow?.postMessage({ type: "gk-network-preview", network: networkPreviewBody }, location.origin); } catch {}
+  }
+}
+function previewNetworkInGame(body) {
+  networkPreviewBody = Object.assign({}, body || {});
+  sendNetworkPreview();
+}
+function findAllLayoutPath(node, view, path) {
+  path = path || [];
+  if (!node) return null;
+  if (node.view) return node.view === view ? path : null;
+  for (let index = 0; index < (node.children || []).length; index += 1) {
+    const found = findAllLayoutPath(node.children[index].node, view, path.concat(index));
+    if (found) return found;
+  }
+  return null;
+}
+function toggleGameBesideSettings() {
+  const tree = state.allLayoutTree;
+  const gamePath = findAllLayoutPath(tree, "game");
+  if (gamePath) {
+    // Terug: de game wordt weer de 3D-view (of het paneel gaat dicht als de 3D-view al ergens staat).
+    if (collectUsedAllViews(tree).has("viewport")) { closeAllPane(gamePath); renderSettingsCardOnly(); return; }
+    getAllLayoutNodeAt(gamePath).view = "viewport";
+  } else {
+    const viewportPath = findAllLayoutPath(tree, "viewport");
+    const cardPath = findAllLayoutPath(tree, "settingsCard");
+    if (viewportPath) getAllLayoutNodeAt(viewportPath).view = "game";
+    else if (cardPath) setAllLayoutNodeAt(cardPath, { dir: "row", children: [{ size: 1, node: { view: "settingsCard" } }, { size: 1.6, node: { view: "game" } }] });
+    else return;
+  }
+  persistAllLayoutTree();
+  renderAllLayout();
+  renderSettingsCardOnly();
+}
+function settingsCardExtra(kind, host) {
+  if (kind !== "network_settings" && kind !== "water_walk_settings") return;
+  if (kind === "network_settings" && !networkPreviewBody) {
+    const doc = docBench.docs("network_settings")[0];
+    if (doc?.body) networkPreviewBody = Object.assign({}, doc.body);
+  }
+  const shown = collectUsedAllViews(state.allLayoutTree).has("game");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "wbdGhost";
+  button.textContent = shown ? "🧊 3D-view terug" : "🎮 Game ernaast";
+  button.title = shown ? "Zet de 3D-view weer op de plek van de game" : "Zet de game naast deze kaart, zodat je meteen ziet wat een schuif doet";
+  button.addEventListener("click", toggleGameBesideSettings);
+  const note = document.createElement("div");
+  note.className = "wbdNote";
+  note.textContent = kind === "water_walk_settings"
+    ? "De game en de server lopen met dezelfde regels, dus dit gaat pas mee na SAVE TO GAME. De game ernaast laadt dan vanzelf opnieuw."
+    : "Schuiven werkt meteen in de game ernaast: bijsturen, wachten en andere spelers. Server-ticks en updates per seconde gaan pas mee na SAVE TO GAME.";
+  const bar = document.createElement("div");
+  bar.className = "wbdGameBeside";
+  bar.append(button, note);
+  const head = host.querySelector(".wbdHead");
+  if (head) head.after(bar); else host.prepend(bar);
 }
 
 function collectUsedAllViews(node, used) {
@@ -25519,7 +25757,7 @@ function renderAllLayout() {
   // querySelector calls in buildAllPane/allPaneContentElement would then
   // never find them again (they'd be silently lost, leaving empty panes).
   if (el.allLayoutOverflow) {
-    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS, SETTINGS_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
+    const contentElements = new Set(NODE_PANE_VIEWS.concat(WORKBENCH_PANE_VIEWS, SETTINGS_PANE_VIEWS, TERRAIN_PANE_VIEWS).map(allPaneContentElement).filter(Boolean));
     for (const contentEl of contentElements) {
       el.allLayoutOverflow.appendChild(contentEl);
     }
@@ -25535,6 +25773,7 @@ function renderAllLayout() {
     if (nodeId) requestAnimationFrame(function () { focusGraphNode(nodeId); });
   }
   allLayoutLastUsedViews = usedViews;
+  syncGamePane(usedViews);
   resizeRuntimeAfterLayout();
 }
 
@@ -30546,6 +30785,7 @@ async function reconnectEditor() {
 if (el.connectionButton) el.connectionButton.addEventListener("click", reconnectEditor);
 el.saveDraftButton.addEventListener("click", saveDraft);
 el.publishButton.addEventListener("click", publish);
+if (el.bakeButton) el.bakeButton.addEventListener("click", bakeMap);
 if (el.undoButton) el.undoButton.addEventListener("click", undoGraphMutation);
 if (el.redoButton) el.redoButton.addEventListener("click", redoGraphMutation);
 el.logoutButton.addEventListener("click", async function () {
@@ -30585,12 +30825,89 @@ async function saveDraft() {
   }
 }
 
+// Stap 4 (HUD): de kaart voor de game als tegels (puzzelstukjes) van 512 px. Laag 0 heeft 32 m per tegel (16 pixels
+// per meter, scherp tot ver ingezoomd); elke laag erboven heeft tegels die twee keer zo groot zijn, tot de hele wereld
+// in 2x2 tegels past (voor uitzoomen). De server bewaart elke tegel op zijn vingerafdruk: wat niet veranderd is, blijft staan.
+const MINIMAP_TILE_PX = 512;
+const MINIMAP_TILE_METERS = 32;
+const MINIMAP_UPLOAD_BATCH = 40;
+
+function minimapTilePlan(bounds) {
+  const tiles = [];
+  let levels = 0;
+  for (let level = 0; level < 10; level += 1) {
+    const size = MINIMAP_TILE_METERS * Math.pow(2, level);
+    const x0 = Math.floor(bounds.minX / size);
+    const x1 = Math.floor((bounds.maxX - 0.001) / size);
+    const z0 = Math.floor(bounds.minZ / size);
+    const z1 = Math.floor((bounds.maxZ - 0.001) / size);
+    for (let tz = z0; tz <= z1; tz += 1) {
+      for (let tx = x0; tx <= x1; tx += 1) {
+        tiles.push({ key: level + ":" + tx + ":" + tz, minX: tx * size, maxX: (tx + 1) * size, minZ: tz * size, maxZ: (tz + 1) * size });
+      }
+    }
+    levels = level + 1;
+    if (x1 - x0 <= 1 && z1 - z0 <= 1) break;
+  }
+  return { tiles, levels };
+}
+
+async function bakeWorldMinimapForGame(buildId, onProgress) {
+  if (!runtime || typeof runtime.bakeMinimapImage !== "function" || typeof runtime.getMinimapBakeBounds !== "function") return "Minimap niet gemaakt (geen 3D-beeld).";
+  const bounds = runtime.getMinimapBakeBounds();
+  if (!bounds) return "Minimap niet gemaakt: de wereld heeft geen grond.";
+  const progress = typeof onProgress === "function" ? onProgress : function () {};
+  try {
+    const plan = minimapTilePlan(bounds);
+    const baked = [];
+    progress("Kaart maken: 0 van " + plan.tiles.length + " tegels...");
+    await runtime.bakeMinimapImage({
+      bounds,
+      tiles: plan.tiles,
+      tileResolution: MINIMAP_TILE_PX,
+      quality: 0.85,
+      hideEditorHelpers: true,
+      hideChunkDebugOverlay: true,
+      hideTransformControls: true,
+      includeStaticModels: true,
+      onTile: function (tile, blob, index) {
+        baked.push({ key: tile.key, blob });
+        if ((index + 1) % 10 === 0) progress("Kaart maken: " + (index + 1) + " van " + plan.tiles.length + " tegels...");
+      }
+    });
+    const names = {};
+    for (let i = 0; i < baked.length; i += MINIMAP_UPLOAD_BATCH) {
+      progress("Kaart uploaden: " + Math.min(baked.length, i + MINIMAP_UPLOAD_BATCH) + " van " + baked.length + " tegels...");
+      const formData = new FormData();
+      for (const entry of baked.slice(i, i + MINIMAP_UPLOAD_BATCH)) formData.append(entry.key, entry.blob, "tegel." + (entry.blob.type === "image/png" ? "png" : "webp"));
+      const response = await fetchEditorApi("/api/editor/world-minimap-tiles", { method: "POST", body: formData, timeoutMs: 120000 }, "POST");
+      const data = await response.json().catch(function () { return {}; });
+      if (!response.ok || !data.ok) throw new Error(data.message || "upload mislukt");
+      Object.assign(names, data.tiles || {});
+    }
+    const response = await fetchEditorApi("/api/editor/world-minimap-tiles/commit", {
+      method: "POST",
+      timeoutMs: 60000,
+      body: JSON.stringify({ tilePx: MINIMAP_TILE_PX, baseMeters: MINIMAP_TILE_METERS, levels: plan.levels, buildId: buildId || null,
+        bounds: { minX: bounds.minX, maxX: bounds.maxX, minZ: bounds.minZ, maxZ: bounds.maxZ }, tiles: names })
+    }, "POST");
+    const data = await response.json().catch(function () { return {}; });
+    if (!response.ok || !data.ok) throw new Error(data.message || "opslaan mislukt");
+    return "Minimap bijgewerkt (" + plan.tiles.length + " tegels in " + plan.levels + " lagen).";
+  } catch (error) {
+    return "Minimap niet gemaakt: " + (error?.message || error) + ".";
+  }
+}
+
 async function publish() {
   if (el.publishButton.disabled) return;
   el.publishButton.disabled = true;
+  if (el.bakeButton) el.bakeButton.disabled = true;
   clearAutoSaveDraftTimer();
   try {
     await flushPendingEditorWrites();
+    // Wereld tekenen: niet opgeslagen terrein eerst bewaren (anders mist de game de nieuwe heuvels).
+    if (!(await terrainEditor.saveIfDirty())) throw new Error("Eerst het terrein opslaan lukte niet; probeer Opslaan in Terrein.");
     // Doelbeeld: één knop, één build. De game leest alleen de build; nodes doen niet meer mee.
     const build = await docBench.publish();
     clearUnsaved();
@@ -30599,19 +30916,62 @@ async function publish() {
     clearViewportRefreshTimer();
     updateDocPendingBadge();
     const sameBuild = build && build.buildId === build.previousBuildId;
-    setStatus(!build ? "Alles staat al in de game."
+    const publishedText = !build ? "Alles staat al in de game."
       : sameBuild ? "Gepubliceerd naar de game. De kaarten staan al zo in de game (zelfde build " + build.buildId.slice(0, 10) + ")."
-        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").", "success");
+        : "Gepubliceerd naar de game (met nieuwe build " + build.buildId.slice(0, 10) + ").";
+    // De kaart (minimap) wordt niet meer hier gemaakt (duurde minuten bij een grote wereld); dat doet de knop BAKE.
+    const mapStatus = await refreshBakeStatus();
+    if (mapStatus && !mapStatus.upToDate) setStatus(publishedText + " Let op: de kaart (minimap) is verouderd. Klik BAKE als je klaar bent met de wereld.", "error");
+    else setStatus(publishedText + (mapStatus ? " De kaart is up-to-date." : ""), "success");
     // De tab Game laadt de nieuwe build: meteen als hij open is, anders bij de volgende keer openen.
     const gameFrame = el.gameTabPanel?.querySelector("iframe");
     if (gameFrame && !el.gameTabPanel.hidden) gameFrame.contentWindow?.location.reload();
     else if (gameFrame) gameTabNeedsReload = true;
+    // Paneel Game: ook de nieuwe build laden.
+    const paneFrame = gamePaneHost?.querySelector("iframe");
+    if (paneFrame) paneFrame.contentWindow?.location.reload();
   } catch (error) {
     setStatus(error.message, "error");
   } finally {
     el.publishButton.disabled = false;
+    if (el.bakeButton) el.bakeButton.disabled = false;
   }
 }
+
+// Bake los van SAVE TO GAME: de server zegt of de kaart nog past bij de wereld die nu in de game staat.
+async function refreshBakeStatus() {
+  try {
+    const response = await fetchEditorApi("/api/editor/minimap-status", { method: "GET", timeoutMs: 15000 }, "GET");
+    const data = await response.json().catch(function () { return {}; });
+    if (!response.ok || !data.ok) return null;
+    if (el.bakeButton) {
+      el.bakeButton.dataset.stale = data.upToDate ? "" : "1";
+      el.bakeButton.title = data.upToDate ? "De kaart (minimap) is up-to-date" : (data.hasMap ? "De kaart (minimap) is verouderd: klik om opnieuw te maken" : "Er is nog geen kaart (minimap): klik om te maken");
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function bakeMap() {
+  if (!el.bakeButton || el.bakeButton.disabled) return;
+  el.bakeButton.disabled = true;
+  el.publishButton.disabled = true;
+  try {
+    // De kaart is een foto van de 3D-view; staat er nog iets niet in de game, dan zie je dat al wel op de kaart.
+    const pending = docBench.pendingCount() + notLiveGraphActions();
+    const note = pending ? " (Let op: " + pending + " wijziging(en) staan nog niet in de game; doe ook SAVE TO GAME.)" : "";
+    setStatus("Kaart maken...", "");
+    const text = await bakeWorldMinimapForGame(null, function (progress) { setStatus(progress, ""); });
+    await refreshBakeStatus();
+    setStatus(text + note, text.startsWith("Minimap bijgewerkt") ? "success" : "error");
+  } finally {
+    el.bakeButton.disabled = false;
+    el.publishButton.disabled = false;
+  }
+}
+refreshBakeStatus();
 
 // ---------- Terrain tool ----------
 function terrainCanvasTarget(event) {
@@ -31451,6 +31811,60 @@ async function terrainAddPoint(node, groundPoint) {
   return ok;
 }
 
+function terrainSelectEdge(node, edgeIndex, event = {}) {
+  const count = terrainNodePoints(node).length;
+  if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= count) return;
+  const tool = state.terrainTool;
+  const selected = new Set(tool.selectedEdgeIndices);
+  if (event.ctrlKey || event.metaKey || (tool.multiSelect && !event.shiftKey && selected.has(edgeIndex))) selected.delete(edgeIndex);
+  else {
+    if (!event.shiftKey && !tool.multiSelect) selected.clear();
+    selected.add(edgeIndex);
+  }
+  tool.selectedEdgeIndices = Array.from(selected);
+  tool.edgeStartPointIndex = null;
+  tool.selectedPointIndices = Array.from(new Set(tool.selectedEdgeIndices.flatMap((edge) => [edge, (edge + 1) % count])));
+  tool.selectedPointIndex = tool.selectedPointIndices[0] ?? null;
+  tool.selectedHandleRole = tool.selectedPointIndex === null ? null : "point";
+  setStatus(selected.size + " rand(en) gekozen. Kies Open, Dicht of Open + rest dicht.", "");
+  terrainFinishWithRender();
+}
+
+function terrainSelectEdgePoint(node, pointIndex, event) {
+  const tool = state.terrainTool;
+  const first = tool.edgeStartPointIndex;
+  const edge = edgeBetweenPoints(terrainNodePoints(node).length, first, pointIndex);
+  if (edge !== null) {
+    terrainSelectEdge(node, edge, event);
+    return;
+  }
+  if (!tool.multiSelect && !event.shiftKey) tool.selectedEdgeIndices = [];
+  tool.edgeStartPointIndex = pointIndex;
+  tool.selectedPointIndex = pointIndex;
+  tool.selectedPointIndices = [pointIndex];
+  tool.selectedHandleRole = "point";
+  setStatus(first === null ? "Kies nu het aangrenzende punt van de rand." : "Deze punten vormen geen rand. Kies een punt direct naast het laatst gekozen punt.", "");
+  terrainFinishWithRender();
+}
+
+async function terrainApplyEdges(node, action) {
+  const tool = state.terrainTool;
+  if (tool.edgeEditBusy || !tool.selectedEdgeIndices.length) return false;
+  const currentNode = nodeById(node.id) || node;
+  const next = editClosedEdges(terrainNodePoints(currentNode).length, currentNode.values?.closedEdges || [], tool.selectedEdgeIndices, action);
+  tool.edgeEditBusy = true;
+  terrainFinishWithRender();
+  try {
+    const label = action === "open-rest-closed" ? "Doorgangen open, overige randen dicht" : action === "open" ? "Randen open" : "Randen dicht";
+    const ok = await patchValues(node.id, { closedEdges: next }, { historyLabel: label });
+    if (ok) setStatus(label + ". Groen = doorlopen, rood = geblokkeerd.", "success");
+    return Boolean(ok);
+  } finally {
+    tool.edgeEditBusy = false;
+    terrainFinishWithRender();
+  }
+}
+
 async function terrainDeletePoint(node, pointIndex) {
   const capabilities = terrainNodeCapabilities(node);
   if (!capabilities.allowDelete) return false;
@@ -32087,7 +32501,7 @@ function handleTerrainPointerDown(event) {
   const ground = terrainGroundPointFromEvent(event);
   const mode = state.terrainTool.mode;
   const meshEntityId = runtimeEntityIdFromPointer(event);
-  const terrainInsertHit = mode === "extrude" && capabilities.allowExtrude
+  const terrainInsertHit = (mode === "extrude" && capabilities.allowExtrude) || (mode === "edges" && capabilities.allowEdges)
     ? terrainLineInsertHitFromEvent(node, event)
     : null;
   const shouldPlaceFirstPoints = mode === "select"
@@ -32099,7 +32513,7 @@ function handleTerrainPointerDown(event) {
     || shouldPlaceFirstPoints
     || mode === "extrude"
     || mode === "scale";
-  if (meshEntityId && !(hit && hit.nodeId === node.id) && mode !== "extrude") return;
+  if (meshEntityId && !(hit && hit.nodeId === node.id) && mode !== "extrude" && !(mode === "edges" && terrainInsertHit)) return;
   if (!shouldConsumeTerrainClick) {
     if (event.pointerType === "touch") {
       if (!meshEntityId && capabilities.pointEditing && (mode === "select" || mode === "move")) {
@@ -32129,6 +32543,16 @@ function handleTerrainPointerDown(event) {
   if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   suppressNextViewportRuntimeClick();
 
+  if (mode === "edges" && capabilities.allowEdges) {
+    if (hit && hit.nodeId === node.id && Number.isInteger(hit.pointIndex)) {
+      beginTouchGrabConfirm(event, function () { terrainSelectEdgePoint(node, hit.pointIndex, event); });
+      return;
+    }
+    if (terrainInsertHit) {
+      beginTouchGrabConfirm(event, function () { terrainSelectEdge(node, terrainInsertHit.pointIndex, event); });
+      return;
+    }
+  }
   if (hit && hit.nodeId === node.id) {
     if ((event.ctrlKey || event.metaKey) && hit.handleRole === "center" && state.selectedNodeIds.includes(node.id)) {
       const nextIds = state.selectedNodeIds.filter(function (nodeId) { return nodeId !== node.id; });
@@ -33129,6 +33553,7 @@ if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function ()
 if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });
 if (el.settingsModeButton) el.settingsModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("settings"); });
 if (el.gameModeButton) el.gameModeButton.addEventListener("click", function () { setGameTabOpen(true); });
+if (el.terrainModeButton) el.terrainModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("terrain"); });
 
 initMobileControls();
 setEditorMode(state.editorMode, false);

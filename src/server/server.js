@@ -10,6 +10,7 @@ import { openDatabase, resolveDatabasePath } from "./db.js";
 import { AuthService } from "./auth-service.js";
 import { UserAdminService } from "./user-admin-service.js";
 import { AssetService } from "./asset-service.js";
+import { worldMapHash } from "./world-map-hash.js";
 import { GraphRepository } from "./graph-repository.js";
 import { GraphMigrationService } from "./graph-migration-service.js";
 import { MmoService } from "./mmo-service.js";
@@ -149,7 +150,9 @@ const editorLayoutViews = {
   nodes: new Set(["tools", "graph", "viewport", "assets"]),
   workbench: new Set(["workbench", "viewport", "relations", "library"]),
   // Werkbank Fase 1: tab Instellingen (menu, kaart, 3D-preview).
-  settings: new Set(["settingsMenu", "settingsCard", "viewport"])
+  settings: new Set(["settingsMenu", "settingsCard", "viewport"]),
+  // Wereld tekenen ronde 2: tab Terrein (gereedschap, 3D, terrein-bibliotheek).
+  terrain: new Set(["terrainTools", "viewport", "terrainLibrary"])
 };
 
 function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
@@ -175,11 +178,13 @@ function normalizeEditorUserLayout(value) {
   if (!nodes || !workbench) return null;
   // Oude indelingen hebben nog geen Instellingen-tab; die krijgt dan de standaardindeling in de editor.
   const settings = normalizeEditorLayoutNode(value.layouts?.settings, editorLayoutViews.settings);
+  const terrain = normalizeEditorLayoutNode(value.layouts?.terrain, editorLayoutViews.terrain);
   const layouts = { nodes, workbench };
   if (settings) layouts.settings = settings;
+  if (terrain) layouts.terrain = terrain;
   return {
     version: 1,
-    editorMode: ["workbench", "settings", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
+    editorMode: ["workbench", "settings", "terrain", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
     layouts
   };
 }
@@ -297,6 +302,14 @@ function serveStatic(req, res, url) {
   if (pathname === "/login") return sendRedirect(res, "/login/");
   if (pathname.startsWith("/editor/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/editor/"));
   if (pathname.startsWith("/game/") && !authService.currentUser(req)) return sendRedirect(res, "/login/?next=" + encodeURIComponent("/game/"));
+  // Kaarttegels heten naar hun inhoud (sha1) en veranderen dus nooit: de browser mag ze voor altijd bewaren.
+  if (pathname.startsWith("/assets/minimap-tiles/") && /^[0-9a-f]{40}\.(webp|png)$/.test(pathname.slice("/assets/minimap-tiles/".length))) {
+    return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=31536000, immutable", req);
+  }
+  // Wereld tekenen: terreinvakken (hoogte .bin, verf .png) heten ook naar hun inhoud (sha1).
+  if (pathname.startsWith("/assets/terrain/") && /^[0-9a-f]{40}\.(bin|png)$/.test(pathname.slice("/assets/terrain/".length))) {
+    return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=31536000, immutable", req);
+  }
   if (pathname.startsWith("/assets/")) return serveFile(res, safePath(assetsRoot, pathname.slice("/assets/".length)), "public, max-age=300", req);
   if (pathname.startsWith("/vendor/three/")) {
     if (!fs.existsSync(vendorRoot)) return sendText(res, 503, "Three.js dependency ontbreekt. Run npm install.");
@@ -595,6 +608,11 @@ async function handleApi(req, res, url) {
     if (req.method === "GET" && url.pathname === "/api/game/party") {
       const snapshot = node05EconomyRuntimeService.snapshotForRequest(req);
       return sendJson(res, 200, { ok: true, party: snapshot.party });
+    }
+    // MMO (3-11): groepsacties van de nieuwe HUD (uitnodigen, meedoen, nee, verlaten); antwoord = alleen de groep.
+    if (req.method === "POST" && url.pathname === "/api/game/party/action") {
+      const body = await readJson(req);
+      return sendJson(res, 200, node05EconomyRuntimeService.partyActionForRequest(req, body));
     }
     if (req.method === "POST" && url.pathname === "/api/game/party/invite") {
       const body = await readJson(req);
@@ -901,6 +919,34 @@ async function handleApi(req, res, url) {
       if (!asset) return sendJson(res, 404, { ok: false, message: "Asset bestaat niet." });
       return sendJson(res, 201, repository.createModelEntityFromAsset(asset, body.position || {}, body.parentId || null));
     }
+    if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      return sendJson(res, 201, { ok: true, tiles: assetService.saveMinimapTiles(multipart.files) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/terrain-chunks") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      return sendJson(res, 201, { ok: true, chunks: assetService.saveTerrainChunks(multipart.files) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/terrain-paint") {
+      authService.requireEditor(req);
+      const multipart = await readMultipart(req);
+      return sendJson(res, 201, { ok: true, paint: assetService.saveTerrainPaint(multipart.files) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/editor/world-minimap-tiles/commit") {
+      authService.requireEditor(req);
+      const body = await readJson(req);
+      body.mapHash = worldMapHash(mmoService.getPublishedWorldContext().world);
+      return sendJson(res, 201, Object.assign({ ok: true }, assetService.commitMinimapTiles(body)));
+    }
+    if (req.method === "GET" && url.pathname === "/api/editor/minimap-status") {
+      authService.requireEditor(req);
+      const manifest = assetService.minimapTiles();
+      const current = worldMapHash(mmoService.getPublishedWorldContext().world);
+      return sendJson(res, 200, { ok: true, hasMap: Boolean(manifest), bakedAt: manifest?.bakedAt || null,
+        upToDate: Boolean(manifest && manifest.mapHash && manifest.mapHash === current) });
+    }
     if (req.method === "POST" && url.pathname === "/api/editor/minimap-bakes") {
       authService.requireEditor(req);
       const multipart = await readMultipart(req);
@@ -1014,6 +1060,9 @@ async function handleApi(req, res, url) {
     }
     if (req.method === "GET" && url.pathname === "/api/game/world") {
       return sendJson(res, 200, mmoService.getPublishedWorldContext().world);
+    }
+    if (req.method === "GET" && url.pathname === "/api/game/minimap") {
+      return sendJson(res, 200, { ok: true, tiles: assetService.minimapTiles() });
     }
     if (req.method === "GET" && url.pathname === "/api/game/version") {
       return sendJson(res, 200, { ok: true, publishedAt: mmoService.getPublishedWorldContext().publishedAt });

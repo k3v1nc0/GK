@@ -91,7 +91,7 @@ export function createActorPresentation(options = {}) {
       record.dyingUntil = now + DYING_MS;
       return true;
     }
-    if (message.e === "hit" && Number.isFinite(Number(message.hp))) {
+    if ((message.e === "hit" || message.e === "heal") && Number.isFinite(Number(message.hp))) {
       record.hp = Number(message.hp);
       return true;
     }

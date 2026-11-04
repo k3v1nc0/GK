@@ -1,11 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261029-klassen2";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261103-groep1";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
-import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261025-f4-music1";
-import { createActorPresentation } from "./actor-presentation.js?v=20261029-klassen3";
-import { createCharactersWindow } from "./characters-window.js?v=20261029-klassen2";
+import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
+import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261103-panel3";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -32,6 +32,11 @@ const gameRoot = document.querySelector("#gameRoot");
 const defeatOverlay = document.querySelector("#defeatOverlay");
 const overlay = document.querySelector("#gameOverlay");
 const overlayText = document.querySelector("#overlayText");
+// Stap 4: de nieuwe HUD (hud/gk-hud.js), zie ensureGkHud() onderaan.
+let gkHud = null;
+let gkHudPixels = 1; // Instellingen > Scherpte (0.7 / 1 / 1.5 / 2)
+const gkHudDebug = { on: false, slot: null };
+const gkHudCache = { assets: null, assetMap: new Map(), modulesSource: null, modules: null, targetsAt: 0, targets: [] };
 
 // FIX-5 authoritative movement / rubberband prevention. See README/fases/MMO-01-FIX-5-*.md.
 const OWN_SMALL_CORRECTION_THRESHOLD = 1.0;
@@ -90,7 +95,12 @@ const DEFAULT_MMO_NETWORK_SETTINGS = {
   remoteMaxExtrapolationMs: REMOTE_INTERPOLATION_MAX_EXTRAPOLATION_MS,
   readyTimeoutMs: MMO_READY_TIMEOUT_MS,
   wsStatusHysteresisMs: WS_STATUS_HYSTERESIS_MS,
-  clientPingIntervalMs: CLIENT_PING_INTERVAL_MS
+  clientPingIntervalMs: CLIENT_PING_INTERVAL_MS,
+  showHealthPing: true,
+  showHealthTps: true,
+  showHealthMspt: true,
+  showHealthCpu: true,
+  showHealthPacketLoss: true
 };
 const CLICK_MOVE_START_RADIUS = 0.04;
 // Zelfde aankomstregel als de server (simulatePlayerTick): binnen 0,15 van het klikpunt is aangekomen.
@@ -306,8 +316,20 @@ function handleActorMessage(message) {
   }
   if (message.type !== "actor:event") return false;
   if (actorPresentation.applyEvent(message)) syncRuntimeTargets();
+  // Healing (2-11): kleine zwevende getallen boven de vijand (schade rood, genezen groen) en boven andere spelers.
+  if (gkHud && Number(message.amount) > 0) {
+    if (message.e === "hit" || message.e === "death") gkHud.worldFloat(message.id, "-" + Math.round(Number(message.amount)), "dmg");
+    else if (message.e === "heal") gkHud.worldFloat(message.id, "+" + Math.round(Number(message.amount)), "heal");
+    else if (message.e === "attack" && message.target) gkHud.worldFloat(message.target === state.player?.id ? "self" : "player:" + message.target, "-" + Math.round(Number(message.amount)), "dmg");
+  }
+  // MMO (3-11): een teamlid wordt geraakt: zijn balk linksboven zakt meteen (de server stuurt elke seconde de echte stand).
+  if (message.e === "attack" && message.target && Number(message.amount) > 0) nudgePartyHp(message.target, -Number(message.amount));
   if (message.e === "attack" && message.target && message.target === state.player?.id) {
-    if (Number.isFinite(Number(message.amount))) showGameHudDialogueNotice("Je wordt geraakt: -" + message.amount + (message.defeated ? " (verslagen)" : ""), { title: "Gevecht" });
+    // Stap 4: een klap is geen tekstmelding meer maar een rode flits en een getal bij de levensbalk.
+    if (Number.isFinite(Number(message.amount))) {
+      if (gkHud) gkHud.playerHit(Number(message.amount));
+      else showGameHudDialogueNotice("Je wordt geraakt: -" + message.amount + (message.defeated ? " (verslagen)" : ""), { title: "Gevecht" });
+    }
     const nowAt = performance.now();
     if (message.defeated || nowAt - actorHitRefreshAt > 400) {
       actorHitRefreshAt = nowAt;
@@ -372,7 +394,14 @@ const state = {
     lastWsOpenAt: 0,
     clockOffsetMs: 0,
     lastTransport: null,
-    lastIgnoredReason: null
+    lastIgnoredReason: null,
+    serverTps: null,
+    serverTargetTps: null,
+    serverMspt: null,
+    serverTickBudgetMs: null,
+    serverCpuPercent: null,
+    serverTickStatus: null,
+    lastServerHealthAt: 0
   },
   control: {
     isLocalController: false,
@@ -478,6 +507,11 @@ const state = {
     active: false,
     pointerId: null,
     target: null,
+    route: null,
+    routeWorldKey: null,
+    routePending: false,
+    routeRequestId: 0,
+    routeArrivalRadius: 0,
     lastHoldVector: null,
     mode: "none",
     downX: 0,
@@ -489,7 +523,17 @@ const state = {
     lastDistanceToTarget: -1,
     moved: false,
     dragged: false,
-    sprintPointerId: null
+    sprintPointerId: null,
+    playerHold: null
+  },
+  // MMO (3-11): je groep (van de server, live) en openstaande uitnodigingen.
+  party: {
+    view: null,
+    invites: []
+  },
+  // MMO stap 2 (3-11): wie je blokkeerde (van de server). De berichten zelf bewaart de HUD (laatste 60).
+  chat: {
+    blocks: []
   },
   playerDefeated: false,
   lastAnimationState: "idle",
@@ -521,6 +565,7 @@ const state = {
   netPing: {
     seq: 0,
     samples: [],
+    probes: [],
     lastSentAt: 0,
     lastPongAt: 0,
     lastRttMs: null,
@@ -750,8 +795,30 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+// Verbinding naast de game (3-11): in de editor gaan de schuiven van Instellingen > Verbinding meteen naar deze game.
+// Ze gelden voor deze kant; de server gebruikt de opgeslagen waarden pas na SAVE TO GAME.
+window.addEventListener("message", function (event) {
+  if (event.origin !== location.origin || event.source !== window.parent || event.source === window) return;
+  if (event.data?.type !== "gk-network-preview") return;
+  const body = event.data.network && typeof event.data.network === "object" ? event.data.network : null;
+  if (!body) { state.networkPreview = null; return; }
+  const preview = Object.assign({}, body, { enabled: true });
+  const inputHz = Number(preview.inputSendRateHz);
+  if (Number.isFinite(inputHz) && inputHz > 0) preview.moveSendIntervalMs = Math.round(1000 / inputHz);
+  const baseDelay = Number(preview.remoteInterpolationBaseDelayMs);
+  if (Number.isFinite(baseDelay)) {
+    preview.remoteInterpolationMinDelayMs = Math.round(baseDelay * 0.8);
+    preview.remoteInterpolationMaxDelayMs = Math.round(baseDelay * 1.4);
+  }
+  state.networkPreview = preview;
+  if (state.remote) {
+    state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
+    state.remote.remoteRenderDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
+  }
+});
+
 function mmoNetworkSettings() {
-  const source = state.gameWorld?.mmo?.network;
+  const source = state.networkPreview || state.gameWorld?.mmo?.network;
   const enabled = source && source.enabled !== false;
   const values = enabled ? source : {};
   const presetValues = values && values.networkPreset ? (mmoNetworkPresetValues(values.networkPreset) || {}) : {};
@@ -802,7 +869,12 @@ function mmoNetworkSettings() {
     remoteMaxExtrapolationMs: read("remoteMaxExtrapolationMs", 0, 250),
     readyTimeoutMs: read("readyTimeoutMs", 1000, 30000),
     wsStatusHysteresisMs: read("wsStatusHysteresisMs", 0, 2000),
-    clientPingIntervalMs: read("clientPingIntervalMs", 500, 10000)
+    clientPingIntervalMs: read("clientPingIntervalMs", 500, 10000),
+    showHealthPing: values.showHealthPing !== false,
+    showHealthTps: values.showHealthTps !== false,
+    showHealthMspt: values.showHealthMspt !== false,
+    showHealthCpu: values.showHealthCpu !== false,
+    showHealthPacketLoss: values.showHealthPacketLoss !== false
   };
 }
 
@@ -3107,6 +3179,7 @@ function mmoDebugHudModule(config) {
 }
 
 function syncMmoDebugHudLayout(config) {
+  if (gkHud) return;
   const frame = state.debugHud.elements?.frame || null;
   if (!frame || isGameHudLayoutInteractionActive()) return;
   syncGameHudLivePanelLayout(frame, mmoDebugHudModule(config).anchor);
@@ -5098,6 +5171,7 @@ function startRemoteFrameLoop() {
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
     if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
+    if (gkHud) gkHud.frame(now);
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -5167,6 +5241,43 @@ function summarizePingSamples(samples) {
   };
 }
 
+function applyServerHealth(source, receivedAt = performance.now()) {
+  if (!source || typeof source !== "object") return false;
+  const readMetric = function (serverKey, plainKey) {
+    const raw = source[serverKey] ?? source[plainKey];
+    if (raw === null || raw === undefined || raw === "") return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  };
+  const tps = readMetric("serverTps", "tps");
+  const targetTps = readMetric("serverTargetTps", "targetTps");
+  const mspt = readMetric("serverMspt", "mspt");
+  const tickBudgetMs = readMetric("serverTickBudgetMs", "tickBudgetMs");
+  const cpuPercent = readMetric("serverCpuPercent", "cpuPercent");
+  const status = source.serverTickStatus ?? source.tickStatus;
+  const hasHealth = tps !== null || targetTps !== null || mspt !== null || tickBudgetMs !== null || cpuPercent !== null || status;
+  if (!hasHealth) return false;
+  state.net.serverTps = tps;
+  state.net.serverTargetTps = targetTps;
+  state.net.serverMspt = mspt;
+  state.net.serverTickBudgetMs = tickBudgetMs;
+  state.net.serverCpuPercent = cpuPercent;
+  state.net.serverTickStatus = status ? String(status) : null;
+  state.net.lastServerHealthAt = receivedAt;
+  return true;
+}
+
+function pingProbeLossPercent(nowEpoch = epochNow()) {
+  const probes = Array.isArray(state.netPing.probes) ? state.netPing.probes : [];
+  const graceMs = Math.max(5000, mmoNetworkSettings().clientPingIntervalMs * 2.5);
+  const settled = probes.filter(function (probe) {
+    return probe.received === true || nowEpoch - Number(probe.sentAt || 0) >= graceMs;
+  }).slice(-PING_SAMPLE_WINDOW_SIZE);
+  if (!settled.length) return null;
+  const lost = settled.filter(function (probe) { return probe.received !== true; }).length;
+  return round((lost / settled.length) * 100);
+}
+
 function updateRemoteInterpolationDelay() {
   const netSettings = mmoNetworkSettings();
   const pingStats = summarizePingSamples(state.netPing.samples);
@@ -5195,6 +5306,7 @@ function commitWsVisibleStatus(kind, text) {
   state.wsState = nextKind;
   state.wsLastStatusReason = nextText;
   state.wsStateVisibleAt = performance.now();
+  updateConnectionLight();
   const wsPill = state.debugHud.elements && state.debugHud.elements.wsPill;
   if (wsPill) {
     wsPill.className = "ws-pill ws-pill--" + nextKind;
@@ -5328,12 +5440,17 @@ function startPingLoop(socket, attemptId) {
   state.netPing.lastSentAt = 0;
   state.netPing.lastPongAt = 0;
   state.netPing.lastRttMs = null;
+  state.netPing.probes = [];
   const sendPing = function () {
     if (!state.ws || state.ws !== socket || socket.readyState !== WebSocket.OPEN) return;
     const seq = Math.max(1, Math.floor(Number(state.netPing.seq) || 0) + 1);
     state.netPing.seq = seq;
     const sentAt = epochNow();
     state.netPing.lastSentAt = sentAt;
+    state.netPing.probes.push({ seq: seq, sentAt: sentAt, received: false });
+    if (state.netPing.probes.length > PING_SAMPLE_WINDOW_SIZE * 3) {
+      state.netPing.probes = state.netPing.probes.slice(-(PING_SAMPLE_WINDOW_SIZE * 3));
+    }
     try {
       socket.send(JSON.stringify({
         type: "ping",
@@ -5906,6 +6023,11 @@ function applyAuthoritativeUpdate(update, options = {}) {
         })
       : null;
     if (clientInputSeq > 0 && isLocalControllerSnapshot) removeAckedInputs(clientInputSeq);
+    // Serverlampje: hoe ver zat de server naast de plek waar wij waren bij dezelfde input (bevestiging van je plek).
+    if (hasAckedReferencePosition) {
+      state.net.lastAckError = Math.hypot(referencePosition.x - nextPosition.x, referencePosition.z - nextPosition.z);
+      state.net.lastAckAt = performance.now();
+    }
     state.authoritativePosition = clonePosition(nextPosition);
     if (localPredictionHoldActive && state.predictedPosition) {
       state.position = Object.assign(clonePosition(nextPosition), {
@@ -5999,7 +6121,9 @@ function applyAuthoritativeUpdate(update, options = {}) {
       // server stuurt daarna niets meer (er verandert niets), en de
       // boekhouding dacht al dat het idle was.
       setMovementAnimationState(animationState);
-      if (distance <= netSettings.ownPredictionDeadzone) {
+      // Wereld tekenen: de server zet een stilstaande speler op nieuw terrein (heuvel/kuil); die hoogte overnemen.
+      const heightChange = previousPosition ? Math.abs((Number(previousPosition.y) || 0) - (Number(nextPosition.y) || 0)) : 0;
+      if (distance <= netSettings.ownPredictionDeadzone && heightChange <= 0.05) {
         // Positie laten staan; de animatie is hierboven al gesynct.
       } else if (distance > netSettings.ownSmallCorrectionThreshold) {
         state.predictedPosition = clonePosition(nextPosition);
@@ -6070,6 +6194,8 @@ function isMmoDebugForced() {
 function resolveMmoDebugConfig() {
   const nodes = Array.isArray(state.gameWorld?.ui) ? state.gameWorld.ui : [];
   const node = nodes.find(function (item) { return item && item.type === "debug_mmo_hud"; });
+  // Nieuwe HUD: geen oud debugpaneel; de prestatie-info (FPS) komt via runtime.setPerformanceHud (zie setDebug).
+  if (gkHud) return null;
   if (node) return node;
   return isMmoDebugForced() ? defaultMmoDebugConfig() : null;
 }
@@ -6318,7 +6444,12 @@ function refreshMmoDebugHud() {
   removeMmoDebugHud();
   const elements = buildMmoDebugHudDom(config);
   const module = mmoDebugHudModule(config);
-  elements.frame = appendGameHudPanel("debug", module, elements.root, module.anchor);
+  if (gkHud && gkHudDebug.slot) {
+    gkHudDebug.slot.append(elements.root);
+    elements.frame = elements.root;
+  } else {
+    elements.frame = appendGameHudPanel("debug", module, elements.root, module.anchor);
+  }
   state.debugHud.elements = elements;
   state.debugHud.signature = signature;
   const expanded = wasExpanded !== null ? wasExpanded : (isMmoDebugForced() || config.startCollapsed === false);
@@ -7064,11 +7195,6 @@ function clearNode03PendingTargetAction(targetId = null) {
 function maybeRunPendingNode03TargetAction(reason = "range") {
   const pending = state.node03.pendingTargetAction;
   if (!pending || state.node03.actionInFlight || isNode03Defeated()) return false;
-  const age = performance.now() - Number(pending.createdAt || 0);
-  if (age > NODE03_PENDING_TARGET_ACTION_TTL_MS) {
-    clearNode03PendingTargetAction();
-    return false;
-  }
   const node04Action = pending.action.startsWith("node04:");
   const rawTarget = node03TargetById(pending.targetId)
     || (node04Action ? node04TargetById(pending.targetId) : null);
@@ -7077,6 +7203,11 @@ function maybeRunPendingNode03TargetAction(reason = "range") {
     : node03TargetWithClientRange(rawTarget);
   if (!target || target.available === false) {
     clearNode03PendingTargetAction(pending.targetId);
+    return false;
+  }
+  if (isWalkingToTarget(target)) pending.createdAt = performance.now();
+  if (performance.now() - Number(pending.createdAt || 0) > NODE03_PENDING_TARGET_ACTION_TTL_MS) {
+    clearNode03PendingTargetAction();
     return false;
   }
   if (target.inRange === false) return false;
@@ -7272,6 +7403,11 @@ function renderNode03Hud() {
   const snapshot = state.node03.snapshot;
   refreshGameDefeatState();
   syncDebugActionButtons();
+  // Stap 4: de nieuwe HUD tekent alles; de oude losse panelen komen niet meer.
+  if (gkHud) {
+    gkHud.render();
+    return;
+  }
   if (!modules.length || !snapshot) {
     removeNode03Hud();
     return;
@@ -7364,7 +7500,7 @@ async function loadNode03State(options = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node03.lastError = data?.message || "NODE-03 state niet beschikbaar.";
+      state.node03.lastError = data?.message || "Spelergegevens niet beschikbaar.";
       if (!options.silent) showHudError(state.node03.lastError);
       renderNode03Hud();
       return false;
@@ -7383,7 +7519,7 @@ async function loadNode03State(options = {}) {
     scheduleNode03Poll();
     return true;
   } catch (error) {
-    state.node03.lastError = String(error?.message || error || "NODE-03 state mislukt.");
+    state.node03.lastError = String(error?.message || error || "Spelergegevens laden mislukt.");
     if (!options.silent) showHudError(state.node03.lastError);
     renderNode03Hud();
     return false;
@@ -7413,6 +7549,7 @@ async function waitForServerPositionInRange(target, timeoutMs) {
 async function runNode03Action(action, targetId, extra = {}) {
   const normalizedAction = String(action || "").replace(/^node03:/, "").toLowerCase();
   const isTravel = normalizedAction === "travel";
+  const isUnstuck = normalizedAction === "unstuck";
   const isRespawn = normalizedAction === "respawn" || normalizedAction === "reset_demo" || normalizedAction === "reset";
   const bypassDefeatState = isRespawn || normalizedAction.startsWith("debug_") || normalizedAction === "inventory_cleanup";
   if (isNode03Defeated() && !bypassDefeatState) {
@@ -7430,7 +7567,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     selectNode03Target(currentTarget.instanceId);
     if (extra.skipMoveToTarget !== true && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
       setNode03PendingTargetAction(normalizedAction || action, currentTarget);
-      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node03-target");
+      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node03-target", { arrivalRadius: targetArrivalRadius(currentTarget, true) });
       state.node03.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || "target") + "."
         : (currentTarget.displayName || "Target") + " is buiten range.";
@@ -7441,6 +7578,11 @@ async function runNode03Action(action, targetId, extra = {}) {
   }
   state.node03.actionInFlight = true;
   state.node03.lastError = "";
+  if (isUnstuck) {
+    clearLocalMovementForTeleport();
+    if (state.session && isMmoGameplayReady()) sendInputState({ force: true, stop: true });
+  }
+  if (normalizedAction === "attack" && gkHud) gkHud.combat();
   renderNode03Hud();
   // De server beslist of je bij het portal bent; wacht tot de serverpositie (niet alleen je scherm) in bereik is.
   if (isTravel) await waitForServerPositionInRange(currentTarget, PORTAL_SERVER_RANGE_WAIT_MS);
@@ -7459,6 +7601,7 @@ async function runNode03Action(action, targetId, extra = {}) {
         currencyId: extra.currencyId || null,
         amount: extra.amount === null || extra.amount === undefined ? null : Number(extra.amount),
         itemInstanceId: extra.itemInstanceId || null,
+        slotId: extra.slotId || null,
         operationId: "node03:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
       })
     });
@@ -7468,7 +7611,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      const serverMessage = data?.message || "NODE-03 actie mislukt.";
+      const serverMessage = data?.message || "Spelactie mislukt.";
       const pendingAttempt = Math.max(0, Number(extra.pendingAttempt || 0) || 0);
       if (
         extra.pendingTargetAction === true &&
@@ -7489,6 +7632,7 @@ async function runNode03Action(action, targetId, extra = {}) {
     }
     if (currentTarget?.instanceId) clearNode03PendingTargetAction(currentTarget.instanceId);
     state.node03.lastActionMessage = data.message || (isTravel ? "Travel complete." : "");
+    keepNewestActionMessage("node03");
     if (state.node03.lastActionMessage) showGameHudDialogueNotice(state.node03.lastActionMessage, { title: "Melding" });
     if (isTravel) {
       applyInstantTravelResponse(data);
@@ -7505,12 +7649,12 @@ async function runNode03Action(action, targetId, extra = {}) {
       state.node03.snapshot = data.snapshot;
       syncNode03RuntimeTargets();
     }
-    if (isRespawn && data.position) applyInstantRespawnResponse(data);
+    if ((isRespawn || isUnstuck) && data.position) applyInstantRespawnResponse(data);
     else if (data.position) applyFallbackPosition({ ok: true, position: data.position });
     renderNode03Hud();
     renderNode04Hud();
   } catch (error) {
-    state.node03.lastError = String(error?.message || error || "NODE-03 actie mislukt.");
+    state.node03.lastError = String(error?.message || error || "Spelactie mislukt.");
     showHudError(state.node03.lastError);
   } finally {
     if (isTravel && state.portalTravel.active) finishPortalTravel();
@@ -7520,6 +7664,30 @@ async function runNode03Action(action, targetId, extra = {}) {
 }
 
 // ---- NODE-04 quest/dialogue HUD: rendered from published quest_tracker/dialogue/notification nodes ----
+
+// Healing (2-11): de server stuurt na regeneratie, gif of een effect de nieuwe stand; de HUD tekent hem meteen.
+function applyVitalsMessage(message) {
+  const snapshot = state.node03.snapshot;
+  if (!snapshot) return;
+  const wasDefeated = isNode03Defeated();
+  const bar = function (previous, next) {
+    const max = num(next?.max, 0);
+    const current = num(next?.current, max);
+    return Object.assign({}, previous || {}, { current: current, max: max, percent: max > 0 ? Math.max(0, Math.min(1, current / max)) : 0 });
+  };
+  snapshot.stats = Object.assign({}, snapshot.stats || {}, { health: bar(snapshot.stats?.health, message.health), mana: bar(snapshot.stats?.mana, message.mana) });
+  if (snapshot.stats.byId) {
+    const byId = Object.assign({}, snapshot.stats.byId);
+    if (byId["stat.health"]) byId["stat.health"] = Object.assign({}, byId["stat.health"], { currentValue: snapshot.stats.health.current });
+    if (byId["stat.mana"]) byId["stat.mana"] = Object.assign({}, byId["stat.mana"], { currentValue: snapshot.stats.mana.current });
+    snapshot.stats.byId = byId;
+  }
+  snapshot.effects = Array.isArray(message.effects) ? message.effects : [];
+  snapshot.itemCooldowns = message.itemCooldowns && typeof message.itemCooldowns === "object" ? message.itemCooldowns : {};
+  snapshot.effectsReceivedAt = performance.now();
+  if (!wasDefeated && isNode03Defeated()) scheduleNode03ImmediateRefresh();
+  renderNode03Hud();
+}
 
 function isNode03Defeated(snapshot = state.node03.snapshot) {
   const health = snapshot?.stats?.health || {};
@@ -7593,9 +7761,17 @@ function currentGameHudDialogueNotice() {
   if (state.node04.dialogueNotice?.text) return state.node04.dialogueNotice;
   const error = state.node04.lastError || state.node03.lastError || state.node05.lastError;
   if (error) return { title: "Error", text: error, tone: "error", dismissible: true };
-  const message = state.node04.lastActionMessage || state.node03.lastActionMessage || state.node05.lastActionMessage;
+  const message = [state.node04.lastActionMessage, state.node03.lastActionMessage, state.node05.lastActionMessage]
+    .find(function (text) { return text && !GAME_NOTICE_NOISE.test(String(text).trim()); });
   if (message) return { title: "Message", text: message, tone: "info", dismissible: true };
   return null;
+}
+
+// De laatste melding blijft staan (bijv. "Vijand verslagen"), niet een oudere van een ander onderdeel (zoals "Dialogue gestart").
+function keepNewestActionMessage(source) {
+  const text = String(state[source]?.lastActionMessage || "").trim();
+  if (!text || GAME_NOTICE_NOISE.test(text)) return;
+  for (const other of ["node03", "node04", "node05"]) if (other !== source) state[other].lastActionMessage = "";
 }
 
 function hasGameHudDialoguePanelContent() {
@@ -7819,8 +7995,40 @@ function node04RuntimeTargetsForScene() {
   return Array.from(byId.values());
 }
 
+// Een tik in de wereld en de HUD-knoppen (aanvallen, 🤝 doen) starten een doel op dezelfde manier.
+// Een NPC (gesprek of winkel/werkplaats) gaat via de HUD: daar komen gesprek, Handelen en Maken samen.
+function activateRuntimeTarget(target) {
+  const action = String(target?.action || "");
+  if (gkHud && (action === "node04:start_dialogue" || action === "node05:focus_service")) {
+    gkHud.talkTo(target);
+    return;
+  }
+  activateRuntimeTargetDirect(target);
+}
+
+function activateRuntimeTargetDirect(target) {
+  if (!target?.instanceId || !target.action) return;
+  const action = String(target.action);
+  if (action.startsWith("node04:")) {
+    runNode04Action(action, target.instanceId, { questId: target.questId || null, dialogueId: target.dialogueId || null });
+  } else if (action.startsWith("node05:")) {
+    runNode05Action(action, { targetId: target.instanceId });
+  } else {
+    runNode03Action(action, target.instanceId);
+  }
+}
+
 function syncRuntimeTargets() {
   if (!state.runtime || typeof state.runtime.setRuntimeTargets !== "function") return;
+  const list = collectRuntimeTargets();
+  if (!list.length) {
+    if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
+    return;
+  }
+  state.runtime.setRuntimeTargets(list);
+}
+
+function collectRuntimeTargets() {
   const byId = new Map();
   const addTargets = function (targets) {
     for (const target of targets) {
@@ -7838,11 +8046,7 @@ function syncRuntimeTargets() {
   }));
   if (state.node04.snapshot) addTargets(node04RuntimeTargetsForScene());
   if (state.node05.snapshot) addTargets(node05RuntimeTargetsForScene());
-  if (!byId.size) {
-    if (typeof state.runtime.clearRuntimeTargets === "function") state.runtime.clearRuntimeTargets();
-    return;
-  }
-  state.runtime.setRuntimeTargets(Array.from(byId.values()));
+  return Array.from(byId.values());
 }
 
 function refreshNode04ClientRanges(now = performance.now(), options = {}) {
@@ -8053,6 +8257,11 @@ function renderNode04Module(module, snapshot) {
 }
 
 function renderNode04Hud() {
+  if (gkHud) {
+    if (!state.node04.snapshot) syncRuntimeTargets();
+    gkHud.render();
+    return;
+  }
   const modules = node04Modules();
   const snapshot = state.node04.snapshot;
   const dialogueNotice = currentGameHudDialogueNotice();
@@ -8118,7 +8327,7 @@ async function loadNode04State(options = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node04.lastError = data?.message || "NODE-04 state niet beschikbaar.";
+      state.node04.lastError = data?.message || "Questgegevens niet beschikbaar.";
       if (!options.silent) showHudError(state.node04.lastError);
       renderNode04Hud();
       return false;
@@ -8133,7 +8342,7 @@ async function loadNode04State(options = {}) {
     scheduleNode04Poll();
     return true;
   } catch (error) {
-    state.node04.lastError = String(error?.message || error || "NODE-04 state mislukt.");
+    state.node04.lastError = String(error?.message || error || "Questgegevens laden mislukt.");
     if (!options.silent) showHudError(state.node04.lastError);
     renderNode04Hud();
     return false;
@@ -8162,7 +8371,7 @@ async function runNode04Action(action, targetId, extra = {}) {
   const currentTarget = node04TargetWithClientRange(node04TargetById(targetId));
   if (currentTarget?.instanceId && currentTarget.available !== false && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
     setNode03PendingTargetAction(action, currentTarget);
-    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node04-target");
+    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node04-target", { arrivalRadius: targetArrivalRadius(currentTarget) });
     state.node04.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || "quest target") + "."
       : (currentTarget.displayName || "Quest target") + " is buiten range.";
@@ -8200,11 +8409,12 @@ async function runNode04Action(action, targetId, extra = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node04.lastError = data?.message || "NODE-04 actie mislukt.";
+      state.node04.lastError = data?.message || "Questactie mislukt.";
       showHudError(state.node04.lastError);
       return;
     }
     state.node04.lastActionMessage = data.message || "";
+    keepNewestActionMessage("node04");
     if (state.node04.lastActionMessage) showGameHudDialogueNotice(state.node04.lastActionMessage, { title: "Melding" });
     if (Object.prototype.hasOwnProperty.call(data, "dialogue")) state.node04.dialogue = data.dialogue || null;
     if (data.snapshot) {
@@ -8215,7 +8425,7 @@ async function runNode04Action(action, targetId, extra = {}) {
     renderNode03Hud();
     renderNode04Hud();
   } catch (error) {
-    state.node04.lastError = String(error?.message || error || "NODE-04 actie mislukt.");
+    state.node04.lastError = String(error?.message || error || "Questactie mislukt.");
     showHudError(state.node04.lastError);
   } finally {
     state.node04.actionInFlight = false;
@@ -8864,6 +9074,11 @@ function renderNode05Module(module, snapshot) {
 }
 
 function renderNode05Hud() {
+  if (gkHud) {
+    if (!state.node05.snapshot) syncRuntimeTargets();
+    gkHud.render();
+    return;
+  }
   const modules = node05Modules();
   const snapshot = state.node05.snapshot;
   if (!modules.length || !snapshot) {
@@ -8918,7 +9133,7 @@ async function loadNode05State(options = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node05.lastError = data?.message || "NODE-05 state niet beschikbaar.";
+      state.node05.lastError = data?.message || "Handelsgegevens niet beschikbaar.";
       if (!options.silent) showHudError(state.node05.lastError);
       renderNode05Hud();
       return false;
@@ -8934,7 +9149,7 @@ async function loadNode05State(options = {}) {
     if (shouldLoadNode05State()) scheduleNode05Poll();
     return true;
   } catch (error) {
-    state.node05.lastError = String(error?.message || error || "NODE-05 state mislukt.");
+    state.node05.lastError = String(error?.message || error || "Handelsgegevens laden mislukt.");
     if (!options.silent) showHudError(state.node05.lastError);
     renderNode05Hud();
     return false;
@@ -8973,7 +9188,7 @@ async function runNode05Action(action, payload = {}) {
   const currentTarget = node05TargetWithClientRange(node05TargetById(payload.targetId));
   if (normalized === "focus_service" || normalized === "move_target") {
     if (currentTarget && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
-      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target");
+      const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target", { arrivalRadius: targetArrivalRadius(currentTarget) });
       state.node05.lastActionMessage = started
         ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
         : (currentTarget.displayName || currentTarget.label || "Service") + " is al dichtbij.";
@@ -8983,7 +9198,7 @@ async function runNode05Action(action, payload = {}) {
     return;
   }
   if (currentTarget?.instanceId && currentTarget.inRange === false && Number.isFinite(Number(currentTarget.x)) && Number.isFinite(Number(currentTarget.z))) {
-    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target");
+    const started = startClickToMoveTarget(num(currentTarget.x, 0), num(currentTarget.z, 0), "node05-target", { arrivalRadius: targetArrivalRadius(currentTarget) });
     state.node05.lastActionMessage = started
       ? "Loop naar " + (currentTarget.displayName || currentTarget.label || "service") + "."
       : (currentTarget.displayName || currentTarget.label || "Service") + " is buiten range.";
@@ -9024,11 +9239,12 @@ async function runNode05Action(action, payload = {}) {
     }
     const data = await response.json().catch(function () { return null; });
     if (!response.ok || !data || data.ok !== true) {
-      state.node05.lastError = data?.message || "NODE-05 actie mislukt.";
+      state.node05.lastError = data?.message || "Handelsactie mislukt.";
       showHudError(state.node05.lastError);
       return;
     }
     state.node05.lastActionMessage = data.message || "";
+    keepNewestActionMessage("node05");
     if (state.node05.lastActionMessage) showGameHudDialogueNotice(state.node05.lastActionMessage, { title: "Melding" });
     if (data.snapshot) {
       state.node05.snapshot = data.snapshot;
@@ -9039,7 +9255,7 @@ async function runNode05Action(action, payload = {}) {
     renderNode04Hud();
     renderNode05Hud();
   } catch (error) {
-    state.node05.lastError = String(error?.message || error || "NODE-05 actie mislukt.");
+    state.node05.lastError = String(error?.message || error || "Handelsactie mislukt.");
     showHudError(state.node05.lastError);
   } finally {
     state.node05.actionInFlight = false;
@@ -9087,7 +9303,15 @@ function resetMmoDebugRuntimeState() {
   state.net.clockOffsetMs = 0;
   state.net.lastTransport = null;
   state.net.lastIgnoredReason = null;
+  state.net.serverTps = null;
+  state.net.serverTargetTps = null;
+  state.net.serverMspt = null;
+  state.net.serverTickBudgetMs = null;
+  state.net.serverCpuPercent = null;
+  state.net.serverTickStatus = null;
+  state.net.lastServerHealthAt = 0;
   state.netPing.samples = [];
+  state.netPing.probes = [];
   state.netPing.lastSentAt = 0;
   state.netPing.lastPongAt = 0;
   state.netPing.lastRttMs = null;
@@ -10752,6 +10976,11 @@ function observeGameMinimapHudSize(elements) {
 }
 
 function refreshGameMinimapHud() {
+  // Stap 4: de nieuwe HUD heeft een eigen minimap zonder bake.
+  if (gkHud) {
+    removeGameMinimapHud();
+    return;
+  }
   const config = resolveGameMinimapConfig();
   if (!config) {
     removeGameMinimapHud();
@@ -11291,6 +11520,10 @@ function ensureRuntime(world) {
     });
     state.runtimeAntialias = desiredAntialias;
     window.__GK_GAME_RUNTIME = state.runtime;
+    // Nieuwe HUD: scherpe 2D-namen in plaats van de 3D-bordjes boven NPC's, vijanden en items.
+    if (typeof state.runtime.setRuntimeTargetNameplatesVisible === "function") state.runtime.setRuntimeTargetNameplatesVisible(false);
+    if (gkHudDebug.on && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.slot);
+    if (typeof state.runtime.setPlayerPixelRatio === "function") state.runtime.setPlayerPixelRatio(gkHudPixels);
   }
   return state.runtime;
 }
@@ -11397,6 +11630,14 @@ function isPointerHoldActive() {
     && state.pointer.downAt > 0;
 }
 
+// Een nieuwe klikroute vervangt de vorige. Laat de server eerst zijn opgebouwde rij met
+// tussenpunten vergeten; anders werkt hij nog de oude route (bijvoorbeeld via een brug) af.
+function interruptActiveClickRoute(reason = "click-route-replaced") {
+  if (!state.pointer.active || state.pointer.mode !== "click_to_move" || isPointerHoldActive()) return false;
+  sendInputState({ force: true, stop: true, reason: reason });
+  return true;
+}
+
 function refreshPointerTargetFromActivePointer(options = {}) {
   if (!state.pointer.active) return false;
   if (state.pointer.mode === "click_to_move" && options.allowClickToMove !== true) return false;
@@ -11405,6 +11646,7 @@ function refreshPointerTargetFromActivePointer(options = {}) {
 
 function shouldSendPointerTargetToServer() {
   if (!state.pointer.target) return false;
+  if (state.pointer.routePending) return false;
   // While the mouse/finger is held down the client uses the pointer as a
   // direction hold. Sending the ground point would make the server walk to a
   // stale target and stop there while local prediction keeps moving.
@@ -11412,13 +11654,57 @@ function shouldSendPointerTargetToServer() {
   return true;
 }
 
-function startClickToMoveTarget(worldX, worldZ, source = null) {
+function prepareClickMoveRoute() {
+  if (!state.pointer.target || !state.predictedPosition || !state.runtime?.findPlayerMovementPath) return false;
+  const worldKey = state.runtimeWorldKey;
+  if (state.pointer.routePending && state.pointer.routeWorldKey === worldKey) return true;
+  const requestId = ++state.pointer.routeRequestId;
+  state.pointer.route = null;
+  state.pointer.routePending = true;
+  state.pointer.routeWorldKey = worldKey;
+  state.runtime.findPlayerMovementPath({ ...state.predictedPosition }, { ...state.pointer.target }, {
+    radius: currentCollisionRadius(), arrivalRadius: state.pointer.routeArrivalRadius
+  }).then(function (route) {
+    if (requestId !== state.pointer.routeRequestId || !state.pointer.active) return;
+    state.pointer.routePending = false;
+    if (worldKey !== state.runtimeWorldKey || route.reason === "cancelled") return;
+    if (!route.ok || !route.points.length) {
+      clearMovementInput("click-route-unavailable");
+      return;
+    }
+    state.pointer.route = route.points;
+    sendInputState({ force: true });
+  });
+  return true;
+}
+
+function clickMoveWaypoint(position = state.predictedPosition) {
+  if (isPointerHoldActive()) return state.pointer.target;
+  if ((!state.pointer.route || state.pointer.routeWorldKey !== state.runtimeWorldKey) && !prepareClickMoveRoute()) return null;
+  if (state.pointer.routePending) return null;
+  const route = state.pointer.route;
+  while (route.length > 1 && Math.hypot(route[0].x - position.x, route[0].z - position.z) <= 0.0001) route.shift();
+  return route[0] || state.pointer.target;
+}
+
+function targetArrivalRadius(target, includeRadius = false) {
+  const reach = Math.max(0, num(target?.range, 0)) + (includeRadius ? Math.max(0, num(target?.radius, 0)) : 0);
+  return Math.max(0, reach - 0.25);
+}
+
+function isWalkingToTarget(target) {
+  return Boolean(target && state.pointer.active && state.pointer.mode === "click_to_move" && !isPointerHoldActive()
+    && state.pointer.target && Math.hypot(state.pointer.target.x - num(target.x, 0), state.pointer.target.z - num(target.z, 0)) < 0.1);
+}
+
+function startClickToMoveTarget(worldX, worldZ, source = null, options = {}) {
   if (!isMmoGameplayReady()) return false;
   if (isNode03Defeated()) {
     clearLocalMovementForDefeat({ force: true, sendStop: true });
     renderNode04Hud();
     return false;
   }
+  interruptActiveClickRoute(source ? source + "-replaced" : "click-route-replaced");
   clearPointerTarget(false);
   state.pointer.active = true;
   state.pointer.pointerId = null;
@@ -11434,10 +11720,12 @@ function startClickToMoveTarget(worldX, worldZ, source = null) {
   state.pointer.dragged = false;
   state.pointer.lastHoldVector = null;
   state.pointer.target = { x: Number(worldX) || 0, z: Number(worldZ) || 0 };
+  state.pointer.routeArrivalRadius = Math.max(0, num(options.arrivalRadius, 0));
   if (pointerTargetDistance() <= clickMoveSelfRadius()) {
     clearPointerTarget(false);
     return false;
   }
+  if (!prepareClickMoveRoute()) return false;
   noteLocalControlStart(true, source || "click-to-move");
   return true;
 }
@@ -11464,10 +11752,12 @@ function currentMoveVector() {
     }
     if (state.pointer.mode === "click_to_move") {
       if (!state.pointer.target || !state.predictedPosition) return { x: 0, z: 0 };
-      x = state.pointer.target.x - state.predictedPosition.x;
-      z = state.pointer.target.z - state.predictedPosition.z;
+      const waypoint = clickMoveWaypoint();
+      if (!waypoint) return { x: 0, z: 0 };
+      x = waypoint.x - state.predictedPosition.x;
+      z = waypoint.z - state.predictedPosition.z;
       const length = Math.hypot(x, z);
-      if (length <= clickMoveArrivalRadius()) {
+      if (length <= clickMoveArrivalRadius() && (!state.pointer.route || state.pointer.route.length <= 1)) {
         if (pointerHeld && state.pointer.lastHoldVector) {
           return { x: state.pointer.lastHoldVector.x, z: state.pointer.lastHoldVector.z };
         }
@@ -11600,6 +11890,7 @@ function withOwnCharacterModel(gameWorld, player) {
 
 function primeHttpSnapshotState(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
+  applyServerHealth(snapshot.serverPerf);
   state.user = snapshot.user || state.user;
   state.session = snapshot.session || state.session;
   state.csrfToken = snapshot.csrfToken || state.csrfToken;
@@ -12027,6 +12318,7 @@ function handleSocketMessage(raw) {
     return;
   }
   if (!message || typeof message.type !== "string") return;
+  state.net.lastMessageAt = performance.now();
 
   if (message.type === "auth_ok") {
     const socket = state.ws;
@@ -12051,6 +12343,7 @@ function handleSocketMessage(raw) {
   state.debug.lastPacketType = message.type;
   state.debug.lastPacketAt = packetAt;
   updateClockOffsetFromServerMessage(message, packetAt);
+  applyServerHealth(message, packetAt);
 
   if (message.type !== "ping" && message.type !== "pong") {
     state.debug.lastReceivedType = message.type;
@@ -12067,6 +12360,11 @@ function handleSocketMessage(raw) {
     return;
   }
   if (message.type === "pong") {
+    const pongSeq = Number(message.clientPingSeq);
+    if (Number.isFinite(pongSeq)) {
+      const probe = state.netPing.probes.slice().reverse().find(function (entry) { return Number(entry.seq) === pongSeq; });
+      if (probe) probe.received = true;
+    }
     const sentAt = Number(message.clientSentAt);
     if (Number.isFinite(sentAt) && sentAt > 0) {
       recordPingSample(epochNow(packetAt) - sentAt, message.serverTimeMs ?? null, sentAt);
@@ -12122,6 +12420,7 @@ function handleSocketMessage(raw) {
     return;
   }
   if (message.type === "fog:discovery") {
+    if (gkHud) gkHud.fogDiscovered(message);
     applyMinimapFogDiscoveryPayload(message, { replace: false });
     markWsConnected();
     return;
@@ -12133,6 +12432,49 @@ function handleSocketMessage(raw) {
   }
   if (message.type === "actor:snapshot" || message.type === "actor:event") {
     handleActorMessage(message);
+    return;
+  }
+  // Healing (2-11): levens, mana, effecten en wachttijden van jezelf (1x per seconde als er iets verandert).
+  if (message.type === "vitals") {
+    applyVitalsMessage(message);
+    return;
+  }
+  // MMO (3-11): je groep (leden, level, levens, mana, online), uitnodigingen en korte meldingen.
+  if (message.type === "party:state") {
+    applyPartyState(message.party || null);
+    return;
+  }
+  if (message.type === "party:invite") {
+    addPartyInvite(message.invite);
+    return;
+  }
+  if (message.type === "party:notice") {
+    if (gkHud && message.text) {
+      gkHud.toast(String(message.text), { icon: "three-friends", ms: 3500 });
+      gkHud.chatNotice(String(message.text), "", true);
+    }
+    return;
+  }
+  // MMO stap 2 (3-11): chat. De server kiest wie een bericht krijgt; de HUD toont het (en de ballon boven het hoofd).
+  if (message.type === "chat:message") {
+    if (gkHud && message.message) gkHud.chatMessage(message.message, message.heard);
+    return;
+  }
+  if (message.type === "chat:error" || message.type === "chat:notice") {
+    if (gkHud && message.text) gkHud.chatNotice(String(message.text), message.type === "chat:error" ? "error" : "");
+    return;
+  }
+  if (message.type === "chat:blocks") {
+    state.chat.blocks = Array.isArray(message.blocks) ? message.blocks : [];
+    if (gkHud) gkHud.render();
+    return;
+  }
+  // Healing (2-11): een speler geneest een ander: groen getal boven die speler.
+  if (message.type === "fx") {
+    if (message.target && Number(message.amount) > 0 && message.tone === "heal") nudgePartyHp(message.target, Number(message.amount));
+    if (gkHud && message.target && message.target !== state.player?.id && Number(message.amount) > 0) {
+      gkHud.worldFloat("player:" + message.target, "+" + Math.round(Number(message.amount)), message.tone === "heal" ? "heal" : "dmg");
+    }
     return;
   }
   if (message.type === "node03:entities_changed") {
@@ -12742,19 +13084,21 @@ function stepMovement(now) {
   // Zo lopen client en server ook langs obstakels dezelfde route en even snel; anders liep de server voor of
   // een andere kant om en volgde er een correctie.
   const tickSeconds = 1 / clamp(num(netSettings.serverTickRateHz, 30), 10, 60);
-  const clickTarget = state.pointer.active && state.pointer.mode === "click_to_move" && state.pointer.target ? state.pointer.target : null;
+  const followsRoute = state.pointer.active && state.pointer.mode === "click_to_move" && !isPointerHoldActive();
   const radius = currentCollisionRadius();
   let stepPosition = { x: state.predictedPosition.x, y: state.predictedPosition.y, z: state.predictedPosition.z };
   let resolved = { x: stepPosition.x, y: stepPosition.y, z: stepPosition.z, collided: false };
   let facingX = nx;
   let facingZ = nz;
   let remainingDt = dt;
-  while (remainingDt > 0.000001) {
+  let movementSteps = 0;
+  while (remainingDt > 0.000001 && movementSteps++ < 64) {
     const stepDt = Math.min(tickSeconds, remainingDt);
-    remainingDt -= stepDt;
     let dirX = nx;
     let dirZ = nz;
     let stepDistance = speed * stepDt;
+    const clickTarget = followsRoute ? clickMoveWaypoint(stepPosition) : null;
+    if (followsRoute && !clickTarget) break;
     if (clickTarget) {
       // Nooit voorbij het klikpunt schieten: bij een trage frame liep de speler eroverheen en weer terug.
       const toX = clickTarget.x - stepPosition.x;
@@ -12765,13 +13109,18 @@ function stepMovement(now) {
       dirZ = toZ / remaining;
       stepDistance = Math.min(stepDistance, remaining);
     }
+    remainingDt -= stepDistance / speed;
     const desiredStep = { x: stepPosition.x + dirX * stepDistance, y: stepPosition.y, z: stepPosition.z + dirZ * stepDistance };
     resolved = state.runtime && typeof state.runtime.resolvePlayerMovementIntent === "function"
       ? state.runtime.resolvePlayerMovementIntent(stepPosition, desiredStep, { radius: radius })
       : Object.assign({ collided: false }, desiredStep);
+    const actualX = resolved.x - stepPosition.x;
+    const actualZ = resolved.z - stepPosition.z;
+    if (Math.hypot(actualX, actualZ) > 0.00001) {
+      facingX = actualX;
+      facingZ = actualZ;
+    }
     stepPosition = { x: resolved.x, y: Number.isFinite(resolved.y) ? resolved.y : stepPosition.y, z: resolved.z };
-    facingX = dirX;
-    facingZ = dirZ;
   }
   const nextPosition = {
     x: stepPosition.x,
@@ -12787,7 +13136,7 @@ function stepMovement(now) {
     state.control.collisionBlockedSince = 0;
     state.control.collisionStopSent = false;
   }
-  if (state.pointer.active && state.pointer.mode === "click_to_move" && state.pointer.target) {
+  if (state.pointer.active && state.pointer.mode === "click_to_move" && !isPointerHoldActive() && state.pointer.target) {
     const remainingDistance = Math.hypot(state.pointer.target.x - nextPosition.x, state.pointer.target.z - nextPosition.z);
     const previousRemainingDistance = Number.isFinite(Number(state.pointer.lastDistanceToTarget))
       ? Number(state.pointer.lastDistanceToTarget)
@@ -12844,6 +13193,10 @@ function setInput(action, pressed) {
 function bindKeyboardControls() {
   window.addEventListener("keydown", function (event) {
     if (isEditableTarget(event.target)) return;
+    if (gkHud && gkHud.handleKey(event)) {
+      event.preventDefault();
+      return;
+    }
     const hotbarSlot = node03HotbarSlotIndexForKey(event.code);
     const sprintKey = event.code === "ShiftLeft" || event.code === "ShiftRight";
     const movementKey = event.code === "KeyW" || event.code === "ArrowUp"
@@ -12919,6 +13272,12 @@ function bindKeyboardControls() {
 }
 
 function clearPointerTarget(keepTarget = false) {
+  state.runtime?.cancelPlayerMovementPath?.();
+  state.pointer.routeRequestId += 1;
+  state.pointer.routePending = false;
+  state.pointer.routeArrivalRadius = 0;
+  state.pointer.route = null;
+  state.pointer.routeWorldKey = null;
   state.pointer.active = false;
   state.pointer.pointerId = null;
   state.pointer.mode = "none";
@@ -12942,6 +13301,15 @@ function updatePointerTargetFromEvent(event) {
 }
 
 function handleGamePointerDown(event, source = "pointer") {
+  // MMO (3-11): rechtsklik op een andere speler = spelermenu (uitnodigen, doel kiezen).
+  if (event.pointerType === "mouse" && event.button === 2) {
+    const picked = isMmoGameplayReady() ? remotePlayerAtPointer(event) : null;
+    if (picked) {
+      event.preventDefault();
+      openPlayerMenuFor(picked, event.clientX, event.clientY);
+    }
+    return;
+  }
   if (event.pointerType !== "touch" && event.button !== 0) return;
   event.preventDefault();
   if (!isMmoGameplayReady()) return;
@@ -12950,10 +13318,9 @@ function handleGamePointerDown(event, source = "pointer") {
     renderNode04Hud();
     return;
   }
-  // Second finger while the first is already driving movement: hold-to-sprint, the
-  // touch equivalent of holding Shift. Mirrors the keyboard sprint handler below rather
-  // than restarting click-to-move tracking with this finger's position.
-  if (event.pointerType === "touch" && state.pointer.active && event.pointerId !== state.pointer.pointerId) {
+  // Alleen een tweede vinger terwijl de eerste nog echt op het scherm staat betekent sprint.
+  // Een nieuwe tik na een eerdere klikroute moet die route juist vervangen.
+  if (event.pointerType === "touch" && isPointerHoldActive() && event.pointerId !== state.pointer.pointerId) {
     state.pointer.sprintPointerId = event.pointerId;
     state.input.sprint = true;
     if (typeof canvas.setPointerCapture === "function") {
@@ -12966,21 +13333,16 @@ function handleGamePointerDown(event, source = "pointer") {
     ? state.runtime.pickRuntimeTargetAt(event.clientX, event.clientY)
     : null;
   if (pickedNode03Target?.instanceId && pickedNode03Target?.action) {
-    if (String(pickedNode03Target.action).startsWith("node04:")) {
-      runNode04Action(pickedNode03Target.action, pickedNode03Target.instanceId, {
-        questId: pickedNode03Target.questId || null,
-        dialogueId: pickedNode03Target.dialogueId || null
-      });
-    } else if (String(pickedNode03Target.action).startsWith("node05:")) {
-      runNode05Action(pickedNode03Target.action, {
-        targetId: pickedNode03Target.instanceId
-      });
-    } else {
-      runNode03Action(pickedNode03Target.action, pickedNode03Target.instanceId);
-    }
+    activateRuntimeTarget(pickedNode03Target);
     return;
   }
+  // MMO (3-11): vinger op een andere speler: lang drukken = menu. Kort tikken loopt gewoon (hieronder).
+  const heldPlayer = event.pointerType !== "mouse" ? remotePlayerAtPointer(event) : null;
+  if (heldPlayer) startPlayerHold(event, heldPlayer);
+  else cancelPlayerHold();
   clearNode03PendingTargetAction();
+  interruptActiveClickRoute("world-click-route-replaced");
+  clearPointerTarget(false);
   state.input.move_forward = false;
   state.input.move_back = false;
   state.input.move_left = false;
@@ -13010,6 +13372,8 @@ function handleGamePointerDown(event, source = "pointer") {
 }
 
 function handleGamePointerMove(event) {
+  const hold = state.pointer.playerHold;
+  if (hold && event.pointerId === hold.pointerId && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > PLAYER_HOLD_SLOP_PX) cancelPlayerHold();
   if (!state.pointer.active || event.pointerId !== state.pointer.pointerId) return;
   event.preventDefault();
   if (isNode03Defeated()) {
@@ -13030,6 +13394,7 @@ function handleGamePointerMove(event) {
 }
 
 function releaseGamePointer(event) {
+  if (state.pointer.playerHold && (!event || event.pointerId === undefined || event.pointerId === state.pointer.playerHold.pointerId)) cancelPlayerHold();
   if (!state.pointer.active && state.pointer.pointerId === null && state.pointer.sprintPointerId === null) return;
   if (isNode03Defeated()) {
     if (event) event.preventDefault();
@@ -13058,6 +13423,7 @@ function releaseGamePointer(event) {
     state.pointer.screenY = 0;
     state.pointer.downAt = 0;
     state.pointer.lastHoldVector = null;
+    if (prepareClickMoveRoute()) sendInputState({ force: true });
     return;
   }
   if (hasMovementInput()) stepMovement(performance.now());
@@ -13069,8 +13435,156 @@ function releaseGamePointer(event) {
   }
 }
 
+// MMO (3-11): lang drukken (vinger) of rechtsklik (muis) op een andere speler = spelermenu.
+// Kort tikken blijft gewoon lopen, zodat je in een drukte met veel spelers nergens last van hebt.
+const PLAYER_HOLD_SLOP_PX = 12;
+
+function remotePlayerAtPointer(event) {
+  const picked = state.runtime && typeof state.runtime.pickRemotePlayerAt === "function"
+    ? state.runtime.pickRemotePlayerAt(event.clientX, event.clientY)
+    : null;
+  if (!picked || !picked.playerId || String(picked.playerId) === String(state.player?.id || "")) return null;
+  return picked;
+}
+
+function openPlayerMenuFor(picked, x, y) {
+  if (!gkHud || !picked || typeof gkHud.playerMenu !== "function") return false;
+  gkHud.playerMenu({ id: String(picked.playerId), name: picked.displayName || "Speler", x, y });
+  return true;
+}
+
+function cancelPlayerHold() {
+  const hold = state.pointer.playerHold;
+  if (hold?.timer) window.clearTimeout(hold.timer);
+  state.pointer.playerHold = null;
+}
+
+function startPlayerHold(event, picked) {
+  cancelPlayerHold();
+  const hold = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, picked, timer: 0 };
+  hold.timer = window.setTimeout(function () {
+    if (state.pointer.playerHold !== hold) return;
+    state.pointer.playerHold = null;
+    // Stilstaan en het menu openen (de vinger blijft nog even liggen; loslaten doet daarna niets meer).
+    if (state.pointer.active && state.pointer.pointerId === hold.pointerId) {
+      clearPointerTarget(false);
+      clearMovementInput("player-menu", { finalPointerTarget: localStopPointForServer() });
+    }
+    try { if (typeof navigator.vibrate === "function") navigator.vibrate(15); } catch {}
+    openPlayerMenuFor(picked, hold.x, hold.y);
+  }, partyRules().holdMs);
+  state.pointer.playerHold = hold;
+}
+
+// MMO (3-11): Instellingen > Groep staat in de wereld; oudere builds zonder: dezelfde standaard als de kaart.
+function partyRules() {
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const rules = project?.playerRules?.byType?.party_rules?.[0] || {};
+  return {
+    holdMs: Math.max(250, Math.min(1500, num(rules.holdMs, 500))),
+    farMeters: Math.max(10, num(rules.farMeters, 60))
+  };
+}
+
+// MMO stap 2 (3-11): chat-regels uit Instellingen > Chat (zonder kaart de standaard).
+function chatRules() {
+  const project = state.gameProject || state.gameWorld?.gameProject || null;
+  const rules = project?.playerRules?.byType?.chat_rules?.[0] || {};
+  const quick = typeof rules.quickMessages === "string" ? rules.quickMessages : "👋 Hoi! | Help! | Bedankt! | Kom hier! | Volg mij!";
+  return {
+    maxLength: Math.max(20, Math.min(500, num(rules.maxLength, 160))),
+    bubbleSeconds: Math.max(0, Math.min(30, num(rules.bubbleSeconds, 6))),
+    quick: quick.split("|").map(function (entry) { return entry.trim().slice(0, 40); }).filter(Boolean).slice(0, 8)
+  };
+}
+
+// Een chatbericht of blokkeren via de verbinding. false = geen verbinding.
+function sendChatSocket(type, payload) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    state.ws.send(JSON.stringify({ type, payload }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyPartyState(view) {
+  state.party.view = view && Array.isArray(view.members) ? view : null;
+  // In een groep zijn andere uitnodigingen niet meer nodig.
+  if (state.party.view) state.party.invites = [];
+  if (gkHud) gkHud.render();
+}
+
+function addPartyInvite(invite) {
+  if (!invite || !invite.inviteId) return;
+  const at = performance.now();
+  const entry = {
+    inviteId: String(invite.inviteId),
+    fromId: String(invite.fromId || ""),
+    fromName: String(invite.fromName || "Speler"),
+    at,
+    until: at + Math.max(1000, num(invite.leftMs, 60000))
+  };
+  state.party.invites = state.party.invites
+    .filter(function (other) { return other.until > at && other.inviteId !== entry.inviteId && (!entry.fromId || other.fromId !== entry.fromId); })
+    .concat(entry)
+    .slice(-3);
+  if (gkHud) gkHud.render();
+}
+
+// Meteen zichtbaar maken wat het netwerk al vertelt (klap of genezing); de server stuurt elke seconde de echte stand.
+function nudgePartyHp(playerId, delta) {
+  const view = state.party.view;
+  const member = view && Array.isArray(view.members) ? view.members.find(function (entry) { return entry.id === String(playerId); }) : null;
+  if (!member || member.id === state.player?.id || !Number.isFinite(delta) || delta === 0) return;
+  member.hp = Math.max(0, Math.min(num(member.hpMax, 0), num(member.hp, 0) + Math.round(delta)));
+  if (gkHud) gkHud.render();
+}
+
+// Groepsacties (uitnodigen, meedoen, nee, verlaten) via de lichte route: het antwoord is alleen de groep.
+async function runPartyAction(action, payload = {}) {
+  const inviteId = payload.inviteId || null;
+  if ((action === "accept" || action === "decline") && inviteId) {
+    state.party.invites = state.party.invites.filter(function (entry) { return entry.inviteId !== inviteId; });
+  }
+  try {
+    const response = await gameFetch("/api/game/party/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(Object.assign({}, payload, {
+        action,
+        operationId: "party:" + state.net.clientSessionId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8)
+      }))
+    });
+    if (response.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return { ok: false, message: "" };
+    }
+    const data = await response.json().catch(function () { return null; });
+    if (!response.ok || !data || data.ok !== true) return { ok: false, message: data?.message || "Dat lukte niet." };
+    if (Object.prototype.hasOwnProperty.call(data, "party")) applyPartyState(data.party);
+    return { ok: true, message: data.message || "" };
+  } catch (error) {
+    return { ok: false, message: String(error?.message || "Geen verbinding met de server.") };
+  } finally {
+    if (gkHud) gkHud.render();
+  }
+}
+
+function partyPlayerPosition(playerId) {
+  const entry = state.remote.players.get(String(playerId || ""));
+  const position = entry?.renderState || entry?.position || null;
+  return position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z)) ? { x: Number(position.x), z: Number(position.z) } : null;
+}
+
 function bindPointerControls() {
   if (!canvas) return;
+  // Rechtsklik is in de game het spelermenu, nooit het menu van de browser.
+  canvas.addEventListener("contextmenu", function (event) {
+    event.preventDefault();
+  });
   canvas.addEventListener("pointerdown", function (event) {
     handleGamePointerDown(event, "pointer");
   });
@@ -13218,6 +13732,10 @@ async function pollVersion() {
 let canonicalClientBuildId = null;
 let canonicalClientWorld = null;
 function showCanonicalBanner(text, sticky) {
+  if (gkHud) {
+    gkHud.toast(text, { sticky: sticky === true, icon: sticky ? "info" : "compass", ms: 6000 });
+    return;
+  }
   let banner = document.getElementById("canonicalProjectBanner");
   if (!banner) {
     banner = document.createElement("div");
@@ -13269,7 +13787,7 @@ function refreshWorldRegionLabel() {
   label.style.display = worldSpatial.label ? "block" : "none";
 }
 function ensureWorldMusic() {
-  if (!worldSpatial.music) worldSpatial.music = createWorldMusic({ onStateChange: refreshWorldRegionLabel });
+  if (!worldSpatial.music) worldSpatial.music = createWorldMusic({ onStateChange: refreshWorldRegionLabel, muted: worldSpatial.musicMuted === true });
   if (!worldSpatial.unlockBound) {
     worldSpatial.unlockBound = true;
     const unlock = function () { if (worldSpatial.music) worldSpatial.music.unlock(); };
@@ -13283,16 +13801,17 @@ function applyWorldMembership(message) {
   const regionId = message.regionId || null;
   const areaId = message.areaId || null;
   const changed = regionId !== worldSpatial.regionId || areaId !== worldSpatial.areaId;
-  const hadRegion = Boolean(worldSpatial.regionId);
+  const areaChanged = areaId !== worldSpatial.areaId;
   worldSpatial.regionId = regionId;
   worldSpatial.areaId = areaId;
-  worldSpatial.label = [message.regionName, message.areaName].filter(Boolean).join(" · ");
+  // Ronde 10: alleen de naam van het deelgebied; het oude gebied (vroegere zone) toont geen naam meer.
+  worldSpatial.label = String(message.areaName || "").trim();
   state.debug.worldRegionId = regionId;
   state.debug.worldAreaId = areaId;
   if (message.musicUrl || worldSpatial.music) ensureWorldMusic().setTrack(message.musicUrl || null);
   refreshWorldRegionLabel();
   if (changed && state.minimapHud) state.minimapHud.dirty = true;
-  if (changed && worldSpatial.label && (hadRegion || message.areaName)) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
+  if (areaChanged && worldSpatial.label) showCanonicalBanner("Je bent nu in " + worldSpatial.label, false);
 }
 
 async function checkCanonicalBuild() {
@@ -13306,7 +13825,245 @@ async function checkCanonicalBuild() {
   } catch {}
 }
 
+// ---- Stap 4: de nieuwe HUD (hud/gk-hud.js). Die tekent alleen; hier staan de data en de acties. ----
+
+async function gkHudJson(url, body) {
+  const options = body === undefined
+    ? { credentials: "same-origin", headers: { Accept: "application/json" } }
+    : { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) };
+  const response = await gameFetch(url, options);
+  const result = await response.json().catch(function () { return {}; });
+  if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
+  return result;
+}
+
+function gkHudAsset(assetId) {
+  const assets = state.gameWorld?.assets || [];
+  if (gkHudCache.assets !== assets) {
+    gkHudCache.assets = assets;
+    gkHudCache.assetMap = new Map(assets.map(function (asset) { return [asset.id, asset]; }));
+  }
+  return assetId ? gkHudCache.assetMap.get(assetId) || null : null;
+}
+
+// Een plaatje voor in de HUD: bij een model de thumbnail, bij een afbeelding het bestand zelf.
+function gkHudAssetUrl(assetId, preferThumb) {
+  const asset = gkHudAsset(assetId);
+  if (!asset) return null;
+  if (asset.assetType === "image") return asset.sourcePath || asset.thumbnailPath || null;
+  return asset.thumbnailPath || null;
+}
+
+function gkHudModules() {
+  const modules = (state.gameProject || state.gameWorld?.gameProject || null)?.ui?.modules;
+  if (!Array.isArray(modules)) return null;
+  if (gkHudCache.modulesSource !== modules) {
+    gkHudCache.modulesSource = modules;
+    gkHudCache.modules = new Set(modules.map(function (module) { return module?.nodeType; }).filter(Boolean));
+  }
+  return gkHudCache.modules;
+}
+
+function gkHudTargets() {
+  const now = performance.now();
+  if (now - gkHudCache.targetsAt > 90) {
+    gkHudCache.targetsAt = now;
+    gkHudCache.targets = collectRuntimeTargets();
+  }
+  return gkHudCache.targets;
+}
+
+function gkHudRemotes() {
+  const list = [];
+  for (const entry of state.remote.players.values()) {
+    if (entry?.isSelfAccount) continue;
+    const position = entry?.renderState || entry?.position;
+    if (position && Number.isFinite(Number(position.x)) && Number.isFinite(Number(position.z))) list.push({ x: Number(position.x), z: Number(position.z) });
+  }
+  return list;
+}
+
+function gkHudPlayer() {
+  const classId = state.player?.selectedCharacterId || state.node03.snapshot?.characterId || null;
+  const characters = (state.gameProject || state.gameWorld?.gameProject || null)?.catalogs?.playableCharacters || {};
+  const character = classId ? characters[classId] : null;
+  return {
+    displayName: state.player?.displayName || "",
+    className: character?.classChoice ? character.displayName : "",
+    modelAssetId: state.gameWorld?.player?.modelAssetId || null
+  };
+}
+
+function ensureGkHud() {
+  if (gkHud) return gkHud;
+  gkHud = createGkHud({
+    // Niet in #hud: de wereld-runtime maakt #hud leeg zodra de wereld geladen is.
+    mount: hud.parentElement || document.body,
+    data: function () {
+      const network = mmoNetworkSettings();
+      return {
+        s03: state.node03.snapshot,
+        s04: state.node04.snapshot,
+        s05: state.node05.snapshot,
+        dialogue: state.node04.dialogue,
+        notice: currentGameHudDialogueNotice(),
+        defeated: isNode03Defeated(),
+        busy: { n03: state.node03.actionInFlight === true, n04: state.node04.actionInFlight === true, n05: state.node05.actionInFlight === true },
+        modules: gkHudModules(),
+        player: gkHudPlayer(),
+        isAdmin: state.node03.snapshot?.viewer?.isAdmin === true,
+        // MMO (3-11): je groep en openstaande uitnodigingen.
+        party: state.party.view,
+        partyInvites: state.party.invites,
+        selfId: state.player?.id || null,
+        chatBlocks: state.chat.blocks,
+        healthDefaults: {
+          ping: network.showHealthPing,
+          tps: network.showHealthTps,
+          mspt: network.showHealthMspt,
+          cpu: network.showHealthCpu,
+          packetLoss: network.showHealthPacketLoss
+        }
+      };
+    },
+    live: function () {
+      const player = state.runtime && typeof state.runtime.getPlayerState === "function" ? state.runtime.getPlayerState() : null;
+      const basis = state.runtime && typeof state.runtime.getCameraGroundBasis === "function" ? state.runtime.getCameraGroundBasis() : null;
+      const position = player && Number.isFinite(Number(player.x)) ? { x: Number(player.x), z: Number(player.z) } : (state.position ? { x: num(state.position.x, 0), z: num(state.position.z, 0) } : null);
+      return {
+        position: position,
+        facingDeg: num(player?.rotationY, 0),
+        forward: basis?.forward || { x: 0, z: -1 },
+        targets: gkHudTargets(),
+        remotes: gkHudRemotes(),
+        world: state.gameWorld,
+        region: worldSpatial.label || "",
+        selectedTargetId: state.node03.selectedTargetId || ""
+      };
+    },
+    assetUrl: gkHudAssetUrl,
+    npcFaceUrl: function (targetRef) {
+      const npcId = String(targetRef || "").replace(/^target\.npc\./, "");
+      const entity = (state.gameWorld?.entities || []).find(function (candidate) { return candidate && candidate.id === "npc_entity." + npcId; });
+      return gkHudAssetUrl(entity?.modelAssetId, true);
+    },
+    vendor: function (vendorId) {
+      return vendorId ? node05Vendors().find(function (vendor) { return vendor.vendorId === vendorId; }) || null : null;
+    },
+    station: function (stationId) {
+      return stationId ? node05CraftingStations().find(function (station) { return station.stationId === stationId; }) || null : null;
+    },
+    run03: function (action, targetId, extra) { return runNode03Action(action, targetId, extra || {}); },
+    run04: function (action, targetId, extra) { return runNode04Action(action, targetId, extra || {}); },
+    run05: function (action, payload) { return runNode05Action(action, payload || {}); },
+    // MMO (3-11): groep.
+    partyAction: function (action, payload) { return runPartyAction(action, payload || {}); },
+    partyRules: partyRules,
+    chatRules: chatRules,
+    chatSend: function (payload) { return sendChatSocket("chat:send", payload || {}); },
+    chatBlock: function (playerId, on) { return sendChatSocket("chat:block", { playerId: String(playerId || ""), on: on !== false }); },
+    playerPosition: partyPlayerPosition,
+    activate: activateRuntimeTargetDirect,
+    walkTo: function (x, z, target) { return startClickToMoveTarget(num(x, 0), num(z, 0), "hud-talk", { arrivalRadius: targetArrivalRadius(target) }); },
+    isWalkingTo: isWalkingToTarget,
+    textureUrl: function (assetId) { return gkHudAsset(assetId)?.sourcePath || null; },
+    closeDialogue: function () {
+      state.node04.dialogue = null;
+      renderNode04Hud();
+    },
+    dismissNotice: function () {
+      clearGameHudDialogueNotice();
+      renderNode04Hud();
+    },
+    fetchJson: function (url) { return gkHudJson(url); },
+    postJson: function (url, body) { return gkHudJson(url, body || {}); },
+    onSwitched: function () { window.location.reload(); },
+    logout: async function () {
+      try { await gameFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      window.location.href = "/login/?next=%2Fgame%2F";
+    },
+    setViewInset: function (right, bottom) {
+      if (state.runtime && typeof state.runtime.setViewInset === "function") state.runtime.setViewInset(right, bottom);
+    },
+    setPixels: function (value) {
+      gkHudPixels = Number(value) || 1;
+      if (state.runtime && typeof state.runtime.setPlayerPixelRatio === "function") state.runtime.setPlayerPixelRatio(gkHudPixels);
+    },
+    setMusic: function (on) {
+      worldSpatial.musicMuted = on === false;
+      if (worldSpatial.music && typeof worldSpatial.music.setMuted === "function") worldSpatial.music.setMuted(worldSpatial.musicMuted);
+    },
+    setDebug: function (on, slot) {
+      if (gkHudDebug.on === on && gkHudDebug.slot === slot) return;
+      gkHudDebug.on = on === true;
+      gkHudDebug.slot = slot || null;
+      if (state.runtime && typeof state.runtime.setPerformanceHud === "function") state.runtime.setPerformanceHud(gkHudDebug.on ? gkHudDebug.slot : null);
+      refreshMmoDebugHud();
+    },
+    // Schermplekken voor de 2D-naamlabels boven NPC's, vijanden en items.
+    labelAnchors: function () {
+      return state.runtime && typeof state.runtime.getRuntimeTargetLabelAnchors === "function" ? state.runtime.getRuntimeTargetLabelAnchors() : [];
+    }
+  });
+  updateConnectionLight();
+  if (!connectionLightTimer) connectionLightTimer = window.setInterval(updateConnectionLight, 500);
+  return gkHud;
+}
+
+// Compacte serverstatus linksonder: groen = de server bevestigt je plek, oranje = wachten op de server of de server
+// ziet je ergens anders (dan word je straks teruggezet), rood = meer dan 6 s geen antwoord of geen verbinding.
+let connectionLightTimer = 0;
+function updateConnectionLight() {
+  if (!gkHud || typeof gkHud.setConnection !== "function") return;
+  const socketKind = state.wsStateVisible;
+  if (socketKind !== "connected") {
+    gkHud.setConnection(socketKind === "disconnected" ? "disconnected" : "standby", socketKind || "", null, null);
+    return;
+  }
+  const nowPerf = performance.now();
+  const age = state.net.lastMessageAt ? nowPerf - state.net.lastMessageAt : Infinity;
+  const ping = Number(state.netPing?.lastRttMs);
+  const deadzone = Math.max(0.2, num(mmoNetworkSettings().ownPredictionDeadzone, 0.35));
+  const moving = hasMovementInput();
+  const pending = Array.isArray(state.net.pendingInputs) ? state.net.pendingInputs : [];
+  const oldestPending = pending.length ? Math.min.apply(null, pending.map(function (entry) { return num(entry.sentAt, Date.now()); })) : 0;
+  const waitMs = oldestPending ? Date.now() - oldestPending : 0;
+  const ackError = num(state.net.lastAckError, 0);
+  const own = state.predictedPosition || state.position;
+  const server = state.authoritativePosition;
+  const restError = !moving && own && server ? Math.hypot(num(own.x, 0) - num(server.x, 0), num(own.z, 0) - num(server.z, 0)) : 0;
+  const parts = [];
+  if (Number.isFinite(ping)) parts.push("ping " + Math.round(ping) + " ms");
+  let kind = "connected";
+  if (age > 6000) {
+    kind = "disconnected";
+    parts.push("al " + (age / 1000).toFixed(1) + " s geen antwoord");
+  } else if (waitMs > Math.max(600, (Number.isFinite(ping) ? ping : 200) * 3) && (moving || restError > deadzone)) {
+    kind = "standby";
+    parts.push("wacht " + (waitMs / 1000).toFixed(1) + " s op de server");
+  } else if (moving && ackError > deadzone) {
+    kind = "standby";
+    parts.push("server ziet je " + ackError.toFixed(2) + " m ergens anders");
+  } else if (!moving && restError > deadzone) {
+    kind = "standby";
+    parts.push("server staat " + restError.toFixed(2) + " m verderop: je wordt teruggezet");
+  } else {
+    parts.push("server bevestigt je plek");
+  }
+  const healthFresh = state.net.lastServerHealthAt > 0 && nowPerf - state.net.lastServerHealthAt < 6000;
+  gkHud.setConnection(kind, parts.join(", "), Number.isFinite(ping) ? ping : null, {
+    tps: healthFresh ? state.net.serverTps : null,
+    targetTps: healthFresh ? state.net.serverTargetTps : null,
+    mspt: healthFresh ? state.net.serverMspt : null,
+    tickBudgetMs: healthFresh ? state.net.serverTickBudgetMs : null,
+    cpuPercent: healthFresh ? state.net.serverCpuPercent : null,
+    tickStatus: healthFresh ? state.net.serverTickStatus : null,
+    packetLossPercent: pingProbeLossPercent()
+  });
+}
+
 async function start() {
+  ensureGkHud();
   stepMovement(performance.now());
   startMovementFrameLoop();
   bindKeyboardControls();
@@ -13327,24 +14084,6 @@ async function start() {
     updateHud();
   }
   window.setInterval(pollVersion, 2500);
-  // Klassen: venster 🧙 Characters (wisselen en uiterlijk kiezen). Na een wissel laadt de game opnieuw.
-  createCharactersWindow({
-    fetchJson: async function (url) {
-      const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
-      const result = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
-      return result;
-    },
-    postJson: async function (url, body) {
-      const response = await gameFetch(url, { method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(body) });
-      const result = await response.json().catch(function () { return {}; });
-      if (!response.ok) throw new Error(result.message || "HTTP " + response.status);
-      return result;
-    },
-    assetById: function (assetId) { return (state.gameWorld?.assets || []).find(function (asset) { return asset.id === assetId; }) || null; },
-    onSwitched: function () { window.location.reload(); }
-  });
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);
 }

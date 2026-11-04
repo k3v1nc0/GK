@@ -41,11 +41,9 @@ export function convertShape(body, shape) {
   return next;
 }
 
-// Region (rechthoek in mm) waar een punt in ligt; leeg = gewoon in de wereld.
-export function regionRefAt(bench, xMm, zMm) {
-  const hit = bench.docs("region").find((doc) => [doc.body.minXMm, doc.body.maxXMm, doc.body.minZMm, doc.body.maxZMm].every(Number.isFinite)
-    && xMm >= doc.body.minXMm && xMm <= doc.body.maxXMm && zMm >= doc.body.minZMm && zMm <= doc.body.maxZMm);
-  return hit ? hit.docKey : null;
+// Ronde 3: er zijn geen gebieden meer; alles staat gewoon in de ene wereld (oude koppelingen vallen weg bij verplaatsen).
+export function regionRefAt() {
+  return null;
 }
 
 // Bibliotheek-kaart op de 3D-wereld laten vallen:

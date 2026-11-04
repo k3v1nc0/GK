@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import { buildRuntimeWorld } from "./authoring/world-builder.js";
 import { createSpatialIndex, metersToMm, resolveMembership } from "../../apps/web/public/shared/spatial.js";
-import { buildWalkabilityIndex, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
+import { buildWalkabilityIndex, groundHeightAt, resolveMovement, solidCollisionEntriesForWorld } from "../../apps/web/public/shared/movement-kernel.js";
 import { mmoNetworkPresetValues } from "../shared/node-types.js";
 import { createWorldClock } from "./runtime/world-clock.js";
 import { ActorRuntime } from "./runtime/actor-runtime.js";
+import { VitalsRuntime } from "./runtime/vitals-runtime.js";
+import { PartyRuntime } from "./runtime/party-runtime.js";
+import { ChatRuntime } from "./runtime/chat-runtime.js";
 import { CharacterService } from "./character-service.js";
 import { JoinTickets } from "./runtime/join-tickets.js";
 import { createPositionCheckpointer } from "./persistence/position-checkpoint.js";
@@ -36,6 +39,7 @@ const POSITION_MAX_PENDING = Math.max(100, Number(process.env.GAME_POSITION_MAX_
 const RATE_LIMIT_PER_SECOND = Math.max(1, Number(process.env.GAME_WS_RATE_LIMIT_PER_SECOND || 120));
 const WORLD_TICK_HZ = Math.max(1, Number(process.env.GAME_WORLD_TICK_HZ || 50));
 const WORLD_TICK_MS = Math.max(10, Math.round(1000 / WORLD_TICK_HZ));
+const SERVER_TPS_WINDOW_MS = 1000;
 const POINTER_STALL_MIN_STEP = 0.01;
 // Padvolgen: de client stuurt bij elke beweging zijn positie als tussenpunt; de server loopt die punten af
 // (normale snelheid, met botsingen) in plaats van alleen de richting of het eindpunt te volgen.
@@ -44,6 +48,9 @@ const PATH_POINT_MIN_SPACING = 0.1;
 const PATH_STALL_TICKS = 3;
 const PATH_POINT_SKIP_RADIUS = 0.6;
 const PATH_QUEUE_MAX = 400;
+// Vast op een punt dat de client wel haalde: de server controleert dan de stap van de client zelf (vorig punt ->
+// dit punt) met dezelfde botsingsfunctie. Klopt die stap en staat de server dichtbij het vorige punt, dan volgt hij.
+const PATH_TRUST_RADIUS = 0.75;
 const DIRECTION_INPUT_TIMEOUT_MS = Math.max(200, Number(process.env.GAME_DIRECTION_INPUT_TIMEOUT_MS || 750));
 const POINTER_STALL_STOP_TICKS = 6;
 const WORLD_SNAPSHOT_HZ = Math.max(1, Number(process.env.GAME_WORLD_SNAPSHOT_HZ || 20));
@@ -478,6 +485,13 @@ function zonePackageForPosition(world, position, currentZoneId = null) {
   }) || null;
 }
 
+// Wereld tekenen: wie stilstaat terwijl het terrein verandert (nieuwe build), komt weer met de voeten op de grond.
+function idleGroundPosition(position, index, radius) {
+  if (!index?.heightfield) return position;
+  const y = groundHeightAt(index, position.x, position.z, position.y, radius);
+  return Number.isFinite(y) && Math.abs(y - position.y) > 0.001 ? { x: position.x, y: y, z: position.z } : position;
+}
+
 function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
   const index = worldContext?.walkabilityIndex || null;
   if (!index || !pointerTarget) return index;
@@ -487,6 +501,8 @@ function movementIndexForPlayerInput(worldContext, state, pointerTarget) {
   if (!Array.isArray(index.surfaceBlockers) || index.surfaceBlockers.length === 0) return index;
   if (!worldContext.crossZoneWalkabilityIndex) {
     worldContext.crossZoneWalkabilityIndex = Object.assign({}, index, { surfaceBlockers: [] });
+    // De afgeronde rand (Lopen en botsen) gaat niet mee met Object.assign: zelf doorgeven.
+    if (index.edgeField) worldContext.crossZoneWalkabilityIndex.edgeField = index.edgeField;
   }
   return worldContext.crossZoneWalkabilityIndex;
 }
@@ -620,11 +636,12 @@ function publicPlayer(profile, world = null) {
   };
 }
 
-export function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId) {
+export function publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId = null) {
   if (!profile || !position) return null;
   return {
     playerId: profile.id,
     displayName: profile.display_name,
+    modelAssetId: modelAssetId || null,
     position: {
       x: round(position.x),
       y: round(position.y),
@@ -649,8 +666,8 @@ export function publicRemotePlayerSnapshot(profile, position, connectedSessionCo
   };
 }
 
-function publicRemotePlayerJoined(profile, position, connectedSessionCount, worldId) {
-  const snapshot = publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId);
+function publicRemotePlayerJoined(profile, position, connectedSessionCount, worldId, modelAssetId = null) {
+  const snapshot = publicRemotePlayerSnapshot(profile, position, connectedSessionCount, worldId, modelAssetId);
   if (!snapshot) return null;
   return snapshot;
 }
@@ -840,7 +857,12 @@ export class MmoService {
     // Per speler de rij tussenpunten van de route die de client liep (zie updatePathQueue).
     this.pathQueueByPlayerId = new Map();
     // Ticktijden, zichtbaar voor de speler via /api/game/player (serverPerf).
-    this.tickPerf = { loops: 0, ticks: 0, maxLoopMs: 0, avgLoopMs: 0, maxLateMs: 0, resets: 0, lostMs: 0, since: Date.now() };
+    this.tickPerf = {
+      loops: 0, ticks: 0, maxLoopMs: 0, avgLoopMs: 0, maxTickMs: 0, avgTickMs: 0,
+      maxLateMs: 0, resets: 0, lostMs: 0, since: Date.now(),
+      tps: null, tpsWindowStartedAt: Date.now(), tpsWindowTicks: 0,
+      cpuPercent: null, cpuWindowUsage: process.cpuUsage()
+    };
     this.playerDefeatStateByPlayerId = new Map();
     this.dirtyPlayerIdsByWorldId = new Map();
     this.lastWorldSnapshotAtMsByWorldId = new Map();
@@ -868,6 +890,34 @@ export class MmoService {
       connections: (worldId) => Array.from(this.connectionsByWorldId.get(worldId) || [])
         .map((id) => this.connectionsById.get(id)).filter((connection) => connection && !connection.closed),
       send: (connection, payload) => send(connection.ws, payload)
+    });
+    // Healing (2-11): regeneratie en tijdelijke effecten van spelers, 1x per seconde in dezelfde worldtick.
+    this.vitalsRuntime = new VitalsRuntime({
+      db: this.db,
+      project: () => this.getPublishedWorldContext()?.world?.gameProject || null,
+      playerStates: (worldId) => this.getWorldPlayerStates(worldId),
+      isOnline: (playerId, worldId) => Boolean(this.getConnectionForPlayer(playerId, worldId)),
+      connectionFor: (playerId, worldId) => this.getConnectionForPlayer(playerId, worldId),
+      send: (connection, payload) => send(connection.ws, payload),
+      onDefeat: (playerId, worldId) => this.stopPlayerForDefeat(playerId, worldId)
+    });
+    // MMO (3-11): groepen live (leden, level, levens, mana, online), 1x per seconde en meteen na een groepsactie.
+    this.partyRuntime = new PartyRuntime({
+      db: this.db,
+      project: () => this.getPublishedWorldContext()?.world?.gameProject || null,
+      playerStates: (worldId) => this.getWorldPlayerStates(worldId),
+      connectionFor: (playerId, worldId) => this.getConnectionForPlayer(playerId, worldId || null),
+      sendToPlayer: (playerId, payload) => this.sendToPlayer(playerId, payload),
+      modelFor: (profile) => this.characterModel(profile)
+    });
+    // MMO stap 2 (3-11): chat (Buurt, Groep, Fluisteren) en blokkeren. De server kiest wie het bericht krijgt.
+    this.chatRuntime = new ChatRuntime({
+      db: this.db,
+      project: () => this.getPublishedWorldContext()?.world?.gameProject || null,
+      playerStates: (worldId) => this.getWorldPlayerStates(worldId),
+      connectionFor: (playerId) => this.getConnectionForPlayer(playerId, null),
+      sendToPlayer: (playerId, payload) => this.sendToPlayer(playerId, payload),
+      partyMemberIds: (playerId) => this.partyRuntime.memberIds(playerId)
     });
     this.worldClock = createWorldClock({ tickMs: WORLD_TICK_MS, maxCatchUpTicks: 3, maxLagMs: 1000, overrunLimit: 5 });
     this.startWorldTickLoop();
@@ -961,7 +1011,21 @@ export class MmoService {
     for (const step of plan.ticks) {
       const startedAt = performance.now();
       this.tickWorld(step.atMs, step.deltaMs);
-      this.worldClock.recordTickDuration(performance.now() - startedAt, nowMs());
+      const tickDurationMs = performance.now() - startedAt;
+      const measuredAt = nowMs();
+      this.worldClock.recordTickDuration(tickDurationMs, measuredAt);
+      this.tickPerf.maxTickMs = Math.max(this.tickPerf.maxTickMs, tickDurationMs);
+      this.tickPerf.avgTickMs = this.tickPerf.avgTickMs > 0 ? this.tickPerf.avgTickMs * 0.9 + tickDurationMs * 0.1 : tickDurationMs;
+      this.tickPerf.tpsWindowTicks += 1;
+      const tpsElapsedMs = measuredAt - this.tickPerf.tpsWindowStartedAt;
+      if (tpsElapsedMs >= SERVER_TPS_WINDOW_MS) {
+        this.tickPerf.tps = this.tickPerf.tpsWindowTicks * 1000 / tpsElapsedMs;
+        const cpuDelta = process.cpuUsage(this.tickPerf.cpuWindowUsage);
+        this.tickPerf.cpuPercent = ((cpuDelta.user + cpuDelta.system) / 1000) / tpsElapsedMs * 100;
+        this.tickPerf.cpuWindowUsage = process.cpuUsage();
+        this.tickPerf.tpsWindowStartedAt = measuredAt;
+        this.tickPerf.tpsWindowTicks = 0;
+      }
       this.tickPerf.maxLateMs = Math.max(this.tickPerf.maxLateMs, step.lateMs);
     }
     if (plan.ticks.length > 0) {
@@ -1050,7 +1114,11 @@ export class MmoService {
     if (this.worldCache && this.worldCache.canonicalBuildId === canonicalBuildId) return this.worldCache;
     const world = buildRuntimeWorld(canonical?.data || {}, Object.assign({}, this.canonicalOverlayOptions || {}, { buildId: canonicalBuildId || null, publishedAt }));
     const worldId = worldIdFor(world);
-    const walkabilityIndex = buildWalkabilityIndex(world);
+    // Wereld tekenen: de hoogte van de grond komt uit de vakken in de assets (zelfde als editor en game).
+    const assetService = this.canonicalOverlayOptions?.assetService || null;
+    const walkabilityIndex = buildWalkabilityIndex(world, {
+      readTerrainChunk: assetService && typeof assetService.readTerrainChunk === "function" ? (sha1) => assetService.readTerrainChunk(sha1) : null
+    });
     // Publish/rollback replaces the compiled world, but not the live state of an
     // authored entity. Keep runtime-disabled colliders (dead/claimed/depleted)
     // disabled until Node03 rehydrates that same state against the new cache.
@@ -1081,6 +1149,7 @@ export class MmoService {
       if (collider.enabled !== nextEnabled) changed += 1;
       collider.enabled = nextEnabled;
     }
+    if (changed) this.worldCache.collisionRevision = (this.worldCache.collisionRevision || 0) + 1;
     return changed;
   }
 
@@ -1126,15 +1195,19 @@ export class MmoService {
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
     const inserted = [];
-    this.db.exec("BEGIN");
+    // Unstuck verwerkt de kaart binnen de bestaande spelactie-transactie.
+    const ownTransaction = this.db.isTransaction !== true;
+    if (ownTransaction) this.db.exec("BEGIN");
     try {
       for (const cellKey of keys) {
         const result = insert.run(playerId, worldId, mapLayer, cellKey, discoveryType, sourceAreaId || null, discoveredAt, discoveredAt);
         if (result.changes > 0) inserted.push(cellKey);
       }
-      this.db.exec("COMMIT");
+      if (ownTransaction) this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (ownTransaction) {
+        try { this.db.exec("ROLLBACK"); } catch {}
+      }
       throw error;
     }
     return inserted;
@@ -1431,7 +1504,7 @@ export class MmoService {
     if (!zonePackage?.zoneId || zonePackage.zoneId === position.current_zone_id) return position;
     const session = sessionContext?.session || sessionContext || null;
     position.current_zone_id = zonePackage.zoneId;
-    position.current_spawn_id = null;
+    // Bewaar de laatste portal/respawnplek voor Unstuck, ook na lopend wisselen van zone.
     position.revision = (Number(position.revision) || 0) + 1;
     position.updated_at = now();
     position.updated_at_ms = nowMs();
@@ -1537,11 +1610,19 @@ export class MmoService {
 
   serverPerfSnapshot() {
     const perf = this.tickPerf || {};
+    const tickHealth = this.serverTickHealthSnapshot();
     return {
       tickMs: this.currentWorldTickMs(),
+      tps: tickHealth.tps,
+      targetTps: tickHealth.targetTps,
+      mspt: tickHealth.mspt,
+      cpuPercent: tickHealth.cpuPercent,
+      tickBudgetMs: tickHealth.tickBudgetMs,
+      tickStatus: tickHealth.status,
       ticks: perf.ticks || 0,
       avgLoopMs: Math.round((perf.avgLoopMs || 0) * 10) / 10,
       maxLoopMs: Math.round(perf.maxLoopMs || 0),
+      maxTickMs: Math.round((perf.maxTickMs || 0) * 10) / 10,
       maxLateMs: Math.round(perf.maxLateMs || 0),
       resets: perf.resets || 0,
       lostMs: Math.round(perf.lostMs || 0),
@@ -1550,7 +1631,38 @@ export class MmoService {
       positions: this.positionCheckpoint ? this.positionCheckpoint.snapshot() : null,
       dbWritesMs: Object.fromEntries(Array.from(this.dbWriteSamplesByLabel || []).map(([label, ring]) => [label, summarizeSamples(ring.toArray())])),
       eventLoopDelayMs: this.eventLoopDelay ? eventLoopDelaySummary(this.eventLoopDelay, this.perfWindowStartedAt) : null,
-      actors: this.actorRuntime ? this.actorRuntime.snapshotForDebug() : null
+      actors: this.actorRuntime ? this.actorRuntime.snapshotForDebug() : null,
+      vitals: this.vitalsRuntime ? this.vitalsRuntime.snapshotForDebug() : null,
+      party: this.partyRuntime ? this.partyRuntime.snapshotForDebug() : null,
+      chat: this.chatRuntime ? this.chatRuntime.snapshotForDebug() : null
+    };
+  }
+
+  serverTickHealthSnapshot() {
+    const perf = this.tickPerf || {};
+    const tickBudgetMs = this.currentWorldTickMs();
+    const tps = perf.tps === null || perf.tps === undefined ? Number.NaN : Number(perf.tps);
+    const mspt = perf.avgTickMs === null || perf.avgTickMs === undefined ? Number.NaN : Number(perf.avgTickMs);
+    const cpuPercent = perf.cpuPercent === null || perf.cpuPercent === undefined ? Number.NaN : Number(perf.cpuPercent);
+    return {
+      tps: Number.isFinite(tps) && tps >= 0 ? Math.round(tps * 10) / 10 : null,
+      targetTps: Math.round((1000 / tickBudgetMs) * 10) / 10,
+      mspt: Number.isFinite(mspt) && mspt >= 0 && Number(perf.ticks) > 0 ? Math.round(mspt * 10) / 10 : null,
+      cpuPercent: Number.isFinite(cpuPercent) && cpuPercent >= 0 ? Math.round(cpuPercent * 10) / 10 : null,
+      tickBudgetMs: tickBudgetMs,
+      status: this.worldClock?.status || "NORMAL"
+    };
+  }
+
+  serverHealthPayload() {
+    const health = this.serverTickHealthSnapshot();
+    return {
+      serverTps: health.tps,
+      serverTargetTps: health.targetTps,
+      serverMspt: health.mspt,
+      serverCpuPercent: health.cpuPercent,
+      serverTickBudgetMs: health.tickBudgetMs,
+      serverTickStatus: health.status
     };
   }
 
@@ -1664,6 +1776,20 @@ export class MmoService {
     return (this.connectionsByPlayerId.get(playerId) || new Set()).size;
   }
 
+  // MMO (3-11): een bericht naar alle open verbindingen van één speler (groep, uitnodiging, melding).
+  sendToPlayer(playerId, payload) {
+    const connectionIds = Array.from(this.connectionsByPlayerId.get(playerId) || []);
+    if (!connectionIds.length) return false;
+    const text = JSON.stringify(payload);
+    let sent = false;
+    for (const connectionId of connectionIds) {
+      const connection = this.connectionsById.get(connectionId);
+      if (!connection || connection.closed) continue;
+      if (sendText(connection.ws, text)) sent = true;
+    }
+    return sent;
+  }
+
   getConnectionForPlayer(playerId, worldId = null) {
     const connectionIds = Array.from(this.connectionsByPlayerId.get(playerId) || []);
     for (const connectionId of connectionIds) {
@@ -1752,7 +1878,7 @@ export class MmoService {
         teleport: position.teleport === true,
         client_sent_at: position.clientSentAt || position.client_sent_at || null,
         server_received_at: position.serverReceivedAt || position.server_received_at || null
-      }, this.countConnectedPlayerSessions(playerId), worldId));
+      }, this.countConnectedPlayerSessions(playerId), worldId, record?.modelAssetId || this.characterModel(profile)));
     }
     return {
       ok: true,
@@ -1839,7 +1965,7 @@ export class MmoService {
     if (!connection || !connection.worldId) return;
     const snapshot = this.getWorldPresenceSnapshot(connection.worldId, connection.player?.id || null);
     if (position && connection.player) {
-      const ownPlayer = publicRemotePlayerSnapshot(connection.player, position, this.countConnectedPlayerSessions(connection.player.id), connection.worldId);
+      const ownPlayer = publicRemotePlayerSnapshot(connection.player, position, this.countConnectedPlayerSessions(connection.player.id), connection.worldId, this.characterModel(connection.player));
       if (ownPlayer) {
         snapshot.players = snapshot.players.filter(function (entry) {
           return entry && entry.playerId !== ownPlayer.playerId;
@@ -1852,7 +1978,7 @@ export class MmoService {
   broadcastRemotePlayerJoined(connection, position) {
     if (!connection || !position || !connection.worldId || !connection.player) return;
     const connectedSessionCount = this.countConnectedPlayerSessions(connection.player.id);
-    const payload = publicRemotePlayerJoined(connection.player, position, connectedSessionCount, connection.worldId);
+    const payload = publicRemotePlayerJoined(connection.player, position, connectedSessionCount, connection.worldId, this.characterModel(connection.player));
     if (!payload) return;
     this.broadcastToWorld(connection.worldId, eventMessage("remote_player:joined", payload, this.stampServerPayload(connection.worldId, payload)), {
       excludeUserId: connection.user?.id || null
@@ -1923,6 +2049,7 @@ export class MmoService {
       protocolVersion: PROTOCOL_VERSION,
       worldId: worldId || null,
       serverTick: serverTick,
+      ...this.serverHealthPayload(),
       serverTimeMs: serverTimeMs,
       snapshotSeq: snapshotSeq,
       players: players
@@ -2051,6 +2178,13 @@ export class MmoService {
 
   getPlayerStateCacheKey(playerId, worldId) {
     return positionKey(playerId, worldId);
+  }
+
+  // Een nieuw tabblad kan sessionStorage (en dus clientSessionId) van zijn opener erven.
+  // Volgnummers mogen daarom nooit alleen op clientSessionId worden bijgehouden: twee verschillende
+  // spelers met hetzelfde browser-id moeten volledig onafhankelijke input- en route-reeksen houden.
+  getPlayerClientStateKey(playerId, clientSessionId) {
+    return String(playerId || "") + "\u0000" + String(clientSessionId || "");
   }
 
   setPlayerDefeatedForMovement(playerId, defeated) {
@@ -2396,8 +2530,9 @@ export class MmoService {
       teleport: true
     });
     if (nextState.client_session_id) {
-      this.lastInputSeqByClientSessionId.set(nextState.client_session_id, Number(nextState.client_input_seq || 0) || 0);
-      this.lastControllerEpochByClientSessionId.set(nextState.client_session_id, Number(nextState.controller_epoch || 0) || 0);
+      const playerClientKey = this.getPlayerClientStateKey(profile.id, nextState.client_session_id);
+      this.lastInputSeqByClientSessionId.set(playerClientKey, Number(nextState.client_input_seq || 0) || 0);
+      this.lastControllerEpochByClientSessionId.set(playerClientKey, Number(nextState.controller_epoch || 0) || 0);
     }
     this.broadcastRemotePlayerState(connection, nextState, connection.sourceDevice || null);
     return nextState;
@@ -2590,7 +2725,7 @@ export class MmoService {
         const toZ = target.z - position.z;
         const toDistance = Math.hypot(toX, toZ);
         if (toDistance <= PATH_POINT_REACHED) {
-          points.shift();
+          pathQueue.prev = points.shift();
           continue;
         }
         const step = Math.min(toDistance, remaining);
@@ -2603,24 +2738,42 @@ export class MmoService {
         const moved = Math.hypot(stepResult.x - position.x, stepResult.z - position.z);
         directionX = toX / toDistance;
         directionZ = toZ / toDistance;
+        if (moved < step * 0.1 && toDistance <= remaining + PATH_TRUST_RADIUS) {
+          // Rubber banding (Kevin 3-11): de server zat op een iets andere plek vast (steile oever, water) terwijl
+          // de client er netjes langs gleed; daarna sloeg hij elk punt over en bleef op de startplek staan.
+          const prev = pathQueue.prev || position;
+          if (Math.hypot(prev.x - position.x, prev.z - position.z) <= PATH_TRUST_RADIUS) {
+            const check = resolveMovement({ x: prev.x, y: position.y, z: prev.z }, { x: target.x, y: position.y, z: target.z }, {
+              radius: radius,
+              index: movementIndexForPlayerInput(worldContext, state, target),
+              solids: solids
+            });
+            if (Math.hypot(check.x - target.x, check.z - target.z) <= PATH_POINT_REACHED) {
+              position = { x: check.x, y: check.y, z: check.z };
+              remaining -= toDistance;
+              pathQueue.prev = points.shift();
+              continue;
+            }
+          }
+        }
         position = { x: stepResult.x, y: stepResult.y, z: stepResult.z };
         remaining -= step;
         if (moved < step * 0.1) {
           // Vast. Ligt het punt binnen botsingsafstand (de client gleed er net iets anders langs), sla het
           // dan meteen over en loop door; anders na een paar ticks. Zo bouwt glijden langs bomen geen achterstand op.
           if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_SKIP_RADIUS) {
-            points.shift();
+            pathQueue.prev = points.shift();
             continue;
           }
           blocked = true;
           break;
         }
-        if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_REACHED) points.shift();
+        if (Math.hypot(target.x - position.x, target.z - position.z) <= PATH_POINT_REACHED) pathQueue.prev = points.shift();
       }
       if (blocked) {
         pathQueue.stalls = (Number(pathQueue.stalls) || 0) + 1;
         if (pathQueue.stalls >= PATH_STALL_TICKS) {
-          points.shift();
+          pathQueue.prev = points.shift();
           pathQueue.stalls = 0;
         }
       } else {
@@ -2642,7 +2795,7 @@ export class MmoService {
           index: movementIndex,
           solids: solids
         })
-        : currentPosition;
+        : idleGroundPosition(currentPosition, movementIndex, radius);
     }
     const deltaX = resolved.x - currentPosition.x;
     const deltaZ = resolved.z - currentPosition.z;
@@ -2665,10 +2818,10 @@ export class MmoService {
     } else if (this.pointerStallTicksByPlayerId.has(stallKey)) {
       this.pointerStallTicksByPlayerId.delete(stallKey);
     }
-    const nextRotation = moving && Math.hypot(directionX, directionZ) > 0.0001
-      ? Math.atan2(directionX, directionZ) * 180 / Math.PI
+    const nextRotation = distance > 0.0001
+      ? Math.atan2(deltaX, deltaZ) * 180 / Math.PI
       : state.rotation_y;
-    const nextRevision = (Number(state.revision) || 0) + (distance > 0.0001 || state.moving !== moving || state.animation_state !== (moving ? (input?.sprint === true ? "run" : "walk") : "idle") ? 1 : 0);
+    const nextRevision = (Number(state.revision) || 0) + (distance > 0.0001 || Math.abs(resolved.y - currentPosition.y) > 0.001 || state.moving !== moving || state.animation_state !== (moving ? (input?.sprint === true ? "run" : "walk") : "idle") ? 1 : 0);
     const nextState = Object.assign({}, state, {
       x: round(resolved.x),
       y: round(resolved.y),
@@ -2693,7 +2846,7 @@ export class MmoService {
     const nextZonePackage = zonePackageForPosition(worldContext.world, nextState, state.current_zone_id || activeZoneIdForWorld(worldContext.world));
     if (nextZonePackage?.zoneId && nextZonePackage.zoneId !== state.current_zone_id) {
       nextState.current_zone_id = nextZonePackage.zoneId;
-      nextState.current_spawn_id = null;
+      // De laatste portal/respawnplek blijft beschikbaar voor Unstuck.
     }
     this.assignSpatialMembership(nextState, state);
     return this.updatePlayerStateFromTick(state, nextState, tickInfo.connection || null, inputState || input, Object.assign({}, tickInfo, {
@@ -2725,8 +2878,9 @@ export class MmoService {
     const currentControllerEpoch = normalizeControllerEpoch(current.controller_epoch || 0);
     const currentControllerSessionId = current.active_controller_session_id || null;
     const clientSessionId = inputState.clientSessionId || connection.session.id;
+    const playerClientKey = this.getPlayerClientStateKey(profile.id, clientSessionId);
     connection.sourceDevice = inputState.sourceDevice || connection.sourceDevice || connection.session?.device_label || null;
-    const lastAcceptedSeq = Number(this.lastInputSeqByClientSessionId.get(clientSessionId) || 0);
+    const lastAcceptedSeq = Number(this.lastInputSeqByClientSessionId.get(playerClientKey) || 0);
     const isCurrentController = currentControllerSessionId && currentControllerSessionId === connection.session.id;
     const hasActiveInput = Boolean(!input.stop && !input.settle && (Math.hypot(num(input.moveX, 0), num(input.moveZ, 0)) > 0.0001 || Boolean(input.pointerTarget)));
     const inputEpoch = normalizeControllerEpoch(inputState.controllerEpoch || 0);
@@ -2797,9 +2951,9 @@ export class MmoService {
     });
 
     if (inputSeq > 0) {
-      this.lastInputSeqByClientSessionId.set(clientSessionId, inputSeq);
+      this.lastInputSeqByClientSessionId.set(playerClientKey, inputSeq);
     }
-    this.lastControllerEpochByClientSessionId.set(clientSessionId, nextControllerEpoch);
+    this.lastControllerEpochByClientSessionId.set(playerClientKey, nextControllerEpoch);
     this.lastControllerByUserId.set(connection.user.id, {
       sessionId: nextState.active_controller_session_id || null,
       clientSessionId: clientSessionId,
@@ -2937,6 +3091,16 @@ export class MmoService {
       } catch (error) {
         console.error("[actors] tick mislukt:", error.message);
       }
+      try {
+        this.vitalsRuntime.tick(worldId, nowMsValue);
+      } catch (error) {
+        console.error("[vitals] tick mislukt:", error.message);
+      }
+      try {
+        this.partyRuntime.tick(worldId, nowMsValue);
+      } catch (error) {
+        console.error("[groep] tick mislukt:", error.message);
+      }
     }
   }
 
@@ -3062,6 +3226,8 @@ export class MmoService {
     this.sendReady(connection, worldContext, position);
     this.sendWorldPresenceSnapshot(connection, position);
     this.sendInitialWorldSnapshot(connection, worldContext);
+    try { this.partyRuntime.sendTo(profile.id); } catch (error) { console.error("[groep] versturen mislukt:", error.message); }
+    try { this.chatRuntime.sendTo(profile.id); } catch (error) { console.error("[chat] versturen mislukt:", error.message); }
     if (!playerWasPresent) {
       this.broadcastRemotePlayerJoined(connection, position);
       this.recordEvent("player_presence_joined", sessionContext.user.id, profile.id, sessionContext.session.id);
@@ -3204,7 +3370,8 @@ export class MmoService {
         serverTime: now(),
         type: "pong",
         clientSentAt: Number.isFinite(Number(message.clientSentAt)) ? num(message.clientSentAt, 0) : null,
-        clientPingSeq: Number.isFinite(Number(message.clientPingSeq)) ? Math.floor(Number(message.clientPingSeq)) : null
+        clientPingSeq: Number.isFinite(Number(message.clientPingSeq)) ? Math.floor(Number(message.clientPingSeq)) : null,
+        ...this.serverHealthPayload()
       };
       send(connection.ws, eventMessage("pong", payload, this.stampServerPayload(connection.worldId, payload)));
       return;
@@ -3220,6 +3387,12 @@ export class MmoService {
       this.sendReady(connection, worldContext, position);
       this.sendWorldPresenceSnapshot(connection, position);
       this.sendInitialWorldSnapshot(connection, worldContext);
+      try { this.partyRuntime.sendTo(connection.player.id); } catch (error) { console.error("[groep] versturen mislukt:", error.message); }
+      try { this.chatRuntime.sendTo(connection.player.id); } catch (error) { console.error("[chat] versturen mislukt:", error.message); }
+      return;
+    }
+    if (message.type === "chat:send" || message.type === "chat:block") {
+      try { this.chatRuntime.handle(connection, message); } catch (error) { console.error("[chat] mislukt:", error.message); }
       return;
     }
     if (message.type !== "player:move_intent" && message.type !== "player:position_intent" && message.type !== "player:input_state") {

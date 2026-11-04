@@ -2,6 +2,8 @@
 // Gedeeld door de server (src/server/mmo-service.js) en de browser (via world-runtime.js).
 // Fase 02 (F2-E1-T01): uit world-runtime.js gehaald; gedrag is ongewijzigd (zie tests/movement-parity.test.js).
 import earcut from "./earcut.js";
+import { createEdgeField } from "./edge-field.js";
+import { createHeightfield, decodeTerrainChunk, normalizeTerrainWater, terrainHeightAt, terrainWaterAt, TERRAIN_MAX_SLOPE_DEG, WATER_BLOCK_DEPTH } from "./terrain.js";
 
 // Zelfde stappen als THREE.ShapeUtils.triangulateShape(contour, []): dubbel eindpunt weg, dan earcut.
 function triangulateContourXZ(points) {
@@ -184,8 +186,183 @@ export function createEmptyWalkabilityIndex() {
     ground: null,
     surfaceBlockers: [],
     blockers: [],
-    walkables: []
+    walkables: [],
+    // Wereld tekenen (ronde 1): hoogte van de grond (terrain.js) en hoe steil je nog omhoog mag lopen.
+    heightfield: null,
+    maxSlopeTan: Math.tan(TERRAIN_MAX_SLOPE_DEG * DEG_TO_RAD),
+    // Ronde 3: watervlakken (Niet in / Doorheen / IJs), zie terrain.js.
+    waters: [],
+    // Dichte randen van loopvlakken (onzichtbare muren), zie walkableWallBlocks.
+    walls: []
   };
+}
+
+// Een dichte rand werkt alleen voor wie ongeveer op die hoogte loopt (niet voor wie ver onder de brug loopt).
+const WALL_HEIGHT_REACH = 2;
+
+function closestOnWall(wall, x, z) {
+  const dx = wall.bx - wall.ax;
+  const dz = wall.bz - wall.az;
+  const lengthSq = dx * dx + dz * dz;
+  const t = lengthSq > 0 ? clamp(((x - wall.ax) * dx + (z - wall.az) * dz) / lengthSq, 0, 1) : 0;
+  const ox = x - (wall.ax + dx * t);
+  const oz = z - (wall.az + dz * t);
+  return { distSq: ox * ox + oz * oz, t };
+}
+
+function segmentsCross(ax, az, bx, bz, cx, cz, dx, dz) {
+  const d1 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx);
+  const d2 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx);
+  const d3 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+  const d4 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+// Loopvlak met dichte randen: je kunt er niet overheen en komt er niet dichter dan je straal bij.
+// Weglopen of erlangs glijden mag altijd (zo raak je nooit vast).
+export function walkableWallBlocks(index, startX, startY, startZ, x, z, radius) {
+  const walls = index?.walls;
+  if (!walls || !walls.length) return false;
+  const r = Math.max(0.05, num(radius, 0));
+  const minX = Math.min(startX, x) - r;
+  const maxX = Math.max(startX, x) + r;
+  const minZ = Math.min(startZ, z) - r;
+  const maxZ = Math.max(startZ, z) + r;
+  for (const wall of walls) {
+    if (maxX < wall.minX || minX > wall.maxX || maxZ < wall.minZ || minZ > wall.maxZ) continue;
+    const to = closestOnWall(wall, x, z);
+    if (Math.abs(num(startY, 0) - (wall.ay + (wall.by - wall.ay) * to.t)) > WALL_HEIGHT_REACH) continue;
+    if (segmentsCross(startX, startZ, x, z, wall.ax, wall.az, wall.bx, wall.bz)) return true;
+    if (to.distSq < r * r && to.distSq < closestOnWall(wall, startX, startZ).distSq - 1e-9) return true;
+  }
+  return false;
+}
+
+// Ronde 3: water op x, z. Geeft { water, bottom } of null; bottom = terreinhoogte (zonder ground.y).
+function waterUnder(index, x, z) {
+  if (!index?.waters?.length) return null;
+  const water = terrainWaterAt(index.waters, x, z);
+  if (!water) return null;
+  return { water, bottom: index.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0 };
+}
+
+// Afgeronde rand: wat telt als "dicht"? Diep "Niet in"-water en (als dat aan staat) te steile grond.
+// Onder een brug (loopvlak) is het nooit dicht, zodat je de brug gewoon op kunt.
+function edgeSourceBlocked(index, x, z) {
+  if (isPointOnWalkableSurface(index, x, z, 0)) return false;
+  const wet = waterUnder(index, x, z);
+  if (wet && wet.water.behavior === "block" && wet.water.height - wet.bottom > num(index.waterBlockDepth, WATER_BLOCK_DEPTH)) return true;
+  return Boolean(index.edgeSteep && index.heightfield && terrainGradientTan(index.heightfield, x, z) > num(index.maxSlopeTan, 1.19));
+}
+
+// De afgeronde rand hoort bij de index maar wordt niet mee gekopieerd (hij bevat functies): de routezoeker in een
+// achtergrondwerker krijgt een kopie van de index en maakt de rand daar opnieuw uit edgeSettings.
+export function ensureEdgeField(index) {
+  if (!index || index.edgeField || !index.edgeSettings) return index;
+  Object.defineProperty(index, "edgeField", {
+    value: createEdgeField(Object.assign({}, index.edgeSettings, { isBlocked: (x, z) => edgeSourceBlocked(index, x, z) })),
+    enumerable: false, writable: true, configurable: true
+  });
+  return index;
+}
+
+// Staat x/z binnen de afgeronde rand? Wie er al in staat (bijv. net gespawnd) mag alleen naar buiten of erlangs.
+function edgeBlocks(index, startX, startZ, x, z) {
+  const field = index?.edgeField;
+  if (!field) return false;
+  const to = field.fieldAt(x, z);
+  if (to >= field.limit) return false;
+  const from = field.fieldAt(startX, startZ);
+  return !(from < field.limit && to >= from - 0.0001);
+}
+
+// Water "Niet in": hoe diep sta je erin? Kijkt naar het midden en 16 punten op een cirkel om de speler (radius),
+// zodat je al bij de waterlijn wordt tegengehouden en soepel langs een ronde oever glijdt. 0 = droog,
+// anders { center } = diepte onder het midden van de speler.
+// Zoveel mag de spelerscirkel het water raken zonder dat hij als "in het water" telt (zie de helling-uitzondering).
+const WATER_ESCAPE_MARGIN = 0.05;
+// Zoveel mag een glij-stap langs een oever of steile helling stijgen (per meter): genoeg voor afronding, te weinig om te klimmen.
+const TANGENT_RISE_TAN = 0.05;
+const WATER_RING = Array.from({ length: 16 }, (_, i) => [Math.cos(i * Math.PI / 8), Math.sin(i * Math.PI / 8)]);
+function blockWaterDepth(index, x, z, radius) {
+  // Afgeronde rand aan: water zit al in de rand (edgeBlocks), hier niet nog eens.
+  if (!index?.waters?.length || index.edgeField) return 0;
+  // Instellingen > Water (lopen): "Voeten in het water" maakt de cirkel kleiner, "Tegenhouden vanaf diepte" de drempel.
+  radius = Math.max(0, num(radius, 0) - num(index.waterEdgeInset, 0));
+  const blockDepth = num(index.waterBlockDepth, WATER_BLOCK_DEPTH);
+  let deepest = 0;
+  let deepestWater = null;
+  let deepestX = x;
+  let deepestZ = z;
+  const r = Math.max(0, num(radius, 0));
+  for (let i = -1; i < WATER_RING.length; i += 1) {
+    const px = i < 0 ? x : x + WATER_RING[i][0] * r;
+    const pz = i < 0 ? z : z + WATER_RING[i][1] * r;
+    const wet = waterUnder(index, px, pz);
+    if (!wet || wet.water.behavior !== "block") continue;
+    const depth = wet.water.height - wet.bottom;
+    if (depth > deepest) {
+      deepest = depth;
+      deepestWater = wet.water;
+      deepestX = px;
+      deepestZ = pz;
+    }
+  }
+  if (deepest <= blockDepth) return 0;
+  // Wat telt bij eruit lopen: hoe diep het midden van de speler staat (kan negatief zijn: midden al droog).
+  const bottom = index.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0;
+  return { center: deepestWater.height - bottom, sampleX: deepestX, sampleZ: deepestZ };
+}
+
+// Hoe steil de grond zelf is op x/z (tan van de hoek). Gemeten over 0,5, 1 en 2 m naar elke kant en de steilste
+// telt: zo telt de voet van een steile wand ook als steil, en maken kleine hobbels een steile helling niet beloopbaar.
+function terrainGradient(heightfield, x, z) {
+  let steepest = { x: 0, z: 0, tan: 0 };
+  for (const reach of [0.5, 1, 2]) {
+    const dx = (terrainHeightAt(heightfield, x + reach, z) - terrainHeightAt(heightfield, x - reach, z)) / (2 * reach);
+    const dz = (terrainHeightAt(heightfield, x, z + reach) - terrainHeightAt(heightfield, x, z - reach)) / (2 * reach);
+    const tan = Math.hypot(dx, dz);
+    if (tan > steepest.tan) steepest = { x: dx, z: dz, tan };
+  }
+  return steepest;
+}
+
+function terrainGradientTan(heightfield, x, z) {
+  return terrainGradient(heightfield, x, z).tan;
+}
+
+export function terrainSlopeTan(degrees) {
+  const value = Number(degrees);
+  const safe = Number.isFinite(value) ? clamp(value, 1, 89) : TERRAIN_MAX_SLOPE_DEG;
+  return Math.tan(safe * DEG_TO_RAD);
+}
+
+// De hoogtekaart voor een wereld. options.heightfield = een kant-en-klare (browser); anders leest
+// options.readTerrainChunk(sha1) de vakken (server, uit de assets). Zonder vakken: null (plat).
+export function heightfieldForWorld(worldData, options = {}) {
+  if (options.heightfield) return options.heightfield;
+  const config = worldData?.terrain?.heightfield || null;
+  const refs = config?.chunks && typeof config.chunks === "object" ? config.chunks : null;
+  if (!refs || typeof options.readTerrainChunk !== "function") return null;
+  const chunks = new Map();
+  for (const [key, sha1] of Object.entries(refs)) {
+    const data = options.readTerrainChunk(sha1);
+    const chunk = data instanceof Int16Array ? data : decodeTerrainChunk(data);
+    if (chunk) chunks.set(key, chunk);
+  }
+  return chunks.size ? createHeightfield(chunks) : null;
+}
+
+// Hoogte van de grond op x, z: basis (ground.y) + terrein. Loopvlakken (bruggen) gaan voor.
+export function groundHeightAt(source, x, z, fallbackY = 0, inflate = 0) {
+  const index = resolveWalkabilitySource(source);
+  const base = num(index?.ground?.y, fallbackY);
+  const walkableY = walkableSurfaceHeightAt(index, x, z, base, inflate);
+  if (walkableY !== null) return walkableY;
+  const ground = base + (index?.heightfield ? terrainHeightAt(index.heightfield, x, z) : 0);
+  const wet = waterUnder(index, x, z);
+  if (wet && wet.water.behavior === "ice") return Math.max(ground, base + wet.water.height);
+  return ground;
 }
 
 
@@ -488,9 +665,24 @@ export function pointInRotatedRectangle(px, pz, rect, inflate = 0) {
 }
 
 
-export function createWalkabilityIndex(worldData) {
+export function createWalkabilityIndex(worldData, options = {}) {
   const index = createEmptyWalkabilityIndex();
   index.ground = worldGroundForCollision(worldData);
+  index.heightfield = heightfieldForWorld(worldData, options);
+  index.maxSlopeTan = terrainSlopeTan(worldData?.terrain?.heightfield?.maxSlopeDeg);
+  const waterWalk = worldData?.terrain?.waterWalk || null;
+  index.waterEdgeInset = Math.min(1, Math.max(0, num(waterWalk?.waterEdgeInset, 0)));
+  index.waterBlockDepth = Math.min(2, Math.max(0, num(waterWalk?.waterBlockDepth, WATER_BLOCK_DEPTH)));
+  // Instellingen > Lopen en botsen: afgeronde rand om water en te steile rots (pas uitgerekend waar iemand loopt).
+  index.edgeSteep = waterWalk?.edgeSteep !== false;
+  index.edgeSettings = waterWalk && waterWalk.edgeRound !== false
+    ? { cellSize: waterWalk.edgeCell, keepDistance: waterWalk.edgeDistance, smoothRadius: waterWalk.edgeSmooth }
+    : null;
+  // Route bij klikken (Instellingen > Lopen en botsen): hoe groot de routezoeker mag zoeken.
+  index.routeMaxExpanded = num(waterWalk?.routeSearchSize, 16000);
+  index.routeMaxSpacing = num(waterWalk?.routeMaxSpacing, 8);
+  ensureEdgeField(index);
+  index.waters = (Array.isArray(worldData?.terrain?.water) ? worldData.terrain.water : []).map(normalizeTerrainWater).filter(Boolean);
 
   const terrain = worldData?.terrain || {};
   const collision = worldData?.collision || {};
@@ -561,10 +753,23 @@ export function createWalkabilityIndex(worldData) {
       depth: depth,
       rotationY: num(walkable?.rotationY, 0),
       priority: num(walkable?.priority, 0),
+      closedEdges: Array.isArray(walkable?.closedEdges) ? walkable.closedEdges.slice() : [],
       points: points,
       mode: mode,
       triangles: mode === "polygon" ? triangulateWalkableSurface(points) : []
     });
+    // Dichte randen: rand i loopt van punt i naar punt i+1 (de laatste terug naar het eerste).
+    if (mode === "polygon" && Array.isArray(walkable?.closedEdges)) {
+      for (const edge of walkable.closedEdges) {
+        if (!Number.isInteger(edge) || edge < 0 || edge >= points.length) continue;
+        const a = points[edge];
+        const b = points[(edge + 1) % points.length];
+        index.walls.push({
+          ax: a.x, az: a.z, ay: num(a.y, y), bx: b.x, bz: b.z, by: num(b.y, y),
+          minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x), minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z)
+        });
+      }
+    }
   }
 
   index.walkables.sort(function (left, right) {
@@ -677,8 +882,8 @@ export function solidCollisionEntriesForWorld(world) {
 }
 
 
-export function buildWalkabilityIndex(worldData) {
-  activeWalkabilityIndex = createWalkabilityIndex(worldData);
+export function buildWalkabilityIndex(worldData, options = {}) {
+  activeWalkabilityIndex = createWalkabilityIndex(worldData, options);
   return activeWalkabilityIndex;
 }
 
@@ -793,7 +998,8 @@ export function hasMovedXZ(startX, startZ, x, z) {
 }
 
 
-export function resolveMovementCandidateInto(output, startX, startY, startZ, candidateX, candidateY, candidateZ, index, ground, solids, radius) {
+export function resolveMovementCandidateInto(output, startX, startY, startZ, candidateX, candidateY, candidateZ,
+  index, ground, solids, radius, ignoreSlope = false) {
   output.x = Number.isFinite(candidateX) ? candidateX : startX;
   output.y = Number.isFinite(candidateY) ? candidateY : startY;
   output.z = Number.isFinite(candidateZ) ? candidateZ : startZ;
@@ -802,16 +1008,365 @@ export function resolveMovementCandidateInto(output, startX, startY, startZ, can
   pushAwayFromSolids(output, radius, solids);
   clampPointToGround(output, ground, radius);
   if (isPointBlockedByTerrain(index, output.x, output.z, radius)) return false;
+  if (walkableWallBlocks(index, startX, startY, startZ, output.x, output.z, radius)) return false;
   const walkableY = walkableSurfaceHeightAt(index, output.x, output.z, num(ground?.y, startY), radius);
-  if (walkableY !== null) output.y = walkableY;
+  // De extra botsmarge rond een brug mag geen begaanbaar strookje water buiten de reling maken.
+  if (walkableY !== null && (isPointOnWalkableSurface(index, output.x, output.z, 0) || !blockWaterDepth(index, output.x, output.z, radius))) {
+    output.y = walkableY;
+    return true;
+  }
+  if (edgeBlocks(index, startX, startZ, output.x, output.z)) return false;
+  // Water: "Niet in" houdt je al bij de waterlijn tegen (cirkel om de speler); op "IJs" loop je bovenop;
+  // "Doorheen" = gewoon de bodem. Wie toch in het water staat, mag altijd naar ondieper (ook een steile oever op).
+  const wetTo = blockWaterDepth(index, output.x, output.z, radius);
+  if (wetTo) {
+    const wetFrom = blockWaterDepth(index, startX, startZ, radius);
+    // Naar ondieper = het midden komt hoger én je stapt niet naar het diepste stuk water toe. Anders kun je met
+    // piepkleine stapjes omhoog langs de waterlijn steeds verder het water in schuiven (en dan de wand op).
+    const intoWater = wetFrom
+      && (output.x - startX) * (wetFrom.sampleX - startX) + (output.z - startZ) * (wetFrom.sampleZ - startZ) > 0.000001;
+    if (!(wetFrom && wetTo.center < wetFrom.center && !intoWater)) return false;
+  }
+  const wet = waterUnder(index, output.x, output.z);
+  if (wet && wet.water.behavior === "ice") {
+    output.y = num(ground?.y, 0) + Math.max(wet.bottom, wet.water.height);
+    return true;
+  }
+  // Terrein: op de hoogte van de grond lopen; te steil omhoog = een muur (omlaag mag altijd).
+  const heightfield = index?.heightfield || null;
+  if (heightfield) {
+    const baseY = num(ground?.y, 0);
+    const endHeight = terrainHeightAt(heightfield, output.x, output.z);
+    const distance = Math.hypot(output.x - startX, output.z - startZ);
+    if (distance > COLLISION_EPSILON) {
+      const rise = endHeight - terrainHeightAt(heightfield, startX, startZ);
+      // Te steil = de helling van de grond zelf (niet alleen de looprichting): schuin langs een steile helling
+      // omhoog mag dus ook niet. Langs de helling (gelijk blijven) of omlaag mag wel, zodat je soepel doorloopt.
+      // Alleen een spelerscirkel die al in blokwater overlapt mag nog naar ondieper/droog ontsnappen; zodra de
+      // cirkel droog is geldt deze uitzondering niet meer en kan hij de oever niet verder beklimmen.
+      // Een paar centimeter overlap (afronding, serverplek) telt niet: anders klim je langs het water de berg op.
+      const maxTan = num(index.maxSlopeTan, 1.19);
+      // ignoreSlope true = geen hellingregel (alleen ontsnappen uit het water); een getal = zoveel stijging per meter
+      // mag (raaklijn langs een oever), daarboven geldt de hellingregel gewoon.
+      const riseAllowed = typeof ignoreSlope === "number" ? ignoreSlope : 0.002;
+      // Afgeronde rand: buiten de rand doet die het werk; wie erin staat (bijv. gespawnd op een helling) houdt de hellingregel.
+      const edgeHandlesSlope = index.edgeField && index.edgeSteep && index.edgeField.fieldAt(startX, startZ) >= index.edgeField.limit;
+      if (ignoreSlope !== true && !edgeHandlesSlope && rise > distance * riseAllowed
+        && (rise / distance > maxTan || terrainGradientTan(heightfield, output.x, output.z) > maxTan)
+        && !blockWaterDepth(index, startX, startZ, Math.max(0, num(radius, 0) - WATER_ESCAPE_MARGIN))) return false;
+    }
+    output.y = baseY + endHeight;
+  }
   return true;
 }
 
 
+// Projecteer een stap die het diepe water in wijst op de hoogtelijn van de oever. Daarmee komt de glijrichting
+// uit het terrein zelf en niet uit de toevallige lengte van één clientframe of servertick. Alleen deze berekende
+// raaklijn krijgt de hellinguitzondering; gewone (ook diagonale) invoer kan een steile oever dus niet beklimmen.
+function resolveTerrainTangentCandidateInto(output, startX, startY, startZ, desiredY, slideX, slideZ, gradient, distance,
+  index, ground, solids, radius) {
+  const normalX = gradient.x / gradient.tan;
+  const normalZ = gradient.z / gradient.tan;
+  // Een rechte raaklijn aan een gebogen oever kan door afronding net met een ringsample in het water vallen.
+  // Zoek dan hooguit enkele millimeters naar de droge kant; deze marge schaalt met de stap en wordt niet gebruikt
+  // om werkelijk de helling op te lopen: de raaklijn mag maar een heel klein beetje stijgen (TANGENT_RISE_TAN).
+  for (const dryFraction of [0, 0.01, 0.025, 0.05]) {
+    const candidateX = startX + slideX + normalX * distance * dryFraction;
+    const candidateZ = startZ + slideZ + normalZ * distance * dryFraction;
+    if (resolveMovementCandidateInto(output, startX, startY, startZ, candidateX, desiredY, candidateZ,
+      index, ground, solids, radius, TANGENT_RISE_TAN)
+      && Math.hypot(output.x - candidateX, output.z - candidateZ) < 0.00001) return true;
+  }
+  return false;
+}
+
+function blockingWaterAhead(index, startX, startZ, desiredX, desiredZ, radius) {
+  const dx = desiredX - startX;
+  const dz = desiredZ - startZ;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= COLLISION_EPSILON) return 0;
+  const lookahead = Math.max(0.5, Math.max(0, num(radius, 0)));
+  const aheadX = startX + dx / distance * lookahead;
+  const aheadZ = startZ + dz / distance * lookahead;
+  // Een brug (loopvlak) over het water: daar loop je gewoon op, dus dat water telt niet als "water vooruit".
+  if (isPointOnWalkableSurface(index, aheadX, aheadZ, 0) || isPointOnWalkableSurface(index, desiredX, desiredZ, 0)) return 0;
+  return blockWaterDepth(index, aheadX, aheadZ, radius);
+}
+
+function resolveWaterShoreSlideInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius) {
+  if (!index?.heightfield || isPointOnWalkableSurface(index, desiredX, desiredZ, 0)) return false;
+  const wetTo = blockingWaterAhead(index, startX, startZ, desiredX, desiredZ, radius)
+    || blockWaterDepth(index, desiredX, desiredZ, radius);
+  if (!wetTo) return false;
+  const dx = desiredX - startX;
+  const dz = desiredZ - startZ;
+  const distance = Math.hypot(dx, dz);
+  // De watergrens geldt voor de hele spelerscirkel. Het diepste ringpunt geeft bij grillige oevers de beste
+  // normaal; op een gladde ronde oever kan juist de continue helling onder het midden stabieler zijn.
+  for (const gradient of [
+    terrainGradient(index.heightfield, wetTo.sampleX, wetTo.sampleZ),
+    terrainGradient(index.heightfield, startX, startZ)
+  ]) {
+    if (gradient.tan <= COLLISION_EPSILON) continue;
+    const gradientLengthSq = gradient.x * gradient.x + gradient.z * gradient.z;
+    const intoWater = dx * gradient.x + dz * gradient.z;
+    if (intoWater >= -COLLISION_EPSILON) continue;
+    const slideX = dx - gradient.x * intoWater / gradientLengthSq;
+    const slideZ = dz - gradient.z * intoWater / gradientLengthSq;
+    const slideLength = Math.hypot(slideX, slideZ);
+    if (slideLength <= COLLISION_EPSILON) continue;
+    if (resolveTerrainTangentCandidateInto(output, startX, startY, startZ, desiredY,
+      slideX * distance / slideLength, slideZ * distance / slideLength, gradient,
+      distance, index, ground, solids, radius)) return true;
+  }
+  return false;
+}
+
+
+// Hetzelfde principe voor een te steile helling: verwijder alleen de component recht omhoog en behoud de
+// component langs de hoogtelijn. Zo kan een diagonale invoer nooit alsnog klimmen, maar blijft lopen erlangs
+// onafhankelijk van de frame-/ticklengte doorgaan.
+function resolveSteepTerrainSlideInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius) {
+  if (!index?.heightfield || (index.edgeField && index.edgeSteep)) return false;
+  const dx = desiredX - startX;
+  const dz = desiredZ - startZ;
+  const distance = Math.hypot(dx, dz);
+  if (distance <= COLLISION_EPSILON) return false;
+  // Kijk op een vaste afstand vooruit, niet alleen naar het eindpunt van deze frame-/tickstap. Daardoor zien een
+  // stap van 16 ms en een van 20 ms dezelfde naderende helling en kiezen ze vóór de rand dezelfde raaklijn.
+  const lookahead = Math.max(0.5, Math.max(0, num(radius, 0)));
+  const aheadX = startX + dx / distance * lookahead;
+  const aheadZ = startZ + dz / distance * lookahead;
+  const startGradient = terrainGradient(index.heightfield, startX, startZ);
+  const aheadGradient = terrainGradient(index.heightfield, aheadX, aheadZ);
+  const maxSlopeTan = num(index.maxSlopeTan, 1.19);
+  const lookaheadRise = terrainHeightAt(index.heightfield, aheadX, aheadZ) - terrainHeightAt(index.heightfield, startX, startZ);
+  for (const gradient of [startGradient, aheadGradient]) {
+    if (gradient.tan <= maxSlopeTan && lookaheadRise <= lookahead * maxSlopeTan) continue;
+    const gradientLengthSq = gradient.x * gradient.x + gradient.z * gradient.z;
+    const uphill = dx * gradient.x + dz * gradient.z;
+    if (uphill <= COLLISION_EPSILON) continue;
+    const slideX = dx - gradient.x * uphill / gradientLengthSq;
+    const slideZ = dz - gradient.z * uphill / gradientLengthSq;
+    const slideLength = Math.hypot(slideX, slideZ);
+    if (slideLength <= COLLISION_EPSILON) continue;
+    if (resolveTerrainTangentCandidateInto(output, startX, startY, startZ, desiredY,
+      slideX * distance / slideLength, slideZ * distance / slideLength, gradient,
+      distance, index, ground, solids, radius)) return true;
+  }
+  return false;
+}
+
+
 export function resolveMovementStepInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius) {
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius)) return output;
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, startZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
-  if (resolveMovementCandidateInto(output, startX, startY, startZ, startX, desiredY, desiredZ, index, ground, solids, radius) && hasMovedXZ(startX, startZ, output.x, output.z)) return output;
+  const dx = desiredX - startX;
+  const dz = desiredZ - startZ;
+  const distance = Math.hypot(dx, dz);
+  const waterAhead = distance > COLLISION_EPSILON
+    ? blockingWaterAhead(index, startX, startZ, desiredX, desiredZ, radius)
+    : 0;
+  const direct = resolveMovementCandidateInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius);
+  if (direct && Math.hypot(output.x - desiredX, output.z - desiredZ) < 0.00001 && !waterAhead) return output;
+  const fallback = direct ? { x: output.x, y: output.y, z: output.z } : null;
+  let shoreTangent = null;
+  let irregularWaterShore = false;
+  if (distance > COLLISION_EPSILON && index?.heightfield) {
+    const nearbyWater = blockWaterDepth(index, startX, startZ, radius + 1) || waterAhead;
+    if (nearbyWater) {
+      const shoreGradients = [
+        terrainGradient(index.heightfield, nearbyWater.sampleX, nearbyWater.sampleZ),
+        terrainGradient(index.heightfield, startX, startZ)
+      ];
+      const [ringGradient, centerGradient] = shoreGradients;
+      const lowShoreGradient = Math.min(ringGradient.tan, centerGradient.tan);
+      const highShoreGradient = Math.max(ringGradient.tan, centerGradient.tan);
+      const shoreGradientCos = lowShoreGradient > COLLISION_EPSILON
+        ? (ringGradient.x * centerGradient.x + ringGradient.z * centerGradient.z) / (ringGradient.tan * centerGradient.tan)
+        : 1;
+      irregularWaterShore = (highShoreGradient - lowShoreGradient > 0.05
+        && highShoreGradient > Math.max(0.1, lowShoreGradient * 1.5)) || shoreGradientCos < 0.9;
+      for (const gradient of shoreGradients) {
+        if (gradient.tan <= COLLISION_EPSILON) continue;
+        const gradientLengthSq = gradient.x * gradient.x + gradient.z * gradient.z;
+        const alongNormal = dx * gradient.x + dz * gradient.z;
+        const tangentX = dx - gradient.x * alongNormal / gradientLengthSq;
+        const tangentZ = dz - gradient.z * alongNormal / gradientLengthSq;
+        const tangentLength = Math.hypot(tangentX, tangentZ);
+        if (tangentLength > distance * 0.1 && (!shoreTangent || tangentLength > Math.hypot(shoreTangent.x, shoreTangent.z))) {
+          shoreTangent = { x: tangentX, z: tangentZ };
+        }
+      }
+    }
+  }
+  if (distance > COLLISION_EPSILON
+    && resolveWaterShoreSlideInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius)) return output;
+  if (distance > COLLISION_EPSILON
+    && resolveSteepTerrainSlideInto(output, startX, startY, startZ, desiredX, desiredY, desiredZ, index, ground, solids, radius)) return output;
+  if (distance > COLLISION_EPSILON) {
+    // Zoek de kleinste draai naar een vrije richting, met dezelfde staplengte.
+    // Dit werkt ook langs schuine muren, ronde oevers, bomen en brugranden.
+    const tryAngle = function (angle) {
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const x = startX + dx * cos - dz * sin;
+      const z = startZ + dx * sin + dz * cos;
+      return resolveMovementCandidateInto(output, startX, startY, startZ, x, desiredY, z, index, ground, solids, radius)
+        && Math.hypot(output.x - x, output.z - z) < 0.00001;
+    };
+    const sides = [];
+    const increment = Math.PI / 12;
+    for (const sign of [-1, 1]) {
+      for (let turn = 1; turn <= 6; turn += 1) {
+        let angle = turn * increment;
+        if (!tryAngle(sign * angle)) continue;
+        let blocked = angle - increment;
+        for (let refine = 0; refine < 7; refine += 1) {
+          const middle = (blocked + angle) / 2;
+          if (tryAngle(sign * middle)) angle = middle;
+          else blocked = middle;
+        }
+        sides.push({ angle, sign });
+        break;
+      }
+    }
+    sides.sort((a, b) => a.angle - b.angle);
+    // Recht tegen een symmetrische muur: geen willekeurige kant kiezen. Langs een wateroever is er wel een
+    // duidelijke raaklijn uit de invoer; kies dan de kant die daarmee het meest overeenkomt.
+    let chosenSide = sides.length && (sides.length === 1 || sides[1].angle - sides[0].angle > 0.003) ? sides[0] : null;
+    if (!chosenSide && shoreTangent && sides.length) {
+      const score = (side) => {
+        const angle = side.sign * side.angle;
+        const candidateX = dx * Math.cos(angle) - dz * Math.sin(angle);
+        const candidateZ = dx * Math.sin(angle) + dz * Math.cos(angle);
+        return candidateX * shoreTangent.x + candidateZ * shoreTangent.z;
+      };
+      chosenSide = sides.slice().sort((a, b) => score(b) - score(a) || a.sign - b.sign)[0];
+    }
+    if (chosenSide && tryAngle(chosenSide.sign * chosenSide.angle)) return output;
+
+    // In een scherpe kom tussen diep water en een steile oever kan elke richting binnen 90 graden geblokkeerd
+    // zijn. Zoek daar ook achterwaarts naar de dichtstbijzijnde volledig geldige richting. Dit klimt niet en gaat
+    // niet het water in; het voorkomt alleen dat beide legale uitwegen door de halve zoekcirkel worden gemist.
+    const trappedAtWaterShore = Boolean(shoreTangent) || irregularWaterShore
+      || Boolean(index?.heightfield && blockWaterDepth(index, startX, startZ, radius + 1)
+        && terrainGradientTan(index.heightfield, startX, startZ) > num(index.maxSlopeTan, 1.19));
+    if (trappedAtWaterShore) {
+      const escapeSides = [];
+      for (const sign of [-1, 1]) {
+        for (let turn = 7; turn <= 12; turn += 1) {
+          let angle = turn * increment;
+          if (!tryAngle(sign * angle)) continue;
+          let blocked = angle - increment;
+          for (let refine = 0; refine < 7; refine += 1) {
+            const middle = (blocked + angle) / 2;
+            if (tryAngle(sign * middle)) angle = middle;
+            else blocked = middle;
+          }
+          escapeSides.push({ angle, sign });
+          break;
+        }
+      }
+      escapeSides.sort((a, b) => a.angle - b.angle || a.sign - b.sign);
+      if (escapeSides.length && tryAngle(escapeSides[0].sign * escapeSides[0].angle)) return output;
+      // Geen enkele richting is legaal: duw uitsluitend naar de droge kant van de oever. Dit is een korte
+      // ontklemming, geen helling-uitzondering voor de invoerrichting; daarna gelden water en maxSlope weer.
+      // Alleen als je echt in het water staat: droog naast het water ben je niet klem (je kunt terug) en mag je
+      // de wand niet op geduwd worden.
+      const nearbyWater = blockWaterDepth(index, startX, startZ, Math.max(0, radius - WATER_ESCAPE_MARGIN))
+        ? blockWaterDepth(index, startX, startZ, radius + 1) || waterAhead : 0;
+      if (nearbyWater) {
+        for (const dryGradient of [
+          terrainGradient(index.heightfield, nearbyWater.sampleX, nearbyWater.sampleZ),
+          terrainGradient(index.heightfield, startX, startZ)
+        ]) {
+          if (dryGradient.tan <= COLLISION_EPSILON) continue;
+          for (const dryDistance of [distance, Math.max(distance, radius * 0.24)]) {
+            const dryX = startX + dryGradient.x / dryGradient.tan * dryDistance;
+            const dryZ = startZ + dryGradient.z / dryGradient.tan * dryDistance;
+            if (resolveMovementCandidateInto(output, startX, startY, startZ, dryX, desiredY, dryZ,
+              index, ground, solids, radius, true)
+              && Math.hypot(output.x - dryX, output.z - dryZ) < 0.00001) return output;
+          }
+        }
+        const escapeDistance = Math.max(distance, radius * 0.24);
+        const dryCandidates = [];
+        const dryOutput = { x: startX, y: startY, z: startZ };
+        for (let directionIndex = 0; directionIndex < 16; directionIndex += 1) {
+          const angle = directionIndex * Math.PI / 8;
+          const dryX = startX + Math.cos(angle) * escapeDistance;
+          const dryZ = startZ + Math.sin(angle) * escapeDistance;
+          if (!resolveMovementCandidateInto(dryOutput, startX, startY, startZ, dryX, desiredY, dryZ,
+            index, ground, solids, radius, true)
+            || Math.hypot(dryOutput.x - dryX, dryOutput.z - dryZ) >= 0.00001) continue;
+          dryCandidates.push({
+            x: dryOutput.x,
+            y: dryOutput.y,
+            z: dryOutput.z,
+            height: terrainHeightAt(index.heightfield, dryOutput.x, dryOutput.z),
+            directionIndex
+          });
+        }
+        dryCandidates.sort((a, b) => a.height - b.height || a.directionIndex - b.directionIndex);
+        if (dryCandidates.length) {
+          output.x = dryCandidates[0].x;
+          output.y = dryCandidates[0].y;
+          output.z = dryCandidates[0].z;
+          return output;
+        }
+      }
+    }
+
+    // Nog net buiten de water-ring kan een steile, grillige oever dezelfde klem geven. Kies dan de laagste
+    // volledig geldige richting rondom: dat is altijd van de helling af, nooit ertegenop.
+    let bestNearbyGradient = index?.heightfield && !index.edgeField ? terrainGradient(index.heightfield, startX, startZ) : null;
+    if (bestNearbyGradient) {
+      for (let sampleIndex = 0; sampleIndex < 8; sampleIndex += 1) {
+        const sampleAngle = sampleIndex * Math.PI / 4;
+        const sampleGradient = terrainGradient(index.heightfield,
+          startX + Math.cos(sampleAngle) * Math.max(radius, 0.5),
+          startZ + Math.sin(sampleAngle) * Math.max(radius, 0.5));
+        if (sampleGradient.tan > bestNearbyGradient.tan) bestNearbyGradient = sampleGradient;
+      }
+    }
+    const steepNearby = bestNearbyGradient?.tan > num(index.maxSlopeTan, 1.19);
+    const nearbyNormal = bestNearbyGradient ? (dx * bestNearbyGradient.x + dz * bestNearbyGradient.z) / (bestNearbyGradient.tan * bestNearbyGradient.tan) : 0;
+    const nearbyTangentLength = bestNearbyGradient
+      ? Math.hypot(dx - bestNearbyGradient.x * nearbyNormal, dz - bestNearbyGradient.z * nearbyNormal)
+      : 0;
+    if (steepNearby && nearbyTangentLength > distance * 0.1) {
+      const downhillCandidates = [];
+      const downhillOutput = { x: startX, y: startY, z: startZ };
+      for (let directionIndex = 0; directionIndex < 16; directionIndex += 1) {
+        const angle = directionIndex * Math.PI / 8;
+        const candidateX = startX + Math.cos(angle) * distance;
+        const candidateZ = startZ + Math.sin(angle) * distance;
+        if (!resolveMovementCandidateInto(downhillOutput, startX, startY, startZ, candidateX, desiredY, candidateZ,
+          index, ground, solids, radius)
+          || Math.hypot(downhillOutput.x - candidateX, downhillOutput.z - candidateZ) >= 0.00001) continue;
+        downhillCandidates.push({
+          x: downhillOutput.x,
+          y: downhillOutput.y,
+          z: downhillOutput.z,
+          height: terrainHeightAt(index.heightfield, downhillOutput.x, downhillOutput.z),
+          directionIndex
+        });
+      }
+      downhillCandidates.sort((a, b) => a.height - b.height || a.directionIndex - b.directionIndex);
+      if (downhillCandidates.length) {
+        output.x = downhillCandidates[0].x;
+        output.y = downhillCandidates[0].y;
+        output.z = downhillCandidates[0].z;
+        return output;
+      }
+    }
+  }
+  if (fallback) {
+    output.x = fallback.x;
+    output.y = fallback.y;
+    output.z = fallback.z;
+    return output;
+  }
   output.x = startX;
   output.y = startY;
   output.z = startZ;
@@ -827,6 +1382,14 @@ export function movementSubstepCount(startX, startZ, desiredX, desiredZ, radius)
 }
 
 
+function terrainMovementSubstepCount(startX, startZ, desiredX, desiredZ, radius) {
+  const distance = Math.hypot(desiredX - startX, desiredZ - startZ);
+  if (distance <= COLLISION_EPSILON) return 1;
+  const stepSize = Math.max(Math.max(0, num(radius, 0)) * 0.048, 0.018);
+  return clamp(Math.ceil((distance - COLLISION_EPSILON) / stepSize), 1, 48);
+}
+
+
 export function resolveMovementInto(output, start, desired, options = {}) {
   const index = resolveWalkabilitySource(options.index);
   const radius = Math.max(0, num(options.radius, 0.5));
@@ -838,24 +1401,85 @@ export function resolveMovementInto(output, start, desired, options = {}) {
   const desiredX = num(desired?.x, startX);
   const desiredY = num(desired?.y, startY);
   const desiredZ = num(desired?.z, startZ);
-  const substeps = movementSubstepCount(startX, startZ, desiredX, desiredZ, radius);
+  let substeps = movementSubstepCount(startX, startZ, desiredX, desiredZ, radius);
+  let quantizeSubsteps = false;
+  if (index?.heightfield && !index.edgeField) {
+    const moveDistance = Math.hypot(desiredX - startX, desiredZ - startZ);
+    const lookahead = Math.max(0.5, radius);
+    const aheadX = moveDistance > COLLISION_EPSILON ? startX + (desiredX - startX) / moveDistance * lookahead : startX;
+    const aheadZ = moveDistance > COLLISION_EPSILON ? startZ + (desiredZ - startZ) / moveDistance * lookahead : startZ;
+    const startGradient = terrainGradient(index.heightfield, startX, startZ);
+    const aheadGradient = terrainGradient(index.heightfield, aheadX, aheadZ);
+    const maxSlopeTan = num(index.maxSlopeTan, 1.19);
+    const nearSteepTerrain = startGradient.tan > maxSlopeTan || aheadGradient.tan > maxSlopeTan;
+    const lowGradient = Math.min(startGradient.tan, aheadGradient.tan);
+    const highGradient = Math.max(startGradient.tan, aheadGradient.tan);
+    const gradientDot = startGradient.x * aheadGradient.x + startGradient.z * aheadGradient.z;
+    const gradientCos = lowGradient > COLLISION_EPSILON ? gradientDot / (startGradient.tan * aheadGradient.tan) : 1;
+    const irregularShore = (highGradient - lowGradient > 0.05 && highGradient > Math.max(0.1, lowGradient * 1.5))
+      || gradientCos < 0.9;
+    const nearBlockingWater = blockWaterDepth(index, startX, startZ, radius + 1)
+      || blockWaterDepth(index, aheadX, aheadZ, radius + 1);
+    if (nearSteepTerrain || (nearBlockingWater && irregularShore)) {
+      substeps = terrainMovementSubstepCount(startX, startZ, desiredX, desiredZ, radius);
+      quantizeSubsteps = true;
+    }
+  }
   let currentX = startX;
   let currentY = startY;
   let currentZ = startZ;
+  const baseStepX = (desiredX - startX) / substeps;
+  const baseStepZ = (desiredZ - startZ) / substeps;
+  const baseStepDistance = Math.hypot(baseStepX, baseStepZ);
+  let slideStepX = null;
+  let slideStepZ = null;
   output.x = startX;
   output.y = startY;
   output.z = startZ;
   for (let stepIndex = 1; stepIndex <= substeps; stepIndex += 1) {
     const t = stepIndex / substeps;
-    const candidateX = startX + ((desiredX - startX) * t);
+    const requestedStepX = slideStepX ?? baseStepX;
+    const requestedStepZ = slideStepZ ?? baseStepZ;
+    const candidateX = currentX + requestedStepX;
     const candidateY = startY + ((desiredY - startY) * t);
-    const candidateZ = startZ + ((desiredZ - startZ) * t);
+    const candidateZ = currentZ + requestedStepZ;
     resolveMovementStepInto(output, currentX, currentY, currentZ, candidateX, candidateY, candidateZ, index, ground, solids, radius);
+    // Zelfde millimeterraster binnen de ruimtelijke substappen; zo hangt het pad niet af van de vraag of die
+    // substappen door één server-tick of door meerdere clientframes zijn aangeleverd.
+    if (quantizeSubsteps) {
+      const exactX = output.x;
+      const exactY = output.y;
+      const exactZ = output.z;
+      output.x = Math.round(output.x * 1000) / 1000;
+      output.y = Math.round(output.y * 1000) / 1000;
+      output.z = Math.round(output.z * 1000) / 1000;
+      // Afronden mag je niet het water in schuiven: dan geldt de oever-uitzondering en klim je de wand op.
+      if (blockWaterDepth(index, output.x, output.z, radius) && !blockWaterDepth(index, exactX, exactZ, radius)) {
+        output.x = exactX;
+        output.y = exactY;
+        output.z = exactZ;
+      }
+    }
     if (!hasMovedXZ(currentX, currentZ, output.x, output.z) && hasMovedXZ(currentX, currentZ, candidateX, candidateZ)) {
       output.x = currentX;
       output.y = currentY;
       output.z = currentZ;
       return output;
+    }
+    const actualStepX = output.x - currentX;
+    const actualStepZ = output.z - currentZ;
+    const actualStepDistance = Math.hypot(actualStepX, actualStepZ);
+    if (baseStepDistance > COLLISION_EPSILON && actualStepDistance > COLLISION_EPSILON) {
+      const requestedDistance = Math.hypot(requestedStepX, requestedStepZ);
+      const alignment = requestedDistance > COLLISION_EPSILON
+        ? (actualStepX * requestedStepX + actualStepZ * requestedStepZ) / (actualStepDistance * requestedDistance)
+        : 1;
+      // Na een botsing de gekozen glijrichting binnen deze frame/tick vasthouden. Anders kan de volgende
+      // substap de oorspronkelijke invoer opnieuw toepassen en precies terugglijden naar het beginpunt.
+      if (slideStepX !== null || alignment < 0.999) {
+        slideStepX = actualStepX / actualStepDistance * baseStepDistance;
+        slideStepZ = actualStepZ / actualStepDistance * baseStepDistance;
+      }
     }
     currentX = output.x;
     currentY = output.y;
@@ -871,6 +1495,11 @@ export function resolveMovement(start, desired, options = {}) {
     y: num(start?.y, 0),
     z: num(start?.z, 0)
   };
-  return resolveMovementInto(result, start, desired, options);
+  resolveMovementInto(result, start, desired, options);
+  // De server bewaart millimeters. Rond al in de gedeelde kernel af, zodat de client niet met extra decimalen
+  // een andere oevertak kiest en later door dezelfde serverafronding wordt teruggetrokken.
+  result.x = Math.round(result.x * 1000) / 1000;
+  result.y = Math.round(result.y * 1000) / 1000;
+  result.z = Math.round(result.z * 1000) / 1000;
+  return result;
 }
-

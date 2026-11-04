@@ -12,6 +12,11 @@ import { LOOT_ENTRY_KEYS, LOOT_KINDS } from "./kinds/loot.js";
 import { HELP_ID, HELP_NAME, help, ui } from "./kinds/ui.js";
 import { WORLD_KINDS } from "./kinds/world.js";
 import { GAME_KINDS } from "./kinds/game.js";
+import { NETWORK_KINDS } from "./kinds/network.js";
+import { WATER_WALK_KINDS } from "./kinds/water-walk.js";
+import { PARTY_KINDS } from "./kinds/party.js";
+import { CHAT_KINDS } from "./kinds/chat.js";
+import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
@@ -39,6 +44,8 @@ const shapeSelect = (label) => ({ type: "select", required: true, options: AREA_
 const regionRef = { type: "ref", refKind: "region", required: true, audience: "client", label: "Gebied",
   ui: ui("🗺️", "ref", "viewport", { more: true }), default: null,
   help: help("In welk gebied dit ligt.", "Wordt vanzelf gekozen als je het in de 3D-view tekent.", "Melding 'buiten gebied' → teken het binnen een gebied.") };
+
+const USE_GROUP = "✨ Gebruiken: eten, drinken en effect";
 
 export const CANONICAL_KINDS = {
   project_settings: {
@@ -111,6 +118,9 @@ export const CANONICAL_KINDS = {
       worldModelAssetId: { type: "asset", assetType: "model", required: false, maxLength: 160, audience: "client", label: "Model",
         ui: ui("🧊", "asset", "werkbank"), default: null,
         help: help("Het 3D-model als het item op de grond ligt (en het plaatje in de tas).", "Sleep een model uit de Bibliotheek op dit vak.", "Item onzichtbaar op de grond → sleep hier een model op.") },
+      modelScaleBp: { type: "integer", required: false, min: 100, max: 100000, audience: "client", label: "Grootte op de grond",
+        ui: ui("📏", "slider", "werkbank", { step: 100, unit: "%", scale: 100, range: [1000, 40000], more: true }), default: 10000,
+        help: help("Hoe groot het item op de grond ligt.", "100 % = zoals het model is gemaakt. Een stuk vlees naast een speler van 1,5 m: ongeveer 20-30 cm.", "Item te klein of te groot → schuif naar rechts (groter) of links (kleiner).") },
       tags: { type: "tagList", required: false, maxItems: 32, audience: "client", label: "Labels",
         ui: ui("🏷️", "tags", "werkbank", { more: true }), default: null,
         help: help("Extra labels waar regels naar kunnen kijken (bijv. 'vis', 'ijzer').", "Kleine letters, kort. Een paar per item is genoeg.", "Label werkt niet → controleer de spelling (alleen a-z, 0-9, _ . : -).") },
@@ -126,7 +136,16 @@ export const CANONICAL_KINDS = {
         help: help("Hoeveel harder je slaat als je dit draagt.", "1-5 voor de eerste wapens.", "Wapen maakt geen verschil → hoger.") },
       armorBonus: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Extra pantser",
         ui: ui("🛡️", "slider", "werkbank", { step: 1, range: [0, 100], more: true }), default: 0,
-        help: help("Hoeveel minder schade je krijgt als je dit draagt.", "1-5 voor de eerste kleding.", "Spelers onkwetsbaar → lager.") }
+        help: help("Hoeveel minder schade je krijgt als je dit draagt.", "1-5 voor de eerste kleding.", "Spelers onkwetsbaar → lager.") },
+      // Stap 4 (HUD): eten en drinken. Met een waarde boven 0 krijgt het item in de tas de knop Gebruiken.
+      // Healing (2-11): alles over gebruiken staat samen in het uitklapblok "Gebruiken" onderaan het item.
+      healAmount: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Geneest meteen",
+        ui: ui("💚", "slider", "werkbank", { step: 1, range: [0, 200], group: USE_GROUP }), default: 0,
+        help: help("Hoeveel levens je meteen terugkrijgt als je dit gebruikt.", "10-30 voor brood en drankjes. 0 = niet meteen genezen (een effect hieronder mag wel).", "Geen knop Gebruiken in de tas → zet hier meer dan 0 of geef het item een effect.") },
+      useCooldownS: { type: "integer", required: false, min: 0, max: 86400, audience: "client", label: "Wachttijd",
+        ui: ui("⏱️", "slider", "werkbank", { step: 1, range: [0, 300], unit: "s", group: USE_GROUP }), default: 0,
+        help: help("Hoe lang je moet wachten voor je dit item nog eens kunt gebruiken. Je ziet de tijd in de tas.", "10-30 s voor drankjes, 0 voor gewoon eten.", "Spelers drinken 20 drankjes in een gevecht → langer.") },
+      ...effectFields(USE_GROUP, { unit: "min", what: "het item" })
     }
   },
   pickup: {
@@ -247,7 +266,8 @@ export const CANONICAL_KINDS = {
         ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID("dit obstakel") },
       displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
         ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("dit obstakel") },
-      regionRef,
+      // Ronde 3: gebieden zijn weg; een obstakel staat gewoon in de wereld (oude kaarten mogen het veld nog hebben).
+      regionRef: Object.assign({}, regionRef, { required: false }),
       shape: shapeSelect("Vorm"),
       minXMm: mmField("Links", false, "⬅️"),
       maxXMm: mmField("Rechts", false, "➡️"),
@@ -265,7 +285,11 @@ export const CANONICAL_KINDS = {
   ...LOOT_KINDS,
   ...ACTOR_KINDS,
   ...WORLD_KINDS,
-  ...GAME_KINDS
+  ...GAME_KINDS,
+  ...NETWORK_KINDS,
+  ...WATER_WALK_KINDS,
+  ...PARTY_KINDS,
+  ...CHAT_KINDS
 };
 
 // Velden per Area-vorm. Een veld van een andere vorm is een fout (geen half-ingevulde vormen).
@@ -363,6 +387,27 @@ export function validateDocument(kind, body) {
       if (bad) issues.push(issue(key, "FIELD_POINT", field.label + ": elk punt is [x, z] in hele mm" + (field.allowHeight ? " (een loopvlak mag [x, z, hoogte])." : ".")));
       continue;
     }
+    if (field.type === "terrainChunks") {
+      // Wereld tekenen: { "cx:cz": sha1 } (vak → vingerafdruk van het bestand in assets/terrain).
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      if (entries.length > 16384) issues.push(issue(key, "FIELD_RANGE", field.label + ": te veel vakken."));
+      if (entries.some(([chunk, sha1]) => !/^-?\d{1,5}:-?\d{1,5}$/.test(chunk) || typeof sha1 !== "string" || !/^[0-9a-f]{40}$/.test(sha1))) {
+        issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met een vingerafdruk (40 tekens)."));
+      }
+      continue;
+    }
+    if (field.type === "terrainPaint") {
+      // Ronde 2: { "cx:cz": { file: sha1 (PNG in assets/terrain), layers: [terreintextuur-sleutel of "", x3] } }.
+      if (typeof value !== "object" || Array.isArray(value)) { issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn.")); continue; }
+      const entries = Object.entries(value);
+      if (entries.length > 16384) issues.push(issue(key, "FIELD_RANGE", field.label + ": te veel vakken."));
+      const badEntry = ([chunk, ref]) => !/^-?\d{1,5}:-?\d{1,5}$/.test(chunk) || !ref || typeof ref !== "object" || Array.isArray(ref)
+        || typeof ref.file !== "string" || !/^[0-9a-f]{40}$/.test(ref.file) || !Array.isArray(ref.layers) || ref.layers.length > 3
+        || ref.layers.some((layer) => typeof layer !== "string" || layer.length > 160 || (layer && !layer.startsWith("terrain_texture:")));
+      if (entries.some(badEntry)) issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met { file, layers }."));
+      continue;
+    }
     if (field.type === "areaSettings") {
       if (typeof value !== "object" || Array.isArray(value)) issues.push(issue(key, "FIELD_TYPE", field.label + " moet een object zijn."));
       continue;
@@ -449,6 +494,10 @@ function shapeIssues(kind, body, issues) {
     // Uitrusting stapelt nooit: de build maakt er vanzelf een los stuk van (runtime-overlay), dus geen blokkade hier.
     return;
   }
+  if (kind === "terrain_texture") {
+    if (!body.textureAssetId && !body.color) issues.push(issue("textureAssetId", "TEXTURE_OR_COLOR", "Kies een plaatje of een kleur."));
+    return;
+  }
   if (kind === "region") {
     if (body.minXMm >= body.maxXMm || body.minZMm >= body.maxZMm) issues.push(issue("maxXMm", "REGION_EMPTY", "Een Region moet breedte en diepte hebben (min < max)."));
     return;
@@ -456,7 +505,6 @@ function shapeIssues(kind, body, issues) {
   if (kind === "area" && areaSoort(body) !== "deelgebied") { areaShapeIssues(body, issues); return; }
   if (kind === "area") {
     if (body.settings) issues.push(issue("settings", "SOORT_FIELD", "Een deelgebied heeft geen instellingen."));
-    if (!body.regionRef) issues.push(issue("regionRef", "FIELD_REQUIRED", "Een deelgebied hoort bij een gebied."));
     if (!body.shape) issues.push(issue("shape", "FIELD_REQUIRED", "Vorm is verplicht."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.some((point) => point.length !== 2)) issues.push(issue("pointsMm", "FIELD_POINT", "Alleen een loopvlak heeft een hoogte per punt."));
     if (Array.isArray(body.pointsMm) && body.pointsMm.length < 3) issues.push(issue("pointsMm", "FIELD_RANGE", "Een deelgebied heeft minstens 3 punten."));

@@ -181,6 +181,8 @@ function betterArea(a, b) {
 
 // Server-side membership met hysteresis. previous = { regionId, areaId } of null.
 // Geeft { regionId, areaId, cellKey } terug (null waar niets is).
+// Ronde 3: een deelgebied zonder gebied (regionId leeg) geldt overal in de wereld; een deelgebied met gebied
+// alleen binnen dat gebied (oude data).
 export function resolveMembership(index, xMm, zMm, previous = null, hysteresisMm = DEFAULT_HYSTERESIS_MM) {
   const key = cellKeyForPointMm(xMm, zMm);
   const cell = index.cells[key] || null;
@@ -193,16 +195,17 @@ export function resolveMembership(index, xMm, zMm, previous = null, hysteresisMm
       if (candidate && rectContains(candidate, xMm, zMm)) { region = candidate; break; }
     }
   }
-  if (!region) return { regionId: null, areaId: null, cellKey: key };
+  const regionId = region ? region.regionId : null;
+  const fits = (candidate) => !candidate.regionId || candidate.regionId === regionId;
   let best = null;
   for (const areaId of cell?.areas || []) {
     const candidate = index.areas.get(areaId);
-    if (candidate && candidate.regionId === region.regionId && areaContains(candidate, xMm, zMm) && betterArea(candidate, best)) best = candidate;
+    if (candidate && fits(candidate) && areaContains(candidate, xMm, zMm) && betterArea(candidate, best)) best = candidate;
   }
   const previousArea = previous?.areaId ? index.areas.get(previous.areaId) : null;
-  if (previousArea && previousArea.regionId === region.regionId && previousArea !== best && areaContains(previousArea, xMm, zMm, hysteresisMm)) {
+  if (previousArea && fits(previousArea) && previousArea !== best && areaContains(previousArea, xMm, zMm, hysteresisMm)) {
     // Blijf in de vorige Area zolang die nog (bijna) geldt en er geen Area met hogere prioriteit is.
     if (!best || areaRank(best).priority <= areaRank(previousArea).priority) best = previousArea;
   }
-  return { regionId: region.regionId, areaId: best ? best.areaId : null, cellKey: key };
+  return { regionId, areaId: best ? best.areaId : null, cellKey: key };
 }

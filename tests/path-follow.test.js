@@ -117,6 +117,18 @@ test("een stop maakt de rij leeg en de server staat stil", function () {
   assert.equal(state.moving, false);
 });
 
+test("twee spelers houden een eigen route, ook met hetzelfde browser-id", function () {
+  const service = fakeService();
+  service.getPlayerClientStateKey = MmoService.prototype.getPlayerClientStateKey.bind(service);
+  service.updatePathQueue("p1", { pathPoint: { x: 5, z: 0 } });
+  service.updatePathQueue("p2", { pathPoint: { x: 0, z: 5 } });
+  service.updatePathQueue("p1", { stop: true });
+  assert.equal(service.pathQueueByPlayerId.has("p1"), false, "alleen speler 1 stopt");
+  assert.equal(service.pathQueueByPlayerId.has("p2"), true, "de route van speler 2 blijft bestaan");
+  assert.notEqual(service.getPlayerClientStateKey("p1", "zelfde-tab-id"), service.getPlayerClientStateKey("p2", "zelfde-tab-id"),
+    "bewegingsvolgnummers zijn per speler gescheiden");
+});
+
 test("onbereikbaar tussenpunt wordt na een paar ticks overgeslagen", function () {
   const service = fakeService();
   const wall = { id: "rock", x: 2, z: 0, radius: 1.5, enabled: true };

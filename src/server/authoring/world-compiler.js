@@ -31,6 +31,8 @@ export function spatialIssues(docs) {
   }
   const regionByKey = new Map(regions.map((doc) => [doc.docKey, doc]));
   for (const area of areas) {
+    // Ronde 3: zonder gebied staat een deelgebied (of obstakel) los in de wereld.
+    if (!area.body.regionRef) continue;
     const region = regionByKey.get(area.body.regionRef);
     if (!region) {
       issues.push({ code: "AREA_REGION_MISSING", docKey: area.docKey, otherDocKey: area.body.regionRef, message: (area.kind === "collider" ? "Obstakel " : "Area ") + area.body.displayName + " hoort bij een Region die niet (meer) bestaat." });
@@ -105,7 +107,7 @@ export function compileWorldSection(documents, options = {}) {
       regions.server.push(split.server);
       addToCells(doc.body, "regions", doc.body.regionId, doc.docKey);
     } else {
-      const regionId = regionIdFromRef(doc.body.regionRef);
+      const regionId = doc.body.regionRef ? regionIdFromRef(doc.body.regionRef) : null;
       const toRuntime = (data) => { const next = Object.assign({}, data, { regionId }); delete next.regionRef; return next; };
       const target = doc.kind === "collider" ? colliders : areas;
       target.client.push(toRuntime(split.client));

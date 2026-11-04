@@ -1654,7 +1654,9 @@ export const NODE_TYPES = {
       depth: { label: "Depth", type: "number", default: 2.5, min: 0.01, max: 10000, step: 0.01, required: true },
       rotationY: { label: "Rotation Y", type: "number", default: 0, min: -360, max: 360, step: 0.1, required: true },
       priority: { label: "Priority", type: "number", default: 10, step: 1, required: true },
-      points: { label: "Points", type: "json", default: [], required: false, hidden: true }
+      points: { label: "Points", type: "json", default: [], required: false, hidden: true },
+      // Dichte randen: lijst randnummers (rand i = van punt i naar punt i+1). Daar kun je niet overheen lopen.
+      closedEdges: { label: "Closed edges", type: "json", default: [], required: false, hidden: true }
     }
   },
 
@@ -2149,6 +2151,11 @@ export const NODE_TYPES = {
 	      settingsId: { section: "Identity", label: "Settings id (settingsId)", type: "text", default: "mmo_network", required: true, maxLength: 64, pattern: "^[a-z0-9_:-]+$" },
 	      enabled: { section: "Identity", label: "Enabled (enabled)", type: "boolean", default: true, required: true },
 	      networkPreset: { section: "Preset", label: "Netcode preset (networkPreset)", type: "select", options: MMO_NETWORK_PRESET_OPTIONS, default: "custom", required: true, help: "Custom bewaart jouw eigen waarden. Presets 0-7 zetten de gekoppelde hardcode velden tegelijk. 0 is meeste smoothing/laagste bandwidth; 7 is de rustigste no-rubberband MMO preset." },
+	      showHealthPing: { section: "Server health HUD", label: "Show ping", type: "boolean", default: true, required: true },
+	      showHealthTps: { section: "Server health HUD", label: "Show TPS", type: "boolean", default: true, required: true },
+	      showHealthMspt: { section: "Server health HUD", label: "Show MSPT", type: "boolean", default: true, required: true },
+	      showHealthCpu: { section: "Server health HUD", label: "Show server CPU", type: "boolean", default: true, required: true },
+	      showHealthPacketLoss: { section: "Server health HUD", label: "Show packet loss", type: "boolean", default: true, required: true },
 	      serverTickRateHz: { section: "Rates", label: "Fixed timestep Hz (serverTickRateHz)", type: "number", default: 30, min: 10, max: 60, step: 1, required: true, help: "Gangbare game-dev naam: fixed timestep of simulation tick. Houd state replication en client input rate niet hoger dan deze waarde. 30 Hz is de normale MMO-keuze." },
 	      snapshotRateHz: { section: "Rates", label: "State replication Hz (snapshotRateHz)", type: "number", default: 20, min: 5, max: 30, step: 1, required: true, help: "Gangbare game-dev naam: snapshot rate, replication rate of state sync rate. Best practice: 15-20 Hz voor MMO movement. Bij aanpassen volgt de interpolation buffer mee." },
 	      inputSendRateHz: { section: "Rates", label: "Client input rate Hz (inputSendRateHz)", type: "number", default: 30, min: 10, max: 60, step: 1, required: true, help: "Gangbare game-dev naam: input command rate of client input rate. Meestal gelijk aan fixed timestep. Dit schrijft ook de oude hardcode fallback moveSendIntervalMs mee." },

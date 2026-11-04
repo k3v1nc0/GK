@@ -9,6 +9,7 @@ import { compileCanonical } from "../src/server/authoring/build-service.js";
 import { validateDocument } from "../src/shared/authoring/kinds.js";
 import { ActorRuntime } from "../src/server/runtime/actor-runtime.js";
 import { createNavigator } from "../src/server/runtime/navigation.js";
+import { createWalkabilityIndex } from "../apps/web/public/shared/movement-kernel.js";
 
 test("schade: exact gelijk aan de oude NODE-03 formules (golden vectors)", function () {
   for (let ap = 0; ap <= 120; ap += 3) {
@@ -103,7 +104,7 @@ function runtimeHarness() {
     send: (connection, payload) => sent.push(payload)
   });
   runtime.setCombatBridge({ applyActorHit: (input) => { hits.push(input); return { damage: 3, remainingHealth: 97, defeated: false }; } });
-  return { runtime, players, sent, hits, db };
+  return { runtime, players, sent, hits, db, worldContext };
 }
 
 test("vijand: slaapt ver weg, ziet je dichtbij, loopt naar je toe en slaat", function () {
@@ -156,4 +157,68 @@ test("navigatie: zelfde tegel twee keer = zelfde hash; route om een muur", funct
   const path = createNavigator({ index, radius: 0.5 }).findPath({ x: 0, z: 0 }, { x: 10, z: 0 });
   assert.equal(path.ok, true);
   assert.ok(path.points.length >= 2 && path.points.some((point) => Math.abs(point.z) > 5), "loopt om de muur heen");
+});
+
+test("vijand volgt een bewegende speler over de brug en loopt via de brug terug", function () {
+  const { runtime, players, hits, db, worldContext } = runtimeHarness();
+  worldContext.walkabilityIndex = createWalkabilityIndex({ ground: { width: 100, depth: 100, y: 0 },
+    terrain: { water: [{ id: "river", x: 20, z: 0, width: 8, depth: 200, height: 1, behavior: "block" }] },
+    collision: { walkableSurfaces: [{ id: "bridge", y: 1, closedEdges: [0, 2], points: [
+      { x: 15, y: 1, z: 20 }, { x: 25, y: 1, z: 20 }, { x: 25, y: 1, z: 23 }, { x: 15, y: 1, z: 23 }
+    ] }] } });
+  let now = 3000000;
+  runtime.tick("w", now, 100);
+  const wolf = runtime.actors.get("actor:w1");
+  runtime.engage(wolf, "p1");
+  players[0].x = 30; players[0].z = 10;
+  let crossed = false;
+  const step = () => {
+    const previous = { x: wolf.x, z: wolf.z };
+    now += 100;
+    runtime.tick("w", now, 100);
+    assert.ok(Math.hypot(wolf.x - previous.x, wolf.z - previous.z) <= 0.401, "normale snelheid, geen teleport");
+    if (wolf.x > 15.5 && wolf.x < 24.5) {
+      assert.ok(wolf.z >= 20.49 && wolf.z <= 22.51, "water en dichte brugranden respecteren");
+      assert.ok(wolf.y >= 0.99, "op de brug lopen");
+      crossed = true;
+    }
+  };
+  for (let i = 0; i < 180; i += 1) {
+    if (i < 60) players[0].x += 0.05;
+    step();
+  }
+  assert.ok(crossed && wolf.x > 25, "overgestoken");
+  assert.ok(hits.length > 0, "speler bereikt en aangevallen");
+  assert.ok(runtime.perf.pathQueries <= 6, "bestaande route hergebruiken");
+  players[0].x = 90;
+  crossed = false;
+  for (let i = 0; i < 180; i += 1) step();
+  assert.ok(crossed, "ook terug over de brug");
+  assert.equal(wolf.state, "idle");
+  assert.ok(Math.hypot(wolf.x - wolf.home.x, wolf.z - wolf.home.z) <= 0.6);
+  db.close();
+});
+
+test("vijand wacht op zoekbudget zonder een rechte route te verzinnen", function () {
+  const { runtime, players, db } = runtimeHarness();
+  runtime.tick("w", 4000000, 100);
+  const wolf = runtime.actors.get("actor:w1");
+  const before = { x: wolf.x, z: wolf.z };
+  assert.equal(runtime.moveTowards(wolf, players[0], { left: 0, checks: 0 }, true), true);
+  assert.deepEqual({ x: wolf.x, z: wolf.z }, before);
+  assert.deepEqual(wolf.path, []);
+  assert.equal(wolf.pathGoal, null);
+  assert.equal(runtime.moveTowards(wolf, players[0], { left: 1, checks: 12000 }, true), true);
+  assert.ok(Math.hypot(wolf.x - before.x, wolf.z - before.z) > 0);
+  db.close();
+});
+
+test("vijandnavigatie begrenst zoekwerk en kan daarna opnieuw zoeken", function () {
+  const index = createWalkabilityIndex({ ground: { width: 100, depth: 100, y: 0 } });
+  const nav = createNavigator({ index });
+  const limited = nav.findPath({ x: 0, z: 0 }, { x: 40, z: 0 }, { maxChecks: 3 });
+  assert.equal(limited.reason, "budget");
+  assert.equal(limited.checks, 3);
+  assert.deepEqual(limited.points, []);
+  assert.equal(nav.findPath({ x: 0, z: 0 }, { x: 1, z: 0 }).ok, true);
 });

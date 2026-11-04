@@ -28,6 +28,8 @@ const soundHelp = (wat) => help(
 
 export const ACTOR_BEHAVIORS = Object.freeze(["aggressive", "defensive"]);
 
+const HEAL_GROUP = "💚 Genezen";
+
 export const ACTOR_KINDS = {
   actor_archetype: {
     label: "Vijand",
@@ -56,6 +58,16 @@ export const ACTOR_KINDS = {
       attackPower: { type: "integer", required: true, min: 0, max: 1000000, audience: "server", label: "Aanvalskracht",
         ui: ui("💪", "slider", "werkbank", { step: 1, range: [0, 200] }), default: 5,
         help: help("Hoe hard de vijand slaat (telt op bij de schade van zijn aanval).", "3-10 aan het begin van de game.", "Spelers gaan te snel dood → lager.") },
+      // Healing (2-11): regeneratie en een genees-spreuk (vijand-healer), samen in een uitklapblok onder Aanvalskracht.
+      regenEnabled: { type: "boolean", required: false, audience: "server", label: "Regeneratie",
+        ui: ui("💚", "toggle", "werkbank", { group: HEAL_GROUP }), default: false,
+        help: help("Krijgt de vijand vanzelf levens terug, ook tijdens het gevecht?", "Uit voor gewone vijanden; aan voor taaie vijanden zoals trollen.", "Vijand is niet kapot te krijgen → zet dit uit of de snelheid lager.") },
+      regenBp: { type: "integer", required: false, min: 0, max: 10000, audience: "server", label: "Regeneratie-snelheid",
+        ui: ui("⏩", "slider", "werkbank", { step: 10, range: [0, 1000], unit: "%/s", scale: 100, group: HEAL_GROUP, when: { key: "regenEnabled", is: [true] } }), default: 100,
+        help: help("Hoeveel procent van zijn levens de vijand per seconde terugkrijgt (alleen als Regeneratie aan staat). 0 % = niets.", "0,5-2 %/s.", "Vijand geneest sneller dan jij schade doet → lager.") },
+      healAbilityRef: { type: "ref", refKind: "ability", required: false, audience: "server", label: "Genees-spreuk",
+        ui: ui("✨", "ref", "werkbank", { group: HEAL_GROUP }), default: null,
+        help: help("Een spreuk waarmee deze vijand zichzelf of de zwakste vijand in de buurt geneest (een vijand-healer).", "Sleep een aanval met soort Genezen hierop. Leeg = geen healer.", "Healer geneest te vaak → maak de wachttijd van de spreuk langer.") },
       armor: { type: "integer", required: true, min: 0, max: 1000000, audience: "server", label: "Pantser",
         ui: ui("🛡️", "slider", "werkbank", { step: 1, range: [0, 200], more: true }), default: 0,
         help: help("Hoeveel schade de vijand tegenhoudt.", "0-5 voor gewone vijanden.", "Je doet bijna geen schade → lager.") },

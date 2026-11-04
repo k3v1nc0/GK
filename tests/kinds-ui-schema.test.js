@@ -55,9 +55,9 @@ test("de standaardwaarden zijn zelf geldig", () => {
   }
 });
 
-test("per soort staan hooguit ±6 velden in beeld (rest onder ⚙️ meer)", () => {
+test("per soort staan hooguit ±6 velden in beeld (rest onder ⚙️ meer of in een uitklapblok)", () => {
   for (const [kind, spec] of Object.entries(CANONICAL_KINDS)) {
-    const visible = Object.values(spec.fields).filter((field) => field.ui.place === spec.place && !field.ui.more);
+    const visible = Object.values(spec.fields).filter((field) => field.ui.place === spec.place && !field.ui.more && !field.ui.group);
     assert.ok(visible.length <= 7, kind + " toont " + visible.length + " velden zonder ⚙️");
   }
 });

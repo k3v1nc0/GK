@@ -28,6 +28,11 @@
   display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--wbd-accent-ink); color: var(--wbd-accent); font-size: 11px; line-height: 18px; text-align: center;
 }
+/* Bake los van SAVE TO GAME: oranje stip als de kaart (minimap) niet meer bij de wereld in de game past. */
+#bakeButton[data-stale="1"]::after {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%;
+  background: #f0a030; vertical-align: middle;
+}
 .workbenchDocTab { border-color: #3a4b5d; }
 
 /* ---------- Paneel / formulier ---------- */
@@ -98,6 +103,8 @@
 
 .wbdMoreToggle { justify-self: start; border: 1px solid var(--wbd-line); background: transparent; color: var(--wbd-muted); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .wbdMoreToggle:hover, .wbdMoreToggle[aria-expanded="true"] { color: var(--wbd-text); border-color: #4a5a6a; }
+.wbdGroup { display: grid; gap: 6px; border: 1px solid var(--wbd-line); border-radius: 8px; padding: 6px; }
+.wbdGroup > .wbdGroupToggle { justify-self: stretch; text-align: left; border: 0; padding: 2px 4px; color: var(--wbd-text); font-weight: 600; }
 .wbdMore { padding-top: 4px; border-top: 1px dashed var(--wbd-line); }
 .wbdNote { color: var(--wbd-muted); font-size: 12px; }
 .wbdEmpty { color: var(--wbd-muted); padding: 12px; text-align: center; }

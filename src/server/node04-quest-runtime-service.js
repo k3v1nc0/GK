@@ -253,7 +253,7 @@ export class Node04QuestRuntimeService {
       playerId: ctx.profile.id,
       operationType: action || "unknown",
       requestHash: hash,
-      label: "Deze NODE-04 actie",
+      label: "Deze questactie",
       faultHook: this.operationFaultHook || null,
       perform: () => {
         this.ensureRuntime(ctx);
@@ -268,7 +268,7 @@ export class Node04QuestRuntimeService {
         else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "reset_node04") result = this.resetNode04(ctx);
         else {
-          const error = new Error("Onbekende NODE-04 actie.");
+          const error = new Error("Onbekende questactie.");
           error.status = 400;
           throw error;
         }
@@ -1085,6 +1085,13 @@ export class Node04QuestRuntimeService {
         conditions: progress?.conditions || []
       } : null,
       nextQuestRefs: Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs.slice() : [],
+      // Stap 4 (HUD): de beloning in het questboek.
+      rewards: (Array.isArray(quest.rewards) ? quest.rewards : []).map(function (reward) {
+        if (reward?.actionKind === "xp") return { kind: "xp", amount: safeInteger(reward.amount, 0) };
+        if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
+        if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
+        return null;
+      }).filter(function (reward) { return reward && reward.amount > 0; }),
       acceptedAt: row.accepted_at || null,
       completedAt: row.completed_at || null
     };
@@ -1393,6 +1400,6 @@ export class Node04QuestRuntimeService {
     this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ?").run(ctx.profile.id);
     this.db.prepare("DELETE FROM quest_transition_audit WHERE player_id = ?").run(ctx.profile.id);
     this.ensureAvailableQuests(ctx);
-    return { message: "NODE-04 quest state reset.", events: [{ type: "node04_reset" }] };
+    return { message: "Questgegevens opnieuw ingesteld.", events: [{ type: "node04_reset" }] };
   }
 }

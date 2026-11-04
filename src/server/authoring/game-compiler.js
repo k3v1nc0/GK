@@ -2,9 +2,13 @@
 // Pure functie: zelfde kaarten -> zelfde sectie. Zonder zulke kaarten geen sectie (oudere builds blijven bytegelijk).
 // De wereldbouwer (world-builder.js) maakt hier de catalogus, NPC's, quests, winkels en de HUD van.
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
+import { networkValues } from "../../shared/authoring/kinds/network.js";
+import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
+import { partyValues } from "../../shared/authoring/kinds/party.js";
+import { chatValues } from "../../shared/authoring/kinds/chat.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "npc", "quest", "recipe", "placed_model"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -60,7 +64,8 @@ export function compileGameSection(documents, options = {}) {
   const classValues = (body) => {
     const values = settingsValues("player_class", body);
     return { classId: values.classId, displayName: values.displayName, description: values.description || "",
-      healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower,
+      healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
+      healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       startGrants: grants(values.startItems), models: Array.isArray(values.models) ? values.models.slice() : [] };
   };
   const classDocs = of("player_class").slice().sort((a, b) => String(a.body.displayName).localeCompare(String(b.body.displayName)) || a.docKey.localeCompare(b.docKey));
@@ -74,6 +79,19 @@ export function compileGameSection(documents, options = {}) {
   if (classes.length) player.classes = classes;
 
   const hud = settingsValues("hud_settings", of("hud_settings")[0]?.body || null);
+  // Healing (2-11): regels voor regeneratie, effecten, respawn en level omhoog.
+  const combat = settingsValues("combat_settings", of("combat_settings")[0]?.body || null);
+  // Verbinding (3-11): alleen als de kaart er is; anders houden game en server hun eigen standaard.
+  const networkDoc = of("network_settings")[0] || null;
+  const network = networkDoc ? networkValues(networkDoc.body) : null;
+  // Water (lopen) (3-11): alleen als de kaart er is; anders de standaard van de loopregels.
+  const waterWalkDoc = of("water_walk_settings")[0] || null;
+  const waterWalk = waterWalkDoc ? waterWalkValues(waterWalkDoc.body) : null;
+  // Groep (MMO) (3-11): alleen als de kaart er is; anders de standaard (wereldbouwer).
+  const partyDoc = of("party_settings")[0] || null;
+  const party = partyDoc ? partyValues(partyDoc.body) : null;
+  const chatDoc = of("chat_settings")[0] || null;
+  const chat = chatDoc ? chatValues(chatDoc.body) : null;
 
   const npcs = of("npc").map((doc) => {
     const label = "NPC " + doc.body.displayName;
@@ -142,7 +160,7 @@ export function compileGameSection(documents, options = {}) {
   });
 
   return {
-    server: { schema: GAME_SECTION_VERSION, currencies, player, hud, npcs, quests, recipes, placedModels },
+    server: { schema: GAME_SECTION_VERSION, currencies, player, hud, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
     errors
   };
 }

@@ -26,7 +26,7 @@ const ITEM_FIELD_TO_RUNTIME = {
   tags: "tags",
   vendorValue: "vendorBaseValueMinor"
 };
-export const CANONICAL_ITEM_RUNTIME_KEYS = ["id"].concat(Object.values(ITEM_FIELD_TO_RUNTIME));
+export const CANONICAL_ITEM_RUNTIME_KEYS = ["id", "worldModelScale"].concat(Object.values(ITEM_FIELD_TO_RUNTIME));
 
 // Zet een canoniek item om naar de vorm die node03 uit catalogs.items leest. Velden die Canoniek kent
 // komen altijd uit Canoniek (leeg = weg). Legacy-velden die Canoniek niet kent blijven bevroren staan.
@@ -44,8 +44,19 @@ export function runtimeItemFromCanonical(item, legacy = null) {
     runtime.stackable = false;
     runtime.stackLimit = 1;
   }
-  for (const field of ["attackPowerBonus", "armorBonus"]) {
+  // Ronde 10: grootte op de grond uit de Werkbank (100 % = zoals het model is gemaakt), geen vaste 45 % meer.
+  runtime.worldModelScale = Math.max(0.01, (Number(item.modelScaleBp) || 10000) / 10000);
+  for (const field of ["attackPowerBonus", "armorBonus", "healAmount", "useCooldownS", "effectDurationS", "effectTickS"]) {
     if (Number.isInteger(item[field]) && item[field] > 0) runtime[field] = item[field];
+    else delete runtime[field];
+  }
+  // Healing (2-11): het effect bij gebruiken (min mag: bijv. een vies drankje met -2 pantser).
+  for (const field of ["effectAttackPower", "effectArmor", "effectHealPower", "effectHealthPctBp", "effectManaPctBp"]) {
+    if (Number.isInteger(item[field]) && item[field] !== 0) runtime[field] = item[field];
+    else delete runtime[field];
+  }
+  for (const field of ["effectName", "effectIconAssetId"]) {
+    if (typeof item[field] === "string" && item[field]) runtime[field] = item[field];
     else delete runtime[field];
   }
   // Alleen een helemaal nieuw item krijgt de basisvelden die de legacy-compiler altijd zette.

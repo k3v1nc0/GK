@@ -33,7 +33,10 @@ export const CLIENT_MESSAGE_TYPES = Object.freeze([
   "player:request_state",
   "player:move_intent",
   "player:position_intent",
-  "player:input_state"
+  "player:input_state",
+  // MMO stap 2 (3-11): chat en blokkeren.
+  "chat:send",
+  "chat:block"
 ]);
 
 const CLIENT_TYPE_SET = new Set(CLIENT_MESSAGE_TYPES);
@@ -85,6 +88,16 @@ export function validateClientMessage(raw) {
     if (!optionalNumber(input.moveX) || !optionalNumber(input.moveZ) || !optionalPoint(input.pointerTarget)) {
       return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_input" };
     }
+  }
+  if (message.type === "chat:send") {
+    const chat = message.payload || {};
+    if (typeof chat.text !== "string" || chat.text.length > 2000 || (chat.channel !== undefined && typeof chat.channel !== "string")
+      || (chat.toName !== undefined && chat.toName !== null && typeof chat.toName !== "string") || (chat.toId !== undefined && chat.toId !== null && typeof chat.toId !== "string")) {
+      return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_chat" };
+    }
+  }
+  if (message.type === "chat:block" && (typeof message.payload?.playerId !== "string" || message.payload.playerId.length > 128)) {
+    return { ok: false, code: CLOSE_CODES.BAD_MESSAGE, reason: "invalid_chat" };
   }
   return { ok: true, message };
 }

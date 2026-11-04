@@ -21,9 +21,14 @@ import {
   isPointBlockedByTerrain,
   resolveMovementInto,
   resolveMovement,
+  resolveWalkabilitySource,
   createWalkabilityIndex,
   isPointBlockedBySurface
 } from "./movement-kernel.js";
+import { terrainHeightAt } from "./terrain.js";
+import { createPlayerPathClient } from "./player-path-client.js?v=20261103-routes3";
+import { createTerrainLayer, seedTerrainChunk, seedTerrainPaint } from "./terrain-render.js";
+import { createWaterLayer } from "./water-render.js?v=20261030-terrein6";
 export {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,
@@ -42,6 +47,8 @@ const DEG_TO_RAD = Math.PI / 180;
 let objectResidencyState = null;
 let chunkResidencyState = null;
 let minimapBakeChunkOverride = false;
+// Kaart-bake: lage alphaTest-drempel zodat bomen en hekjes ook op de grote (verre) kaarttegels blijven staan.
+const MINIMAP_BAKE_ALPHA_TEST = 0.1;
 let minimapBakeShadowFocusOverride = null;
 
 function colorOrDefault(value, fallback) {
@@ -1793,6 +1800,8 @@ function collectGhostPlaneCandidateRecord(object, context = {}) {
     || object.userData?.interactableId
     || object.userData?.scatterInstance === true
     || object.userData?.surfaceLayerId
+    // Ronde 3c: watervlakken (water-render.js) zijn echte wereld, geen spookvlak; anders ruimt de opruimer ze op.
+    || object.userData?.gkWater
   );
   const suspiciousFlags = [];
   if (isCameraChild) suspiciousFlags.push("cameraChild");
@@ -2948,6 +2957,8 @@ export function worldSpaceGroundUv(worldX, worldZ, ground, textureWorldSize = nu
 }
 
 export function resolveGroundRenderMode(worldData, runtimeMode = "editor") {
+  // Wereld tekenen: met een hoogtekaart tekent de terreinlaag de grond (eigen vakken van 64 m).
+  if (worldData?.terrain?.heightfield) return "full";
   const policy = resolveChunkPolicy(worldData, runtimeMode);
   const shouldChunk = policy.enabled === true && policy.groundChunkingEnabled !== false;
   return shouldChunk ? "chunked" : "full";
@@ -3100,7 +3111,9 @@ function groundBlueprintForWorld(worldData, runtimeMode) {
     bounds: bounds,
     textureSize: textureSize,
     tiles: tiles,
-    tilesByChunkKey: tilesByChunkKey
+    tilesByChunkKey: tilesByChunkKey,
+    // Wereld tekenen: met een hoogtekaart tekent de terreinlaag de grond, nooit ook nog platte tegels.
+    terrainHeightfield: Boolean(worldData?.terrain?.heightfield)
   };
 }
 
@@ -3132,6 +3145,7 @@ export function groundBlueprintSignature(worldData, runtimeMode) {
     policy.policyId || "",
     policy.enabled === true ? 1 : 0,
     policy.groundChunkingEnabled !== false ? 1 : 0,
+    worldData?.terrain?.heightfield ? "terrein" : "",
     bounds ? round(bounds.minX) : "",
     bounds ? round(bounds.maxX) : "",
     bounds ? round(bounds.minZ) : "",
@@ -3142,7 +3156,7 @@ export function groundBlueprintSignature(worldData, runtimeMode) {
 
 function buildGroundChunkPlanFromBlueprint(blueprint, runtimeMode = "editor", windowState = null, previousState = null) {
   const policy = blueprint.policy;
-  const renderMode = policy.enabled === true && policy.groundChunkingEnabled !== false && Boolean(blueprint.bounds)
+  const renderMode = policy.enabled === true && policy.groundChunkingEnabled !== false && Boolean(blueprint.bounds) && blueprint.terrainHeightfield !== true
     ? "chunked"
     : "full";
   const shouldChunk = renderMode === "chunked";
@@ -4577,7 +4591,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // The device profile picks an automatic ratio, but authored game settings own the
   // actual limits. This keeps low-power mobile defaults economical while allowing the
   // Game World Settings minimum to demand a sharper image when the project can afford it.
+  // Speler-instelling (game, Instellingen > Scherpte): vaste pixelverhouding 0.7 / 1 / 1.5 / 2. Staat die aan, dan
+  // telt alleen deze waarde en zakt de automatische resolutie niet meer (anders werd de telefoon onscherp).
+  let playerPixelRatio = null;
   const effectivePixelRatio = function (performance) {
+    if (mode === "game" && playerPixelRatio) return playerPixelRatio;
     const configuredMax = Math.max(0.5, num(performance?.pixelRatioCap, 1));
     const configuredMin = Math.min(configuredMax, Math.max(0.5, num(performance?.pixelRatioMin, 0.5)));
     const deviceRatio = Math.max(0.5, num(window.devicePixelRatio, 1));
@@ -4635,7 +4653,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // tijdelijk met minder pixels (tot pixelRatioMin) en gaat weer omhoog zodra er ruimte is.
   const adaptiveResolution = { lastCheckAt: 0, raiseBlockedUntil: 0, slowSince: 0, fastSince: 0 };
   function maybeAdaptPixelRatio(now) {
-    if (mode !== "game" || worldPerformance.game?.adaptiveResolution === false) return;
+    if (mode !== "game" || playerPixelRatio || worldPerformance.game?.adaptiveResolution === false) return;
     if (now - adaptiveResolution.lastCheckAt < 500) return;
     adaptiveResolution.lastCheckAt = now;
     const maxRatio = effectivePixelRatio(worldPerformance.game);
@@ -4660,6 +4678,11 @@ export function createGkWorldRuntime(canvas, options = {}) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000000);
+  let gameBaseFov = 50; // ingestelde kijkhoek van de game-camera (zie applyGameFov)
+  // Wereld tekenen (ronde 1): de grond met hoogtes, in vakken rond de speler/camera (terrain-render.js).
+  const terrainLayer = createTerrainLayer({ scene, mode, requestRender: function (reason) { requestRender(reason); } });
+  // Ronde 3: watervlakken (los, plat) uit world.terrain.water; de editor-tab Terrein zet ze ook live.
+  const waterLayer = createWaterLayer({ scene, requestRender: function (reason) { requestRender(reason); } });
   const content = new THREE.Group();
   scene.add(content);
 
@@ -5026,6 +5049,7 @@ export function createGkWorldRuntime(canvas, options = {}) {
   // Voorspelling van de eigen speler (game): de volledige obstakellijst, net als de server, los van welke
   // chunks er geladen of zichtbaar zijn. activeSolids volgt de render-residentie en is daar niet geschikt voor.
   let predictionSolids = [];
+  let playerPathClient = null;
   let runtimeCollisionBaseCount = 0;
   const frameProfileWaiters = [];
 
@@ -8578,6 +8602,45 @@ function resolveChunkDebugCenter(policy) {
     if (reason) DEBUG_RUNTIME.lastStopReason = reason;
   }
 
+  // Stap 4 (HUD): een open paneel bedekt een deel van het beeld. Het beeld schuift dan zo dat de speler midden in
+  // het vrije deel staat (zelfde zoom). Klikken, picking en worldToScreen rekenen met dezelfde camera mee.
+  let viewInsetX = 0;
+  let viewInsetY = 0;
+  function applyViewInset() {
+    const width = Math.max(1, lastResizeWidth || canvas.clientWidth || 1);
+    const height = Math.max(1, lastResizeHeight || canvas.clientHeight || 1);
+    if (!viewInsetX && !viewInsetY) camera.clearViewOffset();
+    else camera.setViewOffset(width, height, viewInsetX / 2, viewInsetY / 2, width, height);
+    camera.updateProjectionMatrix();
+    requestRender();
+  }
+
+  function setViewInset(right, bottom) {
+    const nextX = Math.max(0, Math.round(Number(right) || 0));
+    const nextY = Math.max(0, Math.round(Number(bottom) || 0));
+    if (nextX === viewInsetX && nextY === viewInsetY) return;
+    viewInsetX = nextX;
+    viewInsetY = nextY;
+    applyViewInset();
+  }
+
+  // Game: het poppetje is even groot, hoe je het scherm ook houdt (breed of hoog, telefoon of pc). De ingestelde
+  // kijkhoek geldt voor de korte kant van het scherm: liggend de hoogte, staand de breedte.
+  function applyGameFov() {
+    if (mode !== "game") return;
+    const aspect = camera.aspect > 0 ? camera.aspect : 1;
+    camera.fov = aspect >= 1 ? gameBaseFov
+      : 2 * Math.atan(Math.tan((gameBaseFov * DEG_TO_RAD) / 2) / aspect) / DEG_TO_RAD;
+  }
+
+  function setPlayerPixelRatio(value) {
+    const allowed = [0.7, 1, 1.5, 2];
+    const next = allowed.includes(Number(value)) ? Number(value) : null;
+    if (next === playerPixelRatio) return;
+    playerPixelRatio = next;
+    handleResize("player-pixel-ratio");
+  }
+
   function handleResize(reason) {
     if (disposed) return false;
     const rect = resizeTarget && typeof resizeTarget.getBoundingClientRect === "function"
@@ -8596,7 +8659,9 @@ function resolveChunkDebugCenter(policy) {
     renderer.setPixelRatio(ratio);
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
+    applyGameFov();
     camera.updateProjectionMatrix();
+    if (viewInsetX || viewInsetY) applyViewInset();
     DEBUG_RUNTIME.resizeCount += 1;
     if (DEBUG_RUNTIME.enabled && beforePosition) {
       const afterPosition = camera.position.clone();
@@ -8647,6 +8712,7 @@ function resolveChunkDebugCenter(policy) {
     const delta = Math.min(0.05, rawDelta);
     const animationDelta = rawDelta;
     lastTime = time;
+    waterLayer.update(time);
     perfHudFrameMs = perfHudWarmup ? perfHudFrameMs * 0.85 + frameMs * 0.15 : frameMs;
     perfHudWarmup = true;
     collisionPerfState.checksLastFrame = 0;
@@ -8702,6 +8768,10 @@ function resolveChunkDebugCenter(policy) {
         || buildChunkFrameSyncSignature(chunkPolicy) !== chunkFrameDebugSignature;
     }
     if (shouldSyncChunkState) syncChunkDebugState("frame");
+    if (terrainLayer.active) {
+      const terrainCenter = mode === "game" && player.root ? player.pos : liveEditorCameraTarget();
+      if (terrainLayer.update(num(terrainCenter?.x, 0), num(terrainCenter?.z, 0))) requestRender("terrain-pending");
+    }
     if (residentContentState.pendingChunkKeys.length && residentContentState.pendingBuildBlockedByBudget !== true) {
       requestRender("resident-pending-drain");
     }
@@ -8953,6 +9023,34 @@ function resolveChunkDebugCenter(policy) {
     return null;
   }
 
+  // Brug-stand: de Hoogte (boven de grond, zoals in de kaart) waarbij de onderkant van het model op het hoogste
+  // grondpunt onder het model ligt. target = { x, z, scale } zoals het straks opgeslagen wordt.
+  function restOnHighestGroundY(entityId, target = {}) {
+    const root = rootForSelectableId(entityId);
+    if (!root) return null;
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    if (box.isEmpty()) return null;
+    const pivot = new THREE.Vector3();
+    root.getWorldPosition(pivot);
+    const ratio = num(target.scale, 0) > 0 && root.scale.x > 0 ? num(target.scale, 1) / root.scale.x : 1;
+    const x = num(target.x, pivot.x);
+    const z = num(target.z, pivot.z);
+    const minX = x + (box.min.x - pivot.x) * ratio;
+    const maxX = x + (box.max.x - pivot.x) * ratio;
+    const minZ = z + (box.min.z - pivot.z) * ratio;
+    const maxZ = z + (box.max.z - pivot.z) * ratio;
+    const steps = 12;
+    let top = -Infinity;
+    for (let i = 0; i <= steps; i += 1) {
+      for (let j = 0; j <= steps; j += 1) {
+        top = Math.max(top, terrainLift(minX + (maxX - minX) * i / steps, minZ + (maxZ - minZ) * j / steps));
+      }
+    }
+    const bottom = (box.min.y - pivot.y) * ratio;
+    return top - bottom - terrainLift(x, z);
+  }
+
   function rootsForGroupSelectableId(entityId) {
     const wantedId = String(entityId || "").trim();
     if (!wantedId) return [];
@@ -9077,7 +9175,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function terrainOverlayColorForNode(nodeType) {
-    if (nodeType === "walkable_surface") return 0x8fe0a8;
+    if (nodeType === "walkable_surface") return 0x64c8ff;
     if (nodeType === "surface_layer") return 0x8fbf6a;
     if (nodeType === "area_definition") return 0xa855f7;
     return 0xf0b35a;
@@ -9256,10 +9354,10 @@ function resolveChunkDebugCenter(policy) {
     const nodeId = String(nextOverlay.nodeId || "");
     const nodeType = String(nextOverlay.nodeType || "");
     const closed = nodeType !== "surface_layer";
-    // The line and both handle kinds all share one color - the node's own accent
-    // color, passed through from the editor - so the shape reads as "this node" at
-    // a glance in the viewport.
-    const color = nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(terrainOverlayColorForNode(nodeType));
+    // Blauwe bewerkpunten onderscheiden het loopvlak van rode/groene doorgangen.
+    const color = nodeType === "walkable_surface"
+      ? new THREE.Color(terrainOverlayColorForNode(nodeType))
+      : nextOverlay.color ? new THREE.Color(nextOverlay.color) : new THREE.Color(terrainOverlayColorForNode(nodeType));
     const lineColor = color;
     const y = nodeType === "walkable_surface"
       ? num(nextOverlay.y, 0)
@@ -9295,8 +9393,47 @@ function resolveChunkDebugCenter(policy) {
       return index === selectedIndex;
     };
 
-    const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
-    if (line) terrainEditorOverlay.add(line);
+    if (nodeType === "walkable_surface" && !extrudePreviewPoint && points.length >= 3) {
+      const closedEdges = new Set(Array.isArray(nextOverlay.closedEdges) ? nextOverlay.closedEdges : []);
+      const selectedEdges = new Set(Array.isArray(nextOverlay.selectedEdgeIndices) ? nextOverlay.selectedEdgeIndices : []);
+      const openPositions = [];
+      const closedPositions = [];
+      for (let edge = 0; edge < points.length; edge += 1) {
+        const a = points[edge];
+        const b = points[(edge + 1) % points.length];
+        (closedEdges.has(edge) ? closedPositions : openPositions).push(a, b);
+        if (selectedEdges.has(edge)) {
+          // Witte markering midden op iedere gekozen lijn; de randkleur blijft zichtbaar.
+          const marker = new THREE.Mesh(
+            new THREE.SphereGeometry(0.18, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, toneMapped: false })
+          );
+          marker.position.copy(a).lerp(b, 0.5);
+          marker.renderOrder = 2002;
+          marker.raycast = function () {};
+          marker.userData.debugOverlay = true;
+          marker.userData.debugOverlayKind = "terrain";
+          terrainEditorOverlay.add(marker);
+        }
+      }
+      for (const [positions, edgeColor, name] of [[openPositions, 0x32e875, "open"], [closedPositions, 0xff3b30, "closed"]]) {
+        if (!positions.length) continue;
+        const lines = new THREE.LineSegments(
+          new THREE.BufferGeometry().setFromPoints(positions),
+          new THREE.LineBasicMaterial({ color: edgeColor, depthTest: false, depthWrite: false, transparent: true, opacity: 1, toneMapped: false })
+        );
+        lines.renderOrder = 2000;
+        lines.frustumCulled = false;
+        lines.name = "GK terrain overlay " + name + " edges";
+        lines.raycast = function () {};
+        lines.userData.debugOverlay = true;
+        lines.userData.debugOverlayKind = "terrain";
+        terrainEditorOverlay.add(lines);
+      }
+    } else {
+      const line = terrainOverlayLine(points, closed && points.length >= 3, lineColor, closed ? 0.92 : 0.95);
+      if (line) terrainEditorOverlay.add(line);
+    }
 
     // Walkable Surface points form a ladder - point i always pairs with point
     // (n-1-i) as one "rung" across the surface (matches triangulateWalkableSurfaceLadder
@@ -9704,7 +9841,7 @@ function resolveChunkDebugCenter(policy) {
         runtimeStats.meshes = Math.max(0, runtimeStats.meshes - counts.meshes);
       }
     });
-    if (plan.mode === "full" && !fullGroundPlane && worldData?.ground) {
+    if (plan.mode === "full" && !fullGroundPlane && worldData?.ground && !(worldData?.terrain?.heightfield && terrainLayer.active)) {
       addGround(worldData);
     }
     groundChunkState.mode = plan.mode;
@@ -11278,6 +11415,8 @@ function resolveChunkDebugCenter(policy) {
   }
 
   async function bakeMinimapImage(config = {}) {
+    // Wereld tekenen: eerst alle hoogtes binnen, anders staat er een platte grond op de kaart.
+    if (terrainLayer.active) await terrainLayer.whenLoaded();
     const bakeWorld = minimapBakeWorldForZone(config.zoneRef);
     const bounds = config.bounds;
     const minX = num(bounds?.minX, NaN);
@@ -11295,7 +11434,11 @@ function resolveChunkDebugCenter(policy) {
     // webp using the real scene's own background/fog, matching the live 3D world exactly.
     const format = "webp";
     const quality = Math.max(0.1, Math.min(1, num(config.quality, 0.78)));
-    const backgroundColor = colorOrDefault(bakeWorld?.world?.backgroundColor, "#101a26");
+    // config.tiles = [{minX,maxX,minZ,maxZ}] + config.onTile(tile, blob, index): veel kleine foto's in één keer.
+    const tiled = Array.isArray(config.tiles) && config.tiles.length > 0 && typeof config.onTile === "function";
+    let tilesDone = 0;
+    // Buiten de grond is de kaart zwart (net als de mist), niet de lucht-kleur.
+    const backgroundColor = "#000000";
     const transparentBackground = false;
     const centerX = (minX + maxX) / 2;
     const centerZ = (minZ + maxZ) / 2;
@@ -11318,6 +11461,12 @@ function resolveChunkDebugCenter(policy) {
     }
     if (config.hideTransformControls !== false) hideRoot(transformGuide);
     if (config.hideChunkDebugOverlay !== false) hideRoot(chunkDebugOverlay);
+    // Naambordjes en cirkels van NPC's, vijanden en items horen niet op de kaartfoto.
+    for (const targetRoot of runtimeTargetRoots.values()) {
+      targetRoot.traverse(function (child) {
+        if (child?.name === "node03-runtime-target-nameplate" || child?.name === "node03-runtime-target-ring") hideRoot(child);
+      });
+    }
     if (config.includeStaticModels === false) {
       for (const root of entityRoots.values()) hideRoot(root);
     }
@@ -11339,6 +11488,7 @@ function resolveChunkDebugCenter(policy) {
     clearGroundChunkState("minimap-bake-disable-chunks");
     clearTerrainRuntimeVisuals();
     if (bakeWorld?.ground) addGround(bakeWorld);
+    if (terrainLayer.active) terrainLayer.update(centerX, centerZ);
     buildTerrainRuntimeStreamingVisuals(bakeWorld);
     addZoneGrounds(bakeWorld);
     addScatterGroundCovers(bakeWorld);
@@ -11372,7 +11522,7 @@ function resolveChunkDebugCenter(policy) {
     // stays linear, which made the bake visibly darker than the live 3D world. An sRGB render
     // target makes the GPU encode on write so readRenderTargetPixels returns the same values the
     // screen shows.
-    const renderTarget = new THREE.WebGLRenderTarget(resolution, resolution, {
+    const renderTarget = new THREE.WebGLRenderTarget(tiled ? 1 : resolution, tiled ? 1 : resolution, {
       type: THREE.UnsignedByteType,
       colorSpace: THREE.SRGBColorSpace
     });
@@ -11386,9 +11536,15 @@ function resolveChunkDebugCenter(policy) {
     // never looks. Temporarily disable it; ground/materials/lights/shadows stay identical.
     const previousFog = scene.fog;
     scene.fog = null;
+    const previousBackground = scene.background;
+    scene.background = null;
 
     let outputCanvas = null;
     let bakeError = null;
+    // Kaart (3-11): bladeren en hekjes zijn uitgeknipt met alphaTest. Van ver weg (grote kaarttegels) middelt de GPU
+    // die doorzichtigheid, valt alles onder de drempel en verdwijnen bomen en de brug van de kaart. Tijdens de bake
+    // een lage drempel; daarna precies terug.
+    const bakeAlphaRestore = [];
     try {
       await waitForMinimapBakeTerrainTextures();
       await waitForMinimapBakeModelAssets(bakeWorld);
@@ -11396,6 +11552,18 @@ function resolveChunkDebugCenter(policy) {
         window.requestAnimationFrame(function () {
           window.requestAnimationFrame(function () { resolve(); });
         });
+      });
+      const seenBakeMaterials = new Set();
+      scene.traverse(function (child) {
+        if (!child?.material) return;
+        for (const material of Array.isArray(child.material) ? child.material : [child.material]) {
+          if (!material || seenBakeMaterials.has(material)) continue;
+          seenBakeMaterials.add(material);
+          if (num(material.alphaTest, 0) > MINIMAP_BAKE_ALPHA_TEST) {
+            bakeAlphaRestore.push([material, material.alphaTest]);
+            material.alphaTest = MINIMAP_BAKE_ALPHA_TEST;
+          }
+        }
       });
       scene.updateMatrixWorld(true);
       stableSunShadowController?.update?.({
@@ -11406,6 +11574,53 @@ function resolveChunkDebugCenter(policy) {
         collisionResidentChunkKeys: []
       }, "minimap-bake-zone");
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+      if (tiled) {
+        // Kaarttegels: de wereld één keer klaarzetten en dan elk stukje apart fotograferen (zelfde licht en schaduw).
+        const tileRes = Math.max(64, Math.min(2048, maxTextureSize, Math.round(num(config.tileResolution, 512))));
+        const tileTarget = new THREE.WebGLRenderTarget(tileRes, tileRes, { type: THREE.UnsignedByteType, colorSpace: THREE.SRGBColorSpace });
+        const tileCamera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, bakeCamera.far);
+        tileCamera.up.set(0, 0, -1);
+        const tileCanvas = document.createElement("canvas");
+        tileCanvas.width = tileRes;
+        tileCanvas.height = tileRes;
+        const tileCtx = tileCanvas.getContext("2d");
+        const tilePixels = new Uint8Array(tileRes * tileRes * 4);
+        const tileImage = tileCtx.createImageData(tileRes, tileRes);
+        const tileRow = tileRes * 4;
+        try {
+          for (let index = 0; index < config.tiles.length; index += 1) {
+            const tile = config.tiles[index];
+            const tw = num(tile.maxX) - num(tile.minX);
+            const td = num(tile.maxZ) - num(tile.minZ);
+            const tcx = (num(tile.minX) + num(tile.maxX)) / 2;
+            const tcz = (num(tile.minZ) + num(tile.maxZ)) / 2;
+            tileCamera.left = -tw / 2;
+            tileCamera.right = tw / 2;
+            tileCamera.top = td / 2;
+            tileCamera.bottom = -td / 2;
+            tileCamera.position.set(tcx, highY, tcz);
+            tileCamera.lookAt(tcx, groundY, tcz);
+            tileCamera.updateProjectionMatrix();
+            renderer.setRenderTarget(tileTarget);
+            renderer.setClearColor(new THREE.Color(backgroundColor), 1);
+            renderer.autoClear = true;
+            renderer.clear(true, true, true);
+            renderer.render(scene, tileCamera);
+            renderer.readRenderTargetPixels(tileTarget, 0, 0, tileRes, tileRes, tilePixels);
+            for (let y = 0; y < tileRes; y += 1) {
+              const srcStart = (tileRes - y - 1) * tileRow;
+              tileImage.data.set(tilePixels.subarray(srcStart, srcStart + tileRow), y * tileRow);
+            }
+            tileCtx.putImageData(tileImage, 0, 0);
+            const blob = await new Promise(function (resolve) { tileCanvas.toBlob(resolve, "image/webp", quality); });
+            if (!blob) throw new Error("Kaarttegel kon niet worden opgeslagen.");
+            await config.onTile(tile, blob, index);
+          }
+        } finally {
+          tileTarget.dispose();
+        }
+        tilesDone = config.tiles.length;
+      } else {
       renderer.setRenderTarget(renderTarget);
       renderer.setClearColor(new THREE.Color(backgroundColor), transparentBackground ? 0 : 1);
       renderer.autoClear = true;
@@ -11426,13 +11641,16 @@ function resolveChunkDebugCenter(policy) {
         imageData.data.set(pixels.subarray(srcStart, srcStart + rowSize), y * rowSize);
       }
       ctx.putImageData(imageData, 0, 0);
+      }
     } catch (error) {
       bakeError = error;
     } finally {
+      for (const [material, alphaTest] of bakeAlphaRestore) material.alphaTest = alphaTest;
       renderer.setRenderTarget(previousTarget);
       renderer.setClearColor(previousClearColor, previousClearAlpha);
       renderer.autoClear = previousAutoClear;
       scene.fog = previousFog;
+      scene.background = previousBackground;
       renderTarget.dispose();
       restoreResidentContentAfterMinimapBake(previousResidentWindowState);
       restoreTerrainVisualsAfterMinimapBake(previousTerrainVisualState);
@@ -11468,6 +11686,7 @@ function resolveChunkDebugCenter(policy) {
     if (bakeError) return Promise.reject(bakeError);
 
     const finalBounds = { minX, maxX, minZ, maxZ, width, depth };
+    if (tiled) return { tiles: tilesDone, bounds: finalBounds, format: "webp", quality: quality };
     return new Promise(function (resolve, reject) {
       outputCanvas.toBlob(function (resultBlob) {
         if (!resultBlob) {
@@ -11945,8 +12164,10 @@ function resolveChunkDebugCenter(policy) {
         if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
         if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
       }
+      // Wereld tekenen: bij verschuiven blijft het object even hoog boven de grond (gaat mee met heuvels).
+      next.y += terrainLift(next.x, next.z) - terrainLift(transform.startPosition.x, transform.startPosition.z);
       if (snapState.mode === "ground" && object.userData.snapToGround !== false) {
-        next.y = num(world?.ground?.y, 0);
+        next.y = num(world?.ground?.y, 0) + terrainLift(next.x, next.z);
       }
       if (!object.position.equals(next)) {
         object.position.copy(next);
@@ -12069,8 +12290,9 @@ function resolveChunkDebugCenter(policy) {
           if (!axis || axis === "y") next.z = Math.round(next.z / gridSize) * gridSize;
           if (!axis || axis === "z") next.y = Math.round(next.y / gridSize) * gridSize;
         }
+        next.y += terrainLift(next.x, next.z) - terrainLift(entry.startPosition.x, entry.startPosition.z);
         if (snapState.mode === "ground" && entry.object.userData.snapToGround !== false) {
-          next.y = num(world?.ground?.y, 0);
+          next.y = num(world?.ground?.y, 0) + terrainLift(next.x, next.z);
         }
         if (!entry.object.position.equals(next)) {
           entry.object.position.copy(next);
@@ -13059,7 +13281,9 @@ function resolveChunkDebugCenter(policy) {
     }
     const shouldApplyToViewport = mode === "game" || !editorViewInitialized;
     if (shouldApplyToViewport) {
-      camera.fov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      gameBaseFov = num(cam?.fov, mode === "editor" ? editorCameraDefaults.fov : gameCameraDefaults.fov);
+      camera.fov = gameBaseFov;
+      applyGameFov();
       camera.updateProjectionMatrix();
       updateCameraPosition();
       if (orbitControls) {
@@ -13135,8 +13359,116 @@ function resolveChunkDebugCenter(policy) {
   function addGround(worldData) {
     const ground = worldData?.ground;
     if (!ground?.width || !ground?.depth) return;
+    if (worldData?.terrain?.heightfield) {
+      addTerrainGround(worldData);
+      return;
+    }
     const mesh = addGroundPlaneMesh(worldData, ground, "published-ground");
     if (mesh) fullGroundPlane = mesh;
+  }
+
+  // Wereld tekenen: zelfde materiaal en textuur als de platte grond, maar met hoogtes (terreinlaag).
+  function addTerrainGround(worldData) {
+    const ground = worldData.ground;
+    const bounds = effectiveGroundBounds(ground);
+    if (!bounds) return;
+    terrainLayer.setBakeMode(minimapBakeChunkOverride === true);
+    const sameLook = terrainLayer.material && terrainLayer.material.userData.terrainLookKey === terrainLookKey(worldData);
+    const material = sameLook ? terrainLayer.material : createGroundPlaneMaterial(ground, bounds, null);
+    material.userData.terrainLookKey = terrainLookKey(worldData);
+    terrainLayer.setWorld(worldData, { material, textureSize: groundTextureWorldSize(ground), receiveShadow: Boolean(groundShadowOptions().receiveShadow) });
+    waterLayer.setWater(worldData?.terrain?.water, num(ground.y, 0));
+    const textureAsset = assetById(worldData, ground.textureAssetId);
+    // setWorld() kan tijdens het opstarten kort na elkaar via de HTTP-snapshot en de
+    // websocket worden aangeroepen. clearContent() gooit dan de nog ladende texture-
+    // callback weg, terwijl dit materiaal bewust bewaard blijft. Vraag de texture in
+    // dat geval opnieuw aan; anders blijft het terrein permanent wit tot een volgende
+    // world-wijziging.
+    if (textureAsset?.sourcePath && (!sameLook || !material.map)) {
+      retainTerrainTexture(textureAsset, function (texture) {
+        if (terrainLayer.material !== material) return;
+        const clone = texture.clone();
+        clone.colorSpace = THREE.SRGBColorSpace;
+        clone.wrapS = THREE.RepeatWrapping;
+        clone.wrapT = THREE.RepeatWrapping;
+        clone.repeat.set(1, 1);
+        clone.needsUpdate = true;
+        material.map = clone;
+        material.needsUpdate = true;
+        terrainLayer.refreshMaterial();
+        requestRender("terrain-texture-loaded");
+      });
+    }
+  }
+
+  function terrainLookKey(worldData) {
+    const ground = worldData?.ground || {};
+    const asset = assetById(worldData, ground.textureAssetId);
+    return [ground.materialColor || "", asset?.sourcePath || "", sharedWorldPerformance().smoothShading === false ? "flat" : "smooth"].join("|");
+  }
+
+  // Hoogte van het terrein (zonder ground.y) op x, z; 0 zonder terrein.
+  function terrainLift(x, z) {
+    return terrainLayer.active ? terrainHeightAt(terrainLayer.heightfield, num(x, 0), num(z, 0)) : 0;
+  }
+
+  // Wereld tekenen (editor): objecten gaan tijdens het penselen mee omhoog en omlaag. Begin van een streek:
+  // onthoud per object de hoogte van de grond eronder; na elke penseelstap schuift het object het verschil.
+  // Begroeiing (scatter) gaat mee bij Sluiten (dan bouwt de server de wereld opnieuw op de nieuwe hoogte).
+  function terrainFollowRoots() {
+    const roots = new Set();
+    for (const root of entityRoots.values()) {
+      if (!root?.position || roots.has(root)) continue;
+      if (root.userData?.transformable !== true && root.userData?.snapToGround === false) continue;
+      roots.add(root);
+    }
+    return roots;
+  }
+
+  function terrainBeginEdit() {
+    for (const root of terrainFollowRoots()) root.userData.terrainFollowH = terrainLift(root.position.x, root.position.z);
+  }
+
+  function terrainFollowObjects(keys) {
+    const touched = new Set(keys || []);
+    if (!touched.size) return;
+    for (const root of terrainFollowRoots()) {
+      if (!Number.isFinite(root.userData.terrainFollowH)) continue;
+      const key = Math.floor(root.position.x / 64) + ":" + Math.floor(root.position.z / 64);
+      if (!touched.has(key)) continue;
+      const height = terrainLift(root.position.x, root.position.z);
+      const delta = height - root.userData.terrainFollowH;
+      if (Math.abs(delta) < 0.0001) continue;
+      root.position.y += delta;
+      root.userData.terrainFollowH = height;
+      root.updateMatrixWorld(true);
+    }
+  }
+
+  function terrainChanged(keys, options = {}) {
+    const list = Array.from(keys || []);
+    if (!list.length) return;
+    terrainLayer.markChanged(list, options);
+    terrainFollowObjects(list);
+    if (selectionHelper?.visible) selectionHelper.update();
+    requestRender("terrain-changed");
+  }
+
+  function terrainDiscardEdits() {
+    terrainBeginEdit();
+    const keys = terrainLayer.discardEdits();
+    terrainFollowObjects(keys);
+    requestRender("terrain-discard");
+    return keys;
+  }
+
+  function terrainRaycastScreen(clientX, clientY) {
+    if (!terrainLayer.active) return null;
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    return terrainLayer.raycast(raycaster.ray.origin, raycaster.ray.direction);
   }
 
   function groundsReferToSameZone(left, right) {
@@ -14987,6 +15319,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const sprite = new THREE.Sprite(material);
     sprite.name = "remote-player-nameplate";
+    sprite.visible = runtimeTargetNameplatesVisible;
     sprite.position.set(0, 2.15, 0);
     sprite.scale.set(3.2, 0.8, 1);
     sprite.renderOrder = 4001;
@@ -15056,7 +15389,7 @@ function resolveChunkDebugCenter(policy) {
     }
     if (existing && existing.userData?.localPlayerLabelText === label) {
       updateLocalPlayerNameplateAnchor(existing, sourceObject || playerVisualObject(root));
-      existing.visible = true;
+      existing.visible = runtimeTargetNameplatesVisible;
       player.nameplateRoot = existing;
       return existing;
     }
@@ -15203,6 +15536,19 @@ function resolveChunkDebugCenter(policy) {
     record.connectedSessionCount = Number(remotePlayer?.connectedSessionCount || record.connectedSessionCount || 0) || 0;
     record.sourceSessionId = remotePlayer?.sourceSessionId || record.sourceSessionId || null;
     record.sourceDevice = remotePlayer?.sourceDevice || record.sourceDevice || null;
+    // Klassen: het uiterlijk van de klasse van deze speler. Komt het later binnen of verandert het, dan
+    // wordt het poppetje opnieuw gebouwd (anders bleef het standaard-spelermodel van de kaart Wereld staan).
+    const nextModelAssetId = remotePlayer?.modelAssetId || record.modelAssetId || null;
+    if (record.root && nextModelAssetId !== (record.modelAssetId || null)) {
+      if (record.root.parent) record.root.parent.remove(record.root);
+      const counts = countObjectTree(record.root);
+      runtimeStats.sceneObjects = Math.max(0, runtimeStats.sceneObjects - (counts.objects || 0));
+      runtimeStats.meshes = Math.max(0, runtimeStats.meshes - (counts.meshes || 0));
+      disposeObject(record.root);
+      record.root = null;
+      record.object = null;
+    }
+    record.modelAssetId = nextModelAssetId;
     if (!record.root || !record.root.parent) {
       const root = createRemotePlayerRoot(record, worldData);
       record.root = root;
@@ -15391,6 +15737,65 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
+  function runtimeTargetNameplateY(target) {
+    const modelScaleY = Number.isFinite(Number(target?.modelScaleY))
+      ? Number(target.modelScaleY)
+      : (Number.isFinite(Number(target?.modelScale)) ? Number(target.modelScale) : 1);
+    return Number.isFinite(Number(target?.nameplateY))
+      ? Number(target.nameplateY)
+      : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
+  }
+
+  // Game (stap 4): de plek op het scherm net boven elk zichtbaar doel, voor de scherpe 2D-naamlabels van de HUD
+  // (in plaats van de 3D-bordjes). Dichtstbij eerst, hooguit maxCount.
+  // 2D-namen in de HUD: schermplek (pagina-pixels) van NPC's, vijanden, spullen en spelers.
+  // Afstand telt vanaf je eigen poppetje (niet de camera), zodat uitzoomen geen namen wegknipt.
+  function getRuntimeTargetLabelAnchors(maxDistance = 80, maxCount = 40) {
+    const list = [];
+    if (!camera || !canvas) return list;
+    const rect = canvas.getBoundingClientRect();
+    const point = new THREE.Vector3();
+    const origin = player.root ? player.root.position : player.pos;
+    const push = function (id, name, entityKind, extra) {
+      const distance = origin ? Math.hypot(point.x - origin.x, point.z - origin.z) : camera.position.distanceTo(point);
+      if (!(distance <= maxDistance)) return;
+      point.project(camera);
+      if (!(point.z >= -1 && point.z <= 1) || Math.abs(point.x) > 1.05 || Math.abs(point.y) > 1.05) return;
+      list.push(Object.assign({
+        id, name, entityKind, action: "", selected: false, available: true,
+        x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
+        distance
+      }, extra || null));
+    };
+    for (const [id, root] of runtimeTargetRoots) {
+      if (!root || root.visible === false) continue;
+      const target = root.userData?.runtimeTargetPayload || {};
+      const name = String(target.displayName || "").trim().slice(0, 34);
+      if (!name) continue;
+      point.set(root.position.x, root.position.y + Math.max(1.6, runtimeTargetNameplateY(target) - 0.45), root.position.z);
+      push(id, name, String(target.entityKind || target.targetKind || ""), {
+        action: String(target.action || ""), selected: target.selected === true, available: target.available !== false
+      });
+    }
+    // Spelers: de plek van hun (verborgen) 3D-naambordje.
+    const self = player.root?.userData?.localPlayerNameplateRoot || null;
+    if (self && player.displayName) {
+      self.getWorldPosition(point);
+      point.y -= 0.25;
+      push("self", String(player.displayName).trim().slice(0, 32), "self");
+    }
+    for (const [playerId, record] of remotePlayers) {
+      const plate = record?.root?.userData?.remotePlayerNameplateRoot || null;
+      if (!plate || record.root.visible === false || !record.root.parent) continue;
+      plate.getWorldPosition(point);
+      point.y -= 0.25;
+      push("player:" + playerId, String(record.displayName || "").trim().slice(0, 32) || "Speler", "player");
+    }
+    list.sort(function (a, b) { return a.distance - b.distance; });
+    return list.length > maxCount ? list.slice(0, maxCount) : list;
+  }
+
   function createRuntimeTargetNameplate(target) {
     const label = runtimeTargetLabel(target);
     const color = runtimeTargetColor(target);
@@ -15442,13 +15847,7 @@ function resolveChunkDebugCenter(policy) {
     const sprite = new THREE.Sprite(material);
     sprite.name = "node03-runtime-target-nameplate";
     sprite.visible = runtimeTargetNameplatesVisible;
-    const modelScaleY = Number.isFinite(Number(target?.modelScaleY))
-      ? Number(target.modelScaleY)
-      : (Number.isFinite(Number(target?.modelScale)) ? Number(target.modelScale) : 1);
-    const nameplateY = Number.isFinite(Number(target?.nameplateY))
-      ? Number(target.nameplateY)
-      : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
-    sprite.position.set(0, nameplateY, 0);
+    sprite.position.set(0, runtimeTargetNameplateY(target), 0);
     sprite.scale.set(4.2, 1.22, 1);
     sprite.renderOrder = 4100;
     sprite.frustumCulled = false;
@@ -15521,7 +15920,10 @@ function resolveChunkDebugCenter(policy) {
     else runtimeTargetSuppressedEntityIds.delete(id);
     // Zelfde regel als de server (setWorldEntityColliderEnabled): een verborgen target (bijv. verzameld) botst niet.
     for (const solid of predictionSolids) {
-      if (String(solid?.entityId || "") === id) solid.enabled = !suppressed;
+      if (String(solid?.entityId || "") === id && solid.enabled !== !suppressed) {
+        solid.enabled = !suppressed;
+        playerPathClient?.invalidate();
+      }
     }
     for (const solid of solids) {
       if (String(solid?.entityId || "") !== id) continue;
@@ -16417,6 +16819,13 @@ function resolveChunkDebugCenter(policy) {
         if (child?.name === "node03-runtime-target-nameplate") child.visible = nextVisible;
       });
     }
+    // Spelersnamen (eigen en anderen) gaan mee: de game toont ze dan als 2D-namen in de HUD.
+    const selfPlate = player.root?.userData?.localPlayerNameplateRoot;
+    if (selfPlate) selfPlate.visible = nextVisible;
+    for (const record of remotePlayers.values()) {
+      const plate = record?.root?.userData?.remotePlayerNameplateRoot;
+      if (plate) plate.visible = nextVisible;
+    }
     requestRender("runtime-target-nameplates");
     return runtimeTargetNameplatesVisible;
   }
@@ -16453,6 +16862,37 @@ function resolveChunkDebugCenter(policy) {
       }
     }
     return null;
+  }
+
+  // MMO (3-11): welke andere speler staat onder de vinger of muis? Schermtest van voeten tot naambordje (geen raycast
+  // op het model: goedkoop op de oude laptop en het werkt ook bij dunne of bewegende modellen). Dichtstbij wint.
+  function pickRemotePlayerAt(clientX, clientY) {
+    if (mode !== "game" || !camera || !canvas || !remotePlayers.size) return null;
+    const rect = canvas.getBoundingClientRect();
+    const feet = new THREE.Vector3();
+    const head = new THREE.Vector3();
+    const toScreen = (vector) => ({ x: rect.left + (vector.x * 0.5 + 0.5) * rect.width, y: rect.top + (-vector.y * 0.5 + 0.5) * rect.height });
+    let best = null;
+    for (const [playerId, record] of remotePlayers) {
+      const root = record?.root;
+      if (!root || root.visible === false || !root.parent) continue;
+      root.getWorldPosition(feet);
+      const plate = root.userData?.remotePlayerNameplateRoot || null;
+      if (plate) plate.getWorldPosition(head);
+      else head.set(feet.x, feet.y + 1.9, feet.z);
+      const distance = camera.position.distanceTo(feet);
+      feet.project(camera);
+      head.project(camera);
+      if (!(feet.z >= -1 && feet.z <= 1)) continue;
+      const a = toScreen(feet);
+      const b = toScreen(head);
+      const height = Math.max(28, Math.abs(a.y - b.y));
+      const halfWidth = Math.max(20, height * 0.32);
+      if (clientY < Math.min(a.y, b.y) - 8 || clientY > Math.max(a.y, b.y) + 10) continue;
+      if (Math.abs(clientX - (a.x + b.x) / 2) > halfWidth) continue;
+      if (!best || distance < best.distance) best = { playerId, displayName: String(record.displayName || "").trim() || "Speler", distance };
+    }
+    return best;
   }
 
   function getRemotePlayerDebugState() {
@@ -16588,6 +17028,12 @@ function resolveChunkDebugCenter(policy) {
     pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
     const groundY = num(world?.ground?.y, 0);
+    // Wereld tekenen: de muis raakt de heuvel, niet een plat vlak eronder. y blijft de basis van de grond
+    // (zoals altijd): plaatsen slaat de hoogte boven de grond op, de wereldbouwer telt het terrein erbij.
+    if (terrainLayer.active) {
+      const terrainHit = terrainLayer.raycast(raycaster.ray.origin, raycaster.ray.direction);
+      if (terrainHit) return { x: round(terrainHit.x), y: groundY, z: round(terrainHit.z), terrainY: terrainHit.y };
+    }
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
     const hit = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(plane, hit)) return null;
@@ -16658,6 +17104,15 @@ function resolveChunkDebugCenter(policy) {
       blocked: blocked,
       collided: collided
     };
+  }
+
+  function findPlayerMovementPath(startPosition, target, options = {}) {
+    if (!playerPathClient) playerPathClient = createPlayerPathClient();
+    return playerPathClient.findPath(startPosition, target, {
+      index: resolveWalkabilitySource(),
+      radius: Math.max(0.05, num(options.radius, player.radius)),
+      solids: mode === "game" ? predictionSolids : activeSolids
+    }, { arrivalRadius: options.arrivalRadius || 0 });
   }
 
   function setPlayerAnimationState(animationState) {
@@ -16976,11 +17431,12 @@ function resolveChunkDebugCenter(policy) {
   function clearHudModules() {
     for (const node of hudNodes.anchored.values()) node.remove();
     hudNodes.anchored.clear();
-    for (const entry of hudNodes.performance.values()) {
+    for (const [key, entry] of Array.from(hudNodes.performance.entries())) {
+      if (entry.keep) continue;
       if (typeof entry.dispose === "function") entry.dispose();
       else entry.root.remove();
+      hudNodes.performance.delete(key);
     }
-    hudNodes.performance.clear();
     perfHudNextUpdateAt = 0;
   }
 
@@ -17054,7 +17510,12 @@ function resolveChunkDebugCenter(policy) {
     if (metrics.showChunkCulling === true) addRow("terrainChunks", "T Chunks");
     let frame = null;
     let dispose = null;
-    if (hudPanelAdapter && typeof hudPanelAdapter.appendPanel === "function") {
+    if (mod.mount) {
+      root.className = "perf-hud perf-hud--compact";
+      mod.mount.appendChild(root);
+      frame = root;
+      dispose = function () { root.remove(); };
+    } else if (hudPanelAdapter && typeof hudPanelAdapter.appendPanel === "function") {
       const moduleId = mod.id || "perf_hud";
       const result = hudPanelAdapter.appendPanel({
         moduleId: moduleId,
@@ -17072,6 +17533,7 @@ function resolveChunkDebugCenter(policy) {
       hudElement.appendChild(root);
     }
     hudNodes.performance.set(mod.id || "perf_hud", {
+      keep: mod.keep === true,
       root: root,
       frame: frame,
       dispose: dispose,
@@ -17081,6 +17543,32 @@ function resolveChunkDebugCenter(policy) {
       updateIntervalMs: updateIntervalMs,
       nextUpdateAt: 0
     });
+  }
+
+  // Game (stap 4): prestatie-info (FPS, frame, GPU) in een eigen hoekje van de nieuwe HUD; null = weg.
+  function setPerformanceHud(mount) {
+    const existing = hudNodes.performance.get("gk_perf");
+    if (existing) {
+      if (typeof existing.dispose === "function") existing.dispose();
+      else existing.root.remove();
+      hudNodes.performance.delete("gk_perf");
+    }
+    if (!mount) return false;
+    buildPerformanceHudModule({
+      id: "gk_perf",
+      label: "Prestatie",
+      mount: mount,
+      keep: true,
+      updateIntervalMs: 500,
+      metrics: {
+        showFps: true, showFrameMs: true, showGpuMs: true, showRenderCpuMs: true, showRemoteSyncMs: true, showRenderer: true,
+        showDrawCalls: true, showTriangles: true, showMovementStepMs: false, showMinimapDrawMs: false, showGeometries: false,
+        showTextures: false, showSceneObjects: false, showEntities: false, showScatterInstances: false, showTerrainVisuals: false,
+        showCollisionShapes: false
+      }
+    });
+    perfHudNextUpdateAt = 0;
+    return true;
   }
 
   function setHudModules(modules) {
@@ -17853,6 +18341,7 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function setWorld(nextWorld, options = {}) {
+    playerPathClient?.invalidate();
     worldBuildGeneration += 1;
     // In game mode is de server (via game.js) eigenaar van de spelerpositie.
     // spawnPlayer() zet de speler straks terug op world.spawn; zonder herstel
@@ -17900,8 +18389,13 @@ function resolveChunkDebugCenter(policy) {
     }
     const useChunkedGround = shouldUseChunkedGround(world, mode);
     const residentStreamingEnabled = isChunkCullingRuntimeEnabled(resolveChunkPolicy(world, mode));
+    if (!world?.terrain?.heightfield) terrainLayer.setWorld(null);
     if (!useChunkedGround) addGround(world);
-    const nextWalkabilityIndex = buildWalkabilityIndex(world);
+    // Ronde 3b: water altijd uit de wereld zetten, ook als de grond via een andere weg getekend wordt (game).
+    waterLayer.setWater(world?.terrain?.water, num(world?.ground?.y, 0));
+    // Altijd de hoogte van de terreinlaag als de wereld terrein heeft, ook als de laag nog niet getekend is (game:
+    // die komt later via de grondvakken). Anders voorspelt de client zonder hellingen en trekt de server je terug.
+    const nextWalkabilityIndex = buildWalkabilityIndex(world, { heightfield: world?.terrain?.heightfield || terrainLayer.active ? terrainLayer.heightfield : null });
     predictionSolids = mode === "game"
       ? solidCollisionEntriesForWorld(world).map(function (solid) {
         return Object.assign(solid, { enabled: !runtimeTargetSuppressedEntityIds.has(String(solid.entityId || "")) });
@@ -18035,7 +18529,10 @@ function resolveChunkDebugCenter(policy) {
   }
 
   function destroy() {
+    playerPathClient?.destroy();
     disposed = true;
+    terrainLayer.dispose();
+    waterLayer.dispose();
     rejectFrameProfileWaiters(new Error("runtime destroyed"));
     stopRenderLoop("destroy");
     viewportPanSession = null;
@@ -18330,9 +18827,13 @@ function resolveChunkDebugCenter(policy) {
     dispose: destroy,
     screenToGround: screenToGround,
     worldToScreen: worldToScreen,
+    setViewInset: setViewInset,
+    setPlayerPixelRatio: setPlayerPixelRatio,
     getPlayerState: getPlayerState,
     getCameraGroundBasis: getCameraGroundBasis,
     resolvePlayerMovementIntent: resolvePlayerMovementIntent,
+    findPlayerMovementPath: findPlayerMovementPath,
+    cancelPlayerMovementPath: function () { playerPathClient?.cancel(); },
     setPlayerAnimationState: setPlayerAnimationState,
     setLocalPlayerDisplayName: setLocalPlayerDisplayName,
     upsertRemotePlayer: upsertRemotePlayer,
@@ -18353,9 +18854,12 @@ function resolveChunkDebugCenter(policy) {
     setRuntimeTargetAnimation: setRuntimeTargetAnimation,
     registerRuntimeAssets: registerRuntimeAssets,
     setRuntimeTargetNameplatesVisible: setRuntimeTargetNameplatesVisible,
+    getRuntimeTargetLabelAnchors: getRuntimeTargetLabelAnchors,
+    setPerformanceHud: setPerformanceHud,
     getRuntimeTargetNameplatesVisible: getRuntimeTargetNameplatesVisible,
     clearRuntimeTargets: clearRuntimeTargets,
     pickRuntimeTargetAt: pickRuntimeTargetAt,
+    pickRemotePlayerAt: pickRemotePlayerAt,
     debugState: debugState,
     debugCollisionAt: debugCollisionAt,
     debugTeleportPlayer: debugTeleportPlayer,
@@ -18505,6 +19009,49 @@ function resolveChunkDebugCenter(policy) {
     getLoadErrors: function () { return loadErrors.slice(); },
     bakeMinimapImage: bakeMinimapImage,
     getMinimapBakeBounds: getMinimapBakeBounds,
-    getMinimapMarkerSnapshot: getMinimapMarkerSnapshot
+    getMinimapMarkerSnapshot: getMinimapMarkerSnapshot,
+    // Wereld tekenen (ronde 1): de terreinlaag voor de knop Terrein in de editor.
+    terrainActive: function () { return terrainLayer.active; },
+    terrainHeightfield: function () { return terrainLayer.heightfield; },
+    terrainHeightAt: terrainLift,
+    restOnHighestGroundY: restOnHighestGroundY,
+    // Ronde 3: water live zetten vanuit de editor (lijst zoals world.terrain.water) en de huidige lijst lezen.
+    terrainSetWater: function (list) { waterLayer.setWater(list, num(world?.ground?.y, 0)); },
+    terrainWaterList: function () { return waterLayer.list(); },
+    terrainBounds: function () { return terrainLayer.bounds; },
+    terrainRaycastScreen: terrainRaycastScreen,
+    terrainBeginEdit: terrainBeginEdit,
+    terrainChanged: terrainChanged,
+    terrainDiscardEdits: terrainDiscardEdits,
+    terrainDirtyChunks: function () { return terrainLayer.dirtyChunks(); },
+    terrainIsDirty: function () { return terrainLayer.isDirty(); },
+    terrainCommitSaved: function (refs, saved, paintRefs, savedPaint) {
+      terrainLayer.commitSaved(refs, saved);
+      if (paintRefs) terrainLayer.commitPaintSaved(paintRefs, savedPaint);
+      // De wereld in de editor kent nu ook de nieuwe vakken: opnieuw opbouwen (bijv. na de minimap bij
+      // SAVE TO GAME) zet dan niet de oude hoogtes en verf terug.
+      if (world?.terrain?.heightfield) {
+        const heightfield = Object.assign({}, world.terrain.heightfield, { chunks: Object.assign({}, refs) });
+        if (paintRefs) heightfield.paint = Object.assign({}, heightfield.paint || {}, { chunks: JSON.parse(JSON.stringify(paintRefs)) });
+        world.terrain = Object.assign({}, world.terrain, { heightfield });
+      }
+    },
+    // Ronde 2: verf (penseel in Terrein).
+    terrainPaintfield: function () { return terrainLayer.paintfield; },
+    terrainPaintChanged: function (keys, options) {
+      terrainLayer.markPaintChanged(Array.from(keys || []), options || {});
+      requestRender("terrain-paint");
+    },
+    terrainPaintDirtyChunks: function () { return terrainLayer.paintDirtyChunks(); },
+    terrainDefinePaintTexture: function (docKey, info) { terrainLayer.definePaintTexture(docKey, info); },
+    terrainSeedPaint: seedTerrainPaint,
+    terrainSeedChunk: seedTerrainChunk,
+    terrainStats: function () { return terrainLayer.stats(); },
+    terrainChunkInfoAt: function (x, z) { return terrainLayer.chunkInfoAt(x, z); },
+    terrainSetCursor: function (cursor) { terrainLayer.setCursor(cursor); },
+    terrainSetHeavyTint: function (on) { terrainLayer.setHeavyTint(on); },
+    renderInfo: function () {
+      return { triangles: renderer.info?.render?.triangles || 0, calls: renderer.info?.render?.calls || 0 };
+    }
   };
 }

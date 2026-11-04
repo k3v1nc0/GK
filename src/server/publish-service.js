@@ -640,7 +640,9 @@ function buildWalkableSurfaceReadModel(node) {
     depth: numberOrNull(node.values.depth),
     rotationY: numberOrNull(node.values.rotationY),
     priority: numberOrNull(node.values.priority),
-    points: normalizeWalkablePointList(node.values.points, node.values.y)
+    points: normalizeWalkablePointList(node.values.points, node.values.y),
+    // Dichte randen (onzichtbare muur), zie movement-kernel.
+    closedEdges: Array.isArray(node.values.closedEdges) ? node.values.closedEdges.filter((edge) => Number.isInteger(edge) && edge >= 0) : []
   };
 }
 
@@ -1877,6 +1879,11 @@ function buildMmoNetworkReadModel(node) {
     nodeId: node?.id || null,
     enabled: values.enabled !== false,
     networkPreset: normalizeMmoNetworkPreset(values.networkPreset, "custom"),
+    showHealthPing: values.showHealthPing !== false,
+    showHealthTps: values.showHealthTps !== false,
+    showHealthMspt: values.showHealthMspt !== false,
+    showHealthCpu: values.showHealthCpu !== false,
+    showHealthPacketLoss: values.showHealthPacketLoss !== false,
     serverTickRateHz: serverTickRateHz,
     snapshotRateHz: snapshotRateHz,
     inputSendRateHz: inputSendRateHz,

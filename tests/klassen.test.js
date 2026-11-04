@@ -48,9 +48,9 @@ test("DPS, Healer en Tank: eigen levens, kracht, pantser, heal-kracht, start-spu
   const characters = catalogs.playableCharacters;
   assert.deepEqual(Object.keys(characters), ["class.dps", "class.healer", "class.tank"], "op naam");
   const stats = (id) => catalogs.statBlocks[characters[id].statBlockRef].entries.map((entry) => entry.baseValue);
-  assert.deepEqual(stats("class.dps"), [80, 10, 0, 5]);
-  assert.deepEqual(stats("class.healer"), [60, 5, 0, 10]);
-  assert.deepEqual(stats("class.tank"), [100, 5, 10, 5]);
+  assert.deepEqual(stats("class.dps"), [80, 10, 0, 5, 50]);
+  assert.deepEqual(stats("class.healer"), [60, 5, 0, 10, 50]);
+  assert.deepEqual(stats("class.tank"), [100, 5, 10, 5, 50]);
   assert.equal(catalogs.stats["stat.heal_power"].displayName, "Heal-kracht");
   assert.deepEqual(characters["class.dps"].startingItemGrants, [{ itemRef: "item.zwaard", amount: 1 }]);
   assert.deepEqual(characters["class.tank"].startingCurrencyGrants, [{ currencyRef: "currency.goud", amountMinor: 30 }]);

@@ -8,6 +8,11 @@
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
 import { settingsValues } from "./game-compiler.js";
+import { partyValues } from "../../shared/authoring/kinds/party.js";
+import { chatValues } from "../../shared/authoring/kinds/chat.js";
+import { areaBoundsMm } from "../../../apps/web/public/shared/spatial.js";
+import { heightfieldForWorld } from "../../../apps/web/public/shared/movement-kernel.js";
+import { normalizeTerrainWater, terrainHeightAt, terrainSlopeDegAt, terrainUnderWater, TERRAIN_CHUNK_METERS } from "../../../apps/web/public/shared/terrain.js";
 
 export const WORLD_FORMAT_VERSION = "gk-game-project-v3";
 export const WORLD_ID = "world.main";
@@ -80,6 +85,114 @@ export function worldSettingsValues(body = null) {
   return values;
 }
 
+// Wereld tekenen (ronde 1): de kaart "Terrein" met standaardwaarden.
+export function terrainSettingsValues(body = null) {
+  const values = {};
+  for (const [key, field] of Object.entries(CANONICAL_KINDS.terrain_settings.fields)) {
+    const value = body ? body[key] : undefined;
+    values[key] = value === undefined || value === null || value === "" ? field.default : value;
+  }
+  return values;
+}
+
+// Ronde 2: verf en rots. textures = { doc-sleutel: { assetId, size, url } }; de url komt uit de assetlijst.
+function terrainPaintConfig(data, values) {
+  const textures = {};
+  for (const texture of Array.isArray(data?.terrainTextures) ? data.terrainTextures : []) {
+    const color = /^#[0-9a-fA-F]{6}$/.test(String(texture?.color || "")) ? texture.color : null;
+    if (!texture || texture.archived || (!texture.textureAssetId && !color)) continue;
+    const docKey = texture.docKey || "terrain_texture:" + texture.textureId;
+    textures[docKey] = { assetId: texture.textureAssetId || null, color, size: Number(texture.tileSize) || 4, url: null, name: texture.displayName || "" };
+  }
+  const paint = values.paint && typeof values.paint === "object" && !Array.isArray(values.paint) ? values.paint : {};
+  const rock = values.rockTextureRef && textures[values.rockTextureRef] ? { texture: values.rockTextureRef, slopeDeg: Number(values.rockSlopeDeg) } : null;
+  return { chunks: JSON.parse(JSON.stringify(paint)), textures, rock };
+}
+
+function terrainHeightfieldConfig(data) {
+  const values = terrainSettingsValues(data?.terrain || null);
+  const chunks = values.chunks && typeof values.chunks === "object" && !Array.isArray(values.chunks) ? values.chunks : {};
+  return { chunkSize: TERRAIN_CHUNK_METERS, baseUrl: "/assets/terrain/", chunks: Object.assign({}, chunks),
+    maxSlopeDeg: Number(values.maxSlopeDeg), triBudget: Number(values.triBudget), chunkTriBudget: Number(values.chunkTriBudget),
+    scatterSlopeDeg: Number(values.scatterSlopeDeg), paint: terrainPaintConfig(data, values) };
+}
+
+// Ronde 3: watervlakken uit de kaarten "Water" (los, plat vlak met één hoogte).
+function terrainWaterList(data) {
+  return (Array.isArray(data?.terrainWater) ? data.terrainWater : [])
+    .map((doc) => normalizeTerrainWater(Object.assign({}, doc, { id: doc?.waterId })))
+    .filter(Boolean)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// Ronde 3: begroeiing (bomen, stenen, gras) niet op te steile hellingen en niet onder water. Kopie, niets aangepast.
+export function dropScatterOffTerrain(world, heightfield) {
+  const waters = world?.terrain?.water || [];
+  const maxSlope = Number(world?.terrain?.heightfield?.scatterSlopeDeg);
+  const hasHeights = Boolean(heightfield && heightfield.chunks && heightfield.chunks.size);
+  if (!waters.length && !hasHeights) return world;
+  const entities = world.entities || [];
+  const kept = entities.filter((entity) => {
+    if (entity?.type !== "scatter") return true;
+    const position = entity.transform?.position || {};
+    const x = Number(position.x) || 0;
+    const z = Number(position.z) || 0;
+    if (waters.length && terrainUnderWater(heightfield, waters, x, z)) return false;
+    return !(hasHeights && Number.isFinite(maxSlope) && terrainSlopeDegAt(heightfield, x, z) > maxSlope);
+  });
+  return kept.length === entities.length ? world : Object.assign({}, world, { entities: kept });
+}
+
+// Alles wat in de kaarten op de grond staat (y = hoogte boven de grond) komt op de hoogte van het terrein.
+// Kopieën, niets wordt aangepast: de builddata blijft zoals hij is.
+export function liftWorldOntoTerrain(world, heightfield) {
+  if (!heightfield || !heightfield.chunks || heightfield.chunks.size === 0) return world;
+  const groundY = Number(world?.ground?.y) || 0;
+  const lift = (x, z) => terrainHeightAt(heightfield, Number(x) || 0, Number(z) || 0);
+  const liftPoint = (point) => (point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.z))
+    ? Object.assign({}, point, { y: (Number(point.y) || 0) + lift(point.x, point.z) }) : point);
+  const liftEntity = (entity) => {
+    const position = entity?.transform?.position;
+    if (!position) return entity;
+    return Object.assign({}, entity, { transform: Object.assign({}, entity.transform, { position: liftPoint(position) }) });
+  };
+  const liftTarget = (target) => {
+    const next = liftPoint(target);
+    if (next && next.linkedEntity) next.linkedEntity = liftPoint(next.linkedEntity);
+    return next;
+  };
+  const liftController = (controller) => Object.assign({}, controller, {
+    spawnSets: (controller?.spawnSets || []).map((set) => Object.assign({}, set, { spawns: (set.spawns || []).map(liftPoint) }))
+  });
+  const memo = new Map();
+  const liftPackage = (pkg) => {
+    if (!pkg || typeof pkg !== "object") return pkg;
+    if (memo.has(pkg)) return memo.get(pkg);
+    const next = Object.assign({}, pkg);
+    if (Array.isArray(pkg.spawns)) next.spawns = pkg.spawns.map(liftPoint);
+    if (Array.isArray(pkg.entities)) next.entities = pkg.entities.map(liftPoint);
+    if (Array.isArray(pkg.questTargets)) next.questTargets = pkg.questTargets.map(liftTarget);
+    if (Array.isArray(pkg.spawnControllers)) next.spawnControllers = pkg.spawnControllers.map(liftController);
+    memo.set(pkg, next);
+    return next;
+  };
+  const liftZones = (zones) => (zones ? Object.assign({}, zones, {
+    packages: (zones.packages || []).map(liftPackage),
+    byId: Object.fromEntries(Object.entries(zones.byId || {}).map(([id, pkg]) => [id, liftPackage(pkg)]))
+  }) : zones);
+  const zones = liftZones(world.zones);
+  const projectZones = world.gameProject?.zones === world.zones ? zones : liftZones(world.gameProject?.zones);
+  const spawn = world.spawn ? Object.assign({}, world.spawn, { y: groundY + lift(world.spawn.x, world.spawn.z) }) : world.spawn;
+  return Object.assign({}, world, {
+    entities: (world.entities || []).map(liftEntity),
+    interactables: (world.interactables || []).map(liftPoint),
+    spawn,
+    zones,
+    zonePackage: liftPackage(world.zonePackage),
+    gameProject: world.gameProject ? Object.assign({}, world.gameProject, { zones: projectZones }) : world.gameProject
+  });
+}
+
 function catalogs() {
   const result = Object.fromEntries(CATALOG_SECTIONS.map((section) => [section, {}]));
   for (const policy of RESPAWN_POLICIES) {
@@ -138,8 +251,12 @@ export function baseRuntimeWorld(data = {}, options = {}) {
   const project = { id: "gk.project", gameName, defaultLanguage: "nl", contentVersion: "0.1.0", startZoneRef: WORLD_ZONE_ID, startSpawnRef: WORLD_SPAWN_ID };
   if (data?.project?.motd) project.motd = data.project.motd;
 
-  const assetIds = [settings.groundTextureAssetId, settings.playerModelAssetId].filter(Boolean);
+  const heightfield = terrainHeightfieldConfig(data);
+  const paintTextures = Object.values(heightfield.paint.textures);
+  const assetIds = Array.from(new Set([settings.groundTextureAssetId, settings.playerModelAssetId].concat(paintTextures.map((texture) => texture.assetId)).filter(Boolean)));
   const assets = options.assetService && assetIds.length ? options.assetService.manifestForIds(assetIds) : [];
+  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+  for (const texture of paintTextures) texture.url = assetsById.get(texture.assetId)?.sourcePath || null;
 
   const world = {
     schemaVersion: WORLD_FORMAT_VERSION,
@@ -158,7 +275,9 @@ export function baseRuntimeWorld(data = {}, options = {}) {
     entities: [], interactables: [], keybinds: [], ui: [],
     minimap: options.editor ? { bakes: [], game: null, editor: null } : { bakes: [], game: null },
     mmo: { network: null },
-    terrain: { layers: [], surfaces: [] },
+    // Wereld tekenen: heightfield = de hoogte van de grond (vakken in assets/terrain); de game en de editor
+    // tekenen de grond hiermee (ook als hij nog plat is).
+    terrain: { layers: [], surfaces: [], heightfield, water: terrainWaterList(data) },
     collision: { blockers: [], walkableSurfaces: [] },
     scatterAreas: [],
     chunkLoading: clone(CHUNK_LOADING),
@@ -195,7 +314,13 @@ export function buildRuntimeWorld(data = {}, options = {}) {
     return next;
   });
   const world = applyCanonicalBuild(base, { buildId: options.buildId || null, data: Object.assign({}, source, { pickups, removedLegacyPickups: [] }) }, options);
-  return withGame(world, source, options);
+  const full = withGame(world, source, options);
+  // Wereld tekenen: zonder assetService (tests) of zonder vakken blijft alles op y zoals in de kaarten.
+  const assetService = options.assetService;
+  const heightfield = assetService && typeof assetService.readTerrainChunk === "function"
+    ? heightfieldForWorld(full, { readTerrainChunk: (sha1) => assetService.readTerrainChunk(sha1) })
+    : null;
+  return liftWorldOntoTerrain(dropScatterOffTerrain(full, heightfield), heightfield);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -207,8 +332,29 @@ export const PLAYER_STAT_BLOCK_ID = "stat_block.player";
 export const PLAYER_XP_CURVE_ID = "stat_curve.player_xp";
 export const CRAFTING_STATION_TYPE = "crafting.station";
 const NPC_TALK_RANGE = 2.5;
+const FOG_CELL_M = 8;
+
+// Ronde 10: namen van deelgebieden op de kaarten, midden in het gebied (meters).
+function areaLabels(section) {
+  const labels = [];
+  for (const area of Array.isArray(section?.areas) ? section.areas : []) {
+    const name = String(area?.displayName || "").trim();
+    if (!name) continue;
+    try {
+      const box = areaBoundsMm(area);
+      if (![box.minXMm, box.maxXMm, box.minZMm, box.maxZMm].every(Number.isFinite)) continue;
+      labels.push({ id: area.areaId || name, name: name.slice(0, 40), x: (box.minXMm + box.maxXMm) / 2000, z: (box.minZMm + box.maxZMm) / 2000 });
+    } catch { /* kapotte vorm: geen naam */ }
+  }
+  return labels;
+}
+// Getal uit Game-scherm (0 is ook een geldige keuze), anders de standaard; begrensd tot 0..max.
+function fogPercent(value, fallback, max = 100) {
+  const number = value === "" || value === null || value === undefined ? NaN : Number(value);
+  return Math.max(0, Math.min(max, Number.isFinite(number) ? number : fallback));
+}
 const talkRangeOf = (npc) => (Number(npc?.talkRange) > 0 ? Number(npc.talkRange) : NPC_TALK_RANGE);
-const STAT_IDS = { health: "stat.health", attackPower: "stat.attack_power", armor: "stat.armor", healPower: "stat.heal_power" };
+const STAT_IDS = { health: "stat.health", attackPower: "stat.attack_power", armor: "stat.armor", healPower: "stat.heal_power", mana: "stat.mana" };
 
 const npcEntityId = (npcId, editor) => (editor ? EDITOR_DOC_PREFIX + "npc:" + npcId : "npc_entity." + npcId);
 const npcTargetId = (npcId) => "target.npc." + npcId;
@@ -240,6 +386,8 @@ function hudModules(hud, { currencyIds, hasVendor, hasStation }) {
   if (hud.showWallet) modules.push(mod("wallet_hud", { moduleId: "hud.wallet", title: "Geld", currencyRefs: currencyIds.slice(), itemRefs: [], maxEntries: 5, anchor: "top-right" }));
   // Zonder dit venster kan een verslagen speler niet terugkomen: altijd aan.
   modules.push(mod("death_respawn_hud", { moduleId: "hud.death_respawn", anchor: "center", showCountdown: true, showDestination: true }));
+  if (hud.showEffects !== false) modules.push(mod("effects_hud", { moduleId: "hud.effects", anchor: "top-left" }));
+  if (hud.showFloatNumbers !== false) modules.push(mod("float_numbers_hud", { moduleId: "hud.float_numbers", anchor: "center" }));
   if (hud.showInteractions) modules.push(mod("interaction_hud", { moduleId: "hud.interactions", title: "In de buurt", anchor: "center-right", layout: "panel",
     targetKinds: ["enemy", "resource", "pickup", "zone_link"], maxTargets: 8, rangeMode: "ability_range", showDistance: true, showHealth: true,
     showLootPreview: true, allowDemoReset: false }));
@@ -321,10 +469,12 @@ function withGame(world, source, options) {
   const player = game?.player || (() => {
     const values = settingsValues("player_class", null);
     const project = settingsValues("project_settings", null);
-    return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower,
+    return { healthMax: values.healthMax, attackPower: values.attackPower, armor: values.armor, healPower: values.healPower, manaMax: values.manaMax,
+      healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
   })();
   const hud = game?.hud || settingsValues("hud_settings", null);
+  const combat = game?.combat || settingsValues("combat_settings", null);
   const npcs = game?.npcs || [];
   const quests = game?.quests || [];
   const recipes = game?.recipes || [];
@@ -334,16 +484,21 @@ function withGame(world, source, options) {
     [STAT_IDS.health]: { id: STAT_IDS.health, statId: STAT_IDS.health, displayName: "Levens" },
     [STAT_IDS.attackPower]: { id: STAT_IDS.attackPower, statId: STAT_IDS.attackPower, displayName: "Kracht" },
     [STAT_IDS.armor]: { id: STAT_IDS.armor, statId: STAT_IDS.armor, displayName: "Pantser" },
-    [STAT_IDS.healPower]: { id: STAT_IDS.healPower, statId: STAT_IDS.healPower, displayName: "Heal-kracht" }
+    [STAT_IDS.healPower]: { id: STAT_IDS.healPower, statId: STAT_IDS.healPower, displayName: "Heal-kracht" },
+    [STAT_IDS.mana]: { id: STAT_IDS.mana, statId: STAT_IDS.mana, displayName: "Mana" }
   };
   const statBlock = (id, values) => ({ id, entries: [
     { statRef: STAT_IDS.health, baseValue: values.healthMax },
     { statRef: STAT_IDS.attackPower, baseValue: values.attackPower },
     { statRef: STAT_IDS.armor, baseValue: values.armor },
-    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5 }
+    { statRef: STAT_IDS.healPower, baseValue: Number.isFinite(values.healPower) ? values.healPower : 5 },
+    { statRef: STAT_IDS.mana, baseValue: Number.isFinite(values.manaMax) ? values.manaMax : 50 }
   ] });
+  // Healing (2-11): regeneratie per klasse in basispunten per seconde (100 = 1 %/s), buiten gevecht.
+  const regenBp = (value, fallback) => (Number.isInteger(value) && value >= 0 ? value : fallback);
   const character = (id, displayName, statBlockRef, values, extra = {}) => Object.assign({
     id, displayName, statBlockRef, startingAbilityRefs: [], defaultLoadoutId: "loadout.main",
+    healthRegenBp: regenBp(values.healthRegenBp, 0), manaRegenBp: regenBp(values.manaRegenBp, 0),
     startingItemGrants: values.startGrants.filter((grant) => grant.itemId).map((grant) => ({ itemRef: grant.itemId, amount: grant.amount })),
     startingCurrencyGrants: values.startGrants.filter((grant) => grant.currencyId).map((grant) => ({ currencyRef: grant.currencyId, amountMinor: grant.amount }))
   }, extra);
@@ -431,7 +586,15 @@ function withGame(world, source, options) {
     questCount: questRecords.length, dialogueCount: dialogues.length });
 
   const playerRules = { id: "player_rules.main", policies: [], byType: {
-    player_progression_rules: [{ id: "rules.progression", maxLevel: player.maxLevel, xpCurveRef: PLAYER_XP_CURVE_ID, baseStatBlockRef: PLAYER_STAT_BLOCK_ID }]
+    player_progression_rules: [{ id: "rules.progression", maxLevel: player.maxLevel, xpCurveRef: PLAYER_XP_CURVE_ID, baseStatBlockRef: PLAYER_STAT_BLOCK_ID }],
+    // Healing (2-11): met hoeveel levens/mana je terugkomt en de regels voor regeneratie en effecten.
+    death_respawn_rules: [{ id: "rules.respawn", healthRestorePercent: (Number(combat.respawnHealthPct) || 100) / 100,
+      manaRestorePercent: (Number.isFinite(Number(combat.respawnManaPct)) ? Number(combat.respawnManaPct) : 100) / 100, staminaRestorePercent: 1 }],
+    combat_rules: [{ id: "rules.combat", regenDelayMs: Math.max(0, Number(combat.regenDelayS) || 0) * 1000, effectStacking: combat.effectStacking || "refresh",
+      maxEffects: Number(combat.maxEffects) || 8, clearBuffsOnDeath: combat.clearBuffsOnDeath !== false, levelUpRestore: combat.levelUpRestore !== false }],
+    // Groep (MMO) (3-11): Instellingen > Groep. Zonder kaart de standaard; server en game lezen dit.
+    party_rules: [Object.assign({ id: "rules.party" }, game?.party || partyValues(null))],
+    chat_rules: [Object.assign({ id: "rules.chat" }, game?.chat || chatValues(null))]
   } };
   const modules = hudModules(hud, { currencyIds: currencyList.map((currency) => currency.currencyId),
     hasVendor: npcs.some((npc) => npc.shopOffers.length), hasStation: npcs.some((npc) => npc.crafting) });
@@ -452,6 +615,12 @@ function withGame(world, source, options) {
   // zodra die losse wereldplaatsing verdwijnt.
   const modelIds = Array.from(new Set(entities.map((entity) => entity.modelAssetId)
     .concat(Object.values(items).map((item) => item?.worldModelAssetId))
+    // Stap 4 (HUD): eigen iconen van items en valuta (plaatjes in de tas).
+    .concat(Object.values(items).map((item) => item?.iconAssetId))
+    // Healing (2-11): icoontjes van effecten (items en aanvallen) in de HUD.
+    .concat(Object.values(items).map((item) => item?.effectIconAssetId))
+    .concat(Object.values(source.actors?.abilities || {}).map((ability) => ability?.effectIconAssetId))
+    .concat(currencyList.map((currency) => currency.iconAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   const missing = modelIds.filter((id) => !known.has(id));
@@ -463,6 +632,17 @@ function withGame(world, source, options) {
     zonePackage: patchZone(world.zonePackage),
     entities: (world.entities || []).concat(entities),
     assets: Array.from(known.values()),
-    worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null
+    worldMusic: worldMusic && worldMusic.url ? { assetId: worldMusic.assetId, url: worldMusic.url } : null,
+    // Verbinding (3-11): Instellingen > Verbinding (MMO). Zonder kaart: null = de standaard van game en server.
+    mmo: Object.assign({}, world.mmo || {}, { network: game?.network || null }),
+    // Water (lopen) (3-11): Instellingen > Water (lopen). Zonder kaart: null = de standaard van de loopregels.
+    terrain: Object.assign({}, world.terrain || {}, { waterWalk: game?.waterWalk || null }),
+    // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
+    minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
+      enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
+      fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
+        fogColor: "#05070a", fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
+        revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }
+    }) })
   });
 }

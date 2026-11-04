@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
+import { partyRulesFromProject } from "./runtime/party-runtime.js";
 
 function now() {
   return new Date().toISOString();
@@ -47,6 +48,12 @@ function safeJsonParse(text, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 function randomId(prefix) {
@@ -224,7 +231,7 @@ export class Node05EconomyRuntimeService {
       playerId: ctx.profile.id,
       operationType: action || "unknown",
       requestHash: hash,
-      label: "Deze NODE-05 actie",
+      label: "Deze handelsactie",
       faultHook: this.operationFaultHook || null,
       perform: () => {
         this.ensureRuntime(ctx);
@@ -243,13 +250,16 @@ export class Node05EconomyRuntimeService {
     if (action === "party_leave" || action === "party:leave") return this.leaveParty(ctx, operationId);
     if (action === "party_invite" || action === "party:invite") return this.inviteToParty(ctx, payload, operationId);
     if (action === "party_accept" || action === "party:accept_invite") return this.acceptPartyInvite(ctx, payload, operationId);
+    if (action === "party_decline" || action === "party:decline_invite") return this.declinePartyInvite(ctx, payload, operationId);
+    if (action === "party_kick" || action === "party:kick") return this.kickFromParty(ctx, payload, operationId);
+    if (action === "party_invite_rule" || action === "party:invite_rule") return this.setPartyInviteRule(ctx, payload, operationId);
     if (action === "market_list" || action === "market:create") return this.createMarketOrder(ctx, payload, operationId);
     if (action === "market_buy" || action === "market:buy") return this.buyMarketOrder(ctx, payload, operationId);
     if (action === "market_cancel" || action === "market:cancel") return this.cancelMarketOrder(ctx, payload, operationId);
     if (action === "mail_claim" || action === "mail:claim") return this.claimMail(ctx, payload, operationId);
     if (action === "mail_claim_all" || action === "mail:claim_all") return this.claimAllMail(ctx, operationId);
     if (action === "reset_node05") return this.resetNode05(ctx, operationId);
-    const error = new Error("Onbekende NODE-05 actie: " + (action || "-"));
+    const error = new Error("Onbekende handelsactie: " + (action || "-"));
     error.status = 400;
     throw error;
   }
@@ -526,7 +536,7 @@ export class Node05EconomyRuntimeService {
 
   activePartyForPlayer(playerId) {
     const membership = this.db.prepare(`
-      SELECT pm.*, p.leader_player_id, p.loot_policy_id, p.revision, p.created_at, p.updated_at
+      SELECT pm.*, p.leader_player_id, p.loot_policy_id, p.invite_rule, p.revision, p.created_at, p.updated_at
       FROM party_members pm
       JOIN parties p ON p.id = pm.party_id
       WHERE pm.player_id = ? AND pm.left_at IS NULL AND p.disbanded_at IS NULL
@@ -551,6 +561,7 @@ export class Node05EconomyRuntimeService {
       partyId: membership.party_id,
       leaderPlayerId: membership.leader_player_id,
       lootPolicyId: membership.loot_policy_id,
+      inviteRule: membership.invite_rule || null,
       role: membership.role,
       revision: safeInteger(membership.revision, 1),
       members
@@ -896,9 +907,40 @@ export class Node05EconomyRuntimeService {
     `).run(vendor.vendorId, offer.offerId, scopeKey, quantity, now());
   }
 
-  createParty(ctx, operationId) {
-    const existing = this.activePartyForPlayer(ctx.profile.id);
-    if (existing) return { action: "party_create", party: existing, message: "Je zit al in een party." };
+  // ---- Groep (MMO, 3-11) ----
+  // Uitnodigen, meedoen, nee en verlaten. De server beslist alles; partyRuntime stuurt de nieuwe stand live naar de leden.
+  partyRuntime() {
+    return this.mmoService?.partyRuntime || null;
+  }
+
+  partyRules(ctx) {
+    return partyRulesFromProject(ctx.project);
+  }
+
+  playerOnline(playerId, worldId) {
+    if (typeof this.mmoService?.getConnectionForPlayer !== "function") return true;
+    return Boolean(this.mmoService.getConnectionForPlayer(playerId, worldId || null));
+  }
+
+  playerName(playerId, fallback = "Speler") {
+    try { return this.db.prepare("SELECT display_name FROM player_profiles WHERE id = ? LIMIT 1").get(playerId)?.display_name || fallback; } catch { return fallback; }
+  }
+
+  partyMemberIds(partyId) {
+    return this.db.prepare("SELECT player_id FROM party_members WHERE party_id = ? AND left_at IS NULL ORDER BY joined_at ASC, player_id ASC")
+      .all(partyId).map((row) => row.player_id);
+  }
+
+  // Lid worden (ook opnieuw: dezelfde groep, dezelfde speler = de oude regel komt terug).
+  addPartyMember(partyId, playerId, role) {
+    this.db.prepare(`
+      INSERT INTO party_members (party_id, player_id, role, joined_at, left_at, contribution_json)
+      VALUES (?, ?, ?, ?, NULL, '{}')
+      ON CONFLICT(party_id, player_id) DO UPDATE SET role = excluded.role, joined_at = excluded.joined_at, left_at = NULL
+    `).run(partyId, playerId, role, now());
+  }
+
+  newParty(ctx, leaderPlayerId) {
     const policy = firstPolicy(ctx.project, "party_rules", {});
     const lootPolicy = firstPolicy(ctx.project, "party_loot_policy", {});
     const partyId = randomId("party");
@@ -906,96 +948,188 @@ export class Node05EconomyRuntimeService {
     this.db.prepare(`
       INSERT INTO parties (id, leader_player_id, loot_policy_id, revision, created_at, updated_at)
       VALUES (?, ?, ?, 1, ?, ?)
-    `).run(partyId, ctx.profile.id, lootPolicy.policyId || policy.partyLootPolicyRef || "policy.party_loot.personal", stamp, stamp);
-    this.db.prepare(`
-      INSERT INTO party_members (party_id, player_id, role, joined_at, contribution_json)
-      VALUES (?, ?, 'leader', ?, '{}')
-    `).run(partyId, ctx.profile.id, stamp);
+    `).run(partyId, leaderPlayerId, lootPolicy.policyId || policy.partyLootPolicyRef || "policy.party_loot.personal", stamp, stamp);
+    this.addPartyMember(partyId, leaderPlayerId, "leader");
     this.node03RuntimeService.recordGameplayEvent(ctx, "party_created", "player", partyId, {});
-    return { action: "party_create", party: this.activePartyForPlayer(ctx.profile.id), message: "Party aangemaakt." };
+    return partyId;
+  }
+
+  createParty(ctx, operationId) {
+    const existing = this.activePartyForPlayer(ctx.profile.id);
+    if (existing) return { action: "party_create", party: existing, message: "Je zit al in een groep." };
+    const partyId = this.newParty(ctx, ctx.profile.id);
+    this.partyRuntime()?.changed(partyId, [ctx.profile.id]);
+    return { action: "party_create", party: this.activePartyForPlayer(ctx.profile.id), message: "Groep gemaakt." };
   }
 
   leaveParty(ctx, operationId) {
     const party = this.activePartyForPlayer(ctx.profile.id);
-    if (!party) return { action: "party_leave", message: "Je zit niet in een party." };
+    if (!party) return { action: "party_leave", message: "Je zit niet in een groep." };
     const stamp = now();
+    const me = this.playerName(ctx.profile.id);
     this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL")
       .run(stamp, party.partyId, ctx.profile.id);
-    const remaining = this.db.prepare("SELECT COUNT(*) AS count FROM party_members WHERE party_id = ? AND left_at IS NULL")
-      .get(party.partyId);
-    if (safeInteger(remaining?.count, 0) <= 0) {
-      this.db.prepare("UPDATE parties SET disbanded_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?")
-        .run(stamp, stamp, party.partyId);
-    } else if (party.leaderPlayerId === ctx.profile.id) {
-      const nextLeader = this.db.prepare("SELECT player_id FROM party_members WHERE party_id = ? AND left_at IS NULL ORDER BY joined_at ASC LIMIT 1")
-        .get(party.partyId);
-      if (nextLeader?.player_id) {
+    const remaining = this.partyMemberIds(party.partyId);
+    const runtime = this.partyRuntime();
+    if (remaining.length <= 1) {
+      this.disbandParty(party.partyId, stamp);
+      runtime?.notice(remaining, me + " heeft de groep verlaten. De groep is opgeheven.");
+    } else {
+      let text = me + " heeft de groep verlaten.";
+      if (party.leaderPlayerId === ctx.profile.id) {
+        const nextLeader = remaining[0];
         this.db.prepare("UPDATE party_members SET role = CASE WHEN player_id = ? THEN 'leader' ELSE 'member' END WHERE party_id = ? AND left_at IS NULL")
-          .run(nextLeader.player_id, party.partyId);
+          .run(nextLeader, party.partyId);
         this.db.prepare("UPDATE parties SET leader_player_id = ?, updated_at = ?, revision = revision + 1 WHERE id = ?")
-          .run(nextLeader.player_id, stamp, party.partyId);
+          .run(nextLeader, stamp, party.partyId);
+        text += " " + this.playerName(nextLeader) + " is nu de leider.";
+      } else {
+        this.db.prepare("UPDATE parties SET updated_at = ?, revision = revision + 1 WHERE id = ?").run(stamp, party.partyId);
       }
+      runtime?.notice(remaining, text);
     }
     this.node03RuntimeService.recordGameplayEvent(ctx, "party_left", "player", party.partyId, {});
-    return { action: "party_leave", message: "Party verlaten." };
+    runtime?.changed(party.partyId, [ctx.profile.id].concat(remaining));
+    return { action: "party_leave", message: "Je hebt de groep verlaten." };
+  }
+
+  // Alleen nog één speler over: de groep houdt op.
+  disbandParty(partyId, stamp = now()) {
+    this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND left_at IS NULL").run(stamp, partyId);
+    this.db.prepare("UPDATE parties SET disbanded_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?").run(stamp, stamp, partyId);
+    this.db.prepare("UPDATE party_invites SET status = 'cancelled', responded_at = ? WHERE party_id = ? AND status = 'pending'").run(stamp, partyId);
+  }
+
+  // De leider zet iemand uit de groep (Kevin 3-11).
+  kickFromParty(ctx, payload, operationId) {
+    const party = this.activePartyForPlayer(ctx.profile.id);
+    if (!party) throw httpError(409, "Je zit niet in een groep.");
+    if (party.leaderPlayerId !== ctx.profile.id) throw httpError(403, "Alleen de leider kan iemand uit de groep zetten.");
+    const targetPlayerId = safeString(payload.targetPlayerId || payload.playerId, "");
+    if (!targetPlayerId || targetPlayerId === ctx.profile.id) throw httpError(400, "Wil je zelf weg? Kies dan Groep verlaten.");
+    const name = this.playerName(targetPlayerId, "Die speler");
+    if (!party.members.some((member) => member.playerId === targetPlayerId)) throw httpError(404, name + " zit niet in jouw groep.");
+    const stamp = now();
+    this.db.prepare("UPDATE party_members SET left_at = ? WHERE party_id = ? AND player_id = ? AND left_at IS NULL").run(stamp, party.partyId, targetPlayerId);
+    const remaining = this.partyMemberIds(party.partyId);
+    const runtime = this.partyRuntime();
+    runtime?.notice([targetPlayerId], this.playerName(ctx.profile.id) + " heeft je uit de groep gezet.");
+    if (remaining.length <= 1) {
+      this.disbandParty(party.partyId, stamp);
+      runtime?.notice(remaining, name + " is uit de groep gezet. De groep is opgeheven.");
+    } else {
+      this.db.prepare("UPDATE parties SET updated_at = ?, revision = revision + 1 WHERE id = ?").run(stamp, party.partyId);
+      runtime?.notice(remaining.filter((id) => id !== ctx.profile.id), name + " is uit de groep gezet.");
+    }
+    this.node03RuntimeService.recordGameplayEvent(ctx, "party_kicked", "player", party.partyId, { targetPlayerId });
+    runtime?.changed(party.partyId, [targetPlayerId].concat(remaining));
+    return { action: "party_kick", message: name + " is uit de groep gezet." };
+  }
+
+  // De leider kiest of de leden mogen uitnodigen: "all" (iedereen) of "leader" (alleen de leider).
+  setPartyInviteRule(ctx, payload, operationId) {
+    const party = this.activePartyForPlayer(ctx.profile.id);
+    if (!party) throw httpError(409, "Je zit niet in een groep.");
+    if (party.leaderPlayerId !== ctx.profile.id) throw httpError(403, "Alleen de leider kan dit veranderen.");
+    const rule = payload.rule === "leader" ? "leader" : payload.rule === "all" ? "all" : "";
+    if (!rule) throw httpError(400, "Kies aan of uit.");
+    const stamp = now();
+    this.db.prepare("UPDATE parties SET invite_rule = ?, updated_at = ?, revision = revision + 1 WHERE id = ?").run(rule, stamp, party.partyId);
+    const text = rule === "all" ? "Iedereen in de groep mag nu uitnodigen." : "Alleen de leider mag nu uitnodigen.";
+    const runtime = this.partyRuntime();
+    runtime?.notice(this.partyMemberIds(party.partyId).filter((id) => id !== ctx.profile.id), text);
+    runtime?.changed(party.partyId, []);
+    return { action: "party_invite_rule", message: text };
   }
 
   inviteToParty(ctx, payload, operationId) {
     const targetPlayerId = safeString(payload.targetPlayerId || payload.playerId || payload.player_id, "");
-    if (!targetPlayerId || targetPlayerId === ctx.profile.id) {
-      const error = new Error("Kies een andere speler om uit te nodigen.");
-      error.status = 400;
-      throw error;
+    if (!targetPlayerId || targetPlayerId === ctx.profile.id) throw httpError(400, "Kies een andere speler om uit te nodigen.");
+    const target = this.db.prepare("SELECT id, display_name FROM player_profiles WHERE id = ? LIMIT 1").get(targetPlayerId);
+    if (!target) throw httpError(404, "Speler niet gevonden.");
+    const name = target.display_name || "Die speler";
+    if (!this.playerOnline(targetPlayerId, ctx.worldId)) throw httpError(409, name + " is niet online.");
+    // MMO stap 2 (3-11): blokkeren geldt ook voor uitnodigingen.
+    const chat = this.mmoService?.chatRuntime || null;
+    if (chat && chat.hasBlocked(targetPlayerId, ctx.profile.id)) throw httpError(403, name + " wil geen uitnodigingen van jou.");
+    if (chat && chat.hasBlocked(ctx.profile.id, targetPlayerId)) throw httpError(409, "Je hebt " + name + " geblokkeerd. Deblokkeer eerst (spelermenu).");
+    if (this.activePartyForPlayer(targetPlayerId)) throw httpError(409, name + " zit al in een groep.");
+    const rules = this.partyRules(ctx);
+    const party = this.activePartyForPlayer(ctx.profile.id);
+    if (party) {
+      if ((party.inviteRule || rules.whoCanInvite) === "leader" && party.leaderPlayerId !== ctx.profile.id) throw httpError(403, "Alleen de leider van de groep mag uitnodigen.");
+      if (party.members.length >= rules.maxMembers) throw httpError(409, "De groep is vol (" + rules.maxMembers + " spelers).");
     }
-    const target = this.db.prepare("SELECT * FROM player_profiles WHERE id = ? LIMIT 1").get(targetPlayerId);
-    if (!target) {
-      const error = new Error("Speler niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    let party = this.activePartyForPlayer(ctx.profile.id);
-    if (!party) {
-      this.createParty(ctx, operationId + ":create_party");
-      party = this.activePartyForPlayer(ctx.profile.id);
-    }
-    if (!party || party.leaderPlayerId !== ctx.profile.id) {
-      const error = new Error("Alleen de party leader kan uitnodigen.");
-      error.status = 403;
-      throw error;
-    }
-    const policy = firstPolicy(ctx.project, "party_rules", {});
-    const expiresAt = addSeconds(safeInteger(policy.inviteTimeoutSeconds, 120));
+    // Een oudere uitnodiging van jou (of je groep) aan dezelfde speler vervalt: de nieuwe telt.
+    const stamp = now();
+    this.db.prepare(`
+      UPDATE party_invites SET status = 'cancelled', responded_at = ?
+      WHERE invitee_player_id = ? AND status = 'pending' AND (inviter_player_id = ? OR (party_id IS NOT NULL AND party_id = ?))
+    `).run(stamp, targetPlayerId, ctx.profile.id, party?.partyId || "");
     const inviteId = randomId("party_invite");
     this.db.prepare(`
       INSERT INTO party_invites (id, party_id, inviter_player_id, invitee_player_id, status, created_at, expires_at)
       VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(inviteId, party.partyId, ctx.profile.id, targetPlayerId, now(), expiresAt);
-    return { action: "party_invite", inviteId, message: "Party invite verstuurd naar " + (target.display_name || targetPlayerId) + "." };
+    `).run(inviteId, party?.partyId || null, ctx.profile.id, targetPlayerId, stamp, addSeconds(rules.inviteTimeoutS));
+    this.partyRuntime()?.inviteSent(inviteId);
+    return { action: "party_invite", inviteId, message: "Uitnodiging gestuurd naar " + name + "." };
   }
 
-  acceptPartyInvite(ctx, payload, operationId) {
+  pendingInvite(ctx, payload) {
     const inviteId = safeString(payload.inviteId || payload.invite_id, "");
     const row = inviteId
       ? this.db.prepare("SELECT * FROM party_invites WHERE id = ? AND invitee_player_id = ? LIMIT 1").get(inviteId, ctx.profile.id)
       : this.db.prepare("SELECT * FROM party_invites WHERE invitee_player_id = ? AND status = 'pending' AND expires_at > ? ORDER BY created_at DESC LIMIT 1").get(ctx.profile.id, now());
-    if (!row || row.status !== "pending" || Date.parse(row.expires_at) <= Date.now()) {
-      const error = new Error("Party invite is niet geldig.");
-      error.status = 404;
-      throw error;
-    }
-    const existing = this.activePartyForPlayer(ctx.profile.id);
-    if (existing) {
-      const error = new Error("Je zit al in een party.");
-      error.status = 409;
-      throw error;
-    }
-    this.db.prepare("UPDATE party_invites SET status = 'accepted', responded_at = ? WHERE id = ?").run(now(), row.id);
-    this.db.prepare(`
-      INSERT INTO party_members (party_id, player_id, role, joined_at, contribution_json)
-      VALUES (?, ?, 'member', ?, '{}')
-    `).run(row.party_id, ctx.profile.id, now());
-    this.db.prepare("UPDATE parties SET updated_at = ?, revision = revision + 1 WHERE id = ?").run(now(), row.party_id);
-    return { action: "party_accept", party: this.activePartyForPlayer(ctx.profile.id), message: "Party invite geaccepteerd." };
+    if (!row || row.status !== "pending" || Date.parse(row.expires_at) <= Date.now()) throw httpError(404, "Deze uitnodiging is verlopen.");
+    return row;
+  }
+
+  acceptPartyInvite(ctx, payload, operationId) {
+    const row = this.pendingInvite(ctx, payload);
+    if (this.activePartyForPlayer(ctx.profile.id)) throw httpError(409, "Je zit al in een groep. Verlaat die eerst.");
+    const rules = this.partyRules(ctx);
+    // De groep van de uitnodiging; bestaat die niet meer, dan de groep van wie uitnodigde; anders een nieuwe met hem als leider.
+    let partyId = null;
+    if (row.party_id && this.db.prepare("SELECT id FROM parties WHERE id = ? AND disbanded_at IS NULL LIMIT 1").get(row.party_id)) partyId = row.party_id;
+    if (!partyId) partyId = this.activePartyForPlayer(row.inviter_player_id)?.partyId || null;
+    if (!partyId) partyId = this.newParty(ctx, row.inviter_player_id);
+    const before = this.partyMemberIds(partyId);
+    if (before.length >= rules.maxMembers) throw httpError(409, "De groep is vol (" + rules.maxMembers + " spelers).");
+    const stamp = now();
+    this.addPartyMember(partyId, ctx.profile.id, "member");
+    this.db.prepare("UPDATE party_invites SET status = 'accepted', responded_at = ? WHERE id = ?").run(stamp, row.id);
+    this.db.prepare("UPDATE parties SET updated_at = ?, revision = revision + 1 WHERE id = ?").run(stamp, partyId);
+    const runtime = this.partyRuntime();
+    runtime?.notice(before, this.playerName(ctx.profile.id) + " doet mee met de groep.");
+    runtime?.changed(partyId, before.concat([ctx.profile.id]));
+    return { action: "party_accept", message: "Je zit nu in de groep met " + this.playerName(row.inviter_player_id) + "." };
+  }
+
+  declinePartyInvite(ctx, payload, operationId) {
+    const row = this.pendingInvite(ctx, payload);
+    this.db.prepare("UPDATE party_invites SET status = 'declined', responded_at = ? WHERE id = ?").run(now(), row.id);
+    this.partyRuntime()?.notice([row.inviter_player_id], this.playerName(ctx.profile.id) + " doet nu niet mee.");
+    return { action: "party_decline", message: "Uitnodiging afgeslagen." };
+  }
+
+  // Lichte route voor de game: alleen groepsacties, het antwoord is alleen de groep (geen hele handels-snapshot).
+  partyActionForRequest(req, payload = {}) {
+    const short = { invite: "party_invite", accept: "party_accept", decline: "party_decline", leave: "party_leave", kick: "party_kick", invite_rule: "party_invite_rule" };
+    const raw = safeString(payload.action, "").toLowerCase();
+    const action = short[raw] || (Object.values(short).includes(raw) ? raw : "");
+    if (!action) throw httpError(400, "Onbekende groepsactie: " + (raw || "-"));
+    const ctx = this.getRequestContext(req);
+    const operationId = operationIdFromPayload(payload) || randomId("party_operation");
+    return runOperation(this.db, {
+      operationId,
+      playerId: ctx.profile.id,
+      operationType: action,
+      requestHash: normalizedActionPayloadHash(action, payload),
+      label: "Deze groepsactie",
+      faultHook: this.operationFaultHook || null,
+      perform: () => this.performAction(ctx, action, payload, operationId),
+      buildResponse: (result) => ({ ok: true, operationId, action, message: result.message || "", party: this.partyRuntime()?.viewFor(ctx.profile.id) ?? null })
+    });
   }
 
   createMarketOrder(ctx, payload, operationId) {
@@ -1209,7 +1343,7 @@ export class Node05EconomyRuntimeService {
     }
     this.db.prepare("DELETE FROM player_mail_attachments WHERE mail_id IN (SELECT id FROM player_mail WHERE player_id = ?)").run(ctx.profile.id);
     this.db.prepare("DELETE FROM player_mail WHERE player_id = ?").run(ctx.profile.id);
-    return { action: "reset_node05", message: "NODE-05 runtime state reset." };
+    return { action: "reset_node05", message: "Handelsgegevens opnieuw ingesteld." };
   }
 
   currencyAmount(playerId, currencyId) {

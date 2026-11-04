@@ -1,12 +1,14 @@
 // Fundament zonder nodes: de basis van de wereld (grond, startplek, speler, camera, licht) staat in één
 // kaart "Wereld" onder Instellingen. Zonder die kaart gebruikt de build de standaardwaarden hieronder,
 // zodat een lege editor toch een speelbare wereld geeft.
-import { help, ui } from "./ui.js";
+import { HELP_ID, HELP_NAME, help, ui } from "./ui.js";
 
 const num = (label, icon, def, min, max, step, unit, helpText, extra = {}) => ({
   type: "number", required: false, min, max, audience: "client", label,
   ui: ui(icon, "slider", "instellingen", Object.assign({ step, unit }, extra)), default: def, help: helpText
 });
+// Ronde 2: alles van de grond staat in de editor-tab Terrein (plek "terrein").
+const tnum = (label, icon, def, min, max, step, unit, helpText, extra = {}) => num(label, icon, def, min, max, step, unit, helpText, Object.assign({ place: "terrein" }, extra));
 const color = (label, icon, def, helpText, extra = {}) => ({
   type: "color", required: false, audience: "client", label,
   ui: ui(icon, "color", "instellingen", extra), default: def, help: helpText
@@ -20,15 +22,15 @@ export const WORLD_KINDS = {
     singleton: true,
     domain: "project",
     fields: {
-      groundSize: num("Grootte van de wereld", "🗺️", 500, 20, 4000, 10, "m",
+      groundSize: tnum("Grootte van de wereld", "🗺️", 500, 20, 4000, 10, "m",
         help("Hoe groot de grond is (vierkant, het midden is 0,0).", "200-1000 m. Groter = meer ruimte, maar meer werk voor de laptop.", "Spelers lopen van de rand af → maak hem groter."),
         { range: [20, 2000] }),
       groundColor: color("Kleur van de grond", "🎨", "#3f6b3f",
-        help("De kleur van de grond waar nog geen textuur of pad ligt.", "Groen voor gras, bruin voor zand.", "Grond te fel → kies een donkerdere kleur.")),
+        help("De kleur van de grond waar nog geen textuur of pad ligt.", "Groen voor gras, bruin voor zand.", "Grond te fel → kies een donkerdere kleur."), { place: "terrein" }),
       groundTextureAssetId: { type: "asset", assetType: "texture", required: false, maxLength: 160, audience: "client", label: "Textuur van de grond",
-        ui: ui("🖼️", "asset", "instellingen"), default: null,
+        ui: ui("🖼️", "asset", "terrein"), default: null,
         help: help("Het plaatje dat over de hele grond ligt.", "Kies een gras- of zandtextuur uit de lijst of sleep die uit Assets op dit vak.", "Grond ziet er wazig uit → kies een scherpere textuur of maak de textuurmaat kleiner.") },
-      groundTextureSize: num("Textuurmaat (meter)", "📐", 10, 1, 200, 1, "m",
+      groundTextureSize: tnum("Textuurmaat (meter)", "📐", 10, 1, 200, 1, "m",
         help("Hoeveel meter één plaatje van de textuur beslaat.", "5 tot 20 meter werkt meestal goed.", "Patroon herhaalt te vaak → groter."),
         { range: [1, 50] }),
       startX: num("Startplek X", "📍", 0, -2000, 2000, 0.5, "m",
@@ -67,6 +69,129 @@ export const WORLD_KINDS = {
       musicAssetId: { type: "asset", assetType: "audio", required: false, maxLength: 160, audience: "client", label: "Muziek",
         ui: ui("🎵", "asset", "instellingen", { more: true }), default: null,
         help: help("De muziek die overal in de wereld speelt.", "Kies een rustig muziekstuk (mp3/ogg). Een gebied met eigen muziek gaat voor.", "Geen muziek → klik één keer in de game (browsers wachten daarop) of kies een ander bestand.") }
+    }
+  },
+  // Wereld tekenen: de hoogte en verf van de grond. De vakken zelf maak je in de editor-tab Terrein
+  // (penselen, stempels, verf); bij opslaan komen ze hier als lijst "vak → vingerafdruk".
+  terrain_settings: {
+    label: "Terrein",
+    icon: "⛰️",
+    place: "terrein",
+    singleton: true,
+    domain: "project",
+    fields: {
+      maxSlopeDeg: tnum("Te steil om te lopen", "🧗", 50, 10, 89, 1, "°",
+        help("Vanaf deze helling kunnen spelers en vijanden niet meer omhoog lopen (het is dan een muur). Omlaag mag altijd.", "40-55 graden. 50 is een goede start.", "Spelers lopen tegen bergen op → lager. Spelers blijven hangen op kleine heuvels → hoger."),
+        { range: [20, 80] }),
+      rockTextureRef: { type: "ref", refKind: "terrain_texture", required: false, audience: "client", label: "Rots op steile hellingen",
+        ui: ui("🪨", "ref", "terrein"), default: null,
+        help: help("Een terreintextuur die vanzelf op steile hellingen komt, zonder verven.", "Kies je rotstextuur uit de Bibliotheek. Leeg = geen rots.", "Rots ook op kleine heuvels → zet de helling voor rots hoger.") },
+      rockSlopeDeg: tnum("Rots vanaf helling", "📐", 40, 10, 80, 1, "°",
+        help("Vanaf deze helling komt de rotstextuur over de grond.", "35-45 graden.", "Te veel rots → hoger. Bergen nog groen → lager."),
+        { range: [20, 70] }),
+      scatterSlopeDeg: tnum("Begroeiing tot helling", "🌳", 40, 5, 89, 1, "°",
+        help("Bomen, stenen en gras uit Begroeiing komen niet op hellingen die steiler zijn dan dit (en nooit onder water).", "30-45 graden.", "Bomen op de rotswand → lager. Te kale heuvels → hoger."),
+        { range: [10, 80] }),
+      triBudget: tnum("Driehoeken grond (budget)", "🔺", 60000, 5000, 500000, 1000, "",
+        help("Hoeveel driehoeken de grond in beeld mag hebben. De teller in Terrein wordt oranje vanaf 80 % en rood erboven.", "30.000-80.000 voor een oude laptop.", "Game hapert op de laptop → lager zetten en bergen gladder maken."),
+        { range: [10000, 200000], more: true }),
+      chunkTriBudget: tnum("Driehoeken per vak (budget)", "🟥", 4000, 500, 9000, 100, "",
+        help("Hoeveel driehoeken één vak van 64 x 64 m dichtbij mag hebben. Te zware vakken kleuren rood in Terrein.", "2.000-5.000. Vlak = bijna niks, ruige bergen = veel.", "Veel rode vakken → gladstrijken of minder kleine hobbels maken."),
+        { range: [1000, 8000], more: true }),
+      chunks: { type: "terrainChunks", required: false, audience: "client", label: "Hoogte van de grond (vakken)",
+        ui: ui("🗺️", "terrain", "viewport"), default: {},
+        help: help("De opgeslagen hoogte van de grond, per vak van 64 x 64 meter.", "Maak je in de editor-tab Terrein en dan Opslaan.", "Grond plat na opslaan → open Terrein, teken opnieuw en druk Opslaan.") },
+      paint: { type: "terrainPaint", required: false, audience: "client", label: "Verf van de grond (vakken)",
+        ui: ui("🖌️", "terrainPaint", "viewport"), default: {},
+        help: help("De opgeslagen verf van de grond: per vak 3 eigen texturen bovenop de grondtextuur.", "Maak je in de editor-tab Terrein met het verfpenseel.", "Verf weg na opslaan → open Terrein, verf opnieuw en druk Opslaan.") }
+    }
+  },
+  // Ronde 2: een textuur om mee te verven (Bibliotheek in de tab Terrein).
+  terrain_texture: {
+    label: "Terreintextuur",
+    plural: "Terreintexturen",
+    icon: "🖌️",
+    place: "terrein",
+    domain: "project",
+    idField: "textureId",
+    fields: {
+      textureId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Textuur-ID",
+        ui: ui("🔖", "id", "terrein", { more: true }), default: null, help: HELP_ID("deze terreintextuur") },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
+        ui: ui("🏷️", "text", "terrein"), default: "", help: HELP_NAME("deze terreintextuur") },
+      textureAssetId: { type: "asset", assetType: "texture", required: false, maxLength: 160, audience: "client", label: "Plaatje",
+        ui: ui("🖼️", "asset", "terrein"), default: null,
+        help: help("Het plaatje dat herhaald over de grond komt waar je verft. Leeg = verven met de kleur hieronder.", "Een naadloze (tegelbare) textuur, bijv. gras, zand of rots.", "Je ziet naden in een raster → kies een naadloze textuur.") },
+      color: { type: "color", required: false, audience: "client", label: "Kleur (zonder plaatje)",
+        ui: ui("🎨", "color", "terrein"), default: null,
+        help: help("Verven met een egale kleur in plaats van een plaatje.", "Laat Plaatje leeg en kies een kleur.", "Je ziet het plaatje en niet de kleur → maak Plaatje leeg.") },
+      tileSize: tnum("Textuurmaat (meter)", "📐", 4, 0.5, 100, 0.5, "m",
+        help("Hoeveel meter één plaatje van deze textuur beslaat.", "2-8 m voor gras en zand, groter voor rots.", "Patroon herhaalt te vaak → groter. Te wazig → kleiner."),
+        { range: [1, 30] })
+    }
+  },
+  // Ronde 2: een stempel (hoogteplaatje: wit = hoog). Zelf maken in Terrein, PNG importeren of de startset.
+  terrain_stamp: {
+    label: "Stempel",
+    plural: "Stempels",
+    icon: "🗻",
+    place: "terrein",
+    domain: "project",
+    idField: "stampId",
+    fields: {
+      stampId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Stempel-ID",
+        ui: ui("🔖", "id", "terrein", { more: true }), default: null, help: HELP_ID("deze stempel") },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
+        ui: ui("🏷️", "text", "terrein"), default: "", help: HELP_NAME("deze stempel") },
+      imageAssetId: { type: "asset", assetType: "image", required: true, maxLength: 160, audience: "client", label: "Hoogteplaatje",
+        ui: ui("🖼️", "asset", "terrein"), default: null,
+        help: help("Een grijs plaatje: wit is hoog, zwart is laag.", "PNG, liefst 16-bit (uit Blender of een heightmap-site).", "Trapjes in de berg → gebruik een 16-bit PNG of maak hem zelf in Terrein.") },
+      size: tnum("Grootte", "↔️", 64, 2, 2000, 1, "m",
+        help("Hoe breed de stempel standaard op de grond komt.", "20-200 m.", "Berg te klein → groter. Past niet in de wereld → kleiner."),
+        { range: [4, 300] }),
+      height: tnum("Hoogte", "↕️", 20, -300, 300, 0.5, "m",
+        help("Hoe hoog wit wordt (negatief = een kuil of dal).", "5-40 m voor heuvels en bergen.", "Te steil om op te lopen → lager of groter maken."),
+        { range: [-50, 100] })
+    }
+  },
+  // Ronde 3: water is een los, plat vlak met één hoogte. Trekken en verslepen doe je in Terrein > Water.
+  terrain_water: {
+    label: "Water",
+    plural: "Water",
+    icon: "🌊",
+    place: "terrein",
+    domain: "project",
+    idField: "waterId",
+    fields: {
+      waterId: { type: "id", required: true, maxLength: 120, audience: "client", label: "Water-ID",
+        ui: ui("🔖", "id", "terrein", { more: true }), default: null, help: HELP_ID("dit water") },
+      displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
+        ui: ui("🏷️", "text", "terrein"), default: "", help: HELP_NAME("dit water") },
+      behavior: { type: "select", required: false, options: ["block", "wade", "ice"], audience: "client", label: "Gedrag",
+        optionIcons: { block: "🚫", wade: "🚶", ice: "🧊" }, optionLabels: { block: "Niet in", wade: "Doorheen", ice: "IJs" },
+        ui: ui("🌊", "select", "terrein"), default: "block",
+        help: help("Wat spelers met dit water doen. Niet in: diep water houdt je tegen (de oever kun je op). Doorheen: je loopt over de bodem. IJs: je loopt bovenop.",
+          "Niet in voor meren en zee, Doorheen voor een beekje, IJs voor een bevroren vijver.", "Speler loopt door het meer → kies Niet in en zet het water hoger dan de bodem.") },
+      height: tnum("Hoogte van het water", "↕️", 0, -300, 300, 0.1, "m",
+        help("Hoe hoog het wateroppervlak ligt. Waar de grond hoger is, zie je oever.", "Net onder de rand van je kuil of dal.", "Water staat over de oever → lager. Bodem droog → hoger."),
+        { range: [-20, 40] }),
+      x: tnum("Midden X", "📍", 0, -2000, 2000, 0.5, "m",
+        help("Waar het midden van het water ligt (links-rechts).", "Sleep het water in Terrein > Water.", "Water op de verkeerde plek → sleep het of verander dit getal."), { range: [-250, 250], more: true }),
+      z: tnum("Midden Z", "📍", 0, -2000, 2000, 0.5, "m",
+        help("Waar het midden van het water ligt (voor-achter).", "Sleep het water in Terrein > Water.", "Water op de verkeerde plek → sleep het of verander dit getal."), { range: [-250, 250], more: true }),
+      width: tnum("Breedte", "↔️", 10, 0.5, 2000, 0.5, "m",
+        help("Hoe breed het watervlak is.", "Trek het vlak iets groter dan je kuil; de oever ontstaat vanzelf.", "Water steekt buiten de kuil → kleiner of lager."), { range: [1, 200] }),
+      depth: tnum("Diepte (lengte)", "↕️", 10, 0.5, 2000, 0.5, "m",
+        help("Hoe lang het watervlak is (voor-achter).", "Trek het vlak iets groter dan je kuil.", "Water steekt buiten de kuil → kleiner of lager."), { range: [1, 200] }),
+      rotation: tnum("Draaien", "🔄", 0, 0, 359, 1, "°",
+        help("Draai het watervlak.", "0 = recht.", "Water staat scheef → zet op 0."), { more: true }),
+      color: color("Kleur", "🎨", "#2f6f9f",
+        help("De kleur van het water.", "Blauw voor een meer, groenig voor een moeras.", "Water te fel → kies een donkerdere kleur."), { place: "terrein" }),
+      opacity: tnum("Doorzichtig", "👻", 0.7, 0.1, 1, 0.05, "",
+        help("Hoe goed je de bodem ziet (1 = helemaal niet doorzichtig).", "0.6 tot 0.8.", "Bodem niet te zien → lager."), { range: [0.1, 1], more: true }),
+      waves: { type: "boolean", required: false, audience: "client", label: "Golfjes",
+        ui: ui("〰️", "toggle", "terrein"), default: true,
+        help: help("Kleine golfjes op het water. Uit = alleen een kleur (lichter voor een oude laptop).", "Aan voor meren, uit voor een plas.", "Game hapert bij het water → zet uit.") }
     }
   }
 };

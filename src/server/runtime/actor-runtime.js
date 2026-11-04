@@ -5,7 +5,8 @@
 // - Naar de game: actor:snapshot (alleen wat in de buurt is en veranderde) en actor:event.
 import { computeDamage, lootSeed, rollLoot, withinRangeMm } from "../../../apps/web/public/shared/combat-math.js";
 import { metersToMm, resolveMembership } from "../../../apps/web/public/shared/spatial.js";
-import { resolveMovement, walkableSurfaceHeightAt } from "../../../apps/web/public/shared/movement-kernel.js";
+import { groundHeightAt, resolveMovement } from "../../../apps/web/public/shared/movement-kernel.js";
+import { computeHeal, regenStep } from "../../../apps/web/public/shared/effect-math.js";
 import { createNavigator } from "./navigation.js";
 import { playerAbilityFromSection } from "../authoring/actor-compiler.js";
 
@@ -18,6 +19,10 @@ const AOI_M = 64;
 const WAKE_M = 80;
 const PATH_QUERIES_PER_STEP = 4;
 const PATH_MAX_EXPANDED = 4000;
+const PATH_CHECKS_PER_STEP = 24000;
+const PATH_CHECKS_PER_QUERY = 12000;
+const REPATH_INTERVAL_MS = 600;
+const PATH_RETRY_MS = 1000;
 const REPATH_DISTANCE_M = 1.5;
 const PATH_FAILS_BEFORE_RETURN = 3;
 const PATROL_PAUSE_MS = 2000;
@@ -25,6 +30,8 @@ const HOME_REACHED_M = 0.6;
 const PLAYER_RADIUS_MM = 500;
 const RANGE_SLACK_MM = 300;
 const ATTACK_ANIM_MS = 600;
+const REGEN_STEP_MS = 1000;
+const HEAL_BELOW = 0.75; // een vijand-healer geneest pas onder 75 % levens
 
 const mm = (meters) => Math.round(Number(meters) * 1000);
 const meters = (millimeters) => Number(millimeters) / 1000;
@@ -55,6 +62,7 @@ export class ActorRuntime {
     this.section = null;
     this.worldId = null;
     this.worldContextRef = null;
+    this.navigationRevision = null;
     this.actors = new Map(); // instance-id zonder occurrence (spawnKey) -> actor
     this.resources = new Map();
     this.navigators = new Map();
@@ -64,6 +72,7 @@ export class ActorRuntime {
     this.accumulatorMs = 0;
     this.lastSnapshotAtMs = 0;
     this.lastStepAtMs = 0;
+    this.regenAtMs = 0;
     this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0 };
   }
 
@@ -79,9 +88,14 @@ export class ActorRuntime {
     const buildId = canonical?.buildId || null;
     let worldContext = null;
     try { worldContext = this.host.worldContext(); } catch { worldContext = null; }
-    if (worldContext !== this.worldContextRef) {
+    const navigationRevision = (worldContext?.collisionRevision || 0) + ":" + (worldContext?.walkabilityIndex?.heightfield?.revision || 0);
+    if (worldContext !== this.worldContextRef || navigationRevision !== this.navigationRevision) {
       this.worldContextRef = worldContext;
+      this.navigationRevision = navigationRevision;
       this.navigators.clear();
+      for (const actor of this.actors.values()) {
+        actor.path = []; actor.pathGoal = null; actor.nextPathAtMs = 0;
+      }
     }
     if (buildId === this.buildId && this.worldId === (worldContext?.worldId || null)) return this.section;
     this.buildId = buildId;
@@ -95,7 +109,8 @@ export class ActorRuntime {
     const index = this.worldContextRef?.walkabilityIndex || null;
     const fallback = Number(index?.ground?.y) || 0;
     try {
-      const y = index ? walkableSurfaceHeightAt(index, x, z, fallback, 0) : null;
+      // Wereld tekenen: loopvlak (brug) of anders de hoogte van het terrein.
+      const y = index ? groundHeightAt(index, x, z, fallback, 0) : null;
       return Number.isFinite(y) ? y : fallback;
     } catch {
       return fallback;
@@ -281,10 +296,15 @@ export class ActorRuntime {
   }
 
   step(nowMs) {
+    this.lastStepAtMs = nowMs;
+    if (nowMs - this.regenAtMs >= REGEN_STEP_MS) {
+      this.regenAtMs = nowMs;
+      this.regenActors();
+    }
     const players = this.playersForStep();
     const playerList = Array.from(players.values());
     const near = (x, z, range) => playerList.some((p) => Math.hypot(p.x - x, p.z - z) <= range);
-    const budget = { left: PATH_QUERIES_PER_STEP };
+    const budget = { left: PATH_QUERIES_PER_STEP, checks: PATH_CHECKS_PER_STEP };
     for (const resource of this.resources.values()) {
       if (!resource.available && nowMs >= resource.respawnAtMs) this.respawnResource(resource);
     }
@@ -298,6 +318,52 @@ export class ActorRuntime {
     }
   }
 
+  // Healing (2-11): vijanden met Regeneratie aan krijgen elke seconde levens terug, ook tijdens het gevecht.
+  regenActors() {
+    for (const actor of this.actors.values()) {
+      const def = actor.def;
+      if (actor.state === "dead" || !def.regenEnabled || !(def.regenBp > 0) || actor.hp >= actor.hpMax) { actor.regenCarry = 0; continue; }
+      const step = regenStep(actor.hpMax, def.regenBp, actor.regenCarry || 0, 1);
+      actor.regenCarry = step.carry;
+      if (step.amount <= 0) continue;
+      actor.hp = Math.min(actor.hpMax, actor.hp + step.amount);
+      actor.rev += 1;
+    }
+  }
+
+  // Healing (2-11): een vijand-healer geneest zichzelf of de zwakste vechtende vijand binnen het bereik van zijn spreuk.
+  tryHeal(actor, nowMs) {
+    const def = actor.def;
+    if (!def.healAbilityId || nowMs < (actor.nextHealAtMs || 0)) return false;
+    const ability = this.section?.abilities?.[def.healAbilityId];
+    if (!ability || ability.abilityKind !== "heal") return false;
+    const reach = meters(ability.rangeMm) + meters(def.radiusMm);
+    let best = null;
+    let bestPct = HEAL_BELOW;
+    for (const other of this.actors.values()) {
+      if (other.state === "dead" || other.hpMax <= 0) continue;
+      if (other !== actor && other.state !== "engage") continue;
+      const pct = other.hp / other.hpMax;
+      if (pct >= bestPct) continue;
+      if (other !== actor && Math.hypot(other.x - actor.x, other.z - actor.z) > reach + meters(other.def.radiusMm)) continue;
+      best = other;
+      bestPct = pct;
+    }
+    if (!best) return false;
+    const before = best.hp;
+    best.hp = Math.min(best.hpMax, best.hp + computeHeal(ability, 0));
+    best.rev += 1;
+    actor.nextHealAtMs = nowMs + Math.max(100, ability.cooldownMs);
+    actor.nextAttackAtMs = Math.max(actor.nextAttackAtMs, nowMs + ATTACK_ANIM_MS);
+    if (best !== actor) actor.ry = Math.atan2(best.x - actor.x, best.z - actor.z);
+    actor.path = [];
+    actor.anim = "attack";
+    actor.animUntilMs = nowMs + ATTACK_ANIM_MS;
+    actor.rev += 1;
+    this.emitEvent({ e: "heal", id: best.id, by: actor.id, amount: best.hp - before, hp: best.hp }, best.x, best.z);
+    return true;
+  }
+
   eligibleTarget(actor, player) {
     if (!player || player.defeated || player.safe) return false;
     return Math.hypot(player.x - actor.home.x, player.z - actor.home.z) <= meters(actor.def.leashRangeMm) + 2;
@@ -306,6 +372,7 @@ export class ActorRuntime {
   stepActor(actor, nowMs, players, playerList, budget) {
     const def = actor.def;
     if (actor.anim === "attack" && nowMs >= actor.animUntilMs) this.setAnim(actor, "idle");
+    if (actor.state !== "return" && this.tryHeal(actor, nowMs)) return;
     if (actor.state === "idle" || actor.state === "patrol") {
       if (def.behavior === "aggressive" && def.aggroRangeMm > 0) {
         let best = null;
@@ -383,6 +450,7 @@ export class ActorRuntime {
     actor.path = [];
     actor.pathGoal = null;
     actor.pathFails = 0;
+    actor.nextPathAtMs = 0;
     actor.rev += 1;
   }
 
@@ -392,6 +460,7 @@ export class ActorRuntime {
     actor.path = [];
     actor.pathGoal = null;
     actor.pathFails = 0;
+    actor.nextPathAtMs = 0;
     actor.rev += 1;
   }
 
@@ -401,26 +470,42 @@ export class ActorRuntime {
     actor.rev += 1;
   }
 
-  // Loopt een stap richting goal. Geeft false als er geen route was of de vijand vastzit.
+  // Loopt een stap richting goal. Alleen een mislukte zoekopdracht telt als routefout.
   moveTowards(actor, goal, budget, chasing) {
+    const now = this.lastStepAtMs;
     const needPath = !actor.path.length || !actor.pathGoal || Math.hypot(actor.pathGoal.x - goal.x, actor.pathGoal.z - goal.z) > (chasing ? REPATH_DISTANCE_M : 0.1);
-    let routeOk = true;
-    if (needPath) {
-      if (budget.left > 0) {
+    if (needPath && now >= (actor.nextPathAtMs || 0)) {
+      if (budget.left > 0 && (budget.checks ?? PATH_CHECKS_PER_QUERY) > 0) {
         budget.left -= 1;
         this.perf.pathQueries += 1;
-        const result = this.navigatorFor(actor.def.radiusMm).findPath({ x: actor.x, z: actor.z }, { x: goal.x, z: goal.z }, { maxExpanded: PATH_MAX_EXPANDED });
-        actor.path = result.ok ? result.points.slice() : [{ x: goal.x, z: goal.z }];
-        routeOk = result.ok;
+        const result = this.navigatorFor(actor.def.radiusMm).findPath({ x: actor.x, y: actor.y, z: actor.z }, { x: goal.x, z: goal.z }, {
+          maxExpanded: PATH_MAX_EXPANDED, maxChecks: Math.min(PATH_CHECKS_PER_QUERY, budget.checks ?? PATH_CHECKS_PER_QUERY)
+        });
+        budget.checks = Math.max(0, (budget.checks ?? PATH_CHECKS_PER_QUERY) - result.checks);
+        actor.nextPathAtMs = now + (result.ok ? REPATH_INTERVAL_MS : PATH_RETRY_MS);
+        if (result.ok) {
+          actor.path = result.points.slice();
+          actor.pathGoal = { x: goal.x, z: goal.z };
+        } else if (!actor.path.length) {
+          this.setAnim(actor, "idle");
+          return false;
+        }
       } else {
         this.perf.pathBudgetHits += 1;
-        if (!actor.path.length) actor.path = [{ x: goal.x, z: goal.z }];
       }
-      actor.pathGoal = { x: goal.x, z: goal.z };
+    }
+    // Wachten op zoekbudget is geen mislukte route; nooit blind naar het eindpunt lopen.
+    if (!actor.path.length) {
+      this.setAnim(actor, "idle");
+      return true;
     }
     const moved = this.followPath(actor);
-    if (routeOk && moved) actor.pathFails = 0;
-    return routeOk && moved;
+    if (moved) actor.pathFails = 0;
+    else {
+      actor.path = []; actor.pathGoal = null;
+      actor.nextPathAtMs = Math.max(actor.nextPathAtMs || 0, now + REPATH_INTERVAL_MS);
+    }
+    return true;
   }
 
   followPath(actor) {
@@ -435,12 +520,12 @@ export class ActorRuntime {
       const target = actor.path[0];
       const dx = target.x - actor.x; const dz = target.z - actor.z;
       const distance = Math.hypot(dx, dz);
-      if (distance <= 0.05) { actor.path.shift(); continue; }
+      if (distance <= 0.001) { actor.path.shift(); continue; }
       const step = Math.min(distance, remaining);
       const desired = { x: actor.x + (dx / distance) * step, y: actor.y, z: actor.z + (dz / distance) * step };
       const result = resolveMovement({ x: actor.x, y: actor.y, z: actor.z }, desired, { radius, index: context?.walkabilityIndex || null, solids: context?.solidColliders || [] });
       const moved = Math.hypot(result.x - actor.x, result.z - actor.z);
-      actor.ry = Math.atan2(dx, dz);
+      actor.ry = Math.atan2(result.x - actor.x, result.z - actor.z);
       actor.x = result.x; actor.y = Number.isFinite(result.y) ? result.y : actor.y; actor.z = result.z;
       remaining -= step;
       if (moved < step * 0.1) {
@@ -480,6 +565,7 @@ export class ActorRuntime {
     actor.hp = actor.hpMax;
     actor.x = actor.home.x; actor.z = actor.home.z; actor.y = this.groundYAt(actor.x, actor.z);
     actor.path = []; actor.pathGoal = null; actor.targetPlayerId = null; actor.patrolIndex = 0; actor.pauseUntilMs = 0;
+    actor.nextPathAtMs = 0;
     actor.contributors = new Set();
     actor.anim = "idle";
     actor.nextAttackAtMs = nowMs + 1000;

@@ -2,6 +2,13 @@
 // schade in punten, schaal in basispunten (10000 = 100%), afstand in mm en wachttijd in ms. Geen formules of scripts.
 // Werkbank Fase 1: per veld icoon, bediening, plek, standaard en Ⓘ-hulp (zie ./ui.js).
 import { HELP_ID, HELP_NAME, help, ui } from "./ui.js";
+import { effectFields } from "./effect-fields.js";
+
+// Healing (2-11): een aanval kan ook genezen, mana kosten en een effect op het doel geven (gif, genezing over tijd).
+export const ABILITY_KINDS = Object.freeze(["damage", "heal"]);
+const HEAL_GROUP = "💚 Genezen en mana";
+const EFFECT_GROUP = "✨ Effect op het doel";
+const HEAL_ONLY = Object.freeze({ key: "abilityKind", is: ["heal"] });
 
 const PCT = { unit: "%", scale: 100 };
 
@@ -19,6 +26,10 @@ export const COMBAT_KINDS = {
         ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID("deze aanval") },
       displayName: { type: "text", required: true, maxLength: 80, audience: "client", label: "Naam",
         ui: ui("🏷️", "text", "werkbank"), default: "", help: HELP_NAME("deze aanval") },
+      abilityKind: { type: "select", required: false, options: ABILITY_KINDS.slice(), optionIcons: { damage: "⚔️", heal: "💚" },
+        optionLabels: { damage: "Schade", heal: "Genezen" }, audience: "client", label: "Soort",
+        ui: ui("🎭", "select", "werkbank"), default: "damage",
+        help: help("Doet deze aanval schade, of geneest hij?", "Schade voor gewone aanvallen. Genezen voor de genees-spreuk van een klasse of een vijand-healer.", "Spreuk doet schade in plaats van genezen → kies Genezen.") },
       baseDamage: { type: "integer", required: true, min: 0, max: 1000000, audience: "server", label: "Basisschade",
         ui: ui("💥", "slider", "werkbank", { step: 1, range: [0, 200] }), default: 10,
         help: help("Hoeveel schade de aanval altijd doet, voordat kracht en pantser meetellen.", "5-20 voor het begin van de game, hoger voor latere vijanden.", "Vijanden gaan te snel dood → lager. Gevechten duren te lang → hoger.") },
@@ -33,7 +44,17 @@ export const COMBAT_KINDS = {
         help: help("Hoe ver weg het doel mag staan om te raken.", "1,5-2,5 m voor zwaarden, 10-20 m voor bogen en spreuken.", "Je moet tegen het doel aan lopen → hoger. Raken van te ver → lager.") },
       cooldownMs: { type: "integer", required: true, min: 100, max: 600000, audience: "client", label: "Wachttijd",
         ui: ui("⏱️", "slider", "werkbank", { step: 100, unit: "s", scale: 1000, range: [100, 30000] }), default: 1500,
-        help: help("Hoe lang je moet wachten voor je deze aanval weer kunt doen.", "1-2 s voor een gewone aanval, 10-60 s voor een sterke.", "Te veel klikken → langer. Gevecht voelt traag → korter.") }
+        help: help("Hoe lang je moet wachten voor je deze aanval weer kunt doen.", "1-2 s voor een gewone aanval, 10-60 s voor een sterke.", "Te veel klikken → langer. Gevecht voelt traag → korter.") },
+      baseHeal: { type: "integer", required: false, min: 0, max: 1000000, audience: "server", label: "Geneest",
+        ui: ui("💚", "slider", "werkbank", { step: 1, range: [0, 200], group: HEAL_GROUP, when: HEAL_ONLY }), default: 20,
+        help: help("Hoeveel levens deze spreuk geneest (alleen bij soort Genezen). De heal-kracht van de klasse telt erbij.", "15-30 aan het begin van de game.", "Healer geneest te weinig → hoger.") },
+      healScalingBp: { type: "integer", required: false, min: 0, max: 100000, audience: "server", label: "Heal-kracht telt mee",
+        ui: ui("📈", "slider", "werkbank", Object.assign({ step: 500, range: [0, 30000], group: HEAL_GROUP, when: HEAL_ONLY }, PCT)), default: 10000,
+        help: help("Hoeveel de heal-kracht van de genezer erbij telt.", "100 % = alle heal-kracht telt mee.", "Heal-kracht maakt geen verschil → hoger.") },
+      manaCost: { type: "integer", required: false, min: 0, max: 1000000, audience: "client", label: "Kost mana",
+        ui: ui("🔵", "slider", "werkbank", { step: 1, range: [0, 200], group: HEAL_GROUP }), default: 0,
+        help: help("Hoeveel mana een speler kwijt is als hij deze aanval of spreuk doet. 0 = gratis.", "10-25 voor een genees-spreuk.", "Mana is meteen op → lager. Spelers genezen eindeloos → hoger.") },
+      ...effectFields(EFFECT_GROUP, { unit: "s", what: "de aanval" })
     }
   }
 };

@@ -1,10 +1,11 @@
 // Werkbank Fase 1 (bouwrecept §0b): hulpjes om de UI-beschrijving per veld kort te schrijven.
 // Alleen data: elk veld krijgt ui (icoon, bediening, plek, stap, eenheid), default en help (Ⓘ).
 //
-// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | color
+// ui.control: text | id | slider | toggle | select | asset | ref | refList | tags | loot | points | areaSettings | color | terrain
+// terrain / terrainPaint: hoogte en verf van de grond (vakken), alleen te tekenen in de editor-tab Terrein.
 // refList: een lijst regels { ref, ...getallen } (bijv. startitems: item of valuta + aantal). Velden: refKinds, columns.
 // ui.soorten: alleen tonen bij deze Area-soorten (Ombouw stap 2).
-// ui.place:   werkbank (paneel links) | instellingen (kaart) | viewport (slepen/tekenen in 3D) | relaties
+// ui.place:   werkbank (paneel links) | instellingen (kaart) | terrein (tab Terrein) | viewport (slepen/tekenen in 3D) | relaties
 // ui.unit + ui.scale: wat Kevin ziet (bijv. 1500 mm met scale 1000 = "1.5 m").
 // ui.range: het bereik van de slider als het echte min/max te groot is om te schuiven (het getalvak mag wel tot min/max).
 // ui.more: true = staat onder de ⚙️-knop "meer" (per rol maximaal ±6 velden in beeld, plan §10.4).
@@ -14,9 +15,9 @@ export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color"]);
-export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "viewport", "relaties"]);
-export const KIND_PLACES = Object.freeze(["werkbank", "instellingen"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint"]);
+export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties"]);
+export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
 // Welke bediening bij welk veldtype hoort (de schema-test controleert dit).
 export const CONTROL_FOR_TYPE = Object.freeze({
@@ -34,7 +35,9 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   lootEntries: ["loot"],
   pointList: ["points"],
   areaSettings: ["areaSettings"],
-  color: ["color"]
+  color: ["color"],
+  terrainChunks: ["terrain"],
+  terrainPaint: ["terrainPaint"]
 });
 
 // Veelgebruikte hulpteksten.

@@ -51,7 +51,7 @@ test("spelregels uit kaarten: speler, valuta, winkel, crafting, quests, HUD en m
   // Speler: levens, kracht, pantser, XP per level en start-spullen.
   const character = catalogs.playableCharacters["class.held"];
   const block = catalogs.statBlocks[character.statBlockRef].entries.map((entry) => entry.baseValue);
-  assert.deepEqual(block, [150, 12, 3, 5], "levens, kracht, pantser en heal-kracht (standaard 5)");
+  assert.deepEqual(block, [150, 12, 3, 5, 50], "levens, kracht, pantser, heal-kracht (standaard 5) en mana (standaard 50)");
   assert.deepEqual(character.startingCurrencyGrants, [{ currencyRef: "currency.goud", amountMinor: 25 }]);
   assert.deepEqual(character.startingItemGrants, [{ itemRef: "item.hout", amount: 2 }]);
   const rules = world.gameProject.playerRules.byType.player_progression_rules[0];

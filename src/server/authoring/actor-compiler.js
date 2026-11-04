@@ -132,6 +132,9 @@ export function compileActorSection(documents, options = {}) {
     const label = "Vijand " + doc.body.actorId;
     needRef(doc, doc.body.abilityRef, "ability", label);
     if (doc.body.lootTableRef) needRef(doc, doc.body.lootTableRef, "loot_table", label);
+    // Healing (2-11): een vijand-healer heeft een genees-spreuk (aanval met soort Genezen).
+    const healAbility = doc.body.healAbilityRef ? needRef(doc, doc.body.healAbilityRef, "ability", label + " (genees-spreuk)") : null;
+    if (healAbility && healAbility.body.abilityKind !== "heal") errors.push({ code: "HEAL_ABILITY_KIND", docKey: doc.docKey, message: label + ": de genees-spreuk " + healAbility.body.displayName + " heeft niet de soort Genezen." });
     const model = needAsset(doc, doc.body.modelAssetId, "model", label);
     needAsset(doc, doc.body.hitSoundAssetId, "audio", label);
     needAsset(doc, doc.body.deathSoundAssetId, "audio", label);
@@ -145,8 +148,10 @@ export function compileActorSection(documents, options = {}) {
     const split = splitByAudience(doc.kind, doc.body);
     const server = Object.assign({}, split.server, { abilityId: idFromRef(doc.body.abilityRef) });
     if (doc.body.lootTableRef) server.lootTableId = idFromRef(doc.body.lootTableRef);
+    if (healAbility) server.healAbilityId = healAbility.body.abilityId;
     delete server.abilityRef;
     delete server.lootTableRef;
+    delete server.healAbilityRef;
     archetypes.server[doc.body.actorId] = server;
     archetypes.client[doc.body.actorId] = split.client;
   }
@@ -167,13 +172,18 @@ export function compileActorSection(documents, options = {}) {
 
   // Klassen: per klasse een eigen aanval (klasse-ID -> ability-ID). Zonder aanval de ingebouwde standaardklap.
   const classAbilityIds = {};
+  const classHealAbilityIds = {};
   for (const doc of active.filter((candidate) => candidate.kind === "player_class").sort((a, b) => a.docKey.localeCompare(b.docKey))) {
     const ability = doc.body.abilityRef ? needRef(doc, doc.body.abilityRef, "ability", "Klasse " + doc.body.displayName + " (aanval)") : null;
     if (ability) classAbilityIds[doc.body.classId] = ability.body.abilityId;
+    // Healing (2-11): de genees-spreuk van de klasse (💚-knop in de game).
+    const heal = doc.body.healAbilityRef ? needRef(doc, doc.body.healAbilityRef, "ability", "Klasse " + doc.body.displayName + " (genees-spreuk)") : null;
+    if (heal && heal.body.abilityKind !== "heal") errors.push({ code: "HEAL_ABILITY_KIND", docKey: doc.docKey, message: "Klasse " + doc.body.displayName + ": de genees-spreuk " + heal.body.displayName + " heeft niet de soort Genezen." });
+    else if (heal) classHealAbilityIds[doc.body.classId] = heal.body.abilityId;
   }
   return {
-    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
-    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets },
+    server: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.server, lootTables, resources: resources.server, archetypes: archetypes.server, spawns, resourceSpawns },
+    client: { schema: ACTOR_SECTION_VERSION, classAbilityIds, classHealAbilityIds, abilities: abilities.client, resources: resources.client, archetypes: archetypes.client, assets },
     errors
   };
 }
@@ -183,4 +193,11 @@ export function playerAbilityFromSection(section, classId = null) {
   const id = classId ? section?.classAbilityIds?.[classId] : null;
   const ability = id ? section.abilities?.[id] : null;
   return ability ? Object.assign({}, DEFAULT_PLAYER_ABILITY, ability) : DEFAULT_PLAYER_ABILITY;
+}
+
+// Healing (2-11): de genees-spreuk van de klasse, of null.
+export function playerHealAbilityFromSection(section, classId = null) {
+  const id = classId ? section?.classHealAbilityIds?.[classId] : null;
+  const ability = id ? section?.abilities?.[id] : null;
+  return ability && ability.abilityKind === "heal" ? Object.assign({ abilityId: id }, ability) : null;
 }
