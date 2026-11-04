@@ -4,7 +4,7 @@
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
 import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
-import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
+import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
 import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest2";

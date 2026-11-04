@@ -157,6 +157,48 @@ test("server: lopende quest blijft op zijn eigen versie na een aanpassing", () =
   assert.equal(summary.activeStep.objectives[0].requiredValue, 3, "nieuwe speler krijgt de nieuwe versie");
 });
 
+test("server: questgever blijft op de kaart, alleen beschikbare quests laten hem gloeien", () => {
+  const { db, node03, service, ctx, row } = setup();
+  // De kaartstatus hangt alleen van quests af, niet van de rest van de gevechtsnapshot.
+  node03.buildSnapshot = () => ({});
+  const n4 = service();
+  const context = ctx("p1");
+  const quests = context.project.campaigns.quests.byId;
+  quests["quest.locked"] = Object.assign({}, quests["quest.smid"], {
+    id: "quest.locked", startDialogueRef: "dialogue.npc.npc.smid",
+    prerequisiteQuestRefs: ["quest.missing"]
+  });
+  const markers = () => n4.buildSnapshot(context).questGivers;
+  const farmer = () => markers().find((giver) => giver.targetId === "target.npc.npc.boer");
+  n4.ensureAvailableQuests(context);
+  assert.equal(markers().length, 1, "twee quests bij dezelfde gever delen één ster");
+  assert.equal(farmer().hasAvailableQuest, true, "vanaf het begin zichtbaar");
+  assert.deepEqual([farmer().instanceId, farmer().displayName, farmer().x, farmer().z, farmer().zoneRef],
+    ["node04:target.npc.npc.boer:dialogue", "Boer", -4, 4, WORLD_ZONE_ID]);
+  assert.equal(markers().some((giver) => giver.targetId === "target.npc.npc.smid"), false, "gesloten vervolgquest toont nog geen ster");
+
+  n4.acceptQuest(context, "quest.wolven", "map_accept1");
+  assert.equal(farmer().hasAvailableQuest, true, "de tweede beschikbare quest houdt de ster groot");
+  n4.acceptQuest(context, "quest.smid", "map_accept2");
+  assert.equal(farmer().hasAvailableQuest, false, "alles aangenomen: gever blijft als kleine ster");
+  n4.abandonQuest(context, "quest.wolven", "map_abandon");
+  assert.equal(farmer().hasAvailableQuest, true, "verlaten quest is weer te halen");
+  n4.acceptQuest(context, "quest.wolven", "map_accept3");
+  for (const questId of ["quest.wolven", "quest.smid"]) {
+    n4.completeQuestRun(context, quests[questId], row("p1", questId), quests[questId].stepsById.end, "map_end_" + questId);
+    assert.equal(row("p1", questId).status, "completed");
+  }
+  assert.equal(farmer().hasAvailableQuest, false, "voltooide gever verdwijnt niet");
+  quests["quest.wolven"].repeatMode = "repeatable";
+  assert.equal(farmer().hasAvailableQuest, true, "herhaalbare quest maakt de ster opnieuw groot");
+
+  // Ook een oude available-rij mag nieuwe, niet-gehaalde voorwaarden niet omzeilen.
+  n4.insertQuestState(context, "quest.locked", "available", null, 0, "test");
+  assert.equal(markers().find((giver) => giver.targetId === "target.npc.npc.smid").hasAvailableQuest, false);
+  assert.deepEqual(n4.buildQuestGivers(Object.assign({}, context, { zoneId: "zone.elsewhere" }), []), [], "alleen gevers in de huidige zone");
+  db.close();
+});
+
 test("server: oude build (stap deliver) zonder versie werkt nog via de oude knop", () => {
   const { db, service, ctx, row, xp, give, setProject } = setup();
   const project = world();
@@ -240,4 +282,3 @@ test("stap 2: Team samen klaar = beide teamleden tegelijk door", () => {
   assert.equal(row("p1", "quest.wolven").active_step_id, "step.terug");
   assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug", "p2 gaat mee door zonder zelf te slaan");
 });
-

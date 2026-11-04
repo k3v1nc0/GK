@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261030-terrein4";
+import { createHudMinimap } from "./gk-minimap.js?v=20261104-questgiver2";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -90,7 +90,9 @@ const PIXEL_STEPS = [0.7, 1, 1.5, 2];
 const MAP_DEFAULTS = { span: 160, bigIcon: 0.8, miniIcon: 1, bigText: 1, miniText: 1, rotate: false, pin: null, big: {}, mini: { pickup: false, resource: false } };
 // Alles wat op de kaarten kan staan: [soort, meervoud (legenda), enkelvoud (naamlabel)].
 const MAP_KINDS = [["area", "Gebiedsnamen", "Gebied"], ["npc", "NPC's", "NPC"], ["enemy", "Vijanden", "Vijand"], ["resource", "Grondstoffen", "Grondstof"], ["pickup", "Oppakken", "Oppakken"],
-  ["player", "Spelers", "Speler"], ["portal", "Portals", "Portal"], ["quest", "Quest-doel", "Quest-doel"], ["pin", "Jouw pin", "Jouw pin"]];
+  ["player", "Spelers", "Speler"], ["portal", "Portals", "Portal"],
+  ["questgiver_available", "Questgever: quest te halen", "Quest te halen"], ["questgiver", "Questgever: geen nieuwe quest", "Questgever"],
+  ["quest", "Quest-doel", "Quest-doel"], ["pin", "Jouw pin", "Jouw pin"]];
 
 function mapStore(raw) {
   const map = Object.assign({}, MAP_DEFAULTS, raw && typeof raw === "object" ? raw : {});
@@ -1936,17 +1938,13 @@ export function createGkHud(api) {
     const body = h("div", { class: "gkBody" });
     const list = h("div", { class: "gkList" });
     const active = quests.active || [];
-    const available = quests.available || [];
     const completed = quests.completed || [];
     // Behaald = al eens ingeleverd en kan (nu of later) nog een keer: grijs met ↻. Kan niet meer = Archief.
     const again = (quests.again || []).concat(completed.filter(function (quest) { return quest.repeatMode === "daily" || quest.repeatMode === "weekly"; }));
     const archive = completed.filter(function (quest) { return quest.repeatMode !== "daily" && quest.repeatMode !== "weekly"; });
-    if (!active.length && !available.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests. Praat met mensen in de wereld."));
+    if (!active.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests aangenomen. Zoek een questgever op de kaart."));
     if (active.length) list.append(sectionGroup("quests-active", "Bezig", active.map(function (quest) {
       return questCard(quest, quest.questId === trackedId, targets.find(function (t) { return t.questId === quest.questId; }));
-    })));
-    if (available.length) list.append(sectionGroup("quests-available", "Te halen", available.map(function (quest) {
-      return questCard(quest, false, null);
     })));
     if (again.length) list.append(sectionGroup("quests-again", "Behaald", again.map(function (quest) {
       return questCard(quest, false, null);
@@ -2432,23 +2430,38 @@ export function createGkHud(api) {
   function mapMarkers(live) {
     const markers = [];
     const npcSpots = [];
+    const givers = data().s04?.questGivers || [];
     for (const target of live.targets || []) {
       if (!target || target.available === false || !Number.isFinite(Number(target.x))) continue;
       const kind = markerKind(target);
       if (!kind) continue;
       // Een NPC met gesprek én winkel: één ruitje.
       if (kind === "npc") {
+        // De blijvende questgever-ster vervangt het gewone NPC-ruitje.
+        if (givers.some(function (giver) { return sameMapSpot(giver, target); })) continue;
         if (npcSpots.some(function (spot) { return Math.hypot(spot.x - num(target.x), spot.z - num(target.z)) < 2.5; })) continue;
         npcSpots.push({ x: num(target.x), z: num(target.z) });
       }
       markers.push({ x: target.x, z: target.z, kind, name: target.displayName || target.label || "", target });
     }
     for (const remote of live.remotes || []) markers.push({ x: remote.x, z: remote.z, kind: "player", name: remote.displayName || remote.name || "" });
+    for (const giver of givers) {
+      if (!Number.isFinite(Number(giver.x)) || !Number.isFinite(Number(giver.z))) continue;
+      markers.push({ x: giver.x, z: giver.z, kind: giver.hasAvailableQuest ? "questgiver_available" : "questgiver",
+        name: giver.displayName || "Questgever", target: giver });
+    }
     return markers;
+  }
+  function sameMapSpot(left, right) {
+    return Boolean(left.targetId && left.targetId === right.targetId)
+      || Math.hypot(num(left.x, Infinity) - num(right.x, -Infinity), num(left.z, Infinity) - num(right.z, -Infinity)) < 0.5;
   }
   function mapQuestTarget() {
     const quest = trackedQuest();
-    return quest ? (data().s04?.questTargets || []).find(function (t) { return t.questId === quest.questId; }) || null : null;
+    const target = quest ? (data().s04?.questTargets || []).find(function (t) { return t.questId === quest.questId; }) : null;
+    // Ook bij terugkeren naar de gever blijft diens eigen ster (en fog-regel) leidend.
+    if (target && (data().s04?.questGivers || []).some(function (giver) { return sameMapSpot(giver, target); })) return null;
+    return target || null;
   }
   function drawBigMap() {
     const live = api.live();
@@ -2465,7 +2478,9 @@ export function createGkHud(api) {
     if (result) ui.bigFocus = result.focus;
     bigCenter.classList.toggle("gkOn", ui.bigFollow);
     const counts = {};
-    for (const marker of markers) if (minimap.discovered(marker.x, marker.z)) counts[marker.kind] = (counts[marker.kind] || 0) + 1;
+    for (const marker of markers) {
+      if (marker.kind === "questgiver_available" || minimap.discovered(marker.x, marker.z)) counts[marker.kind] = (counts[marker.kind] || 0) + 1;
+    }
     if (quest) counts.quest = 1;
     if (sm.pin) counts.pin = 1;
     for (const area of areaLabels(live)) if (minimap.discovered(area.x, area.z)) counts.area = (counts.area || 0) + 1;
@@ -3207,6 +3222,7 @@ export function createGkHud(api) {
     frame,
     handleKey,
     toast,
+    openCharacters() { openTab("chars"); },
     // kind: "connected" | "connecting" | "reconnecting" | "disconnected" (uit game.js).
     // detail = extra uitleg in de tooltip; de compacte meetwaarden krijgen ieder hun eigen gezondheidskleur.
     setConnection(kind, detail = "", pingMs = null, health = null) {

@@ -22,11 +22,17 @@ export class UserAdminService {
     this.closeSessionConnections = typeof closeSessionConnections === "function" ? closeSessionConnections : () => {};
   }
 
-  // Alle tabellen met een kolom player_id (behalve het profiel zelf): daar staat de voortgang van een speler.
-  playerStateTables() {
+  // Alle tabellen die rechtstreeks naar een speler verwijzen. Dit omvat naast player_id ook
+  // bijvoorbeeld seller_player_id en blocked_player_id, zodat een volledige spelreset geen
+  // handel, party's of blokkades van verwijderde characters laat staan.
+  playerStateReferences() {
     const tables = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((row) => row.name);
-    return tables.filter((name) => name !== "player_profiles"
-      && this.db.prepare("SELECT name FROM pragma_table_info(?)").all(name).some((column) => column.name === "player_id"));
+    return tables.map((name) => ({
+      name,
+      columns: this.db.prepare("SELECT name FROM pragma_table_info(?)").all(name)
+        .map((column) => column.name)
+        .filter((column) => column === "player_id" || column.endsWith("_player_id"))
+    })).filter((entry) => entry.name !== "player_profiles" && entry.columns.length).reverse();
   }
 
   list() {
@@ -95,20 +101,29 @@ export class UserAdminService {
     return { id: user.id };
   }
 
-  // Tas, geld, quests, level, uitrusting en plek weg: bij de volgende keer inloggen begint de speler opnieuw.
+  // Alleen het spel wordt teruggezet. Account, rol, editorindeling en opgeslagen editorwerk blijven staan.
+  // Alle characters verdwijnen, zodat bij de volgende keer inloggen opnieuw een character gekozen moet worden.
   resetProgress(userId) {
     const user = this.user(userId);
-    // Klassen: een account kan meerdere characters hebben (één per klasse); ze beginnen allemaal opnieuw.
     const profiles = this.db.prepare("SELECT id FROM player_profiles WHERE user_id = ?").all(user.id);
     if (!profiles.length) return { id: user.id, cleared: 0 };
     this.logoutEverywhere(user.id);
     let cleared = 0;
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of this.playerStateTables()) {
-        const statement = this.db.prepare("DELETE FROM \"" + table.replace(/"/g, "") + "\" WHERE player_id = ?");
-        for (const profile of profiles) cleared += Number(statement.run(profile.id).changes || 0);
+      // Eerst de actieve verwijzing wissen; die kolom heeft bewust geen foreign key.
+      this.db.prepare("UPDATE users SET active_profile_id = NULL, updated_at = ? WHERE id = ?").run(now(), user.id);
+      // Omgekeerde aanmaakvolgorde wist afhankelijke rijen (zoals market_trades) voor hun ouders.
+      for (const reference of this.playerStateReferences()) {
+        const table = reference.name.replace(/"/g, "");
+        const columns = reference.columns.map((column) => column.replace(/"/g, ""));
+        const where = columns.map((column) => "\"" + column + "\" = ?").join(" OR ");
+        const statement = this.db.prepare("DELETE FROM \"" + table + "\" WHERE " + where);
+        for (const profile of profiles) {
+          cleared += Number(statement.run(...columns.map(() => profile.id)).changes || 0);
+        }
       }
+      cleared += Number(this.db.prepare("DELETE FROM player_profiles WHERE user_id = ?").run(user.id).changes || 0);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");

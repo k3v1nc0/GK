@@ -282,6 +282,8 @@ export const GAME_KINDS = {
       fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
       fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
         help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
+      questArrowDistanceMeters: int("Questpijl binnen afstand", "⭐", 200, 0, 2000, "instellingen", { step: 10, range: [0, 2000], unit: "m", more: true },
+        help("Binnen deze afstand tot een questgever of quest-doel verschijnt de richtingspijl aan de rand van de minimap of grote kaart als het punt buiten beeld ligt. De queststerren blijven zichtbaar volgens hun eigen mistregels.", "200 m. 0 m = geen questpijlen; de sterren blijven op de kaart.", "Questpijlen verschijnen te vroeg → lager. Je wilt eerder de richting zien → hoger.")),
       fogDarkness: int("Donkerte van de mist", "🌑", 100, 0, 100, "instellingen", { range: [0, 100], more: true },
         help("Hoe donker de mist op de kaart is, in procent. 100 = helemaal dicht, je ziet er niets doorheen.", "90 tot 100.", "Je ziet de kaart door de mist heen → hoger.")),
       // Healing (2-11): effect-icoontjes bij het portret en kleine zwevende getallen (spelers kunnen ze in de game zelf uitzetten).

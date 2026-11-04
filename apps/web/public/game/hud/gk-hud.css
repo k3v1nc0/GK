@@ -230,7 +230,7 @@
 .gkVignette.gkHitFlash { animation: gkHitFlash 0.45s ease-out; }
 
 /* debug-info (alleen admin) */
-.gkDebugSlot { left: var(--gk-edge); bottom: calc(var(--gk-edge) + 26px); max-width: min(360px, 60%); pointer-events: auto; }
+.gkDebugSlot { max-width: fit-content; left: var(--gk-edge); bottom: calc(var(--gk-edge) + 26px); pointer-events: auto; }
 .gkDebugSlot:empty { display: none; }
 .gkDebugSlot .perf-hud { position: relative; inset: auto; width: 210px; max-width: 100%; }
 
@@ -540,6 +540,10 @@
 .gkMark--pickup { background: #8fe3ff; width: 11px; height: 11px; }
 .gkMark--player { background: #4da3ff; }
 .gkMark--quest { border: 0; background: #ffb020; clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); width: 16px; height: 16px; border-radius: 0; }
+.gkMark--questgiver, .gkMark--questgiver_available { border: 0; border-radius: 0; background: none; width: 18px; height: 18px; color: #d4a84a; }
+.gkMark--questgiver::before, .gkMark--questgiver_available::before { content: "★"; display: block; font: 18px/18px system-ui, sans-serif; text-align: center; }
+.gkMark--questgiver_available { width: 23px; height: 23px; color: #ffe08a; filter: drop-shadow(0 0 4px #ffc53d); }
+.gkMark--questgiver_available::before { font-size: 23px; line-height: 23px; }
 .gkMark--portal { background: radial-gradient(circle, #2a0b45 35%, #c77dff 40%); width: 16px; height: 16px; }
 .gkMark--area { border: 0; border-radius: 0; background: none; width: 18px; height: 14px; line-height: 14px; text-align: center; font: italic 700 11px Georgia, serif; color: #f3e2b3; text-shadow: 0 0 2px #000; }
 .gkMark--area::before { content: "Aa"; }

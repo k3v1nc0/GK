@@ -9,6 +9,8 @@ const MARKER_COLORS = {
   pickup: "#8fe3ff",
   player: "#4da3ff",
   quest: "#ffb020",
+  questgiver_available: "#ffe08a",
+  questgiver: "#d4a84a",
   portal: "#c77dff",
   pin: "#ff4fd8"
 };
@@ -134,6 +136,11 @@ function buildBase(world, texture) {
 
 function drawMarker(ctx, kind, x, y, dot) {
   ctx.fillStyle = MARKER_COLORS[kind] || "#ffffff";
+  if (kind === "questgiver") {
+    // Een rustige ster, iets groter dan het NPC-ruitje (1.2 × dot).
+    drawStar(ctx, x, y, dot * 1.5);
+    return;
+  }
   ctx.beginPath();
   if (kind === "npc") {
     ctx.moveTo(x, y - dot * 1.2);
@@ -184,17 +191,23 @@ function drawPin(ctx, x, y, r) {
 
 // Een doel (quest-ster of je pin). edge(p) geeft null als p in beeld is, anders de plek op de rand
 // waar een pijltje in de goede richting komt. Geeft true als het doel zelf getekend is (dan kun je erop tikken).
-function drawGoal(ctx, kind, p, dot, edge) {
+function drawGoal(ctx, kind, p, dot, edge, allowArrow = true) {
+  const out = edge(p);
+  if (out && !allowArrow) return false;
+  ctx.save();
   ctx.fillStyle = MARKER_COLORS[kind];
   ctx.strokeStyle = kind === "pin" ? "rgba(40,0,30,0.9)" : "rgba(40,20,0,0.9)";
   ctx.lineWidth = Math.max(1, dot * 0.3);
-  const out = edge(p);
+  if (kind === "questgiver_available") {
+    ctx.shadowColor = "#ffc53d";
+    ctx.shadowBlur = dot * 2.6;
+  }
   if (!out) {
     if (kind === "pin") drawPin(ctx, p.x, p.y, dot * 1.6);
-    else drawStar(ctx, p.x, p.y, dot * 1.9);
+    else drawStar(ctx, p.x, p.y, dot * (kind === "questgiver_available" ? 2.3 : 1.9));
+    ctx.restore();
     return true;
   }
-  ctx.save();
   ctx.translate(out.x, out.y);
   ctx.rotate(out.angle);
   ctx.beginPath();
@@ -207,6 +220,12 @@ function drawGoal(ctx, kind, p, dot, edge) {
   ctx.stroke();
   ctx.restore();
   return false;
+}
+
+function questArrowInRange(view, target) {
+  const meters = Math.max(0, num(view.world?.minimap?.game?.questArrowDistanceMeters, 200));
+  return meters > 0 && Boolean(view.center)
+    && Math.hypot(num(target.x) - num(view.center.x), num(target.z) - num(view.center.z)) <= meters;
 }
 
 function iconScale(value) {
@@ -615,7 +634,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     ctx.lineWidth = Math.max(1, size * 0.008);
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
-      if (show[marker.kind] === false) continue;
+      if (show[marker.kind] === false || marker.kind === "questgiver_available") continue;
       const p = toScreen(num(marker.x), num(marker.z));
       if (Math.hypot(p.x - half, p.y - half) > half - dot) continue;
       if (!discovered(marker.x, marker.z)) continue;
@@ -628,7 +647,12 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       const r = half - dot * 2;
       return { x: half + Math.cos(angle) * r, y: half + Math.sin(angle) * r, angle };
     };
-    if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) drawGoal(ctx, "quest", toScreen(num(view.quest.x), num(view.quest.z)), dot, circleEdge);
+    if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) drawGoal(ctx, "quest", toScreen(num(view.quest.x), num(view.quest.z)), dot, circleEdge, questArrowInRange(view, view.quest));
+    // Beschikbare questgevers zijn vanaf het begin boven de mist zichtbaar, onafhankelijk van het gevolgde quest-doel.
+    for (const marker of Array.isArray(view.markers) ? view.markers : []) {
+      if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
+      drawGoal(ctx, marker.kind, toScreen(num(marker.x), num(marker.z)), dot, circleEdge, questArrowInRange(view, marker));
+    }
     if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) drawGoal(ctx, "pin", toScreen(num(view.pin.x), num(view.pin.z)), dot, circleEdge);
     // Jijzelf: een wit pijltje in je looprichting, altijd in het midden.
     const facing = num(view.facingDeg) * Math.PI / 180;
@@ -693,7 +717,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     const areaFont = Math.max(9, Math.min(40, 15 * 160 / span)) * ratio * textScale(view.textScale);
     if (show.area !== false) drawAreaNames(g, view.areas, toScreen, areaFont, function (p) { return p.x > -size * 0.2 && p.y > 0 && p.x < size * 1.2 && p.y < size; });
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
-      if (show[marker.kind] === false || !discovered(marker.x, marker.z)) continue;
+      if (show[marker.kind] === false || marker.kind === "questgiver_available" || !discovered(marker.x, marker.z)) continue;
       const p = toScreen(num(marker.x), num(marker.z));
       if (p.x < -margin || p.y < -margin || p.x > size + margin || p.y > size + margin) continue;
       g.lineWidth = Math.max(1, dot * 0.28);
@@ -712,7 +736,14 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     };
     if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) {
       const p = toScreen(num(view.quest.x), num(view.quest.z));
-      if (drawGoal(g, "quest", p, dot, boxEdge)) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest.name || "" });
+      if (drawGoal(g, "quest", p, dot, boxEdge, questArrowInRange(view, view.quest))) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest.name || "" });
+    }
+    for (const marker of Array.isArray(view.markers) ? view.markers : []) {
+      if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
+      const p = toScreen(num(marker.x), num(marker.z));
+      if (drawGoal(g, marker.kind, p, dot, boxEdge, questArrowInRange(view, marker))) {
+        hits.push({ x: p.x / ratio, y: p.y / ratio, kind: marker.kind, name: marker.name || "", target: marker.target || null });
+      }
     }
     if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) {
       const p = toScreen(num(view.pin.x), num(view.pin.z));

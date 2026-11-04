@@ -1285,6 +1285,7 @@ export class Node04QuestRuntimeService {
       },
       trackedQuest,
       questTargets,
+      questGivers: this.buildQuestGivers(ctx, questSummaries),
       dialogueTargets: this.buildDialogueTargets(ctx),
       notifications: this.loadNotifications(ctx),
       node03,
@@ -1580,6 +1581,38 @@ export class Node04QuestRuntimeService {
     const dialogue = quest?.startDialogueRef ? dialogueById(ctx.project, quest.startDialogueRef) : null;
     const target = this.resolveQuestTarget(ctx.project, dialogue?.targetRef || quest?.turnInTargetRef);
     return target && target.zoneRef === ctx.zoneId ? "node04:" + target.targetId + ":dialogue" : null;
+  }
+
+  buildQuestGivers(ctx, questSummaries) {
+    const summaries = new Map(questSummaries.map(function (quest) { return [quest.questId, quest]; }));
+    const givers = new Map();
+    for (const quest of allQuests(ctx.project)) {
+      const summary = summaries.get(quest.id);
+      // Nog vergrendelde quests hebben geen spelerstate: hun gever krijgt pas een ster zodra
+      // de quest werkelijk beschikbaar is geweest voor dit character.
+      if (!summary) continue;
+      const dialogue = quest?.startDialogueRef ? dialogueById(ctx.project, quest.startDialogueRef) : null;
+      const target = this.resolveQuestTarget(ctx.project, dialogue?.targetRef || quest?.turnInTargetRef);
+      if (!target || target.zoneRef !== ctx.zoneId) continue;
+      const key = safeString(target.entityRef || target.linkedEntity?.entityId, target.targetId);
+      let giver = givers.get(key);
+      if (!giver) {
+        giver = this.runtimeTargetFromQuestTarget(ctx, target, {
+          instanceId: "node04:" + target.targetId + ":dialogue",
+          action: "node04:start_dialogue",
+          dialogueId: dialogue?.id || null,
+          prompt: "Talk",
+          status: "quest giver",
+          hasAvailableQuest: false
+        });
+        givers.set(key, giver);
+      }
+      // Ook verlaten/herhaalbare quests tellen; een aangenomen quest wist de gever niet.
+      if (summary.status === QUEST_STATUS.AVAILABLE && this.questPrerequisitesMet(ctx, quest)) {
+        giver.hasAvailableQuest = true;
+      }
+    }
+    return Array.from(givers.values());
   }
 
   buildDialogueTargets(ctx) {

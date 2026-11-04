@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest4";
+import { createGkHud } from "./hud/gk-hud.js?v=20261104-questgiver2";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -14075,8 +14075,28 @@ async function start() {
   window.addEventListener("beforeunload", function () { clearMovementInput("beforeunload"); });
   window.addEventListener("pagehide", function () { clearMovementInput("pagehide"); });
   try {
-    const loaded = await loadSessionState({ forceWorld: true, showLoading: true });
-    if (loaded) startRemoteFrameLoop();
+    // Een nieuw of volledig gereset account kiest eerst een character. Deze read-only controle
+    // draait vóór /api/game/player, omdat die route anders alvast een leeg profiel zou aanmaken.
+    const charactersResponse = await gameFetch("/api/game/characters", { headers: { Accept: "application/json" } });
+    if (charactersResponse.status === 401) {
+      window.location.href = "/login/?next=%2Fgame%2F";
+      return;
+    }
+    const characters = charactersResponse.ok ? await charactersResponse.json() : null;
+    const classes = Array.isArray(characters?.classes) ? characters.classes : [];
+    const mustChooseCharacter = classes.length > 0 && !classes.some((entry) => entry?.character);
+    if (mustChooseCharacter) {
+      // De characterkeuze is een POST. Haal alleen het CSRF-token op; /api/auth/me maakt geen
+      // spelerprofiel aan en doorbreekt de verplichte keuze dus niet.
+      const authResponse = await gameFetch("/api/auth/me", { headers: { Accept: "application/json" } });
+      const auth = authResponse.ok ? await authResponse.json() : null;
+      state.csrfToken = auth?.csrfToken || "";
+      hideOverlay();
+      gkHud.openCharacters();
+    } else {
+      const loaded = await loadSessionState({ forceWorld: true, showLoading: true });
+      if (loaded) startRemoteFrameLoop();
+    }
   } catch (error) {
     clearMmoReadyTimeout();
     state.debug.lastError = String(error?.message || error || "Kon de game state niet laden.");

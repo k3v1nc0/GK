@@ -144,7 +144,7 @@ test("Kaarttegels: bewaard op vingerafdruk, actief na commit, oude tegels en fot
   }
 });
 
-test("Mist op de kaart: standaard aan met vakjes van 8 m; uit te zetten, zicht, donkerte en zachte rand instelbaar", async () => {
+test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook bij 0", async () => {
   const { compileCanonical } = await import("../src/server/authoring/build-service.js");
   const { buildRuntimeWorld } = await import("../src/server/authoring/world-builder.js");
   const docs = (hud) => [{ docKey: "project_settings", kind: "project_settings", body: { gameName: "GK", xpPerLevel: 300, maxLevel: 30 }, archived: false, revision: 1 }]
@@ -154,18 +154,24 @@ test("Mist op de kaart: standaard aan met vakjes van 8 m; uit te zetten, zicht, 
     assert.deepEqual(compiled.errors, []);
     return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text));
   };
-  const fog = world(null).minimap.game.fogOfWar;
+  const defaults = world(null).minimap.game;
+  assert.equal(defaults.questArrowDistanceMeters, 200);
+  const fog = defaults.fogOfWar;
   assert.equal(fog.enabled, true);
   assert.equal(fog.cellSize, 8);
   assert.equal(fog.revealRadius, 5);
   assert.equal(fog.fogOpacity, 1, "standaard helemaal dicht");
   assert.equal(fog.fogFeatherRadius, 1, "standaard 8 m zachte rand = 1 vakje");
-  const custom = world({ fogOfWar: false, fogRevealMeters: 80, fogDarkness: 80, fogFadeMeters: 16 }).minimap.game.fogOfWar;
+  const customMap = world({ fogOfWar: false, fogRevealMeters: 80, fogDarkness: 80, fogFadeMeters: 16, questArrowDistanceMeters: 350 }).minimap.game;
+  assert.equal(customMap.questArrowDistanceMeters, 350);
+  const custom = customMap.fogOfWar;
   assert.equal(custom.enabled, false);
   assert.equal(custom.revealRadius, 10);
   assert.equal(custom.fogOpacity, 0.8);
   assert.equal(custom.fogFeatherRadius, 2);
-  const hard = world({ fogDarkness: 0, fogFadeMeters: 0 }).minimap.game.fogOfWar;
+  const disabledArrows = world({ fogDarkness: 0, fogFadeMeters: 0, questArrowDistanceMeters: 0 }).minimap.game;
+  assert.equal(disabledArrows.questArrowDistanceMeters, 0, "0 schakelt alleen de questpijlen uit");
+  const hard = disabledArrows.fogOfWar;
   assert.equal(hard.fogOpacity, 0, "0 blijft 0");
   assert.equal(hard.fogFeatherRadius, 0);
 });

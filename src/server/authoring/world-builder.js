@@ -667,6 +667,7 @@ function withGame(world, source, options) {
     // Stap 4 (HUD): fog of war op de minimap. De server onthoudt per speler welke vakjes van 8 m ontdekt zijn.
     minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
       enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
+      questArrowDistanceMeters: fogPercent(hud.questArrowDistanceMeters, 200, 2000),
       fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
         fogColor: "#05070a", fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
         revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }

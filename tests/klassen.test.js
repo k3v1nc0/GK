@@ -80,7 +80,7 @@ test("een klasse met een verdwenen start-item houdt publiceren tegen", () => {
   assert.ok(compileCanonical(docs, {}).errors.some((error) => error.code === "REF_UNRESOLVED"));
 });
 
-test("migratie 017: meerdere characters per account; reset wist ze allemaal", () => {
+test("migratie 017: meerdere characters per account; reset verwijdert ze allemaal", () => {
   const db = new DatabaseSync(":memory:");
   for (const file of fs.readdirSync("db/migrations").filter((name) => name.endsWith(".sql")).sort()) db.exec(fs.readFileSync("db/migrations/" + file, "utf8"));
   db.exec("PRAGMA foreign_keys = ON");
@@ -97,4 +97,6 @@ test("migratie 017: meerdere characters per account; reset wist ze allemaal", ()
   assert.equal(anna.characters, 2);
   admin.resetProgress("u1");
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM player_progression").get().n, 0, "beide characters beginnen opnieuw");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM player_profiles WHERE user_id = 'u1'").get().n, 0, "beide characters zijn weg");
+  assert.equal(db.prepare("SELECT active_profile_id FROM users WHERE id = 'u1'").get().active_profile_id, null);
 });
