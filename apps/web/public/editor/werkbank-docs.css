@@ -215,3 +215,9 @@
 .qbMineGoal { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 6px; background: #101a26; }
 .qbMineGoal.done { color: var(--wbd-ok); }
 .qbBad { color: var(--wbd-accent); }
+/* Quest Builder stap 3: Questgebied als cirkel of rechthoek; kaart per stap. */
+.wbdInline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wbdInline .wbdNumber { width: 64px; }
+.qbMap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.qbMap .wbdSelect { width: 170px; }
+.qbArea { width: 170px; }

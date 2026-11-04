@@ -8,7 +8,8 @@ export function parseAreaLegacyRef(legacyRef) {
   return match ? { nodeType: match[1], runtimeId: match[2] } : null;
 }
 
-const isShape = (doc) => doc.kind === "area" && areaSoort(doc.body) !== "deelgebied";
+// Een Questgebied is geen vorm in de wereld: alleen de quest-motor leest het (game-compiler).
+const isShape = (doc) => doc.kind === "area" && areaSoort(doc.body) !== "deelgebied" && areaSoort(doc.body) !== "questgebied";
 
 // Geeft null als er geen vlakken zijn (dan blijft een oudere build bytegelijk).
 export function compileAreaShapes(known, options = {}) {

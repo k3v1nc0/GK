@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest6";
+import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest7";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -8053,8 +8053,38 @@ function refreshNode04ClientRanges(now = performance.now(), options = {}) {
   if (!state.node04.snapshot) return;
   if (now - num(state.node04.lastRangeRenderAt, 0) < 250) return;
   state.node04.lastRangeRenderAt = now;
+  checkNode04QuestAreas();
   if (options.deferRuntimeSync !== true) syncRuntimeTargets();
   return true;
+}
+
+// Quest Builder stap 3: loop je een questgebied in of uit (Ga naar / Verlaat gebied)? Dan meteen de stand opvragen;
+// de server kijkt zelf (met zijn eigen positie) of het doel klaar is.
+function node04PointInArea(points, x, z) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const a = points[i];
+    const b = points[j];
+    if ((num(a.z) > z) !== (num(b.z) > z) && x < ((num(b.x) - num(a.x)) * (z - num(a.z))) / (num(b.z) - num(a.z)) + num(a.x)) inside = !inside;
+  }
+  return inside;
+}
+function checkNode04QuestAreas() {
+  const position = currentLocalPlayerPosition();
+  if (!position) return;
+  const quests = state.node04.snapshot?.quests?.active || [];
+  const seen = state.node04.areaInside || (state.node04.areaInside = new Map());
+  let changed = false;
+  for (const quest of quests) {
+    for (const area of quest?.activeStep?.watchAreas || []) {
+      if (!Array.isArray(area.points) || area.points.length < 3) continue;
+      const inside = node04PointInArea(area.points, num(position.x), num(position.z));
+      const key = quest.questId + "|" + area.areaId;
+      if (seen.has(key) && seen.get(key) !== inside) changed = true;
+      seen.set(key, inside);
+    }
+  }
+  if (changed) loadNode04State().catch(function () {});
 }
 
 function node04PrimaryTarget() {

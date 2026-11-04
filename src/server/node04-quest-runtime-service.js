@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { QUEST_STATUS, OBJECTIVE_STATUS, OBJECTIVE_TYPES } from "../shared/quest-contract.js";
 import { assertDeveloperActionAllowed, normalizedActionPayloadHash } from "./action-security.js";
 import { runOperation } from "./persistence/operation-contract.js";
-import { QUEST_NEARBY_M } from "../../apps/web/public/shared/quest-graph.js";
+import { QUEST_NEARBY_M, pointInArea } from "../../apps/web/public/shared/quest-graph.js";
 
 const DEFAULT_LOADOUT_ID = "loadout.main";
 
@@ -123,6 +123,11 @@ function allQuests(project) {
   return Object.values(campaignPackage(project)?.quests?.byId || {});
 }
 
+// Stap 3: een Questgebied uit de build ({ points, center, radius, displayName }).
+function questAreaById(project, areaId) {
+  return campaignPackage(project)?.questAreas?.byId?.[safeString(areaId)] || null;
+}
+
 function questById(project, questId) {
   const id = safeString(questId);
   return campaignPackage(project)?.quests?.byId?.[id] || null;
@@ -218,6 +223,13 @@ function objectiveCredits(objective, via) {
   if (via === "group") return objectiveIsTeam(objective) || credit !== "fighters";
   if (via === "nearby") return !objectiveIsTeam(objective) && credit === "nearby";
   return false;
+}
+
+// Stap 3: "Alleen in gebied": de gebeurtenis (vijand, grondstof, pickup) moet in het Questgebied liggen.
+function eventInArea(project, objective, event) {
+  if (!objective?.inAreaRef) return true;
+  const area = questAreaById(project, objective.inAreaRef);
+  return Boolean(area) && pointInArea(area.points, Number(event?.at?.x), Number(event?.at?.z));
 }
 
 function objectiveEventRef(objective) {
@@ -721,7 +733,8 @@ export class Node04QuestRuntimeService {
       const step = stepById(quest, row.active_step_id);
       if (!step || step.kind === "end") continue;
       const matching = (Array.isArray(step.objectives) ? step.objectives : []).filter(function (objective) {
-        return objective.objectiveType === event.type && objectiveEventRef(objective) === refId && objectiveCredits(objective, via);
+        return objective.objectiveType === event.type && objectiveEventRef(objective) === refId && objectiveCredits(objective, via)
+          && eventInArea(ctx.project, objective, event);
       });
       if (!matching.length) continue;
       this.atomic(() => {
@@ -1358,6 +1371,14 @@ export class Node04QuestRuntimeService {
       complete = storedDone || this.objectiveInRange(ctx, objective, 0, false);
       current = complete ? 1 : 0;
       extra.reachedNow = complete && !storedDone;
+    } else if (type === "enter" || type === "leave") {
+      // Stap 3: de server kijkt waar je nu bent (zijn eigen positie). Eén keer gehaald = klaar, heen en weer telt niet opnieuw.
+      const area = questAreaById(ctx.project, objective.areaRef);
+      const known = Boolean(area) && Number.isFinite(Number(ctx.position?.x)) && Number.isFinite(Number(ctx.position?.z));
+      const inside = known && pointInArea(area.points, Number(ctx.position.x), Number(ctx.position.z));
+      complete = storedDone || (known && (type === "enter" ? inside : !inside));
+      current = complete ? 1 : 0;
+      extra.reachedNow = complete && !storedDone;
     } else if (objectiveIsTeam(objective) && scope?.questId && storedDone) {
       // Team-doel al klaar: laat de stand van toen zien, niet opnieuw rekenen met het team van nu.
       current = Math.max(1, safeInteger(stored?.required_value, required));
@@ -1509,6 +1530,9 @@ export class Node04QuestRuntimeService {
       activeStep: step ? {
         stepId: step.id,
         displayName: step.displayName || step.id,
+        // Stap 3: zoekgebied / punt op de kaart, en de gebieden waar de game op let (in of uit = meteen opvragen).
+        map: this.stepMapView(ctx, step),
+        watchAreas: this.watchAreas(ctx, objectives),
         instruction: this.resolveTokenText(ctx, step.instruction || ""),
         stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
         match: step.match === "any" ? "any" : "all",
@@ -1575,6 +1599,41 @@ export class Node04QuestRuntimeService {
     return targets;
   }
 
+  stepMapView(ctx, step) {
+    const area = step?.map ? questAreaById(ctx.project, step.map.areaRef) : null;
+    if (!area) return null;
+    const show = step.map.show === "point" || step.map.show === "hidden" ? step.map.show : "area";
+    if (show === "hidden") return { show, areaId: area.id };
+    return { show, areaId: area.id, name: area.displayName, center: area.center, radius: area.radius, points: show === "area" ? area.points : [] };
+  }
+
+  watchAreas(ctx, objectives) {
+    const out = [];
+    for (const objective of objectives || []) {
+      if ((objective.objectiveType !== "enter" && objective.objectiveType !== "leave") || objective.complete) continue;
+      const area = questAreaById(ctx.project, objective.areaRef);
+      if (area && !out.some((entry) => entry.areaId === area.id)) out.push({ areaId: area.id, points: area.points });
+    }
+    return out;
+  }
+
+  // Stap 3: zonder NPC-doel wijst de quest naar het midden van het gebied (stap-kaart of Ga naar gebied); Verborgen = niets.
+  targetForArea(ctx, trackedQuest) {
+    const step = trackedQuest.activeStep;
+    if (step?.map?.show === "hidden") return null;
+    const enter = (step?.objectives || []).find((objective) => objective.objectiveType === "enter" && !objective.complete);
+    const area = questAreaById(ctx.project, step?.map?.areaId || enter?.areaRef);
+    if (!area) return null;
+    return this.runtimeTargetFromQuestTarget(ctx, { targetId: "area." + area.id, x: area.center.x, y: 0, z: area.center.z, zoneRef: ctx.zoneId,
+      radius: Math.max(3, area.radius), visibleInGame: false, displayName: area.displayName }, {
+      instanceId: "node04:" + trackedQuest.questId + ":" + step.stepId + ":area",
+      questId: trackedQuest.questId,
+      displayName: area.displayName,
+      prompt: "Ga hierheen",
+      status: enter?.displayName || step.displayName || "quest gebied"
+    });
+  }
+
   targetForActiveStep(ctx, trackedQuest) {
     const step = trackedQuest.activeStep;
     if (!step) return null;
@@ -1598,7 +1657,8 @@ export class Node04QuestRuntimeService {
       const linkTarget = this.travelTargetTowardZone(ctx, step.zoneRef);
       if (linkTarget) return linkTarget;
     }
-    if (!target || target.zoneRef !== ctx.zoneId) return null;
+    if (!target) return this.targetForArea(ctx, trackedQuest);
+    if (target.zoneRef !== ctx.zoneId) return null;
     const talk = objective && (objective.objectiveType === "talk" || objective.objectiveType === "deliver");
     const dialogue = talk ? this.dialogueForTarget(ctx, target.targetId) : null;
     return this.runtimeTargetFromQuestTarget(ctx, target, {

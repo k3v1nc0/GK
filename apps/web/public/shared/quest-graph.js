@@ -15,9 +15,18 @@ export const OBJECTIVE_KINDS = Object.freeze({
   collect: Object.freeze({ icon: "🎒", label: "Heb in je tas", refKind: "item_definition", amount: true }),
   deliver: Object.freeze({ icon: "📦", label: "Breng", refKind: "item_definition", amount: true, npc: true }),
   talk: Object.freeze({ icon: "💬", label: "Praat met", refKind: "npc" }),
-  visit: Object.freeze({ icon: "🚶", label: "Ga naar", refKind: "npc" })
+  visit: Object.freeze({ icon: "🚶", label: "Ga naar", refKind: "npc" }),
+  // Stap 3: gebieden (Questgebied uit de Area tool). De server kijkt zelf waar je bent.
+  enter: Object.freeze({ icon: "🎯", label: "Ga naar gebied", refKind: "area" }),
+  leave: Object.freeze({ icon: "🏃", label: "Verlaat gebied", refKind: "area" })
 });
-export const OBJECTIVE_ORDER = Object.freeze(["defeat", "gather", "pickup", "collect", "deliver", "talk", "visit"]);
+export const OBJECTIVE_ORDER = Object.freeze(["defeat", "gather", "pickup", "collect", "deliver", "talk", "visit", "enter", "leave"]);
+// Stap 3: per stap hoe het gebied op de minimap en de kaart staat.
+export const STEP_MAP_SHOW = Object.freeze({
+  area: Object.freeze({ icon: "⭕", label: "Zoekgebied" }),
+  point: Object.freeze({ icon: "📍", label: "Punt in het midden" }),
+  hidden: Object.freeze({ icon: "🙈", label: "Verborgen" })
+});
 
 // verplicht = nodig om verder te gaan; mag = niet nodig; bonus = niet nodig, extra; verborgen = nodig, maar pas in beeld als het klaar is.
 export const OBJECTIVE_ROLES = Object.freeze({
@@ -49,8 +58,22 @@ export const PARTY_LEAVE_RULES = Object.freeze({
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
-const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit"]);
+const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef"]);
+const isAreaRef = (value) => typeof value === "string" && value.startsWith("area:") && value.length <= 140;
+
+// Ligt (x, z) binnen het gebied? points = [{x, z}] in meters (een veelhoek; een cirkel is een veelhoek met veel punten).
+export function pointInArea(points, x, z) {
+  const list = Array.isArray(points) ? points : [];
+  if (list.length < 3 || !Number.isFinite(Number(x)) || !Number.isFinite(Number(z))) return false;
+  let inside = false;
+  for (let i = 0, j = list.length - 1; i < list.length; j = i, i += 1) {
+    const a = list[i];
+    const b = list[j];
+    if ((a.z > z) !== (b.z > z) && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}
 const NEXT_KEYS = new Set(["to"]);
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -110,6 +133,8 @@ export function questStepsShapeIssues(value) {
     if (step.title !== undefined && step.title !== null && !isText(step.title, QUEST_LIMITS.title)) issues.push(where + ": de naam is te lang.");
     if (step.text !== undefined && step.text !== null && !isText(step.text, QUEST_LIMITS.text)) issues.push(where + ": de uitleg is te lang.");
     if (step.match !== undefined && step.match !== null && !STEP_MATCH[step.match]) issues.push(where + ": ongeldige keuze bij Klaar als.");
+    if (step.mapRef !== undefined && step.mapRef !== null) { if (!isAreaRef(step.mapRef)) issues.push(where + ": Kaart moet een Questgebied zijn."); else refs.push(step.mapRef); }
+    if (step.mapShow !== undefined && step.mapShow !== null && !STEP_MAP_SHOW[step.mapShow]) issues.push(where + ": ongeldige keuze bij Kaart.");
     if (step.next !== undefined && step.next !== null) {
       if (!Array.isArray(step.next) || step.next.length > QUEST_LIMITS.next) issues.push(where + ": hooguit " + QUEST_LIMITS.next + " overgangen.");
       else step.next.forEach((link) => {
@@ -143,6 +168,7 @@ export function questStepsShapeIssues(value) {
       if (objective.role !== undefined && objective.role !== null && !OBJECTIVE_ROLES[objective.role]) issues.push(at + ": ongeldige rol.");
       if (objective.share !== undefined && objective.share !== null && !OBJECTIVE_SHARES[objective.share]) issues.push(at + ": ongeldige keuze bij Voor wie.");
       if (objective.credit !== undefined && objective.credit !== null && !OBJECTIVE_CREDITS[objective.credit]) issues.push(at + ": ongeldige keuze bij Telt voor.");
+      if (objective.areaRef !== undefined && objective.areaRef !== null) { if (!isAreaRef(objective.areaRef)) issues.push(at + ": Alleen in gebied moet een Questgebied zijn."); else refs.push(objective.areaRef); }
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
@@ -165,6 +191,7 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
     else if (!objectives.some(objectiveNeeded)) add(step.stepId, null, "Minstens één doel moet verplicht (of verborgen) zijn, anders is de stap meteen klaar.");
     const next = Array.isArray(step.next) ? step.next.filter(isObject) : [];
     if (!next.length) add(step.stepId, null, "Kies waar de quest na deze stap heen gaat (Daarna).");
+    if (step.mapRef && !refExists(step.mapRef)) add(step.stepId, null, "Kaart: " + refLabel(step.mapRef) + " bestaat niet (meer) of is geen Questgebied.");
     for (const link of next) {
       if (link.to === step.stepId) add(step.stepId, null, "Deze stap gaat naar zichzelf.");
       else if (!byId.has(link.to)) add(step.stepId, null, "Daarna gaat naar een stap die niet (meer) bestaat.");
@@ -174,8 +201,10 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
       if (!spec) continue;
       if (objective.share === "team" && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Team samen kan alleen bij Versla, Verzamel en Pak op.");
       if (objective.credit && objective.type !== "defeat") add(step.stepId, objective.objectiveId, spec.label + ": Telt voor kan alleen bij Versla.");
-      if (!objective.ref) add(step.stepId, objective.objectiveId, spec.label + ": kies wat (sleep een kaart op het vak).");
-      else if (!refExists(objective.ref)) add(step.stepId, objective.objectiveId, refLabel(objective.ref) + " bestaat niet (meer) of is gearchiveerd.");
+      if (objective.areaRef && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Alleen in gebied kan alleen bij Versla, Verzamel en Pak op.");
+      else if (objective.areaRef && !refExists(objective.areaRef)) add(step.stepId, objective.objectiveId, refLabel(objective.areaRef) + " bestaat niet (meer) of is geen Questgebied.");
+      if (!objective.ref) add(step.stepId, objective.objectiveId, spec.label + (spec.refKind === "area" ? ": kies een Questgebied." : ": kies wat (sleep een kaart op het vak)."));
+      else if (!refExists(objective.ref)) add(step.stepId, objective.objectiveId, refLabel(objective.ref) + (spec.refKind === "area" ? " bestaat niet (meer) of is geen Questgebied." : " bestaat niet (meer) of is gearchiveerd."));
       if (spec.npc) {
         if (!objective.npcRef) add(step.stepId, objective.objectiveId, spec.label + ": kies bij wie het gebracht moet worden.");
         else if (!refExists(objective.npcRef)) add(step.stepId, objective.objectiveId, refLabel(objective.npcRef) + " bestaat niet (meer) of is gearchiveerd.");

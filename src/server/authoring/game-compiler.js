@@ -7,6 +7,7 @@ import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
 import { hasOwnSteps, questGraphIssues, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
+import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
 export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model"]);
@@ -113,7 +114,8 @@ export function compileGameSection(documents, options = {}) {
 
   const questDocs = of("quest");
   // Quest Builder stap 1: de quest-check (zelfde regels als in de Quest Builder) houdt een onspeelbare quest tegen.
-  const refExists = (ref) => { const target = byKey.get(ref); return Boolean(target) && target.kind === kindOfRef(ref); };
+  // Een gebied in een quest moet een Questgebied zijn (geen pad of bos).
+  const refExists = (ref) => { const target = byKey.get(ref); return Boolean(target) && target.kind === kindOfRef(ref) && (target.kind !== "area" || areaSoort(target.body) === "questgebied"); };
   const refLabel = (ref) => { const target = byKey.get(ref); return target?.body?.displayName || ref; };
   for (const doc of questDocs) {
     const label = "Quest " + doc.body.displayName;
@@ -158,10 +160,17 @@ export function compileGameSection(documents, options = {}) {
         objectiveId: objective.objectiveId, type: objective.type, targetId: objective.ref ? idFromRef(objective.ref) : null,
         npcId: objective.npcRef ? idFromRef(objective.npcRef) : null, amount: Number.isInteger(objective.amount) ? objective.amount : 1,
         role: objective.role || "required", share: objective.share === "team" ? "team" : "personal",
-        credit: objective.credit === "fighters" || objective.credit === "nearby" ? objective.credit : "group"
-      }))
+        credit: objective.credit === "fighters" || objective.credit === "nearby" ? objective.credit : "group",
+        ...(objective.areaRef ? { areaId: idFromRef(objective.areaRef) } : {})
+      })),
+      // Stap 3: het gebied van deze stap op de kaart (zoekgebied, punt of verborgen).
+      ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {})
     }))
   }));
+  // Stap 3: Questgebieden (Area tool) in meters, voor de quest-motor (ga naar, verlaat, alleen hier tellen, zoekgebied).
+  const questAreas = active.filter((doc) => doc.kind === "area" && areaSoort(doc.body) === "questgebied")
+    .sort((a, b) => a.docKey.localeCompare(b.docKey))
+    .map((doc) => ({ areaId: doc.body.areaId, displayName: doc.body.displayName, points: areaPointsMeters(doc.body) }));
 
   const recipes = of("recipe").map((doc) => {
     const label = "Recept " + doc.body.displayName;
@@ -184,7 +193,8 @@ export function compileGameSection(documents, options = {}) {
   });
 
   return {
-    server: { schema: GAME_SECTION_VERSION, currencies, player, hud, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
+    server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
+      questAreas.length ? { questAreas } : {}),
     errors
   };
 }

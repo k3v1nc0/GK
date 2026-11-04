@@ -422,11 +422,15 @@ function questObjective(objective, names) {
     record.zoneRef = WORLD_ZONE_ID;
     record.radius = talkRangeOf(names.npcs.get(npcId));
   }
+  // Stap 3: gebieden. Ga naar / verlaat = het gebied zelf; Alleen in gebied = een gebeurtenis telt alleen daar.
+  if (spec.refKind === "area") record.areaRef = objective.targetId;
+  if (spec.event && objective.areaId) record.inAreaRef = objective.areaId;
   const what = objective.type === "defeat" ? names.actor(objective.targetId)
     : objective.type === "gather" ? names.resource(objective.targetId)
-      : spec.refKind === "npc" ? names.npc(objective.targetId) : names.item(objective.targetId);
+      : spec.refKind === "npc" ? names.npc(objective.targetId) : spec.refKind === "area" ? names.area(objective.targetId) : names.item(objective.targetId);
   const amount = spec.amount && record.requiredAmount > 1 ? record.requiredAmount + "× " : "";
-  record.displayName = (spec.label || objective.type) + " " + amount + what + (spec.npc ? " naar " + names.npc(objective.npcId) : "");
+  record.displayName = (spec.label || objective.type) + " " + amount + what + (spec.npc ? " naar " + names.npc(objective.npcId) : "")
+    + (record.inAreaRef ? " in " + names.area(record.inAreaRef) : "");
   return record;
 }
 
@@ -434,8 +438,11 @@ function questRecord(quest, names) {
   const steps = quest.steps.map((step) => {
     const objectives = step.kind === "step" ? step.objectives.map((objective) => questObjective(objective, names)) : [];
     const summary = objectives.filter((objective) => objective.role !== "hidden").map((objective) => objective.displayName).join(", ");
-    return { id: step.stepId, kind: step.kind, displayName: step.title || summary || step.stepId, instruction: step.text || summary || step.title || "",
+    const record = { id: step.stepId, kind: step.kind, displayName: step.title || summary || step.stepId, instruction: step.text || summary || step.title || "",
       match: step.match, objectives, next: step.kind === "step" ? step.next.map((to) => ({ to })) : [], conditions: [], rewards: [] };
+    // Stap 3: alleen als er een gebied gekozen is (zo blijft de versie van bestaande quests gelijk).
+    if (step.kind === "step" && step.mapAreaId) record.map = { areaRef: step.mapAreaId, show: step.mapShow || "area" };
+    return record;
   });
   const first = steps[0] || null;
   const giverTarget = npcTargetId(quest.giverNpcId);
@@ -601,7 +608,16 @@ function withGame(world, source, options) {
 
   // Quests en gesprekken.
   const npcsById = new Map(npcs.map((npc) => [npc.npcId, npc]));
-  const names = { npcs: npcsById, npc: (id) => npcsById.get(id)?.displayName || id, item: itemName,
+  // Stap 3: Questgebieden (punten in meters + midden en straal voor de kaart).
+  const questAreas = (Array.isArray(game?.questAreas) ? game.questAreas : []).map((area) => {
+    const points = Array.isArray(area.points) ? area.points.map((point) => ({ x: Number(point.x), z: Number(point.z) })) : [];
+    const cx = points.length ? points.reduce((sum, point) => sum + point.x, 0) / points.length : 0;
+    const cz = points.length ? points.reduce((sum, point) => sum + point.z, 0) / points.length : 0;
+    const radius = points.length ? Math.max(...points.map((point) => Math.hypot(point.x - cx, point.z - cz))) : 0;
+    return { id: area.areaId, displayName: area.displayName || area.areaId, points, center: { x: cx, z: cz }, radius };
+  });
+  const areasById = new Map(questAreas.map((area) => [area.id, area]));
+  const names = { npcs: npcsById, npc: (id) => npcsById.get(id)?.displayName || id, item: itemName, area: (id) => areasById.get(id)?.displayName || id,
     actor: (id) => source.actors?.archetypes?.[id]?.displayName || id, resource: (id) => source.actors?.resources?.[id]?.displayName || id };
   // Oudere builds hebben nog geen stappen in de sectie: die quests worden 1 stap + einde zoals vroeger.
   const legacySteps = (quest) => (quest.goal === "visit"
@@ -613,7 +629,7 @@ function withGame(world, source, options) {
   const recordsById = new Map(questRecords.map((record) => [record.id, record]));
   const usable = quests.filter((quest) => recordsById.has(quest.questId));
   const dialogues = npcs.map((npc) => npcDialogue(npc, usable, recordsById));
-  const campaigns = Object.assign({}, gameProject.campaigns, { quests: listOf(questRecords), dialogues: listOf(dialogues),
+  const campaigns = Object.assign({}, gameProject.campaigns, { quests: listOf(questRecords), dialogues: listOf(dialogues), questAreas: listOf(questAreas),
     questCount: questRecords.length, dialogueCount: dialogues.length });
 
   const playerRules = { id: "player_rules.main", policies: [], byType: {

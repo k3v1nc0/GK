@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261104-questgiver2";
+import { createHudMinimap } from "./gk-minimap.js?v=20261104-quest7";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -2416,7 +2416,7 @@ export function createGkHud(api) {
     // Meedraaien = jouw kijkrichting staat altijd boven (zoals in WoW); uit = noorden boven.
     const facing = num(live.facingDeg) * Math.PI / 180;
     const north = minimap.draw({ world: live.world, center: position, facingDeg: live.facingDeg, forward: sm.rotate === false ? { x: 0, z: -1 } : { x: Math.sin(facing), z: Math.cos(facing) },
-      radius: zoom, markers, quest: questTarget, pin: sm.pin, show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText });
+      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), pin: sm.pin, show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText });
     const rounded = Math.round(num(north));
     if (ui.sig.north !== rounded) {
       ui.sig.north = rounded;
@@ -2469,6 +2469,11 @@ export function createGkHud(api) {
     return Boolean(left.targetId && left.targetId === right.targetId)
       || Math.hypot(num(left.x, Infinity) - num(right.x, -Infinity), num(left.z, Infinity) - num(right.z, -Infinity)) < 0.5;
   }
+  // Quest Builder stap 3: het zoekgebied van de gevolgde quest (alleen als de stap "Zoekgebied" zegt).
+  function mapQuestArea() {
+    const map = trackedQuest()?.activeStep?.map || null;
+    return map && map.show === "area" && Array.isArray(map.points) && map.points.length >= 3 ? map : null;
+  }
   function mapQuestTarget() {
     const quest = trackedQuest();
     const target = quest ? (data().s04?.questTargets || []).find(function (t) { return t.questId === quest.questId; }) : null;
@@ -2484,7 +2489,7 @@ export function createGkHud(api) {
     const markers = mapMarkers(live);
     const quest = mapQuestTarget();
     const result = minimap.drawFull(bigCanvas, { world: live.world, center: live.position, facingDeg: live.facingDeg, markers,
-      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null,
+      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(),
       pin: sm.pin, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText });
     ui.bigView = result;
     ui.bigHits = result?.hits || [];

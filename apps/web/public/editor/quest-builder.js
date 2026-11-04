@@ -3,7 +3,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, stepsFromSimple } from "../shared/quest-graph.js?v=20261104-quest5";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, stepsFromSimple } from "../shared/quest-graph.js?v=20261104-quest7";
 
 const TABS = [["basis", "📋 Basis"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -34,8 +34,20 @@ function names(bench) {
     const doc = ref ? bench.doc(ref) : null;
     return doc ? bench.docName(doc) : String(ref || "…").replace(/^[a-z_]+:/, "");
   };
-  const refExists = (ref) => { const doc = bench.doc(ref); return Boolean(doc) && !doc.archived; };
+  // Een gebied in een quest moet een Questgebied zijn (zelfde regel als bij SAVE TO GAME).
+  const refExists = (ref) => { const doc = bench.doc(ref); return Boolean(doc) && !doc.archived && (doc.kind !== "area" || doc.body?.soort === "questgebied"); };
   return { nameOf, refExists };
+}
+
+// Stap 3: keuzelijst met de Questgebieden (gemaakt met de Area tool, soort 🎯 Questgebied).
+function areaSelect(bench, value, empty, title, onPick) {
+  const areas = bench.docs("area").filter((doc) => doc.body?.soort === "questgebied");
+  const select = el("select", { class: "wbdSelect qbArea", title }, [el("option", { value: "", text: empty })]
+    .concat(areas.map((doc) => el("option", { value: doc.docKey, text: "🎯 " + bench.docName(doc) }))));
+  if (value && !areas.some((doc) => doc.docKey === value)) select.append(el("option", { value, text: "⚠️ " + value.replace(/^area:/, "") }));
+  select.value = value || "";
+  select.addEventListener("change", () => onPick(select.value || null));
+  return select;
 }
 
 function stepLabel(step, index, nameOf) {
@@ -254,6 +266,18 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
       at(copy).next = nextSelect.value ? [{ to: nextSelect.value }].concat(rest) : rest;
     }));
     card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "➡️ Daarna" }), nextSelect]));
+    // Stap 3: Kaart = welk Questgebied deze stap op de minimap en de kaart toont, en hoe.
+    const mapArea = areaSelect(state.bench, step.mapRef || null, "Geen gebied", "Het Questgebied van deze stap (maak er een met de Area tool: 🎯 Questgebied)",
+      (ref) => edit("kaart", (copy) => { if (ref) at(copy).mapRef = ref; else { delete at(copy).mapRef; delete at(copy).mapShow; } }));
+    const mapParts = [mapArea];
+    if (step.mapRef) {
+      const show = el("select", { class: "wbdSelect", title: "Hoe het gebied op de minimap en de kaart staat" },
+        Object.entries(STEP_MAP_SHOW).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+      show.value = STEP_MAP_SHOW[step.mapShow] ? step.mapShow : "area";
+      show.addEventListener("change", () => edit("kaart", (copy) => { if (show.value === "area") delete at(copy).mapShow; else at(copy).mapShow = show.value; }));
+      mapParts.push(show);
+    }
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "🗺️ Kaart" }), el("div", { class: "qbMap" }, mapParts)]));
     card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "💬 Uitleg" }),
       textInput(step.text, "Wat de speler in zijn questlog leest (mag leeg)", QUEST_LIMITS.text, (value) => edit("uitleg", (copy) => { at(copy).text = value; }))]));
   }
@@ -272,12 +296,15 @@ function objectiveRow(state, objective, issues, change, remove) {
     if (next.refKind !== OBJECTIVE_KINDS[target.type]?.refKind) target.ref = null;
     target.type = type.value;
     if (!next.npc) delete target.npcRef;
-    if (!next.event) delete target.share;
+    if (!next.event) { delete target.share; delete target.areaRef; }
     if (target.type !== "defeat") delete target.credit;
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
   }));
-  const parts = [type, el("div", { class: "qbSlot" }, bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null,
-    (ref) => change("doel", (target) => { target.ref = ref || null; })))];
+  // Ga naar / Verlaat gebied: een keuzelijst met Questgebieden; de rest: een kaart uit de Bibliotheek op het vak.
+  const what = spec.refKind === "area"
+    ? areaSelect(bench, objective.ref || null, "Kies een Questgebied...", "Welk gebied", (ref) => change("gebied", (target) => { target.ref = ref; }))
+    : bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null, (ref) => change("doel", (target) => { target.ref = ref || null; }));
+  const parts = [type, el("div", { class: "qbSlot" }, what)];
   if (spec.amount) {
     const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Hoeveel" });
     amount.value = String(objective.amount || 1);
@@ -287,6 +314,11 @@ function objectiveRow(state, objective, issues, change, remove) {
   if (spec.npc) {
     parts.push(el("span", { class: "qbLabel", text: "naar" }), el("div", { class: "qbSlot" }, bench.refControl({ refKind: "npc", required: false, ui: { icon: "🧑" } }, objective.npcRef || null,
       (ref) => change("bij wie", (target) => { target.npcRef = ref || null; }))));
+  }
+  // Stap 3: telt alleen als de vijand, grondstof of pickup in dit Questgebied ligt.
+  if (spec.event) {
+    parts.push(areaSelect(bench, objective.areaRef || null, "📍 Overal", "Alleen in gebied: telt alleen binnen dit Questgebied",
+      (ref) => change("alleen in gebied", (target) => { if (ref) target.areaRef = ref; else delete target.areaRef; })));
   }
   // Stap 2 (samen questen): voor wie telt dit doel. Alleen bij Versla, Verzamel en Pak op.
   if (spec.event) {

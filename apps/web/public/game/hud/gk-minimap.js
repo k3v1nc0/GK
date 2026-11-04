@@ -162,6 +162,26 @@ function drawMarker(ctx, kind, x, y, dot) {
   ctx.stroke();
 }
 
+// Quest Builder stap 3: het zoekgebied van de quest (doorzichtig goud met een stippellijn).
+function drawQuestArea(ctx, area, toScreen, lineWidth) {
+  const points = pointsOf(area?.points);
+  if (points.length < 3) return;
+  ctx.save();
+  ctx.beginPath();
+  points.forEach(function (point, index) {
+    const p = toScreen(point.x, point.z);
+    if (index) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255, 176, 32, 0.18)";
+  ctx.fill();
+  ctx.setLineDash([lineWidth * 3, lineWidth * 2]);
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = "rgba(255, 196, 64, 0.95)";
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawStar(ctx, x, y, r) {
   ctx.beginPath();
   for (let i = 0; i < 10; i += 1) {
@@ -630,6 +650,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     const show = view.show || {};
     // Gebiedsnamen zoomen mee met de kaart (zoals letters op een landkaart), maar blijven tussen een kleinste en grootste maat leesbaar.
     const areaFont = Math.max(size * 0.05, Math.min(size * 0.14, size * 0.075 * 60 / Math.max(5, num(view.radius, 60)))) * textScale(view.textScale);
+    if (view.questArea && show.quest !== false) drawQuestArea(ctx, view.questArea, toScreen, Math.max(1.5, size * 0.012));
     if (show.area !== false) drawAreaNames(ctx, view.areas, toScreen, areaFont, function (p) { return Math.hypot(p.x - half, p.y - half) < half * 0.78; });
     ctx.lineWidth = Math.max(1, size * 0.008);
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
@@ -715,6 +736,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     const margin = dot * 3;
     // Gebiedsnamen: 15 px bij 160 m in beeld; inzoomen = groter (max 40 px), uitzoomen = kleiner (min 9 px).
     const areaFont = Math.max(9, Math.min(40, 15 * 160 / span)) * ratio * textScale(view.textScale);
+    if (view.questArea && show.quest !== false) drawQuestArea(g, view.questArea, toScreen, Math.max(1.5, 2 * ratio));
     if (show.area !== false) drawAreaNames(g, view.areas, toScreen, areaFont, function (p) { return p.x > -size * 0.2 && p.y > 0 && p.x < size * 1.2 && p.y < size; });
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (show[marker.kind] === false || marker.kind === "questgiver_available" || !discovered(marker.x, marker.z)) continue;

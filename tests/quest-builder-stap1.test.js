@@ -412,3 +412,85 @@ test("stap 2: team-doel al klaar blijft op zijn stand; een nieuw lid krijgt die 
   node03.questEvents(ctx("p2"), ["p2"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:2", operationId: "b" });
   assert.equal(row("p2", "quest.wolven").active_step_id, "step.terug", "p2 haalt zijn eigen kill");
 });
+
+// ---- Stap 3: kaart en gebieden ----
+import { areaCirclePointsMm } from "../apps/web/public/shared/area-soorten.js";
+const bosArea = doc("area", "area:bos", { areaId: "bos", displayName: "Bosrand", soort: "questgebied", shape: "polygon", pointsMm: areaCirclePointsMm(20000, 20000, 10000) });
+const bosQuest = (extraHout = {}) => doc("quest", "quest:quest.bos", { questId: "quest.bos", displayName: "Bosrand", giverRef: "npc:npc.boer", rewardXp: 5, steps: [
+  { stepId: "zoek", kind: "step", match: "all", mapRef: "area:bos", objectives: [{ objectiveId: "in", type: "enter", ref: "area:bos" }], next: [{ to: "hout" }] },
+  { stepId: "hout", kind: "step", match: "all", mapRef: "area:bos", mapShow: "point", objectives: [Object.assign({ objectiveId: "hout", type: "gather", ref: "resource_definition:bush", amount: 2, areaRef: "area:bos" }, extraHout)], next: [{ to: "weg" }] },
+  { stepId: "weg", kind: "step", match: "all", objectives: [{ objectiveId: "uit", type: "leave", ref: "area:bos" }], next: [{ to: "end" }] },
+  { stepId: "end", kind: "end", title: "Klaar" }] });
+function bosWorld(extraHout = {}) {
+  const compiled = compileCanonical(docs(2, [bosArea, bosQuest(extraHout)]), {});
+  assert.deepEqual(compiled.errors, []);
+  return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text)).gameProject;
+}
+
+test("stap 3: Questgebied in de build; quest-check: gebied moet bestaan en een Questgebied zijn", () => {
+  const project = bosWorld();
+  const area = project.campaigns.questAreas.byId.bos;
+  assert.equal(area.points.length, 24);
+  assert.ok(Math.abs(area.center.x - 20) < 0.01 && Math.abs(area.radius - 10) < 0.01);
+  const quest = project.campaigns.quests.byId["quest.bos"];
+  assert.equal(quest.steps[0].objectives[0].areaRef, "bos");
+  assert.equal(quest.steps[1].objectives[0].inAreaRef, "bos");
+  assert.match(quest.steps[1].objectives[0].displayName, /in Bosrand/);
+  assert.deepEqual(quest.steps[0].map, { areaRef: "bos", show: "area" });
+  const pad = doc("area", "area:pad", { areaId: "pad", displayName: "Pad", soort: "pad", shape: "polygon", pointsMm: [[0, 0], [5000, 0]] });
+  const wrong = doc("quest", "quest:quest.fout", { questId: "quest.fout", displayName: "Fout", giverRef: "npc:npc.boer", steps: [
+    { stepId: "a", kind: "step", objectives: [{ objectiveId: "o", type: "enter", ref: "area:pad" }, { objectiveId: "p", type: "leave", ref: null }], next: [{ to: "end" }] },
+    { stepId: "end", kind: "end" }] });
+  const messages = compileCanonical(docs(2, [pad, wrong]), {}).errors.map((error) => error.message).join(" | ");
+  assert.match(messages, /Pad bestaat niet \(meer\) of is geen Questgebied/);
+  assert.match(messages, /Verlaat gebied: kies een Questgebied/);
+});
+
+test("stap 3: ga naar gebied (server-positie), heen en weer telt 1x, hout buiten het gebied telt niet, verlaat gebied", () => {
+  const { node03, service, ctx, row, setProject } = setup();
+  setProject(bosWorld());
+  const n4 = service();
+  const outside = { x: 0, z: 0 };
+  const inside = { x: 20, z: 21 };
+  n4.acceptQuest(ctx("p1", outside), "quest.bos", "op1");
+  n4.syncAutoProgress(ctx("p1", outside));
+  assert.equal(row("p1", "quest.bos").active_step_id, "zoek", "buiten het gebied: nog niet");
+  const summary = n4.buildQuestSummary(ctx("p1", outside), ctx("p1").project.campaigns.quests.byId["quest.bos"], row("p1", "quest.bos"));
+  assert.equal(summary.activeStep.map.show, "area");
+  assert.equal(summary.activeStep.map.points.length, 24, "zoekgebied voor de minimap");
+  assert.equal(summary.activeStep.watchAreas[0].areaId, "bos", "de game let op in/uit");
+  n4.syncAutoProgress(ctx("p1", inside));
+  assert.equal(row("p1", "quest.bos").active_step_id, "hout", "in het gebied: door");
+  n4.syncAutoProgress(ctx("p1", outside));
+  n4.syncAutoProgress(ctx("p1", inside));
+  assert.equal(row("p1", "quest.bos").active_step_id, "hout", "heen en weer: geen extra stap");
+  const hout = () => n4.buildQuestSummary(ctx("p1", inside), ctx("p1").project.campaigns.quests.byId["quest.bos"], row("p1", "quest.bos")).activeStep.objectives[0].currentValue;
+  node03.questEvents(ctx("p1", inside), ["p1"], { type: "gather", refId: "bush", eventKey: "gather:b9:1", operationId: "a", at: { x: 60, z: 60 } });
+  assert.equal(hout(), 0, "struik buiten de cirkel telt niet");
+  node03.questEvents(ctx("p1", inside), ["p1"], { type: "gather", refId: "bush", eventKey: "gather:b1:1", operationId: "b", at: { x: 20, z: 20 } });
+  assert.equal(hout(), 1, "struik in de cirkel telt");
+  const point = n4.buildQuestSummary(ctx("p1", inside), ctx("p1").project.campaigns.quests.byId["quest.bos"], row("p1", "quest.bos")).activeStep.map;
+  assert.deepEqual([point.show, point.points.length], ["point", 0], "punt: geen gebied, wel het midden");
+  node03.questEvents(ctx("p1", inside), ["p1"], { type: "gather", refId: "bush", eventKey: "gather:b1:2", operationId: "c", at: { x: 22, z: 18 } });
+  assert.equal(row("p1", "quest.bos").active_step_id, "weg");
+  n4.syncAutoProgress(ctx("p1", inside));
+  assert.equal(row("p1", "quest.bos").active_step_id, "weg", "verlaat gebied: nog binnen");
+  n4.syncAutoProgress(ctx("p1", outside));
+  assert.equal(row("p1", "quest.bos").status, "completed", "buiten: klaar");
+});
+
+test("stap 3: Team samen in een gebied: een kill van een groepslid in het gebied telt voor het team, erbuiten niet", () => {
+  const { db, node03, service, ctx, row, setProject } = setup();
+  setProject(bosWorld({ type: "defeat", ref: "actor_archetype:wolf", share: "team", amount: 1 }));
+  party(db, ["p1", "p2"]);
+  const n4 = service();
+  for (const id of ["p1", "p2"]) {
+    n4.acceptQuest(ctx(id, { x: 20, z: 20 }), "quest.bos", "acc" + id);
+    n4.syncAutoProgress(ctx(id, { x: 20, z: 20 }));
+  }
+  const goal = () => n4.buildQuestSummary(ctx("p1"), ctx("p1").project.campaigns.quests.byId["quest.bos"], row("p1", "quest.bos")).activeStep.objectives[0];
+  node03.questEvents(ctx("p2"), ["p2"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:1", operationId: "a", at: { x: 80, z: 80 } });
+  assert.equal(goal().currentValue, 0, "wolf buiten het gebied");
+  node03.questEvents(ctx("p2"), ["p2"], { type: "defeat", refId: "wolf", eventKey: "defeat:w1:2", operationId: "b", at: { x: 19, z: 21 } });
+  assert.deepEqual([goal().currentValue, goal().requiredValue], [1, 2], "kill van p2 in het gebied telt voor het team");
+});

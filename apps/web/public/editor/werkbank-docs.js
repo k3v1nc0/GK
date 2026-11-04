@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
-import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest5";
-import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest5";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261104-quest7";
+import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest7";
+import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest7";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -624,7 +624,7 @@ export function createDocBench(options = {}) {
   function questStepsSummary(body, doc) {
     const own = hasOwnSteps(body);
     const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
-    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived; };
+    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived && (target.kind !== "area" || target.body?.soort === "questgebied"); };
     const issues = own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave }).length : 0;
     const text = !doc ? "Eerst ✓ Maken, dan kun je stappen bouwen."
       : own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (issues ? " · ⚠️ " + issues : " · ✅")
@@ -745,6 +745,24 @@ export function createDocBench(options = {}) {
       const row = fieldRow(key, field, control(key, field, body, isNew, onChange), ["loot", "refList", "assetList"].includes(field.ui?.control));
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more ? more : visible).append(row);
+    }
+    // Quest Builder stap 3: een Questgebied snel als cirkel of rechthoek met een maat in meters (vrij = punten slepen).
+    if (kind === "area" && where === "werkbank" && !isNew && doc && areaSoort(body) === "questgebied") {
+      const now = areaCenterMm(body.pointsMm);
+      const size = el("input", { type: "number", class: "wbdNumber", min: "1", max: "500", step: "1", value: String(Math.max(1, Math.round(now.radius / 1000))), title: "Straal (cirkel) of halve breedte (rechthoek) in meters" });
+      const shapeTo = (make, label) => async () => {
+        const meters = Math.max(1, Math.min(500, Number(size.value) || 10));
+        body.pointsMm = make(now.x, now.z, meters * 1000);
+        try { await saveDoc(kind, doc, body, "Questgebied · " + label + " " + meters + " m"); } catch {}
+        rerender();
+      };
+      const circle = el("button", { type: "button", class: "wbdChoice", text: "⭕ Cirkel" });
+      const rect = el("button", { type: "button", class: "wbdChoice", text: "⬛ Rechthoek" });
+      circle.addEventListener("click", shapeTo(areaCirclePointsMm, "cirkel"));
+      rect.addEventListener("click", shapeTo(areaRectPointsMm, "rechthoek"));
+      visible.append(fieldRow("questArea", { label: "Vorm (m)", ui: { icon: "⭕" },
+        help: { waarvoor: "Maak het gebied een cirkel (straal in meter) of rechthoek (halve breedte in meter) op dezelfde plek.", goed: "10 tot 40 m voor een zoekgebied.", probleem: "Andere vorm nodig → sleep de punten in de 3D-view (F = punt erbij)." } },
+        el("div", { class: "wbdInline" }, [size, circle, rect])));
     }
     for (const [name, entry] of groups) entry.toggle.textContent = (entry.fields.hidden ? "▸ " : "▾ ") + name + " (" + entry.fields.childElementCount + ")";
     host.append(visible);

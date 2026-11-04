@@ -225,7 +225,7 @@ export const CANONICAL_KINDS = {
         optionIcons: Object.fromEntries(AREA_SOORT_ORDER.map((key) => [key, AREA_SOORTEN[key].icon])),
         optionLabels: Object.fromEntries(AREA_SOORT_ORDER.map((key) => [key, AREA_SOORTEN[key].label])),
         ui: ui("🧩", "select", "werkbank"), default: null,
-        help: help("Wat dit vlak is: begroeiing, pad, blokkade, loopvlak of deelgebied.", "Kies het icoon; de punten blijven staan als je wisselt.", "Verkeerde soort → klik een ander icoon; zet daarna de instellingen opnieuw.") },
+        help: help("Wat dit vlak is: begroeiing, pad, blokkade, loopvlak, deelgebied of questgebied (voor quests).", "Kies het icoon; de punten blijven staan als je wisselt.", "Verkeerde soort → klik een ander icoon; zet daarna de instellingen opnieuw.") },
       settings: { type: "areaSettings", required: false, audience: "client", label: "Instellingen", soorten: AREA_SETTING_SPECS,
         ui: ui("🎛️", "areaSettings", "werkbank"), default: null,
         help: help("De instellingen die bij deze soort horen (textuur, modellen, breedte).", "Begin met de velden in beeld; de rest staat onder ⚙️ meer.", "Ziet er raar uit → zet een veld terug op de standaard.") },

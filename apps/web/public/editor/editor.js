@@ -11,11 +11,11 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261104-quest6";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261104-quest7";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";
-import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
+import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261104-quest7";
 import { removeVisualObjects, visualModelsForRelation, visualObjectRelations } from "./visual-object-relations.js?v=20261007-visual-builder2";
 import { FIELD_HELP_STATUSES, createSemanticFieldHelpRegistry, formatSemanticFieldHelp, semanticFieldHelpEntry } from "./semantic-field-help.js?v=20261012-semantic-help1";
 import {
@@ -1101,7 +1101,8 @@ async function createAreaDoc(soort) {
   const cz = Number(center.z) || 0;
   const groundY = terrainGroundY();
   const corners = soort === "pad" ? [[-5, 0], [5, 0]] : [[-4, -4], [4, -4], [4, 4], [-4, 4]];
-  const pointsMm = corners.map(function (offset) {
+  // Questgebied: meteen een cirkel van 10 m (straal en vorm pas je aan in het paneel).
+  const pointsMm = soort === "questgebied" ? areaCirclePointsMm(mm(cx), mm(cz), 10000) : corners.map(function (offset) {
     const point = [mm(cx + offset[0]), mm(cz + offset[1])];
     if (def.height) point.push(mm(groundY + 0.35));
     return point;

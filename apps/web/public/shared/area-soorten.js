@@ -7,7 +7,7 @@ import { NODE_TYPES } from "./node-types.js";
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
-export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "loopvlak", "deelgebied"]);
+export const AREA_SOORT_ORDER = Object.freeze(["begroeiing", "pad", "blokkade", "loopvlak", "deelgebied", "questgebied"]);
 
 // geometry: velden van de oude node die de Area tool uit de punten afleidt (staan niet in settings).
 // main: de velden die in beeld staan (rest onder ⚙️ meer).
@@ -33,8 +33,33 @@ export const AREA_SOORTEN = Object.freeze({
     main: ["priority"]
   },
   // Een deelgebied (F4) gebruikt zijn eigen velden (gebied, muziek, veilig, voorrang); geen settings.
-  deelgebied: { label: "Deelgebied", icon: "🔷", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] }
+  deelgebied: { label: "Deelgebied", icon: "🔷", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] },
+  // Quest Builder stap 3: een gebied voor quests (ga naar, verlaat, alleen hier tellen, zoekgebied op de kaart).
+  // Alleen de quest-motor leest het; het doet niets met muziek, veilig of botsen.
+  questgebied: { label: "Questgebied", icon: "🎯", nodeType: "area_definition", closed: true, minPoints: 3, geometry: [], main: [] }
 });
+
+// Een cirkel (24 punten) of rechthoek rond (cx, cz) in mm, voor de knoppen ⭕ en ⬛ bij een Questgebied.
+export function areaCirclePointsMm(cxMm, czMm, radiusMm, count = 24) {
+  const r = Math.max(1000, Math.round(radiusMm));
+  return Array.from({ length: count }, (_, i) => {
+    const angle = (i / count) * Math.PI * 2;
+    return [Math.round(cxMm + Math.cos(angle) * r), Math.round(czMm + Math.sin(angle) * r)];
+  });
+}
+export function areaRectPointsMm(cxMm, czMm, halfMm) {
+  const h = Math.max(1000, Math.round(halfMm));
+  return [[cxMm - h, czMm - h], [cxMm + h, czMm - h], [cxMm + h, czMm + h], [cxMm - h, czMm + h]].map((point) => point.map(Math.round));
+}
+// Midden en "straal" (verste punt) van een vlak in mm.
+export function areaCenterMm(pointsMm) {
+  const list = Array.isArray(pointsMm) ? pointsMm : [];
+  if (!list.length) return { x: 0, z: 0, radius: 10000 };
+  const x = list.reduce((sum, point) => sum + point[0], 0) / list.length;
+  const z = list.reduce((sum, point) => sum + point[1], 0) / list.length;
+  const radius = Math.max(...list.map((point) => Math.hypot(point[0] - x, point[1] - z)));
+  return { x: Math.round(x), z: Math.round(z), radius: Math.round(radius) };
+}
 
 // Naam, icoon en Ⓘ-hulp per instelling: [icoon, naam, waarvoor, goede waarden, probleem → oplossing].
 const T = {
