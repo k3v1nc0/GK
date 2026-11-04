@@ -191,6 +191,7 @@ export function createGkHud(api) {
   const ui = {
     trade: null,            // { vendorId, offerId } tijdens handelen
     craft: null,            // { stationId, recipeId } tijdens maken
+    craftSearch: "",        // filter in de compacte receptenlijst
     sure: "",               // knop die een tweede tik nodig heeft (weggooien, uitloggen)
     sureTimer: 0,
     chars: null,            // laatst geladen characters-lijst
@@ -1603,7 +1604,7 @@ export function createGkHud(api) {
     talk.hidden = !dialogue || root.dataset.mode !== "talk" || root.dataset.dock !== "talk";
     if (!dialogue) { talk.classList.remove("gkTalk--service"); talk.replaceChildren(); return; }
     const serviceActive = Boolean(ui.trade || ui.craft);
-    const oldBody = talk.querySelector(".gkTalkService .gkBody");
+    const oldBody = talk.querySelector(".gkTalkService .gkBody, .gkTalkService .gkCraftList");
     const oldTop = talk.querySelector(".gkTalkService .gkSplitTop");
     const bodyScroll = oldBody ? oldBody.scrollTop : 0;
     const topScroll = oldTop ? oldTop.scrollTop : 0;
@@ -1629,7 +1630,7 @@ export function createGkHud(api) {
     const serviceView = serviceActive ? h("section", { class: "gkTalkService" }, ui.trade ? sheetTrade() : sheetCraft()) : null;
     talk.classList.toggle("gkTalk--service", serviceActive);
     talk.replaceChildren(...[intro, serviceView].filter(Boolean));
-    const nextBody = talk.querySelector(".gkTalkService .gkBody");
+    const nextBody = talk.querySelector(".gkTalkService .gkBody, .gkTalkService .gkCraftList");
     const nextTop = talk.querySelector(".gkTalkService .gkSplitTop");
     if (nextBody) nextBody.scrollTop = bodyScroll;
     if (nextTop) nextTop.scrollTop = topScroll;
@@ -1653,7 +1654,7 @@ export function createGkHud(api) {
     if (ui.sig.rail === signature) return;
     ui.sig.rail = signature;
     rail.hidden = m === "trade" || m === "craft";
-    const handleTitle = p === "open" ? "Kleiner (alleen iconen)" : p === "dock" ? (dockNow === "talk" ? "Gesprek dicht" : "Chat dicht") : "Dicht";
+    const handleTitle = dockNow === "talk" ? "Gesprek sluiten" : p === "open" ? "Kleiner (alleen iconen)" : p === "dock" ? "Chat dicht" : "Dicht";
     const items = [h("button", { type: "button", class: "gkTab gkHandle", "data-act": "handle", title: handleTitle }, [h("b", { text: "›" })])];
     for (const tab of tabs) {
       const on = p === "open" && tab.id === store.tab;
@@ -2104,7 +2105,7 @@ export function createGkHud(api) {
   function sheetTrade() {
     const d = data();
     const vendor = api.vendor(ui.trade?.vendorId);
-    if (!vendor) return [head("shop", "Winkel"), h("div", { class: "gkBody" }, [emptyNote("shop", "Deze winkel is er niet meer.")])];
+    if (!vendor) return [h("div", { class: "gkBody" }, [emptyNote("shop", "Deze winkel is er niet meer.")])];
     const offers = (vendor.offers || []).filter(function (offer) { return ["sell_to_player", "both"].includes(offer.mode); });
     const wares = h("div", { class: "gkGrid", "data-drop": "wares" }, offers.map(function (offer) {
       const def = catalogItem(offer.itemRef) || {};
@@ -2120,54 +2121,63 @@ export function createGkHud(api) {
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "buy", "data-id": selected.offerId, disabled: d.busy?.n05 || !selected.canBuy ? true : null },
           [ico("two-coins", "plain"), "Kopen ", coin(selected.sellPriceMinor, selected.sellCurrencyRef)])]));
     }
-    return [head("shop", vendor.label || vendor.displayName || "Winkel"), top];
+    return [top];
   }
 
   function sheetCraft() {
     const d = data();
     const station = api.station(ui.craft?.stationId);
-    if (!station) return [head("anvil-impact", "Maken"), h("div", { class: "gkBody" }, [emptyNote("anvil-impact", "Hier kun je niets meer maken.")])];
+    if (!station) return [h("div", { class: "gkBody" }, [emptyNote("anvil-impact", "Hier kun je niets meer maken.")])];
     const recipes = station.recipes || [];
-    if (!recipes.some(function (recipe) { return recipe.recipeId === ui.craft.recipeId; })) ui.craft.recipeId = recipes[0]?.recipeId || null;
-    const recipe = recipes.find(function (entry) { return entry.recipeId === ui.craft.recipeId; }) || null;
-    const top = h("div", { class: "gkBody" });
-    if (recipes.length > 1) {
-      top.append(h("div", { class: "gkRecipeTabs" }, recipes.map(function (entry) {
-        const output = (entry.outputs || [])[0];
-        return h("button", { type: "button", class: "gkCell" + (entry.recipeId === ui.craft.recipeId ? " gkOn" : ""), "data-act": "recipe", "data-id": entry.recipeId, title: entry.displayName },
-          [output?.itemId ? itemVisual(output.itemId) : ico("hammer-drop")]);
-      })));
-    }
-    if (!recipe) top.append(emptyNote("anvil-impact", "Geen recepten."));
-    else {
-      const row = h("div", { class: "gkRecipe" });
-      (recipe.ingredients || []).forEach(function (ingredient, index) {
-        if (index) row.append(h("span", { class: "gkSign", text: "+" }));
-        const ok = num(ingredient.owned) >= num(ingredient.required, 1);
-        row.append(h("div", { class: "gkRecipeItem" }, [h("div", { class: "gkCell", title: ingredient.displayName, "data-rarity": catalogItem(ingredient.itemRef)?.rarity || "common" },
-          [ingredient.itemRef ? itemVisual(ingredient.itemRef) : currencyVisual(ingredient.currencyRef)]),
-        h("span", { class: "gkNeed " + (ok ? "gkOk" : "gkMiss"), text: fmt(ingredient.owned) + "/" + fmt(ingredient.required) + (ok ? " ✓" : " ✗") })]));
-      });
-      row.append(h("span", { class: "gkSign", text: "→" }));
+    const query = String(ui.craftSearch || "").trim().toLocaleLowerCase();
+    const search = h("input", { type: "search", class: "gkCraftSearch", "data-craft-search": "1", value: ui.craftSearch,
+      placeholder: "Recept zoeken…", "aria-label": "Recept zoeken", autocomplete: "off", spellcheck: "false" });
+    const list = h("div", { class: "gkCraftList" });
+    for (const recipe of recipes) {
+      const searchText = [recipe.displayName, ...(recipe.ingredients || []).map(function (entry) { return entry.displayName || entry.itemRef || entry.currencyRef; }),
+        ...(recipe.outputs || []).map(function (entry) { return entry.displayName || entry.itemId || entry.currencyId; })].filter(Boolean).join(" ").toLocaleLowerCase();
+      const row = h("div", { class: "gkCraftRow", "data-craft-row": "1", "data-search": searchText, hidden: query && !searchText.includes(query) ? true : null });
+      const strip = h("div", { class: "gkCraftStrip" });
+      strip.append(h("button", { type: "button", class: "gkCraftThumb gkCraftMake", "data-act": "craft", "data-id": recipe.recipeId,
+        title: (recipe.displayName || "Recept") + " maken", disabled: d.busy?.n05 || !recipe.canCraft ? true : null },
+      [ico("anvil-impact", "plain"), h("span", { text: "Maken" }), num(recipe.craftDurationMs) > 0
+        ? h("small", { text: Math.round(num(recipe.craftDurationMs) / 1000) + "s" }) : null]));
       for (const output of recipe.outputs || []) {
-        row.append(h("div", { class: "gkRecipeItem" }, [h("div", { class: "gkCell", title: output.displayName, "data-rarity": catalogItem(output.itemId)?.rarity || "common" },
-          [output.itemId ? itemVisual(output.itemId) : currencyVisual(output.currencyId), num(output.amount) > 1 ? h("b", { text: fmt(output.amount) }) : null])]));
+        strip.append(h("div", { class: "gkCraftThumb gkCell gkCraftResult", title: output.displayName || recipe.displayName,
+          "data-rarity": catalogItem(output.itemId)?.rarity || "common" }, [
+          output.itemId ? itemVisual(output.itemId) : currencyVisual(output.currencyId),
+          h("span", { class: "gkCraftThumbLabel", text: (recipe.displayName || recipe.recipeId) + (num(output.amount, 1) > 1 ? " ×" + fmt(output.amount) : "") })
+        ]));
       }
-      row.append(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "craft", "data-id": recipe.recipeId, title: "Maken", disabled: d.busy?.n05 || !recipe.canCraft ? true : null },
-        [ico("hammer-drop", "plain"), num(recipe.craftDurationMs) > 0 ? Math.round(num(recipe.craftDurationMs) / 1000) + " s" : ""]));
-      top.append(h("strong", { text: recipe.displayName }), row);
+      (recipe.ingredients || []).forEach(function (ingredient) {
+        const ok = num(ingredient.owned) >= num(ingredient.required, 1);
+        strip.append(h("div", { class: "gkCraftThumb gkCell " + (ok ? "gkOk" : "gkMiss"),
+          title: ingredient.displayName || ingredient.itemRef || ingredient.currencyRef,
+          "data-rarity": catalogItem(ingredient.itemRef)?.rarity || "common" }, [
+          ingredient.itemRef ? itemVisual(ingredient.itemRef) : currencyVisual(ingredient.currencyRef),
+          h("span", { class: "gkCraftThumbLabel", text: fmt(ingredient.owned) + "/" + fmt(ingredient.required) })
+        ]));
+      });
+      row.append(strip);
+      list.append(row);
     }
+    const noRecipes = h("div", { class: "gkCraftEmpty", "data-craft-empty": "1", hidden: recipes.length && recipes.some(function (recipe) {
+      const text = [recipe.displayName, ...(recipe.ingredients || []).map(function (entry) { return entry.displayName || entry.itemRef || entry.currencyRef; }),
+        ...(recipe.outputs || []).map(function (entry) { return entry.displayName || entry.itemId || entry.currencyId; })].filter(Boolean).join(" ").toLocaleLowerCase();
+      return !query || text.includes(query);
+    }) ? true : null, text: recipes.length ? "Geen recepten gevonden." : "Geen recepten." });
     const now = Date.now();
+    const jobs = h("div", { class: "gkCraftJobs" });
     for (const job of (d.s05?.crafting?.jobs || []).filter(function (entry) { return entry.state === "running"; }).slice(0, 3)) {
       const start = Date.parse(job.startedAt || "") || now;
       const end = Date.parse(job.completesAt || "") || now;
       const pct = end > start ? Math.max(0, Math.min(1, (now - start) / (end - start))) : 1;
       const jobRecipe = recipes.find(function (entry) { return entry.recipeId === job.recipeId; });
-      top.append(h("div", { class: "gkJob" }, [ico("hourglass"), h("span", { text: jobRecipe?.displayName || job.recipeId }),
+      jobs.append(h("div", { class: "gkJob" }, [ico("hourglass"), h("span", { text: jobRecipe?.displayName || job.recipeId }),
         h("div", { class: "gkProgress" }, [h("i", { style: "width:" + Math.round(pct * 100) + "%" })]),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "claim", "data-id": job.jobId, disabled: d.busy?.n05 || !job.canClaim ? true : null }, ["Ophalen"])]));
     }
-    return [head("anvil-impact", station.label || "Maken"), top];
+    return [h("div", { class: "gkCraft" }, [h("div", { class: "gkCraftTools" }, [ico("anvil-impact"), search]), list, noRecipes, jobs])];
   }
 
   function syncSettings() {
@@ -2789,15 +2799,21 @@ export function createGkHud(api) {
   }
   function shrinkPanel() {
     const panelNow = root.dataset.panel;
-    if (ui.trade || ui.craft) { endService(); return; }
-    // Alleen chat of gesprek open: het pijltje doet die dicht.
-    if (panelNow === "dock") { if (root.dataset.dock === "talk") closeTalk(); else closeChat(); return; }
+    // Bij een gesprek sluit het pijltje alles in één keer. Zo blijft na een
+    // winkel of werkplaats niet eerst alleen het gesprek achter.
+    if (root.dataset.dock === "talk" || ui.trade || ui.craft) {
+      closeTalk();
+      setPanel("closed");
+      return;
+    }
+    // Alleen chat open: het pijltje doet die dicht.
+    if (panelNow === "dock") { closeChat(); return; }
     setPanel(panelNow === "open" ? "rail" : "closed");
   }
   function startService(kind, id) {
     store.item = null;
     if (kind === "vendor") { ui.trade = { vendorId: id, offerId: null }; ui.craft = null; }
-    else { ui.craft = { stationId: id, recipeId: null }; ui.trade = null; }
+    else { ui.craft = { stationId: id, recipeId: null }; ui.craftSearch = ""; ui.trade = null; }
     ui.dockPick = "talk";
     ui.farTradeSince = 0;
     applyLayout();
@@ -2928,7 +2944,6 @@ export function createGkHud(api) {
       case "ware": if (ui.trade) { ui.trade.offerId = ui.trade.offerId === id ? null : id; store.item = null; renderTalk(); } break;
       case "buy": if (ui.trade) api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
       case "sell": if (ui.trade && id) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
-      case "recipe": if (ui.craft) { ui.craft.recipeId = id; renderTalk(); } break;
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
       case "claim": api.run05("crafting:claim", { jobId: id }); break;
       case "set": store[id] = id.startsWith("health") ? !healthSettingOn(id) : !store[id]; save(); ui.effective = ""; render(); break;
@@ -3129,6 +3144,19 @@ export function createGkHud(api) {
   }
 
   root.addEventListener("click", onClick);
+  root.addEventListener("input", function (event) {
+    const input = event.target && typeof event.target.closest === "function" ? event.target.closest("[data-craft-search]") : null;
+    if (!input || !root.contains(input)) return;
+    ui.craftSearch = String(input.value || "");
+    const query = ui.craftSearch.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const row of root.querySelectorAll("[data-craft-row]")) {
+      row.hidden = Boolean(query && !String(row.dataset.search || "").includes(query));
+      if (!row.hidden) visible += 1;
+    }
+    const empty = root.querySelector("[data-craft-empty]");
+    if (empty) empty.hidden = visible > 0;
+  });
   root.addEventListener("pointerdown", onPointerDown);
   // MMO (3-11): rechtsklik op een teamlid = spelermenu; nooit het browsermenu over het spelermenu heen.
   root.addEventListener("contextmenu", function (event) {

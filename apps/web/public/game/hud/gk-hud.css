@@ -189,6 +189,11 @@
 .gkTalkIntro .gkTalkHead { grid-column: 2; align-self: center; }
 .gkTalkIntro .gkTalkText, .gkTalkIntro .gkChoices { grid-column: 1 / -1; }
 .gkTalk.gkTalk--service { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; }
+.gkTalk.gkTalk--service .gkTalkIntro { gap: 6px; }
+.gkTalk.gkTalk--service .gkTalkFace { width: calc(36px * var(--gk-scale)); height: calc(36px * var(--gk-scale)); }
+.gkTalk.gkTalk--service .gkTalkText { font-size: 12px; line-height: 1.25; }
+.gkTalk.gkTalk--service .gkChoices { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.gkTalk.gkTalk--service .gkChoice { flex: 1 0 auto; min-height: calc(27px * var(--gk-scale)); padding-block: 2px; }
 .gkTalkService { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 10px;
   border: 1px solid var(--gk-line); background: rgba(6, 10, 18, 0.38); }
 .gkTalkService .gkSheetHead { background: rgba(6, 10, 18, 0.42); }
@@ -421,18 +426,37 @@
 .gkBar .gkCell { width: 44px; height: 44px; flex: none; box-sizing: border-box; padding: 4px; }
 .gkBar span { flex: 1 1 auto; min-width: 0; font-size: 12px; }
 .gkBar .gkBtn { flex: 0 0 auto; }
-.gkRecipe { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
-.gkRecipe .gkCell { width: var(--gk-cellsize); height: var(--gk-cellsize); box-sizing: border-box; }
-.gkRecipe .gkNeed { position: absolute; left: 0; right: 0; bottom: -18px; text-align: center; font-size: 11px; font-weight: 800; }
-.gkRecipe .gkNeed.gkOk { color: #6dff9a; }
-.gkRecipe .gkNeed.gkMiss { color: #ff7b7b; }
-.gkRecipe .gkSign { font-size: 20px; color: var(--gk-muted); font-weight: 900; }
-.gkRecipeItem { position: relative; margin-bottom: 18px; }
-.gkRecipeTabs { padding: 2px; display: flex; gap: 6px; overflow: auto; padding-bottom: 6px; scrollbar-width: none; }
-.gkRecipeTabs .gkCell { width: 46px; height: 46px; flex: none; box-sizing: border-box; padding: 4px; }
-.gkJob { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.gkCraft { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.gkCraftTools { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-bottom: 1px solid var(--gk-line); background: rgba(6, 10, 18, 0.32); }
+.gkCraftTools > .gkIco { flex: none; width: 18px; height: 18px; }
+.gkCraftSearch { flex: 1 1 auto; min-width: 0; height: 28px; padding: 3px 8px; border: 1px solid var(--gk-line2); border-radius: 7px; outline: 0;
+  color: var(--gk-text); background: rgba(22, 32, 52, 0.96); font: inherit; }
+.gkCraftSearch:focus { border-color: var(--gk-accent); box-shadow: 0 0 0 1px var(--gk-accent); }
+.gkCraftList { --gk-craft-thumb: clamp(44px, 13vw, 54px); flex: 1 1 auto; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.gkCraftRow { width: 100%; min-width: 0; min-height: calc(var(--gk-craft-thumb) + 8px); box-sizing: border-box; overflow-x: auto; overflow-y: hidden; padding: 4px 6px;
+  border-bottom: 1px solid rgba(118, 158, 220, 0.14); scrollbar-width: thin; overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
+.gkCraftRow:hover { background: rgba(70, 163, 255, 0.07); }
+.gkCraftStrip { width: max-content; min-width: 100%; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+.gkCraftThumb, .gkCraftThumb.gkCell { position: relative; flex: 0 0 var(--gk-craft-thumb); width: var(--gk-craft-thumb); height: var(--gk-craft-thumb); min-width: 0; min-height: 0;
+  box-sizing: border-box; border-radius: 8px; overflow: hidden; }
+.gkCraftThumb.gkCell { padding: 4px 4px 15px; }
+.gkCraftThumbLabel { position: absolute; z-index: 1; left: 2px; right: 2px; bottom: 2px; padding: 1px 2px; overflow: hidden; border-radius: 4px;
+  color: #fff; background: rgba(4, 8, 16, 0.82); font-size: 9px; font-weight: 900; line-height: 1.15; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.gkCraftThumb.gkOk .gkCraftThumbLabel { color: #6dff9a; }
+.gkCraftThumb.gkMiss .gkCraftThumbLabel { color: #ff7b7b; }
+.gkCraftResult .gkCraftThumbLabel { color: var(--gk-gold); }
+.gkCraftMake { display: grid; place-items: center; padding: 4px 3px 15px; border: 1px solid rgba(120, 255, 160, 0.5); color: #fff;
+  background: linear-gradient(180deg, #3fbf5f, #1f7d3a); }
+.gkCraftMake:disabled { opacity: 0.45; cursor: default; }
+.gkCraftMake .gkIco { width: 24px; height: 24px; }
+.gkCraftMake > span { position: absolute; left: 2px; right: 2px; bottom: 2px; font-size: 9px; font-weight: 900; line-height: 1.15; }
+.gkCraftMake > small { position: absolute; top: 2px; right: 2px; padding: 0 2px; border-radius: 4px; background: rgba(4, 8, 16, 0.75); font-size: 8px; }
+.gkCraftEmpty { padding: 14px 8px; color: var(--gk-muted); text-align: center; font-size: 12px; }
+.gkCraftJobs { flex: none; max-height: 92px; overflow: auto; padding: 0 6px 5px; border-top: 1px solid var(--gk-line); }
+.gkJob { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; white-space: nowrap; }
 .gkJob .gkIco { width: 18px; height: 18px; }
 .gkJob .gkProgress { flex: 1 1 auto; }
+.gkCraftJobs .gkBtn { min-height: 30px; height: 30px; padding: 3px 8px; }
 
 @keyframes gkPop { from { transform: scale(0.94); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes gkSlide { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
