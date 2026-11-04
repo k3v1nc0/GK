@@ -146,22 +146,6 @@ function sortedQuestSteps(quest) {
   });
 }
 
-function nextStepFor(quest, currentStep) {
-  if (!quest || !currentStep) return null;
-  const explicit = stepById(quest, currentStep.nextStepRef);
-  if (explicit) return explicit;
-  const steps = sortedQuestSteps(quest);
-  const index = steps.findIndex(function (step) { return step.id === currentStep.id; });
-  return index >= 0 ? steps[index + 1] || null : null;
-}
-
-function defaultStepForAccept(quest) {
-  const steps = sortedQuestSteps(quest);
-  const start = stepById(quest, quest?.startStepRef) || steps[0] || null;
-  if (!start || start.stepType !== OBJECTIVE_TYPES.TALK) return start;
-  return nextStepFor(quest, start) || start;
-}
-
 function questRepeatMode(quest) {
   const mode = safeString(quest?.repeatMode || "once_per_character");
   return ["repeatable", "daily", "weekly"].includes(mode) ? mode : "once_per_character";
@@ -193,12 +177,93 @@ function compareNumbers(left, comparison, right) {
   return left >= right;
 }
 
+// ---- Quest Builder stap 1 (4-11): een quest is een netwerk van stappen met eindes ----------------------------
+// Doelen met een gebeurtenis (versla, verzamel, pak op) telt de server zelf, 1x per gebeurtenis per speler.
+const EVENT_OBJECTIVES = new Set(["defeat", "gather", "pickup"]);
+// Praat- en inleverkeuzes zet de quest-motor zelf in het NPC-gesprek: "quest.obj|<quest>|<stap>|<doel>".
+const QUEST_CHOICE_PREFIX = "quest.obj|";
+const MAX_STEP_HOPS = 16;
+const normalizedQuests = new WeakMap();
+
+function isOpenStatus(status) {
+  return status === QUEST_STATUS.ACTIVE || status === QUEST_STATUS.READY_TO_TURN_IN;
+}
+
+function stateOf(row) {
+  const state = safeJsonParse(row?.state_json || "{}", {});
+  return state && typeof state === "object" ? state : {};
+}
+
+function objectiveIdOf(objective) {
+  return objective?.id || objective?.objectiveId || null;
+}
+
+function objectiveIsNeeded(objective) {
+  return objective?.role !== "optional" && objective?.role !== "bonus";
+}
+
+function objectiveEventRef(objective) {
+  return objective?.actorRef || objective?.resourceRef || objective?.itemRef || null;
+}
+
+function requiredOf(objective) {
+  return Math.max(1, safeInteger(objective?.requiredAmount || objective?.requiredCount, 1));
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+// Oudere builds (1 stap deliver/reach, of een rij met nextStepRef) worden hier hetzelfde netwerk met een einde.
+// De stap-ID's blijven gelijk, dus lopende quests van spelers gaan gewoon door.
+function normalizeQuest(quest) {
+  if (!quest || typeof quest !== "object") return null;
+  if (quest.graph === true) return quest;
+  if (normalizedQuests.has(quest)) return normalizedQuests.get(quest);
+  const list = sortedQuestSteps(quest);
+  const steps = list.map(function (step, index) {
+    const following = stepById(quest, step.nextStepRef) || list[index + 1] || null;
+    const objectives = (Array.isArray(step.objectives) ? step.objectives : []).map(function (objective) {
+      return Object.assign({}, objective, {
+        id: objectiveIdOf(objective),
+        objectiveType: objective.objectiveType === OBJECTIVE_TYPES.REACH ? "talk" : objective.objectiveType,
+        role: "required"
+      });
+    });
+    return Object.assign({}, step, { kind: "step", match: "all", objectives, next: [{ to: following ? following.id : "end" }] });
+  });
+  steps.push({ id: "end", kind: "end", displayName: "Klaar", instruction: "", match: "all", objectives: [], next: [], conditions: [], rewards: [] });
+  const result = Object.assign({}, quest, {
+    graph: true,
+    steps,
+    stepsById: Object.fromEntries(steps.map(function (step) { return [step.id, step]; })),
+    startStepRef: stepById(quest, quest.startStepRef)?.id || steps[0].id,
+    version: quest.version || "legacy_" + crypto.createHash("sha256").update(JSON.stringify(quest)).digest("hex").slice(0, 16)
+  });
+  normalizedQuests.set(quest, result);
+  return result;
+}
+
+function firstNextStep(quest, step) {
+  for (const link of Array.isArray(step?.next) ? step.next : []) {
+    const next = stepById(quest, link?.to);
+    if (next) return next;
+  }
+  return null;
+}
+
 export class Node04QuestRuntimeService {
   constructor(db, repository, mmoService, node03RuntimeService) {
     this.db = db;
     this.repository = repository;
     this.mmoService = mmoService;
     this.node03RuntimeService = node03RuntimeService;
+    this.versionCache = new Map();
+    this.savepointSeq = 0;
+    // Quest Builder: versla / verzamel / pak op komen hier binnen (zelfde transactie als de actie).
+    if (node03RuntimeService) node03RuntimeService.questEvents = (ctx, playerIds, event) => this.onQuestEvent(ctx, playerIds, event);
   }
 
   getRequestContext(req) {
@@ -246,7 +311,7 @@ export class Node04QuestRuntimeService {
     const action = safeString(payload.action, "").toLowerCase();
     const operationId = safeString(payload.operationId || payload.operation_id, "") || randomId("node04_operation");
     const hash = normalizedActionPayloadHash(action, payload);
-    if (action === "reset_quest" || action === "reset_node04") assertDeveloperActionAllowed(ctx);
+    if (action === "reset_quest" || action === "reset_node04" || action === "dev_set_step") assertDeveloperActionAllowed(ctx);
     // F2-E2-T08: queststatus, beloning en receipt in een transactie; ACK pas na COMMIT.
     return runOperation(this.db, {
       operationId,
@@ -267,6 +332,7 @@ export class Node04QuestRuntimeService {
         else if (action === "abandon") result = this.abandonQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "reset_quest") result = this.resetQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "reset_node04") result = this.resetNode04(ctx);
+        else if (action === "dev_set_step") result = this.devSetStep(ctx, safeString(payload.questId || payload.quest_id), safeString(payload.stepId || payload.step_id), operationId);
         else {
           const error = new Error("Onbekende questactie.");
           error.status = 400;
@@ -296,9 +362,10 @@ export class Node04QuestRuntimeService {
         const refreshed = this.loadQuestState(ctx.profile.id, quest.id);
         if (refreshed) existing.set(quest.id, refreshed);
         else existing.delete(quest.id);
-      } else {
-        this.syncQuestContentHash(ctx, row, quest);
+        continue;
       }
+      this.syncQuestContentHash(ctx, row, quest);
+      if (isOpenStatus(row.status) && !stateOf(row).version) this.pinQuestVersion(ctx, normalizeQuest(quest), row);
     }
     for (const quest of allQuests(ctx.project)) {
       if (!quest?.id || existing.has(quest.id)) continue;
@@ -376,52 +443,168 @@ export class Node04QuestRuntimeService {
   }
 
   syncAutoProgress(ctx) {
-    const rows = this.loadQuestStateRows(ctx).filter(function (row) {
-      return row.status === QUEST_STATUS.ACTIVE;
-    });
-    for (const row of rows) {
-      const quest = questById(ctx.project, row.quest_id);
-      const step = stepById(quest, row.active_step_id) || defaultStepForAccept(quest);
-      if (!quest || !step) continue;
-      const progress = this.evaluateStepProgress(ctx, quest, step);
-      this.persistObjectiveProgress(ctx, quest, step, progress);
-      const next = progress.complete ? nextStepFor(quest, step) : null;
-      if (progress.complete && step.stepType === OBJECTIVE_TYPES.DELIVER && !next) {
-        this.updateQuestState(ctx, quest.id, QUEST_STATUS.READY_TO_TURN_IN, step.id, row.status, row.active_step_id, "ready_to_turn_in");
-        continue;
-      }
-      if (step.autoAdvance !== false && progress.complete) {
-        if (next) {
-          this.updateQuestState(ctx, quest.id, QUEST_STATUS.ACTIVE, next.id, row.status, row.active_step_id, "auto_advance");
+    for (const row of this.loadQuestStateRows(ctx)) {
+      if (!isOpenStatus(row.status)) continue;
+      const quest = this.questDefinition(ctx, row.quest_id, row);
+      if (quest) this.advanceQuest(ctx, quest, row, null);
+    }
+  }
+
+  // Alles of niets: voortgang, stapwissel en beloning samen. Werkt ook buiten een runOperation
+  // (bij het ophalen van de stand); binnen een transactie is het een geneste savepoint.
+  atomic(fn) {
+    this.savepointSeq = (this.savepointSeq || 0) + 1;
+    const name = "quest_sp_" + this.savepointSeq;
+    this.db.exec("SAVEPOINT " + name);
+    try {
+      const result = fn();
+      this.db.exec("RELEASE " + name);
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK TO " + name);
+      this.db.exec("RELEASE " + name);
+      throw error;
+    }
+  }
+
+  // De questversie waarmee deze speler begon. Nieuwe versie in de build? Dan maakt hij deze run af op zijn oude versie.
+  questDefinition(ctx, questId, row) {
+    const current = normalizeQuest(questById(ctx.project, questId));
+    const version = safeString(stateOf(row).version);
+    if (!version || current?.version === version) return current;
+    const key = questId + "|" + version;
+    if (!this.versionCache.has(key)) {
+      const stored = this.db.prepare("SELECT definition_json FROM quest_versions WHERE quest_id = ? AND version = ? LIMIT 1").get(questId, version);
+      this.versionCache.set(key, stored ? normalizeQuest(safeJsonParse(stored.definition_json, null)) : null);
+    }
+    return this.versionCache.get(key) || current;
+  }
+
+  rememberQuestVersion(quest) {
+    this.db.prepare("INSERT OR IGNORE INTO quest_versions (quest_id, version, definition_json, created_at) VALUES (?, ?, ?, ?)")
+      .run(quest.id, quest.version, JSON.stringify(quest), now());
+  }
+
+  // Lopende quest van voor de Quest Builder: vastzetten op de huidige versie (zelfde stap-ID's), niets terugzetten.
+  pinQuestVersion(ctx, quest, row) {
+    this.rememberQuestVersion(quest);
+    const state = Object.assign(stateOf(row), { version: quest.version, runId: stateOf(row).runId || randomId("run") });
+    this.db.prepare("UPDATE player_quest_states SET state_json = ?, updated_at = ? WHERE player_id = ? AND quest_id = ?")
+      .run(stableJson(state), now(), ctx.profile.id, quest.id);
+    row.state_json = stableJson(state);
+  }
+
+  // 1x per sleutel per speler per quest (gebeurtenis of beloning). Tweede keer: false.
+  claimOnce(playerId, questId, key, type) {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO player_quest_event_receipts (player_id, quest_id, event_id, event_type, payload_hash, consumed_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(playerId, questId, key, type, key, now());
+    return Number(result.changes) === 1;
+  }
+
+  loadObjectiveProgress(playerId, questId, stepId) {
+    const rows = this.db.prepare("SELECT * FROM player_objective_progress WHERE player_id = ? AND quest_id = ? AND step_id = ?").all(playerId, questId || "", stepId || "");
+    return new Map(rows.map(function (row) { return [row.objective_id, row]; }));
+  }
+
+  writeObjectiveProgress(playerId, questId, stepId, objectiveId, current, required) {
+    this.db.prepare(`
+      INSERT INTO player_objective_progress (player_id, quest_id, step_id, objective_id, current_value, required_value, status, revision, progress_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, '{}', ?)
+      ON CONFLICT(player_id, quest_id, step_id, objective_id) DO UPDATE SET
+        current_value = excluded.current_value,
+        required_value = excluded.required_value,
+        status = excluded.status,
+        revision = player_objective_progress.revision + 1,
+        updated_at = excluded.updated_at
+    `).run(playerId, questId, stepId, objectiveId, current, required, current >= required ? OBJECTIVE_STATUS.COMPLETED : OBJECTIVE_STATUS.ACTIVE, now());
+  }
+
+  // Stap klaar? Dan via de eerste overgang naar de volgende stap. Een einde: quest klaar + beloning (1x per run).
+  advanceQuest(ctx, quest, row, operationId) {
+    return this.atomic(() => {
+      let current = Object.assign({}, row);
+      let step = current.active_step_id ? stepById(quest, current.active_step_id) : stepById(quest, quest.startStepRef);
+      const events = [];
+      for (let hop = 0; step && hop < MAX_STEP_HOPS; hop += 1) {
+        if (step.kind === "end") return this.completeQuestRun(ctx, quest, current, step, operationId, events);
+        const progress = this.evaluateStepProgress(ctx, quest, step);
+        for (const objective of progress.objectives) {
+          if (objective.reachedNow) this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objective.objectiveId, 1, 1);
         }
+        if (!progress.complete) break;
+        const next = firstNextStep(quest, step);
+        if (!next) return this.completeQuestRun(ctx, quest, current, null, operationId, events);
+        // Een stap die je (opnieuw) binnenkomt begint leeg.
+        this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ? AND step_id = ?").run(ctx.profile.id, quest.id, next.id);
+        this.updateQuestState(ctx, quest.id, QUEST_STATUS.ACTIVE, next.id, current.status, step.id, "step_complete", { operationId: operationId || null });
+        events.push({ type: "quest_step", questId: quest.id, stepId: next.id });
+        current = Object.assign(current, { status: QUEST_STATUS.ACTIVE, active_step_id: next.id });
+        step = next;
+      }
+      return { completed: false, events, grants: [] };
+    });
+  }
+
+  completeQuestRun(ctx, quest, row, endStep, operationId, events = []) {
+    const opId = operationId || randomId("quest_progress");
+    const runId = safeString(stateOf(row).runId, "run_" + safeString(row.accepted_at, "legacy"));
+    const grants = [];
+    if (this.claimOnce(ctx.profile.id, quest.id, "reward:" + runId, "quest_reward")) {
+      const actions = (Array.isArray(endStep?.rewards) ? endStep.rewards : []).concat(Array.isArray(quest.rewards) ? quest.rewards : []);
+      for (const action of actions) grants.push.apply(grants, this.executeAction(ctx, action, opId, quest.id));
+    }
+    this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, endStep?.id || null, row.status, row.active_step_id, "quest_complete", { operationId: opId, endId: endStep?.id || null, grants });
+    // Gebeurtenis-bonnetjes van deze run zijn niet meer nodig (de beloning-bon blijft).
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.node03RuntimeService.recordGameplayEvent(ctx, "quest_completed", "player", quest.id, { endId: endStep?.id || null, grants });
+    for (const nextQuestId of Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs : []) {
+      if (!questById(ctx.project, nextQuestId)) continue;
+      grants.push.apply(grants, this.executeAction(ctx, { actionKind: "start_quest", questRef: nextQuestId, mode: "activate", reason: "quest_unlock" }, opId, quest.id));
+    }
+    events.push({ type: "quest_completed", questId: quest.id, endId: endStep?.id || null });
+    return { completed: true, events, grants, message: "Quest voltooid: " + (quest.displayName || quest.id) };
+  }
+
+  // Aangeroepen door node03 (versla, verzamel, pak op), binnen dezelfde transactie als de actie zelf.
+  // Een kill telt voor iedereen die meevocht. Een fout in een quest mag het gevecht nooit tegenhouden.
+  onQuestEvent(ctx, playerIds, event) {
+    const ids = Array.from(new Set((Array.isArray(playerIds) ? playerIds : []).filter(Boolean)));
+    for (const playerId of ids) {
+      const pctx = playerId === ctx.profile?.id ? ctx : Object.assign({}, ctx, { profile: { id: playerId }, position: null });
+      try {
+        this.applyQuestEvent(pctx, event);
+      } catch (error) {
+        console.warn("[quest] gebeurtenis niet verwerkt:", error?.message || error);
       }
     }
   }
 
-  persistObjectiveProgress(ctx, quest, step, progress) {
-    const stamp = now();
-    for (const objective of progress.objectives) {
-      this.db.prepare(`
-        INSERT INTO player_objective_progress (player_id, quest_id, step_id, objective_id, current_value, required_value, status, revision, progress_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(player_id, quest_id, step_id, objective_id) DO UPDATE SET
-          current_value = excluded.current_value,
-          required_value = excluded.required_value,
-          status = excluded.status,
-          revision = player_objective_progress.revision + 1,
-          progress_json = excluded.progress_json,
-          updated_at = excluded.updated_at
-      `).run(
-        ctx.profile.id,
-        quest.id,
-        step.id,
-        objective.objectiveId,
-        safeInteger(objective.currentValue, 0),
-        Math.max(1, safeInteger(objective.requiredValue, 1)),
-        objective.complete ? OBJECTIVE_STATUS.COMPLETED : OBJECTIVE_STATUS.ACTIVE,
-        stableJson(objective),
-        stamp
-      );
+  applyQuestEvent(ctx, event) {
+    const refId = safeString(event?.refId);
+    const key = safeString(event?.eventKey);
+    if (!EVENT_OBJECTIVES.has(event?.type) || !refId || !key) return;
+    for (const row of this.loadQuestStateRows(ctx)) {
+      if (!isOpenStatus(row.status)) continue;
+      const quest = this.questDefinition(ctx, row.quest_id, row);
+      const step = stepById(quest, row.active_step_id);
+      if (!step || step.kind === "end") continue;
+      const matching = (Array.isArray(step.objectives) ? step.objectives : []).filter(function (objective) {
+        return objective.objectiveType === event.type && objectiveEventRef(objective) === refId;
+      });
+      if (!matching.length) continue;
+      this.atomic(() => {
+        if (!this.claimOnce(ctx.profile.id, quest.id, "ev:" + key, event.type)) return;
+        const stored = this.loadObjectiveProgress(ctx.profile.id, quest.id, step.id);
+        for (const objective of matching) {
+          const required = requiredOf(objective);
+          const before = safeInteger(stored.get(objectiveIdOf(objective))?.current_value, 0);
+          if (before >= required) continue;
+          this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveIdOf(objective), before + 1, required);
+        }
+        this.advanceQuest(ctx, quest, row, event.operationId || null);
+      });
     }
   }
 
@@ -431,13 +614,13 @@ export class Node04QuestRuntimeService {
       UPDATE player_quest_states
       SET status = ?,
           active_step_id = ?,
-          tracked = CASE WHEN ? IN ('active', 'ready_to_turn_in') THEN 1 ELSE tracked END,
+          tracked = CASE WHEN ? IN ('active', 'ready_to_turn_in') AND COALESCE(?, '') NOT IN ('active', 'ready_to_turn_in') THEN 1 ELSE tracked END,
           completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END,
           claimed_at = CASE WHEN ? = 'completed' THEN COALESCE(claimed_at, ?) ELSE claimed_at END,
           revision = revision + 1,
           updated_at = ?
       WHERE player_id = ? AND quest_id = ?
-    `).run(status, activeStepId || null, status, status, stamp, status, stamp, stamp, ctx.profile.id, questId);
+    `).run(status, activeStepId || null, status, fromStatus || null, status, stamp, status, stamp, stamp, ctx.profile.id, questId);
     this.audit(ctx, questId, fromStatus, status, fromStepId, activeStepId || null, extra.operationId || null, reason, extra);
   }
 
@@ -449,31 +632,23 @@ export class Node04QuestRuntimeService {
   }
 
   acceptQuest(ctx, questId, operationId, reason = "player_accept") {
-    const quest = questById(ctx.project, questId);
-    if (!quest) {
-      const error = new Error("Quest niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    if (!this.questPrerequisitesMet(ctx, quest)) {
-      const error = new Error("Deze quest is nog niet vrijgespeeld.");
-      error.status = 400;
-      throw error;
-    }
+    const quest = normalizeQuest(questById(ctx.project, questId));
+    if (!quest) throw httpError(404, "Quest niet gevonden.");
+    if (!this.questPrerequisitesMet(ctx, quest)) throw httpError(400, "Deze quest is nog niet vrijgespeeld.");
     const row = this.loadQuestState(ctx.profile.id, quest.id);
-    if (row?.status === QUEST_STATUS.COMPLETED) {
-      if (!questCanRepeatNow(row, quest)) {
-        return { message: questRepeatBlockedMessage(quest), events: [] };
-      }
-      this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
-      this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
-      this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    if (row && isOpenStatus(row.status)) return { message: "Quest is al actief.", events: [] };
+    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) {
+      return { message: questRepeatBlockedMessage(quest), events: [] };
     }
-    if (row?.status === QUEST_STATUS.ACTIVE) {
-      return { message: "Quest is al actief.", events: [] };
-    }
-    const step = defaultStepForAccept(quest);
+    const start = stepById(quest, quest.startStepRef);
+    if (!start || start.kind === "end") throw httpError(400, "Deze quest heeft nog geen eerste stap.");
+    // Nieuwe run: schone voortgang, eigen run-ID (beloning 1x per run) en de versie waarop hij hem afmaakt.
+    this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.rememberQuestVersion(quest);
     const stamp = now();
+    const stateJson = this.questStateJson(ctx, quest, { version: quest.version, runId: randomId("run") });
     this.db.prepare(`
       INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, revision, state_json, updated_at)
       VALUES (?, ?, 'active', ?, ?, ?, 1, ?, ?)
@@ -481,16 +656,22 @@ export class Node04QuestRuntimeService {
         status = 'active',
         active_step_id = excluded.active_step_id,
         tracked = excluded.tracked,
-        accepted_at = COALESCE(player_quest_states.accepted_at, excluded.accepted_at),
+        accepted_at = excluded.accepted_at,
         completed_at = NULL,
         claimed_at = NULL,
         revision = player_quest_states.revision + 1,
         state_json = excluded.state_json,
         updated_at = excluded.updated_at
-    `).run(ctx.profile.id, quest.id, step?.id || null, quest.autoTrack !== false ? 1 : 0, stamp, this.questStateJson(ctx, quest), stamp);
-    this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.ACTIVE, row?.active_step_id || null, step?.id || null, operationId, reason, {});
-    this.node03RuntimeService.recordGameplayEvent(ctx, "quest_accepted", "player", quest.id, { stepId: step?.id || null });
-    return { message: "Quest accepted: " + (quest.displayName || quest.id), events: [{ type: "quest_accepted", questId: quest.id }] };
+    `).run(ctx.profile.id, quest.id, start.id, quest.autoTrack !== false ? 1 : 0, stamp, stateJson, stamp);
+    this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.ACTIVE, row?.active_step_id || null, start.id, operationId, reason, { version: quest.version });
+    this.node03RuntimeService.recordGameplayEvent(ctx, "quest_accepted", "player", quest.id, { stepId: start.id, version: quest.version });
+    const fresh = this.loadQuestState(ctx.profile.id, quest.id);
+    const advanced = this.advanceQuest(ctx, quest, fresh, operationId);
+    return {
+      message: advanced.completed ? advanced.message : "Quest aangenomen: " + (quest.displayName || quest.id),
+      events: [{ type: "quest_accepted", questId: quest.id }].concat(advanced.events || []),
+      grants: advanced.grants || []
+    };
   }
 
   trackQuest(ctx, questId, operationId) {
@@ -518,88 +699,74 @@ export class Node04QuestRuntimeService {
     return { message: "Quest verlaten.", events: [{ type: "quest_abandoned", questId: quest.id }] };
   }
 
+  // Oude knoppen "Turn in" / "Complete" (node04:turn_in, node04:reach): zoek het inlever- of praatdoel bij deze NPC.
   turnInQuest(ctx, questId, operationId) {
-    const quest = questById(ctx.project, questId);
-    const row = this.loadQuestState(ctx.profile.id, questId);
-    const step = stepById(quest, row?.active_step_id);
-    if (!quest || !row || ![QUEST_STATUS.ACTIVE, QUEST_STATUS.READY_TO_TURN_IN].includes(row.status) || !step) {
-      const error = new Error("Quest is niet actief.");
-      error.status = 400;
-      throw error;
-    }
-    const progress = this.evaluateStepProgress(ctx, quest, step);
-    if (step.stepType !== OBJECTIVE_TYPES.DELIVER || !progress.complete || !progress.conditionsMet || !this.isStepTargetInRange(ctx, step, progress)) {
-      const error = new Error(progress.blockedReason || "Quest kan nog niet ingeleverd worden.");
-      error.status = 400;
-      throw error;
-    }
-    const grants = [];
-    const actions = this.actionsForTurnIn(quest, step, progress);
-    for (const action of actions) {
-      grants.push.apply(grants, this.executeAction(ctx, action, operationId, quest.id));
-    }
-    this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, null, row.status, row.active_step_id, "turn_in", { operationId, grants });
-    this.node03RuntimeService.recordGameplayEvent(ctx, "quest_completed", "player", quest.id, { grants });
-    for (const nextQuestId of Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs : []) {
-      const nextQuest = questById(ctx.project, nextQuestId);
-      if (!nextQuest) continue;
-      const startAction = { actionKind: "start_quest", questRef: nextQuest.id, mode: "activate", reason: "quest_unlock" };
-      grants.push.apply(grants, this.executeAction(ctx, startAction, operationId, quest.id));
-    }
-    return {
-      message: "Quest voltooid: " + (quest.displayName || quest.id),
-      events: [{ type: "quest_completed", questId: quest.id }],
-      grants
-    };
+    return this.completeObjectiveNearby(ctx, questId, ["deliver"], operationId);
   }
 
   completeReachQuest(ctx, questId, operationId) {
-    const quest = questById(ctx.project, questId);
-    const row = this.loadQuestState(ctx.profile.id, questId);
-    const step = stepById(quest, row?.active_step_id);
-    if (!quest || !row || row.status !== QUEST_STATUS.ACTIVE || !step) {
-      const error = new Error("Quest is niet actief.");
-      error.status = 400;
-      throw error;
-    }
-    const progress = this.evaluateStepProgress(ctx, quest, step);
-    if (step.stepType !== OBJECTIVE_TYPES.REACH || !progress.complete || !progress.conditionsMet) {
-      const error = new Error(progress.blockedReason || "Questdoel is nog niet bereikt.");
-      error.status = 400;
-      throw error;
-    }
-    const grants = [];
-    for (const action of (Array.isArray(step.rewards) ? step.rewards : []).concat(Array.isArray(quest.rewards) ? quest.rewards : [])) {
-      grants.push.apply(grants, this.executeAction(ctx, action, operationId, quest.id));
-    }
-    this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, null, row.status, row.active_step_id, "reach_complete", { operationId, grants });
-    this.node03RuntimeService.recordGameplayEvent(ctx, "quest_completed", "player", quest.id, { grants });
-    return {
-      message: "Quest voltooid: " + (quest.displayName || quest.id),
-      events: [{ type: "quest_completed", questId: quest.id }],
-      grants
-    };
+    return this.completeObjectiveNearby(ctx, questId, ["talk"], operationId);
   }
 
-  actionsForTurnIn(quest, step, progress) {
-    const actions = [];
-    const explicitRemove = [];
-    for (const action of Array.isArray(step.rewards) ? step.rewards : []) {
-      if (action?.actionKind === "remove_item") explicitRemove.push(action);
-      actions.push(action);
+  completeObjectiveNearby(ctx, questId, types, operationId) {
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    const quest = row && isOpenStatus(row.status) ? this.questDefinition(ctx, questId, row) : null;
+    const step = stepById(quest, row?.active_step_id);
+    if (!quest || !step || step.kind === "end") throw httpError(400, "Quest is niet actief.");
+    const progress = this.evaluateStepProgress(ctx, quest, step);
+    const open = progress.objectives.find((objective) => types.includes(objective.objectiveType) && !objective.complete
+      && (objective.objectiveType !== "deliver" || objective.ready) && this.objectiveInRange(ctx, objective, 1.5, true));
+    if (!open) throw httpError(400, progress.blockedReason || "Quest kan nog niet ingeleverd worden.");
+    const objective = step.objectives.find(function (candidate) { return objectiveIdOf(candidate) === open.objectiveId; });
+    return this.completeTalkObjective(ctx, quest, row, step, objective, operationId, null);
+  }
+
+  // Keuze uit het NPC-gesprek: "quest.obj|<quest>|<stap>|<doel>". Alleen geldig als die stap nu actief is.
+  chooseQuestObjective(ctx, dialogue, choiceId, operationId) {
+    const [questId, stepId, objectiveId] = choiceId.slice(QUEST_CHOICE_PREFIX.length).split("|");
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    if (!row || !isOpenStatus(row.status) || row.active_step_id !== stepId) throw httpError(400, "Deze questkeuze is niet meer geldig.");
+    const quest = this.questDefinition(ctx, questId, row);
+    const step = stepById(quest, stepId);
+    const objective = (Array.isArray(step?.objectives) ? step.objectives : []).find(function (candidate) { return objectiveIdOf(candidate) === objectiveId; });
+    if (!objective || !["talk", "deliver"].includes(objective.objectiveType) || objective.targetRef !== dialogue.targetRef) {
+      throw httpError(400, "Deze questkeuze is niet meer geldig.");
     }
-    if (!explicitRemove.length) {
-      for (const objective of progress.objectives) {
-        if (objective.objectiveType !== OBJECTIVE_TYPES.DELIVER || !objective.itemRef) continue;
-        actions.unshift({
-          actionKind: "remove_item",
-          itemRef: objective.itemRef,
-          amount: objective.requiredValue,
-          reason: "quest_turn_in"
-        });
-      }
-    }
-    return actions.concat(Array.isArray(quest.rewards) ? quest.rewards : []);
+    return this.completeTalkObjective(ctx, quest, row, step, objective, operationId, dialogue);
+  }
+
+  completeTalkObjective(ctx, quest, row, step, objective, operationId, dialogue) {
+    return this.atomic(() => {
+      const objectiveId = objectiveIdOf(objective);
+      const stored = this.loadObjectiveProgress(ctx.profile.id, quest.id, step.id).get(objectiveId);
+      if (stored?.status === OBJECTIVE_STATUS.COMPLETED) return { message: "Dat heb je al gedaan.", events: [], dialogue: null };
+      if (!this.objectiveInRange(ctx, objective, 1.5, true)) throw httpError(400, "Je bent te ver weg.");
+      const required = requiredOf(objective);
+      if (objective.objectiveType === "deliver") this.consumeItem(ctx, objective.itemRef, required, operationId, "quest_turn_in", quest.id);
+      this.writeObjectiveProgress(ctx.profile.id, quest.id, step.id, objectiveId, required, required);
+      this.db.prepare(`
+        INSERT INTO player_dialogue_choices (id, player_id, dialogue_id, entry_id, choice_id, quest_id, chosen_at, payload_json)
+        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+      `).run(randomId("dialogue_choice"), ctx.profile.id, dialogue?.id || "quest", QUEST_CHOICE_PREFIX + [quest.id, step.id, objectiveId].join("|"), quest.id, now(), stableJson({ stepId: step.id, objectiveId }));
+      const advanced = this.advanceQuest(ctx, quest, this.loadQuestState(ctx.profile.id, quest.id), operationId);
+      const done = objective.objectiveType === "deliver" ? "Ingeleverd: " + (objective.displayName || quest.displayName) : "Quest bijgewerkt: " + (quest.displayName || quest.id);
+      return {
+        message: advanced.completed ? advanced.message : done,
+        events: [{ type: "quest_objective", questId: quest.id, stepId: step.id, objectiveId }].concat(advanced.events || []),
+        grants: advanced.grants || [],
+        dialogue: null
+      };
+    });
+  }
+
+  // Binnen bereik van het doel (NPC of plek). Onbekende positie telt alleen als "ja" bij praten/inleveren (zoals vroeger).
+  objectiveInRange(ctx, objective, slack = 0, allowUnknown = false) {
+    const target = this.resolveQuestTarget(ctx.project, objective?.targetRef);
+    if (!target) return allowUnknown;
+    if (safeString(objective.zoneRef || target.zoneRef || ctx.zoneId) !== safeString(ctx.zoneId)) return false;
+    const distance = positionDistance(ctx.position, target);
+    if (distance === null) return allowUnknown;
+    return distance <= Math.max(0.1, safeNumber(objective.radius || target.radius, 3)) + slack;
   }
 
   executeAction(ctx, action, operationId, sourceRef) {
@@ -774,21 +941,14 @@ export class Node04QuestRuntimeService {
 
   chooseDialogue(ctx, payload = {}, operationId) {
     const dialogue = dialogueById(ctx.project, payload.dialogueId || payload.dialogue_id) || this.dialogueForTarget(ctx, payload.targetId || payload.target_id);
-    if (!dialogue) {
-      const error = new Error("Dialogue niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
-    const entry = dialogue.entriesById?.[payload.entryId || payload.entry_id || dialogue.startEntryRef] || dialogue.entries?.[0] || null;
+    if (!dialogue) throw httpError(404, "Dialogue niet gevonden.");
     const choiceId = safeString(payload.choiceId || payload.choice_id);
+    if (choiceId.startsWith(QUEST_CHOICE_PREFIX)) return this.chooseQuestObjective(ctx, dialogue, choiceId, operationId);
+    const entry = dialogue.entriesById?.[payload.entryId || payload.entry_id || dialogue.startEntryRef] || dialogue.entries?.[0] || null;
     const choice = (Array.isArray(entry?.choices) ? entry.choices : []).find(function (candidate) {
       return candidate.id === choiceId;
     }) || null;
-    if (!choice) {
-      const error = new Error("Dialogue keuze niet gevonden.");
-      error.status = 404;
-      throw error;
-    }
+    if (!choice) throw httpError(404, "Dialogue keuze niet gevonden.");
     this.db.prepare(`
       INSERT INTO player_dialogue_choices (id, player_id, dialogue_id, entry_id, choice_id, quest_id, chosen_at, payload_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -796,24 +956,20 @@ export class Node04QuestRuntimeService {
     this.node03RuntimeService.recordGameplayEvent(ctx, "dialogue_choice", "player", dialogue.id, { entryId: entry?.id || null, choiceId: choice.id });
     const events = [{ type: "dialogue_choice", dialogueId: dialogue.id, choiceId: choice.id }];
     let message = "Dialogue keuze verwerkt.";
-    if (choice.action === "accept_quest" && choice.questRef) {
-      const accepted = this.acceptQuest(ctx, choice.questRef, operationId, "dialogue_accept");
-      events.push.apply(events, accepted.events || []);
-      message = accepted.message || message;
-    } else if (choice.action === "turn_in_quest" && choice.questRef) {
-      const turnedIn = this.turnInQuest(ctx, choice.questRef, operationId);
-      events.push.apply(events, turnedIn.events || []);
-      message = turnedIn.message || message;
-    } else if (choice.action === "complete_quest" && choice.questRef) {
-      // Terugbouw zonder nodes: "Ga naar iemand" meld je klaar door met die NPC te praten.
-      const completed = this.completeReachQuest(ctx, choice.questRef, operationId);
-      events.push.apply(events, completed.events || []);
-      message = completed.message || message;
+    let grants = [];
+    let result = null;
+    if (choice.action === "accept_quest" && choice.questRef) result = this.acceptQuest(ctx, choice.questRef, operationId, "dialogue_accept");
+    else if (choice.action === "turn_in_quest" && choice.questRef) result = this.turnInQuest(ctx, choice.questRef, operationId);
+    else if (choice.action === "complete_quest" && choice.questRef) result = this.completeReachQuest(ctx, choice.questRef, operationId);
+    if (result) {
+      events.push.apply(events, result.events || []);
+      message = result.message || message;
+      grants = result.grants || [];
     }
     const nextDialogue = choice.closeAfterSelect || choice.action === "close"
       ? null
       : this.buildDialogueRuntime(ctx, dialogue, choice.nextEntryRef || entry?.nextEntryRef || null);
-    return { message, events, dialogue: nextDialogue };
+    return { message, events, grants, dialogue: nextDialogue };
   }
 
   dialogueForTarget(ctx, targetId) {
@@ -826,6 +982,19 @@ export class Node04QuestRuntimeService {
   buildDialogueRuntime(ctx, dialogue, entryId) {
     const entry = dialogue.entriesById?.[entryId] || dialogue.entriesById?.[dialogue.startEntryRef] || dialogue.entries?.[0] || null;
     if (!entry) return null;
+    const startEntryId = dialogue.startEntryRef || dialogue.entries?.[0]?.id || null;
+    const choices = (Array.isArray(entry.choices) ? entry.choices : []).filter((choice) => {
+      return this.evaluateConditions(ctx, choice.conditions || []).met;
+    }).map((choice) => ({
+      choiceId: choice.id,
+      label: this.resolveTokenText(ctx, choice.label || "Continue"),
+      action: choice.action || "none",
+      questRef: choice.questRef || null,
+      nextEntryRef: choice.nextEntryRef || null,
+      closeAfterSelect: choice.closeAfterSelect === true || choice.action === "accept_quest" || choice.action === "close" || choice.action === "complete_quest"
+    }));
+    // Quest Builder: praat- en inleverdoelen bij deze NPC staan bovenaan het begin van het gesprek.
+    if (entry.id === startEntryId) choices.unshift.apply(choices, this.questChoicesFor(ctx, dialogue));
     return {
       dialogueId: dialogue.id,
       displayName: dialogue.displayName || dialogue.id,
@@ -833,17 +1002,30 @@ export class Node04QuestRuntimeService {
       entryId: entry.id,
       speakerName: entry.speakerName || dialogue.displayName || "",
       text: this.resolveTokenText(ctx, entry.text || ""),
-      choices: (Array.isArray(entry.choices) ? entry.choices : []).filter((choice) => {
-        return this.evaluateConditions(ctx, choice.conditions || []).met;
-      }).map((choice) => ({
-        choiceId: choice.id,
-        label: this.resolveTokenText(ctx, choice.label || "Continue"),
-        action: choice.action || "none",
-        questRef: choice.questRef || null,
-        nextEntryRef: choice.nextEntryRef || null,
-        closeAfterSelect: choice.closeAfterSelect === true || choice.action === "accept_quest" || choice.action === "close" || choice.action === "complete_quest"
-      }))
+      choices
     };
+  }
+
+  questChoicesFor(ctx, dialogue) {
+    const targetRef = safeString(dialogue?.targetRef);
+    const choices = [];
+    if (!targetRef) return choices;
+    for (const row of this.loadQuestStateRows(ctx)) {
+      if (!isOpenStatus(row.status)) continue;
+      const quest = this.questDefinition(ctx, row.quest_id, row);
+      const step = stepById(quest, row.active_step_id);
+      if (!step || step.kind === "end") continue;
+      for (const objective of this.evaluateStepProgress(ctx, quest, step).objectives) {
+        if (objective.complete || objective.targetRef !== targetRef) continue;
+        const choiceId = QUEST_CHOICE_PREFIX + [quest.id, step.id, objective.objectiveId].join("|");
+        if (objective.objectiveType === "talk") {
+          choices.push({ choiceId, label: "💬 " + (quest.displayName || quest.id), action: "quest_objective", questRef: quest.id, nextEntryRef: null, closeAfterSelect: true });
+        } else if (objective.objectiveType === "deliver" && objective.ready) {
+          choices.push({ choiceId, label: "📦 Inleveren: " + (quest.displayName || quest.id), action: "quest_objective", questRef: quest.id, nextEntryRef: null, closeAfterSelect: true });
+        }
+      }
+    }
+    return choices;
   }
 
   resolveTokenText(ctx, text) {
@@ -890,19 +1072,14 @@ export class Node04QuestRuntimeService {
         required: safeInteger(condition.level, 1)
       };
     }
-    // Terugbouw zonder nodes: gesprekskeuzes per quest (aanbieden, inleveren, klaar melden).
+    // Gesprekskeuze "quest aannemen". Inleveren en praten voor een stap zet de quest-motor zelf in het gesprek,
+    // dus de oude keuzes (quest_turn_in / quest_reach_ready uit oudere builds) blijven verborgen.
     if (condition.conditionType === "quest_available" || condition.conditionType === "quest_turn_in" || condition.conditionType === "quest_reach_ready") {
       const quest = questById(ctx.project, condition.questRef);
       const row = quest ? this.loadQuestState(ctx.profile.id, quest.id) : null;
-      let met = false;
-      if (quest && row && condition.conditionType === "quest_available") {
-        met = row.status === QUEST_STATUS.AVAILABLE || (row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest));
-      } else if (quest && row && [QUEST_STATUS.ACTIVE, QUEST_STATUS.READY_TO_TURN_IN].includes(row.status)) {
-        const step = stepById(quest, row.active_step_id) || defaultStepForAccept(quest);
-        const wanted = condition.conditionType === "quest_turn_in" ? OBJECTIVE_TYPES.DELIVER : OBJECTIVE_TYPES.REACH;
-        met = Boolean(step && step.stepType === wanted && this.evaluateStepProgress(ctx, quest, step).complete);
-      }
-      return { conditionType: condition.conditionType, questRef: condition.questRef || null, met, message: met ? "" : "" };
+      const met = Boolean(quest && row && condition.conditionType === "quest_available"
+        && (row.status === QUEST_STATUS.AVAILABLE || row.status === QUEST_STATUS.ABANDONED || (row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest))));
+      return { conditionType: condition.conditionType, questRef: condition.questRef || null, met, message: "" };
     }
     if (condition.conditionType === "has_item") {
       const amount = this.node03RuntimeService.ownedItemCount(ctx.profile.id, condition.itemRef);
@@ -913,79 +1090,68 @@ export class Node04QuestRuntimeService {
   }
 
   evaluateStepProgress(ctx, quest, step) {
-    const objectives = (Array.isArray(step?.objectives) ? step.objectives : []).map((objective) => this.evaluateObjective(ctx, objective));
+    const stored = this.loadObjectiveProgress(ctx.profile.id, quest?.id, step?.id);
+    const objectives = (Array.isArray(step?.objectives) ? step.objectives : []).map((objective) => this.evaluateObjective(ctx, objective, stored.get(objectiveIdOf(objective))));
     const conditions = this.evaluateConditions(ctx, step?.conditions || []);
-    const objectivesComplete = objectives.length ? objectives.every(function (objective) { return objective.complete; }) : false;
+    const needed = objectives.filter(function (objective) { return objective.needed; });
+    const isDone = function (objective) { return objective.complete; };
+    const objectivesComplete = needed.length > 0 && (step?.match === "any" ? needed.some(isDone) : needed.every(isDone));
     const complete = objectivesComplete && conditions.met;
     return {
       questId: quest?.id || null,
       stepId: step?.id || null,
       complete,
       conditionsMet: conditions.met,
-      blockedReason: conditions.failedReason || objectives.find(function (objective) { return !objective.complete; })?.message || "",
+      blockedReason: conditions.failedReason || needed.find(function (objective) { return !objective.complete; })?.message || "",
       objectives,
       conditions: conditions.results
     };
   }
 
-  evaluateObjective(ctx, objective) {
-    const required = Math.max(1, safeInteger(objective?.requiredAmount || objective?.requiredCount, 1));
+  // stored = rij uit player_objective_progress. Tas-doelen kijken live naar je tas; gebeurtenis-doelen naar de teller.
+  evaluateObjective(ctx, objective, stored) {
     const type = objective?.objectiveType || "custom";
-    if (type === OBJECTIVE_TYPES.COLLECT || type === OBJECTIVE_TYPES.DELIVER) {
-      const current = this.node03RuntimeService.ownedItemCount(ctx.profile.id, objective.itemRef);
-      return Object.assign({}, objective, {
-        objectiveId: objective.id || objective.objectiveId,
-        objectiveType: type,
-        currentValue: Math.min(current, required),
-        requiredValue: required,
-        complete: current >= required,
-        message: current >= required ? "" : displayForItem(ctx.catalogs, objective.itemRef) + " " + current + "/" + required
-      });
+    const required = requiredOf(objective);
+    const storedDone = stored?.status === OBJECTIVE_STATUS.COMPLETED;
+    const label = objective?.displayName || type;
+    let current = 0;
+    let complete = false;
+    let supported = true;
+    const extra = {};
+    if (type === OBJECTIVE_TYPES.COLLECT) {
+      const owned = this.node03RuntimeService.ownedItemCount(ctx.profile.id, objective.itemRef);
+      current = Math.min(owned, required);
+      complete = owned >= required;
+    } else if (type === OBJECTIVE_TYPES.DELIVER) {
+      const owned = this.node03RuntimeService.ownedItemCount(ctx.profile.id, objective.itemRef);
+      complete = storedDone;
+      current = complete ? required : Math.min(owned, required);
+      extra.ready = !complete && owned >= required;
+    } else if (type === OBJECTIVE_TYPES.TALK) {
+      complete = storedDone;
+      current = complete ? 1 : 0;
+    } else if (type === "visit") {
+      complete = storedDone || this.objectiveInRange(ctx, objective, 0, false);
+      current = complete ? 1 : 0;
+      extra.reachedNow = complete && !storedDone;
+    } else if (EVENT_OBJECTIVES.has(type)) {
+      current = Math.min(safeInteger(stored?.current_value, 0), required);
+      complete = current >= required;
+    } else {
+      supported = false;
     }
-    if (type === OBJECTIVE_TYPES.REACH) {
-      const target = this.resolveQuestTarget(ctx.project, objective.targetRef);
-      const zoneOk = safeString(ctx.zoneId) === safeString(objective.zoneRef || target?.zoneRef);
-      const distance = target ? positionDistance(ctx.position, target) : null;
-      const radius = Math.max(0.1, safeNumber(objective.radius || target?.radius, 4));
-      const complete = zoneOk && distance !== null && distance <= radius;
-      return Object.assign({}, objective, {
-        objectiveId: objective.id || objective.objectiveId,
-        objectiveType: type,
-        currentValue: complete ? 1 : 0,
-        requiredValue: 1,
-        complete,
-        distance: distance === null ? null : round(distance),
-        message: complete ? "" : "Ga naar " + (target?.label || objective.targetRef || "target")
-      });
-    }
-    if (type === OBJECTIVE_TYPES.TALK) {
-      return Object.assign({}, objective, {
-        objectiveId: objective.id || objective.objectiveId,
-        objectiveType: type,
-        currentValue: 1,
-        requiredValue: 1,
-        complete: true,
-        message: ""
-      });
-    }
-    return Object.assign({}, objective, {
-      objectiveId: objective?.id || objective?.objectiveId || "objective.unknown",
+    const role = objective?.role || "required";
+    return Object.assign({}, objective, extra, {
+      objectiveId: objectiveIdOf(objective),
       objectiveType: type,
-      currentValue: 0,
+      role,
+      needed: objectiveIsNeeded(objective),
+      hidden: role === "hidden" && !complete,
+      currentValue: current,
       requiredValue: required,
-      complete: false,
-      message: "Objective niet ondersteund."
+      complete,
+      message: complete ? "" : !supported ? "Doel niet ondersteund." : required > 1 ? label + " " + current + "/" + required : label
     });
-  }
-
-  isStepTargetInRange(ctx, step, progress) {
-    const targetRef = step.targetRef || progress.objectives.find(function (objective) { return objective.targetRef; })?.targetRef || null;
-    const target = this.resolveQuestTarget(ctx.project, targetRef);
-    if (!target) return true;
-    if (safeString(target.zoneRef || ctx.zoneId) !== safeString(ctx.zoneId)) return false;
-    const distance = positionDistance(ctx.position, target);
-    // Kleine marge: de serverpositie loopt soms net achter op wat de speler ziet.
-    return distance === null || distance <= Math.max(0.1, safeNumber(target.radius, 3)) + 1.5;
   }
 
   resolveQuestTarget(project, targetRef) {
@@ -1055,15 +1221,20 @@ export class Node04QuestRuntimeService {
   buildQuestSummary(ctx, quest, row) {
     if (!quest?.id || !row) return null;
     const canRepeat = row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest);
-    const status = canRepeat ? QUEST_STATUS.AVAILABLE : row.status;
-    const isActive = status === QUEST_STATUS.ACTIVE || status === QUEST_STATUS.READY_TO_TURN_IN;
-    const step = isActive ? (stepById(quest, row.active_step_id) || defaultStepForAccept(quest)) : null;
-    const progress = isActive && step ? this.evaluateStepProgress(ctx, quest, step) : null;
+    const status = canRepeat || row.status === QUEST_STATUS.ABANDONED ? QUEST_STATUS.AVAILABLE : row.status;
+    const isActive = isOpenStatus(status);
+    // Een lopende quest toont de versie waarop deze speler hem speelt.
+    const definition = isActive ? this.questDefinition(ctx, quest.id, row) : normalizeQuest(quest);
+    const step = isActive ? stepById(definition, row.active_step_id) : null;
+    const progress = step && step.kind !== "end" ? this.evaluateStepProgress(ctx, definition, step) : null;
+    const objectives = (progress?.objectives || []).filter(function (objective) { return !objective.hidden; });
+    const openNeeded = objectives.filter(function (objective) { return objective.needed && !objective.complete; });
+    const inRange = (objective) => this.objectiveInRange(ctx, objective, 1.5, true);
     return {
       questId: quest.id,
-      displayName: quest.displayName || quest.id,
-      summary: this.resolveTokenText(ctx, quest.summary || ""),
-      description: this.resolveTokenText(ctx, quest.description || ""),
+      displayName: definition?.displayName || quest.displayName || quest.id,
+      summary: this.resolveTokenText(ctx, definition?.summary || quest.summary || ""),
+      description: this.resolveTokenText(ctx, definition?.description || quest.description || ""),
       status,
       repeatMode: questRepeatMode(quest),
       canRepeat,
@@ -1073,15 +1244,17 @@ export class Node04QuestRuntimeService {
         stepId: step.id,
         displayName: step.displayName || step.id,
         instruction: this.resolveTokenText(ctx, step.instruction || ""),
-        stepType: step.stepType || "custom",
-        targetRef: step.targetRef || null,
+        stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
+        match: step.match === "any" ? "any" : "all",
+        targetRef: openNeeded.find(function (objective) { return objective.targetRef; })?.targetRef || null,
         zoneRef: step.zoneRef || null,
-        complete: progress?.complete === true,
+        // "Klaar! Ga terug": alles gedaan, alleen nog inleveren bij de NPC.
+        complete: progress?.complete === true || (openNeeded.length > 0 && openNeeded.every(function (objective) { return objective.objectiveType === "deliver" && objective.ready; })),
         conditionsMet: progress?.conditionsMet !== false,
         blockedReason: progress?.blockedReason || "",
-        canTurnIn: step.stepType === OBJECTIVE_TYPES.DELIVER && progress?.complete === true && this.isStepTargetInRange(ctx, step, progress),
-        canReach: step.stepType === OBJECTIVE_TYPES.REACH && progress?.complete === true,
-        objectives: progress?.objectives || [],
+        canTurnIn: objectives.some((objective) => objective.objectiveType === "deliver" && objective.ready && inRange(objective)),
+        canReach: objectives.some((objective) => objective.objectiveType === "talk" && !objective.complete && inRange(objective)),
+        objectives,
         conditions: progress?.conditions || []
       } : null,
       nextQuestRefs: Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs.slice() : [],
@@ -1125,19 +1298,18 @@ export class Node04QuestRuntimeService {
   targetForActiveStep(ctx, trackedQuest) {
     const step = trackedQuest.activeStep;
     if (!step) return null;
-    const objectivesReady = (Array.isArray(step.objectives) ? step.objectives : []).every(function (objective) {
-      return objective?.complete !== false;
-    });
+    const objectives = Array.isArray(step.objectives) ? step.objectives : [];
+    const objectivesReady = objectives.every(function (objective) { return objective?.complete !== false; });
     const levelGate = objectivesReady && step.conditionsMet === false ? this.failedPlayerLevelCondition(step.conditions) : null;
     if (levelGate) {
       const levelTarget = this.targetForLevelGate(ctx, trackedQuest, step, levelGate);
       if (levelTarget) return levelTarget;
     }
-    const quest = questById(ctx.project, trackedQuest.questId);
-    const compiledStep = stepById(quest, step.stepId);
-    const objectiveTargetRef = step.objectives.find(function (objective) { return objective.targetRef; })?.targetRef || null;
-    let targetRef = compiledStep?.markerRule?.targetRef || step.targetRef || objectiveTargetRef;
-    let target = this.resolveQuestTarget(ctx.project, targetRef);
+    // Eerst een open doel dat nu kan (inleveren als je alles hebt), anders het eerste open doel met een plek.
+    const open = objectives.filter(function (objective) { return !objective.complete && objective.targetRef; });
+    const objective = open.find(function (candidate) { return candidate.needed !== false && (candidate.objectiveType !== "deliver" || candidate.ready); })
+      || open.find(function (candidate) { return candidate.needed !== false; }) || open[0] || null;
+    const target = this.resolveQuestTarget(ctx.project, objective?.targetRef || step.targetRef);
     if (target && target.zoneRef !== ctx.zoneId) {
       const linkTarget = this.travelTargetTowardZone(ctx, target.zoneRef);
       if (linkTarget) return linkTarget;
@@ -1147,22 +1319,16 @@ export class Node04QuestRuntimeService {
       if (linkTarget) return linkTarget;
     }
     if (!target || target.zoneRef !== ctx.zoneId) return null;
-    let action = "node04:move_marker";
-    let prompt = "Move";
-    if (step.stepType === OBJECTIVE_TYPES.DELIVER) {
-      action = "node04:turn_in";
-      prompt = step.canTurnIn ? "Turn in" : "Move";
-    } else if (step.stepType === OBJECTIVE_TYPES.REACH) {
-      action = "node04:reach";
-      prompt = step.canReach ? "Complete" : "Move";
-    }
+    const talk = objective && (objective.objectiveType === "talk" || objective.objectiveType === "deliver");
+    const dialogue = talk ? this.dialogueForTarget(ctx, target.targetId) : null;
     return this.runtimeTargetFromQuestTarget(ctx, target, {
       instanceId: "node04:" + trackedQuest.questId + ":" + step.stepId,
-      action,
+      action: dialogue ? "node04:start_dialogue" : "node04:move_marker",
+      dialogueId: dialogue?.id || null,
       questId: trackedQuest.questId,
       displayName: questTargetWorldName(target, step.displayName || trackedQuest.displayName),
-      prompt,
-      status: step.displayName || "quest target"
+      prompt: dialogue ? "Praten" : "Ga hierheen",
+      status: objective?.displayName || step.displayName || "quest target"
     });
   }
 
@@ -1346,6 +1512,7 @@ export class Node04QuestRuntimeService {
     const name = quest?.displayName || row.quest_id;
     if (row.reason === "manual_reset" || row.reason === "content_changed") return "Quest opnieuw beschikbaar: " + name;
     if (row.reason === "turn_in" || row.to_status === QUEST_STATUS.COMPLETED) return "Quest voltooid: " + name;
+    if (row.reason === "step_complete") return "Volgende stap: " + name;
     if (row.to_status === QUEST_STATUS.ACTIVE) return "Quest actief: " + name;
     if (row.to_status === QUEST_STATUS.AVAILABLE) return "Quest beschikbaar: " + name;
     return name;
@@ -1396,10 +1563,33 @@ export class Node04QuestRuntimeService {
 
   resetNode04(ctx) {
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ?").run(ctx.profile.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ?").run(ctx.profile.id);
     this.db.prepare("DELETE FROM player_quest_states WHERE player_id = ?").run(ctx.profile.id);
     this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ?").run(ctx.profile.id);
     this.db.prepare("DELETE FROM quest_transition_audit WHERE player_id = ?").run(ctx.profile.id);
     this.ensureAvailableQuests(ctx);
     return { message: "Questgegevens opnieuw ingesteld.", events: [{ type: "node04_reset" }] };
+  }
+
+  // Alleen voor ontwikkelaars (Testen in de Quest Builder): een nieuwe run die direct bij deze stap begint.
+  devSetStep(ctx, questId, stepId, operationId) {
+    const quest = normalizeQuest(questById(ctx.project, questId));
+    const step = stepById(quest, stepId);
+    if (!quest) throw httpError(404, "Quest niet gevonden.");
+    if (!step || step.kind === "end") throw httpError(400, "Kies een stap (geen einde).");
+    const row = this.loadQuestState(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.rememberQuestVersion(quest);
+    const stamp = now();
+    this.db.prepare(`
+      INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, revision, state_json, updated_at)
+      VALUES (?, ?, 'active', ?, 1, ?, 1, ?, ?)
+      ON CONFLICT(player_id, quest_id) DO UPDATE SET status = 'active', active_step_id = excluded.active_step_id, tracked = 1,
+        accepted_at = excluded.accepted_at, completed_at = NULL, claimed_at = NULL, revision = player_quest_states.revision + 1,
+        state_json = excluded.state_json, updated_at = excluded.updated_at
+    `).run(ctx.profile.id, quest.id, step.id, stamp, this.questStateJson(ctx, quest, { version: quest.version, runId: randomId("run") }), stamp);
+    this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.ACTIVE, row?.active_step_id || null, step.id, operationId, "dev_set_step", {});
+    return { message: "Test: " + (quest.displayName || quest.id) + " staat op stap '" + (step.displayName || step.id) + "'.", events: [] };
   }
 }

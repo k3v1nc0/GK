@@ -166,3 +166,51 @@
 .wbdChildList { display: flex; flex-wrap: wrap; gap: 6px; }
 .wbdChildList .wbdGhost.active { border-color: #2f6b45; background: rgba(47, 107, 69, 0.18); }
 .wbdChildForm { padding: 8px; border: 1px solid var(--wbd-line); border-radius: 9px; background: var(--wbd-card); }
+
+/* ---------- Quest Builder (stap 1, 4-11) ---------- */
+.wbdQuestSteps { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.qbOverlay { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+.qbPanel { pointer-events: auto; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(920px, calc(100vw - 24px));
+  max-height: calc(100vh - 72px); overflow: auto; background: var(--wbd-bg); border: 1px solid var(--wbd-line); border-radius: 12px; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
+.qbHead { position: sticky; top: 0; z-index: 1; background: var(--wbd-bg); display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--wbd-line); cursor: move; }
+.qbHeadIcon { font-size: 26px; }
+.qbHeadText { flex: 1; min-width: 0; }
+.qbBadge { font-size: 12px; padding: 3px 10px; border-radius: 10px; background: #1b2633; color: var(--wbd-muted); white-space: nowrap; }
+.qbBadgeOk { background: rgba(60, 207, 110, .14); color: var(--wbd-ok); }
+.qbBadgeBad { background: #3b2a12; color: var(--wbd-accent); }
+.qbTabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--wbd-line); }
+.qbTab { border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 8px 14px; background: transparent; color: var(--wbd-muted); font: inherit; cursor: pointer; }
+.qbTab.active { background: var(--wbd-card); border-color: var(--wbd-line); color: var(--wbd-text); }
+.qbBody { padding: 14px; display: grid; gap: 12px; }
+.qbIntro { display: grid; gap: 8px; justify-items: start; padding: 14px; background: var(--wbd-card); border: 1px solid var(--wbd-line); border-radius: 10px; }
+.qbSteps { display: grid; gap: 10px; }
+.qbStep { display: grid; gap: 8px; padding: 10px 12px; background: var(--wbd-card); border: 1px solid var(--wbd-line); border-left: 4px solid #3a6ea5; border-radius: 10px; }
+.qbStepEnd { border-left-color: var(--wbd-ok); }
+.qbStepBad { border-left-color: var(--wbd-accent); }
+.qbStepHead { display: flex; align-items: center; gap: 6px; }
+.qbStepHead .wbdText { flex: 1; min-width: 0; font-weight: 600; }
+.qbNum { min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #1b2b3d; font-weight: 700; }
+.qbIconBtn { width: 30px; height: 30px; border: 1px solid var(--wbd-line); border-radius: 7px; background: transparent; color: var(--wbd-text); cursor: pointer; padding: 0; }
+.qbIconBtn:disabled { opacity: .35; cursor: default; }
+.qbRow { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; }
+.qbLabel { color: #c9d4dc; white-space: nowrap; }
+.qbMatch { grid-template-columns: repeat(2, minmax(0, 220px)); }
+.qbObjectives { display: grid; gap: 6px; }
+.qbObjective { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px; border: 1px solid var(--wbd-line); border-radius: 8px; background: #101a26; }
+.qbObjectiveBad { border-color: #6b4a1c; }
+.qbType { width: 150px; }
+.qbRole { width: 130px; }
+.qbSlot { flex: 1 1 180px; min-width: 160px; }
+.qbTimes { display: flex; align-items: center; gap: 4px; color: var(--wbd-muted); }
+.qbAmount { width: 70px; }
+.qbAdders { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.qbAdder { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed #3a4b5d; border-radius: 8px; padding: 4px 8px; background: transparent; color: var(--wbd-text); font: inherit; font-size: 12px; cursor: pointer; }
+.qbAdder:hover { border-color: var(--wbd-accent); }
+.qbAdd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qbIssues { margin: 0; padding: 6px 10px 6px 26px; background: #2a1d0c; border-radius: 8px; color: var(--wbd-accent); display: grid; gap: 2px; }
+.qbTestBox { display: grid; gap: 8px; padding: 12px; background: var(--wbd-card); border: 1px solid var(--wbd-line); border-radius: 10px; }
+.qbTestBox h4 { margin: 0; }
+.qbMine { display: grid; gap: 4px; }
+.qbMineGoal { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 6px; background: #101a26; }
+.qbMineGoal.done { color: var(--wbd-ok); }
+.qbBad { color: var(--wbd-accent); }

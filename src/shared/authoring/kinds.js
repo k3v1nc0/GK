@@ -18,6 +18,7 @@ import { PARTY_KINDS } from "./kinds/party.js";
 import { CHAT_KINDS } from "./kinds/chat.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
+import { questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
 const ASSET_PATTERN = /^[A-Za-z0-9_.:-]+$/;
@@ -406,6 +407,12 @@ export function validateDocument(kind, body) {
         || typeof ref.file !== "string" || !/^[0-9a-f]{40}$/.test(ref.file) || !Array.isArray(ref.layers) || ref.layers.length > 3
         || ref.layers.some((layer) => typeof layer !== "string" || layer.length > 160 || (layer && !layer.startsWith("terrain_texture:")));
       if (entries.some(badEntry)) issues.push(issue(key, "FIELD_TERRAIN", field.label + ": elk vak is \"x:z\" met { file, layers }."));
+      continue;
+    }
+    if (field.type === "questSteps") {
+      const shape = questStepsShapeIssues(value);
+      for (const message of shape.issues) issues.push(issue(key, "QUEST_STEPS", message));
+      refs.push(...shape.refs);
       continue;
     }
     if (field.type === "areaSettings") {

@@ -6,6 +6,7 @@ import { networkValues } from "../../shared/authoring/kinds/network.js";
 import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
+import { hasOwnSteps, questGraphIssues, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
 export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model"]);
@@ -111,10 +112,21 @@ export function compileGameSection(documents, options = {}) {
   });
 
   const questDocs = of("quest");
+  // Quest Builder stap 1: de quest-check (zelfde regels als in de Quest Builder) houdt een onspeelbare quest tegen.
+  const refExists = (ref) => { const target = byKey.get(ref); return Boolean(target) && target.kind === kindOfRef(ref); };
+  const refLabel = (ref) => { const target = byKey.get(ref); return target?.body?.displayName || ref; };
   for (const doc of questDocs) {
     const label = "Quest " + doc.body.displayName;
-    for (const field of ["giverRef", "targetNpcRef", "itemRef", "previousQuestRef"]) needRef(doc, doc.body[field], label);
+    for (const field of ["giverRef", "previousQuestRef"]) needRef(doc, doc.body[field], label);
     needRows(doc, doc.body.rewards, label + " (beloning)");
+    if (hasOwnSteps(doc.body)) {
+      const titles = new Map(doc.body.steps.map((step, index) => [step.stepId, step.title || String(index + 1)]));
+      for (const found of questGraphIssues(doc.body.steps, { refExists, refLabel })) {
+        fail(doc, "QUEST_CHECK", label + (found.stepId ? ", stap '" + (titles.get(found.stepId) || found.stepId) + "'" : "") + ": " + found.message);
+      }
+      continue;
+    }
+    for (const field of ["targetNpcRef", "itemRef"]) needRef(doc, doc.body[field], label);
     const goal = doc.body.goal || "deliver";
     if (goal === "deliver" && !doc.body.itemRef) fail(doc, "QUEST_ITEM", label + ": kies welk item de speler moet brengen.");
     if (goal === "visit" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies onder ⚙️ meer naar welke NPC de speler moet gaan (Inleveren bij).");
@@ -136,7 +148,17 @@ export function compileGameSection(documents, options = {}) {
     itemId: doc.body.itemRef ? idFromRef(doc.body.itemRef) : null, amount: doc.body.amount || 1,
     rewards: grants(doc.body.rewards), rewardXp: Number.isInteger(doc.body.rewardXp) ? doc.body.rewardXp : 0,
     previousQuestId: doc.body.previousQuestRef ? idFromRef(doc.body.previousQuestRef) : null,
-    repeatable: doc.body.repeatable === true
+    repeatable: doc.body.repeatable === true,
+    // Quest Builder stap 1: de stappen (of de snelle quest omgezet naar 1 stap + einde), met ID's in plaats van verwijzingen.
+    steps: questSteps(doc.body).map((step) => ({
+      stepId: step.stepId, kind: step.kind, title: step.title || "", text: step.text || "", match: step.match === "any" ? "any" : "all",
+      next: (Array.isArray(step.next) ? step.next : []).map((link) => link.to),
+      objectives: (Array.isArray(step.objectives) ? step.objectives : []).map((objective) => ({
+        objectiveId: objective.objectiveId, type: objective.type, targetId: objective.ref ? idFromRef(objective.ref) : null,
+        npcId: objective.npcRef ? idFromRef(objective.npcRef) : null, amount: Number.isInteger(objective.amount) ? objective.amount : 1,
+        role: objective.role || "required"
+      }))
+    }))
   }));
 
   const recipes = of("recipe").map((doc) => {

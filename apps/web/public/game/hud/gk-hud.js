@@ -561,7 +561,8 @@ export function createGkHud(api) {
     const progression = s03?.progression || {};
     const quest = has("quest_tracker_hud") ? trackedQuest() : null;
     const step = quest?.activeStep || null;
-    const objective = (step?.objectives || [])[0] || null;
+    // De balk bij je portret toont het eerste doel dat nog open staat.
+    const objective = (step?.objectives || []).find(function (entry) { return !entry.complete && entry.needed !== false; }) || (step?.objectives || [])[0] || null;
     const questText = quest ? (step?.instruction || step?.displayName || quest.displayName) : "";
     const portraitUrl = api.assetUrl(d.player?.modelAssetId, true);
     const signature = JSON.stringify([d.player?.displayName, d.player?.className, portraitUrl, progression.level, progression.progressPercent,
@@ -1956,13 +1957,17 @@ export function createGkHud(api) {
     ]);
     const text = step?.instruction || quest.summary || quest.description || "";
     if (text) card.append(h("p", { text }));
-    for (const objective of step?.objectives || []) {
+    // Quest Builder stap 1: elk doel van de stap met een vinkje; tellers met een balk. Bonus/mag staat erbij.
+    const goals = step?.objectives || [];
+    for (const objective of goals) {
       const required = Math.max(1, num(objective.requiredValue, 1));
       const current = Math.min(required, num(objective.currentValue));
-      if (required > 1) {
-        card.append(h("div", { class: "gkObjective" + (objective.complete ? " gkOk" : "") }, [h("span", { text: objective.instruction || objective.displayName || "" }), h("b", { text: fmt(current) + " / " + fmt(required) })]));
-        card.append(h("div", { class: "gkProgress" }, [h("i", { style: "width:" + Math.round(current / required * 100) + "%" })]));
-      }
+      if (goals.length < 2 && required < 2) continue;
+      const extra = objective.role === "bonus" ? " (bonus)" : objective.role === "optional" ? " (mag)" : "";
+      card.append(h("div", { class: "gkObjective" + (objective.complete ? " gkOk" : "") }, [
+        h("span", { text: (objective.complete ? "✓ " : "") + (objective.instruction || objective.displayName || "") + extra }),
+        required > 1 ? h("b", { text: fmt(current) + " / " + fmt(required) }) : null]));
+      if (required > 1) card.append(h("div", { class: "gkProgress" }, [h("i", { style: "width:" + Math.round(current / required * 100) + "%" })]));
     }
     const rewards = (quest.rewards || []).map(function (reward) {
       if (reward.kind === "xp") return stat("round-star", fmt(reward.amount) + " XP");

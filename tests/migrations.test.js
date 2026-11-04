@@ -30,10 +30,10 @@ test("echte migraties accepteren alleen de historische dubbele 006 en maken veri
   try {
     db = await openDatabase(rootDir);
     assert.equal(db.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
-    assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migrations").get().total, 22);
-    assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migration_checksums").get().total, 22);
+    assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migrations").get().total, 23);
+    assert.equal(db.prepare("SELECT COUNT(*) AS total FROM migration_checksums").get().total, 23);
     const backupDirs = fs.readdirSync(path.join(rootDir, "db", "migration-backups"));
-    assert.equal(backupDirs.length, 23, "baseline plus een backup voor elk van tweeëntwintig migratiebestanden");
+    assert.equal(backupDirs.length, 24, "baseline plus een backup voor elk van drieëntwintig migratiebestanden");
   } finally {
     if (db) db.close();
     if (previous.root === undefined) delete process.env.GK_TEST_ROOT; else process.env.GK_TEST_ROOT = previous.root;

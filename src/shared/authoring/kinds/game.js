@@ -3,6 +3,7 @@
 // placed_model blijft het interne document per wereldinstantie, maar staat niet als Bibliotheek-soort in beeld.
 // Speler en Game-scherm (HUD) staan onder Instellingen. De wereldbouwer maakt hieruit de spelwereld.
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, ui } from "./ui.js";
+import { QUEST_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
 
 const idField = (label, wat) => ({ type: "id", required: true, maxLength: 120, audience: "client", label,
   ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID(wat) });
@@ -108,12 +109,16 @@ export const GAME_KINDS = {
         help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat.")),
       goal: { type: "select", required: false, options: QUEST_GOALS.slice(), optionIcons: { deliver: "📦", visit: "🚶" },
         optionLabels: { deliver: "Breng spullen", visit: "Ga naar iemand" }, audience: "client", label: "Doel",
-        ui: ui("🎯", "select", "werkbank"), default: "deliver",
+        ui: ui("🎯", "select", "werkbank", { hideWhen: "steps" }), default: "deliver",
         help: help("Wat de speler moet doen.", "Breng spullen = verzamel items en lever ze in. Ga naar iemand = loop naar een andere NPC.", "Quest wordt nooit klaar → controleer item en aantal, of kies bij 'Ga naar iemand' een NPC onder ⚙️ meer.") },
       itemRef: refField("Welk item", "🎒", "item_definition", false,
-        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen.")),
-      amount: int("Hoeveel", "🔢", 1, 1, 9999, "werkbank", { range: [1, 50] },
+        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen."), { hideWhen: "steps" }),
+      amount: int("Hoeveel", "🔢", 1, 1, 9999, "werkbank", { range: [1, 50], hideWhen: "steps" },
         help("Hoeveel van het item de speler moet brengen.", "1 tot 10 voor een eerste quest.", "Duurt te lang → minder.")),
+      // Quest Builder stap 1: de quest als netwerk van stappen. Leeg = de snelle quest hierboven (1 stap + einde).
+      steps: { type: "questSteps", required: false, maxItems: QUEST_LIMITS.steps, audience: "client", label: "Stappen",
+        ui: ui("🪜", "questSteps", "werkbank"), default: null,
+        help: help("De stappen van de quest: doelen per stap en waar de quest daarna heen gaat.", "Begin met de snelle quest (1 doel). Meer nodig? Open de Quest Builder en voeg stappen toe.", "Rode melding in de Quest Builder → klik de stap en los op wat er staat.") },
       rewards: refList("Beloning", "🎁", ["item_definition", "currency"], [AMOUNT], "werkbank",
         help("Wat de speler krijgt als de quest klaar is.", "Sleep items of valuta uit de Bibliotheek, bijv. 10 goud of een zwaard.", "Spelers worden te snel rijk → minder of goedkopere beloningen.")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
@@ -122,7 +127,7 @@ export const GAME_KINDS = {
         ui: ui("💬", "text", "werkbank", { more: true }), default: null,
         help: help("De uitleg die de NPC geeft als hij de quest aanbiedt.", "Eén of twee zinnen: wat en waarom, bijv. \"Breng me 3 appels voor de taart.\"", "Spelers snappen het niet → zeg precies wat en hoeveel.") },
       targetNpcRef: refField("Inleveren bij", "🏁", "npc", false,
-        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { more: true }),
+        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { more: true, hideWhen: "steps" }),
       previousQuestRef: refField("Pas na quest", "⛓️", "quest", false,
         help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { more: true }),
       repeatable: toggle("Herhaalbaar", "🔁", false, "werkbank",

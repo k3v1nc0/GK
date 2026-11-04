@@ -1586,6 +1586,9 @@ export class Node03RuntimeService {
     pickup.updatedAt = now();
     this.saveEntityState(ctx, pickup);
     this.recordGameplayEvent(ctx, "pickup_claimed", "player", pickup.instanceId, { grants });
+    if (pickup.pickupKind !== "currency") {
+      this.questEvents?.(ctx, [ctx.profile.id], { type: "pickup", refId: pickup.itemRef, eventKey: "pickup:" + pickup.instanceId + ":" + operationId, operationId });
+    }
     return {
       action: "pickup",
       targetId: pickup.instanceId,
@@ -2099,6 +2102,9 @@ export class Node03RuntimeService {
       }
       this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
       this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
+      // Quest Builder: de kill telt voor iedereen die meevocht (1x per vijand-leven per speler).
+      this.questEvents?.(ctx, plan.rewards.map((reward) => reward.playerId),
+        { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId });
     } else {
       this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
     }
@@ -2131,6 +2137,7 @@ export class Node03RuntimeService {
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
     this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", plan.instanceId, { grants });
+    this.questEvents?.(ctx, [ctx.profile.id], { type: "gather", refId: plan.resourceId, eventKey: "gather:" + plan.instanceId, operationId });
     return {
       action: "gather",
       targetId: plan.instanceId,

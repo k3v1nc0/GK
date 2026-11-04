@@ -7,6 +7,8 @@ import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261028-users1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261027-om2b";
+import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest1";
+import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest1";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -618,6 +620,21 @@ export function createDocBench(options = {}) {
     return input;
   }
 
+  // Quest Builder stap 1: in het paneel alleen een samenvatting; bouwen doe je in de Quest Builder.
+  function questStepsSummary(body, doc) {
+    const own = hasOwnSteps(body);
+    const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
+    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived; };
+    const issues = own ? questGraphIssues(body.steps, { refExists }).length : 0;
+    const text = !doc ? "Eerst ✓ Maken, dan kun je stappen bouwen."
+      : own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (issues ? " · ⚠️ " + issues : " · ✅")
+        : "Snelle quest (1 doel). Meer stappen? Open de Quest Builder.";
+    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Quest Builder", disabled: doc ? null : true });
+    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: own ? "stappen" : "basis" }));
+    return el("div", { class: "wbdQuestSteps" }, [el("span", { class: "wbdNote", text }), button]);
+  }
+  bench.refControl = refControl;
+
   // ---------- het paneel dat zichzelf tekent ----------
 
   // Tekent één document (of een nieuw document) uit het schema. Bestaande documenten slaan elke wijziging
@@ -667,6 +684,8 @@ export function createDocBench(options = {}) {
     };
     // ui.when: { key, is: [...] } = alleen tonen als dat andere veld zo staat (bijv. Geneest alleen bij soort Genezen).
     const shownWhen = (field) => {
+      // ui.hideWhen: weg zodra dat andere veld gevuld is (snelle questvelden zodra de quest eigen stappen heeft).
+      if (field.ui?.hideWhen && !emptyValue(body[field.ui.hideWhen])) return false;
       const when = field.ui?.when;
       if (!when) return true;
       const current = emptyValue(body[when.key]) ? spec.fields[when.key]?.default : body[when.key];
@@ -713,6 +732,10 @@ export function createDocBench(options = {}) {
         rerender();
       };
       if (onPreview && !isNew) onChange.preview = (next) => onPreview(Object.assign({}, body, { [key]: next }));
+      if (field.ui?.control === "questSteps") {
+        visible.append(fieldRow(key, field, questStepsSummary(body, doc), true));
+        continue;
+      }
       if (field.ui?.control === "areaSettings") {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);

@@ -619,7 +619,7 @@ export class ActorRuntime {
       }
     }
     const plan = {
-      kind: "attack", instanceId: actor.id, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
+      kind: "attack", instanceId: actor.id, actorId: actor.def.actorId, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
       damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + actor.def.respawnMs : null, rewards, buildId: this.buildId, label
     };
     this.pending.set(ctx.operationId, plan);
@@ -639,7 +639,7 @@ export class ActorRuntime {
       throw error;
     }
     const plan = {
-      kind: "gather", instanceId: resource.id, spawnKey: resource.spawnKey, occurrence: resource.occurrence, playerId: ctx.playerId,
+      kind: "gather", instanceId: resource.id, resourceId: resource.def.resourceId, spawnKey: resource.spawnKey, occurrence: resource.occurrence, playerId: ctx.playerId,
       claimKey: resource.id, items: rollLoot(section.lootTables, resource.def.lootTableId, lootSeed(this.buildId, resource.id, ctx.playerId)),
       respawnAtMs: ctx.nowMs + resource.def.respawnMs, buildId: this.buildId, label
     };

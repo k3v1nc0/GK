@@ -7,6 +7,8 @@
 // De uitkomst heeft precies het formaat dat de game (world-runtime.js) en de spelserver (mmo/node03) al lezen.
 import { CANONICAL_KINDS } from "../../shared/authoring/kinds.js";
 import { applyCanonicalBuild, EDITOR_DOC_PREFIX } from "./runtime-overlay.js";
+import { sha256, stableStringify } from "./stable-json.js";
+import { OBJECTIVE_KINDS } from "../../../apps/web/public/shared/quest-graph.js";
 import { settingsValues } from "./game-compiler.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
@@ -401,55 +403,72 @@ function hudModules(hud, { currencyIds, hasVendor, hasStation }) {
   return modules;
 }
 
-function questRecord(quest, npcsById, itemName) {
-  const turnInNpcId = quest.targetNpcId || quest.giverNpcId;
-  const target = npcTargetId(turnInNpcId);
-  const targetName = npcsById.get(turnInNpcId)?.displayName || turnInNpcId;
-  const step = quest.goal === "visit"
-    ? { id: "step.visit", sequenceIndex: 0, displayName: "Ga naar " + targetName, instruction: "Ga naar " + targetName + ".", stepType: "reach",
-      targetRef: target, zoneRef: WORLD_ZONE_ID, autoAdvance: true, conditions: [], rewards: [],
-      objectives: [{ id: "objective.visit", objectiveType: "reach", targetRef: target, zoneRef: WORLD_ZONE_ID, radius: talkRangeOf(npcsById.get(turnInNpcId)) }] }
-    : { id: "step.deliver", sequenceIndex: 0, displayName: "Breng " + quest.amount + "× " + itemName(quest.itemId) + " naar " + targetName,
-      instruction: "Breng " + quest.amount + "× " + itemName(quest.itemId) + " naar " + targetName + ".", stepType: "deliver",
-      targetRef: target, autoAdvance: true, conditions: [], rewards: [],
-      objectives: [{ id: "objective.deliver", objectiveType: "deliver", itemRef: quest.itemId, requiredAmount: quest.amount, targetRef: target }] };
+// Quest Builder stap 1: een quest is een netwerk van stappen (doelen, overgangen, eindes).
+// De snelle Quest-kaart is al omgezet naar 1 stap + einde (game-compiler). version = vingerafdruk van de inhoud:
+// een speler maakt een lopende quest af op de versie waarmee hij begon (quest-motor, tabel quest_versions).
+function questObjective(objective, names) {
+  const spec = OBJECTIVE_KINDS[objective.type] || {};
+  const record = { id: objective.objectiveId, objectiveType: objective.type, role: objective.role || "required",
+    requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
+  if (objective.type === "defeat") record.actorRef = objective.targetId;
+  else if (objective.type === "gather") record.resourceRef = objective.targetId;
+  else if (spec.refKind === "item_definition") record.itemRef = objective.targetId;
+  const npcId = spec.npc ? objective.npcId : spec.refKind === "npc" ? objective.targetId : null;
+  if (npcId) {
+    record.targetRef = npcTargetId(npcId);
+    record.zoneRef = WORLD_ZONE_ID;
+    record.radius = talkRangeOf(names.npcs.get(npcId));
+  }
+  const what = objective.type === "defeat" ? names.actor(objective.targetId)
+    : objective.type === "gather" ? names.resource(objective.targetId)
+      : spec.refKind === "npc" ? names.npc(objective.targetId) : names.item(objective.targetId);
+  const amount = spec.amount && record.requiredAmount > 1 ? record.requiredAmount + "× " : "";
+  record.displayName = (spec.label || objective.type) + " " + amount + what + (spec.npc ? " naar " + names.npc(objective.npcId) : "");
+  return record;
+}
+
+function questRecord(quest, names) {
+  const steps = quest.steps.map((step) => {
+    const objectives = step.kind === "step" ? step.objectives.map((objective) => questObjective(objective, names)) : [];
+    const summary = objectives.filter((objective) => objective.role !== "hidden").map((objective) => objective.displayName).join(", ");
+    return { id: step.stepId, kind: step.kind, displayName: step.title || summary || step.stepId, instruction: step.text || summary || step.title || "",
+      match: step.match, objectives, next: step.kind === "step" ? step.next.map((to) => ({ to })) : [], conditions: [], rewards: [] };
+  });
+  const first = steps[0] || null;
+  const giverTarget = npcTargetId(quest.giverNpcId);
   const rewards = [];
   if (quest.rewardXp > 0) rewards.push({ actionKind: "xp", amount: quest.rewardXp });
   for (const grant of quest.rewards) {
     if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
     else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
   }
-  return {
-    id: quest.questId, displayName: quest.displayName, description: quest.description || step.instruction, summary: step.instruction,
-    steps: [step], stepsById: { [step.id]: step }, startStepRef: step.id, rewards, conditions: [],
-    startDialogueRef: npcDialogueId(quest.giverNpcId), turnInTargetRef: target,
+  const record = {
+    id: quest.questId, graph: true, displayName: quest.displayName, description: quest.description || first?.instruction || "", summary: first?.instruction || "",
+    steps, stepsById: Object.fromEntries(steps.map((step) => [step.id, step])), startStepRef: first?.id || null, rewards, conditions: [],
+    startDialogueRef: npcDialogueId(quest.giverNpcId), turnInTargetRef: giverTarget,
     prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
     autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
   };
+  record.version = sha256(stableStringify(record)).slice(0, 16);
+  return record;
 }
 
-// Eén gesprek per NPC: begroeting, dan per quest een keuze (aanbieden, inleveren of klaar melden).
-// De keuzes verschijnen alleen als ze kunnen (voorwaarden quest_available / quest_turn_in / quest_reach_ready).
-function npcDialogue(npc, quests, itemName) {
+// Eén gesprek per NPC: begroeting, dan per quest de keuze om hem aan te nemen (voorwaarde quest_available).
+// Praten en inleveren voor een queststap zet de quest-motor er zelf bij (per speler en per questversie).
+function npcDialogue(npc, quests, records) {
   const start = { id: "entry.start", entryType: "line", speakerName: npc.displayName, text: npc.greeting || "Hallo!", choices: [] };
   const entries = [start];
   let order = 0;
   for (const quest of quests) {
     if (quest.giverNpcId === npc.npcId) {
       const offerId = "entry.offer." + quest.questId;
-      const ask = quest.goal === "visit" ? "" : "Breng " + quest.amount + "× " + itemName(quest.itemId) + ".";
+      const ask = records.get(quest.questId)?.summary || "";
       start.choices.push({ id: "choice.ask." + quest.questId, label: "📜 " + quest.displayName, order: order++, action: "none", nextEntryRef: offerId,
         conditions: [{ conditionType: "quest_available", questRef: quest.questId }] });
       entries.push({ id: offerId, entryType: "line", speakerName: npc.displayName, text: quest.description || ask || quest.displayName, choices: [
         { id: "choice.accept." + quest.questId, label: "Ja, ik doe het!", order: 0, action: "accept_quest", questRef: quest.questId, closeAfterSelect: true, conditions: [] },
         { id: "choice.later." + quest.questId, label: "Nu niet", order: 1, action: "close", closeAfterSelect: true, conditions: [] }
       ] });
-    }
-    if ((quest.targetNpcId || quest.giverNpcId) === npc.npcId) {
-      const visit = quest.goal === "visit";
-      start.choices.push({ id: "choice.done." + quest.questId, label: "✅ " + (visit ? "Klaar: " : "Inleveren: ") + quest.displayName, order: order++,
-        action: visit ? "complete_quest" : "turn_in_quest", questRef: quest.questId, closeAfterSelect: true,
-        conditions: [{ conditionType: visit ? "quest_reach_ready" : "quest_turn_in", questRef: quest.questId }] });
     }
   }
   start.choices.push({ id: "choice.bye", label: "Tot ziens", order: order++, action: "close", closeAfterSelect: true, conditions: [] });
@@ -578,10 +597,18 @@ function withGame(world, source, options) {
 
   // Quests en gesprekken.
   const npcsById = new Map(npcs.map((npc) => [npc.npcId, npc]));
-  const questRecords = quests.filter((quest) => npcsById.has(quest.giverNpcId) && npcsById.has(quest.targetNpcId || quest.giverNpcId))
-    .map((quest) => questRecord(quest, npcsById, itemName));
-  const usable = quests.filter((quest) => questRecords.some((record) => record.id === quest.questId));
-  const dialogues = npcs.map((npc) => npcDialogue(npc, usable, itemName));
+  const names = { npcs: npcsById, npc: (id) => npcsById.get(id)?.displayName || id, item: itemName,
+    actor: (id) => source.actors?.archetypes?.[id]?.displayName || id, resource: (id) => source.actors?.resources?.[id]?.displayName || id };
+  // Oudere builds hebben nog geen stappen in de sectie: die quests worden 1 stap + einde zoals vroeger.
+  const legacySteps = (quest) => (quest.goal === "visit"
+    ? [{ stepId: "step.visit", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.visit", type: "talk", targetId: quest.targetNpcId, npcId: null, amount: 1, role: "required" }] }]
+    : [{ stepId: "step.deliver", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.deliver", type: "deliver", targetId: quest.itemId, npcId: quest.targetNpcId || quest.giverNpcId, amount: quest.amount || 1, role: "required" }] }])
+    .concat([{ stepId: "end", kind: "end", title: "Klaar", text: "", match: "all", next: [], objectives: [] }]);
+  const questRecords = quests.filter((quest) => npcsById.has(quest.giverNpcId))
+    .map((quest) => questRecord(Array.isArray(quest.steps) ? quest : Object.assign({}, quest, { steps: legacySteps(quest) }), names));
+  const recordsById = new Map(questRecords.map((record) => [record.id, record]));
+  const usable = quests.filter((quest) => recordsById.has(quest.questId));
+  const dialogues = npcs.map((npc) => npcDialogue(npc, usable, recordsById));
   const campaigns = Object.assign({}, gameProject.campaigns, { quests: listOf(questRecords), dialogues: listOf(dialogues),
     questCount: questRecords.length, dialogueCount: dialogues.length });
 
