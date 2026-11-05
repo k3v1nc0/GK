@@ -148,11 +148,11 @@ async function readJson(req) {
 
 const editorLayoutViews = {
   nodes: new Set(["tools", "graph", "viewport", "assets"]),
-  workbench: new Set(["workbench", "viewport", "relations", "library"]),
+  workbench: new Set(["workbench", "viewport", "relations", "library", "game"]),
   // Werkbank Fase 1: tab Instellingen (menu, kaart, 3D-preview).
-  settings: new Set(["settingsMenu", "settingsCard", "viewport"]),
+  settings: new Set(["settingsMenu", "settingsCard", "viewport", "game"]),
   // Wereld tekenen ronde 2: tab Terrein (gereedschap, 3D, terrein-bibliotheek).
-  terrain: new Set(["terrainTools", "viewport", "terrainLibrary"])
+  terrain: new Set(["terrainTools", "viewport", "terrainLibrary", "game"])
 };
 
 function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
@@ -165,8 +165,8 @@ function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
   for (const child of node.children) {
     const normalizedNode = normalizeEditorLayoutNode(child?.node, allowedViews, depth + 1);
     const size = Number(child?.size);
-    if (!normalizedNode || !Number.isFinite(size) || size <= 0) return null;
-    children.push({ size: Math.min(1000, Math.max(0.02, size)), node: normalizedNode });
+    if (!normalizedNode || !Number.isFinite(size) || size < 0) return null;
+    children.push({ size, node: normalizedNode });
   }
   return { dir: node.dir, children };
 }

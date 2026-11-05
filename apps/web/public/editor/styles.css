@@ -3588,25 +3588,6 @@ body.workbenchMode.workbenchStageOverview .workbenchOverview {
   body[data-mobile-panel="all"] .allLayoutRoot {
     display: flex;
   }
-  body.workbenchMode .mobilePanelTabs { display: none; }
-  body.workbenchMode .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows:
-      minmax(0, var(--workbench-mobile-tools-height))
-      16px
-      minmax(0, var(--workbench-mobile-viewport-height))
-      16px
-      minmax(0, var(--workbench-mobile-assets-height));
-    overflow-y: auto;
-  }
-  body.workbenchMode .tools,
-  body.workbenchMode .viewportColumn,
-  body.workbenchMode .assetColumn { display: flex !important; width: 100%; }
-  body.workbenchMode .layoutResizer[data-resizer="tools"],
-  body.workbenchMode .layoutResizer[data-resizer="viewport"] { display: block !important; }
-  body.workbenchMode .layoutResizer[data-resizer="graph"] { display: none !important; }
-  body.workbenchMode .workbenchRelationResizer { display: block !important; flex-basis: 16px; }
-  body.workbenchMode .allLayoutRoot { display: none !important; }
 }
 
 @media (pointer: coarse) {

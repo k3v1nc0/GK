@@ -133,7 +133,6 @@ const AUTHORING_ROUTE_STORAGE_KEY = "gk.editorAuthoringRoute";
 const AUTHORING_INDICATORS_STORAGE_KEY = "gk.editorAuthoringIndicators";
 const RUNTIME_NAMEPLATES_STORAGE_KEY = "gk.editorRuntimeNameplates";
 const CURRENT_GROUP_STORAGE_KEY = "gk.editorCurrentGroupId";
-const EDITOR_LAYOUT_STORAGE_KEY = "gk.editorLayoutSizes.v2";
 const EDITOR_MOBILE_PANEL_STORAGE_KEY = "gk.editorMobilePanel";
 const ALL_LAYOUT_STORAGE_KEY = "gk.editorAllLayouts.v2";
 const NODE_PANE_VIEWS = ["tools", "graph", "viewport", "assets"];
@@ -507,7 +506,6 @@ const el = {
   graphZoomOutButton: document.querySelector("#graphZoomOutButton"),
   graphZoomInButton: document.querySelector("#graphZoomInButton"),
   zoomResetButton: document.querySelector("#zoomResetButton"),
-  layoutResizers: Array.from(document.querySelectorAll(".layout > .layoutResizer")),
   viewportSelectionBox: document.querySelector("#viewportSelectionBox"),
   allLayoutRoot: document.querySelector("#allLayoutRoot"),
   allLayoutOverflow: document.querySelector("#allLayoutOverflow"),
@@ -523,7 +521,6 @@ const el = {
   oldModeMenu: document.querySelector("#oldModeMenu"),
   settingsMenuPanel: document.querySelector("#settingsMenuPanel"),
   settingsCardPanel: document.querySelector("#settingsCardPanel"),
-  workbenchRelationResizer: document.querySelector("#workbenchRelationResizer"),
   workbenchSelectionPanel: document.querySelector("#workbenchSelectionPanel"),
   workbenchLibraryPanel: document.querySelector("#workbenchLibraryPanel"),
   workbenchRelationStrip: document.querySelector("#workbenchRelationStrip"),
@@ -557,7 +554,6 @@ let viewportTouchEditSuppress = false;
 // setMobilePanel() -> updateAllLayoutMode()) can never hit these before their `let`
 // initializer has run - that previously threw a TDZ ReferenceError that silently
 // aborted the whole script's startup.
-let allLayoutActive = false;
 let allLayoutLastUsedViews = new Set();
 let editorLayoutServerReady = false;
 let editorLayoutSaveTimer = null;
@@ -1237,73 +1233,6 @@ function isViewportPaneVisible() {
 
 function hasInspectorSelection() {
   return Boolean(state.selectedNodeIds.length || state.selectedEdgeIds.length);
-}
-
-function setRootCssVar(name, value, persist = true) {
-  if (!name || !value) return;
-  document.documentElement.style.setProperty(name, value);
-  if (!persist) return;
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
-    stored[name] = value;
-    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
-  } catch {}
-}
-
-function applyStoredEditorLayoutSizes() {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(EDITOR_LAYOUT_STORAGE_KEY) || "{}");
-    const allowed = new Set([
-      "--tools-width",
-      "--graph-width",
-      "--viewport-width",
-      "--assets-width",
-      "--workbench-tools-width",
-      "--workbench-viewport-width",
-      "--workbench-assets-width",
-      "--workbench-relations-height",
-      "--mobile-tools-height",
-      "--mobile-graph-height",
-      "--mobile-viewport-height",
-      "--mobile-assets-height",
-      "--workbench-mobile-tools-height",
-      "--workbench-mobile-viewport-height",
-      "--workbench-mobile-assets-height"
-    ]);
-    for (const [name, value] of Object.entries(stored || {})) {
-      if (!allowed.has(name)) continue;
-      if (typeof value !== "string" || !/^\d+(\.\d+)?px$/.test(value)) continue;
-      document.documentElement.style.setProperty(name, value);
-    }
-  } catch {}
-}
-
-function persistEditorLayoutSizes() {
-  try {
-    const names = [
-      "--tools-width",
-      "--graph-width",
-      "--viewport-width",
-      "--assets-width",
-      "--workbench-tools-width",
-      "--workbench-viewport-width",
-      "--workbench-assets-width",
-      "--workbench-relations-height",
-      "--mobile-tools-height",
-      "--mobile-graph-height",
-      "--mobile-viewport-height",
-      "--mobile-assets-height",
-      "--workbench-mobile-tools-height",
-      "--workbench-mobile-viewport-height",
-      "--workbench-mobile-assets-height"
-    ];
-    const stored = {};
-    for (const name of names) {
-      const value = document.documentElement.style.getPropertyValue(name).trim();
-      if (value) stored[name] = value;
-    }
-    window.localStorage.setItem(EDITOR_LAYOUT_STORAGE_KEY, JSON.stringify(stored));
-  } catch {}
 }
 
 function setMobilePanel(panel, persist = true) {
@@ -25257,7 +25186,7 @@ function clampNumber(value, min, max) {
 }
 
 function resizePair(startA, startB, delta, minA, minB) {
-  const total = Math.max(1, startA + startB);
+  const total = Math.max(0, startA + startB);
   const maxA = Math.max(minA, total - minB);
   const a = clampNumber(startA + delta, minA, maxA);
   return { a: a, b: Math.max(minB, total - a) };
@@ -25268,138 +25197,6 @@ function resizeRuntimeAfterLayout() {
     if (runtime && typeof runtime.render === "function") runtime.render("layout-resize");
     scheduleViewportFloatingPanelLayoutRefresh();
   });
-}
-
-function applyEditorLayoutResize(drag, event) {
-  if (!drag) return;
-  if (drag.mobile) {
-    const deltaY = event.clientY - drag.startY;
-    if (drag.id === "tools") {
-      const pair = resizePair(drag.toolsHeight, drag.workbench ? drag.viewportHeight : drag.graphHeight, deltaY, 0, 0);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-tools-height" : "--mobile-tools-height", Math.round(pair.a) + "px", false);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-viewport-height" : "--mobile-graph-height", Math.round(pair.b) + "px", false);
-    } else if (drag.id === "graph") {
-      const pair = resizePair(drag.graphHeight, drag.viewportHeight, deltaY, 0, 0);
-      setRootCssVar("--mobile-graph-height", Math.round(pair.a) + "px", false);
-      setRootCssVar("--mobile-viewport-height", Math.round(pair.b) + "px", false);
-    } else if (drag.id === "viewport") {
-      const pair = resizePair(drag.viewportHeight, drag.assetsHeight, deltaY, 0, 0);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-viewport-height" : "--mobile-viewport-height", Math.round(pair.a) + "px", false);
-      setRootCssVar(drag.workbench ? "--workbench-mobile-assets-height" : "--mobile-assets-height", Math.round(pair.b) + "px", false);
-    }
-    resizeRuntimeAfterLayout();
-    return;
-  }
-
-  const deltaX = event.clientX - drag.startX;
-  if (drag.id === "tools") {
-    const pair = resizePair(drag.toolsWidth, drag.workbench ? drag.viewportWidth : drag.graphWidth, deltaX, 0, 0);
-    setRootCssVar(drag.workbench ? "--workbench-tools-width" : "--tools-width", Math.round(pair.a) + "px", false);
-    setRootCssVar(drag.workbench ? "--workbench-viewport-width" : "--graph-width", Math.round(pair.b) + "px", false);
-  } else if (drag.id === "graph") {
-    const pair = resizePair(drag.graphWidth, drag.viewportWidth, deltaX, 0, 0);
-    setRootCssVar("--graph-width", Math.round(pair.a) + "px", false);
-    setRootCssVar("--viewport-width", Math.round(pair.b) + "px", false);
-  } else if (drag.id === "viewport") {
-    const pair = resizePair(drag.viewportWidth, drag.assetsWidth, deltaX, 0, 0);
-    setRootCssVar(drag.workbench ? "--workbench-viewport-width" : "--viewport-width", Math.round(pair.a) + "px", false);
-    setRootCssVar(drag.workbench ? "--workbench-assets-width" : "--assets-width", Math.round(pair.b) + "px", false);
-  }
-  resizeRuntimeAfterLayout();
-}
-
-function beginEditorLayoutResize(event, resizer) {
-  if (!resizer || (event.button !== undefined && event.button !== 0)) return;
-  if (!el.layout) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const tools = document.querySelector(".tools");
-  const graph = document.querySelector(".graphColumn");
-  const viewport = document.querySelector(".viewportColumn");
-  const assets = document.querySelector(".assetColumn");
-  const layoutRect = el.layout.getBoundingClientRect();
-  const drag = {
-    id: resizer.dataset.resizer,
-    mobile: isMobileLayout(),
-    workbench: state.editorMode === "workbench",
-    startX: event.clientX,
-    startY: event.clientY,
-    layoutWidth: layoutRect.width,
-    mobileMaxHeight: Math.max(180, layoutRect.height - 80),
-    toolsWidth: tools?.getBoundingClientRect().width || 250,
-    graphWidth: graph?.getBoundingClientRect().width || 320,
-    viewportWidth: viewport?.getBoundingClientRect().width || 320,
-    assetsWidth: assets?.getBoundingClientRect().width || 310,
-    toolsHeight: tools?.getBoundingClientRect().height || 220,
-    graphHeight: graph?.getBoundingClientRect().height || 340,
-    viewportHeight: viewport?.getBoundingClientRect().height || 360,
-    assetsHeight: assets?.getBoundingClientRect().height || 260
-  };
-  resizer.classList.add("active");
-  try { resizer.setPointerCapture?.(event.pointerId); } catch {}
-  function onMove(moveEvent) {
-    if (moveEvent.pointerId !== event.pointerId) return;
-    moveEvent.preventDefault();
-    applyEditorLayoutResize(drag, moveEvent);
-  }
-  function onUp(upEvent) {
-    if (upEvent.pointerId !== undefined && upEvent.pointerId !== event.pointerId) return;
-    resizer.classList.remove("active");
-    persistEditorLayoutSizes();
-    try { resizer.releasePointerCapture?.(event.pointerId); } catch {}
-    window.removeEventListener("pointermove", onMove, true);
-    window.removeEventListener("pointerup", onUp, true);
-    window.removeEventListener("pointercancel", onUp, true);
-  }
-  window.addEventListener("pointermove", onMove, true);
-  window.addEventListener("pointerup", onUp, true);
-  window.addEventListener("pointercancel", onUp, true);
-}
-
-function initEditorLayoutResizers() {
-  for (const resizer of el.layoutResizers || []) {
-    resizer.addEventListener("pointerdown", function (event) {
-      beginEditorLayoutResize(event, resizer);
-    });
-  }
-  if (el.workbenchRelationResizer) {
-    el.workbenchRelationResizer.addEventListener("pointerdown", beginWorkbenchRelationResize);
-  }
-}
-
-function beginWorkbenchRelationResize(event) {
-  const resizer = el.workbenchRelationResizer;
-  const strip = el.workbenchRelationStrip;
-  if (state.editorMode !== "workbench" || !resizer || !strip || !el.viewportWrap) return;
-  if (event.button !== undefined && event.button !== 0) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const pointerId = event.pointerId;
-  const startY = event.clientY;
-  const stageElement = state.workbenchStage === "overview" && el.workbenchOverviewPanel ? el.workbenchOverviewPanel : el.viewportWrap;
-  const viewportHeight = stageElement.getBoundingClientRect().height;
-  const relationHeight = strip.getBoundingClientRect().height;
-  resizer.classList.add("active");
-  try { resizer.setPointerCapture?.(pointerId); } catch {}
-  function onMove(moveEvent) {
-    if (moveEvent.pointerId !== pointerId) return;
-    moveEvent.preventDefault();
-    const pair = resizePair(viewportHeight, relationHeight, moveEvent.clientY - startY, 0, 0);
-    setRootCssVar("--workbench-relations-height", Math.round(pair.b) + "px", false);
-    resizeRuntimeAfterLayout();
-  }
-  function onUp(upEvent) {
-    if (upEvent.pointerId !== undefined && upEvent.pointerId !== pointerId) return;
-    resizer.classList.remove("active");
-    persistEditorLayoutSizes();
-    try { resizer.releasePointerCapture?.(pointerId); } catch {}
-    window.removeEventListener("pointermove", onMove, true);
-    window.removeEventListener("pointerup", onUp, true);
-    window.removeEventListener("pointercancel", onUp, true);
-  }
-  window.addEventListener("pointermove", onMove, true);
-  window.addEventListener("pointerup", onUp, true);
-  window.addEventListener("pointercancel", onUp, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -25472,7 +25269,7 @@ function isValidAllLayoutNode(node, allowedViews = allPaneViews()) {
   if (node.dir === "row" || node.dir === "col") {
     return Array.isArray(node.children) && node.children.length >= 1 &&
       node.children.every(function (child) {
-        return child && typeof child.size === "number" && child.size > 0 && isValidAllLayoutNode(child.node, allowedViews);
+        return child && typeof child.size === "number" && child.size >= 0 && isValidAllLayoutNode(child.node, allowedViews);
       });
   }
   return false;
@@ -25487,6 +25284,42 @@ function defaultAllLayoutTrees() {
   };
 }
 
+// Een split in dezelfde richting als zijn ouder vormt visueel één rij of kolom.
+// Maak daar ook één siblinglijst van, zodat iedere resizer alleen zijn twee
+// directe buurpanelen wijzigt en een derde paneel op zijn plek blijft staan.
+function flattenAllLayoutSplits(node) {
+  if (!node || node.view || !Array.isArray(node.children)) return node;
+  const flattenedChildren = [];
+  for (const child of node.children) {
+    const childNode = flattenAllLayoutSplits(child.node);
+    if (childNode && childNode.dir === node.dir && Array.isArray(childNode.children)) {
+      const nestedTotal = childNode.children.reduce(function (total, nestedChild) {
+        return total + Math.max(0, Number(nestedChild.size) || 0);
+      }, 0);
+      if (nestedTotal > 0) {
+        for (const nestedChild of childNode.children) {
+          flattenedChildren.push({
+            size: Math.max(0, Number(child.size) || 0) * (Math.max(0, Number(nestedChild.size) || 0) / nestedTotal),
+            node: nestedChild.node
+          });
+        }
+        continue;
+      }
+    }
+    flattenedChildren.push({ size: Math.max(0, Number(child.size) || 0), node: childNode });
+  }
+  node.children = flattenedChildren;
+  return node;
+}
+
+function flattenAllLayoutTrees(layouts) {
+  if (!layouts || typeof layouts !== "object") return layouts;
+  for (const mode of Object.keys(layouts)) {
+    layouts[mode] = flattenAllLayoutSplits(layouts[mode]);
+  }
+  return layouts;
+}
+
 function isValidAllLayoutTrees(layouts) {
   return Boolean(layouts
     && isValidAllLayoutNode(layouts.nodes, NODE_PANE_VIEWS)
@@ -25497,7 +25330,7 @@ function isValidAllLayoutTrees(layouts) {
 function withSettingsLayout(layouts) {
   if (!isValidAllLayoutNode(layouts.settings, SETTINGS_PANE_VIEWS)) layouts.settings = defaultAllLayoutTree("settings");
   if (!isValidAllLayoutNode(layouts.terrain, TERRAIN_PANE_VIEWS)) layouts.terrain = defaultAllLayoutTree("terrain");
-  return layouts;
+  return flattenAllLayoutTrees(layouts);
 }
 
 function loadStoredAllLayoutTrees() {
@@ -25514,6 +25347,8 @@ function loadStoredAllLayoutTrees() {
 function currentEditorLayoutPayload() {
   if (!state.allLayoutTrees) state.allLayoutTrees = defaultAllLayoutTrees();
   if (state.allLayoutTree) state.allLayoutTrees[state.editorMode] = state.allLayoutTree;
+  flattenAllLayoutTrees(state.allLayoutTrees);
+  state.allLayoutTree = state.allLayoutTrees[state.editorMode];
   return {
     version: 1,
     editorMode: state.editorMode,
@@ -25798,7 +25633,7 @@ function buildAllSplit(node, path) {
       wrap.appendChild(resizer);
     }
     const childEl = buildAllLayoutNode(child.node, path.concat(index));
-    childEl.style.flex = String(Math.max(0.0001, child.size)) + " 1 0px";
+    childEl.style.flex = String(Math.max(0, child.size)) + " 1 0px";
     wrap.appendChild(childEl);
   });
   return wrap;
@@ -25908,32 +25743,47 @@ function beginAllSplitResize(event, resizerEl, splitNode, indexA, indexB) {
   event.preventDefault();
   event.stopPropagation();
   const dir = splitNode.dir;
+  const splitEl = resizerEl.parentElement;
   const childElA = resizerEl.previousElementSibling;
   const childElB = resizerEl.nextElementSibling;
-  if (!childElA || !childElB) return;
-  const rectA = childElA.getBoundingClientRect();
-  const rectB = childElB.getBoundingClientRect();
-  const startSizeA = dir === "row" ? rectA.width : rectA.height;
-  const startSizeB = dir === "row" ? rectB.width : rectB.height;
-  const totalPx = Math.max(1, startSizeA + startSizeB);
-  const growA = splitNode.children[indexA].size;
-  const growB = splitNode.children[indexB].size;
-  const growPerPx = (growA + growB) / totalPx;
+  if (!splitEl || !childElA || !childElB) return;
+
+  // Zet tijdens het slepen ieder direct paneel vast op zijn huidige pixelmaat.
+  // Zo kan flexbox geen andere resizer in dezelfde split mee verplaatsen.
+  const childEls = Array.from(splitEl.children).filter(function (childEl) {
+    return !childEl.classList.contains("allSplitResizer");
+  });
+  if (childEls.length !== splitNode.children.length) return;
+  const originalSizes = splitNode.children.map(function (child) { return child.size; });
+  const startSizes = childEls.map(function (childEl) {
+    const rect = childEl.getBoundingClientRect();
+    return dir === "row" ? rect.width : rect.height;
+  });
+  const totalStartSize = Math.max(1, startSizes.reduce(function (total, size) { return total + size; }, 0));
+  const startShares = startSizes.map(function (size) { return (size / totalStartSize) * 100; });
+  const startSizeA = startSizes[indexA];
+  const startSizeB = startSizes[indexB];
+  childEls.forEach(function (childEl, index) {
+    childEl.style.flex = "0 0 " + startSizes[index] + "px";
+  });
   const startX = event.clientX;
   const startY = event.clientY;
-  const minPx = 20;
+  let didMove = false;
   resizerEl.classList.add("active");
   try { resizerEl.setPointerCapture?.(event.pointerId); } catch {}
   function onMove(moveEvent) {
     if (moveEvent.pointerId !== event.pointerId) return;
     moveEvent.preventDefault();
     const delta = dir === "row" ? (moveEvent.clientX - startX) : (moveEvent.clientY - startY);
-    const deltaPx = clampNumber(delta, minPx - startSizeA, startSizeB - minPx);
-    const deltaGrow = deltaPx * growPerPx;
-    splitNode.children[indexA].size = Math.max(0.02, growA + deltaGrow);
-    splitNode.children[indexB].size = Math.max(0.02, growB - deltaGrow);
-    childElA.style.flex = String(splitNode.children[indexA].size) + " 1 0px";
-    childElB.style.flex = String(splitNode.children[indexB].size) + " 1 0px";
+    const pair = resizePair(startSizeA, startSizeB, delta, 0, 0);
+    if (!didMove) {
+      didMove = true;
+      splitNode.children.forEach(function (child, index) { child.size = Math.max(0, startShares[index]); });
+    }
+    splitNode.children[indexA].size = Math.max(0, (pair.a / totalStartSize) * 100);
+    splitNode.children[indexB].size = Math.max(0, (pair.b / totalStartSize) * 100);
+    childElA.style.flexBasis = pair.a + "px";
+    childElB.style.flexBasis = pair.b + "px";
     resizeRuntimeAfterLayout();
   }
   function onUp(upEvent) {
@@ -25943,42 +25793,19 @@ function beginAllSplitResize(event, resizerEl, splitNode, indexA, indexB) {
     window.removeEventListener("pointermove", onMove, true);
     window.removeEventListener("pointerup", onUp, true);
     window.removeEventListener("pointercancel", onUp, true);
-    persistAllLayoutTree();
+    childEls.forEach(function (childEl, index) {
+      const size = didMove ? splitNode.children[index].size : originalSizes[index];
+      childEl.style.flex = String(Math.max(0, size)) + " 1 0px";
+    });
+    if (didMove) persistAllLayoutTree();
   }
   window.addEventListener("pointermove", onMove, true);
   window.addEventListener("pointerup", onUp, true);
   window.addEventListener("pointercancel", onUp, true);
 }
 
-function restoreFlatEditorLayoutOrder() {
-  if (!el.layout) return;
-  const toolsEl = document.querySelector(".tools");
-  const graphEl = document.querySelector(".graphColumn");
-  const viewportEl = document.querySelector(".viewportColumn");
-  const assetsEl = document.querySelector(".assetColumn");
-  const resizerTools = el.layout.querySelector('[data-resizer="tools"]');
-  const resizerGraph = el.layout.querySelector('[data-resizer="graph"]');
-  const resizerViewport = el.layout.querySelector('[data-resizer="viewport"]');
-  if (toolsEl && resizerTools) el.layout.insertBefore(toolsEl, resizerTools);
-  if (graphEl && resizerGraph) el.layout.insertBefore(graphEl, resizerGraph);
-  if (viewportEl && resizerViewport) el.layout.insertBefore(viewportEl, resizerViewport);
-  if (assetsEl) el.layout.appendChild(assetsEl);
-  if (el.workbenchRelationStrip && el.statusText?.parentElement === viewportEl) {
-    viewportEl.insertBefore(el.workbenchRelationStrip, el.statusText);
-  }
-}
-
 function updateAllLayoutMode() {
-  const shouldBeActive = true;
-  if (shouldBeActive && !allLayoutActive) {
-    allLayoutActive = true;
-    renderAllLayout();
-  } else if (shouldBeActive && allLayoutActive) {
-    renderAllLayout();
-  } else if (!shouldBeActive && allLayoutActive) {
-    allLayoutActive = false;
-    restoreFlatEditorLayoutOrder();
-  }
+  renderAllLayout();
 }
 
 function initAllLayoutControls() {
@@ -26029,7 +25856,6 @@ function focusViewportSelection() {
 }
 
 function initMobileControls() {
-  applyStoredEditorLayoutSizes();
   initAllLayoutControls();
   setMobilePanel("all", false);
   updateTopbarLabels();
@@ -26040,7 +25866,6 @@ function initMobileControls() {
       });
     }
   }
-  initEditorLayoutResizers();
   initWorkbenchW2();
   if (el.fullscreenButton) el.fullscreenButton.addEventListener("click", toggleEditorFullscreen);
   document.addEventListener("fullscreenchange", updateEditorFullscreenButton);
