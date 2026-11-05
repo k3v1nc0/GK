@@ -112,7 +112,11 @@ export const CANONICAL_KINDS = {
         help: help("Mag het item verhandeld of verkocht worden?", "Aan voor gewone items, uit voor questitems.", "Questitem belandt op de markt → zet dit uit.") },
       questItem: { type: "boolean", required: false, audience: "client", label: "Questitem",
         ui: ui("📜", "toggle", "werkbank", { more: true }), default: false,
-        help: help("Is dit een item dat alleen voor een quest is?", "Aan voor brieven, sleutels en bewijsstukken.", "Questitem kan weggegooid worden → zet dit aan.") },
+        help: help("Is dit een item dat alleen voor een quest is? Dan staat het in het tas-vak 🔑 Quest, kun je het niet weggooien of verkopen en gaat het weg als de quest klaar is.", "Aan voor brieven, sleutels en bewijsstukken.", "Questitem kan weggegooid worden → zet dit aan.") },
+      // Quest Builder stap 4: zoals in ESO/WoW kun je een uniek item maar 1× bij je hebben.
+      unique: { type: "boolean", required: false, audience: "client", label: "Uniek (max 1)",
+        ui: ui("1️⃣", "toggle", "werkbank", { more: true }), default: false,
+        help: help("Een speler kan hier maar 1 van hebben. Oppakken, buit en kopen geven er niet nog een.", "Aan voor een brief die een quest start, een sleutel of een bijzonder bewijsstuk.", "Spelers hebben er meer dan 1 → zet dit aan.") },
       iconAssetId: { type: "asset", assetType: "image", required: false, maxLength: 160, audience: "client", label: "Eigen icoon",
         ui: ui("🖼️", "asset", "werkbank", { more: true }), default: null,
         help: help("Een eigen plaatje voor in de tas. Leeg = het plaatje van het 3D-model.", "Meestal leeg laten; vierkant plaatje van 64-128 px als je toch wilt.", "Icoon ziet er wazig uit → gebruik een groter plaatje.") },
@@ -179,7 +183,12 @@ export const CANONICAL_KINDS = {
         help: help("Hoeveel je krijgt als je hem oppakt.", "1 tot 5 stuks.", "Spelers hebben te snel genoeg → lager.") },
       respawnPolicyRef: { type: "id", required: false, maxLength: 120, audience: "server", label: "Terugkomen",
         ui: ui("⏳", "select", "werkbank", { optionsFrom: "respawnPolicies" }), default: null,
-        help: help("Of en wanneer de pickup terugkomt nadat iemand hem pakt.", "Kies een beleid uit de lijst; leeg = komt niet terug.", "Pickup komt nooit terug → kies hier een beleid.") }
+        help: help("Hoe snel de pickup terugkomt nadat iemand hem pakt (bij Ieder zijn eigen: voor die speler).", "Kies uit de lijst; leeg = Snel (30 s - 1 min). Nooit terug: zet Oppakken op Ieder 1×.", "Komt te snel terug → kies Langzaam of Zeldzaam.") },
+      // Quest Builder stap 4: een quest-object is per speler (ESO/WoW): iedereen pakt zijn eigen, of ieder maar 1×.
+      claimMode: { type: "select", required: false, options: ["shared", "personal", "once"], optionIcons: { shared: "🌍", personal: "🧍", once: "1️⃣" },
+        optionLabels: { shared: "Gedeeld: één voor iedereen", personal: "Ieder zijn eigen", once: "Ieder 1× (komt niet terug)" }, audience: "server", label: "Oppakken",
+        ui: ui("🫳", "select", "werkbank"), default: "shared",
+        help: help("Wie hem kan pakken. Gedeeld: wie het eerst komt; daarna is hij voor iedereen weg tot hij terugkomt. Ieder zijn eigen: voor jou weg, anderen zien hem nog. Ieder 1×: elke speler kan hem precies één keer pakken.", "Gedeeld voor gewone spullen; Ieder 1× voor een brief of sleutel voor een quest.", "Spelers pakken hem voor elkaar weg → kies Ieder zijn eigen of Ieder 1×.") }
     }
   },
   // F4-E1-T02: een Region is een exclusieve rechthoek in world-mm. Regions overlappen nooit (half-open grenzen).

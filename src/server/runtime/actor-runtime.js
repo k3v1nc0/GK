@@ -750,6 +750,18 @@ export class ActorRuntime {
     }
   }
 
+  // Quest Builder (Kevin 5-11): waar levende vijanden (of beschikbare grondstoffen) van deze soort nu zijn, voor de ⭐ op de kaart.
+  livePositions(kind, defId) {
+    const list = [];
+    const resource = kind === "resource";
+    for (const entry of (resource ? this.resources : this.actors).values()) {
+      if ((resource ? entry.def?.resourceId : entry.def?.actorId) !== defId) continue;
+      if (resource ? !entry.available : entry.state === "dead") continue;
+      list.push({ id: entry.id, x: entry.x, z: entry.z });
+    }
+    return list;
+  }
+
   snapshotForDebug() {
     return {
       buildId: this.buildId,

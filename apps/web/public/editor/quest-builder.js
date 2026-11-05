@@ -1,17 +1,19 @@
 // Quest Builder stap 1 (4-11): een quest als netwerk van stappen, over de editor heen, met tabs.
-// 📋 Basis = de gewone Quest-kaart; 🪜 Stappen = stappen, doelen en eindes; 🧪 Testen = quest-check en je eigen stand.
+// 5-11: de tabs volgen hoe je een quest bedenkt. 🚪 Start = hoe begint hij en wie mag hem doen; 🪜 Stappen = wat moet
+// de speler doen (doelen en eindes); 🧪 Testen = quest-check en je eigen stand. Naam, beloning en verhaal staan in het paneel.
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest8";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest11";
 
-const TABS = [["basis", "📋 Basis"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
+const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
 let current = null;
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 export function openQuestBuilder(bench, docKey, { setStatus = () => {}, tab = "stappen" } = {}) {
+  if (!TABS.some(([id]) => id === tab)) tab = "stappen";
   if (current && current.docKey === docKey) { current.tab = tab; current.render(); return; }
   if (current) current.close();
   const root = el("div", { class: "qbOverlay", role: "dialog", "aria-label": "Quest Builder" });
@@ -40,10 +42,10 @@ function names(bench) {
 }
 
 // Stap 3: keuzelijst met de Questgebieden (gemaakt met de Area tool, soort 🎯 Questgebied).
-function areaSelect(bench, value, empty, title, onPick) {
+function areaSelect(bench, value, empty, title, onPick, prefix = "🎯 ") {
   const areas = bench.docs("area").filter((doc) => doc.body?.soort === "questgebied");
   const select = el("select", { class: "wbdSelect qbArea", title }, [el("option", { value: "", text: empty })]
-    .concat(areas.map((doc) => el("option", { value: doc.docKey, text: "🎯 " + bench.docName(doc) }))));
+    .concat(areas.map((doc) => el("option", { value: doc.docKey, text: prefix + bench.docName(doc) }))));
   if (value && !areas.some((doc) => doc.docKey === value)) select.append(el("option", { value, text: "⚠️ " + value.replace(/^area:/, "") }));
   select.value = value || "";
   select.addEventListener("change", () => onPick(select.value || null));
@@ -95,11 +97,8 @@ function render(state) {
   panel.dataset.tab = state.tab;
   root.replaceChildren(panel);
   placePanel(state, panel);
-  if (state.tab === "basis") {
-    const form = el("div", { class: "wbdForm" });
-    content.append(form, startBlock(state, body, startIssues));
-    bench.renderForm(form, { kind: "quest", docKey: doc.docKey, skip: ["start"] });
-  } else if (state.tab === "testen") renderTest(state, content, body, steps, issues, nameOf);
+  if (state.tab === "start") renderStart(state, content, body, startIssues, nameOf);
+  else if (state.tab === "testen") renderTest(state, content, body, steps, issues, nameOf);
   else renderSteps(state, content, body, steps, issues, nameOf);
   panel.scrollTop = scroll;
 }
@@ -132,7 +131,16 @@ async function saveSteps(state, body, steps, label, dropSimple = false) {
   render(state);
 }
 
-// ---------- 🚪 Start en voorwaarden (stap 4) ----------
+// Eén gewoon veld van de quest opslaan (bijv. wie geeft hem, pas na quest).
+async function saveField(state, key, value, label) {
+  const doc = state.bench.doc(state.docKey);
+  const body = clone(doc.body || {});
+  if (value === null || value === undefined || value === "") delete body[key]; else body[key] = value;
+  try { await state.bench.saveDoc("quest", doc, body, "Quest · " + label); } catch {}
+  render(state);
+}
+
+// ---------- 🚪 Start: hoe begint de quest en wie mag hem doen (stap 4) ----------
 
 // Opslaan in het veld start. De standaard (bij een NPC, geen voorwaarden) = geen veld, zo blijft een quest gelijk aan vroeger.
 async function saveStart(state, label, change) {
@@ -151,16 +159,21 @@ async function saveStart(state, label, change) {
   render(state);
 }
 
-function startBlock(state, body, issues) {
+function renderStart(state, host, body, issues, nameOf) {
   const bench = state.bench;
   const start = body.start || {};
   const mode = questStartMode(body);
-  const box = el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🚪 Start en voorwaarden" })]);
+
+  // 1. Hoe begint hij: bij een NPC, een item lezen, een gebied in of vanzelf.
   const how = el("select", { class: "wbdSelect", title: "Hoe begint de speler deze quest?" },
     Object.entries(QUEST_START_MODES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   how.value = mode;
   how.addEventListener("change", () => saveStart(state, "start", (next) => { next.mode = how.value; }));
-  const row = [el("span", { class: "qbLabel", text: "Hoe start hij" }), how];
+  const row = [how];
+  if (mode === "npc") {
+    row.push(el("div", { class: "qbSlot" }, bench.refControl({ refKind: "npc", required: false, ui: { icon: "🧑" } }, body.giverRef || null,
+      (ref) => saveField(state, "giverRef", ref, "wie geeft hem"))));
+  }
   if (mode === "item") {
     row.push(el("div", { class: "qbSlot" }, bench.refControl({ refKind: "item_definition", required: false, ui: { icon: "📜" } }, start.itemRef || null,
       (ref) => saveStart(state, "start-item", (next) => { next.itemRef = ref || null; }))));
@@ -169,16 +182,20 @@ function startBlock(state, body, issues) {
     row.push(areaSelect(bench, start.areaRef || null, "Kies een Questgebied...", "Hier start de quest",
       (ref) => saveStart(state, "startgebied", (next) => { next.areaRef = ref || null; })));
   }
-  box.append(el("div", { class: "qbObjective" }, row));
   const hint = {
-    npc: "De NPC bij 🧑 Wie geeft hem (hierboven) biedt de quest aan.",
-    item: "De speler leest het item in zijn tas (knop 📜 Lezen). Tip: zet het item op Questitem en leg het als Pickup in de wereld, bijv. bij een kist. Het item blijft in de tas tot de quest klaar is.",
+    npc: "Deze NPC biedt de quest aan. Sleep een NPC uit de Bibliotheek op het vak.",
+    item: "De speler leest het item in zijn tas (knop 📜 Lezen). Tip: zet het item op Questitem en Uniek (max 1), en leg het als Pickup in de wereld (bijv. bij een kist) met Oppakken = Ieder 1×. Het item blijft in de tas tot de quest klaar is.",
     area: "De quest start als de speler dit gebied binnenloopt.",
-    auto: "Start vanzelf zodra de voorwaarden kloppen, bijv. 'Quest af' hieronder of ⛓️ Pas na quest. Deze quest kan de speler niet verlaten."
+    auto: "Start vanzelf zodra de speler mag (zie hieronder), bijv. meteen na ⛓️ Pas na quest. Deze quest kan de speler niet verlaten."
   }[mode];
-  box.append(el("p", { class: "wbdNote", text: hint }));
+  host.append(el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🚪 Hoe begint de quest?" }),
+    el("div", { class: "qbObjective" }, row), el("p", { class: "wbdNote", text: hint })]));
 
-  // Voorwaarden: EN = alles moet kloppen, OF = één is genoeg.
+  // 2. Wie mag hem beginnen: pas na een andere quest + voorwaarden (EN = alles moet kloppen, OF = één is genoeg).
+  const box = el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🔒 Wie mag hem beginnen?" })]);
+  box.append(el("div", { class: "qbObjective" }, [el("span", { class: "qbLabel", text: "⛓️ Pas na quest" }),
+    el("div", { class: "qbSlot" }, bench.refControl({ refKind: "quest", required: false, ui: { icon: "⛓️" } }, body.previousQuestRef || null,
+      (ref) => saveField(state, "previousQuestRef", ref, "pas na quest")))]));
   const rules = Array.isArray(start.rules) ? start.rules : [];
   const change = (label, edit) => saveStart(state, label, (next) => { next.rules = clone(rules); edit(next.rules, next); });
   if (rules.length > 1) {
@@ -199,8 +216,8 @@ function startBlock(state, body, issues) {
     change("voorwaarde erbij", (list) => list.push(type === "level" ? { type, min: 10 } : type === "item" ? { type, amount: 1 } : { type }));
   });
   box.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: "Klopt het niet, dan zegt de game de speler waarom hij nog niet kan beginnen." })]));
-  if (issues.length) box.append(issueList(issues));
-  return box;
+  host.append(box);
+  if (issues.length) host.append(issueList(issues));
 }
 
 function requirementRow(state, rule, change, remove) {
@@ -238,13 +255,20 @@ function requirementRow(state, rule, change, remove) {
 // ---------- 🪜 Stappen ----------
 
 function renderSteps(state, host, body, steps, issues, nameOf) {
+  // Velden van de quest zelf (snelle quest, bij groep verlaten) tekent de Werkbank; na opslaan tekenen we de Quest Builder opnieuw.
+  const fields = (only) => {
+    const form = el("div", { class: "wbdForm" });
+    state.bench.renderForm(form, { kind: "quest", docKey: state.docKey, place: "questbuilder", only, bare: true, onSaved: () => render(state) });
+    return form;
+  };
   if (!steps) {
     const simple = stepsFromSimple(body);
     const convert = el("button", { type: "button", class: "wbdPrimary", text: "🪜 Omzetten naar stappen" });
     convert.addEventListener("click", () => saveSteps(state, body, simple, "omgezet naar stappen", true));
     host.append(el("div", { class: "qbIntro" }, [
-      el("p", { text: "Dit is nu een snelle quest: " + objectiveText(simple[0].objectives[0], nameOf) + "." }),
-      el("p", { class: "wbdNote", text: "Omzetten = dezelfde quest als 1 stap + een einde. Daarna kun je doelen en stappen toevoegen. Spelers die hem al doen merken niets." }),
+      el("p", { text: "Snelle quest (1 doel): " + objectiveText(simple[0].objectives[0], nameOf) + "." }),
+      fields(SIMPLE_FIELDS),
+      el("p", { class: "wbdNote", text: "Meer nodig (doden, verzamelen, meerdere stappen, eindes)? Omzetten = dezelfde quest als 1 stap + een einde. Spelers die hem al doen merken niets." }),
       convert
     ]));
     return;
@@ -279,6 +303,9 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
   if (steps.length >= QUEST_LIMITS.steps) { addStep.disabled = true; addEnd.disabled = true; }
   host.append(el("div", { class: "qbAdd" }, [addStep, addEnd,
     el("span", { class: "wbdNote", text: "De bovenste stap is het begin. Elke stap gaat via Daarna naar een volgende stap of een einde." })]));
+  // Bij groep verlaten doet alleen iets bij een doel met 👥 Team samen.
+  const hasTeam = steps.some((step) => (step.objectives || []).some((objective) => objective?.share === "team"));
+  if (hasTeam || (body.partyLeave && body.partyLeave !== "keep")) host.append(fields(["partyLeave"]));
 }
 
 function issueList(issues) {
@@ -335,7 +362,7 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
   ]);
   card.append(head);
   if (isEnd) {
-    card.append(el("div", { class: "wbdNote", text: "Hier is de quest klaar. De beloning (tab Basis) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
+    card.append(el("div", { class: "wbdNote", text: "Hier is de quest klaar. De beloning (in het questpaneel) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
   } else {
     const needed = (step.objectives || []).filter(objectiveNeeded).length;
     if (needed > 1) {
@@ -403,6 +430,7 @@ function objectiveRow(state, objective, issues, change, remove) {
     target.type = type.value;
     if (!next.npc) delete target.npcRef;
     if (!next.event) { delete target.share; delete target.areaRef; }
+    if (!next.mark) delete target.mark;
     if (target.type !== "defeat") delete target.credit;
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
   }));
@@ -423,8 +451,16 @@ function objectiveRow(state, objective, issues, change, remove) {
   }
   // Stap 3: telt alleen als de vijand, grondstof of pickup in dit Questgebied ligt.
   if (spec.event) {
-    parts.push(areaSelect(bench, objective.areaRef || null, "📍 Overal", "Alleen in gebied: telt alleen binnen dit Questgebied",
-      (ref) => change("alleen in gebied", (target) => { if (ref) target.areaRef = ref; else delete target.areaRef; })));
+    parts.push(areaSelect(bench, objective.areaRef || null, "📍 Telt overal", "Waar telt dit? Overal, of alleen als de vijand/grondstof/pickup in dit Questgebied ligt.",
+      (ref) => change("alleen in gebied", (target) => { if (ref) target.areaRef = ref; else delete target.areaRef; }), "📍 Telt alleen in 🎯 "));
+  }
+  // Kevin 5-11: een ster op de minimap en de grote kaart (ook door de mist) die meeloopt met de vijand.
+  if (spec.mark) {
+    const mark = el("select", { class: "wbdSelect qbShare", title: "⭐ Ster op kaart: de speler ziet op de minimap en de grote kaart (ook door de mist) waar deze vijand of grondstof nu is. De 5 dichtstbijzijnde; hij loopt mee." },
+      [el("option", { value: "", text: "🗺️ Geen ster" }), el("option", { value: "star", text: "⭐ Ster op kaart" })]);
+    mark.value = objective.mark === "star" ? "star" : "";
+    mark.addEventListener("change", () => change("ster op kaart", (target) => { if (mark.value) target.mark = "star"; else delete target.mark; }));
+    parts.push(mark);
   }
   // Stap 2 (samen questen): voor wie telt dit doel. Alleen bij Versla, Verzamel en Pak op.
   if (spec.event) {

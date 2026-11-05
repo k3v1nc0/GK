@@ -855,6 +855,13 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     const quantity = normalizeQuantity(payload.quantity, 1);
+    // Quest Builder stap 4: een uniek item koop je niet als je het al hebt (en nooit meer dan 1).
+    const bought = catalogSection(ctx.catalogs, "items")[offer.itemRef] || null;
+    if (bought?.unique === true && (quantity > 1 || this.node03RuntimeService.ownedItemCount(ctx.profile.id, offer.itemRef) >= 1)) {
+      const error = new Error("Je kunt maar 1 " + displayForItem(ctx.catalogs, offer.itemRef) + " hebben.");
+      error.status = 409;
+      throw error;
+    }
     const summary = this.vendorOfferSummary(ctx, vendor, offer);
     const total = summary.sellPriceMinor * quantity;
     this.spendCurrency(ctx, summary.sellCurrencyRef, total, "vendor_buy", offer.offerId, operationId);

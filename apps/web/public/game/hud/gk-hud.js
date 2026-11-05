@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest8";
+import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest11";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -2420,7 +2420,7 @@ export function createGkHud(api) {
     // Meedraaien = jouw kijkrichting staat altijd boven (zoals in WoW); uit = noorden boven.
     const facing = num(live.facingDeg) * Math.PI / 180;
     const north = minimap.draw({ world: live.world, center: position, facingDeg: live.facingDeg, forward: sm.rotate === false ? { x: 0, z: -1 } : { x: Math.sin(facing), z: Math.cos(facing) },
-      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), pin: sm.pin, show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText });
+      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live), pin: sm.pin, show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText });
     const rounded = Math.round(num(north));
     if (ui.sig.north !== rounded) {
       ui.sig.north = rounded;
@@ -2478,6 +2478,17 @@ export function createGkHud(api) {
     const map = trackedQuest()?.activeStep?.map || null;
     return map && map.show === "area" && Array.isArray(map.points) && map.points.length >= 3 ? map : null;
   }
+  // Kevin 5-11: ⭐ waar de vijand die je moet verslaan nu loopt. Ziet de game hem zelf (dichtbij), dan de vloeiende plek.
+  function mapQuestMarks(live) {
+    const marks = trackedQuest()?.activeStep?.marks;
+    if (!Array.isArray(marks) || !marks.length) return [];
+    const byId = new Map((live.targets || []).map(function (target) { return [String(target.instanceId || ""), target]; }));
+    return marks.map(function (mark) {
+      const seen = byId.get(String(mark.id || ""));
+      if (seen && seen.available === false) return null;
+      return seen && Number.isFinite(Number(seen.x)) ? { x: num(seen.x), z: num(seen.z) } : { x: num(mark.x), z: num(mark.z) };
+    }).filter(Boolean);
+  }
   function mapQuestTarget() {
     const quest = trackedQuest();
     const target = quest ? (data().s04?.questTargets || []).find(function (t) { return t.questId === quest.questId; }) : null;
@@ -2493,7 +2504,7 @@ export function createGkHud(api) {
     const markers = mapMarkers(live);
     const quest = mapQuestTarget();
     const result = minimap.drawFull(bigCanvas, { world: live.world, center: live.position, facingDeg: live.facingDeg, markers,
-      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(),
+      quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(), questMarks: mapQuestMarks(live),
       pin: sm.pin, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText });
     ui.bigView = result;
     ui.bigHits = result?.hits || [];

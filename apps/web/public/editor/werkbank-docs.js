@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest8";
-import { QUEST_START_MODES, hasOwnSteps, questGraphIssues, questStartIssues, questStartMode, requirementText } from "../shared/quest-graph.js?v=20261105-quest8";
-import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest8";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest11";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest11";
+import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest11";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -620,41 +620,50 @@ export function createDocBench(options = {}) {
     return input;
   }
 
-  // Quest Builder stap 1: in het paneel alleen een samenvatting; bouwen doe je in de Quest Builder.
-  function questStepsSummary(body, doc) {
-    const own = hasOwnSteps(body);
-    const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
+  // Quest (5-11): het paneel is de kaart van de quest (naam, beloning, verhaal). Hoe hij werkt staat hier als één korte
+  // samenvatting met één knop; start, voorwaarden en stappen stel je in de Quest Builder in.
+  const START_SHORT = { npc: "bij een NPC", item: "item lezen", area: "gebied in", auto: "vanzelf" };
+  function questSummary(body, doc) {
+    if (!doc) return el("span", { class: "wbdNote", text: "Eerst ✓ Maken, dan stel je in de Quest Builder in hoe hij start en wat de speler moet doen." });
+    const nameOf = (ref) => { const target = ref ? bench.doc(ref) : null; return target ? docName(target) : String(ref || "…").replace(/^[a-z_]+:/, ""); };
     const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived && (target.kind !== "area" || target.body?.soort === "questgebied"); };
-    const issues = own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave }).length : 0;
-    const text = !doc ? "Eerst ✓ Maken, dan kun je stappen bouwen."
-      : own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (issues ? " · ⚠️ " + issues : " · ✅")
-        : "Snelle quest (1 doel). Meer stappen? Open de Quest Builder.";
-    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Quest Builder", disabled: doc ? null : true });
-    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: own ? "stappen" : "basis" }));
-    return el("div", { class: "wbdQuestSteps" }, [el("span", { class: "wbdNote", text }), button]);
-  }
-  // Quest Builder stap 4: hoe de quest start + voorwaarden, als korte zin; instellen in de Quest Builder (tab Basis).
-  function questStartSummary(body, doc) {
     const mode = questStartMode(body);
     const start = body.start || {};
-    const nameOf = (ref) => { const target = ref ? bench.doc(ref) : null; return target ? docName(target) : String(ref || "…").replace(/^[a-z_]+:/, ""); };
+    const who = mode === "npc" ? body.giverRef : mode === "item" ? start.itemRef : mode === "area" ? start.areaRef : null;
     const rules = Array.isArray(start.rules) ? start.rules : [];
-    const how = QUEST_START_MODES[mode].icon + " " + QUEST_START_MODES[mode].label
-      + (mode === "item" && start.itemRef ? ": " + nameOf(start.itemRef) : mode === "area" && start.areaRef ? ": " + nameOf(start.areaRef) : "");
-    const need = rules.length ? (rules.length > 1 ? (start.match === "any" ? "OF" : "EN") + ": " : "") + rules.map((rule) => requirementText(rule, nameOf)).join(", ") : "geen voorwaarden";
-    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived && (target.kind !== "area" || target.body?.soort === "questgebied"); };
-    const issues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc?.docKey || null }).length;
-    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Instellen", disabled: doc ? null : true });
-    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: "basis" }));
-    return el("div", { class: "wbdQuestSteps" }, [el("span", { class: "wbdNote", text: how + " · " + need + (issues ? " · ⚠️ " + issues : "") }), button]);
+    const need = rules.map((rule) => requirementText(rule, nameOf));
+    if (body.previousQuestRef) need.unshift("na " + nameOf(body.previousQuestRef));
+    const startLine = QUEST_START_MODES[mode].icon + " Start: " + START_SHORT[mode] + (who ? " (" + nameOf(who) + ")" : "")
+      + " · " + (need.length ? (rules.length > 1 ? (start.match === "any" ? "OF: " : "EN: ") : "") + need.join(", ") : "iedereen mag");
+    const own = hasOwnSteps(body);
+    const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
+    const stepsLine = own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)"
+      : "🪜 Snelle quest: " + objectiveText(stepsFromSimple(body)[0].objectives[0], nameOf);
+    const maxLevel = bench.docs("project_settings")[0]?.body?.maxLevel || 50;
+    const startIssues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc.docKey, maxLevel }).length;
+    const issues = startIssues + (own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave }).length : 0);
+    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Quest Builder" });
+    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: startIssues ? "start" : "stappen" }));
+    return el("div", { class: "wbdQuestSteps" }, [
+      el("div", { class: "wbdQuestLines" }, [
+        el("span", { class: "wbdNote", text: startLine }),
+        el("span", { class: "wbdNote", text: stepsLine }),
+        el("span", { class: "wbdNote", text: issues ? "⚠️ " + issues + (issues === 1 ? " melding" : " meldingen") : "✅ Quest-check OK" })
+      ]),
+      button
+    ]);
   }
+  const QUEST_SUMMARY_FIELD = { label: "Zo werkt hij", ui: { icon: "📜", control: "questSteps" },
+    help: { waarvoor: "Hoe de quest start, wie hem mag doen en wat de speler moet doen.", goed: "Klik 📜 Quest Builder: tab 🚪 Start, 🪜 Stappen en 🧪 Testen.", probleem: "⚠️ melding → open de Quest Builder; de tab 🧪 Testen zegt wat er mis is." } };
   bench.refControl = refControl;
 
   // ---------- het paneel dat zichzelf tekent ----------
 
   // Tekent één document (of een nieuw document) uit het schema. Bestaande documenten slaan elke wijziging
   // meteen op (realtime, met Ctrl+Z); een nieuw document heeft een ✓ Maken-knop.
-  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [] } = {}) {
+  // only = alleen deze velden; bare = zonder kop en knoppen (de Quest Builder tekent zo een paar velden in zijn eigen tab);
+  // onSaved = na opslaan dit doen in plaats van dit formulier opnieuw tekenen.
+  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [], only = null, bare = false, onSaved = null } = {}) {
     const spec = bench.spec(kind);
     host.replaceChildren();
     if (!spec) { host.append(el("div", { class: "wbdEmpty", text: "Onbekende soort." })); return; }
@@ -673,7 +682,7 @@ export function createDocBench(options = {}) {
       el("div", { class: "wbdHeadText" }, [el("div", { class: "wbdHeadKind", text: isNew ? "Nieuw: " + spec.label : spec.label }), el("div", { class: "wbdHeadName", text: title || (isNew ? "" : docName(doc)) })])
     ]);
     if (doc?.archived) head.append(el("span", { class: "wbdBadge", text: "gearchiveerd" }));
-    host.append(head);
+    if (!bare) host.append(head);
 
     const visible = el("div", { class: "wbdFields" });
     const more = el("div", { class: "wbdFields wbdMore", hidden: true });
@@ -711,7 +720,7 @@ export function createDocBench(options = {}) {
     for (const [key, field] of Object.entries(spec.fields)) {
       if (field.ui?.place === "viewport") { viewportOnly.push([key, field]); continue; }
       if (field.ui?.place !== where) continue;
-      if (skip.includes(key)) continue;
+      if (skip.includes(key) || (only && !only.includes(key))) continue;
       if (kind === "area" && field.ui?.soorten && !field.ui.soorten.includes(areaSoort(body))) continue;
       if (!shownWhen(field)) continue;
       const onChange = async (next) => {
@@ -747,17 +756,15 @@ export function createDocBench(options = {}) {
         }
         if (isNew && !spec.singleton) { rerender(); return; }
         try { await saveDoc(kind, doc, body, spec.label + " · " + field.label); } catch {}
-        rerender();
+        if (onSaved) onSaved(); else rerender();
       };
       if (onPreview && !isNew) onChange.preview = (next) => onPreview(Object.assign({}, body, { [key]: next }));
       if (field.ui?.control === "questSteps") {
-        visible.append(fieldRow(key, field, questStepsSummary(body, doc), true));
+        visible.append(fieldRow(key, QUEST_SUMMARY_FIELD, questSummary(body, doc), true));
         continue;
       }
-      if (field.ui?.control === "questStart") {
-        visible.append(fieldRow(key, field, questStartSummary(body, doc), true));
-        continue;
-      }
+      // Start en voorwaarden tekent de Quest Builder zelf (tab 🚪 Start).
+      if (field.ui?.control === "questStart") continue;
       if (field.ui?.control === "areaSettings") {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);
@@ -766,7 +773,7 @@ export function createDocBench(options = {}) {
       }
       const row = fieldRow(key, field, control(key, field, body, isNew, onChange), ["loot", "refList", "assetList"].includes(field.ui?.control));
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
-      else (field.ui?.more ? more : visible).append(row);
+      else (field.ui?.more && !bare ? more : visible).append(row);
     }
     // Quest Builder stap 3: een Questgebied snel als cirkel of rechthoek met een maat in meters (vrij = punten slepen).
     if (kind === "area" && where === "werkbank" && !isNew && doc && areaSoort(body) === "questgebied") {
@@ -788,6 +795,7 @@ export function createDocBench(options = {}) {
     }
     for (const [name, entry] of groups) entry.toggle.textContent = (entry.fields.hidden ? "▸ " : "▾ ") + name + " (" + entry.fields.childElementCount + ")";
     host.append(visible);
+    if (bare) return;
     if (more.childElementCount) {
       const toggle = el("button", { type: "button", class: "wbdMoreToggle", "aria-expanded": "false", text: "⚙️ meer (" + more.childElementCount + ")" });
       toggle.addEventListener("click", () => {
@@ -844,7 +852,7 @@ export function createDocBench(options = {}) {
     if (actions.childElementCount) host.append(actions);
 
     function rerender() {
-      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip });
+      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip, only, bare, onSaved });
     }
   };
 

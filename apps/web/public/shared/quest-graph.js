@@ -9,8 +9,8 @@ export const QUEST_LIMITS = Object.freeze({ steps: 64, objectives: 12, next: 4, 
 
 // Soorten doelen. event = de server telt gebeurtenissen (niet wat je nu hebt).
 export const OBJECTIVE_KINDS = Object.freeze({
-  defeat: Object.freeze({ icon: "⚔️", label: "Versla", refKind: "actor_archetype", amount: true, event: true }),
-  gather: Object.freeze({ icon: "🪵", label: "Verzamel", refKind: "resource_definition", amount: true, event: true }),
+  defeat: Object.freeze({ icon: "⚔️", label: "Versla", refKind: "actor_archetype", amount: true, event: true, mark: true }),
+  gather: Object.freeze({ icon: "🪵", label: "Verzamel", refKind: "resource_definition", amount: true, event: true, mark: true }),
   pickup: Object.freeze({ icon: "✋", label: "Pak op", refKind: "item_definition", amount: true, event: true }),
   collect: Object.freeze({ icon: "🎒", label: "Heb in je tas", refKind: "item_definition", amount: true }),
   deliver: Object.freeze({ icon: "📦", label: "Breng", refKind: "item_definition", amount: true, npc: true }),
@@ -74,7 +74,7 @@ export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "E
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
 const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark"]);
 const isAreaRef = (value) => typeof value === "string" && value.startsWith("area:") && value.length <= 140;
 
 // Ligt (x, z) binnen het gebied? points = [{x, z}] in meters (een veelhoek; een cirkel is een veelhoek met veel punten).
@@ -184,6 +184,7 @@ export function questStepsShapeIssues(value) {
       if (objective.share !== undefined && objective.share !== null && !OBJECTIVE_SHARES[objective.share]) issues.push(at + ": ongeldige keuze bij Voor wie.");
       if (objective.credit !== undefined && objective.credit !== null && !OBJECTIVE_CREDITS[objective.credit]) issues.push(at + ": ongeldige keuze bij Telt voor.");
       if (objective.areaRef !== undefined && objective.areaRef !== null) { if (!isAreaRef(objective.areaRef)) issues.push(at + ": Alleen in gebied moet een Questgebied zijn."); else refs.push(objective.areaRef); }
+      if (objective.mark !== undefined && objective.mark !== null && objective.mark !== "star") issues.push(at + ": ongeldige keuze bij Ster op kaart.");
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
@@ -216,6 +217,7 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
       if (!spec) continue;
       if (objective.share === "team" && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Team samen kan alleen bij Versla, Verzamel en Pak op.");
       if (objective.credit && objective.type !== "defeat") add(step.stepId, objective.objectiveId, spec.label + ": Telt voor kan alleen bij Versla.");
+      if (objective.mark && !spec.mark) add(step.stepId, objective.objectiveId, spec.label + ": ⭐ Ster op kaart kan alleen bij Versla en Verzamel.");
       if (objective.areaRef && !spec.event) add(step.stepId, objective.objectiveId, spec.label + ": Alleen in gebied kan alleen bij Versla, Verzamel en Pak op.");
       else if (objective.areaRef && !refExists(objective.areaRef)) add(step.stepId, objective.objectiveId, refLabel(objective.areaRef) + " bestaat niet (meer) of is geen Questgebied.");
       if (!objective.ref) add(step.stepId, objective.objectiveId, spec.label + (spec.refKind === "area" ? ": kies een Questgebied." : ": kies wat (sleep een kaart op het vak)."));

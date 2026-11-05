@@ -425,6 +425,8 @@ function questObjective(objective, names) {
   // Stap 3: gebieden. Ga naar / verlaat = het gebied zelf; Alleen in gebied = een gebeurtenis telt alleen daar.
   if (spec.refKind === "area") record.areaRef = objective.targetId;
   if (spec.event && objective.areaId) record.inAreaRef = objective.areaId;
+  // Kevin 5-11: ⭐ op de kaart (alleen als het aan staat, zo blijft de versie van bestaande quests gelijk).
+  if (spec.mark && objective.mark === "star") record.mark = "star";
   const what = objective.type === "defeat" ? names.actor(objective.targetId)
     : objective.type === "gather" ? names.resource(objective.targetId)
       : spec.refKind === "npc" ? names.npc(objective.targetId) : spec.refKind === "area" ? names.area(objective.targetId) : names.item(objective.targetId);

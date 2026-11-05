@@ -185,3 +185,46 @@ test("stap 4: gebied binnenlopen start de quest; na verlaten pas weer na eruit e
   n4.autoStartQuests(ctx({ x: 21, z: 20 }));
   assert.equal(row("quest.veld").status, "active", "eruit en weer erin: opnieuw gestart");
 });
+
+test("stap 4: uniek item max 1, brief per speler 1× oppakken, niet nog eens als je de quest al doet", () => {
+  const { db, node03, n4, ctx, level, project } = setup();
+  const items = project.catalogs.items;
+  items.brief.unique = true;
+  node03.grantItem(ctx(), "brief", 3, "test", "test");
+  node03.grantItem(ctx(), "brief", 1, "test", "test");
+  assert.equal(node03.ownedItemCount("p1", "brief"), 1, "uniek: nooit meer dan 1");
+  db.prepare("DELETE FROM player_inventory_stacks WHERE player_id = 'p1'").run();
+  db.prepare("DELETE FROM player_item_instances WHERE player_id = 'p1'").run();
+  // Een Pickup met de brief, Oppakken = Ieder 1×.
+  const pickup = { instanceId: "kist1", entityKind: "pickup", pickupKind: "item", itemRef: "brief", displayName: "Brief", amount: 1, claimMode: "once", available: true, status: "available" };
+  node03.getEntityState = () => ({ state: pickup });
+  node03.assertInRange = () => {};
+  node03.recordGameplayEvent = () => {};
+  node03.saveEntityState = () => { throw new Error("de wereld-pickup hoort niet te veranderen"); };
+  assert.match(node03.pickupTarget(ctx(), "kist1", "op1").message, /picked up/);
+  assert.equal(node03.ownedItemCount("p1", "brief"), 1);
+  assert.ok(node03.pickupClaim("p1", "kist1"), "voor deze speler weg");
+  assert.equal(node03.pickupClaim("p2", "kist1"), null, "een ander kan hem nog pakken");
+  assert.match(node03.pickupTarget(ctx(), "kist1", "op2").message, /al eens gepakt/);
+  // Lezen start de quest; daarna geeft een tweede kist geen tweede brief.
+  level(10);
+  node03.useItem(ctx(), { itemId: "brief" }, "op3");
+  pickup.instanceId = "kist2";
+  db.prepare("DELETE FROM player_inventory_stacks WHERE player_id = 'p1'").run();
+  db.prepare("DELETE FROM player_item_instances WHERE player_id = 'p1'").run();
+  assert.match(node03.pickupTarget(ctx(), "kist2", "op4").message, /al bezig met "De brief"/);
+  assert.equal(node03.ownedItemCount("p1", "brief"), 0);
+  assert.equal(typeof n4.pickupBlockedReason, "function");
+});
+
+test("Kevin 5-11: ⭐ op de kaart volgt de levende vijand (dichtstbij eerst), alleen bij Versla en Verzamel", async () => {
+  const { n4, ctx } = setup();
+  n4.mmoService = { actorRuntime: { livePositions: (kind, id) => (kind === "actor" && id === "wolf" ? [{ id: "a:2", x: 50, z: 0 }, { id: "a:1", x: 5, z: 0 }] : []) } };
+  const step = { objectives: [{ id: "o", objectiveType: "defeat", actorRef: "wolf", mark: "star" }, { id: "p", objectiveType: "defeat", actorRef: "wolf" }] };
+  const marks = n4.liveMarks(ctx({ x: 0, z: 0 }), step, [{ objectiveId: "o", complete: false }, { objectiveId: "p", complete: false }]);
+  assert.deepEqual(marks.map((mark) => mark.id), ["a:1", "a:2"], "alleen het doel met ster, dichtstbij eerst");
+  assert.deepEqual(n4.liveMarks(ctx(), step, [{ objectiveId: "o", complete: true }]), [], "doel klaar = geen ster");
+  const { questGraphIssues } = await import("../apps/web/public/shared/quest-graph.js");
+  const issues = questGraphIssues([{ stepId: "a", kind: "step", objectives: [{ objectiveId: "o", type: "talk", ref: "npc:npc.smid", mark: "star" }], next: [{ to: "end" }] }, { stepId: "end", kind: "end" }]);
+  assert.ok(issues.some((issue) => /Ster op kaart kan alleen bij Versla en Verzamel/.test(issue.message)));
+});

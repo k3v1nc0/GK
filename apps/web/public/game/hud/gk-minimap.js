@@ -669,6 +669,10 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       return { x: half + Math.cos(angle) * r, y: half + Math.sin(angle) * r, angle };
     };
     if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) drawGoal(ctx, "quest", toScreen(num(view.quest.x), num(view.quest.z)), dot, circleEdge, questArrowInRange(view, view.quest));
+    // Kevin 5-11: sterren op de vijanden die je moet verslaan (boven de mist); alleen de dichtstbijzijnde krijgt een pijltje.
+    if (show.quest !== false) (Array.isArray(view.questMarks) ? view.questMarks : []).forEach(function (mark, index) {
+      drawGoal(ctx, "quest", toScreen(num(mark.x), num(mark.z)), dot * 0.8, circleEdge, index === 0 && questArrowInRange(view, mark));
+    });
     // Beschikbare questgevers zijn vanaf het begin boven de mist zichtbaar, onafhankelijk van het gevolgde quest-doel.
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
@@ -760,6 +764,10 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       const p = toScreen(num(view.quest.x), num(view.quest.z));
       if (drawGoal(g, "quest", p, dot, boxEdge, questArrowInRange(view, view.quest))) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest.name || "" });
     }
+    if (show.quest !== false) (Array.isArray(view.questMarks) ? view.questMarks : []).forEach(function (mark, index) {
+      const p = toScreen(num(mark.x), num(mark.z));
+      if (drawGoal(g, "quest", p, dot * 0.8, boxEdge, index === 0 && questArrowInRange(view, mark))) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest?.name || "" });
+    });
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
       const p = toScreen(num(marker.x), num(marker.z));

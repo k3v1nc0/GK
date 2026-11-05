@@ -135,10 +135,10 @@ export function compileGameSection(documents, options = {}) {
     for (const field of ["targetNpcRef", "itemRef"]) needRef(doc, doc.body[field], label);
     const goal = doc.body.goal || "deliver";
     if (goal === "deliver" && !doc.body.itemRef) fail(doc, "QUEST_ITEM", label + ": kies welk item de speler moet brengen.");
-    if (goal === "visit" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies onder ⚙️ meer naar welke NPC de speler moet gaan (Inleveren bij).");
+    if (goal === "visit" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies in de Quest Builder (🪜 Stappen) bij 🏁 Inleveren bij naar welke NPC de speler moet gaan.");
     if (goal === "visit" && doc.body.targetNpcRef && doc.body.targetNpcRef === doc.body.giverRef) fail(doc, "QUEST_SAME_NPC", label + ": 'Ga naar iemand' moet een andere NPC zijn dan wie de quest geeft.");
     // Snelle quest die niet bij een NPC start: dan is er geen 'wie gaf hem' om in te leveren.
-    if (goal === "deliver" && questStartMode(doc.body) !== "npc" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies onder ⚙️ meer bij wie de speler inlevert (Inleveren bij).");
+    if (goal === "deliver" && questStartMode(doc.body) !== "npc" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies in de Quest Builder (🪜 Stappen) bij 🏁 Inleveren bij wie de speler inlevert.");
   }
   // Een kring van "Pas na quest" maakt quests onbereikbaar.
   const previous = new Map(questDocs.map((doc) => [doc.docKey, doc.body.previousQuestRef || null]));
@@ -177,7 +177,9 @@ export function compileGameSection(documents, options = {}) {
         npcId: objective.npcRef ? idFromRef(objective.npcRef) : null, amount: Number.isInteger(objective.amount) ? objective.amount : 1,
         role: objective.role || "required", share: objective.share === "team" ? "team" : "personal",
         credit: objective.credit === "fighters" || objective.credit === "nearby" ? objective.credit : "group",
-        ...(objective.areaRef ? { areaId: idFromRef(objective.areaRef) } : {})
+        ...(objective.areaRef ? { areaId: idFromRef(objective.areaRef) } : {}),
+        // Kevin 5-11: ⭐ op de kaart waar de vijand (of grondstof) nu is.
+        ...(objective.mark === "star" ? { mark: "star" } : {})
       })),
       // Stap 3: het gebied van deze stap op de kaart (zoekgebied, punt of verborgen).
       ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {})

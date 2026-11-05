@@ -300,6 +300,7 @@ export class Node04QuestRuntimeService {
     this.shareOffers = new Map(); // playerId -> Map(questId -> { fromId, fromName, until })
     // Stap 4: een brief (of ander item) lezen start een quest; en wie welk startgebied al binnen was (alleen binnenlopen telt).
     if (node03RuntimeService) node03RuntimeService.questUseItem = (ctx, itemId, operationId) => this.useQuestItem(ctx, itemId, operationId);
+    if (node03RuntimeService) node03RuntimeService.questPickupBlocked = (ctx, itemId) => this.pickupBlockedReason(ctx, itemId);
     this.startAreaInside = new Map(); // playerId|questId -> true/false
   }
 
@@ -544,6 +545,21 @@ export class Node04QuestRuntimeService {
     this.pingQuest([ctx.profile.id]);
     return { action: "use", message: name + " gelezen. Nieuwe quest: " + started.map((quest) => quest.displayName || quest.id).join(", ") + ".",
       events: started.map((quest) => ({ type: "quest_accepted", questId: quest.id })), grants: [] };
+  }
+
+  // Stap 4: een brief die een quest start pak je niet op als je die quest al doet, of al gedaan hebt en hij maar 1× kan.
+  pickupBlockedReason(ctx, itemId) {
+    const quests = allQuests(ctx.project).filter((quest) => quest?.startMode === "item" && quest.startItemRef === itemId);
+    if (!quests.length) return "";
+    let reason = "";
+    for (const quest of quests) {
+      const row = this.loadQuestState(ctx.profile.id, quest.id);
+      const title = "\"" + (quest.displayName || quest.id) + "\"";
+      if (row && isOpenStatus(row.status)) reason = reason || "Je bent al bezig met " + title + ".";
+      else if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) reason = reason || "Je hebt " + title + " al gedaan.";
+      else return "";
+    }
+    return reason;
   }
 
   // Stap 4: questitems van deze quest (het start-item en de items uit de doelen) gaan weg als hij klaar is of verlaten wordt.
@@ -1658,6 +1674,30 @@ export class Node04QuestRuntimeService {
     };
   }
 
+  // De 5 dichtstbijzijnde levende vijanden (of grondstoffen) van open doelen met ⭐ Ster op kaart; met "Alleen in gebied" alleen daarbinnen.
+  liveMarks(ctx, step, objectives) {
+    const runtime = this.mmoService?.actorRuntime;
+    if (!runtime || typeof runtime.livePositions !== "function") return [];
+    const marks = [];
+    for (const objective of Array.isArray(step?.objectives) ? step.objectives : []) {
+      if (objective?.mark !== "star") continue;
+      const view = objectives.find((entry) => entry.objectiveId === objectiveIdOf(objective));
+      if (!view || view.complete) continue;
+      const kind = objective.objectiveType === "gather" ? "resource" : objective.objectiveType === "defeat" ? "actor" : null;
+      const ref = kind === "resource" ? objective.resourceRef : objective.actorRef;
+      if (!kind || !ref) continue;
+      const area = objective.inAreaRef ? questAreaById(ctx.project, objective.inAreaRef) : null;
+      for (const spot of runtime.livePositions(kind, ref)) {
+        if (area && !pointInArea(area.points, spot.x, spot.z)) continue;
+        marks.push({ id: spot.id, objectiveId: view.objectiveId, x: Math.round(spot.x * 100) / 100, z: Math.round(spot.z * 100) / 100 });
+      }
+    }
+    const px = Number(ctx.position?.x);
+    const pz = Number(ctx.position?.z);
+    if (Number.isFinite(px) && Number.isFinite(pz)) marks.sort((a, b) => Math.hypot(a.x - px, a.z - pz) - Math.hypot(b.x - px, b.z - pz));
+    return marks.slice(0, 5);
+  }
+
   buildStartAreas(ctx, byQuest) {
     const list = [];
     for (const quest of allQuests(ctx.project)) {
@@ -1713,6 +1753,8 @@ export class Node04QuestRuntimeService {
         // Stap 3: zoekgebied / punt op de kaart, en de gebieden waar de game op let (in of uit = meteen opvragen).
         map: this.stepMapView(ctx, step),
         watchAreas: this.watchAreas(ctx, objectives),
+        // Kevin 5-11: ⭐ op de kaart (ook door de mist) waar de vijand die je moet verslaan nu loopt.
+        marks: this.liveMarks(ctx, step, objectives),
         instruction: this.resolveTokenText(ctx, step.instruction || ""),
         stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
         match: step.match === "any" ? "any" : "all",

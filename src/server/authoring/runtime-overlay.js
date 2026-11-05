@@ -21,6 +21,7 @@ const ITEM_FIELD_TO_RUNTIME = {
   bindPolicy: "bindPolicy",
   tradable: "tradable",
   questItem: "questItem",
+  unique: "unique",
   iconAssetId: "iconAssetId",
   worldModelAssetId: "worldModelAssetId",
   tags: "tags",
@@ -94,6 +95,9 @@ export function runtimeSpawnFromCanonical(pickup, legacySpawn = null, options = 
   if (!legacySpawn || !legacySpawn.zoneRef) delete spawn.zoneRef;
   if (pickup.respawnPolicyRef) spawn.respawnPolicyRef = pickup.respawnPolicyRef;
   else delete spawn.respawnPolicyRef;
+  // Quest Builder stap 4: per speler oppakken (Ieder zijn eigen / Ieder 1×).
+  if (pickup.claimMode === "personal" || pickup.claimMode === "once") spawn.claimMode = pickup.claimMode;
+  else delete spawn.claimMode;
   if (options.editor) spawn.nodeId = EDITOR_DOC_PREFIX + "pickup:" + pickup.pickupId;
   return spawn;
 }

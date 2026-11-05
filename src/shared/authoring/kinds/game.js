@@ -107,21 +107,22 @@ export const GAME_KINDS = {
       displayName: nameField("deze quest"),
       // Quest Builder stap 4: hoe de quest start (NPC, item lezen, gebied, vanzelf) en de voorwaarden (EN/OF).
       start: { type: "questStart", required: false, audience: "client", label: "Start en voorwaarden",
-        ui: ui("🚪", "questStart", "werkbank"), default: null,
+        ui: ui("🚪", "questStart", "questbuilder"), default: null,
         help: help("Hoe de quest begint (bij een NPC, een brief lezen, een gebied in of vanzelf) en wat je nodig hebt (level, item, quest af, klasse).", "Meestal: bij een NPC zonder voorwaarden. Een brief uit een kist met 'Level minstens 10' voor een verborgen quest.", "Niemand kan de quest beginnen → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
       // Alleen nodig als de quest bij een NPC start (stap 4); de quest-check zegt het als hij ontbreekt.
       giverRef: refField("Wie geeft hem", "🧑", "npc", false,
         help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat."),
-        { when: { key: "start.mode", is: ["npc"], fallback: "npc" } }),
+        { place: "questbuilder", when: { key: "start.mode", is: ["npc"], fallback: "npc" } }),
       goal: { type: "select", required: false, options: QUEST_GOALS.slice(), optionIcons: { deliver: "📦", visit: "🚶" },
         optionLabels: { deliver: "Breng spullen", visit: "Ga naar iemand" }, audience: "client", label: "Doel",
-        ui: ui("🎯", "select", "werkbank", { hideWhen: "steps" }), default: "deliver",
-        help: help("Wat de speler moet doen.", "Breng spullen = verzamel items en lever ze in. Ga naar iemand = loop naar een andere NPC.", "Quest wordt nooit klaar → controleer item en aantal, of kies bij 'Ga naar iemand' een NPC onder ⚙️ meer.") },
+        ui: ui("🎯", "select", "questbuilder", { hideWhen: "steps" }), default: "deliver",
+        help: help("Wat de speler moet doen.", "Breng spullen = verzamel items en lever ze in. Ga naar iemand = loop naar een andere NPC.", "Quest wordt nooit klaar → controleer item en aantal, of kies bij 'Ga naar iemand' een NPC bij 🏁 Inleveren bij.") },
       itemRef: refField("Welk item", "🎒", "item_definition", false,
-        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen."), { hideWhen: "steps" }),
-      amount: int("Hoeveel", "🔢", 1, 1, 9999, "werkbank", { range: [1, 50], hideWhen: "steps" },
+        help("Welk item de speler moet brengen (alleen bij Breng spullen).", "Sleep een item uit de Bibliotheek; bijv. een item dat vijanden laten vallen.", "Quest wordt nooit klaar → kies een item dat je echt kunt krijgen."), { place: "questbuilder", hideWhen: "steps" }),
+      amount: int("Hoeveel", "🔢", 1, 1, 9999, "questbuilder", { range: [1, 50], hideWhen: "steps" },
         help("Hoeveel van het item de speler moet brengen.", "1 tot 10 voor een eerste quest.", "Duurt te lang → minder.")),
       // Quest Builder stap 1: de quest als netwerk van stappen. Leeg = de snelle quest hierboven (1 stap + einde).
+      // 5-11: het paneel toont hier één samenvatting (start + stappen) met één knop; de velden met plek questbuilder staan alleen in de Quest Builder.
       steps: { type: "questSteps", required: false, maxItems: QUEST_LIMITS.steps, audience: "client", label: "Stappen",
         ui: ui("🪜", "questSteps", "werkbank"), default: null,
         help: help("De stappen van de quest: doelen per stap en waar de quest daarna heen gaat.", "Begin met de snelle quest (1 doel). Meer nodig? Open de Quest Builder en voeg stappen toe.", "Rode melding in de Quest Builder → klik de stap en los op wat er staat.") },
@@ -130,19 +131,19 @@ export const GAME_KINDS = {
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
         help("Hoeveel ervaring de speler krijgt bij het inleveren.", "50-200 voor een eerste quest.", "Spelers stijgen te snel → minder XP.")),
       description: { type: "text", required: false, maxLength: 300, audience: "client", label: "Wat de NPC vertelt",
-        ui: ui("💬", "text", "werkbank", { more: true }), default: null,
+        ui: ui("💬", "text", "werkbank"), default: null,
         help: help("De uitleg die de NPC geeft als hij de quest aanbiedt.", "Eén of twee zinnen: wat en waarom, bijv. \"Breng me 3 appels voor de taart.\"", "Spelers snappen het niet → zeg precies wat en hoeveel.") },
       targetNpcRef: refField("Inleveren bij", "🏁", "npc", false,
-        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { more: true, hideWhen: "steps" }),
+        help("Bij welke NPC je de quest inlevert. Leeg = bij wie hem gaf.", "Bij 'Ga naar iemand' verplicht: de NPC waar de speler heen moet.", "Quest niet in te leveren → controleer of die NPC in de wereld staat."), { place: "questbuilder", hideWhen: "steps" }),
       previousQuestRef: refField("Pas na quest", "⛓️", "quest", false,
-        help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { more: true }),
+        help("Deze quest komt pas als de speler een andere quest af heeft.", "Gebruik dit om een verhaal in stappen te maken.", "Quest komt nooit → controleer of de vorige quest te doen is."), { place: "questbuilder" }),
       // Quest Builder stap 2: wat er gebeurt als je de groep verlaat (alleen bij Team samen-doelen).
       partyLeave: { type: "select", required: false, options: ["keep", "wait", "fail"], optionIcons: { keep: "🎒", wait: "⏸️", fail: "❌" },
         optionLabels: { keep: "Meenemen: alleen verder", wait: "Wachten tot je weer in een groep zit", fail: "Quest mislukt" }, audience: "client", label: "Bij groep verlaten",
-        ui: ui("🚪", "select", "werkbank", { more: true }), default: "keep",
+        ui: ui("🚪", "select", "questbuilder"), default: "keep",
         help: help("Wat er met Team samen-doelen gebeurt als iemand de groep verlaat. Je eigen bijdrage blijft altijd; er worden nooit vijanden of NPC's gekopieerd.", "Meenemen voor zijquests, Wachten voor groepsquests en bosses.", "Spelers verlaten de groep om sneller klaar te zijn → kies Wachten.") },
       repeatable: toggle("Herhaalbaar", "🔁", false, "werkbank",
-        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit."), { more: true })
+        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit."))
     }
   },
   recipe: {

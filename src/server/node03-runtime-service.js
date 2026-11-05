@@ -1197,6 +1197,8 @@ export class Node03RuntimeService {
       available: true,
       status: "available",
       respawnPolicyRef: spawn.respawnPolicyRef || "respawn_policy.node03_quick",
+      // Quest Builder stap 4: shared = één voor iedereen; personal = ieder zijn eigen; once = ieder 1×.
+      claimMode: spawn.claimMode === "personal" || spawn.claimMode === "once" ? spawn.claimMode : "shared",
       interaction: { action: "pickup", prompt: "Pick up", range: 3 },
       updatedAt: now()
     };
@@ -1574,22 +1576,41 @@ export class Node03RuntimeService {
       throw error;
     }
     const pickup = target.state;
-    if (pickup.available === false || pickup.status === "claimed") {
-      return { action: "pickup", targetId: pickup.instanceId, message: pickup.displayName + " is al opgepakt.", events: [] };
+    const personal = pickup.claimMode === "personal" || pickup.claimMode === "once";
+    // Ieder zijn eigen / Ieder 1×: de wereld-pickup blijft liggen; per speler onthouden wie hem had.
+    const claim = personal ? this.pickupClaim(ctx.profile.id, pickup.instanceId) : null;
+    if (personal ? claim : (pickup.available === false || pickup.status === "claimed")) {
+      return { action: "pickup", targetId: pickup.instanceId, message: pickup.displayName + (pickup.claimMode === "once" ? ": die heb je al eens gepakt." : " is al opgepakt."), events: [] };
     }
     this.assertInRange(ctx, pickup, "pickup");
+    // Quest Builder stap 4: uniek = max 1; een brief voor een quest die je al doet of al gedaan hebt pak je niet nog eens.
+    if (pickup.pickupKind !== "currency") {
+      const item = catalogSection(ctx.catalogs, "items")[pickup.itemRef] || {};
+      const blocked = item.unique === true && this.ownedItemCount(ctx.profile.id, pickup.itemRef) >= 1
+        ? "Je hebt al " + pickup.displayName + ". Daar kun je er maar 1 van hebben."
+        : this.questPickupBlocked?.(ctx, pickup.itemRef) || "";
+      if (blocked) return { action: "pickup", targetId: pickup.instanceId, message: blocked, events: [] };
+    }
     const amount = pickup.pickupKind === "currency"
       ? Math.max(1, Math.round((safeInteger(pickup.minAmount, pickup.amount) + safeInteger(pickup.maxAmount, pickup.amount)) / 2))
       : Math.max(1, safeInteger(pickup.amount, 1));
     const grants = pickup.pickupKind === "currency"
       ? [this.grantCurrency(ctx, pickup.currencyRef, amount, "pickup_claimed", pickup.instanceId, operationId)]
       : this.grantItem(ctx, pickup.itemRef, amount, "pickup_claimed", pickup.instanceId, operationId);
-    pickup.available = false;
-    pickup.status = "claimed";
-    pickup.claimedBy = ctx.profile.id;
-    pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
-    pickup.updatedAt = now();
-    this.saveEntityState(ctx, pickup);
+    if (personal) {
+      const respawnAt = pickup.claimMode === "once" ? null : addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef));
+      this.db.prepare(`
+        INSERT INTO player_pickup_claims (player_id, instance_id, claimed_at, respawn_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(player_id, instance_id) DO UPDATE SET claimed_at = excluded.claimed_at, respawn_at = excluded.respawn_at
+      `).run(ctx.profile.id, pickup.instanceId, now(), respawnAt);
+    } else {
+      pickup.available = false;
+      pickup.status = "claimed";
+      pickup.claimedBy = ctx.profile.id;
+      pickup.respawnAt = pickup.respawnPolicyRef ? addMs(respawnDelayMs(ctx.catalogs, pickup.respawnPolicyRef)) : null;
+      pickup.updatedAt = now();
+      this.saveEntityState(ctx, pickup);
+    }
     this.recordGameplayEvent(ctx, "pickup_claimed", "player", pickup.instanceId, { grants });
     if (pickup.pickupKind !== "currency") {
       this.questEvents?.(ctx, [ctx.profile.id], { type: "pickup", refId: pickup.itemRef, eventKey: "pickup:" + pickup.instanceId + ":" + operationId, operationId,
@@ -1602,6 +1623,14 @@ export class Node03RuntimeService {
       events: [{ type: "picked_up", targetId: pickup.instanceId, label: pickup.displayName }],
       grants
     };
+  }
+
+  // Quest Builder stap 4: heeft deze speler deze pickup (Ieder zijn eigen / Ieder 1×) nu nog? null = nee, mag pakken.
+  pickupClaim(playerId, instanceId) {
+    const row = this.db.prepare("SELECT * FROM player_pickup_claims WHERE player_id = ? AND instance_id = ? LIMIT 1").get(playerId, instanceId);
+    if (!row) return null;
+    if (row.respawn_at && Date.parse(row.respawn_at) <= Date.now()) return null;
+    return row;
   }
 
   physicalPortalCandidates(ctx) {
@@ -1879,7 +1908,9 @@ export class Node03RuntimeService {
 
   grantItem(ctx, itemId, amount, reason, sourceRef, operationId = randomId("node03_grant")) {
     const item = catalogSection(ctx.catalogs, "items")[itemId] || {};
-    const quantity = Math.max(1, safeInteger(amount, 1));
+    // Quest Builder stap 4: uniek = je kunt er maar 1 hebben (buit of beloning geeft er dan niet nog een).
+    if (item.unique === true && this.ownedItemCount(ctx.profile.id, itemId) >= 1) return [];
+    const quantity = item.unique === true ? 1 : Math.max(1, safeInteger(amount, 1));
     if (item.stackable !== false) {
       const bindState = item.bindPolicy === "bind_on_pickup" ? "bound" : DEFAULT_BIND_STATE;
       const existing = this.db.prepare("SELECT quantity FROM player_inventory_stacks WHERE player_id = ? AND item_id = ? AND bind_state = ? LIMIT 1")
@@ -2563,6 +2594,9 @@ export class Node03RuntimeService {
       const rows = statement.all(zoneCtx.worldId, zoneCtx.zoneId, NODE03_INSTANCE_PREFIX + "%");
       for (const row of rows) {
         const entity = safeJsonParse(row.state_json, {}) || {};
+        // Quest Builder stap 4: een pickup per speler is voor jou weg zodra jij hem had (anderen zien hem nog).
+        if (entity.entityKind === "pickup" && (entity.claimMode === "personal" || entity.claimMode === "once") && ctx.profile?.id
+          && this.pickupClaim(ctx.profile.id, entity.instanceId)) Object.assign(entity, { available: false, status: "claimed" });
         const distance = positionDistance(ctx.position, entity);
         all.push(Object.assign({}, entity, {
           zoneId: zoneCtx.zoneId,
