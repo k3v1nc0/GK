@@ -228,3 +228,29 @@ test("Kevin 5-11: ⭐ op de kaart volgt de levende vijand (dichtstbij eerst), al
   const issues = questGraphIssues([{ stepId: "a", kind: "step", objectives: [{ objectiveId: "o", type: "talk", ref: "npc:npc.smid", mark: "star" }], next: [{ to: "end" }] }, { stepId: "end", kind: "end" }]);
   assert.ok(issues.some((issue) => /Ster op kaart kan alleen bij Versla en Verzamel/.test(issue.message)));
 });
+
+test("Kevin 5-11: admin ziet per speler nog niet / bezig (stap) / gedaan; Opnieuw haalt quest, brief en pickup-claim weg", () => {
+  const { node03, n4, ctx, row, give, level, db, sent } = setup();
+  const stamp = new Date().toISOString();
+  const status = () => Object.fromEntries(n4.questPlayersForAdmin("quest.brief").map((player) => [player.username, player.status + (player.stepId ? ":" + player.stepId : "")]));
+  assert.deepEqual(status(), { speler1: "none" }, "nog niet");
+  give("brief");
+  level(10);
+  node03.useItem(ctx(), { itemId: "brief" }, "op1");
+  assert.deepEqual(status(), { speler1: "active:praat" }, "bezig op stap praat");
+  // De brief kwam uit een kist met Oppakken = Ieder 1×.
+  db.prepare("INSERT INTO world_entity_state (world_id, zone_id, instance_id, state_kind, state_json, revision, updated_at) VALUES ('world.main', ?, 'kist', 'node03_runtime', ?, 1, ?)")
+    .run(WORLD_ZONE_ID, JSON.stringify({ instanceId: "kist", itemRef: "brief" }), stamp);
+  db.prepare("INSERT INTO player_pickup_claims (player_id, instance_id, claimed_at, respawn_at) VALUES ('p1', 'kist', ?, NULL)").run(stamp);
+  n4.node03RuntimeService.adminContextForPlayer = () => ctx();
+  const result = n4.adminQuestAction({ action: "reset", playerId: "p1", questId: "quest.brief" });
+  assert.match(result.message, /weg bij deze speler/);
+  assert.equal(row("quest.brief"), undefined, "stand weg");
+  assert.equal(node03.ownedItemCount("p1", "brief"), 0, "brief weg");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM player_pickup_claims WHERE player_id = 'p1'").get().n, 0, "kist weer te pakken");
+  assert.deepEqual(status(), { speler1: "none" });
+  n4.adminQuestAction({ action: "step", playerId: "p1", questId: "quest.brief", stepId: "praat" });
+  assert.deepEqual(status(), { speler1: "active:praat" }, "Naar stap werkt zonder DEV_GAME_ACTIONS");
+  assert.throws(() => n4.adminQuestAction({ action: "iets", playerId: "p1", questId: "quest.brief" }), /Onbekende actie/);
+  return new Promise((resolve) => setTimeout(() => { assert.ok(sent.some(([id, type]) => id === "p1" && type === "quest:refresh"), "speler krijgt seintje"); resolve(); }, 60));
+});

@@ -204,7 +204,11 @@ async function main() {
     await talk({ action: "choose_dialogue", entryId: "entry.start", choiceId: "choice.ask.quest.hout" }, "ask");
     const accept = await talk({ action: "choose_dialogue", entryId: "entry.offer.quest.hout", choiceId: "choice.accept.quest.hout" }, "accept");
     assert(accept.status === 200, "quest aannemen (" + accept.status + " " + (accept.json?.message || "") + ")");
-    const done = await talk({ action: "choose_dialogue", entryId: "entry.start", choiceId: "choice.done.quest.hout" }, "done");
+    // Sinds Quest Builder stap 1 zet de quest-motor de inleverkeuze zelf in het gesprek: "quest.obj|<quest>|<stap>|<doel>".
+    const hello2 = await talk({ action: "start_dialogue" }, "talk2");
+    const turnIn = (hello2.json?.dialogue?.choices || []).find((choice) => String(choice.choiceId || "").startsWith("quest.obj|quest.hout|"));
+    assert(Boolean(turnIn), "de Boer laat je het hout inleveren");
+    const done = await talk({ action: "choose_dialogue", entryId: "entry.start", choiceId: turnIn.choiceId }, "done");
     assert(done.status === 200, "quest inleveren (" + done.status + " " + (done.json?.message || "") + ")");
     snap = await n03();
     assert(goud(snap) === 25 && stuks(snap, "item.hout") === 0 && Number(snap.progression?.xp || 0) >= 40, "beloning: +5 Goud en 40 XP, het hout is ingeleverd");

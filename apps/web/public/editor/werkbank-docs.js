@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest11";
-import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest11";
-import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest11";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest12";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest12";
+import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest12";
 
 const DOC_MIME = "application/x-gk-doc";
 

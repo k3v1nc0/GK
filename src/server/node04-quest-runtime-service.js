@@ -565,18 +565,21 @@ export class Node04QuestRuntimeService {
   // Stap 4: questitems van deze quest (het start-item en de items uit de doelen) gaan weg als hij klaar is of verlaten wordt.
   // Het start-item (de brief) blijft bij verlaten en bij een herhaalbare quest: dan kun je opnieuw beginnen.
   removeQuestItems(ctx, quest, keepStart, operationId) {
+    for (const itemId of this.questItemIds(ctx, quest, keepStart)) {
+      const count = this.node03RuntimeService.ownedItemCount(ctx.profile.id, itemId);
+      if (count > 0) this.node03RuntimeService.removeInventoryItem(ctx, itemId, count, "quest_item_removed", quest.id, operationId || randomId("quest_items"));
+    }
+  }
+
+  // De questitems van deze quest (start-item en items uit de doelen die Questitem aan hebben).
+  questItemIds(ctx, quest, keepStart = false) {
     const items = catalogSection(ctx.catalogs, "items");
     const ids = new Set();
     if (quest?.startItemRef && !keepStart) ids.add(quest.startItemRef);
     for (const step of Array.isArray(quest?.steps) ? quest.steps : []) {
       for (const objective of Array.isArray(step?.objectives) ? step.objectives : []) if (objective?.itemRef) ids.add(objective.itemRef);
     }
-    for (const itemId of ids) {
-      const item = items[itemId];
-      if (!item || !(item.questItem === true || item.category === "quest")) continue;
-      const count = this.node03RuntimeService.ownedItemCount(ctx.profile.id, itemId);
-      if (count > 0) this.node03RuntimeService.removeInventoryItem(ctx, itemId, count, "quest_item_removed", quest.id, operationId || randomId("quest_items"));
-    }
+    return new Set(Array.from(ids).filter((itemId) => items[itemId] && (items[itemId].questItem === true || items[itemId].category === "quest")));
   }
 
   insertQuestState(ctx, questId, status, stepId, tracked, reason) {
@@ -2170,6 +2173,65 @@ export class Node04QuestRuntimeService {
     this.db.prepare("DELETE FROM quest_transition_audit WHERE player_id = ?").run(ctx.profile.id);
     this.ensureAvailableQuests(ctx);
     return { message: "Questgegevens opnieuw ingesteld.", events: [{ type: "node04_reset" }] };
+  }
+
+  // ---------- Quest Builder (5-11): spelers per quest, alleen voor de admin (editor, tab 🧪 Testen) ----------
+
+  // Per character: nog niet / bezig (welke stap) / gedaan / verlaten / mislukt. Zo zie je of spelers ergens vastlopen.
+  questPlayersForAdmin(questId) {
+    const id = safeString(questId, "");
+    if (!id) throw httpError(400, "Geen quest gekozen.");
+    return this.db.prepare(`
+      SELECT p.id AS player_id, p.selected_character_id AS class_id, u.id AS user_id, u.username, u.role,
+        s.status, s.active_step_id, s.accepted_at, s.completed_at, s.updated_at
+      FROM player_profiles p JOIN users u ON u.id = p.user_id
+      LEFT JOIN player_quest_states s ON s.player_id = p.id AND s.quest_id = ?
+      ORDER BY u.username COLLATE NOCASE, p.created_at
+    `).all(id).map((row) => ({
+      playerId: row.player_id,
+      userId: row.user_id,
+      username: row.username,
+      role: row.role,
+      classId: row.class_id || null,
+      status: row.status || "none",
+      stepId: isOpenStatus(row.status) ? row.active_step_id || null : null,
+      since: (isOpenStatus(row.status) ? row.accepted_at : row.status === QUEST_STATUS.COMPLETED ? row.completed_at : null) || row.updated_at || null
+    }));
+  }
+
+  // Opnieuw = alsof die speler de quest nooit had (ook de questitems en Ieder 1×-pickups ervan); Naar stap = test of hulp bij vastlopen.
+  adminQuestAction(payload = {}) {
+    const action = safeString(payload.action, "");
+    const ctx = this.node03RuntimeService.adminContextForPlayer(payload.playerId);
+    ctx.campaigns = campaignPackage(ctx.project);
+    const questId = safeString(payload.questId, "");
+    const operationId = randomId("admin_quest");
+    const result = this.atomic(() => {
+      if (action === "reset") return this.adminResetQuest(ctx, questId, operationId);
+      if (action === "step") return this.devSetStep(ctx, questId, safeString(payload.stepId, ""), operationId);
+      throw httpError(400, "Onbekende actie.");
+    });
+    this.pingQuest([ctx.profile.id]);
+    return result;
+  }
+
+  adminResetQuest(ctx, questId, operationId) {
+    const quest = normalizeQuest(questById(ctx.project, questId));
+    if (!quest) throw httpError(404, "Quest niet gevonden. Druk eerst SAVE TO GAME.");
+    const row = this.loadQuestState(ctx.profile.id, quest.id);
+    const items = this.questItemIds(ctx, quest);
+    this.removeQuestItems(ctx, quest, false, operationId);
+    // Pickups (Ieder eigen / Ieder 1×) die een questitem van deze quest gaven, mag deze speler weer pakken.
+    for (const claim of this.db.prepare("SELECT instance_id FROM player_pickup_claims WHERE player_id = ?").all(ctx.profile.id)) {
+      const entity = this.db.prepare("SELECT state_json FROM world_entity_state WHERE instance_id = ? LIMIT 1").get(claim.instance_id);
+      const itemRef = safeJsonParse(entity?.state_json || "{}", {})?.itemRef;
+      if (itemRef && items.has(itemRef)) this.db.prepare("DELETE FROM player_pickup_claims WHERE player_id = ? AND instance_id = ?").run(ctx.profile.id, claim.instance_id);
+    }
+    for (const table of ["player_objective_progress", "player_quest_event_receipts", "player_dialogue_choices", "player_quest_states"]) {
+      this.db.prepare("DELETE FROM " + table + " WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    }
+    this.audit(ctx, quest.id, row?.status || null, QUEST_STATUS.AVAILABLE, row?.active_step_id || null, null, operationId, "admin_reset", {});
+    return { message: (quest.displayName || quest.id) + " is weg bij deze speler (alsof hij hem nooit had)." };
   }
 
   // Alleen voor ontwikkelaars (Testen in de Quest Builder): een nieuwe run die direct bij deze stap begint.

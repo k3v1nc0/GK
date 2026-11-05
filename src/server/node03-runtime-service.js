@@ -387,6 +387,16 @@ export class Node03RuntimeService {
     };
   }
 
+  // Quest Builder (5-11): de admin werkt vanuit de editor aan de stand van een speler, zonder sessie van die speler.
+  adminContextForPlayer(playerId) {
+    const profile = this.db.prepare("SELECT * FROM player_profiles WHERE id = ? LIMIT 1").get(safeString(playerId, ""));
+    if (!profile) throw httpError(404, "Speler niet gevonden.");
+    const worldContext = this.mmoService.getPublishedWorldContext();
+    const world = worldContext.world;
+    return { sessionContext: null, worldContext, world, project: resolveProject(world), catalogs: resolveCatalogs(world),
+      profile, position: null, zonePackage: null, zoneId: profile.current_zone_id || null, worldId: worldContext.worldId };
+  }
+
   resolveCurrentZonePackage(world, position) {
     const project = resolveProject(world);
     const packages = Array.isArray(project?.zones?.packages) ? project.zones.packages : [];

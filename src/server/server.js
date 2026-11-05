@@ -559,6 +559,13 @@ async function handleApi(req, res, url) {
       }
       return sendJson(res, 404, { ok: false, message: "Onbekende gebruikersactie." });
     }
+    // Quest Builder (5-11): per quest wie hem nog niet heeft, bezig is (welke stap) of klaar is; Opnieuw en Naar stap per speler (alleen admin).
+    if (url.pathname === "/api/admin/quest-players") {
+      const admin = authService.requireEditor(req);
+      if (admin.role !== "admin") return sendJson(res, 403, { ok: false, message: "Alleen de admin kan de stand van spelers zien." });
+      if (req.method === "GET") return sendJson(res, 200, { ok: true, me: admin.id, players: node04QuestRuntimeService.questPlayersForAdmin(url.searchParams.get("questId")) });
+      if (req.method === "POST") return sendJson(res, 200, Object.assign({ ok: true }, node04QuestRuntimeService.adminQuestAction(await readJson(req))));
+    }
     // Klassen: per account een character per klasse; wisselen en uiterlijk kiezen in het Characters-venster.
     if (req.method === "GET" && url.pathname === "/api/game/characters") {
       return sendJson(res, 200, node03RuntimeService.charactersForRequest(req));

@@ -4,7 +4,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest11";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest12";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -504,7 +504,7 @@ function renderTest(state, host, body, steps, issues, nameOf) {
 
   const questId = body.questId;
   const mine = el("section", { class: "qbTestBox" }, [el("h4", { text: "🧍 Jouw speler" }),
-    el("p", { class: "wbdNote", text: "Werkt na SAVE TO GAME, met het account waarmee je nu bent ingelogd. 'Naar stap' en 'Opnieuw' alleen als DEV_GAME_ACTIONS=1 op de server aan staat." })]);
+    el("p", { class: "wbdNote", text: "Werkt na SAVE TO GAME, met het account waarmee je nu bent ingelogd. Opnieuw en Naar stap staan hieronder bij 👥 Spelers." })]);
   const out = el("div", { class: "qbMine" });
   const show = (text, bad = false) => { out.replaceChildren(el("p", { class: bad ? "qbBad" : "", text })); };
   const refresh = async () => {
@@ -522,26 +522,115 @@ function renderTest(state, host, body, steps, issues, nameOf) {
       out.replaceChildren(...lines);
     } catch (error) { show(error.message || "Kon je stand niet ophalen.", true); }
   };
-  const act = async (payload) => {
-    try {
-      const result = await api("/api/game/node04/action", { method: "POST", body: Object.assign({ questId, operationId: "qb_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) }, payload) });
-      state.setStatus(result.message || "Gedaan.", "success");
-      await refresh();
-    } catch (error) { show(error.message || "Mislukt.", true); }
-  };
   const look = el("button", { type: "button", class: "wbdGhost", text: "🔄 Bekijk mijn stand" });
   look.addEventListener("click", refresh);
-  const reset = el("button", { type: "button", class: "wbdGhost", text: "↺ Opnieuw (te halen)" });
-  reset.addEventListener("click", () => act({ action: "reset_quest" }));
-  const buttons = [look, reset];
+  mine.append(el("div", { class: "qbAdd" }, [look]), out);
+  host.append(mine, playersBox(state, body, steps, nameOf));
+}
+
+// ---------- 👥 Spelers (5-11): wie heeft de quest nog niet, wie is bezig (welke stap), wie is klaar ----------
+
+const PLAYER_STATUS = {
+  none: ["⚪", "Nog niet"], available: ["⚪", "Nog niet"], active: ["🟡", "Bezig"], ready_to_turn_in: ["🟡", "Bezig (inleveren)"],
+  completed: ["🟢", "Gedaan"], abandoned: ["⚫", "Verlaten"], failed: ["🔴", "Mislukt"]
+};
+const PLAYER_FILTERS = [["all", "Iedereen"], ["none", "Nog niet"], ["busy", "Bezig"], ["done", "Gedaan"]];
+const PLAYER_ROWS_MAX = 200;
+
+function sinceText(iso) {
+  const ms = Date.now() - Date.parse(iso || "");
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return min + " min";
+  if (min < 48 * 60) return Math.floor(min / 60) + " u";
+  return Math.floor(min / 1440) + " d";
+}
+
+function playersBox(state, body, steps, nameOf) {
+  const bench = state.bench;
+  const questId = body.questId;
   const all = steps || stepsFromSimple(body);
   const playable = all.filter((step) => step.kind === "step");
-  if (playable.length) {
-    const pick = el("select", { class: "wbdSelect" }, playable.map((step) => el("option", { value: step.stepId, text: stepLabel(step, all.indexOf(step), nameOf) })));
-    const go = el("button", { type: "button", class: "wbdGhost", text: "⏩ Naar stap" });
-    go.addEventListener("click", () => act({ action: "dev_set_step", stepId: pick.value }));
-    buttons.push(pick, go);
-  }
-  mine.append(el("div", { class: "qbAdd" }, buttons), out);
-  host.append(mine);
+  const stepName = (stepId) => { const index = all.findIndex((step) => step.stepId === stepId); return index >= 0 ? stepLabel(all[index], index, nameOf) : stepId || ""; };
+  const classes = new Map(bench.docs("player_class").map((doc) => [doc.body?.classId, bench.docName(doc)]));
+  const box = el("section", { class: "qbTestBox" }, [el("h4", { text: "👥 Spelers" }),
+    el("p", { class: "wbdNote", text: "Per character: nog niet, bezig (op welke stap en hoe lang al) of gedaan. Zitten veel spelers lang op dezelfde stap, dan lopen ze daar vast. Alleen voor de admin." })]);
+  const search = el("input", { type: "search", class: "wbdText qbSearch", placeholder: "🔍 Zoek speler...", value: state.playerSearch || "" });
+  const filter = el("select", { class: "wbdSelect", title: "Welke spelers" }, PLAYER_FILTERS.map(([value, label]) => el("option", { value, text: label })));
+  filter.value = state.playerFilter || "all";
+  const reload = el("button", { type: "button", class: "wbdGhost", text: "🔄 Vernieuwen" });
+  const stepPick = el("select", { class: "wbdSelect", title: "Naar welke stap gaat ⏩" }, playable.map((step) => el("option", { value: step.stepId, text: "⏩ " + stepName(step.stepId) })));
+  if (state.playerStep && playable.some((step) => step.stepId === state.playerStep)) stepPick.value = state.playerStep;
+  stepPick.addEventListener("change", () => { state.playerStep = stepPick.value; });
+  const summary = el("div", { class: "qbPlayerSum" });
+  const table = el("div", { class: "qbPlayers" });
+  box.append(el("div", { class: "qbAdd" }, [search, filter, reload]), summary, el("div", { class: "qbAdd" }, [el("span", { class: "wbdNote", text: "Knop ⏩ zet een speler op:" }), stepPick]), table);
+  let players = [];
+  let me = null;
+
+  const draw = () => {
+    const counts = { none: 0, busy: 0, done: 0, other: 0 };
+    const perStep = new Map();
+    for (const player of players) {
+      const status = player.status;
+      if (status === "none" || status === "available") counts.none += 1;
+      else if (status === "active" || status === "ready_to_turn_in") { counts.busy += 1; perStep.set(player.stepId, (perStep.get(player.stepId) || 0) + 1); }
+      else if (status === "completed") counts.done += 1;
+      else counts.other += 1;
+    }
+    summary.replaceChildren(el("div", { text: "⚪ Nog niet: " + counts.none + " · 🟡 Bezig: " + counts.busy + " · 🟢 Gedaan: " + counts.done + (counts.other ? " · ⚫ Verlaten/mislukt: " + counts.other : "") }));
+    if (perStep.size) {
+      summary.append(el("div", { class: "qbStepBars" }, playable.concat(Array.from(perStep.keys()).filter((id) => !playable.some((step) => step.stepId === id)).map((stepId) => ({ stepId })))
+        .map((step) => {
+          const count = perStep.get(step.stepId) || 0;
+          return el("div", { class: "qbStepBar" }, [el("span", { text: stepName(step.stepId) }),
+            el("span", { class: "qbStepTrack" }, el("span", { class: "qbStepFill", style: "width:" + Math.round((count / Math.max(1, counts.busy)) * 100) + "%" })), el("b", { text: String(count) })]);
+        })));
+    }
+    const term = search.value.trim().toLowerCase();
+    const want = filter.value;
+    const shown = players.filter((player) => {
+      if (term && !String(player.username || "").toLowerCase().includes(term)) return false;
+      if (want === "none") return player.status === "none" || player.status === "available";
+      if (want === "busy") return player.status === "active" || player.status === "ready_to_turn_in";
+      if (want === "done") return player.status === "completed";
+      return true;
+    });
+    const head = el("div", { class: "qbPlayerRow qbPlayerHead" }, ["Speler", "Stand", "Stap", "Sinds", ""].map((text) => el("span", { text })));
+    const rows = shown.slice(0, PLAYER_ROWS_MAX).map((player) => {
+      const [icon, label] = PLAYER_STATUS[player.status] || ["❔", player.status];
+      const who = player.username + (classes.get(player.classId) ? " · " + classes.get(player.classId) : "") + (player.userId === me ? " (jij)" : "");
+      const reset = smallButton("↺", "Opnieuw: quest weg bij " + player.username + " (ook de questitems)", () => {
+        if (!window.confirm("Quest '" + (body.displayName || questId) + "' weghalen bij " + who + "?\nAlsof hij hem nooit had: stand en questitems gaan weg.")) return;
+        act({ action: "reset", playerId: player.playerId });
+      });
+      const go = smallButton("⏩", "Zet " + player.username + " op de gekozen stap", () => act({ action: "step", playerId: player.playerId, stepId: stepPick.value }), !playable.length);
+      return el("div", { class: "qbPlayerRow" }, [el("span", { text: who }), el("span", { text: icon + " " + label }),
+        el("span", { text: player.stepId ? stepName(player.stepId) : "" }), el("span", { class: "wbdNote", text: sinceText(player.since) }), el("span", { class: "qbPlayerActs" }, [reset, go])]);
+    });
+    table.replaceChildren(head, ...rows);
+    if (!shown.length) table.append(el("p", { class: "wbdNote", text: players.length ? "Niemand gevonden." : "Nog geen spelers." }));
+    if (shown.length > PLAYER_ROWS_MAX) table.append(el("p", { class: "wbdNote", text: "Eerste " + PLAYER_ROWS_MAX + " van " + shown.length + ". Zoek om er minder te zien." }));
+  };
+  const load = async () => {
+    table.replaceChildren(el("p", { class: "wbdNote", text: "Even kijken..." }));
+    try {
+      const result = await api("/api/admin/quest-players?questId=" + encodeURIComponent(questId || ""));
+      players = result.players || [];
+      me = result.me || null;
+      draw();
+    } catch (error) { table.replaceChildren(el("p", { class: "qbBad", text: error.message || "Kon de spelers niet ophalen." })); }
+  };
+  const act = async (payload) => {
+    try {
+      const result = await api("/api/admin/quest-players", { method: "POST", body: Object.assign({ questId }, payload) });
+      state.setStatus(result.message || "Gedaan.", "success");
+    } catch (error) { state.setStatus(error.message || "Mislukt.", "error"); }
+    await load();
+  };
+  search.addEventListener("input", () => { state.playerSearch = search.value; draw(); });
+  filter.addEventListener("change", () => { state.playerFilter = filter.value; draw(); });
+  reload.addEventListener("click", load);
+  load();
+  return box;
 }
