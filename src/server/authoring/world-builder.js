@@ -462,6 +462,8 @@ function questRecord(quest, names) {
     autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
   };
   if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
+  // 5-11: plaatje in het startvenster (alleen als gekozen, zo blijft de versie gelijk).
+  if (quest.imageAssetId) record.imageAssetId = quest.imageAssetId;
   // Stap 4: alleen als het afwijkt van de standaard (bij een NPC, geen voorwaarden), zo blijft de versie gelijk.
   if (quest.startMode === "item" || quest.startMode === "area" || quest.startMode === "auto") {
     record.startMode = quest.startMode;
@@ -683,6 +685,8 @@ function withGame(world, source, options) {
     .concat(Object.values(items).map((item) => item?.effectIconAssetId))
     .concat(Object.values(source.actors?.abilities || {}).map((ability) => ability?.effectIconAssetId))
     .concat(currencyList.map((currency) => currency.iconAssetId))
+    // 5-11: plaatjes in het startvenster van quests.
+    .concat(quests.map((quest) => quest?.imageAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
   const missing = modelIds.filter((id) => !known.has(id));

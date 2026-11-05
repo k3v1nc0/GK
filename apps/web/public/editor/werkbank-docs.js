@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest12";
-import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest12";
-import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest12";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest13";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest13";
+import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest13";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -613,6 +613,13 @@ export function createDocBench(options = {}) {
       const count = Array.isArray(value) ? value.length : 0;
       return el("span", { class: "wbdNote", text: count ? count + " punten (tekenen in de 3D-view)" : "Teken in de 3D-view" });
     }
+    // 5-11: een langere tekst (bijv. het verhaal van een quest) in een vak met meerdere regels.
+    if (field.ui?.multiline) {
+      const area = el("textarea", { class: "wbdText wbdTextArea", rows: 4, maxlength: field.maxLength || 1000 });
+      area.value = emptyValue(value) ? "" : String(value);
+      area.addEventListener("change", () => onChange(area.value.trim() || null));
+      return area;
+    }
     const input = el("input", { type: "text", class: "wbdText", maxlength: field.maxLength || 200 });
     input.value = emptyValue(value) ? "" : String(value);
     if (type === "id" && !isNew) input.disabled = true;
@@ -663,7 +670,7 @@ export function createDocBench(options = {}) {
   // meteen op (realtime, met Ctrl+Z); een nieuw document heeft een ✓ Maken-knop.
   // only = alleen deze velden; bare = zonder kop en knoppen (de Quest Builder tekent zo een paar velden in zijn eigen tab);
   // onSaved = na opslaan dit doen in plaats van dit formulier opnieuw tekenen.
-  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [], only = null, bare = false, onSaved = null } = {}) {
+  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [], only = null, bare = false, onSaved = null, labels = null } = {}) {
     const spec = bench.spec(kind);
     host.replaceChildren();
     if (!spec) { host.append(el("div", { class: "wbdEmpty", text: "Onbekende soort." })); return; }
@@ -771,7 +778,8 @@ export function createDocBench(options = {}) {
         more.append(...rows.extra);
         continue;
       }
-      const row = fieldRow(key, field, control(key, field, body, isNew, onChange), ["loot", "refList", "assetList"].includes(field.ui?.control));
+      const shown = labels && labels[key] ? Object.assign({}, field, { label: labels[key] }) : field;
+      const row = fieldRow(key, shown, control(key, field, body, isNew, onChange), ["loot", "refList", "assetList"].includes(field.ui?.control) || field.ui?.multiline);
       if (field.ui?.group) groupBox(field.ui.group).fields.append(row);
       else (field.ui?.more && !bare ? more : visible).append(row);
     }
@@ -852,7 +860,7 @@ export function createDocBench(options = {}) {
     if (actions.childElementCount) host.append(actions);
 
     function rerender() {
-      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip, only, bare, onSaved });
+      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip, only, bare, onSaved, labels });
     }
   };
 

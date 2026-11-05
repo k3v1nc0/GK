@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest12";
+import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest13";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -194,6 +194,8 @@ function loadStore() {
 export function createGkHud(api) {
   const store = loadStore();
   const ui = {
+    storyKnown: null,       // 5-11: quests die al liepen (null = nog geen stand gezien)
+    storyQueue: [],         // 5-11: quests waarvan het startvenster nog open moet
     trade: null,            // { vendorId, offerId } tijdens handelen
     craft: null,            // { stationId, recipeId } tijdens maken
     craftSearch: "",        // filter in de compacte receptenlijst
@@ -335,6 +337,8 @@ export function createGkHud(api) {
 
   const talk = h("div", { class: "gkTalk", hidden: true, role: "dialog" });
   const death = h("div", { class: "gkDeath", hidden: true });
+  // 5-11: startvenster van een quest die niet bij een NPC begint (brief, gebied, vanzelf): plaatje, verhaal, doelen, Op pad.
+  const story = h("div", { class: "gkStory", hidden: true });
   const debugSlot = h("div", { class: "gkDebugSlot" });
   // Namen boven NPC's, vijanden en items: scherpe 2D-tekst die met het doel meebeweegt (geen 3D-bordjes meer).
   const labels = h("div", { class: "gkLabels", "aria-hidden": "true" });
@@ -391,7 +395,7 @@ export function createGkHud(api) {
   const splitBar = h("div", { class: "gkSplitBar", role: "separator", "aria-orientation": "horizontal", title: "Sleep om de verdeling te veranderen (dubbel tikken = half om half)" }, [h("i")]);
   const panelBody = h("div", { class: "gkPanelBody" }, [sheet, splitBar, dock]);
   const panel = h("aside", { class: "gkPanel" }, [panelResize, rail, panelBody]);
-  root.append(vignette, game, panel, bigMap);
+  root.append(vignette, game, panel, bigMap, story);
   (api.mount || document.body).append(root);
   document.documentElement.classList.add("gkHudActive");
 
@@ -553,6 +557,7 @@ export function createGkHud(api) {
     renderToasts();
     renderTalk();
     renderDeath();
+    renderStory();
     renderRail();
     renderSheet();
     syncSettings();
@@ -1584,6 +1589,41 @@ export function createGkHud(api) {
       death.replaceChildren(h("div", { class: "gkDeathCard" }, [ico("tombstone"), h("strong", { text: "Je bent verslagen" }),
         h("button", { type: "button", class: "gkBtn gkGo", "data-act": "respawn" }, [ico("heart-plus", "plain"), "Opnieuw beginnen"])]));
     }
+  }
+
+  // 5-11: een nieuwe quest die met een brief, een gebied of vanzelf begon, krijgt een eigen venster.
+  // Bij de eerste stand na het laden niet (die quests liepen al).
+  const STORY_LOOK = { item: ["Brief", "scroll-unfurled"], area: ["In de buurt", "position-marker"], auto: ["Nieuwe opdracht", "star-medal"] };
+  function renderStory() {
+    const active = data().s04?.quests?.active;
+    if (Array.isArray(active)) {
+      const ids = new Set(active.map(function (quest) { return quest.questId; }));
+      if (ui.storyKnown) {
+        for (const quest of active) {
+          if (!ui.storyKnown.has(quest.questId) && STORY_LOOK[quest.startMode] && !ui.storyQueue.includes(quest.questId)) ui.storyQueue.push(quest.questId);
+        }
+      }
+      ui.storyKnown = ids;
+      ui.storyQueue = ui.storyQueue.filter(function (id) { return ids.has(id); });
+    }
+    const quest = ui.storyQueue.length ? (active || []).find(function (entry) { return entry.questId === ui.storyQueue[0]; }) || null : null;
+    const signature = quest ? JSON.stringify([quest.questId, quest.description, quest.imageAssetId, quest.activeStep?.stepId]) : "";
+    if (ui.sig.story === signature) return;
+    ui.sig.story = signature;
+    story.hidden = !quest;
+    if (!quest) { story.replaceChildren(); return; }
+    const look = STORY_LOOK[quest.startMode];
+    const art = api.assetUrl(quest.imageAssetId, false);
+    const goals = (quest.activeStep?.objectives || []).filter(function (objective) { return objective.needed !== false; })
+      .map(function (objective) { return objective.displayName || objective.objectiveType; });
+    story.replaceChildren(h("div", { class: "gkStoryCard gkStory--" + quest.startMode, role: "dialog", "aria-label": quest.displayName }, [
+      h("div", { class: "gkStoryArt" }, [art ? h("img", { src: art, alt: "" }) : ico(look[1])]),
+      h("div", { class: "gkStoryHead" }, [h("small", { text: look[0] }), h("strong", { text: quest.displayName }),
+        quest.afterQuest ? h("em", null, [ico("check-mark"), quest.afterQuest + " afgerond"]) : null]),
+      quest.description ? h("div", { class: "gkStoryText", text: quest.description }) : null,
+      goals.length ? h("div", { class: "gkStoryGoals" }, [h("b", { text: "Wat moet je doen" })].concat(goals.map(function (goal) { return h("span", { text: goal }); }))) : null,
+      h("div", { class: "gkStoryBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": "story-ok" }, [ico("check-mark", "plain"), "Op pad!"])])
+    ]));
   }
 
   // Gezicht, tekst, gesprekskeuzes én winkel/werkplaats blijven in hetzelfde onderdeel Gesprek.
@@ -3010,6 +3050,7 @@ export function createGkHud(api) {
       case "pixels": store.pixels = Number(id) || 1; save(); render(); break;
       case "icocolor": store.icoColor = id; save(); render(); break;
       case "respawn": api.run03("respawn", null, {}); break;
+      case "story-ok": ui.storyQueue.shift(); renderStory(); break;
       case "unstuck": api.run03("unstuck", null, {}); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
@@ -3181,6 +3222,7 @@ export function createGkHud(api) {
     if (event.ctrlKey || event.metaKey || event.altKey) return false;
     const code = event.code;
     if (code === "Escape") {
+      if (ui.storyQueue.length) { ui.storyQueue.shift(); renderStory(); return true; }
       if (ui.menu) { closeMenu(); return true; }
       if (chatShown()) { closeChat(); return true; }
       if (ui.bigMap) { ui.bigMap = false; syncBigMap(); return true; }

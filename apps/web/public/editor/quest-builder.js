@@ -4,7 +4,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest12";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest13";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -188,8 +188,18 @@ function renderStart(state, host, body, issues, nameOf) {
     area: "De quest start als de speler dit gebied binnenloopt.",
     auto: "Start vanzelf zodra de speler mag (zie hieronder), bijv. meteen na ⛓️ Pas na quest. Deze quest kan de speler niet verlaten."
   }[mode];
+  // Het verhaal bij de start: bij een NPC in het gesprek, anders in een eigen venster in de game (met plaatje en doelen).
+  const story = el("div", { class: "wbdForm" });
+  bench.renderForm(story, { kind: "quest", docKey: state.docKey, place: "questbuilder", only: ["description", "imageAssetId"], bare: true, onSaved: () => render(state),
+    labels: { description: { npc: "Wat de NPC vertelt", item: "Wat er in de brief staat", area: "Wat er in de buurt gebeurt", auto: "Heads-up" }[mode] } });
+  const popup = {
+    npc: "De NPC vertelt dit in het gesprek, met de knoppen Aannemen en Nee.",
+    item: "Bij 📜 Lezen opent een brief-venster met deze tekst, het plaatje en wat de speler moet doen. Dan begint de quest.",
+    area: "Als de speler het gebied binnenloopt, opent een venster met deze tekst, het plaatje en wat hij moet doen.",
+    auto: "Als de quest vanzelf start, opent een venster met deze tekst, het plaatje en wat de speler moet doen. Boven staat welke quest hij net af heeft."
+  }[mode];
   host.append(el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🚪 Hoe begint de quest?" }),
-    el("div", { class: "qbObjective" }, row), el("p", { class: "wbdNote", text: hint })]));
+    el("div", { class: "qbObjective" }, row), el("p", { class: "wbdNote", text: hint }), story, el("p", { class: "wbdNote", text: "🪟 " + popup })]));
 
   // 2. Wie mag hem beginnen: pas na een andere quest + voorwaarden (EN = alles moet kloppen, OF = één is genoeg).
   const box = el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🔒 Wie mag hem beginnen?" })]);

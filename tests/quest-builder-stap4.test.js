@@ -254,3 +254,22 @@ test("Kevin 5-11: admin ziet per speler nog niet / bezig (stap) / gedaan; Opnieu
   assert.throws(() => n4.adminQuestAction({ action: "iets", playerId: "p1", questId: "quest.brief" }), /Onbekende actie/);
   return new Promise((resolve) => setTimeout(() => { assert.ok(sent.some(([id, type]) => id === "p1" && type === "quest:refresh"), "speler krijgt seintje"); resolve(); }, 60));
 });
+
+test("Kevin 5-11: startvenster: verhaal, plaatje en vorige quest in de stand; plaatje alleen in de build als gekozen", () => {
+  const extra = [doc("quest", "quest:quest.na", { questId: "quest.na", displayName: "Bart roept", description: "Soldaat Bart heeft je nodig.", imageAssetId: "img.bart",
+    steps: talkSteps(), start: { mode: "auto", rules: [{ type: "quest", ref: "quest:quest.deur" }] } })];
+  const compiled = compileCanonical(docs(extra), {});
+  assert.deepEqual(compiled.errors, []);
+  const project = buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text)).gameProject;
+  assert.equal(project.campaigns.quests.byId["quest.na"].imageAssetId, "img.bart");
+  assert.equal("imageAssetId" in project.campaigns.quests.byId["quest.deur"], false, "geen plaatje = geen veld (versie blijft gelijk)");
+  const { n4, ctx, db } = setup();
+  const stamp = new Date().toISOString();
+  db.prepare("INSERT INTO player_quest_states (player_id, quest_id, status, active_step_id, tracked, accepted_at, revision, state_json, updated_at) VALUES ('p1', 'quest.na', 'active', 'praat', 1, ?, 1, '{}', ?)").run(stamp, stamp);
+  const c = Object.assign(ctx(), { project, catalogs: project.catalogs });
+  const summary = n4.buildQuestSummary(c, project.campaigns.quests.byId["quest.na"], n4.loadQuestState("p1", "quest.na"));
+  assert.equal(summary.startMode, "auto");
+  assert.equal(summary.imageAssetId, "img.bart");
+  assert.equal(summary.afterQuest, "De deur");
+  assert.equal(summary.description, "Soldaat Bart heeft je nodig.");
+});

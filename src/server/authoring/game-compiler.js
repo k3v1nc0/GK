@@ -160,7 +160,7 @@ export function compileGameSection(documents, options = {}) {
       requirements: { match: start.match === "any" ? "any" : "all", rules } };
   };
   const quests = questDocs.map((doc) => Object.assign({
-    questId: doc.body.questId, displayName: doc.body.displayName, description: doc.body.description || "",
+    questId: doc.body.questId, displayName: doc.body.displayName, description: doc.body.description || "", imageAssetId: doc.body.imageAssetId || null,
     goal: doc.body.goal || "deliver", giverNpcId: questStartMode(doc.body) === "npc" && doc.body.giverRef ? idFromRef(doc.body.giverRef) : null,
     targetNpcId: doc.body.targetNpcRef ? idFromRef(doc.body.targetNpcRef) : null,
     itemId: doc.body.itemRef ? idFromRef(doc.body.itemRef) : null, amount: doc.body.amount || 1,

@@ -169,6 +169,7 @@
 
 /* ---------- Quest Builder (stap 1, 4-11) ---------- */
 .wbdQuestSteps { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.wbdTextArea { width: 100%; min-height: 80px; resize: vertical; font: inherit; line-height: 1.4; }
 .wbdQuestLines { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .qbOverlay { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
 .qbPanel { pointer-events: auto; position: fixed; top: 56px; left: 50%; transform: translateX(-50%); width: min(920px, calc(100vw - 24px));

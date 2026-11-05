@@ -1713,6 +1713,14 @@ export class Node04QuestRuntimeService {
     return list;
   }
 
+  // Vanzelf-quest: de quest die je net af hebt (Quest af-voorwaarde of Pas na quest), voor de heads-up.
+  afterQuestName(ctx, quest) {
+    const rules = Array.isArray(quest?.requirements?.rules) ? quest.requirements.rules : [];
+    const ref = rules.find((rule) => rule?.type === "quest")?.questRef || (Array.isArray(quest?.prerequisiteQuestRefs) ? quest.prerequisiteQuestRefs[0] : null);
+    const before = ref ? questById(ctx.project, ref) : null;
+    return before ? before.displayName || before.id : null;
+  }
+
   buildQuestSummary(ctx, quest, row) {
     if (!quest?.id || !row) return null;
     const canRepeat = row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest);
@@ -1746,6 +1754,10 @@ export class Node04QuestRuntimeService {
       canRepeat,
       // Stap 4: een quest die vanzelf start kun je niet verlaten (geen knop Verlaten).
       canAbandon: !(quest.abandonable === false || quest.startMode === "auto"),
+      // 5-11: het startvenster in de game (brief, gebied, vanzelf): hoe hij start, plaatje en welke quest je net af hebt.
+      startMode: quest.startMode || "npc",
+      imageAssetId: quest.imageAssetId || null,
+      afterQuest: quest.startMode === "auto" ? this.afterQuestName(ctx, quest) : null,
       // "Nog een keer": loop naar de Quest giver en praat (alleen in deze zone).
       giverTargetId: canRepeat ? this.giverTargetId(ctx, quest) : null,
       tracked: row.tracked === 1,
