@@ -107,8 +107,9 @@ function normalizeQuantity(value, fallback = 1) {
   return Math.max(1, safeInteger(value, fallback));
 }
 
+// Questitems (Quest Builder stap 4) zijn nooit te verhandelen of te verkopen.
 function itemIsTradable(item) {
-  return item && item.tradable !== false && item.bindPolicy !== "quest_bound";
+  return item && item.tradable !== false && item.bindPolicy !== "quest_bound" && item.questItem !== true && item.category !== "quest";
 }
 
 function operationIdFromPayload(payload) {
@@ -881,6 +882,12 @@ export class Node05EconomyRuntimeService {
       throw error;
     }
     const quantity = normalizeQuantity(payload.quantity, 1);
+    const sold = catalogSection(ctx.catalogs, "items")[offer.itemRef] || null;
+    if (sold && (sold.questItem === true || sold.category === "quest")) {
+      const error = new Error("Een questitem kun je niet verkopen.");
+      error.status = 409;
+      throw error;
+    }
     const summary = this.vendorOfferSummary(ctx, vendor, offer);
     this.removeItem(ctx, offer.itemRef, quantity, "vendor_sell", vendor.vendorId, operationId);
     const grant = this.node03RuntimeService.grantCurrency(ctx, summary.buyCurrencyRef, summary.buyPriceMinor * quantity, "vendor_sell", offer.offerId, operationId);

@@ -298,6 +298,9 @@ export class Node04QuestRuntimeService {
     if (node03RuntimeService) node03RuntimeService.questPartyLeaving = (ctx, playerId) => this.onPartyLeaving(ctx, playerId);
     // Stap 2: quest delen met je groep. Kort geldig (2 minuten), alleen in het geheugen: na een herstart opnieuw delen.
     this.shareOffers = new Map(); // playerId -> Map(questId -> { fromId, fromName, until })
+    // Stap 4: een brief (of ander item) lezen start een quest; en wie welk startgebied al binnen was (alleen binnenlopen telt).
+    if (node03RuntimeService) node03RuntimeService.questUseItem = (ctx, itemId, operationId) => this.useQuestItem(ctx, itemId, operationId);
+    this.startAreaInside = new Map(); // playerId|questId -> true/false
   }
 
   getRequestContext(req) {
@@ -310,6 +313,7 @@ export class Node04QuestRuntimeService {
     this.node03RuntimeService.ensurePlayerRuntime(ctx);
     this.node03RuntimeService.ensureZoneEntityState(ctx);
     this.ensureAvailableQuests(ctx);
+    this.autoStartQuests(ctx);
     this.syncAutoProgress(ctx);
   }
 
@@ -383,6 +387,7 @@ export class Node04QuestRuntimeService {
 
   snapshotForRequestFromContext(ctx) {
     this.ensureAvailableQuests(ctx);
+    this.autoStartQuests(ctx);
     this.syncAutoProgress(ctx);
     return this.buildSnapshot(ctx);
   }
@@ -420,6 +425,142 @@ export class Node04QuestRuntimeService {
       if (!row || row.status !== QUEST_STATUS.COMPLETED) return false;
     }
     return true;
+  }
+
+  // Stap 4: waarom deze speler de quest (nog) niet kan beginnen. "" = mag beginnen.
+  // EN: alles moet kloppen (de game noemt wat ontbreekt). OF: één is genoeg (de game noemt de keuzes).
+  questStartIssue(ctx, quest) {
+    const requirements = quest?.requirements;
+    const rules = Array.isArray(requirements?.rules) ? requirements.rules : [];
+    if (!rules.length) return "";
+    const any = requirements.match === "any";
+    const missing = [];
+    for (const rule of rules) {
+      const why = this.requirementMissing(ctx, rule);
+      if (!why && any) return "";
+      if (why) missing.push(why);
+    }
+    if (!missing.length) return "";
+    return "Je kunt \"" + (quest.displayName || quest.id) + "\" nog niet beginnen. Nodig: " + missing.join(any ? " of " : " en ") + ".";
+  }
+
+  requirementMissing(ctx, rule) {
+    if (rule?.type === "level") {
+      const level = this.loadProgression(ctx).level;
+      const min = Math.max(1, safeInteger(rule.min, 1));
+      return level >= min ? "" : "level " + min + " (jij bent level " + level + ")";
+    }
+    if (rule?.type === "item") {
+      const need = Math.max(1, safeInteger(rule.amount, 1));
+      return this.node03RuntimeService.ownedItemCount(ctx.profile.id, rule.itemRef) >= need ? "" : need + "× " + displayForItem(ctx.catalogs, rule.itemRef) + " in je tas";
+    }
+    if (rule?.type === "quest") {
+      return this.questEverCompleted(ctx.profile.id, rule.questRef) ? "" : "quest \"" + (questById(ctx.project, rule.questRef)?.displayName || rule.questRef) + "\" af";
+    }
+    if (rule?.type === "class") {
+      const mine = safeString(this.db.prepare("SELECT selected_character_id FROM player_profiles WHERE id = ? LIMIT 1").get(ctx.profile.id)?.selected_character_id);
+      return mine === rule.classRef ? "" : "klasse " + (catalogSection(ctx.catalogs, "playableCharacters")[rule.classRef]?.displayName || rule.classRef);
+    }
+    return "";
+  }
+
+  questEverCompleted(playerId, questId) {
+    const row = this.loadQuestState(playerId, questId);
+    if (row?.status === QUEST_STATUS.COMPLETED) return true;
+    return Boolean(this.db.prepare("SELECT 1 FROM quest_transition_audit WHERE player_id = ? AND quest_id = ? AND to_status = 'completed' LIMIT 1").get(playerId, questId));
+  }
+
+  // Nog niet vrijgespeeld (Pas na quest): welke quest moet eerst af?
+  prerequisiteMessage(ctx, quest) {
+    const open = (Array.isArray(quest?.prerequisiteQuestRefs) ? quest.prerequisiteQuestRefs : [])
+      .find((questId) => this.loadQuestState(ctx.profile.id, questId)?.status !== QUEST_STATUS.COMPLETED);
+    return open ? "Maak eerst de quest \"" + (questById(ctx.project, open)?.displayName || open) + "\" af." : "Deze quest is nog niet vrijgespeeld.";
+  }
+
+  // Stap 4: quests die vanzelf starten (na een andere quest of zodra de voorwaarden kloppen) of als je een gebied binnenloopt.
+  // Vanzelf: vanuit 'te halen' of na mislukken. Gebied: alleen bij binnenlopen (wie erin staat na verlaten, moet er eerst uit).
+  autoStartQuests(ctx) {
+    for (const quest of allQuests(ctx.project)) {
+      if (quest?.startMode !== "auto" && quest?.startMode !== "area") continue;
+      const row = this.loadQuestState(ctx.profile.id, quest.id);
+      if (!row) continue;
+      const waiting = row.status === QUEST_STATUS.AVAILABLE || row.status === QUEST_STATUS.ABANDONED;
+      if (quest.startMode === "auto") {
+        if (waiting && this.questPrerequisitesMet(ctx, quest) && !this.questStartIssue(ctx, quest)) this.startQuestFor(ctx, quest, "auto_start");
+        continue;
+      }
+      const area = questAreaById(ctx.project, quest.startAreaRef);
+      const x = Number(ctx.position?.x);
+      const z = Number(ctx.position?.z);
+      if (!area || !Number.isFinite(x) || !Number.isFinite(z)) continue;
+      const inside = pointInArea(area.points, x, z);
+      const key = ctx.profile.id + "|" + quest.id;
+      const wasInside = this.startAreaInside.get(key) === true;
+      this.startAreaInside.set(key, inside);
+      if (!inside || wasInside) continue;
+      if (!waiting && !(row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest))) continue;
+      if (!this.questPrerequisitesMet(ctx, quest)) { this.noticePlayer(ctx.profile.id, this.prerequisiteMessage(ctx, quest)); continue; }
+      const issue = this.questStartIssue(ctx, quest);
+      if (issue) this.noticePlayer(ctx.profile.id, issue);
+      else this.startQuestFor(ctx, quest, "area_start");
+    }
+  }
+
+  startQuestFor(ctx, quest, reason) {
+    try {
+      this.atomic(() => this.acceptQuest(ctx, quest.id, randomId("quest_start"), reason));
+      this.noticePlayer(ctx.profile.id, "Nieuwe quest: " + (quest.displayName || quest.id));
+    } catch (error) {
+      console.warn("[quest] starten niet gelukt:", error?.message || error);
+    }
+  }
+
+  noticePlayer(playerId, text) {
+    try { this.mmoService?.partyRuntime?.notice([playerId], text); } catch {}
+  }
+
+  // Stap 4: een item lezen (bijv. een brief) start de quest. Het item blijft in je tas, dus 2× lezen start hem 1×.
+  // null = dit item start geen quest (dan gewoon eten/drinken zoals altijd).
+  useQuestItem(ctx, itemId, operationId) {
+    const quests = allQuests(ctx.project).filter((quest) => quest?.startMode === "item" && quest.startItemRef === itemId);
+    if (!quests.length) return null;
+    const name = displayForItem(ctx.catalogs, itemId);
+    if (this.node03RuntimeService.ownedItemCount(ctx.profile.id, itemId) < 1) throw httpError(404, "Je hebt geen " + name + ".");
+    this.ensureAvailableQuests(ctx);
+    const started = [];
+    let reason = "";
+    for (const quest of quests) {
+      const title = "\"" + (quest.displayName || quest.id) + "\"";
+      const row = this.loadQuestState(ctx.profile.id, quest.id);
+      const why = row && isOpenStatus(row.status) ? "Je bent al bezig met " + title + "."
+        : row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest) ? "Je hebt " + title + " al gedaan."
+          : !this.questPrerequisitesMet(ctx, quest) ? this.prerequisiteMessage(ctx, quest)
+            : this.questStartIssue(ctx, quest);
+      if (why) { reason = reason || why; continue; }
+      this.acceptQuest(ctx, quest.id, operationId, "item_read");
+      started.push(quest);
+    }
+    if (!started.length) throw httpError(409, reason);
+    this.pingQuest([ctx.profile.id]);
+    return { action: "use", message: name + " gelezen. Nieuwe quest: " + started.map((quest) => quest.displayName || quest.id).join(", ") + ".",
+      events: started.map((quest) => ({ type: "quest_accepted", questId: quest.id })), grants: [] };
+  }
+
+  // Stap 4: questitems van deze quest (het start-item en de items uit de doelen) gaan weg als hij klaar is of verlaten wordt.
+  // Het start-item (de brief) blijft bij verlaten en bij een herhaalbare quest: dan kun je opnieuw beginnen.
+  removeQuestItems(ctx, quest, keepStart, operationId) {
+    const items = catalogSection(ctx.catalogs, "items");
+    const ids = new Set();
+    if (quest?.startItemRef && !keepStart) ids.add(quest.startItemRef);
+    for (const step of Array.isArray(quest?.steps) ? quest.steps : []) {
+      for (const objective of Array.isArray(step?.objectives) ? step.objectives : []) if (objective?.itemRef) ids.add(objective.itemRef);
+    }
+    for (const itemId of ids) {
+      const item = items[itemId];
+      if (!item || !(item.questItem === true || item.category === "quest")) continue;
+      const count = this.node03RuntimeService.ownedItemCount(ctx.profile.id, itemId);
+      if (count > 0) this.node03RuntimeService.removeInventoryItem(ctx, itemId, count, "quest_item_removed", quest.id, operationId || randomId("quest_items"));
+    }
   }
 
   insertQuestState(ctx, questId, status, stepId, tracked, reason) {
@@ -598,6 +739,7 @@ export class Node04QuestRuntimeService {
       for (const action of actions) grants.push.apply(grants, this.executeAction(ctx, action, opId, quest.id));
     }
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, endStep?.id || null, row.status, row.active_step_id, "quest_complete", { operationId: opId, endId: endStep?.id || null, grants });
+    this.removeQuestItems(ctx, quest, questRepeatMode(quest) !== "once_per_character", opId);
     // Gebeurtenis-bonnetjes van deze run zijn niet meer nodig (de beloning-bon blijft).
     this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
     this.node03RuntimeService.recordGameplayEvent(ctx, "quest_completed", "player", quest.id, { endId: endStep?.id || null, grants });
@@ -823,7 +965,7 @@ export class Node04QuestRuntimeService {
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     if (row && isOpenStatus(row.status)) return false;
     if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) return false;
-    return this.questPrerequisitesMet(ctx, normalizeQuest(quest));
+    return this.questPrerequisitesMet(ctx, normalizeQuest(quest)) && !this.questStartIssue(ctx, quest);
   }
 
   shareOffersFor(playerId, nowMs = Date.now()) {
@@ -871,12 +1013,15 @@ export class Node04QuestRuntimeService {
   acceptQuest(ctx, questId, operationId, reason = "player_accept") {
     const quest = normalizeQuest(questById(ctx.project, questId));
     if (!quest) throw httpError(404, "Quest niet gevonden.");
-    if (!this.questPrerequisitesMet(ctx, quest)) throw httpError(400, "Deze quest is nog niet vrijgespeeld.");
+    if (!this.questPrerequisitesMet(ctx, quest)) throw httpError(400, this.prerequisiteMessage(ctx, quest));
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     if (row && isOpenStatus(row.status)) return { message: "Quest is al actief.", events: [] };
     if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) {
       return { message: questRepeatBlockedMessage(quest), events: [] };
     }
+    // Stap 4: voorwaarden (level, item, quest af, klasse). De game zegt waarom niet.
+    const startIssue = this.questStartIssue(ctx, quest);
+    if (startIssue) throw httpError(409, startIssue);
     const start = stepById(quest, quest.startStepRef);
     if (!start || start.kind === "end") throw httpError(400, "Deze quest heeft nog geen eerste stap.");
     // Nieuwe run: schone voortgang, eigen run-ID (beloning 1x per run) en de versie waarop hij hem afmaakt.
@@ -928,11 +1073,18 @@ export class Node04QuestRuntimeService {
   abandonQuest(ctx, questId, operationId, reason = "abandon") {
     const quest = questById(ctx.project, questId);
     const row = this.loadQuestState(ctx.profile.id, questId);
-    if (!quest || !row || !isOpenStatus(row.status) || quest.abandonable === false) throw httpError(400, "Deze quest kan niet verlaten worden.");
+    if (!quest || !row || !isOpenStatus(row.status)) throw httpError(400, "Deze quest kan niet verlaten worden.");
+    // Stap 4: een quest die vanzelf start kun je niet zelf verlaten (mislukken via de groepsregel kan wel; dan begint hij opnieuw).
+    if (reason === "abandon" && (quest.abandonable === false || quest.startMode === "auto")) throw httpError(400, "Deze quest kun je niet verlaten.");
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
     this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.ABANDONED, row.active_step_id, row.status, row.active_step_id, reason, { operationId });
-    return { message: "Quest verlaten. Je kunt hem opnieuw aannemen bij de NPC.", events: [{ type: "quest_abandoned", questId: quest.id }] };
+    this.removeQuestItems(ctx, normalizeQuest(quest), true, operationId);
+    // Wie in het startgebied staat, moet er eerst uit en weer in om opnieuw te beginnen.
+    if (quest.startMode === "area") this.startAreaInside.set(ctx.profile.id + "|" + quest.id, true);
+    const again = quest.startMode === "item" ? "Lees " + displayForItem(ctx.catalogs, quest.startItemRef) + " opnieuw om weer te beginnen."
+      : quest.startMode === "area" ? "Loop opnieuw het gebied in om weer te beginnen." : "Je kunt hem opnieuw aannemen bij de NPC.";
+    return { message: "Quest verlaten. " + again, events: [{ type: "quest_abandoned", questId: quest.id }] };
   }
 
   // Oude knoppen "Turn in" / "Complete" (node04:turn_in, node04:reach): zoek het inlever- of praatdoel bij deze NPC.
@@ -1050,6 +1202,11 @@ export class Node04QuestRuntimeService {
       if (action.mode === "track_only") {
         this.trackQuest(ctx, quest.id, operationId);
         return [{ kind: "quest_tracked", questId: quest.id, displayName: quest.displayName || quest.id }];
+      }
+      // Stap 4: kan de volgende quest nog niet beginnen (voorwaarden)? Dan staat hij klaar, de beloning gaat gewoon door.
+      if (!this.questPrerequisitesMet(ctx, quest) || this.questStartIssue(ctx, quest)) {
+        this.insertQuestState(ctx, quest.id, QUEST_STATUS.AVAILABLE, null, quest.autoTrack === true ? 1 : 0, action.reason || "quest_unlock");
+        return [{ kind: "quest_unlocked", questId: quest.id, displayName: quest.displayName || quest.id }];
       }
       this.acceptQuest(ctx, quest.id, operationId, action.reason || "quest_unlock");
       return [{ kind: "quest_started", questId: quest.id, displayName: quest.displayName || quest.id }];
@@ -1223,7 +1380,8 @@ export class Node04QuestRuntimeService {
       return this.evaluateConditions(ctx, choice.conditions || []).met;
     }).map((choice) => ({
       choiceId: choice.id,
-      label: this.resolveTokenText(ctx, choice.label || "Continue"),
+      // Stap 4: een quest die je nog niet kunt beginnen krijgt een slotje; aannemen zegt waarom niet.
+      label: this.resolveTokenText(ctx, choice.label || "Continue") + (this.offerLocked(ctx, choice) ? " 🔒" : ""),
       action: choice.action || "none",
       questRef: choice.questRef || null,
       nextEntryRef: choice.nextEntryRef || null,
@@ -1240,6 +1398,12 @@ export class Node04QuestRuntimeService {
       text: this.resolveTokenText(ctx, entry.text || ""),
       choices
     };
+  }
+
+  offerLocked(ctx, choice) {
+    const questRef = (Array.isArray(choice?.conditions) ? choice.conditions : []).find((condition) => condition?.conditionType === "quest_available")?.questRef;
+    const quest = questRef ? questById(ctx.project, questRef) : null;
+    return Boolean(quest?.requirements) && Boolean(this.questStartIssue(ctx, quest));
   }
 
   questChoicesFor(ctx, dialogue) {
@@ -1480,6 +1644,8 @@ export class Node04QuestRuntimeService {
       trackedQuest,
       questTargets,
       questGivers: this.buildQuestGivers(ctx, questSummaries),
+      // Stap 4: gebieden waar een quest start; de game vraagt meteen de stand op als je erin loopt.
+      startAreas: this.buildStartAreas(ctx, byQuest),
       // Stap 2: quests die een groepslid met je deelde (Aannemen / Nee in het questboek).
       questShares: this.shareOffersFor(ctx.profile.id).map((offer) => {
         const quest = questById(ctx.project, offer.questId);
@@ -1490,6 +1656,18 @@ export class Node04QuestRuntimeService {
       node03,
       generatedAt: now()
     };
+  }
+
+  buildStartAreas(ctx, byQuest) {
+    const list = [];
+    for (const quest of allQuests(ctx.project)) {
+      if (quest?.startMode !== "area") continue;
+      const row = byQuest.get(quest.id);
+      if (!row || isOpenStatus(row.status) || (row.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest))) continue;
+      const area = questAreaById(ctx.project, quest.startAreaRef);
+      if (area && Array.isArray(area.points) && area.points.length >= 3) list.push({ questId: quest.id, areaId: area.id, points: area.points });
+    }
+    return list;
   }
 
   buildQuestSummary(ctx, quest, row) {
@@ -1523,6 +1701,8 @@ export class Node04QuestRuntimeService {
       doneBefore: row.status === QUEST_STATUS.COMPLETED,
       repeatMode: questRepeatMode(quest),
       canRepeat,
+      // Stap 4: een quest die vanzelf start kun je niet verlaten (geen knop Verlaten).
+      canAbandon: !(quest.abandonable === false || quest.startMode === "auto"),
       // "Nog een keer": loop naar de Quest giver en praat (alleen in deze zone).
       giverTargetId: canRepeat ? this.giverTargetId(ctx, quest) : null,
       tracked: row.tracked === 1,
@@ -1580,8 +1760,9 @@ export class Node04QuestRuntimeService {
       const target = this.targetForActiveStep(ctx, trackedQuest);
       if (target) targets.push(target);
     }
-    if (!targets.length && availableQuests.length) {
-      const quest = questById(ctx.project, availableQuests[0].questId);
+    const offered = availableQuests.find((entry) => questById(ctx.project, entry.questId)?.startDialogueRef) || null;
+    if (!targets.length && offered) {
+      const quest = questById(ctx.project, offered.questId);
       const dialogue = quest?.startDialogueRef ? dialogueById(ctx.project, quest.startDialogueRef) : null;
       const target = this.resolveQuestTarget(ctx.project, dialogue?.targetRef || quest?.turnInTargetRef);
       if (target && target.zoneRef === ctx.zoneId) {
@@ -1846,7 +2027,7 @@ export class Node04QuestRuntimeService {
         givers.set(key, giver);
       }
       // Ook verlaten/herhaalbare quests tellen; een aangenomen quest wist de gever niet.
-      if (summary.status === QUEST_STATUS.AVAILABLE && this.questPrerequisitesMet(ctx, quest)) {
+      if (summary.status === QUEST_STATUS.AVAILABLE && this.questPrerequisitesMet(ctx, quest) && !this.questStartIssue(ctx, quest)) {
         giver.hasAvailableQuest = true;
       }
     }

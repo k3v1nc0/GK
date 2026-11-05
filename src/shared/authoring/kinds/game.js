@@ -105,8 +105,14 @@ export const GAME_KINDS = {
     fields: {
       questId: idField("Quest-ID", "deze quest"),
       displayName: nameField("deze quest"),
-      giverRef: refField("Wie geeft hem", "🧑", "npc", true,
-        help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat.")),
+      // Quest Builder stap 4: hoe de quest start (NPC, item lezen, gebied, vanzelf) en de voorwaarden (EN/OF).
+      start: { type: "questStart", required: false, audience: "client", label: "Start en voorwaarden",
+        ui: ui("🚪", "questStart", "werkbank"), default: null,
+        help: help("Hoe de quest begint (bij een NPC, een brief lezen, een gebied in of vanzelf) en wat je nodig hebt (level, item, quest af, klasse).", "Meestal: bij een NPC zonder voorwaarden. Een brief uit een kist met 'Level minstens 10' voor een verborgen quest.", "Niemand kan de quest beginnen → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
+      // Alleen nodig als de quest bij een NPC start (stap 4); de quest-check zegt het als hij ontbreekt.
+      giverRef: refField("Wie geeft hem", "🧑", "npc", false,
+        help("Bij welke NPC je deze quest aanneemt.", "Sleep een NPC uit de Bibliotheek op dit vak.", "Niemand biedt de quest aan → controleer of de NPC in de wereld staat."),
+        { when: { key: "start.mode", is: ["npc"], fallback: "npc" } }),
       goal: { type: "select", required: false, options: QUEST_GOALS.slice(), optionIcons: { deliver: "📦", visit: "🚶" },
         optionLabels: { deliver: "Breng spullen", visit: "Ga naar iemand" }, audience: "client", label: "Doel",
         ui: ui("🎯", "select", "werkbank", { hideWhen: "steps" }), default: "deliver",

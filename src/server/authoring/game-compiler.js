@@ -6,7 +6,7 @@ import { networkValues } from "../../shared/authoring/kinds/network.js";
 import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
-import { hasOwnSteps, questGraphIssues, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
+import { hasOwnSteps, questGraphIssues, questStartIssues, questStartMode, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
@@ -119,7 +119,11 @@ export function compileGameSection(documents, options = {}) {
   const refLabel = (ref) => { const target = byKey.get(ref); return target?.body?.displayName || ref; };
   for (const doc of questDocs) {
     const label = "Quest " + doc.body.displayName;
-    for (const field of ["giverRef", "previousQuestRef"]) needRef(doc, doc.body[field], label);
+    // Stap 4: hoe start hij en kloppen de voorwaarden (de NPC alleen als de quest bij een NPC start).
+    needRef(doc, doc.body.previousQuestRef, label);
+    for (const found of questStartIssues(doc.body, { refExists, refLabel, selfRef: doc.docKey, maxLevel: projectValues.maxLevel })) {
+      fail(doc, "QUEST_START", label + ": " + found.message);
+    }
     needRows(doc, doc.body.rewards, label + " (beloning)");
     if (hasOwnSteps(doc.body)) {
       const titles = new Map(doc.body.steps.map((step, index) => [step.stepId, step.title || String(index + 1)]));
@@ -133,6 +137,8 @@ export function compileGameSection(documents, options = {}) {
     if (goal === "deliver" && !doc.body.itemRef) fail(doc, "QUEST_ITEM", label + ": kies welk item de speler moet brengen.");
     if (goal === "visit" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies onder ⚙️ meer naar welke NPC de speler moet gaan (Inleveren bij).");
     if (goal === "visit" && doc.body.targetNpcRef && doc.body.targetNpcRef === doc.body.giverRef) fail(doc, "QUEST_SAME_NPC", label + ": 'Ga naar iemand' moet een andere NPC zijn dan wie de quest geeft.");
+    // Snelle quest die niet bij een NPC start: dan is er geen 'wie gaf hem' om in te leveren.
+    if (goal === "deliver" && questStartMode(doc.body) !== "npc" && !doc.body.targetNpcRef) fail(doc, "QUEST_TARGET", label + ": kies onder ⚙️ meer bij wie de speler inlevert (Inleveren bij).");
   }
   // Een kring van "Pas na quest" maakt quests onbereikbaar.
   const previous = new Map(questDocs.map((doc) => [doc.docKey, doc.body.previousQuestRef || null]));
@@ -143,9 +149,19 @@ export function compileGameSection(documents, options = {}) {
       seen.add(ref);
     }
   }
-  const quests = questDocs.map((doc) => ({
+  // Stap 4: start en voorwaarden met ID's. Een NPC geeft de quest alleen als hij bij een NPC start.
+  const startOf = (body) => {
+    const mode = questStartMode(body);
+    const start = body.start || {};
+    const rules = (Array.isArray(start.rules) ? start.rules : []).map((rule) => (rule.type === "level"
+      ? { type: "level", min: Number.isInteger(rule.min) ? rule.min : 1 }
+      : Object.assign({ type: rule.type, id: idFromRef(rule.ref) }, rule.type === "item" ? { amount: Number.isInteger(rule.amount) ? rule.amount : 1 } : {})));
+    return { startMode: mode, startItemId: mode === "item" ? idFromRef(start.itemRef) : null, startAreaId: mode === "area" ? idFromRef(start.areaRef) : null,
+      requirements: { match: start.match === "any" ? "any" : "all", rules } };
+  };
+  const quests = questDocs.map((doc) => Object.assign({
     questId: doc.body.questId, displayName: doc.body.displayName, description: doc.body.description || "",
-    goal: doc.body.goal || "deliver", giverNpcId: idFromRef(doc.body.giverRef),
+    goal: doc.body.goal || "deliver", giverNpcId: questStartMode(doc.body) === "npc" && doc.body.giverRef ? idFromRef(doc.body.giverRef) : null,
     targetNpcId: doc.body.targetNpcRef ? idFromRef(doc.body.targetNpcRef) : null,
     itemId: doc.body.itemRef ? idFromRef(doc.body.itemRef) : null, amount: doc.body.amount || 1,
     rewards: grants(doc.body.rewards), rewardXp: Number.isInteger(doc.body.rewardXp) ? doc.body.rewardXp : 0,
@@ -166,7 +182,7 @@ export function compileGameSection(documents, options = {}) {
       // Stap 3: het gebied van deze stap op de kaart (zoekgebied, punt of verborgen).
       ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {})
     }))
-  }));
+  }, startOf(doc.body)));
   // Stap 3: Questgebieden (Area tool) in meters, voor de quest-motor (ga naar, verlaat, alleen hier tellen, zoekgebied).
   const questAreas = active.filter((doc) => doc.kind === "area" && areaSoort(doc.body) === "questgebied")
     .sort((a, b) => a.docKey.localeCompare(b.docKey))

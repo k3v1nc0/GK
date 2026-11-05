@@ -814,6 +814,11 @@ export class Node03RuntimeService {
     const name = displayForItem(ctx.catalogs, itemId);
     const heal = safeInteger(item.healAmount, 0);
     const effect = effectFromSource(item, name);
+    // Quest Builder stap 4: een brief (of ander item) lezen start een quest. Het item blijft in je tas.
+    if (heal <= 0 && !effect && this.questUseItem) {
+      const read = this.questUseItem(ctx, itemId, operationId);
+      if (read) return read;
+    }
     if (heal <= 0 && !effect) throw httpError(409, name + " kun je niet gebruiken.");
     const nowMs = Date.now();
     const waitMs = itemReadyInMs(this.db, ctx.profile.id, itemId, nowMs);
@@ -2420,6 +2425,9 @@ export class Node03RuntimeService {
 
   loadHudCatalog(ctx) {
     const slots = catalogSection(ctx.catalogs, "equipmentSlots");
+    // Quest Builder stap 4: items die een quest starten krijgen in de tas de knop 📜 Lezen.
+    const readable = new Set(Object.values(ctx.project?.campaigns?.quests?.byId || {})
+      .filter((quest) => quest?.startMode === "item" && quest.startItemRef).map((quest) => quest.startItemRef));
     const items = Object.values(catalogSection(ctx.catalogs, "items")).map(function (item) {
       return {
         itemId: item.id,
@@ -2442,6 +2450,7 @@ export class Node03RuntimeService {
         attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
         armorBonus: safeInteger(item.armorBonus, 0),
         questItem: item.questItem === true || item.category === "quest",
+        readable: readable.has(item.id),
         vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
       };
     }).filter(function (item) {

@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261104-quest7";
+import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest8";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -1755,7 +1755,8 @@ export function createGkHud(api) {
     return items.map(function (entry) {
       const def = catalogItem(entry.itemId) || {};
       const key = entry.kind === "instance" ? "inst:" + entry.instanceId : "stack:" + entry.itemId;
-      return { key, entry, def, category: def.category || entry.category || "misc", name: def.displayName || entry.displayName || entry.itemId };
+      // Stap 4: questitems staan altijd in het eigen vak 🔑 Quest.
+      return { key, entry, def, category: def.questItem ? "quest" : (def.category || entry.category || "misc"), name: def.displayName || entry.displayName || entry.itemId };
     }).sort(function (a, b) {
       const order = ["equipment", "consumable", "material", "quest", "misc", "custom"];
       return order.indexOf(a.category) - order.indexOf(b.category) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
@@ -1861,6 +1862,8 @@ export function createGkHud(api) {
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy || waiting ? true : null },
           [ico(def.effect ? "sparkles" : "heart-plus", "plain"), "Gebruiken", h("em", { class: "gkCd gkCdBtn", "data-cd": itemId, hidden: true })]));
       }
+      // Stap 4: een brief (of ander item) lezen start een quest; het item blijft in je tas.
+      if (def.readable && !options.sell) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy ? true : null }, [ico("scroll-unfurled", "plain"), "Lezen"]));
       if (!def.questItem && !options.sell) {
         const sure = ui.sure === "destroy:" + key;
         buttons.push(h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "destroy", "data-key": key, disabled: busy ? true : null },
@@ -2002,7 +2005,8 @@ export function createGkHud(api) {
     const inParty = (data().party?.members || []).length > 1;
     if (inParty && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-share", "data-id": quest.questId, disabled: busy ? true : null }, [ico("three-friends", "plain"), "Delen"]));
     // Quest verlaten: je voortgang gaat weg; daarna kun je hem opnieuw aannemen bij de NPC (dan op de nieuwste versie).
-    if (quest.status === "active" || quest.status === "ready_to_turn_in") {
+    // Stap 4: een quest die vanzelf start kun je niet verlaten.
+    if ((quest.status === "active" || quest.status === "ready_to_turn_in") && quest.canAbandon !== false) {
       const sure = ui.sure === "quest-abandon:" + quest.questId;
       buttons.push(h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "quest-abandon", "data-id": quest.questId, disabled: busy ? true : null },
         [ico("cancel", "plain"), sure ? "Zeker? Tik nog eens" : "Verlaten"]));

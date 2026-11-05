@@ -18,7 +18,7 @@ import { PARTY_KINDS } from "./kinds/party.js";
 import { CHAT_KINDS } from "./kinds/chat.js";
 import { effectFields } from "./kinds/effect-fields.js";
 import { AREA_SETTING_SPECS, AREA_SOORT_ORDER, AREA_SOORTEN, areaSettingsIssues, areaSoort } from "./kinds/area.js";
-import { questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
+import { questStartShapeIssues, questStepsShapeIssues } from "../../../apps/web/public/shared/quest-graph.js";
 
 const ID_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$/;
 const ASSET_PATTERN = /^[A-Za-z0-9_.:-]+$/;
@@ -412,6 +412,13 @@ export function validateDocument(kind, body) {
     if (field.type === "questSteps") {
       const shape = questStepsShapeIssues(value);
       for (const message of shape.issues) issues.push(issue(key, "QUEST_STEPS", message));
+      refs.push(...shape.refs);
+      continue;
+    }
+    if (field.type === "questStart") {
+      // Quest Builder stap 4: hoe de quest start en de voorwaarden (EN/OF).
+      const shape = questStartShapeIssues(value);
+      for (const message of shape.issues) issues.push(issue(key, "QUEST_START", message));
       refs.push(...shape.refs);
       continue;
     }

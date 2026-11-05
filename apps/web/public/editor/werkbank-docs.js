@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261104-quest7";
-import { hasOwnSteps, questGraphIssues } from "../shared/quest-graph.js?v=20261104-quest7";
-import { openQuestBuilder } from "./quest-builder.js?v=20261104-quest7";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest8";
+import { QUEST_START_MODES, hasOwnSteps, questGraphIssues, questStartIssues, questStartMode, requirementText } from "../shared/quest-graph.js?v=20261105-quest8";
+import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest8";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -633,13 +633,28 @@ export function createDocBench(options = {}) {
     button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: own ? "stappen" : "basis" }));
     return el("div", { class: "wbdQuestSteps" }, [el("span", { class: "wbdNote", text }), button]);
   }
+  // Quest Builder stap 4: hoe de quest start + voorwaarden, als korte zin; instellen in de Quest Builder (tab Basis).
+  function questStartSummary(body, doc) {
+    const mode = questStartMode(body);
+    const start = body.start || {};
+    const nameOf = (ref) => { const target = ref ? bench.doc(ref) : null; return target ? docName(target) : String(ref || "…").replace(/^[a-z_]+:/, ""); };
+    const rules = Array.isArray(start.rules) ? start.rules : [];
+    const how = QUEST_START_MODES[mode].icon + " " + QUEST_START_MODES[mode].label
+      + (mode === "item" && start.itemRef ? ": " + nameOf(start.itemRef) : mode === "area" && start.areaRef ? ": " + nameOf(start.areaRef) : "");
+    const need = rules.length ? (rules.length > 1 ? (start.match === "any" ? "OF" : "EN") + ": " : "") + rules.map((rule) => requirementText(rule, nameOf)).join(", ") : "geen voorwaarden";
+    const refExists = (ref) => { const target = bench.doc(ref); return Boolean(target) && !target.archived && (target.kind !== "area" || target.body?.soort === "questgebied"); };
+    const issues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc?.docKey || null }).length;
+    const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Instellen", disabled: doc ? null : true });
+    button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: "basis" }));
+    return el("div", { class: "wbdQuestSteps" }, [el("span", { class: "wbdNote", text: how + " · " + need + (issues ? " · ⚠️ " + issues : "") }), button]);
+  }
   bench.refControl = refControl;
 
   // ---------- het paneel dat zichzelf tekent ----------
 
   // Tekent één document (of een nieuw document) uit het schema. Bestaande documenten slaan elke wijziging
   // meteen op (realtime, met Ctrl+Z); een nieuw document heeft een ✓ Maken-knop.
-  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null } = {}) {
+  bench.renderForm = function renderForm(host, { kind, docKey = null, title = null, onDone = null, place = null, onPreview = null, skip = [] } = {}) {
     const spec = bench.spec(kind);
     host.replaceChildren();
     if (!spec) { host.append(el("div", { class: "wbdEmpty", text: "Onbekende soort." })); return; }
@@ -688,12 +703,15 @@ export function createDocBench(options = {}) {
       if (field.ui?.hideWhen && !emptyValue(body[field.ui.hideWhen])) return false;
       const when = field.ui?.when;
       if (!when) return true;
-      const current = emptyValue(body[when.key]) ? spec.fields[when.key]?.default : body[when.key];
+      // Een pad (bijv. "start.mode") kijkt in een object-veld; fallback = de waarde als het leeg is.
+      const value = String(when.key).split(".").reduce((part, name) => (part && typeof part === "object" ? part[name] : undefined), body);
+      const current = emptyValue(value) ? (when.fallback !== undefined ? when.fallback : spec.fields[when.key]?.default) : value;
       return when.is.includes(current);
     };
     for (const [key, field] of Object.entries(spec.fields)) {
       if (field.ui?.place === "viewport") { viewportOnly.push([key, field]); continue; }
       if (field.ui?.place !== where) continue;
+      if (skip.includes(key)) continue;
       if (kind === "area" && field.ui?.soorten && !field.ui.soorten.includes(areaSoort(body))) continue;
       if (!shownWhen(field)) continue;
       const onChange = async (next) => {
@@ -734,6 +752,10 @@ export function createDocBench(options = {}) {
       if (onPreview && !isNew) onChange.preview = (next) => onPreview(Object.assign({}, body, { [key]: next }));
       if (field.ui?.control === "questSteps") {
         visible.append(fieldRow(key, field, questStepsSummary(body, doc), true));
+        continue;
+      }
+      if (field.ui?.control === "questStart") {
+        visible.append(fieldRow(key, field, questStartSummary(body, doc), true));
         continue;
       }
       if (field.ui?.control === "areaSettings") {
@@ -822,7 +844,7 @@ export function createDocBench(options = {}) {
     if (actions.childElementCount) host.append(actions);
 
     function rerender() {
-      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place });
+      bench.renderForm(host, { kind, docKey: isNew ? null : doc.docKey, title, onDone, place, skip });
     }
   };
 

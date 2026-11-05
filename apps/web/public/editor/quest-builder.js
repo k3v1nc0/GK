@@ -3,7 +3,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, stepsFromSimple } from "../shared/quest-graph.js?v=20261104-quest7";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest8";
 
 const TABS = [["basis", "📋 Basis"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -69,9 +69,12 @@ function render(state) {
   const body = clone(doc.body || {});
   const { nameOf, refExists } = names(bench);
   const steps = hasOwnSteps(body) ? body.steps : null;
-  const issues = steps ? questGraphIssues(steps, { refExists, refLabel: nameOf, partyLeave: body.partyLeave }) : [];
-  const badge = !steps ? el("span", { class: "qbBadge", text: "Snelle quest" })
-    : issues.length ? el("span", { class: "qbBadge qbBadgeBad", text: "⚠️ " + issues.length + (issues.length === 1 ? " melding" : " meldingen") })
+  // Stap 4: de quest-check kijkt ook of de quest te beginnen is (start en voorwaarden).
+  const maxLevel = bench.docs("project_settings")[0]?.body?.maxLevel || 50;
+  const startIssues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc.docKey, maxLevel });
+  const issues = startIssues.concat(steps ? questGraphIssues(steps, { refExists, refLabel: nameOf, partyLeave: body.partyLeave }) : []);
+  const badge = issues.length ? el("span", { class: "qbBadge qbBadgeBad", text: "⚠️ " + issues.length + (issues.length === 1 ? " melding" : " meldingen") })
+    : !steps ? el("span", { class: "qbBadge", text: "Snelle quest" })
       : el("span", { class: "qbBadge qbBadgeOk", text: "✅ Quest-check OK" });
   const close = el("button", { type: "button", class: "wbdGhost", text: "✕ Sluiten", title: "Sluiten (Esc)" });
   close.addEventListener("click", () => state.close());
@@ -94,8 +97,8 @@ function render(state) {
   placePanel(state, panel);
   if (state.tab === "basis") {
     const form = el("div", { class: "wbdForm" });
-    content.append(form);
-    bench.renderForm(form, { kind: "quest", docKey: doc.docKey });
+    content.append(form, startBlock(state, body, startIssues));
+    bench.renderForm(form, { kind: "quest", docKey: doc.docKey, skip: ["start"] });
   } else if (state.tab === "testen") renderTest(state, content, body, steps, issues, nameOf);
   else renderSteps(state, content, body, steps, issues, nameOf);
   panel.scrollTop = scroll;
@@ -127,6 +130,109 @@ async function saveSteps(state, body, steps, label, dropSimple = false) {
   if (dropSimple) for (const key of SIMPLE_FIELDS) delete next[key];
   try { await state.bench.saveDoc("quest", doc, next, "Quest · " + label); } catch {}
   render(state);
+}
+
+// ---------- 🚪 Start en voorwaarden (stap 4) ----------
+
+// Opslaan in het veld start. De standaard (bij een NPC, geen voorwaarden) = geen veld, zo blijft een quest gelijk aan vroeger.
+async function saveStart(state, label, change) {
+  const doc = state.bench.doc(state.docKey);
+  const body = clone(doc.body || {});
+  const next = clone(body.start || {});
+  change(next);
+  if (next.mode === "npc") delete next.mode;
+  if (next.mode !== "item") delete next.itemRef;
+  if (next.mode !== "area") delete next.areaRef;
+  if (!Array.isArray(next.rules) || !next.rules.length) { delete next.rules; delete next.match; }
+  if (next.match === "all") delete next.match;
+  for (const key of Object.keys(next)) if (next[key] === null || next[key] === undefined) delete next[key];
+  if (Object.keys(next).length) body.start = next; else delete body.start;
+  try { await state.bench.saveDoc("quest", doc, body, "Quest · " + label); } catch {}
+  render(state);
+}
+
+function startBlock(state, body, issues) {
+  const bench = state.bench;
+  const start = body.start || {};
+  const mode = questStartMode(body);
+  const box = el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🚪 Start en voorwaarden" })]);
+  const how = el("select", { class: "wbdSelect", title: "Hoe begint de speler deze quest?" },
+    Object.entries(QUEST_START_MODES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+  how.value = mode;
+  how.addEventListener("change", () => saveStart(state, "start", (next) => { next.mode = how.value; }));
+  const row = [el("span", { class: "qbLabel", text: "Hoe start hij" }), how];
+  if (mode === "item") {
+    row.push(el("div", { class: "qbSlot" }, bench.refControl({ refKind: "item_definition", required: false, ui: { icon: "📜" } }, start.itemRef || null,
+      (ref) => saveStart(state, "start-item", (next) => { next.itemRef = ref || null; }))));
+  }
+  if (mode === "area") {
+    row.push(areaSelect(bench, start.areaRef || null, "Kies een Questgebied...", "Hier start de quest",
+      (ref) => saveStart(state, "startgebied", (next) => { next.areaRef = ref || null; })));
+  }
+  box.append(el("div", { class: "qbObjective" }, row));
+  const hint = {
+    npc: "De NPC bij 🧑 Wie geeft hem (hierboven) biedt de quest aan.",
+    item: "De speler leest het item in zijn tas (knop 📜 Lezen). Tip: zet het item op Questitem en leg het als Pickup in de wereld, bijv. bij een kist. Het item blijft in de tas tot de quest klaar is.",
+    area: "De quest start als de speler dit gebied binnenloopt.",
+    auto: "Start vanzelf zodra de voorwaarden kloppen, bijv. 'Quest af' hieronder of ⛓️ Pas na quest. Deze quest kan de speler niet verlaten."
+  }[mode];
+  box.append(el("p", { class: "wbdNote", text: hint }));
+
+  // Voorwaarden: EN = alles moet kloppen, OF = één is genoeg.
+  const rules = Array.isArray(start.rules) ? start.rules : [];
+  const change = (label, edit) => saveStart(state, label, (next) => { next.rules = clone(rules); edit(next.rules, next); });
+  if (rules.length > 1) {
+    const match = el("select", { class: "wbdSelect", title: "Moeten alle voorwaarden kloppen, of is één genoeg?" },
+      Object.entries(REQUIREMENT_MATCH).map(([value, label]) => el("option", { value, text: label })));
+    match.value = start.match === "any" ? "any" : "all";
+    match.addEventListener("change", () => saveStart(state, "EN/OF", (next) => { next.match = match.value; }));
+    box.append(el("div", { class: "qbAdd" }, [el("span", { class: "qbLabel", text: "Voorwaarden" }), match]));
+  } else box.append(el("span", { class: "qbLabel", text: rules.length ? "Voorwaarde" : "Voorwaarden: geen (iedereen mag)" }));
+  rules.forEach((rule, index) => box.append(requirementRow(state, rule, (label, edit) => change(label, (list) => edit(list[index])),
+    () => change("voorwaarde weg", (list) => list.splice(index, 1)))));
+  const add = el("select", { class: "wbdSelect", title: "Voorwaarde toevoegen" }, [el("option", { value: "", text: "➕ Voorwaarde..." })]
+    .concat(Object.entries(REQUIREMENT_KINDS).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label }))));
+  add.disabled = rules.length >= QUEST_START_LIMITS.rules;
+  add.addEventListener("change", () => {
+    const type = add.value;
+    if (!type) return;
+    change("voorwaarde erbij", (list) => list.push(type === "level" ? { type, min: 10 } : type === "item" ? { type, amount: 1 } : { type }));
+  });
+  box.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: "Klopt het niet, dan zegt de game de speler waarom hij nog niet kan beginnen." })]));
+  if (issues.length) box.append(issueList(issues));
+  return box;
+}
+
+function requirementRow(state, rule, change, remove) {
+  const bench = state.bench;
+  const spec = REQUIREMENT_KINDS[rule.type] || REQUIREMENT_KINDS.level;
+  const parts = [el("span", { class: "qbLabel", text: spec.icon + " " + spec.label })];
+  if (rule.type === "level") {
+    const level = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_START_LIMITS.level, step: 1, title: "Vanaf welk level" });
+    level.value = rule.min ? String(rule.min) : "";
+    level.addEventListener("change", () => change("level", (target) => { target.min = Math.max(1, Math.min(QUEST_START_LIMITS.level, Math.round(Number(level.value) || 1))); }));
+    parts.push(level);
+  } else if (rule.type === "class") {
+    // Klassen staan onder Instellingen > Klassen (niet in de Bibliotheek), dus een keuzelijst.
+    const classes = bench.docs("player_class");
+    const pick = el("select", { class: "wbdSelect qbArea", title: "Welke klasse" }, [el("option", { value: "", text: "Kies een klasse..." })]
+      .concat(classes.map((doc) => el("option", { value: doc.docKey, text: "🧙 " + bench.docName(doc) }))));
+    if (rule.ref && !classes.some((doc) => doc.docKey === rule.ref)) pick.append(el("option", { value: rule.ref, text: "⚠️ " + rule.ref.replace(/^player_class:/, "") }));
+    pick.value = rule.ref || "";
+    pick.addEventListener("change", () => change("klasse", (target) => { if (pick.value) target.ref = pick.value; else delete target.ref; }));
+    parts.push(pick);
+  } else {
+    parts.push(el("div", { class: "qbSlot" }, bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, rule.ref || null,
+      (ref) => change(spec.label, (target) => { if (ref) target.ref = ref; else delete target.ref; }))));
+    if (spec.amount) {
+      const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Hoeveel" });
+      amount.value = String(rule.amount || 1);
+      amount.addEventListener("change", () => change("aantal", (target) => { target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1))); }));
+      parts.push(el("label", { class: "qbTimes" }, [el("span", { text: "×" }), amount]));
+    }
+  }
+  parts.push(smallButton("🗑️", "Voorwaarde weghalen", remove));
+  return el("div", { class: "qbObjective" }, parts);
 }
 
 // ---------- 🪜 Stappen ----------
@@ -348,12 +454,12 @@ function objectiveRow(state, objective, issues, change, remove) {
 
 function renderTest(state, host, body, steps, issues, nameOf) {
   const check = el("section", { class: "qbTestBox" }, [el("h4", { text: "🔎 Quest-check" })]);
-  if (!steps) check.append(el("p", { class: "wbdNote", text: "Snelle quest: SAVE TO GAME controleert item en NPC." }));
+  if (!issues.length && !steps) check.append(el("p", { class: "wbdNote", text: "Snelle quest: SAVE TO GAME controleert item en NPC." }));
   else if (!issues.length) check.append(el("p", { text: "✅ Alles in orde. Deze quest kan naar de game (SAVE TO GAME)." }));
   else {
     check.append(el("p", { class: "wbdNote", text: "SAVE TO GAME houdt deze quest tegen tot dit is opgelost:" }));
     check.append(el("ul", { class: "qbIssues" }, issues.map((issue) => {
-      const step = issue.stepId ? steps.find((entry) => entry.stepId === issue.stepId) : null;
+      const step = issue.stepId && steps ? steps.find((entry) => entry.stepId === issue.stepId) : null;
       const where = step ? stepLabel(step, steps.indexOf(step), nameOf) + ": " : "";
       return el("li", { text: "⚠️ " + where + issue.message });
     })));

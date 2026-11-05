@@ -55,6 +55,21 @@ export const PARTY_LEAVE_RULES = Object.freeze({
   wait: Object.freeze({ icon: "⏸️", label: "Wachten tot je weer in een groep zit" }),
   fail: Object.freeze({ icon: "❌", label: "Quest mislukt" })
 });
+// Stap 4: hoe een quest start en wat je nodig hebt om hem te beginnen (EN = alles, OF = één is genoeg).
+export const QUEST_START_MODES = Object.freeze({
+  npc: Object.freeze({ icon: "🧑", label: "Bij een NPC (praten)" }),
+  item: Object.freeze({ icon: "📜", label: "Item lezen (bijv. een brief uit een kist)" }),
+  area: Object.freeze({ icon: "🎯", label: "Een Questgebied binnenlopen" }),
+  auto: Object.freeze({ icon: "⛓️", label: "Vanzelf (bijv. meteen na een andere quest)" })
+});
+export const REQUIREMENT_MATCH = Object.freeze({ all: "EN: alles moet kloppen", any: "OF: één is genoeg" });
+export const REQUIREMENT_KINDS = Object.freeze({
+  level: Object.freeze({ icon: "⭐", label: "Level minstens" }),
+  item: Object.freeze({ icon: "🎒", label: "Heeft item", refKind: "item_definition", amount: true }),
+  quest: Object.freeze({ icon: "📜", label: "Quest af", refKind: "quest" }),
+  class: Object.freeze({ icon: "🧙", label: "Klasse", refKind: "player_class" })
+});
+export const QUEST_START_LIMITS = Object.freeze({ rules: 8, level: 500 });
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
@@ -232,6 +247,88 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
     else if (step.kind === "step" && !canEnd.has(step.stepId) && nextOf(step).length) add(step.stepId, null, "Vanaf hier kom je nooit bij een einde (de stappen gaan in een kring).");
   }
   return issues;
+}
+
+// ---------- Stap 4: start en voorwaarden (veld start op de quest) ----------
+// { mode, itemRef, areaRef, match, rules: [{ type: level, min } | { type: item, ref, amount } | { type: quest, ref } | { type: class, ref }] }
+const START_KEYS = new Set(["mode", "itemRef", "areaRef", "match", "rules"]);
+const RULE_KEYS = new Set(["type", "min", "ref", "amount"]);
+
+export function questStartMode(body) {
+  const mode = isObject(body?.start) ? body.start.mode : null;
+  return QUEST_START_MODES[mode] ? mode : "npc";
+}
+
+// Vorm-controle bij opslaan (schema). Half ingevuld mag; de quest-check zegt wat er nog mist.
+export function questStartShapeIssues(value) {
+  const issues = [];
+  const refs = [];
+  if (!isObject(value)) return { issues: ["Start moet een object zijn."], refs };
+  const unknown = Object.keys(value).filter((key) => !START_KEYS.has(key));
+  if (unknown.length) issues.push("Start: onbekend veld " + unknown.join(", ") + ".");
+  const given = (field) => field !== undefined && field !== null;
+  const refOf = (ref, kind) => typeof ref === "string" && ref.length <= 160 && ref.startsWith(kind + ":");
+  if (given(value.mode) && !QUEST_START_MODES[value.mode]) issues.push("Start: ongeldige keuze bij Hoe start hij.");
+  if (given(value.itemRef)) { if (!refOf(value.itemRef, "item_definition")) issues.push("Start: het start-item moet een item zijn."); else refs.push(value.itemRef); }
+  if (given(value.areaRef)) { if (!isAreaRef(value.areaRef)) issues.push("Start: het startgebied moet een Questgebied zijn."); else refs.push(value.areaRef); }
+  if (given(value.match) && !REQUIREMENT_MATCH[value.match]) issues.push("Voorwaarden: ongeldige keuze bij EN/OF.");
+  if (given(value.rules)) {
+    if (!Array.isArray(value.rules) || value.rules.length > QUEST_START_LIMITS.rules) issues.push("Hooguit " + QUEST_START_LIMITS.rules + " voorwaarden.");
+    else value.rules.forEach((rule, index) => {
+      const at = "Voorwaarde " + (index + 1);
+      if (!isObject(rule)) { issues.push(at + " is ongeldig."); return; }
+      const extra = Object.keys(rule).filter((key) => !RULE_KEYS.has(key));
+      if (extra.length) issues.push(at + ": onbekend veld " + extra.join(", ") + ".");
+      const spec = REQUIREMENT_KINDS[rule.type];
+      if (!spec) { issues.push(at + ": onbekende soort."); return; }
+      if (given(rule.min) && (!Number.isInteger(rule.min) || rule.min < 1 || rule.min > QUEST_START_LIMITS.level)) issues.push(at + ": level moet tussen 1 en " + QUEST_START_LIMITS.level + " liggen.");
+      if (given(rule.ref)) { if (!spec.refKind || !refOf(rule.ref, spec.refKind)) issues.push(at + ": moet naar een " + (spec.refKind || "?") + " wijzen."); else refs.push(rule.ref); }
+      if (given(rule.amount) && (!Number.isInteger(rule.amount) || rule.amount < 1 || rule.amount > QUEST_LIMITS.amount)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");
+    });
+  }
+  return { issues, refs: Array.from(new Set(refs)) };
+}
+
+// De quest-check voor de start: is de quest te beginnen en wijst elke voorwaarde naar een bestaande kaart?
+// Zelfde meldingen in de Quest Builder en bij SAVE TO GAME. selfRef = de eigen quest (docKey).
+export function questStartIssues(body, { refExists = () => true, refLabel = (ref) => ref, selfRef = null, maxLevel = null } = {}) {
+  const issues = [];
+  const add = (message) => issues.push({ stepId: null, objectiveId: null, message });
+  const start = isObject(body?.start) ? body.start : {};
+  const mode = questStartMode(body);
+  const gone = (ref, area = false) => refLabel(ref) + (area ? " bestaat niet (meer) of is geen Questgebied." : " bestaat niet (meer) of is gearchiveerd.");
+  if (mode === "npc") {
+    if (!body?.giverRef) add("Start: kies wie de quest geeft (🧑 Wie geeft hem).");
+    else if (!refExists(body.giverRef)) add("Start: " + gone(body.giverRef));
+  } else if (mode === "item") {
+    if (!start.itemRef) add("Start: kies welk item de quest start (bijv. een brief).");
+    else if (!refExists(start.itemRef)) add("Start: " + gone(start.itemRef));
+  } else if (mode === "area") {
+    if (!start.areaRef) add("Start: kies het Questgebied waar de quest start.");
+    else if (!refExists(start.areaRef)) add("Start: " + gone(start.areaRef, true));
+  }
+  for (const rule of Array.isArray(start.rules) ? start.rules.filter(isObject) : []) {
+    const spec = REQUIREMENT_KINDS[rule.type];
+    if (!spec) continue;
+    if (rule.type === "level") {
+      if (!Number.isInteger(rule.min)) add("Voorwaarde level: vul in vanaf welk level.");
+      else if (Number.isInteger(maxLevel) && rule.min > maxLevel) add("Voorwaarde level " + rule.min + ": het hoogste level is " + maxLevel + ", dus niemand kan deze quest beginnen.");
+      continue;
+    }
+    if (!rule.ref) add("Voorwaarde " + spec.label + ": kies wat (sleep een kaart op het vak).");
+    else if (selfRef && rule.ref === selfRef) add("Voorwaarde: een quest kan niet zichzelf nodig hebben.");
+    else if (!refExists(rule.ref)) add("Voorwaarde: " + gone(rule.ref));
+  }
+  return issues;
+}
+
+// Korte tekst voor een voorwaarde, bijv. "Level minstens 10" of "Heeft item 2× Sleutel".
+export function requirementText(rule, nameOf = (ref) => ref) {
+  const spec = REQUIREMENT_KINDS[rule?.type];
+  if (!spec) return "?";
+  if (rule.type === "level") return spec.label + " " + (rule.min || "…");
+  const amount = spec.amount && Number(rule.amount) > 1 ? rule.amount + "× " : "";
+  return spec.label + " " + amount + (rule.ref ? nameOf(rule.ref) : "…");
 }
 
 // Korte tekst voor een doel, bijv. "Versla 3× Wolf" of "Breng 2× Hout naar Smid".

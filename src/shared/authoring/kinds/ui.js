@@ -11,13 +11,15 @@
 // ui.more: true = staat onder de ⚙️-knop "meer" (per rol maximaal ±6 velden in beeld, plan §10.4).
 // ui.hideWhen: verberg dit veld zodra dat andere veld gevuld is (bijv. de snelle questvelden zodra de quest eigen stappen heeft).
 // questSteps: de stappen van een quest (Quest Builder); het paneel toont een samenvatting + knop naar de Quest Builder.
+// questStart: hoe een quest start + voorwaarden (EN/OF); in te stellen in de Quest Builder (tab Basis).
+// ui.when.key mag een pad zijn (bijv. "start.mode"); ui.when.fallback = de waarde als dat leeg is.
 // ui.optionsFrom: keuzes komen uit de werkruimte (zones, respawnPolicies, equipmentSlots, clips:<veld>).
 
 export const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });
 
 export const ui = (icon, control, place, extra = {}) => Object.freeze(Object.assign({ icon, control, place }, extra));
 
-export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps"]);
+export const FIELD_CONTROLS = Object.freeze(["text", "id", "slider", "toggle", "select", "asset", "assetList", "ref", "refList", "tags", "loot", "points", "areaSettings", "color", "terrain", "terrainPaint", "questSteps", "questStart"]);
 export const FIELD_PLACES = Object.freeze(["werkbank", "instellingen", "terrein", "viewport", "relaties"]);
 export const KIND_PLACES = Object.freeze(["werkbank", "instellingen", "terrein"]);
 
@@ -40,7 +42,8 @@ export const CONTROL_FOR_TYPE = Object.freeze({
   color: ["color"],
   terrainChunks: ["terrain"],
   terrainPaint: ["terrainPaint"],
-  questSteps: ["questSteps"]
+  questSteps: ["questSteps"],
+  questStart: ["questStart"]
 });
 
 // Veelgebruikte hulpteksten.

@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261104-quest7";
+import { createGkHud } from "./hud/gk-hud.js?v=20261105-quest8";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -8083,6 +8083,14 @@ function checkNode04QuestAreas() {
       if (seen.has(key) && seen.get(key) !== inside) changed = true;
       seen.set(key, inside);
     }
+  }
+  // Quest Builder stap 4: een quest die start als je een gebied binnenloopt. Erin = meteen de stand opvragen.
+  for (const area of state.node04.snapshot?.startAreas || []) {
+    if (!Array.isArray(area.points) || area.points.length < 3) continue;
+    const inside = node04PointInArea(area.points, num(position.x), num(position.z));
+    const key = "start|" + area.questId + "|" + area.areaId;
+    if (seen.has(key) && seen.get(key) !== inside && inside) changed = true;
+    seen.set(key, inside);
   }
   if (changed) loadNode04State().catch(function () {});
 }

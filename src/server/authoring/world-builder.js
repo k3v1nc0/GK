@@ -445,7 +445,7 @@ function questRecord(quest, names) {
     return record;
   });
   const first = steps[0] || null;
-  const giverTarget = npcTargetId(quest.giverNpcId);
+  const giverTarget = quest.giverNpcId ? npcTargetId(quest.giverNpcId) : null;
   const rewards = [];
   if (quest.rewardXp > 0) rewards.push({ actionKind: "xp", amount: quest.rewardXp });
   for (const grant of quest.rewards) {
@@ -455,11 +455,23 @@ function questRecord(quest, names) {
   const record = {
     id: quest.questId, graph: true, displayName: quest.displayName, description: quest.description || first?.instruction || "", summary: first?.instruction || "",
     steps, stepsById: Object.fromEntries(steps.map((step) => [step.id, step])), startStepRef: first?.id || null, rewards, conditions: [],
-    startDialogueRef: npcDialogueId(quest.giverNpcId), turnInTargetRef: giverTarget,
+    startDialogueRef: quest.giverNpcId ? npcDialogueId(quest.giverNpcId) : null, turnInTargetRef: giverTarget,
     prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
     autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
   };
   if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
+  // Stap 4: alleen als het afwijkt van de standaard (bij een NPC, geen voorwaarden), zo blijft de versie gelijk.
+  if (quest.startMode === "item" || quest.startMode === "area" || quest.startMode === "auto") {
+    record.startMode = quest.startMode;
+    if (quest.startMode === "item") record.startItemRef = quest.startItemId;
+    if (quest.startMode === "area") record.startAreaRef = quest.startAreaId;
+  }
+  const rules = Array.isArray(quest.requirements?.rules) ? quest.requirements.rules : [];
+  if (rules.length) {
+    record.requirements = { match: quest.requirements.match === "any" ? "any" : "all", rules: rules.map((rule) => (rule.type === "level" ? { type: "level", min: rule.min }
+      : rule.type === "item" ? { type: "item", itemRef: rule.id, amount: rule.amount || 1 }
+        : rule.type === "quest" ? { type: "quest", questRef: rule.id } : { type: "class", classRef: rule.id })) };
+  }
   record.version = sha256(stableStringify(record)).slice(0, 16);
   return record;
 }
@@ -624,7 +636,8 @@ function withGame(world, source, options) {
     ? [{ stepId: "step.visit", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.visit", type: "talk", targetId: quest.targetNpcId, npcId: null, amount: 1, role: "required" }] }]
     : [{ stepId: "step.deliver", kind: "step", title: "", text: "", match: "all", next: ["end"], objectives: [{ objectiveId: "objective.deliver", type: "deliver", targetId: quest.itemId, npcId: quest.targetNpcId || quest.giverNpcId, amount: quest.amount || 1, role: "required" }] }])
     .concat([{ stepId: "end", kind: "end", title: "Klaar", text: "", match: "all", next: [], objectives: [] }]);
-  const questRecords = quests.filter((quest) => npcsById.has(quest.giverNpcId))
+  // Stap 4: een quest die niet bij een NPC start (item lezen, gebied, vanzelf) heeft geen NPC nodig.
+  const questRecords = quests.filter((quest) => (quest.startMode && quest.startMode !== "npc") || npcsById.has(quest.giverNpcId))
     .map((quest) => questRecord(Array.isArray(quest.steps) ? quest : Object.assign({}, quest, { steps: legacySteps(quest) }), names));
   const recordsById = new Map(questRecords.map((record) => [record.id, record]));
   const usable = quests.filter((quest) => recordsById.has(quest.questId));
