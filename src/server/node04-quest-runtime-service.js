@@ -543,7 +543,7 @@ export class Node04QuestRuntimeService {
     }
     if (!started.length) throw httpError(409, reason);
     this.pingQuest([ctx.profile.id]);
-    return { action: "use", message: name + " gelezen. Nieuwe quest: " + started.map((quest) => quest.displayName || quest.id).join(", ") + ".",
+    return { action: "use", message: "Quest aangenomen: " + started.map((quest) => quest.displayName || quest.id).join(", ") + ".",
       events: started.map((quest) => ({ type: "quest_accepted", questId: quest.id })), grants: [] };
   }
 

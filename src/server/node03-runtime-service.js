@@ -2466,9 +2466,15 @@ export class Node03RuntimeService {
 
   loadHudCatalog(ctx) {
     const slots = catalogSection(ctx.catalogs, "equipmentSlots");
-    // Quest Builder stap 4: items die een quest starten krijgen in de tas de knop 📜 Lezen.
-    const readable = new Set(Object.values(ctx.project?.campaigns?.quests?.byId || {})
-      .filter((quest) => quest?.startMode === "item" && quest.startItemRef).map((quest) => quest.startItemRef));
+    // Quest Builder stap 4 + Kevin 5-11: een item dat een quest start opent bij een klik in de tas meteen het gesprek
+    // met de brief (verhaal, plaatje, doelen) en de knop Quest accepteren.
+    const reads = new Map();
+    for (const quest of Object.values(ctx.project?.campaigns?.quests?.byId || {})) {
+      if (quest?.startMode !== "item" || !quest.startItemRef || reads.has(quest.startItemRef)) continue;
+      const first = (Array.isArray(quest.steps) ? quest.steps : []).find((step) => step?.kind !== "end") || null;
+      reads.set(quest.startItemRef, { questId: quest.id, displayName: quest.displayName || quest.id, description: quest.description || "", imageAssetId: quest.imageAssetId || null,
+        goals: (Array.isArray(first?.objectives) ? first.objectives : []).filter((objective) => objective?.role !== "hidden").map((objective) => objective.displayName).filter(Boolean).slice(0, 8) });
+    }
     const items = Object.values(catalogSection(ctx.catalogs, "items")).map(function (item) {
       return {
         itemId: item.id,
@@ -2491,7 +2497,8 @@ export class Node03RuntimeService {
         attackPowerBonus: safeInteger(item.attackPowerBonus, 0),
         armorBonus: safeInteger(item.armorBonus, 0),
         questItem: item.questItem === true || item.category === "quest",
-        readable: readable.has(item.id),
+        readable: reads.has(item.id),
+        reads: reads.get(item.id) || null,
         vendorValue: safeInteger(item.vendorBaseValueMinor, 0)
       };
     }).filter(function (item) {

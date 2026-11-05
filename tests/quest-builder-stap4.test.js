@@ -112,13 +112,17 @@ test("stap 4: brief lezen onder level 10 zegt waarom niet; vanaf 10 start hij, 2
   assert.notEqual(row("quest.brief")?.status, "active");
   level(10);
   const read = node03.useItem(ctx(), { itemId: "brief" }, "op2");
-  assert.match(read.message, /Brief gelezen\. Nieuwe quest: De brief/);
+  assert.match(read.message, /Quest aangenomen: De brief/);
   assert.equal(row("quest.brief").status, "active");
   assert.throws(() => node03.useItem(ctx(), { itemId: "brief" }, "op3"), /al bezig met "De brief"/);
   const starts = db.prepare("SELECT COUNT(*) AS n FROM quest_transition_audit WHERE player_id = 'p1' AND quest_id = 'quest.brief' AND to_status = 'active'").get().n;
   assert.equal(starts, 1, "2× lezen start 1×");
   assert.equal(node03.ownedItemCount("p1", "brief"), 1, "de brief blijft in je tas");
-  assert.equal(node03.loadHudCatalog(ctx()).items.find((item) => item.itemId === "brief").readable, true, "knop Lezen in de tas");
+  const brief = node03.loadHudCatalog(ctx()).items.find((item) => item.itemId === "brief");
+  assert.equal(brief.readable, true, "klik in de tas opent de brief");
+  assert.equal(brief.reads.questId, "quest.brief");
+  assert.equal(brief.reads.displayName, "De brief");
+  assert.deepEqual(brief.reads.goals.length, 1, "de doelen van de eerste stap");
 });
 
 test("stap 4: questitem blijft bij verlaten, gaat weg als de quest klaar is", () => {

@@ -4,7 +4,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest13";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest14";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -184,7 +184,7 @@ function renderStart(state, host, body, issues, nameOf) {
   }
   const hint = {
     npc: "Deze NPC biedt de quest aan. Sleep een NPC uit de Bibliotheek op het vak.",
-    item: "De speler leest het item in zijn tas (knop 📜 Lezen). Tip: zet het item op Questitem en Uniek (max 1), en leg het als Pickup in de wereld (bijv. bij een kist) met Oppakken = Ieder 1×. Het item blijft in de tas tot de quest klaar is.",
+    item: "De speler klikt het item in zijn tas aan en leest het in het gesprek. Tip: zet het item op Questitem en Uniek (max 1), en leg het als Pickup in de wereld (bijv. bij een kist) met Oppakken = Ieder 1×. Het item blijft in de tas tot de quest klaar is.",
     area: "De quest start als de speler dit gebied binnenloopt.",
     auto: "Start vanzelf zodra de speler mag (zie hieronder), bijv. meteen na ⛓️ Pas na quest. Deze quest kan de speler niet verlaten."
   }[mode];
@@ -194,12 +194,12 @@ function renderStart(state, host, body, issues, nameOf) {
     labels: { description: { npc: "Wat de NPC vertelt", item: "Wat er in de brief staat", area: "Wat er in de buurt gebeurt", auto: "Heads-up" }[mode] } });
   const popup = {
     npc: "De NPC vertelt dit in het gesprek, met de knoppen Aannemen en Nee.",
-    item: "Bij 📜 Lezen opent een brief-venster met deze tekst, het plaatje en wat de speler moet doen. Dan begint de quest.",
-    area: "Als de speler het gebied binnenloopt, opent een venster met deze tekst, het plaatje en wat hij moet doen.",
-    auto: "Als de quest vanzelf start, opent een venster met deze tekst, het plaatje en wat de speler moet doen. Boven staat welke quest hij net af heeft."
+    item: "Klik op het item in de tas: het gesprek toont deze tekst (als brief), het plaatje en de doelen, met de knop Quest accepteren. Daarna opent Menu > Quests bij deze quest.",
+    area: "Loopt de speler het gebied in, dan start de quest en toont het gesprek deze tekst, het plaatje en de doelen, met de knop Op pad! (naar Menu > Quests).",
+    auto: "Start de quest vanzelf, dan toont het gesprek deze tekst, het plaatje, de doelen en welke quest net af is, met de knop Op pad! (naar Menu > Quests)."
   }[mode];
   host.append(el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🚪 Hoe begint de quest?" }),
-    el("div", { class: "qbObjective" }, row), el("p", { class: "wbdNote", text: hint }), story, el("p", { class: "wbdNote", text: "🪟 " + popup })]));
+    el("div", { class: "qbObjective" }, row), el("p", { class: "wbdNote", text: hint }), story, el("p", { class: "wbdNote", text: "💬 " + popup })]));
 
   // 2. Wie mag hem beginnen: pas na een andere quest + voorwaarden (EN = alles moet kloppen, OF = één is genoeg).
   const box = el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🔒 Wie mag hem beginnen?" })]);

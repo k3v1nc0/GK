@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest13";
+import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest14";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -194,8 +194,10 @@ function loadStore() {
 export function createGkHud(api) {
   const store = loadStore();
   const ui = {
+    story: null,            // 5-11: verhaal in het gesprek: { kind: "letter", itemId } of { kind: "started", questId }
     storyKnown: null,       // 5-11: quests die al liepen (null = nog geen stand gezien)
-    storyQueue: [],         // 5-11: quests waarvan het startvenster nog open moet
+    storyQueue: [],         // 5-11: gebied/vanzelf-quests waarvan het verhaal nog moet komen
+    focusQuest: null,       // 5-11: { questId, until } = open Menu > Quests bij deze quest zodra hij loopt
     trade: null,            // { vendorId, offerId } tijdens handelen
     craft: null,            // { stationId, recipeId } tijdens maken
     craftSearch: "",        // filter in de compacte receptenlijst
@@ -337,8 +339,6 @@ export function createGkHud(api) {
 
   const talk = h("div", { class: "gkTalk", hidden: true, role: "dialog" });
   const death = h("div", { class: "gkDeath", hidden: true });
-  // 5-11: startvenster van een quest die niet bij een NPC begint (brief, gebied, vanzelf): plaatje, verhaal, doelen, Op pad.
-  const story = h("div", { class: "gkStory", hidden: true });
   const debugSlot = h("div", { class: "gkDebugSlot" });
   // Namen boven NPC's, vijanden en items: scherpe 2D-tekst die met het doel meebeweegt (geen 3D-bordjes meer).
   const labels = h("div", { class: "gkLabels", "aria-hidden": "true" });
@@ -395,7 +395,7 @@ export function createGkHud(api) {
   const splitBar = h("div", { class: "gkSplitBar", role: "separator", "aria-orientation": "horizontal", title: "Sleep om de verdeling te veranderen (dubbel tikken = half om half)" }, [h("i")]);
   const panelBody = h("div", { class: "gkPanelBody" }, [sheet, splitBar, dock]);
   const panel = h("aside", { class: "gkPanel" }, [panelResize, rail, panelBody]);
-  root.append(vignette, game, panel, bigMap, story);
+  root.append(vignette, game, panel, bigMap);
   (api.mount || document.body).append(root);
   document.documentElement.classList.add("gkHudActive");
 
@@ -484,7 +484,7 @@ export function createGkHud(api) {
   function mode() {
     const d = data();
     if (d.defeated) return "dead";
-    if (d.dialogue || ui.serviceTalk || ui.trade || ui.craft) return "talk";
+    if (d.dialogue || ui.serviceTalk || ui.trade || ui.craft || ui.story) return "talk";
     return "explore";
   }
   function combat(now = performance.now()) {
@@ -546,6 +546,7 @@ export function createGkHud(api) {
 
   // ---- rendering ----
   function render() {
+    watchQuestStarts();
     applyLayout();
     renderUnit();
     renderParty();
@@ -557,7 +558,6 @@ export function createGkHud(api) {
     renderToasts();
     renderTalk();
     renderDeath();
-    renderStory();
     renderRail();
     renderSheet();
     syncSettings();
@@ -1128,6 +1128,7 @@ export function createGkHud(api) {
     ui.trade = null;
     ui.craft = null;
     store.item = null;
+    ui.story = null;
     if (data().dialogue) {
       ui.serviceTalk = null;
       api.closeDialogue();
@@ -1591,44 +1592,95 @@ export function createGkHud(api) {
     }
   }
 
-  // 5-11: een nieuwe quest die met een brief, een gebied of vanzelf begon, krijgt een eigen venster.
-  // Bij de eerste stand na het laden niet (die quests liepen al).
+  // Kevin 5-11: het verhaal van een quest die niet bij een NPC begint staat in het gespreksvenster.
+  // Brief: klik op de brief in de tas = de brief in het gesprek met de knop Quest accepteren.
+  // Gebied of vanzelf: de quest is al begonnen = het verhaal in het gesprek met Op pad!. Daarna Menu > Quests bij die quest.
   const STORY_LOOK = { item: ["Brief", "scroll-unfurled"], area: ["In de buurt", "position-marker"], auto: ["Nieuwe opdracht", "star-medal"] };
-  function renderStory() {
+  function watchQuestStarts() {
     const active = data().s04?.quests?.active;
-    if (Array.isArray(active)) {
-      const ids = new Set(active.map(function (quest) { return quest.questId; }));
-      if (ui.storyKnown) {
-        for (const quest of active) {
-          if (!ui.storyKnown.has(quest.questId) && STORY_LOOK[quest.startMode] && !ui.storyQueue.includes(quest.questId)) ui.storyQueue.push(quest.questId);
-        }
+    if (!Array.isArray(active)) return;
+    const ids = new Set(active.map(function (quest) { return quest.questId; }));
+    // Bij de eerste stand na het laden niet (die quests liepen al).
+    if (ui.storyKnown) {
+      for (const quest of active) {
+        if (!ui.storyKnown.has(quest.questId) && (quest.startMode === "area" || quest.startMode === "auto") && !ui.storyQueue.includes(quest.questId)) ui.storyQueue.push(quest.questId);
       }
-      ui.storyKnown = ids;
-      ui.storyQueue = ui.storyQueue.filter(function (id) { return ids.has(id); });
     }
-    const quest = ui.storyQueue.length ? (active || []).find(function (entry) { return entry.questId === ui.storyQueue[0]; }) || null : null;
-    const signature = quest ? JSON.stringify([quest.questId, quest.description, quest.imageAssetId, quest.activeStep?.stepId]) : "";
-    if (ui.sig.story === signature) return;
-    ui.sig.story = signature;
-    story.hidden = !quest;
-    if (!quest) { story.replaceChildren(); return; }
-    const look = STORY_LOOK[quest.startMode];
-    const art = api.assetUrl(quest.imageAssetId, false);
-    const goals = (quest.activeStep?.objectives || []).filter(function (objective) { return objective.needed !== false; })
-      .map(function (objective) { return objective.displayName || objective.objectiveType; });
-    story.replaceChildren(h("div", { class: "gkStoryCard gkStory--" + quest.startMode, role: "dialog", "aria-label": quest.displayName }, [
+    ui.storyKnown = ids;
+    ui.storyQueue = ui.storyQueue.filter(function (id) { return ids.has(id); });
+    if (ui.focusQuest) {
+      const id = ui.focusQuest.questId;
+      if (ids.has(id)) { ui.focusQuest = null; ui.storyQueue = ui.storyQueue.filter(function (other) { return other !== id; }); showQuest(id); }
+      else if (performance.now() > ui.focusQuest.until) ui.focusQuest = null;
+    }
+    if (!ui.story && ui.storyQueue.length) ui.story = { kind: "started", questId: ui.storyQueue.shift() };
+  }
+  function storyView() {
+    const story = ui.story;
+    const active = data().s04?.quests?.active || [];
+    if (story?.kind === "letter") {
+      const reads = catalogItem(story.itemId)?.reads;
+      if (!reads) return null;
+      const running = active.some(function (quest) { return quest.questId === reads.questId; });
+      return { mode: "item", questId: reads.questId, itemId: story.itemId, displayName: reads.displayName, description: reads.description, imageAssetId: reads.imageAssetId,
+        goals: reads.goals || [], afterQuest: null, button: running ? ["story-open", "Naar quest", "scroll-unfurled"] : ["story-accept", "Quest accepteren", "check-mark"] };
+    }
+    const quest = story ? active.find(function (entry) { return entry.questId === story.questId; }) : null;
+    if (!quest) return null;
+    return { mode: STORY_LOOK[quest.startMode] ? quest.startMode : "auto", questId: quest.questId, itemId: "", displayName: quest.displayName, description: quest.description || "",
+      imageAssetId: quest.imageAssetId, afterQuest: quest.afterQuest || null, button: ["story-open", "Op pad!", "check-mark"],
+      goals: (quest.activeStep?.objectives || []).filter(function (objective) { return objective.needed !== false; }).map(function (objective) { return objective.displayName || objective.objectiveType; }) };
+  }
+  function renderStoryTalk(view) {
+    const busy = Boolean(data().busy?.n03);
+    const signature = JSON.stringify(["story", root.dataset.mode, root.dataset.dock, view, busy]);
+    if (ui.sig.talk === signature) return;
+    ui.sig.talk = signature;
+    talk.hidden = root.dataset.mode !== "talk" || root.dataset.dock !== "talk";
+    talk.classList.remove("gkTalk--service");
+    const look = STORY_LOOK[view.mode];
+    const art = api.assetUrl(view.imageAssetId, false);
+    talk.replaceChildren(h("div", { class: "gkStoryCard gkStory--" + view.mode, "aria-label": view.displayName }, [
       h("div", { class: "gkStoryArt" }, [art ? h("img", { src: art, alt: "" }) : ico(look[1])]),
-      h("div", { class: "gkStoryHead" }, [h("small", { text: look[0] }), h("strong", { text: quest.displayName }),
-        quest.afterQuest ? h("em", null, [ico("check-mark"), quest.afterQuest + " afgerond"]) : null]),
-      quest.description ? h("div", { class: "gkStoryText", text: quest.description }) : null,
-      goals.length ? h("div", { class: "gkStoryGoals" }, [h("b", { text: "Wat moet je doen" })].concat(goals.map(function (goal) { return h("span", { text: goal }); }))) : null,
-      h("div", { class: "gkStoryBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": "story-ok" }, [ico("check-mark", "plain"), "Op pad!"])])
+      h("div", { class: "gkStoryHead" }, [h("small", { text: look[0] }), h("strong", { text: view.displayName }),
+        view.afterQuest ? h("em", null, [ico("check-mark"), view.afterQuest + " afgerond"]) : null]),
+      h("button", { type: "button", class: "gkClose", "data-act": "talk-close", title: "Sluiten (Esc)" }, [ico("cancel")]),
+      view.description ? h("div", { class: "gkStoryText", text: view.description }) : null,
+      view.goals.length ? h("div", { class: "gkStoryGoals" }, [h("b", { text: "Wat moet je doen" })].concat(view.goals.map(function (goal) { return h("span", { text: goal }); }))) : null,
+      h("div", { class: "gkStoryBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": view.button[0], "data-id": view.questId, "data-item": view.itemId,
+        disabled: busy && view.button[0] === "story-accept" ? true : null }, [ico(view.button[2], "plain"), view.button[1]])])
     ]));
+  }
+  function closeStory() {
+    ui.story = null;
+    applyLayout();
+    render();
+  }
+  // Menu > Quests open, bij deze quest (even oplichten).
+  function showQuest(questId) {
+    ui.story = null;
+    store.item = null;
+    store.tab = "quests";
+    ui.combatAt = -1e9;
+    setPanel("open");
+    window.requestAnimationFrame(function () {
+      const card = Array.from(sheet.querySelectorAll("[data-quest]")).find(function (node) { return node.dataset.quest === questId; });
+      if (!card) return;
+      card.scrollIntoView({ block: "nearest" });
+      card.classList.add("gkFlash");
+      window.setTimeout(function () { card.classList.remove("gkFlash"); }, 1600);
+    });
   }
 
   // Gezicht, tekst, gesprekskeuzes én winkel/werkplaats blijven in hetzelfde onderdeel Gesprek.
   function renderTalk() {
     const d = data();
+    if (ui.story && !d.dialogue && !ui.serviceTalk && !ui.trade && !ui.craft) {
+      const view = storyView();
+      if (view) { renderStoryTalk(view); return; }
+      ui.story = null;
+      applyLayout();
+    }
     const activeVendor = ui.trade ? api.vendor(ui.trade.vendorId) : null;
     const activeStation = ui.craft ? api.station(ui.craft.stationId) : null;
     const dialogue = d.dialogue || (ui.serviceTalk ? { dialogueId: "", entryId: "", speakerName: ui.serviceTalk.name, text: "Wat kan ik voor je doen?", choices: [], targetRef: "" }
@@ -1902,8 +1954,6 @@ export function createGkHud(api) {
         buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy || waiting ? true : null },
           [ico(def.effect ? "sparkles" : "heart-plus", "plain"), "Gebruiken", h("em", { class: "gkCd gkCdBtn", "data-cd": itemId, hidden: true })]));
       }
-      // Stap 4: een brief (of ander item) lezen start een quest; het item blijft in je tas.
-      if (def.readable && !options.sell) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "use", "data-id": itemId, disabled: busy ? true : null }, [ico("scroll-unfurled", "plain"), "Lezen"]));
       if (!def.questItem && !options.sell) {
         const sure = ui.sure === "destroy:" + key;
         buttons.push(h("button", { type: "button", class: "gkBtn gkWarn" + (sure ? " gkSure" : ""), "data-act": "destroy", "data-key": key, disabled: busy ? true : null },
@@ -2014,7 +2064,7 @@ export function createGkHud(api) {
     const later = quest.repeatMode === "weekly" ? "↻ Volgende week weer" : quest.repeatMode === "daily" ? "↻ Morgen weer" : "Behaald";
     const status = quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
     const grey = quest.doneBefore ? (quest.status === "completed" && later === "Behaald" ? " gkGrey gkArchive" : " gkGrey") : "";
-    const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") + grey }, [
+    const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") + grey, "data-quest": quest.questId }, [
       h("h3", null, [ico(quest.status === "completed" || step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: quest.displayName }), status ? h("small", { text: status }) : null])
     ]);
     const text = step?.instruction || quest.summary || quest.description || "";
@@ -2995,7 +3045,12 @@ export function createGkHud(api) {
       case "bag": openTab("bag"); break;
       case "close": if (ui.trade || ui.craft) endService(); else setPanel("closed"); break;
       case "filter": store.filter = id; store.item = null; save(); renderSheet(); break;
-      case "item": store.item = store.item === key ? null : key; save(); renderSheetOrService(); break;
+      case "item": {
+        // Kevin 5-11: een brief (item dat een quest start) opent meteen het gesprek met de brief.
+        const reading = !ui.trade && !ui.craft ? catalogItem(itemPayload(key).itemId) : null;
+        if (reading?.reads) { store.item = null; ui.story = { kind: "letter", itemId: reading.itemId }; ui.dockPick = "talk"; save(); applyLayout(); render(); break; }
+        store.item = store.item === key ? null : key; save(); renderSheetOrService(); break;
+      }
       case "slot": {
         const worn = (data().s03?.equipment || []).some(function (row) { return row.slotId === id; });
         if (worn) { store.item = store.item === "eq:" + id ? null : "eq:" + id; save(); renderSheet(); }
@@ -3050,7 +3105,8 @@ export function createGkHud(api) {
       case "pixels": store.pixels = Number(id) || 1; save(); render(); break;
       case "icocolor": store.icoColor = id; save(); render(); break;
       case "respawn": api.run03("respawn", null, {}); break;
-      case "story-ok": ui.storyQueue.shift(); renderStory(); break;
+      case "story-accept": ui.focusQuest = { questId: id, until: performance.now() + 8000 }; api.run03("use", null, { itemId: el.dataset.item }); break;
+      case "story-open": showQuest(id); break;
       case "unstuck": api.run03("unstuck", null, {}); break;
       case "attack": attack(); break;
       case "heal": heal(); break;
@@ -3222,7 +3278,7 @@ export function createGkHud(api) {
     if (event.ctrlKey || event.metaKey || event.altKey) return false;
     const code = event.code;
     if (code === "Escape") {
-      if (ui.storyQueue.length) { ui.storyQueue.shift(); renderStory(); return true; }
+      if (ui.story && !data().dialogue) { closeStory(); return true; }
       if (ui.menu) { closeMenu(); return true; }
       if (chatShown()) { closeChat(); return true; }
       if (ui.bigMap) { ui.bigMap = false; syncBigMap(); return true; }
