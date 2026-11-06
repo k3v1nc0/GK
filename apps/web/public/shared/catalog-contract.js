@@ -1,4 +1,4 @@
-import { canonicalJsonStringify, normalizeCanonicalId, normalizeTagQuery } from "./node-contract.js";
+import { canonicalJsonStringify, normalizeCanonicalId, normalizeTagQuery } from "./node-contract.js?v=20261106-perf1";
 
 export const CATALOG_SCHEMA_VERSION = "gk-catalog-v1";
 

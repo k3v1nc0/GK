@@ -361,8 +361,15 @@ function serveStatic(req, res, url) {
   if (pathname === "/favicon.ico") return serveFile(res, path.join(rootDir, "favicon.ico"), "public, max-age=86400", req);
   if (pathname.endsWith("/")) pathname += "index.html";
   const ext = path.extname(pathname);
-  // Code altijd verversen na een update ("no-cache" = eerst vragen), maar ongewijzigd = 304 zonder download.
-  const cache = ext === ".html" || ext === ".js" || ext === ".css" ? "no-cache" : "public, max-age=300";
+  // HTML en niet-geversioneerde modules moeten na een deploy altijd valideren.
+  // Een ?v= URL is een nieuwe resource-identiteit en mag daarom zonder extra
+  // roundtrip uit de browsercache komen; de HTML-entrypoints dragen de deployversie.
+  const versionedCode = (ext === ".js" || ext === ".css") && url.searchParams.has("v");
+  const cache = versionedCode
+    ? "public, max-age=31536000, immutable"
+    : ext === ".html" || ext === ".js" || ext === ".css"
+      ? "no-cache"
+      : "public, max-age=300";
   return serveFile(res, safePath(publicRoot, pathname.slice(1)), cache, req);
 }
 

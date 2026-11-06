@@ -7,7 +7,7 @@ import {
   normalizeReferenceList,
   normalizeTagList,
   normalizeTagQuery
-} from "./node-contract.js?v=20261006-portal-pair2";
+} from "./node-contract.js?v=20261106-perf1";
 
 function safeString(value) {
   return String(value === null || value === undefined ? "" : value).trim();

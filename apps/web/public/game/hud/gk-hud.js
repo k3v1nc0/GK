@@ -2468,9 +2468,16 @@ export function createGkHud(api) {
     }
   }
 
-  // 2D-naamlabels: elke beurt de schermplek bijwerken (alleen transform, geen nieuwe elementen als het niet hoeft).
+  // 2D-naamlabels: elke beurt de schermplek bijwerken (geen nieuwe elementen als het niet hoeft).
   let labelRect = null;
   let labelRectAt = 0;
+  function snapToScreenPixel(value) {
+    // Op een HiDPI-scherm is een halve CSS-pixel vaak precies één fysieke pixel.
+    // Afronden op CSS-pixels liet de namen zichtbaar hokken; een doorlopende
+    // translate3d maakte Chrome's gerasterde tekst tijdens het lopen wazig.
+    const ratio = Math.max(1, Number(window.devicePixelRatio) || 1);
+    return Math.round(value * ratio) / ratio;
+  }
   function drawLabels(now, anchors) {
     if (!anchors.length && !labelPool.size) return;
     if (!labelRect || now - labelRectAt > 1000) { labelRect = labels.getBoundingClientRect(); labelRectAt = now; }
@@ -2492,7 +2499,10 @@ export function createGkHud(api) {
       const kind = own || markerKind(anchor) || "other";
       const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "");
       if (el.className !== className) el.className = className;
-      el.style.transform = "translate3d(" + Math.round(anchor.x - labelRect.left) + "px," + Math.round(anchor.y - labelRect.top) + "px,0) translate(-50%,-100%)";
+      const left = snapToScreenPixel(anchor.x - labelRect.left) + "px";
+      const top = snapToScreenPixel(anchor.y - labelRect.top) + "px";
+      if (el.style.left !== left) el.style.left = left;
+      if (el.style.top !== top) el.style.top = top;
     }
     for (const [id, el] of labelPool) {
       if (!seen.has(id)) { el.remove(); labelPool.delete(id); }

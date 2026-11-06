@@ -2,8 +2,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20260728-zone-canvas-fix23";
-import { previewTokenText } from "./token-preview.js?v=20260717-node01-foundation";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues } from "./node-types.js?v=20261106-perf1";
+import { previewTokenText } from "./token-preview.js?v=20261106-perf1";
 import {
   effectiveGroundBounds,
   effectiveWorldGroundBounds,

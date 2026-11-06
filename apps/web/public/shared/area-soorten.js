@@ -2,7 +2,7 @@
 // Per soort leest de game hem met hetzelfde tekenwerk als de oude node (zelfde read-model), zodat een
 // verhuisd pad, bos of blokkade er precies hetzelfde uitziet. De instellingen per soort staan in "settings";
 // hun regels (type, min, max, keuzes) komen uit de oude nodedefinitie, de naam/icoon/hulp staat hier.
-import { NODE_TYPES } from "./node-types.js";
+import { NODE_TYPES } from "./node-types.js?v=20261106-perf1";
 
 // Zelfde vorm als help() in src/shared/authoring/kinds/ui.js (dit bestand draait ook in de browser).
 const help = (waarvoor, goed, probleem) => Object.freeze({ waarvoor, goed, probleem });

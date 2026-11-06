@@ -1,4 +1,4 @@
-import { normalizeCanonicalId, normalizeReferenceList } from "../shared/node-contract.js";
+import { normalizeCanonicalId, normalizeReferenceList } from "../shared/node-contract.js?v=20261106-perf1";
 
 // These helpers read and return ordinary persistent graphs. They own no UI state
 // and never infer an asset, another entity, or a replacement relationship.

@@ -1,11 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261103-groep1";
-import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20260730-stop-resync1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261106-perf1";
+import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261105-quest15";
+import { createGkHud } from "./hud/gk-hud.js?v=20261106-label-motion1";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -297,10 +297,41 @@ function persistNetState() {
 
 const persistedNetState = loadPersistedNetState();
 
+// active/client.json en builds/:id/client.json bevatten voor de actieve build
+// hetzelfde clientpakket. Deel die response tussen minimap/projectmetadata en
+// actor-presentatie; bij een gepinde oudere build valt actor-presentatie terug
+// op de expliciete build-URL.
+let canonicalClientBuildId = null;
+let canonicalClientWorld = null;
+let canonicalClientPayloadPromise = null;
+
+function fetchActiveCanonicalClientPayload() {
+  if (!canonicalClientPayloadPromise) {
+    canonicalClientPayloadPromise = (async function () {
+      const response = await fetch("/api/authoring/active/client.json", { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })();
+    canonicalClientPayloadPromise.catch(function () {
+      canonicalClientPayloadPromise = null;
+    });
+  }
+  return canonicalClientPayloadPromise;
+}
+
 // Fase 05: vijanden en grondstoffen uit de canonieke build (server stuurt actor:snapshot / actor:event).
 const actorPresentation = createActorPresentation({
   classId: function () { return state.player?.selectedCharacterId || null; },
   fetchJson: async function (url) {
+    const buildMatch = /^\/api\/authoring\/builds\/(b_[0-9a-f]{24})\/client\.json$/.exec(String(url || ""));
+    if (buildMatch) {
+      try {
+        const activePayload = await fetchActiveCanonicalClientPayload();
+        if (activePayload?.buildId === buildMatch[1]) return activePayload;
+      } catch {
+        // De expliciete build-URL hieronder blijft de veilige fallback.
+      }
+    }
     const response = await gameFetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("HTTP " + response.status);
     return response.json();
@@ -446,6 +477,7 @@ const state = {
   sync: {
     inFlight: false,
     lastSilentSyncAt: 0,
+    startupComplete: false,
     zoneRefreshInFlight: false,
     pendingZoneId: null,
     zoneRefreshTimerId: 0
@@ -12161,6 +12193,20 @@ function applyRemotePlayerSpawn(payload) {
   syncRemotePlayers(performance.now());
 }
 
+function scheduleInitialSocketStateFallback(socket) {
+  if (!socket) return;
+  if (socket._gkInitialStateTimer) window.clearTimeout(socket._gkInitialStateTimer);
+  socket._gkInitialStateTimer = window.setTimeout(function () {
+    socket._gkInitialStateTimer = null;
+    if (socket !== state.ws || socket.readyState !== WebSocket.OPEN) return;
+    const missingInitialState = !state.mmoReady.connectionReadyReceived
+      || !state.mmoReady.playerStateReceived
+      || !state.mmoReady.presenceSnapshotReceived;
+    if (!missingInitialState) return;
+    try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+  }, 750);
+}
+
 async function openWebSocket() {
   if (!state.session || !state.wantReconnect) return;
   if (state.wsTicketInFlight) return;
@@ -12244,7 +12290,7 @@ async function openWebSocket() {
       state.mmoReady.socketOpen = true;
       markWsConnected();
       startPingLoop(socket, socket._gkConnectionAttemptId);
-      try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+      scheduleInitialSocketStateFallback(socket);
       maybeMarkMmoOnlineReady("legacy_open");
       return;
     }
@@ -12296,6 +12342,7 @@ function closeWebSocket(intentional = true) {
 
 function handleSocketClose(socket, event) {
   if (socket) window.clearTimeout(socket._gkConnectTimer);
+  if (socket?._gkInitialStateTimer) window.clearTimeout(socket._gkInitialStateTimer);
   if (!socket || socket._gkConnectionAttemptId !== state.wsConnectionAttemptId) return;
   if (state.ws === socket) state.ws = null;
   stopPingLoop();
@@ -12368,7 +12415,7 @@ function handleSocketMessage(raw) {
     state.mmoReady.socketOpen = true;
     markWsConnected();
     startPingLoop(socket, socket._gkConnectionAttemptId);
-    try { socket.send(JSON.stringify({ type: "player:request_state" })); } catch {}
+    scheduleInitialSocketStateFallback(socket);
     maybeMarkMmoOnlineReady("auth_ok");
     return;
   }
@@ -12664,7 +12711,10 @@ async function loadSessionState(options = {}) {
   const worldChanged = options.forceWorld === true || !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
   state.lastPublishedAt = snapshot.worldPublishedAt || snapshot.publishedAt || snapshot.gameWorld?.publishedAt || state.lastPublishedAt;
   primeHttpSnapshotState(snapshot);
-  await loadGameHudDefaultProfiles({ silent: true, force: worldChanged, rerender: false });
+  // HUD-voorkeuren zijn niet nodig om de wereld te bouwen of de multiplayer-
+  // verbinding te openen. Laat dit kleine request parallel lopen; bij een trage
+  // response mag het de eerste speelbare frame en de join-ticket niet blokkeren.
+  loadGameHudDefaultProfiles({ silent: true, force: worldChanged, rerender: true });
   primeConnectedSocketReadiness();
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED || state.ws.readyState === WebSocket.CLOSING) {
     openWebSocket();
@@ -13708,6 +13758,10 @@ function handleVisibilityChange() {
     return;
   }
   state.lastFrameAt = 0;
+  if (!state.sync.startupComplete) {
+    state.sync.hiddenAt = 0;
+    return;
+  }
   if (shouldResyncAfterReturn()) silentResync("visibility-visible");
   state.sync.hiddenAt = 0;
   if (!state.ws || state.ws.readyState === WebSocket.CLOSED) openWebSocket();
@@ -13715,11 +13769,16 @@ function handleVisibilityChange() {
 
 function handleWindowFocus() {
   state.lastFrameAt = 0;
+  // focus/pageshow worden ook tijdens de eerste navigatie afgevuurd. Dan start()
+  // de canonieke sessielaad al; een tweede snapshot bouwt dezelfde wereld en
+  // start alle node-state requests nogmaals.
+  if (!state.sync.startupComplete) return;
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) silentResync("window-focus");
 }
 
 function handlePageShow(event) {
   state.lastFrameAt = 0;
+  if (!state.sync.startupComplete) return;
   if (event?.persisted || shouldResyncAfterReturn()) silentResync("pageshow");
 }
 
@@ -13778,8 +13837,6 @@ async function pollVersion() {
 
 // Fase 03: clientpakket van de canonieke build. Deze tab houdt de build waarmee hij startte (sessie-pin);
 // komt er een nieuwe build, dan meldt de tab dat je kunt verversen in plaats van midden in het spel te wisselen.
-let canonicalClientBuildId = null;
-let canonicalClientWorld = null;
 function showCanonicalBanner(text, sticky) {
   if (gkHud) {
     gkHud.toast(text, { sticky: sticky === true, icon: sticky ? "info" : "compass", ms: 6000 });
@@ -13800,9 +13857,7 @@ function showCanonicalBanner(text, sticky) {
 
 async function loadCanonicalClientBuild() {
   try {
-    const response = await fetch("/api/authoring/active/client.json", { credentials: "same-origin", cache: "no-store" });
-    if (!response.ok) return;
-    const data = await response.json();
+    const data = await fetchActiveCanonicalClientPayload();
     if (!data?.buildId) return;
     canonicalClientBuildId = data.buildId;
     canonicalClientWorld = data.client?.world || null;
@@ -14152,6 +14207,7 @@ async function start() {
     showOverlay("MMO verbinden mislukt: " + (getMmoReadinessBlocker() || "waiting_for_http_snapshot"));
     updateHud();
   }
+  state.sync.startupComplete = true;
   window.setInterval(pollVersion, 2500);
   await loadCanonicalClientBuild();
   window.setInterval(checkCanonicalBuild, 30000);

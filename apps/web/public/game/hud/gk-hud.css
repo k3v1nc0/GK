@@ -178,7 +178,7 @@
 /* namen boven NPC's, vijanden en items (2D, scherp) */
 .gkLabels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
 .gkLabel { position: absolute; left: 0; top: 0; padding: 0 2px 4px; white-space: nowrap; font-size: 13px; font-weight: 700; letter-spacing: 0.01em; color: #e6edf5;
-  text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); will-change: transform; }
+  text-shadow: 0 0 2px #000, 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.8); transform: translate(-50%, -100%); }
 .gkLabel--npc { color: #ffd34d; }
 .gkLabel--enemy { color: #ff7a7a; }
 .gkLabel--resource { color: #a7e98a; }
