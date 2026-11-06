@@ -13,6 +13,12 @@ const int = (label, icon, def, min, max, place, extra, helpText) => ({ type: "in
   ui: ui(icon, "slider", place, Object.assign({ step: 1 }, extra)), default: def, help: helpText });
 const toggle = (label, icon, def, place, helpText, extra = {}) => ({ type: "boolean", required: false, audience: "client", label,
   ui: ui(icon, "toggle", place, extra), default: def, help: helpText });
+const colorSetting = (label, icon, def, group, helpText) => ({ type: "color", required: false, audience: "client", label,
+  ui: ui(icon, "color", "instellingen", { group, more: true }), default: def, help: helpText });
+const textSetting = (label, icon, def, group, helpText) => ({ type: "text", required: false, maxLength: 40, audience: "client", label,
+  ui: ui(icon, "text", "instellingen", { group, more: true }), default: def, help: helpText });
+const selectSetting = (label, icon, def, options, optionLabels, group, helpText) => ({ type: "select", required: false, options,
+  optionLabels, audience: "client", label, ui: ui(icon, "select", "instellingen", { group, more: true }), default: def, help: helpText });
 const refField = (label, icon, refKind, required, helpText, extra = {}) => ({ type: "ref", refKind, required, audience: "client", label,
   ui: ui(icon, "ref", "werkbank", extra), default: null, help: helpText });
 // Een lijst regels { ref, aantal/prijs }: slepen of kiezen per regel (zie werkbank-docs.js refListControl).
@@ -38,6 +44,42 @@ const clipField = (label, icon) => ({ type: "text", required: false, maxLength: 
 
 const CLASS_HEAL_GROUP = "💚 Terugkrijgen en genezen";
 export const STACKING_LABELS = Object.freeze({ refresh: "Opnieuw beginnen", extend: "Tijd erbij", block: "Niet nog eens" });
+
+const MAP_ICON_OPTIONS = Object.freeze(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
+const MAP_ICON_LABELS = Object.freeze({ dot: "Rondje", diamond: "Ruit", square: "Vierkant", triangle: "Driehoek", star: "Ster",
+  pin: "Pin", portal: "Portalring", cross: "Kruis", ring: "Open ring", arrow: "Pijl" });
+const MAP_START_GROUP = "🗺️ Kaart: begin en vorm";
+const MAP_SIZE_GROUP = "📐 Kaart: maten en tekst";
+const MAP_COLOR_GROUP = "🎨 Kaart: algemene kleuren";
+const mapLegendFields = (key, label, color, shape, mini = true, big = true) => {
+  const group = "📍 Legenda: " + label;
+  const title = label.replace(/:.*$/, "");
+  return {
+    ["map" + key + "Label"]: textSetting("Naam in legenda", "🏷️", label, group,
+      help("De naam van deze soort in de legenda en bij kaartlabels.", label + " is de standaard.", "De kaartnaam is onduidelijk → schrijf hier je eigen naam.")),
+    ["map" + key + "Color"]: colorSetting("Kleur", "🎨", color, group,
+      help("De kleur van het icoon op de kleine kaart, grote kaart en in de legenda.", color + ".", "Het icoon valt niet op → kies meer contrast.")),
+    ["map" + key + "Icon"]: selectSetting("Icoon", "🔶", shape, MAP_ICON_OPTIONS.slice(), MAP_ICON_LABELS, group,
+      help("De vorm van het icoon voor " + title.toLowerCase() + ". De legenda gebruikt dezelfde vorm.", MAP_ICON_LABELS[shape] + ".", "Het lijkt te veel op een ander icoon → kies een andere vorm.")),
+    ["map" + key + "ShowMini"]: toggle("Op minimap bij start", "🧭", mini, "instellingen",
+      help("Toont deze soort standaard op de kleine kaart. Een speler kan dit later zelf wijzigen in de legenda.", mini ? "Aan." : "Uit.", "De minimap is te druk → zet uit."), { group, more: true }),
+    ["map" + key + "ShowBig"]: toggle("Op grote kaart bij start", "🗺️", big, "instellingen",
+      help("Toont deze soort standaard op de grote kaart. Een speler kan dit later zelf wijzigen in de legenda.", big ? "Aan." : "Uit.", "De grote kaart is te druk → zet uit."), { group, more: true })
+  };
+};
+const MAP_LEGEND_FIELDS = Object.freeze(Object.assign({},
+  mapLegendFields("Self", "Jij", "#ffffff", "arrow"),
+  mapLegendFields("Npc", "NPC's", "#ffd34d", "diamond"),
+  mapLegendFields("Enemy", "Vijanden", "#ff4b4b", "dot"),
+  mapLegendFields("Resource", "Grondstoffen", "#63d65f", "dot", false),
+  mapLegendFields("Pickup", "Oppakken", "#8fe3ff", "dot", false),
+  mapLegendFields("Player", "Spelers", "#4da3ff", "dot"),
+  mapLegendFields("Portal", "Portals", "#c77dff", "portal"),
+  mapLegendFields("QuestgiverAvailable", "Questgever: quest te halen", "#ffe08a", "star"),
+  mapLegendFields("Questgiver", "Questgever: geen nieuwe quest", "#d4a84a", "star"),
+  mapLegendFields("Quest", "Quest-doel", "#ffb020", "star"),
+  mapLegendFields("Pin", "Jouw pin", "#ff4fd8", "pin")
+));
 
 export const QUEST_GOALS = Object.freeze(["deliver", "visit"]);
 
@@ -300,7 +342,89 @@ export const GAME_KINDS = {
       showWallet: toggle("Portemonnee", "🪙", true, "instellingen", help("Het tabblad 🪙 Geld: hoeveel van elke valuta de speler heeft.", "Aan als je een winkel hebt.", "Geen geld in je game → zet uit.")),
       showQuests: toggle("Quests", "📜", true, "instellingen", help("Het tabblad 📜 Quests, de quest-regel bij het portret en praten met NPC's.", "Aan als je quests of NPC's hebt.", "Praten werkt niet → zet aan.")),
       showInteractions: toggle("Doen-knop", "🤝", true, "instellingen", help("De knop 🤝 onderin: praten, oppakken of verzamelen bij wat het dichtstbij is.", "Aan; handig op een telefoon of laptop zonder muis.", "Spelers moeten precies op kleine dingen tikken → zet aan."), { more: true }),
+      clickAreaExtraPercent: int("Klikruimte extra", "👆", 10, 0, 200, "instellingen", { range: [0, 100], unit: "%", group: "🎯 Objecten, NPC's en namen", more: true },
+        help("Hoeveel procent extra klikruimte er rondom de echte breedte, hoogte en diepte van iedere mesh komt.", "10 % met 0,15 m extra werkt meestal prettig. De klikruimte volgt automatisch het formaat van NPC's, items en andere doelen.", "Je selecteert iets terwijl je er ruim naast klikt → lager.")),
+      clickAreaExtraMeters: { type: "number", required: false, min: 0, max: 10, audience: "client", label: "Klikruimte extra in meters",
+        ui: ui("📐", "slider", "instellingen", { step: 0.05, unit: "m", range: [0, 2], group: "🎯 Objecten, NPC's en namen", more: true }), default: 0.15,
+        help: help("Hoeveel meter extra klikruimte er aan iedere kant van de mesh komt, boven op het percentage.", "0,10 tot 0,25 m maakt kleine items makkelijker aanklikbaar zonder een groot onzichtbaar vlak te maken.", "De klikruimte is nog te breed of te hoog → lager; kleine items zijn lastig → iets hoger.") },
+      showWorldRings: toggle("Cirkels om doelen", "⭕", true, "instellingen",
+        help("Toont de gekleurde cirkel op de grond rond NPC's, vijanden, items en andere interactieve doelen.", "Zet uit voor een rustiger spelbeeld; aanklikken en de Doen-knop blijven werken.", "Je wilt de doelen weer duidelijk zien → zet aan."),
+        { group: "🎯 Objecten, NPC's en namen", more: true }),
+      worldNameOffsetMeters: { type: "number", required: false, min: 0, max: 10, audience: "client", label: "Namen boven mesh",
+        ui: ui("↕️", "slider", "instellingen", { step: 0.05, unit: "m", range: [0, 3], group: "🎯 Objecten, NPC's en namen", more: true }), default: 0.2,
+        help: help("Hoeveel meter boven het hoogste punt van de echte mesh de 2D-naam staat.", "0,15 tot 0,30 m. De hoogte wordt voor ieder model apart gemeten.", "Naam zit in het model → hoger. Naam zweeft te ver erboven → lager.") },
+      worldNameFontSizePx: int("Tekstgrootte namen", "🔤", 13, 8, 48, "instellingen", { range: [8, 32], unit: "px", group: "🎯 Objecten, NPC's en namen", more: true },
+        help("De grootte van de 2D-namen boven meshes en spelers.", "13 px is de standaard; 16-20 px leest makkelijker op een klein scherm.", "Namen bedekken te veel van het spel → kleiner.")),
       showShop: toggle("Winkel en crafting", "🛒", true, "instellingen", help("Kopen, verkopen en maken bij een NPC: het paneel splitst dan in waren en je tas.", "Aan als een NPC iets verkoopt of maakt.", "Winkel niet te zien → zet aan."), { more: true }),
+      mapMinimapVisible: toggle("Minimap zichtbaar bij start", "🧭", true, "instellingen",
+        help("Of een nieuwe speler begint met de kleine kaart rechtsboven in beeld. De speler kan hem later zelf uitzetten.", "Aan.", "De kaart mag pas later gebruikt worden → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapLargeStartOpen: toggle("Start met grote kaart open", "🗺️", false, "instellingen",
+        help("Opent de grote kaart meteen wanneer een nieuwe speler het spel binnenkomt.", "Uit.", "De kaart moet als beginscherm dienen → zet aan."), { group: MAP_START_GROUP, more: true }),
+      mapShape: selectSetting("Vorm minimap", "🔲", "round", ["round", "square"], { round: "Rond", square: "Vierkant" }, MAP_START_GROUP,
+        help("De vorm van de kleine kaart rechtsboven.", "Rond.", "Je wilt de hoeken van de kaart gebruiken → kies Vierkant.")),
+      mapRotate: toggle("Minimap draait mee", "🧭", false, "instellingen",
+        help("Aan = de kijkrichting van de speler blijft boven. Uit = het noorden blijft boven.", "Uit: noorden boven.", "De speler raakt de richting kwijt → probeer de andere stand."), { group: MAP_START_GROUP, more: true }),
+      mapAllowPin: toggle("Speler mag een pin plaatsen", "📍", true, "instellingen",
+        help("Laat de speler op een lege plek van de grote kaart klikken om een eigen pin te plaatsen en erheen te lopen.", "Aan.", "Je wilt geen persoonlijke routepunten → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapMiniShowRegionName: toggle("Gebiedsnaam onder minimap", "🏷️", true, "instellingen",
+        help("Toont de naam van het huidige gebied onder de kleine kaart.", "Aan.", "De naam neemt te veel ruimte in → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowRegionName: toggle("Gebiedsnaam boven grote kaart", "🏷️", true, "instellingen",
+        help("Toont de naam van het huidige gebied als titel van de grote kaart.", "Aan.", "Je wilt alleen 'Kaart' als titel → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowScale: toggle("Schaalbalk grote kaart", "📏", true, "instellingen",
+        help("Toont linksonder hoeveel meter een lijn op de grote kaart is.", "Aan.", "Je wilt een rustigere kaart → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapBigShowCoordinates: toggle("Coördinaten grote kaart", "🔢", true, "instellingen",
+        help("Toont rechtsonder de X- en Z-positie van de speler.", "Aan.", "Spelers mogen geen coördinaten zien → zet uit."), { group: MAP_START_GROUP, more: true }),
+      mapMiniSizePx: int("Grootte minimap", "📐", 120, 64, 320, "instellingen", { range: [80, 240], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("De diameter of breedte van de kleine kaart vóór de algemene HUD-schaal wordt toegepast.", "120 px.", "De kaart bedekt te veel → kleiner.")),
+      mapMiniZoomNearMeters: int("Minimap zoom dichtbij", "➕", 30, 10, 1000, "instellingen", { range: [15, 120], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de dichtstbij-stand.", "30 m.", "Je ziet te weinig vlak om je heen → hoger.")),
+      mapMiniZoomNormalMeters: int("Minimap zoom normaal", "🔍", 60, 10, 2000, "instellingen", { range: [30, 250], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de normale stand.", "60 m.", "De normale kaart staat te ver weg → lager.")),
+      mapMiniZoomFarMeters: int("Minimap zoom ver", "➖", 120, 10, 4000, "instellingen", { range: [60, 500], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter vanaf het midden zichtbaar is in de verste stand.", "120 m.", "Je wilt meer van de omgeving zien → hoger.")),
+      mapMiniDefaultZoom: selectSetting("Beginzoom minimap", "🔍", "normal", ["near", "normal", "far"], { near: "Dichtbij", normal: "Normaal", far: "Ver" }, MAP_SIZE_GROUP,
+        help("Met welke van de drie zoomstanden een nieuwe speler begint.", "Normaal.", "Belangrijke dingen zijn buiten beeld → kies Ver.")),
+      mapBigSpanMeters: int("Beginzoom grote kaart", "🗺️", 160, 30, 10000, "instellingen", { step: 10, range: [50, 1000], unit: "m", group: MAP_SIZE_GROUP, more: true },
+        help("Hoeveel meter breed de grote kaart bij het openen begint. De speler kan daarna zelf zoomen.", "160 m.", "De kaart begint te ver ingezoomd → hoger.")),
+      mapMiniIconScalePct: int("Icoongrootte minimap", "🔶", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van alle markeringen op de kleine kaart.", "100 %.", "De icoontjes bedekken elkaar → lager.")),
+      mapBigIconScalePct: int("Icoongrootte grote kaart", "🔶", 80, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van alle markeringen op de grote kaart.", "80 %.", "De icoontjes zijn moeilijk te zien → hoger.")),
+      mapMiniFixedIconSize: toggle("Alles boven minimap vast bij zoomen", "📌", true, "instellingen",
+        help("Aan = alle iconen, namen en gebiedsteksten boven op de kaart-bake houden exact dezelfde pixelgrootte bij in- en uitzoomen. Uit = deze lagen schalen mee met de zoom.", "Aan voor altijd even grote en leesbare kaartlagen.", "Iconen of teksten worden groter of kleiner tijdens zoomen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapBigFixedIconSize: toggle("Alles boven grote kaart vast bij zoomen", "📌", true, "instellingen",
+        help("Aan = alle iconen, namen en gebiedsteksten boven op de grote kaart-bake houden exact dezelfde pixelgrootte bij in- en uitzoomen. Uit = deze lagen schalen mee met de zoom.", "Aan voor altijd even grote en leesbare kaartlagen.", "Iconen of teksten worden groter of kleiner tijdens zoomen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapMiniAreaTextScalePct: int("Gebiedstekst minimap", "🔤", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van de namen die in de kaart zelf staan.", "100 %.", "Gebiedsnamen bedekken de kaart → lager.")),
+      mapBigAreaTextScalePct: int("Gebiedstekst grote kaart", "🔤", 100, 40, 250, "instellingen", { range: [50, 200], unit: "%", group: MAP_SIZE_GROUP, more: true },
+        help("Grootte van gebiedsnamen op de grote kaart.", "100 %.", "Gebiedsnamen zijn onleesbaar → hoger.")),
+      mapMiniShowMarkerNames: toggle("Namen naast minimap-iconen", "🏷️", false, "instellingen",
+        help("Schrijft de naam van NPC's, spelers, vijanden, portals en andere markeringen naast hun icoon op de minimap.", "Uit om de kleine kaart rustig te houden.", "Je wilt direct zien wat ieder punt is → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapBigShowMarkerNames: toggle("Namen naast grote-kaart-iconen", "🏷️", false, "instellingen",
+        help("Schrijft de naam van iedere markering naast het icoon op de grote kaart.", "Uit; aanwijzen of tikken toont de naam.", "De kaart moet alle namen meteen tonen → zet aan."), { group: MAP_SIZE_GROUP, more: true }),
+      mapMiniMarkerNameSizePx: int("Naamgrootte minimap", "🔤", 10, 6, 32, "instellingen", { range: [7, 20], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("Tekstgrootte van namen naast markeringen op de minimap.", "10 px.", "Namen zijn te klein → hoger.")),
+      mapBigMarkerNameSizePx: int("Naamgrootte grote kaart", "🔤", 12, 6, 40, "instellingen", { range: [8, 28], unit: "px", group: MAP_SIZE_GROUP, more: true },
+        help("Tekstgrootte van namen naast markeringen op de grote kaart.", "12 px.", "Namen bedekken elkaar → lager.")),
+      mapBackgroundColor: colorSetting("Achtergrond buiten de wereld", "⬛", "#0b1220", MAP_COLOR_GROUP,
+        help("De kleur achter kaarttegels en buiten de rand van de wereld.", "Donkerblauw.", "De lege kaartdelen vallen te veel op → kies een donkerdere kleur.")),
+      mapBorderColor: colorSetting("Randkleur kaarten", "🟨", "#b99446", MAP_COLOR_GROUP,
+        help("De rand om de kleine en grote kaart.", "Goudbruin.", "De rand past niet bij je HUD → kies een andere kleur.")),
+      mapBorderWidthPx: int("Dikte kaartrand", "📏", 3, 0, 12, "instellingen", { range: [0, 8], unit: "px", group: MAP_COLOR_GROUP, more: true },
+        help("De dikte van de rand om de kleine en grote kaart.", "3 px.", "Geen rand gewenst → 0.")),
+      mapAreaLabel: textSetting("Naam in legenda", "🏷️", "Gebiedsnamen", "📍 Legenda: Gebiedsnamen",
+        help("De naam van de gebiedstekst in de legenda.", "Gebiedsnamen.", "Gebruik een kortere naam als de legenda te breed wordt.")),
+      mapAreaColor: colorSetting("Kleur gebiedsnamen", "🎨", "#f3e2b3", "📍 Legenda: Gebiedsnamen",
+        help("De kleur van gebiedsnamen in de kaart en het voorbeeld in de legenda.", "Licht perkament.", "Tekst heeft te weinig contrast → kies lichter.")),
+      mapAreaShowMini: toggle("Op minimap bij start", "🧭", true, "instellingen",
+        help("Toont gebiedsnamen standaard op de minimap.", "Aan.", "De minimap is te druk → zet uit."), { group: "📍 Legenda: Gebiedsnamen", more: true }),
+      mapAreaShowBig: toggle("Op grote kaart bij start", "🗺️", true, "instellingen",
+        help("Toont gebiedsnamen standaard op de grote kaart.", "Aan.", "De grote kaart is te druk → zet uit."), { group: "📍 Legenda: Gebiedsnamen", more: true }),
+      mapMarkerNameColor: colorSetting("Kleur namen bij iconen", "🎨", "#ffffff", MAP_COLOR_GROUP,
+        help("De tekstkleur van namen naast kaarticonen.", "Wit.", "De namen zijn slecht leesbaar → kies meer contrast.")),
+      mapFogColor: colorSetting("Kleur van de mist", "🌫️", "#05070a", MAP_COLOR_GROUP,
+        help("De kleur waarmee nog niet ontdekte kaartdelen worden bedekt.", "Bijna zwart.", "Je wilt gekleurde mist → kies hier een tint.")),
+      ...MAP_LEGEND_FIELDS,
       fogOfWar: toggle("Mist op de kaart", "🌫️", true, "instellingen", help("Fog of war: op de minimap en de grote kaart is alles donker tot je er geweest bent. Ontdekte plekken blijven bewaard.", "Aan voor een avontuurgevoel.", "Spelers zien meteen de hele kaart → zet aan."), { more: true }),
       fogRevealMeters: int("Zicht in de mist", "👁️", 40, 8, 400, "instellingen", { range: [10, 150], more: true },
         help("Hoe ver om je heen de mist weggaat terwijl je loopt (in meters).", "30-60 m.", "De kaart gaat te langzaam open → hoger.")),
@@ -314,5 +438,21 @@ export const GAME_KINDS = {
       fogFadeMeters: int("Zachte rand van de mist", "🌗", 8, 0, 64, "instellingen", { range: [0, 32], more: true },
         help("Hoe breed de zachte overgang aan de rand van de mist is, in meters. 0 = een harde rand.", "4 tot 16 m.", "Je ziet te veel door de rand heen → lager. De rand is te hoekig → hoger."))
     }
+  },
+  minimap_settings: {
+    label: "Minimap",
+    icon: "🗺️",
+    place: "instellingen",
+    singleton: true,
+    domain: "project",
+    fields: {}
   }
 };
+
+// De kaartvelden staan hierboven bij elkaar met de andere HUD-presentatievelden,
+// maar vormen in de editor bewust een zelfstandige instellingenpagina.
+for (const key of Object.keys(GAME_KINDS.hud_settings.fields)) {
+  if (!key.startsWith("map") && !["fogOfWar", "fogRevealMeters", "questArrowDistanceMeters", "fogDarkness", "fogFadeMeters"].includes(key)) continue;
+  GAME_KINDS.minimap_settings.fields[key] = GAME_KINDS.hud_settings.fields[key];
+  delete GAME_KINDS.hud_settings.fields[key];
+}

@@ -15746,6 +15746,116 @@ function resolveChunkDebugCenter(policy) {
       : (target?.modelAssetId ? clamp(Math.max(2.65, modelScaleY * 2.9 + 0.7), 2.65, 8) : 2.65);
   }
 
+  function runtimeTargetPresentationConfig() {
+    const raw = world?.gameProject?.ui?.targetPresentation || {};
+    return {
+      hitboxMarginPercent: clamp(num(raw.hitboxMarginPercent, 10), 0, 200),
+      hitboxMarginMeters: clamp(num(raw.hitboxMarginMeters, 0.15), 0, 10),
+      ringsVisible: raw.ringsVisible !== false,
+      labelOffsetMeters: clamp(num(raw.labelOffsetMeters, 0.2), 0, 10),
+      labelFontSizePx: clamp(num(raw.labelFontSizePx, 13), 8, 48)
+    };
+  }
+
+  function fallbackRuntimeVisualMeasurement(target, playerVisual = false) {
+    if (playerVisual) return { centerX: 0, centerY: 1, centerZ: 0, topY: 2, width: 0.9, height: 2, depth: 0.7, resolved: false };
+    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
+    if (kind === "resource") return { centerX: 0, centerY: 0.95, centerZ: 0, topY: 1.9, width: 1.56, height: 1.9, depth: 1.56, resolved: false };
+    if (kind === "pickup") return { centerX: 0, centerY: 0.32, centerZ: 0, topY: 0.64, width: 0.75, height: 0.64, depth: 0.75, resolved: false };
+    if (kind === "zone_link") return { centerX: 0, centerY: 1, centerZ: 0, topY: 1.9, width: 1.75, height: 1.8, depth: 1.75, resolved: false };
+    return { centerX: 0, centerY: 1, centerZ: 0, topY: 2, width: 0.9, height: 2, depth: 0.9, resolved: false };
+  }
+
+  // Meet alleen de zichtbare modeldelen, dus niet de ring, het oude 3D-naambord
+  // of het onzichtbare klikvlak zelf. Het resultaat staat in de lokale ruimte
+  // van ownerRoot en kan daardoor goedkoop met een bewegend doel meeschuiven.
+  function runtimeVisualMeasurement(ownerRoot, visualRoots, cacheKey, fallback) {
+    if (!ownerRoot) return fallback;
+    const roots = (Array.isArray(visualRoots) ? visualRoots : [visualRoots]).filter(Boolean);
+    const signature = roots.map(function (entry) { return entry.uuid || entry.id || entry.name || "visual"; }).join("|");
+    const now = performance.now();
+    const cached = ownerRoot.userData?.[cacheKey] || null;
+    if (cached && cached.signature === signature && (cached.resolved || now < num(cached.retryAt, 0))) return cached;
+    const bounds = new THREE.Box3();
+    bounds.makeEmpty();
+    let meshCount = 0;
+    for (const visual of roots) {
+      visual.updateWorldMatrix(true, true);
+      visual.traverseVisible(function (child) {
+        if (!(child.isMesh || child.isInstancedMesh) || child.material?.visible === false || child.userData?.shadowProxy === true) return;
+        let localBounds = null;
+        if (child.isInstancedMesh) {
+          if (!child.boundingBox && typeof child.computeBoundingBox === "function") child.computeBoundingBox();
+          localBounds = child.boundingBox || null;
+        } else if (child.geometry) {
+          if (!child.geometry.boundingBox && typeof child.geometry.computeBoundingBox === "function") child.geometry.computeBoundingBox();
+          localBounds = child.geometry.boundingBox || null;
+        }
+        if (!localBounds || localBounds.isEmpty()) return;
+        bounds.union(localBounds.clone().applyMatrix4(child.matrixWorld));
+        meshCount += 1;
+      });
+    }
+    if (!meshCount || bounds.isEmpty()) {
+      const pending = Object.assign({ signature, retryAt: now + 250 }, fallback);
+      ownerRoot.userData[cacheKey] = pending;
+      return pending;
+    }
+    ownerRoot.updateWorldMatrix(true, false);
+    const centerWorld = bounds.getCenter(new THREE.Vector3());
+    const sizeWorld = bounds.getSize(new THREE.Vector3());
+    const centerLocal = ownerRoot.worldToLocal(centerWorld.clone());
+    const topLocal = ownerRoot.worldToLocal(new THREE.Vector3(centerWorld.x, bounds.max.y, centerWorld.z));
+    const worldScale = ownerRoot.getWorldScale(new THREE.Vector3());
+    const measured = {
+      signature,
+      retryAt: Infinity,
+      centerX: centerLocal.x,
+      centerY: centerLocal.y,
+      centerZ: centerLocal.z,
+      topY: topLocal.y,
+      width: sizeWorld.x / Math.max(0.0001, Math.abs(worldScale.x)),
+      height: sizeWorld.y / Math.max(0.0001, Math.abs(worldScale.y)),
+      depth: sizeWorld.z / Math.max(0.0001, Math.abs(worldScale.z)),
+      resolved: true
+    };
+    ownerRoot.userData[cacheKey] = measured;
+    return measured;
+  }
+
+  function runtimeTargetVisualMeasurement(root, target) {
+    const attachedEntityId = runtimeTargetAttachedEntityId(target);
+    const attachedCandidate = attachedEntityId ? rootForSelectableId(attachedEntityId) : null;
+    const attachedRoot = attachedCandidate?.userData?.runtimeTarget === true ? null : attachedCandidate;
+    const visuals = attachedRoot ? [attachedRoot] : root?.children?.filter(function (child) {
+      return child?.name === "node03-runtime-target-model" || child?.name === "node03-runtime-target-body";
+    }) || [];
+    return runtimeVisualMeasurement(root, visuals, "runtimeTargetVisualMeasurement", fallbackRuntimeVisualMeasurement(target));
+  }
+
+  function runtimePlayerVisualMeasurement(root) {
+    const visuals = root?.children?.filter(function (child) {
+      return child?.userData?.localPlayerNameplate !== true && child?.userData?.remotePlayerNameplate !== true;
+    }) || [];
+    return runtimeVisualMeasurement(root, visuals, "runtimePlayerVisualMeasurement", fallbackRuntimeVisualMeasurement(null, true));
+  }
+
+  function runtimeTargetLabelPoint(root, target, point) {
+    const measured = runtimeTargetVisualMeasurement(root, target);
+    point.set(measured.centerX, measured.topY, measured.centerZ);
+    root.localToWorld(point);
+    point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
+    return point;
+  }
+
+  function runtimePlayerLabelPoint(root, point) {
+    const measured = runtimePlayerVisualMeasurement(root);
+    point.set(measured.centerX, measured.topY, measured.centerZ);
+    root.localToWorld(point);
+    point.y += runtimeTargetPresentationConfig().labelOffsetMeters;
+    return point;
+  }
+
   // Game (stap 4): de plek op het scherm net boven elk zichtbaar doel, voor de scherpe 2D-naamlabels van de HUD
   // (in plaats van de 3D-bordjes). Dichtstbij eerst, hooguit maxCount.
   // 2D-namen in de HUD: schermplek (pagina-pixels) van NPC's, vijanden, spullen en spelers.
@@ -15756,6 +15866,8 @@ function resolveChunkDebugCenter(policy) {
     const rect = canvas.getBoundingClientRect();
     const point = new THREE.Vector3();
     const origin = player.root ? player.root.position : player.pos;
+    const presentation = runtimeTargetPresentationConfig();
+    const seenWorldLabels = new Set();
     const push = function (id, name, entityKind, extra) {
       const distance = origin ? Math.hypot(point.x - origin.x, point.z - origin.z) : camera.position.distanceTo(point);
       if (!(distance <= maxDistance)) return;
@@ -15765,7 +15877,8 @@ function resolveChunkDebugCenter(policy) {
         id, name, entityKind, action: "", selected: false, available: true,
         x: rect.left + (point.x * 0.5 + 0.5) * rect.width,
         y: rect.top + (-point.y * 0.5 + 0.5) * rect.height,
-        distance
+        distance,
+        fontSizePx: presentation.labelFontSizePx
       }, extra || null));
     };
     for (const [id, root] of runtimeTargetRoots) {
@@ -15773,23 +15886,29 @@ function resolveChunkDebugCenter(policy) {
       const target = root.userData?.runtimeTargetPayload || {};
       const name = String(target.displayName || "").trim().slice(0, 34);
       if (!name) continue;
-      point.set(root.position.x, root.position.y + Math.max(1.6, runtimeTargetNameplateY(target) - 0.45), root.position.z);
+      // Een NPC kan tegelijk een praat-, winkel- en crafting-target zijn. Die
+      // interacties blijven allemaal actief, maar dezelfde mesh krijgt één naam.
+      const attachedEntityId = runtimeTargetAttachedEntityId(target);
+      const placeKey = "place:" + name.toLocaleLowerCase() + ":"
+        + Math.round(num(root.position?.x, 0) * 5) + ":"
+        + Math.round(num(root.position?.z, 0) * 5);
+      const entityKey = attachedEntityId ? "entity:" + attachedEntityId : "";
+      if ((entityKey && seenWorldLabels.has(entityKey)) || seenWorldLabels.has(placeKey)) continue;
+      if (entityKey) seenWorldLabels.add(entityKey);
+      seenWorldLabels.add(placeKey);
+      runtimeTargetLabelPoint(root, target, point);
       push(id, name, String(target.entityKind || target.targetKind || ""), {
         action: String(target.action || ""), selected: target.selected === true, available: target.available !== false
       });
     }
-    // Spelers: de plek van hun (verborgen) 3D-naambordje.
-    const self = player.root?.userData?.localPlayerNameplateRoot || null;
-    if (self && player.displayName) {
-      self.getWorldPosition(point);
-      point.y -= 0.25;
+    // Spelers gebruiken dezelfde regel: hoogste punt van hun eigen mesh + marge.
+    if (player.root && player.displayName) {
+      runtimePlayerLabelPoint(player.root, point);
       push("self", String(player.displayName).trim().slice(0, 32), "self");
     }
     for (const [playerId, record] of remotePlayers) {
-      const plate = record?.root?.userData?.remotePlayerNameplateRoot || null;
-      if (!plate || record.root.visible === false || !record.root.parent) continue;
-      plate.getWorldPosition(point);
-      point.y -= 0.25;
+      if (!record?.root || record.root.visible === false || !record.root.parent) continue;
+      runtimePlayerLabelPoint(record.root, point);
       push("player:" + playerId, String(record.displayName || "").trim().slice(0, 32) || "Speler", "player");
     }
     list.sort(function (a, b) { return a.distance - b.distance; });
@@ -15858,26 +15977,6 @@ function resolveChunkDebugCenter(policy) {
     return sprite;
   }
 
-  function runtimeTargetHitRadius(target) {
-    const kind = String(target?.entityKind || target?.targetKind || "").toLowerCase();
-    if (Number.isFinite(Number(target?.clickRadius))) return clamp(Number(target.clickRadius), 0.4, 8);
-    if (Number.isFinite(Number(target?.hitRadius))) return clamp(Number(target.hitRadius), 0.4, 8);
-    // A solid authored portal cannot be reached at its exact centre. Its click
-    // area therefore includes the physical radius, just like its range check.
-    if (kind === "zone_link" && Number.isFinite(Number(target?.range))) {
-      return clamp(Math.max(0, Number(target.range)) + Math.max(0, num(target?.radius, 0)), 0.4, 8);
-    }
-    if (Number.isFinite(Number(target?.range)) && Number(target.range) > 0) {
-      return clamp(Number(target.range), 0.4, 8);
-    }
-    if (kind === "zone_link") return 4.5;
-    if (kind === "enemy") return 1.35;
-    if (kind === "resource") return 1.55;
-    if (kind === "pickup") return 1.35;
-    if (kind === "quest") return clamp(Number(target?.radius) || 1.8, 1.2, 4);
-    return 1.5;
-  }
-
   function runtimeTargetEditorSelectableId(target) {
     return mode === "editor" ? String(target?.editorSelectableId || runtimeTargetAttachedEntityId(target) || "").trim() : "";
   }
@@ -15888,7 +15987,10 @@ function resolveChunkDebugCenter(policy) {
 
   function runtimeTargetAttachedEntityId(target) {
     const explicit = mode === "editor" ? target?.editorAttachedEntityId : null;
-    return String(explicit || (target?.renderBody === false ? target?.visualEntityId : null) || "").trim();
+    const runtimeAttached = target?.renderBody === false
+      ? (target?.visualEntityId || target?.linkedEntity?.entityId || target?.linkedEntity?.nodeId || target?.linkedEntityId || target?.entityRef)
+      : null;
+    return String(explicit || runtimeAttached || "").trim();
   }
 
   function runtimeTargetControlsAttachedEntity(target) {
@@ -15956,10 +16058,42 @@ function resolveChunkDebugCenter(policy) {
     };
   }
 
-  function createRuntimeTargetHitProxy(target) {
-    const radius = runtimeTargetHitRadius(target);
-    const height = clamp(radius * 1.8, 1.8, 5.2);
-    const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1);
+  function runtimeTargetHitboxSpec(root, target) {
+    const measured = runtimeTargetVisualMeasurement(root, target);
+    const presentation = runtimeTargetPresentationConfig();
+    const factor = 1 + presentation.hitboxMarginPercent / 100;
+    const extra = presentation.hitboxMarginMeters * 2;
+    return {
+      centerX: measured.centerX,
+      centerY: measured.centerY,
+      centerZ: measured.centerZ,
+      width: Math.max(0.1, measured.width * factor + extra),
+      height: Math.max(0.1, measured.height * factor + extra),
+      depth: Math.max(0.1, measured.depth * factor + extra),
+      resolved: measured.resolved === true
+    };
+  }
+
+  function refreshRuntimeTargetHitProxy(root, target) {
+    if (!root) return null;
+    const mesh = root.children.find(function (child) { return child?.userData?.runtimeTargetHitProxy === true; }) || null;
+    if (!mesh) return null;
+    const spec = runtimeTargetHitboxSpec(root, target);
+    const signature = [spec.centerX, spec.centerY, spec.centerZ, spec.width, spec.height, spec.depth, spec.resolved].map(function (value) {
+      return typeof value === "number" ? Math.round(value * 10000) / 10000 : value;
+    }).join("|");
+    if (mesh.userData.runtimeTargetHitboxSignature !== signature) {
+      mesh.position.set(spec.centerX, spec.centerY, spec.centerZ);
+      mesh.scale.set(spec.width, spec.height, spec.depth);
+      mesh.userData.runtimeTargetHitboxSignature = signature;
+    }
+    return mesh;
+  }
+
+  function createRuntimeTargetHitProxy(target, root = null) {
+    // Een eenheidsbox wordt naar de gemeten mesh-afmetingen geschaald. Anders dan
+    // vroeger komt de praat-/aanval-/opraapafstand hier niet meer in terecht.
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: 0,
@@ -15968,14 +16102,18 @@ function resolveChunkDebugCenter(policy) {
     material.colorWrite = false;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = "node03-runtime-target-hit-proxy";
-    mesh.position.y = height / 2;
     mesh.renderOrder = -1;
     mesh.userData.runtimeAlive = true;
     mesh.userData.runtimeTarget = true;
+    mesh.userData.runtimeTargetHitProxy = true;
     mesh.userData.runtimeTargetId = target?.instanceId || null;
     mesh.userData.runtimeTargetPayload = Object.assign({}, target);
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     if (editorSelectableId) mesh.userData.entityId = editorSelectableId;
+    if (root) {
+      root.add(mesh);
+      refreshRuntimeTargetHitProxy(root, target);
+    }
     return mesh;
   }
 
@@ -16528,6 +16666,11 @@ function resolveChunkDebugCenter(policy) {
       loadModelInto(group, assetId, world, function () {
         if (group.userData.actorAnimation) playAnimationState(group, group.userData.actorAnimation, 0);
         markRuntimeTargetTree(group, target);
+        const targetRoot = group.parent;
+        if (targetRoot?.userData?.runtimeTarget === true) {
+          targetRoot.userData.runtimeTargetVisualMeasurement = null;
+          refreshRuntimeTargetHitProxy(targetRoot, targetRoot.userData.runtimeTargetPayload || target);
+        }
       }, {
         castShadow: false,
         receiveShadow: true
@@ -16584,6 +16727,7 @@ function resolveChunkDebugCenter(policy) {
     });
     const mesh = new THREE.Mesh(new THREE.TorusGeometry(ringRadius, target?.selected ? 0.045 : 0.035, 6, 44), material);
     mesh.name = "node03-runtime-target-ring";
+    mesh.visible = runtimeTargetPresentationConfig().ringsVisible;
     mesh.position.y = 0.055;
     mesh.rotation.x = Math.PI / 2;
     // Terrain/surface layers can be streamed in after the target. Several of
@@ -16613,7 +16757,7 @@ function resolveChunkDebugCenter(policy) {
     }
     root.add(createRuntimeTargetRangeRing(target));
     if (target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
-    root.add(createRuntimeTargetHitProxy(target));
+    createRuntimeTargetHitProxy(target, root);
     const nameplate = createRuntimeTargetNameplate(target);
     if (nameplate) root.add(nameplate);
     markRuntimeTargetTree(root, target);
@@ -16635,6 +16779,7 @@ function resolveChunkDebugCenter(policy) {
       syncRuntimeTargetAttachedEntitySuppression(previousAttachedEntityId);
     }
     if (attachedEntityId) syncRuntimeTargetAttachedEntitySuppression(attachedEntityId);
+    refreshRuntimeTargetHitProxy(root, target);
     const editorSelectableId = runtimeTargetEditorSelectableId(target);
     if (editorSelectableId) {
       root.userData.entityId = editorSelectableId;
@@ -16686,13 +16831,14 @@ function resolveChunkDebugCenter(policy) {
       }
       root.add(createRuntimeTargetRangeRing(target));
       if (!keepBody && target?.renderBody !== false) root.add(createRuntimeTargetBody(target));
-      root.add(createRuntimeTargetHitProxy(target));
+      createRuntimeTargetHitProxy(target, root);
       const nameplate = createRuntimeTargetNameplate(target);
       if (nameplate) root.add(nameplate);
       root.userData.runtimeTargetSignature = signature;
       root.userData.runtimeTargetBodySignature = bodySignature;
     }
     markRuntimeTargetTree(root, target);
+    refreshRuntimeTargetHitProxy(root, target);
   }
 
   // Mixers hangen aan de modelgroep binnen een target; bij weghalen ook de mixer opruimen (anders lekt hij).
@@ -16836,6 +16982,11 @@ function resolveChunkDebugCenter(policy) {
 
   function pickRuntimeTargetAt(clientX, clientY) {
     if (mode !== "game" || !runtimeTargetRoots.size) return null;
+    // Modellen kunnen asynchroon klaar zijn. Vlak voor de klik nog één keer meten
+    // voorkomt dat de tijdelijke standaardbox blijft gelden.
+    for (const root of runtimeTargetRoots.values()) {
+      if (root?.visible !== false) refreshRuntimeTargetHitProxy(root, root.userData?.runtimeTargetPayload || {});
+    }
     const rect = canvas.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;

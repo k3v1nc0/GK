@@ -1,11 +1,11 @@
-import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261106-perf1";
+import { createGkWorldRuntime } from "../shared/world-runtime.js?v=20261106-label-sync2";
 import { normalizeWorldSettingsPreset, worldSettingsPresetValues, mmoNetworkPresetValues } from "../shared/node-types.js?v=20261106-perf1";
 import { shouldApplyServerPosition as shouldApplyServerRevision } from "../shared/revision-guard.js?v=20260708-mmo02-fix3";
 import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../shared/protocol-v1.js?v=20261025-f2-client1";
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261106-label-motion1";
+import { createGkHud } from "./hud/gk-hud.js?v=20261106-minimap-settings4";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -5203,7 +5203,6 @@ function startRemoteFrameLoop() {
     state.remote.rafId = window.requestAnimationFrame(tick);
     syncRemotePlayers(now);
     if (actorPresentation.frame(state.runtime, now)) syncRuntimeTargets();
-    if (gkHud) gkHud.frame(now);
   };
   state.remote.rafId = window.requestAnimationFrame(tick);
 }
@@ -11584,6 +11583,12 @@ function ensureRuntime(world) {
       hudPanelAdapter: createRuntimeHudPanelAdapter(),
       externalPlayerAuthority: true,
       localPlayerDisplayName: state.player?.displayName || state.player?.id || "",
+      // De 2D-namen moeten in exact dezelfde animatiebeurt als de 3D-camera
+      // worden geplaatst. Een losse HUD-loop gaf vooral zijwaarts één frame
+      // verschil, wat eruitzag als tearing/wazige tekst.
+      onRenderFrame: function () {
+        if (gkHud) gkHud.frame(performance.now());
+      },
       onLoadErrors: function (errors) {
         if (errors.length) showHudError("Asset kon niet laden: " + errors[0]);
       }
@@ -11971,6 +11976,9 @@ function primeHttpSnapshotState(snapshot) {
   state.worldId = snapshot.worldId || state.worldId;
   state.gameWorld = withOwnCharacterModel(snapshot.gameWorld || state.gameWorld, state.player);
   state.gameProject = snapshot.gameProject || state.gameWorld?.gameProject || state.gameProject;
+  if (gkHud && typeof gkHud.setMapPresentation === "function") {
+    gkHud.setMapPresentation(state.gameWorld?.minimap?.game?.presentation || null);
+  }
   state.remote.interpolationDelayMs = mmoNetworkSettings().remoteInterpolationBaseDelayMs;
   state.remote.remoteRenderDelayMs = state.remote.interpolationDelayMs;
   state.schemaVersion = snapshot.schemaVersion || state.gameWorld?.schemaVersion || state.gameProject?.schemaVersion || state.schemaVersion;
@@ -12711,6 +12719,9 @@ async function loadSessionState(options = {}) {
   const worldChanged = options.forceWorld === true || !state.runtimeWorldKey || state.runtimeWorldKey !== nextWorldKey;
   state.lastPublishedAt = snapshot.worldPublishedAt || snapshot.publishedAt || snapshot.gameWorld?.publishedAt || state.lastPublishedAt;
   primeHttpSnapshotState(snapshot);
+  // Nu pas is de gepubliceerde minimap-presentatie bekend. Voorheen werd de HUD
+  // vóór deze response gemaakt en bleef hij daardoor de ingebouwde defaults tonen.
+  ensureGkHud();
   // HUD-voorkeuren zijn niet nodig om de wereld te bouwen of de multiplayer-
   // verbinding te openen. Laat dit kleine request parallel lopen; bij een trage
   // response mag het de eerste speelbare frame en de join-ticket niet blokkeren.
@@ -14003,6 +14014,9 @@ function ensureGkHud() {
   gkHud = createGkHud({
     // Niet in #hud: de wereld-runtime maakt #hud leeg zodra de wereld geladen is.
     mount: hud.parentElement || document.body,
+    mapPresentation: function () {
+      return state.gameWorld?.minimap?.game?.presentation || null;
+    },
     data: function () {
       const network = mmoNetworkSettings();
       return {
@@ -14167,7 +14181,6 @@ function updateConnectionLight() {
 }
 
 async function start() {
-  ensureGkHud();
   stepMovement(performance.now());
   startMovementFrameLoop();
   bindKeyboardControls();
@@ -14196,7 +14209,7 @@ async function start() {
       const auth = authResponse.ok ? await authResponse.json() : null;
       state.csrfToken = auth?.csrfToken || "";
       hideOverlay();
-      gkHud.openCharacters();
+      ensureGkHud().openCharacters();
     } else {
       const loaded = await loadSessionState({ forceWorld: true, showLoading: true });
       if (loaded) startRemoteFrameLoop();

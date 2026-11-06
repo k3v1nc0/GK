@@ -3,6 +3,7 @@
 // stippen voor jezelf, NPC's, vijanden, grondstoffen, pickups, medespelers, portals, het quest-doel en je pin.
 
 const MARKER_COLORS = {
+  self: "#ffffff",
   npc: "#ffd34d",
   enemy: "#ff4b4b",
   resource: "#63d65f",
@@ -14,6 +15,8 @@ const MARKER_COLORS = {
   portal: "#c77dff",
   pin: "#ff4fd8"
 };
+const MARKER_SHAPES = { self: "arrow", npc: "diamond", enemy: "dot", resource: "dot", pickup: "dot", player: "dot",
+  quest: "star", questgiver_available: "star", questgiver: "star", portal: "portal", pin: "pin" };
 const MIN_SPAN_M = 30;     // grote kaart: verder inzoomen dan 30 m breed heeft geen zin
 
 function num(value, fallback = 0) {
@@ -134,32 +137,71 @@ function buildBase(world, texture) {
   return { canvas, minX, minZ, scale };
 }
 
-function drawMarker(ctx, kind, x, y, dot) {
-  ctx.fillStyle = MARKER_COLORS[kind] || "#ffffff";
-  if (kind === "questgiver") {
-    // Een rustige ster, iets groter dan het NPC-ruitje (1.2 × dot).
-    drawStar(ctx, x, y, dot * 1.5);
-    return;
-  }
-  ctx.beginPath();
-  if (kind === "npc") {
-    ctx.moveTo(x, y - dot * 1.2);
-    ctx.lineTo(x + dot * 1.1, y);
-    ctx.lineTo(x, y + dot * 1.2);
-    ctx.lineTo(x - dot * 1.1, y);
-    ctx.closePath();
-  } else if (kind === "portal") {
-    ctx.arc(x, y, dot * 1.3, 0, Math.PI * 2);
+function markerStyle(styles, kind) {
+  const style = styles?.[kind] || {};
+  return {
+    color: /^#[0-9a-f]{6}$/i.test(String(style.color || "")) ? String(style.color) : (MARKER_COLORS[kind] || "#ffffff"),
+    shape: String(style.shape || MARKER_SHAPES[kind] || "dot"),
+    label: String(style.label || "")
+  };
+}
+
+function drawConfiguredMarker(ctx, style, x, y, radius, angle = 0) {
+  const r = Math.max(1, radius);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = style.color;
+  ctx.strokeStyle = "rgba(0,0,0,0.82)";
+  ctx.lineWidth = Math.max(1, r * 0.28);
+  const shape = style.shape;
+  if (shape === "star") {
+    drawStar(ctx, 0, 0, r * 1.35);
+  } else if (shape === "pin") {
+    drawPin(ctx, 0, 0, r * 1.15);
+  } else if (shape === "portal") {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.3, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.beginPath();
     ctx.fillStyle = "#2a0b45";
-    ctx.arc(x, y, dot * 0.6, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (shape === "ring") {
+    ctx.beginPath();
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = Math.max(2, r * 0.55);
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (shape === "cross") {
+    ctx.fillRect(-r * 0.28, -r, r * 0.56, r * 2);
+    ctx.fillRect(-r, -r * 0.28, r * 2, r * 0.56);
+    ctx.strokeRect(-r * 0.28, -r, r * 0.56, r * 2);
+    ctx.strokeRect(-r, -r * 0.28, r * 2, r * 0.56);
   } else {
-    ctx.arc(x, y, kind === "pickup" ? dot * 0.75 : dot, 0, Math.PI * 2);
+    ctx.beginPath();
+    if (shape === "diamond") {
+      ctx.moveTo(0, -r * 1.2); ctx.lineTo(r * 1.1, 0); ctx.lineTo(0, r * 1.2); ctx.lineTo(-r * 1.1, 0); ctx.closePath();
+    } else if (shape === "square") {
+      ctx.rect(-r, -r, r * 2, r * 2);
+    } else if (shape === "triangle") {
+      ctx.moveTo(0, -r * 1.25); ctx.lineTo(r * 1.15, r); ctx.lineTo(-r * 1.15, r); ctx.closePath();
+    } else if (shape === "arrow") {
+      ctx.moveTo(r * 1.25, 0); ctx.lineTo(-r * 0.8, r * 0.72); ctx.lineTo(-r * 0.38, 0); ctx.lineTo(-r * 0.8, -r * 0.72); ctx.closePath();
+    } else {
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.stroke();
   }
-  ctx.fill();
-  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMarker(ctx, kind, x, y, dot, styles) {
+  const style = markerStyle(styles, kind);
+  const scale = kind === "questgiver" && style.shape === "star" ? 1.15 : kind === "pickup" && style.shape === "dot" ? 0.75 : 1;
+  drawConfiguredMarker(ctx, style, x, y, dot * scale);
 }
 
 // Quest Builder stap 3: het zoekgebied van de quest (doorzichtig goud met een stippellijn).
@@ -211,11 +253,12 @@ function drawPin(ctx, x, y, r) {
 
 // Een doel (quest-ster of je pin). edge(p) geeft null als p in beeld is, anders de plek op de rand
 // waar een pijltje in de goede richting komt. Geeft true als het doel zelf getekend is (dan kun je erop tikken).
-function drawGoal(ctx, kind, p, dot, edge, allowArrow = true) {
+function drawGoal(ctx, kind, p, dot, edge, allowArrow = true, styles = null) {
   const out = edge(p);
   if (out && !allowArrow) return false;
+  const style = markerStyle(styles, kind);
   ctx.save();
-  ctx.fillStyle = MARKER_COLORS[kind];
+  ctx.fillStyle = style.color;
   ctx.strokeStyle = kind === "pin" ? "rgba(40,0,30,0.9)" : "rgba(40,20,0,0.9)";
   ctx.lineWidth = Math.max(1, dot * 0.3);
   if (kind === "questgiver_available") {
@@ -223,8 +266,7 @@ function drawGoal(ctx, kind, p, dot, edge, allowArrow = true) {
     ctx.shadowBlur = dot * 2.6;
   }
   if (!out) {
-    if (kind === "pin") drawPin(ctx, p.x, p.y, dot * 1.6);
-    else drawStar(ctx, p.x, p.y, dot * (kind === "questgiver_available" ? 2.3 : 1.9));
+    drawConfiguredMarker(ctx, style, p.x, p.y, dot * (kind === "questgiver_available" ? 1.8 : 1.5));
     ctx.restore();
     return true;
   }
@@ -252,22 +294,9 @@ function iconScale(value) {
   return Math.max(0.4, Math.min(2.5, num(value, 1)));
 }
 
-function drawArrow(ctx, x, y, angle, r, lineWidth) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.lineTo(-r * 0.75, r * 0.7);
-  ctx.lineTo(-r * 0.35, 0);
-  ctx.lineTo(-r * 0.75, -r * 0.7);
-  ctx.closePath();
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
-  ctx.lineWidth = lineWidth;
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+function drawArrow(ctx, x, y, angle, r, lineWidth, styles) {
+  const style = markerStyle(styles, "self");
+  drawConfiguredMarker(ctx, style, x, y, r * 0.65, angle);
 }
 
 // textureUrl(world): de url van de grond-texture (of null), voor de getekende reservekaart als er nog geen tegels zijn.
@@ -589,7 +618,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     return Math.max(0.5, Math.min(2, num(value, 1)));
   }
 
-  function drawAreaNames(g, areas, toScreen, fontPx, inside) {
+  function drawAreaNames(g, areas, toScreen, fontPx, inside, color) {
     if (!Array.isArray(areas) || !areas.length) return;
     g.save();
     g.font = "italic 700 " + Math.round(fontPx) + "px Georgia, 'Times New Roman', serif";
@@ -598,7 +627,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     g.lineJoin = "round";
     g.lineWidth = Math.max(2, fontPx * 0.3);
     g.strokeStyle = "rgba(0,0,0,0.8)";
-    g.fillStyle = "#f3e2b3";
+    g.fillStyle = color || "#f3e2b3";
     for (const area of areas) {
       if (!area || !area.name || !discovered(area.x, area.z)) continue;
       const p = toScreen(num(area.x), num(area.z));
@@ -606,6 +635,22 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       g.strokeText(area.name, p.x, p.y);
       g.fillText(area.name, p.x, p.y);
     }
+    g.restore();
+  }
+
+  function drawMarkerName(g, name, x, y, fontPx, color, offset) {
+    const text = String(name || "").trim().slice(0, 34);
+    if (!text) return;
+    g.save();
+    g.font = "700 " + Math.max(6, Math.round(fontPx)) + "px system-ui, sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "bottom";
+    g.lineJoin = "round";
+    g.lineWidth = Math.max(2, fontPx * 0.28);
+    g.strokeStyle = "rgba(0,0,0,0.9)";
+    g.fillStyle = color || "#ffffff";
+    g.strokeText(text, x, y - offset);
+    g.fillText(text, x, y - offset);
     g.restore();
   }
 
@@ -635,9 +680,11 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     ctx.clearRect(0, 0, size, size);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(half, half, half, 0, Math.PI * 2);
+    const roundMap = view.shape !== "square";
+    if (roundMap) ctx.arc(half, half, half, 0, Math.PI * 2);
+    else ctx.rect(0, 0, size, size);
     ctx.clip();
-    ctx.fillStyle = fog ? fog.color : "#0b1220";
+    ctx.fillStyle = fog ? fog.color : (view.backgroundColor || "#0b1220");
     ctx.fillRect(0, 0, size, size);
     const bounds = mapBounds(view.world);
     if (bounds) {
@@ -646,60 +693,83 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
       drawGround(ctx, { minX: cx - reach, maxX: cx + reach, minZ: cz - reach, maxZ: cz + reach }, k, view.world, bounds);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
-    const dot = Math.max(3, size * 0.028) * iconScale(view.iconScale);
+    // Deze ene zoomkeuze geldt voor iedere presentatielaag boven op de bake:
+    // iconen, namen bij iconen en gebiedsteksten. Aan = vaste CSS-pixels.
+    const fixedOverlaySize = view.fixedIconSize !== false;
+    const zoomOverlayScale = fixedOverlaySize ? 1
+      : Math.max(0.4, Math.min(2.5, num(view.iconReferenceSpan, view.radius) / Math.max(1, num(view.radius, 60))));
+    const dot = Math.max(3, size * 0.028) * iconScale(view.iconScale) * zoomOverlayScale;
     const show = view.show || {};
-    // Gebiedsnamen zoomen mee met de kaart (zoals letters op een landkaart), maar blijven tussen een kleinste en grootste maat leesbaar.
-    const areaFont = Math.max(size * 0.05, Math.min(size * 0.14, size * 0.075 * 60 / Math.max(5, num(view.radius, 60)))) * textScale(view.textScale);
+    const nameRatio = size / Math.max(1, canvas.clientWidth || 120);
+    const markerNameFont = Math.max(6, num(view.nameFontPx, 10)) * nameRatio * zoomOverlayScale;
+    const insideMap = function (p, pad = 0) {
+      return roundMap
+        ? Math.hypot(p.x - half, p.y - half) <= half - pad
+        : p.x >= pad && p.y >= pad && p.x <= size - pad && p.y <= size - pad;
+    };
+    const areaFont = (fixedOverlaySize
+      ? size * 0.075
+      : Math.max(size * 0.05, Math.min(size * 0.14, size * 0.075 * 60 / Math.max(5, num(view.radius, 60))))) * textScale(view.textScale);
     if (view.questArea && show.quest !== false) drawQuestArea(ctx, view.questArea, toScreen, Math.max(1.5, size * 0.012));
-    if (show.area !== false) drawAreaNames(ctx, view.areas, toScreen, areaFont, function (p) { return Math.hypot(p.x - half, p.y - half) < half * 0.78; });
+    if (show.area !== false) drawAreaNames(ctx, view.areas, toScreen, areaFont, function (p) { return insideMap(p, half * 0.18); }, view.areaColor);
     ctx.lineWidth = Math.max(1, size * 0.008);
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (show[marker.kind] === false || marker.kind === "questgiver_available") continue;
       const p = toScreen(num(marker.x), num(marker.z));
-      if (Math.hypot(p.x - half, p.y - half) > half - dot) continue;
+      if (!insideMap(p, dot)) continue;
       if (!discovered(marker.x, marker.z)) continue;
-      drawMarker(ctx, marker.kind, p.x, p.y, dot);
+      drawMarker(ctx, marker.kind, p.x, p.y, dot, view.styles);
+      if (view.showNames) drawMarkerName(ctx, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 1.5);
     }
     // Quest-doel (gouden ster) en je pin; buiten de kaart een pijltje op de rand in de goede richting.
-    const circleEdge = function (p) {
+    const mapEdge = function (p) {
+      if (!roundMap) {
+        const pad = dot * 2.2;
+        if (insideMap(p, pad)) return null;
+        const dx = p.x - half;
+        const dy = p.y - half;
+        const t = (half - pad) / Math.max(Math.abs(dx), Math.abs(dy), 1);
+        return { x: half + dx * t, y: half + dy * t, angle: Math.atan2(dy, dx) };
+      }
       if (Math.hypot(p.x - half, p.y - half) <= half - dot * 2.2) return null;
       const angle = Math.atan2(p.y - half, p.x - half);
       const r = half - dot * 2;
       return { x: half + Math.cos(angle) * r, y: half + Math.sin(angle) * r, angle };
     };
-    if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) drawGoal(ctx, "quest", toScreen(num(view.quest.x), num(view.quest.z)), dot, circleEdge, questArrowInRange(view, view.quest));
+    if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) {
+      const p = toScreen(num(view.quest.x), num(view.quest.z));
+      if (drawGoal(ctx, "quest", p, dot, mapEdge, questArrowInRange(view, view.quest), view.styles) && view.showNames) {
+        drawMarkerName(ctx, view.quest.name || markerStyle(view.styles, "quest").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
+      }
+    }
     // Kevin 5-11: sterren op de vijanden die je moet verslaan (boven de mist); alleen de dichtstbijzijnde krijgt een pijltje.
     if (show.quest !== false) (Array.isArray(view.questMarks) ? view.questMarks : []).forEach(function (mark, index) {
-      drawGoal(ctx, "quest", toScreen(num(mark.x), num(mark.z)), dot * 0.8, circleEdge, index === 0 && questArrowInRange(view, mark));
+      drawGoal(ctx, "quest", toScreen(num(mark.x), num(mark.z)), dot * 0.8, mapEdge, index === 0 && questArrowInRange(view, mark), view.styles);
     });
     // Beschikbare questgevers zijn vanaf het begin boven de mist zichtbaar, onafhankelijk van het gevolgde quest-doel.
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
-      drawGoal(ctx, marker.kind, toScreen(num(marker.x), num(marker.z)), dot, circleEdge, questArrowInRange(view, marker));
+      const p = toScreen(num(marker.x), num(marker.z));
+      if (drawGoal(ctx, marker.kind, p, dot, mapEdge, questArrowInRange(view, marker), view.styles) && view.showNames) {
+        drawMarkerName(ctx, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
+      }
     }
-    if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) drawGoal(ctx, "pin", toScreen(num(view.pin.x), num(view.pin.z)), dot, circleEdge);
-    // Jijzelf: een wit pijltje in je looprichting, altijd in het midden.
+    if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) {
+      const p = toScreen(num(view.pin.x), num(view.pin.z));
+      if (drawGoal(ctx, "pin", p, dot, mapEdge, true, view.styles) && view.showNames) {
+        drawMarkerName(ctx, markerStyle(view.styles, "pin").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
+      }
+    }
+    // Jijzelf: het ingestelde icoon in je looprichting, altijd in het midden.
     const facing = num(view.facingDeg) * Math.PI / 180;
     const wx = Math.sin(facing);
     const wz = Math.cos(facing);
     const angle = Math.atan2(d * wx + e * wz, a * wx + b * wz);
-    const r = dot * 1.9;
-    ctx.save();
-    ctx.translate(half, half);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.lineTo(-r * 0.75, r * 0.7);
-    ctx.lineTo(-r * 0.35, 0);
-    ctx.lineTo(-r * 0.75, -r * 0.7);
-    ctx.closePath();
-    ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "rgba(0,0,0,0.85)";
-    ctx.lineWidth = Math.max(1.2, size * 0.012);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    if (show.self !== false) {
+      drawArrow(ctx, half, half, angle, dot * 1.9, Math.max(1.2, size * 0.012), view.styles);
+      if (view.showNames) drawMarkerName(ctx, markerStyle(view.styles, "self").label, half, half, markerNameFont, view.nameColor, dot * 1.8);
+    }
     ctx.restore();
     // Noorden: waar de wereld -Z op het kaartje ligt (draait mee als de camera draait).
     return Math.atan2(-e, -b) * 180 / Math.PI + 90;
@@ -714,7 +784,7 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     const size = Math.round(css * ratio);
     if (target.width !== size || target.height !== size) { target.width = size; target.height = size; }
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.fillStyle = fog ? fog.color : "#0b1220";
+    g.fillStyle = fog ? fog.color : (view.backgroundColor || "#0b1220");
     g.fillRect(0, 0, size, size);
     const bounds = mapBounds(view.world);
     if (!bounds) return null;
@@ -734,21 +804,25 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     g.setTransform(k, 0, 0, k, size / 2 - cx * k, size / 2 - cz * k);
     drawGround(g, { minX: cx - halfSpan, maxX: cx + halfSpan, minZ: cz - halfSpan, maxZ: cz + halfSpan }, k, view.world, bounds);
     g.setTransform(1, 0, 0, 1, 0, 0);
-    const dot = 4.5 * ratio * iconScale(view.iconScale);
+    const fixedOverlaySize = view.fixedIconSize !== false;
+    const zoomOverlayScale = fixedOverlaySize ? 1
+      : Math.max(0.4, Math.min(2.5, num(view.iconReferenceSpan, span) / Math.max(MIN_SPAN_M, span)));
+    const dot = 4.5 * ratio * iconScale(view.iconScale) * zoomOverlayScale;
     const show = view.show || {};
     const hits = [];
     const margin = dot * 3;
-    // Gebiedsnamen: 15 px bij 160 m in beeld; inzoomen = groter (max 40 px), uitzoomen = kleiner (min 9 px).
-    const areaFont = Math.max(9, Math.min(40, 15 * 160 / span)) * ratio * textScale(view.textScale);
+    const markerNameFont = Math.max(6, num(view.nameFontPx, 12)) * ratio * zoomOverlayScale;
+    const areaFont = (fixedOverlaySize ? 15 : Math.max(9, Math.min(40, 15 * 160 / span))) * ratio * textScale(view.textScale);
     if (view.questArea && show.quest !== false) drawQuestArea(g, view.questArea, toScreen, Math.max(1.5, 2 * ratio));
-    if (show.area !== false) drawAreaNames(g, view.areas, toScreen, areaFont, function (p) { return p.x > -size * 0.2 && p.y > 0 && p.x < size * 1.2 && p.y < size; });
+    if (show.area !== false) drawAreaNames(g, view.areas, toScreen, areaFont, function (p) { return p.x > -size * 0.2 && p.y > 0 && p.x < size * 1.2 && p.y < size; }, view.areaColor);
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (show[marker.kind] === false || marker.kind === "questgiver_available" || !discovered(marker.x, marker.z)) continue;
       const p = toScreen(num(marker.x), num(marker.z));
       if (p.x < -margin || p.y < -margin || p.x > size + margin || p.y > size + margin) continue;
       g.lineWidth = Math.max(1, dot * 0.28);
       g.strokeStyle = "rgba(0,0,0,0.8)";
-      drawMarker(g, marker.kind, p.x, p.y, marker.kind === "portal" ? dot * 1.3 : dot);
+      drawMarker(g, marker.kind, p.x, p.y, marker.kind === "portal" ? dot * 1.3 : dot, view.styles);
+      if (view.showNames) drawMarkerName(g, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 1.6);
       hits.push({ x: p.x / ratio, y: p.y / ratio, kind: marker.kind, name: marker.name || "", target: marker.target || null });
     }
     const pad = dot * 2.4;
@@ -762,54 +836,64 @@ export function createHudMinimap(canvas, textureUrl, onUpdate) {
     };
     if (view.quest && show.quest !== false && Number.isFinite(Number(view.quest.x))) {
       const p = toScreen(num(view.quest.x), num(view.quest.z));
-      if (drawGoal(g, "quest", p, dot, boxEdge, questArrowInRange(view, view.quest))) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest.name || "" });
+      if (drawGoal(g, "quest", p, dot, boxEdge, questArrowInRange(view, view.quest), view.styles)) {
+        if (view.showNames) drawMarkerName(g, view.quest.name || markerStyle(view.styles, "quest").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
+        hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest.name || "" });
+      }
     }
     if (show.quest !== false) (Array.isArray(view.questMarks) ? view.questMarks : []).forEach(function (mark, index) {
       const p = toScreen(num(mark.x), num(mark.z));
-      if (drawGoal(g, "quest", p, dot * 0.8, boxEdge, index === 0 && questArrowInRange(view, mark))) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest?.name || "" });
+      if (drawGoal(g, "quest", p, dot * 0.8, boxEdge, index === 0 && questArrowInRange(view, mark), view.styles)) hits.push({ x: p.x / ratio, y: p.y / ratio, kind: "quest", name: view.quest?.name || "" });
     });
     for (const marker of Array.isArray(view.markers) ? view.markers : []) {
       if (marker.kind !== "questgiver_available" || show[marker.kind] === false) continue;
       const p = toScreen(num(marker.x), num(marker.z));
-      if (drawGoal(g, marker.kind, p, dot, boxEdge, questArrowInRange(view, marker))) {
+      if (drawGoal(g, marker.kind, p, dot, boxEdge, questArrowInRange(view, marker), view.styles)) {
+        if (view.showNames) drawMarkerName(g, marker.name, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
         hits.push({ x: p.x / ratio, y: p.y / ratio, kind: marker.kind, name: marker.name || "", target: marker.target || null });
       }
     }
     if (view.pin && show.pin !== false && Number.isFinite(Number(view.pin.x))) {
       const p = toScreen(num(view.pin.x), num(view.pin.z));
-      if (drawGoal(g, "pin", p, dot, boxEdge)) hits.push({ x: p.x / ratio, y: (p.y - dot * 2) / ratio, kind: "pin", name: "" });
+      if (drawGoal(g, "pin", p, dot, boxEdge, true, view.styles)) {
+        if (view.showNames) drawMarkerName(g, markerStyle(view.styles, "pin").label, p.x, p.y, markerNameFont, view.nameColor, dot * 2);
+        hits.push({ x: p.x / ratio, y: (p.y - dot * 2) / ratio, kind: "pin", name: "" });
+      }
     }
-    if (view.center) {
+    if (view.center && show.self !== false) {
       const p = toScreen(num(view.center.x), num(view.center.z));
       const facing = num(view.facingDeg) * Math.PI / 180;
-      drawArrow(g, p.x, p.y, Math.atan2(Math.cos(facing), Math.sin(facing)), dot * 2.2, Math.max(1.5, dot * 0.3));
+      drawArrow(g, p.x, p.y, Math.atan2(Math.cos(facing), Math.sin(facing)), dot * 2.2, Math.max(1.5, dot * 0.3), view.styles);
+      if (view.showNames) drawMarkerName(g, markerStyle(view.styles, "self").label, p.x, p.y, markerNameFont, view.nameColor, dot * 1.8);
     }
     // Schaalbalk linksonder en je plek (X, Z) rechtsonder.
     const step = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000].filter(function (value) { return value <= span / 4; }).pop() || 5;
     const x0 = 12 * ratio;
     const y0 = size - 14 * ratio;
     const x1 = x0 + step * k;
-    g.lineCap = "round";
-    for (const pass of [["rgba(0,0,0,0.75)", 5], ["#ffffff", 2]]) {
-      g.strokeStyle = pass[0];
-      g.lineWidth = pass[1] * ratio;
-      g.beginPath();
-      g.moveTo(x0, y0 - 5 * ratio);
-      g.lineTo(x0, y0);
-      g.lineTo(x1, y0);
-      g.lineTo(x1, y0 - 5 * ratio);
-      g.stroke();
-    }
-    g.lineCap = "butt";
     g.font = "600 " + Math.round(12 * ratio) + "px system-ui, sans-serif";
     g.textBaseline = "bottom";
     g.lineWidth = 3 * ratio;
     g.strokeStyle = "rgba(0,0,0,0.8)";
     g.fillStyle = "#ffffff";
-    g.textAlign = "left";
-    g.strokeText(step + " m", x0 + 4 * ratio, y0 - 6 * ratio);
-    g.fillText(step + " m", x0 + 4 * ratio, y0 - 6 * ratio);
-    if (view.center) {
+    if (view.showScale !== false) {
+      g.lineCap = "round";
+      for (const pass of [["rgba(0,0,0,0.75)", 5], ["#ffffff", 2]]) {
+        g.strokeStyle = pass[0];
+        g.lineWidth = pass[1] * ratio;
+        g.beginPath();
+        g.moveTo(x0, y0 - 5 * ratio);
+        g.lineTo(x0, y0);
+        g.lineTo(x1, y0);
+        g.lineTo(x1, y0 - 5 * ratio);
+        g.stroke();
+      }
+      g.lineCap = "butt";
+      g.textAlign = "left";
+      g.strokeText(step + " m", x0 + 4 * ratio, y0 - 6 * ratio);
+      g.fillText(step + " m", x0 + 4 * ratio, y0 - 6 * ratio);
+    }
+    if (view.center && view.showCoordinates !== false) {
       const text = "X " + Math.round(num(view.center.x)) + "  Z " + Math.round(num(view.center.z));
       g.textAlign = "right";
       g.strokeText(text, size - 10 * ratio, size - 8 * ratio);

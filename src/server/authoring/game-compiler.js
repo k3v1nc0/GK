@@ -10,7 +10,7 @@ import { hasOwnSteps, questGraphIssues, questStartIssues, questStartMode, questS
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
-export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model"]);
+export const GAME_DOC_KINDS = Object.freeze(["currency", "player_class", "hud_settings", "minimap_settings", "combat_settings", "network_settings", "water_walk_settings", "party_settings", "chat_settings", "npc", "quest", "recipe", "placed_model"]);
 
 const idFromRef = (ref) => String(ref || "").replace(/^[a-z_]+:/, "");
 const kindOfRef = (ref) => String(ref || "").split(":")[0];
@@ -80,7 +80,12 @@ export function compileGameSection(documents, options = {}) {
   const player = Object.assign(classValues(null), { xpPerLevel: projectValues.xpPerLevel, maxLevel: projectValues.maxLevel });
   if (classes.length) player.classes = classes;
 
-  const hud = settingsValues("hud_settings", of("hud_settings")[0]?.body || null);
+  const legacyHudBody = of("hud_settings")[0]?.body || null;
+  const hud = settingsValues("hud_settings", legacyHudBody);
+  // Bestaande projecten bewaarden mist/kaartvelden vroeger in Game-scherm. Zolang
+  // er nog geen eigen Minimap-kaart is, nemen we die waarden één keer als bron mee.
+  const minimapDoc = of("minimap_settings")[0] || null;
+  const minimap = settingsValues("minimap_settings", Object.assign({}, legacyHudBody || {}, minimapDoc?.body || {}));
   // Healing (2-11): regels voor regeneratie, effecten, respawn en level omhoog.
   const combat = settingsValues("combat_settings", of("combat_settings")[0]?.body || null);
   // Verbinding (3-11): alleen als de kaart er is; anders houden game en server hun eigen standaard.
@@ -223,7 +228,7 @@ export function compileGameSection(documents, options = {}) {
   });
 
   return {
-    server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
+    server: Object.assign({ schema: GAME_SECTION_VERSION, currencies, player, hud, minimap, combat, network, waterWalk, party, chat, npcs, quests, recipes, placedModels },
       questAreas.length ? { questAreas } : {}),
     errors
   };

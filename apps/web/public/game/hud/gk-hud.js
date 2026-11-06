@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest15";
+import { createHudMinimap } from "./gk-minimap.js?v=20261106-minimap-settings4";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -67,6 +67,10 @@ const COMBAT_MS = 6000;
 
 const DEFAULTS = { panel: null, tab: "bag", filter: "all", scroll: {}, item: null, quest: null, done: false,
   minimap: true, zoom: 1, size: "m", music: true, combatFold: true, debug: false, icoSize: "m", icoAnim: true, icoColor: "color", map: null,
+  // Alleen waarden die de speler zelf in de game wijzigt mogen een gepubliceerde
+  // minimapstandaard overschrijven. Oudere opslag bevatte de hele standaardkaart,
+  // waardoor latere editorwijzigingen onzichtbaar bleven.
+  mapOverrides: {},
   // Eigen paneelmaat en ingeklapte lijstkoppen worden per speler onthouden.
   panelWidth: null, panelHeight: null, sectionFold: { "settings-server": true, "settings-view": true },
   // Namen boven poppetjes (2D): NPC's/vijanden/spullen, andere spelers, jijzelf.
@@ -87,18 +91,99 @@ const PIXEL_STEPS = [0.7, 1, 1.5, 2];
 // Kaarten: big/mini = wat je ziet per soort (ontbreekt = aan, dus een nieuwe soort staat vanzelf aan), span = meters in beeld
 // op de grote kaart, bigIcon/miniIcon = grootte van de kaarticonen, rotate = minimap draait mee, pin = je eigen pin {x, z}.
 // bigText/miniText = grootte van de gebiedsnamen (die zoomen ook mee met de kaart).
+const MAP_STYLE_DEFAULTS = Object.freeze({
+  self: { label: "Jij", color: "#ffffff", shape: "arrow" },
+  npc: { label: "NPC's", color: "#ffd34d", shape: "diamond" },
+  enemy: { label: "Vijanden", color: "#ff4b4b", shape: "dot" },
+  resource: { label: "Grondstoffen", color: "#63d65f", shape: "dot" },
+  pickup: { label: "Oppakken", color: "#8fe3ff", shape: "dot" },
+  player: { label: "Spelers", color: "#4da3ff", shape: "dot" },
+  portal: { label: "Portals", color: "#c77dff", shape: "portal" },
+  questgiver_available: { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star" },
+  questgiver: { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" },
+  quest: { label: "Quest-doel", color: "#ffb020", shape: "star" },
+  pin: { label: "Jouw pin", color: "#ff4fd8", shape: "pin" }
+});
 const MAP_DEFAULTS = { span: 160, bigIcon: 0.8, miniIcon: 1, bigText: 1, miniText: 1, rotate: false, pin: null, big: {}, mini: { pickup: false, resource: false } };
 // Alles wat op de kaarten kan staan: [soort, meervoud (legenda), enkelvoud (naamlabel)].
-const MAP_KINDS = [["area", "Gebiedsnamen", "Gebied"], ["npc", "NPC's", "NPC"], ["enemy", "Vijanden", "Vijand"], ["resource", "Grondstoffen", "Grondstof"], ["pickup", "Oppakken", "Oppakken"],
+const MAP_KINDS = [["self", "Jij", "Jij"], ["area", "Gebiedsnamen", "Gebied"], ["npc", "NPC's", "NPC"], ["enemy", "Vijanden", "Vijand"], ["resource", "Grondstoffen", "Grondstof"], ["pickup", "Oppakken", "Oppakken"],
   ["player", "Spelers", "Speler"], ["portal", "Portals", "Portal"],
   ["questgiver_available", "Questgever: quest te halen", "Quest te halen"], ["questgiver", "Questgever: geen nieuwe quest", "Questgever"],
   ["quest", "Quest-doel", "Quest-doel"], ["pin", "Jouw pin", "Jouw pin"]];
 
-function mapStore(raw) {
-  const map = Object.assign({}, MAP_DEFAULTS, raw && typeof raw === "object" ? raw : {});
-  map.big = Object.assign({}, raw?.big || {});
-  // Minimap (3-11): Oppakken en Grondstoffen standaard uit (eigen vinkje in de legenda gaat voor).
-  map.mini = Object.assign({}, MAP_DEFAULTS.mini, raw?.mini || {});
+function mapPresentation(raw) {
+  const value = raw && typeof raw === "object" ? raw : {};
+  const styles = {};
+  const big = { area: value.area?.showBig !== false };
+  const mini = { area: value.area?.showMini !== false };
+  for (const [kind, fallback] of Object.entries(MAP_STYLE_DEFAULTS)) {
+    const source = value.styles?.[kind] || {};
+    styles[kind] = {
+      label: String(source.label || fallback.label).slice(0, 40),
+      color: /^#[0-9a-f]{6}$/i.test(String(source.color || "")) ? String(source.color) : fallback.color,
+      shape: String(source.shape || fallback.shape)
+    };
+    big[kind] = source.showBig !== false;
+    mini[kind] = source.showMini !== false;
+  }
+  return {
+    minimapVisible: value.minimapVisible !== false,
+    largeStartOpen: value.largeStartOpen === true,
+    shape: value.shape === "square" ? "square" : "round",
+    rotate: value.rotate === true,
+    allowPin: value.allowPin !== false,
+    miniShowRegionName: value.miniShowRegionName !== false,
+    bigShowRegionName: value.bigShowRegionName !== false,
+    bigShowScale: value.bigShowScale !== false,
+    bigShowCoordinates: value.bigShowCoordinates !== false,
+    miniSizePx: Math.max(64, Math.min(320, num(value.miniSizePx, 120))),
+    zoomLevels: Array.isArray(value.zoomLevels) && value.zoomLevels.length === 3
+      ? value.zoomLevels.map(function (entry, index) { return Math.max(10, num(entry, ZOOMS[index])); }) : ZOOMS.slice(),
+    defaultZoomIndex: Math.max(0, Math.min(2, Math.round(num(value.defaultZoomIndex, 1)))),
+    bigSpanMeters: Math.max(30, num(value.bigSpanMeters, 160)),
+    miniIconScale: Math.max(0.4, Math.min(2.5, num(value.miniIconScale, 1))),
+    bigIconScale: Math.max(0.4, Math.min(2.5, num(value.bigIconScale, 0.8))),
+    miniFixedIconSize: value.miniFixedIconSize !== false,
+    bigFixedIconSize: value.bigFixedIconSize !== false,
+    miniAreaTextScale: Math.max(0.4, Math.min(2.5, num(value.miniAreaTextScale, 1))),
+    bigAreaTextScale: Math.max(0.4, Math.min(2.5, num(value.bigAreaTextScale, 1))),
+    miniShowMarkerNames: value.miniShowMarkerNames === true,
+    bigShowMarkerNames: value.bigShowMarkerNames === true,
+    miniMarkerNameSizePx: Math.max(6, Math.min(32, num(value.miniMarkerNameSizePx, 10))),
+    bigMarkerNameSizePx: Math.max(6, Math.min(40, num(value.bigMarkerNameSizePx, 12))),
+    backgroundColor: /^#[0-9a-f]{6}$/i.test(String(value.backgroundColor || "")) ? String(value.backgroundColor) : "#0b1220",
+    borderColor: /^#[0-9a-f]{6}$/i.test(String(value.borderColor || "")) ? String(value.borderColor) : "#b99446",
+    borderWidthPx: Math.max(0, Math.min(12, num(value.borderWidthPx, 3))),
+    markerNameColor: /^#[0-9a-f]{6}$/i.test(String(value.markerNameColor || "")) ? String(value.markerNameColor) : "#ffffff",
+    area: {
+      label: String(value.area?.label || "Gebiedsnamen").slice(0, 40),
+      color: /^#[0-9a-f]{6}$/i.test(String(value.area?.color || "")) ? String(value.area.color) : "#f3e2b3"
+    },
+    styles, big, mini
+  };
+}
+
+function mapStore(raw, authored, overrides = {}) {
+  const saved = raw && typeof raw === "object" ? raw : null;
+  const custom = function (key) { return overrides[key] === true; };
+  const map = Object.assign({}, MAP_DEFAULTS, authored);
+  map.span = custom("span") && saved && Number.isFinite(Number(saved.span)) ? Number(saved.span) : authored.bigSpanMeters;
+  map.bigIcon = custom("bigIcon") && saved && Number.isFinite(Number(saved.bigIcon)) ? Number(saved.bigIcon) : authored.bigIconScale;
+  map.miniIcon = custom("miniIcon") && saved && Number.isFinite(Number(saved.miniIcon)) ? Number(saved.miniIcon) : authored.miniIconScale;
+  map.bigText = custom("bigText") && saved && Number.isFinite(Number(saved.bigText)) ? Number(saved.bigText) : authored.bigAreaTextScale;
+  map.miniText = custom("miniText") && saved && Number.isFinite(Number(saved.miniText)) ? Number(saved.miniText) : authored.miniAreaTextScale;
+  map.rotate = custom("rotate") && saved && typeof saved.rotate === "boolean" ? saved.rotate : authored.rotate;
+  map.big = Object.assign({}, authored.big);
+  map.mini = Object.assign({}, authored.mini);
+  for (const kind of Object.keys(map.big)) if (custom("big:" + kind) && saved?.big && typeof saved.big[kind] === "boolean") map.big[kind] = saved.big[kind];
+  for (const kind of Object.keys(map.mini)) if (custom("mini:" + kind) && saved?.mini && typeof saved.mini[kind] === "boolean") map.mini[kind] = saved.mini[kind];
+  // Vorm, kleuren, namen en iconen zijn publiceerinstellingen en volgen dus altijd de editor.
+  for (const key of ["shape", "allowPin", "miniShowRegionName", "bigShowRegionName", "bigShowScale", "bigShowCoordinates",
+    "miniSizePx", "zoomLevels", "defaultZoomIndex", "bigSpanMeters", "miniFixedIconSize", "bigFixedIconSize",
+    "miniShowMarkerNames", "bigShowMarkerNames", "miniMarkerNameSizePx", "bigMarkerNameSizePx",
+    "backgroundColor", "borderColor", "borderWidthPx", "markerNameColor"]) map[key] = authored[key];
+  map.styles = authored.styles;
+  map.area = authored.area;
   map.pin = raw?.pin && Number.isFinite(Number(raw.pin.x)) && Number.isFinite(Number(raw.pin.z)) ? { x: Number(raw.pin.x), z: Number(raw.pin.z) } : null;
   return map;
 }
@@ -178,21 +263,27 @@ function slotKey(slotId) {
   return String(slotId || "").replace(/^equipment_slot\./, "");
 }
 
-function loadStore() {
+function loadStore(authored) {
   try {
     const raw = JSON.parse(window.localStorage.getItem(STORE_KEY) || "{}");
+    const mapOverrides = raw?.mapOverrides && typeof raw.mapOverrides === "object" ? Object.assign({}, raw.mapOverrides) : {};
     return Object.assign({}, DEFAULTS, raw && typeof raw === "object" ? raw : {}, {
+      minimap: mapOverrides.minimap === true && Object.prototype.hasOwnProperty.call(raw || {}, "minimap") ? raw.minimap !== false : authored.minimapVisible,
+      zoom: mapOverrides.zoom === true && Object.prototype.hasOwnProperty.call(raw || {}, "zoom") ? Math.max(0, Math.min(2, Math.round(num(raw.zoom, 1)))) : authored.defaultZoomIndex,
       scroll: Object.assign({}, raw?.scroll || {}),
       sectionFold: Object.assign({}, DEFAULTS.sectionFold, raw?.sectionFold || {}),
-      map: mapStore(raw?.map)
+      mapOverrides,
+      map: mapStore(raw?.map, authored, mapOverrides)
     });
   } catch {
-    return Object.assign({}, DEFAULTS, { scroll: {}, sectionFold: Object.assign({}, DEFAULTS.sectionFold), map: mapStore(null) });
+    return Object.assign({}, DEFAULTS, { minimap: authored.minimapVisible, zoom: authored.defaultZoomIndex,
+      scroll: {}, sectionFold: Object.assign({}, DEFAULTS.sectionFold), mapOverrides: {}, map: mapStore(null, authored) });
   }
 }
 
 export function createGkHud(api) {
-  const store = loadStore();
+  let authoredMap = mapPresentation(typeof api.mapPresentation === "function" ? api.mapPresentation() : null);
+  const store = loadStore(authoredMap);
   const ui = {
     story: null,            // 5-11: verhaal in het gesprek: { kind: "letter", itemId } of { kind: "started", questId }
     storyKnown: null,       // 5-11: quests die al liepen (null = nog geen stand gezien)
@@ -226,7 +317,7 @@ export function createGkHud(api) {
     doTarget: null,
     doKind: "",
     farTradeSince: 0,
-    bigMap: false,          // grote kaart open (M of de kaartknop)
+    bigMap: authoredMap.largeStartOpen, // grote kaart open (M of de kaartknop)
     bigAt: 0,
     bigHits: [],            // alles op de grote kaart waar je op kunt tikken
     bigView: null,          // hoe de grote kaart nu staat (midden, meters in beeld)
@@ -396,8 +487,38 @@ export function createGkHud(api) {
   const panelBody = h("div", { class: "gkPanelBody" }, [sheet, splitBar, dock]);
   const panel = h("aside", { class: "gkPanel" }, [panelResize, rail, panelBody]);
   root.append(vignette, game, panel, bigMap);
+  applyMapAppearance();
   (api.mount || document.body).append(root);
   document.documentElement.classList.add("gkHudActive");
+
+  function applyMapAppearance() {
+    root.dataset.mapshape = store.map.shape;
+    root.style.setProperty("--gk-map", "calc(" + store.map.miniSizePx + "px * var(--gk-scale))");
+    root.style.setProperty("--gk-map-border", store.map.borderColor);
+    root.style.setProperty("--gk-map-border-width", store.map.borderWidthPx + "px");
+    root.style.setProperty("--gk-map-background", store.map.backgroundColor);
+  }
+
+  function markMapOverride(key) {
+    store.mapOverrides = Object.assign({}, store.mapOverrides || {}, { [key]: true });
+  }
+
+  // De HUD kan al nodig zijn voor de characterkeuze, dus een wereld kan later
+  // binnenkomen. Pas de publicatie dan alsnog toe zonder persoonlijke keuzes die
+  // de speler daarna bewust in de game maakt te verliezen.
+  function setMapPresentation(raw) {
+    if (!raw || typeof raw !== "object") return;
+    authoredMap = mapPresentation(raw);
+    store.map = mapStore(store.map, authoredMap, store.mapOverrides || {});
+    if (store.mapOverrides?.minimap !== true) store.minimap = authoredMap.minimapVisible;
+    if (store.mapOverrides?.zoom !== true) store.zoom = authoredMap.defaultZoomIndex;
+    applyMapAppearance();
+    ui.mapAt = 0;
+    ui.bigAt = 0;
+    ui.sig.legend = "";
+    render();
+    if (ui.bigMap) requestBigDraw();
+  }
 
   // ---- opslaan ----
   function save() {
@@ -2493,8 +2614,11 @@ export function createGkHud(api) {
         labelPool.set(anchor.id, el);
       }
       if (el.textContent !== anchor.name) el.textContent = anchor.name;
-      const halfWidth = Math.min(130, String(anchor.name || "").length * 3.6 + 8);
-      const covered = underHud(anchor.x - halfWidth, anchor.y - 20, anchor.x + halfWidth, anchor.y);
+      const fontSize = Math.max(8, Math.min(48, num(anchor.fontSizePx, 13)));
+      const fontSizeCss = fontSize + "px";
+      if (el.style.fontSize !== fontSizeCss) el.style.fontSize = fontSizeCss;
+      const halfWidth = Math.min(260, String(anchor.name || "").length * fontSize * 0.3 + 8);
+      const covered = underHud(anchor.x - halfWidth, anchor.y - fontSize * 1.7, anchor.x + halfWidth, anchor.y);
       if (el.dataset.covered !== (covered ? "1" : "")) { el.dataset.covered = covered ? "1" : ""; el.style.visibility = covered ? "hidden" : ""; }
       const kind = own || markerKind(anchor) || "other";
       const className = "gkLabel gkLabel--" + kind + (anchor.selected ? " gkOn" : "") + (anchor.available === false ? " gkDim" : "");
@@ -2527,20 +2651,27 @@ export function createGkHud(api) {
     if (fogConfig) minimap.revealAround(position.x, position.z, fogConfig.revealRadius);
     const markers = mapMarkers(live);
     const questTarget = mapQuestTarget();
-    const zoom = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, num(store.zoom, 1)))];
     const sm = store.map;
+    const zooms = Array.isArray(sm.zoomLevels) && sm.zoomLevels.length ? sm.zoomLevels : ZOOMS;
+    const zoomIndex = Math.max(0, Math.min(zooms.length - 1, Math.round(num(store.zoom, 1))));
+    const zoom = zooms[zoomIndex];
     // Meedraaien = jouw kijkrichting staat altijd boven (zoals in WoW); uit = noorden boven.
     const facing = num(live.facingDeg) * Math.PI / 180;
     const north = minimap.draw({ world: live.world, center: position, facingDeg: live.facingDeg, forward: sm.rotate === false ? { x: 0, z: -1 } : { x: Math.sin(facing), z: Math.cos(facing) },
-      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live), pin: sm.pin, show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText });
+      radius: zoom, markers, quest: questTarget, questArea: mapQuestArea(), questMarks: mapQuestMarks(live), pin: sm.allowPin ? sm.pin : null,
+      show: sm.mini, iconScale: sm.miniIcon, areas: areaLabels(live), textScale: sm.miniText, styles: sm.styles, shape: sm.shape,
+      fixedIconSize: sm.miniFixedIconSize, iconReferenceSpan: sm.zoomLevels[Math.max(0, Math.min(sm.zoomLevels.length - 1, sm.defaultZoomIndex))],
+      areaColor: sm.area.color, showNames: sm.miniShowMarkerNames, nameFontPx: sm.miniMarkerNameSizePx,
+      nameColor: sm.markerNameColor, backgroundColor: sm.backgroundColor });
     const rounded = Math.round(num(north));
     if (ui.sig.north !== rounded) {
       ui.sig.north = rounded;
       mapNorth.style.transform = rounded ? "rotate(" + rounded + "deg)" : "";
     }
-    const label = live.region || "";
+    const label = sm.miniShowRegionName === false ? "" : (live.region || "");
     if (mapLabel.textContent !== label) mapLabel.textContent = label;
-    const zoomText = ["+", "", "−"][num(store.zoom, 1)] || "";
+    mapLabel.hidden = sm.miniShowRegionName === false;
+    const zoomText = zoomIndex === 0 ? "+" : zoomIndex === zooms.length - 1 ? "−" : "";
     if (mapZoom.textContent !== zoomText) mapZoom.textContent = zoomText;
     mapZoom.hidden = !zoomText;
   }
@@ -2617,22 +2748,26 @@ export function createGkHud(api) {
     const quest = mapQuestTarget();
     const result = minimap.drawFull(bigCanvas, { world: live.world, center: live.position, facingDeg: live.facingDeg, markers,
       quest: quest ? Object.assign({ name: trackedQuest()?.displayName || "" }, quest) : null, questArea: mapQuestArea(), questMarks: mapQuestMarks(live),
-      pin: sm.pin, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText });
+      pin: sm.allowPin ? sm.pin : null, span: sm.span, focus: ui.bigFocus, show: sm.big, iconScale: sm.bigIcon, areas: areaLabels(live), textScale: sm.bigText,
+      styles: sm.styles, areaColor: sm.area.color, showNames: sm.bigShowMarkerNames, nameFontPx: sm.bigMarkerNameSizePx,
+      fixedIconSize: sm.bigFixedIconSize, iconReferenceSpan: sm.bigSpanMeters,
+      nameColor: sm.markerNameColor, backgroundColor: sm.backgroundColor, showScale: sm.bigShowScale, showCoordinates: sm.bigShowCoordinates });
     ui.bigView = result;
     ui.bigHits = result?.hits || [];
     if (result) ui.bigFocus = result.focus;
     bigCenter.classList.toggle("gkOn", ui.bigFollow);
     const counts = {};
+    counts.self = 1;
     for (const marker of markers) {
       if (marker.kind === "questgiver_available" || minimap.discovered(marker.x, marker.z)) counts[marker.kind] = (counts[marker.kind] || 0) + 1;
     }
     if (quest) counts.quest = 1;
-    if (sm.pin) counts.pin = 1;
+    if (sm.allowPin && sm.pin) counts.pin = 1;
     for (const area of areaLabels(live)) if (minimap.discovered(area.x, area.z)) counts.area = (counts.area || 0) + 1;
-    const title = live.region || "Kaart";
+    const title = sm.bigShowRegionName === false ? "Kaart" : (live.region || "Kaart");
     if (bigTitle.textContent !== title) bigTitle.textContent = title;
     renderBigLegend(counts);
-    if (ui.bigPinDist && sm.pin && live.position) {
+    if (ui.bigPinDist && sm.allowPin && sm.pin && live.position) {
       const meters = Math.round(Math.hypot(sm.pin.x - num(live.position.x), sm.pin.z - num(live.position.z)));
       const text = meters + " m";
       if (ui.bigPinDist.textContent !== text) ui.bigPinDist.textContent = text;
@@ -2642,7 +2777,7 @@ export function createGkHud(api) {
   // (zo blijft een schuif die je net vasthoudt gewoon werken).
   function renderBigLegend(counts) {
     const sm = store.map;
-    const signature = JSON.stringify([sm.big, sm.mini, sm.rotate, Boolean(sm.pin), Boolean(counts.portal)]);
+    const signature = JSON.stringify([sm.big, sm.mini, sm.rotate, sm.allowPin, Boolean(sm.pin), Boolean(counts.portal), sm.styles, sm.area]);
     if (ui.sig.legend !== signature) {
       ui.sig.legend = signature;
       ui.bigCounts = {};
@@ -2652,10 +2787,13 @@ export function createGkHud(api) {
           "aria-checked": on ? "true" : "false", title: label + (which === "big" ? " op de grote kaart" : " op de minimap") });
       };
       const rows = MAP_KINDS.map(function (entry) {
+        const style = entry[0] === "area" ? { label: sm.area.label, color: sm.area.color, shape: "text" } : (sm.styles[entry[0]] || {});
+        const label = style.label || entry[1];
         const count = h("em");
         ui.bigCounts[entry[0]] = count;
-        return h("div", { class: "gkLegendRow" }, [h("i", { class: "gkMark gkMark--" + entry[0] }), h("span", { text: entry[1] }), count,
-          check("big", entry[0], entry[1]), check("mini", entry[0], entry[1])]);
+        return h("div", { class: "gkLegendRow" }, [h("i", { class: "gkMark gkMark--configured", "data-shape": style.shape || "dot",
+          style: "--gk-mark-color:" + (style.color || "#ffffff") }), h("span", { text: label }), count,
+          check("big", entry[0], label), check("mini", entry[0], label)]);
       });
       const slide = function (id, label) {
         const value = Math.max(0.5, Math.min(2, num(sm[id], 1)));
@@ -2664,15 +2802,16 @@ export function createGkHud(api) {
       };
       ui.bigPinDist = null;
       let pinBox = null;
-      if (sm.pin) {
+      if (sm.allowPin && sm.pin) {
         ui.bigPinDist = h("em");
-        pinBox = h("div", { class: "gkLegendBox" }, [h("div", { class: "gkLegendPin" }, [h("i", { class: "gkMark gkMark--pin" }), h("span", { text: "Jouw pin" }), ui.bigPinDist]),
+        const pinStyle = sm.styles.pin || MAP_STYLE_DEFAULTS.pin;
+        pinBox = h("div", { class: "gkLegendBox" }, [h("div", { class: "gkLegendPin" }, [h("i", { class: "gkMark gkMark--configured", "data-shape": pinStyle.shape,
+          style: "--gk-mark-color:" + pinStyle.color }), h("span", { text: pinStyle.label }), ui.bigPinDist]),
           h("div", { class: "gkBtns" }, [h("button", { type: "button", class: "gkBtn gkGo", "data-act": "pin-walk" }, ["Loop erheen"]),
             h("button", { type: "button", class: "gkBtn", "data-act": "pin-clear" }, ["Weghalen"])])]);
       }
       bigLegend.replaceChildren(...[
         h("div", { class: "gkLegendHead" }, [h("span", { text: "Wat zie je?" }), h("b", { text: "Groot" }), h("b", { text: "Klein" })]),
-        h("div", { class: "gkLegendRow" }, [h("i", { class: "gkMark gkMark--self" }), h("span", { text: "Jij" })]),
         ...rows,
         h("div", { class: "gkLegendBox" }, [h("div", { class: "gkLegendSub", text: "Grootte van de kaarticonen" }), slide("bigIcon", "Grote kaart"), slide("miniIcon", "Minimap"),
           h("div", { class: "gkLegendRow gkLegendRow--switch" }, [h("span", { text: "Minimap draait mee" }),
@@ -2680,15 +2819,16 @@ export function createGkHud(api) {
               "aria-checked": sm.rotate !== false ? "true" : "false", title: "Aan = jouw kijkrichting boven, uit = noorden boven" })])]),
         h("div", { class: "gkLegendBox" }, [h("div", { class: "gkLegendSub", text: "Grootte van de gebiedsnamen (zoomen mee)" }), slide("bigText", "Grote kaart"), slide("miniText", "Minimap")]),
         pinBox,
-        h("p", { class: "gkLegendNote", text: "Slepen = schuiven. Scrollen, knijpen of + en − = zoomen. Tik op een lege plek voor een pin"
-          + (counts.portal ? ", op een portal om te reizen." : ". Nog geen portals in deze wereld.") })].filter(Boolean));
+        h("p", { class: "gkLegendNote", text: "Slepen = schuiven. Scrollen, knijpen of + en − = zoomen."
+          + (sm.allowPin ? " Tik op een lege plek voor een pin." : "")
+          + (counts.portal ? " Tik op een portal om te reizen." : " Nog geen portals in deze wereld.") })].filter(Boolean));
     }
     for (const entry of MAP_KINDS) {
       const el = ui.bigCounts?.[entry[0]];
       if (!el) continue;
       const text = counts[entry[0]] && entry[0] !== "quest" && entry[0] !== "pin" ? String(counts[entry[0]]) : "";
       if (el.textContent !== text) el.textContent = text;
-      const dim = !counts[entry[0]];
+      const dim = entry[0] !== "self" && !counts[entry[0]];
       if (el.parentNode.classList.contains("gkDim") !== dim) el.parentNode.classList.toggle("gkDim", dim);
     }
   }
@@ -2747,6 +2887,7 @@ export function createGkHud(api) {
       }
     }
     store.map.span = Math.round(next * 10) / 10;
+    markMapOverride("span");
     save();
     hideBigTip();
     requestBigDraw();
@@ -2762,7 +2903,7 @@ export function createGkHud(api) {
   }
   function showBigTip(hit, ms) {
     const kind = MAP_KINDS.find(function (entry) { return entry[0] === hit.kind; });
-    const label = kind ? kind[2] : "";
+    const label = store.map.styles?.[hit.kind]?.label || (kind ? kind[2] : "");
     bigTip.textContent = hit.name && hit.name !== label ? label + ": " + hit.name : label + (hit.kind === "portal" ? " (tik = reizen)" : hit.kind === "pin" ? " (tik = weghalen)" : "");
     bigTip.style.left = hit.x + "px";
     bigTip.style.top = hit.y + "px";
@@ -2791,6 +2932,7 @@ export function createGkHud(api) {
     }
     if (hit && hit.kind === "pin") { store.map.pin = null; hideBigTip(); changedMap(); return; }
     if (hit) { showBigTip(hit, 2500); return; }
+    if (store.map.allowPin === false) return;
     const world = bigWorld(p);
     if (!world) return;
     store.map.pin = { x: Math.round(world.x * 10) / 10, z: Math.round(world.z * 10) / 10 };
@@ -2860,6 +3002,7 @@ export function createGkHud(api) {
     if (!input) return;
     const value = Math.max(0.5, Math.min(2, num(input.value, 1)));
     store.map[input.dataset.slide] = value;
+    markMapOverride(input.dataset.slide);
     const out = input.parentNode.querySelector("em");
     if (out) out.textContent = Math.round(value * 100) + "%";
     save();
@@ -3108,10 +3251,14 @@ export function createGkHud(api) {
       case "bigcenter": ui.bigFollow = true; ui.bigFocus = null; requestBigDraw(); break;
       case "mapshow": {
         const [which, kind] = id.split(":");
-        if (store.map[which] && kind) { store.map[which][kind] = store.map[which][kind] === false; changedMap(); }
+        if (store.map[which] && kind) {
+          store.map[which][kind] = store.map[which][kind] === false;
+          markMapOverride(which + ":" + kind);
+          changedMap();
+        }
         break;
       }
-      case "maprotate": store.map.rotate = store.map.rotate === false; changedMap(); break;
+      case "maprotate": store.map.rotate = store.map.rotate === false; markMapOverride("rotate"); changedMap(); break;
       case "pin-clear": store.map.pin = null; changedMap(); break;
       case "pin-walk":
         if (store.map.pin) {
@@ -3133,14 +3280,24 @@ export function createGkHud(api) {
       case "attack": attack(); break;
       case "heal": heal(); break;
       case "do": interact(); break;
-      case "map": store.zoom = (num(store.zoom, 1) + 1) % ZOOMS.length; save(); ui.mapAt = 0; break;
+      case "map": {
+        const zooms = Array.isArray(store.map.zoomLevels) && store.map.zoomLevels.length ? store.map.zoomLevels : ZOOMS;
+        store.zoom = (num(store.zoom, 1) + 1) % zooms.length;
+        markMapOverride("zoom");
+        save();
+        ui.mapAt = 0;
+        break;
+      }
       case "toast-close": api.dismissNotice(); break;
       case "ware": if (ui.trade) { ui.trade.offerId = ui.trade.offerId === id ? null : id; store.item = null; renderTalk(); } break;
       case "buy": if (ui.trade) api.run05("vendor_buy", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
       case "sell": if (ui.trade && id) api.run05("vendor_sell", { vendorId: ui.trade.vendorId, offerId: id, quantity: 1 }); break;
       case "craft": if (ui.craft) api.run05("craft", { stationId: ui.craft.stationId, recipeId: id }); break;
       case "claim": api.run05("crafting:claim", { jobId: id }); break;
-      case "set": store[id] = id.startsWith("health") ? !healthSettingOn(id) : !store[id]; save(); ui.effective = ""; render(); break;
+      case "set":
+        store[id] = id.startsWith("health") ? !healthSettingOn(id) : !store[id];
+        if (id === "minimap") markMapOverride("minimap");
+        save(); ui.effective = ""; render(); break;
       case "size": store.size = id; save(); ui.effective = ""; render(); break;
       case "play": playCharacter(el.dataset.class, el.dataset.model || null); break;
       case "logout": api.logout(); break;
@@ -3372,6 +3529,7 @@ export function createGkHud(api) {
   });
   window.addEventListener("resize", function () { ui.effective = ""; applyLayout(); render(); padGrids(); });
   render();
+  if (ui.bigMap) syncBigMap();
 
   return {
     render,
@@ -3379,6 +3537,7 @@ export function createGkHud(api) {
     handleKey,
     toast,
     questBanner,
+    setMapPresentation,
     openCharacters() { openTab("chars"); },
     // kind: "connected" | "connecting" | "reconnecting" | "disconnected" (uit game.js).
     // detail = extra uitleg in de tooltip; de compacte meetwaarden krijgen ieder hun eigen gezondheidskleur.

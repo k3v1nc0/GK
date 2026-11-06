@@ -102,9 +102,10 @@
 
 /* minimap */
 .gkMapWrap { top: var(--gk-edge); right: var(--gk-edge); width: var(--gk-map); display: grid; justify-items: center; gap: 4px; pointer-events: none; }
-.gkMap { position: relative; width: var(--gk-map); height: var(--gk-map); border-radius: 50%; padding: 0; border: 3px solid #b99446; background: #0b1220;
+.gkMap { position: relative; width: var(--gk-map); height: var(--gk-map); border-radius: 50%; padding: 0; border: var(--gk-map-border-width, 3px) solid var(--gk-map-border, #b99446); background: var(--gk-map-background, #0b1220);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(0, 0, 0, 0.6); pointer-events: auto; overflow: visible; }
 .gkMap canvas { width: 100%; height: 100%; display: block; border-radius: 50%; }
+.gkHud[data-mapshape="square"] .gkMap, .gkHud[data-mapshape="square"] .gkMap canvas { border-radius: 12px; }
 .gkMapNorth { position: absolute; inset: -3px; pointer-events: none; }
 .gkMapNorth b { position: absolute; left: 50%; top: -8px; transform: translateX(-50%); width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center;
   font-size: 9px; font-weight: 900; background: #7a1f1f; border: 1px solid #f0c060; color: #fff; }
@@ -534,7 +535,7 @@
 .gkBigCard { width: min(980px, 100%); max-height: 100%; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; background: var(--gk-bg); border: 1px solid var(--gk-line2);
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7); animation: gkPop 0.16s ease-out; }
 .gkBigBody { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 10px; padding: 10px; min-height: 0; overflow: auto; }
-.gkBigCanvas { position: relative; aspect-ratio: 1 / 1; width: min(100%, calc(100vh - 110px)); width: min(100%, calc(100dvh - 110px)); justify-self: center; border-radius: 12px; overflow: hidden; border: 2px solid #b99446; background: #0b1220; }
+.gkBigCanvas { position: relative; aspect-ratio: 1 / 1; width: min(100%, calc(100vh - 110px)); width: min(100%, calc(100dvh - 110px)); justify-self: center; border-radius: 12px; overflow: hidden; border: var(--gk-map-border-width, 2px) solid var(--gk-map-border, #b99446); background: var(--gk-map-background, #0b1220); }
 .gkBigCanvas canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 .gkBigCanvas canvas:active { cursor: grabbing; }
 .gkBigTools { position: absolute; top: 10px; right: 10px; display: grid; gap: 8px; }
@@ -581,6 +582,19 @@
 .gkLabel--self { color: #ffffff; }
 .gkLabel--player { color: #8cc4ff; }
 .gkMark--pin { background: #ff4fd8; border-radius: 50% 50% 50% 0; transform: rotate(-45deg) scale(0.9); }
+.gkMark--configured { background: var(--gk-mark-color, #fff); }
+.gkMark--configured[data-shape="dot"] { border-radius: 50%; }
+.gkMark--configured[data-shape="diamond"] { border-radius: 2px; transform: rotate(45deg) scale(0.82); }
+.gkMark--configured[data-shape="square"] { border-radius: 2px; }
+.gkMark--configured[data-shape="triangle"] { border: 0; border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.gkMark--configured[data-shape="star"] { border: 0; border-radius: 0; width: 16px; height: 16px; clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); }
+.gkMark--configured[data-shape="pin"] { border-radius: 50% 50% 50% 0; transform: rotate(-45deg) scale(0.9); }
+.gkMark--configured[data-shape="portal"] { width: 16px; height: 16px; background: radial-gradient(circle, #2a0b45 35%, var(--gk-mark-color, #c77dff) 40%); }
+.gkMark--configured[data-shape="cross"] { border: 0; border-radius: 0; clip-path: polygon(38% 0, 62% 0, 62% 38%, 100% 38%, 100% 62%, 62% 62%, 62% 100%, 38% 100%, 38% 62%, 0 62%, 0 38%, 38% 38%); }
+.gkMark--configured[data-shape="ring"] { border: 3px solid var(--gk-mark-color, #fff); background: transparent; }
+.gkMark--configured[data-shape="arrow"] { border: 0; border-radius: 0; width: 16px; clip-path: polygon(0 0, 100% 50%, 0 100%, 30% 50%); }
+.gkMark--configured[data-shape="text"] { border: 0; border-radius: 0; background: none; width: 18px; height: 14px; line-height: 14px; text-align: center; font: italic 700 11px Georgia, serif; color: var(--gk-mark-color, #f3e2b3); text-shadow: 0 0 2px #000; }
+.gkMark--configured[data-shape="text"]::before { content: "Aa"; }
 .gkHud[data-orient="port"] .gkBigBody, .gkHud[data-orient="square"] .gkBigBody { display: flex; flex-direction: column; align-items: center; }
 .gkHud[data-orient="port"] .gkBigBody > *, .gkHud[data-orient="square"] .gkBigBody > * { flex: none; }
 .gkHud[data-orient="port"] .gkLegend, .gkHud[data-orient="square"] .gkLegend { width: 100%; max-width: 520px; justify-self: center; }

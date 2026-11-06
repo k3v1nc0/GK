@@ -533,7 +533,9 @@ function withGame(world, source, options) {
       healthRegenBp: values.healthRegenBp, manaRegenBp: values.manaRegenBp,
       xpPerLevel: project.xpPerLevel, maxLevel: project.maxLevel, startGrants: [], models: [] };
   })();
-  const hud = game?.hud || settingsValues("hud_settings", null);
+  // Ook bij een oudere gepubliceerde game zonder nieuwere HUD-velden blijven de
+  // schema-standaarden gelden.
+  const hud = Object.assign(settingsValues("hud_settings", null), settingsValues("minimap_settings", null), game?.hud || {}, game?.minimap || {});
   const combat = game?.combat || settingsValues("combat_settings", null);
   const npcs = game?.npcs || [];
   const quests = game?.quests || [];
@@ -685,7 +687,84 @@ function withGame(world, source, options) {
     packages: (zones.packages || []).map(patchZone),
     byId: Object.fromEntries(Object.entries(zones.byId || {}).map(([id, pkg]) => [id, patchZone(pkg)]))
   });
-  const ui = Object.assign({}, gameProject.ui, { modules });
+  // Algemene presentatie van interactieve doelen. De runtime meet per doel de echte mesh
+  // en telt alleen deze ingestelde marge op; interactieafstand is dus geen klikvlak meer.
+  const targetPresentation = {
+    hitboxMarginPercent: Math.max(0, Math.min(200, Number(hud.clickAreaExtraPercent) || 0)),
+    hitboxMarginMeters: Math.max(0, Math.min(10, Number(hud.clickAreaExtraMeters) || 0)),
+    ringsVisible: hud.showWorldRings !== false,
+    labelOffsetMeters: Math.max(0, Math.min(10, Number(hud.worldNameOffsetMeters) || 0)),
+    labelFontSizePx: Math.max(8, Math.min(48, Number(hud.worldNameFontSizePx) || 13))
+  };
+  const mapNumber = (value, fallback, min, max) => Math.max(min, Math.min(max, Number.isFinite(Number(value)) ? Number(value) : fallback));
+  const mapColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value) : fallback;
+  const mapShapes = new Set(["dot", "diamond", "square", "triangle", "star", "pin", "portal", "cross", "ring", "arrow"]);
+  const mapStyle = (key, fallback) => {
+    const shape = String(hud["map" + key + "Icon"] || fallback.shape);
+    return {
+      label: String(hud["map" + key + "Label"] || fallback.label).slice(0, 40),
+      color: mapColor(hud["map" + key + "Color"], fallback.color),
+      shape: mapShapes.has(shape) ? shape : fallback.shape,
+      showMini: hud["map" + key + "ShowMini"] !== false,
+      showBig: hud["map" + key + "ShowBig"] !== false
+    };
+  };
+  const mapStyles = {
+    self: mapStyle("Self", { label: "Jij", color: "#ffffff", shape: "arrow" }),
+    npc: mapStyle("Npc", { label: "NPC's", color: "#ffd34d", shape: "diamond" }),
+    enemy: mapStyle("Enemy", { label: "Vijanden", color: "#ff4b4b", shape: "dot" }),
+    resource: mapStyle("Resource", { label: "Grondstoffen", color: "#63d65f", shape: "dot" }),
+    pickup: mapStyle("Pickup", { label: "Oppakken", color: "#8fe3ff", shape: "dot" }),
+    player: mapStyle("Player", { label: "Spelers", color: "#4da3ff", shape: "dot" }),
+    portal: mapStyle("Portal", { label: "Portals", color: "#c77dff", shape: "portal" }),
+    questgiver_available: mapStyle("QuestgiverAvailable", { label: "Questgever: quest te halen", color: "#ffe08a", shape: "star" }),
+    questgiver: mapStyle("Questgiver", { label: "Questgever: geen nieuwe quest", color: "#d4a84a", shape: "star" }),
+    quest: mapStyle("Quest", { label: "Quest-doel", color: "#ffb020", shape: "star" }),
+    pin: mapStyle("Pin", { label: "Jouw pin", color: "#ff4fd8", shape: "pin" })
+  };
+  const mapDefaultZoom = { near: 0, normal: 1, far: 2 }[hud.mapMiniDefaultZoom] ?? 1;
+  const mapPresentation = {
+    minimapVisible: hud.mapMinimapVisible !== false,
+    largeStartOpen: hud.mapLargeStartOpen === true,
+    shape: hud.mapShape === "square" ? "square" : "round",
+    rotate: hud.mapRotate === true,
+    allowPin: hud.mapAllowPin !== false,
+    miniShowRegionName: hud.mapMiniShowRegionName !== false,
+    bigShowRegionName: hud.mapBigShowRegionName !== false,
+    bigShowScale: hud.mapBigShowScale !== false,
+    bigShowCoordinates: hud.mapBigShowCoordinates !== false,
+    miniSizePx: mapNumber(hud.mapMiniSizePx, 120, 64, 320),
+    zoomLevels: [
+      mapNumber(hud.mapMiniZoomNearMeters, 30, 10, 1000),
+      mapNumber(hud.mapMiniZoomNormalMeters, 60, 10, 2000),
+      mapNumber(hud.mapMiniZoomFarMeters, 120, 10, 4000)
+    ],
+    defaultZoomIndex: mapDefaultZoom,
+    bigSpanMeters: mapNumber(hud.mapBigSpanMeters, 160, 30, 10000),
+    miniIconScale: mapNumber(hud.mapMiniIconScalePct, 100, 40, 250) / 100,
+    bigIconScale: mapNumber(hud.mapBigIconScalePct, 80, 40, 250) / 100,
+    miniFixedIconSize: hud.mapMiniFixedIconSize !== false,
+    bigFixedIconSize: hud.mapBigFixedIconSize !== false,
+    miniAreaTextScale: mapNumber(hud.mapMiniAreaTextScalePct, 100, 40, 250) / 100,
+    bigAreaTextScale: mapNumber(hud.mapBigAreaTextScalePct, 100, 40, 250) / 100,
+    miniShowMarkerNames: hud.mapMiniShowMarkerNames === true,
+    bigShowMarkerNames: hud.mapBigShowMarkerNames === true,
+    miniMarkerNameSizePx: mapNumber(hud.mapMiniMarkerNameSizePx, 10, 6, 32),
+    bigMarkerNameSizePx: mapNumber(hud.mapBigMarkerNameSizePx, 12, 6, 40),
+    backgroundColor: mapColor(hud.mapBackgroundColor, "#0b1220"),
+    borderColor: mapColor(hud.mapBorderColor, "#b99446"),
+    borderWidthPx: mapNumber(hud.mapBorderWidthPx, 3, 0, 12),
+    area: {
+      label: String(hud.mapAreaLabel || "Gebiedsnamen").slice(0, 40),
+      color: mapColor(hud.mapAreaColor, "#f3e2b3"),
+      showMini: hud.mapAreaShowMini !== false,
+      showBig: hud.mapAreaShowBig !== false
+    },
+    markerNameColor: mapColor(hud.mapMarkerNameColor, "#ffffff"),
+    fogColor: mapColor(hud.mapFogColor, "#05070a"),
+    styles: mapStyles
+  };
+  const ui = Object.assign({}, gameProject.ui, { modules, targetPresentation });
   const nextProject = Object.assign({}, gameProject, { catalogs, campaigns, playerRules, ui, zones: nextZones });
 
   // Itemmeshes zijn zelfstandige assetgebruikers. Een pickup mag niet afhankelijk zijn van
@@ -726,8 +805,9 @@ function withGame(world, source, options) {
     minimap: editor ? world.minimap : Object.assign({}, world.minimap || {}, { game: Object.assign({}, world.minimap?.game || {}, {
       enabled: true, sourceMinimapId: "world", areaLabels: areaLabels(source.world),
       questArrowDistanceMeters: fogPercent(hud.questArrowDistanceMeters, 200, 2000),
+      presentation: mapPresentation,
       fogOfWar: { enabled: hud.fogOfWar !== false, cellSize: FOG_CELL_M, revealRadius: Math.max(1, Math.min(64, Math.round((Number(hud.fogRevealMeters) || 40) / FOG_CELL_M))),
-        fogColor: "#05070a", fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
+        fogColor: mapPresentation.fogColor, fogOpacity: fogPercent(hud.fogDarkness, 100) / 100, fogFeatherRadius: fogPercent(hud.fogFadeMeters, 8, 64) / FOG_CELL_M,
         revealShape: "circle", saveIntervalMs: 1000, movementThreshold: 1 }
     }) })
   });

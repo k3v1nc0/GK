@@ -147,10 +147,11 @@ test("Kaarttegels: bewaard op vingerafdruk, actief na commit, oude tegels en fot
 test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook bij 0", async () => {
   const { compileCanonical } = await import("../src/server/authoring/build-service.js");
   const { buildRuntimeWorld } = await import("../src/server/authoring/world-builder.js");
-  const docs = (hud) => [{ docKey: "project_settings", kind: "project_settings", body: { gameName: "GK", xpPerLevel: 300, maxLevel: 30 }, archived: false, revision: 1 }]
-    .concat(hud ? [{ docKey: "hud_settings", kind: "hud_settings", body: hud, archived: false, revision: 1 }] : []);
-  const world = (hud) => {
-    const compiled = compileCanonical(docs(hud), {});
+  const docs = (hud, minimap) => [{ docKey: "project_settings", kind: "project_settings", body: { gameName: "GK", xpPerLevel: 300, maxLevel: 30 }, archived: false, revision: 1 }]
+    .concat(hud ? [{ docKey: "hud_settings", kind: "hud_settings", body: hud, archived: false, revision: 1 }] : [])
+    .concat(minimap ? [{ docKey: "minimap_settings", kind: "minimap_settings", body: minimap, archived: false, revision: 1 }] : []);
+  const world = (hud, minimap) => {
+    const compiled = compileCanonical(docs(hud, minimap), {});
     assert.deepEqual(compiled.errors, []);
     return buildRuntimeWorld(JSON.parse(compiled.files["server.json"].text));
   };
@@ -174,6 +175,51 @@ test("Kaartinstellingen: mist en afstand van questpijlen volgen de editor, ook b
   const hard = disabledArrows.fogOfWar;
   assert.equal(hard.fogOpacity, 0, "0 blijft 0");
   assert.equal(hard.fogFeatherRadius, 0);
+
+  const authoredMap = world(null, {
+    mapShape: "square",
+    mapRotate: true,
+    mapMiniSizePx: 180,
+    mapMiniDefaultZoom: "far",
+    mapMiniZoomFarMeters: 300,
+    mapMiniFixedIconSize: false,
+    mapBigFixedIconSize: true,
+    mapBigSpanMeters: 500,
+    mapBigShowMarkerNames: true,
+    mapNpcLabel: "Bewoners",
+    mapNpcColor: "#123456",
+    mapNpcIcon: "triangle",
+    mapNpcShowMini: false,
+    mapFogColor: "#112233"
+  }).minimap.game;
+  assert.equal(authoredMap.presentation.shape, "square");
+  assert.equal(authoredMap.presentation.rotate, true);
+  assert.equal(authoredMap.presentation.miniSizePx, 180);
+  assert.deepEqual(authoredMap.presentation.zoomLevels, [30, 60, 300]);
+  assert.equal(authoredMap.presentation.defaultZoomIndex, 2);
+  assert.equal(authoredMap.presentation.miniFixedIconSize, false);
+  assert.equal(authoredMap.presentation.bigFixedIconSize, true);
+  assert.equal(authoredMap.presentation.bigSpanMeters, 500);
+  assert.equal(authoredMap.presentation.bigShowMarkerNames, true);
+  assert.deepEqual(authoredMap.presentation.styles.npc, {
+    label: "Bewoners", color: "#123456", shape: "triangle", showMini: false, showBig: true
+  });
+  assert.equal(authoredMap.fogOfWar.fogColor, "#112233");
+
+  const presentation = world({
+    clickAreaExtraPercent: 25,
+    clickAreaExtraMeters: 0.4,
+    showWorldRings: false,
+    worldNameOffsetMeters: 0.65,
+    worldNameFontSizePx: 19
+  }).gameProject.ui.targetPresentation;
+  assert.deepEqual(presentation, {
+    hitboxMarginPercent: 25,
+    hitboxMarginMeters: 0.4,
+    ringsVisible: false,
+    labelOffsetMeters: 0.65,
+    labelFontSizePx: 19
+  });
 });
 
 test("Ronde 10: deelgebied-namen op de kaart en grootte van items op de grond", async () => {
