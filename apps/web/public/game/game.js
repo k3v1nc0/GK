@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261106-quest22";
+import { createGkHud } from "./hud/gk-hud.js?v=20261106-quest23";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -12545,7 +12545,7 @@ function handleSocketMessage(raw) {
   }
   // Quest Builder stap 5: Als → Dan: Bericht in beeld.
   if (message.type === "quest:message") {
-    if (gkHud && message.text) gkHud.questBanner(String(message.text), message.title ? String(message.title) : "");
+    if (gkHud && message.text) gkHud.questBanner(String(message.text), message.title ? String(message.title) : "", message.questId ? String(message.questId) : "");
     else if (message.text) showGameHudDialogueNotice(String(message.text), { title: message.title || "Quest" });
     return;
   }

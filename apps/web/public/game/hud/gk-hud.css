@@ -788,6 +788,11 @@
 .gkCh--system { color: var(--gk-gold); font-style: italic; }
 .gkCh--error { color: #ff9a9a; }
 .gkCh--quest { font-style: normal; font-weight: 700; }
+.gkChatFeed .gkFeedQuest { pointer-events: auto; cursor: pointer; border: 1px solid rgba(246, 197, 68, 0.35); }
+.gkChatFeed .gkFeedQuest:hover { background: rgba(40, 30, 8, 0.85); }
+.gkChatFeed .gkFeedQuest { display: flex; align-items: center; gap: 6px; }
+.gkFeedClose { flex: none; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: 6px; background: rgba(255, 255, 255, 0.1); color: #fff3d6; font-size: 11px; line-height: 20px; cursor: pointer; }
+.gkFeedClose:hover { background: rgba(255, 90, 90, 0.45); }
 .gkChatBox { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; animation: gkPop 0.14s ease-out; }
 .gkChatBox[hidden] { display: none; }
 /* Typen met de vinger: de chat zweeft net boven het toetsenbord (top en hoogte zet gk-hud.js). */

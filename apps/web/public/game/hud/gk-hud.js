@@ -315,6 +315,9 @@ export function createGkHud(api) {
   let authoredMap = mapPresentation(typeof api.mapPresentation === "function" ? api.mapPresentation() : null);
   const store = loadStore(authoredMap);
   const ui = {
+    celebrations: [],       // Kevin 6-11: Quest voltooid en Level omhoog na elkaar (niet over elkaar)
+    celebrating: false,
+    questFeed: [],          // Kevin 6-11: de laatste 3 questmeldingen linksonder (blijven staan, de oudste gaat eruit)
     story: null,            // 5-11: verhaal in het gesprek: { kind: "letter", itemId } of { kind: "started", questId }
     storyKnown: null,       // 5-11: quests die al liepen (null = nog geen stand gezien)
     storyQueue: [],         // 5-11: gebied/vanzelf-quests waarvan het verhaal nog moet komen
@@ -1032,8 +1035,7 @@ export function createGkHud(api) {
   ];
   const CHAT_KEEP = 60;          // zoveel regels onthouden (zuinig op de oude laptop)
   const CHAT_FEED_MS = 12000;    // zo lang blijft een nieuw bericht linksonder staan als de chat dicht is
-  // Kevin 6-11: questmeldingen blijven langer staan (je keek even weg); hooguit 3, een nieuwe duwt de oudste weg.
-  const QUEST_FEED_MS = 30000;
+  // Kevin 6-11: questmeldingen blijven linksonder staan (je keek even weg); hooguit 3, een nieuwe duwt de oudste weg. Klik = naar de quest.
   const QUEST_FEED_MAX = 3;
   function chatRulesNow() {
     const rules = typeof api.chatRules === "function" ? api.chatRules() || {} : {};
@@ -1084,9 +1086,13 @@ export function createGkHud(api) {
     }
   }
   // Een melding in het tabje Systeem (quiet = geen toast, bijvoorbeeld omdat game.js al een toast liet zien).
-  function chatNotice(text, tone, quiet, quest = false) {
+  // questId: een melding over een quest (blijft linksonder staan, klik = naar die quest).
+  function chatNotice(text, tone, quiet, questId = null) {
     if (!text) return;
-    chatAddLine({ id: "n" + Math.random().toString(36).slice(2), channel: "system", tone: tone || "", text: String(text), at: performance.now(), time: Date.now(), quest: quest === true });
+    const line = { id: "n" + Math.random().toString(36).slice(2), channel: "system", tone: tone || "", text: String(text), at: performance.now(), time: Date.now(),
+      quest: questId !== null && questId !== undefined, questId: questId ? String(questId) : "" };
+    if (line.quest) ui.questFeed = ui.questFeed.concat(line).slice(-QUEST_FEED_MAX);
+    chatAddLine(line);
     if (!quiet && !chatShown()) toast(text, { tone: tone === "error" ? "error" : "info", icon: "chat-bubble", ms: 3500 });
   }
   function chatShows(line, tab, blockedIds) {
@@ -1186,11 +1192,11 @@ export function createGkHud(api) {
       return;
     }
     const blockedIds = new Set(chatBlocked().map(function (entry) { return entry.id; }));
-    const life = function (line) { return line.quest ? QUEST_FEED_MS : CHAT_FEED_MS; };
-    const alive = ui.chatLines.filter(function (line) { return now - line.at < life(line) && chatShows(line, "all", blockedIds); });
-    const quests = alive.filter(function (line) { return line.quest; }).slice(-QUEST_FEED_MAX);
-    const recent = alive.filter(function (line) { return !line.quest || quests.includes(line); }).slice(-5);
-    const signature = recent.map(function (line) { return line.id + (now - line.at > life(line) - 1600 ? "o" : ""); }).join("|");
+    // Questmeldingen blijven staan (hooguit 3); gewone berichten 12 s. Op volgorde van binnenkomst.
+    const chat = ui.chatLines.filter(function (line) { return !line.quest && now - line.at < CHAT_FEED_MS && chatShows(line, "all", blockedIds); }).slice(-5);
+    const recent = ui.questFeed.concat(chat).sort(function (a, b) { return a.at - b.at; });
+    const fading = function (line) { return !line.quest && now - line.at > CHAT_FEED_MS - 1600; };
+    const signature = recent.map(function (line) { return line.id + (fading(line) ? "o" : ""); }).join("|");
     if (ui.sig.feed === signature) return;
     ui.sig.feed = signature;
     const wasHidden = chatFeed.hidden;
@@ -1198,7 +1204,15 @@ export function createGkHud(api) {
     if (wasHidden && !chatFeed.hidden) placeChat();
     chatFeed.replaceChildren(...recent.map(function (line) {
       const el = chatLineEl(line);
-      if (now - line.at > life(line) - 1600) el.classList.add("gkOld");
+      if (fading(line)) el.classList.add("gkOld");
+      if (line.quest) {
+        el.classList.add("gkFeedQuest");
+        el.dataset.act = "feed-quest";
+        el.dataset.id = line.questId;
+        el.title = "Naar de quest";
+        // ✕ = deze melding weg (staat hij in de weg).
+        el.append(h("button", { type: "button", class: "gkFeedClose", "data-act": "feed-quest-close", "data-id": line.id, title: "Weg", "aria-label": "Melding weg", text: "✕" }));
+      }
       return el;
     }));
   }
@@ -1711,33 +1725,47 @@ export function createGkHud(api) {
     hp.classList.add("gkHit");
     vignette.classList.add("gkHitFlash");
   }
-  function levelUp(newLevel) {
-    const node = h("div", { class: "gkLevelUp" }, [ico("star-medal"), h("b", { text: "Level " + newLevel + "!" })]);
+  // Kevin 6-11: Quest voltooid en Level omhoog komen na elkaar, met een korte pauze. Quest voltooid eerst (de XP gaf het level).
+  const CELEBRATE_GAP_MS = 700;
+  function celebrate(order, ms, build) {
+    ui.celebrations.push({ order, ms, build });
+    ui.celebrations.sort(function (a, b) { return a.order - b.order; });
+    if (ui.celebrating) return;
+    ui.celebrating = true;
+    // Even wachten: komen ze tegelijk binnen, dan staat Quest voltooid vooraan.
+    window.setTimeout(nextCelebration, 300);
+  }
+  function nextCelebration() {
+    const next = ui.celebrations.shift();
+    if (!next) { ui.celebrating = false; return; }
+    const node = next.build();
     game.append(node);
-    window.setTimeout(function () { node.remove(); }, 2700);
+    window.setTimeout(function () { node.remove(); window.setTimeout(nextCelebration, CELEBRATE_GAP_MS); }, next.ms);
+  }
+  function levelUp(newLevel) {
+    celebrate(1, 2700, function () { return h("div", { class: "gkLevelUp" }, [ico("star-medal"), h("b", { text: "Level " + newLevel + "!" })]); });
   }
 
   // Kevin 6-11: quest gehaald. Groot en goud zoals level omhoog, met de naam, het einde (na een keuze) en wat je kreeg.
   function questDone(info) {
     const title = String(info?.title || "");
     if (!title) return;
-    for (const old of game.querySelectorAll(".gkQuestDone")) old.remove();
     const rewards = (Array.isArray(info.rewards) ? info.rewards : []).map(String).slice(0, 6);
-    const node = h("div", { class: "gkQuestDone", role: "status" }, [
-      h("div", { class: "gkQuestDoneRays" }),
-      ico("star-medal"),
-      h("b", { text: "Quest voltooid!" }),
-      h("strong", { text: title }),
-      info.ending ? h("small", { text: "🏁 " + String(info.ending) }) : null,
-      rewards.length ? h("span", { class: "gkQuestDoneRewards", text: rewards.join("  ·  ") }) : null
-    ]);
-    game.append(node);
-    window.setTimeout(function () { node.remove(); }, 4300);
-    chatNotice("🏆 Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true, true);
+    celebrate(0, 4300, function () {
+      return h("div", { class: "gkQuestDone", role: "status" }, [
+        h("div", { class: "gkQuestDoneRays" }),
+        ico("star-medal"),
+        h("b", { text: "Quest voltooid!" }),
+        h("strong", { text: title }),
+        info.ending ? h("small", { text: "🏁 " + String(info.ending) }) : null,
+        rewards.length ? h("span", { class: "gkQuestDoneRewards", text: rewards.join("  ·  ") }) : null
+      ]);
+    });
+    chatNotice("🏆 Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true, String(info.questId || ""));
   }
 
   // Quest Builder stap 5: Bericht in beeld (Als → Dan). Groot in het midden, kort, en ook in de chat.
-  function questBanner(text, title) {
+  function questBanner(text, title, questId = "") {
     const message = String(text || "");
     if (!message) return;
     for (const old of game.querySelectorAll(".gkQuestBanner")) old.remove();
@@ -1745,7 +1773,7 @@ export function createGkHud(api) {
       h("div", { class: "gkQuestBannerText" }, [title ? h("small", { text: String(title) }) : null, h("b", { text: message })])]);
     game.append(node);
     window.setTimeout(function () { node.remove(); }, 5200);
-    chatNotice((title ? String(title) + ": " : "") + message, "", true, true);
+    chatNotice((title ? String(title) + ": " : "") + message, "", true, String(questId || ""));
   }
 
   function toast(text, options = {}) {
@@ -3312,6 +3340,8 @@ export function createGkHud(api) {
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
       case "quest-again": api.run04("node04:start_dialogue", id); break;
       case "quest-retry": api.run04("node04:accept_quest", null, { questId: id }); break;
+      case "feed-quest": showQuest(id); break;
+      case "feed-quest-close": ui.questFeed = ui.questFeed.filter(function (line) { return line.id !== id; }); ui.sig.feed = ""; renderChatFeed(); break;
       case "quest-reward": api.run04("node04:choose_reward", null, { questId: id, choiceId: el.dataset.index }); break;
       case "quest-share": api.run04("node04:share", null, { questId: id }); break;
       case "quest-share-accept": api.run04("node04:accept_share", null, { questId: id }); break;
