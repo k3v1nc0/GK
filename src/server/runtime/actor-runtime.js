@@ -3,6 +3,9 @@
 // - Beweging via dezelfde botsingsfunctie als spelers (resolveMovement); routes via navigation.js met een budget.
 // - Spelersaanval en verzamelen: plan (puur) -> node03 schrijft in één transactie -> pas daarna in het geheugen.
 // - Naar de game: actor:snapshot (alleen wat in de buurt is en veranderde) en actor:event.
+// - Quest Builder stap 5: vijanden die een quest laat verschijnen (groepen voor speler, groep of iedereen). Eén servercheck
+//   (canSeeGroup) in snapshots, gebeurtenissen, AI en aanvallen: wie ze niet mag zien, kan ze ook niet raken en wordt niet aangevallen.
+//   Ze komen niet terug na de dood en worden nooit gekopieerd. De quest-motor (node04) zegt wie ze nog nodig heeft (questKeeper).
 import { computeDamage, lootSeed, rollLoot, withinRangeMm } from "../../../apps/web/public/shared/combat-math.js";
 import { metersToMm, resolveMembership } from "../../../apps/web/public/shared/spatial.js";
 import { groundHeightAt, resolveMovement } from "../../../apps/web/public/shared/movement-kernel.js";
@@ -32,6 +35,10 @@ const RANGE_SLACK_MM = 300;
 const ATTACK_ANIM_MS = 600;
 const REGEN_STEP_MS = 1000;
 const HEAL_BELOW = 0.75; // een vijand-healer geneest pas onder 75 % levens
+const QUEST_PREFIX = "qs.";
+const QUEST_CORPSE_MS = 5000; // een verslagen quest-vijand blijft nog even liggen en is dan weg
+const QUEST_KEEP_MS = 2000;
+const QUEST_LOGOUT_GRACE_MS = 60000; // "Weg na uitloggen": even opnieuw verbinden houdt ze
 
 const mm = (meters) => Math.round(Number(meters) * 1000);
 const meters = (millimeters) => Number(millimeters) / 1000;
@@ -53,7 +60,7 @@ export function isResourceInstanceId(id) {
 }
 
 // host: { db, canonicalBuild(), worldContext(), spatial(), playerStates(worldId), isOnline(pid, wid), isDefeated(pid),
-//         connections(worldId) -> [{ id, player: { id }, ws }], send(connection, payload) }
+//         connections(worldId) -> [{ id, player: { id }, ws }], send(connection, payload), partyOf(playerId)? }
 export class ActorRuntime {
   constructor(host) {
     this.host = host;
@@ -73,6 +80,14 @@ export class ActorRuntime {
     this.lastSnapshotAtMs = 0;
     this.lastStepAtMs = 0;
     this.regenAtMs = 0;
+    // Stap 5: quest-groepen (id -> groep). questKeeper(groep) -> { open: [spelers met de quest open], need: [wie ze nog nodig heeft] };
+    // questReleased(groep) = de regels mogen opnieuw (na uitloggen weg). Beide zet de quest-motor.
+    this.questGroups = new Map();
+    this.questGroupsWorld = null;
+    this.questSeq = 0;
+    this.questKeepAtMs = 0;
+    this.questKeeper = null;
+    this.questReleased = null;
     this.perf = { steps: 0, maxStepMs: 0, avgStepMs: 0, pathQueries: 0, pathBudgetHits: 0, snapshotsSent: 0 };
   }
 
@@ -161,6 +176,13 @@ export class ActorRuntime {
       resource.y = this.groundYAt(resource.x, resource.z);
       this.resources.set(spawnKey, resource);
     }
+    // Stap 5: quest-vijanden blijven bij een nieuwe build; na een herstart komen ze uit de database.
+    if (this.questGroupsWorld !== this.worldId) {
+      this.questGroupsWorld = this.worldId;
+      this.questGroups = new Map();
+      this.loadQuestGroups();
+    }
+    this.restoreQuestActors(previousActors, nowMs);
   }
 
   newActor(spawn, def, row, nowMs) {
@@ -308,9 +330,14 @@ export class ActorRuntime {
     for (const resource of this.resources.values()) {
       if (!resource.available && nowMs >= resource.respawnAtMs) this.respawnResource(resource);
     }
+    if (nowMs - this.questKeepAtMs >= QUEST_KEEP_MS) {
+      this.questKeepAtMs = nowMs;
+      this.keepQuestGroups(nowMs);
+    }
     for (const actor of this.actors.values()) {
       if (actor.state === "dead") {
-        if (nowMs >= actor.respawnAtMs) this.respawnActor(actor, nowMs);
+        // Een quest-vijand komt niet terug: na even liggen is hij weg.
+        if (nowMs >= actor.respawnAtMs) { if (actor.group) this.actors.delete(actor.spawnKey); else this.respawnActor(actor, nowMs); }
         continue;
       }
       if (actor.state !== "return" && actor.state !== "engage" && !near(actor.x, actor.z, WAKE_M) && !near(actor.home.x, actor.home.z, WAKE_M)) continue;
@@ -320,6 +347,11 @@ export class ActorRuntime {
 
   // Healing (2-11): vijanden met Regeneratie aan krijgen elke seconde levens terug, ook tijdens het gevecht.
   regenActors() {
+    const nowMs = this.lastStepAtMs;
+    for (const resource of this.resources.values()) {
+      if (!resource.takenBy?.size) continue;
+      for (const [playerId, until] of resource.takenBy) if (until <= nowMs) resource.takenBy.delete(playerId);
+    }
     for (const actor of this.actors.values()) {
       const def = actor.def;
       if (actor.state === "dead" || !def.regenEnabled || !(def.regenBp > 0) || actor.hp >= actor.hpMax) { actor.regenCarry = 0; continue; }
@@ -342,7 +374,7 @@ export class ActorRuntime {
     let bestPct = HEAL_BELOW;
     for (const other of this.actors.values()) {
       if (other.state === "dead" || other.hpMax <= 0) continue;
-      if (other !== actor && other.state !== "engage") continue;
+      if (other !== actor && (other.state !== "engage" || other.group !== actor.group)) continue;
       const pct = other.hp / other.hpMax;
       if (pct >= bestPct) continue;
       if (other !== actor && Math.hypot(other.x - actor.x, other.z - actor.z) > reach + meters(other.def.radiusMm)) continue;
@@ -360,12 +392,14 @@ export class ActorRuntime {
     actor.anim = "attack";
     actor.animUntilMs = nowMs + ATTACK_ANIM_MS;
     actor.rev += 1;
-    this.emitEvent({ e: "heal", id: best.id, by: actor.id, amount: best.hp - before, hp: best.hp }, best.x, best.z);
+    this.emitEvent({ e: "heal", id: best.id, by: actor.id, amount: best.hp - before, hp: best.hp }, best.x, best.z, best);
     return true;
   }
 
   eligibleTarget(actor, player) {
     if (!player || player.defeated || player.safe) return false;
+    // Stap 5: een quest-vijand jaagt alleen op wie hem mag zien.
+    if (actor.group && !this.canSeeGroup(actor.group, player.id)) return false;
     return Math.hypot(player.x - actor.home.x, player.z - actor.home.z) <= meters(actor.def.leashRangeMm) + 2;
   }
 
@@ -554,7 +588,7 @@ export class ActorRuntime {
         console.error("[actors] aanval op speler mislukt:", error.message);
       }
     }
-    this.emitEvent({ e: "attack", id: actor.id, target: target.id, amount: outcome?.damage ?? null, remainingHealth: outcome?.remainingHealth ?? null, defeated: outcome?.defeated === true }, actor.x, actor.z);
+    this.emitEvent({ e: "attack", id: actor.id, target: target.id, amount: outcome?.damage ?? null, remainingHealth: outcome?.remainingHealth ?? null, defeated: outcome?.defeated === true }, actor.x, actor.z, actor);
     if (outcome?.defeated) this.startReturn(actor);
   }
 
@@ -571,7 +605,7 @@ export class ActorRuntime {
     actor.nextAttackAtMs = nowMs + 1000;
     actor.rev += 1;
     this.persistState(actor.spawnKey, actor.occurrence, "alive", null);
-    this.emitEvent({ e: "respawn", id: actor.id }, actor.x, actor.z);
+    this.emitEvent({ e: "respawn", id: actor.id }, actor.x, actor.z, actor);
   }
 
   respawnResource(resource) {
@@ -590,6 +624,8 @@ export class ActorRuntime {
     const section = this.ensureBuild(ctx.nowMs);
     const { entry: actor, stale } = this.findByInstanceId(ctx.targetId);
     if (!section || !actor || actor.kind !== "actor") throw httpError(404, "Vijand niet gevonden.");
+    // Stap 5: wie een quest-vijand niet mag zien, kan hem ook niet raken.
+    if (actor.group && !this.canSeeGroup(actor.group, ctx.playerId)) throw httpError(404, "Vijand niet gevonden.");
     const label = actor.def.displayName;
     if (stale || actor.state === "dead") return { plan: null, result: { action: "attack", targetId: ctx.targetId, message: label + " is al verslagen.", events: [] } };
     if (ctx.safe || this.pointIsSafe(actor.x, actor.z)) throw httpError(409, "Hier kun je niet vechten (veilig gebied).", "SAFE_AREA");
@@ -620,7 +656,8 @@ export class ActorRuntime {
     }
     const plan = {
       kind: "attack", instanceId: actor.id, actorId: actor.def.actorId, x: actor.x, z: actor.z, spawnKey: actor.spawnKey, occurrence: actor.occurrence, playerId: ctx.playerId,
-      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + actor.def.respawnMs : null, rewards, buildId: this.buildId, label
+      damage, hpAfter, killed, respawnAtMs: killed ? ctx.nowMs + (actor.group ? QUEST_CORPSE_MS : actor.def.respawnMs) : null, rewards, buildId: this.buildId, label,
+      questSpawn: actor.group ? { groupId: actor.group.id, questId: actor.group.questId, spawnId: actor.group.spawnId } : null
     };
     this.pending.set(ctx.operationId, plan);
     return { plan, result: null };
@@ -632,6 +669,9 @@ export class ActorRuntime {
     if (!section || !resource || resource.kind !== "resource") throw httpError(404, "Grondstof niet gevonden.");
     const label = resource.def.displayName;
     if (stale || !resource.available) return { plan: null, result: { action: "gather", targetId: ctx.targetId, message: label + " is op. Kom later terug.", events: [] } };
+    // Stap 5: Ieder zijn eigen: voor jou weg tot Terug na, anderen zien en oogsten hem nog.
+    const personal = resource.def.gatherMode === "personal";
+    if (personal && (resource.takenBy?.get(ctx.playerId) || 0) > ctx.nowMs) return { plan: null, result: { action: "gather", targetId: ctx.targetId, message: label + " heb je al geoogst. Kom later terug.", events: [] } };
     const reachMm = resource.def.gatherRangeMm + resource.def.radiusMm + RANGE_SLACK_MM;
     if (!withinRangeMm(mm(ctx.x), mm(ctx.z), mm(resource.x), mm(resource.z), reachMm)) {
       const error = httpError(400, "Target is te ver weg voor gather.", "TARGET_OUT_OF_RANGE");
@@ -640,8 +680,10 @@ export class ActorRuntime {
     }
     const plan = {
       kind: "gather", instanceId: resource.id, resourceId: resource.def.resourceId, x: resource.x, z: resource.z, spawnKey: resource.spawnKey, occurrence: resource.occurrence, playerId: ctx.playerId,
-      claimKey: resource.id, items: rollLoot(section.lootTables, resource.def.lootTableId, lootSeed(this.buildId, resource.id, ctx.playerId)),
-      respawnAtMs: ctx.nowMs + resource.def.respawnMs, buildId: this.buildId, label
+      claimKey: personal ? resource.id + "|" + ctx.playerId + "|" + ctx.operationId : resource.id,
+      items: rollLoot(section.lootTables, resource.def.lootTableId, lootSeed(this.buildId, personal ? resource.id + "|" + ctx.operationId : resource.id, ctx.playerId)),
+      respawnAtMs: ctx.nowMs + resource.def.respawnMs, buildId: this.buildId, label, personal,
+      eventKey: personal ? resource.id + ":" + ctx.operationId : resource.id
     };
     this.pending.set(ctx.operationId, plan);
     return { plan, result: null };
@@ -659,10 +701,16 @@ export class ActorRuntime {
     if (plan.kind === "gather") {
       const resource = this.resources.get(plan.spawnKey);
       if (!resource || resource.occurrence !== plan.occurrence || plan.claimed === false) return;
+      if (plan.personal) {
+        if (!resource.takenBy) resource.takenBy = new Map();
+        resource.takenBy.set(plan.playerId, plan.respawnAtMs);
+        this.emitEvent({ e: "gathered", id: resource.id, by: plan.playerId }, resource.x, resource.z, resource, plan.playerId);
+        return;
+      }
       resource.available = false;
       resource.respawnAtMs = plan.respawnAtMs;
       resource.rev += 1;
-      this.emitEvent({ e: "gathered", id: resource.id, by: plan.playerId }, resource.x, resource.z);
+      this.emitEvent({ e: "gathered", id: resource.id, by: plan.playerId }, resource.x, resource.z, resource);
       return;
     }
     const actor = this.actors.get(plan.spawnKey);
@@ -677,18 +725,28 @@ export class ActorRuntime {
       actor.respawnAtMs = plan.respawnAtMs;
       actor.path = [];
       actor.targetPlayerId = null;
-      this.emitEvent({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage }, actor.x, actor.z);
+      if (actor.group) {
+        const spec = actor.group.actors.find((entry) => entry.key === actor.spawnKey);
+        if (spec) spec.dead = true;
+        this.persistQuestGroup(actor.group);
+      }
+      this.emitEvent({ e: "death", id: actor.id, by: plan.playerId, amount: plan.damage }, actor.x, actor.z, actor);
       return;
     }
-    this.emitEvent({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp }, actor.x, actor.z);
+    this.emitEvent({ e: "hit", id: actor.id, by: plan.playerId, amount: plan.damage, hp: actor.hp }, actor.x, actor.z, actor);
     if (actor.state !== "engage" && actor.state !== "return") this.engage(actor, plan.playerId);
   }
 
   // ---- naar de clients ------------------------------------------------------------------------------------
 
-  encode(entry) {
+  // Ieder zijn eigen: is deze grondstof voor deze speler nu op?
+  takenFor(entry, playerId, nowMs = this.lastStepAtMs) {
+    return Boolean(entry.takenBy && playerId && (entry.takenBy.get(playerId) || 0) > nowMs);
+  }
+
+  encode(entry, viewerId = null, nowMs = this.lastStepAtMs) {
     if (entry.kind === "resource") {
-      return { id: entry.id, k: "r", d: entry.def.resourceId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), s: entry.available ? "i" : "d" };
+      return { id: entry.id, k: "r", d: entry.def.resourceId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), s: entry.available && !this.takenFor(entry, viewerId, nowMs) ? "i" : "d" };
     }
     const s = entry.state === "dead" ? "d" : entry.anim === "attack" ? "a" : entry.anim === "walk" ? "w" : "i";
     return { id: entry.id, k: "a", d: entry.def.actorId, x: r2(entry.x), y: r2(entry.y), z: r2(entry.z), r: Math.round(entry.ry * 100) / 100, hp: entry.hp, hm: entry.hpMax, s };
@@ -711,15 +769,18 @@ export class ActorRuntime {
       if (!sent) { sent = { sigs: new Map(), lastFullAtMs: 0 }; this.sentByConnection.set(connection.id, sent); }
       const full = nowMs - sent.lastFullAtMs >= FULL_SNAPSHOT_MS;
       const px = Number(position.x); const pz = Number(position.z);
+      const viewerId = connection.player?.id || null;
       const actors = [];
       const nearIds = new Set();
       for (const entry of all) {
         if (Math.abs(entry.x - px) > AOI_M || Math.abs(entry.z - pz) > AOI_M) continue;
+        // Stap 5: een quest-vijand gaat alleen naar wie hem mag zien.
+        if (entry.group && !this.canSeeGroup(entry.group, viewerId)) continue;
         nearIds.add(entry.id);
-        const sig = entry.rev + ":" + entry.id;
+        const sig = entry.rev + ":" + entry.id + (entry.takenBy && this.takenFor(entry, viewerId, nowMs) ? ":t" : "");
         if (!full && sent.sigs.get(entry.id) === sig) continue;
         sent.sigs.set(entry.id, sig);
-        actors.push(this.encode(entry));
+        actors.push(this.encode(entry, viewerId, nowMs));
       }
       const gone = [];
       for (const id of Array.from(sent.sigs.keys())) {
@@ -735,7 +796,8 @@ export class ActorRuntime {
     }
   }
 
-  emitEvent(event, x, z) {
+  // entry: de vijand/grondstof (quest-vijand: alleen naar wie hem mag zien). only: alleen naar deze speler.
+  emitEvent(event, x, z, entry = null, only = null) {
     if (!this.worldId) return;
     const connections = this.host.connections(this.worldId);
     if (!connections.length) return;
@@ -743,6 +805,8 @@ export class ActorRuntime {
     for (const state of this.host.playerStates(this.worldId)) if (state?.player_id) positions.set(state.player_id, state);
     const payload = Object.assign({ type: "actor:event", serverTimeMs: Date.now() }, event);
     for (const connection of connections) {
+      if (only && connection.player?.id !== only) continue;
+      if (entry?.group && !this.canSeeGroup(entry.group, connection.player?.id)) continue;
       const position = positions.get(connection.player?.id);
       const isTarget = event.target && connection.player?.id === event.target;
       if (!isTarget && (!position || Math.abs(Number(position.x) - x) > AOI_M || Math.abs(Number(position.z) - z) > AOI_M)) continue;
@@ -751,15 +815,210 @@ export class ActorRuntime {
   }
 
   // Quest Builder (Kevin 5-11): waar levende vijanden (of beschikbare grondstoffen) van deze soort nu zijn, voor de ⭐ op de kaart.
-  livePositions(kind, defId) {
+  // viewerId: alleen wat die speler mag zien (quest-vijanden, Ieder zijn eigen).
+  livePositions(kind, defId, viewerId = null) {
     const list = [];
     const resource = kind === "resource";
     for (const entry of (resource ? this.resources : this.actors).values()) {
       if ((resource ? entry.def?.resourceId : entry.def?.actorId) !== defId) continue;
-      if (resource ? !entry.available : entry.state === "dead") continue;
+      if (resource ? !entry.available || this.takenFor(entry, viewerId) : entry.state === "dead") continue;
+      if (entry.group && !this.canSeeGroup(entry.group, viewerId)) continue;
       list.push({ id: entry.id, x: entry.x, z: entry.z });
     }
     return list;
+  }
+
+  // Stap 5: waar de levende vijanden van deze verschijning zijn die deze speler ziet (voor de ⭐ op de kaart).
+  questSpawnPositions(questId, spawnId, viewerId) {
+    const list = [];
+    for (const group of this.questGroups.values()) {
+      if (group.questId !== questId || group.spawnId !== spawnId || !this.canSeeGroup(group, viewerId)) continue;
+      for (const spec of group.actors) {
+        const actor = spec.dead ? null : this.actors.get(spec.key);
+        if (actor && actor.state !== "dead") list.push({ id: actor.id, x: actor.x, z: actor.z });
+      }
+    }
+    return list;
+  }
+
+  // ---- Stap 5: quest-vijanden (Als → Dan: Laat verschijnen) ---------------------------------------------------
+
+  partyOf(playerId) {
+    try { return typeof this.host.partyOf === "function" ? this.host.partyOf(playerId) || null : null; } catch { return null; }
+  }
+
+  // De ene servercheck: mag deze speler deze groep zien (en dus raken, en wordt hij erdoor aangevallen)?
+  // Iedereen: ja. Wie hem liet verschijnen of er zelf aan meedoet (members): ja, ook na groep verlaten (niets wordt gekopieerd).
+  // Voor de groep: ook wie nu in die groep zit.
+  canSeeGroup(group, playerId) {
+    if (!group || !playerId) return false;
+    if (group.audience === "all") return true;
+    if (group.members.has(playerId)) return true;
+    return group.ownerKind === "party" && Boolean(group.ownerId) && this.partyOf(playerId) === group.ownerId;
+  }
+
+  canSeeGroupId(groupId, playerId) {
+    const group = this.questGroups.get(groupId);
+    return group ? this.canSeeGroup(group, playerId) : false;
+  }
+
+  // Een groep van deze verschijning die deze speler al ziet (dan komt er geen tweede).
+  findQuestGroup(questId, spawnId, playerId) {
+    for (const group of this.questGroups.values()) {
+      if (group.questId === questId && group.spawnId === spawnId && this.canSeeGroup(group, playerId)) return group;
+    }
+    return null;
+  }
+
+  // { worldId, questId, spawnId, stepId, ruleId, audience, despawn, playerId, actorId, count, center: { x, z }, around: meters }
+  // Ziet de speler al een groep van deze verschijning, dan doet hij daaraan mee (geen dubbele groep). -> { group, created } | null
+  spawnQuestGroup(request, nowMs = Date.now()) {
+    if (!this.section || request.worldId !== this.worldId) this.ensureBuild(nowMs);
+    if (!this.section || !this.worldId || (request.worldId && request.worldId !== this.worldId)) return null;
+    const def = this.section.archetypes?.[request.actorId];
+    if (!def || !request.playerId) return null;
+    const existing = this.findQuestGroup(request.questId, request.spawnId, request.playerId);
+    if (existing) {
+      // Meedoen (gebeurt 1× per keer dat iemand de stap binnenkomt): altijd opslaan, zo staat hij zeker in de database.
+      existing.members.add(request.playerId);
+      existing.seen.set(request.playerId, nowMs);
+      this.persistQuestGroup(existing);
+      return { group: existing, created: false };
+    }
+    const audience = request.audience === "player" || request.audience === "all" ? request.audience : "group";
+    const partyId = audience === "group" ? this.partyOf(request.playerId) : null;
+    this.questSeq += 1;
+    const id = "g" + nowMs.toString(36) + this.questSeq.toString(36);
+    const group = {
+      id, questId: request.questId, spawnId: request.spawnId, stepId: request.stepId || null, ruleId: request.ruleId || null, audience,
+      ownerKind: audience === "all" ? null : partyId ? "party" : "player", ownerId: audience === "all" ? null : partyId || request.playerId,
+      despawn: request.despawn === "step" || request.despawn === "logout" ? request.despawn : "quest",
+      members: new Set([request.playerId]), seen: new Map([[request.playerId, nowMs]]), loadedAtMs: nowMs, createdAt: new Date(nowMs).toISOString(), actors: []
+    };
+    const count = Math.max(1, Math.min(10, Math.floor(Number(request.count) || 1)));
+    const center = { x: Number(request.center?.x) || 0, z: Number(request.center?.z) || 0 };
+    const ring = Math.max(1.5, Number(request.around) || 1.5 + count * 0.6);
+    const turn = (nowMs % 360) * (Math.PI / 180);
+    for (let index = 0; index < count; index += 1) {
+      const angle = turn + (index / count) * Math.PI * 2;
+      const point = this.walkablePoint(center, { x: center.x + Math.sin(angle) * ring, z: center.z + Math.cos(angle) * ring }, def.radiusMm);
+      group.actors.push({ key: ACTOR_INSTANCE_PREFIX + QUEST_PREFIX + id + "." + index, actorId: def.actorId, x: r2(point.x), z: r2(point.z), dead: false });
+    }
+    this.questGroups.set(id, group);
+    this.restoreQuestActors(new Map(), nowMs, group);
+    this.persistQuestGroup(group);
+    return { group, created: true };
+  }
+
+  // Van het midden naar de plek lopen met dezelfde botsing als spelers: zo staat een vijand nooit in een muur.
+  walkablePoint(from, to, radiusMm) {
+    const context = this.worldContextRef;
+    try {
+      const y = this.groundYAt(from.x, from.z);
+      const result = resolveMovement({ x: from.x, y, z: from.z }, { x: to.x, y, z: to.z }, { radius: meters(radiusMm || 500), index: context?.walkabilityIndex || null, solids: context?.solidColliders || [] });
+      if (Number.isFinite(result?.x) && Number.isFinite(result?.z)) return { x: result.x, z: result.z };
+    } catch {}
+    return { x: to.x, z: to.z };
+  }
+
+  newQuestActor(group, spec, def, nowMs) {
+    const actor = {
+      kind: "actor", spawnKey: spec.key, occurrence: 1, def, spawn: { spawnId: spec.key.slice(ACTOR_INSTANCE_PREFIX.length), actorId: def.actorId, xMm: mm(spec.x), zMm: mm(spec.z) },
+      x: spec.x, z: spec.z, y: this.groundYAt(spec.x, spec.z), ry: 0, home: { x: spec.x, z: spec.z }, patrol: [], group,
+      hp: def.healthMax, hpMax: def.healthMax, state: "idle", anim: "idle", animUntilMs: 0,
+      targetPlayerId: null, path: [], pathGoal: null, pathFails: 0, patrolIndex: 0, pauseUntilMs: 0, stuck: 0,
+      nextAttackAtMs: nowMs + 1000, contributors: new Set(), respawnAtMs: 0, rev: 1
+    };
+    actor.id = actor.spawnKey + ":1";
+    return actor;
+  }
+
+  // De levende vijanden van de quest-groepen in de actors-lijst (na een nieuwe build: zelfde vijand, nieuwe gegevens).
+  restoreQuestActors(previousActors, nowMs, only = null) {
+    if (!this.section) return;
+    for (const group of only ? [only] : this.questGroups.values()) {
+      for (const spec of group.actors) {
+        if (spec.dead) continue;
+        const def = this.section.archetypes?.[spec.actorId];
+        if (!def) continue;
+        const old = previousActors.get(spec.key);
+        const actor = old && old.def.actorId === def.actorId ? old : this.newQuestActor(group, spec, def, nowMs);
+        actor.def = def;
+        actor.group = group;
+        actor.hpMax = def.healthMax;
+        actor.hp = Math.min(actor.hp, actor.hpMax);
+        this.actors.set(spec.key, actor);
+      }
+    }
+  }
+
+  removeQuestGroup(group, reason) {
+    for (const spec of group.actors) this.actors.delete(spec.key);
+    this.questGroups.delete(group.id);
+    if (this.worldId) {
+      try { this.host.db.prepare("DELETE FROM quest_spawn_groups WHERE world_id = ? AND group_id = ?").run(this.worldId, group.id); } catch {}
+    }
+    if (reason === "logout" && typeof this.questReleased === "function") {
+      try { this.questReleased(group); } catch (error) { console.error("[actors] quest-regels vrijgeven mislukt:", error.message); }
+    }
+  }
+
+  // Elke 2 s: wie heeft deze groep nog nodig? Niemand meer (quest of stap klaar, verlaten, of na uitloggen) = weg.
+  keepQuestGroups(nowMs) {
+    if (!this.questGroups.size || typeof this.questKeeper !== "function") return;
+    for (const group of Array.from(this.questGroups.values())) {
+      let result = null;
+      try { result = this.questKeeper(group); } catch (error) { console.error("[actors] quest-groep controleren mislukt:", error.message); continue; }
+      if (!result) continue;
+      const open = new Set(result.open || []);
+      let changed = false;
+      for (const id of Array.from(group.members)) {
+        if (!open.has(id)) { group.members.delete(id); group.seen.delete(id); changed = true; }
+      }
+      const need = (result.need || []).filter((id) => group.members.has(id));
+      let keep = need.length > 0;
+      let reason = "done";
+      if (keep && group.despawn === "logout") {
+        keep = need.some((id) => {
+          if (this.host.isOnline(id, this.worldId)) { group.seen.set(id, nowMs); return true; }
+          return nowMs - (group.seen.get(id) || group.loadedAtMs) < QUEST_LOGOUT_GRACE_MS;
+        });
+        if (!keep) reason = "logout";
+      }
+      if (!keep) this.removeQuestGroup(group, reason);
+      else if (changed) this.persistQuestGroup(group);
+    }
+  }
+
+  persistQuestGroup(group) {
+    if (!this.worldId) return;
+    try {
+      const stamp = new Date().toISOString();
+      this.host.db.prepare(`
+        INSERT INTO quest_spawn_groups (world_id, group_id, quest_id, spawn_id, step_id, rule_id, audience, owner_kind, owner_id, despawn, members_json, actors_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(world_id, group_id) DO UPDATE SET members_json = excluded.members_json, actors_json = excluded.actors_json, updated_at = excluded.updated_at
+      `).run(this.worldId, group.id, group.questId, group.spawnId, group.stepId, group.ruleId, group.audience, group.ownerKind, group.ownerId, group.despawn,
+        JSON.stringify(Array.from(group.members)), JSON.stringify(group.actors), group.createdAt, stamp);
+    } catch (error) {
+      if (!this.questPersistWarned) { this.questPersistWarned = true; console.error("[actors] quest-groep niet opgeslagen:", error.message); }
+    }
+  }
+
+  loadQuestGroups() {
+    let rows = [];
+    try { rows = this.host.db.prepare("SELECT * FROM quest_spawn_groups WHERE world_id = ?").all(this.worldId); } catch { return; } // migratie 025 nog niet gedraaid
+    const nowMs = Date.now();
+    for (const row of rows) {
+      let members = [];
+      let actors = [];
+      try { members = JSON.parse(row.members_json || "[]"); actors = JSON.parse(row.actors_json || "[]"); } catch { continue; }
+      this.questGroups.set(row.group_id, {
+        id: row.group_id, questId: row.quest_id, spawnId: row.spawn_id, stepId: row.step_id || null, ruleId: row.rule_id || null, audience: row.audience,
+        ownerKind: row.owner_kind || null, ownerId: row.owner_id || null, despawn: row.despawn, members: new Set(members), seen: new Map(), loadedAtMs: nowMs,
+        createdAt: row.created_at, actors: (Array.isArray(actors) ? actors : []).filter((spec) => spec && typeof spec.key === "string")
+      });
+    }
   }
 
   snapshotForDebug() {
@@ -767,6 +1026,7 @@ export class ActorRuntime {
       buildId: this.buildId,
       actors: this.actors.size,
       resources: this.resources.size,
+      questGroups: this.questGroups.size,
       perf: Object.assign({}, this.perf),
       navigators: Array.from(this.navigators.entries()).map(([radiusMm, nav]) => Object.assign({ radiusMm }, nav.stats()))
     };

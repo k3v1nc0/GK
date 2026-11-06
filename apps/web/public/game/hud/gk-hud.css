@@ -136,6 +136,15 @@
 .gkLevelUp { top: 26%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; pointer-events: none; animation: gkLevelUp 2.6s ease-out forwards; }
 .gkLevelUp .gkIco { width: 64px; height: 64px; }
 .gkLevelUp b { font-size: 26px; font-weight: 900; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 18px rgba(246, 197, 68, 0.6); }
+/* Quest Builder stap 5: Bericht in beeld */
+.gkQuestBanner { top: 18%; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px;
+  border: 2px solid rgba(246, 197, 68, 0.75); border-radius: 12px; background: linear-gradient(180deg, rgba(40, 26, 12, 0.94), rgba(18, 12, 6, 0.94));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); pointer-events: none; animation: gkQuestBanner 5s ease-out forwards; }
+.gkQuestBanner .gkIco { width: 34px; height: 34px; flex: none; }
+.gkQuestBannerText { display: grid; gap: 2px; min-width: 0; }
+.gkQuestBannerText small { font-size: 12px; color: var(--gk-gold); opacity: 0.9; }
+.gkQuestBannerText b { font-size: 17px; font-weight: 800; color: #fff3d6; text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
+@keyframes gkQuestBanner { 0% { opacity: 0; transform: translate(-50%, 10px); } 8% { opacity: 1; transform: translate(-50%, 0); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -10px); } }
 
 /* knoppen onderin */
 .gkActions { right: var(--gk-edge); bottom: var(--gk-edge); display: flex; align-items: flex-end; gap: 10px; pointer-events: none; }

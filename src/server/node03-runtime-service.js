@@ -2147,11 +2147,15 @@ export class Node03RuntimeService {
         this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(given), reward.claimKey);
         if (reward.playerId === ctx.profile.id) grants = given;
       }
-      this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
+      // Een quest-vijand (stap 5) komt niet terug; die bewaart de vijandenserver zelf.
+      if (!plan.questSpawn) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "dead", plan.respawnAtMs, plan.buildId);
       this.recordGameplayEvent(ctx, "actor_defeated", "player", plan.instanceId, { damage: plan.damage, grants });
       // Quest Builder: de kill telt voor iedereen die meevocht (1x per vijand-leven per speler).
+      // Stap 5: bij een quest-vijand welke verschijning het was, en alleen wie hem mag zien telt mee.
+      const spawn = plan.questSpawn || null;
       this.questEvents?.(ctx, plan.rewards.map((reward) => reward.playerId),
-        { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z } });
+        { type: "defeat", refId: plan.actorId, eventKey: "defeat:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z },
+          spawn, canSee: spawn ? (playerId) => runtime.canSeeGroupId(spawn.groupId, playerId) : null });
     } else {
       this.recordGameplayEvent(ctx, "actor_hit", "player", plan.instanceId, { damage: plan.damage, healthAfter: plan.hpAfter });
     }
@@ -2182,9 +2186,10 @@ export class Node03RuntimeService {
     const grants = [];
     for (const item of plan.items) grants.push(...this.grantItem(ctx, item.itemId, item.quantity, "resource_gathered", plan.instanceId, operationId));
     this.db.prepare("UPDATE actor_loot_claims SET grants_json = ? WHERE claim_key = ?").run(stableJson(grants), plan.claimKey);
-    this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
+    // Stap 5: Ieder zijn eigen = alleen voor jou weg (in het geheugen), niet voor iedereen.
+    if (!plan.personal) this.saveActorSpawnState(ctx, plan.spawnKey, plan.occurrence, "depleted", plan.respawnAtMs, plan.buildId);
     this.recordGameplayEvent(ctx, "resource_gathered", "player", plan.instanceId, { grants });
-    this.questEvents?.(ctx, [ctx.profile.id], { type: "gather", refId: plan.resourceId, eventKey: "gather:" + plan.instanceId, operationId, at: { x: plan.x, z: plan.z } });
+    this.questEvents?.(ctx, [ctx.profile.id], { type: "gather", refId: plan.resourceId, eventKey: "gather:" + (plan.eventKey || plan.instanceId), operationId, at: { x: plan.x, z: plan.z } });
     return {
       action: "gather",
       targetId: plan.instanceId,

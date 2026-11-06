@@ -6,9 +6,9 @@ import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
-import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest14";
-import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest14";
-import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest14";
+import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261105-quest15";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest15";
+import { openQuestBuilder } from "./quest-builder.js?v=20261105-quest15";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -644,11 +644,12 @@ export function createDocBench(options = {}) {
       + " · " + (need.length ? (rules.length > 1 ? (start.match === "any" ? "OF: " : "EN: ") : "") + need.join(", ") : "iedereen mag");
     const own = hasOwnSteps(body);
     const count = (kind) => body.steps.filter((step) => step?.kind === kind).length;
-    const stepsLine = own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)"
+    const spawnCount = Array.isArray(body.spawns) ? body.spawns.length : 0;
+    const stepsLine = own ? "🪜 " + count("step") + " stap(pen) · 🏁 " + count("end") + " einde(s)" + (spawnCount ? " · 👾 " + spawnCount + " verschijning(en)" : "")
       : "🪜 Snelle quest: " + objectiveText(stepsFromSimple(body)[0].objectives[0], nameOf);
     const maxLevel = bench.docs("project_settings")[0]?.body?.maxLevel || 50;
     const startIssues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc.docKey, maxLevel }).length;
-    const issues = startIssues + (own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave }).length : 0);
+    const issues = startIssues + (own ? questGraphIssues(body.steps, { refExists, partyLeave: body.partyLeave, spawns: body.spawns }).length : 0);
     const button = el("button", { type: "button", class: "wbdPrimary", text: "📜 Quest Builder" });
     button.addEventListener("click", () => openQuestBuilder(bench, doc.docKey, { setStatus, tab: startIssues ? "start" : "stappen" }));
     return el("div", { class: "wbdQuestSteps" }, [
@@ -661,7 +662,7 @@ export function createDocBench(options = {}) {
     ]);
   }
   const QUEST_SUMMARY_FIELD = { label: "Zo werkt hij", ui: { icon: "📜", control: "questSteps" },
-    help: { waarvoor: "Hoe de quest start, wie hem mag doen en wat de speler moet doen.", goed: "Klik 📜 Quest Builder: tab 🚪 Start, 🪜 Stappen en 🧪 Testen.", probleem: "⚠️ melding → open de Quest Builder; de tab 🧪 Testen zegt wat er mis is." } };
+    help: { waarvoor: "Hoe de quest start, wie hem mag doen en wat de speler moet doen.", goed: "Klik 📜 Quest Builder: tab 🚪 Start, 🪜 Stappen, 👾 Verschijnen en 🧪 Testen.", probleem: "⚠️ melding → open de Quest Builder; de tab 🧪 Testen zegt wat er mis is." } };
   bench.refControl = refControl;
 
   // ---------- het paneel dat zichzelf tekent ----------
@@ -771,7 +772,7 @@ export function createDocBench(options = {}) {
         continue;
       }
       // Start en voorwaarden tekent de Quest Builder zelf (tab 🚪 Start).
-      if (field.ui?.control === "questStart") continue;
+      if (field.ui?.control === "questStart" || field.ui?.control === "questSpawns") continue;
       if (field.ui?.control === "areaSettings") {
         const rows = areaSettingsRows(field, body, onChange);
         visible.append(...rows.main);

@@ -302,6 +302,12 @@ export class Node04QuestRuntimeService {
     if (node03RuntimeService) node03RuntimeService.questUseItem = (ctx, itemId, operationId) => this.useQuestItem(ctx, itemId, operationId);
     if (node03RuntimeService) node03RuntimeService.questPickupBlocked = (ctx, itemId) => this.pickupBlockedReason(ctx, itemId);
     this.startAreaInside = new Map(); // playerId|questId -> true/false
+    // Stap 5: de vijandenserver vraagt elke 2 s wie een quest-groep nog nodig heeft; na uitloggen weg = regels mogen opnieuw.
+    const actors = mmoService?.actorRuntime;
+    if (actors) {
+      actors.questKeeper = (group) => this.questSpawnNeeds(group);
+      actors.questReleased = (group) => this.releaseSpawnRules(group);
+    }
   }
 
   getRequestContext(req) {
@@ -735,11 +741,14 @@ export class Node04QuestRuntimeService {
         }
         // Team samen gehaald: voor alle teamleden tegelijk klaar (ieder zijn eigen bonnetje), daarna gaan zij ook door.
         for (const objective of teamDone) this.finishTeamObjective(ctx, quest, step, objective, operationId);
+        // Stap 5: Als → Dan (de stap begint, een doel staat op een aantal, de stap is klaar).
+        this.fireStepRules(ctx, quest, current, step, progress, operationId);
         if (!progress.complete) break;
         const next = firstNextStep(quest, step);
         if (!next) return this.completeQuestRun(ctx, quest, current, null, operationId, events);
-        // Een stap die je (opnieuw) binnenkomt begint leeg.
+        // Een stap die je (opnieuw) binnenkomt begint leeg (ook zijn regels gaan weer 1×).
         this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ? AND step_id = ?").run(ctx.profile.id, quest.id, next.id);
+        this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE ?").run(ctx.profile.id, quest.id, "rule:%:" + next.id + ":%");
         this.updateQuestState(ctx, quest.id, QUEST_STATUS.ACTIVE, next.id, current.status, step.id, "step_complete", { operationId: operationId || null });
         events.push({ type: "quest_step", questId: quest.id, stepId: next.id });
         current = Object.assign(current, { status: QUEST_STATUS.ACTIVE, active_step_id: next.id });
@@ -747,6 +756,97 @@ export class Node04QuestRuntimeService {
       }
       return { completed: false, events, grants: [] };
     });
+  }
+
+  // ---- Stap 5: Als → Dan --------------------------------------------------------------------------------------
+  // Elke regel gaat 1× per keer dat deze speler de stap binnenkomt (bonnetje rule:<run>:<stap>:<regel>).
+  fireStepRules(ctx, quest, row, step, progress, operationId) {
+    const rules = Array.isArray(step?.rules) ? step.rules : [];
+    if (!rules.length) return;
+    const runId = safeString(stateOf(row).runId, "run_" + safeString(row?.accepted_at, "legacy"));
+    for (const rule of rules) {
+      if (!rule?.id || !this.ruleTriggered(rule, progress)) continue;
+      const key = "rule:" + runId + ":" + step.id + ":" + rule.id;
+      if (this.db.prepare("SELECT 1 FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id = ? LIMIT 1").get(ctx.profile.id, quest.id, key)) continue;
+      if (!this.claimOnce(ctx.profile.id, quest.id, key, "quest_rule")) continue;
+      // Een fout in een regel mag de quest nooit tegenhouden.
+      try { this.runRule(ctx, quest, step, rule); } catch (error) { console.warn("[quest] regel niet uitgevoerd:", error?.message || error); }
+    }
+  }
+
+  ruleTriggered(rule, progress) {
+    if (rule.when === "start") return true;
+    if (rule.when === "done") return progress?.complete === true;
+    if (rule.when === "count") {
+      const objective = (progress?.objectives || []).find((entry) => entry.objectiveId === rule.objectiveRef);
+      return Boolean(objective) && (objective.complete === true || safeInteger(objective.currentValue, 0) >= Math.max(1, safeInteger(rule.amount, 1)));
+    }
+    return false;
+  }
+
+  runRule(ctx, quest, step, rule) {
+    if (rule.then === "message") {
+      const text = safeString(rule.text).trim();
+      if (text) this.questMessage([ctx.profile.id], quest, text);
+      return;
+    }
+    if (rule.then !== "spawn") return;
+    const spawn = (Array.isArray(quest.spawns) ? quest.spawns : []).find((entry) => entry?.id === rule.spawnRef);
+    const runtime = this.mmoService?.actorRuntime;
+    if (!spawn || !runtime || typeof runtime.spawnQuestGroup !== "function") return;
+    const place = this.spawnPlace(ctx, spawn);
+    if (!place) return;
+    runtime.spawnQuestGroup({ worldId: ctx.worldId, questId: quest.id, spawnId: spawn.id, stepId: step.id, ruleId: rule.id, audience: spawn.audience,
+      despawn: spawn.despawn, playerId: ctx.profile.id, actorId: spawn.actorRef, count: spawn.count, center: place.center, around: place.around });
+  }
+
+  // In het Questgebied (rond het midden), of rond de speler die de regel liet gaan.
+  spawnPlace(ctx, spawn) {
+    const area = spawn.areaRef ? questAreaById(ctx.project, spawn.areaRef) : null;
+    const points = Array.isArray(area?.points) ? area.points.filter((point) => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.z))) : [];
+    if (points.length >= 3) {
+      const center = { x: points.reduce((sum, point) => sum + Number(point.x), 0) / points.length, z: points.reduce((sum, point) => sum + Number(point.z), 0) / points.length };
+      return { center, around: Math.min(8, 2 + safeInteger(spawn.count, 1) * 0.6) };
+    }
+    let position = ctx.position && Number.isFinite(Number(ctx.position.x)) ? ctx.position : null;
+    if (!position) {
+      try { position = (this.mmoService?.getWorldPlayerStates?.(ctx.worldId) || []).find((state) => state?.player_id === ctx.profile.id) || null; } catch { position = null; }
+    }
+    if (!position || !Number.isFinite(Number(position.x)) || !Number.isFinite(Number(position.z))) return null;
+    return { center: { x: Number(position.x), z: Number(position.z) }, around: 7 };
+  }
+
+  // Bericht in beeld (na de transactie, zoals het seintje).
+  questMessage(playerIds, quest, text) {
+    const ids = (playerIds || []).filter(Boolean);
+    if (!ids.length || typeof this.mmoService?.sendToPlayer !== "function") return;
+    const payload = { type: "quest:message", questId: quest.id, title: quest.displayName || quest.id, text: text.slice(0, 200) };
+    setTimeout(() => {
+      for (const id of ids) { try { this.mmoService.sendToPlayer(id, payload); } catch {} }
+    }, 30);
+  }
+
+  // Wie heeft deze quest-groep nog? open = quest nog bezig (mag hem blijven zien); need = houdt hem in de wereld.
+  questSpawnNeeds(group) {
+    const open = [];
+    const need = [];
+    for (const playerId of group.members) {
+      const row = this.loadQuestState(playerId, group.questId);
+      if (!row || !isOpenStatus(row.status)) continue;
+      open.push(playerId);
+      if (group.despawn === "step" && row.active_step_id !== group.stepId) continue;
+      need.push(playerId);
+    }
+    return { open, need };
+  }
+
+  // Na uitloggen weg: wie nog op die stap staat, kan de regel opnieuw laten gaan (geen kopie; de normale start van de stap).
+  releaseSpawnRules(group) {
+    if (!group?.stepId || !group?.ruleId) return;
+    for (const playerId of group.members) {
+      this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE ?")
+        .run(playerId, group.questId, "rule:%:" + group.stepId + ":" + group.ruleId);
+    }
   }
 
   completeQuestRun(ctx, quest, row, endStep, operationId, events = []) {
@@ -760,7 +860,7 @@ export class Node04QuestRuntimeService {
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, endStep?.id || null, row.status, row.active_step_id, "quest_complete", { operationId: opId, endId: endStep?.id || null, grants });
     this.removeQuestItems(ctx, quest, questRepeatMode(quest) !== "once_per_character", opId);
     // Gebeurtenis-bonnetjes van deze run zijn niet meer nodig (de beloning-bon blijft).
-    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND (event_id LIKE 'ev:%' OR event_id LIKE 'rule:%')").run(ctx.profile.id, quest.id);
     this.node03RuntimeService.recordGameplayEvent(ctx, "quest_completed", "player", quest.id, { endId: endStep?.id || null, grants });
     for (const nextQuestId of Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs : []) {
       if (!questById(ctx.project, nextQuestId)) continue;
@@ -816,6 +916,11 @@ export class Node04QuestRuntimeService {
     const ids = Array.from(new Set(list.includes(ctx.profile?.id) ? [ctx.profile.id].concat(list) : list));
     // Versla: ook de groep in de buurt, en (als het doel dat zegt) iedereen in de buurt met deze stap.
     const extra = event?.type === "defeat" ? this.nearbyCredit(ctx, ids) : { group: [], nearby: [] };
+    // Stap 5: een quest-vijand telt alleen voor wie hem mag zien.
+    if (typeof event?.canSee === "function") {
+      extra.group = extra.group.filter((id) => event.canSee(id));
+      extra.nearby = extra.nearby.filter((id) => event.canSee(id));
+    }
     const recipients = ids.map((id) => [id, "fighter"])
       .concat(extra.group.map((id) => [id, "group"]), extra.nearby.map((id) => [id, "nearby"]));
     const teamTaken = new Set();
@@ -895,7 +1000,9 @@ export class Node04QuestRuntimeService {
       if (!step || step.kind === "end") continue;
       const matching = (Array.isArray(step.objectives) ? step.objectives : []).filter(function (objective) {
         return objective.objectiveType === event.type && objectiveEventRef(objective) === refId && objectiveCredits(objective, via)
-          && eventInArea(ctx.project, objective, event);
+          && eventInArea(ctx.project, objective, event)
+          // Stap 5: Versla een verschijning = alleen de vijanden van die verschijning van deze quest.
+          && (!objective.spawnRef || (event.spawn?.questId === quest.id && event.spawn?.spawnId === objective.spawnRef));
       });
       if (!matching.length) continue;
       this.atomic(() => {
@@ -1045,7 +1152,7 @@ export class Node04QuestRuntimeService {
     if (!start || start.kind === "end") throw httpError(400, "Deze quest heeft nog geen eerste stap.");
     // Nieuwe run: schone voortgang, eigen run-ID (beloning 1x per run) en de versie waarop hij hem afmaakt.
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
-    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND (event_id LIKE 'ev:%' OR event_id LIKE 'rule:%')").run(ctx.profile.id, quest.id);
     this.db.prepare("DELETE FROM player_dialogue_choices WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
     this.rememberQuestVersion(quest);
     const stamp = now();
@@ -1096,7 +1203,7 @@ export class Node04QuestRuntimeService {
     // Stap 4: een quest die vanzelf start kun je niet zelf verlaten (mislukken via de groepsregel kan wel; dan begint hij opnieuw).
     if (reason === "abandon" && (quest.abandonable === false || quest.startMode === "auto")) throw httpError(400, "Deze quest kun je niet verlaten.");
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
-    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND (event_id LIKE 'ev:%' OR event_id LIKE 'rule:%')").run(ctx.profile.id, quest.id);
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.ABANDONED, row.active_step_id, row.status, row.active_step_id, reason, { operationId });
     this.removeQuestItems(ctx, normalizeQuest(quest), true, operationId);
     // Wie in het startgebied staat, moet er eerst uit en weer in om opnieuw te beginnen.
@@ -1678,7 +1785,7 @@ export class Node04QuestRuntimeService {
   }
 
   // De 5 dichtstbijzijnde levende vijanden (of grondstoffen) van open doelen met ⭐ Ster op kaart; met "Alleen in gebied" alleen daarbinnen.
-  liveMarks(ctx, step, objectives) {
+  liveMarks(ctx, step, objectives, questId = null) {
     const runtime = this.mmoService?.actorRuntime;
     if (!runtime || typeof runtime.livePositions !== "function") return [];
     const marks = [];
@@ -1690,7 +1797,10 @@ export class Node04QuestRuntimeService {
       const ref = kind === "resource" ? objective.resourceRef : objective.actorRef;
       if (!kind || !ref) continue;
       const area = objective.inAreaRef ? questAreaById(ctx.project, objective.inAreaRef) : null;
-      for (const spot of runtime.livePositions(kind, ref)) {
+      // Alleen wat deze speler ziet; bij een verschijning alleen die vijanden.
+      const spots = objective.spawnRef && typeof runtime.questSpawnPositions === "function"
+        ? runtime.questSpawnPositions(questId, objective.spawnRef, ctx.profile.id) : runtime.livePositions(kind, ref, ctx.profile.id);
+      for (const spot of spots) {
         if (area && !pointInArea(area.points, spot.x, spot.z)) continue;
         marks.push({ id: spot.id, objectiveId: view.objectiveId, x: Math.round(spot.x * 100) / 100, z: Math.round(spot.z * 100) / 100 });
       }
@@ -1769,7 +1879,7 @@ export class Node04QuestRuntimeService {
         map: this.stepMapView(ctx, step),
         watchAreas: this.watchAreas(ctx, objectives),
         // Kevin 5-11: ⭐ op de kaart (ook door de mist) waar de vijand die je moet verslaan nu loopt.
-        marks: this.liveMarks(ctx, step, objectives),
+        marks: this.liveMarks(ctx, step, objectives, quest.id),
         instruction: this.resolveTokenText(ctx, step.instruction || ""),
         stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
         match: step.match === "any" ? "any" : "all",
@@ -2254,7 +2364,7 @@ export class Node04QuestRuntimeService {
     if (!step || step.kind === "end") throw httpError(400, "Kies een stap (geen einde).");
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
-    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE 'ev:%'").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND (event_id LIKE 'ev:%' OR event_id LIKE 'rule:%')").run(ctx.profile.id, quest.id);
     this.rememberQuestVersion(quest);
     const stamp = now();
     this.db.prepare(`

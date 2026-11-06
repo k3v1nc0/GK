@@ -889,7 +889,9 @@ export class MmoService {
       isDefeated: (playerId) => this.isPlayerDefeatedForMovement(playerId),
       connections: (worldId) => Array.from(this.connectionsByWorldId.get(worldId) || [])
         .map((id) => this.connectionsById.get(id)).filter((connection) => connection && !connection.closed),
-      send: (connection, payload) => send(connection.ws, payload)
+      send: (connection, payload) => send(connection.ws, payload),
+      // Quest Builder stap 5: quest-vijanden voor de groep zien alleen de leden van die groep.
+      partyOf: (playerId) => (this.partyRuntime ? this.partyRuntime.partyIdFor(playerId) : null)
     });
     // Healing (2-11): regeneratie en tijdelijke effecten van spelers, 1x per seconde in dezelfde worldtick.
     this.vitalsRuntime = new VitalsRuntime({

@@ -3,7 +3,7 @@
 // placed_model blijft het interne document per wereldinstantie, maar staat niet als Bibliotheek-soort in beeld.
 // Speler en Game-scherm (HUD) staan onder Instellingen. De wereldbouwer maakt hieruit de spelwereld.
 import { HELP_ID, HELP_MODEL, HELP_NAME, HELP_SCALE, help, ui } from "./ui.js";
-import { QUEST_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
+import { QUEST_LIMITS, QUEST_SPAWN_LIMITS } from "../../../../apps/web/public/shared/quest-graph.js";
 
 const idField = (label, wat) => ({ type: "id", required: true, maxLength: 120, audience: "client", label,
   ui: ui("🔖", "id", "werkbank", { more: true }), default: null, help: HELP_ID(wat) });
@@ -126,6 +126,11 @@ export const GAME_KINDS = {
       steps: { type: "questSteps", required: false, maxItems: QUEST_LIMITS.steps, audience: "client", label: "Stappen",
         ui: ui("🪜", "questSteps", "werkbank"), default: null,
         help: help("De stappen van de quest: doelen per stap en waar de quest daarna heen gaat.", "Begin met de snelle quest (1 doel). Meer nodig? Open de Quest Builder en voeg stappen toe.", "Rode melding in de Quest Builder → klik de stap en los op wat er staat.") },
+      // Quest Builder stap 5: wat de quest laat verschijnen (vijanden met een eigen naam, voor wie, wanneer weg). Een regel bij een stap
+      // (⚡ Als → Dan) laat het verschijnen. Hoort bij de quest, niet bij een stap.
+      spawns: { type: "questSpawns", required: false, maxItems: QUEST_SPAWN_LIMITS.spawns, audience: "client", label: "Verschijnen",
+        ui: ui("👾", "questSpawns", "questbuilder"), default: null,
+        help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap ⚡ Als → Dan: Laat verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
       rewards: refList("Beloning", "🎁", ["item_definition", "currency"], [AMOUNT], "werkbank",
         help("Wat de speler krijgt als de quest klaar is.", "Sleep items of valuta uit de Bibliotheek, bijv. 10 goud of een zwaard.", "Spelers worden te snel rijk → minder of goedkopere beloningen.")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },

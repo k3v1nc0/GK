@@ -127,7 +127,7 @@ export function compileGameSection(documents, options = {}) {
     needRows(doc, doc.body.rewards, label + " (beloning)");
     if (hasOwnSteps(doc.body)) {
       const titles = new Map(doc.body.steps.map((step, index) => [step.stepId, step.title || String(index + 1)]));
-      for (const found of questGraphIssues(doc.body.steps, { refExists, refLabel })) {
+      for (const found of questGraphIssues(doc.body.steps, { refExists, refLabel, spawns: doc.body.spawns })) {
         fail(doc, "QUEST_CHECK", label + (found.stepId ? ", stap '" + (titles.get(found.stepId) || found.stepId) + "'" : "") + ": " + found.message);
       }
       continue;
@@ -179,11 +179,23 @@ export function compileGameSection(documents, options = {}) {
         credit: objective.credit === "fighters" || objective.credit === "nearby" ? objective.credit : "group",
         ...(objective.areaRef ? { areaId: idFromRef(objective.areaRef) } : {}),
         // Kevin 5-11: ⭐ op de kaart waar de vijand (of grondstof) nu is.
-        ...(objective.mark === "star" ? { mark: "star" } : {})
+        ...(objective.mark === "star" ? { mark: "star" } : {}),
+        // Stap 5: Versla telt alleen de vijanden van deze verschijning.
+        ...(objective.type === "defeat" && objective.spawnId ? { spawnId: objective.spawnId } : {})
       })),
       // Stap 3: het gebied van deze stap op de kaart (zoekgebied, punt of verborgen).
-      ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {})
-    }))
+      ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {}),
+      // Stap 5: Als → Dan (alleen als er regels zijn).
+      ...(Array.isArray(step.rules) && step.rules.length ? { rules: step.rules.map((rule) => ({
+        ruleId: rule.ruleId, when: rule.when, objectiveId: rule.objectiveId || null, amount: Number.isInteger(rule.amount) ? rule.amount : 1,
+        then: rule.then, spawnId: rule.spawnId || null, text: rule.text || ""
+      })) } : {})
+    })),
+    // Stap 5: wat de quest laat verschijnen.
+    ...(Array.isArray(doc.body.spawns) && doc.body.spawns.length ? { spawns: doc.body.spawns.map((spawn) => ({
+      spawnId: spawn.spawnId, name: spawn.name || "", actorId: spawn.actorRef ? idFromRef(spawn.actorRef) : null, count: Number.isInteger(spawn.count) ? spawn.count : 1,
+      areaId: spawn.areaRef ? idFromRef(spawn.areaRef) : null, audience: spawn.audience || "group", despawn: spawn.despawn || "quest"
+    })) } : {})
   }, startOf(doc.body)));
   // Stap 3: Questgebieden (Area tool) in meters, voor de quest-motor (ga naar, verlaat, alleen hier tellen, zoekgebied).
   const questAreas = active.filter((doc) => doc.kind === "area" && areaSoort(doc.body) === "questgebied")

@@ -1,12 +1,13 @@
 // Quest Builder stap 1 (4-11): een quest als netwerk van stappen, over de editor heen, met tabs.
 // 5-11: de tabs volgen hoe je een quest bedenkt. 🚪 Start = hoe begint hij en wie mag hem doen; 🪜 Stappen = wat moet
-// de speler doen (doelen en eindes); 🧪 Testen = quest-check en je eigen stand. Naam, beloning en verhaal staan in het paneel.
+// de speler doen (doelen, eindes en ⚡ Als → Dan); 👾 Verschijnen = vijanden die de quest laat verschijnen (stap 5);
+// 🧪 Testen = quest-check en de stand van spelers. Naam, beloning en verhaal staan in het paneel.
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest14";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest15";
 
-const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["testen", "🧪 Testen"]];
+const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
 let current = null;
 
@@ -71,10 +72,12 @@ function render(state) {
   const body = clone(doc.body || {});
   const { nameOf, refExists } = names(bench);
   const steps = hasOwnSteps(body) ? body.steps : null;
+  // Stap 5: de verschijningen van deze quest (voor Als → Dan en Versla bij de stappen).
+  state.spawns = Array.isArray(body.spawns) ? body.spawns : [];
   // Stap 4: de quest-check kijkt ook of de quest te beginnen is (start en voorwaarden).
   const maxLevel = bench.docs("project_settings")[0]?.body?.maxLevel || 50;
   const startIssues = questStartIssues(body, { refExists, refLabel: nameOf, selfRef: doc.docKey, maxLevel });
-  const issues = startIssues.concat(steps ? questGraphIssues(steps, { refExists, refLabel: nameOf, partyLeave: body.partyLeave }) : []);
+  const issues = startIssues.concat(steps ? questGraphIssues(steps, { refExists, refLabel: nameOf, partyLeave: body.partyLeave, spawns: body.spawns }) : []);
   const badge = issues.length ? el("span", { class: "qbBadge qbBadgeBad", text: "⚠️ " + issues.length + (issues.length === 1 ? " melding" : " meldingen") })
     : !steps ? el("span", { class: "qbBadge", text: "Snelle quest" })
       : el("span", { class: "qbBadge qbBadgeOk", text: "✅ Quest-check OK" });
@@ -98,6 +101,7 @@ function render(state) {
   root.replaceChildren(panel);
   placePanel(state, panel);
   if (state.tab === "start") renderStart(state, content, body, startIssues, nameOf);
+  else if (state.tab === "verschijnen") renderSpawns(state, content, body, steps, issues, nameOf);
   else if (state.tab === "testen") renderTest(state, content, body, steps, issues, nameOf);
   else renderSteps(state, content, body, steps, issues, nameOf);
   panel.scrollTop = scroll;
@@ -128,6 +132,16 @@ async function saveSteps(state, body, steps, label, dropSimple = false) {
   const next = Object.assign({}, body, { steps });
   if (dropSimple) for (const key of SIMPLE_FIELDS) delete next[key];
   try { await state.bench.saveDoc("quest", doc, next, "Quest · " + label); } catch {}
+  render(state);
+}
+
+// De hele quest in één keer aanpassen (bijv. verschijning + de doelen die erheen wijzen), met één Ctrl+Z.
+async function saveQuest(state, label, change) {
+  const doc = state.bench.doc(state.docKey);
+  const body = clone(doc.body || {});
+  change(body);
+  if (Array.isArray(body.spawns) && !body.spawns.length) delete body.spawns;
+  try { await state.bench.saveDoc("quest", doc, body, "Quest · " + label); } catch {}
   render(state);
 }
 
@@ -288,7 +302,7 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
     change(copy);
     saveSteps(state, body, copy, label);
   };
-  const general = issues.filter((issue) => !issue.stepId);
+  const general = issues.filter((issue) => !issue.stepId && !issue.spawnId);
   if (general.length) host.append(issueList(general));
   const list = el("div", { class: "qbSteps" });
   steps.forEach((step, index) => list.append(stepCard(state, steps, step, index, issues.filter((issue) => issue.stepId === step.stepId), nameOf, edit)));
@@ -401,6 +415,7 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
       return button;
     })));
     card.append(adders);
+    card.append(rulesBox(state, step, (label, change) => edit(label, (copy) => change(at(copy)))));
     const nextSelect = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
       .map((other) => el("option", { value: other.stepId, text: stepLabel(other, steps.indexOf(other), nameOf) }))));
     nextSelect.value = (step.next || [])[0]?.to || "";
@@ -441,7 +456,7 @@ function objectiveRow(state, objective, issues, change, remove) {
     if (!next.npc) delete target.npcRef;
     if (!next.event) { delete target.share; delete target.areaRef; }
     if (!next.mark) delete target.mark;
-    if (target.type !== "defeat") delete target.credit;
+    if (target.type !== "defeat") { delete target.credit; delete target.spawnId; }
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
   }));
   // Ga naar / Verlaat gebied: een keuzelijst met Questgebieden; de rest: een kaart uit de Bibliotheek op het vak.
@@ -449,6 +464,22 @@ function objectiveRow(state, objective, issues, change, remove) {
     ? areaSelect(bench, objective.ref || null, "Kies een Questgebied...", "Welk gebied", (ref) => change("gebied", (target) => { target.ref = ref; }))
     : bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null, (ref) => change("doel", (target) => { target.ref = ref || null; }));
   const parts = [type, el("div", { class: "qbSlot" }, what)];
+  // Stap 5: Versla alle vijanden van deze soort, of alleen die van een verschijning van deze quest.
+  const spawns = state.spawns || [];
+  if (objective.type === "defeat" && (spawns.length || objective.spawnId)) {
+    const pick = el("select", { class: "wbdSelect qbShare", title: "Telt elke vijand van deze soort, of alleen de vijanden die deze quest liet verschijnen (👾 Verschijnen)." },
+      [el("option", { value: "", text: "⚔️ Elke van deze soort" })].concat(spawns.map((spawn) => el("option", { value: spawn.spawnId, text: "👾 Alleen: " + spawnName(spawn, (ref) => names(bench).nameOf(ref)) }))));
+    if (objective.spawnId && !spawns.some((spawn) => spawn.spawnId === objective.spawnId)) pick.append(el("option", { value: objective.spawnId, text: "⚠️ " + objective.spawnId }));
+    pick.value = objective.spawnId || "";
+    pick.addEventListener("change", () => change("verschijning", (target) => {
+      const spawn = spawns.find((entry) => entry.spawnId === pick.value);
+      if (!spawn) { delete target.spawnId; return; }
+      target.spawnId = spawn.spawnId;
+      if (spawn.actorRef) target.ref = spawn.actorRef;
+      target.amount = Math.max(1, spawn.count || 1);
+    }));
+    parts.push(pick);
+  }
   if (spec.amount) {
     const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Hoeveel" });
     amount.value = String(objective.amount || 1);
@@ -494,6 +525,148 @@ function objectiveRow(state, objective, issues, change, remove) {
   parts.push(role, smallButton("🗑️", "Doel weghalen", remove));
   const row = el("div", { class: "qbObjective" + (issues.length ? " qbObjectiveBad" : "") }, parts);
   return issues.length ? el("div", { class: "qbObjectiveWrap" }, [row, issueList(issues)]) : row;
+}
+
+// ---------- ⚡ Als → Dan (stap 5): kleine regels per stap ----------
+
+function rulesBox(state, step, edit) {
+  const box = el("div", { class: "qbRules" }, [el("span", { class: "qbLabel", text: "⚡ Als → Dan" })]);
+  const rules = Array.isArray(step.rules) ? step.rules : [];
+  rules.forEach((rule, index) => box.append(ruleRow(state, step, rule,
+    (label, change) => edit(label, (target) => change(target.rules[index], target)),
+    () => edit("regel weg", (target) => { target.rules.splice(index, 1); if (!target.rules.length) delete target.rules; }))));
+  const add = el("button", { type: "button", class: "wbdGhost", text: "➕ Als → Dan", title: "Bijv. als 5 hout verzameld is, laat 3 wolven verschijnen" });
+  add.disabled = rules.length >= QUEST_SPAWN_LIMITS.rules;
+  add.addEventListener("click", () => edit("regel erbij", (target) => {
+    target.rules = target.rules || [];
+    const spawn = (state.spawns || [])[0];
+    const rule = { ruleId: uniqueId("regel_", new Set(target.rules.map((entry) => entry.ruleId))), when: "start", then: spawn ? "spawn" : "message" };
+    if (spawn) rule.spawnId = spawn.spawnId; else rule.text = "";
+    target.rules.push(rule);
+  }));
+  box.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: rules.length ? "Elke regel gaat 1× per keer dat de speler deze stap binnenkomt." : "Bijv. als 5 hout verzameld is, laat 3 wolven verschijnen; of een bericht in beeld." })]));
+  return box;
+}
+
+function ruleRow(state, step, rule, change, remove) {
+  const spawns = state.spawns || [];
+  const objectives = Array.isArray(step.objectives) ? step.objectives : [];
+  const { nameOf } = names(state.bench);
+  const when = el("select", { class: "wbdSelect", title: "Wanneer" }, Object.entries(RULE_WHEN).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+  when.value = RULE_WHEN[rule.when] ? rule.when : "start";
+  when.addEventListener("change", () => change("als", (target) => {
+    target.when = when.value;
+    if (when.value === "count") {
+      const first = objectives.find((objective) => OBJECTIVE_KINDS[objective.type]?.amount) || objectives[0];
+      if (first) target.objectiveId = first.objectiveId;
+      target.amount = target.amount || Math.max(1, Math.ceil((first?.amount || 2) / 2));
+    } else { delete target.objectiveId; delete target.amount; }
+  }));
+  const parts = [when];
+  if (rule.when === "count") {
+    const goal = el("select", { class: "wbdSelect qbArea", title: "Welk doel" }, [el("option", { value: "", text: "Kies een doel..." })]
+      .concat(objectives.map((objective) => el("option", { value: objective.objectiveId, text: objectiveText(objective, nameOf) }))));
+    goal.value = rule.objectiveId || "";
+    goal.addEventListener("change", () => change("doel", (target) => { if (goal.value) target.objectiveId = goal.value; else delete target.objectiveId; }));
+    const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Bij hoeveel" });
+    amount.value = String(rule.amount || 1);
+    amount.addEventListener("change", () => change("aantal", (target) => { target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1))); }));
+    parts.push(goal, el("label", { class: "qbTimes" }, [el("span", { text: "op" }), amount]));
+  }
+  const then = el("select", { class: "wbdSelect", title: "Wat er dan gebeurt" }, Object.entries(RULE_THEN).map(([value, entry]) => el("option", { value, text: "→ " + entry.icon + " " + entry.label })));
+  then.value = RULE_THEN[rule.then] ? rule.then : "message";
+  then.addEventListener("change", () => change("dan", (target) => {
+    target.then = then.value;
+    if (then.value === "spawn") { delete target.text; if (spawns[0]) target.spawnId = spawns[0].spawnId; }
+    else { delete target.spawnId; target.text = target.text || ""; }
+  }));
+  parts.push(then);
+  if (rule.then === "spawn") {
+    if (!spawns.length) {
+      const go = el("button", { type: "button", class: "wbdGhost", text: "👾 Maak eerst een verschijning" });
+      go.addEventListener("click", () => { state.tab = "verschijnen"; render(state); });
+      parts.push(go);
+    } else {
+      const what = el("select", { class: "wbdSelect qbArea", title: "Wat er verschijnt (👾 Verschijnen)" }, [el("option", { value: "", text: "Kies..." })]
+        .concat(spawns.map((spawn) => el("option", { value: spawn.spawnId, text: "👾 " + spawnName(spawn, nameOf) }))));
+      if (rule.spawnId && !spawns.some((spawn) => spawn.spawnId === rule.spawnId)) what.append(el("option", { value: rule.spawnId, text: "⚠️ " + rule.spawnId }));
+      what.value = rule.spawnId || "";
+      what.addEventListener("change", () => change("wat verschijnt", (target) => { if (what.value) target.spawnId = what.value; else delete target.spawnId; }));
+      parts.push(what);
+    }
+  } else {
+    parts.push(textInput(rule.text, "Bericht in beeld, bijv. Wolven! Verdedig het hout!", QUEST_SPAWN_LIMITS.text, (value) => change("bericht", (target) => { target.text = value; })));
+  }
+  parts.push(smallButton("🗑️", "Regel weghalen", remove));
+  return el("div", { class: "qbObjective qbRule" }, parts);
+}
+
+// ---------- 👾 Verschijnen (stap 5): wat de quest laat verschijnen ----------
+
+function renderSpawns(state, host, body, steps, issues, nameOf) {
+  const bench = state.bench;
+  const spawns = state.spawns || [];
+  host.append(el("section", { class: "qbTestBox" }, [el("h4", { text: "👾 Wat deze quest laat verschijnen" }),
+    el("p", { class: "wbdNote", text: "Vijanden die bij deze quest horen. Ze verschijnen pas als een regel bij een stap dat zegt: 🪜 Stappen > ⚡ Als → Dan > 👾 Laat verschijnen. Ze komen niet terug als ze dood zijn en worden nooit gekopieerd, ook niet als iemand de groep verlaat (wie erbij was, ziet ze nog)." })]));
+  if (!steps) host.append(el("p", { class: "wbdNote", text: "Een snelle quest heeft geen regels. Zet hem eerst om naar stappen (🪜 Stappen)." }));
+  const used = (spawnId) => {
+    const lines = [];
+    (steps || []).forEach((step, index) => {
+      for (const rule of step.rules || []) if (rule.then === "spawn" && rule.spawnId === spawnId) lines.push("⚡ " + stepLabel(step, index, nameOf) + ": " + (RULE_WHEN[rule.when]?.label || "") + (rule.when === "count" ? " " + (rule.amount || 1) : ""));
+      for (const objective of step.objectives || []) if (objective.spawnId === spawnId) lines.push("⚔️ " + stepLabel(step, index, nameOf) + ": " + objectiveText(objective, nameOf));
+    });
+    return lines;
+  };
+  const edit = (label, change) => saveQuest(state, label, change);
+  spawns.forEach((spawn, index) => {
+    const at = (body2) => body2.spawns[index];
+    const card = el("section", { class: "qbStep" + (issues.some((issue) => issue.spawnId === spawn.spawnId) ? " qbStepBad" : ""), "data-spawn": spawn.spawnId });
+    const name = textInput(spawn.name, "Naam, bijv. Wolvengroep", QUEST_SPAWN_LIMITS.name, (value) => edit("naam verschijning", (copy) => { if (value) at(copy).name = value; else delete at(copy).name; }));
+    card.append(el("div", { class: "qbStepHead" }, [el("span", { class: "qbNum", text: "👾" }), name,
+      smallButton("🗑️", "Verschijning weghalen", () => edit("verschijning weg", (copy) => {
+        copy.spawns.splice(index, 1);
+        // Regels en doelen die erheen wezen: leeg maken (de quest-check zegt wat er nog moet).
+        for (const step of Array.isArray(copy.steps) ? copy.steps : []) {
+          for (const rule of step.rules || []) if (rule.spawnId === spawn.spawnId) delete rule.spawnId;
+          for (const objective of step.objectives || []) if (objective.spawnId === spawn.spawnId) delete objective.spawnId;
+        }
+      }))]));
+    const count = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_SPAWN_LIMITS.count, step: 1, title: "Hoeveel" });
+    count.value = String(spawn.count || 1);
+    count.addEventListener("change", () => edit("aantal verschijning", (copy) => { at(copy).count = Math.max(1, Math.min(QUEST_SPAWN_LIMITS.count, Math.round(Number(count.value) || 1))); }));
+    const actor = bench.refControl({ refKind: "actor_archetype", required: false, ui: { icon: "⚔️" } }, spawn.actorRef || null, (ref) => edit("vijand verschijning", (copy) => {
+      if (ref) at(copy).actorRef = ref; else delete at(copy).actorRef;
+      // Versla-doelen van deze verschijning wijzen naar dezelfde vijand.
+      for (const step of Array.isArray(copy.steps) ? copy.steps : []) for (const objective of step.objectives || []) if (objective.spawnId === spawn.spawnId && ref) objective.ref = ref;
+    }));
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "⚔️ Wat" }), el("div", { class: "qbObjective" }, [el("div", { class: "qbSlot" }, actor), el("label", { class: "qbTimes" }, [el("span", { text: "×" }), count])])]));
+    const audience = el("select", { class: "wbdSelect", title: "Wie ziet ze, kan ze raken en wordt door ze aangevallen" },
+      Object.entries(QUEST_SPAWN_AUDIENCE).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+    audience.value = QUEST_SPAWN_AUDIENCE[spawn.audience] ? spawn.audience : "group";
+    audience.addEventListener("change", () => edit("voor wie verschijning", (copy) => { if (audience.value === "group") delete at(copy).audience; else at(copy).audience = audience.value; }));
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "👥 Voor wie" }), audience]));
+    const where = areaSelect(bench, spawn.areaRef || null, "📍 Rond de speler (7 m)", "Waar ze verschijnen: rond de speler bij wie de regel ging, of in het midden van een Questgebied",
+      (ref) => edit("waar verschijning", (copy) => { if (ref) at(copy).areaRef = ref; else delete at(copy).areaRef; }), "🎯 In ");
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "📍 Waar" }), where]));
+    const despawn = el("select", { class: "wbdSelect", title: "Wanneer ze weggaan. Dood = weg (ze komen niet terug)." },
+      Object.entries(QUEST_SPAWN_DESPAWN).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+    despawn.value = QUEST_SPAWN_DESPAWN[spawn.despawn] ? spawn.despawn : "quest";
+    despawn.addEventListener("change", () => edit("verdwijnen verschijning", (copy) => { if (despawn.value === "quest") delete at(copy).despawn; else at(copy).despawn = despawn.value; }));
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "💨 Verdwijnen" }), despawn]));
+    const lines = used(spawn.spawnId);
+    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "🔗 Gebruikt" }),
+      el("div", { class: "wbdQuestLines" }, lines.length ? lines.map((line) => el("span", { class: "wbdNote", text: line })) : [el("span", { class: "wbdNote", text: "Nog nergens. Zet bij een stap ⚡ Als → Dan: 👾 Laat verschijnen." })])]));
+    const own = issues.filter((issue) => issue.spawnId === spawn.spawnId);
+    if (own.length) card.append(issueList(own));
+    host.append(card);
+  });
+  const add = el("button", { type: "button", class: "wbdPrimary", text: "➕ Verschijning" });
+  add.disabled = spawns.length >= QUEST_SPAWN_LIMITS.spawns;
+  add.addEventListener("click", () => edit("verschijning erbij", (copy) => {
+    copy.spawns = Array.isArray(copy.spawns) ? copy.spawns : [];
+    copy.spawns.push({ spawnId: uniqueId("spawn_", new Set(copy.spawns.map((entry) => entry.spawnId))), count: 3 });
+  }));
+  host.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: "Sleep een vijand uit de Bibliotheek op het vak ⚔️ Wat." })]));
 }
 
 // ---------- 🧪 Testen ----------

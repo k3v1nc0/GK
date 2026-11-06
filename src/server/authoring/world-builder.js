@@ -406,7 +406,7 @@ function hudModules(hud, { currencyIds, hasVendor, hasStation }) {
 // Quest Builder stap 1: een quest is een netwerk van stappen (doelen, overgangen, eindes).
 // De snelle Quest-kaart is al omgezet naar 1 stap + einde (game-compiler). version = vingerafdruk van de inhoud:
 // een speler maakt een lopende quest af op de versie waarmee hij begon (quest-motor, tabel quest_versions).
-function questObjective(objective, names) {
+function questObjective(objective, names, spawns = new Map()) {
   const spec = OBJECTIVE_KINDS[objective.type] || {};
   const record = { id: objective.objectiveId, objectiveType: objective.type, role: objective.role || "required",
     share: spec.event && objective.share === "team" ? "team" : "personal", requiredAmount: spec.amount ? Math.max(1, objective.amount || 1) : 1 };
@@ -427,7 +427,10 @@ function questObjective(objective, names) {
   if (spec.event && objective.areaId) record.inAreaRef = objective.areaId;
   // Kevin 5-11: ⭐ op de kaart (alleen als het aan staat, zo blijft de versie van bestaande quests gelijk).
   if (spec.mark && objective.mark === "star") record.mark = "star";
-  const what = objective.type === "defeat" ? names.actor(objective.targetId)
+  // Stap 5: alleen de vijanden van deze verschijning tellen (alleen als gekozen, zo blijft de versie gelijk).
+  const spawn = objective.type === "defeat" && objective.spawnId ? spawns.get(objective.spawnId) : null;
+  if (spawn) record.spawnRef = spawn.spawnId;
+  const what = spawn ? spawn.name || names.actor(objective.targetId) : objective.type === "defeat" ? names.actor(objective.targetId)
     : objective.type === "gather" ? names.resource(objective.targetId)
       : spec.refKind === "npc" ? names.npc(objective.targetId) : spec.refKind === "area" ? names.area(objective.targetId) : names.item(objective.targetId);
   const amount = spec.amount && record.requiredAmount > 1 ? record.requiredAmount + "× " : "";
@@ -437,13 +440,19 @@ function questObjective(objective, names) {
 }
 
 function questRecord(quest, names) {
+  const spawns = new Map((Array.isArray(quest.spawns) ? quest.spawns : []).filter((spawn) => spawn.actorId).map((spawn) => [spawn.spawnId, spawn]));
   const steps = quest.steps.map((step) => {
-    const objectives = step.kind === "step" ? step.objectives.map((objective) => questObjective(objective, names)) : [];
+    const objectives = step.kind === "step" ? step.objectives.map((objective) => questObjective(objective, names, spawns)) : [];
     const summary = objectives.filter((objective) => objective.role !== "hidden").map((objective) => objective.displayName).join(", ");
     const record = { id: step.stepId, kind: step.kind, displayName: step.title || summary || step.stepId, instruction: step.text || summary || step.title || "",
       match: step.match, objectives, next: step.kind === "step" ? step.next.map((to) => ({ to })) : [], conditions: [], rewards: [] };
     // Stap 3: alleen als er een gebied gekozen is (zo blijft de versie van bestaande quests gelijk).
     if (step.kind === "step" && step.mapAreaId) record.map = { areaRef: step.mapAreaId, show: step.mapShow || "area" };
+    // Stap 5: Als → Dan (alleen als er regels zijn).
+    if (step.kind === "step" && Array.isArray(step.rules) && step.rules.length) {
+      record.rules = step.rules.map((rule) => ({ id: rule.ruleId, when: rule.when, objectiveRef: rule.objectiveId || null, amount: Math.max(1, rule.amount || 1),
+        then: rule.then, spawnRef: rule.spawnId || null, text: rule.text || "" }));
+    }
     return record;
   });
   const first = steps[0] || null;
@@ -464,6 +473,11 @@ function questRecord(quest, names) {
   if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
   // 5-11: plaatje in het startvenster (alleen als gekozen, zo blijft de versie gelijk).
   if (quest.imageAssetId) record.imageAssetId = quest.imageAssetId;
+  // Stap 5: wat de quest laat verschijnen (alleen als er iets is).
+  if (spawns.size) {
+    record.spawns = Array.from(spawns.values()).map((spawn) => ({ id: spawn.spawnId, name: spawn.name || names.actor(spawn.actorId), actorRef: spawn.actorId,
+      count: Math.max(1, Math.min(10, spawn.count || 1)), areaRef: spawn.areaId || null, audience: spawn.audience || "group", despawn: spawn.despawn || "quest" }));
+  }
   // Stap 4: alleen als het afwijkt van de standaard (bij een NPC, geen voorwaarden), zo blijft de versie gelijk.
   if (quest.startMode === "item" || quest.startMode === "area" || quest.startMode === "auto") {
     record.startMode = quest.startMode;

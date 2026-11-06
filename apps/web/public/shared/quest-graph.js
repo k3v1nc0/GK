@@ -70,11 +70,36 @@ export const REQUIREMENT_KINDS = Object.freeze({
   class: Object.freeze({ icon: "🧙", label: "Klasse", refKind: "player_class" })
 });
 export const QUEST_START_LIMITS = Object.freeze({ rules: 8, level: 500 });
+// Stap 5: wat een quest laat verschijnen hoort bij de quest (veld spawns), met een eigen naam, voor wie en wanneer weg.
+// Een regel bij een stap (Als → Dan) laat het verschijnen. Nooit automatisch gekopieerd (ook niet bij groep verlaten).
+export const QUEST_SPAWN_LIMITS = Object.freeze({ spawns: 8, count: 10, name: 60, rules: 6, text: 200 });
+export const QUEST_SPAWN_AUDIENCE = Object.freeze({
+  group: Object.freeze({ icon: "👥", label: "Voor de groep (alleen = alleen jij)" }),
+  player: Object.freeze({ icon: "🧍", label: "Alleen voor de speler" }),
+  all: Object.freeze({ icon: "🌍", label: "Voor iedereen" })
+});
+export const QUEST_SPAWN_DESPAWN = Object.freeze({
+  quest: Object.freeze({ icon: "📜", label: "Tot ze dood zijn of de quest eindigt" }),
+  step: Object.freeze({ icon: "🪜", label: "Weg als de stap klaar is" }),
+  logout: Object.freeze({ icon: "🚪", label: "Weg na uitloggen (1 min)" })
+});
+// Als → Dan (regels per stap). Elke regel gaat 1× per keer dat je de stap binnenkomt.
+export const RULE_WHEN = Object.freeze({
+  start: Object.freeze({ icon: "▶️", label: "Als de stap begint" }),
+  count: Object.freeze({ icon: "🔢", label: "Als een doel op" }),
+  done: Object.freeze({ icon: "✅", label: "Als de stap klaar is" })
+});
+export const RULE_THEN = Object.freeze({
+  spawn: Object.freeze({ icon: "👾", label: "Laat verschijnen" }),
+  message: Object.freeze({ icon: "💬", label: "Bericht in beeld" })
+});
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
-const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark"]);
+const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow", "rules"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark", "spawnId"]);
+const RULE_KEYS_STEP = new Set(["ruleId", "when", "objectiveId", "amount", "then", "spawnId", "text"]);
+const SPAWN_KEYS = new Set(["spawnId", "name", "actorRef", "count", "areaRef", "audience", "despawn"]);
 const isAreaRef = (value) => typeof value === "string" && value.startsWith("area:") && value.length <= 140;
 
 // Ligt (x, z) binnen het gebied? points = [{x, z}] in meters (een veelhoek; een cirkel is een veelhoek met veel punten).
@@ -156,6 +181,7 @@ export function questStepsShapeIssues(value) {
         if (!isObject(link) || Object.keys(link).some((key) => !NEXT_KEYS.has(key)) || typeof link.to !== "string" || !ID_PATTERN.test(link.to)) issues.push(where + ": ongeldige overgang.");
       });
     }
+    if (step.rules !== undefined && step.rules !== null) ruleShapeIssues(step.rules, where, issues);
     if (step.objectives === undefined || step.objectives === null) return;
     if (!Array.isArray(step.objectives) || step.objectives.length > QUEST_LIMITS.objectives) { issues.push(where + ": hooguit " + QUEST_LIMITS.objectives + " doelen."); return; }
     const objectiveIds = new Set();
@@ -185,19 +211,82 @@ export function questStepsShapeIssues(value) {
       if (objective.credit !== undefined && objective.credit !== null && !OBJECTIVE_CREDITS[objective.credit]) issues.push(at + ": ongeldige keuze bij Telt voor.");
       if (objective.areaRef !== undefined && objective.areaRef !== null) { if (!isAreaRef(objective.areaRef)) issues.push(at + ": Alleen in gebied moet een Questgebied zijn."); else refs.push(objective.areaRef); }
       if (objective.mark !== undefined && objective.mark !== null && objective.mark !== "star") issues.push(at + ": ongeldige keuze bij Ster op kaart.");
+      if (objective.spawnId !== undefined && objective.spawnId !== null && !isId(objective.spawnId)) issues.push(at + ": ongeldige verschijning.");
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
 }
 
+const isId = (value) => typeof value === "string" && value.length <= 60 && ID_PATTERN.test(value);
+
+// Stap 5: vorm van de regels (Als → Dan) van één stap.
+function ruleShapeIssues(rules, where, issues) {
+  if (!Array.isArray(rules) || rules.length > QUEST_SPAWN_LIMITS.rules) { issues.push(where + ": hooguit " + QUEST_SPAWN_LIMITS.rules + " regels (Als → Dan)."); return; }
+  const ids = new Set();
+  rules.forEach((rule, number) => {
+    const at = where + ", regel " + (number + 1);
+    if (!isObject(rule)) { issues.push(at + " is ongeldig."); return; }
+    const extra = Object.keys(rule).filter((key) => !RULE_KEYS_STEP.has(key));
+    if (extra.length) issues.push(at + ": onbekend veld " + extra.join(", ") + ".");
+    if (!isId(rule.ruleId)) issues.push(at + ": ongeldige regel-ID.");
+    else if (ids.has(rule.ruleId)) issues.push(at + ": regel-ID komt twee keer voor.");
+    else ids.add(rule.ruleId);
+    if (!RULE_WHEN[rule.when]) issues.push(at + ": ongeldige keuze bij Als.");
+    if (!RULE_THEN[rule.then]) issues.push(at + ": ongeldige keuze bij Dan.");
+    if (rule.objectiveId !== undefined && rule.objectiveId !== null && !isId(rule.objectiveId)) issues.push(at + ": ongeldig doel.");
+    if (rule.spawnId !== undefined && rule.spawnId !== null && !isId(rule.spawnId)) issues.push(at + ": ongeldige verschijning.");
+    if (rule.amount !== undefined && rule.amount !== null && (!Number.isInteger(rule.amount) || rule.amount < 1 || rule.amount > QUEST_LIMITS.amount)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");
+    if (rule.text !== undefined && rule.text !== null && !isText(rule.text, QUEST_SPAWN_LIMITS.text)) issues.push(at + ": het bericht is te lang.");
+  });
+}
+
+// Stap 5: vorm-controle van het veld spawns (bij opslaan). Half ingevuld mag; de quest-check zegt wat er nog mist.
+export function questSpawnsShapeIssues(value) {
+  const issues = [];
+  const refs = [];
+  if (!Array.isArray(value)) return { issues: ["Verschijnen moet een lijst zijn."], refs };
+  if (value.length > QUEST_SPAWN_LIMITS.spawns) issues.push("Hooguit " + QUEST_SPAWN_LIMITS.spawns + " verschijningen.");
+  const ids = new Set();
+  value.forEach((spawn, index) => {
+    const at = "Verschijning " + (index + 1);
+    if (!isObject(spawn)) { issues.push(at + " is ongeldig."); return; }
+    const extra = Object.keys(spawn).filter((key) => !SPAWN_KEYS.has(key));
+    if (extra.length) issues.push(at + ": onbekend veld " + extra.join(", ") + ".");
+    if (!isId(spawn.spawnId)) issues.push(at + ": ongeldige ID.");
+    else if (ids.has(spawn.spawnId)) issues.push(at + ": ID " + spawn.spawnId + " komt twee keer voor.");
+    else ids.add(spawn.spawnId);
+    if (spawn.name !== undefined && spawn.name !== null && !isText(spawn.name, QUEST_SPAWN_LIMITS.name)) issues.push(at + ": de naam is te lang.");
+    if (spawn.actorRef !== undefined && spawn.actorRef !== null) {
+      if (typeof spawn.actorRef !== "string" || spawn.actorRef.length > 160 || !spawn.actorRef.startsWith("actor_archetype:")) issues.push(at + ": moet een vijand zijn.");
+      else refs.push(spawn.actorRef);
+    }
+    if (spawn.count !== undefined && spawn.count !== null && (!Number.isInteger(spawn.count) || spawn.count < 1 || spawn.count > QUEST_SPAWN_LIMITS.count)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_SPAWN_LIMITS.count + " liggen.");
+    if (spawn.areaRef !== undefined && spawn.areaRef !== null) { if (!isAreaRef(spawn.areaRef)) issues.push(at + ": Waar moet een Questgebied zijn."); else refs.push(spawn.areaRef); }
+    if (spawn.audience !== undefined && spawn.audience !== null && !QUEST_SPAWN_AUDIENCE[spawn.audience]) issues.push(at + ": ongeldige keuze bij Voor wie.");
+    if (spawn.despawn !== undefined && spawn.despawn !== null && !QUEST_SPAWN_DESPAWN[spawn.despawn]) issues.push(at + ": ongeldige keuze bij Verdwijnen.");
+  });
+  return { issues, refs: Array.from(new Set(refs)) };
+}
+
+export function spawnName(spawn, nameOf = (ref) => ref) {
+  if (!spawn) return "…";
+  return spawn.name || (spawn.actorRef ? (Number(spawn.count) > 1 ? spawn.count + "× " : "") + nameOf(spawn.actorRef) : "Verschijning");
+}
+
 // De quest-check: alles wat de quest onspeelbaar maakt. refExists(ref) -> bestaat die kaart (niet gearchiveerd)?
 // Elke melding: { stepId, objectiveId, message }. Dezelfde meldingen in de Quest Builder en bij SAVE TO GAME.
-export function questGraphIssues(steps, { refExists = () => true, refLabel = (ref) => ref, partyLeave = null } = {}) {
+export function questGraphIssues(steps, { refExists = () => true, refLabel = (ref) => ref, partyLeave = null, spawns = null } = {}) {
   const issues = [];
-  const add = (stepId, objectiveId, message) => issues.push({ stepId: stepId || null, objectiveId: objectiveId || null, message });
+  const add = (stepId, objectiveId, message, spawnId = null) => issues.push(Object.assign({ stepId: stepId || null, objectiveId: objectiveId || null, message }, spawnId ? { spawnId } : {}));
   const list = Array.isArray(steps) ? steps.filter(isObject) : [];
   if (!list.length) { add(null, null, "Deze quest heeft nog geen stappen."); return issues; }
   const byId = new Map(list.map((step) => [step.stepId, step]));
+  // Stap 5: verschijningen van de quest en welke ervan een regel laat verschijnen.
+  const spawnList = Array.isArray(spawns) ? spawns.filter(isObject) : [];
+  const spawnById = new Map(spawnList.map((spawn) => [spawn.spawnId, spawn]));
+  const spawned = new Set();
+  for (const step of list) for (const rule of Array.isArray(step.rules) ? step.rules : []) if (isObject(rule) && rule.then === "spawn" && rule.spawnId) spawned.add(rule.spawnId);
+  const spawnLabel = (spawn) => "👾 " + spawnName(spawn, refLabel);
   if (list[0].kind !== "step") add(list[0].stepId, null, "De eerste stap is het begin van de quest; dat moet een gewone stap zijn, geen einde.");
   if (!list.some((step) => step.kind === "end")) add(null, null, "Deze quest heeft geen einde. Voeg een einde toe.");
   for (const step of list) {
@@ -226,7 +315,36 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
         if (!objective.npcRef) add(step.stepId, objective.objectiveId, spec.label + ": kies bij wie het gebracht moet worden.");
         else if (!refExists(objective.npcRef)) add(step.stepId, objective.objectiveId, refLabel(objective.npcRef) + " bestaat niet (meer) of is gearchiveerd.");
       }
+      // Stap 5: Versla een verschijning van deze quest.
+      if (objective.spawnId) {
+        const spawn = spawnById.get(objective.spawnId);
+        if (objective.type !== "defeat") add(step.stepId, objective.objectiveId, spec.label + ": een verschijning kan alleen bij Versla.");
+        else if (!spawn) add(step.stepId, objective.objectiveId, "Versla: de verschijning bestaat niet (meer). Kies er een in 👾 Verschijnen.");
+        else if (!spawned.has(spawn.spawnId)) add(step.stepId, objective.objectiveId, spawnLabel(spawn) + " verschijnt nooit. Zet bij een stap ⚡ Als → Dan: Laat verschijnen.");
+        else if (spawn.actorRef && objective.ref && objective.ref !== spawn.actorRef) add(step.stepId, objective.objectiveId, "Versla: de vijand past niet bij " + spawnLabel(spawn) + ".");
+      }
     }
+    const ruleList = Array.isArray(step.rules) ? step.rules.filter(isObject) : [];
+    for (const rule of ruleList) {
+      const where = "⚡ Als → Dan: ";
+      if (rule.when === "count") {
+        const target = objectives.find((objective) => objective.objectiveId === rule.objectiveId);
+        if (!rule.objectiveId) add(step.stepId, null, where + "kies bij welk doel.");
+        else if (!target) add(step.stepId, null, where + "het doel bestaat niet (meer) in deze stap.");
+      }
+      if (rule.then === "spawn") {
+        const spawn = spawnById.get(rule.spawnId);
+        if (!rule.spawnId) add(step.stepId, null, where + "kies wat er verschijnt.");
+        else if (!spawn) add(step.stepId, null, where + "die verschijning bestaat niet (meer). Kijk in 👾 Verschijnen.");
+        else if (rule.when === "done" && spawn.despawn === "step") add(step.stepId, null, where + spawnLabel(spawn) + " verschijnt als de stap klaar is, maar is dan meteen weer weg (Weg als de stap klaar is).");
+      }
+      if (rule.then === "message" && !String(rule.text || "").trim()) add(step.stepId, null, where + "vul het bericht in.");
+    }
+  }
+  for (const spawn of spawnList) {
+    if (!spawn.actorRef) add(null, null, spawnLabel(spawn) + ": kies welke vijand (sleep een vijand uit de Bibliotheek op het vak).", spawn.spawnId);
+    else if (!refExists(spawn.actorRef)) add(null, null, spawnLabel(spawn) + ": " + refLabel(spawn.actorRef) + " bestaat niet (meer) of is gearchiveerd.", spawn.spawnId);
+    if (spawn.areaRef && !refExists(spawn.areaRef)) add(null, null, spawnLabel(spawn) + ": " + refLabel(spawn.areaRef) + " bestaat niet (meer) of is geen Questgebied.", spawn.spawnId);
   }
   // Een regel voor groep verlaten zonder Team samen-doel doet niets: zeg het, dan schrikt niemand.
   const hasTeam = list.some((step) => Array.isArray(step.objectives) && step.objectives.some((objective) => isObject(objective) && objective.share === "team"));

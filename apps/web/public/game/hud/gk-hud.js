@@ -6,7 +6,7 @@
 //   herlaad) sta je weer precies waar je was: zelfde paneel, tabblad, filter, item en scrollplek.
 // Dit bestand tekent alleen. Alle spelregels blijven op de server; game.js geeft de data en de acties (api).
 import { ICON_PATHS } from "./gk-icon-paths.js?v=20261103-chat1";
-import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest14";
+import { createHudMinimap } from "./gk-minimap.js?v=20261105-quest15";
 import { formatDuration } from "../../shared/effect-math.js?v=20261102-heal2";
 
 const STORE_KEY = "gk:hud:v1";
@@ -1556,6 +1556,18 @@ export function createGkHud(api) {
     const node = h("div", { class: "gkLevelUp" }, [ico("star-medal"), h("b", { text: "Level " + newLevel + "!" })]);
     game.append(node);
     window.setTimeout(function () { node.remove(); }, 2700);
+  }
+
+  // Quest Builder stap 5: Bericht in beeld (Als → Dan). Groot in het midden, kort, en ook in de chat.
+  function questBanner(text, title) {
+    const message = String(text || "");
+    if (!message) return;
+    for (const old of game.querySelectorAll(".gkQuestBanner")) old.remove();
+    const node = h("div", { class: "gkQuestBanner", role: "status" }, [ico("scroll-unfurled"),
+      h("div", { class: "gkQuestBannerText" }, [title ? h("small", { text: String(title) }) : null, h("b", { text: message })])]);
+    game.append(node);
+    window.setTimeout(function () { node.remove(); }, 5200);
+    chatNotice(message, "", true);
   }
 
   function toast(text, options = {}) {
@@ -3356,6 +3368,7 @@ export function createGkHud(api) {
     frame,
     handleKey,
     toast,
+    questBanner,
     openCharacters() { openTab("chars"); },
     // kind: "connected" | "connecting" | "reconnecting" | "disconnected" (uit game.js).
     // detail = extra uitleg in de tooltip; de compacte meetwaarden krijgen ieder hun eigen gezondheidskleur.

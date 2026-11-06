@@ -210,6 +210,10 @@
 .qbAdder { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed #3a4b5d; border-radius: 8px; padding: 4px 8px; background: transparent; color: var(--wbd-text); font: inherit; font-size: 12px; cursor: pointer; }
 .qbAdder:hover { border-color: var(--wbd-accent); }
 .qbAdd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Stap 5: Als → Dan bij een stap */
+.qbRules { display: grid; gap: 6px; padding: 8px; border: 1px dashed #4a3b1c; border-radius: 8px; background: #141822; }
+.qbRule { border-color: #4a3b1c; }
+.qbRule .wbdText { flex: 1 1 220px; min-width: 160px; }
 .qbIssues { margin: 0; padding: 6px 10px 6px 26px; background: #2a1d0c; border-radius: 8px; color: var(--wbd-accent); display: grid; gap: 2px; }
 .qbTestBox { display: grid; gap: 8px; padding: 12px; background: var(--wbd-card); border: 1px solid var(--wbd-line); border-radius: 10px; }
 .qbTestBox h4 { margin: 0; }
