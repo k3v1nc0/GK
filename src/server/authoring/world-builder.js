@@ -703,8 +703,13 @@ function withGame(world, source, options) {
     .concat(quests.map((quest) => quest?.imageAssetId))
     .concat((player.classes || []).flatMap((entry) => entry.models || [])).filter(Boolean)));
   const known = new Map((world.assets || []).map((asset) => [asset.id, asset]));
-  const missing = modelIds.filter((id) => !known.has(id));
-  if (missing.length && options.assetService) for (const asset of options.assetService.manifestForIds(missing)) known.set(asset.id, asset);
+  // Paden van thumbnails kunnen na een import/migratie wijzigen zonder dat de
+  // game opnieuw gepubliceerd hoeft te worden. Ververs daarom alle gebruikte
+  // assets uit de bibliotheek; de originele sourcePath blijft de renderbron.
+  const usedAssetIds = Array.from(new Set(Array.from(known.keys()).concat(modelIds)));
+  if (usedAssetIds.length && options.assetService) {
+    for (const asset of options.assetService.manifestForIds(usedAssetIds)) known.set(asset.id, asset);
+  }
   const worldMusic = source.worldMusic || null;
   return Object.assign({}, world, {
     gameProject: nextProject,

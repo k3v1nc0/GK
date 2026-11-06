@@ -10019,7 +10019,7 @@ function gameMinimapAssetById(assetId) {
 
 function gameMinimapIconImage(assetId) {
   const asset = gameMinimapAssetById(assetId);
-  const url = normalizeMinimapImageUrl(asset?.sourcePath || asset?.thumbnailPath || asset?.url || "");
+  const url = normalizeMinimapImageUrl(asset?.thumbnailPath || asset?.url || "");
   if (!url) return null;
   if (!state.minimapHud.images) state.minimapHud.images = new Map();
   const key = "icon:" + url;
@@ -13895,11 +13895,11 @@ function gkHudAsset(assetId) {
   return assetId ? gkHudCache.assetMap.get(assetId) || null : null;
 }
 
-// Een plaatje voor in de HUD: bij een model de thumbnail, bij een afbeelding het bestand zelf.
+// HUD-afbeeldingen en iconen gebruiken altijd de kleine bibliotheekthumbnail.
+// sourcePath blijft uitsluitend voor echte wereldtextures, audio en 3D-rendering.
 function gkHudAssetUrl(assetId, preferThumb) {
   const asset = gkHudAsset(assetId);
   if (!asset) return null;
-  if (asset.assetType === "image") return asset.sourcePath || asset.thumbnailPath || null;
   return asset.thumbnailPath || null;
 }
 

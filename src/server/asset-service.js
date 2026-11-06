@@ -25,6 +25,10 @@ function logTiming(label, startedAt, details) {
 }
 
 const allowedAssetTypes = new Set(["model", "texture", "image", "audio", "data"]);
+const ASSET_THUMBNAIL_SIZE = 150;
+const ASSET_THUMBNAIL_VERSION = 2;
+const ASSET_THUMBNAIL_QUALITY = 68;
+const ASSET_THUMBNAIL_TIMEOUT_MS = 30000;
 // Hard stop for one GLB thumbnail run. Normal runs take 8-20 s; a stalled
 // network check (cdn.shopify.com model-viewer) used to block the single
 // thumbnail queue for 7-30 minutes. The helper has its own 90 s watchdog.
@@ -86,6 +90,12 @@ function assetPathForStem(assetsDir, baseDirName, stem, ext) {
     path: "/" + ["assets", baseDirName, stem + ext].join("/"),
     filePath: path.join(assetsDir, baseDirName, stem + ext)
   };
+}
+
+function thumbnailStemForAsset(sourceStem, assetId) {
+  const stem = String(sourceStem || "asset").trim() || "asset";
+  const unique = crypto.createHash("sha1").update(String(assetId || stem)).digest("hex").slice(0, 12);
+  return stem + "-" + unique;
 }
 
 function updateWorldAssetPaths(worldJson, assetId, sourcePath, thumbnailPath) {
@@ -166,6 +176,7 @@ export class AssetService {
     this.thumbnailQueuedAssetIds = new Set();
     this.thumbnailWorkerRunning = false;
     this.thumbnailQueueKickScheduled = false;
+    this.thumbnailUpdateListener = null;
   }
 
   list() {
@@ -181,25 +192,71 @@ export class AssetService {
     return ids.map((id) => this.get(id)).filter(Boolean);
   }
 
-  resumePendingThumbnailJobs() {
-    const rows = this.db.prepare("SELECT id, source_path, asset_type, metadata_json FROM asset_library WHERE asset_type = 'model'").all();
+  setThumbnailUpdateListener(listener) {
+    this.thumbnailUpdateListener = typeof listener === "function" ? listener : null;
+  }
+
+  async migrateLegacyImageThumbnails() {
+    const rows = this.db.prepare("SELECT * FROM asset_library WHERE asset_type IN ('image', 'texture') ORDER BY created_at ASC").all();
+    let converted = 0;
     for (const row of rows) {
+      if (isCurrentThumbnail(row, this.assetsDir)) continue;
+      const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
+      if (!sourceFilePath || !fs.existsSync(sourceFilePath)) {
+        this.updateAssetThumbnailState(row.id, null, {
+          thumbnailStatus: "failed",
+          thumbnailError: "Source file ontbreekt."
+        });
+        continue;
+      }
+      const sourceStem = path.basename(row.source_path || row.id, path.extname(row.source_path || ""));
+      try {
+        const result = await generateImageThumbnail({
+          assetsDir: this.assetsDir,
+          thumbnailStem: thumbnailStemForAsset(sourceStem, row.id),
+          sourceFilePath: sourceFilePath
+        });
+        this.updateAssetThumbnailState(row.id, result.thumbnailPath, thumbnailReadyMetadata(result));
+        removeSupersededThumbnail(this.assetsDir, row, result.thumbnailPath);
+        converted += 1;
+      } catch (error) {
+        this.updateAssetThumbnailState(row.id, null, {
+          thumbnailStatus: "failed",
+          thumbnailError: shortThumbnailErrorMessage(error?.message || "Thumbnail generatie mislukt."),
+          thumbnailFinishedAt: now()
+        });
+      }
+    }
+    if (converted) console.info("[thumbnail] migrated " + converted + " image/texture thumbnails to 150x150 WebP.");
+    return converted;
+  }
+
+  resumePendingThumbnailJobs() {
+    if (this.skipModelThumbnails) return;
+    const rows = this.db.prepare("SELECT * FROM asset_library WHERE asset_type = 'model' ORDER BY created_at ASC").all();
+    for (const row of rows) {
+      if (isCurrentThumbnail(row, this.assetsDir)) continue;
       const metadata = normalizeAssetMetadata(row);
       const extraRound = metadata.thumbnailStatus === "failed" && metadata.thumbnailExtraRoundDone !== true;
-      if (metadata.thumbnailStatus !== "pending" && metadata.thumbnailStatus !== "processing" && !extraRound) continue;
       const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
       if (!sourceFilePath || !fs.existsSync(sourceFilePath)) continue;
       if (extraRound) this.startThumbnailExtraRound(row.id);
-      else this.enqueueThumbnailJob({ assetId: row.id });
+      else {
+        this.updateAssetThumbnailState(row.id, row.thumbnail_path || null, {
+          thumbnailStatus: "pending",
+          thumbnailError: null
+        });
+        this.enqueueThumbnailJob({ assetId: row.id });
+      }
     }
   }
 
   // One extra automatic round for a thumbnail that ended in "failed".
   startThumbnailExtraRound(assetId) {
-    const row = this.db.prepare("SELECT metadata_json FROM asset_library WHERE id = ?").get(assetId);
+    const row = this.db.prepare("SELECT metadata_json, thumbnail_path FROM asset_library WHERE id = ?").get(assetId);
     const metadata = row ? parseJson(row.metadata_json, {}) : null;
     if (!metadata || metadata.thumbnailStatus !== "failed" || metadata.thumbnailExtraRoundDone === true) return;
-    this.updateAssetThumbnailState(assetId, null, {
+    this.updateAssetThumbnailState(assetId, row.thumbnail_path || null, {
       thumbnailStatus: "pending",
       thumbnailError: "Extra automatische ronde na mislukte thumbnail.",
       thumbnailExtraRoundDone: true
@@ -245,11 +302,17 @@ export class AssetService {
   }
 
   updateAssetThumbnailState(assetId, thumbnailPath, metadataPatch) {
-    const row = this.db.prepare("SELECT metadata_json FROM asset_library WHERE id = ?").get(assetId);
+    const row = this.db.prepare("SELECT source_path, thumbnail_path, metadata_json FROM asset_library WHERE id = ?").get(assetId);
     if (!row) return false;
     const metadata = Object.assign({}, parseJson(row.metadata_json, {}), metadataPatch || {});
     this.db.prepare("UPDATE asset_library SET thumbnail_path = ?, metadata_json = ?, updated_at = ? WHERE id = ?")
       .run(thumbnailPath, JSON.stringify(metadata), now(), assetId);
+    if (row.thumbnail_path !== thumbnailPath) {
+      this.updateStoredAssetPaths(assetId, row.source_path, thumbnailPath);
+      if (this.thumbnailUpdateListener) {
+        try { this.thumbnailUpdateListener(assetId, thumbnailPath); } catch {}
+      }
+    }
     return true;
   }
 
@@ -272,7 +335,7 @@ export class AssetService {
       error.status = 500;
       throw error;
     }
-    this.updateAssetThumbnailState(id, null, {
+    this.updateAssetThumbnailState(id, row.thumbnail_path || null, {
       thumbnailStatus: "pending",
       thumbnailError: null,
       thumbnailStartedAt: null,
@@ -292,11 +355,12 @@ export class AssetService {
       if (!row) return;
       const asset = toAsset(row);
       if (asset.assetType !== "model") return;
+      const previousThumbnailPath = row.thumbnail_path || null;
       const sourceFilePath = safeUploadFilePath(this.assetsDir, row.source_path);
       const startedAt = performance.now();
       const startedAtIso = now();
       if (!sourceFilePath || !fs.existsSync(sourceFilePath)) {
-        this.updateAssetThumbnailState(assetId, null, {
+        this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
           thumbnailStatus: "failed",
           thumbnailError: "Source file ontbreekt.",
           thumbnailStartedAt: startedAtIso,
@@ -310,12 +374,13 @@ export class AssetService {
       try {
         workingDir = fs.mkdtempSync(path.join(os.tmpdir(), "gk-thumbnail-"));
         const workingSourceFilePath = path.join(workingDir, path.basename(sourceFilePath));
-        const initialStem = path.basename(row.source_path || assetId, path.extname(row.source_path || ""));
-        const initialThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", initialStem, ".png");
+        const initialSourceStem = path.basename(row.source_path || assetId, path.extname(row.source_path || ""));
+        const initialStem = thumbnailStemForAsset(initialSourceStem, assetId);
+        const initialThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", initialStem, ".webp");
         const initialThumbnailFilePath = initialThumbnailAssetPath.filePath;
         const strict = isTruthyEnv(process.env.GLB_THUMBNAIL_STRICT);
         fs.copyFileSync(sourceFilePath, workingSourceFilePath);
-        this.updateAssetThumbnailState(assetId, null, {
+        this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
           thumbnailStatus: "processing",
           thumbnailError: null,
           thumbnailStartedAt: startedAtIso,
@@ -338,7 +403,8 @@ export class AssetService {
           return;
         }
         const latestSourceStem = path.basename(latestRow.source_path || assetId, path.extname(latestRow.source_path || ""));
-        const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", latestSourceStem, ".png");
+        const nextThumbnailStem = thumbnailStemForAsset(latestSourceStem, assetId);
+        const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", nextThumbnailStem, ".webp");
         const durationMs = timingNumber(startedAt);
         const finishedAtIso = now();
         if (result.status === "ready" && result.thumbnailPath) {
@@ -348,7 +414,7 @@ export class AssetService {
               fs.rmSync(nextThumbnailAssetPath.filePath, { force: true });
               fs.renameSync(initialThumbnailFilePath, nextThumbnailAssetPath.filePath);
             } catch (error) {
-              this.updateAssetThumbnailState(assetId, null, {
+              this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
                 thumbnailStatus: "failed",
                 thumbnailError: shortThumbnailErrorMessage(error.message || "Thumbnail rename mislukt."),
                 thumbnailStartedAt: startedAtIso,
@@ -359,16 +425,18 @@ export class AssetService {
             }
           }
           this.updateAssetThumbnailState(assetId, nextThumbnailAssetPath.path, {
-            thumbnailStatus: "ready",
-            thumbnailError: null,
-            thumbnailStartedAt: startedAtIso,
-            thumbnailFinishedAt: finishedAtIso,
-            thumbnailDurationMs: durationMs
+            ...thumbnailReadyMetadata({
+              filePath: nextThumbnailAssetPath.filePath,
+              durationMs: durationMs,
+              startedAt: startedAtIso,
+              finishedAt: finishedAtIso
+            })
           });
+          removeSupersededThumbnail(this.assetsDir, row, nextThumbnailAssetPath.path);
           return;
         }
         if (result.status === "skipped") {
-          this.updateAssetThumbnailState(assetId, null, {
+          this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
             thumbnailStatus: "skipped",
             thumbnailError: null,
             thumbnailStartedAt: startedAtIso,
@@ -380,7 +448,7 @@ export class AssetService {
         const attempt = Math.max(1, Math.floor(Number(job?.attempt) || 1));
         if (attempt < GLB_THUMBNAIL_MAX_ATTEMPTS) {
           // Stays "pending", so a server restart also picks it up again.
-          this.updateAssetThumbnailState(assetId, null, {
+          this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
             thumbnailStatus: "pending",
             thumbnailError: "Poging " + attempt + " mislukte; nieuwe poging over " + Math.round(GLB_THUMBNAIL_RETRY_DELAY_MS / 1000) + " s.",
             thumbnailStartedAt: startedAtIso,
@@ -395,7 +463,7 @@ export class AssetService {
           }, GLB_THUMBNAIL_RETRY_DELAY_MS).unref?.();
           return;
         }
-        this.updateAssetThumbnailState(assetId, null, {
+        this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
           thumbnailStatus: "failed",
           thumbnailError: shortThumbnailErrorMessage(result.error || "GLB thumbnail generatie mislukt."),
           thumbnailStartedAt: startedAtIso,
@@ -407,7 +475,7 @@ export class AssetService {
           setTimeout(() => { this.startThumbnailExtraRound(assetId); }, GLB_THUMBNAIL_EXTRA_ROUND_DELAY_MS).unref?.();
         }
       } catch (error) {
-        this.updateAssetThumbnailState(assetId, null, {
+        this.updateAssetThumbnailState(assetId, previousThumbnailPath, {
           thumbnailStatus: "failed",
           thumbnailError: shortThumbnailErrorMessage(error && error.message ? error.message : "GLB thumbnail generatie mislukt."),
           thumbnailStartedAt: startedAtIso,
@@ -468,7 +536,8 @@ export class AssetService {
     const nextSourcePath = nextSourceAssetPath.path;
     const thumbnailIsSource = row.thumbnail_path && row.thumbnail_path === row.source_path;
     const thumbnailExists = Boolean(currentThumbnailFilePath && fs.existsSync(currentThumbnailFilePath));
-    const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", sourceStem, ".png");
+    const currentThumbnailExt = path.extname(row.thumbnail_path || "").toLowerCase() || ".webp";
+    const nextThumbnailAssetPath = assetPathForStem(this.assetsDir, "thumbnails", thumbnailStemForAsset(sourceStem, id), currentThumbnailExt);
     const nextThumbnailFilePath = thumbnailIsSource
       ? nextSourceFilePath
       : (thumbnailExists ? nextThumbnailAssetPath.filePath : null);
@@ -558,6 +627,7 @@ export class AssetService {
         thumbnailError: null
       };
       let resolvedThumbnailPath = null;
+      let thumbnailDurationMs = null;
       try {
         if (assetType === "model" && !this.skipModelThumbnails) {
           Object.assign(metadata, metadataFromGlb(file.data), {
@@ -568,8 +638,14 @@ export class AssetService {
             thumbnailStatus: "skipped"
           });
         } else if (assetType === "image" || assetType === "texture") {
-          resolvedThumbnailPath = sourcePath;
-          metadata.thumbnailStatus = "ready";
+          const thumbnailResult = await generateImageThumbnail({
+            assetsDir: this.assetsDir,
+            thumbnailStem: thumbnailStemForAsset(sourceStem, id),
+            sourceFilePath: sourceFilePath
+          });
+          resolvedThumbnailPath = thumbnailResult.thumbnailPath;
+          thumbnailDurationMs = thumbnailResult.durationMs;
+          Object.assign(metadata, thumbnailReadyMetadata(thumbnailResult));
         } else {
           metadata.thumbnailStatus = "skipped";
         }
@@ -590,7 +666,7 @@ export class AssetService {
         asset: this.get(id),
         timings: {
           importUploadMs: totalServerMs,
-          thumbnailMs: null,
+          thumbnailMs: thumbnailDurationMs,
           totalServerMs: totalServerMs
         }
       };
@@ -1064,18 +1140,101 @@ function safeUploadFilePath(assetsDir, assetPath) {
   return filePath;
 }
 
+function isCurrentThumbnail(row, assetsDir) {
+  const metadata = parseJson(row?.metadata_json, {});
+  if (metadata.thumbnailVersion !== ASSET_THUMBNAIL_VERSION
+      || metadata.thumbnailWidth !== ASSET_THUMBNAIL_SIZE
+      || metadata.thumbnailHeight !== ASSET_THUMBNAIL_SIZE
+      || metadata.thumbnailFormat !== "webp") return false;
+  const thumbnailPath = String(row?.thumbnail_path || "");
+  if (!thumbnailPath.startsWith("/assets/thumbnails/") || path.extname(thumbnailPath).toLowerCase() !== ".webp") return false;
+  const filePath = safeUploadFilePath(assetsDir, thumbnailPath);
+  return Boolean(filePath && fs.existsSync(filePath) && fs.statSync(filePath).size > 0);
+}
+
+function thumbnailReadyMetadata(result = {}) {
+  let thumbnailBytes = null;
+  try {
+    if (result.filePath) thumbnailBytes = fs.statSync(result.filePath).size;
+  } catch {}
+  return {
+    thumbnailStatus: "ready",
+    thumbnailError: null,
+    thumbnailStartedAt: result.startedAt || null,
+    thumbnailFinishedAt: result.finishedAt || now(),
+    thumbnailDurationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null,
+    thumbnailVersion: ASSET_THUMBNAIL_VERSION,
+    thumbnailWidth: ASSET_THUMBNAIL_SIZE,
+    thumbnailHeight: ASSET_THUMBNAIL_SIZE,
+    thumbnailFormat: "webp",
+    thumbnailBytes: thumbnailBytes
+  };
+}
+
+function removeSupersededThumbnail(assetsDir, row, nextThumbnailPath) {
+  const previousPath = String(row?.thumbnail_path || "");
+  if (!previousPath || previousPath === row?.source_path || previousPath === nextThumbnailPath) return;
+  const previousFilePath = safeUploadFilePath(assetsDir, previousPath);
+  if (!previousFilePath) return;
+  try { fs.unlinkSync(previousFilePath); } catch {}
+}
+
+async function generateImageThumbnail({ assetsDir, thumbnailStem, sourceFilePath }) {
+  const startedAt = performance.now();
+  const startedAtIso = now();
+  const thumbnailsDir = path.join(assetsDir, "thumbnails");
+  const resolvedStem = String(thumbnailStem || "").trim();
+  const thumbnailPath = "/assets/thumbnails/" + resolvedStem + ".webp";
+  const finalFilePath = path.join(thumbnailsDir, resolvedStem + ".webp");
+  const temporaryFilePath = path.join(thumbnailsDir, resolvedStem + ".tmp.webp");
+  fs.mkdirSync(thumbnailsDir, { recursive: true });
+  fs.rmSync(temporaryFilePath, { force: true });
+  try {
+    const result = await runProcess("convert", [
+      sourceFilePath,
+      "-auto-orient",
+      "-thumbnail", ASSET_THUMBNAIL_SIZE + "x" + ASSET_THUMBNAIL_SIZE + ">",
+      "-background", "none",
+      "-gravity", "center",
+      "-extent", ASSET_THUMBNAIL_SIZE + "x" + ASSET_THUMBNAIL_SIZE,
+      "-strip",
+      "-quality", String(ASSET_THUMBNAIL_QUALITY),
+      "-define", "webp:method=6",
+      temporaryFilePath
+    ], { timeoutMs: ASSET_THUMBNAIL_TIMEOUT_MS });
+    if (result.code !== 0 || result.timedOut || !fs.existsSync(temporaryFilePath) || fs.statSync(temporaryFilePath).size < 1) {
+      throw new Error(result.timedOut
+        ? "Afbeelding-thumbnail duurde te lang."
+        : ((result.stderr || "").trim() || "Afbeelding-thumbnail generatie mislukt."));
+    }
+    fs.rmSync(finalFilePath, { force: true });
+    fs.renameSync(temporaryFilePath, finalFilePath);
+    return {
+      thumbnailPath: thumbnailPath,
+      filePath: finalFilePath,
+      durationMs: timingNumber(startedAt),
+      startedAt: startedAtIso,
+      finishedAt: now()
+    };
+  } finally {
+    fs.rmSync(temporaryFilePath, { force: true });
+  }
+}
+
 async function generateGlbThumbnail({ rootDir, assetsDir, scriptPath, thumbnailStem, sourceFilePath, strict }) {
   const startedAt = performance.now();
   const thumbnailsDir = path.join(assetsDir, "thumbnails");
   const resolvedStem = String(thumbnailStem || "").trim();
-  const thumbnailPath = "/assets/thumbnails/" + resolvedStem + ".png";
-  const finalFilePath = path.join(thumbnailsDir, resolvedStem + ".png");
-  const temporaryFilePath = path.join(thumbnailsDir, resolvedStem + ".tmp.png");
+  const thumbnailPath = "/assets/thumbnails/" + resolvedStem + ".webp";
+  const finalFilePath = path.join(thumbnailsDir, resolvedStem + ".webp");
+  const temporaryFilePath = path.join(thumbnailsDir, resolvedStem + ".tmp.webp");
   fs.mkdirSync(thumbnailsDir, { recursive: true });
   fs.rmSync(temporaryFilePath, { force: true });
   fs.rmSync(finalFilePath, { force: true });
   const env = Object.assign({}, process.env, {
-    GLB_THUMBNAIL_STRICT: strict ? "1" : "0"
+    GLB_THUMBNAIL_STRICT: strict ? "1" : "0",
+    GLB_THUMBNAIL_SIZE: String(ASSET_THUMBNAIL_SIZE),
+    GLB_THUMBNAIL_QUALITY: String(ASSET_THUMBNAIL_QUALITY / 100)
   });
   console.info("[timing] thumbnail generation start stem=" + resolvedStem);
   try {

@@ -2,7 +2,7 @@
 // Geen scherm per functie: elk veld wordt vanzelf een slider, aan/uit, keuzeknoppen, sleep-vak of tekstvak,
 // met icoon en Ⓘ-hulp. Alles schrijft naar documenten (/api/authoring/command), nooit naar de node-graph.
 import { api, command, el, friendlyError, slug } from "./canonical-api.js";
-import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261028-picker1";
+import { createAssetPicker, createMiniPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
@@ -125,6 +125,32 @@ export function createDocBench(options = {}) {
       await bench.load();
       return result;
     }
+  };
+
+  // Alleen tijdelijke UI-invoer. Bestaande kaarten worden al meteen via de API
+  // opgeslagen; een nog niet aangemaakte kaart moet wel mee kunnen naar een ander
+  // apparaat van dezelfde gebruiker.
+  bench.resumeState = function resumeState() {
+    return clone({
+      selectedDocKey: bench.selectedDocKey || null,
+      newKind: bench.newKind || null,
+      settingsView: bench.settingsView || "project_settings",
+      draft: bench.draft || null,
+      childDocKey: bench.childDocKey || null,
+      groupOpen: bench.groupOpen || null,
+      moreOpen: bench.moreOpen === true
+    });
+  };
+
+  bench.restoreResumeState = function restoreResumeState(value) {
+    if (!value || typeof value !== "object") return;
+    bench.selectedDocKey = typeof value.selectedDocKey === "string" ? value.selectedDocKey : null;
+    bench.newKind = typeof value.newKind === "string" ? value.newKind : null;
+    bench.settingsView = typeof value.settingsView === "string" ? value.settingsView : "project_settings";
+    bench.draft = value.draft && typeof value.draft === "object" ? clone(value.draft) : null;
+    bench.childDocKey = value.childDocKey && typeof value.childDocKey === "object" ? clone(value.childDocKey) : {};
+    bench.groupOpen = value.groupOpen && typeof value.groupOpen === "object" ? clone(value.groupOpen) : {};
+    bench.moreOpen = value.moreOpen === true;
   };
 
   function assetById(id) {
@@ -585,6 +611,10 @@ export function createDocBench(options = {}) {
   function control(key, field, body, isNew, onChange) {
     const value = body[key];
     const type = field.ui?.control;
+    const rememberTypedDraft = (next) => {
+      if (!isNew || !bench.draft || bench.draft.body !== body) return;
+      if (emptyValue(next)) delete body[key]; else body[key] = next;
+    };
     if (type === "slider") return sliderControl(field, value, onChange);
     if (type === "toggle") return toggleControl(field, value, onChange);
     if (type === "select") return selectControl(field, value, body, onChange);
@@ -603,6 +633,7 @@ export function createDocBench(options = {}) {
     if (type === "tags") {
       const input = el("input", { type: "text", class: "wbdText", placeholder: "label, label" });
       input.value = Array.isArray(value) ? value.join(", ") : "";
+      input.addEventListener("input", () => rememberTypedDraft(Array.from(new Set(input.value.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean)))));
       input.addEventListener("change", () => {
         const tags = Array.from(new Set(input.value.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean)));
         onChange(tags.length ? tags : null);
@@ -617,12 +648,14 @@ export function createDocBench(options = {}) {
     if (field.ui?.multiline) {
       const area = el("textarea", { class: "wbdText wbdTextArea", rows: 4, maxlength: field.maxLength || 1000 });
       area.value = emptyValue(value) ? "" : String(value);
+      area.addEventListener("input", () => rememberTypedDraft(area.value));
       area.addEventListener("change", () => onChange(area.value.trim() || null));
       return area;
     }
     const input = el("input", { type: "text", class: "wbdText", maxlength: field.maxLength || 200 });
     input.value = emptyValue(value) ? "" : String(value);
     if (type === "id" && !isNew) input.disabled = true;
+    input.addEventListener("input", () => rememberTypedDraft(input.value));
     input.addEventListener("change", () => onChange(input.value.trim() || null));
     return input;
   }

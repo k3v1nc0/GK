@@ -186,7 +186,7 @@ export function createAssetPicker({ getAssets, assetTypes = [], value, label = "
     onClear: allowClear ? () => onChange(null) : null,
     getOptions: () => getAssets().filter(matches).map((asset) => ({ value: asset.id, label: asset.name || asset.id,
       subtitle: [asset.category, asset.assetType].filter(Boolean).join(" · "),
-      thumbnailPath: asset.thumbnailPath || (["image", "texture"].includes(asset.assetType) ? asset.sourcePath : ""),
+      thumbnailPath: asset.thumbnailPath || "",
       icon: { model: "⬡", audio: "♫", image: "▧", texture: "▧", data: "{}" }[asset.assetType] })),
     accepts: (transfer) => Array.from(transfer?.types || []).includes(ASSET_MIME),
     onDrop: (transfer, choose) => {

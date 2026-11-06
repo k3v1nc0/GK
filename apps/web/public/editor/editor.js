@@ -11,8 +11,8 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261006-portal-pair2";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261006-portal-pair2";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261105-quest15";
-import { createAssetPicker } from "./mini-asset-picker.js?v=20261028-picker1";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261106-resume1";
+import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";
 import { AREA_EDITOR_PREFIX, AREA_SOORTEN, AREA_SOORT_ORDER, areaBodyFromNodePatch, areaCirclePointsMm, areaNodeValues, areaSoort } from "../shared/area-soorten.js?v=20261105-quest15";
@@ -61,6 +61,7 @@ const EDITOR_HEALTHCHECK_STALE_MS = 45000;
 const EDITOR_HEALTHCHECK_INTERVAL_MS = 15000;
 const EDITOR_AUTOSAVE_DELAY_MS = 45000;
 const EDITOR_AUTOSAVE_RETRY_MS = 15000;
+const EDITOR_RESUME_SAVE_DELAY_MS = 900;
 
 const HEAD = 34;
 const PAD = 8;
@@ -557,6 +558,7 @@ let viewportTouchEditSuppress = false;
 let allLayoutLastUsedViews = new Set();
 let editorLayoutServerReady = false;
 let editorLayoutSaveTimer = null;
+let loadedEditorResumeState = null;
 const POINT_LONG_PRESS_MS = 520;
 const POINT_LONG_PRESS_MOVE_PX = 9;
 const floatingPanelLiveStates = new Map();
@@ -1332,6 +1334,7 @@ function storeFloatingPanelState(panelId, panelState, deviceKey = floatingPanelD
       ...percentState
     };
     window.localStorage.setItem(EDITOR_FLOATING_PANELS_STORAGE_KEY, JSON.stringify(store));
+    scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS);
   } catch {}
 }
 
@@ -6058,26 +6061,10 @@ async function boot() {
       setViewportAxis(null);
     },
     onLoadErrors: renderViewportErrors,
-    onEditorCameraChange: function (fields) {
-      const node = state.graph.nodes.find(function (n) { return n.type === "editor_camera"; });
-      if (!node) return;
-      patchValues(node.id, {
-        targetX: fields.targetX,
-        targetY: fields.targetY,
-        targetZ: fields.targetZ,
-        pitch: fields.pitch,
-        yaw: fields.yaw,
-        distance: fields.distance
-      }, {
-        historyLabel: "",
-        refreshViewport: false,
-        refreshValidation: false,
-        refreshGraph: false,
-        refreshEdgeList: false,
-        refreshInspector: false,
-        refreshAssetUsage: false,
-        countUnsaved: false
-      });
+    onEditorCameraChange: function () {
+      // Navigeren in de editor is gebruikersstatus, geen projectwijziging. De volledige
+      // live cameraview wordt via /api/editor/layout aan het account gekoppeld.
+      scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS);
       scheduleEditorMinimapRedraw();
     }
   });
@@ -6102,6 +6089,7 @@ async function boot() {
   setStatus("Klaar.", "success");
   renderUnsaved();
   void refreshViewport({ force: true }).then(function () {
+    restoreResumeCameraAfterWorldLoad();
     return refreshValidation();
   });
 }
@@ -6112,6 +6100,7 @@ async function reloadGraph(options = {}) {
   state.graph = graph;
   state.nodeTypes = graph.nodeTypes || state.nodeTypes || {};
   state.graphLoaded = true;
+  restoreResumeSelectionAfterGraphLoad();
   const rememberedModel = state.workbenchSelectedModelId
     ? graphNodeByIdInGraph(state.graph, state.workbenchSelectedModelId)
     : null;
@@ -25344,19 +25333,189 @@ function loadStoredAllLayoutTrees() {
   return defaultAllLayoutTrees();
 }
 
+function editorResumeClone(value) {
+  if (value === undefined) return null;
+  try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+}
+
+function currentEditorResumePayload() {
+  const capturedCamera = runtime && typeof runtime.captureViewState === "function"
+    ? runtime.captureViewState()
+    : loadedEditorResumeState?.cameraView || null;
+  return editorResumeClone({
+    version: 1,
+    savedAt: new Date().toISOString(),
+    cameraView: capturedCamera,
+    ui: {
+      mobilePanel: state.mobilePanel,
+      assetCardSize: state.assetCardSize,
+      floatingPanelDevice: floatingPanelDeviceKey(),
+      authoringRouteId: state.authoringRouteId,
+      currentGroupId: state.currentGroupId,
+      authoringOverviewActive: state.authoringOverviewActive,
+      selectedNodeId: state.selectedNodeId,
+      selectedNodeIds: state.selectedNodeIds,
+      selectedEdgeIds: state.selectedEdgeIds,
+      viewportMode: state.viewportMode,
+      snapMode: state.snapMode,
+      snapGridSize: state.snapGridSize,
+      previewAnimations: state.previewAnimations,
+      graphView: state.view,
+      workbenchSelectedModelId: state.workbenchSelectedModelId,
+      workbenchLibraryType: state.workbenchLibraryType,
+      workbenchSearch: state.workbenchSearch,
+      workbenchStage: state.workbenchStage,
+      workbenchDefinitionId: state.workbenchDefinitionId,
+      workbenchRelationScope: state.workbenchRelationScope,
+      catalogHubType: state.catalogHubType,
+      catalogHubSelectedNodeId: state.catalogHubSelectedNodeId,
+      catalogHubSearch: state.catalogHubSearch,
+      settingsHubKind: state.settingsHubKind,
+      settingsHubSelectedNodeId: state.settingsHubSelectedNodeId,
+      settingsHubSearch: state.settingsHubSearch,
+      questTimelineView: state.questTimelineView,
+      questTimelineSelectedQuestId: state.questTimelineSelectedQuestId,
+      questTimelineSelectedStepId: state.questTimelineSelectedStepId,
+      questTimelineSelectedDialogueId: state.questTimelineSelectedDialogueId,
+      questTimelineSelectedEntryId: state.questTimelineSelectedEntryId
+    },
+    drafts: {
+      documents: typeof docBench.resumeState === "function" ? docBench.resumeState() : null,
+      objectFunction: state.objectFunctionDraft,
+      visualBuilder: state.visualBuilderDraft,
+      zoneCanvas: state.zoneCanvasDraft,
+      worldContent: state.worldContentDraft,
+      questTimeline: state.questTimelineDraft,
+      questTimelineDialogue: state.questTimelineDialogueDraft,
+      questTimelineInsert: state.questTimelineInsertDraft,
+      questTimelineDialogueInsert: state.questTimelineDialogueInsertDraft,
+      questTimelineChild: state.questTimelineChildDraft,
+      questTimelinePendingTarget: state.questTimelinePendingTargetRef,
+      catalogHub: state.catalogHubDraft,
+      settingsHub: state.settingsHubDraft,
+      workbenchEnemy: state.workbenchEnemyDraft,
+      workbenchLootRule: state.workbenchLootRuleDraft,
+      workbenchCreate: state.workbenchCreateDraft,
+      workbenchDefinition: state.workbenchDefinitionDraft,
+      workbenchRow: state.workbenchRowDraft,
+      workbenchStatRule: state.workbenchStatRuleDraft,
+      assetManager: {
+        assetId: state.assetManager.assetId,
+        replacementAssetId: state.assetManager.replacementAssetId,
+        draftName: state.assetManager.draftName,
+        draftCategory: state.assetManager.draftCategory
+      }
+    },
+    floatingPanels: readFloatingPanelStore()
+  });
+}
+
+function applyEditorResumeState(resume) {
+  if (!resume || typeof resume !== "object") return;
+  loadedEditorResumeState = editorResumeClone(resume);
+  const ui = resume.ui && typeof resume.ui === "object" ? resume.ui : {};
+  const stringOrNull = function (value) { return typeof value === "string" && value ? value : null; };
+  if (["all", "tools", "graph", "inspector", "viewport", "assets"].includes(ui.mobilePanel)) state.mobilePanel = ui.mobilePanel;
+  if (Number.isFinite(Number(ui.assetCardSize))) state.assetCardSize = clampAssetCardSize(ui.assetCardSize);
+  state.storedAuthoringRouteId = stringOrNull(ui.authoringRouteId) || state.storedAuthoringRouteId;
+  state.authoringRouteId = state.storedAuthoringRouteId;
+  state.storedCurrentGroupId = stringOrNull(ui.currentGroupId) || state.storedCurrentGroupId;
+  state.currentGroupId = state.storedCurrentGroupId;
+  if (typeof ui.authoringOverviewActive === "boolean") state.authoringOverviewActive = ui.authoringOverviewActive;
+  state.selectedNodeId = stringOrNull(ui.selectedNodeId);
+  state.selectedNodeIds = Array.isArray(ui.selectedNodeIds) ? ui.selectedNodeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];
+  state.selectedEdgeIds = Array.isArray(ui.selectedEdgeIds) ? ui.selectedEdgeIds.filter(function (id) { return typeof id === "string"; }).slice(0, 500) : [];
+  if (["translate", "rotate", "scale"].includes(ui.viewportMode)) state.viewportMode = ui.viewportMode;
+  if (["off", "grid", "ground"].includes(ui.snapMode)) state.snapMode = ui.snapMode;
+  if (Number.isFinite(Number(ui.snapGridSize))) state.snapGridSize = Math.max(0.001, Number(ui.snapGridSize));
+  if (typeof ui.previewAnimations === "boolean") state.previewAnimations = ui.previewAnimations;
+  if (ui.graphView && [ui.graphView.panX, ui.graphView.panY, ui.graphView.scale].every(function (value) { return Number.isFinite(Number(value)); })) {
+    state.view = { panX: Number(ui.graphView.panX), panY: Number(ui.graphView.panY), scale: clampGraphScale(ui.graphView.scale) };
+  }
+  state.workbenchSelectedModelId = stringOrNull(ui.workbenchSelectedModelId);
+  if (typeof ui.workbenchLibraryType === "string") state.workbenchLibraryType = ui.workbenchLibraryType;
+  if (typeof ui.workbenchSearch === "string") state.workbenchSearch = ui.workbenchSearch;
+  if (["overview", "world"].includes(ui.workbenchStage)) state.workbenchStage = ui.workbenchStage;
+  state.workbenchDefinitionId = stringOrNull(ui.workbenchDefinitionId);
+  if (["direct", "all", "used"].includes(ui.workbenchRelationScope)) state.workbenchRelationScope = ui.workbenchRelationScope;
+  for (const key of ["catalogHubType", "catalogHubSearch", "settingsHubKind", "settingsHubSearch", "questTimelineView"]) {
+    if (typeof ui[key] === "string") state[key] = ui[key];
+  }
+  for (const key of ["catalogHubSelectedNodeId", "settingsHubSelectedNodeId", "questTimelineSelectedQuestId", "questTimelineSelectedStepId", "questTimelineSelectedDialogueId", "questTimelineSelectedEntryId"]) {
+    state[key] = stringOrNull(ui[key]);
+  }
+  const drafts = resume.drafts && typeof resume.drafts === "object" ? resume.drafts : {};
+  if (typeof docBench.restoreResumeState === "function") docBench.restoreResumeState(drafts.documents);
+  const draftMap = {
+    objectFunctionDraft: "objectFunction", visualBuilderDraft: "visualBuilder", zoneCanvasDraft: "zoneCanvas", worldContentDraft: "worldContent",
+    questTimelineDraft: "questTimeline", questTimelineDialogueDraft: "questTimelineDialogue", questTimelineInsertDraft: "questTimelineInsert",
+    questTimelineDialogueInsertDraft: "questTimelineDialogueInsert", questTimelineChildDraft: "questTimelineChild",
+    questTimelinePendingTargetRef: "questTimelinePendingTarget", catalogHubDraft: "catalogHub", settingsHubDraft: "settingsHub",
+    workbenchEnemyDraft: "workbenchEnemy", workbenchLootRuleDraft: "workbenchLootRule", workbenchCreateDraft: "workbenchCreate",
+    workbenchDefinitionDraft: "workbenchDefinition", workbenchRowDraft: "workbenchRow", workbenchStatRuleDraft: "workbenchStatRule"
+  };
+  for (const [stateKey, draftKey] of Object.entries(draftMap)) state[stateKey] = editorResumeClone(drafts[draftKey]);
+  if (drafts.assetManager && typeof drafts.assetManager === "object") {
+    state.assetManager.assetId = stringOrNull(drafts.assetManager.assetId);
+    state.assetManager.replacementAssetId = typeof drafts.assetManager.replacementAssetId === "string" ? drafts.assetManager.replacementAssetId : "";
+    state.assetManager.draftName = typeof drafts.assetManager.draftName === "string" ? drafts.assetManager.draftName : null;
+    state.assetManager.draftCategory = typeof drafts.assetManager.draftCategory === "string" ? drafts.assetManager.draftCategory : null;
+  }
+  if (resume.floatingPanels && typeof resume.floatingPanels === "object") {
+    const floatingPanels = editorResumeClone(resume.floatingPanels) || {};
+    const deviceKey = floatingPanelDeviceKey();
+    const otherDeviceKey = deviceKey === "mobile" ? "desktop" : "mobile";
+    // Posities zijn ook als percentages opgeslagen. Bij de eerste overstap naar een
+    // ander scherm kunnen we daarom veilig de laatst bekende indeling als basis nemen.
+    if (!floatingPanels[deviceKey] && floatingPanels[otherDeviceKey]) {
+      floatingPanels[deviceKey] = editorResumeClone(floatingPanels[otherDeviceKey]);
+    }
+    try { window.localStorage.setItem(EDITOR_FLOATING_PANELS_STORAGE_KEY, JSON.stringify(floatingPanels)); } catch {}
+    floatingPanelLiveStates.clear();
+  }
+  try {
+    window.localStorage.setItem(EDITOR_MOBILE_PANEL_STORAGE_KEY, state.mobilePanel);
+    window.localStorage.setItem(ASSET_CARD_SIZE_STORAGE_KEY, String(state.assetCardSize));
+    if (state.workbenchSelectedModelId) window.localStorage.setItem(WORKBENCH_SELECTION_STORAGE_KEY, state.workbenchSelectedModelId);
+    else window.localStorage.removeItem(WORKBENCH_SELECTION_STORAGE_KEY);
+    storeWorkbenchValue(WORKBENCH_STAGE_STORAGE_KEY, state.workbenchStage);
+    storeWorkbenchValue(WORKBENCH_DEFINITION_STORAGE_KEY, state.workbenchDefinitionId);
+  } catch {}
+  applyAssetCardSize(state.assetCardSize, false);
+  setMobilePanel(state.mobilePanel, false);
+}
+
+function restoreResumeSelectionAfterGraphLoad() {
+  if (!loadedEditorResumeState) return;
+  const nodeIds = new Set((state.graph.nodes || []).map(function (node) { return node.id; }));
+  const edgeIds = new Set((state.graph.edges || []).map(function (edge) { return edge.id; }).filter(Boolean));
+  state.selectedNodeIds = state.selectedNodeIds.filter(function (id) { return nodeIds.has(id); });
+  state.selectedEdgeIds = state.selectedEdgeIds.filter(function (id) { return edgeIds.has(id); });
+  state.selectedNodeId = nodeIds.has(state.selectedNodeId) ? state.selectedNodeId : state.selectedNodeIds[0] || null;
+}
+
+function restoreResumeCameraAfterWorldLoad() {
+  const cameraView = loadedEditorResumeState?.cameraView;
+  if (!cameraView || !runtime || typeof runtime.restoreViewState !== "function") return false;
+  const restored = runtime.restoreViewState(cameraView);
+  if (restored) scheduleEditorMinimapRedraw();
+  return restored;
+}
+
 function currentEditorLayoutPayload() {
   if (!state.allLayoutTrees) state.allLayoutTrees = defaultAllLayoutTrees();
   if (state.allLayoutTree) state.allLayoutTrees[state.editorMode] = state.allLayoutTree;
   flattenAllLayoutTrees(state.allLayoutTrees);
   state.allLayoutTree = state.allLayoutTrees[state.editorMode];
   return {
-    version: 1,
+    version: 2,
     editorMode: state.editorMode,
-    layouts: state.allLayoutTrees
+    layouts: state.allLayoutTrees,
+    resume: currentEditorResumePayload()
   };
 }
 
-function scheduleEditorLayoutServerSave() {
+function scheduleEditorLayoutServerSave(delayMs = 250) {
   if (!editorLayoutServerReady) return;
   if (editorLayoutSaveTimer) clearTimeout(editorLayoutSaveTimer);
   editorLayoutSaveTimer = setTimeout(function () {
@@ -25368,7 +25527,7 @@ function scheduleEditorLayoutServerSave() {
     }).catch(function (error) {
       console.warn("Editorindeling kon niet worden opgeslagen:", error?.message || error);
     });
-  }, 250);
+  }, Math.max(200, Number(delayMs) || 250));
 }
 
 function flushEditorLayoutServerSave() {
@@ -25403,6 +25562,7 @@ async function loadEditorLayoutFromServer() {
       window.localStorage.setItem(EDITOR_MODE_STORAGE_KEY, state.editorMode);
     } catch {}
   }
+  if (stored?.resume) applyEditorResumeState(stored.resume);
   editorLayoutServerReady = true;
   if (!stored) persistAllLayoutTree();
 }
@@ -33374,6 +33534,13 @@ window.addEventListener("pointercancel", handleTerrainPointerUp, true);
 window.addEventListener("mouseup", handleTerrainMouseUpFallback, true);
 window.addEventListener("blur", clearViewportTouchEditState, true);
 window.addEventListener("pagehide", flushEditorLayoutServerSave);
+document.addEventListener("input", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("change", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("click", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+window.addEventListener("pointerup", function () { scheduleEditorLayoutServerSave(EDITOR_RESUME_SAVE_DELAY_MS); }, true);
+document.addEventListener("visibilitychange", function () {
+  if (document.visibilityState === "hidden") flushEditorLayoutServerSave();
+});
 
 if (el.nodesModeButton) el.nodesModeButton.addEventListener("click", function () { if (el.oldModeMenu) el.oldModeMenu.open = false; setEditorMode("nodes"); });
 if (el.workbenchModeButton) el.workbenchModeButton.addEventListener("click", function () { setGameTabOpen(false); setEditorMode("workbench"); });

@@ -1047,6 +1047,10 @@ export class MmoService {
     this.spatialCache = null;
   }
 
+  invalidateWorldCache() {
+    if (this.worldCache) this.worldCache.canonicalBuildId = "__asset_refresh__" + nowMs();
+  }
+
   // Fase 04: Region/Area-index uit de actieve canonieke build (in geheugen, één keer per build opgebouwd).
   spatialIndex() {
     const canonical = this.canonicalBuildProvider ? this.canonicalBuildProvider() : null;

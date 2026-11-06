@@ -36,7 +36,7 @@ async function main() {
   const inputPath = process.argv[2];
   const outputPath = process.argv[3];
   if (!inputPath || !outputPath) {
-    throw new Error("Usage: generate-glb-thumbnail.cjs <input.glb> <output.png>");
+    throw new Error("Usage: generate-glb-thumbnail.cjs <input.glb> <output.webp>");
   }
 
   const fileHandler = new FileHandler();
@@ -57,7 +57,8 @@ async function main() {
 }
 
 function buildArgv(inputPath, outputPath) {
-  const thumbnailSize = Number(process.env.GLB_THUMBNAIL_SIZE || 768);
+  const thumbnailSize = Number(process.env.GLB_THUMBNAIL_SIZE || 150);
+  const imageQuality = Number(process.env.GLB_THUMBNAIL_QUALITY || 0.68);
   const timeout = Number(process.env.GLB_THUMBNAIL_TIMEOUT || 30000);
   const modelViewerAttributes = process.env.GLB_THUMBNAIL_MODEL_VIEWER_ATTRIBUTES || "environment-image=neutral&exposure=0.92&shadow-intensity=1";
   const modelViewerVersion = process.env.GLB_THUMBNAIL_MODEL_VIEWER_VERSION || "1.9";
@@ -68,6 +69,7 @@ function buildArgv(inputPath, outputPath) {
     output: outputPath,
     width: thumbnailSize,
     height: thumbnailSize,
+    image_quality: Math.max(0.1, Math.min(1, imageQuality)),
     timeout: timeout,
     color: color,
     model_viewer_attributes: modelViewerAttributes,

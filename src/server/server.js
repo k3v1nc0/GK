@@ -46,6 +46,7 @@ const assetService = new AssetService(db, rootDir, {
   assetsDir: assetsRoot,
   skipModelThumbnails: process.env.GK_TEST_ISOLATED === "1" && process.env.GK_SKIP_MODEL_THUMBNAILS === "1"
 });
+await assetService.migrateLegacyImageThumbnails();
 assetService.resumePendingThumbnailJobs();
 const symbolIndexService = new SymbolIndexService();
 const tokenResolver = new TokenResolver({ symbolIndexService });
@@ -55,6 +56,7 @@ const gameProjectCompiler = new GameProjectCompiler({ symbolIndexService, tokenR
 const publishService = new PublishService(repository, { assetService, symbolIndexService, tokenResolver, gameProjectCompiler });
 const graphMigrationService = new GraphMigrationService(repository, { symbolIndexService });
 const mmoService = new MmoService(db, authService, repository);
+assetService.setThumbnailUpdateListener(() => mmoService.invalidateWorldCache());
 const userAdminService = new UserAdminService(db, { closeSessionConnections: (sessionId, code, reason) => mmoService.closeSessionConnections(sessionId, code, reason) });
 const node03RuntimeService = new Node03RuntimeService(db, repository, mmoService);
 const node04QuestRuntimeService = new Node04QuestRuntimeService(db, repository, mmoService, node03RuntimeService);
@@ -171,6 +173,46 @@ function normalizeEditorLayoutNode(node, allowedViews, depth = 0) {
   return { dir: node.dir, children };
 }
 
+// De editor bewaart naast de vensterindeling ook een kleine, per gebruiker gebonden
+// hervatstatus. Dit is bewust geen projectinhoud: camera, selectie en half ingevulde
+// formulieren mogen een andere editorgebruiker niet verplaatsen of naar de live game gaan.
+function normalizeEditorResumeJson(value, depth = 0, budget = { entries: 0 }) {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") return value.slice(0, 100000);
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (depth > 12 || budget.entries > 12000) return null;
+  if (Array.isArray(value)) {
+    const result = [];
+    for (const entry of value.slice(0, 2000)) {
+      budget.entries += 1;
+      result.push(normalizeEditorResumeJson(entry, depth + 1, budget));
+    }
+    return result;
+  }
+  if (!value || typeof value !== "object") return null;
+  const result = {};
+  for (const [key, entry] of Object.entries(value).slice(0, 500)) {
+    if (["__proto__", "prototype", "constructor"].includes(key)) continue;
+    budget.entries += 1;
+    result[key.slice(0, 120)] = normalizeEditorResumeJson(entry, depth + 1, budget);
+  }
+  return result;
+}
+
+function normalizeEditorResume(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = {
+    version: 1,
+    savedAt: typeof value.savedAt === "string" ? value.savedAt.slice(0, 40) : null,
+    cameraView: value.cameraView,
+    ui: value.ui,
+    drafts: value.drafts,
+    floatingPanels: value.floatingPanels
+  };
+  const normalized = normalizeEditorResumeJson(source);
+  return Buffer.byteLength(JSON.stringify(normalized), "utf8") <= 600000 ? normalized : null;
+}
+
 function normalizeEditorUserLayout(value) {
   if (!value || typeof value !== "object") return null;
   const nodes = normalizeEditorLayoutNode(value.layouts?.nodes, editorLayoutViews.nodes);
@@ -183,9 +225,10 @@ function normalizeEditorUserLayout(value) {
   if (settings) layouts.settings = settings;
   if (terrain) layouts.terrain = terrain;
   return {
-    version: 1,
+    version: 2,
     editorMode: ["workbench", "settings", "terrain", "nodes"].includes(value.editorMode) ? value.editorMode : "workbench",
-    layouts
+    layouts,
+    resume: normalizeEditorResume(value.resume)
   };
 }
 
