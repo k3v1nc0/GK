@@ -5,7 +5,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261105-quest15";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest16";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -277,6 +277,72 @@ function requirementRow(state, rule, change, remove) {
 }
 
 // ---------- 🪜 Stappen ----------
+// 6-11 (Kevin): in één keer te snappen. Bovenaan de hele quest in gewone zinnen; elke stap in drie blokken
+// (🎯 wat moet de speler doen, ⚡ wat gebeurt er onderweg, ➡️ en daarna) met een korte uitleg; velden onder elkaar
+// met een naam ervoor; zeldzame opties achter ⚙️ Meer; kant-en-klare stappen.
+
+// Kant-en-klare stappen: één klik, daarna alleen nog invullen wat.
+const STEP_TEMPLATES = [
+  { id: "gather", text: "🪵 Iets verzamelen", objectives: [{ type: "gather", amount: 5 }] },
+  { id: "defeat", text: "⚔️ Vijanden verslaan", objectives: [{ type: "defeat", amount: 3 }] },
+  { id: "spawn", text: "👾 Vijanden laten verschijnen en verslaan", objectives: [{ type: "defeat", amount: 3 }], spawn: true },
+  { id: "talk", text: "💬 Met iemand praten", objectives: [{ type: "talk" }] },
+  { id: "deliver", text: "📦 Iets brengen", objectives: [{ type: "deliver", amount: 1 }] },
+  { id: "enter", text: "🎯 Ergens heen gaan", objectives: [{ type: "enter" }] },
+  { id: "empty", text: "➕ Lege stap", objectives: [] }
+];
+
+// Wat vul je in bij een doel (de naam voor het vak).
+const WHAT_LABEL = { actor_archetype: "Welke vijand", resource_definition: "Welke grondstof", item_definition: "Welk item", npc: "Wie", area: "Welk gebied" };
+
+function goalText(objective, spawns, nameOf) {
+  const spawn = objective.spawnId ? spawns.find((entry) => entry.spawnId === objective.spawnId) : null;
+  if (!spawn) return objectiveText(objective, nameOf);
+  const amount = Number(objective.amount) > 1 ? objective.amount + "× " : "";
+  return "Versla " + amount + "👾 " + spawnName(spawn, nameOf);
+}
+
+// Een regel als zin, bijv. "Bij 5× Hout: 👾 Wolvengroep verschijnen".
+function ruleText(rule, step, spawns, nameOf) {
+  const goal = (step.objectives || []).find((objective) => objective.objectiveId === rule.objectiveId);
+  const what = goal ? (goal.ref ? nameOf(goal.ref) : OBJECTIVE_KINDS[goal.type]?.label || "doel") : "…";
+  const when = rule.when === "count" ? "Bij " + (rule.amount || 1) + "× " + what : rule.when === "done" ? "Als de stap klaar is" : "Zodra de stap begint";
+  const spawn = spawns.find((entry) => entry.spawnId === rule.spawnId);
+  const then = rule.then === "spawn" ? "👾 " + (spawn ? spawnName(spawn, nameOf) : "…") + " verschijnen" : "💬 \"" + (rule.text || "…") + "\"";
+  return when + ": " + then;
+}
+
+// 📖 Zo loopt je quest: de hele quest in gewone zinnen. Klik een stap om ernaartoe te gaan.
+function storyBox(state, host, steps, issues, nameOf) {
+  const spawns = state.spawns || [];
+  const box = el("section", { class: "qbStory" }, [el("h4", { text: "📖 Zo loopt je quest" }),
+    el("p", { class: "qbHint", text: "Lees dit als een verhaal. Klopt het met je idee? Dan is de quest goed. Klik een stap om hem te openen." })]);
+  const list = el("ol", { class: "qbStoryList" });
+  steps.forEach((step, index) => {
+    const bad = issues.some((issue) => issue.stepId === step.stepId);
+    const lines = [];
+    if (step.kind === "end") lines.push(el("b", { text: (bad ? "⚠️ " : "") + "🏁 " + (step.title || "Klaar") + ": de speler krijgt de beloning." }));
+    else {
+      const goals = (step.objectives || []).map((objective) => goalText(objective, spawns, nameOf)
+        + (objective.role === "optional" ? " (mag)" : objective.role === "bonus" ? " (bonus)" : objective.role === "hidden" ? " (verborgen)" : ""));
+      const joiner = step.match === "any" ? " of " : " en ";
+      lines.push(el("b", { text: (bad ? "⚠️ " : "") + (step.title ? step.title + ": " : "") + (goals.length ? goals.join(joiner) : "nog geen doel") + "." }));
+      for (const rule of step.rules || []) lines.push(el("span", { text: "⚡ " + ruleText(rule, step, spawns, nameOf) }));
+      const to = steps.find((other) => other.stepId === (step.next || [])[0]?.to);
+      const nextIndex = to ? steps.indexOf(to) : -1;
+      if (!to) lines.push(el("span", { class: "qbBad", text: "➡️ Daarna: nog niet gekozen" }));
+      else if (nextIndex !== index + 1 || to.kind === "end") lines.push(el("span", { text: "➡️ Daarna: " + (to.kind === "end" ? "🏁 " + (to.title || "Klaar") : "stap " + (nextIndex + 1)) }));
+    }
+    const item = el("li", { class: "qbStoryStep" + (bad ? " qbStoryBad" : ""), title: "Naar deze stap" }, lines);
+    item.addEventListener("click", () => {
+      const card = state.root.querySelector('[data-step="' + step.stepId + '"]');
+      if (card) { card.scrollIntoView({ block: "start", behavior: "smooth" }); card.classList.add("qbFlash"); setTimeout(() => card.classList.remove("qbFlash"), 1200); }
+    });
+    list.append(item);
+  });
+  box.append(list);
+  host.append(box);
+}
 
 function renderSteps(state, host, body, steps, issues, nameOf) {
   // Velden van de quest zelf (snelle quest, bij groep verlaten) tekent de Werkbank; na opslaan tekenen we de Quest Builder opnieuw.
@@ -297,18 +363,24 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
     ]));
     return;
   }
-  const edit = (label, change) => {
-    const copy = clone(steps);
-    change(copy);
-    saveSteps(state, body, copy, label);
-  };
+  // edit: de stappen aanpassen (en zo nodig de verschijningen), met één Ctrl+Z.
+  const edit = (label, change) => saveQuest(state, label, (copy) => change(copy.steps, copy));
   const general = issues.filter((issue) => !issue.stepId && !issue.spawnId);
   if (general.length) host.append(issueList(general));
+  storyBox(state, host, steps, issues, nameOf);
   const list = el("div", { class: "qbSteps" });
   steps.forEach((step, index) => list.append(stepCard(state, steps, step, index, issues.filter((issue) => issue.stepId === step.stepId), nameOf, edit)));
   host.append(list);
-  const addStep = el("button", { type: "button", class: "wbdGhost", text: "➕ Stap" });
-  addStep.addEventListener("click", () => edit("stap erbij", (copy) => {
+  host.append(templateBar(state, steps, edit));
+  // Bij groep verlaten doet alleen iets bij een doel met 👥 Team samen.
+  const hasTeam = steps.some((step) => (step.objectives || []).some((objective) => objective?.share === "team"));
+  if (hasTeam || (body.partyLeave && body.partyLeave !== "keep")) host.append(fields(["partyLeave"]));
+}
+
+// ➕ Nieuwe stap: kant-en-klaar. De nieuwe stap komt na de laatste stap (vóór het einde) en Daarna loopt mee.
+function templateBar(state, steps, edit) {
+  const full = steps.length >= QUEST_LIMITS.steps;
+  const add = (template) => edit("stap erbij: " + template.text, (copy, body) => {
     const used = new Set(copy.map((step) => step.stepId));
     const stepId = uniqueId("stap_", used);
     let last = -1;
@@ -317,19 +389,31 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
     const firstEnd = copy.find((step) => step.kind === "end");
     const next = prev && prev.next?.length ? clone(prev.next) : firstEnd ? [{ to: firstEnd.stepId }] : [];
     if (prev) prev.next = [{ to: stepId }];
-    copy.splice(last + 1, 0, { stepId, kind: "step", title: "", match: "all", objectives: [], next });
-  }));
-  const addEnd = el("button", { type: "button", class: "wbdGhost", text: "🏁 Einde" });
-  addEnd.addEventListener("click", () => edit("einde erbij", (copy) => {
+    const objectives = template.objectives.map((entry, number) => Object.assign({ objectiveId: "doel_" + (number + 1), ref: null, role: "required" }, entry));
+    const step = { stepId, kind: "step", title: "", match: "all", objectives, next };
+    if (template.spawn) {
+      // 👾 Een verschijning erbij, die verschijnt zodra de stap begint; het Versla-doel telt alleen die vijanden.
+      body.spawns = Array.isArray(body.spawns) ? body.spawns : [];
+      const spawnId = uniqueId("spawn_", new Set(body.spawns.map((entry) => entry.spawnId)));
+      body.spawns.push({ spawnId, count: 3 });
+      objectives[0].spawnId = spawnId;
+      step.rules = [{ ruleId: "regel_1", when: "start", then: "spawn", spawnId }];
+    }
+    copy.splice(last + 1, 0, step);
+  });
+  const buttons = STEP_TEMPLATES.map((template) => {
+    const button = el("button", { type: "button", class: "qbTemplate", text: template.text, disabled: full || null });
+    button.addEventListener("click", () => add(template));
+    return button;
+  });
+  const end = el("button", { type: "button", class: "qbTemplate", text: "🏁 Einde", disabled: full || null, title: "Nog een einde (bijv. een ander einde na een keuze)" });
+  end.addEventListener("click", () => edit("einde erbij", (copy) => {
     const used = new Set(copy.map((step) => step.stepId));
     copy.push({ stepId: used.has("end") ? uniqueId("einde_", used) : "end", kind: "end", title: "" });
   }));
-  if (steps.length >= QUEST_LIMITS.steps) { addStep.disabled = true; addEnd.disabled = true; }
-  host.append(el("div", { class: "qbAdd" }, [addStep, addEnd,
-    el("span", { class: "wbdNote", text: "De bovenste stap is het begin. Elke stap gaat via Daarna naar een volgende stap of een einde." })]));
-  // Bij groep verlaten doet alleen iets bij een doel met 👥 Team samen.
-  const hasTeam = steps.some((step) => (step.objectives || []).some((objective) => objective?.share === "team"));
-  if (hasTeam || (body.partyLeave && body.partyLeave !== "keep")) host.append(fields(["partyLeave"]));
+  return el("section", { class: "qbStory qbTemplates" }, [el("h4", { text: "➕ Nieuwe stap" }),
+    el("p", { class: "qbHint", text: "Kies wat de speler in de nieuwe stap moet doen. Hij komt na de laatste stap; daarna vul je alleen nog in wat (sleep een kaart uit de Bibliotheek op het vak)." }),
+    el("div", { class: "qbTemplateRow" }, buttons.concat(end))]);
 }
 
 function issueList(issues) {
@@ -347,6 +431,29 @@ function smallButton(text, title, onClick, disabled = false) {
   const button = el("button", { type: "button", class: "qbIconBtn", text, title, "aria-label": title, disabled: disabled || null });
   button.addEventListener("click", onClick);
   return button;
+}
+
+// Een blok in een stap: titel + korte uitleg + inhoud.
+function block(icon, title, hint, children) {
+  return el("div", { class: "qbBlock" }, [el("div", { class: "qbBlockHead" }, [el("span", { text: icon }), el("b", { text: title })]),
+    hint ? el("p", { class: "qbHint", text: hint }) : null].concat(children).filter(Boolean));
+}
+
+// Eén veld: naam ervoor, bediening erachter.
+function field(label, control, wide = false) {
+  return el("div", { class: "qbField" + (wide ? " qbFieldWide" : "") }, [el("span", { class: "qbFieldLabel", text: label }), el("div", { class: "qbFieldValue" }, control)]);
+}
+
+// ⚙️ Meer: dicht tenzij je hem openzette; wat er aan staat zie je in de kopregel.
+function moreBox(state, key, chips, rows) {
+  const open = state.openMore?.has(key);
+  const details = el("details", { class: "qbMore" }, [el("summary", { text: "⚙️ Meer" + (chips.length ? " · " + chips.join(" · ") : "") })].concat(rows));
+  if (open) details.open = true;
+  details.addEventListener("toggle", () => {
+    state.openMore = state.openMore || new Set();
+    if (details.open) state.openMore.add(key); else state.openMore.delete(key);
+  });
+  return details;
 }
 
 // Verschuiven. Is de quest een gewone rij (elke stap gaat naar de volgende, de laatste naar een einde)?
@@ -367,11 +474,11 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
   const isEnd = step.kind === "end";
   const at = (copy) => copy[index];
   const card = el("section", { class: "qbStep" + (isEnd ? " qbStepEnd" : "") + (issues.length ? " qbStepBad" : ""), "data-step": step.stepId });
-  const goals = (step.objectives || []).map((objective) => objectiveText(objective, nameOf)).join(", ");
-  const title = textInput(step.title, isEnd ? "Naam van dit einde (mag leeg)" : (goals || "Naam van de stap (mag leeg)"), QUEST_LIMITS.title,
+  const title = textInput(step.title, isEnd ? "Naam van dit einde (mag leeg)" : "Naam van de stap (mag leeg), bijv. Hout zoeken", QUEST_LIMITS.title,
     (value) => edit("naam", (copy) => { at(copy).title = value; }));
-  const head = el("div", { class: "qbStepHead" }, [
-    el("span", { class: "qbNum", title: index === 0 ? "Begin van de quest" : "", text: index === 0 && !isEnd ? "▶" : isEnd ? "🏁" : String(index + 1) }),
+  const number = isEnd ? "🏁 Einde" : "Stap " + (index + 1);
+  card.append(el("div", { class: "qbStepHead" }, [
+    el("span", { class: "qbNum qbNumWide", title: index === 0 && !isEnd ? "Hier begint de quest" : "", text: (index === 0 && !isEnd ? "▶ " : "") + number }),
     title,
     smallButton("▲", "Omhoog", () => edit("volgorde", (copy) => moveStep(copy, index, -1)), index === 0),
     smallButton("▼", "Omlaag", () => edit("volgorde", (copy) => moveStep(copy, index, 1)), index === steps.length - 1),
@@ -383,71 +490,92 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
         other.next = (other.next || []).map((link) => (link.to === gone.stepId ? (forward && forward !== other.stepId ? { to: forward } : null) : link)).filter(Boolean);
       }
     }))
-  ]);
-  card.append(head);
+  ]));
   if (isEnd) {
-    card.append(el("div", { class: "wbdNote", text: "Hier is de quest klaar. De beloning (in het questpaneel) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
-  } else {
-    const needed = (step.objectives || []).filter(objectiveNeeded).length;
-    if (needed > 1) {
-      card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "✅ Klaar als" }), el("div", { class: "wbdChoices qbMatch" }, Object.entries(STEP_MATCH).map(([value, label]) => {
-        const active = (step.match || "all") === value;
-        const button = el("button", { type: "button", class: "wbdChoice" + (active ? " active" : ""), "aria-pressed": String(active), text: label });
-        button.addEventListener("click", () => edit("klaar als", (copy) => { at(copy).match = value; }));
-        return button;
-      }))]));
-    }
-    const objectives = el("div", { class: "qbObjectives" });
-    (step.objectives || []).forEach((objective, number) => objectives.append(objectiveRow(state, objective, issues.filter((issue) => issue.objectiveId === objective.objectiveId),
-      (label, change) => edit(label, (copy) => change(at(copy).objectives[number], at(copy))),
-      () => edit("doel weg", (copy) => { at(copy).objectives.splice(number, 1); }))));
-    card.append(objectives);
-    const adders = el("div", { class: "qbAdders" }, [el("span", { class: "qbLabel", text: "➕ Doel" })].concat(OBJECTIVE_ORDER.map((type) => {
-      const spec = OBJECTIVE_KINDS[type];
-      const button = el("button", { type: "button", class: "qbAdder", title: spec.label, disabled: (step.objectives || []).length >= QUEST_LIMITS.objectives || null }, [el("span", { text: spec.icon }), el("span", { text: spec.label })]);
-      button.addEventListener("click", () => edit("doel erbij", (copy) => {
-        const target = at(copy);
-        target.objectives = target.objectives || [];
-        const objective = { objectiveId: uniqueId("doel_", new Set(target.objectives.map((entry) => entry.objectiveId))), type, ref: null, role: "required" };
-        if (spec.amount) objective.amount = 1;
-        target.objectives.push(objective);
-      }));
-      return button;
-    })));
-    card.append(adders);
-    card.append(rulesBox(state, step, (label, change) => edit(label, (copy) => change(at(copy)))));
-    const nextSelect = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
-      .map((other) => el("option", { value: other.stepId, text: stepLabel(other, steps.indexOf(other), nameOf) }))));
-    nextSelect.value = (step.next || [])[0]?.to || "";
-    nextSelect.addEventListener("change", () => edit("daarna", (copy) => {
-      const rest = (at(copy).next || []).slice(1);
-      at(copy).next = nextSelect.value ? [{ to: nextSelect.value }].concat(rest) : rest;
-    }));
-    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "➡️ Daarna" }), nextSelect]));
-    // Stap 3: Kaart = welk Questgebied deze stap op de minimap en de kaart toont, en hoe.
-    const mapArea = areaSelect(state.bench, step.mapRef || null, "Geen gebied", "Het Questgebied van deze stap (maak er een met de Area tool: 🎯 Questgebied)",
-      (ref) => edit("kaart", (copy) => { if (ref) at(copy).mapRef = ref; else { delete at(copy).mapRef; delete at(copy).mapShow; } }));
-    const mapParts = [mapArea];
-    if (step.mapRef) {
-      const show = el("select", { class: "wbdSelect", title: "Hoe het gebied op de minimap en de kaart staat" },
-        Object.entries(STEP_MAP_SHOW).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
-      show.value = STEP_MAP_SHOW[step.mapShow] ? step.mapShow : "area";
-      show.addEventListener("change", () => edit("kaart", (copy) => { if (show.value === "area") delete at(copy).mapShow; else at(copy).mapShow = show.value; }));
-      mapParts.push(show);
-    }
-    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "🗺️ Kaart" }), el("div", { class: "qbMap" }, mapParts)]));
-    card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "💬 Uitleg" }),
-      textInput(step.text, "Wat de speler in zijn questlog leest (mag leeg)", QUEST_LIMITS.text, (value) => edit("uitleg", (copy) => { at(copy).text = value; }))]));
+    card.append(el("p", { class: "qbHint", text: "Hier is de quest klaar. De beloning (in het questpaneel) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
+    if (issues.length) card.append(issueList(issues));
+    return card;
   }
+
+  // 🎯 Blok 1: wat moet de speler doen?
+  const goals = el("div", { class: "qbGoals" });
+  (step.objectives || []).forEach((objective, number) => goals.append(objectiveRow(state, step, objective, issues.filter((issue) => issue.objectiveId === objective.objectiveId),
+    (label, change) => edit(label, (copy, body) => change(at(copy).objectives[number], at(copy), body)),
+    () => edit("doel weg", (copy) => { at(copy).objectives.splice(number, 1); }))));
+  const addGoal = el("select", { class: "wbdSelect", title: "Nog een doel in deze stap" }, [el("option", { value: "", text: "➕ Nog een doel..." })]
+    .concat(OBJECTIVE_ORDER.map((type) => el("option", { value: type, text: OBJECTIVE_KINDS[type].icon + " " + OBJECTIVE_KINDS[type].label }))));
+  addGoal.disabled = (step.objectives || []).length >= QUEST_LIMITS.objectives;
+  addGoal.addEventListener("change", () => {
+    const type = addGoal.value;
+    if (!type) return;
+    edit("doel erbij", (copy) => {
+      const target = at(copy);
+      target.objectives = target.objectives || [];
+      const objective = { objectiveId: uniqueId("doel_", new Set(target.objectives.map((entry) => entry.objectiveId))), type, ref: null, role: "required" };
+      if (OBJECTIVE_KINDS[type].amount) objective.amount = 1;
+      target.objectives.push(objective);
+    });
+  });
+  const doParts = [goals];
+  const needed = (step.objectives || []).filter(objectiveNeeded).length;
+  if (needed > 1) {
+    doParts.push(field("✅ Klaar als", el("div", { class: "wbdChoices qbMatch" }, Object.entries(STEP_MATCH).map(([value, label]) => {
+      const active = (step.match || "all") === value;
+      const button = el("button", { type: "button", class: "wbdChoice" + (active ? " active" : ""), "aria-pressed": String(active), text: label });
+      button.addEventListener("click", () => edit("klaar als", (copy) => { at(copy).match = value; }));
+      return button;
+    }))));
+  }
+  doParts.push(el("div", { class: "qbAdd" }, [addGoal]));
+  card.append(block("🎯", "Wat moet de speler doen?", "Als alle doelen af zijn, is de stap klaar en gaat de quest verder.", doParts));
+
+  // ⚡ Blok 2: wat gebeurt er onderweg?
+  card.append(block("⚡", "Wat gebeurt er onderweg? (mag leeg)",
+    "Bijv. bij 5 hout verschijnen wolven, of er komt een bericht in beeld. Zet het in de stap waar het moet gebeuren.",
+    [rulesBox(state, step, (label, change) => edit(label, (copy, body) => change(at(copy), body)))]));
+
+  // ➡️ Blok 3: en daarna?
+  const nextSelect = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
+    .map((other) => el("option", { value: other.stepId, text: other.kind === "end" ? "🏁 " + (other.title || "Klaar") : "Stap " + (steps.indexOf(other) + 1) + (other.title ? ": " + other.title : "") }))));
+  nextSelect.value = (step.next || [])[0]?.to || "";
+  nextSelect.addEventListener("change", () => edit("daarna", (copy) => {
+    const rest = (at(copy).next || []).slice(1);
+    at(copy).next = nextSelect.value ? [{ to: nextSelect.value }].concat(rest) : rest;
+  }));
+  // Kaart en uitleg: wat de speler op de kaart en in zijn questlog ziet.
+  const mapArea = areaSelect(state.bench, step.mapRef || null, "Geen gebied", "Het Questgebied van deze stap (maak er een met de Area tool: 🎯 Questgebied)",
+    (ref) => edit("kaart", (copy) => { if (ref) at(copy).mapRef = ref; else { delete at(copy).mapRef; delete at(copy).mapShow; } }));
+  const mapParts = [mapArea];
+  if (step.mapRef) {
+    const show = el("select", { class: "wbdSelect", title: "Hoe het gebied op de minimap en de kaart staat" },
+      Object.entries(STEP_MAP_SHOW).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+    show.value = STEP_MAP_SHOW[step.mapShow] ? step.mapShow : "area";
+    show.addEventListener("change", () => edit("kaart", (copy) => { if (show.value === "area") delete at(copy).mapShow; else at(copy).mapShow = show.value; }));
+    mapParts.push(show);
+  }
+  const chips = [];
+  if (step.mapRef) chips.push("🗺️ " + nameOf(step.mapRef));
+  if (step.text) chips.push("💬 uitleg");
+  card.append(block("➡️", "En daarna?", "Waar de quest heen gaat als deze stap klaar is: de volgende stap of een einde.", [
+    field("➡️ Ga naar", nextSelect),
+    moreBox(state, "step|" + step.stepId, chips, [
+      field("🗺️ Op de kaart", el("div", { class: "qbMap" }, mapParts)),
+      field("💬 In het questlog", textInput(step.text, "Wat de speler in zijn questlog leest (mag leeg)", QUEST_LIMITS.text, (value) => edit("uitleg", (copy) => { at(copy).text = value; })), true)
+    ])
+  ]));
   const own = issues.filter((issue) => !issue.objectiveId);
   if (own.length) card.append(issueList(own));
   return card;
 }
 
-function objectiveRow(state, objective, issues, change, remove) {
+// Eén doel als kaartje: bovenaan in gewone woorden, daaronder de velden met een naam ervoor; de rest onder ⚙️ Meer.
+function objectiveRow(state, step, objective, issues, change, remove) {
   const bench = state.bench;
+  const { nameOf } = names(bench);
+  const spawns = state.spawns || [];
   const spec = OBJECTIVE_KINDS[objective.type] || OBJECTIVE_KINDS.talk;
-  const type = el("select", { class: "wbdSelect qbType", title: "Soort doel" }, OBJECTIVE_ORDER.map((value) => el("option", { value, text: OBJECTIVE_KINDS[value].icon + " " + OBJECTIVE_KINDS[value].label })));
+  const spawn = objective.spawnId ? spawns.find((entry) => entry.spawnId === objective.spawnId) : null;
+  const type = el("select", { class: "wbdSelect", title: "Soort doel" }, OBJECTIVE_ORDER.map((value) => el("option", { value, text: OBJECTIVE_KINDS[value].icon + " " + OBJECTIVE_KINDS[value].label })));
   type.value = objective.type;
   type.addEventListener("change", () => change("soort doel", (target) => {
     const next = OBJECTIVE_KINDS[type.value];
@@ -459,78 +587,99 @@ function objectiveRow(state, objective, issues, change, remove) {
     if (target.type !== "defeat") { delete target.credit; delete target.spawnId; }
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
   }));
-  // Ga naar / Verlaat gebied: een keuzelijst met Questgebieden; de rest: een kaart uit de Bibliotheek op het vak.
+  // Wat: een kaart uit de Bibliotheek op het vak (bij een gebied: een keuzelijst met Questgebieden).
+  // Bij een verschijning zet dezelfde vijand ook de verschijning goed (één vak om te vullen).
   const what = spec.refKind === "area"
     ? areaSelect(bench, objective.ref || null, "Kies een Questgebied...", "Welk gebied", (ref) => change("gebied", (target) => { target.ref = ref; }))
-    : bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null, (ref) => change("doel", (target) => { target.ref = ref || null; }));
-  const parts = [type, el("div", { class: "qbSlot" }, what)];
-  // Stap 5: Versla alle vijanden van deze soort, of alleen die van een verschijning van deze quest.
-  const spawns = state.spawns || [];
+    : bench.refControl({ refKind: spec.refKind, required: false, ui: { icon: spec.icon } }, objective.ref || null, (ref) => change("doel", (target, stepCopy, body) => {
+      target.ref = ref || null;
+      const own = target.spawnId && Array.isArray(body?.spawns) ? body.spawns.find((entry) => entry.spawnId === target.spawnId) : null;
+      if (own) { if (ref) own.actorRef = ref; else delete own.actorRef; }
+    }));
+  const rows = [field("Soort", type), field(WHAT_LABEL[spec.refKind] || "Wat", el("div", { class: "qbSlot" }, what))];
+  // Versla: elke vijand van deze soort, of alleen de vijanden die deze quest laat verschijnen.
   if (objective.type === "defeat" && (spawns.length || objective.spawnId)) {
-    const pick = el("select", { class: "wbdSelect qbShare", title: "Telt elke vijand van deze soort, of alleen de vijanden die deze quest liet verschijnen (👾 Verschijnen)." },
-      [el("option", { value: "", text: "⚔️ Elke van deze soort" })].concat(spawns.map((spawn) => el("option", { value: spawn.spawnId, text: "👾 Alleen: " + spawnName(spawn, (ref) => names(bench).nameOf(ref)) }))));
-    if (objective.spawnId && !spawns.some((spawn) => spawn.spawnId === objective.spawnId)) pick.append(el("option", { value: objective.spawnId, text: "⚠️ " + objective.spawnId }));
+    const pick = el("select", { class: "wbdSelect", title: "Telt elke vijand van deze soort, of alleen de vijanden die deze quest liet verschijnen (👾 Verschijnen)." },
+      [el("option", { value: "", text: "⚔️ Elke vijand van deze soort" })].concat(spawns.map((entry) => el("option", { value: entry.spawnId, text: "👾 Alleen: " + spawnName(entry, nameOf) }))));
+    if (objective.spawnId && !spawn) pick.append(el("option", { value: objective.spawnId, text: "⚠️ " + objective.spawnId }));
     pick.value = objective.spawnId || "";
     pick.addEventListener("change", () => change("verschijning", (target) => {
-      const spawn = spawns.find((entry) => entry.spawnId === pick.value);
-      if (!spawn) { delete target.spawnId; return; }
-      target.spawnId = spawn.spawnId;
-      if (spawn.actorRef) target.ref = spawn.actorRef;
-      target.amount = Math.max(1, spawn.count || 1);
+      const chosen = spawns.find((entry) => entry.spawnId === pick.value);
+      if (!chosen) { delete target.spawnId; return; }
+      target.spawnId = chosen.spawnId;
+      if (chosen.actorRef) target.ref = chosen.actorRef;
+      target.amount = Math.max(1, chosen.count || 1);
     }));
-    parts.push(pick);
+    rows.push(field("Welke precies", pick));
   }
   if (spec.amount) {
     const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Hoeveel" });
     amount.value = String(objective.amount || 1);
-    amount.addEventListener("change", () => change("aantal", (target) => { target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1))); }));
-    parts.push(el("label", { class: "qbTimes" }, [el("span", { text: "×" }), amount]));
+    amount.addEventListener("change", () => change("aantal", (target, stepCopy, body) => {
+      target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1)));
+      // Bij een verschijning: er verschijnen er net zoveel (hooguit 10).
+      const own = target.spawnId && Array.isArray(body?.spawns) ? body.spawns.find((entry) => entry.spawnId === target.spawnId) : null;
+      if (own) own.count = Math.min(QUEST_SPAWN_LIMITS.count, target.amount);
+    }));
+    rows.push(field("Hoeveel", amount));
   }
   if (spec.npc) {
-    parts.push(el("span", { class: "qbLabel", text: "naar" }), el("div", { class: "qbSlot" }, bench.refControl({ refKind: "npc", required: false, ui: { icon: "🧑" } }, objective.npcRef || null,
-      (ref) => change("bij wie", (target) => { target.npcRef = ref || null; }))));
+    rows.push(field("Naar wie", el("div", { class: "qbSlot" }, bench.refControl({ refKind: "npc", required: false, ui: { icon: "🧑" } }, objective.npcRef || null,
+      (ref) => change("bij wie", (target) => { target.npcRef = ref || null; })))));
   }
-  // Stap 3: telt alleen als de vijand, grondstof of pickup in dit Questgebied ligt.
+  if (spawn) rows.push(el("p", { class: "qbHint", text: "👾 Deze vijanden verschijnen door een regel bij ⚡ Wat gebeurt er onderweg. Waar en voor wie staat in de tab 👾 Verschijnen." }));
+
+  // ⚙️ Meer: waar telt het, ster op de kaart, voor wie, telt voor, moet het.
+  const more = [];
+  const chips = [];
   if (spec.event) {
-    parts.push(areaSelect(bench, objective.areaRef || null, "📍 Telt overal", "Waar telt dit? Overal, of alleen als de vijand/grondstof/pickup in dit Questgebied ligt.",
-      (ref) => change("alleen in gebied", (target) => { if (ref) target.areaRef = ref; else delete target.areaRef; }), "📍 Telt alleen in 🎯 "));
+    more.push(field("📍 Waar telt het", areaSelect(bench, objective.areaRef || null, "Overal", "Overal, of alleen als de vijand/grondstof/pickup in dit Questgebied ligt.",
+      (ref) => change("alleen in gebied", (target) => { if (ref) target.areaRef = ref; else delete target.areaRef; }), "Alleen in 🎯 ")));
+    if (objective.areaRef) chips.push("📍 alleen in " + nameOf(objective.areaRef));
   }
-  // Kevin 5-11: een ster op de minimap en de grote kaart (ook door de mist) die meeloopt met de vijand.
   if (spec.mark) {
-    const mark = el("select", { class: "wbdSelect qbShare", title: "⭐ Ster op kaart: de speler ziet op de minimap en de grote kaart (ook door de mist) waar deze vijand of grondstof nu is. De 5 dichtstbijzijnde; hij loopt mee." },
-      [el("option", { value: "", text: "🗺️ Geen ster" }), el("option", { value: "star", text: "⭐ Ster op kaart" })]);
+    const mark = el("select", { class: "wbdSelect", title: "De speler ziet op de minimap en de grote kaart (ook door de mist) waar deze vijand of grondstof nu is. De 5 dichtstbijzijnde; hij loopt mee." },
+      [el("option", { value: "", text: "Nee" }), el("option", { value: "star", text: "⭐ Ja, ster op de kaart" })]);
     mark.value = objective.mark === "star" ? "star" : "";
     mark.addEventListener("change", () => change("ster op kaart", (target) => { if (mark.value) target.mark = "star"; else delete target.mark; }));
-    parts.push(mark);
+    more.push(field("⭐ Op de kaart", mark));
+    if (objective.mark === "star") chips.push("⭐ ster");
   }
-  // Stap 2 (samen questen): voor wie telt dit doel. Alleen bij Versla, Verzamel en Pak op.
   if (spec.event) {
-    const share = el("select", { class: "wbdSelect qbShare", title: "Ieder voor zich: iedereen zijn eigen aantal. Team samen: één teller voor de groep (aantal × teamleden)." },
+    const share = el("select", { class: "wbdSelect", title: "Ieder voor zich: iedereen zijn eigen aantal. Team samen: één teller voor de groep (aantal × teamleden)." },
       Object.entries(OBJECTIVE_SHARES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
     share.value = objective.share === "team" ? "team" : "personal";
     share.addEventListener("change", () => change("voor wie", (target) => { if (share.value === "team") { target.share = "team"; delete target.credit; } else delete target.share; }));
-    parts.push(share);
+    more.push(field("👥 Teller", share));
+    if (objective.share === "team") chips.push("👥 team samen");
   }
-  // Versla, Ieder voor zich: telt de kill ook voor de groep in de buurt (standaard), alleen wie meevocht, of iedereen in de buurt?
   if (objective.type === "defeat" && objective.share !== "team") {
-    const credit = el("select", { class: "wbdSelect qbShare", title: "Voor wie telt een kill. In de buurt = binnen " + QUEST_NEARBY_M + " meter van wie de vijand versloeg." },
+    const credit = el("select", { class: "wbdSelect", title: "Voor wie telt een kill. In de buurt = binnen " + QUEST_NEARBY_M + " meter van wie de vijand versloeg." },
       Object.entries(OBJECTIVE_CREDITS).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
     credit.value = OBJECTIVE_CREDITS[objective.credit] ? objective.credit : "group";
     credit.addEventListener("change", () => change("telt voor", (target) => { if (credit.value === "group") delete target.credit; else target.credit = credit.value; }));
-    parts.push(credit);
+    more.push(field("⚔️ Kill telt voor", credit));
+    if (objective.credit === "fighters" || objective.credit === "nearby") chips.push(OBJECTIVE_CREDITS[objective.credit].icon + " " + OBJECTIVE_CREDITS[objective.credit].label.toLowerCase());
   }
-  const role = el("select", { class: "wbdSelect qbRole", title: "Verplicht, verborgen, mag of bonus" }, Object.entries(OBJECTIVE_ROLES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+  const role = el("select", { class: "wbdSelect", title: "Verplicht, verborgen, mag of bonus" }, Object.entries(OBJECTIVE_ROLES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   role.value = OBJECTIVE_ROLES[objective.role] ? objective.role : "required";
   role.addEventListener("change", () => change("rol", (target) => { target.role = role.value; }));
-  parts.push(role, smallButton("🗑️", "Doel weghalen", remove));
-  const row = el("div", { class: "qbObjective" + (issues.length ? " qbObjectiveBad" : "") }, parts);
-  return issues.length ? el("div", { class: "qbObjectiveWrap" }, [row, issueList(issues)]) : row;
+  more.push(field("❗ Moet het?", role));
+  if (OBJECTIVE_ROLES[objective.role] && objective.role !== "required") chips.push(OBJECTIVE_ROLES[objective.role].icon + " " + OBJECTIVE_ROLES[objective.role].label.toLowerCase());
+
+  const card = el("div", { class: "qbGoal" + (issues.length ? " qbObjectiveBad" : "") }, [
+    el("div", { class: "qbGoalTop" }, [el("b", { text: spec.icon + " " + goalText(objective, spawns, nameOf) }), smallButton("🗑️", "Doel weghalen", remove)]),
+    el("div", { class: "qbFields" }, rows),
+    moreBox(state, "goal|" + step.stepId + "|" + objective.objectiveId, chips, more)
+  ]);
+  if (issues.length) card.append(issueList(issues));
+  return card;
 }
 
 // ---------- ⚡ Als → Dan (stap 5): kleine regels per stap ----------
 
 function rulesBox(state, step, edit) {
-  const box = el("div", { class: "qbRules" }, [el("span", { class: "qbLabel", text: "⚡ Als → Dan" })]);
+  const box = el("div", { class: "qbRules" });
   const rules = Array.isArray(step.rules) ? step.rules : [];
   rules.forEach((rule, index) => box.append(ruleRow(state, step, rule,
     (label, change) => edit(label, (target) => change(target.rules[index], target)),
@@ -544,10 +693,11 @@ function rulesBox(state, step, edit) {
     if (spawn) rule.spawnId = spawn.spawnId; else rule.text = "";
     target.rules.push(rule);
   }));
-  box.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: rules.length ? "Elke regel gaat 1× per keer dat de speler deze stap binnenkomt." : "Bijv. als 5 hout verzameld is, laat 3 wolven verschijnen; of een bericht in beeld." })]));
+  box.append(el("div", { class: "qbAdd" }, [add]));
   return box;
 }
 
+// Eén regel als kaartje: bovenaan de zin, daaronder Als ... en Dan ... onder elkaar.
 function ruleRow(state, step, rule, change, remove) {
   const spawns = state.spawns || [];
   const objectives = Array.isArray(step.objectives) ? step.objectives : [];
@@ -562,43 +712,45 @@ function ruleRow(state, step, rule, change, remove) {
       target.amount = target.amount || Math.max(1, Math.ceil((first?.amount || 2) / 2));
     } else { delete target.objectiveId; delete target.amount; }
   }));
-  const parts = [when];
+  const ifParts = [when];
   if (rule.when === "count") {
-    const goal = el("select", { class: "wbdSelect qbArea", title: "Welk doel" }, [el("option", { value: "", text: "Kies een doel..." })]
-      .concat(objectives.map((objective) => el("option", { value: objective.objectiveId, text: objectiveText(objective, nameOf) }))));
+    const goal = el("select", { class: "wbdSelect", title: "Welk doel" }, [el("option", { value: "", text: "Kies een doel..." })]
+      .concat(objectives.map((objective) => el("option", { value: objective.objectiveId, text: goalText(objective, spawns, nameOf) }))));
     goal.value = rule.objectiveId || "";
     goal.addEventListener("change", () => change("doel", (target) => { if (goal.value) target.objectiveId = goal.value; else delete target.objectiveId; }));
     const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, max: QUEST_LIMITS.amount, step: 1, title: "Bij hoeveel" });
     amount.value = String(rule.amount || 1);
     amount.addEventListener("change", () => change("aantal", (target) => { target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1))); }));
-    parts.push(goal, el("label", { class: "qbTimes" }, [el("span", { text: "op" }), amount]));
+    ifParts.push(goal, el("label", { class: "qbTimes" }, [el("span", { text: "op" }), amount]));
   }
-  const then = el("select", { class: "wbdSelect", title: "Wat er dan gebeurt" }, Object.entries(RULE_THEN).map(([value, entry]) => el("option", { value, text: "→ " + entry.icon + " " + entry.label })));
+  const then = el("select", { class: "wbdSelect", title: "Wat er dan gebeurt" }, Object.entries(RULE_THEN).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   then.value = RULE_THEN[rule.then] ? rule.then : "message";
   then.addEventListener("change", () => change("dan", (target) => {
     target.then = then.value;
     if (then.value === "spawn") { delete target.text; if (spawns[0]) target.spawnId = spawns[0].spawnId; }
     else { delete target.spawnId; target.text = target.text || ""; }
   }));
-  parts.push(then);
+  const thenParts = [then];
   if (rule.then === "spawn") {
     if (!spawns.length) {
       const go = el("button", { type: "button", class: "wbdGhost", text: "👾 Maak eerst een verschijning" });
       go.addEventListener("click", () => { state.tab = "verschijnen"; render(state); });
-      parts.push(go);
+      thenParts.push(go);
     } else {
-      const what = el("select", { class: "wbdSelect qbArea", title: "Wat er verschijnt (👾 Verschijnen)" }, [el("option", { value: "", text: "Kies..." })]
+      const what = el("select", { class: "wbdSelect", title: "Wat er verschijnt (👾 Verschijnen)" }, [el("option", { value: "", text: "Kies..." })]
         .concat(spawns.map((spawn) => el("option", { value: spawn.spawnId, text: "👾 " + spawnName(spawn, nameOf) }))));
       if (rule.spawnId && !spawns.some((spawn) => spawn.spawnId === rule.spawnId)) what.append(el("option", { value: rule.spawnId, text: "⚠️ " + rule.spawnId }));
       what.value = rule.spawnId || "";
       what.addEventListener("change", () => change("wat verschijnt", (target) => { if (what.value) target.spawnId = what.value; else delete target.spawnId; }));
-      parts.push(what);
+      thenParts.push(what);
     }
   } else {
-    parts.push(textInput(rule.text, "Bericht in beeld, bijv. Wolven! Verdedig het hout!", QUEST_SPAWN_LIMITS.text, (value) => change("bericht", (target) => { target.text = value; })));
+    thenParts.push(textInput(rule.text, "Bericht in beeld, bijv. Wolven! Verdedig het hout!", QUEST_SPAWN_LIMITS.text, (value) => change("bericht", (target) => { target.text = value; })));
   }
-  parts.push(smallButton("🗑️", "Regel weghalen", remove));
-  return el("div", { class: "qbObjective qbRule" }, parts);
+  return el("div", { class: "qbGoal qbRule" }, [
+    el("div", { class: "qbGoalTop" }, [el("b", { text: "⚡ " + ruleText(rule, step, spawns, nameOf) }), smallButton("🗑️", "Regel weghalen", remove)]),
+    el("div", { class: "qbFields" }, [field("Als", el("div", { class: "qbInline" }, ifParts), true), field("Dan", el("div", { class: "qbInline" }, thenParts), true)])
+  ]);
 }
 
 // ---------- 👾 Verschijnen (stap 5): wat de quest laat verschijnen ----------
@@ -607,12 +759,12 @@ function renderSpawns(state, host, body, steps, issues, nameOf) {
   const bench = state.bench;
   const spawns = state.spawns || [];
   host.append(el("section", { class: "qbTestBox" }, [el("h4", { text: "👾 Wat deze quest laat verschijnen" }),
-    el("p", { class: "wbdNote", text: "Vijanden die bij deze quest horen. Ze verschijnen pas als een regel bij een stap dat zegt: 🪜 Stappen > ⚡ Als → Dan > 👾 Laat verschijnen. Ze komen niet terug als ze dood zijn en worden nooit gekopieerd, ook niet als iemand de groep verlaat (wie erbij was, ziet ze nog)." })]));
+    el("p", { class: "wbdNote", text: "Vijanden die bij deze quest horen. Ze verschijnen pas als een regel bij een stap dat zegt: 🪜 Stappen > ⚡ Wat gebeurt er onderweg > Dan 👾 laat vijanden verschijnen. Ze komen niet terug als ze dood zijn en worden nooit gekopieerd, ook niet als iemand de groep verlaat (wie erbij was, ziet ze nog)." })]));
   if (!steps) host.append(el("p", { class: "wbdNote", text: "Een snelle quest heeft geen regels. Zet hem eerst om naar stappen (🪜 Stappen)." }));
   const used = (spawnId) => {
     const lines = [];
     (steps || []).forEach((step, index) => {
-      for (const rule of step.rules || []) if (rule.then === "spawn" && rule.spawnId === spawnId) lines.push("⚡ " + stepLabel(step, index, nameOf) + ": " + (RULE_WHEN[rule.when]?.label || "") + (rule.when === "count" ? " " + (rule.amount || 1) : ""));
+      for (const rule of step.rules || []) if (rule.then === "spawn" && rule.spawnId === spawnId) lines.push("⚡ " + stepLabel(step, index, nameOf) + ": " + ruleText(rule, step, spawns, nameOf));
       for (const objective of step.objectives || []) if (objective.spawnId === spawnId) lines.push("⚔️ " + stepLabel(step, index, nameOf) + ": " + objectiveText(objective, nameOf));
     });
     return lines;
@@ -655,7 +807,7 @@ function renderSpawns(state, host, body, steps, issues, nameOf) {
     card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "💨 Verdwijnen" }), despawn]));
     const lines = used(spawn.spawnId);
     card.append(el("div", { class: "qbRow" }, [el("span", { class: "qbLabel", text: "🔗 Gebruikt" }),
-      el("div", { class: "wbdQuestLines" }, lines.length ? lines.map((line) => el("span", { class: "wbdNote", text: line })) : [el("span", { class: "wbdNote", text: "Nog nergens. Zet bij een stap ⚡ Als → Dan: 👾 Laat verschijnen." })])]));
+      el("div", { class: "wbdQuestLines" }, lines.length ? lines.map((line) => el("span", { class: "wbdNote", text: line })) : [el("span", { class: "wbdNote", text: "Nog nergens. Zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen." })])]));
     const own = issues.filter((issue) => issue.spawnId === spawn.spawnId);
     if (own.length) card.append(issueList(own));
     host.append(card);

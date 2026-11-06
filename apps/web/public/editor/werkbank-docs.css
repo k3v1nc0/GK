@@ -210,6 +210,41 @@
 .qbAdder { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed #3a4b5d; border-radius: 8px; padding: 4px 8px; background: transparent; color: var(--wbd-text); font: inherit; font-size: 12px; cursor: pointer; }
 .qbAdder:hover { border-color: var(--wbd-accent); }
 .qbAdd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 6-11: Quest Builder in één keer te snappen: verhaal bovenaan, stap in 3 blokken, velden met een naam ervoor. */
+.qbHint { margin: 0; color: var(--wbd-muted); font-size: 12px; line-height: 1.4; }
+.qbStory { display: grid; gap: 6px; padding: 12px; background: #13202e; border: 1px solid #2c4058; border-radius: 10px; }
+.qbStory h4 { margin: 0; }
+.qbStoryList { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
+.qbStoryStep { padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.qbStoryStep:hover { background: #1b2b3d; }
+.qbStoryStep > b, .qbStoryStep > span { display: block; }
+.qbStoryStep > span { color: var(--wbd-muted); font-size: 12px; }
+.qbStoryStep > span.qbBad { color: var(--wbd-accent); }
+.qbStoryBad > b { color: var(--wbd-accent); }
+.qbTemplates { background: var(--wbd-card); border-color: var(--wbd-line); border-style: dashed; }
+.qbTemplateRow { display: flex; gap: 6px; flex-wrap: wrap; }
+.qbTemplate { border: 1px solid #3a4b5d; border-radius: 8px; padding: 6px 10px; background: #101a26; color: var(--wbd-text); font: inherit; font-size: 13px; cursor: pointer; }
+.qbTemplate:hover:not(:disabled) { border-color: var(--wbd-accent); }
+.qbTemplate:disabled { opacity: .4; cursor: default; }
+.qbNumWide { min-width: 0; padding: 0 10px; border-radius: 14px; white-space: nowrap; }
+.qbBlock { display: grid; gap: 6px; padding: 8px 10px; border-radius: 8px; background: #0f1823; border: 1px solid #1f2d3c; }
+.qbBlockHead { display: flex; align-items: center; gap: 6px; }
+.qbGoals { display: grid; gap: 6px; }
+.qbGoal { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--wbd-line); border-radius: 8px; background: #142030; }
+.qbGoalTop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qbFields { display: grid; gap: 6px; }
+.qbField { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: 8px; }
+.qbFieldLabel { color: #c9d4dc; font-size: 13px; }
+.qbFieldValue { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.qbFieldValue > .wbdSelect, .qbFieldValue > .wbdText, .qbFieldValue > .qbSlot { flex: 1 1 200px; max-width: 320px; }
+.qbFieldWide .qbFieldValue > .wbdText { max-width: none; }
+.qbInline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
+.qbInline > .wbdSelect, .qbInline > .wbdText { flex: 1 1 160px; max-width: 280px; }
+.qbMore > summary { cursor: pointer; color: var(--wbd-muted); font-size: 12px; padding: 2px 0; }
+.qbMore[open] > summary { margin-bottom: 6px; }
+.qbMore > .qbField { margin-top: 6px; }
+.qbStep.qbFlash { box-shadow: 0 0 0 2px var(--wbd-accent); transition: box-shadow .3s; }
+.qbBlock .qbRules { border: 0; padding: 0; background: transparent; }
 /* Stap 5: Als → Dan bij een stap */
 .qbRules { display: grid; gap: 6px; padding: 8px; border: 1px dashed #4a3b1c; border-radius: 8px; background: #141822; }
 .qbRule { border-color: #4a3b1c; }

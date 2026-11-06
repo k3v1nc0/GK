@@ -85,13 +85,13 @@ export const QUEST_SPAWN_DESPAWN = Object.freeze({
 });
 // Als → Dan (regels per stap). Elke regel gaat 1× per keer dat je de stap binnenkomt.
 export const RULE_WHEN = Object.freeze({
-  start: Object.freeze({ icon: "▶️", label: "Als de stap begint" }),
-  count: Object.freeze({ icon: "🔢", label: "Als een doel op" }),
-  done: Object.freeze({ icon: "✅", label: "Als de stap klaar is" })
+  start: Object.freeze({ icon: "▶️", label: "de stap begint" }),
+  count: Object.freeze({ icon: "🔢", label: "een doel een aantal haalt" }),
+  done: Object.freeze({ icon: "✅", label: "de stap klaar is" })
 });
 export const RULE_THEN = Object.freeze({
-  spawn: Object.freeze({ icon: "👾", label: "Laat verschijnen" }),
-  message: Object.freeze({ icon: "💬", label: "Bericht in beeld" })
+  spawn: Object.freeze({ icon: "👾", label: "laat vijanden verschijnen" }),
+  message: Object.freeze({ icon: "💬", label: "zet een bericht in beeld" })
 });
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
@@ -320,7 +320,7 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
         const spawn = spawnById.get(objective.spawnId);
         if (objective.type !== "defeat") add(step.stepId, objective.objectiveId, spec.label + ": een verschijning kan alleen bij Versla.");
         else if (!spawn) add(step.stepId, objective.objectiveId, "Versla: de verschijning bestaat niet (meer). Kies er een in 👾 Verschijnen.");
-        else if (!spawned.has(spawn.spawnId)) add(step.stepId, objective.objectiveId, spawnLabel(spawn) + " verschijnt nooit. Zet bij een stap ⚡ Als → Dan: Laat verschijnen.");
+        else if (!spawned.has(spawn.spawnId)) add(step.stepId, objective.objectiveId, spawnLabel(spawn) + " verschijnt nooit. Zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen.");
         else if (spawn.actorRef && objective.ref && objective.ref !== spawn.actorRef) add(step.stepId, objective.objectiveId, "Versla: de vijand past niet bij " + spawnLabel(spawn) + ".");
       }
     }

@@ -130,7 +130,7 @@ export const GAME_KINDS = {
       // (⚡ Als → Dan) laat het verschijnen. Hoort bij de quest, niet bij een stap.
       spawns: { type: "questSpawns", required: false, maxItems: QUEST_SPAWN_LIMITS.spawns, audience: "client", label: "Verschijnen",
         ui: ui("👾", "questSpawns", "questbuilder"), default: null,
-        help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap ⚡ Als → Dan: Laat verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
+        help: help("Vijanden die deze quest laat verschijnen, bijv. een wolvengroep bij het 5e hout.", "Geef ze een naam (Wolvengroep), kies voor wie (meestal de groep) en zet bij een stap (⚡ Wat gebeurt er onderweg) een regel: Dan 👾 laat vijanden verschijnen.", "Ze verschijnen nooit → kijk in de Quest Builder (🧪 Testen) wat de quest-check zegt.") },
       rewards: refList("Beloning", "🎁", ["item_definition", "currency"], [AMOUNT], "werkbank",
         help("Wat de speler krijgt als de quest klaar is.", "Sleep items of valuta uit de Bibliotheek, bijv. 10 goud of een zwaard.", "Spelers worden te snel rijk → minder of goedkopere beloningen.")),
       rewardXp: int("XP", "⭐", 50, 0, 1000000, "werkbank", { range: [0, 1000] },
