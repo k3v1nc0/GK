@@ -5,7 +5,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest16";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest17";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -335,6 +335,7 @@ function storyBox(state, host, steps, issues, nameOf) {
     }
     const item = el("li", { class: "qbStoryStep" + (bad ? " qbStoryBad" : ""), title: "Naar deze stap" }, lines);
     item.addEventListener("click", () => {
+      if (!state.openSteps.has(step.stepId)) { state.openSteps.add(step.stepId); render(state); }
       const card = state.root.querySelector('[data-step="' + step.stepId + '"]');
       if (card) { card.scrollIntoView({ block: "start", behavior: "smooth" }); card.classList.add("qbFlash"); setTimeout(() => card.classList.remove("qbFlash"), 1200); }
     });
@@ -363,11 +364,24 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
     ]));
     return;
   }
+  // Welke stappen open staan, onthoudt de editor per quest (ook als je later terugkomt: hervatten).
+  const saved = state.bench.questOpenSteps || (state.bench.questOpenSteps = {});
+  state.openSteps = new Set([...(state.openSteps || saved[state.docKey] || [])].filter((id) => steps.some((step) => step.stepId === id)));
+  delete saved[state.docKey];
+  if (state.openSteps.size) saved[state.docKey] = [...state.openSteps];
+  for (const key of Object.keys(saved).slice(0, -30)) delete saved[key];
   // edit: de stappen aanpassen (en zo nodig de verschijningen), met één Ctrl+Z.
   const edit = (label, change) => saveQuest(state, label, (copy) => change(copy.steps, copy));
   const general = issues.filter((issue) => !issue.stepId && !issue.spawnId);
   if (general.length) host.append(issueList(general));
   storyBox(state, host, steps, issues, nameOf);
+  // Stappen staan standaard ingeklapt: per stap alleen de naam en de pijltjes. Open = wat je zelf openklikte.
+  const fold = (close) => { state.openSteps = new Set(close ? [] : steps.map((step) => step.stepId)); render(state); };
+  const foldAll = el("button", { type: "button", class: "wbdGhost", text: "▸ Alles inklappen" });
+  foldAll.addEventListener("click", () => fold(true));
+  const openAll = el("button", { type: "button", class: "wbdGhost", text: "▾ Alles uitklappen" });
+  openAll.addEventListener("click", () => fold(false));
+  host.append(el("div", { class: "qbAdd" }, [foldAll, openAll]));
   const list = el("div", { class: "qbSteps" });
   steps.forEach((step, index) => list.append(stepCard(state, steps, step, index, issues.filter((issue) => issue.stepId === step.stepId), nameOf, edit)));
   host.append(list);
@@ -383,6 +397,7 @@ function templateBar(state, steps, edit) {
   const add = (template) => edit("stap erbij: " + template.text, (copy, body) => {
     const used = new Set(copy.map((step) => step.stepId));
     const stepId = uniqueId("stap_", used);
+    state.openSteps.add(stepId);
     let last = -1;
     copy.forEach((step, index) => { if (step.kind === "step") last = index; });
     const prev = last >= 0 ? copy[last] : null;
@@ -473,11 +488,19 @@ function moveStep(copy, index, delta) {
 function stepCard(state, steps, step, index, issues, nameOf, edit) {
   const isEnd = step.kind === "end";
   const at = (copy) => copy[index];
-  const card = el("section", { class: "qbStep" + (isEnd ? " qbStepEnd" : "") + (issues.length ? " qbStepBad" : ""), "data-step": step.stepId });
-  const title = textInput(step.title, isEnd ? "Naam van dit einde (mag leeg)" : "Naam van de stap (mag leeg), bijv. Hout zoeken", QUEST_LIMITS.title,
+  const closed = !state.openSteps.has(step.stepId);
+  const card = el("section", { class: "qbStep" + (isEnd ? " qbStepEnd" : "") + (issues.length ? " qbStepBad" : "") + (closed ? " qbStepClosed" : ""), "data-step": step.stepId });
+  // Ingeklapt zonder naam: dan zie je de doelen als naam.
+  const goalLine = (step.objectives || []).map((objective) => goalText(objective, state.spawns || [], nameOf)).join(", ");
+  const title = textInput(step.title, closed && goalLine ? goalLine : isEnd ? "Naam van dit einde (mag leeg)" : "Naam van de stap (mag leeg), bijv. Hout zoeken", QUEST_LIMITS.title,
     (value) => edit("naam", (copy) => { at(copy).title = value; }));
   const number = isEnd ? "🏁 Einde" : "Stap " + (index + 1);
+  const toggle = smallButton(closed ? "▸" : "▾", closed ? "Uitklappen" : "Inklappen", () => {
+    if (closed) state.openSteps.add(step.stepId); else state.openSteps.delete(step.stepId);
+    render(state);
+  });
   card.append(el("div", { class: "qbStepHead" }, [
+    toggle,
     el("span", { class: "qbNum qbNumWide", title: index === 0 && !isEnd ? "Hier begint de quest" : "", text: (index === 0 && !isEnd ? "▶ " : "") + number }),
     title,
     smallButton("▲", "Omhoog", () => edit("volgorde", (copy) => moveStep(copy, index, -1)), index === 0),
@@ -491,6 +514,7 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
       }
     }))
   ]));
+  if (closed) return card;
   if (isEnd) {
     card.append(el("p", { class: "qbHint", text: "Hier is de quest klaar. De beloning (in het questpaneel) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
     if (issues.length) card.append(issueList(issues));

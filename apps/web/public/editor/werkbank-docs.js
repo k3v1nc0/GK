@@ -7,8 +7,8 @@ import { convertShape } from "./werkbank-world.js?v=20261030-terrein6";
 import { renderUsers } from "./werkbank-users.js?v=20261104-account-reset1";
 import { computeDamage, rollLoot } from "../shared/combat-math.js";
 import { areaCenterMm, areaCirclePointsMm, areaRectPointsMm, areaSoort, convertAreaSoort } from "../shared/area-soorten.js?v=20261106-perf1";
-import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest16";
-import { openQuestBuilder } from "./quest-builder.js?v=20261106-quest16";
+import { QUEST_START_MODES, hasOwnSteps, objectiveText, questGraphIssues, questStartIssues, questStartMode, requirementText, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest17";
+import { openQuestBuilder } from "./quest-builder.js?v=20261106-quest17";
 
 const DOC_MIME = "application/x-gk-doc";
 
@@ -138,7 +138,8 @@ export function createDocBench(options = {}) {
       draft: bench.draft || null,
       childDocKey: bench.childDocKey || null,
       groupOpen: bench.groupOpen || null,
-      moreOpen: bench.moreOpen === true
+      moreOpen: bench.moreOpen === true,
+      questOpenSteps: bench.questOpenSteps || null
     });
   };
 
@@ -151,6 +152,8 @@ export function createDocBench(options = {}) {
     bench.childDocKey = value.childDocKey && typeof value.childDocKey === "object" ? clone(value.childDocKey) : {};
     bench.groupOpen = value.groupOpen && typeof value.groupOpen === "object" ? clone(value.groupOpen) : {};
     bench.moreOpen = value.moreOpen === true;
+    // Quest Builder: welke stappen per quest open stonden.
+    bench.questOpenSteps = value.questOpenSteps && typeof value.questOpenSteps === "object" ? clone(value.questOpenSteps) : {};
   };
 
   function assetById(id) {
