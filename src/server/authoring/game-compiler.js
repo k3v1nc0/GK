@@ -189,7 +189,10 @@ export function compileGameSection(documents, options = {}) {
         // Kevin 5-11: ⭐ op de kaart waar de vijand (of grondstof) nu is.
         ...(objective.mark === "star" ? { mark: "star" } : {}),
         // Stap 5: Versla telt alleen de vijanden van deze verschijning.
-        ...(objective.type === "defeat" && objective.spawnId ? { spawnId: objective.spawnId } : {})
+        ...(objective.type === "defeat" && objective.spawnId ? { spawnId: objective.spawnId } : {}),
+        // Stap 7: de vraag, de antwoorden (elk naar een eigen stap) en wie er kiest.
+        ...(objective.type === "choose" ? { question: objective.text || "", decide: ["leader", "vote"].includes(objective.decide) ? objective.decide : "self",
+          options: (Array.isArray(objective.options) ? objective.options : []).map((option) => ({ optionId: option.optionId, label: option.label || "", to: option.to || null })) } : {})
       })),
       // Stap 3: het gebied van deze stap op de kaart (zoekgebied, punt of verborgen).
       ...(step.mapRef ? { mapAreaId: idFromRef(step.mapRef), mapShow: ["point", "hidden"].includes(step.mapShow) ? step.mapShow : "area" } : {}),
@@ -203,7 +206,11 @@ export function compileGameSection(documents, options = {}) {
         seconds: step.timer.seconds, start: step.timer.start === "rule" ? "rule" : "step", share: step.timer.share === "group" ? "group" : "personal",
         late: ["restart", "step"].includes(step.timer.late) ? step.timer.late : "fail", lateTo: step.timer.late === "step" ? step.timer.lateTo || null : null,
         logout: step.timer.logout === "pause" ? "pause" : "run"
-      } } : {})
+      } } : {}),
+      // Stap 7: een einde met een eigen beloning (bovenop de gewone), eventueel kiest de speler er 1.
+      ...(step.kind === "end" && ((Array.isArray(step.rewards) && step.rewards.length) || Number.isInteger(step.xp)) ? {
+        rewards: grants((step.rewards || []).filter((row) => row && row.ref).map((row) => ({ ref: row.ref, amount: Number.isInteger(row.amount) ? row.amount : 1 }))), xp: Number.isInteger(step.xp) ? step.xp : 0, pick: step.pick === true
+      } : {})
     })),
     // Stap 5: wat de quest laat verschijnen.
     ...(Array.isArray(doc.body.spawns) && doc.body.spawns.length ? { spawns: doc.body.spawns.map((spawn) => ({

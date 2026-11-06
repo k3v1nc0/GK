@@ -5,7 +5,7 @@ import { JOIN_TICKET_PATH, PROTOCOL_NAME, PROTOCOL_VERSION, WS_PATH } from "../s
 import { acknowledgeBufferedInputs, appendBufferedInput, boundRemoteInterpolationSamples, replayBufferedInputs } from "./netcode.js?v=20261025-f2-netcode1";
 import { createWorldMusic, MUSIC_STATES } from "./world-audio.js?v=20261030-hud12";
 import { createActorPresentation } from "./actor-presentation.js?v=20261102-heal1";
-import { createGkHud } from "./hud/gk-hud.js?v=20261106-quest20";
+import { createGkHud } from "./hud/gk-hud.js?v=20261106-quest21";
 import {
   worldToMinimapPoint,
   resolveMinimapPoint,
@@ -12535,6 +12535,12 @@ function handleSocketMessage(raw) {
   // Quest Builder stap 2: een teamgenoot telde mee of deelde een quest; haal de queststand meteen op.
   if (message.type === "quest:refresh") {
     loadNode04State().catch(function () {});
+    return;
+  }
+  // Kevin 6-11: quest gehaald = feestelijke melding in beeld (zoals level omhoog).
+  if (message.type === "quest:completed") {
+    if (gkHud?.questDone) gkHud.questDone(message);
+    else showGameHudDialogueNotice("Quest voltooid: " + String(message.title || ""), { title: "Quest" });
     return;
   }
   // Quest Builder stap 5: Als → Dan: Bericht in beeld.

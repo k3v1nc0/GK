@@ -436,7 +436,24 @@ function questObjective(objective, names, spawns = new Map()) {
   const amount = spec.amount && record.requiredAmount > 1 ? record.requiredAmount + "× " : "";
   record.displayName = (spec.label || objective.type) + " " + amount + what + (spec.npc ? " naar " + names.npc(objective.npcId) : "")
     + (record.inAreaRef ? " in " + names.area(record.inAreaRef) : "");
+  // Stap 7: de vraag, de antwoorden en wie kiest (ieder zelf staat er niet bij, dat is de standaard).
+  if (objective.type === "choose") {
+    record.question = objective.question || "";
+    record.options = (objective.options || []).map((option) => ({ id: option.optionId, label: option.label || option.optionId, to: option.to }));
+    if (objective.decide === "leader" || objective.decide === "vote") record.decide = objective.decide;
+  }
   return record;
+}
+
+// XP + items/geld -> beloningsacties voor de quest-motor.
+function rewardActions(xp, grants) {
+  const rewards = [];
+  if (xp > 0) rewards.push({ actionKind: "xp", amount: xp });
+  for (const grant of grants) {
+    if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
+    else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
+  }
+  return rewards;
 }
 
 const REPEAT_MODES = { once: "once_per_character", always: "repeatable", daily: "daily", weekly: "weekly", cooldown: "cooldown" };
@@ -457,16 +474,16 @@ function questRecord(quest, names) {
     }
     // Stap 6: de klok (alleen als er een is).
     if (step.kind === "step" && step.timer) record.timer = Object.assign({}, step.timer);
+    // Stap 7: de beloning van dit einde (bovenop die van de quest); rewardPick = de speler kiest 1 item/geld.
+    if (step.kind === "end" && (step.xp > 0 || (Array.isArray(step.rewards) && step.rewards.length))) {
+      record.rewards = rewardActions(step.xp, step.rewards || []);
+      if (step.pick === true && (step.rewards || []).length >= 2) record.rewardPick = true;
+    }
     return record;
   });
   const first = steps[0] || null;
   const giverTarget = quest.giverNpcId ? npcTargetId(quest.giverNpcId) : null;
-  const rewards = [];
-  if (quest.rewardXp > 0) rewards.push({ actionKind: "xp", amount: quest.rewardXp });
-  for (const grant of quest.rewards) {
-    if (grant.currencyId) rewards.push({ actionKind: "currency", currencyRef: grant.currencyId, amountMinor: grant.amount });
-    else rewards.push({ actionKind: "item", itemRef: grant.itemId, amount: grant.amount });
-  }
+  const rewards = rewardActions(quest.rewardXp, quest.rewards);
   const record = {
     id: quest.questId, graph: true, displayName: quest.displayName, description: quest.description || first?.instruction || "", summary: first?.instruction || "",
     steps, stepsById: Object.fromEntries(steps.map((step) => [step.id, step])), startStepRef: first?.id || null, rewards, conditions: [],

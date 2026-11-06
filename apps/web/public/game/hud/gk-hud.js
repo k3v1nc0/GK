@@ -1711,6 +1711,25 @@ export function createGkHud(api) {
     window.setTimeout(function () { node.remove(); }, 2700);
   }
 
+  // Kevin 6-11: quest gehaald. Groot en goud zoals level omhoog, met de naam, het einde (na een keuze) en wat je kreeg.
+  function questDone(info) {
+    const title = String(info?.title || "");
+    if (!title) return;
+    for (const old of game.querySelectorAll(".gkQuestDone")) old.remove();
+    const rewards = (Array.isArray(info.rewards) ? info.rewards : []).map(String).slice(0, 6);
+    const node = h("div", { class: "gkQuestDone", role: "status" }, [
+      h("div", { class: "gkQuestDoneRays" }),
+      ico("star-medal"),
+      h("b", { text: "Quest voltooid!" }),
+      h("strong", { text: title }),
+      info.ending ? h("small", { text: "🏁 " + String(info.ending) }) : null,
+      rewards.length ? h("span", { class: "gkQuestDoneRewards", text: rewards.join("  ·  ") }) : null
+    ]);
+    game.append(node);
+    window.setTimeout(function () { node.remove(); }, 4300);
+    chatNotice("Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true);
+  }
+
   // Quest Builder stap 5: Bericht in beeld (Als → Dan). Groot in het midden, kort, en ook in de chat.
   function questBanner(text, title) {
     const message = String(text || "");
@@ -1900,7 +1919,7 @@ export function createGkHud(api) {
     padGrids();
     function choiceButton(choice) {
       const id = String(choice.choiceId || "");
-      const icon = id.startsWith("choice.ask.") ? "scroll-unfurled" : id.startsWith("choice.done.") || id.startsWith("choice.accept.") ? "check-mark"
+      const icon = id.startsWith("choice.ask.") || id.startsWith("quest.ask|") ? "scroll-unfurled" : id.startsWith("quest.pick|") ? "check-mark" : id.startsWith("choice.done.") || id.startsWith("choice.accept.") ? "check-mark"
         : choice.action === "close" ? "hand" : "talk";
       return h("button", { type: "button", class: "gkChoice", "data-act": "choice", "data-id": id, disabled: d.busy?.n04 ? true : null }, [ico(icon), stripEmoji(choice.label) || "Verder"]);
     }
@@ -2233,7 +2252,7 @@ export function createGkHud(api) {
   function questCard(quest, tracked, target) {
     const step = quest.activeStep || null;
     const later = repeatText(quest);
-    const status = quest.status === "failed" ? "❌ Mislukt" : quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
+    const status = quest.status === "failed" ? "❌ Mislukt" : quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.rewardChoice ? "🎁 Kies je beloning" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
     const grey = quest.doneBefore ? (quest.status === "completed" && later === "Behaald" ? " gkGrey gkArchive" : " gkGrey") : "";
     const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") + grey, "data-quest": quest.questId }, [
       h("h3", null, [ico(quest.status === "completed" || step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: quest.displayName }), status ? h("small", { text: status }) : null])
@@ -2261,6 +2280,14 @@ export function createGkHud(api) {
       return h("span", { class: "gkStat" }, [h("span", { style: "width:16px;height:16px;display:inline-block" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")]);
     });
     if (rewards.length && quest.status !== "completed") card.append(h("div", { class: "gkRewards" }, rewards));
+    // Stap 7: einde met "Speler kiest 1": tik op de beloning die je wilt.
+    if (Array.isArray(step?.rewardChoice) && step.rewardChoice.length) {
+      card.append(h("div", { class: "gkBtns" }, step.rewardChoice.map(function (reward) {
+        const label = reward.kind === "currency" ? [coin(reward.amount, reward.currencyId)]
+          : [h("span", { style: "width:16px;height:16px;display:inline-block" }, [itemVisual(reward.itemId)]), reward.amount + "× " + (reward.displayName || "")];
+        return h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-reward", "data-id": quest.questId, "data-index": String(reward.index), disabled: data().busy?.n04 ? true : null }, label);
+      })));
+    }
     const buttons = [];
     const busy = data().busy?.n04;
     if (tracked && target) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-go", "data-id": target.instanceId, "data-quest": quest.questId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "Ga erheen"]));
@@ -3279,6 +3306,7 @@ export function createGkHud(api) {
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
       case "quest-again": api.run04("node04:start_dialogue", id); break;
       case "quest-retry": api.run04("node04:accept_quest", null, { questId: id }); break;
+      case "quest-reward": api.run04("node04:choose_reward", null, { questId: id, choiceId: el.dataset.index }); break;
       case "quest-share": api.run04("node04:share", null, { questId: id }); break;
       case "quest-share-accept": api.run04("node04:accept_share", null, { questId: id }); break;
       case "quest-share-decline": api.run04("node04:decline_share", null, { questId: id }); break;
@@ -3585,6 +3613,7 @@ export function createGkHud(api) {
     handleKey,
     toast,
     questBanner,
+    questDone,
     setMapPresentation,
     openCharacters() { openTab("chars"); },
     // kind: "connected" | "connecting" | "reconnecting" | "disconnected" (uit game.js).

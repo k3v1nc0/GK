@@ -15,12 +15,21 @@ export const OBJECTIVE_KINDS = Object.freeze({
   collect: Object.freeze({ icon: "🎒", label: "Heb in je tas", refKind: "item_definition", amount: true }),
   deliver: Object.freeze({ icon: "📦", label: "Breng", refKind: "item_definition", amount: true, npc: true }),
   talk: Object.freeze({ icon: "💬", label: "Praat met", refKind: "npc" }),
+  // Stap 7: de NPC stelt een vraag; elk antwoord gaat naar een eigen stap of einde.
+  choose: Object.freeze({ icon: "🔀", label: "Kies bij", refKind: "npc", choice: true }),
   visit: Object.freeze({ icon: "🚶", label: "Ga naar", refKind: "npc" }),
   // Stap 3: gebieden (Questgebied uit de Area tool). De server kijkt zelf waar je bent.
   enter: Object.freeze({ icon: "🎯", label: "Ga naar gebied", refKind: "area" }),
   leave: Object.freeze({ icon: "🏃", label: "Verlaat gebied", refKind: "area" })
 });
-export const OBJECTIVE_ORDER = Object.freeze(["defeat", "gather", "pickup", "collect", "deliver", "talk", "visit", "enter", "leave"]);
+export const OBJECTIVE_ORDER = Object.freeze(["defeat", "gather", "pickup", "collect", "deliver", "talk", "choose", "visit", "enter", "leave"]);
+// Stap 7: keuzes (2-4 antwoorden) en wie er kiest als je in een groep zit. Eindes met een eigen beloning.
+export const QUEST_CHOICE_LIMITS = Object.freeze({ options: 4, label: 60, text: 300, rewards: 6, xp: 1000000 });
+export const CHOICE_DECIDE = Object.freeze({
+  self: Object.freeze({ icon: "🧍", label: "Ieder kiest zelf" }),
+  leader: Object.freeze({ icon: "👑", label: "De leider kiest voor de groep" }),
+  vote: Object.freeze({ icon: "🗳️", label: "De meerderheid (gelijk = de leider)" })
+});
 // Stap 3: per stap hoe het gebied op de minimap en de kaart staat.
 export const STEP_MAP_SHOW = Object.freeze({
   area: Object.freeze({ icon: "⭕", label: "Zoekgebied" }),
@@ -138,9 +147,11 @@ export function durationText(seconds) {
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
-const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow", "rules", "timer"]);
+const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow", "rules", "timer", "rewards", "xp", "pick"]);
+const OPTION_KEYS = new Set(["optionId", "label", "to"]);
+const END_REWARD_KEYS = new Set(["ref", "amount"]);
 const TIMER_KEYS = new Set(["seconds", "start", "share", "late", "lateTo", "logout"]);
-const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark", "spawnId"]);
+const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark", "spawnId", "text", "options", "decide"]);
 const RULE_KEYS_STEP = new Set(["ruleId", "when", "objectiveId", "amount", "then", "spawnId", "text"]);
 const SPAWN_KEYS = new Set(["spawnId", "name", "actorRef", "count", "areaRef", "audience", "despawn"]);
 const isAreaRef = (value) => typeof value === "string" && value.startsWith("area:") && value.length <= 140;
@@ -226,6 +237,21 @@ export function questStepsShapeIssues(value) {
     }
     if (step.rules !== undefined && step.rules !== null) ruleShapeIssues(step.rules, where, issues);
     if (step.timer !== undefined && step.timer !== null) timerShapeIssues(step.timer, where, issues);
+    // Stap 7: een einde met een eigen beloning (items/geld, XP) en of de speler er 1 uit kiest.
+    if (step.rewards !== undefined && step.rewards !== null) {
+      if (!Array.isArray(step.rewards) || step.rewards.length > QUEST_CHOICE_LIMITS.rewards) issues.push(where + ": hooguit " + QUEST_CHOICE_LIMITS.rewards + " beloningen.");
+      else step.rewards.forEach((reward, number) => {
+        const at = where + ", beloning " + (number + 1);
+        if (!isObject(reward) || Object.keys(reward).some((key) => !END_REWARD_KEYS.has(key))) { issues.push(at + " is ongeldig."); return; }
+        if (reward.ref !== undefined && reward.ref !== null) {
+          if (typeof reward.ref !== "string" || reward.ref.length > 160 || !(reward.ref.startsWith("item_definition:") || reward.ref.startsWith("currency:"))) issues.push(at + ": moet een item of geld zijn.");
+          else refs.push(reward.ref);
+        }
+        if (reward.amount !== undefined && reward.amount !== null && (!Number.isInteger(reward.amount) || reward.amount < 1 || reward.amount > QUEST_LIMITS.amount)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");
+      });
+    }
+    if (step.xp !== undefined && step.xp !== null && (!Number.isInteger(step.xp) || step.xp < 0 || step.xp > QUEST_CHOICE_LIMITS.xp)) issues.push(where + ": ongeldige XP.");
+    if (step.pick !== undefined && step.pick !== null && typeof step.pick !== "boolean") issues.push(where + ": ongeldige keuze bij Speler kiest 1.");
     if (step.objectives === undefined || step.objectives === null) return;
     if (!Array.isArray(step.objectives) || step.objectives.length > QUEST_LIMITS.objectives) { issues.push(where + ": hooguit " + QUEST_LIMITS.objectives + " doelen."); return; }
     const objectiveIds = new Set();
@@ -256,6 +282,24 @@ export function questStepsShapeIssues(value) {
       if (objective.areaRef !== undefined && objective.areaRef !== null) { if (!isAreaRef(objective.areaRef)) issues.push(at + ": Alleen in gebied moet een Questgebied zijn."); else refs.push(objective.areaRef); }
       if (objective.mark !== undefined && objective.mark !== null && objective.mark !== "star") issues.push(at + ": ongeldige keuze bij Ster op kaart.");
       if (objective.spawnId !== undefined && objective.spawnId !== null && !isId(objective.spawnId)) issues.push(at + ": ongeldige verschijning.");
+      // Stap 7: vraag, antwoorden en wie kiest.
+      if (objective.text !== undefined && objective.text !== null && !isText(objective.text, QUEST_CHOICE_LIMITS.text)) issues.push(at + ": de vraag is te lang.");
+      if (objective.decide !== undefined && objective.decide !== null && !CHOICE_DECIDE[objective.decide]) issues.push(at + ": ongeldige keuze bij Wie kiest.");
+      if (objective.options !== undefined && objective.options !== null) {
+        if (!Array.isArray(objective.options) || objective.options.length > QUEST_CHOICE_LIMITS.options) issues.push(at + ": hooguit " + QUEST_CHOICE_LIMITS.options + " antwoorden.");
+        else {
+          const optionIds = new Set();
+          objective.options.forEach((option, place) => {
+            const on = at + ", antwoord " + (place + 1);
+            if (!isObject(option) || Object.keys(option).some((key) => !OPTION_KEYS.has(key))) { issues.push(on + " is ongeldig."); return; }
+            if (!isId(option.optionId)) issues.push(on + ": ongeldige ID.");
+            else if (optionIds.has(option.optionId)) issues.push(on + ": ID komt twee keer voor.");
+            else optionIds.add(option.optionId);
+            if (option.label !== undefined && option.label !== null && !isText(option.label, QUEST_CHOICE_LIMITS.label)) issues.push(on + ": de tekst is te lang.");
+            if (option.to !== undefined && option.to !== null && !isId(option.to)) issues.push(on + ": ongeldige stap.");
+          });
+        }
+      }
     });
   });
   return { issues, refs: Array.from(new Set(refs)) };
@@ -355,7 +399,22 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
     if (!objectives.length) add(step.stepId, null, "Deze stap heeft nog geen doel.");
     else if (!objectives.some(objectiveNeeded)) add(step.stepId, null, "Minstens één doel moet verplicht (of verborgen) zijn, anders is de stap meteen klaar.");
     const next = Array.isArray(step.next) ? step.next.filter(isObject) : [];
-    if (!next.length) add(step.stepId, null, "Kies waar de quest na deze stap heen gaat (Daarna).");
+    // Stap 7: met een keuze gaat de quest verder naar de stap van het antwoord.
+    const choices = objectives.filter((objective) => objective.type === "choose");
+    if (!next.length && !choices.length) add(step.stepId, null, "Kies waar de quest na deze stap heen gaat (Daarna).");
+    if (choices.length > 1) add(step.stepId, null, "🔀 Hooguit één keuze per stap (anders weet de quest niet waar hij heen moet).");
+    for (const choice of choices) {
+      const options = Array.isArray(choice.options) ? choice.options.filter(isObject) : [];
+      if (options.length < 2) add(step.stepId, choice.objectiveId, "🔀 Kies bij: geef minstens 2 antwoorden.");
+      options.forEach((option, place) => {
+        const name = "🔀 Antwoord " + (place + 1) + (option.label ? " (" + option.label + ")" : "");
+        if (!String(option.label || "").trim()) add(step.stepId, choice.objectiveId, name + ": vul de tekst in.");
+        if (!option.to) add(step.stepId, choice.objectiveId, name + ": kies waar het heen gaat.");
+        else if (option.to === step.stepId) add(step.stepId, choice.objectiveId, name + ": gaat naar deze stap zelf.");
+        else if (!byId.has(option.to)) add(step.stepId, choice.objectiveId, name + ": gaat naar een stap die niet (meer) bestaat.");
+      });
+      if (!objectiveNeeded(choice)) add(step.stepId, choice.objectiveId, "🔀 Kies bij moet verplicht zijn (anders kiest niemand).");
+    }
     if (step.mapRef && !refExists(step.mapRef)) add(step.stepId, null, "Kaart: " + refLabel(step.mapRef) + " bestaat niet (meer) of is geen Questgebied.");
     for (const link of next) {
       if (link.to === step.stepId) add(step.stepId, null, "Deze stap gaat naar zichzelf.");
@@ -415,6 +474,16 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
       }
     }
   }
+  // Stap 7: eindes met een eigen beloning.
+  for (const step of list) {
+    if (step.kind !== "end") continue;
+    const rewards = Array.isArray(step.rewards) ? step.rewards.filter(isObject) : [];
+    for (const reward of rewards) {
+      if (!reward.ref) add(step.stepId, null, "🎁 Beloning: kies een item of geld (sleep het op het vak).");
+      else if (!refExists(reward.ref)) add(step.stepId, null, "🎁 " + refLabel(reward.ref) + " bestaat niet (meer) of is gearchiveerd.");
+    }
+    if (step.pick === true && rewards.length < 2) add(step.stepId, null, "🎁 Speler kiest 1: zet minstens 2 beloningen bij dit einde.");
+  }
   for (const spawn of spawnList) {
     if (!spawn.actorRef) add(null, null, spawnLabel(spawn) + ": kies welke vijand (sleep een vijand uit de Bibliotheek op het vak).", spawn.spawnId);
     else if (!refExists(spawn.actorRef)) add(null, null, spawnLabel(spawn) + ": " + refLabel(spawn.actorRef) + " bestaat niet (meer) of is gearchiveerd.", spawn.spawnId);
@@ -425,7 +494,10 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
   if (partyLeave && partyLeave !== "keep" && !hasTeam) add(null, null, "Bij groep verlaten doet niets: deze quest heeft geen doel met Team samen.");
   // Bereikbaar vanaf het begin, en vanaf elke bereikbare stap moet een einde te halen zijn.
   const nextOf = (step) => (step.kind === "step" ? (Array.isArray(step.next) ? step.next.map((link) => link?.to) : [])
-    .concat(isObject(step.timer) && step.timer.late === "step" ? [step.timer.lateTo] : []).filter((id) => byId.has(id)) : []);
+    .concat(isObject(step.timer) && step.timer.late === "step" ? [step.timer.lateTo] : [])
+    .concat((Array.isArray(step.objectives) ? step.objectives : []).filter((objective) => isObject(objective) && objective.type === "choose")
+      .flatMap((objective) => (Array.isArray(objective.options) ? objective.options : []).map((option) => option?.to)))
+    .filter((id) => byId.has(id)) : []);
   const reached = new Set([list[0].stepId]);
   const queue = [list[0].stepId];
   while (queue.length) {
@@ -530,6 +602,7 @@ export function requirementText(rule, nameOf = (ref) => ref) {
 export function objectiveText(objective, nameOf = (ref) => ref) {
   const spec = OBJECTIVE_KINDS[objective?.type];
   if (!spec) return "?";
+  if (spec.choice) return spec.label + " " + (objective.ref ? nameOf(objective.ref) : "…") + (objective.text ? ": " + objective.text : "");
   const what = objective.ref ? nameOf(objective.ref) : "…";
   const amount = spec.amount && Number(objective.amount) > 1 ? objective.amount + "× " : "";
   const to = spec.npc ? " naar " + (objective.npcRef ? nameOf(objective.npcRef) : "…") : "";

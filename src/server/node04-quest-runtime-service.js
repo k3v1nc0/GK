@@ -207,6 +207,10 @@ const EVENT_OBJECTIVES = new Set(["defeat", "gather", "pickup"]);
 const SHARE_OFFER_MS = 2 * 60 * 1000;
 // Praat- en inleverkeuzes zet de quest-motor zelf in het NPC-gesprek: "quest.obj|<quest>|<stap>|<doel>".
 const QUEST_CHOICE_PREFIX = "quest.obj|";
+// Stap 7: een vraag van een NPC ("quest.ask|<quest>|<stap>|<doel>"), een antwoord ("quest.pick|...|<antwoord>") en "Later".
+const QUEST_ASK_PREFIX = "quest.ask|";
+const QUEST_PICK_PREFIX = "quest.pick|";
+const QUEST_LATER_CHOICE = "quest.later";
 // Stap 6: de klokken van de quests worden elke seconde bekeken (ook als de speler niets doet of offline is).
 const TIMER_TICK_MS = 1000;
 const MAX_STEP_HOPS = 16;
@@ -294,6 +298,15 @@ function normalizeQuest(quest) {
   });
   normalizedQuests.set(quest, result);
   return result;
+}
+
+// Stap 7: items en geld van een einde waaruit de speler er 1 kiest (XP krijgt hij altijd).
+function pickableRewards(step) {
+  return (Array.isArray(step?.rewards) ? step.rewards : []).filter((action) => action?.actionKind === "item" || action?.actionKind === "currency");
+}
+
+function needsRewardPick(step) {
+  return step?.kind === "end" && step.rewardPick === true && pickableRewards(step).length >= 2;
 }
 
 function firstNextStep(quest, step) {
@@ -400,6 +413,7 @@ export class Node04QuestRuntimeService {
         let result;
         if (action === "start_dialogue") result = this.startDialogue(ctx, payload);
         else if (action === "choose_dialogue") result = this.chooseDialogue(ctx, payload, operationId);
+        else if (action === "choose_reward") result = this.chooseReward(ctx, safeString(payload.questId || payload.quest_id), safeString(payload.choiceId || payload.choice_id), operationId);
         else if (action === "accept_quest") result = this.acceptQuest(ctx, safeString(payload.questId || payload.quest_id), operationId, "player_accept");
         else if (action === "turn_in") result = this.turnInQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
         else if (action === "reach") result = this.completeReachQuest(ctx, safeString(payload.questId || payload.quest_id), operationId);
@@ -766,7 +780,11 @@ export class Node04QuestRuntimeService {
       let step = current.active_step_id ? stepById(quest, current.active_step_id) : stepById(quest, quest.startStepRef);
       const events = [];
       for (let hop = 0; step && hop < MAX_STEP_HOPS; hop += 1) {
-        if (step.kind === "end") return this.completeQuestRun(ctx, quest, current, step, operationId, events);
+        if (step.kind === "end") {
+          // Stap 7: de speler kiest eerst zijn beloning (in het questboek).
+          if (needsRewardPick(step)) return this.waitForRewardPick(ctx, quest, current, step, operationId, events);
+          return this.completeQuestRun(ctx, quest, current, step, operationId, events);
+        }
         const progress = this.evaluateStepProgress(ctx, quest, step);
         const teamDone = [];
         for (const objective of progress.objectives) {
@@ -782,7 +800,8 @@ export class Node04QuestRuntimeService {
         if (!progress.complete) break;
         // Stap 6: gehaald, de klok van deze stap is klaar.
         if (step.timer) this.writeTimer(ctx.profile.id, quest.id, null);
-        const next = firstNextStep(quest, step);
+        // Stap 7: na een keuze gaat de quest naar de stap van het gekozen antwoord.
+        const next = this.choiceNextStep(ctx.profile.id, quest, step) || firstNextStep(quest, step);
         if (!next) return this.completeQuestRun(ctx, quest, current, null, operationId, events);
         // Een stap die je (opnieuw) binnenkomt begint leeg (ook zijn regels gaan weer 1×).
         this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ? AND step_id = ?").run(ctx.profile.id, quest.id, next.id);
@@ -1029,13 +1048,18 @@ export class Node04QuestRuntimeService {
       late: step.timer.late || "fail" };
   }
 
-  completeQuestRun(ctx, quest, row, endStep, operationId, events = []) {
+  // pick: bij "Speler kiest 1" de gekozen beloning (XP van het einde en de beloning van de quest komen er altijd bij).
+  completeQuestRun(ctx, quest, row, endStep, operationId, events = [], pick = null) {
     const opId = operationId || randomId("quest_progress");
     const runId = safeString(stateOf(row).runId, "run_" + safeString(row.accepted_at, "legacy"));
     const grants = [];
     if (this.claimOnce(ctx.profile.id, quest.id, "reward:" + runId, "quest_reward")) {
-      const actions = (Array.isArray(endStep?.rewards) ? endStep.rewards : []).concat(Array.isArray(quest.rewards) ? quest.rewards : []);
+      const endRewards = Array.isArray(endStep?.rewards) ? endStep.rewards : [];
+      const fromEnd = needsRewardPick(endStep) ? endRewards.filter((action) => !pickableRewards(endStep).includes(action)).concat(pick ? [pick] : []) : endRewards;
+      const actions = fromEnd.concat(Array.isArray(quest.rewards) ? quest.rewards : []);
       for (const action of actions) grants.push.apply(grants, this.executeAction(ctx, action, opId, quest.id));
+      // Kevin 6-11: net als level omhoog een feestelijke melding in beeld (1x per keer dat je hem haalt).
+      this.questDoneNotice(ctx, quest, endStep, actions);
     }
     this.updateQuestState(ctx, quest.id, QUEST_STATUS.COMPLETED, endStep?.id || null, row.status, row.active_step_id, "quest_complete", { operationId: opId, endId: endStep?.id || null, grants });
     this.removeQuestItems(ctx, quest, questRepeatMode(quest) !== "once_per_character", opId);
@@ -1048,6 +1072,218 @@ export class Node04QuestRuntimeService {
     }
     events.push({ type: "quest_completed", questId: quest.id, endId: endStep?.id || null });
     return { completed: true, events, grants, message: "Quest voltooid: " + (quest.displayName || quest.id) };
+  }
+
+  // "Quest voltooid!" in beeld, met het einde (als het een naam heeft) en wat je kreeg. Na de transactie, zoals het bericht in beeld.
+  questDoneNotice(ctx, quest, endStep, actions) {
+    if (typeof this.mmoService?.sendToPlayer !== "function") return;
+    const rewards = actions.map((action) => {
+      if (action?.actionKind === "xp" && safeInteger(action.amount, 0) > 0) return "+" + safeInteger(action.amount, 0) + " XP";
+      if (action?.actionKind === "currency") return "+" + safeInteger(action.amountMinor, 0) + " " + displayForCurrency(ctx.catalogs, action.currencyRef);
+      if (action?.actionKind === "item") return "+" + safeInteger(action.amount, 1) + "× " + displayForItem(ctx.catalogs, action.itemRef);
+      return null;
+    }).filter(Boolean).slice(0, 6);
+    // Het einde alleen noemen als de quest er meer heeft (na een keuze).
+    const ends = (Array.isArray(quest.steps) ? quest.steps : []).filter((step) => step?.kind === "end").length;
+    const ending = ends > 1 && endStep?.displayName && endStep.displayName !== endStep.id ? endStep.displayName : "";
+    const payload = { type: "quest:completed", questId: quest.id, title: quest.displayName || quest.id, ending, rewards };
+    const playerId = ctx.profile.id;
+    setTimeout(() => { try { this.mmoService.sendToPlayer(playerId, payload); } catch {} }, 30);
+  }
+
+  // ---- Stap 7: beloning kiezen bij een einde ------------------------------------------------------------------
+  // De quest wacht op het einde (klaar om in te leveren) tot de speler in het questboek zijn beloning kiest.
+  waitForRewardPick(ctx, quest, row, endStep, operationId, events) {
+    if (row.status !== QUEST_STATUS.READY_TO_TURN_IN || row.active_step_id !== endStep.id) {
+      this.updateQuestState(ctx, quest.id, QUEST_STATUS.READY_TO_TURN_IN, endStep.id, row.status, row.active_step_id, "reward_pick", { operationId: operationId || null });
+      events.push({ type: "quest_step", questId: quest.id, stepId: endStep.id });
+    }
+    return { completed: false, events, grants: [], message: "Kies je beloning in je questboek: " + (quest.displayName || quest.id) };
+  }
+
+  chooseReward(ctx, questId, choiceId, operationId) {
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    const quest = row && isOpenStatus(row.status) ? this.questDefinition(ctx, questId, row) : null;
+    const step = stepById(quest, row?.active_step_id);
+    if (!quest || !needsRewardPick(step)) throw httpError(400, "Er is hier geen beloning te kiezen.");
+    const pick = pickableRewards(step)[safeInteger(choiceId, -1)];
+    if (!pick) throw httpError(400, "Die beloning bestaat niet.");
+    return this.atomic(() => this.completeQuestRun(ctx, quest, row, step, operationId, [], pick));
+  }
+
+  // ---- Stap 7: kiezen bij een NPC ------------------------------------------------------------------------------
+  // De keuze staat als questvariabele in state_json.vars["<stap>.<doel>"] = antwoord (blijft deze run vast).
+  choiceNextStep(playerId, quest, step) {
+    const choice = (Array.isArray(step?.objectives) ? step.objectives : []).find((objective) => objective?.objectiveType === "choose");
+    if (!choice) return null;
+    const options = Array.isArray(choice.options) ? choice.options : [];
+    const picked = stateOf(this.loadQuestState(playerId, quest.id)).vars?.[step.id + "." + objectiveIdOf(choice)];
+    // Niet gekozen (bijv. via de testknoppen): het eerste antwoord.
+    const option = options.find((entry) => entry?.id === picked) || options[0];
+    return option ? stepById(quest, option.to) : null;
+  }
+
+  partyLeaderId(partyId) {
+    if (!partyId) return null;
+    return this.db.prepare("SELECT leader_player_id FROM parties WHERE id = ? LIMIT 1").get(partyId)?.leader_player_id || null;
+  }
+
+  // Wie kiest er: ieder zelf, de leider voor het team, of de meerderheid. Team = groepsleden op dezelfde stap die nog niet kozen.
+  // Alleen, of de leider staat niet op deze stap: dan kies je zelf.
+  choiceTeam(ctx, quest, step, objective) {
+    const decide = objective?.decide === "leader" || objective?.decide === "vote" ? objective.decide : "self";
+    const alone = { decide: "self", ids: [ctx.profile.id], leaderId: null };
+    if (decide === "self") return alone;
+    const team = this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id, objectiveIdOf(objective));
+    const leaderId = this.partyLeaderId(team.partyId);
+    if (team.ids.length < 2 || (decide === "leader" && !team.ids.includes(leaderId))) return alone;
+    return { decide, ids: team.ids, leaderId };
+  }
+
+  choiceVotes(quest, step, objective, ids) {
+    const key = step.id + "." + objectiveIdOf(objective);
+    const votes = new Map();
+    for (const id of ids) {
+      const vote = stateOf(this.loadQuestState(id, quest.id)).votes?.[key];
+      if (vote) votes.set(id, vote);
+    }
+    return votes;
+  }
+
+  // Meer dan de helft = beslist. Iedereen gestemd en gelijk: de stem van de leider (anders het eerste antwoord).
+  voteWinner(objective, team, votes) {
+    const counts = new Map();
+    for (const vote of votes.values()) counts.set(vote, (counts.get(vote) || 0) + 1);
+    for (const [optionId, count] of counts) if (count * 2 > team.ids.length) return optionId;
+    if (votes.size < team.ids.length) return null;
+    const top = Math.max(...counts.values());
+    const tied = (objective.options || []).map((option) => option.id).filter((optionId) => counts.get(optionId) === top);
+    const leaderVote = team.leaderId ? votes.get(team.leaderId) : null;
+    return tied.includes(leaderVote) ? leaderVote : tied[0] || null;
+  }
+
+  // Het open keuzedoel bij deze NPC (stap actief, nog niet gekozen).
+  openChoice(ctx, dialogue, questId, stepId, objectiveId) {
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    if (!row || !isOpenStatus(row.status) || row.active_step_id !== stepId) throw httpError(400, "Deze questkeuze is niet meer geldig.");
+    const quest = this.questDefinition(ctx, questId, row);
+    const step = stepById(quest, stepId);
+    const objective = (Array.isArray(step?.objectives) ? step.objectives : []).find((candidate) => objectiveIdOf(candidate) === objectiveId && candidate.objectiveType === "choose");
+    if (!objective || objective.targetRef !== dialogue.targetRef) throw httpError(400, "Deze questkeuze is niet meer geldig.");
+    if (this.loadObjectiveProgress(ctx.profile.id, questId, stepId).get(objectiveId)?.status === OBJECTIVE_STATUS.COMPLETED) throw httpError(400, "Hier is al gekozen.");
+    return { row, quest, step, objective };
+  }
+
+  // De vraag van de NPC met de antwoorden. Al eerder gekozen (stap opnieuw): alleen dat antwoord.
+  askDialogue(ctx, dialogue, quest, step, objective) {
+    const objectiveId = objectiveIdOf(objective);
+    const key = step.id + "." + objectiveId;
+    const team = this.choiceTeam(ctx, quest, step, objective);
+    const options = Array.isArray(objective.options) ? objective.options : [];
+    const labelOf = (optionId) => options.find((option) => option.id === optionId)?.label || optionId;
+    const fixed = stateOf(this.loadQuestState(ctx.profile.id, quest.id)).vars?.[key];
+    let note = "";
+    let canPick = true;
+    if (team.decide === "leader") {
+      canPick = ctx.profile.id === team.leaderId;
+      note = canPick ? "👑 Jij kiest voor de hele groep." : "👑 De leider van je groep kiest.";
+    } else if (team.decide === "vote") {
+      const votes = this.choiceVotes(quest, step, objective, team.ids);
+      const mine = votes.get(ctx.profile.id);
+      note = "🗳️ De meerderheid beslist (" + votes.size + " van " + team.ids.length + " gestemd)." + (mine ? " Jij stemde: " + labelOf(mine) + "." : "");
+    }
+    const list = fixed ? options.filter((option) => option.id === fixed) : options;
+    const entry = dialogue.entriesById?.[dialogue.startEntryRef] || dialogue.entries?.[0] || null;
+    return {
+      dialogueId: dialogue.id,
+      displayName: dialogue.displayName || dialogue.id,
+      targetRef: dialogue.targetRef || null,
+      entryId: QUEST_ASK_PREFIX + [quest.id, step.id, objectiveId].join("|"),
+      speakerName: entry?.speakerName || dialogue.displayName || "",
+      text: (safeString(objective.question).trim() || "Wat kies je?") + (note ? " " + note : ""),
+      choices: (canPick ? list.map((option) => ({ choiceId: QUEST_PICK_PREFIX + [quest.id, step.id, objectiveId, option.id].join("|"), label: option.label || option.id,
+        action: "quest_choice", questRef: quest.id, nextEntryRef: null, closeAfterSelect: false })) : [])
+        .concat([{ choiceId: QUEST_LATER_CHOICE, label: "Later", action: "close", questRef: null, nextEntryRef: null, closeAfterSelect: true }])
+    };
+  }
+
+  askQuestChoice(ctx, dialogue, choiceId) {
+    const [questId, stepId, objectiveId] = choiceId.slice(QUEST_ASK_PREFIX.length).split("|");
+    const { quest, step, objective } = this.openChoice(ctx, dialogue, questId, stepId, objectiveId);
+    return { message: "", events: [], dialogue: this.askDialogue(ctx, dialogue, quest, step, objective) };
+  }
+
+  pickQuestChoice(ctx, dialogue, choiceId, operationId) {
+    const [questId, stepId, objectiveId, optionId] = choiceId.slice(QUEST_PICK_PREFIX.length).split("|");
+    const { row, quest, step, objective } = this.openChoice(ctx, dialogue, questId, stepId, objectiveId);
+    const options = Array.isArray(objective.options) ? objective.options : [];
+    const option = options.find((entry) => entry.id === optionId);
+    if (!option) throw httpError(400, "Dat antwoord bestaat niet.");
+    const key = step.id + "." + objectiveId;
+    const fixed = stateOf(row).vars?.[key];
+    if (fixed && fixed !== option.id) throw httpError(400, "Je hebt al gekozen: " + (options.find((entry) => entry.id === fixed)?.label || fixed));
+    if (!this.objectiveInRange(ctx, objective, 1.5, true)) throw httpError(400, "Je bent te ver weg.");
+    return this.atomic(() => {
+      const team = this.choiceTeam(ctx, quest, step, objective);
+      if (team.decide === "leader" && ctx.profile.id !== team.leaderId) throw httpError(403, "De leider van je groep kiest.");
+      let chosen = option;
+      if (team.decide === "vote") {
+        const state = stateOf(this.loadQuestState(ctx.profile.id, quest.id));
+        state.votes = Object.assign({}, state.votes, { [key]: option.id });
+        this.db.prepare("UPDATE player_quest_states SET state_json = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND quest_id = ?")
+          .run(stableJson(state), now(), ctx.profile.id, quest.id);
+        const winner = this.voteWinner(objective, team, this.choiceVotes(quest, step, objective, team.ids));
+        if (!winner) {
+          const others = team.ids.filter((id) => id !== ctx.profile.id);
+          this.questMessage(others, quest, "🗳️ Er is gestemd. Stem mee bij " + (dialogue.displayName || "de NPC") + ".");
+          this.pingQuest(others);
+          return { message: "Je stem telt: " + option.label + ". Wacht op de rest van de groep.", events: [], dialogue: this.askDialogue(ctx, dialogue, quest, step, objective) };
+        }
+        chosen = options.find((entry) => entry.id === winner) || option;
+      }
+      const advanced = this.applyChoice(ctx, quest, step, objective, chosen, team, operationId, dialogue);
+      const who = team.decide === "leader" ? "Je koos voor de groep: " : team.decide === "vote" ? "De groep koos: " : "Je koos: ";
+      return {
+        message: advanced.completed ? advanced.message : who + (chosen.label || chosen.id),
+        events: [{ type: "quest_objective", questId: quest.id, stepId: step.id, objectiveId }].concat(advanced.events || []),
+        grants: advanced.grants || [],
+        dialogue: null
+      };
+    });
+  }
+
+  // De keuze geldt voor het hele team (bij ieder zelf: alleen jij). Daarna gaat ieder door naar de stap van dat antwoord.
+  applyChoice(ctx, quest, step, objective, option, team, operationId, dialogue) {
+    const objectiveId = objectiveIdOf(objective);
+    const key = step.id + "." + objectiveId;
+    const ids = team.ids.filter((memberId) => {
+      const row = this.loadQuestState(memberId, quest.id);
+      if (!row || !isOpenStatus(row.status) || row.active_step_id !== step.id) return false;
+      const state = stateOf(row);
+      state.vars = Object.assign({}, state.vars, { [key]: option.id });
+      if (state.votes) { delete state.votes[key]; if (!Object.keys(state.votes).length) delete state.votes; }
+      this.db.prepare("UPDATE player_quest_states SET state_json = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND quest_id = ?")
+        .run(stableJson(state), now(), memberId, quest.id);
+      this.writeObjectiveProgress(memberId, quest.id, step.id, objectiveId, 1, 1);
+      this.db.prepare(`
+        INSERT INTO player_dialogue_choices (id, player_id, dialogue_id, entry_id, choice_id, quest_id, chosen_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(randomId("dialogue_choice"), memberId, dialogue?.id || "quest", QUEST_ASK_PREFIX + [quest.id, step.id, objectiveId].join("|"),
+        QUEST_PICK_PREFIX + [quest.id, step.id, objectiveId, option.id].join("|"), quest.id, now(), stableJson({ stepId: step.id, objectiveId, optionId: option.id, by: ctx.profile.id }));
+      return true;
+    });
+    const advanced = this.advanceQuest(ctx, quest, this.loadQuestState(ctx.profile.id, quest.id), operationId);
+    const others = ids.filter((memberId) => memberId !== ctx.profile.id);
+    for (const memberId of others) {
+      const row = this.loadQuestState(memberId, quest.id);
+      if (!row || !isOpenStatus(row.status) || row.active_step_id !== step.id) continue;
+      this.advanceQuest(Object.assign({}, ctx, { profile: { id: memberId }, position: null }), quest, row, operationId);
+    }
+    if (others.length) {
+      this.questMessage(others, quest, (team.decide === "leader" ? "👑 De leider koos: " : "🗳️ De groep koos: ") + (option.label || option.id));
+      this.pingQuest(others);
+    }
+    return advanced;
   }
 
   // Het team van deze speler voor dit doel: groepsleden die dezelfde quest (zelfde versie) op dezelfde stap hebben.
@@ -1643,6 +1879,10 @@ export class Node04QuestRuntimeService {
     if (!dialogue) throw httpError(404, "Dialogue niet gevonden.");
     const choiceId = safeString(payload.choiceId || payload.choice_id);
     if (choiceId.startsWith(QUEST_CHOICE_PREFIX)) return this.chooseQuestObjective(ctx, dialogue, choiceId, operationId);
+    // Stap 7: de vraag van een quest, een antwoord, of "Later".
+    if (choiceId === QUEST_LATER_CHOICE) return { message: "", events: [], dialogue: null };
+    if (choiceId.startsWith(QUEST_ASK_PREFIX)) return this.askQuestChoice(ctx, dialogue, choiceId);
+    if (choiceId.startsWith(QUEST_PICK_PREFIX)) return this.pickQuestChoice(ctx, dialogue, choiceId, operationId);
     const entry = dialogue.entriesById?.[payload.entryId || payload.entry_id || dialogue.startEntryRef] || dialogue.entries?.[0] || null;
     const choice = (Array.isArray(entry?.choices) ? entry.choices : []).find(function (candidate) {
       return candidate.id === choiceId;
@@ -1728,6 +1968,10 @@ export class Node04QuestRuntimeService {
           choices.push({ choiceId, label: "💬 " + (quest.displayName || quest.id), action: "quest_objective", questRef: quest.id, nextEntryRef: null, closeAfterSelect: true });
         } else if (objective.objectiveType === "deliver" && objective.ready) {
           choices.push({ choiceId, label: "📦 Inleveren: " + (quest.displayName || quest.id), action: "quest_objective", questRef: quest.id, nextEntryRef: null, closeAfterSelect: true });
+        } else if (objective.objectiveType === "choose") {
+          // Stap 7: de NPC stelt de vraag van de quest.
+          choices.push({ choiceId: QUEST_ASK_PREFIX + [quest.id, step.id, objective.objectiveId].join("|"), label: "🔀 " + (quest.displayName || quest.id),
+            action: "quest_choice", questRef: quest.id, nextEntryRef: null, closeAfterSelect: false });
         }
       }
     }
@@ -1834,7 +2078,7 @@ export class Node04QuestRuntimeService {
       complete = storedDone;
       current = complete ? required : Math.min(owned, required);
       extra.ready = !complete && owned >= required;
-    } else if (type === OBJECTIVE_TYPES.TALK) {
+    } else if (type === OBJECTIVE_TYPES.TALK || type === "choose") {
       complete = storedDone;
       current = complete ? 1 : 0;
     } else if (type === "visit") {
@@ -2034,6 +2278,14 @@ export class Node04QuestRuntimeService {
     });
     const openNeeded = objectives.filter(function (objective) { return objective.needed && !objective.complete; });
     const inRange = (objective) => this.objectiveInRange(ctx, objective, 1.5, true);
+    const rewardView = (reward) => {
+      if (reward?.actionKind === "xp") return { kind: "xp", amount: safeInteger(reward.amount, 0) };
+      if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
+      if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
+      return null;
+    };
+    // Stap 7: bij een einde met "Speler kiest 1": de beloningen om uit te kiezen (index = wat de knop terugstuurt).
+    const rewardChoice = needsRewardPick(step) ? pickableRewards(step).map((reward, index) => Object.assign({ index }, rewardView(reward))) : null;
     return {
       questId: quest.id,
       displayName: definition?.displayName || quest.displayName || quest.id,
@@ -2069,13 +2321,14 @@ export class Node04QuestRuntimeService {
         marks: this.liveMarks(ctx, step, objectives, quest.id),
         // Stap 6: de aftelklok van deze stap (null = geen klok, of nog niet gestart).
         timer: this.timerView(row, step),
-        instruction: this.resolveTokenText(ctx, step.instruction || ""),
+        instruction: rewardChoice ? "Kies je beloning." : this.resolveTokenText(ctx, step.instruction || ""),
+        rewardChoice,
         stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
         match: step.match === "any" ? "any" : "all",
         targetRef: openNeeded.find(function (objective) { return objective.targetRef; })?.targetRef || null,
         zoneRef: step.zoneRef || null,
         // "Klaar! Ga terug": alles gedaan, alleen nog inleveren bij de NPC.
-        complete: progress?.complete === true || (openNeeded.length > 0 && openNeeded.every(function (objective) { return objective.objectiveType === "deliver" && objective.ready; })),
+        complete: Boolean(rewardChoice) || progress?.complete === true || (openNeeded.length > 0 && openNeeded.every(function (objective) { return objective.objectiveType === "deliver" && objective.ready; })),
         conditionsMet: progress?.conditionsMet !== false,
         blockedReason: progress?.blockedReason || "",
         canTurnIn: objectives.some((objective) => objective.objectiveType === "deliver" && objective.ready && inRange(objective)),
@@ -2089,12 +2342,7 @@ export class Node04QuestRuntimeService {
       } : null,
       nextQuestRefs: Array.isArray(quest.nextQuestRefs) ? quest.nextQuestRefs.slice() : [],
       // Stap 4 (HUD): de beloning in het questboek.
-      rewards: (Array.isArray(quest.rewards) ? quest.rewards : []).map(function (reward) {
-        if (reward?.actionKind === "xp") return { kind: "xp", amount: safeInteger(reward.amount, 0) };
-        if (reward?.actionKind === "currency") return { kind: "currency", currencyId: reward.currencyRef, displayName: displayForCurrency(ctx.catalogs, reward.currencyRef), amount: safeInteger(reward.amountMinor, 0) };
-        if (reward?.actionKind === "item") return { kind: "item", itemId: reward.itemRef, displayName: displayForItem(ctx.catalogs, reward.itemRef), amount: safeInteger(reward.amount, 1) };
-        return null;
-      }).filter(function (reward) { return reward && reward.amount > 0; }),
+      rewards: (Array.isArray(quest.rewards) ? quest.rewards : []).map(rewardView).filter(function (reward) { return reward && reward.amount > 0; }),
       acceptedAt: row.accepted_at || null,
       completedAt: row.completed_at || null
     };

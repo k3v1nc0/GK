@@ -5,7 +5,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, QUEST_REPEAT, QUEST_TIMER_LIMITS, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, TIMER_LATE, TIMER_LOGOUT, TIMER_SHARE, TIMER_START, durationText, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest19";
+import { CHOICE_DECIDE, OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_CHOICE_LIMITS, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, QUEST_REPEAT, QUEST_TIMER_LIMITS, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, TIMER_LATE, TIMER_LOGOUT, TIMER_SHARE, TIMER_START, durationText, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest21";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -324,6 +324,7 @@ const STEP_TEMPLATES = [
   { id: "spawn", text: "👾 Vijanden laten verschijnen en verslaan", objectives: [{ type: "defeat", amount: 3 }], spawn: true },
   { id: "timed", text: "⏱️ Vijanden verslaan binnen 2 minuten", objectives: [{ type: "defeat", amount: 3 }], spawn: true, timer: { seconds: 120 } },
   { id: "talk", text: "💬 Met iemand praten", objectives: [{ type: "talk" }] },
+  { id: "choice", text: "🔀 Keuze bij een NPC", objectives: [{ type: "choose" }], choice: true },
   { id: "deliver", text: "📦 Iets brengen", objectives: [{ type: "deliver", amount: 1 }] },
   { id: "enter", text: "🎯 Ergens heen gaan", objectives: [{ type: "enter" }] },
   { id: "empty", text: "➕ Lege stap", objectives: [] }
@@ -331,6 +332,40 @@ const STEP_TEMPLATES = [
 
 // Wat vul je in bij een doel (de naam voor het vak).
 const WHAT_LABEL = { actor_archetype: "Welke vijand", resource_definition: "Welke grondstof", item_definition: "Welk item", npc: "Wie", area: "Welk gebied" };
+
+// Stap 7: een nieuwe keuze begint met Ja / Nee.
+const newChoiceOptions = () => [{ optionId: "ja", label: "Ja", to: null }, { optionId: "nee", label: "Nee", to: null }];
+
+// Naar welke stap, als woord: "stap 3" of "🏁 Ander einde".
+function stepRefText(steps, stepId) {
+  const to = steps.find((other) => other.stepId === stepId);
+  return !to ? "…" : to.kind === "end" ? "🏁 " + (to.title || "Klaar") : "stap " + (steps.indexOf(to) + 1);
+}
+
+// Keuzelijst met de andere stappen en eindes (Daarna, of waar een antwoord heen gaat).
+function stepSelect(steps, step, value, title, onPick) {
+  const select = el("select", { class: "wbdSelect", title }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
+    .map((other) => el("option", { value: other.stepId, text: other.kind === "end" ? "🏁 " + (other.title || "Klaar") : "Stap " + (steps.indexOf(other) + 1) + (other.title ? ": " + other.title : "") }))));
+  select.value = value || "";
+  select.addEventListener("change", () => onPick(select.value || null));
+  return select;
+}
+
+// Stap 7: de antwoorden als zin, bijv. ""Ja" → stap 3, "Nee" → 🏁 Ander einde (de leider kiest)".
+function choiceLine(objective, steps) {
+  const options = (objective.options || []).map((option) => "\"" + (option.label || "…") + "\" → " + stepRefText(steps, option.to));
+  const who = objective.decide === "leader" ? " (in een groep kiest de leider)" : objective.decide === "vote" ? " (in een groep kiest de meerderheid)" : "";
+  return "🔀 " + (options.join(", ") || "nog geen antwoorden") + who;
+}
+
+// Stap 7: de extra beloning van een einde als zin.
+function endRewardText(step, nameOf) {
+  const list = (step.rewards || []).filter((reward) => reward && reward.ref).map((reward) => (Number(reward.amount) > 1 ? reward.amount + "× " : "") + nameOf(reward.ref));
+  const parts = [];
+  if (list.length) parts.push(step.pick ? "🎁 hij kiest 1 van: " + list.join(" / ") : "🎁 extra: " + list.join(", "));
+  if (Number(step.xp) > 0) parts.push("⭐ " + step.xp + " XP extra");
+  return parts.join(", ");
+}
 
 function goalText(objective, spawns, nameOf) {
   const spawn = objective.spawnId ? spawns.find((entry) => entry.spawnId === objective.spawnId) : null;
@@ -368,17 +403,22 @@ function storyBox(state, host, steps, issues, nameOf) {
   steps.forEach((step, index) => {
     const bad = issues.some((issue) => issue.stepId === step.stepId);
     const lines = [];
-    if (step.kind === "end") lines.push(el("b", { text: (bad ? "⚠️ " : "") + "🏁 " + (step.title || "Klaar") + ": de speler krijgt de beloning." }));
-    else {
+    if (step.kind === "end") {
+      const extra = endRewardText(step, nameOf);
+      lines.push(el("b", { text: (bad ? "⚠️ " : "") + "🏁 " + (step.title || "Klaar") + ": de speler krijgt de beloning" + (extra ? " (" + extra + ")" : "") + "." }));
+    } else {
       const goals = (step.objectives || []).map((objective) => goalText(objective, spawns, nameOf)
         + (objective.role === "optional" ? " (mag)" : objective.role === "bonus" ? " (bonus)" : objective.role === "hidden" ? " (verborgen)" : ""));
       const joiner = step.match === "any" ? " of " : " en ";
       lines.push(el("b", { text: (bad ? "⚠️ " : "") + (step.title ? step.title + ": " : "") + (goals.length ? goals.join(joiner) : "nog geen doel") + "." }));
       for (const rule of step.rules || []) lines.push(el("span", { text: "⚡ " + ruleText(rule, step, spawns, nameOf) }));
       if (step.timer) lines.push(el("span", { text: timerText(step.timer, steps) }));
+      // Stap 7: met een keuze gaat de quest naar de stap van het antwoord.
+      const choice = (step.objectives || []).find((objective) => objective.type === "choose");
       const to = steps.find((other) => other.stepId === (step.next || [])[0]?.to);
       const nextIndex = to ? steps.indexOf(to) : -1;
-      if (!to) lines.push(el("span", { class: "qbBad", text: "➡️ Daarna: nog niet gekozen" }));
+      if (choice) lines.push(el("span", { text: choiceLine(choice, steps) }));
+      else if (!to) lines.push(el("span", { class: "qbBad", text: "➡️ Daarna: nog niet gekozen" }));
       else if (nextIndex !== index + 1 || to.kind === "end") lines.push(el("span", { text: "➡️ Daarna: " + (to.kind === "end" ? "🏁 " + (to.title || "Klaar") : "stap " + (nextIndex + 1)) }));
     }
     const item = el("li", { class: "qbStoryStep" + (bad ? " qbStoryBad" : ""), title: "Naar deze stap" }, lines);
@@ -441,10 +481,11 @@ function renderSteps(state, host, body, steps, issues, nameOf) {
 
 // ➕ Nieuwe stap: kant-en-klaar. De nieuwe stap komt na de laatste stap (vóór het einde) en Daarna loopt mee.
 function templateBar(state, steps, edit) {
-  const full = steps.length >= QUEST_LIMITS.steps;
+  const full = (template) => steps.length + (template?.choice ? 2 : 1) > QUEST_LIMITS.steps;
   const add = (template) => edit("stap erbij: " + template.text, (copy, body) => {
     const used = new Set(copy.map((step) => step.stepId));
     const stepId = uniqueId("stap_", used);
+    used.add(stepId);
     state.openSteps.add(stepId);
     let last = -1;
     copy.forEach((step, index) => { if (step.kind === "step") last = index; });
@@ -463,14 +504,25 @@ function templateBar(state, steps, edit) {
       step.rules = [{ ruleId: "regel_1", when: "start", then: "spawn", spawnId }];
     }
     if (template.timer) step.timer = clone(template.timer);
+    if (template.choice) {
+      // 🔀 Ja gaat verder zoals de quest liep, Nee naar een nieuw einde "Ander einde" (de stap heeft dan geen Daarna).
+      const options = newChoiceOptions();
+      options[0].to = next[0]?.to || null;
+      const endId = used.has("end") ? uniqueId("einde_", used) : "end";
+      copy.push({ stepId: endId, kind: "end", title: "Ander einde" });
+      options[1].to = endId;
+      objectives[0].options = options;
+      objectives[0].text = "";
+      step.next = [];
+    }
     copy.splice(last + 1, 0, step);
   });
   const buttons = STEP_TEMPLATES.map((template) => {
-    const button = el("button", { type: "button", class: "qbTemplate", text: template.text, disabled: full || null });
+    const button = el("button", { type: "button", class: "qbTemplate", text: template.text, disabled: full(template) || null });
     button.addEventListener("click", () => add(template));
     return button;
   });
-  const end = el("button", { type: "button", class: "qbTemplate", text: "🏁 Einde", disabled: full || null, title: "Nog een einde (bijv. een ander einde na een keuze)" });
+  const end = el("button", { type: "button", class: "qbTemplate", text: "🏁 Einde", disabled: full() || null, title: "Nog een einde (bijv. een ander einde na een keuze)" });
   end.addEventListener("click", () => edit("einde erbij", (copy) => {
     const used = new Set(copy.map((step) => step.stepId));
     copy.push({ stepId: used.has("end") ? uniqueId("einde_", used) : "end", kind: "end", title: "" });
@@ -560,12 +612,17 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
       for (const other of copy) {
         if (other.kind !== "step") continue;
         other.next = (other.next || []).map((link) => (link.to === gone.stepId ? (forward && forward !== other.stepId ? { to: forward } : null) : link)).filter(Boolean);
+        // Stap 7: antwoorden die naar de weggehaalde stap gingen.
+        for (const objective of other.objectives || []) {
+          for (const option of objective.options || []) if (option.to === gone.stepId) option.to = forward && forward !== other.stepId ? forward : null;
+        }
       }
     }))
   ]));
   if (closed) return card;
   if (isEnd) {
     card.append(el("p", { class: "qbHint", text: "Hier is de quest klaar. De beloning (in het questpaneel) krijgt iedere speler 1 keer per keer dat hij de quest speelt." }));
+    card.append(endRewardBox(state, step, (label, change) => edit(label, (copy) => change(at(copy)))));
     if (issues.length) card.append(issueList(issues));
     return card;
   }
@@ -574,7 +631,7 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
   const goals = el("div", { class: "qbGoals" });
   (step.objectives || []).forEach((objective, number) => goals.append(objectiveRow(state, step, objective, issues.filter((issue) => issue.objectiveId === objective.objectiveId),
     (label, change) => edit(label, (copy, body) => change(at(copy).objectives[number], at(copy), body)),
-    () => edit("doel weg", (copy) => { at(copy).objectives.splice(number, 1); }))));
+    () => edit("doel weg", (copy) => { at(copy).objectives.splice(number, 1); }), steps)));
   const addGoal = el("select", { class: "wbdSelect", title: "Nog een doel in deze stap" }, [el("option", { value: "", text: "➕ Nog een doel..." })]
     .concat(OBJECTIVE_ORDER.map((type) => el("option", { value: type, text: OBJECTIVE_KINDS[type].icon + " " + OBJECTIVE_KINDS[type].label }))));
   addGoal.disabled = (step.objectives || []).length >= QUEST_LIMITS.objectives;
@@ -586,6 +643,7 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
       target.objectives = target.objectives || [];
       const objective = { objectiveId: uniqueId("doel_", new Set(target.objectives.map((entry) => entry.objectiveId))), type, ref: null, role: "required" };
       if (OBJECTIVE_KINDS[type].amount) objective.amount = 1;
+      if (OBJECTIVE_KINDS[type].choice) objective.options = newChoiceOptions();
       target.objectives.push(objective);
     });
   });
@@ -612,13 +670,13 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
     [timerBox(state, steps, step, (label, change) => edit(label, (copy) => change(at(copy))), nameOf)]));
 
   // ➡️ Blok 4: en daarna?
-  const nextSelect = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
-    .map((other) => el("option", { value: other.stepId, text: other.kind === "end" ? "🏁 " + (other.title || "Klaar") : "Stap " + (steps.indexOf(other) + 1) + (other.title ? ": " + other.title : "") }))));
-  nextSelect.value = (step.next || [])[0]?.to || "";
-  nextSelect.addEventListener("change", () => edit("daarna", (copy) => {
-    const rest = (at(copy).next || []).slice(1);
-    at(copy).next = nextSelect.value ? [{ to: nextSelect.value }].concat(rest) : rest;
-  }));
+  // Stap 7: met een keuze gaat de quest naar de stap van het antwoord (geen Ga naar).
+  const hasChoice = (step.objectives || []).some((objective) => objective.type === "choose");
+  const nextSelect = hasChoice ? el("span", { class: "qbHint", text: "Hangt af van het antwoord (🔀 hierboven)." })
+    : stepSelect(steps, step, (step.next || [])[0]?.to || "", "", (to) => edit("daarna", (copy) => {
+      const rest = (at(copy).next || []).slice(1);
+      at(copy).next = to ? [{ to }].concat(rest) : rest;
+    }));
   // Kaart en uitleg: wat de speler op de kaart en in zijn questlog ziet.
   const mapArea = areaSelect(state.bench, step.mapRef || null, "Geen gebied", "Het Questgebied van deze stap (maak er een met de Area tool: 🎯 Questgebied)",
     (ref) => edit("kaart", (copy) => { if (ref) at(copy).mapRef = ref; else { delete at(copy).mapRef; delete at(copy).mapShow; } }));
@@ -714,7 +772,7 @@ function timerBox(state, steps, step, change, nameOf) {
 }
 
 // Eén doel als kaartje: bovenaan in gewone woorden, daaronder de velden met een naam ervoor; de rest onder ⚙️ Meer.
-function objectiveRow(state, step, objective, issues, change, remove) {
+function objectiveRow(state, step, objective, issues, change, remove, steps = []) {
   const bench = state.bench;
   const { nameOf } = names(bench);
   const spawns = state.spawns || [];
@@ -731,6 +789,8 @@ function objectiveRow(state, step, objective, issues, change, remove) {
     if (!next.mark) delete target.mark;
     if (target.type !== "defeat") { delete target.credit; delete target.spawnId; }
     if (next.amount) target.amount = target.amount || 1; else delete target.amount;
+    // Stap 7: een keuze begint met Ja / Nee; een ander doel heeft geen vraag of antwoorden.
+    if (next.choice) { if (!Array.isArray(target.options)) target.options = newChoiceOptions(); } else { delete target.options; delete target.text; delete target.decide; }
   }));
   // Wat: een kaart uit de Bibliotheek op het vak (bij een gebied: een keuzelijst met Questgebieden).
   // Bij een verschijning zet dezelfde vijand ook de verschijning goed (één vak om te vullen).
@@ -773,6 +833,28 @@ function objectiveRow(state, step, objective, issues, change, remove) {
       (ref) => change("bij wie", (target) => { target.npcRef = ref || null; })))));
   }
   if (spawn) rows.push(el("p", { class: "qbHint", text: "👾 Deze vijanden verschijnen door een regel bij ⚡ Wat gebeurt er onderweg. Waar en voor wie staat in de tab 👾 Verschijnen." }));
+  // Stap 7: de vraag van de NPC en de antwoorden; elk antwoord gaat naar een eigen stap of einde. De keuze ligt daarna vast.
+  if (spec.choice) {
+    rows.push(field("💬 Vraag", textInput(objective.text, "Wat vraagt de NPC? Bijv. Help je mij met de wolven?", QUEST_CHOICE_LIMITS.text,
+      (value) => change("vraag", (target) => { if (value) target.text = value; else delete target.text; })), true));
+    const options = Array.isArray(objective.options) ? objective.options : [];
+    options.forEach((option, place) => {
+      rows.push(field("🔀 Antwoord " + (place + 1), el("div", { class: "qbInline qbChoice" }, [
+        textInput(option.label, "Bijv. Ja, ik help", QUEST_CHOICE_LIMITS.label, (value) => change("antwoord", (target) => { target.options[place].label = value; })),
+        el("span", { class: "qbUnit", text: "→" }),
+        stepSelect(steps, step, option.to, "Waar de quest heen gaat bij dit antwoord", (to) => change("antwoord gaat naar", (target) => { target.options[place].to = to; })),
+        smallButton("🗑️", "Antwoord weghalen", () => change("antwoord weg", (target) => { target.options.splice(place, 1); }), options.length <= 2)
+      ])));
+    });
+    if (options.length < QUEST_CHOICE_LIMITS.options) {
+      const more = el("button", { type: "button", class: "wbdGhost", text: "➕ Antwoord" });
+      more.addEventListener("click", () => change("antwoord erbij", (target) => {
+        target.options = Array.isArray(target.options) ? target.options : [];
+        target.options.push({ optionId: uniqueId("antwoord_", new Set(target.options.map((entry) => entry.optionId))), label: "", to: null });
+      }));
+      rows.push(el("div", { class: "qbAdd" }, [more]));
+    }
+  }
 
   // ⚙️ Meer: waar telt het, ster op de kaart, voor wie, telt voor, moet het.
   const more = [];
@@ -806,6 +888,15 @@ function objectiveRow(state, step, objective, issues, change, remove) {
     more.push(field("⚔️ Kill telt voor", credit));
     if (objective.credit === "fighters" || objective.credit === "nearby") chips.push(OBJECTIVE_CREDITS[objective.credit].icon + " " + OBJECTIVE_CREDITS[objective.credit].label.toLowerCase());
   }
+  if (spec.choice) {
+    const decide = el("select", { class: "wbdSelect", title: "Alleen als spelers deze quest samen in een groep doen. Ieder zelf: ieder zijn eigen antwoord en eigen weg. De leider: hij kiest voor iedereen. De meerderheid: meer dan de helft beslist, bij gelijkspel de leider." },
+      Object.entries(CHOICE_DECIDE).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+    decide.value = CHOICE_DECIDE[objective.decide] ? objective.decide : "self";
+    decide.addEventListener("change", () => change("wie kiest", (target) => { if (decide.value === "self") delete target.decide; else target.decide = decide.value; }));
+    more.push(field("👥 In een groep", decide));
+    if (objective.decide === "leader") chips.push("👑 de leider kiest");
+    if (objective.decide === "vote") chips.push("🗳️ de meerderheid kiest");
+  }
   const role = el("select", { class: "wbdSelect", title: "Verplicht, verborgen, mag of bonus" }, Object.entries(OBJECTIVE_ROLES).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   role.value = OBJECTIVE_ROLES[objective.role] ? objective.role : "required";
   role.addEventListener("change", () => change("rol", (target) => { target.role = role.value; }));
@@ -819,6 +910,34 @@ function objectiveRow(state, step, objective, issues, change, remove) {
   ]);
   if (issues.length) card.append(issueList(issues));
   return card;
+}
+
+// 🎁 Stap 7: de extra beloning van een einde (bovenop die van de quest). Speler kiest 1 = hij kiest in zijn questboek.
+const END_REWARD_AMOUNT = { key: "amount", label: "Aantal", icon: "🔢", min: 1, max: QUEST_LIMITS.amount, default: 1 };
+function endRewardBox(state, step, change) {
+  const rewards = Array.isArray(step.rewards) ? step.rewards : [];
+  const list = state.bench.refListControl({ refKinds: ["item_definition", "currency"], columns: [END_REWARD_AMOUNT], maxItems: QUEST_CHOICE_LIMITS.rewards }, rewards,
+    (rows) => change("beloning einde", (target) => {
+      if (rows && rows.length) target.rewards = rows;
+      else delete target.rewards;
+      if (!rows || rows.length < 2) delete target.pick;
+    }));
+  const xp = el("input", { type: "number", class: "wbdNumber qbAmount", min: 0, max: QUEST_CHOICE_LIMITS.xp, step: 1, title: "Extra XP bij dit einde" });
+  xp.value = String(step.xp || 0);
+  xp.addEventListener("change", () => change("XP einde", (target) => {
+    const value = Math.max(0, Math.min(QUEST_CHOICE_LIMITS.xp, Math.round(Number(xp.value) || 0)));
+    if (value) target.xp = value; else delete target.xp;
+  }));
+  const parts = [field("🎁 Items en geld", list, true), field("⭐ XP", xp)];
+  if (rewards.length >= 2 || step.pick) {
+    parts.push(field("🎁 Speler kiest 1", el("div", { class: "wbdChoices" }, [[false, "Nee, hij krijgt alles"], [true, "Ja, hij kiest er 1"]].map(([value, label]) => {
+      const active = (step.pick === true) === value;
+      const button = el("button", { type: "button", class: "wbdChoice" + (active ? " active" : ""), "aria-pressed": String(active), text: label });
+      button.addEventListener("click", () => change("speler kiest 1", (target) => { if (value) target.pick = true; else delete target.pick; }));
+      return button;
+    }))));
+  }
+  return block("🎁", "Extra beloning bij dit einde (mag leeg)", "Bovenop de gewone beloning van de quest, zo geeft elk einde iets anders. Bij 2 of meer items kun je de speler er 1 laten kiezen.", parts);
 }
 
 // ---------- ⚡ Als → Dan (stap 5): kleine regels per stap ----------

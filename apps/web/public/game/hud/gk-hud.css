@@ -142,6 +142,20 @@
 .gkLevelUp { top: 26%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; pointer-events: none; animation: gkLevelUp 2.6s ease-out forwards; }
 .gkLevelUp .gkIco { width: 64px; height: 64px; }
 .gkLevelUp b { font-size: 26px; font-weight: 900; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 18px rgba(246, 197, 68, 0.6); }
+/* Kevin 6-11: quest gehaald (zoals level omhoog, maar met naam, einde en beloning) */
+.gkQuestDone { top: 12%; left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 3px; max-width: min(560px, calc(100vw - 32px)); text-align: center;
+  pointer-events: none; animation: gkQuestDone 4.2s ease-out forwards; }
+.gkQuestDone .gkIco { width: 72px; height: 72px; filter: drop-shadow(0 0 14px rgba(246, 197, 68, 0.8)); animation: gkQuestDoneSpin 0.9s ease-out; }
+.gkQuestDone b { font-size: 30px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: var(--gk-gold); text-shadow: 0 2px 4px #000, 0 0 22px rgba(246, 197, 68, 0.7); }
+.gkQuestDone strong { font-size: 19px; font-weight: 800; color: #fff3d6; text-shadow: 0 1px 3px #000; overflow-wrap: anywhere; }
+.gkQuestDone small { font-size: 13px; color: var(--gk-gold); text-shadow: 0 1px 2px #000; }
+.gkQuestDoneRewards { margin-top: 4px; padding: 4px 12px; border-radius: 999px; background: rgba(20, 14, 4, 0.75); border: 1px solid rgba(246, 197, 68, 0.6);
+  font-size: 14px; font-weight: 700; color: #ffe7a3; }
+.gkQuestDoneRays { position: absolute; left: 50%; top: 36px; width: 220px; height: 220px; margin: -110px 0 0 -110px; border-radius: 50%; z-index: -1;
+  background: radial-gradient(circle, rgba(246, 197, 68, 0.45) 0%, rgba(246, 197, 68, 0.12) 45%, transparent 70%); animation: gkQuestDoneRays 4.2s ease-out forwards; }
+@keyframes gkQuestDone { 0% { opacity: 0; transform: translate(-50%, 14px) scale(0.7); } 10% { opacity: 1; transform: translate(-50%, 0) scale(1.1); } 18% { transform: translate(-50%, 0) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -18px); } }
+@keyframes gkQuestDoneSpin { 0% { transform: rotate(-30deg) scale(0.4); } 70% { transform: rotate(8deg) scale(1.15); } 100% { transform: rotate(0) scale(1); } }
+@keyframes gkQuestDoneRays { 0% { transform: scale(0.3); opacity: 0; } 15% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
 /* Quest Builder stap 5: Bericht in beeld */
 .gkQuestBanner { top: 18%; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px;
   border: 2px solid rgba(246, 197, 68, 0.75); border-radius: 12px; background: linear-gradient(180deg, rgba(40, 26, 12, 0.94), rgba(18, 12, 6, 0.94));
