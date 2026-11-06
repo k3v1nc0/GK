@@ -198,6 +198,36 @@ function fmt(value) {
   return number >= 10000 ? (Math.round(number / 100) / 10) + "k" : String(number);
 }
 
+// Quest Builder stap 6: aftelklok "1:23" of "1:02:03".
+function clockText(ms) {
+  const total = Math.max(0, Math.ceil(num(ms) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
+}
+// De eindtijd op deze computer: de server stuurt hoeveel er nog over is; per stand (snapshot) 1× omgerekend.
+const clockDeadlines = new WeakMap();
+function clockDeadline(timer) {
+  if (!timer || typeof timer !== "object") return 0;
+  if (!clockDeadlines.has(timer)) clockDeadlines.set(timer, Date.now() + num(timer.leftMs));
+  return clockDeadlines.get(timer);
+}
+// "⏱️ 1:23" (loopt, telt af via data-deadline), "⏸️ 1:23" (staat stil), of niets (geen klok, of gestopt).
+function clockBadge(timer, cls) {
+  if (!timer || timer.stopped) return null;
+  if (timer.paused) return h("b", { class: cls + " gkPaused", text: "⏸️ " + clockText(timer.leftMs), title: "De klok staat stil" });
+  const deadline = clockDeadline(timer);
+  return h("b", { class: cls, "data-deadline": String(deadline), text: "⏱️ " + clockText(deadline - Date.now()), title: "Zoveel tijd heb je nog" });
+}
+function repeatText(quest) {
+  if (!quest.repeatAt) return quest.repeatMode === "weekly" ? "↻ Volgende week weer" : quest.repeatMode === "daily" ? "↻ Morgen weer" : "Behaald";
+  const at = new Date(quest.repeatAt);
+  const time = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+  const today = at.toDateString() === new Date().toDateString();
+  return "↻ Weer vanaf " + (today ? "" : at.toLocaleDateString("nl-NL", { weekday: "short" }) + " ") + time;
+}
+
 // Doelen die tellen (versla, verzamel, pak op, in je tas, breng): altijd "0 / 1" erbij, ook bij 1.
 const COUNTED_GOALS = new Set(["defeat", "gather", "pickup", "collect", "deliver"]);
 
@@ -697,7 +727,8 @@ export function createGkHud(api) {
     const questText = quest ? (step?.instruction || step?.displayName || quest.displayName) : "";
     const portraitUrl = api.assetUrl(d.player?.modelAssetId, true);
     const signature = JSON.stringify([d.player?.displayName, d.player?.className, portraitUrl, progression.level, progression.progressPercent,
-      health.cur, health.max, mana.cur, mana.max, questText, objective?.currentValue, objective?.requiredValue, step?.complete, has("hud_bar"), has("xp_hud")]);
+      health.cur, health.max, mana.cur, mana.max, questText, objective?.currentValue, objective?.requiredValue, step?.complete, has("hud_bar"), has("xp_hud"),
+      step?.timer ? [step.timer.stopped, step.timer.paused, Math.round(clockDeadline(step.timer) / 1000)] : null]);
     // Klap of genezing: zwevend getal bij de levensbalk (alleen bij echte verandering, niet bij de eerste keer).
     if (s03 && ui.lastHp !== null && health.max > 0 && health.cur !== ui.lastHp) {
       const delta = Math.round(health.cur - ui.lastHp);
@@ -741,7 +772,8 @@ export function createGkHud(api) {
     if (quest) {
       const progress = objective && num(objective.requiredValue) > 1 ? fmt(objective.currentValue) + "/" + fmt(objective.requiredValue) : "";
       questLine.classList.toggle("gkDone", step?.complete === true);
-      questLine.replaceChildren(ico(step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: questText }), progress ? h("em", { text: progress }) : "");
+      questLine.replaceChildren(ico(step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: questText }), progress ? h("em", { text: progress }) : "",
+        clockBadge(step?.timer, "gkQuestClock") || "");
       questLine.title = quest.displayName;
     }
   }
@@ -2166,8 +2198,11 @@ export function createGkHud(api) {
     const active = quests.active || [];
     const completed = quests.completed || [];
     // Behaald = al eens ingeleverd en kan (nu of later) nog een keer: grijs met ↻. Kan niet meer = Archief.
-    const again = (quests.again || []).concat(completed.filter(function (quest) { return quest.repeatMode === "daily" || quest.repeatMode === "weekly"; }));
-    const archive = completed.filter(function (quest) { return quest.repeatMode !== "daily" && quest.repeatMode !== "weekly"; });
+    const later = function (quest) { return quest.repeatMode === "daily" || quest.repeatMode === "weekly" || quest.repeatMode === "cooldown"; };
+    const again = (quests.again || []).concat(completed.filter(later));
+    const archive = completed.filter(function (quest) { return !later(quest); });
+    // Stap 6: te laat = mislukt, met ↻ Opnieuw.
+    const failed = quests.failed || [];
     // Stap 2: een groepslid deelt een quest met je.
     const shares = d.s04?.questShares || [];
     if (shares.length) list.append(sectionGroup("quests-shared", "Gedeeld met jou", shares.map(function (offer) {
@@ -2178,9 +2213,12 @@ export function createGkHud(api) {
           h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-share-accept", "data-id": offer.questId, disabled: busy ? true : null }, [ico("check-mark", "plain"), "Aannemen"]),
           h("button", { type: "button", class: "gkBtn", "data-act": "quest-share-decline", "data-id": offer.questId, disabled: busy ? true : null }, [ico("cancel", "plain"), "Nee"])])]);
     })));
-    if (!shares.length && !active.length && !again.length && !archive.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests aangenomen. Zoek een questgever op de kaart."));
+    if (!shares.length && !active.length && !again.length && !archive.length && !failed.length) list.append(emptyNote("scroll-unfurled", "Nog geen quests aangenomen. Zoek een questgever op de kaart."));
     if (active.length) list.append(sectionGroup("quests-active", "Bezig", active.map(function (quest) {
       return questCard(quest, quest.questId === trackedId, targets.find(function (t) { return t.questId === quest.questId; }));
+    })));
+    if (failed.length) list.append(sectionGroup("quests-failed", "Mislukt", failed.map(function (quest) {
+      return questCard(quest, false, null);
     })));
     if (again.length) list.append(sectionGroup("quests-again", "Behaald", again.map(function (quest) {
       return questCard(quest, false, null);
@@ -2194,14 +2232,18 @@ export function createGkHud(api) {
   }
   function questCard(quest, tracked, target) {
     const step = quest.activeStep || null;
-    const later = quest.repeatMode === "weekly" ? "↻ Volgende week weer" : quest.repeatMode === "daily" ? "↻ Morgen weer" : "Behaald";
-    const status = quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
+    const later = repeatText(quest);
+    const status = quest.status === "failed" ? "❌ Mislukt" : quest.status === "completed" ? later : quest.doneBefore ? "↻ Kan nog een keer" : quest.status === "available" ? "Te halen" : step?.complete ? "Klaar! Ga terug" : tracked ? "Volg je" : "";
     const grey = quest.doneBefore ? (quest.status === "completed" && later === "Behaald" ? " gkGrey gkArchive" : " gkGrey") : "";
     const card = h("div", { class: "gkCard" + (tracked ? " gkOn" : "") + grey, "data-quest": quest.questId }, [
       h("h3", null, [ico(quest.status === "completed" || step?.complete ? "check-mark" : "scroll-unfurled"), h("span", { text: quest.displayName }), status ? h("small", { text: status }) : null])
     ]);
     const text = step?.instruction || quest.summary || quest.description || "";
     if (text) card.append(h("p", { text }));
+    // Stap 6: de klok van deze stap, en wat er gebeurt als je te laat bent.
+    const clock = clockBadge(step?.timer, "gkCardClock");
+    if (clock) card.append(h("div", { class: "gkQuestTimer" }, [clock, h("small", { text: step.timer.late === "restart" ? "te laat = stap opnieuw" : step.timer.late === "step" ? "te laat = andere stap" : "te laat = mislukt" })]));
+    if (quest.status === "failed") card.append(h("p", { class: "gkFailed", text: "Je was te laat. Probeer het opnieuw." }));
     // Quest Builder stap 1: elk doel van de stap met een vinkje en (bij tellen) "0 / 2". Bonus/mag staat erbij.
     for (const objective of step?.objectives || []) {
       const required = Math.max(1, num(objective.requiredValue, 1));
@@ -2223,6 +2265,7 @@ export function createGkHud(api) {
     const busy = data().busy?.n04;
     if (tracked && target) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-go", "data-id": target.instanceId, "data-quest": quest.questId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "Ga erheen"]));
     if (!tracked && (quest.status === "active" || quest.status === "ready_to_turn_in")) buttons.push(h("button", { type: "button", class: "gkBtn", "data-act": "quest-track", "data-id": quest.questId, disabled: busy ? true : null }, [ico("compass", "plain"), "Volgen"]));
+    if (quest.status === "failed") buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-retry", "data-id": quest.questId, disabled: busy ? true : null }, [ico("check-mark", "plain"), "↻ Opnieuw"]));
     if (quest.doneBefore && quest.status === "available" && quest.giverTargetId) buttons.push(h("button", { type: "button", class: "gkBtn gkGo", "data-act": "quest-again", "data-id": quest.giverTargetId, disabled: busy ? true : null }, [ico("position-marker", "plain"), "↻ Ga"]));
     // Stap 2: deel je quest met je groep (alleen als je in een groep zit).
     const inParty = (data().party?.members || []).length > 1;
@@ -3031,6 +3074,10 @@ export function createGkHud(api) {
   }
   loadMinimapTiles();
   window.setInterval(loadMinimapTiles, 30000);
+  // Stap 6: de aftelklokken lopen elke seconde (alleen de tekst, de rest van de HUD blijft staan).
+  window.setInterval(function () {
+    for (const badge of root.querySelectorAll("[data-deadline]")) badge.textContent = "⏱️ " + clockText(Number(badge.dataset.deadline) - Date.now());
+  }, 1000);
 
   // Fog of war: wat je al ontdekt hebt komt van de server; nieuwe plekken komen via het netwerk (fogDiscovered).
   let fogConfig = null;
@@ -3231,6 +3278,7 @@ export function createGkHud(api) {
       case "section": store.sectionFold[id] = !store.sectionFold[id]; save(); renderSheet(); break;
       case "quest-go": api.run04("node04:move_marker", id, { questId: el.dataset.quest || null }); break;
       case "quest-again": api.run04("node04:start_dialogue", id); break;
+      case "quest-retry": api.run04("node04:accept_quest", null, { questId: id }); break;
       case "quest-share": api.run04("node04:share", null, { questId: id }); break;
       case "quest-share-accept": api.run04("node04:accept_share", null, { questId: id }); break;
       case "quest-share-decline": api.run04("node04:decline_share", null, { questId: id }); break;

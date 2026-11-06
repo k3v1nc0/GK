@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261106-quest17";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261106-quest19";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261030-terrein6";

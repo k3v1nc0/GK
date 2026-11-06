@@ -154,23 +154,41 @@ function sortedQuestSteps(quest) {
 
 function questRepeatMode(quest) {
   const mode = safeString(quest?.repeatMode || "once_per_character");
-  return ["repeatable", "daily", "weekly"].includes(mode) ? mode : "once_per_character";
+  return ["repeatable", "daily", "weekly", "cooldown"].includes(mode) ? mode : "once_per_character";
 }
 
-function questCanRepeatNow(row, quest) {
+// Stap 6: het eerstvolgende resetmoment na fromMs (servertijd): elke dag, of elke maandag, om repeatHour uur.
+function nextResetMs(fromMs, mode, hour) {
+  const at = new Date(fromMs);
+  at.setHours(clamp(safeInteger(hour, 6), 0, 23), 0, 0, 0);
+  if (mode === "weekly") at.setDate(at.getDate() - ((at.getDay() + 6) % 7));
+  while (at.getTime() <= fromMs) at.setDate(at.getDate() + (mode === "weekly" ? 7 : 1));
+  return at.getTime();
+}
+
+// Wanneer mag deze speler de quest weer doen (ms)? null = nooit, 0 = nu al.
+function questRepeatAtMs(row, quest) {
   const mode = questRepeatMode(quest);
-  if (mode === "repeatable") return true;
-  if (mode === "once_per_character") return false;
+  if (mode === "repeatable") return 0;
+  if (mode === "once_per_character") return null;
   const completedAtMs = Date.parse(row?.completed_at || row?.completedAt || "");
-  if (!Number.isFinite(completedAtMs)) return true;
-  const delayMs = mode === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
-  return Date.now() - completedAtMs >= delayMs;
+  if (!Number.isFinite(completedAtMs)) return 0;
+  if (mode === "cooldown") return completedAtMs + Math.max(1, safeInteger(quest.repeatMinutes, 60)) * 60000;
+  return nextResetMs(completedAtMs, mode, quest.repeatHour === undefined ? 6 : quest.repeatHour);
 }
 
-function questRepeatBlockedMessage(quest) {
-  const mode = questRepeatMode(quest);
-  if (mode === "daily") return "Quest is vandaag al voltooid.";
-  if (mode === "weekly") return "Quest is deze week al voltooid.";
+function questCanRepeatNow(row, quest, nowMs = Date.now()) {
+  const at = questRepeatAtMs(row, quest);
+  return at !== null && nowMs >= at;
+}
+
+function questRepeatBlockedMessage(quest, row = null) {
+  const at = row ? questRepeatAtMs(row, quest) : null;
+  if (at) {
+    const when = new Date(at);
+    const time = String(when.getHours()).padStart(2, "0") + ":" + String(when.getMinutes()).padStart(2, "0");
+    return "Je kunt deze quest weer doen vanaf " + (when.toDateString() === new Date().toDateString() ? "" : when.toLocaleDateString("nl-NL", { weekday: "long" }) + " ") + time + ".";
+  }
   return "Quest is al voltooid.";
 }
 
@@ -189,6 +207,8 @@ const EVENT_OBJECTIVES = new Set(["defeat", "gather", "pickup"]);
 const SHARE_OFFER_MS = 2 * 60 * 1000;
 // Praat- en inleverkeuzes zet de quest-motor zelf in het NPC-gesprek: "quest.obj|<quest>|<stap>|<doel>".
 const QUEST_CHOICE_PREFIX = "quest.obj|";
+// Stap 6: de klokken van de quests worden elke seconde bekeken (ook als de speler niets doet of offline is).
+const TIMER_TICK_MS = 1000;
 const MAX_STEP_HOPS = 16;
 const normalizedQuests = new WeakMap();
 
@@ -307,6 +327,16 @@ export class Node04QuestRuntimeService {
     if (actors) {
       actors.questKeeper = (group) => this.questSpawnNeeds(group);
       actors.questReleased = (group) => this.releaseSpawnRules(group);
+    }
+    // Stap 6: klok (tests zetten een nep-klok) en welke spelers een lopende questklok hebben (playerId|questId).
+    this.clock = () => Date.now();
+    this.timers = new Set();
+    this.timersLoaded = false;
+    if (typeof mmoService?.getConnectionForPlayer === "function") {
+      this.timerTick = setInterval(() => {
+        try { this.tickTimers(); } catch (error) { console.warn("[quest] klok:", error?.message || error); }
+      }, TIMER_TICK_MS);
+      this.timerTick.unref?.();
     }
   }
 
@@ -505,7 +535,8 @@ export class Node04QuestRuntimeService {
       const wasInside = this.startAreaInside.get(key) === true;
       this.startAreaInside.set(key, inside);
       if (!inside || wasInside) continue;
-      if (!waiting && !(row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest))) continue;
+      // Stap 6: mislukt? Opnieuw het gebied in = opnieuw beginnen.
+      if (!waiting && row.status !== QUEST_STATUS.FAILED && !(row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest, this.clock()))) continue;
       if (!this.questPrerequisitesMet(ctx, quest)) { this.noticePlayer(ctx.profile.id, this.prerequisiteMessage(ctx, quest)); continue; }
       const issue = this.questStartIssue(ctx, quest);
       if (issue) this.noticePlayer(ctx.profile.id, issue);
@@ -540,7 +571,7 @@ export class Node04QuestRuntimeService {
       const title = "\"" + (quest.displayName || quest.id) + "\"";
       const row = this.loadQuestState(ctx.profile.id, quest.id);
       const why = row && isOpenStatus(row.status) ? "Je bent al bezig met " + title + "."
-        : row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest) ? "Je hebt " + title + " al gedaan."
+        : row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest, this.clock()) ? "Je hebt " + title + " al gedaan."
           : !this.questPrerequisitesMet(ctx, quest) ? this.prerequisiteMessage(ctx, quest)
             : this.questStartIssue(ctx, quest);
       if (why) { reason = reason || why; continue; }
@@ -562,7 +593,7 @@ export class Node04QuestRuntimeService {
       const row = this.loadQuestState(ctx.profile.id, quest.id);
       const title = "\"" + (quest.displayName || quest.id) + "\"";
       if (row && isOpenStatus(row.status)) reason = reason || "Je bent al bezig met " + title + ".";
-      else if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) reason = reason || "Je hebt " + title + " al gedaan.";
+      else if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest, this.clock())) reason = reason || "Je hebt " + title + " al gedaan.";
       else return "";
     }
     return reason;
@@ -649,7 +680,10 @@ export class Node04QuestRuntimeService {
     for (const row of this.loadQuestStateRows(ctx)) {
       if (!isOpenStatus(row.status)) continue;
       const quest = this.questDefinition(ctx, row.quest_id, row);
-      if (quest) this.advanceQuest(ctx, quest, row, null);
+      if (!quest) continue;
+      // Stap 6: de speler vraagt iets = hij is online (een gepauzeerde klok loopt weer); te laat = eerst dat.
+      if (stateOf(row).timer && this.atomic(() => this.checkTimer(ctx, quest, row, true))) continue;
+      this.advanceQuest(ctx, quest, row, null);
     }
   }
 
@@ -741,9 +775,13 @@ export class Node04QuestRuntimeService {
         }
         // Team samen gehaald: voor alle teamleden tegelijk klaar (ieder zijn eigen bonnetje), daarna gaan zij ook door.
         for (const objective of teamDone) this.finishTeamObjective(ctx, quest, step, objective, operationId);
+        // Stap 6: de klok van deze stap (als hij start zodra de stap begint).
+        if (step.timer) this.startStepTimer(ctx, quest, step, "step");
         // Stap 5: Als → Dan (de stap begint, een doel staat op een aantal, de stap is klaar).
         this.fireStepRules(ctx, quest, current, step, progress, operationId);
         if (!progress.complete) break;
+        // Stap 6: gehaald, de klok van deze stap is klaar.
+        if (step.timer) this.writeTimer(ctx.profile.id, quest.id, null);
         const next = firstNextStep(quest, step);
         if (!next) return this.completeQuestRun(ctx, quest, current, null, operationId, events);
         // Een stap die je (opnieuw) binnenkomt begint leeg (ook zijn regels gaan weer 1×).
@@ -785,6 +823,8 @@ export class Node04QuestRuntimeService {
   }
 
   runRule(ctx, quest, step, rule) {
+    if (rule.then === "timer_start") { this.startStepTimer(ctx, quest, step, "rule"); return; }
+    if (rule.then === "timer_stop") { this.stopStepTimer(ctx, quest, step); return; }
     if (rule.then === "message") {
       const text = safeString(rule.text).trim();
       if (text) this.questMessage([ctx.profile.id], quest, text);
@@ -847,6 +887,146 @@ export class Node04QuestRuntimeService {
       this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE ?")
         .run(playerId, group.questId, "rule:%:" + group.stepId + ":" + group.ruleId);
     }
+  }
+
+  // ---- Stap 6: de klok van een stap ------------------------------------------------------------------------------
+  // In state_json.timer: { stepId, endsAt, pause?, pausedAt?, stopped? }. De server beslist; de game toont alleen de aftelklok.
+  writeTimer(playerId, questId, timer) {
+    const row = this.loadQuestState(playerId, questId);
+    if (!row) return;
+    const state = stateOf(row);
+    if (!timer && !state.timer) return;
+    if (timer) state.timer = timer; else delete state.timer;
+    this.db.prepare("UPDATE player_quest_states SET state_json = ?, revision = revision + 1, updated_at = ? WHERE player_id = ? AND quest_id = ?")
+      .run(stableJson(state), now(), playerId, questId);
+    const key = playerId + "|" + questId;
+    if (timer && timer.endsAt && !timer.stopped) this.timers.add(key); else this.timers.delete(key);
+  }
+
+  // how: "step" = de stap begint (alleen als de klok dan start), "rule" = een regel start hem.
+  // Eén klok voor de groep: wie op dezelfde stap staat krijgt dezelfde eindtijd (ook wie later in de stap komt).
+  startStepTimer(ctx, quest, step, how) {
+    const spec = step?.timer;
+    if (!spec || !(safeInteger(spec.seconds, 0) > 0)) return;
+    if (how === "step" && spec.start === "rule") return;
+    const row = this.loadQuestState(ctx.profile.id, quest.id);
+    if (!row || !isOpenStatus(row.status) || row.active_step_id !== step.id) return;
+    if (stateOf(row).timer?.stepId === step.id) return;
+    let endsAt = this.clock() + safeInteger(spec.seconds, 0) * 1000;
+    let ids = [ctx.profile.id];
+    if (spec.share === "group") {
+      ids = this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id).ids;
+      for (const id of ids) {
+        const other = stateOf(this.loadQuestState(id, quest.id)).timer;
+        if (other?.stepId === step.id && other.endsAt && !other.stopped) { endsAt = other.endsAt; break; }
+      }
+    }
+    // Alleen een eigen klok kan stilstaan bij uitloggen; de groepsklok loopt altijd door.
+    const pause = spec.logout === "pause" && spec.share !== "group";
+    for (const id of ids) {
+      if (id !== ctx.profile.id && stateOf(this.loadQuestState(id, quest.id)).timer?.stepId === step.id) continue;
+      this.writeTimer(id, quest.id, pause ? { stepId: step.id, endsAt, pause: true } : { stepId: step.id, endsAt });
+    }
+    const mates = ids.filter((id) => id !== ctx.profile.id);
+    if (mates.length) this.pingQuest(mates);
+  }
+
+  stopStepTimer(ctx, quest, step) {
+    const ids = step?.timer?.share === "group" ? this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id).ids : [ctx.profile.id];
+    for (const id of ids) {
+      const timer = stateOf(this.loadQuestState(id, quest.id)).timer;
+      if (timer?.stepId === step.id && !timer.stopped) this.writeTimer(id, quest.id, { stepId: step.id, stopped: true });
+    }
+    const mates = ids.filter((id) => id !== ctx.profile.id);
+    if (mates.length) this.pingQuest(mates);
+  }
+
+  // Pauze bij uitloggen (eigen klok), verder lopen als hij terug is, en te laat. true = er is iets met de quest gebeurd.
+  checkTimer(ctx, quest, row, online) {
+    const timer = stateOf(row).timer;
+    if (!timer || !timer.endsAt || timer.stopped) return false;
+    const step = stepById(quest, row.active_step_id);
+    if (!step?.timer || step.id !== timer.stepId || !isOpenStatus(row.status)) { this.writeTimer(ctx.profile.id, quest.id, null); return false; }
+    const nowMs = this.clock();
+    if (timer.pause && !online) {
+      if (!timer.pausedAt) this.writeTimer(ctx.profile.id, quest.id, Object.assign({}, timer, { pausedAt: nowMs }));
+      return false;
+    }
+    if (timer.pausedAt) {
+      this.writeTimer(ctx.profile.id, quest.id, { stepId: timer.stepId, endsAt: timer.endsAt + Math.max(0, nowMs - timer.pausedAt), pause: true });
+      return false;
+    }
+    if (nowMs < timer.endsAt) return false;
+    this.timeUp(ctx, quest, row, step);
+    return true;
+  }
+
+  timeUp(ctx, quest, row, step) {
+    const operationId = randomId("quest_timer");
+    const playerId = ctx.profile.id;
+    this.writeTimer(playerId, quest.id, null);
+    const late = step.timer.late;
+    const to = late === "step" ? stepById(quest, step.timer.lateTo) : null;
+    let text;
+    if (late === "restart" || to) {
+      // Opnieuw (of naar de andere stap): die stap begint leeg, zijn regels gaan weer 1×, de klok begint opnieuw.
+      const target = to || step;
+      this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ? AND step_id = ?").run(playerId, quest.id, target.id);
+      this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND event_id LIKE ?").run(playerId, quest.id, "rule:%:" + target.id + ":%");
+      this.updateQuestState(ctx, quest.id, QUEST_STATUS.ACTIVE, target.id, row.status, step.id, to ? "timer_late_step" : "timer_restart", { operationId });
+      this.advanceQuest(ctx, quest, this.loadQuestState(playerId, quest.id), operationId);
+      text = to ? "⏱️ Te laat!" : "⏱️ Te laat! De stap begint opnieuw.";
+    } else {
+      this.failQuest(ctx, quest, row, operationId, "timer_late");
+      text = "⏱️ Te laat! De quest is mislukt. Probeer het opnieuw in je questboek (↻ Opnieuw).";
+    }
+    this.questMessage([playerId], quest, text);
+    this.pingQuest([playerId]);
+  }
+
+  // Mislukt: voortgang weg (de verschijningen gaan vanzelf weg), questitems weg; ↻ Opnieuw in het questboek = nieuwe run.
+  failQuest(ctx, quest, row, operationId, reason) {
+    this.db.prepare("DELETE FROM player_objective_progress WHERE player_id = ? AND quest_id = ?").run(ctx.profile.id, quest.id);
+    this.db.prepare("DELETE FROM player_quest_event_receipts WHERE player_id = ? AND quest_id = ? AND (event_id LIKE 'ev:%' OR event_id LIKE 'rule:%')").run(ctx.profile.id, quest.id);
+    this.updateQuestState(ctx, quest.id, QUEST_STATUS.FAILED, row.active_step_id, row.status, row.active_step_id, reason, { operationId });
+    this.removeQuestItems(ctx, quest, true, operationId);
+  }
+
+  // Elke seconde: lopende klokken (ook van spelers die niets doen of offline zijn).
+  tickTimers() {
+    if (!this.timersLoaded) {
+      this.timersLoaded = true;
+      for (const row of this.db.prepare("SELECT player_id, quest_id FROM player_quest_states WHERE status IN ('active', 'ready_to_turn_in') AND state_json LIKE '%\"timer\"%'").all()) {
+        this.timers.add(row.player_id + "|" + row.quest_id);
+      }
+    }
+    for (const key of Array.from(this.timers)) {
+      const [playerId, questId] = key.split("|");
+      const row = this.loadQuestState(playerId, questId);
+      const timer = stateOf(row).timer;
+      if (!row || !isOpenStatus(row.status) || !timer?.endsAt || timer.stopped) { this.timers.delete(key); continue; }
+      const online = Boolean(this.mmoService?.getConnectionForPlayer?.(playerId));
+      // Niets te doen? Dan ook geen context bouwen.
+      const due = !timer.pausedAt && this.clock() >= timer.endsAt;
+      if (!due && !(timer.pause && online === Boolean(timer.pausedAt))) continue;
+      try {
+        const ctx = this.node03RuntimeService.adminContextForPlayer(playerId);
+        ctx.campaigns = campaignPackage(ctx.project);
+        const quest = this.questDefinition(ctx, questId, row);
+        if (quest) this.atomic(() => this.checkTimer(ctx, quest, row, online));
+      } catch (error) {
+        console.warn("[quest] klok van " + playerId + " niet verwerkt:", error?.message || error);
+      }
+    }
+  }
+
+  timerView(row, step) {
+    const timer = stateOf(row).timer;
+    if (!step?.timer || !timer || timer.stepId !== step.id) return null;
+    if (timer.stopped) return { stopped: true };
+    const left = timer.pausedAt ? timer.endsAt - timer.pausedAt : timer.endsAt - this.clock();
+    return { leftMs: Math.max(0, left), totalMs: safeInteger(step.timer.seconds, 0) * 1000, paused: Boolean(timer.pausedAt), share: step.timer.share || "personal",
+      late: step.timer.late || "fail" };
   }
 
   completeQuestRun(ctx, quest, row, endStep, operationId, events = []) {
@@ -1090,7 +1270,7 @@ export class Node04QuestRuntimeService {
   canTakeQuest(ctx, quest) {
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     if (row && isOpenStatus(row.status)) return false;
-    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) return false;
+    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest, this.clock())) return false;
     return this.questPrerequisitesMet(ctx, normalizeQuest(quest)) && !this.questStartIssue(ctx, quest);
   }
 
@@ -1142,8 +1322,8 @@ export class Node04QuestRuntimeService {
     if (!this.questPrerequisitesMet(ctx, quest)) throw httpError(400, this.prerequisiteMessage(ctx, quest));
     const row = this.loadQuestState(ctx.profile.id, quest.id);
     if (row && isOpenStatus(row.status)) return { message: "Quest is al actief.", events: [] };
-    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest)) {
-      return { message: questRepeatBlockedMessage(quest), events: [] };
+    if (row?.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest, this.clock())) {
+      return { message: questRepeatBlockedMessage(quest, row), events: [] };
     }
     // Stap 4: voorwaarden (level, item, quest af, klasse). De game zegt waarom niet.
     const startIssue = this.questStartIssue(ctx, quest);
@@ -1604,7 +1784,7 @@ export class Node04QuestRuntimeService {
       const quest = questById(ctx.project, condition.questRef);
       const row = quest ? this.loadQuestState(ctx.profile.id, quest.id) : null;
       const met = Boolean(quest && row && condition.conditionType === "quest_available"
-        && (row.status === QUEST_STATUS.AVAILABLE || row.status === QUEST_STATUS.ABANDONED || (row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest))));
+        && (row.status === QUEST_STATUS.AVAILABLE || row.status === QUEST_STATUS.ABANDONED || row.status === QUEST_STATUS.FAILED || (row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest, this.clock()))));
       return { conditionType: condition.conditionType, questRef: condition.questRef || null, met, message: "" };
     }
     if (condition.conditionType === "has_item") {
@@ -1750,6 +1930,7 @@ export class Node04QuestRuntimeService {
     const available = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && !quest.abandoned && !quest.doneBefore; });
     const again = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.AVAILABLE && quest.doneBefore; });
     const completed = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.COMPLETED; });
+    const failed = questSummaries.filter(function (quest) { return quest.status === QUEST_STATUS.FAILED; });
     const trackedQuest = active.find(function (quest) { return quest.tracked; }) || active[0] || available[0] || null;
     const questTargets = this.buildRuntimeQuestTargets(ctx, trackedQuest, available);
     const node03 = this.node03RuntimeService.buildSnapshot(ctx);
@@ -1765,7 +1946,8 @@ export class Node04QuestRuntimeService {
         active,
         available,
         again,
-        completed
+        completed,
+        failed
       },
       trackedQuest,
       questTargets,
@@ -1816,7 +1998,7 @@ export class Node04QuestRuntimeService {
     for (const quest of allQuests(ctx.project)) {
       if (quest?.startMode !== "area") continue;
       const row = byQuest.get(quest.id);
-      if (!row || isOpenStatus(row.status) || (row.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest))) continue;
+      if (!row || isOpenStatus(row.status) || (row.status === QUEST_STATUS.COMPLETED && !questCanRepeatNow(row, quest, this.clock()))) continue;
       const area = questAreaById(ctx.project, quest.startAreaRef);
       if (area && Array.isArray(area.points) && area.points.length >= 3) list.push({ questId: quest.id, areaId: area.id, points: area.points });
     }
@@ -1833,7 +2015,9 @@ export class Node04QuestRuntimeService {
 
   buildQuestSummary(ctx, quest, row) {
     if (!quest?.id || !row) return null;
-    const canRepeat = row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest);
+    const canRepeat = row.status === QUEST_STATUS.COMPLETED && questCanRepeatNow(row, quest, this.clock());
+    // Stap 6: wanneer hij weer kan (elke dag/week, of na de wachttijd).
+    const repeatAt = row.status === QUEST_STATUS.COMPLETED && !canRepeat ? questRepeatAtMs(row, quest) : null;
     const status = canRepeat || row.status === QUEST_STATUS.ABANDONED ? QUEST_STATUS.AVAILABLE : row.status;
     const isActive = isOpenStatus(status);
     // Een lopende quest toont de versie waarop deze speler hem speelt.
@@ -1862,6 +2046,9 @@ export class Node04QuestRuntimeService {
       doneBefore: row.status === QUEST_STATUS.COMPLETED,
       repeatMode: questRepeatMode(quest),
       canRepeat,
+      repeatAt: repeatAt ? new Date(repeatAt).toISOString() : null,
+      // Stap 6: mislukt (te laat): ↻ Opnieuw in het questboek.
+      failed: row.status === QUEST_STATUS.FAILED,
       // Stap 4: een quest die vanzelf start kun je niet verlaten (geen knop Verlaten).
       canAbandon: !(quest.abandonable === false || quest.startMode === "auto"),
       // 5-11: het startvenster in de game (brief, gebied, vanzelf): hoe hij start, plaatje en welke quest je net af hebt.
@@ -1880,6 +2067,8 @@ export class Node04QuestRuntimeService {
         watchAreas: this.watchAreas(ctx, objectives),
         // Kevin 5-11: ⭐ op de kaart (ook door de mist) waar de vijand die je moet verslaan nu loopt.
         marks: this.liveMarks(ctx, step, objectives, quest.id),
+        // Stap 6: de aftelklok van deze stap (null = geen klok, of nog niet gestart).
+        timer: this.timerView(row, step),
         instruction: this.resolveTokenText(ctx, step.instruction || ""),
         stepType: openNeeded[0]?.objectiveType || objectives[0]?.objectiveType || "custom",
         match: step.match === "any" ? "any" : "all",
@@ -2331,10 +2520,28 @@ export class Node04QuestRuntimeService {
     const result = this.atomic(() => {
       if (action === "reset") return this.adminResetQuest(ctx, questId, operationId);
       if (action === "step") return this.devSetStep(ctx, questId, safeString(payload.stepId, ""), operationId);
+      if (action === "timer") return this.adminTimerAlmostUp(ctx, questId);
       throw httpError(400, "Onbekende actie.");
     });
     this.pingQuest([ctx.profile.id]);
     return result;
+  }
+
+  // Stap 6 (Testen): de lopende klok staat nog 5 seconden (bij een groepsklok voor de hele groep op die stap).
+  adminTimerAlmostUp(ctx, questId) {
+    const row = this.loadQuestState(ctx.profile.id, questId);
+    const quest = row ? this.questDefinition(ctx, questId, row) : null;
+    const step = quest ? stepById(quest, row.active_step_id) : null;
+    const timer = stateOf(row).timer;
+    if (!row || !isOpenStatus(row.status) || !step?.timer || timer?.stepId !== step.id || !timer.endsAt || timer.stopped) throw httpError(400, "Er loopt nu geen klok bij deze speler.");
+    const endsAt = this.clock() + 5000;
+    const ids = step.timer.share === "group" ? this.teamMembers(ctx.profile.id, quest.id, quest.version, step.id).ids : [ctx.profile.id];
+    for (const id of ids) {
+      const other = stateOf(this.loadQuestState(id, quest.id)).timer;
+      if (other?.stepId === step.id && other.endsAt && !other.stopped) this.writeTimer(id, quest.id, Object.assign({}, other, { endsAt, pausedAt: undefined }));
+    }
+    this.pingQuest(ids);
+    return { message: "⏱️ De klok staat nog 5 seconden." };
   }
 
   adminResetQuest(ctx, questId, operationId) {

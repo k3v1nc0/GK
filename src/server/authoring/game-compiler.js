@@ -6,7 +6,7 @@ import { networkValues } from "../../shared/authoring/kinds/network.js";
 import { waterWalkValues } from "../../shared/authoring/kinds/water-walk.js";
 import { partyValues } from "../../shared/authoring/kinds/party.js";
 import { chatValues } from "../../shared/authoring/kinds/chat.js";
-import { hasOwnSteps, questGraphIssues, questStartIssues, questStartMode, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
+import { hasOwnSteps, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, questSteps } from "../../../apps/web/public/shared/quest-graph.js";
 import { areaPointsMeters, areaSoort } from "../../shared/authoring/kinds/area.js";
 
 export const GAME_SECTION_VERSION = "gk-game-1";
@@ -172,6 +172,9 @@ export function compileGameSection(documents, options = {}) {
     rewards: grants(doc.body.rewards), rewardXp: Number.isInteger(doc.body.rewardXp) ? doc.body.rewardXp : 0,
     previousQuestId: doc.body.previousQuestRef ? idFromRef(doc.body.previousQuestRef) : null,
     repeatable: doc.body.repeatable === true,
+    // Stap 6: hoe vaak (oud: Herhaalbaar aan = altijd).
+    repeat: questRepeatOf(doc.body), repeatHour: Number.isInteger(doc.body.repeatHour) ? doc.body.repeatHour : 6,
+    repeatMinutes: Number.isInteger(doc.body.repeatMinutes) ? doc.body.repeatMinutes : 60,
     partyLeave: doc.body.partyLeave === "wait" || doc.body.partyLeave === "fail" ? doc.body.partyLeave : "keep",
     // Quest Builder stap 1: de stappen (of de snelle quest omgezet naar 1 stap + einde), met ID's in plaats van verwijzingen.
     steps: questSteps(doc.body).map((step) => ({
@@ -194,7 +197,13 @@ export function compileGameSection(documents, options = {}) {
       ...(Array.isArray(step.rules) && step.rules.length ? { rules: step.rules.map((rule) => ({
         ruleId: rule.ruleId, when: rule.when, objectiveId: rule.objectiveId || null, amount: Number.isInteger(rule.amount) ? rule.amount : 1,
         then: rule.then, spawnId: rule.spawnId || null, text: rule.text || ""
-      })) } : {})
+      })) } : {}),
+      // Stap 6: de klok (alleen als er een tijd staat).
+      ...(step.kind === "step" && step.timer && Number.isInteger(step.timer.seconds) ? { timer: {
+        seconds: step.timer.seconds, start: step.timer.start === "rule" ? "rule" : "step", share: step.timer.share === "group" ? "group" : "personal",
+        late: ["restart", "step"].includes(step.timer.late) ? step.timer.late : "fail", lateTo: step.timer.late === "step" ? step.timer.lateTo || null : null,
+        logout: step.timer.logout === "pause" ? "pause" : "run"
+      } } : {})
     })),
     // Stap 5: wat de quest laat verschijnen.
     ...(Array.isArray(doc.body.spawns) && doc.body.spawns.length ? { spawns: doc.body.spawns.map((spawn) => ({

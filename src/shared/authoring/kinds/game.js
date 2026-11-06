@@ -194,8 +194,19 @@ export const GAME_KINDS = {
         optionLabels: { keep: "Meenemen: alleen verder", wait: "Wachten tot je weer in een groep zit", fail: "Quest mislukt" }, audience: "client", label: "Bij groep verlaten",
         ui: ui("🚪", "select", "questbuilder"), default: "keep",
         help: help("Wat er met Team samen-doelen gebeurt als iemand de groep verlaat. Je eigen bijdrage blijft altijd; er worden nooit vijanden of NPC's gekopieerd.", "Meenemen voor zijquests, Wachten voor groepsquests en bosses.", "Spelers verlaten de groep om sneller klaar te zijn → kies Wachten.") },
-      repeatable: toggle("Herhaalbaar", "🔁", false, "werkbank",
-        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit."))
+      // Oud (voor stap 6): aan = zo vaak als hij wil. Staat niet meer in het paneel; 🔁 Herhalen in de Quest Builder vervangt het.
+      repeatable: toggle("Herhaalbaar", "🔁", false, "questbuilder",
+        help("Mag de speler deze quest vaker doen?", "Uit voor verhaal-quests, aan voor klusjes (bijv. hout brengen).", "Spelers farmen beloningen → zet dit uit.")),
+      // Quest Builder stap 6: hoe vaak (1 keer, altijd, elke dag of week op een vast uur, of na een wachttijd). Tab 🚪 Start.
+      repeat: { type: "select", required: false, options: ["once", "always", "daily", "weekly", "cooldown"],
+        optionIcons: { once: "1️⃣", always: "🔁", daily: "📅", weekly: "🗓️", cooldown: "⏳" },
+        optionLabels: { once: "1 keer", always: "Zo vaak als hij wil", daily: "Elke dag opnieuw", weekly: "Elke week opnieuw (maandag)", cooldown: "Opnieuw na een wachttijd" },
+        audience: "client", label: "Herhalen", ui: ui("🔁", "select", "questbuilder"), default: null,
+        help: help("Hoe vaak een speler deze quest mag doen.", "1 keer voor het verhaal; elke dag voor klusjes; een wachttijd voor een boss.", "Spelers farmen beloningen → kies 1 keer of een langere wachttijd.") },
+      repeatHour: int("Vanaf hoe laat (uur)", "🕕", 6, 0, 23, "questbuilder", { range: [0, 23] },
+        help("Hoe laat de quest elke dag (of maandag) weer te doen is. Tijd van de server.", "6 = vanaf 06:00 's ochtends.", "Spelers klagen dat het te laat is → kies een vroeger uur.")),
+      repeatMinutes: int("Wachttijd (minuten)", "⏳", 60, 1, 43200, "questbuilder", { range: [1, 1440] },
+        help("Hoeveel minuten een speler moet wachten voor hij de quest weer mag doen.", "30-120 minuten voor een boss of een klusje.", "Spelers farmen hem → langer wachten.")),
     }
   },
   recipe: {

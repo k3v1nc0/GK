@@ -439,6 +439,8 @@ function questObjective(objective, names, spawns = new Map()) {
   return record;
 }
 
+const REPEAT_MODES = { once: "once_per_character", always: "repeatable", daily: "daily", weekly: "weekly", cooldown: "cooldown" };
+
 function questRecord(quest, names) {
   const spawns = new Map((Array.isArray(quest.spawns) ? quest.spawns : []).filter((spawn) => spawn.actorId).map((spawn) => [spawn.spawnId, spawn]));
   const steps = quest.steps.map((step) => {
@@ -453,6 +455,8 @@ function questRecord(quest, names) {
       record.rules = step.rules.map((rule) => ({ id: rule.ruleId, when: rule.when, objectiveRef: rule.objectiveId || null, amount: Math.max(1, rule.amount || 1),
         then: rule.then, spawnRef: rule.spawnId || null, text: rule.text || "" }));
     }
+    // Stap 6: de klok (alleen als er een is).
+    if (step.kind === "step" && step.timer) record.timer = Object.assign({}, step.timer);
     return record;
   });
   const first = steps[0] || null;
@@ -468,8 +472,11 @@ function questRecord(quest, names) {
     steps, stepsById: Object.fromEntries(steps.map((step) => [step.id, step])), startStepRef: first?.id || null, rewards, conditions: [],
     startDialogueRef: quest.giverNpcId ? npcDialogueId(quest.giverNpcId) : null, turnInTargetRef: giverTarget,
     prerequisiteQuestRefs: quest.previousQuestId ? [quest.previousQuestId] : [], nextQuestRefs: [],
-    autoTrack: true, repeatMode: quest.repeatable ? "repeatable" : "once_per_character"
+    autoTrack: true, repeatMode: REPEAT_MODES[quest.repeat] || (quest.repeatable ? "repeatable" : "once_per_character")
   };
+  // Stap 6: elke dag/week vanaf een vast uur, of na een wachttijd (alleen dan, zo blijft de versie van andere quests gelijk).
+  if (quest.repeat === "daily" || quest.repeat === "weekly") record.repeatHour = quest.repeatHour;
+  if (quest.repeat === "cooldown") record.repeatMinutes = quest.repeatMinutes;
   if (quest.partyLeave === "wait" || quest.partyLeave === "fail") record.partyLeave = quest.partyLeave;
   // 5-11: plaatje in het startvenster (alleen als gekozen, zo blijft de versie gelijk).
   if (quest.imageAssetId) record.imageAssetId = quest.imageAssetId;

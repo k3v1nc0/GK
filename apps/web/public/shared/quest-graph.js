@@ -91,12 +91,55 @@ export const RULE_WHEN = Object.freeze({
 });
 export const RULE_THEN = Object.freeze({
   spawn: Object.freeze({ icon: "👾", label: "laat vijanden verschijnen" }),
-  message: Object.freeze({ icon: "💬", label: "zet een bericht in beeld" })
+  message: Object.freeze({ icon: "💬", label: "zet een bericht in beeld" }),
+  // Stap 6: de klok van deze stap starten of stoppen (gehaald).
+  timer_start: Object.freeze({ icon: "⏱️", label: "start de klok" }),
+  timer_stop: Object.freeze({ icon: "⏹️", label: "stop de klok (gehaald)" })
 });
+// Stap 6: tijd per stap. Klok = binnen zoveel seconden; wat er gebeurt als je te laat bent.
+export const QUEST_TIMER_LIMITS = Object.freeze({ min: 5, max: 86400 });
+export const TIMER_START = Object.freeze({
+  step: Object.freeze({ icon: "▶️", label: "Zodra de stap begint" }),
+  rule: Object.freeze({ icon: "⚡", label: "Pas door een regel (⚡ Dan: ⏱️ start de klok)" })
+});
+export const TIMER_SHARE = Object.freeze({
+  personal: Object.freeze({ icon: "🧍", label: "Ieder een eigen klok" }),
+  group: Object.freeze({ icon: "👥", label: "Eén klok voor de groep (gelijk bij iedereen)" })
+});
+export const TIMER_LATE = Object.freeze({
+  fail: Object.freeze({ icon: "❌", label: "De quest mislukt (opnieuw beginnen kan)" }),
+  restart: Object.freeze({ icon: "↩️", label: "De stap begint opnieuw" }),
+  step: Object.freeze({ icon: "➡️", label: "Naar een andere stap" })
+});
+export const TIMER_LOGOUT = Object.freeze({
+  run: Object.freeze({ icon: "⏩", label: "De klok loopt door" }),
+  pause: Object.freeze({ icon: "⏸️", label: "De klok staat stil tot hij terug is" })
+});
+// Stap 6: hoe vaak mag een speler de quest doen (veld repeat; oud: repeatable = altijd).
+export const QUEST_REPEAT = Object.freeze({
+  once: Object.freeze({ icon: "1️⃣", label: "1 keer" }),
+  always: Object.freeze({ icon: "🔁", label: "Zo vaak als hij wil" }),
+  daily: Object.freeze({ icon: "📅", label: "Elke dag opnieuw" }),
+  weekly: Object.freeze({ icon: "🗓️", label: "Elke week opnieuw (maandag)" }),
+  cooldown: Object.freeze({ icon: "⏳", label: "Opnieuw na een wachttijd" })
+});
+export function questRepeatOf(body) {
+  if (QUEST_REPEAT[body?.repeat]) return body.repeat;
+  return body?.repeatable === true ? "always" : "once";
+}
+// "2 min", "1 u 30 min", "45 s".
+export function durationText(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  return [hours ? hours + " u" : "", minutes ? minutes + " min" : "", rest || (!hours && !minutes) ? rest + " s" : ""].filter(Boolean).join(" ");
+}
 export const STEP_MATCH = Object.freeze({ all: "Alle verplichte doelen", any: "Eén verplicht doel" });
 export const STEP_KINDS = Object.freeze({ step: "Stap", end: "Einde" });
 
-const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow", "rules"]);
+const STEP_KEYS = new Set(["stepId", "kind", "title", "text", "match", "objectives", "next", "mapRef", "mapShow", "rules", "timer"]);
+const TIMER_KEYS = new Set(["seconds", "start", "share", "late", "lateTo", "logout"]);
 const OBJECTIVE_KEYS = new Set(["objectiveId", "type", "ref", "npcRef", "amount", "role", "share", "credit", "areaRef", "mark", "spawnId"]);
 const RULE_KEYS_STEP = new Set(["ruleId", "when", "objectiveId", "amount", "then", "spawnId", "text"]);
 const SPAWN_KEYS = new Set(["spawnId", "name", "actorRef", "count", "areaRef", "audience", "despawn"]);
@@ -182,6 +225,7 @@ export function questStepsShapeIssues(value) {
       });
     }
     if (step.rules !== undefined && step.rules !== null) ruleShapeIssues(step.rules, where, issues);
+    if (step.timer !== undefined && step.timer !== null) timerShapeIssues(step.timer, where, issues);
     if (step.objectives === undefined || step.objectives === null) return;
     if (!Array.isArray(step.objectives) || step.objectives.length > QUEST_LIMITS.objectives) { issues.push(where + ": hooguit " + QUEST_LIMITS.objectives + " doelen."); return; }
     const objectiveIds = new Set();
@@ -238,6 +282,22 @@ function ruleShapeIssues(rules, where, issues) {
     if (rule.amount !== undefined && rule.amount !== null && (!Number.isInteger(rule.amount) || rule.amount < 1 || rule.amount > QUEST_LIMITS.amount)) issues.push(at + ": aantal moet tussen 1 en " + QUEST_LIMITS.amount + " liggen.");
     if (rule.text !== undefined && rule.text !== null && !isText(rule.text, QUEST_SPAWN_LIMITS.text)) issues.push(at + ": het bericht is te lang.");
   });
+}
+
+// Stap 6: vorm van de klok van één stap. Half ingevuld mag (de quest-check zegt wat er mist).
+function timerShapeIssues(timer, where, issues) {
+  const at = where + ", ⏱️ klok";
+  if (!isObject(timer)) { issues.push(at + " is ongeldig."); return; }
+  const extra = Object.keys(timer).filter((key) => !TIMER_KEYS.has(key));
+  if (extra.length) issues.push(at + ": onbekend veld " + extra.join(", ") + ".");
+  if (timer.seconds !== undefined && timer.seconds !== null && (!Number.isInteger(timer.seconds) || timer.seconds < QUEST_TIMER_LIMITS.min || timer.seconds > QUEST_TIMER_LIMITS.max)) {
+    issues.push(at + ": tijd moet tussen " + QUEST_TIMER_LIMITS.min + " seconden en 24 uur liggen.");
+  }
+  if (timer.start !== undefined && timer.start !== null && !TIMER_START[timer.start]) issues.push(at + ": ongeldige keuze bij Wanneer begint de klok.");
+  if (timer.share !== undefined && timer.share !== null && !TIMER_SHARE[timer.share]) issues.push(at + ": ongeldige keuze bij Voor wie.");
+  if (timer.late !== undefined && timer.late !== null && !TIMER_LATE[timer.late]) issues.push(at + ": ongeldige keuze bij Te laat.");
+  if (timer.logout !== undefined && timer.logout !== null && !TIMER_LOGOUT[timer.logout]) issues.push(at + ": ongeldige keuze bij Uitloggen.");
+  if (timer.lateTo !== undefined && timer.lateTo !== null && !isId(timer.lateTo)) issues.push(at + ": ongeldige stap bij Te laat.");
 }
 
 // Stap 5: vorm-controle van het veld spawns (bij opslaan). Half ingevuld mag; de quest-check zegt wat er nog mist.
@@ -339,6 +399,20 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
         else if (rule.when === "done" && spawn.despawn === "step") add(step.stepId, null, where + spawnLabel(spawn) + " verschijnt als de stap klaar is, maar is dan meteen weer weg (Weg als de stap klaar is).");
       }
       if (rule.then === "message" && !String(rule.text || "").trim()) add(step.stepId, null, where + "vul het bericht in.");
+      if ((rule.then === "timer_start" || rule.then === "timer_stop") && !isObject(step.timer)) add(step.stepId, null, where + "deze stap heeft geen klok. Zet bij ⏱️ Moet het op tijd? een tijd.");
+      else if (rule.then === "timer_start" && rule.when === "done") add(step.stepId, null, where + "de klok starten als de stap klaar is doet niets. Kies een ander moment.");
+    }
+    // Stap 6: de klok van deze stap.
+    if (isObject(step.timer)) {
+      const where = "⏱️ Klok: ";
+      const timer = step.timer;
+      if (!Number.isInteger(timer.seconds)) add(step.stepId, null, where + "vul in binnen hoeveel tijd.");
+      if (timer.start === "rule" && !ruleList.some((rule) => rule.then === "timer_start")) add(step.stepId, null, where + "de klok start nooit. Zet bij ⚡ een regel Dan ⏱️ start de klok, of kies Zodra de stap begint.");
+      if (timer.late === "step") {
+        if (!timer.lateTo) add(step.stepId, null, where + "kies naar welke stap je gaat als je te laat bent.");
+        else if (timer.lateTo === step.stepId) add(step.stepId, null, where + "te laat gaat naar deze stap zelf. Kies dan ↩️ De stap begint opnieuw.");
+        else if (!byId.has(timer.lateTo)) add(step.stepId, null, where + "te laat gaat naar een stap die niet (meer) bestaat.");
+      }
     }
   }
   for (const spawn of spawnList) {
@@ -350,7 +424,8 @@ export function questGraphIssues(steps, { refExists = () => true, refLabel = (re
   const hasTeam = list.some((step) => Array.isArray(step.objectives) && step.objectives.some((objective) => isObject(objective) && objective.share === "team"));
   if (partyLeave && partyLeave !== "keep" && !hasTeam) add(null, null, "Bij groep verlaten doet niets: deze quest heeft geen doel met Team samen.");
   // Bereikbaar vanaf het begin, en vanaf elke bereikbare stap moet een einde te halen zijn.
-  const nextOf = (step) => (step.kind === "step" && Array.isArray(step.next) ? step.next.map((link) => link?.to).filter((id) => byId.has(id)) : []);
+  const nextOf = (step) => (step.kind === "step" ? (Array.isArray(step.next) ? step.next.map((link) => link?.to) : [])
+    .concat(isObject(step.timer) && step.timer.late === "step" ? [step.timer.lateTo] : []).filter((id) => byId.has(id)) : []);
   const reached = new Set([list[0].stepId]);
   const queue = [list[0].stepId];
   while (queue.length) {

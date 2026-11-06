@@ -5,7 +5,7 @@
 // Alles schrijft naar het quest-document (veld steps) via de opslag van de Werkbank (met Ctrl+Z).
 // De quest-check is dezelfde als bij SAVE TO GAME (shared/quest-graph.js).
 import { api, el } from "./canonical-api.js";
-import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest17";
+import { OBJECTIVE_CREDITS, OBJECTIVE_KINDS, OBJECTIVE_ORDER, OBJECTIVE_ROLES, OBJECTIVE_SHARES, QUEST_LIMITS, QUEST_NEARBY_M, QUEST_SPAWN_AUDIENCE, QUEST_SPAWN_DESPAWN, QUEST_SPAWN_LIMITS, QUEST_START_LIMITS, QUEST_START_MODES, QUEST_REPEAT, QUEST_TIMER_LIMITS, REQUIREMENT_KINDS, REQUIREMENT_MATCH, RULE_THEN, RULE_WHEN, STEP_MAP_SHOW, STEP_MATCH, TIMER_LATE, TIMER_LOGOUT, TIMER_SHARE, TIMER_START, durationText, hasOwnSteps, objectiveNeeded, objectiveText, questGraphIssues, questStartIssues, questRepeatOf, questStartMode, spawnName, stepsFromSimple } from "../shared/quest-graph.js?v=20261106-quest19";
 
 const TABS = [["start", "🚪 Start"], ["stappen", "🪜 Stappen"], ["verschijnen", "👾 Verschijnen"], ["testen", "🧪 Testen"]];
 const SIMPLE_FIELDS = ["goal", "itemRef", "amount", "targetNpcRef"];
@@ -241,7 +241,43 @@ function renderStart(state, host, body, issues, nameOf) {
   });
   box.append(el("div", { class: "qbAdd" }, [add, el("span", { class: "wbdNote", text: "Klopt het niet, dan zegt de game de speler waarom hij nog niet kan beginnen." })]));
   host.append(box);
+  host.append(repeatBox(state, body));
   if (issues.length) host.append(issueList(issues));
+}
+
+// 3. Stap 6: hoe vaak mag een speler de quest doen (oud: Herhaalbaar aan = zo vaak als hij wil).
+function repeatBox(state, body) {
+  const repeat = questRepeatOf(body);
+  const pick = el("select", { class: "wbdSelect", title: "Hoe vaak een speler deze quest mag doen" },
+    Object.entries(QUEST_REPEAT).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+  pick.value = repeat;
+  pick.addEventListener("change", () => saveQuest(state, "herhalen", (next) => {
+    delete next.repeatable;
+    if (pick.value === "once") delete next.repeat; else next.repeat = pick.value;
+  }));
+  const number = (key, value, min, max, label) => {
+    const input = el("input", { type: "number", class: "wbdNumber qbAmount", min, max, step: 1, title: label });
+    input.value = String(value);
+    input.addEventListener("change", () => saveQuest(state, label.toLowerCase(), (next) => { next[key] = Math.max(min, Math.min(max, Math.round(Number(input.value) || min))); }));
+    return input;
+  };
+  const parts = [field("🔁 Herhalen", pick)];
+  if (repeat === "daily" || repeat === "weekly") {
+    const hour = Number.isInteger(body.repeatHour) ? body.repeatHour : 6;
+    parts.push(field("🕕 Weer te doen vanaf", el("div", { class: "qbInline" }, [number("repeatHour", hour, 0, 23, "Uur"), el("span", { class: "wbdNote", text: ":00 uur" + (repeat === "weekly" ? " op maandag" : "") + " (tijd van de server)" })])));
+  }
+  if (repeat === "cooldown") {
+    parts.push(field("⏳ Wachttijd", el("div", { class: "qbInline" }, [number("repeatMinutes", Number.isInteger(body.repeatMinutes) ? body.repeatMinutes : 60, 1, 43200, "Wachttijd"),
+      el("span", { class: "wbdNote", text: "minuten na het inleveren" })])));
+  }
+  const hint = {
+    once: "De speler doet deze quest 1 keer (goed voor het verhaal).",
+    always: "De speler mag hem meteen opnieuw doen (goed voor kleine klusjes).",
+    daily: "Elke dag vanaf dit uur mag hij weer. In het questboek staat wanneer.",
+    weekly: "Elke maandag vanaf dit uur mag hij weer.",
+    cooldown: "Na het inleveren moet de speler zo lang wachten (goed voor een boss)."
+  }[repeat];
+  return el("section", { class: "qbTestBox qbStart" }, [el("h4", { text: "🔁 Hoe vaak mag hij?" }), el("div", { class: "qbFields" }, parts), el("p", { class: "qbHint", text: hint })]);
 }
 
 function requirementRow(state, rule, change, remove) {
@@ -286,6 +322,7 @@ const STEP_TEMPLATES = [
   { id: "gather", text: "🪵 Iets verzamelen", objectives: [{ type: "gather", amount: 5 }] },
   { id: "defeat", text: "⚔️ Vijanden verslaan", objectives: [{ type: "defeat", amount: 3 }] },
   { id: "spawn", text: "👾 Vijanden laten verschijnen en verslaan", objectives: [{ type: "defeat", amount: 3 }], spawn: true },
+  { id: "timed", text: "⏱️ Vijanden verslaan binnen 2 minuten", objectives: [{ type: "defeat", amount: 3 }], spawn: true, timer: { seconds: 120 } },
   { id: "talk", text: "💬 Met iemand praten", objectives: [{ type: "talk" }] },
   { id: "deliver", text: "📦 Iets brengen", objectives: [{ type: "deliver", amount: 1 }] },
   { id: "enter", text: "🎯 Ergens heen gaan", objectives: [{ type: "enter" }] },
@@ -308,8 +345,18 @@ function ruleText(rule, step, spawns, nameOf) {
   const what = goal ? (goal.ref ? nameOf(goal.ref) : OBJECTIVE_KINDS[goal.type]?.label || "doel") : "…";
   const when = rule.when === "count" ? "Bij " + (rule.amount || 1) + "× " + what : rule.when === "done" ? "Als de stap klaar is" : "Zodra de stap begint";
   const spawn = spawns.find((entry) => entry.spawnId === rule.spawnId);
-  const then = rule.then === "spawn" ? "👾 " + (spawn ? spawnName(spawn, nameOf) : "…") + " verschijnen" : "💬 \"" + (rule.text || "…") + "\"";
+  const then = rule.then === "spawn" ? "👾 " + (spawn ? spawnName(spawn, nameOf) : "…") + " verschijnen"
+    : rule.then === "timer_start" ? "⏱️ de klok start" : rule.then === "timer_stop" ? "⏹️ de klok stopt (gehaald)" : "💬 \"" + (rule.text || "…") + "\"";
   return when + ": " + then;
+}
+
+// Stap 6: de klok als zin, bijv. "⏱️ Binnen 2 min (één klok voor de groep), anders ❌ mislukt".
+function timerText(timer, steps) {
+  const to = steps.find((other) => other.stepId === timer.lateTo);
+  const late = timer.late === "restart" ? "↩️ begint de stap opnieuw" : timer.late === "step" ? "➡️ naar " + (to ? (to.kind === "end" ? "🏁 " + (to.title || "Klaar") : "stap " + (steps.indexOf(to) + 1)) : "…")
+    : "❌ mislukt de quest";
+  return "⏱️ Binnen " + (timer.seconds ? durationText(timer.seconds) : "…") + (timer.start === "rule" ? " (start door een regel)" : "") + (timer.share === "group" ? " (één klok voor de groep)" : "")
+    + ", anders " + late + ".";
 }
 
 // 📖 Zo loopt je quest: de hele quest in gewone zinnen. Klik een stap om ernaartoe te gaan.
@@ -328,6 +375,7 @@ function storyBox(state, host, steps, issues, nameOf) {
       const joiner = step.match === "any" ? " of " : " en ";
       lines.push(el("b", { text: (bad ? "⚠️ " : "") + (step.title ? step.title + ": " : "") + (goals.length ? goals.join(joiner) : "nog geen doel") + "." }));
       for (const rule of step.rules || []) lines.push(el("span", { text: "⚡ " + ruleText(rule, step, spawns, nameOf) }));
+      if (step.timer) lines.push(el("span", { text: timerText(step.timer, steps) }));
       const to = steps.find((other) => other.stepId === (step.next || [])[0]?.to);
       const nextIndex = to ? steps.indexOf(to) : -1;
       if (!to) lines.push(el("span", { class: "qbBad", text: "➡️ Daarna: nog niet gekozen" }));
@@ -414,6 +462,7 @@ function templateBar(state, steps, edit) {
       objectives[0].spawnId = spawnId;
       step.rules = [{ ruleId: "regel_1", when: "start", then: "spawn", spawnId }];
     }
+    if (template.timer) step.timer = clone(template.timer);
     copy.splice(last + 1, 0, step);
   });
   const buttons = STEP_TEMPLATES.map((template) => {
@@ -558,7 +607,11 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
     "Bijv. bij 5 hout verschijnen wolven, of er komt een bericht in beeld. Zet het in de stap waar het moet gebeuren.",
     [rulesBox(state, step, (label, change) => edit(label, (copy, body) => change(at(copy), body)))]));
 
-  // ➡️ Blok 3: en daarna?
+  // ⏱️ Blok 3 (stap 6): moet het op tijd?
+  card.append(block("⏱️", "Moet het op tijd? (mag leeg)", "Bijv. versla de wolven binnen 2 minuten. Te laat? Dan mislukt de quest, begint de stap opnieuw of ga je naar een andere stap.",
+    [timerBox(state, steps, step, (label, change) => edit(label, (copy) => change(at(copy))), nameOf)]));
+
+  // ➡️ Blok 4: en daarna?
   const nextSelect = el("select", { class: "wbdSelect" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
     .map((other) => el("option", { value: other.stepId, text: other.kind === "end" ? "🏁 " + (other.title || "Klaar") : "Stap " + (steps.indexOf(other) + 1) + (other.title ? ": " + other.title : "") }))));
   nextSelect.value = (step.next || [])[0]?.to || "";
@@ -590,6 +643,74 @@ function stepCard(state, steps, step, index, issues, nameOf, edit) {
   const own = issues.filter((issue) => !issue.objectiveId);
   if (own.length) card.append(issueList(own));
   return card;
+}
+
+// ⏱️ De klok van een stap: binnen hoeveel tijd en wat er gebeurt als je te laat bent; de rest onder ⚙️ Meer.
+const TIME_UNITS = [["s", "seconden", 1], ["min", "minuten", 60], ["u", "uur", 3600]];
+function timerBox(state, steps, step, change, nameOf) {
+  const timer = step.timer;
+  if (!timer) {
+    const add = el("button", { type: "button", class: "wbdGhost", text: "⏱️ Klok erbij", title: "Deze stap moet binnen een bepaalde tijd af" });
+    add.addEventListener("click", () => change("klok erbij", (target) => { target.timer = { seconds: 120 }; }));
+    return el("div", { class: "qbAdd" }, [add]);
+  }
+  const set = (label, edit) => change(label, (target) => { target.timer = Object.assign({}, target.timer); edit(target.timer); });
+  // Binnen [2] [minuten]: opgeslagen in seconden.
+  const seconds = Number(timer.seconds) || 0;
+  const unit = seconds && seconds % 3600 === 0 ? TIME_UNITS[2] : seconds && seconds % 60 === 0 ? TIME_UNITS[1] : seconds ? TIME_UNITS[0] : TIME_UNITS[1];
+  const amount = el("input", { type: "number", class: "wbdNumber qbAmount", min: 1, step: 1, title: "Hoeveel tijd" });
+  amount.value = seconds ? String(seconds / unit[2]) : "";
+  const unitPick = el("select", { class: "wbdSelect qbUnit", title: "Seconden, minuten of uren" }, TIME_UNITS.map(([value, label]) => el("option", { value, text: label })));
+  unitPick.value = unit[0];
+  const saveTime = () => set("tijd", (target) => {
+    const factor = TIME_UNITS.find(([value]) => value === unitPick.value)[2];
+    const value = Math.round((Number(amount.value) || 0) * factor);
+    if (value) target.seconds = Math.max(QUEST_TIMER_LIMITS.min, Math.min(QUEST_TIMER_LIMITS.max, value)); else delete target.seconds;
+  });
+  amount.addEventListener("change", saveTime);
+  unitPick.addEventListener("change", saveTime);
+  const choice = (options, value, fallback, title, onPick) => {
+    const select = el("select", { class: "wbdSelect", title }, Object.entries(options).map(([key, entry]) => el("option", { value: key, text: entry.icon + " " + entry.label })));
+    select.value = options[value] ? value : fallback;
+    select.addEventListener("change", () => onPick(select.value));
+    return select;
+  };
+  const late = choice(TIMER_LATE, timer.late, "fail", "Wat er gebeurt als de speler te laat is", (value) => set("te laat", (target) => {
+    if (value === "fail") delete target.late; else target.late = value;
+    if (value !== "step") delete target.lateTo;
+  }));
+  const lateParts = [late];
+  if (timer.late === "step") {
+    const to = el("select", { class: "wbdSelect", title: "Naar welke stap" }, [el("option", { value: "", text: "Kies..." })].concat(steps.filter((other) => other.stepId !== step.stepId)
+      .map((other) => el("option", { value: other.stepId, text: other.kind === "end" ? "🏁 " + (other.title || "Klaar") : "Stap " + (steps.indexOf(other) + 1) + (other.title ? ": " + other.title : "") }))));
+    to.value = timer.lateTo || "";
+    to.addEventListener("change", () => set("te laat naar", (target) => { if (to.value) target.lateTo = to.value; else delete target.lateTo; }));
+    lateParts.push(to);
+  }
+  const more = [
+    field("▶️ Klok begint", choice(TIMER_START, timer.start, "step", "Zodra de stap begint, of pas als een regel (⚡) hem start", (value) => set("klok begint", (target) => { if (value === "step") delete target.start; else target.start = value; }))),
+    field("👥 Voor wie", choice(TIMER_SHARE, timer.share, "personal", "Ieder zijn eigen klok, of één klok voor de groep (gelijk bij iedereen)", (value) => set("klok voor wie", (target) => { if (value === "personal") delete target.share; else target.share = value; })))
+  ];
+  if (timer.share !== "group") {
+    more.push(field("🚪 Uitloggen", choice(TIMER_LOGOUT, timer.logout, "run", "Loopt de klok door als de speler uitlogt?", (value) => set("uitloggen", (target) => { if (value === "run") delete target.logout; else target.logout = value; }))));
+  } else more.push(el("p", { class: "qbHint", text: "Eén klok voor de groep loopt altijd door, ook als iemand uitlogt." }));
+  const chips = [];
+  if (timer.start === "rule") chips.push("⚡ start door een regel");
+  if (timer.share === "group") chips.push("👥 groep");
+  if (timer.logout === "pause" && timer.share !== "group") chips.push("⏸️ stil bij uitloggen");
+  const remove = el("button", { type: "button", class: "wbdGhost", text: "🗑️ Klok weg" });
+  remove.addEventListener("click", () => change("klok weg", (target) => {
+    delete target.timer;
+    // Regels die de klok startten of stopten hebben geen zin meer.
+    if (Array.isArray(target.rules)) { target.rules = target.rules.filter((rule) => rule.then !== "timer_start" && rule.then !== "timer_stop"); if (!target.rules.length) delete target.rules; }
+  }));
+  const hint = timer.start === "rule" ? "Zet bij ⚡ Wat gebeurt er onderweg een regel: Dan ⏱️ start de klok (bijv. als de wolven verschijnen)." : "";
+  return el("div", { class: "qbGoal" }, [
+    el("div", { class: "qbGoalTop" }, [el("b", { text: timerText(timer, steps) }), remove]),
+    el("div", { class: "qbFields" }, [field("Binnen", el("div", { class: "qbInline" }, [amount, unitPick])), field("Te laat", el("div", { class: "qbInline" }, lateParts))]),
+    hint ? el("p", { class: "qbHint", text: hint }) : null,
+    moreBox(state, "timer|" + step.stepId, chips, more)
+  ].filter(Boolean));
 }
 
 // Eén doel als kaartje: bovenaan in gewone woorden, daaronder de velden met een naam ervoor; de rest onder ⚙️ Meer.
@@ -747,12 +868,15 @@ function ruleRow(state, step, rule, change, remove) {
     amount.addEventListener("change", () => change("aantal", (target) => { target.amount = Math.max(1, Math.min(QUEST_LIMITS.amount, Math.round(Number(amount.value) || 1))); }));
     ifParts.push(goal, el("label", { class: "qbTimes" }, [el("span", { text: "op" }), amount]));
   }
-  const then = el("select", { class: "wbdSelect", title: "Wat er dan gebeurt" }, Object.entries(RULE_THEN).map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
+  // De klok starten of stoppen kan alleen in een stap met een klok (⏱️).
+  const thenOptions = Object.entries(RULE_THEN).filter(([value]) => !value.startsWith("timer_") || step.timer || rule.then === value);
+  const then = el("select", { class: "wbdSelect", title: "Wat er dan gebeurt" }, thenOptions.map(([value, entry]) => el("option", { value, text: entry.icon + " " + entry.label })));
   then.value = RULE_THEN[rule.then] ? rule.then : "message";
   then.addEventListener("change", () => change("dan", (target) => {
     target.then = then.value;
     if (then.value === "spawn") { delete target.text; if (spawns[0]) target.spawnId = spawns[0].spawnId; }
-    else { delete target.spawnId; target.text = target.text || ""; }
+    else if (then.value === "message") { delete target.spawnId; target.text = target.text || ""; }
+    else { delete target.spawnId; delete target.text; }
   }));
   const thenParts = [then];
   if (rule.then === "spawn") {
@@ -768,7 +892,7 @@ function ruleRow(state, step, rule, change, remove) {
       what.addEventListener("change", () => change("wat verschijnt", (target) => { if (what.value) target.spawnId = what.value; else delete target.spawnId; }));
       thenParts.push(what);
     }
-  } else {
+  } else if (rule.then === "message" || !RULE_THEN[rule.then]) {
     thenParts.push(textInput(rule.text, "Bericht in beeld, bijv. Wolven! Verdedig het hout!", QUEST_SPAWN_LIMITS.text, (value) => change("bericht", (target) => { target.text = value; })));
   }
   return el("div", { class: "qbGoal qbRule" }, [
@@ -910,6 +1034,8 @@ function playersBox(state, body, steps, nameOf) {
   const questId = body.questId;
   const all = steps || stepsFromSimple(body);
   const playable = all.filter((step) => step.kind === "step");
+  // Stap 6: heeft een stap een klok? Dan een knop ⏱️ Klok bijna op per speler.
+  const hasClock = playable.some((step) => step.timer);
   const stepName = (stepId) => { const index = all.findIndex((step) => step.stepId === stepId); return index >= 0 ? stepLabel(all[index], index, nameOf) : stepId || ""; };
   const classes = new Map(bench.docs("player_class").map((doc) => [doc.body?.classId, bench.docName(doc)]));
   const box = el("section", { class: "qbTestBox" }, [el("h4", { text: "👥 Spelers" }),
@@ -964,8 +1090,11 @@ function playersBox(state, body, steps, nameOf) {
         act({ action: "reset", playerId: player.playerId });
       });
       const go = smallButton("⏩", "Zet " + player.username + " op de gekozen stap", () => act({ action: "step", playerId: player.playerId, stepId: stepPick.value }), !playable.length);
+      // Stap 6: niet wachten op de klok.
+      const busy = player.status === "active" || player.status === "ready_to_turn_in";
+      const clock = hasClock ? smallButton("⏱️", "Klok bijna op: de klok van " + player.username + " staat nog 5 seconden", () => act({ action: "timer", playerId: player.playerId }), !busy) : null;
       return el("div", { class: "qbPlayerRow" }, [el("span", { text: who }), el("span", { text: icon + " " + label }),
-        el("span", { text: player.stepId ? stepName(player.stepId) : "" }), el("span", { class: "wbdNote", text: sinceText(player.since) }), el("span", { class: "qbPlayerActs" }, [reset, go])]);
+        el("span", { text: player.stepId ? stepName(player.stepId) : "" }), el("span", { class: "wbdNote", text: sinceText(player.since) }), el("span", { class: "qbPlayerActs" }, [reset, go, clock].filter(Boolean))]);
     });
     table.replaceChildren(head, ...rows);
     if (!shown.length) table.append(el("p", { class: "wbdNote", text: players.length ? "Niemand gevonden." : "Nog geen spelers." }));

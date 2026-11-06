@@ -246,6 +246,7 @@
 .qbStepClosed { padding: 6px 10px; }
 .qbStep.qbFlash { box-shadow: 0 0 0 2px var(--wbd-accent); transition: box-shadow .3s; }
 .qbBlock .qbRules { border: 0; padding: 0; background: transparent; }
+.qbInline > .qbUnit { flex: 0 0 auto; width: 120px; }
 /* Stap 5: Als → Dan bij een stap */
 .qbRules { display: grid; gap: 6px; padding: 8px; border: 1px dashed #4a3b1c; border-radius: 8px; background: #141822; }
 .qbRule { border-color: #4a3b1c; }
