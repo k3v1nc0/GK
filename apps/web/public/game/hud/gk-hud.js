@@ -1032,6 +1032,9 @@ export function createGkHud(api) {
   ];
   const CHAT_KEEP = 60;          // zoveel regels onthouden (zuinig op de oude laptop)
   const CHAT_FEED_MS = 12000;    // zo lang blijft een nieuw bericht linksonder staan als de chat dicht is
+  // Kevin 6-11: questmeldingen blijven langer staan (je keek even weg); hooguit 3, een nieuwe duwt de oudste weg.
+  const QUEST_FEED_MS = 30000;
+  const QUEST_FEED_MAX = 3;
   function chatRulesNow() {
     const rules = typeof api.chatRules === "function" ? api.chatRules() || {} : {};
     return { maxLength: num(rules.maxLength, 160), bubbleSeconds: num(rules.bubbleSeconds, 6), quick: Array.isArray(rules.quick) ? rules.quick : [] };
@@ -1081,9 +1084,9 @@ export function createGkHud(api) {
     }
   }
   // Een melding in het tabje Systeem (quiet = geen toast, bijvoorbeeld omdat game.js al een toast liet zien).
-  function chatNotice(text, tone, quiet) {
+  function chatNotice(text, tone, quiet, quest = false) {
     if (!text) return;
-    chatAddLine({ id: "n" + Math.random().toString(36).slice(2), channel: "system", tone: tone || "", text: String(text), at: performance.now(), time: Date.now() });
+    chatAddLine({ id: "n" + Math.random().toString(36).slice(2), channel: "system", tone: tone || "", text: String(text), at: performance.now(), time: Date.now(), quest: quest === true });
     if (!quiet && !chatShown()) toast(text, { tone: tone === "error" ? "error" : "info", icon: "chat-bubble", ms: 3500 });
   }
   function chatShows(line, tab, blockedIds) {
@@ -1096,7 +1099,7 @@ export function createGkHud(api) {
     const stamp = new Date(line.time || Date.now());
     const title = String(stamp.getHours()).padStart(2, "0") + ":" + String(stamp.getMinutes()).padStart(2, "0");
     if (line.channel === "system") {
-      return h("div", { class: "gkChatLine gkCh--system" + (line.tone === "error" ? " gkCh--error" : ""), title }, [h("span", { text: line.text })]);
+      return h("div", { class: "gkChatLine gkCh--system" + (line.tone === "error" ? " gkCh--error" : "") + (line.quest ? " gkCh--quest" : ""), title }, [h("span", { text: line.text })]);
     }
     let who = line.fromName + ":";
     let whoId = line.fromId;
@@ -1183,8 +1186,11 @@ export function createGkHud(api) {
       return;
     }
     const blockedIds = new Set(chatBlocked().map(function (entry) { return entry.id; }));
-    const recent = ui.chatLines.filter(function (line) { return now - line.at < CHAT_FEED_MS && chatShows(line, "all", blockedIds); }).slice(-5);
-    const signature = recent.map(function (line) { return line.id + (now - line.at > CHAT_FEED_MS - 1600 ? "o" : ""); }).join("|");
+    const life = function (line) { return line.quest ? QUEST_FEED_MS : CHAT_FEED_MS; };
+    const alive = ui.chatLines.filter(function (line) { return now - line.at < life(line) && chatShows(line, "all", blockedIds); });
+    const quests = alive.filter(function (line) { return line.quest; }).slice(-QUEST_FEED_MAX);
+    const recent = alive.filter(function (line) { return !line.quest || quests.includes(line); }).slice(-5);
+    const signature = recent.map(function (line) { return line.id + (now - line.at > life(line) - 1600 ? "o" : ""); }).join("|");
     if (ui.sig.feed === signature) return;
     ui.sig.feed = signature;
     const wasHidden = chatFeed.hidden;
@@ -1192,7 +1198,7 @@ export function createGkHud(api) {
     if (wasHidden && !chatFeed.hidden) placeChat();
     chatFeed.replaceChildren(...recent.map(function (line) {
       const el = chatLineEl(line);
-      if (now - line.at > CHAT_FEED_MS - 1600) el.classList.add("gkOld");
+      if (now - line.at > life(line) - 1600) el.classList.add("gkOld");
       return el;
     }));
   }
@@ -1727,7 +1733,7 @@ export function createGkHud(api) {
     ]);
     game.append(node);
     window.setTimeout(function () { node.remove(); }, 4300);
-    chatNotice("Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true);
+    chatNotice("🏆 Quest voltooid: " + title + (rewards.length ? " (" + rewards.join(", ") + ")" : ""), "", true, true);
   }
 
   // Quest Builder stap 5: Bericht in beeld (Als → Dan). Groot in het midden, kort, en ook in de chat.
@@ -1739,7 +1745,7 @@ export function createGkHud(api) {
       h("div", { class: "gkQuestBannerText" }, [title ? h("small", { text: String(title) }) : null, h("b", { text: message })])]);
     game.append(node);
     window.setTimeout(function () { node.remove(); }, 5200);
-    chatNotice(message, "", true);
+    chatNotice((title ? String(title) + ": " : "") + message, "", true, true);
   }
 
   function toast(text, options = {}) {

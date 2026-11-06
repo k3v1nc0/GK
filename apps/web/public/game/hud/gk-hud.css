@@ -787,6 +787,7 @@
 .gkCh--whisper, .gkCh--whisper .gkChatWho { color: #f3a6ff; }
 .gkCh--system { color: var(--gk-gold); font-style: italic; }
 .gkCh--error { color: #ff9a9a; }
+.gkCh--quest { font-style: normal; font-weight: 700; }
 .gkChatBox { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; animation: gkPop 0.14s ease-out; }
 .gkChatBox[hidden] { display: none; }
 /* Typen met de vinger: de chat zweeft net boven het toetsenbord (top en hoogte zet gk-hud.js). */
