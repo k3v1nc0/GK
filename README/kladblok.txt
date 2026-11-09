@@ -10,6 +10,10 @@ git reset --soft HEAD~1
 git reset --soft ORIG_HEAD 
 git push origin HEAD --force
 
+//als ik --force vergeet en gepuched heb
+git reset --hard HEAD^1
+git push origin main --force-with-lease 
+
 // push en pull tegelijk en mijn verschil in de puch niet er na 
 git config pull.rebase false
 git pull && git push
