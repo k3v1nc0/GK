@@ -16722,6 +16722,7 @@ function resolveChunkDebugCenter(policy) {
               definitionId,
               modelAssetId: item.worldModelAssetId || spawn.worldModelAssetId || null,
               modelScale: num(item.worldModelScale || spawn.worldModelScale, 0.45),
+              editorRotationY: num(spawn.rotationY, 0),
               x: num(spawn.x, 0),
               y: num(spawn.y, num(worldData?.ground?.y, 0)),
               z: num(spawn.z, 0)
@@ -16899,6 +16900,8 @@ function resolveChunkDebugCenter(policy) {
     const previousAttachedEntityId = String(root.userData?.runtimeTargetAttachedEntityId || "").trim();
     const targetPosition = runtimeTargetPosition(target);
     root.position.set(targetPosition.x, targetPosition.y, targetPosition.z);
+    // Pickups (9-11): in de editor draait de hele plek, zodat R verder draait vanaf de opgeslagen hoek.
+    if (mode === "editor" && Number.isFinite(Number(target?.editorRotationY))) root.rotation.y = Number(target.editorRotationY) * DEG_TO_RAD;
     root.visible = runtimeTargetVisible(target);
     root.userData.runtimeTargetPayload = Object.assign({}, target);
     root.userData.runtimeTargetAttachedEntityId = runtimeTargetAttachedEntityId(target) || null;
@@ -17303,7 +17306,11 @@ function resolveChunkDebugCenter(policy) {
         }
         object = object.parent || null;
       }
-      if (!allowRuntimeTarget && runtimeTargetHit) return null;
+      // Kevin 9-11: het klikvak van een kaart met een plek (NPC, pickup) is net zo groot als zijn mesh en telt
+      // daarom als het echte object. Anders ging een klik die de (geanimeerde) mesh net miste naar de grond of
+      // een vlak erachter, en kon je een NPC niet aanklikken.
+      const placedDocProxy = hit.object?.userData?.runtimeTargetHitProxy === true && String(selectableId || "").startsWith("doc:");
+      if (!allowRuntimeTarget && runtimeTargetHit && !placedDocProxy) return null;
       if (!allowSurfaceLayer && surfaceLayerHit) return null;
       return selectableId;
     }

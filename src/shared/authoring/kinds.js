@@ -179,6 +179,10 @@ export const CANONICAL_KINDS = {
       z: { type: "number", required: true, min: -100000, max: 100000, audience: "client", label: "Z",
         ui: ui("↕️", "slider", "viewport", { step: 0.1, unit: "m" }), default: 0,
         help: help("Waar de pickup ligt (voor-achter).", "Sleep het icoon in de 3D-view.", "Ligt in een muur → sleep hem naar een open plek.") },
+      // 9-11: draaien per pickup (R in de 3D-view); de grootte komt van het item (Grootte op de grond).
+      rotationY: { type: "number", required: false, min: 0, max: 359, audience: "client", label: "Draaien",
+        ui: ui("🔄", "slider", "viewport", { step: 1, unit: "°", more: true }), default: 0,
+        help: help("Welke kant de pickup op ligt.", "Klik hem in de 3D-view en druk R, of schuif hier.", "Ligt de verkeerde kant op → draai hem.") },
       amount: { type: "integer", required: true, min: 1, max: 9999, audience: "server", label: "Aantal",
         ui: ui("🔢", "slider", "werkbank", { step: 1, range: [1, 50] }), default: 1,
         help: help("Hoeveel je krijgt als je hem oppakt.", "1 tot 5 stuks.", "Spelers hebben te snel genoeg → lager.") },

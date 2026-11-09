@@ -1183,7 +1183,7 @@ export class Node03RuntimeService {
     const instanceId = NODE03_INSTANCE_PREFIX + ctx.zoneId + ":" + safeString(spawn.spawnEntryId || spawn.nodeId, "pickup_spawn") + ":pickup";
     const definitionId = kind === "currency" ? safeString(spawn.currencyRef, "") : safeString(spawn.itemRef, "");
     const item = kind === "item" ? (catalogSection(ctx.catalogs, "items")[definitionId] || {}) : {};
-    return {
+    const state = {
       version: 1,
       instanceId,
       zoneId: ctx.zoneId,
@@ -1216,6 +1216,10 @@ export class Node03RuntimeService {
       interaction: { action: "pickup", prompt: "Pick up", range: 3 },
       updatedAt: now()
     };
+    // 9-11: draaien per pickup (alleen als hij gedraaid is, zodat oude pickups gelijk blijven).
+    const rotationY = safeNumber(spawn.rotationY, 0);
+    if (rotationY) state.modelRotationY = rotationY;
+    return state;
   }
 
   mergeEntityRuntimeState(ctx, current, desired) {

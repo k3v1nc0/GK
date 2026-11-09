@@ -18,11 +18,12 @@ const DOC_MIME = "application/x-gk-doc";
 // De bron blijft de asset (of bij een pickup: het item); zo groeit de Werkbank niet
 // uit tot een lijst met iedere boom/stoel/steen die ooit in de wereld is neergezet.
 const LIBRARY_KINDS = ["item_definition", "currency", "ability", "loot_table", "resource_definition", "actor_archetype", "npc", "portal", "quest", "recipe", "world_flag"];
-// Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, S = groter/kleiner waar het kan).
+// Kaarten met een plek in de wereld: klik in de 3D-view, G = verplaatsen (R = draaien, T = groter/kleiner waar het kan).
+// Een pickup draait per plek; zijn grootte komt van het item (Grootte op de grond).
 export const PLACED_KINDS = Object.freeze({
-  pickup: { move: true },
+  pickup: { move: true, rotate: true },
   npc: { move: true, rotate: true },
-  // Portals (8-11): sleep de kaart op de wereld; G, R en S zoals bij een model.
+  // Portals (8-11): sleep de kaart op de wereld; G, R en T zoals bij een model.
   portal: { move: true, rotate: true, scale: true },
   placed_model: { move: true, rotate: true, scale: true },
   actor_spawn: { move: true },

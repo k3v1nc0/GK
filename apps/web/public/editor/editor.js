@@ -1,4 +1,4 @@
-import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261108-portals3";
+import { createGkWorldRuntime, effectiveWorldGroundBounds } from "../shared/world-runtime.js?v=20261109-pickup-draai1";
 import { edgeBetweenPoints, editClosedEdges } from "./walkable-edge-tools.js?v=20261031-randen1";
 import { createTerrainEditor } from "./terrain-editor.js?v=20261102-terrein10";
 import { DATA_TYPE_OPTIONS, dataTypeColor, groupInterfaceDefault, isMultiValueDataType, mmoNetworkFieldNodePatch, slugifyGroupPortName, worldSettingsPresetNodePatch } from "../shared/node-types.js?v=20261106-perf1";
@@ -11,7 +11,7 @@ import {
   normalizeTagQuery
 } from "../shared/node-contract.js?v=20261106-perf1";
 import { referenceKindFromId, referenceMatchesKinds, referencePickerSort } from "../shared/reference-utils.js?v=20261106-perf1";
-import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261108-portals2";
+import { createDocBench, PLACED_KINDS } from "./werkbank-docs.js?v=20261109-pickup-draai1";
 import { createAssetPicker } from "./mini-asset-picker.js?v=20261106-thumbs150";
 import { csrfFetch, rememberCsrfToken, currentCsrfToken } from "./csrf-fetch.js";
 import { createDocDrop, docKeyFromRuntimeId, regionRefAt, runtimeIdForDocKey, DOC_MIME } from "./werkbank-world.js?v=20261108-portals1";
@@ -966,7 +966,7 @@ async function importAssetFile(file, options = {}) {
 }
 
 // Documenten met een plek (pickup, NPC, model, vijand- en grondstofplek) staan als echte mesh in de editorwereld.
-// Klikken opent de kaart; G verplaatst, R draait en S schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
+// Klikken opent de kaart; G verplaatst, R draait en T schaalt (alleen wat bij die soort past, zie PLACED_KINDS).
 // Een kaart uit de Bibliotheek op de wereld laten vallen maakt een plek (zie werkbank-world.js).
 let docDrop = null;
 const PLACED_DOC_KINDS = new Set(Object.keys(PLACED_KINDS));
@@ -984,7 +984,7 @@ function placedDocLabel(docKey) {
 
 function placedDocHint(kind) {
   const can = PLACED_KINDS[kind] || { move: true };
-  return ["G = verplaatsen", can.rotate ? "R = draaien" : "", can.scale ? "S = groter/kleiner" : ""].filter(Boolean).join(", ");
+  return ["G = verplaatsen", can.rotate ? "R = draaien" : "", can.scale ? "T = groter/kleiner" : ""].filter(Boolean).join(", ");
 }
 
 // Na elke documentwijziging: de 3D-view opnieuw laden, zodat hij toont wat er is opgeslagen.
@@ -993,8 +993,59 @@ function refreshViewportForDocs() {
   scheduleViewportRefresh(false, 250);
 }
 
+// Kevin 9-11: meerdere kaarten met een plek tegelijk kiezen (box select of Shift/Ctrl-klik) en dan samen
+// G (verplaatsen), R (draaien rond het midden) of T (groter/kleiner). Elke kaart doet alleen wat bij zijn soort past.
+function selectedPlacedDocKeys() {
+  const focused = focusedPlacedDocKey();
+  const keys = (state.selectedDocKeys || []).filter(function (key) {
+    const doc = docBench.doc(key);
+    return doc && PLACED_DOC_KINDS.has(doc.kind) && !doc.archived;
+  });
+  if (focused && keys.length > 1 && keys.includes(focused)) return keys;
+  return focused ? [focused] : [];
+}
+
+// Waar een kaart in de wereld staat (vijand- en grondstofplekken in mm), voor box select.
+function placedDocPoint(doc) {
+  const body = doc?.body || {};
+  const inMm = doc.kind === "actor_spawn" || doc.kind === "resource_spawn";
+  const x = inMm ? Number(body.xMm) / 1000 : Number(body.x);
+  const z = inMm ? Number(body.zMm) / 1000 : Number(body.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  const ground = runtime && typeof runtime.terrainHeightAt === "function" ? Number(runtime.terrainHeightAt(x, z)) || 0 : 0;
+  return { x: x, y: ground + (inMm ? 0 : Number(body.y) || 0), z: z };
+}
+
+function viewportMarqueeDocKeys(rect) {
+  if (!runtime || typeof runtime.worldToScreen !== "function" || !docBench.workspace) return [];
+  const keys = [];
+  for (const kind of PLACED_DOC_KINDS) {
+    for (const doc of docBench.docs(kind)) {
+      const point = placedDocPoint(doc);
+      const screen = point ? runtime.worldToScreen(point) : null;
+      if (screen && rectContainsPoint(rect, screen)) keys.push(doc.docKey);
+    }
+  }
+  return keys;
+}
+
+function selectPlacedDocs(docKeys) {
+  const keys = Array.from(new Set(docKeys || [])).filter(function (key) {
+    const doc = docBench.doc(key);
+    return doc && PLACED_DOC_KINDS.has(doc.kind) && !doc.archived;
+  });
+  if (!keys.length) { deselectViewportClick(); return; }
+  if (keys.length === 1) { selectPlacedDoc(keys[0]); return; }
+  if (state.selectedNodeIds.length) clearSelection({ clearPendingEdge: true });
+  state.selectedDocKeys = keys;
+  focusDoc(keys[0]);
+  syncRuntimeSelection();
+  setStatus(keys.length + " dingen gekozen. G = verplaatsen, R = draaien, T = groter/kleiner (elk wat bij zijn soort past).", "");
+}
+
 function selectPlacedDoc(docKey) {
   if (state.selectedNodeIds.length) clearSelection({ clearPendingEdge: true });
+  state.selectedDocKeys = [docKey];
   focusDoc(docKey);
   syncRuntimeSelection();
   const doc = docBench.doc(docKey);
@@ -4547,9 +4598,13 @@ function setViewportSnap(mode, gridSize) {
 function syncRuntimeModelSelectionForTransform() {
   if (!runtime || runtimeTransformActive()) return selectedModelNode() || selectedWorldContentPositionNode();
   // Een gekozen document (pickup) verplaats je met G, net als een model.
-  const placedDocKey = state.selectedNodeIds.length ? null : focusedPlacedDocKey();
-  if (placedDocKey) {
-    if (typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeIdForDocKey(placedDocKey));
+  const placedDocKeys = state.selectedNodeIds.length ? [] : selectedPlacedDocKeys();
+  if (placedDocKeys.length > 1 && typeof runtime.selectEntities === "function") {
+    runtime.selectEntities(placedDocKeys.map(runtimeIdForDocKey), { authoringIds: [], selectionCount: 0 });
+    return null;
+  }
+  if (placedDocKeys.length) {
+    if (typeof runtime.selectEntity === "function") runtime.selectEntity(runtimeIdForDocKey(placedDocKeys[0]));
     return null;
   }
   // A finished transform clears the runtime's transient selection, while the editor's
@@ -4594,7 +4649,7 @@ function beginRuntimeTransformFromShortcut(mode, statusText, triggerEvent) {
     return false;
   }
   const placedKey = transformNode ? null : focusedPlacedDocKey();
-  if (placedKey && mode !== "move" && !(PLACED_KINDS[docBench.doc(placedKey)?.kind] || {})[mode]) {
+  if (placedKey && mode !== "move" && selectedPlacedDocKeys().length < 2 && !(PLACED_KINDS[docBench.doc(placedKey)?.kind] || {})[mode]) {
     setStatus(placedDocLabel(placedKey) + ": " + placedDocHint(docBench.doc(placedKey)?.kind) + ".", "error");
     return false;
   }
@@ -5685,8 +5740,7 @@ function syncRuntimeSelection() {
   const runtimeIds = state.selectedNodeIds
     .map(function (nodeId) { return runtimeNodeId(nodeById(nodeId)); })
     .filter(Boolean);
-  const placedDocKey = state.selectedNodeIds.length ? null : focusedPlacedDocKey();
-  if (placedDocKey) runtimeIds.push(runtimeIdForDocKey(placedDocKey));
+  if (!state.selectedNodeIds.length) for (const docKey of selectedPlacedDocKeys()) runtimeIds.push(runtimeIdForDocKey(docKey));
   if (typeof runtime.selectEntities === "function") {
     runtime.selectEntities(runtimeIds, {
       authoringIds: state.selectedNodeIds,
@@ -5991,6 +6045,11 @@ async function boot() {
       scheduleEditorMinimapRedraw();
     },
     onSelectEntities: function (entityIds) {
+      const docKeys = (entityIds || []).map(docKeyFromRuntimeId).filter(function (key) { return key && PLACED_DOC_KINDS.has(docBench.doc(key)?.kind); });
+      if (docKeys.length) {
+        selectPlacedDocs(docKeys);
+        return;
+      }
       const nodeIds = Array.from(new Set((entityIds || [])
         .map(function (id) { return nodeByRuntimeId(id)?.id; })
         .filter(Boolean)));
@@ -6010,6 +6069,15 @@ async function boot() {
       else showViewportSelectionBox(rect.left, rect.top, rect.right, rect.bottom);
     },
     onMarqueeSelect: function (rect, additive, subtractive) {
+      // Kaarten met een plek (NPC, pickup, model, portal, vijand- en grondstofplek).
+      const hitDocKeys = viewportMarqueeDocKeys(rect);
+      const currentDocKeys = selectedPlacedDocKeys();
+      if (hitDocKeys.length || ((additive || subtractive) && currentDocKeys.length)) {
+        const remove = new Set(hitDocKeys);
+        selectPlacedDocs(subtractive ? currentDocKeys.filter(function (key) { return !remove.has(key); })
+          : additive ? currentDocKeys.concat(hitDocKeys) : hitDocKeys);
+        return;
+      }
       const hitNodeIds = viewportMarqueeNodeIds(rect);
       let nextIds;
       if (subtractive) {
@@ -16556,12 +16624,14 @@ function docFocusActive() {
 }
 
 function clearDocFocus() {
+  state.selectedDocKeys = [];
   docBench.selectedDocKey = null;
   docBench.newKind = null;
   docBench.draft = null;
 }
 
 function focusDoc(docKey, newKind = null) {
+  if (!(state.selectedDocKeys || []).includes(docKey)) state.selectedDocKeys = [];
   docBench.selectedDocKey = docKey;
   docBench.newKind = newKind;
   if (!newKind) docBench.draft = null;
@@ -24595,6 +24665,14 @@ el.edgeLayer.addEventListener("pointerdown", function (event) {
 // handle" already does (terrainPointsPatch/scatterTranslatePoints).
 async function commitGroupTransform(payload) {
   const commits = payload?.commits || [];
+  // Kaarten met een plek: elke kaart apart opslaan (een NPC heeft soms twee roots met dezelfde ID; één keer is genoeg).
+  const docCommits = new Map();
+  for (const entry of commits) {
+    const docKey = docKeyFromRuntimeId(entry?.entityId);
+    if (docKey && !docCommits.has(docKey) && PLACED_DOC_KINDS.has(docBench.doc(docKey)?.kind)) docCommits.set(docKey, entry.transform || {});
+  }
+  for (const [docKey, transform] of docCommits) await commitDocTransform(docKey, transform);
+  if (docCommits.size && !state.selectedNodeIds.length) return;
   const patchedNodeIds = new Set();
   const patchMap = new Map();
   function addPatch(nodeId, values) {
